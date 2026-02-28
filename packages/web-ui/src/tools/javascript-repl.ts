@@ -137,8 +137,8 @@ export function createJavaScriptReplTool(): AgentTool<typeof javascriptReplSchem
 		get description() {
 			const runtimeProviderDescriptions =
 				this.runtimeProvidersFactory?.()
-					.map((d) => d.getDescription())
-					.filter((d) => d.trim().length > 0) || [];
+					.map((d: any) => d.getDescription())
+					.filter((d: any) => d.trim().length > 0) || [];
 			return JAVASCRIPT_REPL_TOOL_DESCRIPTION(runtimeProviderDescriptions);
 		},
 		parameters: javascriptReplSchema,

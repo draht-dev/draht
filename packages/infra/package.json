@@ -6,7 +6,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "sst dev",
-		"build": "tsc --noEmit",
+		"build": "tsgo --noEmit",
 		"clean": "rm -rf dist .sst"
 	},
 	"dependencies": {

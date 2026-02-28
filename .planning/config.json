@@ -1,0 +1,12 @@
+{
+  "mode": "yolo",
+  "depth": "standard",
+  "workflow": {
+    "research": false,
+    "plan_check": true,
+    "verifier": true
+  },
+  "git": {
+    "commit_docs": true
+  }
+}

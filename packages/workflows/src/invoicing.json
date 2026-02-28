@@ -1,0 +1,77 @@
+{
+	"name": "Invoice & Time Tracking",
+	"nodes": [
+		{
+			"parameters": {
+				"rule": { "interval": [{ "field": "cronExpression", "expression": "0 18 * * 5" }] }
+			},
+			"name": "Schedule: Friday 6PM",
+			"type": "n8n-nodes-base.scheduleTrigger",
+			"position": [250, 300],
+			"typeVersion": 1.2
+		},
+		{
+			"parameters": {
+				"url": "={{$json.timeTrackingApiUrl || '{{TIME_TRACKING_API_URL}}'}}",
+				"method": "GET",
+				"headers": { "Authorization": "Bearer {{TIME_TRACKING_API_KEY}}" },
+				"queryParameters": { "start_date": "={{$today.minus({days: 7}).toFormat('yyyy-MM-dd')}}", "end_date": "={{$today.toFormat('yyyy-MM-dd')}}" }
+			},
+			"name": "Fetch Time Entries",
+			"type": "n8n-nodes-base.httpRequest",
+			"position": [500, 300],
+			"typeVersion": 4.2
+		},
+		{
+			"parameters": {
+				"model": "claude-sonnet-4-20250514",
+				"messages": {
+					"values": [
+						{
+							"role": "user",
+							"content": "Generate a weekly time report from these entries. Calculate totals per project, format as a clean summary table. Entries:\n={{JSON.stringify($json)}}"
+						}
+					]
+				}
+			},
+			"name": "Generate Report",
+			"type": "n8n-nodes-base.anthropic",
+			"position": [750, 300],
+			"typeVersion": 1,
+			"credentials": { "anthropicApi": { "id": "{{ANTHROPIC_CREDENTIAL_ID}}", "name": "Anthropic" } }
+		},
+		{
+			"parameters": {
+				"sendTo": "{{INVOICE_EMAIL}}",
+				"subject": "Weekly Time Report — ={{$today.toFormat('dd.MM.yyyy')}}",
+				"text": "={{$json.content[0].text}}"
+			},
+			"name": "Email Report",
+			"type": "n8n-nodes-base.emailSend",
+			"position": [1000, 200],
+			"typeVersion": 2.1,
+			"credentials": { "smtp": { "id": "{{SMTP_CREDENTIAL_ID}}", "name": "SMTP" } }
+		},
+		{
+			"parameters": {
+				"operation": "create",
+				"databaseId": "{{NOTION_INVOICES_DB_ID}}",
+				"properties": {
+					"Week": { "title": [{ "text": { "content": "={{$today.minus({days: 7}).toFormat('dd.MM')}} - ={{$today.toFormat('dd.MM.yyyy')}}" } }] },
+					"Status": { "select": { "name": "Draft" } }
+				}
+			},
+			"name": "Log to Notion",
+			"type": "n8n-nodes-base.notion",
+			"position": [1000, 400],
+			"typeVersion": 2,
+			"credentials": { "notionApi": { "id": "{{NOTION_CREDENTIAL_ID}}", "name": "Notion" } }
+		}
+	],
+	"connections": {
+		"Schedule: Friday 6PM": { "main": [[{ "node": "Fetch Time Entries", "type": "main", "index": 0 }]] },
+		"Fetch Time Entries": { "main": [[{ "node": "Generate Report", "type": "main", "index": 0 }]] },
+		"Generate Report": { "main": [[{ "node": "Email Report", "type": "main", "index": 0 }, { "node": "Log to Notion", "type": "main", "index": 0 }]] }
+	},
+	"settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,21 @@
+{
+	"name": "@draht/ci",
+	"version": "0.55.3",
+	"private": true,
+	"description": "CI/CD AI Review Pipeline — GitHub Action for Claude-powered PR reviews",
+	"type": "module",
+	"main": "./src/action.ts",
+	"scripts": {
+		"build": "tsgo --noEmit",
+		"clean": "rm -rf dist",
+		"review": "bun run src/action.ts"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.39.0",
+		"@octokit/rest": "^21.1.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.5",
+		"typescript": "^5.9.2"
+	}
+}

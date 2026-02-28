@@ -1,0 +1,57 @@
+name: "Draht AI Review"
+description: "AI-powered PR review using Claude with AGENTS.md context"
+author: "Draht"
+
+inputs:
+  anthropic-api-key:
+    description: "Anthropic API key for Claude"
+    required: true
+  model:
+    description: "Claude model to use"
+    required: false
+    default: "claude-sonnet-4-20250514"
+  agents-md-path:
+    description: "Path to AGENTS.md file relative to repo root"
+    required: false
+    default: "AGENTS.md"
+  severity-threshold:
+    description: "Minimum severity to block merge (info, warning, critical)"
+    required: false
+    default: "critical"
+  max-files:
+    description: "Maximum number of files to review (0 = unlimited)"
+    required: false
+    default: "0"
+
+outputs:
+  findings-count:
+    description: "Total number of findings"
+  critical-count:
+    description: "Number of critical findings"
+  review-summary:
+    description: "Summary of the review"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+    - name: Install dependencies
+      shell: bash
+      run: cd ${{ github.action_path }} && bun install --frozen-lockfile
+    - name: Run AI Review
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        GITHUB_TOKEN: ${{ github.token }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_AGENTS_MD_PATH: ${{ inputs.agents-md-path }}
+        INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
+        INPUT_MAX_FILES: ${{ inputs.max-files }}
+      run: bun run ${{ github.action_path }}/src/action.ts
+
+branding:
+  icon: "eye"
+  color: "blue"

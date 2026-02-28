@@ -35,9 +35,38 @@
 - R5.2: Update build scripts to include new packages
 - R5.3: Ensure `npm install` resolves cleanly
 
+### R5-KB: Client Knowledge Base Extension
+- R5-KB.1: Create `packages/knowledge/` with package.json (@draht/knowledge)
+- R5-KB.2: Zvec integration for local vector DB operations (index, search, update)
+- R5-KB.3: Per-client knowledge store (AGENTS.md, decisions, patterns) with namespace isolation
+- R5-KB.4: Coding agent extension that auto-loads client context on session_start
+- R5-KB.5: CLI commands for knowledge management (index, search, forget)
+
+### R6-CI: CI/CD AI Review Pipeline
+- R6-CI.1: Create `packages/ci/` with package.json (@draht/ci)
+- R6-CI.2: GitHub Action YAML (action.yml) with inputs for model, AGENTS.md path, severity threshold
+- R6-CI.3: TypeScript action that fetches PR diff, sends to Claude with AGENTS.md context
+- R6-CI.4: Posts inline review comments, blocks merge on critical findings via check status
+
+### R7-MA: Multi-Agent Orchestration
+- R7-MA.1: Create `packages/orchestrator/` with package.json (@draht/orchestrator)
+- R7-MA.2: GSD Controller pattern: task → plan → spawn sub-agents → synthesize results
+- R7-MA.3: Ticket Decomposer: break tickets into agent-sized sub-tasks with dependency graph
+- R7-MA.4: Sub-agent coordination with result synthesis and failure handling
+
+### R8-WF: n8n Client Workflows
+- R8-WF.1: Create `packages/workflows/` with package.json (@draht/workflows)
+- R8-WF.2: Client onboarding workflow (form → repo → Notion → AGENTS.md → invoice)
+- R8-WF.3: Daily AI standup workflow (git commits → summarize → post to channel)
+- R8-WF.4: Invoice + time tracking workflow template
+
+### R9-DG: Deploy Guardian Extension
+- R9-DG.1: Coding agent extension for pre-deployment safety checks
+- R9-DG.2: Lighthouse + load testing integration (run checks, report results)
+- R9-DG.3: Rollback automation (detect failure → rollback to last known good)
+- R9-DG.4: SST-specific safety (never auto-deploy, always verify, check resource drift)
+
 ## v2 (Nice to Have)
-- Client knowledge persistence (vector DB per client)
-- Multi-agent orchestration layer
 - DACH compliance module (Datenschutz, EU AI Act)
 - Draht CLI wrapper around pi coding-agent
 - draht.dev website
@@ -46,4 +75,3 @@
 - Deploying any AWS resources
 - Modifying Pi Agent core logic (ai, agent, tui packages internals)
 - Custom LLM providers
-- Production CI/CD pipeline

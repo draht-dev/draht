@@ -18,9 +18,11 @@
 	},
 	"scripts": {
 		"build": "tsgo --noEmit",
+		"test": "vitest run",
 		"clean": "rm -rf dist"
 	},
 	"devDependencies": {
+		"vitest": "^3.2.4",
 		"@draht/coding-agent": "workspace:*",
 		"@types/node": "^22.10.5",
 		"typescript": "^5.9.2"

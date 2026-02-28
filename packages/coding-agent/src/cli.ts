@@ -5,7 +5,7 @@
  *
  * Test with: npx tsx src/cli-new.ts [args...]
  */
-process.title = "pi";
+process.title = "draht";
 
 import { setBedrockProviderModule } from "@draht/ai";
 import { bedrockProviderModule } from "@draht/ai/bedrock-provider";

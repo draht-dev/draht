@@ -1,0 +1,131 @@
+---
+const title = "Draht — AI Coding Agent";
+const description = "A modular, extensible AI coding agent with read, bash, edit, and write tools. Built for developers who want full control.";
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="description" content={description} />
+		<title>{title}</title>
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<style>
+			:root {
+				--bg: #0a0a0a;
+				--fg: #e5e5e5;
+				--accent: #3b82f6;
+				--muted: #737373;
+				--mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+			}
+			* { margin: 0; padding: 0; box-sizing: border-box; }
+			body {
+				font-family: var(--mono);
+				background: var(--bg);
+				color: var(--fg);
+				min-height: 100vh;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				padding: 2rem;
+			}
+			.hero {
+				text-align: center;
+				max-width: 640px;
+			}
+			h1 {
+				font-size: 3rem;
+				font-weight: 700;
+				letter-spacing: -0.02em;
+				margin-bottom: 1rem;
+			}
+			h1 span { color: var(--accent); }
+			.tagline {
+				font-size: 1.125rem;
+				color: var(--muted);
+				line-height: 1.6;
+				margin-bottom: 2rem;
+			}
+			.install {
+				background: #171717;
+				border: 1px solid #262626;
+				border-radius: 8px;
+				padding: 1rem 1.5rem;
+				font-size: 1rem;
+				color: var(--fg);
+				display: inline-block;
+				margin-bottom: 2rem;
+				user-select: all;
+			}
+			.install .prompt { color: var(--accent); }
+			.links {
+				display: flex;
+				gap: 1.5rem;
+				justify-content: center;
+				flex-wrap: wrap;
+			}
+			.links a {
+				color: var(--accent);
+				text-decoration: none;
+				font-size: 0.875rem;
+				border-bottom: 1px solid transparent;
+				transition: border-color 0.2s;
+			}
+			.links a:hover { border-bottom-color: var(--accent); }
+			.features {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+				gap: 1.5rem;
+				max-width: 640px;
+				margin-top: 3rem;
+				text-align: left;
+			}
+			.feature h3 {
+				font-size: 0.875rem;
+				margin-bottom: 0.5rem;
+				color: var(--fg);
+			}
+			.feature p {
+				font-size: 0.75rem;
+				color: var(--muted);
+				line-height: 1.5;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="hero">
+			<h1><span>draht</span></h1>
+			<p class="tagline">
+				A modular AI coding agent.<br />
+				Extensions. Skills. Multi-model. Your terminal.
+			</p>
+			<div class="install">
+				<span class="prompt">$</span> npx @draht/coding-agent
+			</div>
+			<div class="links">
+				<a href="https://github.com/nichochar/draht">GitHub</a>
+				<a href="https://github.com/nichochar/draht/tree/main/packages/coding-agent">Docs</a>
+				<a href="https://github.com/nichochar/draht/blob/main/CONTRIBUTING.md">Contribute</a>
+			</div>
+		</div>
+		<div class="features">
+			<div class="feature">
+				<h3>🔌 Extensions</h3>
+				<p>Load custom tools, providers, and commands via the extension API.</p>
+			</div>
+			<div class="feature">
+				<h3>🧠 Multi-Model</h3>
+				<p>Switch between Anthropic, OpenAI, Google, Amazon Bedrock, and more.</p>
+			</div>
+			<div class="feature">
+				<h3>🛠️ Built-in Tools</h3>
+				<p>Read, bash, edit, write — everything you need in your terminal.</p>
+			</div>
+			<div class="feature">
+				<h3>📦 Packages</h3>
+				<p>Install and manage extensions, skills, themes, and prompt templates.</p>
+			</div>
+		</div>
+	</body>
+</html>

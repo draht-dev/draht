@@ -1,4 +1,4 @@
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@draht/ai";
 import { loadPhoton } from "./photon.js";
 
 export interface ImageResizeOptions {

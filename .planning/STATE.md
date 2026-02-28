@@ -1,8 +1,8 @@
 # State
 
-## Current Phase: 1 (Rebrand)
+## Current Phase: 2 (SST v4 Infrastructure)
 ## Current Plan: none
-## Status: initialized
+## Status: phase-1-complete
 
 ## Decisions
 - Astro replaces Next.js in all templates and references (Oskar, 2026-02-28)

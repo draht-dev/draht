@@ -1,6 +1,6 @@
 # Roadmap
 
-## Phase 1: Rebrand — `not-started`
+## Phase 1: Rebrand — `complete`
 **Goal:** All packages renamed to @draht/ namespace, docs updated, builds pass.
 **Requirements:** R1.1, R1.2, R1.3, R1.4, R1.5, R5.1, R5.2, R5.3
 **Acceptance:** `npm run build` succeeds, all references to @mariozechner removed from package names.

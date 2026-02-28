@@ -103,3 +103,9 @@ proto:    buf generate
 - **Pattern:** `*_test.go` co-located with source
 - **Coverage:** `go test -cover`, target 80% for new code
 - **Table-driven tests:** Prefer table-driven test pattern for Go
+
+## Domain-Driven Design (DDD)
+- **Domain model is required:** Every project starts with entities, value objects, aggregates, and bounded contexts defined in PROJECT.md.
+- **Ubiquitous language:** Use domain terms consistently in code, comments, variables, and documentation. Check the glossary.
+- **Bounded contexts:** Don't cross aggregate boundaries in a single task. Each bounded context has its own module/package.
+- **Naming:** Class/type names must match domain glossary terms. CI will flag violations.

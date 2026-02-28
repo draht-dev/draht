@@ -1,7 +1,7 @@
 # State
 
-## Current Phase: ALL COMPLETE (1-9)
-## Status: v2-complete
+## Current Phase: ALL COMPLETE (1-18)
+## Status: v3-complete
 
 ## Decisions
 - Astro replaces Next.js in all templates and references (Oskar, 2026-02-28)
@@ -21,6 +21,15 @@
 - Phase 7: Multi-Agent Orchestration (1 commit)
 - Phase 8: n8n Client Workflows (1 commit)
 - Phase 9: Deploy Guardian Extension (1 commit)
+- Phase 10: Draht CLI & Branding (complete)
+- Phase 11: Testing Infrastructure (complete)
+- Phase 12: Documentation & README (complete)
+- Phase 13: Model Router (3 commits)
+- Phase 14: TDD-First Core (2 commits)
+- Phase 15: DDD-First Core (2 commits)
+- Phase 16: Invoice Generator (2 commits)
+- Phase 17: Compliance Checker (2 commits)
+- Phase 18: draht.dev Website Content (2 commits)
 
 ## Blockers
 None.

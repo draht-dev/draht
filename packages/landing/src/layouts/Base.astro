@@ -1,0 +1,81 @@
+---
+interface Props {
+	title: string;
+	description: string;
+	ogImage?: string;
+}
+
+const { title, description, ogImage = "/og-default.png" } = Astro.props;
+const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="description" content={description} />
+
+		<!-- SEO -->
+		<title>{title}</title>
+		<link rel="canonical" href={canonicalUrl.toString()} />
+		<meta name="robots" content="index, follow" />
+
+		<!-- Open Graph -->
+		<meta property="og:type" content="website" />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:image" content={ogImage} />
+		<meta property="og:url" content={canonicalUrl.toString()} />
+		<meta property="og:site_name" content="Draht" />
+
+		<!-- Twitter -->
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:title" content={title} />
+		<meta name="twitter:description" content={description} />
+		<meta name="twitter:image" content={ogImage} />
+
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="sitemap" href="/sitemap-index.xml" />
+
+		<style is:global>
+			:root {
+				--bg: #0a0a0a;
+				--fg: #e5e5e5;
+				--accent: #3b82f6;
+				--accent-hover: #60a5fa;
+				--muted: #737373;
+				--surface: #171717;
+				--border: #262626;
+				--mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+				--sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+			}
+			* { margin: 0; padding: 0; box-sizing: border-box; }
+			body {
+				font-family: var(--sans);
+				background: var(--bg);
+				color: var(--fg);
+				min-height: 100vh;
+				line-height: 1.6;
+			}
+			code, pre { font-family: var(--mono); }
+			a { color: var(--accent); text-decoration: none; }
+			a:hover { color: var(--accent-hover); }
+		</style>
+	</head>
+	<body>
+		<nav style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; max-width: 1200px; margin: 0 auto;">
+			<a href="/" style="font-family: var(--mono); font-weight: 700; font-size: 1.25rem;">draht</a>
+			<div style="display: flex; gap: 1.5rem; font-size: 0.875rem;">
+				<a href="/#features">Features</a>
+				<a href="/#architecture">Architecture</a>
+				<a href="/#pricing">Pricing</a>
+				<a href="/blog">Blog</a>
+				<a href="https://github.com/nichochar/draht" target="_blank">GitHub</a>
+			</div>
+		</nav>
+		<slot />
+		<footer style="text-align: center; padding: 3rem 2rem; color: var(--muted); font-size: 0.75rem; border-top: 1px solid var(--border); margin-top: 4rem;">
+			<p>© 2026 Draht. Built by <a href="https://freye.tech">Oskar Freye</a>.</p>
+		</footer>
+	</body>
+</html>

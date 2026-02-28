@@ -85,7 +85,7 @@
 **Requirements:** R17-CMP.1 (GDPR PII scanner), R17-CMP.2 (EU AI Act documentation validator), R17-CMP.3 (coding-agent compliance extension), R17-CMP.4 (German legal templates), R17-CMP.5 (compliance report generator)
 **Acceptance:** PII scanner catches test cases, legal templates generated, report passes sample audit.
 
-## Phase 18: draht.dev Website Content — `planned`
+## Phase 18: draht.dev Website Content — `complete`
 **Goal:** Full content for the Astro landing page — features, architecture, getting started, blog scaffold, SEO.
 **Requirements:** R18-WEB.1 (feature descriptions), R18-WEB.2 (architecture diagram), R18-WEB.3 (getting started guide), R18-WEB.4 (pricing/positioning), R18-WEB.5 (blog scaffold), R18-WEB.6 (SEO meta/OG/sitemap)
 **Acceptance:** Landing page has real content, all sections filled, sitemap.xml generated, OG images present.

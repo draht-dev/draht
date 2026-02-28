@@ -1,0 +1,47 @@
+---
+import Base from "../../layouts/Base.astro";
+
+const title = "Blog — Draht";
+const description = "Articles about AI coding agents, freelance development, TDD, DDD, and building with Draht.";
+
+const posts = [
+	{
+		title: "Why Your AI Coding Agent Needs TDD",
+		slug: "tdd-first",
+		date: "2026-03-01",
+		excerpt: "AI agents write code fast. Without tests, they write bugs fast too. Here's how Draht enforces test-driven development.",
+	},
+	{
+		title: "Model Routing: The Right Model for Every Task",
+		slug: "model-routing",
+		date: "2026-03-08",
+		excerpt: "Why use Claude Opus for boilerplate when DeepSeek is 50x cheaper? Draht's model router picks the right model automatically.",
+	},
+	{
+		title: "GDPR Compliance for AI-Generated Code",
+		slug: "gdpr-compliance",
+		date: "2026-03-15",
+		excerpt: "Your AI agent might be logging PII. Here's how to catch it before your client's auditor does.",
+	},
+];
+---
+
+<Base title={title} description={description}>
+	<main style="max-width: 700px; margin: 0 auto; padding: 2rem;">
+		<h1 style="font-size: 2rem; font-weight: 700; margin-bottom: 2rem;">Blog</h1>
+
+		{posts.map((post) => (
+			<article style="margin-bottom: 2rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border);">
+				<time style="color: var(--muted); font-size: 0.75rem;">{post.date}</time>
+				<h2 style="font-size: 1.25rem; margin: 0.5rem 0;">
+					<a href={`/blog/${post.slug}`} style="color: var(--fg);">{post.title}</a>
+				</h2>
+				<p style="color: var(--muted); font-size: 0.875rem;">{post.excerpt}</p>
+			</article>
+		))}
+
+		<p style="color: var(--muted); font-size: 0.875rem; text-align: center; margin-top: 2rem;">
+			More articles coming soon. Follow us on <a href="https://github.com/nichochar/draht">GitHub</a> for updates.
+		</p>
+	</main>
+</Base>

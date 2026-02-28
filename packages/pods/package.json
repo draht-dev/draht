@@ -1,6 +1,6 @@
 {
 	"name": "@draht/pods",
-	"version": "0.55.3",
+	"version": "2026.3.1",
 	"description": "CLI tool for managing vLLM deployments on GPU pods",
 	"type": "module",
 	"bin": {

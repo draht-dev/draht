@@ -163,6 +163,13 @@
         "typescript": "^5.9.2",
       },
     },
+    "packages/invoice": {
+      "name": "@draht/invoice",
+      "version": "0.55.3",
+      "devDependencies": {
+        "@draht/coding-agent": "workspace:*",
+      },
+    },
     "packages/knowledge": {
       "name": "@draht/knowledge",
       "version": "0.55.3",
@@ -438,6 +445,8 @@
     "@draht/deploy-guardian": ["@draht/deploy-guardian@workspace:packages/deploy-guardian"],
 
     "@draht/infra": ["@draht/infra@workspace:packages/infra"],
+
+    "@draht/invoice": ["@draht/invoice@workspace:packages/invoice"],
 
     "@draht/knowledge": ["@draht/knowledge@workspace:packages/knowledge"],
 

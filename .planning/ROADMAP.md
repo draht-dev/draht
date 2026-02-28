@@ -75,7 +75,7 @@
 **Requirements:** R15-DDD.1 (create-project domain model section), R15-DDD.2 (create-requirements bounded context mapping), R15-DDD.3 (create-domain-model command), R15-DDD.4 (map-codebase domain extraction), R15-DDD.5 (knowledge base domain glossary), R15-DDD.6 (CI domain naming checks), R15-DDD.7 (AGENTS.md DDD section)
 **Acceptance:** `create-project` includes domain model, `create-domain-model` generates from PROJECT.md, CI flags naming violations.
 
-## Phase 16: Invoice Generator — `planned`
+## Phase 16: Invoice Generator — `complete`
 **Goal:** Lexoffice API integration for German freelancer invoicing with time tracking in `packages/invoice/`.
 **Requirements:** R16-INV.1 (Lexoffice API client), R16-INV.2 (invoice templates hourly/fixed), R16-INV.3 (Toggl time tracking integration), R16-INV.4 (coding-agent extension /invoice commands), R16-INV.5 (auto-generate from project data)
 **Acceptance:** Invoice CRUD works against Lexoffice API, Toggl hours imported, coding agent commands registered.

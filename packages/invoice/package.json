@@ -1,0 +1,27 @@
+{
+	"name": "@draht/invoice",
+	"version": "0.55.3",
+	"private": true,
+	"description": "Invoice generator with Lexoffice API and Toggl time tracking integration",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		},
+		"./extension": {
+			"types": "./src/extension.ts",
+			"import": "./src/extension.ts"
+		}
+	},
+	"scripts": {
+		"build": "tsgo --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {},
+	"devDependencies": {
+		"@draht/coding-agent": "workspace:*"
+	}
+}

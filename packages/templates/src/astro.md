@@ -96,3 +96,9 @@ npm run check        # astro check + tsc --noEmit
 - **Pattern:** `*.test.ts` in `test/` or co-located with source
 - **Component testing:** @testing-library for interactive components
 - **Coverage:** Target 80% for new code
+
+## Domain-Driven Design (DDD)
+- **Domain model is required:** Every project starts with entities, value objects, aggregates, and bounded contexts defined in PROJECT.md.
+- **Ubiquitous language:** Use domain terms consistently in code, comments, variables, and documentation. Check the glossary.
+- **Bounded contexts:** Don't cross aggregate boundaries in a single task. Each bounded context has its own module/package.
+- **Naming:** Class/type names must match domain glossary terms. CI will flag violations.

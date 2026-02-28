@@ -70,7 +70,7 @@
 **Requirements:** R14-TDD.1 (task template: test→action→refactor), R14-TDD.2 (commit-task warns on missing tests), R14-TDD.3 (post-task hook runs tests), R14-TDD.4 (quality gate coverage threshold), R14-TDD.5 (AGENTS.md templates TDD section), R14-TDD.6 (workflow files enforce test-first), R14-TDD.7 (coding-agent TDD mode)
 **Acceptance:** `create-plan` generates test blocks first, hooks reject on test failure, coverage gate at 80%.
 
-## Phase 15: DDD-First Core — `planned`
+## Phase 15: DDD-First Core — `complete`
 **Goal:** Embed DDD into project initialization — domain model, bounded contexts, ubiquitous language.
 **Requirements:** R15-DDD.1 (create-project domain model section), R15-DDD.2 (create-requirements bounded context mapping), R15-DDD.3 (create-domain-model command), R15-DDD.4 (map-codebase domain extraction), R15-DDD.5 (knowledge base domain glossary), R15-DDD.6 (CI domain naming checks), R15-DDD.7 (AGENTS.md DDD section)
 **Acceptance:** `create-project` includes domain model, `create-domain-model` generates from PROJECT.md, CI flags naming violations.

@@ -2,9 +2,9 @@
  * Orchestration engine — executes sub-tasks in dependency order via Claude.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import Anthropic from "@anthropic-ai/sdk";
 import type {
 	ExecutionResult,
 	OrchestratorState,
@@ -87,7 +87,7 @@ export class OrchestratorEngine {
 				completed.push(subTask);
 				state.completedSubTaskIds.push(subTask.id);
 				onProgress?.({ type: "subtask_complete", subTask, result });
-			} catch (error) {
+			} catch (_error) {
 				// Retry once
 				try {
 					const result = await this.executeSubTask(subTask, depContext);
@@ -165,7 +165,8 @@ export class OrchestratorEngine {
 		const message = await this.client.messages.create({
 			model: this.model,
 			max_tokens: 4096,
-			system: "You synthesize results from multiple agent sub-tasks into a coherent summary. Be concise and actionable.",
+			system:
+				"You synthesize results from multiple agent sub-tasks into a coherent summary. Be concise and actionable.",
 			messages: [
 				{
 					role: "user",

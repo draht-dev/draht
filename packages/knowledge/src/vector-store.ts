@@ -3,10 +3,10 @@
  * Provides local-first semantic search per client namespace.
  */
 
-import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import Database from "better-sqlite3";
 
 // ============================================================================
 // Types
@@ -210,7 +210,9 @@ export class VectorStore {
 
 	async search(query: string, limit = 5): Promise<SearchResult[]> {
 		const queryEmbedding = await getEmbedding(query, this.apiKey);
-		const rows = this.db.prepare("SELECT content, embedding, source, client, timestamp, type FROM chunks").all() as Array<{
+		const rows = this.db
+			.prepare("SELECT content, embedding, source, client, timestamp, type FROM chunks")
+			.all() as Array<{
 			content: string;
 			embedding: Buffer;
 			source: string;
@@ -241,9 +243,9 @@ export class VectorStore {
 
 	getStats(): { totalChunks: number; sources: string[] } {
 		const count = this.db.prepare("SELECT COUNT(*) as count FROM chunks").get() as { count: number };
-		const sources = this.db
-			.prepare("SELECT DISTINCT source FROM chunks ORDER BY source")
-			.all() as Array<{ source: string }>;
+		const sources = this.db.prepare("SELECT DISTINCT source FROM chunks ORDER BY source").all() as Array<{
+			source: string;
+		}>;
 		return {
 			totalChunks: count.count,
 			sources: sources.map((s) => s.source),

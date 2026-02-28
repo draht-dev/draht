@@ -31,7 +31,10 @@ export const orchestratorExtension: ExtensionFactory = (pi) => {
 				const plan = await decomposer.decompose(description);
 
 				const summary = plan.subTasks
-					.map((t) => `  ${t.id}: [${t.agentType}] ${t.title}${t.dependsOn.length ? ` (after: ${t.dependsOn.join(", ")})` : ""}`)
+					.map(
+						(t) =>
+							`  ${t.id}: [${t.agentType}] ${t.title}${t.dependsOn.length ? ` (after: ${t.dependsOn.join(", ")})` : ""}`,
+					)
 					.join("\n");
 				ctx.ui.notify(`📋 Plan (${plan.subTasks.length} sub-tasks):\n${summary}`, "info");
 				return;
@@ -50,7 +53,10 @@ export const orchestratorExtension: ExtensionFactory = (pi) => {
 					if (event.type === "subtask_complete") ctx.ui.notify(`✅ ${event.subTask.title}`, "info");
 					if (event.type === "subtask_failed") ctx.ui.notify(`❌ ${event.subTask.title}: ${event.error}`, "error");
 				});
-				ctx.ui.notify(`\n📊 Done: ${result.completedSubTasks.length} completed, ${result.failedSubTasks.length} failed\n\n${result.synthesizedResult}`, "info");
+				ctx.ui.notify(
+					`\n📊 Done: ${result.completedSubTasks.length} completed, ${result.failedSubTasks.length} failed\n\n${result.synthesizedResult}`,
+					"info",
+				);
 				return;
 			}
 
@@ -73,7 +79,10 @@ export const orchestratorExtension: ExtensionFactory = (pi) => {
 				if (event.type === "subtask_failed") ctx.ui.notify(`❌ ${event.subTask.title}: ${event.error}`, "error");
 			});
 
-			ctx.ui.notify(`\n📊 Done: ${result.completedSubTasks.length} completed, ${result.failedSubTasks.length} failed\n\n${result.synthesizedResult}`, "info");
+			ctx.ui.notify(
+				`\n📊 Done: ${result.completedSubTasks.length} completed, ${result.failedSubTasks.length} failed\n\n${result.synthesizedResult}`,
+				"info",
+			);
 		},
 	});
 };

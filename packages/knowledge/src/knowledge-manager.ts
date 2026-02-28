@@ -151,7 +151,6 @@ function refineQueryByMode(query: string, mode: SearchMode): string {
 			return `relationships and connections related to: ${query}`;
 		case "fuzzy":
 			return query; // Use as-is for fuzzy/vague queries
-		case "general":
 		default:
 			return query;
 	}

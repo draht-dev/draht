@@ -38,11 +38,7 @@ export async function getPRDiff(octokit: Octokit, ctx: PRContext): Promise<strin
 /**
  * Post inline review comments on a PR.
  */
-export async function postReviewComments(
-	octokit: Octokit,
-	ctx: PRContext,
-	comments: ReviewComment[],
-): Promise<void> {
+export async function postReviewComments(octokit: Octokit, ctx: PRContext, comments: ReviewComment[]): Promise<void> {
 	if (comments.length === 0) return;
 
 	const reviewComments = comments.map((c) => ({

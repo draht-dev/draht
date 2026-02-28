@@ -1,10 +1,21 @@
-# Draht Monorepo
+<p align="center">
+  <img src="draht-logo@0.5.png" alt="Draht" width="400">
+</p>
 
-> **Dynamic Routing for Agent & Task Handling**
+<h1 align="center">Draht</h1>
+
+<p align="center">
+  <strong>Dynamic Routing for Agent & Task Handling</strong>
+</p>
+
+<p align="center">
+  <a href="https://draht.dev">Website</a> · <code>npx @draht/coding-agent</code>
+</p>
+
+> [!WARNING]
+> Draht is in early development. APIs, packages, and features may change without notice. Use at your own risk.
 
 A modular, extensible AI coding agent framework. Extensions, skills, multi-model support — all in your terminal.
-
-**Website:** [draht.dev](https://draht.dev) · **Install:** `npx @draht/coding-agent`
 
 ## Quick Start
 

@@ -50,12 +50,12 @@
 **Requirements:** R10-CLI.1 (rename pi→draht bin entries), R10-CLI.2 (update all package.json bin fields), R10-CLI.3 (draht.dev landing page scaffold with Astro+SST), R10-CLI.4 (CLI help text, version command, branding)
 **Acceptance:** `draht` command works, all bin references updated, landing page scaffold deploys, `draht --version` and `draht --help` work.
 
-## Phase 11: Testing Infrastructure — `planned`
+## Phase 11: Testing Infrastructure — `complete`
 **Goal:** Add test runners to all new packages, integration tests for extension loading, CI pipeline.
 **Requirements:** R11-TEST.1 (vitest/bun:test for knowledge, ci, orchestrator, deploy-guardian), R11-TEST.2 (integration tests for extension loading into coding-agent), R11-TEST.3 (GitHub Actions CI pipeline for automated testing on PR)
 **Acceptance:** All new packages have test suites that pass, extensions load correctly in integration tests, CI runs automatically on PR.
 
-## Phase 12: Documentation & README — `planned`
+## Phase 12: Documentation & README — `complete`
 **Goal:** Comprehensive documentation for draht-mono and all packages.
 **Requirements:** R12-DOC.1 (full README.md for draht-mono), R12-DOC.2 (per-package README updates for all @draht/* packages), R12-DOC.3 (CONTRIBUTING.md update for Draht workflow)
 **Acceptance:** README covers installation, architecture, packages, getting started. Each package has updated README. CONTRIBUTING.md reflects current workflow.

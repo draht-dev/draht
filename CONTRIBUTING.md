@@ -1,4 +1,4 @@
-# Contributing to pi
+# Contributing to Draht
 
 Thanks for wanting to contribute! This guide exists to save both of us time.
 
@@ -22,21 +22,44 @@ We use an approval gate for new contributors:
 
 This exists because AI makes it trivial to generate plausible-looking but low-quality contributions. The issue step lets us filter early.
 
+## Development Setup
+
+```bash
+bun install          # Install all dependencies
+bun run build        # Build all packages
+bun run check        # Lint + format (biome) + type check (tsgo)
+bun run test         # Run all tests
+```
+
+### Tooling
+
+- **Package manager:** bun (not npm)
+- **Type checker:** tsgo (not tsc)
+- **Linter/formatter:** biome
+- **Test runner:** vitest
+- **Infrastructure:** SST v4 (⚠️ never run `sst deploy` manually)
+
 ## Before Submitting a PR
 
 ```bash
-npm run check  # must pass with no errors
-./test.sh      # must pass
+bun run check    # must pass with no errors
+bun run test     # must pass
 ```
 
 Do not edit `CHANGELOG.md`. Changelog entries are added by maintainers.
 
 If you're adding a new provider to `packages/ai`, see `AGENTS.md` for required tests.
 
+## Project Structure
+
+See the [main README](README.md) for the full package listing and architecture diagram.
+
 ## Philosophy
 
-pi's core is minimal. If your feature doesn't belong in the core, it should be an extension. PRs that bloat the core will likely be rejected.
+Draht's core is minimal. If your feature doesn't belong in the core, it should be an extension. PRs that bloat the core will likely be rejected.
+
+Extensions can register tools, commands, providers, themes, skills, and prompt templates. See [Extension Docs](packages/coding-agent/docs/extensions.md).
 
 ## Questions?
 
-Open an issue or ask on [Discord](https://discord.com/invite/nKXTsAcmbT).
+Open an issue on [GitHub](https://github.com/nichochar/draht).

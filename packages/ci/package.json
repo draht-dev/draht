@@ -7,6 +7,7 @@
 	"main": "./src/action.ts",
 	"scripts": {
 		"build": "tsgo --noEmit",
+		"test": "vitest run",
 		"clean": "rm -rf dist",
 		"review": "bun run src/action.ts"
 	},
@@ -15,6 +16,7 @@
 		"@octokit/rest": "^21.1.0"
 	},
 	"devDependencies": {
+		"vitest": "^3.2.4",
 		"@types/node": "^22.10.5",
 		"typescript": "^5.9.2"
 	}

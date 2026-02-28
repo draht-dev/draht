@@ -94,3 +94,12 @@ test:     go test -race -cover ./...
 lint:     golangci-lint run
 proto:    buf generate
 ```
+
+## Testing (TDD)
+- **Philosophy:** Write tests BEFORE implementation. Red → Green → Refactor.
+- **Every task:** Write failing test first, then implement until green, then refactor.
+- **No untested code:** If you write code, there must be a corresponding `*_test.go`.
+- **Runner:** `go test ./...`
+- **Pattern:** `*_test.go` co-located with source
+- **Coverage:** `go test -cover`, target 80% for new code
+- **Table-driven tests:** Prefer table-driven test pattern for Go

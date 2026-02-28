@@ -87,3 +87,12 @@ npm run build        # astro build — production build
 npm run preview      # astro preview — preview production build
 npm run check        # astro check + tsc --noEmit
 ```
+
+## Testing (TDD)
+- **Philosophy:** Write tests BEFORE implementation. Red → Green → Refactor.
+- **Every task:** Write failing test first, then implement until green, then refactor.
+- **No untested code:** If you write to `src/`, there must be a corresponding test.
+- **Runner:** vitest
+- **Pattern:** `*.test.ts` in `test/` or co-located with source
+- **Component testing:** @testing-library for interactive components
+- **Coverage:** Target 80% for new code

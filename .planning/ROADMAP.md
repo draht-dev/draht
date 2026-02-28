@@ -65,7 +65,7 @@
 **Requirements:** R13-RT.1 (router config schema), R13-RT.2 (role→model mapping with fallback chains), R13-RT.3 (CLI commands: set/show/test), R13-RT.4 (auto-fallback on error/rate-limit/timeout), R13-RT.5 (cost tracking per role/session), R13-RT.6 (coding-agent extension for automatic model selection)
 **Acceptance:** `draht router show` displays config, fallback works on simulated errors, cost log written to `.draht/cost-log.jsonl`.
 
-## Phase 14: TDD-First Core — `planned`
+## Phase 14: TDD-First Core — `complete`
 **Goal:** Embed TDD into every part of the Draht workflow — plan templates, hooks, agents, CI.
 **Requirements:** R14-TDD.1 (task template: test→action→refactor), R14-TDD.2 (commit-task warns on missing tests), R14-TDD.3 (post-task hook runs tests), R14-TDD.4 (quality gate coverage threshold), R14-TDD.5 (AGENTS.md templates TDD section), R14-TDD.6 (workflow files enforce test-first), R14-TDD.7 (coding-agent TDD mode)
 **Acceptance:** `create-plan` generates test blocks first, hooks reject on test failure, coverage gate at 80%.

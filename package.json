@@ -17,16 +17,12 @@
     "dev:tsc": "concurrently --names \"ai,web-ui\" --prefix-colors \"cyan,green\" \"cd packages/ai && bun run dev:tsc\" \"cd packages/web-ui && bun run dev:tsc\"",
     "check": "biome check --write --error-on-warnings . && tsgo --noEmit && cd packages/web-ui && bun run check",
     "test": "bun run test --workspaces --if-present",
-    "version:patch": "npm version patch -ws --no-git-tag-version && node scripts/sync-versions.js && rm -rf node_modules packages/*/node_modules package-lock.json && npm install",
-    "version:minor": "npm version minor -ws --no-git-tag-version && node scripts/sync-versions.js && rm -rf node_modules packages/*/node_modules package-lock.json && npm install",
-    "version:major": "npm version major -ws --no-git-tag-version && node scripts/sync-versions.js && rm -rf node_modules packages/*/node_modules package-lock.json && npm install",
-    "version:set": "npm version -ws",
+
     "prepublishOnly": "bun run clean && bun run build && bun run check",
     "publish": "bun run prepublishOnly && npm publish -ws --access public",
     "publish:dry": "bun run prepublishOnly && npm publish -ws --access public --dry-run",
-    "release:patch": "node scripts/release.mjs patch",
-    "release:minor": "node scripts/release.mjs minor",
-    "release:major": "node scripts/release.mjs major",
+    "release": "node scripts/release.mjs",
+    "release:dry": "node scripts/release.mjs --dry-run",
     "prepare": "husky"
   },
   "devDependencies": {

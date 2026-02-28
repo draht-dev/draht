@@ -153,9 +153,7 @@ For non-standard auth, create utility (e.g., `bedrock-utils.ts`) with credential
 
 **Lockstep versioning**: All packages always share the same version number. Every release updates all packages together.
 
-**Version semantics** (no major releases):
-- `patch`: Bug fixes and new features
-- `minor`: API breaking changes
+**Daily versioning**: `YYYY.M.D` (e.g. `2026.2.28`). Multiple releases per day append a suffix: `2026.2.28-1`, `2026.2.28-2`, etc.
 
 ### Steps
 
@@ -163,11 +161,11 @@ For non-standard auth, create utility (e.g., `bedrock-utils.ts`) with credential
 
 2. **Run release script**:
    ```bash
-   npm run release:patch    # Fixes and additions
-   npm run release:minor    # API breaking changes
+   npm run release          # Release with today's date version
+   npm run release:dry      # Dry run (no changes)
    ```
 
-The script handles: version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+The script handles: version computation, version bump, CHANGELOG finalization, commit, tag, build, publish, and adding new `[Unreleased]` sections.
 
 ## **CRITICAL** Tool Usage Rules **CRITICAL**
 - NEVER use sed/cat to read a file or a range of a file. Always use the read tool (use offset + limit for ranged reads).

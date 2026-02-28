@@ -1,131 +1,141 @@
 ---
-const title = "Draht — AI Coding Agent";
-const description = "A modular, extensible AI coding agent with read, bash, edit, and write tools. Built for developers who want full control.";
+import Base from "../layouts/Base.astro";
+
+const title = "Draht — AI Coding Agent for Freelancers";
+const description = "A modular, extensible AI coding agent with model routing, TDD/DDD workflows, invoicing, and compliance. Built for German freelance developers.";
 ---
 
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="description" content={description} />
-		<title>{title}</title>
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<style>
-			:root {
-				--bg: #0a0a0a;
-				--fg: #e5e5e5;
-				--accent: #3b82f6;
-				--muted: #737373;
-				--mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
-			}
-			* { margin: 0; padding: 0; box-sizing: border-box; }
-			body {
-				font-family: var(--mono);
-				background: var(--bg);
-				color: var(--fg);
-				min-height: 100vh;
-				display: flex;
-				flex-direction: column;
-				align-items: center;
-				justify-content: center;
-				padding: 2rem;
-			}
-			.hero {
-				text-align: center;
-				max-width: 640px;
-			}
-			h1 {
-				font-size: 3rem;
-				font-weight: 700;
-				letter-spacing: -0.02em;
-				margin-bottom: 1rem;
-			}
-			h1 span { color: var(--accent); }
-			.tagline {
-				font-size: 1.125rem;
-				color: var(--muted);
-				line-height: 1.6;
-				margin-bottom: 2rem;
-			}
-			.install {
-				background: #171717;
-				border: 1px solid #262626;
-				border-radius: 8px;
-				padding: 1rem 1.5rem;
-				font-size: 1rem;
-				color: var(--fg);
-				display: inline-block;
-				margin-bottom: 2rem;
-				user-select: all;
-			}
-			.install .prompt { color: var(--accent); }
-			.links {
-				display: flex;
-				gap: 1.5rem;
-				justify-content: center;
-				flex-wrap: wrap;
-			}
-			.links a {
-				color: var(--accent);
-				text-decoration: none;
-				font-size: 0.875rem;
-				border-bottom: 1px solid transparent;
-				transition: border-color 0.2s;
-			}
-			.links a:hover { border-bottom-color: var(--accent); }
-			.features {
-				display: grid;
-				grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-				gap: 1.5rem;
-				max-width: 640px;
-				margin-top: 3rem;
-				text-align: left;
-			}
-			.feature h3 {
-				font-size: 0.875rem;
-				margin-bottom: 0.5rem;
-				color: var(--fg);
-			}
-			.feature p {
-				font-size: 0.75rem;
-				color: var(--muted);
-				line-height: 1.5;
-			}
-		</style>
-	</head>
-	<body>
-		<div class="hero">
-			<h1><span>draht</span></h1>
-			<p class="tagline">
-				A modular AI coding agent.<br />
-				Extensions. Skills. Multi-model. Your terminal.
+<Base title={title} description={description}>
+	<main style="max-width: 900px; margin: 0 auto; padding: 2rem;">
+
+		<!-- Hero -->
+		<section style="text-align: center; padding: 4rem 0;">
+			<h1 style="font-family: var(--mono); font-size: 3.5rem; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 1rem;">
+				<span style="color: var(--accent);">draht</span>
+			</h1>
+			<p style="font-size: 1.25rem; color: var(--muted); max-width: 560px; margin: 0 auto 2rem;">
+				The AI coding agent built for freelancers.<br />
+				Multi-model. TDD-first. DDD-native. German-compliant.
 			</p>
-			<div class="install">
-				<span class="prompt">$</span> npx @draht/coding-agent
+			<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; font-family: var(--mono); font-size: 1rem; display: inline-block; margin-bottom: 2rem; user-select: all;">
+				<span style="color: var(--accent);">$</span> npx @draht/coding-agent
 			</div>
-			<div class="links">
-				<a href="https://github.com/nichochar/draht">GitHub</a>
-				<a href="https://github.com/nichochar/draht/tree/main/packages/coding-agent">Docs</a>
-				<a href="https://github.com/nichochar/draht/blob/main/CONTRIBUTING.md">Contribute</a>
+			<div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+				<a href="https://github.com/nichochar/draht" style="background: var(--accent); color: white; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: 600; font-size: 0.875rem;">View on GitHub →</a>
+				<a href="#features" style="background: var(--surface); color: var(--fg); padding: 0.75rem 1.5rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.875rem;">See Features</a>
 			</div>
-		</div>
-		<div class="features">
-			<div class="feature">
-				<h3>🔌 Extensions</h3>
-				<p>Load custom tools, providers, and commands via the extension API.</p>
+		</section>
+
+		<!-- Features -->
+		<section id="features" style="padding: 4rem 0;">
+			<h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 2rem; text-align: center;">What Draht Does</h2>
+			<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 2rem;">
+				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
+					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🧠 Model Router</h3>
+					<p style="color: var(--muted); font-size: 0.875rem;">Role-based model selection with automatic fallback. Architect tasks use Claude Opus, boilerplate uses DeepSeek. Direct API calls — no OpenRouter latency.</p>
+				</div>
+				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
+					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🧪 TDD-First</h3>
+					<p style="color: var(--muted); font-size: 0.875rem;">Tests before implementation. The agent writes failing tests first, then implements until green, then refactors. Not optional — it's how Draht works.</p>
+				</div>
+				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
+					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🏗️ DDD-Native</h3>
+					<p style="color: var(--muted); font-size: 0.875rem;">Every project starts with a domain model. Bounded contexts, aggregates, ubiquitous language — baked into project templates and code review.</p>
+				</div>
+				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
+					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🔌 Extensions</h3>
+					<p style="color: var(--muted); font-size: 0.875rem;">SST resource manager, deploy guardian, client knowledge base. Load custom tools via the extension API. Build your own.</p>
+				</div>
+				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
+					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🧾 Invoicing</h3>
+					<p style="color: var(--muted); font-size: 0.875rem;">Lexoffice API integration for German invoicing. Toggl time tracking. Generate invoices from your terminal: <code>/invoice create</code>.</p>
+				</div>
+				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
+					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🛡️ Compliance</h3>
+					<p style="color: var(--muted); font-size: 0.875rem;">GDPR PII scanner, EU AI Act documentation checker, German legal templates. Automated compliance checks on every commit.</p>
+				</div>
 			</div>
-			<div class="feature">
-				<h3>🧠 Multi-Model</h3>
-				<p>Switch between Anthropic, OpenAI, Google, Amazon Bedrock, and more.</p>
+		</section>
+
+		<!-- Architecture -->
+		<section id="architecture" style="padding: 4rem 0;">
+			<h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 2rem; text-align: center;">Architecture</h2>
+			<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 2rem; font-family: var(--mono); font-size: 0.8rem; line-height: 1.8; overflow-x: auto;">
+				<pre style="color: var(--fg);">
+draht-mono/
+├── packages/
+│   ├── coding-agent/     # Core agent — read, bash, edit, write tools
+│   ├── ai/               # Unified LLM API — Anthropic, OpenAI, Google, DeepSeek
+│   ├── router/           # Role-based model routing with fallback chains
+│   ├── knowledge/        # Per-client vector DB for context persistence
+│   ├── orchestrator/     # Multi-agent task decomposition (GSD Controller)
+│   ├── ci/               # GitHub Action for AI-powered PR review
+│   ├── deploy-guardian/  # Pre-deploy checks, rollback automation
+│   ├── invoice/          # Lexoffice + Toggl invoicing
+│   ├── compliance/       # GDPR scanner, EU AI Act, legal templates
+│   ├── templates/        # AGENTS.md templates (SST/TS, Astro, Go/gRPC)
+│   ├── workflows/        # n8n workflow templates
+│   ├── infra/            # SST v4 infrastructure definitions
+│   └── landing/          # This website (Astro)
+└── .planning/            # GSD methodology — roadmap, plans, execution logs</pre>
 			</div>
-			<div class="feature">
-				<h3>🛠️ Built-in Tools</h3>
-				<p>Read, bash, edit, write — everything you need in your terminal.</p>
+			<p style="text-align: center; margin-top: 1rem; color: var(--muted); font-size: 0.875rem;">
+				Monorepo. 15 packages. TypeScript + Bun. Zero runtime dependencies where possible.
+			</p>
+		</section>
+
+		<!-- Getting Started -->
+		<section style="padding: 4rem 0;">
+			<h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 2rem; text-align: center;">Getting Started</h2>
+			<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 2rem; font-family: var(--mono); font-size: 0.875rem; line-height: 2;">
+				<p style="color: var(--muted);"># Install globally</p>
+				<p><span style="color: var(--accent);">$</span> npm install -g @draht/coding-agent</p>
+				<br />
+				<p style="color: var(--muted);"># Or run directly</p>
+				<p><span style="color: var(--accent);">$</span> npx @draht/coding-agent</p>
+				<br />
+				<p style="color: var(--muted);"># Initialize a project with GSD methodology</p>
+				<p><span style="color: var(--accent);">$</span> draht init</p>
+				<p><span style="color: var(--accent);">$</span> draht create-project "My App"</p>
+				<p><span style="color: var(--accent);">$</span> draht create-requirements</p>
+				<p><span style="color: var(--accent);">$</span> draht create-domain-model</p>
+				<p><span style="color: var(--accent);">$</span> draht create-roadmap</p>
+				<br />
+				<p style="color: var(--muted);"># Configure model routing</p>
+				<p><span style="color: var(--accent);">$</span> draht router show</p>
+				<p><span style="color: var(--accent);">$</span> draht router set architect anthropic/claude-opus-4-6</p>
 			</div>
-			<div class="feature">
-				<h3>📦 Packages</h3>
-				<p>Install and manage extensions, skills, themes, and prompt templates.</p>
+		</section>
+
+		<!-- Pricing -->
+		<section id="pricing" style="padding: 4rem 0;">
+			<h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 1rem; text-align: center;">Pricing</h2>
+			<p style="text-align: center; color: var(--muted); margin-bottom: 2rem;">Draht is open source. The tooling is free. You pay for the AI models you use.</p>
+			<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 2rem; max-width: 700px; margin: 0 auto;">
+				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 2rem; text-align: center;">
+					<h3 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Open Source</h3>
+					<p style="font-size: 2rem; font-weight: 700; margin-bottom: 1rem;">Free</p>
+					<ul style="list-style: none; color: var(--muted); font-size: 0.875rem; text-align: left;">
+						<li style="margin-bottom: 0.5rem;">✓ All packages</li>
+						<li style="margin-bottom: 0.5rem;">✓ Model router</li>
+						<li style="margin-bottom: 0.5rem;">✓ TDD/DDD workflows</li>
+						<li style="margin-bottom: 0.5rem;">✓ Extensions</li>
+						<li style="margin-bottom: 0.5rem;">✓ Community support</li>
+					</ul>
+				</div>
+				<div style="background: var(--surface); border: 2px solid var(--accent); border-radius: 8px; padding: 2rem; text-align: center;">
+					<h3 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Freelance Setup</h3>
+					<p style="font-size: 2rem; font-weight: 700; margin-bottom: 1rem;">€499<span style="font-size: 0.875rem; font-weight: 400; color: var(--muted);"> one-time</span></p>
+					<ul style="list-style: none; color: var(--muted); font-size: 0.875rem; text-align: left;">
+						<li style="margin-bottom: 0.5rem;">✓ Everything in Open Source</li>
+						<li style="margin-bottom: 0.5rem;">✓ Custom AGENTS.md for your stack</li>
+						<li style="margin-bottom: 0.5rem;">✓ Invoice + compliance setup</li>
+						<li style="margin-bottom: 0.5rem;">✓ 2h onboarding call</li>
+						<li style="margin-bottom: 0.5rem;">✓ 30 days email support</li>
+					</ul>
+				</div>
 			</div>
-		</div>
-	</body>
-</html>
+		</section>
+
+	</main>
+</Base>

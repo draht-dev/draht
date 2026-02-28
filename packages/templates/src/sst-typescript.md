@@ -65,3 +65,12 @@ npm run test         # Run tests
 - AWS credentials via environment or SSO profile
 - Stage-based deployment: `dev`, `staging`, `production`
 - Secrets via SST Secret resource, not environment variables
+
+## Testing (TDD)
+- **Philosophy:** Write tests BEFORE implementation. Red → Green → Refactor.
+- **Every task:** Write failing test first, then implement until green, then refactor.
+- **No untested code:** If you write to `src/`, there must be a corresponding test.
+- **Runner:** vitest or bun:test
+- **Pattern:** `*.test.ts` alongside source files or in `test/` directory
+- **Coverage:** Target 80% for new code, use c8/istanbul
+- **Mocking:** Use vitest mock or bun mock for external dependencies

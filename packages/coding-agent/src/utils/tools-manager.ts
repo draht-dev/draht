@@ -12,7 +12,7 @@ const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10000;
 
 function isOfflineModeEnabled(): boolean {
-	const value = process.env.PI_OFFLINE;
+	const value = process.env.DRAHT_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }

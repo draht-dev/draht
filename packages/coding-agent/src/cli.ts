@@ -5,7 +5,7 @@
  *
  * Test with: npx tsx src/cli-new.ts [args...]
  */
-process.title = "pi";
+process.title = "draht";
 
 import { main } from "./main.js";
 

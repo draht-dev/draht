@@ -3,12 +3,12 @@
 	"version": "0.55.3",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
-	"piConfig": {
-		"name": "pi",
-		"configDir": ".pi"
+	"drahtConfig": {
+		"name": "draht",
+		"configDir": ".draht"
 	},
 	"bin": {
-		"pi": "dist/cli.js"
+		"draht": "dist/cli.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

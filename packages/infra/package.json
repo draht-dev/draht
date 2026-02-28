@@ -1,0 +1,20 @@
+{
+	"name": "@draht/infra",
+	"version": "0.55.3",
+	"private": true,
+	"description": "SST v4 infrastructure for Draht — Lambda, API Gateway, DynamoDB",
+	"type": "module",
+	"scripts": {
+		"dev": "sst dev",
+		"build": "tsc --noEmit",
+		"clean": "rm -rf dist .sst"
+	},
+	"dependencies": {
+		"sst": "^3.14.0"
+	},
+	"devDependencies": {
+		"@types/aws-lambda": "^8.10.145",
+		"@types/node": "^22.10.5",
+		"typescript": "^5.9.2"
+	}
+}

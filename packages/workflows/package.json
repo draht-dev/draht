@@ -1,6 +1,6 @@
 {
 	"name": "@draht/workflows",
-	"version": "0.55.3",
+	"version": "2026.3.1",
 	"private": true,
 	"description": "n8n workflow templates for client onboarding, daily standup, and invoicing",
 	"type": "module",

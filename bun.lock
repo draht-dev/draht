@@ -141,6 +141,13 @@
         "@types/ms": "^2.1.0",
       },
     },
+    "packages/compliance": {
+      "name": "@draht/compliance",
+      "version": "0.55.3",
+      "devDependencies": {
+        "@draht/coding-agent": "workspace:*",
+      },
+    },
     "packages/deploy-guardian": {
       "name": "@draht/deploy-guardian",
       "version": "0.55.3",
@@ -441,6 +448,8 @@
     "@draht/ci": ["@draht/ci@workspace:packages/ci"],
 
     "@draht/coding-agent": ["@draht/coding-agent@workspace:packages/coding-agent"],
+
+    "@draht/compliance": ["@draht/compliance@workspace:packages/compliance"],
 
     "@draht/deploy-guardian": ["@draht/deploy-guardian@workspace:packages/deploy-guardian"],
 

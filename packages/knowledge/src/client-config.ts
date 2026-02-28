@@ -76,5 +76,10 @@ function findAgentsMd(cwd: string): string | undefined {
 }
 
 function slugifyPath(cwd: string): string {
-	return path.basename(cwd).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+	return path
+		.basename(cwd)
+		.toLowerCase()
+		.replace(/[^a-z0-9-]/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "");
 }

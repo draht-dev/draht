@@ -21,7 +21,8 @@ export const deployGuardianExtension: ExtensionFactory = (pi) => {
 			if (/\bsst\s+deploy\b/i.test(command)) {
 				return {
 					block: true,
-					reason: "🛡️ Deploy Guardian: `sst deploy` is blocked. Deployments must be done manually with verification.",
+					reason:
+						"🛡️ Deploy Guardian: `sst deploy` is blocked. Deployments must be done manually with verification.",
 				};
 			}
 		}
@@ -76,13 +77,13 @@ export const deployGuardianExtension: ExtensionFactory = (pi) => {
 							ctx.ui.notify("No deployment tags found. Use `/deploy tag` first.", "warning");
 							return;
 						}
-						ctx.ui.notify(`Recent tags:\n${tags.map((t) => `  ${t}`).join("\n")}\n\nUsage: /deploy rollback <tag>`, "info");
+						ctx.ui.notify(
+							`Recent tags:\n${tags.map((t) => `  ${t}`).join("\n")}\n\nUsage: /deploy rollback <tag>`,
+							"info",
+						);
 						return;
 					}
-					const confirmed = await ctx.ui.confirm(
-						"Rollback",
-						`Are you sure you want to rollback to ${rest}?`,
-					);
+					const confirmed = await ctx.ui.confirm("Rollback", `Are you sure you want to rollback to ${rest}?`);
 					if (!confirmed) return;
 					try {
 						rollbackTo(ctx.cwd, rest);
@@ -104,16 +105,18 @@ export const deployGuardianExtension: ExtensionFactory = (pi) => {
 };
 
 function formatChecks(results: CheckResult[]): string {
-	return results
-		.map((r) => `${severityIcon(r.severity)} ${r.name}: ${r.message}`)
-		.join("\n");
+	return results.map((r) => `${severityIcon(r.severity)} ${r.name}: ${r.message}`).join("\n");
 }
 
 function severityIcon(severity: string): string {
 	switch (severity) {
-		case "pass": return "✅";
-		case "warning": return "⚠️";
-		case "fail": return "❌";
-		default: return "❓";
+		case "pass":
+			return "✅";
+		case "warning":
+			return "⚠️";
+		case "fail":
+			return "❌";
+		default:
+			return "❓";
 	}
 }

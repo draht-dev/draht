@@ -5,8 +5,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { type PRContext, createOctokit, getPRDiff, postReviewComments, setCheckStatus } from "./github.js";
-import { type Finding, reviewDiff } from "./reviewer.js";
+import { createOctokit, getPRDiff, type PRContext, postReviewComments, setCheckStatus } from "./github.js";
+import { reviewDiff } from "./reviewer.js";
 
 type Severity = "info" | "warning" | "critical";
 
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
 	const model = process.env.INPUT_MODEL ?? "claude-sonnet-4-20250514";
 	const agentsMdPath = process.env.INPUT_AGENTS_MD_PATH ?? "AGENTS.md";
 	const severityThreshold = (process.env.INPUT_SEVERITY_THRESHOLD ?? "critical") as Severity;
-	const maxFiles = Number.parseInt(process.env.INPUT_MAX_FILES ?? "0", 10);
+	const _maxFiles = Number.parseInt(process.env.INPUT_MAX_FILES ?? "0", 10);
 
 	if (!anthropicApiKey) {
 		console.error("❌ ANTHROPIC_API_KEY is required");
@@ -125,7 +125,9 @@ async function main(): Promise<void> {
 			`| 🟡 Warning | ${warningCount} |`,
 			`| 🔵 Info | ${infoCount} |`,
 			"",
-			hasBlockingFindings ? `❌ **Merge blocked** — findings at or above \`${severityThreshold}\` threshold` : "✅ **All clear** — no blocking findings",
+			hasBlockingFindings
+				? `❌ **Merge blocked** — findings at or above \`${severityThreshold}\` threshold`
+				: "✅ **All clear** — no blocking findings",
 		].join("\n");
 		fs.appendFileSync(summaryFile, md);
 	}

@@ -47,9 +47,7 @@ export interface OrchestratorState {
 	startedAt: number;
 }
 
-export interface ProgressCallback {
-	(event: ProgressEvent): void;
-}
+export type ProgressCallback = (event: ProgressEvent) => void;
 
 export type ProgressEvent =
 	| { type: "subtask_start"; subTask: SubTask }

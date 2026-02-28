@@ -2,8 +2,8 @@
  * Ticket decomposer — breaks high-level tasks into agent-sized sub-tasks.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
+import Anthropic from "@anthropic-ai/sdk";
 import type { AgentType, SubTask, TaskPlan } from "./types.js";
 
 const DECOMPOSE_SYSTEM = `You are a task decomposer for a multi-agent system. Break down the given task into atomic sub-tasks.

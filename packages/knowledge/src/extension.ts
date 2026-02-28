@@ -95,7 +95,10 @@ export const knowledgeExtension: ExtensionFactory = (pi) => {
 						return;
 					}
 					const formatted = results
-						.map((r, i) => `${i + 1}. [${r.score.toFixed(3)}] (${r.metadata.source})\n   ${r.content.slice(0, 120)}...`)
+						.map(
+							(r, i) =>
+								`${i + 1}. [${r.score.toFixed(3)}] (${r.metadata.source})\n   ${r.content.slice(0, 120)}...`,
+						)
 						.join("\n\n");
 					ctx.ui.notify(formatted, "info");
 					break;
@@ -124,10 +127,16 @@ export const knowledgeExtension: ExtensionFactory = (pi) => {
 	});
 };
 
-function formatKnowledgeForPrompt(results: Array<{ content: string; metadata: { source: string; type: string }; score: number }>, clientName: string): string {
+function formatKnowledgeForPrompt(
+	results: Array<{ content: string; metadata: { source: string; type: string }; score: number }>,
+	clientName: string,
+): string {
 	const items = results
 		.filter((r) => r.score > 0.3)
-		.map((r) => `<item source="${r.metadata.source}" type="${r.metadata.type}" relevance="${r.score.toFixed(2)}">\n${r.content}\n</item>`)
+		.map(
+			(r) =>
+				`<item source="${r.metadata.source}" type="${r.metadata.type}" relevance="${r.score.toFixed(2)}">\n${r.content}\n</item>`,
+		)
 		.join("\n");
 
 	if (!items) return "";

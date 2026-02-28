@@ -96,7 +96,9 @@ function checkSSTSafety(cwd: string): CheckResult {
 					};
 				}
 			}
-		} catch { /* ignore */ }
+		} catch {
+			/* ignore */
+		}
 	}
 	return { name: "SST Safety", severity: "pass", message: "No SST config detected" };
 }

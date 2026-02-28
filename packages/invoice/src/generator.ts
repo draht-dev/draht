@@ -14,11 +14,7 @@ export class InvoiceGenerator {
 	/**
 	 * Create an hourly invoice from time entries.
 	 */
-	fromTimeEntries(
-		clientName: string,
-		entries: TimeEntry[],
-		hourlyRate?: number,
-	): Invoice {
+	fromTimeEntries(clientName: string, entries: TimeEntry[], hourlyRate?: number): Invoice {
 		const rate = hourlyRate ?? this.config.defaults.hourlyRate ?? 120;
 		const taxRate = this.config.defaults.taxRate;
 
@@ -30,19 +26,17 @@ export class InvoiceGenerator {
 			grouped.set(desc, (grouped.get(desc) ?? 0) + hours);
 		}
 
-		const items: LineItem[] = Array.from(grouped.entries()).map(
-			([description, hours]) => {
-				const roundedHours = Math.round(hours * 100) / 100;
-				const totalNet = Math.round(roundedHours * rate * 100) / 100;
-				return {
-					description,
-					quantity: roundedHours,
-					unitPrice: rate,
-					taxRate,
-					totalNet,
-				};
-			},
-		);
+		const items: LineItem[] = Array.from(grouped.entries()).map(([description, hours]) => {
+			const roundedHours = Math.round(hours * 100) / 100;
+			const totalNet = Math.round(roundedHours * rate * 100) / 100;
+			return {
+				description,
+				quantity: roundedHours,
+				unitPrice: rate,
+				taxRate,
+				totalNet,
+			};
+		});
 
 		return this.buildInvoice("hourly", clientName, items);
 	}
@@ -50,11 +44,7 @@ export class InvoiceGenerator {
 	/**
 	 * Create a fixed-price invoice.
 	 */
-	fixedPrice(
-		clientName: string,
-		description: string,
-		amount: number,
-	): Invoice {
+	fixedPrice(clientName: string, description: string, amount: number): Invoice {
 		const taxRate = this.config.defaults.taxRate;
 		const items: LineItem[] = [
 			{
@@ -69,20 +59,14 @@ export class InvoiceGenerator {
 		return this.buildInvoice("fixed", clientName, items);
 	}
 
-	private buildInvoice(
-		type: "hourly" | "fixed",
-		clientName: string,
-		items: LineItem[],
-	): Invoice {
+	private buildInvoice(type: "hourly" | "fixed", clientName: string, items: LineItem[]): Invoice {
 		const taxRate = this.config.defaults.taxRate;
 		const totalNet = items.reduce((sum, i) => sum + i.totalNet, 0);
 		const totalTax = Math.round(totalNet * (taxRate / 100) * 100) / 100;
 		const totalGross = Math.round((totalNet + totalTax) * 100) / 100;
 
 		const issueDate = new Date().toISOString().split("T")[0];
-		const dueDate = new Date(
-			Date.now() + this.config.defaults.paymentTermDays * 86400000,
-		)
+		const dueDate = new Date(Date.now() + this.config.defaults.paymentTermDays * 86400000)
 			.toISOString()
 			.split("T")[0];
 

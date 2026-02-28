@@ -25,29 +25,25 @@ export const AI_DOC_REQUIREMENTS: AiDocRequirement[] = [
 		id: "EUAI-3",
 		article: "Art. 11(1)",
 		requirement: "Risk management",
-		description:
-			"Description of risk management measures and known limitations",
+		description: "Description of risk management measures and known limitations",
 	},
 	{
 		id: "EUAI-4",
 		article: "Art. 11(1)",
 		requirement: "Human oversight",
-		description:
-			"Description of human oversight measures and how human control is ensured",
+		description: "Description of human oversight measures and how human control is ensured",
 	},
 	{
 		id: "EUAI-5",
 		article: "Art. 11(1)",
 		requirement: "Accuracy and robustness",
-		description:
-			"Expected levels of accuracy, robustness, and cybersecurity measures",
+		description: "Expected levels of accuracy, robustness, and cybersecurity measures",
 	},
 	{
 		id: "EUAI-6",
 		article: "Art. 11(1)",
 		requirement: "Logging capabilities",
-		description:
-			"Description of logging capabilities and traceability measures",
+		description: "Description of logging capabilities and traceability measures",
 	},
 ];
 
@@ -88,8 +84,7 @@ export class EuAiActChecker {
 			findings.push({
 				rule: "eu-ai-act/missing-documentation",
 				severity: "warning",
-				message:
-					"No AI system documentation found. If this project uses AI, create AI-SYSTEM-DOCUMENTATION.md",
+				message: "No AI system documentation found. If this project uses AI, create AI-SYSTEM-DOCUMENTATION.md",
 				recommendation:
 					"Create AI-SYSTEM-DOCUMENTATION.md covering: system description, data governance, risk management, human oversight, accuracy metrics, and logging.",
 			});
@@ -112,17 +107,11 @@ export class EuAiActChecker {
 		return findings;
 	}
 
-	private checkSection(
-		content: string,
-		req: AiDocRequirement,
-	): boolean {
+	private checkSection(content: string, req: AiDocRequirement): boolean {
 		const contentLower = content.toLowerCase();
 
 		// Check for the requirement as a heading (## System description, ### Risk management, etc.)
-		const headingPattern = new RegExp(
-			`^#{1,4}\\s+.*${this.escapeRegex(req.requirement.toLowerCase())}`,
-			"m",
-		);
+		const headingPattern = new RegExp(`^#{1,4}\\s+.*${this.escapeRegex(req.requirement.toLowerCase())}`, "m");
 		if (headingPattern.test(contentLower)) return true;
 
 		// Check for the requirement ID as a reference (EUAI-1, Art. 11, etc.)

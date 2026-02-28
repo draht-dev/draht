@@ -55,25 +55,8 @@ export const PII_PATTERNS: PiiPattern[] = [
  */
 export class GdprScanner {
 	private patterns: PiiPattern[];
-	private excludeDirs = new Set([
-		"node_modules",
-		".git",
-		"dist",
-		"build",
-		".next",
-		"coverage",
-	]);
-	private includeExtensions = new Set([
-		".ts",
-		".tsx",
-		".js",
-		".jsx",
-		".json",
-		".env",
-		".yaml",
-		".yml",
-		".toml",
-	]);
+	private excludeDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
+	private includeExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".json", ".env", ".yaml", ".yml", ".toml"]);
 
 	constructor(customPatterns?: PiiPattern[]) {
 		this.patterns = customPatterns ?? PII_PATTERNS;
@@ -102,8 +85,7 @@ export class GdprScanner {
 					pattern.regex.lastIndex = 0;
 					if (pattern.regex.test(lines[i])) {
 						// Skip test files and comments
-						if (filePath.includes(".test.") || filePath.includes(".spec."))
-							continue;
+						if (filePath.includes(".test.") || filePath.includes(".spec.")) continue;
 						findings.push({
 							rule: `gdpr/pii-${pattern.name}`,
 							severity: pattern.severity,
@@ -121,11 +103,7 @@ export class GdprScanner {
 		return findings;
 	}
 
-	private walkDir(
-		baseDir: string,
-		currentDir: string,
-		findings: ComplianceFinding[],
-	): void {
+	private walkDir(baseDir: string, currentDir: string, findings: ComplianceFinding[]): void {
 		const entries = readdirSync(currentDir);
 		for (const entry of entries) {
 			if (this.excludeDirs.has(entry)) continue;

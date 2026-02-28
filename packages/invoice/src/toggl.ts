@@ -36,13 +36,8 @@ export class TogglClient {
 	/**
 	 * Get time entries for a date range.
 	 */
-	async getTimeEntries(
-		startDate: string,
-		endDate: string,
-	): Promise<TimeEntry[]> {
-		const entries = await this.request<TimeEntry[]>(
-			`/me/time_entries?start_date=${startDate}&end_date=${endDate}`,
-		);
+	async getTimeEntries(startDate: string, endDate: string): Promise<TimeEntry[]> {
+		const entries = await this.request<TimeEntry[]>(`/me/time_entries?start_date=${startDate}&end_date=${endDate}`);
 		return entries;
 	}
 
@@ -55,9 +50,7 @@ export class TogglClient {
 		endDate: string,
 	): Promise<{ entries: TimeEntry[]; totalHours: number }> {
 		const entries = await this.getTimeEntries(startDate, endDate);
-		const filtered = entries.filter(
-			(e) => e.project?.toLowerCase() === projectName.toLowerCase(),
-		);
+		const filtered = entries.filter((e) => e.project?.toLowerCase() === projectName.toLowerCase());
 		const totalSeconds = filtered.reduce((sum, e) => sum + e.duration, 0);
 		return {
 			entries: filtered,

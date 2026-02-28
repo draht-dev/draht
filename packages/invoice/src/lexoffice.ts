@@ -14,11 +14,7 @@ export class LexofficeClient {
 		this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
 	}
 
-	private async request<T>(
-		method: string,
-		path: string,
-		body?: unknown,
-	): Promise<T> {
+	private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
 		const response = await fetch(`${this.baseUrl}${path}`, {
 			method,
 			headers: {
@@ -31,9 +27,7 @@ export class LexofficeClient {
 
 		if (!response.ok) {
 			const text = await response.text();
-			throw new Error(
-				`Lexoffice API error ${response.status}: ${text}`,
-			);
+			throw new Error(`Lexoffice API error ${response.status}: ${text}`);
 		}
 
 		return response.json() as Promise<T>;
@@ -91,9 +85,7 @@ export class LexofficeClient {
 			paymentConditions: {
 				paymentTermLabel: `Zahlbar innerhalb von ${Math.round((new Date(invoice.dueDate).getTime() - new Date(invoice.issueDate).getTime()) / 86400000)} Tagen`,
 				paymentTermDuration: Math.round(
-					(new Date(invoice.dueDate).getTime() -
-						new Date(invoice.issueDate).getTime()) /
-						86400000,
+					(new Date(invoice.dueDate).getTime() - new Date(invoice.issueDate).getTime()) / 86400000,
 				),
 			},
 			introduction: invoice.notes ?? "",

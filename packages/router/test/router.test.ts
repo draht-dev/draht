@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ModelRouter, isRetryableError } from "../src/router.js";
+import { isRetryableError, ModelRouter } from "../src/router.js";
 import { DEFAULT_CONFIG } from "../src/types.js";
 
 describe("ModelRouter", () => {

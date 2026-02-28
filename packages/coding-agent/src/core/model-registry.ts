@@ -18,7 +18,7 @@ import {
 	resetApiProviders,
 	resetOAuthProviders,
 	type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
+} from "@draht/ai";
 import { type Static, Type } from "@sinclair/typebox";
 import AjvModule from "ajv";
 import { existsSync, readFileSync } from "fs";

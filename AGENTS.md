@@ -63,7 +63,7 @@ To test pi's TUI in a controlled terminal environment:
 tmux new-session -d -s pi-test -x 80 -y 24
 
 # Start pi from source
-tmux send-keys -t pi-test "cd /Users/badlogic/workspaces/pi-mono && ./pi-test.sh" Enter
+tmux send-keys -t pi-test "cd /Users/exe008/draht-mono && ./pi-test.sh" Enter
 
 # Wait for startup, then capture output
 sleep 3 && tmux capture-pane -t pi-test -p
@@ -104,8 +104,8 @@ Use these sections under `## [Unreleased]`:
 - Each version section is immutable once released
 
 ### Attribution
-- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/badlogic/pi-mono/issues/123))`
-- **External contributions**: `Added feature X ([#456](https://github.com/badlogic/pi-mono/pull/456) by [@username](https://github.com/username))`
+- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/exe008/draht-mono/issues/123))`
+- **External contributions**: `Added feature X ([#456](https://github.com/exe008/draht-mono/pull/456) by [@username](https://github.com/username))`
 
 ## Adding a New LLM Provider (packages/ai)
 

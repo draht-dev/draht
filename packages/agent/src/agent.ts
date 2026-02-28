@@ -12,7 +12,7 @@ import {
 	type TextContent,
 	type ThinkingBudgets,
 	type Transport,
-} from "@mariozechner/pi-ai";
+} from "@draht/ai";
 import { agentLoop, agentLoopContinue } from "./agent-loop.js";
 import type {
 	AgentContext,

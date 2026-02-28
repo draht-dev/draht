@@ -9,18 +9,18 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as _bundledPiAgentCore from "@draht/agent-core";
+import * as _bundledPiAi from "@draht/ai";
+import type { KeyId } from "@draht/tui";
+import * as _bundledPiTui from "@draht/tui";
 import { createJiti } from "@mariozechner/jiti";
-import * as _bundledPiAgentCore from "@mariozechner/pi-agent-core";
-import * as _bundledPiAi from "@mariozechner/pi-ai";
-import type { KeyId } from "@mariozechner/pi-tui";
-import * as _bundledPiTui from "@mariozechner/pi-tui";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as _bundledTypebox from "@sinclair/typebox";
 import { getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
-// avoiding a circular dependency. Extensions can import from @mariozechner/pi-coding-agent.
+// avoiding a circular dependency. Extensions can import from @draht/coding-agent.
 import * as _bundledPiCodingAgent from "../../index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
@@ -40,10 +40,10 @@ import type {
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
-	"@mariozechner/pi-agent-core": _bundledPiAgentCore,
-	"@mariozechner/pi-tui": _bundledPiTui,
-	"@mariozechner/pi-ai": _bundledPiAi,
-	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
+	"@draht/agent-core": _bundledPiAgentCore,
+	"@draht/tui": _bundledPiTui,
+	"@draht/ai": _bundledPiAi,
+	"@draht/coding-agent": _bundledPiCodingAgent,
 };
 
 const require = createRequire(import.meta.url);
@@ -63,10 +63,10 @@ function getAliases(): Record<string, string> {
 	const typeboxRoot = typeboxEntry.replace(/[\\/]build[\\/]cjs[\\/]index\.js$/, "");
 
 	_aliases = {
-		"@mariozechner/pi-coding-agent": packageIndex,
-		"@mariozechner/pi-agent-core": require.resolve("@mariozechner/pi-agent-core"),
-		"@mariozechner/pi-tui": require.resolve("@mariozechner/pi-tui"),
-		"@mariozechner/pi-ai": require.resolve("@mariozechner/pi-ai"),
+		"@draht/coding-agent": packageIndex,
+		"@draht/agent-core": require.resolve("@draht/agent-core"),
+		"@draht/tui": require.resolve("@draht/tui"),
+		"@draht/ai": require.resolve("@draht/ai"),
 		"@sinclair/typebox": typeboxRoot,
 	};
 

@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@draht/agent-core";
 import { Type } from "@sinclair/typebox";
 import * as Diff from "diff";
 import type { Executor } from "../sandbox.js";

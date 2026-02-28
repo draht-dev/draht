@@ -18,8 +18,8 @@
   },
   "dependencies": {
     "@lmstudio/sdk": "^1.5.0",
-    "@draht/ai": "^0.55.3",
-    "@draht/tui": "^0.55.3",
+    "@draht/ai": "workspace:*",
+    "@draht/tui": "workspace:*",
     "docx-preview": "^0.3.7",
     "jszip": "^3.10.1",
     "lucide": "^0.544.0",

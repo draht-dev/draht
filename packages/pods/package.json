@@ -33,7 +33,7 @@
 		"node": ">=20.0.0"
 	},
 	"dependencies": {
-		"@draht/agent-core": "^0.55.3",
+		"@draht/agent-core": "workspace:*",
 		"chalk": "^5.5.0"
 	},
 	"devDependencies": {}

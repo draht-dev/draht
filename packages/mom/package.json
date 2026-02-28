@@ -20,9 +20,9 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sandbox-runtime": "^0.0.16",
-		"@draht/agent-core": "^0.55.3",
-		"@draht/ai": "^0.55.3",
-		"@draht/coding-agent": "^0.55.3",
+		"@draht/agent-core": "workspace:*",
+		"@draht/ai": "workspace:*",
+		"@draht/coding-agent": "workspace:*",
 		"@sinclair/typebox": "^0.34.0",
 		"@slack/socket-mode": "^2.0.0",
 		"@slack/web-api": "^7.0.0",

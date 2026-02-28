@@ -17,7 +17,7 @@
 		"prepublishOnly": "bun run clean && bun run build"
 	},
 	"dependencies": {
-		"@draht/ai": "^0.55.3"
+		"@draht/ai": "workspace:*"
 	},
 	"keywords": [
 		"ai",

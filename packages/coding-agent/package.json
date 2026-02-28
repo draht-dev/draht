@@ -40,9 +40,9 @@
 	},
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.2",
-		"@draht/agent-core": "^0.55.3",
-		"@draht/ai": "^0.55.3",
-		"@draht/tui": "^0.55.3",
+		"@draht/agent-core": "workspace:*",
+		"@draht/ai": "workspace:*",
+		"@draht/tui": "workspace:*",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"chalk": "^5.5.0",
 		"cli-highlight": "^2.1.11",

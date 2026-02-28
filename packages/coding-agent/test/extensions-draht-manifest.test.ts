@@ -27,11 +27,7 @@ describe("extensions draht manifest loading", () => {
 			`export default function(draht) { draht.registerCommand("hello", { handler: async () => {} }); }`,
 		);
 
-		const result = await discoverAndLoadExtensions(
-			[],
-			tempDir,
-			path.join(tempDir, ".draht", "agent"),
-		);
+		const result = await discoverAndLoadExtensions([], tempDir, path.join(tempDir, ".draht", "agent"));
 
 		expect(result.extensions.length).toBeGreaterThanOrEqual(1);
 	});
@@ -53,11 +49,7 @@ describe("extensions draht manifest loading", () => {
 			`export default function(draht) { draht.registerCommand("manifest-hello", { handler: async () => {} }); }`,
 		);
 
-		const result = await discoverAndLoadExtensions(
-			[],
-			tempDir,
-			path.join(tempDir, ".draht", "agent"),
-		);
+		const result = await discoverAndLoadExtensions([], tempDir, path.join(tempDir, ".draht", "agent"));
 
 		const manifestExt = result.extensions.find((e) => e.commands.has("manifest-hello"));
 		expect(manifestExt).toBeDefined();

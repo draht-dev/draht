@@ -21,49 +21,90 @@ export function createInvoiceExtension(config?: Partial<InvoiceConfig>) {
 					type: "hourly" | "fixed";
 					amount?: number;
 					description?: string;
+					hourlyRate?: number;
 					project?: string;
 					startDate?: string;
 					endDate?: string;
 				}) => {
-					if (args.type === "fixed" && args.amount && args.description) {
-						return generator.fixedPrice(
-							args.client,
-							args.description,
-							args.amount,
-						);
+					if (args.type === "fixed") {
+						if (!args.amount || !args.description) {
+							return { error: "Fixed-price invoice requires --amount and --description" };
+						}
+						const invoice = generator.fixedPrice(args.client, args.description, args.amount);
+
+						// If Lexoffice configured, create it there too
+						if (config?.lexoffice?.apiKey) {
+							const lexoffice = new LexofficeClient(config.lexoffice);
+							const result = await lexoffice.createInvoice(invoice);
+							return { invoice, lexofficeId: result.id, message: `Invoice created in Lexoffice: ${result.id}` };
+						}
+						return { invoice, message: "Invoice generated (Lexoffice not configured — draft only)" };
 					}
-					// For hourly, need Toggl integration
+
+					// Hourly: pull time entries from Toggl
+					if (!config?.toggl?.apiToken || !config?.toggl?.workspaceId) {
+						return { error: "Hourly invoice requires toggl.apiToken and toggl.workspaceId in config" };
+					}
+					if (!args.startDate || !args.endDate) {
+						return { error: "Hourly invoice requires --startDate and --endDate (YYYY-MM-DD)" };
+					}
+
+					const toggl = new TogglClient(config.toggl);
+					const projectFilter = args.project ?? args.client;
+					const { entries, totalHours } = await toggl.getProjectTime(
+						projectFilter,
+						args.startDate,
+						args.endDate,
+					);
+
+					if (entries.length === 0) {
+						return { error: `No Toggl entries found for "${projectFilter}" between ${args.startDate} and ${args.endDate}` };
+					}
+
+					const invoice = generator.fromTimeEntries(args.client, entries, args.hourlyRate);
+
+					if (config?.lexoffice?.apiKey) {
+						const lexoffice = new LexofficeClient(config.lexoffice);
+						const result = await lexoffice.createInvoice(invoice);
+						return {
+							invoice,
+							totalHours,
+							entriesCount: entries.length,
+							lexofficeId: result.id,
+							message: `Invoice created from ${entries.length} time entries (${totalHours}h) → Lexoffice: ${result.id}`,
+						};
+					}
+
 					return {
-						message:
-							"Hourly invoice requires Toggl configuration. Set toggl.apiToken and toggl.workspaceId in config.",
+						invoice,
+						totalHours,
+						entriesCount: entries.length,
+						message: `Invoice generated from ${entries.length} time entries (${totalHours}h) — Lexoffice not configured`,
 					};
 				},
 			},
 			"/invoice list": {
 				description: "List recent invoices from Lexoffice",
-				handler: async () => {
+				handler: async (args?: { page?: number }) => {
 					if (!config?.lexoffice?.apiKey) {
-						return {
-							message:
-								"Lexoffice API key not configured. Set lexoffice.apiKey in config.",
-						};
+						return { error: "Lexoffice API key not configured. Set lexoffice.apiKey." };
 					}
 					const client = new LexofficeClient(config.lexoffice);
-					return client.listInvoices();
+					return client.listInvoices(args?.page ?? 0);
 				},
 			},
 			"/invoice send": {
-				description: "Send an invoice via Lexoffice",
+				description: "Finalize and send an invoice via Lexoffice",
 				handler: async (args: { invoiceId: string }) => {
+					if (!args.invoiceId) {
+						return { error: "Missing --invoiceId" };
+					}
 					if (!config?.lexoffice?.apiKey) {
-						return {
-							message:
-								"Lexoffice API key not configured.",
-						};
+						return { error: "Lexoffice API key not configured." };
 					}
 					const client = new LexofficeClient(config.lexoffice);
 					await client.sendInvoice(args.invoiceId);
-					return { message: `Invoice ${args.invoiceId} sent.` };
+					return { message: `Invoice ${args.invoiceId} finalized and sent.` };
 				},
 			},
 		},

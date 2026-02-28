@@ -38,7 +38,7 @@
     "concurrently": "^9.2.1",
     "husky": "^9.1.7",
     "tailwindcss": "^4.2.1",
-    "typescript": "^5.9.2"
+    "typescript": "^6.0.0-beta"
   },
   "engines": {
     "node": ">=20.0.0"

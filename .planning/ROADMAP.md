@@ -80,7 +80,7 @@
 **Requirements:** R16-INV.1 (Lexoffice API client), R16-INV.2 (invoice templates hourly/fixed), R16-INV.3 (Toggl time tracking integration), R16-INV.4 (coding-agent extension /invoice commands), R16-INV.5 (auto-generate from project data)
 **Acceptance:** Invoice CRUD works against Lexoffice API, Toggl hours imported, coding agent commands registered.
 
-## Phase 17: Compliance Checker — `planned`
+## Phase 17: Compliance Checker — `complete`
 **Goal:** GDPR and EU AI Act compliance checking with German legal templates in `packages/compliance/`.
 **Requirements:** R17-CMP.1 (GDPR PII scanner), R17-CMP.2 (EU AI Act documentation validator), R17-CMP.3 (coding-agent compliance extension), R17-CMP.4 (German legal templates), R17-CMP.5 (compliance report generator)
 **Acceptance:** PII scanner catches test cases, legal templates generated, report passes sample audit.

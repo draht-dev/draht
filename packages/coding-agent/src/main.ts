@@ -539,6 +539,169 @@ async function handleConfigCommand(args: string[]): Promise<boolean> {
 	process.exit(0);
 }
 
+async function handleLoginCommand(args: string[]): Promise<boolean> {
+	if (args[0] !== "login" && args[0] !== "--login") {
+		return false;
+	}
+
+	const { getOAuthProviders } = await import("@draht/ai");
+	const authMod = await import("./core/auth-storage.js");
+	const AuthStorageClass = authMod.AuthStorage;
+	// open browser - use dynamic import, fallback to exec
+	const openBrowser = async (url: string) => {
+		try {
+			const { exec } = await import("child_process");
+			exec(`open "${url}" 2>/dev/null || xdg-open "${url}" 2>/dev/null`);
+		} catch { /* ignore */ }
+	};
+
+	const providers = getOAuthProviders();
+	const requestedProvider = args[1]?.toLowerCase();
+
+	// Map friendly names to provider IDs
+	const PROVIDER_ALIASES: Record<string, string> = {
+		anthropic: "anthropic",
+		claude: "anthropic",
+		google: "google-gemini-cli",
+		gemini: "google-gemini-cli",
+		openai: "openai-codex",
+		codex: "openai-codex",
+		copilot: "github-copilot",
+		github: "github-copilot",
+		antigravity: "google-antigravity",
+	};
+
+	if (requestedProvider === "--help" || requestedProvider === "-h" || requestedProvider === "help") {
+		console.log(chalk.bold("\n🔌 draht login\n"));
+		console.log("Authenticate with AI providers.\n");
+		console.log("Usage:");
+		console.log("  draht login              Interactive provider selection");
+		console.log("  draht login anthropic    Login to Anthropic (Claude Pro/Max)");
+		console.log("  draht login gemini       Login to Google Gemini CLI");
+		console.log("  draht login openai       Login to OpenAI (ChatGPT/Codex)");
+		console.log("  draht login copilot      Login to GitHub Copilot");
+		console.log("  draht login all          Login to all providers\n");
+		console.log("Aliases: claude, google, codex, github\n");
+		process.exit(0);
+	}
+
+	if (requestedProvider && requestedProvider !== "all") {
+		const providerId = PROVIDER_ALIASES[requestedProvider] ?? requestedProvider;
+		const provider = providers.find((p) => p.id === providerId);
+		if (!provider) {
+			console.log(chalk.red(`Unknown provider: ${requestedProvider}`));
+			console.log(`\nAvailable providers:`);
+			for (const p of providers) {
+				const aliases = Object.entries(PROVIDER_ALIASES)
+					.filter(([_, v]) => v === p.id)
+					.map(([k]) => k);
+				console.log(`  ${chalk.bold(p.name)} (${p.id}) — aliases: ${aliases.join(", ")}`);
+			}
+			process.exit(1);
+		}
+		await loginProvider(provider, openBrowser);
+		process.exit(0);
+	}
+
+	// Interactive: show menu
+	console.log(chalk.bold("\n🔌 Draht Login\n"));
+	console.log("Select a provider to authenticate:\n");
+
+	const providerList = providers.filter((p) =>
+		["anthropic", "gemini-cli", "openai-codex", "github-copilot"].includes(p.id),
+	);
+
+	for (let i = 0; i < providerList.length; i++) {
+		const p = providerList[i];
+		const as = AuthStorageClass.create();
+		const hasCredentials = as.has(p.id);
+		const status = hasCredentials ? chalk.green("✓ logged in") : chalk.dim("not connected");
+		console.log(`  ${chalk.bold(i + 1)}. ${p.name} ${status}`);
+	}
+	console.log(`  ${chalk.bold("a")}. Login to all`);
+	console.log(`  ${chalk.bold("q")}. Cancel\n`);
+
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	const answer = await new Promise<string>((resolve) => {
+		rl.question("Choice: ", (ans) => {
+			rl.close();
+			resolve(ans.trim());
+		});
+	});
+
+	if (answer === "q" || answer === "") {
+		process.exit(0);
+	}
+
+	if (answer === "a") {
+		for (const p of providerList) {
+			await loginProvider(p, openBrowser);
+		}
+	} else {
+		const idx = parseInt(answer, 10) - 1;
+		if (idx >= 0 && idx < providerList.length) {
+			await loginProvider(providerList[idx], openBrowser);
+		} else {
+			console.log(chalk.red("Invalid choice"));
+		}
+	}
+
+	process.exit(0);
+}
+
+async function loginProvider(
+	provider: { id: string; name: string; login: (cb: any) => Promise<any>; usesCallbackServer?: boolean },
+	openBrowser: (url: string) => Promise<any>,
+): Promise<void> {
+	const { AuthStorage } = await import("./core/auth-storage.js");
+	const authStorage = AuthStorage.create();
+
+	console.log(`\n${chalk.bold(`Logging in to ${provider.name}...`)}`);
+
+	try {
+		const credentials = await provider.login({
+			onAuth: (info: { url: string; instructions?: string }) => {
+				console.log(`\n${chalk.blue("→")} Opening browser for authentication...`);
+				if (info.instructions) console.log(chalk.dim(info.instructions));
+				openBrowser(info.url).catch(() => {
+					console.log(`\n${chalk.yellow("Could not open browser. Visit manually:")}`);
+					console.log(chalk.underline(info.url));
+				});
+			},
+			onPrompt: async (prompt: { message: string; placeholder?: string }) => {
+				const { createInterface } = await import("readline");
+				const rl = createInterface({ input: process.stdin, output: process.stdout });
+				return new Promise<string>((resolve) => {
+					rl.question(`${prompt.message} `, (ans: string) => {
+						rl.close();
+						resolve(ans.trim());
+					});
+				});
+			},
+			onProgress: (message: string) => {
+				console.log(chalk.dim(`  ${message}`));
+			},
+			onManualCodeInput: provider.usesCallbackServer
+				? async () => {
+						const { createInterface } = await import("readline");
+						const rl = createInterface({ input: process.stdin, output: process.stdout });
+						return new Promise<string>((resolve) => {
+							rl.question("Enter the authorization code: ", (ans: string) => {
+								rl.close();
+								resolve(ans.trim());
+							});
+						});
+					}
+				: undefined,
+		});
+
+		authStorage.set(provider.id, { type: "oauth", ...credentials });
+		console.log(chalk.green(`✓ ${provider.name} — logged in successfully`));
+	} catch (error) {
+		console.log(chalk.red(`✗ ${provider.name} — login failed: ${error instanceof Error ? error.message : error}`));
+	}
+}
+
 export async function main(args: string[]) {
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.DRAHT_OFFLINE);
 	if (offlineMode) {
@@ -551,6 +714,10 @@ export async function main(args: string[]) {
 	}
 
 	if (await handleConfigCommand(args)) {
+		return;
+	}
+
+	if (await handleLoginCommand(args)) {
 		return;
 	}
 

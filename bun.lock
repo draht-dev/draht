@@ -232,6 +232,16 @@
         "chalk": "^5.5.0",
       },
     },
+    "packages/router": {
+      "name": "@draht/router",
+      "version": "0.55.3",
+      "dependencies": {
+        "@draht/ai": "workspace:*",
+      },
+      "devDependencies": {
+        "@draht/coding-agent": "workspace:*",
+      },
+    },
     "packages/templates": {
       "name": "@draht/templates",
       "version": "0.55.3",
@@ -438,6 +448,8 @@
     "@draht/orchestrator": ["@draht/orchestrator@workspace:packages/orchestrator"],
 
     "@draht/pods": ["@draht/pods@workspace:packages/pods"],
+
+    "@draht/router": ["@draht/router@workspace:packages/router"],
 
     "@draht/templates": ["@draht/templates@workspace:packages/templates"],
 

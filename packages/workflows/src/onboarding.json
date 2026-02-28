@@ -1,0 +1,80 @@
+{
+	"name": "Client Onboarding",
+	"nodes": [
+		{
+			"parameters": {
+				"httpMethod": "POST",
+				"path": "client-onboarding",
+				"responseMode": "responseNode"
+			},
+			"name": "Webhook: Onboarding Form",
+			"type": "n8n-nodes-base.webhook",
+			"position": [250, 300],
+			"typeVersion": 2
+		},
+		{
+			"parameters": {
+				"operation": "create",
+				"databaseId": "{{NOTION_DATABASE_ID}}",
+				"properties": {
+					"Name": { "title": [{ "text": { "content": "={{$json.clientName}}" } }] },
+					"Email": { "email": "={{$json.email}}" },
+					"Stack": { "select": { "name": "={{$json.stack}}" } },
+					"Status": { "select": { "name": "Active" } }
+				}
+			},
+			"name": "Create Notion Page",
+			"type": "n8n-nodes-base.notion",
+			"position": [500, 200],
+			"typeVersion": 2,
+			"credentials": { "notionApi": { "id": "{{NOTION_CREDENTIAL_ID}}", "name": "Notion" } }
+		},
+		{
+			"parameters": {
+				"owner": "={{$json.githubOrg}}",
+				"repository": "={{$json.repoName}}",
+				"private": true,
+				"description": "Project for ={{$json.clientName}}"
+			},
+			"name": "Create GitHub Repo",
+			"type": "n8n-nodes-base.github",
+			"position": [500, 400],
+			"typeVersion": 1,
+			"credentials": { "githubApi": { "id": "{{GITHUB_CREDENTIAL_ID}}", "name": "GitHub" } }
+		},
+		{
+			"parameters": {
+				"model": "claude-sonnet-4-20250514",
+				"messages": {
+					"values": [
+						{
+							"role": "user",
+							"content": "Generate an AGENTS.md file for a {{$json.stack}} project for client {{$json.clientName}}. Include project conventions, tooling rules, and deployment guidelines."
+						}
+					]
+				}
+			},
+			"name": "Generate AGENTS.md",
+			"type": "n8n-nodes-base.anthropic",
+			"position": [750, 300],
+			"typeVersion": 1,
+			"credentials": { "anthropicApi": { "id": "{{ANTHROPIC_CREDENTIAL_ID}}", "name": "Anthropic" } }
+		},
+		{
+			"parameters": {
+				"respondWith": "json",
+				"responseBody": "={\"status\": \"success\", \"client\": \"{{$json.clientName}}\", \"repo\": \"{{$json.repoName}}\"}"
+			},
+			"name": "Respond Success",
+			"type": "n8n-nodes-base.respondToWebhook",
+			"position": [1000, 300],
+			"typeVersion": 1
+		}
+	],
+	"connections": {
+		"Webhook: Onboarding Form": { "main": [[{ "node": "Create Notion Page", "type": "main", "index": 0 }, { "node": "Create GitHub Repo", "type": "main", "index": 0 }]] },
+		"Create GitHub Repo": { "main": [[{ "node": "Generate AGENTS.md", "type": "main", "index": 0 }]] },
+		"Generate AGENTS.md": { "main": [[{ "node": "Respond Success", "type": "main", "index": 0 }]] }
+	},
+	"settings": { "executionOrder": "v1" }
+}

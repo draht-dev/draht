@@ -1,0 +1,31 @@
+{
+	"name": "@draht/orchestrator",
+	"version": "0.55.3",
+	"private": true,
+	"description": "Multi-agent orchestration — GSD Controller pattern for task decomposition and coordination",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		},
+		"./extension": {
+			"types": "./src/extension.ts",
+			"import": "./src/extension.ts"
+		}
+	},
+	"scripts": {
+		"build": "tsgo --noEmit",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.39.0"
+	},
+	"devDependencies": {
+		"@draht/coding-agent": "workspace:*",
+		"@types/node": "^22.10.5",
+		"typescript": "^5.9.2"
+	}
+}

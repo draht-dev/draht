@@ -19,11 +19,7 @@ export function createComplianceExtension() {
 		check(projectDir: string, projectName?: string): string {
 			const gdprFindings = gdprScanner.scanDirectory(projectDir);
 			const euAiFindings = aiChecker.checkProject(projectDir);
-			const report = generateReport(
-				projectName ?? projectDir,
-				gdprFindings,
-				euAiFindings,
-			);
+			const report = generateReport(projectName ?? projectDir, gdprFindings, euAiFindings);
 			return formatReportMarkdown(report);
 		},
 

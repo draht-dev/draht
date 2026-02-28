@@ -552,7 +552,9 @@ async function handleLoginCommand(args: string[]): Promise<boolean> {
 		try {
 			const { exec } = await import("child_process");
 			exec(`open "${url}" 2>/dev/null || xdg-open "${url}" 2>/dev/null`);
-		} catch { /* ignore */ }
+		} catch {
+			/* ignore */
+		}
 	};
 
 	const providers = getOAuthProviders();

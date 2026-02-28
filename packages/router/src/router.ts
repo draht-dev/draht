@@ -1,11 +1,11 @@
 import {
-	getApiProvider,
-	getModel,
 	type Api,
 	type Context,
+	getApiProvider,
+	getModel,
 	type Model,
-	type StreamOptions,
 	type SimpleStreamOptions,
+	type StreamOptions,
 } from "@draht/ai";
 import { loadConfig } from "./config.js";
 import { estimateCost, logCost } from "./cost.js";

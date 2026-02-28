@@ -51,14 +51,12 @@ export function createInvoiceExtension(config?: Partial<InvoiceConfig>) {
 
 					const toggl = new TogglClient(config.toggl);
 					const projectFilter = args.project ?? args.client;
-					const { entries, totalHours } = await toggl.getProjectTime(
-						projectFilter,
-						args.startDate,
-						args.endDate,
-					);
+					const { entries, totalHours } = await toggl.getProjectTime(projectFilter, args.startDate, args.endDate);
 
 					if (entries.length === 0) {
-						return { error: `No Toggl entries found for "${projectFilter}" between ${args.startDate} and ${args.endDate}` };
+						return {
+							error: `No Toggl entries found for "${projectFilter}" between ${args.startDate} and ${args.endDate}`,
+						};
 					}
 
 					const invoice = generator.fromTimeEntries(args.client, entries, args.hourlyRate);

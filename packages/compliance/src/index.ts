@@ -1,11 +1,11 @@
-export { GdprScanner, PII_PATTERNS } from "./gdpr-scanner.js";
-export { EuAiActChecker, AI_DOC_REQUIREMENTS } from "./eu-ai-act.js";
-export { generateReport, formatReportMarkdown } from "./report.js";
+export { AI_DOC_REQUIREMENTS, EuAiActChecker } from "./eu-ai-act.js";
 export { createComplianceExtension } from "./extension.js";
+export { GdprScanner, PII_PATTERNS } from "./gdpr-scanner.js";
+export { formatReportMarkdown, generateReport } from "./report.js";
 export type {
+	AiDocRequirement,
 	ComplianceFinding,
 	ComplianceReport,
 	PiiPattern,
-	AiDocRequirement,
 	Severity,
 } from "./types.js";

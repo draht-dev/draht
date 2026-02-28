@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { ModelRouter, isRetryableError } from "./router.js";
+import { isRetryableError, ModelRouter } from "./router.js";
 import type { ModelRef, RouterRole } from "./types.js";
 
 /**
@@ -37,8 +37,15 @@ function inferRole(taskDescription: string): RouterRole {
 	if (lower.includes("architect") || lower.includes("design") || lower.includes("plan")) return "architect";
 	if (lower.includes("review") || lower.includes("check") || lower.includes("audit")) return "review";
 	if (lower.includes("document") || lower.includes("readme") || lower.includes("comment")) return "docs";
-	if (lower.includes("scaffold") || lower.includes("boilerplate") || lower.includes("crud") || lower.includes("template")) return "boilerplate";
-	if (lower.includes("what") || lower.includes("how") || lower.includes("why") || lower.includes("explain")) return "quick";
+	if (
+		lower.includes("scaffold") ||
+		lower.includes("boilerplate") ||
+		lower.includes("crud") ||
+		lower.includes("template")
+	)
+		return "boilerplate";
+	if (lower.includes("what") || lower.includes("how") || lower.includes("why") || lower.includes("explain"))
+		return "quick";
 
 	return "implement"; // default
 }

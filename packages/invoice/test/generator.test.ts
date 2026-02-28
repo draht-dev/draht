@@ -33,9 +33,7 @@ describe("InvoiceGenerator", () => {
 	});
 
 	test("uses custom hourly rate", () => {
-		const entries: TimeEntry[] = [
-			{ id: 1, description: "Work", start: "", stop: "", duration: 3600 },
-		];
+		const entries: TimeEntry[] = [{ id: 1, description: "Work", start: "", stop: "", duration: 3600 }];
 		const invoice = generator.fromTimeEntries("Client", entries, 150);
 		expect(invoice.totalNet).toBe(150);
 	});

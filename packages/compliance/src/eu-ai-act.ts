@@ -117,7 +117,40 @@ export class EuAiActChecker {
 		req: AiDocRequirement,
 	): boolean {
 		const contentLower = content.toLowerCase();
-		const keywords = req.requirement.toLowerCase().split(" ");
-		return keywords.some((kw) => contentLower.includes(kw));
+
+		// Check for the requirement as a heading (## System description, ### Risk management, etc.)
+		const headingPattern = new RegExp(
+			`^#{1,4}\\s+.*${this.escapeRegex(req.requirement.toLowerCase())}`,
+			"m",
+		);
+		if (headingPattern.test(contentLower)) return true;
+
+		// Check for the requirement ID as a reference (EUAI-1, Art. 11, etc.)
+		if (contentLower.includes(req.id.toLowerCase())) return true;
+		if (contentLower.includes(req.article.toLowerCase())) return true;
+
+		// Check for the full requirement phrase (not just individual words)
+		if (contentLower.includes(req.requirement.toLowerCase())) return true;
+
+		// Check for key compound phrases from the description
+		const descPhrases = this.extractKeyPhrases(req.description.toLowerCase());
+		const matchCount = descPhrases.filter((phrase) => contentLower.includes(phrase)).length;
+		// Require at least 2 key phrases to match (not just one common word)
+		return matchCount >= 2;
+	}
+
+	private extractKeyPhrases(description: string): string[] {
+		// Extract meaningful 2-3 word phrases, skip stop words
+		const stopWords = new Set(["the", "of", "and", "for", "in", "to", "a", "an", "is", "are", "or", "its"]);
+		const words = description.split(/\s+/).filter((w) => !stopWords.has(w) && w.length > 2);
+		const phrases: string[] = [];
+		for (let i = 0; i < words.length - 1; i++) {
+			phrases.push(`${words[i]} ${words[i + 1]}`);
+		}
+		return phrases;
+	}
+
+	private escapeRegex(str: string): string {
+		return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	}
 }

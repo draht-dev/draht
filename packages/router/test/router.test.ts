@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ModelRouter } from "../src/router.js";
+import { ModelRouter, isRetryableError } from "../src/router.js";
 import { DEFAULT_CONFIG } from "../src/types.js";
 
 describe("ModelRouter", () => {
@@ -50,15 +50,16 @@ describe("ModelRouter", () => {
 	});
 
 	test("isRetryableError identifies retryable errors", () => {
-		expect(router.isRetryableError(new Error("429 rate limit"))).toBe(true);
-		expect(router.isRetryableError(new Error("timeout"))).toBe(true);
-		expect(router.isRetryableError(new Error("503 service unavailable"))).toBe(true);
-		expect(router.isRetryableError(new Error("invalid key"))).toBe(false);
+		expect(isRetryableError(new Error("429 rate limit"))).toBe(true);
+		expect(isRetryableError(new Error("timeout"))).toBe(true);
+		expect(isRetryableError(new Error("503 service unavailable"))).toBe(true);
+		expect(isRetryableError(new Error("invalid key"))).toBe(false);
+		expect(isRetryableError(new Error("overloaded"))).toBe(true);
 	});
 
 	test("isRetryableError checks status property", () => {
-		expect(router.isRetryableError({ status: 429 })).toBe(true);
-		expect(router.isRetryableError({ status: 500 })).toBe(true);
-		expect(router.isRetryableError({ status: 401 })).toBe(false);
+		expect(isRetryableError({ status: 429 })).toBe(true);
+		expect(isRetryableError({ status: 500 })).toBe(true);
+		expect(isRetryableError({ status: 401 })).toBe(false);
 	});
 });

@@ -19,7 +19,7 @@
     "lucide": "^0.544.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
+    "typescript": "^6.0.0-beta",
     "vite": "^7.1.6"
   }
 }

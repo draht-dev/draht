@@ -1,0 +1,12 @@
+{
+	"name": "@draht/templates",
+	"version": "0.55.3",
+	"private": true,
+	"description": "AGENTS.md template library for common stacks — SST/TypeScript, Astro, Go/gRPC",
+	"type": "module",
+	"exports": {
+		"./sst-typescript": "./src/sst-typescript.md",
+		"./astro": "./src/astro.md",
+		"./go-grpc": "./src/go-grpc.md"
+	}
+}

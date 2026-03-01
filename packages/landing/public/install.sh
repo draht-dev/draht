@@ -26,17 +26,31 @@ echo ""
 
 # Check dependencies
 command -v git >/dev/null 2>&1  || error "git is required but not installed."
-command -v bun >/dev/null 2>&1  || {
+command -v curl >/dev/null 2>&1 || error "curl is required but not installed."
+
+if ! command -v bun >/dev/null 2>&1; then
   info "bun not found — installing bun..."
   curl -fsSL https://bun.sh/install | bash
   export PATH="$HOME/.bun/bin:$PATH"
-}
+  command -v bun >/dev/null 2>&1 || error "bun installation failed. Install manually: https://bun.sh"
+fi
+
+# Guard against dangerous INSTALL_DIR values
+case "$INSTALL_DIR" in
+  /|/usr|/usr/local|/etc|/var|/tmp|"$HOME")
+    error "Refusing to install to $INSTALL_DIR — set DRAHT_DIR to a safe location." ;;
+esac
 
 # Clone or update
 if [ -d "$INSTALL_DIR/.git" ]; then
   info "Updating existing install at $INSTALL_DIR..."
   git -C "$INSTALL_DIR" fetch origin main --quiet
-  git -C "$INSTALL_DIR" reset --hard origin/main --quiet
+  git -C "$INSTALL_DIR" reset --hard origin/main
+elif [ -d "$INSTALL_DIR" ]; then
+  info "Removing existing $INSTALL_DIR (not a git repo)..."
+  rm -rf "$INSTALL_DIR"
+  info "Cloning draht to $INSTALL_DIR..."
+  git clone --depth 1 "$REPO" "$INSTALL_DIR" --quiet
 else
   info "Cloning draht to $INSTALL_DIR..."
   git clone --depth 1 "$REPO" "$INSTALL_DIR" --quiet
@@ -45,14 +59,17 @@ fi
 # Build
 info "Installing dependencies..."
 cd "$INSTALL_DIR"
-bun install --frozen-lockfile --quiet
+bun install
 
-info "Building..."
-bun run build --quiet 2>/dev/null || {
-  # Fallback: build only coding-agent
-  cd packages/coding-agent && bun run build --quiet
-  cd "$INSTALL_DIR"
-}
+info "Building coding-agent..."
+cd packages/tui && bun run build || error "Build failed (tui)."
+cd "$INSTALL_DIR"
+cd packages/ai && bun run build || error "Build failed (ai)."
+cd "$INSTALL_DIR"
+cd packages/agent && bun run build || error "Build failed (agent)."
+cd "$INSTALL_DIR"
+cd packages/coding-agent && bun run build || error "Build failed (coding-agent)."
+cd "$INSTALL_DIR"
 
 # Link binary
 mkdir -p "$BIN_DIR"
@@ -79,12 +96,25 @@ if ! echo "$PATH" | grep -q "$BIN_DIR"; then
   esac
 
   if [ -n "$SHELL_RC" ]; then
-    echo "" >> "$SHELL_RC"
-    echo "# draht" >> "$SHELL_RC"
-    echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$SHELL_RC"
-    echo ""
-    success "Added $BIN_DIR to PATH in $SHELL_RC"
-    echo -e "  ${CYAN}Run: source $SHELL_RC${RESET}"
+    # Don't append if already present in the rc file
+    if [ -f "$SHELL_RC" ] && grep -q "# draht" "$SHELL_RC"; then
+      : # Already configured
+    elif [ "$SHELL_RC" = "$HOME/.config/fish/config.fish" ]; then
+      mkdir -p "$(dirname "$SHELL_RC")"
+      echo "" >> "$SHELL_RC"
+      echo "# draht" >> "$SHELL_RC"
+      echo "set -gx PATH $BIN_DIR \$PATH" >> "$SHELL_RC"
+      echo ""
+      success "Added $BIN_DIR to PATH in $SHELL_RC"
+      echo -e "  ${CYAN}Run: source $SHELL_RC${RESET}"
+    else
+      echo "" >> "$SHELL_RC"
+      echo "# draht" >> "$SHELL_RC"
+      echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$SHELL_RC"
+      echo ""
+      success "Added $BIN_DIR to PATH in $SHELL_RC"
+      echo -e "  ${CYAN}Run: source $SHELL_RC${RESET}"
+    fi
   else
     echo ""
     info "Add $BIN_DIR to your PATH to use draht:"

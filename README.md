@@ -38,7 +38,13 @@ draht "Refactor this module to use dependency injection"
 draht -p "List all TODO comments in src/"
 ```
 
-For now, build from source:
+For now, use the 1-command installer:
+
+```bash
+curl -fsSL https://draht.dev/install.sh | bash
+```
+
+Or build manually:
 
 ```bash
 git clone https://github.com/draht-dev/draht.git

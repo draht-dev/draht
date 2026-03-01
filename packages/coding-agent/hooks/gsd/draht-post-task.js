@@ -22,6 +22,41 @@ if (!phaseNum || !planNum || !taskNum || !status) {
 const PLANNING = ".planning";
 const LOG_FILE = path.join(PLANNING, "execution-log.jsonl");
 
+// 0. TDD cycle compliance check
+// If the current commit message starts with "green:", the previous commit for this
+// task should start with "red:" — enforce the Red → Green order.
+if (commitHash) {
+	try {
+		// Find the commit message for commitHash and the one before it
+		const currentMsg = execSync(`git log --format=%s -n 1 ${commitHash} 2>/dev/null`, { encoding: "utf-8" }).trim();
+		if (/^green:/i.test(currentMsg)) {
+			// Scope search to commits that mention this phase/plan/task in their message
+			// to avoid false positives from unrelated older commits
+			const taskPrefix = `${phaseNum}-${planNum}-${taskNum}`;
+			const recentMsgs = execSync(`git log --format=%s -n 50 ${commitHash}~1 2>/dev/null`, { encoding: "utf-8" })
+				.trim()
+				.split("\n")
+				.filter((m) => m.includes(taskPrefix) || /^(red|green|refactor):/i.test(m));
+			// Find the nearest TDD-cycle commit scoped to this task
+			const prevTaskMsg = recentMsgs.find((m) => /^(red|green|refactor):/i.test(m) && m.includes(taskPrefix));
+			if (!prevTaskMsg || !/^red:/i.test(prevTaskMsg)) {
+				console.log(`⚠️  TDD violation: "green:" commit detected but no preceding "red:" commit found for task ${phaseNum}-${planNum}-${taskNum}`);
+				fs.appendFileSync(LOG_FILE, JSON.stringify({
+					timestamp: new Date().toISOString(),
+					phase: parseInt(phaseNum, 10),
+					plan: parseInt(planNum, 10),
+					task: parseInt(taskNum, 10),
+					status: "tdd-violation",
+					warning: "green: commit without preceding red: commit",
+					commit: commitHash,
+				}) + "\n");
+			}
+		}
+	} catch {
+		// Not a git repo or commit not found — ignore
+	}
+}
+
 // 1. Append to execution log
 const entry = {
 	timestamp: new Date().toISOString(),

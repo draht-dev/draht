@@ -230,6 +230,28 @@ export function getPromptsDir(): string {
 	return join(getAgentDir(), "prompts");
 }
 
+/**
+ * Get path to shipped prompt templates (bundled with the package).
+ * - For Bun binary: prompts/ next to executable
+ * - For Node.js: prompts/ at package root
+ */
+export function getShippedPromptsDir(): string {
+	if (isBunBinary) {
+		return join(dirname(process.execPath), "prompts");
+	}
+	return join(getPackageDir(), "prompts");
+}
+
+/**
+ * Get path to shipped hooks (bundled with the package).
+ */
+export function getShippedHooksDir(): string {
+	if (isBunBinary) {
+		return join(dirname(process.execPath), "hooks");
+	}
+	return join(getPackageDir(), "hooks");
+}
+
 /** Get path to sessions directory */
 export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");

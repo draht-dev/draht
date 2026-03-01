@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, isAbsolute, join, resolve, sep } from "path";
-import { CONFIG_DIR_NAME, getPromptsDir } from "../config.js";
+import { CONFIG_DIR_NAME, getPromptsDir, getShippedPromptsDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 
 /**
@@ -218,6 +218,23 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): P
 	const templates: PromptTemplate[] = [];
 
 	if (includeDefaults) {
+		// 0. Load shipped (built-in) templates — loaded first so user/project can override
+		const shippedPromptsDir = getShippedPromptsDir();
+		if (existsSync(shippedPromptsDir)) {
+			templates.push(...loadTemplatesFromDir(shippedPromptsDir, "builtin", "(builtin)"));
+			// Also scan subdirectories (e.g., gsd/, gsd-agents/)
+			try {
+				const subdirs = readdirSync(shippedPromptsDir, { withFileTypes: true });
+				for (const entry of subdirs) {
+					if (entry.isDirectory()) {
+						templates.push(...loadTemplatesFromDir(join(shippedPromptsDir, entry.name), "builtin", "(builtin)"));
+					}
+				}
+			} catch {
+				// ignore
+			}
+		}
+
 		// 1. Load global templates from agentDir/prompts/
 		// Note: if agentDir is provided, it should be the agent dir, not the prompts dir
 		const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;

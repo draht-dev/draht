@@ -6,160 +6,485 @@ const description = "A modular, extensible AI coding agent with model routing, T
 ---
 
 <Base title={title} description={description}>
-	<main style="max-width: 900px; margin: 0 auto; padding: 2rem;">
+	<main class="main">
 
 		<!-- Hero -->
-		<section style="text-align: center; padding: 4rem 0;">
-			<h1 style="font-family: var(--mono); font-size: 3.5rem; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 1rem;">
-				<span style="color: var(--accent);">draht</span>
-			</h1>
-			<p style="font-size: 1.25rem; color: var(--muted); max-width: 560px; margin: 0 auto 2rem;">
+		<section class="hero">
+			<div class="hero-brand">
+				<div class="hero-logo">
+					<img src="/draht-logo.webp" alt="Draht — AI Coding Agent" width="120" height="120" />
+				</div>
+				<div class="hero-connector" aria-hidden="true">
+					<svg viewBox="0 0 2 48" width="2" height="48" class="connector-line">
+						<line x1="1" y1="0" x2="1" y2="48" stroke="currentColor" stroke-width="1" />
+					</svg>
+					<div class="connector-node"></div>
+				</div>
+				<h1 class="hero-title">draht</h1>
+			</div>
+			<p class="hero-subtitle">
+				Dynamic Routing for Agent &amp; Task Handling
+			</p>
+			<p class="hero-desc">
 				The AI coding agent built for freelancers.<br />
 				Multi-model. TDD-first. DDD-native. German-compliant.
 			</p>
-			<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; font-family: var(--mono); font-size: 1rem; display: inline-flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
-				<span style="user-select: all;"><span style="color: var(--muted);">$</span> curl -fsSL https://draht.dev/install.sh | bash</span>
-				<button
-					id="copy-install"
-					style="background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); cursor: pointer; padding: 0.25rem 0.5rem; font-size: 0.75rem; font-family: var(--mono); transition: color 0.2s, border-color 0.2s;"
-					aria-label="Copy install command"
-				>
-					copy
-				</button>
+
+			<div class="install-box">
+				<span class="install-text"><span class="install-prompt">$</span> curl -fsSL https://draht.dev/install.sh | bash</span>
+				<button id="copy-install" class="copy-btn" aria-label="Copy install command">copy</button>
 			</div>
-			<script>
-				document.getElementById("copy-install")?.addEventListener("click", async (e) => {
-					const btn = e.currentTarget as HTMLButtonElement;
-					await navigator.clipboard.writeText("curl -fsSL https://draht.dev/install.sh | bash");
-					btn.textContent = "copied!";
-					btn.style.color = "var(--accent)";
-					btn.style.borderColor = "var(--accent)";
-					setTimeout(() => {
-						btn.textContent = "copy";
-						btn.style.color = "var(--muted)";
-						btn.style.borderColor = "var(--border)";
-					}, 2000);
-				});
-			</script>
-			<p style="font-size: 0.8rem; color: var(--muted); margin-bottom: 2rem;">
-				Installs from source. npm registry coming soon.
-			</p>
-			<div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
-				<a href="https://github.com/draht-dev/draht" style="background: var(--accent); color: white; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: 600; font-size: 0.875rem;">View on GitHub →</a>
-				<a href="#features" style="background: var(--surface); color: var(--fg); padding: 0.75rem 1.5rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.875rem;">See Features</a>
+			<p class="install-note">Installs from source. npm registry coming soon.</p>
+
+			<div class="hero-actions">
+				<a href="https://github.com/draht-dev/draht" class="btn btn-primary">View on GitHub</a>
+				<a href="#features" class="btn btn-secondary">See Features</a>
 			</div>
 		</section>
 
 		<!-- Features -->
-		<section id="features" style="padding: 4rem 0;">
-			<h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 2rem; text-align: center;">What Draht Does</h2>
-			<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 2rem;">
-				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
-					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🧠 Model Router</h3>
-					<p style="color: var(--muted); font-size: 0.875rem;">Role-based model selection with automatic fallback. Architect tasks use Claude Opus, boilerplate uses DeepSeek. Direct API calls — no OpenRouter latency.</p>
+		<section id="features" class="section">
+			<h2 class="section-title">What Draht Does</h2>
+			<div class="feature-grid">
+				<div class="feature-card">
+					<div class="feature-icon">⬡</div>
+					<h3>Model Router</h3>
+					<p>Role-based model selection with automatic fallback. Architect tasks use Claude Opus, boilerplate uses DeepSeek. Direct API calls — no OpenRouter latency.</p>
 				</div>
-				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
-					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🧪 TDD-First</h3>
-					<p style="color: var(--muted); font-size: 0.875rem;">Tests before implementation. The agent writes failing tests first, then implements until green, then refactors. Not optional — it's how Draht works.</p>
+				<div class="feature-card">
+					<div class="feature-icon">△</div>
+					<h3>TDD-First</h3>
+					<p>Tests before implementation. The agent writes failing tests first, then implements until green, then refactors. Not optional — it's how Draht works.</p>
 				</div>
-				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
-					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🏗️ DDD-Native</h3>
-					<p style="color: var(--muted); font-size: 0.875rem;">Every project starts with a domain model. Bounded contexts, aggregates, ubiquitous language — baked into project templates and code review.</p>
+				<div class="feature-card">
+					<div class="feature-icon">◇</div>
+					<h3>DDD-Native</h3>
+					<p>Every project starts with a domain model. Bounded contexts, aggregates, ubiquitous language — baked into project templates and code review.</p>
 				</div>
-				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
-					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🔌 Extensions</h3>
-					<p style="color: var(--muted); font-size: 0.875rem;">SST resource manager, deploy guardian, client knowledge base. Load custom tools via the extension API. Build your own.</p>
+				<div class="feature-card">
+					<div class="feature-icon">⊞</div>
+					<h3>Extensions</h3>
+					<p>SST resource manager, deploy guardian, client knowledge base. Load custom tools via the extension API. Build your own.</p>
 				</div>
-				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
-					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🧾 Invoicing</h3>
-					<p style="color: var(--muted); font-size: 0.875rem;">Lexoffice API integration for German invoicing. Toggl time tracking. Generate invoices from your terminal: <code>/invoice create</code>.</p>
+				<div class="feature-card">
+					<div class="feature-icon">▤</div>
+					<h3>Invoicing</h3>
+					<p>Lexoffice API integration for German invoicing. Toggl time tracking. Generate invoices from your terminal.</p>
 				</div>
-				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem;">
-					<h3 style="font-size: 1rem; margin-bottom: 0.5rem;">🛡️ Compliance</h3>
-					<p style="color: var(--muted); font-size: 0.875rem;">GDPR PII scanner, EU AI Act documentation checker, German legal templates. Automated compliance checks on every commit.</p>
+				<div class="feature-card">
+					<div class="feature-icon">◈</div>
+					<h3>Compliance</h3>
+					<p>GDPR PII scanner, EU AI Act documentation checker, German legal templates. Automated compliance checks on every commit.</p>
 				</div>
 			</div>
 		</section>
 
 		<!-- Architecture -->
-		<section id="architecture" style="padding: 4rem 0;">
-			<h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 2rem; text-align: center;">Architecture</h2>
-			<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 2rem; font-family: var(--mono); font-size: 0.8rem; line-height: 1.8; overflow-x: auto;">
-				<pre style="color: var(--fg);">
-draht-mono/
+		<section id="architecture" class="section">
+			<h2 class="section-title">Architecture</h2>
+			<div class="arch-block">
+				<pre><code>draht-mono/
 ├── packages/
-│   ├── coding-agent/     # Core agent — read, bash, edit, write tools
-│   ├── ai/               # Unified LLM API — Anthropic, OpenAI, Google, DeepSeek
-│   ├── router/           # Role-based model routing with fallback chains
-│   ├── knowledge/        # Per-client vector DB for context persistence
-│   ├── orchestrator/     # Multi-agent task decomposition (GSD Controller)
-│   ├── ci/               # GitHub Action for AI-powered PR review
-│   ├── deploy-guardian/  # Pre-deploy checks, rollback automation
-│   ├── invoice/          # Lexoffice + Toggl invoicing
-│   ├── compliance/       # GDPR scanner, EU AI Act, legal templates
-│   ├── templates/        # AGENTS.md templates (SST/TS, Astro, Go/gRPC)
-│   ├── workflows/        # n8n workflow templates
-│   ├── infra/            # SST v4 infrastructure definitions
-│   └── landing/          # This website (Astro)
-└── .planning/            # GSD methodology — roadmap, plans, execution logs</pre>
+│   ├── coding-agent/     <span class="code-comment"># Core agent — read, bash, edit, write tools</span>
+│   ├── ai/               <span class="code-comment"># Unified LLM API — Anthropic, OpenAI, Google, DeepSeek</span>
+│   ├── router/           <span class="code-comment"># Role-based model routing with fallback chains</span>
+│   ├── knowledge/        <span class="code-comment"># Per-client vector DB for context persistence</span>
+│   ├── orchestrator/     <span class="code-comment"># Multi-agent task decomposition (GSD Controller)</span>
+│   ├── ci/               <span class="code-comment"># GitHub Action for AI-powered PR review</span>
+│   ├── deploy-guardian/  <span class="code-comment"># Pre-deploy checks, rollback automation</span>
+│   ├── invoice/          <span class="code-comment"># Lexoffice + Toggl invoicing</span>
+│   ├── compliance/       <span class="code-comment"># GDPR scanner, EU AI Act, legal templates</span>
+│   ├── templates/        <span class="code-comment"># AGENTS.md templates (SST/TS, Astro, Go/gRPC)</span>
+│   └── landing/          <span class="code-comment"># This website (Astro)</span>
+└── .planning/            <span class="code-comment"># GSD methodology</span></code></pre>
 			</div>
-			<p style="text-align: center; margin-top: 1rem; color: var(--muted); font-size: 0.875rem;">
-				Monorepo. 15 packages. TypeScript + Bun. Zero runtime dependencies where possible.
-			</p>
+			<p class="arch-note">Monorepo. 15 packages. TypeScript + Bun. Zero runtime dependencies where possible.</p>
 		</section>
 
 		<!-- Getting Started -->
-		<section style="padding: 4rem 0;">
-			<h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 2rem; text-align: center;">Getting Started</h2>
-			<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 2rem; font-family: var(--mono); font-size: 0.875rem; line-height: 2;">
-				<p style="color: var(--muted);"># Install globally</p>
-				<p><span style="color: var(--accent);">$</span> npm install -g @draht/coding-agent</p>
-				<br />
-				<p style="color: var(--muted);"># Or run directly</p>
-				<p><span style="color: var(--accent);">$</span> npx @draht/coding-agent</p>
-				<br />
-				<p style="color: var(--muted);"># Initialize a project with GSD methodology</p>
-				<p><span style="color: var(--accent);">$</span> draht init</p>
-				<p><span style="color: var(--accent);">$</span> draht create-project "My App"</p>
-				<p><span style="color: var(--accent);">$</span> draht create-requirements</p>
-				<p><span style="color: var(--accent);">$</span> draht create-domain-model</p>
-				<p><span style="color: var(--accent);">$</span> draht create-roadmap</p>
-				<br />
-				<p style="color: var(--muted);"># Configure model routing</p>
-				<p><span style="color: var(--accent);">$</span> draht router show</p>
-				<p><span style="color: var(--accent);">$</span> draht router set architect anthropic/claude-opus-4-6</p>
+		<section class="section">
+			<h2 class="section-title">Getting Started</h2>
+			<div class="code-block">
+				<div class="code-line comment"># Install globally</div>
+				<div class="code-line cmd">npm install -g @draht/coding-agent</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line comment"># Or run directly</div>
+				<div class="code-line cmd">npx @draht/coding-agent</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line comment"># Initialize a project with GSD methodology</div>
+				<div class="code-line cmd">draht init</div>
+				<div class="code-line cmd">draht create-project "My App"</div>
+				<div class="code-line cmd">draht create-requirements</div>
+				<div class="code-line cmd">draht create-domain-model</div>
+				<div class="code-line cmd">draht create-roadmap</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line comment"># Configure model routing</div>
+				<div class="code-line cmd">draht router show</div>
+				<div class="code-line cmd">draht router set architect anthropic/claude-opus-4-6</div>
 			</div>
 		</section>
 
 		<!-- Pricing -->
-		<section id="pricing" style="padding: 4rem 0;">
-			<h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 1rem; text-align: center;">Pricing</h2>
-			<p style="text-align: center; color: var(--muted); margin-bottom: 2rem;">Draht is open source. The tooling is free. You pay for the AI models you use.</p>
-			<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 2rem; max-width: 700px; margin: 0 auto;">
-				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 2rem; text-align: center;">
-					<h3 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Open Source</h3>
-					<p style="font-size: 2rem; font-weight: 700; margin-bottom: 1rem;">Free</p>
-					<ul style="list-style: none; color: var(--muted); font-size: 0.875rem; text-align: left;">
-						<li style="margin-bottom: 0.5rem;">✓ All packages</li>
-						<li style="margin-bottom: 0.5rem;">✓ Model router</li>
-						<li style="margin-bottom: 0.5rem;">✓ TDD/DDD workflows</li>
-						<li style="margin-bottom: 0.5rem;">✓ Extensions</li>
-						<li style="margin-bottom: 0.5rem;">✓ Community support</li>
+		<section id="pricing" class="section">
+			<h2 class="section-title">Pricing</h2>
+			<p class="section-desc">Draht is open source. The tooling is free. You pay for the AI models you use.</p>
+			<div class="pricing-grid">
+				<div class="pricing-card">
+					<h3>Open Source</h3>
+					<div class="price">Free</div>
+					<ul>
+						<li>All packages</li>
+						<li>Model router</li>
+						<li>TDD/DDD workflows</li>
+						<li>Extensions</li>
+						<li>Community support</li>
 					</ul>
 				</div>
-				<div style="background: var(--surface); border: 2px solid var(--accent); border-radius: 8px; padding: 2rem; text-align: center;">
-					<h3 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Freelance Setup</h3>
-					<p style="font-size: 2rem; font-weight: 700; margin-bottom: 1rem;">€499<span style="font-size: 0.875rem; font-weight: 400; color: var(--muted);"> one-time</span></p>
-					<ul style="list-style: none; color: var(--muted); font-size: 0.875rem; text-align: left;">
-						<li style="margin-bottom: 0.5rem;">✓ Everything in Open Source</li>
-						<li style="margin-bottom: 0.5rem;">✓ Custom AGENTS.md for your stack</li>
-						<li style="margin-bottom: 0.5rem;">✓ Invoice + compliance setup</li>
-						<li style="margin-bottom: 0.5rem;">✓ 2h onboarding call</li>
-						<li style="margin-bottom: 0.5rem;">✓ 30 days email support</li>
+				<div class="pricing-card pricing-featured">
+					<h3>Freelance Setup</h3>
+					<div class="price">&euro;499 <span class="price-note">one-time</span></div>
+					<ul>
+						<li>Everything in Open Source</li>
+						<li>Custom AGENTS.md for your stack</li>
+						<li>Invoice + compliance setup</li>
+						<li>2h onboarding call</li>
+						<li>30 days email support</li>
 					</ul>
 				</div>
 			</div>
 		</section>
 
 	</main>
+
+	<script>
+		document.getElementById("copy-install")?.addEventListener("click", async (e) => {
+			const btn = e.currentTarget as HTMLButtonElement;
+			await navigator.clipboard.writeText("curl -fsSL https://draht.dev/install.sh | bash");
+			btn.textContent = "copied";
+			btn.classList.add("copied");
+			setTimeout(() => {
+				btn.textContent = "copy";
+				btn.classList.remove("copied");
+			}, 2000);
+		});
+	</script>
 </Base>
+
+<style>
+	.main {
+		position: relative;
+		z-index: 1;
+		max-width: 740px;
+		margin: 0 auto;
+		padding: 0 2rem;
+	}
+
+	/* Hero */
+	.hero {
+		text-align: center;
+		padding: 5rem 0 5rem;
+	}
+
+	/* Connected logo + title */
+	.hero-brand {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		margin-bottom: 1rem;
+	}
+	.hero-logo {
+		position: relative;
+	}
+	.hero-logo img {
+		border-radius: 18px;
+		display: block;
+	}
+	.hero-connector {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		margin: -2px 0;
+	}
+	.connector-line {
+		color: var(--accent);
+		opacity: 0.4;
+	}
+	.connector-node {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--accent);
+		opacity: 0.5;
+		margin: -1px 0 4px;
+		box-shadow: 0 0 8px var(--accent-glow);
+	}
+	.hero-title {
+		font-family: var(--mono);
+		font-size: 3.8rem;
+		font-weight: 700;
+		letter-spacing: -0.04em;
+		color: var(--fg);
+		line-height: 1;
+	}
+	.hero-subtitle {
+		font-family: var(--mono);
+		font-size: 0.75rem;
+		color: var(--muted);
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		margin-bottom: 1.75rem;
+	}
+	.hero-desc {
+		font-size: 1.05rem;
+		color: var(--muted);
+		max-width: 460px;
+		margin: 0 auto 2.5rem;
+		line-height: 1.7;
+	}
+
+	/* Install box */
+	.install-box {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 0.875rem 1.25rem;
+		font-family: var(--mono);
+		font-size: 0.85rem;
+		display: inline-flex;
+		align-items: center;
+		gap: 1rem;
+		margin-bottom: 0.75rem;
+	}
+	.install-text {
+		user-select: all;
+	}
+	.install-prompt {
+		color: var(--accent);
+	}
+	.copy-btn {
+		background: none;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: var(--muted);
+		cursor: pointer;
+		padding: 0.2rem 0.5rem;
+		font-size: 0.7rem;
+		font-family: var(--mono);
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		transition: all 0.2s;
+	}
+	.copy-btn:hover {
+		color: var(--fg);
+		border-color: var(--muted);
+	}
+	.copy-btn.copied {
+		color: var(--accent);
+		border-color: var(--accent-dim);
+	}
+	.install-note {
+		font-size: 0.75rem;
+		color: var(--muted);
+		margin-bottom: 2.5rem;
+	}
+
+	/* Buttons */
+	.hero-actions {
+		display: flex;
+		gap: 1rem;
+		justify-content: center;
+		flex-wrap: wrap;
+	}
+	.btn {
+		padding: 0.7rem 1.75rem;
+		border-radius: 6px;
+		font-size: 0.8rem;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+		transition: all 0.2s;
+	}
+	.btn-primary {
+		background: var(--accent);
+		color: #08080a;
+	}
+	.btn-primary:hover {
+		background: #f0dc60;
+		color: #08080a;
+		box-shadow: 0 0 24px var(--accent-glow);
+	}
+	.btn-secondary {
+		background: var(--surface);
+		color: var(--fg);
+		border: 1px solid var(--border);
+	}
+	.btn-secondary:hover {
+		border-color: var(--muted);
+		color: var(--fg);
+	}
+
+	/* Sections */
+	.section {
+		padding: 5rem 0;
+	}
+	.section-title {
+		font-size: 1.75rem;
+		font-weight: 700;
+		margin-bottom: 1rem;
+		text-align: center;
+		letter-spacing: -0.02em;
+	}
+	.section-desc {
+		text-align: center;
+		color: var(--muted);
+		margin-bottom: 2.5rem;
+		font-size: 0.95rem;
+	}
+
+	/* Features */
+	.feature-grid {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 1px;
+		background: var(--border);
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		overflow: hidden;
+		margin-top: 2.5rem;
+	}
+	.feature-card {
+		background: var(--surface);
+		padding: 1.75rem;
+		transition: background 0.2s;
+	}
+	.feature-card:hover {
+		background: var(--surface-hover);
+	}
+	.feature-icon {
+		font-size: 1.1rem;
+		color: var(--accent-dim);
+		margin-bottom: 0.75rem;
+		opacity: 0.6;
+	}
+	.feature-card h3 {
+		font-size: 0.9rem;
+		font-weight: 600;
+		margin-bottom: 0.5rem;
+		letter-spacing: -0.01em;
+	}
+	.feature-card p {
+		color: var(--muted);
+		font-size: 0.8rem;
+		line-height: 1.6;
+	}
+
+	/* Architecture */
+	.arch-block {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		padding: 2rem;
+		overflow-x: auto;
+		margin-top: 2rem;
+	}
+	.arch-block pre {
+		font-size: 0.78rem;
+		line-height: 1.9;
+	}
+	.arch-block code {
+		color: var(--fg);
+	}
+	.code-comment {
+		color: var(--muted);
+	}
+	.arch-note {
+		text-align: center;
+		margin-top: 1rem;
+		color: var(--muted);
+		font-size: 0.8rem;
+	}
+
+	/* Code block */
+	.code-block {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		padding: 1.75rem 2rem;
+		font-family: var(--mono);
+		font-size: 0.825rem;
+		margin-top: 2rem;
+	}
+	.code-line {
+		line-height: 2;
+	}
+	.code-line.comment {
+		color: var(--muted);
+	}
+	.code-line.comment::before {
+		content: "# ";
+	}
+	.code-line.spacer {
+		height: 0.5rem;
+	}
+	.code-line.cmd::before {
+		content: "$ ";
+		color: var(--accent);
+		user-select: none;
+		pointer-events: none;
+	}
+
+	/* Pricing */
+	.pricing-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+		gap: 1.5rem;
+		max-width: 620px;
+		margin: 0 auto;
+	}
+	.pricing-card {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		padding: 2rem;
+	}
+	.pricing-featured {
+		border-color: var(--accent-dark);
+		box-shadow: 0 0 40px rgba(232, 200, 40, 0.03);
+	}
+	.pricing-card h3 {
+		font-size: 1rem;
+		margin-bottom: 0.75rem;
+		font-weight: 600;
+	}
+	.price {
+		font-size: 2rem;
+		font-weight: 700;
+		margin-bottom: 1.25rem;
+	}
+	.price-note {
+		font-size: 0.8rem;
+		font-weight: 400;
+		color: var(--muted);
+	}
+	.pricing-card ul {
+		list-style: none;
+	}
+	.pricing-card li {
+		color: var(--muted);
+		font-size: 0.825rem;
+		padding: 0.3rem 0;
+	}
+	.pricing-card li::before {
+		content: "— ";
+		color: var(--border-accent);
+	}
+	.pricing-featured li::before {
+		color: var(--accent-dim);
+	}
+
+	@media (max-width: 600px) {
+		.hero-title { font-size: 2.75rem; }
+		.feature-grid { grid-template-columns: 1fr; }
+		.main { padding: 0 1.25rem; }
+		.hero-logo img { width: 90px; height: 90px; }
+	}
+</style>

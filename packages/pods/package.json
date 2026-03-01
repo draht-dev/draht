@@ -8,7 +8,7 @@
 	},
 	"scripts": {
 		"clean": "rm -rf dist",
-		"build": "tsgo -p tsconfig.build.json && chmod +x dist/cli.js && cp src/models.json dist/ && cp -r scripts dist/",
+		"build": "tsgo -p tsconfig.build.json && cp src/models.json dist/ && cp -r scripts dist/",
 		"prepublishOnly": "bun run clean && bun run build"
 	},
 	"files": [

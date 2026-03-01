@@ -281,7 +281,8 @@ console.log();
 // 7. Build and publish
 console.log("Building and publishing...");
 run("cd packages/tui && bun run build && cd ../ai && bun run build && cd ../agent && bun run build && cd ../coding-agent && bun run build && cd ../mom && bun run build && cd ../web-ui && bun run build && cd ../pods && bun run build");
-run("npm publish -ws --access public");
+const isPrerelease = version.includes("-");
+run(`npm publish -ws --access public${isPrerelease ? " --tag next" : ""}`);
 console.log();
 
 // 8. Add new [Unreleased] sections

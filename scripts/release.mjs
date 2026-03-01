@@ -126,9 +126,68 @@ function getChangelogs() {
 		.filter((path) => existsSync(path));
 }
 
+function getCommitsSinceLastTag() {
+	// Find the last release tag
+	let lastTag = null;
+	try {
+		lastTag = execSync("git describe --tags --abbrev=0 2>/dev/null", { encoding: "utf-8" }).trim();
+	} catch { /* no tags yet */ }
+
+	// Get commits since last tag (or all commits if no tag)
+	const range = lastTag ? `${lastTag}..HEAD` : "HEAD";
+	let log = "";
+	try {
+		log = execSync(`git log ${range} --format="%s" 2>/dev/null`, { encoding: "utf-8" }).trim();
+	} catch { /* ignore */ }
+
+	if (!log) return null;
+
+	const typeLabels = {
+		feat: "### Features",
+		fix: "### Bug Fixes",
+		perf: "### Performance",
+		refactor: "### Refactoring",
+		docs: "### Documentation",
+		chore: "### Chores",
+		test: "### Tests",
+		ci: "### CI",
+		build: "### Build",
+	};
+
+	const groups = {};
+	for (const line of log.split("\n")) {
+		if (!line.trim()) continue;
+		// Skip release/chore-unreleased commits
+		if (/^(release:|chore: add \[Unreleased\])/.test(line)) continue;
+		const match = line.match(/^(\w+)(?:\(([^)]+)\))?!?:\s*(.+)$/);
+		if (match) {
+			const [, type, scope, desc] = match;
+			const key = typeLabels[type] ?? "### Other";
+			if (!groups[key]) groups[key] = [];
+			groups[key].push(scope ? `- **${scope}:** ${desc}` : `- ${desc}`);
+		} else {
+			// Non-conventional commit — bucket under Other
+			if (!groups["### Other"]) groups["### Other"] = [];
+			groups["### Other"].push(`- ${line}`);
+		}
+	}
+
+	if (Object.keys(groups).length === 0) return null;
+
+	// Render in a consistent order
+	const order = ["### Features", "### Bug Fixes", "### Performance", "### Refactoring", "### Documentation", "### Tests", "### CI", "### Build", "### Chores", "### Other"];
+	const sections = order
+		.filter((k) => groups[k])
+		.map((k) => `${k}\n${groups[k].join("\n")}`)
+		.join("\n\n");
+
+	return sections;
+}
+
 function updateChangelogsForRelease(version) {
 	const date = new Date().toISOString().split("T")[0];
 	const changelogs = getChangelogs();
+	const commitLog = getCommitsSinceLastTag();
 
 	for (const changelog of changelogs) {
 		const content = readFileSync(changelog, "utf-8");
@@ -138,10 +197,22 @@ function updateChangelogsForRelease(version) {
 			continue;
 		}
 
-		const updated = content.replace(
-			"## [Unreleased]",
-			`## [${version}] - ${date}`,
-		);
+		// Check if the [Unreleased] section already has hand-written content
+		const unreleasedMatch = content.match(/## \[Unreleased\]\n([\s\S]*?)(?=\n## \[|$)/);
+		const existingContent = unreleasedMatch?.[1]?.trim() ?? "";
+
+		// Build the new section body: prefer hand-written, fall back to auto-generated commits
+		let sectionBody = existingContent;
+		if (!sectionBody && commitLog) {
+			sectionBody = commitLog;
+			console.log(`  Auto-populating ${changelog} from git commits`);
+		}
+
+		const newSection = sectionBody
+			? `## [${version}] - ${date}\n\n${sectionBody}\n`
+			: `## [${version}] - ${date}\n`;
+
+		const updated = content.replace(/## \[Unreleased\]\n[\s\S]*?(?=\n## \[|$)/, newSection);
 		writeFileSync(changelog, updated);
 		console.log(`  Updated ${changelog}`);
 	}

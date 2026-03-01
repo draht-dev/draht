@@ -33,3 +33,8 @@ pi-*.html
 out.html
 packages/coding-agent/binaries/
 todo.md
+
+# SST / Astro
+.sst/
+.astro/
+sst-env.d.ts

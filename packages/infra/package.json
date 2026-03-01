@@ -1,6 +1,6 @@
 {
 	"name": "@draht/infra",
-	"version": "2026.3.1-6",
+	"version": "2026.3.1-7",
 	"private": true,
 	"description": "SST v4 infrastructure for Draht — Lambda, API Gateway, DynamoDB",
 	"type": "module",

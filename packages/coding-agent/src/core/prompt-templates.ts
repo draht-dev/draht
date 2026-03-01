@@ -217,24 +217,24 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): P
 
 	const templates: PromptTemplate[] = [];
 
-	if (includeDefaults) {
-		// 0. Load shipped (built-in) templates — loaded first so user/project can override
-		const shippedPromptsDir = getShippedPromptsDir();
-		if (existsSync(shippedPromptsDir)) {
-			templates.push(...loadTemplatesFromDir(shippedPromptsDir, "builtin", "(builtin)"));
-			// Also scan subdirectories (e.g., gsd/, gsd-agents/)
-			try {
-				const subdirs = readdirSync(shippedPromptsDir, { withFileTypes: true });
-				for (const entry of subdirs) {
-					if (entry.isDirectory()) {
-						templates.push(...loadTemplatesFromDir(join(shippedPromptsDir, entry.name), "builtin", "(builtin)"));
-					}
+	// 0. Always load shipped (built-in) templates — part of the package, not user config
+	const shippedPromptsDir = getShippedPromptsDir();
+	if (existsSync(shippedPromptsDir)) {
+		templates.push(...loadTemplatesFromDir(shippedPromptsDir, "builtin", "(builtin)"));
+		// Also scan subdirectories (e.g., commands/, agents/)
+		try {
+			const subdirs = readdirSync(shippedPromptsDir, { withFileTypes: true });
+			for (const entry of subdirs) {
+				if (entry.isDirectory()) {
+					templates.push(...loadTemplatesFromDir(join(shippedPromptsDir, entry.name), "builtin", "(builtin)"));
 				}
-			} catch {
-				// ignore
 			}
+		} catch {
+			// ignore
 		}
+	}
 
+	if (includeDefaults) {
 		// 1. Load global templates from agentDir/prompts/
 		// Note: if agentDir is provided, it should be the agent dir, not the prompts dir
 		const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;

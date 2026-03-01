@@ -9,15 +9,20 @@
 </p>
 
 <p align="center">
-  <a href="https://draht.dev">Website</a> · <code>npx @draht/coding-agent</code>
+  <a href="https://draht.dev">Website</a>
 </p>
 
 > [!WARNING]
 > Draht is in early development. APIs, packages, and features may change without notice. Use at your own risk.
 
+> [!NOTE]
+> **Not yet available on npm.** Packages have not been published to the npm registry yet. To use Draht, clone this repository and build from source (see [Development](#development) below).
+
 A modular, extensible AI coding agent framework. Extensions, skills, multi-model support — all in your terminal.
 
 ## Quick Start
+
+> **Coming soon** — once published to npm, you'll be able to install via:
 
 ```bash
 # Install globally
@@ -31,6 +36,15 @@ draht "Refactor this module to use dependency injection"
 
 # Non-interactive (process and exit)
 draht -p "List all TODO comments in src/"
+```
+
+For now, build from source:
+
+```bash
+git clone https://github.com/draht-dev/draht.git
+cd draht
+bun install
+bun run build
 ```
 
 ## Packages

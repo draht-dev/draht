@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="draht-logo@0.5.png" alt="Draht" width="400">
+  <img src="draht-logo@0.5.jpg" alt="Draht" width="400">
 </p>
 
 <h1 align="center">Draht</h1>

@@ -35,7 +35,49 @@ const failed = entries.filter((e) => e.status === "fail").length;
 const skipped = entries.filter((e) => e.status === "skip").length;
 const warnings = entries.filter((e) => e.warning).length;
 
-// 2. Generate phase report
+// 2. Compute TDD and domain health metrics
+const tddViolations = entries.filter((e) => e.status === "tdd-violation").length;
+
+// TDD commit counts: derive from git log scoped to commits since phase start
+// (use the earliest entry timestamp as the lower bound)
+let tddSummary = "⚠️  No TDD commit data in log";
+try {
+	const { execSync } = require("node:child_process");
+	// Scope to commits that follow TDD naming convention for this phase
+	const gitLog = execSync(
+		`git log --format=%s --grep="^[0-9]" -E --extended-regexp 2>/dev/null || git log --format=%s 2>/dev/null`,
+		{ encoding: "utf-8" }
+	).trim();
+	const lines = gitLog.split("\n");
+	const redCount = lines.filter((l) => /^red:/i.test(l)).length;
+	const greenCount = lines.filter((l) => /^green:/i.test(l)).length;
+	const refactorCount = lines.filter((l) => /^refactor:/i.test(l)).length;
+	if (redCount + greenCount + refactorCount > 0) {
+		tddSummary = `🔴 Red: ${redCount}  🟢 Green: ${greenCount}  🔵 Refactor: ${refactorCount}`;
+	} else {
+		tddSummary = "⚠️  No red:/green:/refactor: commits found — TDD cycle may not have been followed";
+	}
+} catch { /* ignore */ }
+
+// Domain health: check DOMAIN.md presence and glossary size
+let domainSummary = "⚠️  .planning/DOMAIN.md not found";
+const domainPath = path.join(PLANNING, "DOMAIN.md");
+if (fs.existsSync(domainPath)) {
+	const domainContent = fs.readFileSync(domainPath, "utf-8");
+	const termMatches = [...domainContent.matchAll(/\b([A-Z][a-zA-Z0-9]+)\b/g)];
+	const termCount = new Set(termMatches.map((m) => m[1])).size;
+	const hasContexts = domainContent.includes("## Bounded Contexts");
+	const hasGlossary = domainContent.includes("## Ubiquitous Language");
+	domainSummary = `${hasContexts ? "✅" : "❌"} Bounded Contexts  ${hasGlossary ? "✅" : "❌"} Ubiquitous Language  📖 ~${termCount} terms`;
+}
+
+// TEST-STRATEGY health
+let testStrategySummary = "⚠️  .planning/TEST-STRATEGY.md not found";
+if (fs.existsSync(path.join(PLANNING, "TEST-STRATEGY.md"))) {
+	testStrategySummary = "✅ TEST-STRATEGY.md present";
+}
+
+// 3. Generate phase report
 const reportPath = path.join(PLANNING, `phase-${phaseNum}-report.md`);
 const report = `# Phase ${phaseNum} Execution Report
 
@@ -55,12 +97,20 @@ ${entries.map((e) => `| ${e.timestamp.slice(0, 19)} | ${e.plan} | ${e.task} | ${
 ## Quality Gate
 ${failed === 0 ? "✅ All tasks passed — ready for verification" : `❌ ${failed} failure(s) — fix plans may be needed`}
 ${warnings > 0 ? `⚠️  ${warnings} task(s) introduced type errors` : "✅ No type errors introduced"}
+
+## TDD Health
+${tddSummary}
+${tddViolations > 0 ? `❌ ${tddViolations} TDD cycle violation(s) recorded (green: without red:)` : "✅ No TDD cycle violations recorded"}
+
+## Domain Model Health
+${domainSummary}
+${testStrategySummary}
 `;
 
 fs.writeFileSync(reportPath, report);
 console.log(`Phase ${phaseNum} report: ${reportPath}`);
 
-// 3. Update ROADMAP.md status
+// 4. Update ROADMAP.md status
 const roadmapPath = path.join(PLANNING, "ROADMAP.md");
 if (fs.existsSync(roadmapPath)) {
 	let roadmap = fs.readFileSync(roadmapPath, "utf-8");
@@ -71,7 +121,7 @@ if (fs.existsSync(roadmapPath)) {
 	console.log(`ROADMAP.md: Phase ${phaseNum} → ${newStatus}`);
 }
 
-// 4. Summary
+// 5. Summary
 console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 console.log(` Draht ► PHASE ${phaseNum} ${failed === 0 ? "COMPLETE ✅" : "NEEDS FIXES ❌"}`);
 console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);

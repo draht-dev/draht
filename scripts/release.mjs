@@ -8,14 +8,15 @@
  * Multiple releases per day: 2026.2.28-1, 2026.2.28-2, etc.
  *
  * Steps:
- * 1. Check for uncommitted changes
- * 2. Compute daily version (check existing tags for suffix)
- * 3. Set version across all packages
- * 4. Update CHANGELOG.md files: [Unreleased] -> [version] - date
- * 5. Commit and tag
- * 6. Publish to npm
- * 7. Add new [Unreleased] section to changelogs
- * 8. Commit and push
+ * 1. Fetch tags from pull remote (for changelog scoping)
+ * 2. Check for uncommitted changes
+ * 3. Compute daily version (check existing tags for suffix)
+ * 4. Set version across all packages
+ * 5. Update CHANGELOG.md files: [Unreleased] -> [version] - date (auto-populated from commits)
+ * 6. Commit and tag
+ * 7. Publish to npm
+ * 8. Add new [Unreleased] section to changelogs
+ * 9. Commit and push
  */
 
 import { execSync } from "child_process";
@@ -237,7 +238,12 @@ function addUnreleasedSection() {
 // Main flow
 console.log(`\n=== Draht Release${DRY_RUN ? " (dry-run)" : ""} ===\n`);
 
-// 1. Check for uncommitted changes
+// 1. Fetch tags from pull remote (for changelog scoping)
+console.log("Fetching tags...");
+run("git fetch pull --tags", { ignoreError: true });
+console.log();
+
+// 2. Check for uncommitted changes
 console.log("Checking for uncommitted changes...");
 const status = run("git status --porcelain", { silent: true, allowInDryRun: true });
 if (status && status.trim()) {
@@ -247,45 +253,45 @@ if (status && status.trim()) {
 }
 console.log("  Working directory clean\n");
 
-// 2. Compute version
+// 3. Compute version
 const version = computeVersion();
 console.log(`Version: ${version}\n`);
 
-// 3. Set version across all packages
+// 4. Set version across all packages
 console.log("Setting version across packages...");
 if (!DRY_RUN) {
 	setVersion(version);
 }
 console.log(`  Set all packages to ${version}\n`);
 
-// 4. Update changelogs
+// 5. Update changelogs
 console.log("Updating CHANGELOG.md files...");
 if (!DRY_RUN) {
 	updateChangelogsForRelease(version);
 }
 console.log();
 
-// 5. Commit and tag
+// 6. Commit and tag
 console.log("Committing and tagging...");
 run("git add .");
 run(`git commit -m "release: v${version}"`);
 run(`git tag v${version}`);
 console.log();
 
-// 6. Build and publish
+// 7. Build and publish
 console.log("Building and publishing...");
 run("bun run prepublishOnly");
 run("npm publish -ws --access public");
 console.log();
 
-// 7. Add new [Unreleased] sections
+// 8. Add new [Unreleased] sections
 console.log("Adding [Unreleased] sections for next cycle...");
 if (!DRY_RUN) {
 	addUnreleasedSection();
 }
 console.log();
 
-// 8. Commit and push
+// 9. Commit and push
 console.log("Committing changelog updates...");
 run("git add .");
 run('git commit -m "chore: add [Unreleased] section for next cycle"');

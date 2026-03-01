@@ -1,6 +1,6 @@
 {
 	"name": "@draht/deploy-guardian",
-	"version": "2026.3.1-6",
+	"version": "2026.3.1-7",
 	"private": true,
 	"description": "Deploy Guardian — pre-deployment checks, rollback automation, SST safety",
 	"type": "module",

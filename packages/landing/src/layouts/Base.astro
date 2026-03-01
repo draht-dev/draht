@@ -5,7 +5,7 @@ interface Props {
 	ogImage?: string;
 }
 
-const { title, description, ogImage = "/og-default.png" } = Astro.props;
+const { title, description, ogImage = "/og.png" } = Astro.props;
 const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 ---
 
@@ -24,7 +24,7 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 		<meta property="og:type" content="website" />
 		<meta property="og:title" content={title} />
 		<meta property="og:description" content={description} />
-		<meta property="og:image" content={ogImage} />
+		<meta property="og:image" content={new URL(ogImage, "https://draht.dev").toString()} />
 		<meta property="og:url" content={canonicalUrl.toString()} />
 		<meta property="og:site_name" content="Draht" />
 
@@ -32,50 +32,452 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 		<meta name="twitter:card" content="summary_large_image" />
 		<meta name="twitter:title" content={title} />
 		<meta name="twitter:description" content={description} />
-		<meta name="twitter:image" content={ogImage} />
+		<meta name="twitter:image" content={new URL(ogImage, "https://draht.dev").toString()} />
 
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+		<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 		<link rel="sitemap" href="/sitemap-index.xml" />
 
 		<style is:global>
 			:root {
-				--bg: #0a0a0a;
-				--fg: #e5e5e5;
-				--accent: #3b82f6;
-				--accent-hover: #60a5fa;
-				--muted: #737373;
-				--surface: #171717;
-				--border: #262626;
+				--bg: #08080a;
+				--fg: #e8e8e0;
+				--accent: #e8c828;
+				--accent-dim: #b89e1e;
+				--accent-glow: rgba(232, 200, 40, 0.12);
+				--accent-dark: #3a3418;
+				--muted: #6a6a5e;
+				--surface: #101010;
+				--surface-hover: #161614;
+				--border: #1e1e1a;
+				--border-accent: #2e2e22;
+				--wire: rgba(255, 255, 255, 0.07);
+				--wire-bright: rgba(255, 255, 255, 0.18);
+				--node: rgba(255, 255, 255, 0.25);
 				--mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
 				--sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 			}
 			* { margin: 0; padding: 0; box-sizing: border-box; }
+			html { scroll-behavior: smooth; }
 			body {
 				font-family: var(--sans);
 				background: var(--bg);
 				color: var(--fg);
 				min-height: 100vh;
 				line-height: 1.6;
+				overflow-x: hidden;
 			}
 			code, pre { font-family: var(--mono); }
-			a { color: var(--accent); text-decoration: none; }
-			a:hover { color: var(--accent-hover); }
+			a { color: var(--accent); text-decoration: none; transition: color 0.2s; }
+			a:hover { color: #f0dc60; }
+			::selection { background: var(--accent-glow); color: var(--fg); }
 		</style>
 	</head>
 	<body>
-		<nav style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; max-width: 1200px; margin: 0 auto;">
-			<a href="/" style="font-family: var(--mono); font-weight: 700; font-size: 1.25rem;">draht</a>
-			<div style="display: flex; gap: 1.5rem; font-size: 0.875rem;">
+		<canvas id="wire-left" class="wire-canvas wire-left"></canvas>
+		<canvas id="wire-right" class="wire-canvas wire-right"></canvas>
+
+		<nav class="nav">
+			<a href="/" class="nav-logo"><img src="/draht-logo.webp" alt="Draht" width="28" height="28" class="nav-logo-img" /></a>
+			<div class="nav-links">
 				<a href="/#features">Features</a>
 				<a href="/#architecture">Architecture</a>
 				<a href="/#pricing">Pricing</a>
-				<a href="/blog">Blog</a>
 				<a href="https://github.com/draht-dev/draht" target="_blank">GitHub</a>
 			</div>
 		</nav>
+
 		<slot />
-		<footer style="text-align: center; padding: 3rem 2rem; color: var(--muted); font-size: 0.75rem; border-top: 1px solid var(--border); margin-top: 4rem;">
-			<p>© 2026 Draht. Built by <a href="https://freye.tech">Oskar Freye</a>.</p>
+
+		<footer class="footer">
+			<p>&copy; 2026 Draht. Built by <a href="https://freye.tech">Oskar Freye</a>.</p>
 		</footer>
+
+		<style>
+			.wire-canvas {
+				position: fixed;
+				top: 0;
+				width: 80px;
+				height: 100vh;
+				z-index: 0;
+				pointer-events: none;
+			}
+			.wire-left { left: 0; }
+			.wire-right { right: 0; }
+
+			@media (max-width: 900px) {
+				.wire-canvas { display: none; }
+			}
+			@media (min-width: 1400px) {
+				.wire-canvas { width: 140px; }
+			}
+
+			.nav {
+				position: relative;
+				z-index: 10;
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				padding: 1.25rem 2.5rem;
+				max-width: 1200px;
+				margin: 0 auto;
+			}
+			.nav-logo {
+				font-family: var(--mono);
+				font-weight: 700;
+				font-size: 1.25rem;
+				color: var(--fg);
+				letter-spacing: -0.02em;
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+			}
+			.nav-logo:hover { color: var(--accent); }
+			.nav-logo-img {
+				border-radius: 6px;
+			}
+			.nav-links {
+				display: flex;
+				gap: 1.75rem;
+				font-size: 0.8rem;
+				letter-spacing: 0.03em;
+				text-transform: uppercase;
+			}
+			.nav-links a { color: var(--muted); }
+			.nav-links a:hover { color: var(--fg); }
+
+			.footer {
+				position: relative;
+				z-index: 10;
+				text-align: center;
+				padding: 3rem 2rem;
+				color: var(--muted);
+				font-size: 0.75rem;
+				border-top: 1px solid var(--border);
+				margin-top: 4rem;
+			}
+		</style>
+
+		<script>
+			function initWires() {
+				const canvasLeft = document.getElementById("wire-left") as HTMLCanvasElement;
+				const canvasRight = document.getElementById("wire-right") as HTMLCanvasElement;
+				if (!canvasLeft || !canvasRight) return;
+
+				const dpr = window.devicePixelRatio || 1;
+
+				function setupCanvas(canvas: HTMLCanvasElement) {
+					const rect = canvas.getBoundingClientRect();
+					canvas.width = rect.width * dpr;
+					canvas.height = rect.height * dpr;
+					const ctx = canvas.getContext("2d")!;
+					ctx.scale(dpr, dpr);
+					return { ctx, w: rect.width, h: rect.height };
+				}
+
+				// Git-history style wire system.
+				// Two wires per side that merge at shared nodes then fork apart.
+				// Blueprints use normalized coords: x=[0..1] of canvas width, y=[0..1] of page height.
+				// "merge" points are where both wires meet at the same (x,y).
+
+				// --- LEFT SIDE ---
+				// Wire A (left lane) and Wire B (right lane) with merge/fork points
+				//
+				//  A---*       * = merge node (both wires meet)
+				//  |   |
+				//  *   |       After merge, single line runs, then forks again
+				//   \  |
+				//    *-*       merge
+				//    |
+				//    *         single
+				//   / \
+				//  A   B       fork
+
+				const leftA: [number, number][] = [
+					[0.25, -0.01],
+					[0.25, 0.05],
+					[0.25, 0.10],  // merge point 1: both wires meet here
+					[0.25, 0.15],  // shared trunk
+					[0.25, 0.18],  // fork: A goes left
+					[0.18, 0.21],
+					[0.18, 0.30],
+					[0.35, 0.33],  // merge point 2
+					[0.35, 0.38],  // shared trunk
+					[0.35, 0.42],  // fork: A goes left
+					[0.20, 0.45],
+					[0.20, 0.55],
+					[0.20, 0.58],  // merge point 3
+					[0.20, 0.62],  // shared trunk
+					[0.20, 0.65],  // fork: A goes left
+					[0.12, 0.68],
+					[0.12, 0.78],
+					[0.30, 0.81],  // merge point 4
+					[0.30, 0.86],  // shared trunk
+					[0.30, 0.89],  // fork: A goes left
+					[0.22, 0.92],
+					[0.22, 1.01],
+				];
+
+				const leftB: [number, number][] = [
+					[0.65, -0.01],
+					[0.65, 0.05],
+					[0.25, 0.10],  // merge point 1 (same as A)
+					[0.25, 0.15],  // shared trunk
+					[0.25, 0.18],  // fork: B goes right
+					[0.55, 0.21],
+					[0.55, 0.30],
+					[0.35, 0.33],  // merge point 2 (same as A)
+					[0.35, 0.38],  // shared trunk
+					[0.35, 0.42],  // fork: B goes right
+					[0.60, 0.45],
+					[0.60, 0.55],
+					[0.20, 0.58],  // merge point 3 (same as A)
+					[0.20, 0.62],  // shared trunk
+					[0.20, 0.65],  // fork: B goes right
+					[0.50, 0.68],
+					[0.50, 0.78],
+					[0.30, 0.81],  // merge point 4 (same as A)
+					[0.30, 0.86],  // shared trunk
+					[0.30, 0.89],  // fork: B goes right
+					[0.55, 0.92],
+					[0.55, 1.01],
+				];
+
+				// Merge node y-positions (normalized) for left side
+				const leftMerges = [0.10, 0.33, 0.58, 0.81];
+
+				// --- RIGHT SIDE (mirrored, different rhythm) ---
+				const rightA: [number, number][] = [
+					[0.75, -0.01],
+					[0.75, 0.04],
+					[0.60, 0.07],  // merge point 1
+					[0.60, 0.13],  // shared
+					[0.60, 0.16],  // fork: A goes right
+					[0.78, 0.19],
+					[0.78, 0.27],
+					[0.45, 0.30],  // merge point 2
+					[0.45, 0.36],  // shared
+					[0.45, 0.40],  // fork: A goes right
+					[0.72, 0.43],
+					[0.72, 0.52],
+					[0.55, 0.55],  // merge point 3
+					[0.55, 0.60],  // shared
+					[0.55, 0.63],  // fork: A goes right
+					[0.80, 0.66],
+					[0.80, 0.74],
+					[0.50, 0.77],  // merge point 4
+					[0.50, 0.83],  // shared
+					[0.50, 0.87],  // fork: A goes right
+					[0.70, 0.90],
+					[0.70, 1.01],
+				];
+
+				const rightB: [number, number][] = [
+					[0.30, -0.01],
+					[0.30, 0.04],
+					[0.60, 0.07],  // merge point 1 (same as A)
+					[0.60, 0.13],  // shared
+					[0.60, 0.16],  // fork: B goes left
+					[0.30, 0.19],
+					[0.30, 0.27],
+					[0.45, 0.30],  // merge point 2 (same as A)
+					[0.45, 0.36],  // shared
+					[0.45, 0.40],  // fork: B goes left
+					[0.22, 0.43],
+					[0.22, 0.52],
+					[0.55, 0.55],  // merge point 3 (same as A)
+					[0.55, 0.60],  // shared
+					[0.55, 0.63],  // fork: B goes left
+					[0.25, 0.66],
+					[0.25, 0.74],
+					[0.50, 0.77],  // merge point 4 (same as A)
+					[0.50, 0.83],  // shared
+					[0.50, 0.87],  // fork: B goes left
+					[0.30, 0.90],
+					[0.30, 1.01],
+				];
+
+				const rightMerges = [0.07, 0.30, 0.55, 0.77];
+
+				interface WirePath {
+					segments: { x: number; y: number }[];
+					pulseSpeed: number;
+					pulseOffset: number;
+				}
+
+				interface MergeNode {
+					x: number;
+					y: number;
+				}
+
+				interface WireState {
+					ctx: CanvasRenderingContext2D;
+					w: number;
+					h: number;
+					wires: WirePath[];
+					merges: MergeNode[];
+				}
+
+				function buildWire(
+					blueprint: [number, number][],
+					w: number,
+					pageH: number,
+					pulseSpeed: number,
+					pulseOffset: number,
+				): WirePath {
+					const segments = blueprint.map(([xn, yn]) => ({
+						x: xn * w,
+						y: yn * pageH,
+					}));
+					return { segments, pulseSpeed, pulseOffset };
+				}
+
+				function buildMerges(
+					blueprint: [number, number][],
+					mergeYs: number[],
+					w: number,
+					pageH: number,
+				): MergeNode[] {
+					return mergeYs.map((my) => {
+						const pt = blueprint.find(([, yn]) => Math.abs(yn - my) < 0.001);
+						return { x: (pt ? pt[0] : 0.5) * w, y: my * pageH };
+					});
+				}
+
+				function createWireState(canvas: HTMLCanvasElement, side: "left" | "right"): WireState {
+					const { ctx, w, h } = setupCanvas(canvas);
+					const pageH = document.documentElement.scrollHeight;
+					const [bpA, bpB, mergeYs] = side === "left"
+						? [leftA, leftB, leftMerges]
+						: [rightA, rightB, rightMerges];
+					const wires = [
+						buildWire(bpA, w, pageH, 0.18, 0),
+						buildWire(bpB, w, pageH, 0.14, 1200),
+					];
+					const merges = buildMerges(bpA, mergeYs, w, pageH);
+					return { ctx, w, h, wires, merges };
+				}
+
+				function drawWires(state: WireState, time: number, scrollY: number) {
+					const { ctx, w, h, wires, merges } = state;
+					ctx.clearRect(0, 0, w, h);
+
+					// Collect all unique segments across both wires to avoid
+					// double-drawing shared trunk segments (which doubles opacity).
+					const drawnSegments = new Set<string>();
+					const segKey = (x1: number, y1: number, x2: number, y2: number) =>
+						`${Math.round(x1)},${Math.round(y1)}-${Math.round(x2)},${Math.round(y2)}`;
+
+					ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+					ctx.lineWidth = 1;
+					ctx.lineJoin = "miter";
+
+					for (const wire of wires) {
+						for (let i = 1; i < wire.segments.length; i++) {
+							const a = wire.segments[i - 1];
+							const b = wire.segments[i];
+							const key = segKey(a.x, a.y, b.x, b.y);
+							if (drawnSegments.has(key)) continue;
+							drawnSegments.add(key);
+
+							ctx.beginPath();
+							ctx.moveTo(a.x, a.y - scrollY);
+							ctx.lineTo(b.x, b.y - scrollY);
+							ctx.stroke();
+						}
+					}
+
+					// Draw merge nodes
+					for (const m of merges) {
+						const sy = m.y - scrollY;
+						if (sy < -20 || sy > h + 20) continue;
+
+						// Outer glow
+						ctx.beginPath();
+						ctx.arc(m.x, sy, 6, 0, Math.PI * 2);
+						ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
+						ctx.fill();
+
+						// Node
+						ctx.beginPath();
+						ctx.arc(m.x, sy, 3, 0, Math.PI * 2);
+						ctx.fillStyle = "rgba(255, 255, 255, 0.22)";
+						ctx.fill();
+					}
+
+					// Traveling pulses
+					for (const wire of wires) {
+						const totalLen = getTotalLength(wire.segments);
+						if (totalLen === 0) continue;
+						const pulsePos = ((time * wire.pulseSpeed * 0.04 + wire.pulseOffset) % totalLen);
+						const point = getPointAtLength(wire.segments, pulsePos);
+						if (point) {
+							const sy = point.y - scrollY;
+							if (sy > -20 && sy < h + 20) {
+								ctx.beginPath();
+								ctx.arc(point.x, sy, 1.5, 0, Math.PI * 2);
+								ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+								ctx.fill();
+
+								ctx.beginPath();
+								ctx.arc(point.x, sy, 5, 0, Math.PI * 2);
+								ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
+								ctx.fill();
+							}
+						}
+					}
+				}
+
+				function getTotalLength(segments: { x: number; y: number }[]): number {
+					let len = 0;
+					for (let i = 1; i < segments.length; i++) {
+						const dx = segments[i].x - segments[i - 1].x;
+						const dy = segments[i].y - segments[i - 1].y;
+						len += Math.sqrt(dx * dx + dy * dy);
+					}
+					return len;
+				}
+
+				function getPointAtLength(segments: { x: number; y: number }[], targetLen: number): { x: number; y: number } | null {
+					let len = 0;
+					for (let i = 1; i < segments.length; i++) {
+						const dx = segments[i].x - segments[i - 1].x;
+						const dy = segments[i].y - segments[i - 1].y;
+						const segLen = Math.sqrt(dx * dx + dy * dy);
+						if (len + segLen >= targetLen) {
+							const t = (targetLen - len) / segLen;
+							return {
+								x: segments[i - 1].x + dx * t,
+								y: segments[i - 1].y + dy * t,
+							};
+						}
+						len += segLen;
+					}
+					return null;
+				}
+
+				let leftState = createWireState(canvasLeft, "left");
+				let rightState = createWireState(canvasRight, "right");
+				let currentScroll = window.scrollY;
+
+				function animate(time: number) {
+					currentScroll = window.scrollY;
+					drawWires(leftState, time, currentScroll);
+					drawWires(rightState, time, currentScroll);
+					requestAnimationFrame(animate);
+				}
+
+				requestAnimationFrame(animate);
+
+				window.addEventListener("resize", () => {
+					leftState = createWireState(canvasLeft, "left");
+					rightState = createWireState(canvasRight, "right");
+				});
+			}
+
+			initWires();
+		</script>
 	</body>
 </html>

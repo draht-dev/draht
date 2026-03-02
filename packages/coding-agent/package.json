@@ -97,7 +97,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/badlogic/pi-mono.git",
+		"url": "git+https://github.com/draht-dev/draht.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {

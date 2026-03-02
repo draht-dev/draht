@@ -178,17 +178,44 @@ function getAffectedPackages(commitHash) {
 }
 
 /**
- * Collect commits since last tag and group them per package directory.
+ * Find the last release tag whose changelog entries have actual content.
+ * Walks backwards through tags (newest first) and checks if any package's
+ * CHANGELOG.md has non-empty content for that version. This skips over
+ * empty releases that were produced by buggy older release scripts.
+ */
+function findLastContentfulTag() {
+	const tags = execSync("git tag -l 'v*' --sort=-creatordate", { encoding: "utf-8" }).trim().split("\n").filter(Boolean);
+	const changelogs = getChangelogs();
+
+	for (const tag of tags) {
+		const version = tag.slice(1); // strip 'v' prefix
+		const versionEscaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+		for (const changelog of changelogs) {
+			const content = readFileSync(changelog, "utf-8");
+			// Match the version header and capture content until next version header or EOF
+			const regex = new RegExp(`## \\[${versionEscaped}\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[|$)`);
+			const match = content.match(regex);
+			if (match?.[1]?.trim()) {
+				console.log(`  Baseline tag: ${tag} (has content in ${changelog})`);
+				return tag;
+			}
+		}
+	}
+
+	return null;
+}
+
+/**
+ * Collect commits since last contentful tag and group them per package directory.
  * Returns Map<packageDir, Map<sectionHeader, string[]>> where string[] are bullet lines.
  */
 function getCommitsPerPackage() {
-	// Find the last release tag
-	let lastTag = null;
-	try {
-		lastTag = execSync("git describe --tags --abbrev=0 2>/dev/null", { encoding: "utf-8" }).trim();
-	} catch { /* no tags yet */ }
-
+	const lastTag = findLastContentfulTag();
 	const range = lastTag ? `${lastTag}..HEAD` : "HEAD";
+
+	console.log(`  Commit range: ${range}`);
+
 	let log = "";
 	try {
 		// Format: hash<SEP>subject
@@ -254,6 +281,16 @@ function renderSections(sections) {
 	return parts.join("\n\n");
 }
 
+/**
+ * Remove empty version entries from a changelog string.
+ * An empty entry is a `## [version] - date` line followed by no content
+ * before the next `## [` or end of file.
+ */
+function removeEmptyVersionEntries(content) {
+	// Match version headers with no content (only whitespace) before the next header or EOF
+	return content.replace(/## \[\d[^\]]*\][^\n]*\n\s*(?=## \[|$)/g, "");
+}
+
 function updateChangelogsForRelease(version) {
 	const date = new Date().toISOString().split("T")[0];
 	const commitsPerPackage = getCommitsPerPackage();
@@ -267,7 +304,7 @@ function updateChangelogsForRelease(version) {
 		const changelog = join(packagesDir, dir, "CHANGELOG.md");
 		if (!existsSync(changelog)) continue;
 
-		const content = readFileSync(changelog, "utf-8");
+		let content = readFileSync(changelog, "utf-8");
 		if (!content.includes("## [Unreleased]")) {
 			console.log(`  Skipping ${changelog}: no [Unreleased] section`);
 			continue;
@@ -280,8 +317,12 @@ function updateChangelogsForRelease(version) {
 			? `## [${version}] - ${date}\n\n${sectionBody}\n`
 			: `## [${version}] - ${date}\n`;
 
-		const updated = content.replace(/## \[Unreleased\]\n[\s\S]*?(?=\n## \[|$)/, newSection);
-		writeFileSync(changelog, updated);
+		content = content.replace(/## \[Unreleased\]\n[\s\S]*?(?=\n## \[|$)/, newSection);
+
+		// Clean up empty version entries left by previous broken releases
+		content = removeEmptyVersionEntries(content);
+
+		writeFileSync(changelog, content);
 		if (sectionBody) {
 			console.log(`  Updated ${changelog} (from git commits)`);
 		} else {

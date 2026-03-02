@@ -1,11 +1,3 @@
-# 🏖️ OSS Vacation
-
-**Issue tracker and PRs reopen March 2, 2026.**
-
-All PRs will be auto-closed until then. Approved contributors can submit PRs after vacation without reapproval. For support, join [Discord](https://discord.com/invite/3cU7Bz4UPx).
-
----
-
 <p align="center">
   <a href="https://shittycodingagent.ai">
     <img src="https://shittycodingagent.ai/logo.svg" alt="pi logo" width="128">
@@ -13,7 +5,7 @@ All PRs will be auto-closed until then. Approved contributors can submit PRs aft
 </p>
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@mariozechner/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@mariozechner/pi-coding-agent?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/@draht/coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@draht/coding-agent?style=flat-square" /></a>
   <a href="https://github.com/badlogic/pi-mono/actions/workflows/ci.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/badlogic/pi-mono/ci.yml?style=flat-square&branch=main" /></a>
 </p>
 <p align="center">
@@ -57,7 +49,7 @@ Pi runs in four modes: interactive, print or JSON, RPC for process integration, 
 ## Quick Start
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @draht/coding-agent
 ```
 
 Authenticate with an API key:
@@ -381,7 +373,7 @@ See [docs/packages.md](docs/packages.md).
 ### SDK
 
 ```typescript
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@draht/coding-agent";
 
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
@@ -569,6 +561,6 @@ MIT
 
 ## See Also
 
-- [@mariozechner/pi-ai](https://www.npmjs.com/package/@mariozechner/pi-ai): Core LLM toolkit
-- [@mariozechner/pi-agent](https://www.npmjs.com/package/@mariozechner/pi-agent): Agent framework
-- [@mariozechner/pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui): Terminal UI components
+- [@draht/ai](https://www.npmjs.com/package/@draht/ai): Core LLM toolkit
+- [@draht/agent-core](https://www.npmjs.com/package/@draht/agent-core): Agent framework
+- [@draht/tui](https://www.npmjs.com/package/@draht/tui): Terminal UI components

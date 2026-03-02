@@ -1,6 +1,6 @@
 {
 	"name": "@draht/knowledge",
-	"version": "2026.3.2-7",
+	"version": "2026.3.2-8",
 	"private": true,
 	"description": "Client knowledge base — per-client vector DB for knowledge persistence across projects",
 	"type": "module",

@@ -1,10 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.2-4] - 2026-03-02
 
-## [2026.3.2-3] - 2026-03-02
+### Added
 
-## [2026.3.1] - 2026-02-28
+- rename pi CLI to draht, update env vars, scaffold landing page
+- rebrand to @draht/ namespace
 
 ## [0.56.0] - 2026-03-04
 
@@ -55,16 +56,6 @@
 
 - Fixed adaptive thinking for Claude Sonnet 4.6 in Anthropic and Bedrock providers, and clamped unsupported `xhigh` effort values to supported levels ([#1548](https://github.com/badlogic/pi-mono/pull/1548) by [@tctev](https://github.com/tctev))
 - Fixed Vertex ADC credential detection race by avoiding caching a false negative during async import initialization ([#1550](https://github.com/badlogic/pi-mono/pull/1550) by [@jeremiahgaylord-web](https://github.com/jeremiahgaylord-web))
-
-## [0.55.0] - 2026-02-24
-
-## [0.54.2] - 2026-02-23
-
-## [0.54.1] - 2026-02-22
-
-## [0.54.0] - 2026-02-19
-
-## [0.53.1] - 2026-02-19
 
 ## [0.53.0] - 2026-02-17
 
@@ -140,15 +131,11 @@
 - Fixed Bedrock adaptive thinking handling for Claude Opus 4.6 with interleaved thinking beta responses ([#1323](https://github.com/badlogic/pi-mono/pull/1323) by [@markusylisiurunen](https://github.com/markusylisiurunen))
 - Fixed `AWS_BEDROCK_SKIP_AUTH` environment detection to avoid `process` access in non-Node.js environments
 
-## [0.52.6] - 2026-02-05
-
 ## [0.52.5] - 2026-02-05
 
 ### Fixed
 
 - Fixed `supportsXhigh()` to treat Anthropic Messages Opus 4.6 models as xhigh-capable so `streamSimple` can map `xhigh` to adaptive effort `max`
-
-## [0.52.4] - 2026-02-05
 
 ## [0.52.3] - 2026-02-05
 
@@ -157,8 +144,6 @@
 - Fixed Bedrock Opus 4.6 model IDs (removed `:0` suffix) and cache pricing for `us.*` and `eu.*` variants
 - Added missing `eu.anthropic.claude-opus-4-6-v1` inference profile to model catalog
 - Fixed Claude Opus 4.6 context window metadata to 200000 for Anthropic and OpenCode providers
-
-## [0.52.2] - 2026-02-05
 
 ## [0.52.1] - 2026-02-05
 
@@ -195,15 +180,11 @@
 
 - Changed Bedrock model generation to drop legacy workarounds now handled upstream ([#1239](https://github.com/badlogic/pi-mono/pull/1239) by [@unexge](https://github.com/unexge))
 
-## [0.51.4] - 2026-02-03
-
 ## [0.51.3] - 2026-02-03
 
 ### Fixed
 
 - Fixed xhigh thinking level support check to accept gpt-5.2 model IDs ([#1209](https://github.com/badlogic/pi-mono/issues/1209))
-
-## [0.51.2] - 2026-02-03
 
 ## [0.51.1] - 2026-02-02
 
@@ -232,12 +213,6 @@
 
 - Added `maxRetryDelayMs` option to `StreamOptions` to cap server-requested retry delays. When a provider (e.g., Google Gemini CLI) requests a delay longer than this value, the request fails immediately with an informative error instead of waiting silently. Default: 60000ms (60 seconds). Set to 0 to disable the cap. ([#1123](https://github.com/badlogic/pi-mono/issues/1123))
 - Added Qwen thinking format support for OpenAI-compatible completions via `enable_thinking`. ([#940](https://github.com/badlogic/pi-mono/pull/940) by [@4h9fbZ](https://github.com/4h9fbZ))
-
-## [0.50.7] - 2026-01-31
-
-## [0.50.6] - 2026-01-30
-
-## [0.50.5] - 2026-01-30
 
 ## [0.50.4] - 2026-01-30
 
@@ -398,8 +373,6 @@
 
 - Export `parseStreamingJson` from main package for tsx dev mode compatibility
 
-## [0.45.5] - 2026-01-13
-
 ## [0.45.4] - 2026-01-13
 
 ### Added
@@ -409,12 +382,6 @@
 ### Fixed
 
 - Fixed z.ai thinking/reasoning: z.ai uses `thinking: { type: "enabled" }` instead of OpenAI's `reasoning_effort`. Added `thinkingFormat` compat flag to handle this. ([#688](https://github.com/badlogic/pi-mono/issues/688))
-
-## [0.45.3] - 2026-01-13
-
-## [0.45.2] - 2026-01-13
-
-## [0.45.1] - 2026-01-13
 
 ## [0.45.0] - 2026-01-13
 
@@ -426,17 +393,11 @@
 - **Anthropic caching on OpenRouter**: Interactions with Anthropic models via OpenRouter now set a 5-minute cache point using Anthropic-style `cache_control` breakpoints on the last assistant or user message. ([#584](https://github.com/badlogic/pi-mono/pull/584) by [@nathyong](https://github.com/nathyong))
 - **Google Gemini CLI provider improvements**: Added Antigravity endpoint fallback (tries daily sandbox then prod when `baseUrl` is unset), header-based retry delay parsing (`Retry-After`, `x-ratelimit-reset`, `x-ratelimit-reset-after`), stable `sessionId` derivation from first user message for cache affinity, empty SSE stream retry with backoff, and `anthropic-beta` header for Claude thinking models ([#670](https://github.com/badlogic/pi-mono/pull/670) by [@kim0](https://github.com/kim0))
 
-## [0.44.0] - 2026-01-12
-
 ## [0.43.0] - 2026-01-11
 
 ### Fixed
 
 - Fixed Google provider thinking detection: `isThinkingPart()` now only checks `thought === true`, not `thoughtSignature`. Per Google docs, `thoughtSignature` is for context replay and can appear on any part type. Also removed `id` field from `functionCall`/`functionResponse` (rejected by Vertex AI and Cloud Code Assist), and added `textSignature` round-trip for multi-turn reasoning context. ([#631](https://github.com/badlogic/pi-mono/pull/631) by [@theBucky](https://github.com/theBucky))
-
-## [0.42.5] - 2026-01-11
-
-## [0.42.4] - 2026-01-10
 
 ## [0.42.3] - 2026-01-10
 
@@ -458,21 +419,11 @@
 - Fixed OpenAI Responses tool strict flag to use a boolean for LM Studio compatibility ([#598](https://github.com/badlogic/pi-mono/pull/598) by [@gnattu](https://github.com/gnattu))
 - Fixed Google Cloud Code Assist OAuth for paid subscriptions: properly handles long-running operations for project provisioning, supports `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT_ID` env vars for paid tiers, and handles VPC-SC affected users ([#582](https://github.com/badlogic/pi-mono/pull/582) by [@cmf](https://github.com/cmf))
 
-## [0.42.1] - 2026-01-09
-
 ## [0.42.0] - 2026-01-09
 
 ### Added
 
 - Added OpenCode Zen provider support with 26 models (Claude, GPT, Gemini, Grok, Kimi, GLM, Qwen, etc.). Set `OPENCODE_API_KEY` env var to use.
-
-## [0.41.0] - 2026-01-09
-
-## [0.40.1] - 2026-01-09
-
-## [0.40.0] - 2026-01-08
-
-## [0.39.1] - 2026-01-08
 
 ## [0.39.0] - 2026-01-08
 
@@ -498,19 +449,11 @@
 - Fixed Codex SSE error events to surface message, code, and status. ([#551](https://github.com/badlogic/pi-mono/pull/551) by [@tmustier](https://github.com/tmustier))
 - Fixed context overflow detection for `context_length_exceeded` error codes.
 
-## [0.37.8] - 2026-01-07
-
-## [0.37.7] - 2026-01-07
-
 ## [0.37.6] - 2026-01-06
 
 ### Added
 
 - Exported OpenAI Codex utilities: `CacheMetadata`, `getCodexInstructions`, `getModelFamily`, `ModelFamily`, `buildCodexPiBridge`, `buildCodexSystemPrompt`, `CodexSystemPrompt` ([#510](https://github.com/badlogic/pi-mono/pull/510) by [@mitsuhiko](https://github.com/mitsuhiko))
-
-## [0.37.5] - 2026-01-06
-
-## [0.37.4] - 2026-01-06
 
 ## [0.37.3] - 2026-01-06
 
@@ -523,8 +466,6 @@
 ### Fixed
 
 - Codex provider now always includes `reasoning.encrypted_content` even when custom `include` options are passed ([#484](https://github.com/badlogic/pi-mono/pull/484) by [@kim0](https://github.com/kim0))
-
-## [0.37.1] - 2026-01-05
 
 ## [0.37.0] - 2026-01-05
 
@@ -551,25 +492,11 @@
 
 - Vertex AI dummy value for `getEnvApiKey()`: Returns `"<authenticated>"` when Application Default Credentials are configured (`~/.config/gcloud/application_default_credentials.json` exists) and both `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION` are set. This allows `streamSimple()` to work with Vertex AI without explicit `apiKey` option. The ADC credentials file existence check is cached per-process to avoid repeated filesystem access.
 
-## [0.35.0] - 2026-01-05
-
-## [0.34.2] - 2026-01-04
-
-## [0.34.1] - 2026-01-04
-
-## [0.34.0] - 2026-01-04
-
-## [0.33.0] - 2026-01-04
-
 ## [0.32.3] - 2026-01-03
 
 ### Fixed
 
 - Google Vertex AI models no longer appear in available models list without explicit authentication. Previously, `getEnvApiKey()` returned a dummy value for `google-vertex`, causing models to show up even when Google Cloud ADC was not configured.
-
-## [0.32.2] - 2026-01-03
-
-## [0.32.1] - 2026-01-03
 
 ## [0.32.0] - 2026-01-03
 
@@ -580,8 +507,6 @@
 ### Fixed
 
 - **Gemini CLI rate limit handling**: Added automatic retry with server-provided delay for 429 errors. Parses delay from error messages like "Your quota will reset after 39s" and waits accordingly. Falls back to exponential backoff for other transient errors. ([#370](https://github.com/badlogic/pi-mono/issues/370))
-
-## [0.31.1] - 2026-01-02
 
 ## [0.31.0] - 2026-01-02
 

@@ -1,10 +1,43 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.2-4] - 2026-03-02
 
-## [2026.3.2-3] - 2026-03-02
+### Added
 
-## [2026.3.1] - 2026-02-28
+- ship GSD commands + subagent runner as built-in extensions
+- post-phase report includes TDD commit metrics and domain model health
+- quality-gate adds domain glossary compliance, cross-context boundary, and TDD ratio checks
+- post-task checks TDD cycle compliance (green: requires preceding red: per task)
+- pre-execute validates DOMAIN.md, TEST-STRATEGY.md, and non-empty <test> sections
+- enforce TDD cycle in quick tasks with config/docs exception
+- add automated test suite and domain health checks to verify-work
+- rewrite execute-phase with mandatory Red→Green→Refactor TDD cycle and domain rules
+- enrich plan-phase with DDD context/domain tags, full TDD task format, and domain rules
+- add testability and domain boundaries gray areas to discuss-phase
+- add DOMAIN.md and TEST-STRATEGY.md scaffolding to new-project and map-codebase
+- integrate GSD methodology as battery-included resources
+- add draht login command
+- rename pi CLI to draht, update env vars, scaffold landing page
+- add SST v4 infrastructure, resource manager, and AGENTS.md templates
+- rebrand to @draht/ namespace
+
+### Changed
+
+- rebrand package references from @mariozechner/pi-* to @draht/*
+- add publishConfig for public npm access
+- comprehensive READMEs, CONTRIBUTING.md, and phase summaries
+- add vitest config, integration tests, and draht manifest test
+- switch from npm to bun, replace tsx with bun runtime, add tsgo
+
+### Fixed
+
+- rm -rf dist/prompts and dist/hooks before copy to avoid stale permission issues
+- build packages individually to avoid workspace recursion, fix copy-assets mkdir
+- load shipped prompts unconditionally (not gated by includeDefaults)
+- remove gsd- prefix from shipped prompts and agents
+- use workspace:* for all inter-package dependencies
+- pre-commit hooks
+- address code review findings and fix router stream types
 
 ## [0.56.0] - 2026-03-04
 
@@ -352,8 +385,6 @@
 - Updated default model for `vercel-ai-gateway` provider to `anthropic/claude-opus-4-6`
 - Updated default model for `opencode` provider to `claude-opus-4-6`
 
-## [0.52.1] - 2026-02-05
-
 ## [0.52.0] - 2026-02-05
 
 ### New Features
@@ -585,8 +616,6 @@
 
 - Fixed empty rows appearing below footer when content shrinks (e.g., closing `/tree`, clearing multi-line editor) ([#1095](https://github.com/badlogic/pi-mono/pull/1095) by [@marckrenn](https://github.com/marckrenn))
 - Fixed terminal cursor remaining hidden after exiting TUI via `stop()` when a render was pending ([#1099](https://github.com/badlogic/pi-mono/pull/1099) by [@haoqixu](https://github.com/haoqixu))
-
-## [0.50.5] - 2026-01-30
 
 ## [0.50.4] - 2026-01-30
 
@@ -1016,8 +1045,6 @@ There are multiple SDK breaking changes since v0.49.3. For the quickest migratio
 - Fixed extension loading in compiled Bun binary: extensions with local file imports now work correctly. Updated `@mariozechner/jiti` to v2.6.5 which bundles babel for Bun binary compatibility. ([#681](https://github.com/badlogic/pi-mono/issues/681))
 - Fixed theme loading when installed via mise: use wrapper directory in release tarballs for compatibility with mise's `strip_components=1` extraction. ([#681](https://github.com/badlogic/pi-mono/issues/681))
 
-## [0.45.3] - 2026-01-13
-
 ## [0.45.2] - 2026-01-13
 
 ### Fixed
@@ -1230,10 +1257,6 @@ There are multiple SDK breaking changes since v0.49.3. For the quickest migratio
 - Context overflow detection now recognizes `context_length_exceeded` errors.
 - Key presses no longer dropped when input is batched over SSH ([#538](https://github.com/badlogic/pi-mono/issues/538))
 - Clipboard image support now works on Alpine Linux and other musl-based distros ([#533](https://github.com/badlogic/pi-mono/issues/533))
-
-## [0.37.8] - 2026-01-07
-
-## [0.37.7] - 2026-01-07
 
 ## [0.37.6] - 2026-01-06
 
@@ -1551,8 +1574,6 @@ pi --extension ./safety.ts -e ./todo.ts
 - SDK: `customTools` option now accepts `ToolDefinition[]` directly (simplified from `Array<{ path?, tool }>`)
 - SDK: `extensions` option accepts `ExtensionFactory[]` for inline extensions
 - SDK: `additionalExtensionPaths` replaces both `additionalHookPaths` and `additionalCustomToolPaths`
-
-## [0.34.2] - 2026-01-04
 
 ## [0.34.1] - 2026-01-04
 

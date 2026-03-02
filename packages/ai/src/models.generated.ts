@@ -6600,23 +6600,6 @@ export const MODELS = {
 			contextWindow: 131000,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
-		"arcee-ai/trinity-mini": {
-			id: "arcee-ai/trinity-mini",
-			name: "Arcee AI: Trinity Mini",
-			api: "openai-completions",
-			provider: "openrouter",
-			baseUrl: "https://openrouter.ai/api/v1",
-			reasoning: true,
-			input: ["text"],
-			cost: {
-				input: 0.045,
-				output: 0.15,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 131072,
-			maxTokens: 131072,
-		} satisfies Model<"openai-completions">,
 		"arcee-ai/trinity-mini:free": {
 			id: "arcee-ai/trinity-mini:free",
 			name: "Arcee AI: Trinity Mini (free)",

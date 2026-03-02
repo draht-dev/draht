@@ -1,28 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.2-4] - 2026-03-02
 
-## [2026.3.2-3] - 2026-03-02
+### Added
 
-## [2026.3.1] - 2026-02-28
+- rebrand to @draht/ namespace
 
-## [0.55.3] - 2026-02-27
+### Changed
 
-## [0.55.2] - 2026-02-27
+- add publishConfig for public npm access
+- switch from npm to bun, replace tsx with bun runtime, add tsgo
 
-## [0.55.1] - 2026-02-26
+### Fixed
 
-## [0.55.0] - 2026-02-24
-
-## [0.54.2] - 2026-02-23
-
-## [0.54.1] - 2026-02-22
-
-## [0.54.0] - 2026-02-19
-
-## [0.53.1] - 2026-02-19
-
-## [0.53.0] - 2026-02-17
+- use workspace:* for all inter-package dependencies
+- address code review findings and fix router stream types
 
 ## [0.52.12] - 2026-02-13
 
@@ -30,49 +22,11 @@
 
 - Added `transport` to `AgentOptions` and `AgentLoopConfig` forwarding, allowing stream transport preference (`"sse"`, `"websocket"`, `"auto"`) to flow into provider calls.
 
-## [0.52.11] - 2026-02-13
-
-## [0.52.10] - 2026-02-12
-
-## [0.52.9] - 2026-02-08
-
-## [0.52.8] - 2026-02-07
-
 ## [0.52.7] - 2026-02-06
 
 ### Fixed
 
 - Fixed `continue()` to resume queued steering/follow-up messages when context currently ends in an assistant message, and preserved one-at-a-time steering ordering during assistant-tail resumes ([#1312](https://github.com/badlogic/pi-mono/pull/1312) by [@ferologics](https://github.com/ferologics))
-
-## [0.52.6] - 2026-02-05
-
-## [0.52.5] - 2026-02-05
-
-## [0.52.4] - 2026-02-05
-
-## [0.52.3] - 2026-02-05
-
-## [0.52.2] - 2026-02-05
-
-## [0.52.1] - 2026-02-05
-
-## [0.52.0] - 2026-02-05
-
-## [0.51.6] - 2026-02-04
-
-## [0.51.5] - 2026-02-04
-
-## [0.51.4] - 2026-02-03
-
-## [0.51.3] - 2026-02-03
-
-## [0.51.2] - 2026-02-03
-
-## [0.51.1] - 2026-02-02
-
-## [0.51.0] - 2026-02-01
-
-## [0.50.9] - 2026-02-01
 
 ## [0.50.8] - 2026-02-01
 
@@ -80,91 +34,11 @@
 
 - Added `maxRetryDelayMs` option to `AgentOptions` to cap server-requested retry delays. Passed through to the underlying stream function. ([#1123](https://github.com/badlogic/pi-mono/issues/1123))
 
-## [0.50.7] - 2026-01-31
-
-## [0.50.6] - 2026-01-30
-
-## [0.50.5] - 2026-01-30
-
-## [0.50.3] - 2026-01-29
-
-## [0.50.2] - 2026-01-29
-
-## [0.50.1] - 2026-01-26
-
-## [0.50.0] - 2026-01-26
-
-## [0.49.3] - 2026-01-22
-
-## [0.49.2] - 2026-01-19
-
-## [0.49.1] - 2026-01-18
-
-## [0.49.0] - 2026-01-17
-
-## [0.48.0] - 2026-01-16
-
-## [0.47.0] - 2026-01-16
-
-## [0.46.0] - 2026-01-15
-
-## [0.45.7] - 2026-01-13
-
-## [0.45.6] - 2026-01-13
-
-## [0.45.5] - 2026-01-13
-
-## [0.45.4] - 2026-01-13
-
-## [0.45.3] - 2026-01-13
-
-## [0.45.2] - 2026-01-13
-
-## [0.45.1] - 2026-01-13
-
-## [0.45.0] - 2026-01-13
-
-## [0.44.0] - 2026-01-12
-
-## [0.43.0] - 2026-01-11
-
-## [0.42.5] - 2026-01-11
-
-## [0.42.4] - 2026-01-10
-
-## [0.42.3] - 2026-01-10
-
-## [0.42.2] - 2026-01-10
-
-## [0.42.1] - 2026-01-09
-
-## [0.42.0] - 2026-01-09
-
-## [0.41.0] - 2026-01-09
-
-## [0.40.1] - 2026-01-09
-
-## [0.40.0] - 2026-01-08
-
-## [0.39.1] - 2026-01-08
-
-## [0.39.0] - 2026-01-08
-
 ## [0.38.0] - 2026-01-08
 
 ### Added
 
 - `thinkingBudgets` option on `Agent` and `AgentOptions` to customize token budgets per thinking level ([#529](https://github.com/badlogic/pi-mono/pull/529) by [@melihmucuk](https://github.com/melihmucuk))
-
-## [0.37.8] - 2026-01-07
-
-## [0.37.7] - 2026-01-07
-
-## [0.37.6] - 2026-01-06
-
-## [0.37.5] - 2026-01-06
-
-## [0.37.4] - 2026-01-06
 
 ## [0.37.3] - 2026-01-06
 
@@ -172,33 +46,11 @@
 
 - `sessionId` option on `Agent` to forward session identifiers to LLM providers for session-based caching.
 
-## [0.37.2] - 2026-01-05
-
-## [0.37.1] - 2026-01-05
-
 ## [0.37.0] - 2026-01-05
 
 ### Fixed
 
 - `minimal` thinking level now maps to `minimal` reasoning effort instead of being treated as `low`.
-
-## [0.36.0] - 2026-01-05
-
-## [0.35.0] - 2026-01-05
-
-## [0.34.2] - 2026-01-04
-
-## [0.34.1] - 2026-01-04
-
-## [0.34.0] - 2026-01-04
-
-## [0.33.0] - 2026-01-04
-
-## [0.32.3] - 2026-01-03
-
-## [0.32.2] - 2026-01-03
-
-## [0.32.1] - 2026-01-03
 
 ## [0.32.0] - 2026-01-03
 
@@ -217,8 +69,6 @@
 ### Fixed
 
 - `prompt()` and `continue()` now throw if called while the agent is already streaming, preventing race conditions and corrupted state. Use `steer()` or `followUp()` to queue messages during streaming, or `await` the previous call.
-
-## [0.31.1] - 2026-01-02
 
 ## [0.31.0] - 2026-01-02
 

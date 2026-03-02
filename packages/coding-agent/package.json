@@ -1,6 +1,6 @@
 {
 	"name": "@draht/coding-agent",
-	"version": "2026.3.2-3",
+	"version": "2026.3.2-4",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"drahtConfig": {

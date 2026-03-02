@@ -1,14 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.2-4] - 2026-03-02
 
-## [2026.3.2-3] - 2026-03-02
+### Added
 
-## [2026.3.1] - 2026-02-28
+- rebrand to @draht/ namespace
 
-## [0.55.3] - 2026-02-27
+### Changed
 
-## [0.55.2] - 2026-02-27
+- add publishConfig for public npm access
+- switch from npm to bun, replace tsx with bun runtime, add tsgo
 
 ## [0.55.1] - 2026-02-26
 
@@ -16,25 +17,11 @@
 
 - Fixed Windows VT input initialization in ESM by loading `koffi` via `createRequire`, restoring VT input mode while keeping `koffi` externalized from compiled binaries ([#1627](https://github.com/badlogic/pi-mono/pull/1627) by [@kaste](https://github.com/kaste))
 
-## [0.55.0] - 2026-02-24
-
-## [0.54.2] - 2026-02-23
-
 ## [0.54.1] - 2026-02-22
 
 ### Fixed
 
 - Changed koffi import from top-level to dynamic require in `enableWindowsVTInput()` to prevent bun from embedding all 18 platform `.node` files (~74MB) into every compiled binary. Koffi is only needed on Windows.
-
-## [0.54.0] - 2026-02-19
-
-## [0.53.1] - 2026-02-19
-
-## [0.53.0] - 2026-02-17
-
-## [0.52.12] - 2026-02-13
-
-## [0.52.11] - 2026-02-13
 
 ## [0.52.10] - 2026-02-12
 
@@ -46,30 +33,12 @@
 
 - Fixed `@` autocomplete fuzzy matching to score against path segments and prefixes, reducing irrelevant matches for nested paths ([#1423](https://github.com/badlogic/pi-mono/issues/1423))
 
-## [0.52.9] - 2026-02-08
-
 ## [0.52.8] - 2026-02-07
 
 ### Added
 
 - Added `pasteToEditor` to `EditorComponent` API for programmatic paste support ([#1351](https://github.com/badlogic/pi-mono/pull/1351) by [@kaofelix](https://github.com/kaofelix))
 - Added kill ring (ctrl+k/ctrl+y/alt+y) and undo (ctrl+z) support to the Input component ([#1373](https://github.com/badlogic/pi-mono/pull/1373) by [@Perlence](https://github.com/Perlence))
-
-## [0.52.7] - 2026-02-06
-
-## [0.52.6] - 2026-02-05
-
-## [0.52.5] - 2026-02-05
-
-## [0.52.4] - 2026-02-05
-
-## [0.52.3] - 2026-02-05
-
-## [0.52.2] - 2026-02-05
-
-## [0.52.1] - 2026-02-05
-
-## [0.52.0] - 2026-02-05
 
 ## [0.51.6] - 2026-02-04
 
@@ -81,15 +50,11 @@
 
 - Fixed `/settings` crashing in narrow terminals by handling small widths in the settings list ([#1246](https://github.com/badlogic/pi-mono/pull/1246) by [@haoqixu](https://github.com/haoqixu))
 
-## [0.51.5] - 2026-02-04
-
 ## [0.51.4] - 2026-02-03
 
 ### Fixed
 
 - Fixed input scrolling to avoid splitting emoji sequences ([#1228](https://github.com/badlogic/pi-mono/pull/1228) by [@haoqixu](https://github.com/haoqixu))
-
-## [0.51.3] - 2026-02-03
 
 ## [0.51.2] - 2026-02-03
 
@@ -122,10 +87,6 @@
 - Fixed unnecessary full redraws when appending many lines after content had previously shrunk (viewport check now uses actual previous content size instead of stale maximum)
 - Fixed Ctrl+D exit closing the parent SSH session due to stdin buffer race condition ([#1185](https://github.com/badlogic/pi-mono/issues/1185))
 
-## [0.51.0] - 2026-02-01
-
-## [0.50.9] - 2026-02-01
-
 ## [0.50.8] - 2026-02-01
 
 ### Added
@@ -135,8 +96,6 @@
 ### Fixed
 
 - Fixed Kitty keyboard protocol base layout fallback so non-QWERTY layouts do not trigger wrong shortcuts ([#1096](https://github.com/badlogic/pi-mono/pull/1096) by [@rytswd](https://github.com/rytswd))
-
-## [0.50.7] - 2026-01-31
 
 ## [0.50.6] - 2026-01-30
 
@@ -172,8 +131,6 @@
 - Fixed autocomplete for paths with spaces by supporting quoted path tokens ([#1077](https://github.com/badlogic/pi-mono/issues/1077))
 - Fixed quoted path completions to avoid duplicating closing quotes during autocomplete ([#1077](https://github.com/badlogic/pi-mono/issues/1077))
 
-## [0.50.3] - 2026-01-29
-
 ## [0.50.2] - 2026-01-29
 
 ### Added
@@ -191,8 +148,6 @@
 
 - Fixed backslash input buffering causing delayed character display in editor and input components ([#1037](https://github.com/badlogic/pi-mono/pull/1037) by [@Perlence](https://github.com/Perlence))
 - Fixed markdown table rendering with proper row dividers and minimum column width ([#997](https://github.com/badlogic/pi-mono/pull/997) by [@tmustier](https://github.com/tmustier))
-
-## [0.50.1] - 2026-01-26
 
 ## [0.50.0] - 2026-01-26
 
@@ -228,8 +183,6 @@
 - Fixed viewport tracking and cursor positioning for overlays and content shrink scenarios
 - Autocomplete now allows searches with `/` characters (e.g., `folder1/folder2`) ([#882](https://github.com/badlogic/pi-mono/pull/882) by [@richardgill](https://github.com/richardgill))
 - Directory completions for `@` file attachments no longer add trailing space, allowing continued autocomplete into subdirectories
-
-## [0.49.2] - 2026-01-19
 
 ## [0.49.1] - 2026-01-18
 
@@ -286,8 +239,6 @@
 
 - Keyboard shortcuts (Ctrl+C, Ctrl+D, etc.) now work on non-Latin keyboard layouts (Russian, Ukrainian, Bulgarian, etc.) in terminals supporting Kitty keyboard protocol with alternate key reporting ([#718](https://github.com/badlogic/pi-mono/pull/718) by [@dannote](https://github.com/dannote))
 
-## [0.45.7] - 2026-01-13
-
 ## [0.45.6] - 2026-01-13
 
 ### Added
@@ -301,18 +252,6 @@
 ### Fixed
 
 - Overlay compositing crash when rendered lines exceed terminal width due to complex ANSI/OSC sequences (e.g., hyperlinks in subagent output) ([#667](https://github.com/badlogic/pi-mono/pull/667) by [@nicobailon](https://github.com/nicobailon))
-
-## [0.45.5] - 2026-01-13
-
-## [0.45.4] - 2026-01-13
-
-## [0.45.3] - 2026-01-13
-
-## [0.45.2] - 2026-01-13
-
-## [0.45.1] - 2026-01-13
-
-## [0.45.0] - 2026-01-13
 
 ## [0.44.0] - 2026-01-12
 
@@ -345,24 +284,6 @@
 - Cursor position tracking when content shrinks with unchanged remaining lines
 - TUI renders with wrong dimensions after suspend/resume if terminal was resized while suspended ([#599](https://github.com/badlogic/pi-mono/issues/599))
 - Pasted content containing Kitty key release patterns (e.g., `:3F` in MAC addresses) was incorrectly filtered out ([#623](https://github.com/badlogic/pi-mono/pull/623) by [@ogulcancelik](https://github.com/ogulcancelik))
-
-## [0.42.4] - 2026-01-10
-
-## [0.42.3] - 2026-01-10
-
-## [0.42.2] - 2026-01-10
-
-## [0.42.1] - 2026-01-09
-
-## [0.42.0] - 2026-01-09
-
-## [0.41.0] - 2026-01-09
-
-## [0.40.1] - 2026-01-09
-
-## [0.40.0] - 2026-01-08
-
-## [0.39.1] - 2026-01-08
 
 ## [0.39.0] - 2026-01-08
 
@@ -403,27 +324,11 @@
 
 - Kitty keyboard protocol flag 2 support for key release events. New exports: `isKeyRelease(data)`, `isKeyRepeat(data)`, `KeyEventType` type. Terminals supporting Kitty protocol (Kitty, Ghostty, WezTerm) now send proper key-up events.
 
-## [0.37.5] - 2026-01-06
-
-## [0.37.4] - 2026-01-06
-
-## [0.37.3] - 2026-01-06
-
-## [0.37.2] - 2026-01-05
-
-## [0.37.1] - 2026-01-05
-
 ## [0.37.0] - 2026-01-05
 
 ### Fixed
 
 - Crash when pasting text with trailing whitespace exceeding terminal width through Markdown rendering ([#457](https://github.com/badlogic/pi-mono/pull/457) by [@robinwander](https://github.com/robinwander))
-
-## [0.36.0] - 2026-01-05
-
-## [0.35.0] - 2026-01-05
-
-## [0.34.2] - 2026-01-04
 
 ## [0.34.1] - 2026-01-04
 
@@ -452,15 +357,11 @@
 
 - Key detection refactored: consolidated `is*()` functions into generic `matchesKey(data, keyId)` function that accepts key identifiers like `"ctrl+c"`, `"shift+enter"`, `"alt+left"`, etc.
 
-## [0.32.3] - 2026-01-03
-
 ## [0.32.2] - 2026-01-03
 
 ### Fixed
 
 - Slash command autocomplete now triggers for commands starting with `.`, `-`, or `_` (e.g., `/.land`, `/-foo`) ([#422](https://github.com/badlogic/pi-mono/issues/422))
-
-## [0.32.1] - 2026-01-03
 
 ## [0.32.0] - 2026-01-03
 

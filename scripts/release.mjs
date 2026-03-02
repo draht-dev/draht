@@ -393,7 +393,9 @@ console.log();
 // 7. Build and publish
 console.log("Building and publishing...");
 run("cd packages/tui && bun run build && cd ../ai && bun run build && cd ../agent && bun run build && cd ../coding-agent && bun run build && cd ../mom && bun run build && cd ../web-ui && bun run build && cd ../pods && bun run build");
-const isPrerelease = version.includes("-");
+// Daily version suffixes like 2026.3.2-4 are NOT prereleases — they're the Nth release of the day.
+// Only versions with non-numeric suffixes (e.g., -beta, -rc.1, -alpha) are prereleases.
+const isPrerelease = /-[a-zA-Z]/.test(version);
 // Publish each non-private package individually (bun publish -ws is not supported in Bun 1.3.x)
 // The publish script resolves workspace:* deps to real versions before publishing and restores after
 run(`node scripts/publish-workspaces.mjs --access public${isPrerelease ? " --tag next" : ""}`);

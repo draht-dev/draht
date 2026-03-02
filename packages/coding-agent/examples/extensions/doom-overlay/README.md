@@ -43,4 +43,4 @@ Height is calculated from width to maintain DOOM's 3.2:1 aspect ratio (accountin
 
 - [id Software](https://github.com/id-Software/DOOM) for the original DOOM
 - [doomgeneric](https://github.com/ozkl/doomgeneric) for the portable DOOM implementation
-- [pi-doom](https://github.com/badlogic/pi-doom) for the original pi integration
+- [pi-doom](https://github.com/badlogic/pi-doom) for the original draht integration

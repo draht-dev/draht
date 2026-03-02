@@ -23,7 +23,7 @@ A Slack bot powered by an LLM that can execute bash commands, read/write files, 
 ## Installation
 
 ```bash
-npm install @mariozechner/pi-mom
+bun add @draht/mom
 ```
 
 ### Slack App Setup
@@ -64,7 +64,7 @@ export MOM_SLACK_APP_TOKEN=xapp-...
 export MOM_SLACK_BOT_TOKEN=xoxb-...
 # Option 1: Anthropic API key
 export ANTHROPIC_API_KEY=sk-ant-...
-# Option 2: use /login command in pi agent, then copy/link auth.json to ~/.pi/mom/
+# Option 2: use /login command in draht, then copy/link auth.json to ~/.draht/mom/
 
 # Create Docker sandbox (recommended)
 docker run -d \
@@ -108,11 +108,11 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 2. **OAuth Login via coding agent command** (Recommended for Claude Pro/Max)
 
-- run interactive coding agent session: `npx @mariozechner/pi-coding-agent`
+- run interactive coding agent session: `bunx @draht/coding-agent`
 - enter `/login` command
   - choose "Anthropic" provider
   - follow instructions in the browser
-- link `auth.json` to mom: `ln -s ~/.pi/agent/auth.json ~/.pi/mom/auth.json`
+- link `auth.json` to mom: `ln -s ~/.pi/agent/auth.json ~/.draht/mom/auth.json`
 
 ## How Mom Works
 
@@ -364,7 +364,7 @@ You can write event files directly to `data/events/` on the host machine. This l
 
 ### Updating Mom
 
-Update mom anytime with `npm install -g @mariozechner/pi-mom`. This only updates the Node.js app on your host. Anything mom installed inside the Docker container remains unchanged.
+Update mom anytime with `bun add -g @draht/mom`. This only updates the Node.js app on your host. Anything mom installed inside the Docker container remains unchanged.
 
 ## Message History
 

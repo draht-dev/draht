@@ -15,6 +15,7 @@
  *   /quick   <task>             — one-shot implement + commit (skip full GSD)
  *   /resume                     — pick up interrupted work from CONTINUE-HERE.md
  *   /status                     — show .planning/STATE.md overview
+ *   /next-milestone             — plan next milestone after current one is complete
  *   /new-project <name> [path]  — create project dir, git init, scaffold .draht/
  *   /init-project               — scaffold .draht/ in existing project
  */
@@ -238,6 +239,70 @@ After both complete, merge into a single prioritized findings report.`,
 			}
 
 			pi.sendUserMessage(`Here is the current project state:\n\n${output}`);
+		},
+	});
+
+	// ── /next-milestone ──────────────────────────────────────────────────────
+	pi.registerCommand("next-milestone", {
+		description: "Plan the next milestone after the current one is complete — review progress, update requirements, create new phases",
+		handler: async (_args, ctx) => {
+			if (isBusy(ctx, ctx.ui)) return;
+
+			const planningDir = path.join(ctx.cwd, ".planning");
+			const roadmapFile = path.join(planningDir, "ROADMAP.md");
+			const stateFile = path.join(planningDir, "STATE.md");
+			const requirementsFile = path.join(planningDir, "REQUIREMENTS.md");
+
+			if (!fs.existsSync(roadmapFile)) {
+				ctx.ui.notify("No .planning/ROADMAP.md found. Run /new-project first.", "warning");
+				return;
+			}
+
+			let context = `\nROADMAP.md:\n${fs.readFileSync(roadmapFile, "utf-8")}`;
+			if (fs.existsSync(stateFile)) {
+				context += `\nSTATE.md:\n${fs.readFileSync(stateFile, "utf-8")}`;
+			}
+			if (fs.existsSync(requirementsFile)) {
+				context += `\nREQUIREMENTS.md:\n${fs.readFileSync(requirementsFile, "utf-8")}`;
+			}
+
+			// Collect UAT and summary files for completed phases
+			const phasesDir = path.join(planningDir, "phases");
+			if (fs.existsSync(phasesDir)) {
+				for (const dir of fs.readdirSync(phasesDir)) {
+					const phaseDir = path.join(phasesDir, dir);
+					if (!fs.statSync(phaseDir).isDirectory()) continue;
+					for (const file of fs.readdirSync(phaseDir)) {
+						if (file.endsWith("-UAT.md") || file.endsWith("-SUMMARY.md")) {
+							context += `\n${dir}/${file}:\n${fs.readFileSync(path.join(phaseDir, file), "utf-8")}`;
+						}
+					}
+				}
+			}
+
+			pi.sendUserMessage(
+				`Use the subagent tool to delegate to the architect agent with this task:
+
+"We have completed a milestone. Your job is to plan the NEXT milestone.
+
+1. Read the current ROADMAP.md and identify the completed milestone and its phases
+2. Review all UAT reports and summaries to understand what was built
+3. Review REQUIREMENTS.md — identify which v1 requirements are now satisfied and which remain
+4. Assess if any v2 requirements should be promoted to the next milestone based on what we learned
+5. Propose the next milestone with new phases:
+   - Each phase has a clear goal (outcome, not activity)
+   - Phases are ordered by dependency
+   - Map phases to remaining/new requirements
+6. Update ROADMAP.md with the new milestone and phases
+7. Update STATE.md to reflect milestone transition
+8. Update REQUIREMENTS.md if requirements changed based on learnings
+
+Present the proposed milestone for user approval before writing files.
+
+Project context:${context}"
+
+Set agentScope to "project".`,
+			);
 		},
 	});
 

@@ -1,34 +1,76 @@
 /**
- * GSD Phase Commands for fr3n-mono
+ * GSD — Get Shit Done
  *
- * Wires up subagent parallel/chain workflows for each GSD phase.
+ * Batteries-included phase commands for structured AI-assisted development.
  *
- * Commands:
+ * Full workflow:
+ *   /discuss <feature>          — clarify requirements before planning
+ *   /plan    <feature>          — architect produces implementation plan
+ *   /execute <task1, task2...>  — parallel implement → review → commit
+ *   /verify                     — parallel lint/typecheck/tests + security audit
+ *
+ * Utilities:
+ *   /review  <scope>            — ad-hoc code review + security audit
+ *   /fix     <issue>            — targeted fix plan for a failing task
+ *   /quick   <task>             — one-shot implement + commit (skip full GSD)
+ *   /resume                     — pick up interrupted work from CONTINUE-HERE.md
+ *   /status                     — show .planning/STATE.md overview
  *   /new-project <name> [path]  — create project dir, git init, scaffold .draht/
  *   /init-project               — scaffold .draht/ in existing project
- *   /plan   <feature>           — architect plans the feature
- *   /execute <tasks>            — parallel implementers + chain reviewer + git-committer
- *   /verify                     — parallel lint/typecheck/tests + security audit
- *   /review <scope>             — code review on a specific scope
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@draht/coding-agent";
 
+function isBusy(ctx: { isIdle: () => boolean }, ui: { notify: (msg: string, level: string) => void }): boolean {
+	if (!ctx.isIdle()) {
+		ui.notify("Agent is busy", "warning");
+		return true;
+	}
+	return false;
+}
+
 export default function (pi: ExtensionAPI) {
+	// ── /discuss ─────────────────────────────────────────────────────────────
+	pi.registerCommand("discuss", {
+		description: "Clarify requirements before planning. Architect asks questions and defines scope. Usage: /discuss <feature>",
+		handler: async (args, ctx) => {
+			if (!args.trim()) {
+				ctx.ui.notify("Usage: /discuss <feature description>", "warning");
+				return;
+			}
+			if (isBusy(ctx, ctx.ui)) return;
+
+			pi.sendUserMessage(
+				`Use the subagent tool to delegate to the architect agent with this task:
+
+"We are in the DISCUSS phase for: ${args.trim()}
+
+Your job is NOT to plan yet. First:
+1. Read relevant existing code to understand the current state
+2. Identify ambiguities, unknowns, and risks
+3. List clarifying questions that need answers before planning can begin
+4. Define a clear, bounded scope for what will and won't be built
+5. Output a DISCUSS summary with: scope, assumptions, open questions, risks
+
+Do not produce file lists or implementation details yet."
+
+Set agentScope to "project".`,
+			);
+		},
+	});
+
 	// ── /plan ────────────────────────────────────────────────────────────────
 	pi.registerCommand("plan", {
-		description: "Plan a feature using the architect agent. Usage: /plan <feature description>",
+		description: "Plan a feature — architect reads codebase and produces structured implementation plan. Usage: /plan <feature>",
 		handler: async (args, ctx) => {
 			if (!args.trim()) {
 				ctx.ui.notify("Usage: /plan <feature description>", "warning");
 				return;
 			}
-			if (!ctx.isIdle()) {
-				ctx.ui.notify("Agent is busy", "warning");
-				return;
-			}
+			if (isBusy(ctx, ctx.ui)) return;
+
 			pi.sendUserMessage(
 				`Use the subagent tool to delegate to the architect agent with this task: "${args.trim()}"\n\nSet agentScope to "project".`,
 			);
@@ -37,46 +79,33 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /execute ─────────────────────────────────────────────────────────────
 	pi.registerCommand("execute", {
-		description:
-			"Execute tasks in parallel with implementers, then chain through reviewer and git-committer. Usage: /execute <comma-separated tasks>",
+		description: "Execute tasks in parallel, then chain reviewer + git-committer. Usage: /execute task1, task2, task3",
 		handler: async (args, ctx) => {
 			if (!args.trim()) {
-				ctx.ui.notify(
-					"Usage: /execute task1, task2, task3  (tasks run in parallel, then review + commit)",
-					"warning",
-				);
+				ctx.ui.notify("Usage: /execute task1, task2, task3", "warning");
 				return;
 			}
-			if (!ctx.isIdle()) {
-				ctx.ui.notify("Agent is busy", "warning");
-				return;
-			}
+			if (isBusy(ctx, ctx.ui)) return;
 
-			const tasks = args
-				.split(",")
-				.map((t) => t.trim())
-				.filter(Boolean);
+			const tasks = args.split(",").map((t) => t.trim()).filter(Boolean);
 
 			if (tasks.length === 1) {
-				// Single task: chain implementer → reviewer → git-committer
 				pi.sendUserMessage(
 					`Use the subagent tool in chain mode with agentScope "project":
-chain:
 1. agent: implementer — task: "${tasks[0]}"
-2. agent: reviewer — task: "Review the changes just made: {previous}"
-3. agent: git-committer — task: "Commit all changes. Context from review: {previous}"`,
+2. agent: reviewer    — task: "Review the changes just made: {previous}"
+3. agent: git-committer — task: "Commit all changes. Review context: {previous}"`,
 				);
 			} else {
-				// Multiple tasks: parallel implementers → reviewer → git-committer
 				const parallelList = tasks.map((t, i) => `${i + 1}. agent: implementer — task: "${t}"`).join("\n");
 				pi.sendUserMessage(
 					`Use the subagent tool with agentScope "project":
 
-Step 1 — run in PARALLEL mode:
+Step 1 — PARALLEL mode (run all simultaneously):
 ${parallelList}
 
-Step 2 — after all parallel tasks complete, run in CHAIN mode:
-1. agent: reviewer — task: "Review all the changes just implemented across the codebase"
+Step 2 — CHAIN mode (after all parallel tasks complete):
+1. agent: reviewer      — task: "Review all changes just implemented"
 2. agent: git-committer — task: "Commit all changes. Review findings: {previous}"`,
 				);
 			}
@@ -85,25 +114,136 @@ Step 2 — after all parallel tasks complete, run in CHAIN mode:
 
 	// ── /verify ──────────────────────────────────────────────────────────────
 	pi.registerCommand("verify", {
-		description: "Run parallel verification: lint, typecheck, tests, and security audit",
+		description: "Parallel verification: lint, typecheck, tests, and security audit",
 		handler: async (_args, ctx) => {
-			if (!ctx.isIdle()) {
-				ctx.ui.notify("Agent is busy", "warning");
+			if (isBusy(ctx, ctx.ui)) return;
+
+			pi.sendUserMessage(
+				`Use the subagent tool in PARALLEL mode with agentScope "project":
+1. agent: verifier        — task: "Run all lint, typecheck, and test checks"
+2. agent: security-auditor — task: "Audit all recent changes for security vulnerabilities"
+
+After both complete, merge findings into a single prioritized report. List what must be fixed before this is production-ready.`,
+			);
+		},
+	});
+
+	// ── /review ──────────────────────────────────────────────────────────────
+	pi.registerCommand("review", {
+		description: "Ad-hoc code review + security audit. Usage: /review <scope or files>",
+		handler: async (args, ctx) => {
+			if (isBusy(ctx, ctx.ui)) return;
+
+			const scope = args.trim() || "all recent changes";
+			pi.sendUserMessage(
+				`Use the subagent tool in PARALLEL mode with agentScope "project":
+1. agent: reviewer        — task: "Review ${scope} for correctness, type safety, and conventions"
+2. agent: security-auditor — task: "Audit ${scope} for security vulnerabilities"
+
+After both complete, merge into a single prioritized findings report.`,
+			);
+		},
+	});
+
+	// ── /fix ─────────────────────────────────────────────────────────────────
+	pi.registerCommand("fix", {
+		description: "Create a targeted fix plan for a failing task or bug. Usage: /fix <description of what's broken>",
+		handler: async (args, ctx) => {
+			if (!args.trim()) {
+				ctx.ui.notify("Usage: /fix <description of what's broken>", "warning");
 				return;
 			}
-			pi.sendUserMessage(
-				`Use the subagent tool in PARALLEL mode with agentScope "project" to run these simultaneously:
-1. agent: verifier — task: "Run all lint, typecheck, and test checks"
-2. agent: security-auditor — task: "Audit all recent changes for security issues"
+			if (isBusy(ctx, ctx.ui)) return;
 
-After both complete, summarize the combined findings and list what needs to be fixed before this is production-ready.`,
+			pi.sendUserMessage(
+				`Use the subagent tool in chain mode with agentScope "project":
+1. agent: architect  — task: "Diagnose this issue and produce a minimal fix plan: ${args.trim()}. Read the relevant code first. Output: root cause, exact files to change, fix steps."
+2. agent: implementer — task: "Apply this fix plan exactly: {previous}"
+3. agent: reviewer    — task: "Verify the fix is correct and doesn't introduce regressions: {previous}"
+4. agent: git-committer — task: "Commit the fix. Fix summary: {previous}"`,
 			);
+		},
+	});
+
+	// ── /quick ───────────────────────────────────────────────────────────────
+	pi.registerCommand("quick", {
+		description: "One-shot task: implement + commit. Skips full GSD workflow. Usage: /quick <task>",
+		handler: async (args, ctx) => {
+			if (!args.trim()) {
+				ctx.ui.notify("Usage: /quick <task description>", "warning");
+				return;
+			}
+			if (isBusy(ctx, ctx.ui)) return;
+
+			pi.sendUserMessage(
+				`Use the subagent tool in chain mode with agentScope "project":
+1. agent: implementer   — task: "${args.trim()}"
+2. agent: git-committer — task: "Commit the changes just made: {previous}"`,
+			);
+		},
+	});
+
+	// ── /resume ──────────────────────────────────────────────────────────────
+	pi.registerCommand("resume", {
+		description: "Resume interrupted work — reads CONTINUE-HERE.md and picks up where we left off",
+		handler: async (_args, ctx) => {
+			if (isBusy(ctx, ctx.ui)) return;
+
+			const continueFile = path.join(ctx.cwd, ".planning", "CONTINUE-HERE.md");
+			const stateFile = path.join(ctx.cwd, ".planning", "STATE.md");
+
+			if (!fs.existsSync(continueFile) && !fs.existsSync(stateFile)) {
+				ctx.ui.notify("No .planning/CONTINUE-HERE.md or STATE.md found. Nothing to resume.", "warning");
+				return;
+			}
+
+			let context = "";
+			if (fs.existsSync(continueFile)) {
+				context += `\nCONTINUE-HERE.md:\n${fs.readFileSync(continueFile, "utf-8")}`;
+			}
+			if (fs.existsSync(stateFile)) {
+				context += `\nSTATE.md:\n${fs.readFileSync(stateFile, "utf-8")}`;
+			}
+
+			pi.sendUserMessage(
+				`Read the following project state and resume work from where it was interrupted. Identify the next incomplete task and proceed with it using the appropriate subagent.${context}`,
+			);
+		},
+	});
+
+	// ── /status ──────────────────────────────────────────────────────────────
+	pi.registerCommand("status", {
+		description: "Show current GSD project state from .planning/STATE.md",
+		handler: async (_args, ctx) => {
+			const stateFile = path.join(ctx.cwd, ".planning", "STATE.md");
+			const logFile = path.join(ctx.cwd, ".planning", "execution-log.jsonl");
+
+			if (!fs.existsSync(stateFile)) {
+				ctx.ui.notify("No .planning/STATE.md found. Run /init-project or /new-project first.", "warning");
+				return;
+			}
+
+			let output = fs.readFileSync(stateFile, "utf-8");
+
+			if (fs.existsSync(logFile)) {
+				const entries = fs.readFileSync(logFile, "utf-8")
+					.split("\n").filter(Boolean)
+					.map((l) => { try { return JSON.parse(l); } catch { return null; } })
+					.filter(Boolean);
+
+				const passed = entries.filter((e) => e.status === "pass").length;
+				const failed = entries.filter((e) => e.status === "fail").length;
+				const skipped = entries.filter((e) => e.status === "skip").length;
+				output += `\n\n---\n**Execution log:** ${passed} passed, ${failed} failed, ${skipped} skipped`;
+			}
+
+			pi.sendUserMessage(`Here is the current project state:\n\n${output}`);
 		},
 	});
 
 	// ── /new-project ─────────────────────────────────────────────────────────
 	pi.registerCommand("new-project", {
-		description: "Create a new project: mkdir, git init, scaffold .draht/. Usage: /new-project <name> [/optional/path]",
+		description: "Create a new project: mkdir, git init, scaffold .draht/. Usage: /new-project <name> [/base/path]",
 		handler: async (args, ctx) => {
 			const parts = args.trim().split(/\s+/);
 			const name = parts[0];
@@ -120,14 +260,12 @@ After both complete, summarize the combined findings and list what needs to be f
 				return;
 			}
 
-			// Create project dir
 			fs.mkdirSync(projectDir, { recursive: true });
 
-			// git init
 			const { execSync } = await import("node:child_process");
 			execSync("git init", { cwd: projectDir });
 
-			// Scaffold .draht/
+			// Scaffold .draht/ from global agents
 			const agentSrc = path.join(process.env.HOME ?? "~", ".draht", "agent", "agents");
 			const agentDest = path.join(projectDir, ".draht", "agents");
 			const extDest = path.join(projectDir, ".draht", "extensions");
@@ -143,7 +281,7 @@ After both complete, summarize the combined findings and list what needs to be f
 				}
 			}
 
-			// Copy extension templates (subagent + gsd-commands, not draco-notify)
+			// Copy shipped extensions into the new project
 			const extSrc = path.dirname(new URL(import.meta.url).pathname);
 			for (const file of ["subagent.ts", "gsd-commands.ts"]) {
 				const src = path.join(extSrc, file);
@@ -152,30 +290,23 @@ After both complete, summarize the combined findings and list what needs to be f
 				}
 			}
 
-			// Write a minimal .gitignore
 			fs.writeFileSync(path.join(projectDir, ".gitignore"), "node_modules/\n.env\n.env.local\n");
 
 			ctx.ui.notify(
-				`✓ Project created at ${projectDir} — ${agentsCopied} agents scaffolded. Open it and customize .draht/agents/*.md for your stack.`,
+				`✓ ${projectDir} created — ${agentsCopied} agents, git initialized. Customize .draht/agents/*.md for your stack.`,
 				"info",
 			);
 
-			// Switch cwd into the new project for the next prompt
 			pi.sendUserMessage(
-				`New project "${name}" created at ${projectDir}. The .draht/ config is scaffolded with ${agentsCopied} agents. What should we build first?`,
+				`New project "${name}" created at ${projectDir} with ${agentsCopied} GSD agents scaffolded. What should we build first?`,
 			);
 		},
 	});
 
 	// ── /init-project ────────────────────────────────────────────────────────
 	pi.registerCommand("init-project", {
-		description: "Scaffold .draht/ config (agents + extensions) for a new project. Copies from global template.",
+		description: "Scaffold .draht/ config into an existing project from global agent defaults",
 		handler: async (_args, ctx) => {
-			const templateDir = path.join(
-				path.dirname(path.dirname(require.resolve("@draht/coding-agent"))),
-				"templates",
-				"project",
-			);
 			const targetDir = path.join(ctx.cwd, ".draht");
 
 			if (fs.existsSync(targetDir)) {
@@ -183,13 +314,7 @@ After both complete, summarize the combined findings and list what needs to be f
 				return;
 			}
 
-			// Fallback: copy from global agent dir structure
-			const agentSrc = path.join(
-				process.env.HOME ?? "~",
-				".draht",
-				"agent",
-				"agents",
-			);
+			const agentSrc = path.join(process.env.HOME ?? "~", ".draht", "agent", "agents");
 			const agentDest = path.join(targetDir, "agents");
 			const extDest = path.join(targetDir, "extensions");
 			fs.mkdirSync(agentDest, { recursive: true });
@@ -205,27 +330,8 @@ After both complete, summarize the combined findings and list what needs to be f
 			}
 
 			ctx.ui.notify(
-				`.draht/ scaffolded with ${copied} agents. Customize .draht/agents/*.md for this project.`,
+				`.draht/ scaffolded with ${copied} agents. Customize .draht/agents/*.md for this project's stack.`,
 				"info",
-			);
-		},
-	});
-
-	// ── /review ──────────────────────────────────────────────────────────────
-	pi.registerCommand("review", {
-		description: "Code review a specific scope. Usage: /review <scope or files>",
-		handler: async (args, ctx) => {
-			if (!ctx.isIdle()) {
-				ctx.ui.notify("Agent is busy", "warning");
-				return;
-			}
-			const scope = args.trim() || "all recent changes";
-			pi.sendUserMessage(
-				`Use the subagent tool in PARALLEL mode with agentScope "project":
-1. agent: reviewer — task: "Review ${scope} for correctness, type safety, and fr3n conventions"
-2. agent: security-auditor — task: "Audit ${scope} for security vulnerabilities"
-
-After both complete, merge the findings into a single prioritized report.`,
 			);
 		},
 	});

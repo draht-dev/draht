@@ -1,0 +1,746 @@
+---
+import Base from "../../layouts/Base.astro";
+
+const title = "Documentation — Draht";
+const description = "Get started with Draht from zero to hero. Installation, configuration, providers, extensions, skills, and more.";
+
+// Features still in development get a construction marker
+const wip = true;
+const ready = false;
+---
+
+<Base title={title} description={description}>
+	<main class="docs">
+
+		<div class="docs-header">
+			<h1>Documentation</h1>
+			<p class="docs-lead">From zero to hero with Draht.</p>
+		</div>
+
+		<!-- Table of Contents -->
+		<nav class="toc">
+			<h2>Contents</h2>
+			<ol>
+				<li><a href="#install">Installation</a></li>
+				<li><a href="#first-run">First Run</a></li>
+				<li><a href="#providers">Providers & Models</a></li>
+				<li><a href="#interactive">Interactive Mode</a></li>
+				<li><a href="#sessions">Sessions & Branching</a></li>
+				<li><a href="#context">Context Files</a></li>
+				<li><a href="#prompt-templates">Prompt Templates</a></li>
+				<li><a href="#skills">Skills</a></li>
+				<li><a href="#extensions">Extensions</a></li>
+				<li><a href="#themes">Themes</a></li>
+				<li><a href="#packages">Draht Packages</a></li>
+				<li><a href="#sdk">SDK & Programmatic Usage</a></li>
+				<li><a href="#model-router">Model Router</a></li>
+				<li><a href="#invoicing">Invoicing</a></li>
+				<li><a href="#compliance">Compliance</a></li>
+				<li><a href="#deploy-guardian">Deploy Guardian</a></li>
+				<li><a href="#orchestrator">Orchestrator</a></li>
+				<li><a href="#cli-reference">CLI Reference</a></li>
+			</ol>
+		</nav>
+
+		<!-- 1. Installation -->
+		<section id="install" class="doc-section">
+			<h2>1. Installation</h2>
+			<p>Draht requires <a href="https://bun.sh">Bun</a> (v1.1+). Install globally:</p>
+			<div class="code-block">
+				<div class="code-line cmd">bun add -g @draht/coding-agent</div>
+			</div>
+			<p>Or run without installing:</p>
+			<div class="code-block">
+				<div class="code-line cmd">bunx @draht/coding-agent</div>
+			</div>
+			<p>Verify the installation:</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht --version</div>
+			</div>
+		</section>
+
+		<!-- 2. First Run -->
+		<section id="first-run" class="doc-section">
+			<h2>2. First Run</h2>
+			<p>Set up an API key and start Draht:</p>
+			<div class="code-block">
+				<div class="code-line comment">Set your API key (Anthropic, OpenAI, Google, etc.)</div>
+				<div class="code-line cmd">export ANTHROPIC_API_KEY=sk-ant-...</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line comment">Start draht in your project directory</div>
+				<div class="code-line cmd">cd my-project</div>
+				<div class="code-line cmd">draht</div>
+			</div>
+			<p>Or use an existing subscription (Claude Pro/Max, ChatGPT Plus/Pro, Copilot, Gemini CLI):</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht</div>
+				<div class="code-line cmd">/login</div>
+			</div>
+			<p>Draht gives the model four tools by default: <code>read</code>, <code>bash</code>, <code>edit</code>, and <code>write</code>. Type a request and the model uses these to fulfill it.</p>
+		</section>
+
+		<!-- 3. Providers & Models -->
+		<section id="providers" class="doc-section">
+			<h2>3. Providers & Models</h2>
+			<p>Draht supports 17+ providers via the <code>@draht/ai</code> package. Each provider's model list is updated with every release.</p>
+
+			<h3>Subscriptions (OAuth)</h3>
+			<ul>
+				<li>Anthropic Claude Pro / Max</li>
+				<li>OpenAI ChatGPT Plus / Pro (Codex)</li>
+				<li>GitHub Copilot</li>
+				<li>Google Gemini CLI</li>
+				<li>Google Antigravity</li>
+			</ul>
+
+			<h3>API Keys</h3>
+			<ul class="cols-2">
+				<li>Anthropic</li>
+				<li>OpenAI</li>
+				<li>Azure OpenAI</li>
+				<li>Google Gemini</li>
+				<li>Google Vertex</li>
+				<li>Amazon Bedrock</li>
+				<li>Mistral</li>
+				<li>Groq</li>
+				<li>Cerebras</li>
+				<li>xAI</li>
+				<li>OpenRouter</li>
+				<li>Vercel AI Gateway</li>
+				<li>ZAI</li>
+				<li>Hugging Face</li>
+				<li>Kimi For Coding</li>
+				<li>MiniMax</li>
+			</ul>
+
+			<h3>Switching Models</h3>
+			<div class="code-block">
+				<div class="code-line comment">Interactive model selector</div>
+				<div class="code-line cmd">Ctrl+L</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line comment">Cycle through scoped models</div>
+				<div class="code-line cmd">Ctrl+P / Shift+Ctrl+P</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line comment">From CLI</div>
+				<div class="code-line cmd">draht --model openai/gpt-4o "Help me refactor"</div>
+				<div class="code-line cmd">draht --model sonnet:high "Complex problem"</div>
+			</div>
+
+			<h3>Custom Providers</h3>
+			<p>Add providers via <code>~/.draht/agent/models.json</code> if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions.</p>
+		</section>
+
+		<!-- 4. Interactive Mode -->
+		<section id="interactive" class="doc-section">
+			<h2>4. Interactive Mode</h2>
+			<p>The Draht TUI from top to bottom:</p>
+			<ul>
+				<li><strong>Startup header</strong> — shortcuts, loaded AGENTS.md files, prompt templates, skills, extensions</li>
+				<li><strong>Messages</strong> — your messages, assistant responses, tool calls and results</li>
+				<li><strong>Editor</strong> — where you type; border color indicates thinking level</li>
+				<li><strong>Footer</strong> — working directory, session, token usage, cost, model</li>
+			</ul>
+
+			<h3>Editor Features</h3>
+			<table>
+				<thead><tr><th>Feature</th><th>How</th></tr></thead>
+				<tbody>
+					<tr><td>File reference</td><td>Type <code>@</code> to fuzzy-search project files</td></tr>
+					<tr><td>Path completion</td><td>Tab to complete paths</td></tr>
+					<tr><td>Multi-line</td><td>Shift+Enter</td></tr>
+					<tr><td>Images</td><td>Ctrl+V to paste, or drag onto terminal</td></tr>
+					<tr><td>Bash commands</td><td><code>!command</code> runs and sends output to LLM</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Key Commands</h3>
+			<table>
+				<thead><tr><th>Command</th><th>Description</th></tr></thead>
+				<tbody>
+					<tr><td><code>/login</code>, <code>/logout</code></td><td>OAuth authentication</td></tr>
+					<tr><td><code>/model</code></td><td>Switch models</td></tr>
+					<tr><td><code>/settings</code></td><td>Thinking level, theme, message delivery</td></tr>
+					<tr><td><code>/resume</code></td><td>Pick from previous sessions</td></tr>
+					<tr><td><code>/new</code></td><td>Start a new session</td></tr>
+					<tr><td><code>/tree</code></td><td>Navigate session tree</td></tr>
+					<tr><td><code>/compact</code></td><td>Compress context window</td></tr>
+					<tr><td><code>/copy</code></td><td>Copy last response to clipboard</td></tr>
+					<tr><td><code>/export</code></td><td>Export session to HTML</td></tr>
+					<tr><td><code>/share</code></td><td>Upload as private GitHub gist</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Keyboard Shortcuts</h3>
+			<table>
+				<thead><tr><th>Key</th><th>Action</th></tr></thead>
+				<tbody>
+					<tr><td>Ctrl+C</td><td>Clear editor (twice to quit)</td></tr>
+					<tr><td>Escape</td><td>Cancel / abort (twice for <code>/tree</code>)</td></tr>
+					<tr><td>Ctrl+L</td><td>Model selector</td></tr>
+					<tr><td>Ctrl+P</td><td>Cycle scoped models</td></tr>
+					<tr><td>Shift+Tab</td><td>Cycle thinking level</td></tr>
+					<tr><td>Ctrl+O</td><td>Collapse / expand tool output</td></tr>
+					<tr><td>Ctrl+T</td><td>Collapse / expand thinking blocks</td></tr>
+					<tr><td>Ctrl+G</td><td>External editor</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Message Queue</h3>
+			<p>Submit messages while the agent is working:</p>
+			<ul>
+				<li><strong>Enter</strong> — queues a steering message (interrupts remaining tools)</li>
+				<li><strong>Alt+Enter</strong> — queues a follow-up (delivered after agent finishes)</li>
+				<li><strong>Escape</strong> — aborts and restores queued messages</li>
+				<li><strong>Alt+Up</strong> — retrieves queued messages back to editor</li>
+			</ul>
+		</section>
+
+		<!-- 5. Sessions -->
+		<section id="sessions" class="doc-section">
+			<h2>5. Sessions & Branching</h2>
+			<p>Sessions auto-save as JSONL files with a tree structure. Each entry has an <code>id</code> and <code>parentId</code>, enabling in-place branching without creating new files.</p>
+
+			<div class="code-block">
+				<div class="code-line cmd">draht -c</div>
+				<div class="code-line comment">Continue most recent session</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line cmd">draht -r</div>
+				<div class="code-line comment">Browse and select from past sessions</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line cmd">draht --no-session</div>
+				<div class="code-line comment">Ephemeral mode (don't save)</div>
+			</div>
+
+			<h3>Branching</h3>
+			<p><strong><code>/tree</code></strong> — navigate the session tree in-place. Select any previous point and continue from there. Search by typing, page with arrows. Filter modes with Ctrl+O. Press <code>l</code> to label entries as bookmarks.</p>
+			<p><strong><code>/fork</code></strong> — create a new session file from the current branch point.</p>
+
+			<h3>Compaction</h3>
+			<p>Long sessions exhaust context windows. Compaction summarizes older messages while keeping recent ones.</p>
+			<ul>
+				<li><strong>Manual:</strong> <code>/compact</code> or <code>/compact &lt;instructions&gt;</code></li>
+				<li><strong>Automatic:</strong> triggers on context overflow or when approaching the limit</li>
+			</ul>
+			<p>Compaction is lossy. The full history remains in the JSONL file; use <code>/tree</code> to revisit.</p>
+		</section>
+
+		<!-- 6. Context Files -->
+		<section id="context" class="doc-section">
+			<h2>6. Context Files</h2>
+			<p>Draht loads <code>AGENTS.md</code> (or <code>CLAUDE.md</code>) at startup from:</p>
+			<ul>
+				<li><code>~/.draht/agent/AGENTS.md</code> — global</li>
+				<li>Parent directories (walking up from cwd)</li>
+				<li>Current directory</li>
+			</ul>
+			<p>Use these for project instructions, conventions, and common commands. All matching files are concatenated into the system prompt.</p>
+
+			<h3>System Prompt</h3>
+			<p>Replace the default system prompt with <code>.draht/SYSTEM.md</code> (project) or <code>~/.draht/agent/SYSTEM.md</code> (global). Append without replacing via <code>APPEND_SYSTEM.md</code>.</p>
+		</section>
+
+		<!-- 7. Prompt Templates -->
+		<section id="prompt-templates" class="doc-section">
+			<h2>7. Prompt Templates</h2>
+			<p>Reusable prompts as Markdown files. Type <code>/name</code> to expand.</p>
+			<div class="code-block">
+				<div class="code-line comment">~/.draht/agent/prompts/review.md</div>
+				<div class="code-line plain">Review this code for bugs, security issues, and performance.</div>
+				<div class="code-line plain">Focus on: {"{{focus}}"}</div>
+			</div>
+			<p>Place in <code>~/.draht/agent/prompts/</code>, <code>.draht/prompts/</code>, or a Draht package.</p>
+		</section>
+
+		<!-- 8. Skills -->
+		<section id="skills" class="doc-section">
+			<h2>8. Skills</h2>
+			<p>On-demand capability packages following the <a href="https://agentskills.io">Agent Skills standard</a>. Invoke via <code>/skill:name</code> or let the agent load them automatically based on trigger descriptions.</p>
+			<div class="code-block">
+				<div class="code-line comment">~/.draht/agent/skills/my-skill/SKILL.md</div>
+				<div class="code-line plain"># My Skill</div>
+				<div class="code-line plain">Use this skill when the user asks about X.</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line plain">## Steps</div>
+				<div class="code-line plain">1. Do this</div>
+				<div class="code-line plain">2. Then that</div>
+			</div>
+			<p>Skill directories searched: <code>~/.draht/agent/skills/</code>, <code>~/.agents/skills/</code>, <code>.draht/skills/</code>, <code>.agents/skills/</code> (walking up from cwd).</p>
+		</section>
+
+		<!-- 9. Extensions -->
+		<section id="extensions" class="doc-section">
+			<h2>9. Extensions</h2>
+			<p>TypeScript modules that extend Draht with custom tools, commands, keyboard shortcuts, event handlers, and UI components.</p>
+			<div class="code-block">
+				<div class="code-line plain">export default function (draht: ExtensionAPI) {"{"}</div>
+				<div class="code-line plain">  draht.registerTool({"{"} name: "deploy", ... {"}"});</div>
+				<div class="code-line plain">  draht.registerCommand("stats", {"{"} ... {"}"});</div>
+				<div class="code-line plain">  draht.on("tool_call", async (event, ctx) => {"{"} ... {"}"});</div>
+				<div class="code-line plain">{"}"}</div>
+			</div>
+
+			<h3>What extensions can do</h3>
+			<ul>
+				<li>Custom tools (or replace built-in tools entirely)</li>
+				<li>Sub-agents and plan mode</li>
+				<li>Custom compaction and summarization</li>
+				<li>Permission gates and path protection</li>
+				<li>Custom editors and UI components</li>
+				<li>Status lines, headers, footers</li>
+				<li>Git checkpointing and auto-commit</li>
+				<li>SSH and sandbox execution</li>
+				<li>MCP server integration</li>
+			</ul>
+			<p>Place in <code>~/.draht/agent/extensions/</code>, <code>.draht/extensions/</code>, or a Draht package.</p>
+		</section>
+
+		<!-- 10. Themes -->
+		<section id="themes" class="doc-section">
+			<h2>10. Themes</h2>
+			<p>Built-in: <code>dark</code>, <code>light</code>. Themes hot-reload: modify the active theme file and Draht immediately applies changes.</p>
+			<p>Place custom themes in <code>~/.draht/agent/themes/</code>, <code>.draht/themes/</code>, or a Draht package.</p>
+		</section>
+
+		<!-- 11. Draht Packages -->
+		<section id="packages" class="doc-section">
+			<h2>11. Draht Packages</h2>
+			<p>Bundle and share extensions, skills, prompts, and themes via npm or git.</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht install npm:@foo/draht-tools</div>
+				<div class="code-line cmd">draht install git:github.com/user/repo</div>
+				<div class="code-line cmd">draht install https://github.com/user/repo</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line cmd">draht remove npm:@foo/draht-tools</div>
+				<div class="code-line cmd">draht list</div>
+				<div class="code-line cmd">draht update</div>
+				<div class="code-line cmd">draht config</div>
+			</div>
+			<p>Use <code>-l</code> for project-local installs. Packages install to <code>~/.draht/agent/git/</code> (git) or global npm.</p>
+
+			<div class="callout callout-warning">
+				<strong>Security:</strong> Draht packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action. Review source code before installing third-party packages.
+			</div>
+
+			<h3>Creating a Package</h3>
+			<p>Add a <code>draht</code> key to <code>package.json</code>:</p>
+			<div class="code-block">
+				<div class="code-line plain">{"{"}</div>
+				<div class="code-line plain">  "name": "my-draht-package",</div>
+				<div class="code-line plain">  "keywords": ["draht-package"],</div>
+				<div class="code-line plain">  "draht": {"{"}</div>
+				<div class="code-line plain">    "extensions": ["./extensions"],</div>
+				<div class="code-line plain">    "skills": ["./skills"],</div>
+				<div class="code-line plain">    "prompts": ["./prompts"],</div>
+				<div class="code-line plain">    "themes": ["./themes"]</div>
+				<div class="code-line plain">  {"}"}</div>
+				<div class="code-line plain">{"}"}</div>
+			</div>
+		</section>
+
+		<!-- 12. SDK -->
+		<section id="sdk" class="doc-section">
+			<h2>12. SDK & Programmatic Usage</h2>
+			<p>Embed Draht in your own apps or scripts:</p>
+			<div class="code-block">
+				<div class="code-line plain">import {"{"} createAgentSession, SessionManager {"}"} from "@draht/coding-agent";</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line plain">const {"{"} session {"}"} = await createAgentSession({"{"}</div>
+				<div class="code-line plain">  sessionManager: SessionManager.inMemory(),</div>
+				<div class="code-line plain">{"}"});</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line plain">await session.prompt("What files are in this directory?");</div>
+			</div>
+
+			<h3>RPC Mode</h3>
+			<p>For non-Node.js integrations, use RPC mode over stdin/stdout:</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht --mode rpc</div>
+			</div>
+		</section>
+
+		<!-- 13. Model Router -->
+		<section id="model-router" class="doc-section">
+			<h2 class="wip-title">13. Model Router <span class="wip-badge">Under Construction</span></h2>
+			<p>Role-based model selection with automatic fallback. Architect tasks use Claude Opus, boilerplate uses DeepSeek. Direct API calls with no OpenRouter latency.</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht router show</div>
+				<div class="code-line cmd">draht router set architect anthropic/claude-opus-4-6</div>
+				<div class="code-line cmd">draht router set boilerplate deepseek/deepseek-coder</div>
+			</div>
+			<p>The router inspects task characteristics (complexity, domain, cost sensitivity) and routes to the appropriate model. Fallback chains ensure availability.</p>
+		</section>
+
+		<!-- 14. Invoicing -->
+		<section id="invoicing" class="doc-section">
+			<h2 class="wip-title">14. Invoicing <span class="wip-badge">Under Construction</span></h2>
+			<p>Lexoffice API integration for German invoicing. Toggl time tracking. Generate invoices from your terminal.</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht invoice create --client "Acme GmbH" --hours 40</div>
+				<div class="code-line cmd">draht invoice send --id INV-2026-042</div>
+				<div class="code-line cmd">draht toggl sync</div>
+			</div>
+			<p>Built for German freelancers: proper VAT handling, Lexoffice sync, and legally compliant invoice templates.</p>
+		</section>
+
+		<!-- 15. Compliance -->
+		<section id="compliance" class="doc-section">
+			<h2 class="wip-title">15. Compliance <span class="wip-badge">Under Construction</span></h2>
+			<p>Automated compliance checks for GDPR and EU AI Act requirements.</p>
+			<ul>
+				<li><strong>GDPR PII scanner</strong> — detects personal data in code and config</li>
+				<li><strong>EU AI Act documentation</strong> — checks required documentation for AI systems</li>
+				<li><strong>German legal templates</strong> — Impressum, Datenschutzerklaerung, AGB</li>
+			</ul>
+			<div class="code-block">
+				<div class="code-line cmd">draht compliance scan</div>
+				<div class="code-line cmd">draht compliance report</div>
+			</div>
+		</section>
+
+		<!-- 16. Deploy Guardian -->
+		<section id="deploy-guardian" class="doc-section">
+			<h2 class="wip-title">16. Deploy Guardian <span class="wip-badge">Under Construction</span></h2>
+			<p>Pre-deploy validation and rollback automation. Runs checks before deployment and automatically rolls back on failure.</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht deploy check</div>
+				<div class="code-line cmd">draht deploy push --stage production</div>
+			</div>
+		</section>
+
+		<!-- 17. Orchestrator -->
+		<section id="orchestrator" class="doc-section">
+			<h2 class="wip-title">17. Orchestrator <span class="wip-badge">Under Construction</span></h2>
+			<p>Multi-agent task decomposition using the GSD (Get Shit Done) methodology. Breaks complex projects into phases, then decomposes phases into tasks for parallel execution.</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht init</div>
+				<div class="code-line cmd">draht create-project "My App"</div>
+				<div class="code-line cmd">draht create-requirements</div>
+				<div class="code-line cmd">draht create-domain-model</div>
+				<div class="code-line cmd">draht create-roadmap</div>
+			</div>
+		</section>
+
+		<!-- 18. CLI Reference -->
+		<section id="cli-reference" class="doc-section">
+			<h2>18. CLI Reference</h2>
+
+			<h3>Basic Usage</h3>
+			<div class="code-block">
+				<div class="code-line cmd">draht [options] [@files...] [messages...]</div>
+			</div>
+
+			<h3>Modes</h3>
+			<table>
+				<thead><tr><th>Flag</th><th>Description</th></tr></thead>
+				<tbody>
+					<tr><td><code>(default)</code></td><td>Interactive mode</td></tr>
+					<tr><td><code>-p</code>, <code>--print</code></td><td>Print response and exit</td></tr>
+					<tr><td><code>--mode json</code></td><td>Output all events as JSON lines</td></tr>
+					<tr><td><code>--mode rpc</code></td><td>RPC mode for process integration</td></tr>
+					<tr><td><code>--export &lt;in&gt; [out]</code></td><td>Export session to HTML</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Model Options</h3>
+			<table>
+				<thead><tr><th>Option</th><th>Description</th></tr></thead>
+				<tbody>
+					<tr><td><code>--provider &lt;name&gt;</code></td><td>Provider (anthropic, openai, google, etc.)</td></tr>
+					<tr><td><code>--model &lt;pattern&gt;</code></td><td>Model pattern or ID (supports <code>provider/id</code>)</td></tr>
+					<tr><td><code>--api-key &lt;key&gt;</code></td><td>API key (overrides env vars)</td></tr>
+					<tr><td><code>--thinking &lt;level&gt;</code></td><td><code>off</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code></td></tr>
+					<tr><td><code>--models &lt;patterns&gt;</code></td><td>Comma-separated patterns for Ctrl+P cycling</td></tr>
+					<tr><td><code>--list-models [search]</code></td><td>List available models</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Session Options</h3>
+			<table>
+				<thead><tr><th>Option</th><th>Description</th></tr></thead>
+				<tbody>
+					<tr><td><code>-c</code>, <code>--continue</code></td><td>Continue most recent session</td></tr>
+					<tr><td><code>-r</code>, <code>--resume</code></td><td>Browse and select session</td></tr>
+					<tr><td><code>--session &lt;path&gt;</code></td><td>Use specific session file or partial UUID</td></tr>
+					<tr><td><code>--no-session</code></td><td>Ephemeral mode (don't save)</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Tool & Resource Options</h3>
+			<table>
+				<thead><tr><th>Option</th><th>Description</th></tr></thead>
+				<tbody>
+					<tr><td><code>--tools &lt;list&gt;</code></td><td>Enable specific built-in tools (default: <code>read,bash,edit,write</code>)</td></tr>
+					<tr><td><code>--no-tools</code></td><td>Disable all built-in tools</td></tr>
+					<tr><td><code>-e</code>, <code>--extension &lt;source&gt;</code></td><td>Load extension (repeatable)</td></tr>
+					<tr><td><code>--no-extensions</code></td><td>Disable extension discovery</td></tr>
+					<tr><td><code>--skill &lt;path&gt;</code></td><td>Load skill (repeatable)</td></tr>
+					<tr><td><code>--no-skills</code></td><td>Disable skill discovery</td></tr>
+				</tbody>
+			</table>
+
+			<h3>File Arguments</h3>
+			<p>Prefix files with <code>@</code> to include in the message:</p>
+			<div class="code-block">
+				<div class="code-line cmd">draht @prompt.md "Answer this"</div>
+				<div class="code-line cmd">draht -p @screenshot.png "What's in this image?"</div>
+				<div class="code-line cmd">draht @code.ts @test.ts "Review these files"</div>
+			</div>
+
+			<h3>Environment Variables</h3>
+			<table>
+				<thead><tr><th>Variable</th><th>Description</th></tr></thead>
+				<tbody>
+					<tr><td><code>ANTHROPIC_API_KEY</code></td><td>Anthropic API key</td></tr>
+					<tr><td><code>OPENAI_API_KEY</code></td><td>OpenAI API key</td></tr>
+					<tr><td><code>GOOGLE_API_KEY</code></td><td>Google Gemini API key</td></tr>
+					<tr><td><code>DRAHT_CODING_AGENT_DIR</code></td><td>Override config directory</td></tr>
+					<tr><td><code>DRAHT_SKIP_VERSION_CHECK</code></td><td>Skip version check at startup</td></tr>
+					<tr><td><code>VISUAL</code>, <code>EDITOR</code></td><td>External editor for Ctrl+G</td></tr>
+				</tbody>
+			</table>
+		</section>
+
+		<div class="docs-footer">
+			<p>Full source and additional documentation on <a href="https://github.com/draht-dev/draht">GitHub</a>.</p>
+		</div>
+
+	</main>
+</Base>
+
+<style>
+	.docs {
+		max-width: 740px;
+		margin: 0 auto;
+		padding: 0 2rem 4rem;
+	}
+
+	.docs-header {
+		text-align: center;
+		padding: 4rem 0 2rem;
+	}
+	.docs-header h1 {
+		font-size: 2.5rem;
+		font-weight: 700;
+		letter-spacing: -0.03em;
+		margin-bottom: 0.5rem;
+	}
+	.docs-lead {
+		color: var(--muted);
+		font-size: 1.05rem;
+	}
+
+	/* Table of Contents */
+	.toc {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		padding: 1.75rem 2rem;
+		margin-bottom: 3rem;
+	}
+	.toc h2 {
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		color: var(--muted);
+		margin-bottom: 1rem;
+	}
+	.toc ol {
+		list-style: none;
+		counter-reset: toc;
+		columns: 2;
+		column-gap: 2rem;
+	}
+	.toc li {
+		counter-increment: toc;
+		padding: 0.25rem 0;
+		font-size: 0.85rem;
+		break-inside: avoid;
+	}
+	.toc li::before {
+		content: counter(toc) ". ";
+		color: var(--accent-dim);
+		font-family: var(--mono);
+		font-size: 0.75rem;
+	}
+	.toc a {
+		color: var(--fg);
+		text-decoration: none;
+	}
+	.toc a:hover {
+		color: var(--accent);
+	}
+
+	/* Sections */
+	.doc-section {
+		padding: 2.5rem 0;
+		border-bottom: 1px solid var(--border);
+	}
+	.doc-section:last-of-type {
+		border-bottom: none;
+	}
+	.doc-section h2 {
+		font-size: 1.5rem;
+		font-weight: 700;
+		margin-bottom: 1rem;
+		letter-spacing: -0.02em;
+	}
+	.doc-section h3 {
+		font-size: 1rem;
+		font-weight: 600;
+		margin: 1.75rem 0 0.75rem;
+		color: var(--fg);
+	}
+	.doc-section p {
+		color: var(--muted);
+		font-size: 0.9rem;
+		line-height: 1.7;
+		margin-bottom: 0.75rem;
+	}
+	.doc-section ul, .doc-section ol {
+		color: var(--muted);
+		font-size: 0.9rem;
+		line-height: 1.7;
+		padding-left: 1.5rem;
+		margin-bottom: 0.75rem;
+	}
+	.doc-section li {
+		padding: 0.15rem 0;
+	}
+	.doc-section code {
+		font-family: var(--mono);
+		font-size: 0.82rem;
+		color: var(--fg);
+		background: var(--surface);
+		padding: 0.15rem 0.4rem;
+		border-radius: 3px;
+	}
+	.doc-section strong {
+		color: var(--fg);
+		font-weight: 600;
+	}
+
+	.cols-2 {
+		columns: 2;
+		column-gap: 2rem;
+	}
+
+	/* Code block */
+	.code-block {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 1.25rem 1.5rem;
+		font-family: var(--mono);
+		font-size: 0.8rem;
+		margin: 0.75rem 0 1rem;
+		overflow-x: auto;
+	}
+	.code-line {
+		line-height: 2;
+		white-space: pre;
+	}
+	.code-line.comment {
+		color: var(--muted);
+	}
+	.code-line.comment::before {
+		content: "# ";
+	}
+	.code-line.cmd::before {
+		content: "$ ";
+		color: var(--accent);
+		user-select: none;
+	}
+	.code-line.spacer {
+		height: 0.4rem;
+	}
+	.code-line.plain {
+		color: var(--fg);
+	}
+
+	/* Tables */
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		margin: 0.75rem 0 1rem;
+		font-size: 0.825rem;
+	}
+	thead {
+		border-bottom: 1px solid var(--border);
+	}
+	th {
+		text-align: left;
+		padding: 0.5rem 0.75rem;
+		color: var(--muted);
+		font-weight: 600;
+		font-size: 0.75rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	td {
+		padding: 0.4rem 0.75rem;
+		color: var(--muted);
+		border-bottom: 1px solid var(--border);
+	}
+	td code {
+		font-size: 0.78rem;
+	}
+
+	/* WIP badge */
+	.wip-title {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+	.wip-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-size: 0.7rem;
+		font-weight: 500;
+		color: #d4a017;
+		background: rgba(212, 160, 23, 0.1);
+		border: 1px solid rgba(212, 160, 23, 0.25);
+		border-radius: 4px;
+		padding: 0.2rem 0.6rem;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+	.wip-badge::before {
+		content: "\1F6A7";
+	}
+
+	/* Callout */
+	.callout {
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+		font-size: 0.85rem;
+		line-height: 1.6;
+		margin: 1rem 0;
+	}
+	.callout-warning {
+		background: rgba(212, 160, 23, 0.06);
+		border: 1px solid rgba(212, 160, 23, 0.2);
+		color: var(--muted);
+	}
+	.callout-warning strong {
+		color: #d4a017;
+	}
+
+	/* Footer */
+	.docs-footer {
+		text-align: center;
+		padding: 3rem 0 1rem;
+		color: var(--muted);
+		font-size: 0.85rem;
+	}
+
+	@media (max-width: 600px) {
+		.docs { padding: 0 1.25rem 3rem; }
+		.docs-header h1 { font-size: 2rem; }
+		.toc ol { columns: 1; }
+		.cols-2 { columns: 1; }
+		table { font-size: 0.75rem; }
+	}
+</style>

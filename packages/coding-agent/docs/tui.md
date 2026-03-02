@@ -4,7 +4,7 @@
 
 Extensions and custom tools can render custom TUI components for interactive user interfaces. This page covers the component system and available building blocks.
 
-**Source:** [`@draht/tui`](https://github.com/badlogic/pi-mono/tree/main/packages/tui)
+**Source:** [`@draht/tui`](https://github.com/draht-dev/draht/tree/main/packages/tui)
 
 ## Component Interface
 

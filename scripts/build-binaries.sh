@@ -56,7 +56,9 @@ if [[ -n "$PLATFORM" ]]; then
 fi
 
 echo "==> Installing dependencies..."
-bun install --frozen-lockfile
+# Allow partial install failures — web-ui has deep node_modules paths that
+# hit NameTooLong on Linux CI. It's not needed for the binary build.
+bun install --frozen-lockfile || echo "Warning: bun install had errors (non-critical packages may have failed)"
 
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."

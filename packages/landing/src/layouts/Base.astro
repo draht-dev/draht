@@ -81,11 +81,23 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 
 		<nav class="nav">
 			<a href="/" class="nav-logo"><img src="/draht-logo.webp" alt="Draht" width="28" height="28" class="nav-logo-img" /></a>
-			<div class="nav-links">
-				<a href="/#features">Features</a>
-				<a href="/#architecture">Architecture</a>
-				<a href="/#pricing">Pricing</a>
-				<a href="https://github.com/draht-dev/draht" target="_blank">GitHub</a>
+			<div class="nav-right">
+				<div class="nav-links" id="nav-links">
+					<a href="/#features">Features</a>
+					<a href="/#architecture">Architecture</a>
+					<a href="/#pricing">Pricing</a>
+				</div>
+				<a href="https://github.com/draht-dev/draht" target="_blank" class="github-btn">
+					<svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+						<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+					</svg>
+					<span class="github-stars" id="github-stars">★ —</span>
+				</a>
+				<button class="burger" id="burger" aria-label="Toggle menu" aria-expanded="false">
+					<span class="burger-line"></span>
+					<span class="burger-line"></span>
+					<span class="burger-line"></span>
+				</button>
 			</div>
 		</nav>
 
@@ -138,6 +150,11 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 			.nav-logo-img {
 				border-radius: 6px;
 			}
+			.nav-right {
+				display: flex;
+				align-items: center;
+				gap: 1.25rem;
+			}
 			.nav-links {
 				display: flex;
 				gap: 1.75rem;
@@ -147,6 +164,74 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 			}
 			.nav-links a { color: var(--muted); }
 			.nav-links a:hover { color: var(--fg); }
+
+			.github-btn {
+				display: flex;
+				align-items: center;
+				gap: 0.4rem;
+				padding: 0.35rem 0.7rem;
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				color: var(--fg);
+				font-size: 0.75rem;
+				font-family: var(--mono);
+				transition: border-color 0.2s, background 0.2s;
+				white-space: nowrap;
+			}
+			.github-btn:hover {
+				border-color: var(--muted);
+				background: var(--surface-hover);
+				color: var(--fg);
+			}
+			.github-stars { font-size: 0.75rem; }
+
+			.burger {
+				display: none;
+				flex-direction: column;
+				justify-content: center;
+				gap: 4px;
+				width: 32px;
+				height: 32px;
+				background: none;
+				border: none;
+				cursor: pointer;
+				padding: 4px;
+			}
+			.burger-line {
+				display: block;
+				width: 100%;
+				height: 2px;
+				background: var(--fg);
+				border-radius: 1px;
+				transition: transform 0.3s, opacity 0.3s;
+			}
+			.burger[aria-expanded="true"] .burger-line:nth-child(1) {
+				transform: translateY(6px) rotate(45deg);
+			}
+			.burger[aria-expanded="true"] .burger-line:nth-child(2) {
+				opacity: 0;
+			}
+			.burger[aria-expanded="true"] .burger-line:nth-child(3) {
+				transform: translateY(-6px) rotate(-45deg);
+			}
+
+			@media (max-width: 640px) {
+				.nav { padding: 1rem 1.25rem; }
+				.burger { display: flex; }
+				.nav-links {
+					display: none;
+					position: absolute;
+					top: 100%;
+					left: 0;
+					right: 0;
+					flex-direction: column;
+					background: var(--bg);
+					border-bottom: 1px solid var(--border);
+					padding: 1rem 1.25rem;
+					gap: 1rem;
+				}
+				.nav-links.open { display: flex; }
+			}
 
 			.footer {
 				position: relative;
@@ -476,6 +561,37 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 					rightState = createWireState(canvasRight, "right");
 				});
 			}
+
+			// Burger menu toggle
+			const burger = document.getElementById("burger");
+			const navLinks = document.getElementById("nav-links");
+			if (burger && navLinks) {
+				burger.addEventListener("click", () => {
+					const open = burger.getAttribute("aria-expanded") === "true";
+					burger.setAttribute("aria-expanded", String(!open));
+					navLinks.classList.toggle("open");
+				});
+				// Close menu on link click
+				navLinks.querySelectorAll("a").forEach(a => {
+					a.addEventListener("click", () => {
+						burger.setAttribute("aria-expanded", "false");
+						navLinks.classList.remove("open");
+					});
+				});
+			}
+
+			// Fetch GitHub stars
+			fetch("https://api.github.com/repos/draht-dev/draht")
+				.then(r => r.json())
+				.then(data => {
+					const el = document.getElementById("github-stars");
+					if (el && typeof data.stargazers_count === "number") {
+						const count = data.stargazers_count;
+						const display = count >= 1000 ? (count / 1000).toFixed(1) + "k" : String(count);
+						el.textContent = "★ " + display;
+					}
+				})
+				.catch(() => {});
 
 			initWires();
 		</script>

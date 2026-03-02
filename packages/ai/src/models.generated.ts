@@ -6530,23 +6530,6 @@ export const MODELS = {
 			contextWindow: 131000,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
-		"arcee-ai/trinity-mini": {
-			id: "arcee-ai/trinity-mini",
-			name: "Arcee AI: Trinity Mini",
-			api: "openai-completions",
-			provider: "openrouter",
-			baseUrl: "https://openrouter.ai/api/v1",
-			reasoning: true,
-			input: ["text"],
-			cost: {
-				input: 0.045,
-				output: 0.15,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 131072,
-			maxTokens: 131072,
-		} satisfies Model<"openai-completions">,
 		"arcee-ai/trinity-mini:free": {
 			id: "arcee-ai/trinity-mini:free",
 			name: "Arcee AI: Trinity Mini (free)",
@@ -7174,7 +7157,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
-			maxTokens: 32768,
+			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"meta-llama/llama-3-8b-instruct": {
 			id: "meta-llama/llama-3-8b-instruct",
@@ -7344,7 +7327,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 196608,
-			maxTokens: 65536,
+			maxTokens: 196608,
 		} satisfies Model<"openai-completions">,
 		"minimax/minimax-m2.1": {
 			id: "minimax/minimax-m2.1",

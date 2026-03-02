@@ -283,7 +283,8 @@ console.log("Building and publishing...");
 run("cd packages/tui && bun run build && cd ../ai && bun run build && cd ../agent && bun run build && cd ../coding-agent && bun run build && cd ../mom && bun run build && cd ../web-ui && bun run build && cd ../pods && bun run build");
 const isPrerelease = version.includes("-");
 // Use `bun publish` (not npm) so workspace:* deps are rewritten to real versions automatically
-run(`bun publish -ws --access public${isPrerelease ? " --tag next" : ""}`);
+// Publish each non-private package individually (bun publish -ws is not supported in Bun 1.3.x)
+run(`node scripts/publish-workspaces.mjs --access public${isPrerelease ? " --tag next" : ""}`);
 console.log();
 
 // 8. Add new [Unreleased] sections

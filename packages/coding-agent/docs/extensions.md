@@ -55,7 +55,7 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 Create `~/.pi/agent/extensions/my-extension.ts`:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@draht/coding-agent";
 import { Type } from "@sinclair/typebox";
 
 export default function (pi: ExtensionAPI) {
@@ -137,10 +137,10 @@ To share extensions via npm or git as pi packages, see [packages.md](packages.md
 
 | Package | Purpose |
 |---------|---------|
-| `@mariozechner/pi-coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
+| `@draht/coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
 | `@sinclair/typebox` | Schema definitions for tool parameters |
-| `@mariozechner/pi-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
-| `@mariozechner/pi-tui` | TUI components for custom rendering |
+| `@draht/ai` | AI utilities (`StringEnum` for Google-compatible enums) |
+| `@draht/tui` | TUI components for custom rendering |
 
 npm dependencies work too. Add a `package.json` next to your extension (or in a parent directory), run `npm install`, and imports from `node_modules/` are resolved automatically.
 
@@ -151,7 +151,7 @@ Node.js built-ins (`node:fs`, `node:path`, etc.) are also available.
 An extension exports a default function that receives `ExtensionAPI`:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@draht/coding-agent";
 
 export default function (pi: ExtensionAPI) {
   // Subscribe to events
@@ -519,7 +519,7 @@ Use this to update UI elements (status bars, footers) or perform model-specific 
 Fired before tool executes. **Can block.** Use `isToolCallEventType` to narrow and get typed inputs.
 
 ```typescript
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import { isToolCallEventType } from "@draht/coding-agent";
 
 pi.on("tool_call", async (event, ctx) => {
   // event.toolName - "bash", "read", "write", "edit", etc.
@@ -553,7 +553,7 @@ export type MyToolInput = Static<typeof myToolSchema>;
 Use `isToolCallEventType` with explicit type parameters:
 
 ```typescript
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import { isToolCallEventType } from "@draht/coding-agent";
 import type { MyToolInput } from "my-extension";
 
 pi.on("tool_call", (event) => {
@@ -573,7 +573,7 @@ Fired after tool executes. **Can modify result.**
 - Handlers can return partial patches (`content`, `details`, or `isError`); omitted fields keep their current values
 
 ```typescript
-import { isBashToolResult } from "@mariozechner/pi-coding-agent";
+import { isBashToolResult } from "@draht/coding-agent";
 
 pi.on("tool_result", async (event, ctx) => {
   // event.toolName, event.toolCallId, event.input
@@ -843,7 +843,7 @@ Tools run with `ExtensionContext`, so they cannot call `ctx.reload()` directly. 
 Example tool the LLM can call to trigger reload:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@draht/coding-agent";
 import { Type } from "@sinclair/typebox";
 
 export default function (pi: ExtensionAPI) {
@@ -890,7 +890,7 @@ See [dynamic-tools.ts](../examples/extensions/dynamic-tools.ts) for a full examp
 
 ```typescript
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@draht/ai";
 
 pi.registerTool({
   name: "my_tool",
@@ -1040,7 +1040,7 @@ pi.registerCommand("stats", {
 Optional: add argument auto-completion for `/command ...`:
 
 ```typescript
-import type { AutocompleteItem } from "@mariozechner/pi-tui";
+import type { AutocompleteItem } from "@draht/tui";
 
 pi.registerCommand("deploy", {
   description: "Deploy to an environment",
@@ -1296,8 +1296,8 @@ Note: Some models are idiots and include the @ prefix in tool path arguments. Bu
 
 ```typescript
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
-import { Text } from "@mariozechner/pi-tui";
+import { StringEnum } from "@draht/ai";
+import { Text } from "@draht/tui";
 
 pi.registerTool({
   name: "my_tool",
@@ -1340,7 +1340,7 @@ pi.registerTool({
 });
 ```
 
-**Important:** Use `StringEnum` from `@mariozechner/pi-ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
+**Important:** Use `StringEnum` from `@draht/ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
 
 ### Overriding Built-in Tools
 
@@ -1377,7 +1377,7 @@ Built-in tool implementations:
 Built-in tools support pluggable operations for delegating to remote systems (SSH, containers, etc.):
 
 ```typescript
-import { createReadTool, createBashTool, type ReadOperations } from "@mariozechner/pi-coding-agent";
+import { createReadTool, createBashTool, type ReadOperations } from "@draht/coding-agent";
 
 // Create tool with custom operations
 const remoteRead = createReadTool(cwd, {
@@ -1406,7 +1406,7 @@ pi.registerTool({
 The bash tool also supports a spawn hook to adjust the command, cwd, or env before execution:
 
 ```typescript
-import { createBashTool } from "@mariozechner/pi-coding-agent";
+import { createBashTool } from "@draht/coding-agent";
 
 const bashTool = createBashTool(cwd, {
   spawnHook: ({ command, cwd, env }) => ({
@@ -1436,7 +1436,7 @@ import {
   formatSize,        // Human-readable size (e.g., "50KB", "1.5MB")
   DEFAULT_MAX_BYTES, // 50KB
   DEFAULT_MAX_LINES, // 2000
-} from "@mariozechner/pi-coding-agent";
+} from "@draht/coding-agent";
 
 async execute(toolCallId, params, signal, onUpdate, ctx) {
   const output = await runCommand();
@@ -1500,7 +1500,7 @@ Tool output is wrapped in a `Box` that handles padding and background. Your rend
 Renders the tool call (before/during execution):
 
 ```typescript
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@draht/tui";
 
 renderCall(args, theme) {
   let text = theme.fg("toolTitle", theme.bold("my_tool "));
@@ -1544,7 +1544,7 @@ renderResult(result, { expanded, isPartial }, theme) {
 Use `keyHint()` to display keybinding hints that respect user's keybinding configuration:
 
 ```typescript
-import { keyHint } from "@mariozechner/pi-coding-agent";
+import { keyHint } from "@draht/coding-agent";
 
 renderResult(result, { expanded }, theme) {
   let text = theme.fg("success", "✓ Done");
@@ -1718,7 +1718,7 @@ ctx.ui.theme.fg("accent", "styled text");  // Access current theme
 For complex UI, use `ctx.ui.custom()`. This temporarily replaces the editor with your component until `done()` is called:
 
 ```typescript
-import { Text, Component } from "@mariozechner/pi-tui";
+import { Text, Component } from "@draht/tui";
 
 const result = await ctx.ui.custom<boolean>((tui, theme, keybindings, done) => {
   const text = new Text("Press Enter to confirm, Escape to cancel", 1, 1);
@@ -1776,8 +1776,8 @@ See [tui.md](tui.md) for the full `OverlayOptions` API and [overlay-qa-tests.ts]
 Replace the main input editor with a custom implementation (vim mode, emacs mode, etc.):
 
 ```typescript
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { matchesKey } from "@mariozechner/pi-tui";
+import { CustomEditor, type ExtensionAPI } from "@draht/coding-agent";
+import { matchesKey } from "@draht/tui";
 
 class VimEditor extends CustomEditor {
   private mode: "normal" | "insert" = "insert";
@@ -1817,7 +1817,7 @@ See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 Register a custom renderer for messages with your `customType`:
 
 ```typescript
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@draht/tui";
 
 pi.registerMessageRenderer("my-extension", (message, options, theme) => {
   const { expanded } = options;
@@ -1866,7 +1866,7 @@ theme.strikethrough(text)
 For syntax highlighting in custom tool renderers:
 
 ```typescript
-import { highlightCode, getLanguageFromPath } from "@mariozechner/pi-coding-agent";
+import { highlightCode, getLanguageFromPath } from "@draht/coding-agent";
 
 // Highlight code with explicit language
 const highlighted = highlightCode("const x = 1;", "typescript", theme);

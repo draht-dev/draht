@@ -5,7 +5,7 @@ Deploy and manage LLMs on GPU pods with automatic vLLM configuration for agentic
 ## Installation
 
 ```bash
-npm install -g @mariozechner/pi
+bun add -g @draht/coding-agent
 ```
 
 ## What is pi?
@@ -22,7 +22,7 @@ npm install -g @mariozechner/pi
 ```bash
 # Set required environment variables
 export HF_TOKEN=your_huggingface_token      # Get from https://huggingface.co/settings/tokens
-export PI_API_KEY=your_api_key              # Any string you want for API authentication
+export DRAHT_API_KEY=your_api_key              # Any string you want for API authentication
 
 # Setup a DataCrunch pod with NFS storage (models path auto-extracted)
 pi pods setup dc1 "ssh root@1.2.3.4" \
@@ -39,7 +39,7 @@ pi agent qwen -i
 
 # Use with any OpenAI-compatible client
 export OPENAI_BASE_URL='http://1.2.3.4:8001/v1'
-export OPENAI_API_KEY=$PI_API_KEY
+export OPENAI_API_KEY=$DRAHT_API_KEY
 ```
 
 ## Prerequisites
@@ -121,10 +121,10 @@ pi agent <name> -i                        # Interactive chat mode
 pi agent <name> -i -c                     # Continue previous session
 
 # Standalone OpenAI-compatible agent (works with any API)
-pi-agent --base-url http://localhost:8000/v1 --model llama-3.1 "Hello"
-pi-agent --api-key sk-... "What is 2+2?"  # Uses OpenAI by default
-pi-agent --json "What is 2+2?"            # Output event stream as JSONL
-pi-agent -i                                # Interactive mode
+draht --base-url http://localhost:8000/v1 --model llama-3.1 "Hello"
+draht --api-key sk-... "What is 2+2?"  # Uses OpenAI by default
+draht --json "What is 2+2?"            # Output event stream as JSONL
+draht -i                                # Interactive mode
 ```
 
 The agent includes tools for file operations (read, list, bash, glob, rg) to test agentic capabilities, particularly useful for code navigation and analysis tasks.
@@ -311,29 +311,29 @@ response = client.chat.completions.create(
 `pi` includes a standalone OpenAI-compatible agent that can work with any API:
 
 ```bash
-# Install globally to get pi-agent command
-npm install -g @mariozechner/pi
+# Install globally to get draht command
+bun add -g @draht/coding-agent
 
 # Use with OpenAI
-pi-agent --api-key sk-... "What is machine learning?"
+draht --api-key sk-... "What is machine learning?"
 
 # Use with local vLLM
-pi-agent --base-url http://localhost:8000/v1 \
+draht --base-url http://localhost:8000/v1 \
          --model meta-llama/Llama-3.1-8B-Instruct \
          --api-key dummy \
          "Explain quantum computing"
 
 # Interactive mode
-pi-agent -i
+draht -i
 
 # Continue previous session
-pi-agent --continue "Follow up question"
+draht --continue "Follow up question"
 
 # Custom system prompt
-pi-agent --system-prompt "You are a Python expert" "Write a web scraper"
+draht --system-prompt "You are a Python expert" "Write a web scraper"
 
 # Use responses API (for GPT-OSS models)
-pi-agent --api responses --model openai/gpt-oss-20b "Hello"
+draht --api responses --model openai/gpt-oss-20b "Hello"
 ```
 
 The agent supports:
@@ -411,7 +411,7 @@ Events are automatically converted to the appropriate API format (Chat Completio
 
 Use `--json` flag to output the event stream as JSONL (JSON Lines) for programmatic consumption:
 ```bash
-pi-agent --api-key sk-... --json "What is 2+2?"
+draht --api-key sk-... --json "What is 2+2?"
 ```
 
 Each line is a complete JSON object representing an event:
@@ -502,8 +502,8 @@ ls -la ~/.pi/sessions/
 ## Environment Variables
 
 - `HF_TOKEN` - HuggingFace token for model downloads
-- `PI_API_KEY` - API key for vLLM endpoints
-- `PI_CONFIG_DIR` - Config directory (default: `~/.pi`)
+- `DRAHT_API_KEY` - API key for vLLM endpoints
+- `DRAHT_CONFIG_DIR` - Config directory (default: `~/.pi`)
 - `OPENAI_API_KEY` - Used by `pi-agent` when no `--api-key` provided
 
 ## License

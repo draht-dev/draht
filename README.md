@@ -15,21 +15,16 @@
 > [!WARNING]
 > Draht is in early development. APIs, packages, and features may change without notice. Use at your own risk.
 
-> [!NOTE]
-> **Not yet available on npm.** Packages have not been published to the npm registry yet. To use Draht, clone this repository and build from source (see [Development](#development) below).
-
 A modular, extensible AI coding agent framework. Extensions, skills, multi-model support — all in your terminal.
 
 ## Quick Start
 
-> **Coming soon** — once published to npm, you'll be able to install via:
-
 ```bash
-# Install globally
+# Install globally (requires bun: https://bun.sh)
 bun add -g @draht/coding-agent
 
 # Or run directly
-npx @draht/coding-agent
+bunx @draht/coding-agent
 
 # Interactive mode with a prompt
 draht "Refactor this module to use dependency injection"
@@ -38,19 +33,10 @@ draht "Refactor this module to use dependency injection"
 draht -p "List all TODO comments in src/"
 ```
 
-For now, use the 1-command installer:
+Or use the 1-command installer:
 
 ```bash
 curl -fsSL https://draht.dev/install.sh | bash
-```
-
-Or build manually:
-
-```bash
-git clone https://github.com/draht-dev/draht.git
-cd draht
-bun install
-bun run build
 ```
 
 ## Packages
@@ -62,16 +48,8 @@ bun run build
 | **[@draht/agent-core](packages/agent)** | Agent runtime with tool calling and state management |
 | **[@draht/tui](packages/tui)** | Terminal UI library with differential rendering |
 | **[@draht/web-ui](packages/web-ui)** | Web components for AI chat interfaces |
-| **[@draht/knowledge](packages/knowledge)** | Client knowledge base with vector search |
-| **[@draht/ci](packages/ci)** | CI/CD review pipeline (GitHub PR reviews) |
-| **[@draht/orchestrator](packages/orchestrator)** | Multi-agent task orchestration |
-| **[@draht/deploy-guardian](packages/deploy-guardian)** | Pre-deploy safety checks |
 | **[@draht/mom](packages/mom)** | Slack bot that delegates messages to the coding agent |
 | **[@draht/pods](packages/pods)** | CLI for managing vLLM deployments on GPU pods |
-| **[@draht/infra](packages/infra)** | SST v4 infrastructure (Lambda, API Gateway, DynamoDB) |
-| **[@draht/templates](packages/templates)** | AGENTS.md template library for common stacks |
-| **[@draht/workflows](packages/workflows)** | n8n workflow definitions |
-| **[@draht/landing](packages/landing)** | Astro landing page for draht.dev |
 
 ## Architecture
 
@@ -81,10 +59,6 @@ draht (CLI)
 │   ├── @draht/agent-core  ← tool execution, message handling
 │   │   └── @draht/ai      ← LLM providers (Anthropic, OpenAI, Google, Bedrock)
 │   └── @draht/tui         ← terminal rendering
-├── @draht/knowledge       ← vector store for project context
-├── @draht/ci              ← PR review automation
-├── @draht/orchestrator    ← multi-agent task decomposition
-└── @draht/deploy-guardian ← pre-deploy safety checks
 ```
 
 ## Extensions
@@ -116,33 +90,7 @@ See [Extension Docs](packages/coding-agent/docs/extensions.md) for the full API.
 ```bash
 bun install          # Install all dependencies
 bun run build        # Build all packages
-bun run dev          # Watch mode for all packages
 bun run check        # Lint, format, and type check (biome + tsgo)
-bun run test         # Run all tests
-```
-
-### Project Structure
-
-```
-draht-mono/
-├── packages/
-│   ├── coding-agent/    # Main CLI
-│   ├── ai/              # LLM providers
-│   ├── agent/           # Agent runtime
-│   ├── tui/             # Terminal UI
-│   ├── web-ui/          # Web components
-│   ├── knowledge/       # Knowledge base
-│   ├── ci/              # CI review
-│   ├── orchestrator/    # Multi-agent
-│   ├── deploy-guardian/ # Deploy checks
-│   ├── mom/             # Slack bot
-│   ├── pods/            # GPU pod management
-│   ├── infra/           # SST infrastructure
-│   ├── templates/       # AGENTS.md templates
-│   ├── workflows/       # n8n workflows
-│   └── landing/         # draht.dev website
-├── .github/workflows/   # CI/CD
-└── .planning/           # GSD planning docs
 ```
 
 ## Environment Variables

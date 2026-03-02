@@ -1,18 +1,18 @@
-# @mariozechner/pi-agent-core
+# @draht/agent-core
 
-Stateful agent with tool execution and event streaming. Built on `@mariozechner/pi-ai`.
+Stateful agent with tool execution and event streaming. Built on `@draht/ai`.
 
 ## Installation
 
 ```bash
-npm install @mariozechner/pi-agent-core
+bun add @draht/agent-core
 ```
 
 ## Quick Start
 
 ```typescript
-import { Agent } from "@mariozechner/pi-agent-core";
-import { getModel } from "@mariozechner/pi-ai";
+import { Agent } from "@draht/agent-core";
+import { getModel } from "@draht/ai";
 
 const agent = new Agent({
   initialState: {
@@ -293,7 +293,7 @@ Follow-up messages are checked only when there are no more tool calls and no ste
 Extend `AgentMessage` via declaration merging:
 
 ```typescript
-declare module "@mariozechner/pi-agent-core" {
+declare module "@draht/agent-core" {
   interface CustomAgentMessages {
     notification: { role: "notification"; text: string; timestamp: number };
   }
@@ -365,7 +365,7 @@ Thrown errors are caught by the agent and reported to the LLM as tool errors wit
 For browser apps that proxy through a backend:
 
 ```typescript
-import { Agent, streamProxy } from "@mariozechner/pi-agent-core";
+import { Agent, streamProxy } from "@draht/agent-core";
 
 const agent = new Agent({
   streamFn: (model, context, options) =>
@@ -382,7 +382,7 @@ const agent = new Agent({
 For direct control without the Agent class:
 
 ```typescript
-import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
+import { agentLoop, agentLoopContinue } from "@draht/agent-core";
 
 const context: AgentContext = {
   systemPrompt: "You are helpful.",

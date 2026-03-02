@@ -4,10 +4,12 @@
  * Wires up subagent parallel/chain workflows for each GSD phase.
  *
  * Commands:
- *   /plan   <feature>  — architect plans the feature
- *   /execute <tasks>   — parallel implementers + chain reviewer + git-committer
- *   /verify            — parallel lint/typecheck/tests + security audit
- *   /review <scope>    — code review on a specific scope
+ *   /new-project <name> [path]  — create project dir, git init, scaffold .draht/
+ *   /init-project               — scaffold .draht/ in existing project
+ *   /plan   <feature>           — architect plans the feature
+ *   /execute <tasks>            — parallel implementers + chain reviewer + git-committer
+ *   /verify                     — parallel lint/typecheck/tests + security audit
+ *   /review <scope>             — code review on a specific scope
  */
 
 import * as fs from "node:fs";
@@ -95,6 +97,72 @@ Step 2 — after all parallel tasks complete, run in CHAIN mode:
 2. agent: security-auditor — task: "Audit all recent changes for security issues"
 
 After both complete, summarize the combined findings and list what needs to be fixed before this is production-ready.`,
+			);
+		},
+	});
+
+	// ── /new-project ─────────────────────────────────────────────────────────
+	pi.registerCommand("new-project", {
+		description: "Create a new project: mkdir, git init, scaffold .draht/. Usage: /new-project <name> [/optional/path]",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/);
+			const name = parts[0];
+			if (!name) {
+				ctx.ui.notify("Usage: /new-project <name> [/optional/base/path]", "warning");
+				return;
+			}
+
+			const basePath = parts[1] ?? ctx.cwd;
+			const projectDir = path.join(basePath, name);
+
+			if (fs.existsSync(projectDir)) {
+				ctx.ui.notify(`Directory already exists: ${projectDir}`, "warning");
+				return;
+			}
+
+			// Create project dir
+			fs.mkdirSync(projectDir, { recursive: true });
+
+			// git init
+			const { execSync } = await import("node:child_process");
+			execSync("git init", { cwd: projectDir });
+
+			// Scaffold .draht/
+			const agentSrc = path.join(process.env.HOME ?? "~", ".draht", "agent", "agents");
+			const agentDest = path.join(projectDir, ".draht", "agents");
+			const extDest = path.join(projectDir, ".draht", "extensions");
+			fs.mkdirSync(agentDest, { recursive: true });
+			fs.mkdirSync(extDest, { recursive: true });
+
+			let agentsCopied = 0;
+			if (fs.existsSync(agentSrc)) {
+				for (const file of fs.readdirSync(agentSrc)) {
+					if (!file.endsWith(".md")) continue;
+					fs.copyFileSync(path.join(agentSrc, file), path.join(agentDest, file));
+					agentsCopied++;
+				}
+			}
+
+			// Copy extension templates (subagent + gsd-commands, not draco-notify)
+			const extSrc = path.dirname(new URL(import.meta.url).pathname);
+			for (const file of ["subagent.ts", "gsd-commands.ts"]) {
+				const src = path.join(extSrc, file);
+				if (fs.existsSync(src)) {
+					fs.copyFileSync(src, path.join(extDest, file));
+				}
+			}
+
+			// Write a minimal .gitignore
+			fs.writeFileSync(path.join(projectDir, ".gitignore"), "node_modules/\n.env\n.env.local\n");
+
+			ctx.ui.notify(
+				`✓ Project created at ${projectDir} — ${agentsCopied} agents scaffolded. Open it and customize .draht/agents/*.md for your stack.`,
+				"info",
+			);
+
+			// Switch cwd into the new project for the next prompt
+			pi.sendUserMessage(
+				`New project "${name}" created at ${projectDir}. The .draht/ config is scaffolded with ${agentsCopied} agents. What should we build first?`,
 			);
 		},
 	});

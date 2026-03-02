@@ -31,10 +31,10 @@ const description = "A modular, extensible AI coding agent with model routing, T
 			</p>
 
 			<div class="install-box">
-				<span class="install-text"><span class="install-prompt">$</span> curl -fsSL https://draht.dev/install.sh | bash</span>
+				<span class="install-text"><span class="install-prompt">$</span> bun add -g @draht/coding-agent</span>
 				<button id="copy-install" class="copy-btn" aria-label="Copy install command">copy</button>
 			</div>
-			<p class="install-note">Installs from source. npm registry coming soon.</p>
+			<p class="install-note">Requires <a href="https://bun.sh" class="install-link">Bun</a>. Then run <code>draht</code> in any project.</p>
 
 			<div class="hero-actions">
 				<a href="https://github.com/draht-dev/draht" class="btn btn-primary">View on GitHub</a>
@@ -106,10 +106,10 @@ const description = "A modular, extensible AI coding agent with model routing, T
 			<h2 class="section-title">Getting Started</h2>
 			<div class="code-block">
 				<div class="code-line comment"># Install globally</div>
-				<div class="code-line cmd">npm install -g @draht/coding-agent</div>
+				<div class="code-line cmd">bun add -g @draht/coding-agent</div>
 				<div class="code-line spacer"></div>
 				<div class="code-line comment"># Or run directly</div>
-				<div class="code-line cmd">npx @draht/coding-agent</div>
+				<div class="code-line cmd">bunx @draht/coding-agent</div>
 				<div class="code-line spacer"></div>
 				<div class="code-line comment"># Initialize a project with GSD methodology</div>
 				<div class="code-line cmd">draht init</div>
@@ -159,7 +159,7 @@ const description = "A modular, extensible AI coding agent with model routing, T
 	<script>
 		document.getElementById("copy-install")?.addEventListener("click", async (e) => {
 			const btn = e.currentTarget as HTMLButtonElement;
-			await navigator.clipboard.writeText("curl -fsSL https://draht.dev/install.sh | bash");
+			await navigator.clipboard.writeText("bun add -g @draht/coding-agent");
 			btn.textContent = "copied";
 			btn.classList.add("copied");
 			setTimeout(() => {
@@ -286,6 +286,18 @@ const description = "A modular, extensible AI coding agent with model routing, T
 		font-size: 0.75rem;
 		color: var(--muted);
 		margin-bottom: 2.5rem;
+	}
+	.install-note code {
+		color: var(--fg);
+		font-family: var(--mono);
+	}
+	.install-link {
+		color: var(--accent-dim);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+	.install-link:hover {
+		color: var(--accent);
 	}
 
 	/* Buttons */

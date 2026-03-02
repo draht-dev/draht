@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.2-8] - 2026-03-02
+
+### Changed
+
+- rebrand all READMEs to draht naming and conventions
 
 ## [2026.3.2-7] - 2026-03-02
 

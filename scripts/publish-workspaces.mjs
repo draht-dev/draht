@@ -51,10 +51,10 @@ function resolveWorkspaceDeps(pkgPath) {
 					console.error(`Cannot resolve workspace dependency ${name} — not found in workspace`);
 					process.exit(1);
 				}
-				// workspace:* -> ^version, workspace:^ -> ^version, workspace:~ -> ~version
-				let prefix = "^";
-				if (version === "workspace:~" || version.startsWith("workspace:~")) prefix = "~";
-				pkg[depType][name] = `${prefix}${resolvedVersion}`;
+				// Use exact versions to avoid semver resolving to older broken releases.
+				// e.g., ^2026.3.2-4 would match 2026.3.2 (release > prerelease in semver),
+				// which may have been published with workspace:* deps.
+				pkg[depType][name] = resolvedVersion;
 				changed = true;
 			}
 		}

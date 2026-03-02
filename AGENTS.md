@@ -86,26 +86,17 @@ tmux kill-session -t pi-test
 - Technical prose only, be kind but direct (e.g., "Thanks @user" not "Thanks so much @user!")
 
 ## Changelog
-Location: `packages/*/CHANGELOG.md` (each package has its own)
+Changelogs are **auto-generated** from conventional commit messages during `npm run release`.
+Do NOT manually edit `CHANGELOG.md` files. The release script scopes commits to packages
+via the conventional commit scope (e.g., `fix(ai): ...` → `packages/ai/CHANGELOG.md`) and
+falls back to file-path detection for unscoped commits.
 
-### Format
-Use these sections under `## [Unreleased]`:
-- `### Breaking Changes` - API changes requiring migration
-- `### Added` - New features
-- `### Changed` - Changes to existing functionality
-- `### Fixed` - Bug fixes
-- `### Removed` - Removed features
-
-### Rules
-- Before adding entries, read the full `[Unreleased]` section to see which subsections already exist
-- New entries ALWAYS go under `## [Unreleased]` section
-- Append to existing subsections (e.g., `### Fixed`), do not create duplicates
-- NEVER modify already-released version sections (e.g., `## [0.12.2]`)
-- Each version section is immutable once released
-
-### Attribution
-- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/exe008/draht-mono/issues/123))`
-- **External contributions**: `Added feature X ([#456](https://github.com/exe008/draht-mono/pull/456) by [@username](https://github.com/username))`
+### Commit message conventions
+- `feat(scope): description` → `### Added`
+- `fix(scope): description` → `### Fixed`
+- `perf|refactor|docs|chore|test|ci|build(scope): description` → `### Changed`
+- Append `!` for breaking changes: `feat(ai)!: remove X` → `### Breaking Changes`
+- Use package directory names as scopes: `ai`, `tui`, `agent`, `coding-agent`, `mom`, `pods`, `web-ui`
 
 ## Adding a New LLM Provider (packages/ai)
 
@@ -147,7 +138,7 @@ For non-standard auth, create utility (e.g., `bedrock-utils.ts`) with credential
 
 ### 7. Documentation
 - `packages/ai/README.md`: Add to providers table, document options/auth, add env vars
-- `packages/ai/CHANGELOG.md`: Add entry under `## [Unreleased]`
+- Changelogs are auto-generated from commit messages at release time (no manual edits needed)
 
 ## Releasing
 
@@ -157,15 +148,13 @@ For non-standard auth, create utility (e.g., `bedrock-utils.ts`) with credential
 
 ### Steps
 
-1. **Update CHANGELOGs**: Ensure all changes since last release are documented in the `[Unreleased]` section of each affected package's CHANGELOG.md
+Run the release script:
+```bash
+npm run release          # Release with today's date version
+npm run release:dry      # Dry run (no changes)
+```
 
-2. **Run release script**:
-   ```bash
-   npm run release          # Release with today's date version
-   npm run release:dry      # Dry run (no changes)
-   ```
-
-The script handles: version computation, version bump, CHANGELOG finalization, commit, tag, build, publish, and adding new `[Unreleased]` sections.
+The script handles: version computation, version bump, CHANGELOG generation from git commits (scoped per package), commit, tag, build, publish, and adding new `[Unreleased]` sections.
 
 ## **CRITICAL** Tool Usage Rules **CRITICAL**
 - NEVER use sed/cat to read a file or a range of a file. Always use the read tool (use offset + limit for ranged reads).

@@ -8,6 +8,7 @@
 		"configDir": ".draht"
 	},
 	"bin": {
+		"coding-agent": "dist/cli.js",
 		"draht": "dist/cli.js",
 		"draht-tools": "bin/draht-tools.cjs"
 	},

@@ -127,87 +127,154 @@ function getChangelogs() {
 		.filter((path) => existsSync(path));
 }
 
-function getCommitsSinceLastTag() {
+/**
+ * Map conventional commit scopes to package directory names.
+ * Scopes not listed here fall back to file-path-based detection.
+ */
+const SCOPE_TO_PACKAGE = {
+	ai: "ai",
+	tui: "tui",
+	agent: "agent",
+	"agent-core": "agent",
+	"coding-agent": "coding-agent",
+	mom: "mom",
+	pods: "pods",
+	"web-ui": "web-ui",
+	landing: "landing",
+	infra: "infra",
+	templates: "templates",
+};
+
+const TYPE_LABELS = {
+	feat: "### Added",
+	fix: "### Fixed",
+	perf: "### Changed",
+	refactor: "### Changed",
+	docs: "### Changed",
+	chore: "### Changed",
+	test: "### Changed",
+	ci: "### Changed",
+	build: "### Changed",
+};
+
+const SECTION_ORDER = ["### Breaking Changes", "### Added", "### Changed", "### Fixed", "### Removed"];
+
+/**
+ * Get the package directories affected by a commit based on changed file paths.
+ */
+function getAffectedPackages(commitHash) {
+	let files = "";
+	try {
+		files = execSync(`git diff-tree --no-commit-id --name-only -r ${commitHash} 2>/dev/null`, { encoding: "utf-8" }).trim();
+	} catch { return []; }
+	if (!files) return [];
+
+	const packages = new Set();
+	for (const file of files.split("\n")) {
+		const match = file.match(/^packages\/([^/]+)\//);
+		if (match) packages.add(match[1]);
+	}
+	return [...packages];
+}
+
+/**
+ * Collect commits since last tag and group them per package directory.
+ * Returns Map<packageDir, Map<sectionHeader, string[]>> where string[] are bullet lines.
+ */
+function getCommitsPerPackage() {
 	// Find the last release tag
 	let lastTag = null;
 	try {
 		lastTag = execSync("git describe --tags --abbrev=0 2>/dev/null", { encoding: "utf-8" }).trim();
 	} catch { /* no tags yet */ }
 
-	// Get commits since last tag (or all commits if no tag)
 	const range = lastTag ? `${lastTag}..HEAD` : "HEAD";
 	let log = "";
 	try {
-		log = execSync(`git log ${range} --format="%s" 2>/dev/null`, { encoding: "utf-8" }).trim();
+		// Format: hash<SEP>subject
+		log = execSync(`git log ${range} --format="%H<SEP>%s" 2>/dev/null`, { encoding: "utf-8" }).trim();
 	} catch { /* ignore */ }
 
-	if (!log) return null;
+	if (!log) return new Map();
 
-	const typeLabels = {
-		feat: "### Features",
-		fix: "### Bug Fixes",
-		perf: "### Performance",
-		refactor: "### Refactoring",
-		docs: "### Documentation",
-		chore: "### Chores",
-		test: "### Tests",
-		ci: "### CI",
-		build: "### Build",
-	};
+	// packageDir -> Map<sectionHeader, bulletLines[]>
+	const perPackage = new Map();
 
-	const groups = {};
+	function addEntry(pkgDir, section, bullet) {
+		if (!perPackage.has(pkgDir)) perPackage.set(pkgDir, new Map());
+		const sections = perPackage.get(pkgDir);
+		if (!sections.has(section)) sections.set(section, []);
+		sections.get(section).push(bullet);
+	}
+
 	for (const line of log.split("\n")) {
 		if (!line.trim()) continue;
-		// Skip release/chore-unreleased commits
-		if (/^(release:|chore: add \[Unreleased\])/.test(line)) continue;
-		const match = line.match(/^(\w+)(?:\(([^)]+)\))?!?:\s*(.+)$/);
-		if (match) {
-			const [, type, scope, desc] = match;
-			const key = typeLabels[type] ?? "### Other";
-			if (!groups[key]) groups[key] = [];
-			groups[key].push(scope ? `- **${scope}:** ${desc}` : `- ${desc}`);
+		const sepIdx = line.indexOf("<SEP>");
+		if (sepIdx === -1) continue;
+		const hash = line.slice(0, sepIdx);
+		const subject = line.slice(sepIdx + 5);
+
+		// Skip release and meta commits
+		if (/^(release:|chore: add \[Unreleased\])/.test(subject)) continue;
+
+		const conventionalMatch = subject.match(/^(\w+)(?:\(([^)]+)\))?(!)?:\s*(.+)$/);
+		if (!conventionalMatch) continue; // skip non-conventional commits
+
+		const [, type, scope, breaking, desc] = conventionalMatch;
+		const section = breaking ? "### Breaking Changes" : (TYPE_LABELS[type] ?? "### Changed");
+		const bullet = `- ${desc}`;
+
+		// Determine target packages
+		let targetPackages = [];
+
+		if (scope && SCOPE_TO_PACKAGE[scope]) {
+			// Scope maps directly to a known package
+			targetPackages = [SCOPE_TO_PACKAGE[scope]];
 		} else {
-			// Non-conventional commit — bucket under Other
-			if (!groups["### Other"]) groups["### Other"] = [];
-			groups["### Other"].push(`- ${line}`);
+			// Fall back to file-path detection
+			targetPackages = getAffectedPackages(hash);
+		}
+
+		// If we still have no target, skip (root-level commits like CI changes)
+		for (const pkg of targetPackages) {
+			addEntry(pkg, section, bullet);
 		}
 	}
 
-	if (Object.keys(groups).length === 0) return null;
+	return perPackage;
+}
 
-	// Render in a consistent order
-	const order = ["### Features", "### Bug Fixes", "### Performance", "### Refactoring", "### Documentation", "### Tests", "### CI", "### Build", "### Chores", "### Other"];
-	const sections = order
-		.filter((k) => groups[k])
-		.map((k) => `${k}\n${groups[k].join("\n")}`)
-		.join("\n\n");
-
-	return sections;
+/**
+ * Render grouped sections into a markdown string.
+ */
+function renderSections(sections) {
+	const parts = SECTION_ORDER
+		.filter((s) => sections.has(s))
+		.map((s) => `${s}\n\n${sections.get(s).join("\n")}`);
+	return parts.join("\n\n");
 }
 
 function updateChangelogsForRelease(version) {
 	const date = new Date().toISOString().split("T")[0];
-	const changelogs = getChangelogs();
-	const commitLog = getCommitsSinceLastTag();
+	const commitsPerPackage = getCommitsPerPackage();
 
-	for (const changelog of changelogs) {
+	const packagesDir = "packages";
+	const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
+		.filter((d) => d.isDirectory())
+		.map((d) => d.name);
+
+	for (const dir of packageDirs) {
+		const changelog = join(packagesDir, dir, "CHANGELOG.md");
+		if (!existsSync(changelog)) continue;
+
 		const content = readFileSync(changelog, "utf-8");
-
 		if (!content.includes("## [Unreleased]")) {
 			console.log(`  Skipping ${changelog}: no [Unreleased] section`);
 			continue;
 		}
 
-		// Check if the [Unreleased] section already has hand-written content
-		const unreleasedMatch = content.match(/## \[Unreleased\]\n([\s\S]*?)(?=\n## \[|$)/);
-		const existingContent = unreleasedMatch?.[1]?.trim() ?? "";
-
-		// Build the new section body: prefer hand-written, fall back to auto-generated commits
-		let sectionBody = existingContent;
-		if (!sectionBody && commitLog) {
-			sectionBody = commitLog;
-			console.log(`  Auto-populating ${changelog} from git commits`);
-		}
+		const sections = commitsPerPackage.get(dir);
+		const sectionBody = sections ? renderSections(sections) : "";
 
 		const newSection = sectionBody
 			? `## [${version}] - ${date}\n\n${sectionBody}\n`
@@ -215,7 +282,11 @@ function updateChangelogsForRelease(version) {
 
 		const updated = content.replace(/## \[Unreleased\]\n[\s\S]*?(?=\n## \[|$)/, newSection);
 		writeFileSync(changelog, updated);
-		console.log(`  Updated ${changelog}`);
+		if (sectionBody) {
+			console.log(`  Updated ${changelog} (from git commits)`);
+		} else {
+			console.log(`  Updated ${changelog} (no changes)`);
+		}
 	}
 }
 
@@ -282,8 +353,8 @@ console.log();
 console.log("Building and publishing...");
 run("cd packages/tui && bun run build && cd ../ai && bun run build && cd ../agent && bun run build && cd ../coding-agent && bun run build && cd ../mom && bun run build && cd ../web-ui && bun run build && cd ../pods && bun run build");
 const isPrerelease = version.includes("-");
-// Use `bun publish` (not npm) so workspace:* deps are rewritten to real versions automatically
 // Publish each non-private package individually (bun publish -ws is not supported in Bun 1.3.x)
+// The publish script resolves workspace:* deps to real versions before publishing and restores after
 run(`node scripts/publish-workspaces.mjs --access public${isPrerelease ? " --tag next" : ""}`);
 console.log();
 

@@ -18,8 +18,8 @@
     "check": "biome check --write --error-on-warnings . && tsgo --noEmit && cd packages/web-ui && bun run check",
     "test": "bun run test --workspaces --if-present",
     "prepublishOnly": "bun run clean && bun run build && bun run check",
-    "publish": "bun run prepublishOnly && bun publish -ws --access public",
-    "publish:dry": "bun run prepublishOnly && bun publish -ws --access public --dry-run",
+    "publish": "bun run prepublishOnly && node scripts/publish-workspaces.mjs",
+    "publish:dry": "bun run prepublishOnly && node scripts/publish-workspaces.mjs --dry-run",
     "release": "node scripts/release.mjs",
     "release:dry": "node scripts/release.mjs --dry-run",
     "prepare": "husky"

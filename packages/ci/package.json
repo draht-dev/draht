@@ -1,6 +1,6 @@
 {
 	"name": "@draht/ci",
-	"version": "2026.3.2-8",
+	"version": "2026.3.2-9",
 	"private": true,
 	"description": "CI/CD AI Review Pipeline — GitHub Action for Claude-powered PR reviews",
 	"type": "module",

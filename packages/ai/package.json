@@ -66,6 +66,9 @@
 	],
 	"author": "Mario Zechner",
 	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/badlogic/pi-mono.git",

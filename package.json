@@ -22,6 +22,8 @@
     "publish:dry": "bun run prepublishOnly && node scripts/publish-workspaces.mjs --dry-run",
     "release": "node scripts/release.mjs",
     "release:dry": "node scripts/release.mjs --dry-run",
+    "dev:link": "bun scripts/dev-link.mjs",
+    "dev:unlink": "bun scripts/dev-unlink.mjs",
     "prepare": "husky"
   },
   "devDependencies": {

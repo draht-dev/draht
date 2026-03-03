@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Mistral } from "@mistralai/mistralai";
 import type { RequestOptions } from "@mistralai/mistralai/lib/sdks.js";
 import type {
@@ -24,7 +25,6 @@ import type {
 	ToolCall,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { buildBaseOptions, clampReasoning } from "./simple-options.js";
@@ -69,11 +69,8 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
 			const transformedMessages = transformMessages(context.messages, model, (id) => normalizeMistralToolCallId(id));
 
-			let payload = buildChatPayload(model, context, transformedMessages, options);
-			const nextPayload = await options?.onPayload?.(payload, model);
-			if (nextPayload !== undefined) {
-				payload = nextPayload as ChatCompletionStreamRequest;
-			}
+			const payload = buildChatPayload(model, context, transformedMessages, options);
+			options?.onPayload?.(payload);
 			const mistralStream = await mistral.chat.stream(payload, buildRequestOptions(model, options));
 			stream.push({ type: "start", partial: output });
 			await consumeChatStream(model, output, stream, mistralStream);
@@ -168,9 +165,7 @@ function deriveMistralToolCallId(id: string, attempt: number): string {
 	if (attempt === 0 && normalized.length === MISTRAL_TOOL_CALL_ID_LENGTH) return normalized;
 	const seedBase = normalized || id;
 	const seed = attempt === 0 ? seedBase : `${seedBase}:${attempt}`;
-	return shortHash(seed)
-		.replace(/[^a-zA-Z0-9]/g, "")
-		.slice(0, MISTRAL_TOOL_CALL_ID_LENGTH);
+	return createHash("sha256").update(seed).digest("hex").slice(0, MISTRAL_TOOL_CALL_ID_LENGTH);
 }
 
 function formatMistralError(error: unknown): string {
@@ -285,9 +280,6 @@ async function consumeChatStream(
 
 	for await (const event of mistralStream) {
 		const chunk = event.data;
-		// Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
-		// mirroring how OpenAI-style streaming exposes a stable response identifier per stream.
-		output.responseId ||= chunk.id;
 
 		if (chunk.usage) {
 			output.usage.input = chunk.usage.promptTokens || 0;
@@ -473,22 +465,17 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 		}
 
 		if (msg.role === "assistant") {
-			const contentParts: ContentChunk[] = [];
+			const textParts: Array<{ type: "text"; text: string }> = [];
 			const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
 
 			for (const block of msg.content) {
 				if (block.type === "text") {
-					if (block.text.trim().length > 0) {
-						contentParts.push({ type: "text", text: sanitizeSurrogates(block.text) });
-					}
+					if (block.text.trim().length > 0) textParts.push({ type: "text", text: sanitizeSurrogates(block.text) });
 					continue;
 				}
 				if (block.type === "thinking") {
 					if (block.thinking.trim().length > 0) {
-						contentParts.push({
-							type: "thinking",
-							thinking: [{ type: "text", text: sanitizeSurrogates(block.thinking) }],
-						});
+						textParts.push({ type: "text", text: sanitizeSurrogates(block.thinking) });
 					}
 					continue;
 				}
@@ -500,9 +487,9 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 			}
 
 			const assistantMessage: ChatCompletionStreamRequestMessages = { role: "assistant" };
-			if (contentParts.length > 0) assistantMessage.content = contentParts;
+			if (textParts.length > 0) assistantMessage.content = textParts;
 			if (toolCalls.length > 0) assistantMessage.toolCalls = toolCalls;
-			if (contentParts.length > 0 || toolCalls.length > 0) result.push(assistantMessage);
+			if (textParts.length > 0 || toolCalls.length > 0) result.push(assistantMessage);
 			continue;
 		}
 

@@ -1,62 +1,12 @@
 {
-	"name": "@draht/ai",
+	"name": "@mariozechner/pi-ai",
 	"version": "2026.4.5",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
-	"exports": {
-		".": {
-			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js"
-		},
-		"./anthropic": {
-			"types": "./dist/providers/anthropic.d.ts",
-			"import": "./dist/providers/anthropic.js"
-		},
-		"./azure-openai-responses": {
-			"types": "./dist/providers/azure-openai-responses.d.ts",
-			"import": "./dist/providers/azure-openai-responses.js"
-		},
-		"./google": {
-			"types": "./dist/providers/google.d.ts",
-			"import": "./dist/providers/google.js"
-		},
-		"./google-gemini-cli": {
-			"types": "./dist/providers/google-gemini-cli.d.ts",
-			"import": "./dist/providers/google-gemini-cli.js"
-		},
-		"./google-vertex": {
-			"types": "./dist/providers/google-vertex.d.ts",
-			"import": "./dist/providers/google-vertex.js"
-		},
-		"./mistral": {
-			"types": "./dist/providers/mistral.d.ts",
-			"import": "./dist/providers/mistral.js"
-		},
-		"./openai-codex-responses": {
-			"types": "./dist/providers/openai-codex-responses.d.ts",
-			"import": "./dist/providers/openai-codex-responses.js"
-		},
-		"./openai-completions": {
-			"types": "./dist/providers/openai-completions.d.ts",
-			"import": "./dist/providers/openai-completions.js"
-		},
-		"./openai-responses": {
-			"types": "./dist/providers/openai-responses.d.ts",
-			"import": "./dist/providers/openai-responses.js"
-		},
-		"./oauth": {
-			"types": "./dist/oauth.d.ts",
-			"import": "./dist/oauth.js"
-		},
-		"./bedrock-provider": {
-			"types": "./dist/bedrock-provider.d.ts",
-			"import": "./dist/bedrock-provider.js"
-		}
-	},
 	"bin": {
-		"draht-ai": "./dist/cli.js"
+		"pi-ai": "./dist/cli.js"
 	},
 	"files": [
 		"dist",
@@ -69,19 +19,18 @@
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
 		"dev:tsc": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",
-		"prepublishOnly": "bun run clean && bun run build"
+		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.73.0",
 		"@aws-sdk/client-bedrock-runtime": "^3.983.0",
-		"@smithy/node-http-handler": "^4.0.0",
-		"@google/genai": "^1.44.0",
+		"@google/genai": "^1.40.0",
 		"@mistralai/mistralai": "1.14.1",
 		"@sinclair/typebox": "^0.34.41",
 		"ajv": "^8.17.1",
 		"ajv-formats": "^3.0.1",
 		"chalk": "^5.6.2",
-		"openai": "6.26.0",
+		"openai": "6.10.0",
 		"partial-json": "^0.1.7",
 		"proxy-agent": "^6.5.0",
 		"undici": "^7.19.1",
@@ -97,14 +46,11 @@
 		"unified",
 		"api"
 	],
-	"author": "Oskar Freye",
+	"author": "Mario Zechner",
 	"license": "MIT",
-	"publishConfig": {
-		"access": "public"
-	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/draht-dev/draht.git",
+		"url": "git+https://github.com/badlogic/pi-mono.git",
 		"directory": "packages/ai"
 	},
 	"engines": {

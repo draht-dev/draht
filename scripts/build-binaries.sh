@@ -65,6 +65,8 @@ if [[ "$SKIP_DEPS" == "false" ]]; then
     # bun install only installs optional deps for the current platform
     # We need all platform bindings for bun cross-compilation
     # Use --force to bypass platform checks (os/cpu restrictions in package.json)
+    # Allow partial failures — @draht/web-ui has deep node_modules paths that
+    # hit NameTooLong on Linux CI. It's not needed for the binary build.
     bun add --force \
         @mariozechner/clipboard-darwin-arm64@0.3.0 \
         @mariozechner/clipboard-darwin-x64@0.3.0 \
@@ -79,7 +81,8 @@ if [[ "$SKIP_DEPS" == "false" ]]; then
         @img/sharp-libvips-darwin-arm64@1.2.4 \
         @img/sharp-libvips-darwin-x64@1.2.4 \
         @img/sharp-libvips-linux-x64@1.2.4 \
-        @img/sharp-libvips-linux-arm64@1.2.4
+        @img/sharp-libvips-linux-arm64@1.2.4 \
+        || echo "Warning: bun add had errors (non-critical packages may have failed)"
 else
     echo "==> Skipping cross-platform native bindings (--skip-deps)"
 fi

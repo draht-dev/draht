@@ -135,12 +135,15 @@ function getFinalText(messages: Message[]): string {
 	return "";
 }
 
+type ProgressFn = (activity: string) => void;
+
 async function runAgent(
 	cwd: string,
 	agent: AgentConfig,
 	task: string,
 	signal?: AbortSignal,
 	step?: number,
+	onProgress?: ProgressFn,
 ): Promise<RunResult> {
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	if (agent.model) args.push("--model", agent.model);
@@ -172,6 +175,23 @@ async function runAgent(
 					const event = JSON.parse(line);
 					if ((event.type === "message_end" || event.type === "tool_result_end") && event.message) {
 						messages.push(event.message as Message);
+					}
+					// Stream activity updates to the parent
+					if (onProgress) {
+						if (event.type === "tool_execution_start") {
+							const toolArgs = event.args ?? {};
+							const detail = toolArgs.command || toolArgs.path || toolArgs.file_path || toolArgs.pattern || "";
+							const short = typeof detail === "string" && detail.length > 60 ? `${detail.slice(0, 60)}...` : detail;
+							onProgress(short ? `${event.toolName} ${short}` : event.toolName);
+						} else if (event.type === "text_delta") {
+							// Show first line of streaming text as activity
+							const text = event.text?.trim();
+							if (text) {
+								const firstLine = text.split("\n")[0];
+								const short = firstLine.length > 80 ? `${firstLine.slice(0, 80)}...` : firstLine;
+								onProgress(short);
+							}
+						}
 					}
 				} catch {}
 			};
@@ -301,24 +321,29 @@ export default function (pi: ExtensionAPI) {
 
 			const lines: string[] = [];
 
-			if (status && options.isPartial) {
+			if (status) {
 				lines.push(theme.fg("muted", status));
 			}
 
-			if (output) {
+			if (output.trim()) {
 				const trimmed = output.trim();
-				if (options.expanded) {
-					lines.push(theme.fg("toolOutput", trimmed));
+				if (options.expanded || options.isPartial) {
+					// When expanded or during execution, show full activity log
+					for (const line of trimmed.split("\n")) {
+						lines.push(theme.fg("toolOutput", line));
+					}
 				} else {
-					const previewLines = trimmed.split("\n").slice(0, 8);
+					// Collapsed final result — show preview
+					const allLines = trimmed.split("\n");
+					const previewLines = allLines.slice(0, 8);
 					lines.push(theme.fg("toolOutput", previewLines.join("\n")));
-					const total = trimmed.split("\n").length;
-					if (total > 8) {
-						lines.push(theme.fg("muted", `... (${total - 8} more lines)`));
+					if (allLines.length > 8) {
+						lines.push(theme.fg("muted", `... (${allLines.length - 8} more lines)`));
 					}
 				}
 			}
 
+			if (lines.length === 0) return new Text("", 0, 0);
 			return new Text(lines.join("\n"), 0, 0);
 		},
 
@@ -333,8 +358,20 @@ export default function (pi: ExtensionAPI) {
 				isError: true,
 			});
 
-			const progress = (status: string) => {
-				onUpdate?.({ content: [{ type: "text" as const, text: "" }], details: { status } });
+			// Stream live activity from the subagent process
+			const activityLines: string[] = [];
+			const emitProgress = (agentName: string, activity?: string) => {
+				const status = activity ? `${agentName}: ${activity}` : `${agentName} working...`;
+				onUpdate?.({
+					content: [{ type: "text" as const, text: activityLines.join("\n") }],
+					details: { status },
+				});
+			};
+			const makeProgressFn = (agentName: string): ProgressFn => (activity) => {
+				// Keep a rolling log of recent activities
+				activityLines.push(`${agentName}: ${activity}`);
+				if (activityLines.length > 50) activityLines.splice(0, activityLines.length - 50);
+				emitProgress(agentName, activity);
 			};
 
 			// ── Chain mode ──
@@ -345,9 +382,10 @@ export default function (pi: ExtensionAPI) {
 					const step = params.chain[i];
 					const agent = find(step.agent);
 					if (!agent) return notFound(step.agent);
-					progress(`[${i + 1}/${params.chain.length}] ${step.agent} working...`);
+					activityLines.length = 0;
+					emitProgress(step.agent, `step ${i + 1}/${params.chain.length}`);
 					const task = step.task.replace(/\{previous\}/g, previous);
-					const result = await runAgent(ctx.cwd, agent, task, signal, i + 1);
+					const result = await runAgent(ctx.cwd, agent, task, signal, i + 1, makeProgressFn(step.agent));
 					results.push(result);
 					if (result.exitCode !== 0) {
 						return {
@@ -368,10 +406,10 @@ export default function (pi: ExtensionAPI) {
 				for (const t of params.tasks) { if (!find(t.agent)) return notFound(t.agent); }
 
 				const agentNames = params.tasks.map((t: { agent: string }) => t.agent).join(", ");
-				progress(`Running ${params.tasks.length} agents in parallel: ${agentNames}`);
+				emitProgress(agentNames);
 
 				const results = await runParallel(params.tasks, MAX_CONCURRENCY, async (t, i) => {
-					return runAgent(ctx.cwd, find(t.agent)!, t.task, signal);
+					return runAgent(ctx.cwd, find(t.agent)!, t.task, signal, undefined, makeProgressFn(t.agent));
 				});
 
 				const ok = results.filter((r) => r.exitCode === 0).length;
@@ -385,8 +423,8 @@ export default function (pi: ExtensionAPI) {
 			if (params.agent && params.task) {
 				const agent = find(params.agent);
 				if (!agent) return notFound(params.agent);
-				progress(`${params.agent} working...`);
-				const result = await runAgent(ctx.cwd, agent, params.task, signal);
+				emitProgress(params.agent);
+				const result = await runAgent(ctx.cwd, agent, params.task, signal, undefined, makeProgressFn(params.agent));
 				const isError = result.exitCode !== 0;
 				return {
 					content: [{ type: "text" as const, text: result.output || result.stderr || "(no output)" }],

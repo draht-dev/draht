@@ -16,7 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@draht/ai";
 import { StringEnum } from "@draht/ai";
-import { type ExtensionAPI, getAgentDir, parseFrontmatter } from "@draht/coding-agent";
+import { type ExtensionAPI, getAgentDir, getPackageDir, parseFrontmatter } from "@draht/coding-agent";
 import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 
@@ -83,13 +83,20 @@ function findProjectAgentsDir(cwd: string): string | null {
 type AgentScope = "user" | "project" | "both";
 
 function discoverAgents(cwd: string, scope: AgentScope): AgentConfig[] {
+	// Shipped agents (bundled with the package) — lowest priority
+	const shippedDir = path.join(getPackageDir(), "agents");
+	const shippedAgents = loadAgentsFromDir(shippedDir, "user");
+
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectDir = findProjectAgentsDir(cwd);
 	const userAgents = scope !== "project" ? loadAgentsFromDir(userDir, "user") : [];
 	const projectAgents = scope !== "user" && projectDir ? loadAgentsFromDir(projectDir, "project") : [];
+
+	// Priority: shipped < user < project
 	const map = new Map<string, AgentConfig>();
+	for (const a of shippedAgents) map.set(a.name, a);
 	for (const a of userAgents) map.set(a.name, a);
-	for (const a of projectAgents) map.set(a.name, a); // project overrides global
+	for (const a of projectAgents) map.set(a.name, a);
 	return Array.from(map.values());
 }
 

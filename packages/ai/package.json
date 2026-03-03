@@ -44,7 +44,7 @@
 		"@aws-sdk/client-bedrock-runtime": "^3.983.0",
 		"@smithy/node-http-handler": "^4.0.0",
 		"@google/genai": "^1.44.0",
-		"@mistralai/mistralai": "1.10.0",
+		"@mistralai/mistralai": "1.14.1",
 		"@sinclair/typebox": "^0.34.41",
 		"ajv": "^8.17.1",
 		"ajv-formats": "^3.0.1",

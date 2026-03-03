@@ -2,8 +2,7 @@
  * Extension system for lifecycle events and custom tools.
  */
 
-export type { SlashCommandInfo, SlashCommandSource } from "../slash-commands.js";
-export type { SourceInfo } from "../source-info.js";
+export type { SlashCommandInfo, SlashCommandLocation, SlashCommandSource } from "../slash-commands.js";
 export {
 	createExtensionRuntime,
 	discoverAndLoadExtensions,
@@ -25,9 +24,9 @@ export type {
 	// Re-exports
 	AgentToolResult,
 	AgentToolUpdateCallback,
-	AppendEntryHandler,
 	// App keybindings (for custom editors)
-	AppKeybinding,
+	AppAction,
+	AppendEntryHandler,
 	// Events - Tool (ToolCallEvent types)
 	BashToolCallEvent,
 	BashToolResultEvent,
@@ -101,7 +100,6 @@ export type {
 	// Commands
 	RegisteredCommand,
 	RegisteredTool,
-	ResolvedCommand,
 	// Events - Resources
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
@@ -117,12 +115,13 @@ export type {
 	SessionBeforeTreeResult,
 	SessionCompactEvent,
 	SessionDirectoryEvent,
-	SessionDirectoryHandler,
 	SessionDirectoryResult,
 	SessionEvent,
+	SessionForkEvent,
 	SessionShutdownEvent,
 	// Events - Session
 	SessionStartEvent,
+	SessionSwitchEvent,
 	SessionTreeEvent,
 	SetActiveToolsHandler,
 	SetLabelHandler,
@@ -154,7 +153,6 @@ export type {
 } from "./types.js";
 // Type guards
 export {
-	defineTool,
 	isBashToolResult,
 	isEditToolResult,
 	isFindToolResult,
@@ -164,4 +162,9 @@ export {
 	isToolCallEventType,
 	isWriteToolResult,
 } from "./types.js";
-export { wrapRegisteredTool, wrapRegisteredTools } from "./wrapper.js";
+export {
+	wrapRegisteredTool,
+	wrapRegisteredTools,
+	wrapToolsWithExtensions,
+	wrapToolWithExtensions,
+} from "./wrapper.js";

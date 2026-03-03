@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
-import { CONFIG_DIR_NAME } from "../config.js";
+import { CONFIG_DIR_NAME, getShippedExtensionsDir } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import type { PackageSource, SettingsManager } from "./settings-manager.js";
 
@@ -1682,6 +1682,22 @@ export class DefaultPackageManager implements PackageManager {
 			userMetadata,
 			userOverrides.themes,
 			globalBaseDir,
+		);
+
+		// Shipped extensions: bundled with the package (batteries included).
+		// Added last so project/user extensions take precedence (addResource is first-write-wins).
+		const shippedMetadata: PathMetadata = {
+			source: "auto",
+			scope: "user",
+			origin: "top-level",
+			baseDir: getShippedExtensionsDir(),
+		};
+		addResources(
+			"extensions",
+			collectAutoExtensionEntries(getShippedExtensionsDir()),
+			shippedMetadata,
+			[],
+			getShippedExtensionsDir(),
 		);
 	}
 

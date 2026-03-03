@@ -4,6 +4,8 @@ Landing page for [draht.dev](https://draht.dev), built with Astro and deployed v
 
 ## Development
 
+[Bun](https://bun.sh) is recommended but any package manager works (npm, pnpm, etc.).
+
 ```bash
 cd packages/landing
 bun install

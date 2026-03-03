@@ -1,6 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.3] - 2026-03-03
+
+### Added
+
+- show 'dev' version when running from source
+- stream subagent activity to tool output for ctrl+o
+- add /agent command for routing prompts through agents
+- add shipped debugger agent
+- ship built-in GSD agents with the package
+- show agent name and progress in subagent tool UI
+- add /next-milestone command for planning after milestone completion
+
+### Fixed
+
+- use draht-tools binary name in GSD prompts and CLI
+- fix subagent spawn in source/dev mode
+- load shipped extensions and rename /resume to /continue
 
 ## [2026.3.2-9] - 2026-03-02
 

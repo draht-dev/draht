@@ -17,6 +17,7 @@ import * as path from "node:path";
 import type { Message } from "@draht/ai";
 import { StringEnum } from "@draht/ai";
 import { type ExtensionAPI, getAgentDir, parseFrontmatter } from "@draht/coding-agent";
+import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 
 const MAX_PARALLEL = 8;
@@ -235,6 +236,17 @@ const Params = Type.Object({
 	),
 });
 
+// ─── Rendering helpers ──────────────────────────────────────────────────────
+
+function truncateTask(task: string, maxLen = 120): string {
+	const oneLine = task.replace(/\n/g, " ").trim();
+	return oneLine.length > maxLen ? `${oneLine.slice(0, maxLen)}...` : oneLine;
+}
+
+interface SubagentDetails {
+	status?: string;
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent",
@@ -243,7 +255,67 @@ export default function (pi: ExtensionAPI) {
 			"Delegate to specialized agents. single: {agent,task} | parallel: {tasks:[]} | chain: {chain:[]} with {previous} placeholder. agentScope: 'both' (default) uses project .draht/agents/ + global.",
 		parameters: Params,
 
-		async execute(_id, params, signal, _onUpdate, ctx) {
+		renderCall(args, theme) {
+			const lines: string[] = [];
+
+			if (args.chain?.length) {
+				const agents = args.chain.map((s: { agent: string }) => s.agent).join(" -> ");
+				lines.push(theme.fg("toolTitle", theme.bold(`subagent chain`)) + " " + theme.fg("accent", agents));
+				for (let i = 0; i < args.chain.length; i++) {
+					const step = args.chain[i];
+					const prefix = theme.fg("muted", `  ${i + 1}.`);
+					lines.push(`${prefix} ${theme.fg("accent", step.agent)} ${theme.fg("toolOutput", truncateTask(step.task))}`);
+				}
+			} else if (args.tasks?.length) {
+				lines.push(theme.fg("toolTitle", theme.bold(`subagent parallel`)) + theme.fg("muted", ` (${args.tasks.length} tasks)`));
+				for (const t of args.tasks) {
+					lines.push(`  ${theme.fg("accent", t.agent)} ${theme.fg("toolOutput", truncateTask(t.task))}`);
+				}
+			} else if (args.agent) {
+				lines.push(
+					theme.fg("toolTitle", theme.bold("subagent")) +
+					" " +
+					theme.fg("accent", args.agent) +
+					(args.task ? " " + theme.fg("toolOutput", truncateTask(args.task)) : ""),
+				);
+			} else {
+				lines.push(theme.fg("toolTitle", theme.bold("subagent")));
+			}
+
+			return new Text(lines.join("\n"), 0, 0);
+		},
+
+		renderResult(result, options, theme) {
+			const status = result.details?.status;
+			const output = result.content
+				?.filter((c) => c.type === "text")
+				.map((c) => ("text" in c ? c.text : ""))
+				.join("\n") || "";
+
+			const lines: string[] = [];
+
+			if (status && options.isPartial) {
+				lines.push(theme.fg("muted", status));
+			}
+
+			if (output) {
+				const trimmed = output.trim();
+				if (options.expanded) {
+					lines.push(theme.fg("toolOutput", trimmed));
+				} else {
+					const previewLines = trimmed.split("\n").slice(0, 8);
+					lines.push(theme.fg("toolOutput", previewLines.join("\n")));
+					const total = trimmed.split("\n").length;
+					if (total > 8) {
+						lines.push(theme.fg("muted", `... (${total - 8} more lines)`));
+					}
+				}
+			}
+
+			return new Text(lines.join("\n"), 0, 0);
+		},
+
+		async execute(_id, params, signal, onUpdate, ctx) {
 			const scope: AgentScope = (params.agentScope as AgentScope) ?? "both";
 			const agents = discoverAgents(ctx.cwd, scope);
 			const available = agents.map((a) => a.name).join(", ") || "none";
@@ -254,6 +326,10 @@ export default function (pi: ExtensionAPI) {
 				isError: true,
 			});
 
+			const progress = (status: string) => {
+				onUpdate?.({ content: [{ type: "text" as const, text: "" }], details: { status } });
+			};
+
 			// ── Chain mode ──
 			if (params.chain?.length) {
 				let previous = "";
@@ -262,6 +338,7 @@ export default function (pi: ExtensionAPI) {
 					const step = params.chain[i];
 					const agent = find(step.agent);
 					if (!agent) return notFound(step.agent);
+					progress(`[${i + 1}/${params.chain.length}] ${step.agent} working...`);
 					const task = step.task.replace(/\{previous\}/g, previous);
 					const result = await runAgent(ctx.cwd, agent, task, signal, i + 1);
 					results.push(result);
@@ -283,13 +360,16 @@ export default function (pi: ExtensionAPI) {
 				}
 				for (const t of params.tasks) { if (!find(t.agent)) return notFound(t.agent); }
 
+				const agentNames = params.tasks.map((t: { agent: string }) => t.agent).join(", ");
+				progress(`Running ${params.tasks.length} agents in parallel: ${agentNames}`);
+
 				const results = await runParallel(params.tasks, MAX_CONCURRENCY, async (t, i) => {
 					return runAgent(ctx.cwd, find(t.agent)!, t.task, signal);
 				});
 
 				const ok = results.filter((r) => r.exitCode === 0).length;
 				const summary = results
-					.map((r) => `[${r.agent}] ${r.exitCode === 0 ? "✓" : "✗"} ${r.output.slice(0, 200)}`)
+					.map((r) => `[${r.agent}] ${r.exitCode === 0 ? "ok" : "fail"} ${r.output.slice(0, 200)}`)
 					.join("\n\n");
 				return { content: [{ type: "text" as const, text: `Parallel: ${ok}/${results.length} succeeded\n\n${summary}` }] };
 			}
@@ -298,6 +378,7 @@ export default function (pi: ExtensionAPI) {
 			if (params.agent && params.task) {
 				const agent = find(params.agent);
 				if (!agent) return notFound(params.agent);
+				progress(`${params.agent} working...`);
 				const result = await runAgent(ctx.cwd, agent, params.task, signal);
 				const isError = result.exitCode !== 0;
 				return {

@@ -166,7 +166,7 @@ const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8"));
 
 export const APP_NAME: string = pkg.drahtConfig?.name || "draht";
 export const CONFIG_DIR_NAME: string = pkg.drahtConfig?.configDir || ".draht";
-export const VERSION: string = pkg.version;
+export const VERSION: string = existsSync(join(getPackageDir(), ".dev")) ? "dev" : pkg.version;
 
 // e.g., DRAHT_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;

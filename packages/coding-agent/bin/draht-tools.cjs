@@ -164,7 +164,7 @@ const commands = {};
 commands.init = function () {
 	const exists = fs.existsSync(planningPath("PROJECT.md"));
 	if (exists) {
-		console.log("Project already initialized. Use `draht progress` to see status.");
+		console.log("Project already initialized. Use `draht-tools progress` to see status.");
 		process.exit(1);
 	}
 	ensureDir(planningPath());
@@ -176,7 +176,7 @@ commands.init = function () {
 	console.log(banner("INIT"));
 	console.log(`\nPlanning directory: ${PLANNING_DIR}/`);
 	if (hasCode) {
-		console.log("\n⚠️  Existing code detected. Consider running: draht map-codebase");
+		console.log("\n⚠️  Existing code detected. Consider running: draht-tools map-codebase");
 	}
 	if (!hasGit()) {
 		console.log("\n⚠️  No git repository. Consider running: git init");
@@ -239,7 +239,7 @@ commands["map-codebase"] = function (dir) {
 	writeMd(path.join(outDir, "DOMAIN-HINTS.md"), `# Domain Model Hints\n\nGenerated: ${timestamp()}\n\nExtracted from codebase to help identify domain model.\n\n${domainHints}\n## TODO\n- [ ] Identify entities vs value objects\n- [ ] Map bounded contexts from directory structure\n- [ ] Define ubiquitous language glossary\n`);
 
 	console.log(`\nCreated:\n  ${outDir}/STACK.md\n  ${outDir}/ARCHITECTURE.md\n  ${outDir}/CONVENTIONS.md\n  ${outDir}/CONCERNS.md\n  ${outDir}/DOMAIN-HINTS.md`);
-	console.log("\n→ Review and fill in the TODOs, then run: draht commit-docs \"map existing codebase\"");
+	console.log("\n→ Review and fill in the TODOs, then run: draht-tools commit-docs \"map existing codebase\"");
 };
 
 // --- create-project ---
@@ -287,7 +287,7 @@ commands["init-state"] = function () {
 // --- phase-info ---
 commands["phase-info"] = function (n) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht phase-info N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools phase-info N"); process.exit(1); }
 
 	const roadmap = getRoadmap();
 	if (!roadmap) { console.error("No ROADMAP.md found"); process.exit(1); }
@@ -301,13 +301,13 @@ commands["phase-info"] = function (n) {
 	if (info) console.log(`\nName: ${info.name}\nStatus: ${info.status}`);
 	if (phaseDir) console.log(`Directory: ${phaseDir}`);
 	if (context) console.log(`\n--- Context ---\n${context}`);
-	else console.log("\nNo context captured yet. Run: gsd-discuss-phase " + num);
+	else console.log("\nNo context captured yet. Run: /discuss-phase " + num);
 };
 
 // --- save-context ---
 commands["save-context"] = function (n, ...rest) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht save-context N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools save-context N"); process.exit(1); }
 
 	const slug = getPhaseSlug(num) || `phase-${num}`;
 	const dir = planningPath("phases", `${padNum(num)}-${slug}`);
@@ -327,7 +327,7 @@ commands["save-context"] = function (n, ...rest) {
 // --- load-phase-context ---
 commands["load-phase-context"] = function (n) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht load-phase-context N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools load-phase-context N"); process.exit(1); }
 
 	const files = [];
 	const project = readMd(planningPath("PROJECT.md"));
@@ -375,7 +375,7 @@ commands["load-phase-context"] = function (n) {
 commands["create-plan"] = function (n, p, ...titleWords) {
 	const phaseNum = parseInt(n, 10);
 	const planNum = parseInt(p, 10);
-	if (!phaseNum || !planNum) { console.error("Usage: draht create-plan N P [title]"); process.exit(1); }
+	if (!phaseNum || !planNum) { console.error("Usage: draht-tools create-plan N P [title]"); process.exit(1); }
 
 	const slug = getPhaseSlug(phaseNum) || `phase-${phaseNum}`;
 	const dir = planningPath("phases", `${padNum(phaseNum)}-${slug}`);
@@ -424,7 +424,7 @@ Created: ${timestamp()}
 // --- discover-plans ---
 commands["discover-plans"] = function (n) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht discover-plans N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools discover-plans N"); process.exit(1); }
 
 	const phaseDir = getPhaseDir(num);
 	if (!phaseDir) { console.error(`Phase ${num} directory not found`); process.exit(1); }
@@ -474,7 +474,7 @@ commands["discover-plans"] = function (n) {
 commands["read-plan"] = function (n, p) {
 	const phaseNum = parseInt(n, 10);
 	const planNum = parseInt(p, 10);
-	if (!phaseNum || !planNum) { console.error("Usage: draht read-plan N P"); process.exit(1); }
+	if (!phaseNum || !planNum) { console.error("Usage: draht-tools read-plan N P"); process.exit(1); }
 
 	const phaseDir = getPhaseDir(phaseNum);
 	if (!phaseDir) { console.error(`Phase ${phaseNum} not found`); process.exit(1); }
@@ -489,7 +489,7 @@ commands["read-plan"] = function (n, p) {
 // --- validate-plans ---
 commands["validate-plans"] = function (n) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht validate-plans N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools validate-plans N"); process.exit(1); }
 
 	const phaseDir = getPhaseDir(num);
 	if (!phaseDir) { console.error(`Phase ${num} not found`); process.exit(1); }
@@ -550,7 +550,7 @@ commands["commit-task"] = function (n, p, t, ...desc) {
 commands["write-summary"] = function (n, p) {
 	const phaseNum = parseInt(n, 10);
 	const planNum = parseInt(p, 10);
-	if (!phaseNum || !planNum) { console.error("Usage: draht write-summary N P"); process.exit(1); }
+	if (!phaseNum || !planNum) { console.error("Usage: draht-tools write-summary N P"); process.exit(1); }
 
 	const phaseDir = getPhaseDir(phaseNum);
 	if (!phaseDir) { console.error(`Phase ${phaseNum} not found`); process.exit(1); }
@@ -564,7 +564,7 @@ commands["write-summary"] = function (n, p) {
 // --- verify-phase ---
 commands["verify-phase"] = function (n) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht verify-phase N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools verify-phase N"); process.exit(1); }
 
 	const phaseDir = getPhaseDir(num);
 	if (!phaseDir) { console.error(`Phase ${num} not found`); process.exit(1); }
@@ -589,7 +589,7 @@ commands["verify-phase"] = function (n) {
 // --- extract-deliverables ---
 commands["extract-deliverables"] = function (n) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht extract-deliverables N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools extract-deliverables N"); process.exit(1); }
 
 	const phaseDir = getPhaseDir(num);
 	if (!phaseDir) { console.error(`Phase ${num} not found`); process.exit(1); }
@@ -631,7 +631,7 @@ commands["extract-deliverables"] = function (n) {
 commands["create-fix-plan"] = function (n, p, ...issueWords) {
 	const phaseNum = parseInt(n, 10);
 	const planNum = parseInt(p, 10);
-	if (!phaseNum || !planNum) { console.error("Usage: draht create-fix-plan N P [issue]"); process.exit(1); }
+	if (!phaseNum || !planNum) { console.error("Usage: draht-tools create-fix-plan N P [issue]"); process.exit(1); }
 
 	const slug = getPhaseSlug(phaseNum) || `phase-${phaseNum}`;
 	const dir = planningPath("phases", `${padNum(phaseNum)}-${slug}`);
@@ -669,7 +669,7 @@ Created: ${timestamp()}
 // --- write-uat ---
 commands["write-uat"] = function (n) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht write-uat N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools write-uat N"); process.exit(1); }
 
 	const phaseDir = getPhaseDir(num);
 	if (!phaseDir) { console.error(`Phase ${num} not found`); process.exit(1); }
@@ -735,7 +735,7 @@ commands.progress = function () {
 	const state = getState();
 	const roadmap = getRoadmap();
 	if (!state || !roadmap) {
-		console.log("No Draht project found. Run: draht init");
+		console.log("No Draht project found. Run: draht-tools init");
 		process.exit(1);
 	}
 
@@ -828,7 +828,7 @@ commands["commit-docs"] = function (...msg) {
 // --- research-phase ---
 commands["research-phase"] = function (n) {
 	const num = parseInt(n, 10);
-	if (!num) { console.error("Usage: draht research-phase N"); process.exit(1); }
+	if (!num) { console.error("Usage: draht-tools research-phase N"); process.exit(1); }
 
 	const slug = getPhaseSlug(num) || `phase-${num}`;
 	const dir = planningPath("phases", `${padNum(num)}-${slug}`);
@@ -849,7 +849,7 @@ commands.help = function () {
 	console.log(`
 Draht Tools — Get Shit Done CLI
 
-Usage: draht <command> [args]
+Usage: draht-tools <command> [args]
 
 Project Setup:
   init                          Check preconditions, create .planning/
@@ -907,6 +907,6 @@ if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
 } else if (commands[cmd]) {
 	commands[cmd](...args);
 } else {
-	console.error(`Unknown command: ${cmd}\nRun: draht help`);
+	console.error(`Unknown command: ${cmd}\nRun: draht-tools help`);
 	process.exit(1);
 }

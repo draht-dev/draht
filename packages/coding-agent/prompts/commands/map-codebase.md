@@ -8,7 +8,7 @@ Analyze existing codebase before planning.
 ```
 
 ## Steps
-1. Run `draht map-codebase [dir]`
+1. Run `draht-tools map-codebase [dir]`
 2. Tool generates: STACK.md, ARCHITECTURE.md, CONVENTIONS.md, CONCERNS.md
 3. Review output, supplement with your own analysis if needed
 4. Identify implicit bounded contexts from directory structure:
@@ -29,4 +29,4 @@ Analyze existing codebase before planning.
    - Existing coverage configuration and goals (if any)
    - Which layers have tests today (unit, integration, e2e)
    - Gaps and recommendations
-8. Commit: `draht commit-docs "map existing codebase"`
+8. Commit: `draht-tools commit-docs "map existing codebase"`

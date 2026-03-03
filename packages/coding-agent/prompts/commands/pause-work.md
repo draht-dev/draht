@@ -8,5 +8,5 @@ Create a handoff document for session continuity.
 ```
 
 ## Steps
-1. Run `draht pause` — creates CONTINUE-HERE.md
-2. Commit: `draht commit-docs "pause work"`
+1. Run `draht-tools pause` — creates CONTINUE-HERE.md
+2. Commit: `draht-tools commit-docs "pause work"`

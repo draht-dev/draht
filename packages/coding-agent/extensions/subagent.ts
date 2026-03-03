@@ -16,14 +16,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@draht/ai";
 import { StringEnum } from "@draht/ai";
-import { type ExtensionAPI, getAgentDir, getPackageDir, parseFrontmatter } from "@draht/coding-agent";
+import { type ExtensionAPI, getAgentDir, getPackageDir, isBunBinary, parseFrontmatter } from "@draht/coding-agent";
 import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 
 const MAX_PARALLEL = 8;
 const MAX_CONCURRENCY = 4;
-// Use the same binary that's currently running
+
+// Build the command to spawn a subagent process.
+// Compiled Bun binary: process.execPath IS the CLI binary, args go directly.
+// Source/dev mode: process.execPath is the runtime (bun/node), process.argv[1] is the CLI script.
 const DRAHT_BIN = process.execPath;
+const DRAHT_ARGS_PREFIX: string[] = isBunBinary ? [] : [process.argv[1]];
 
 // ─── Agent discovery ────────────────────────────────────────────────────────
 
@@ -166,7 +170,7 @@ async function runAgent(
 
 	try {
 		const exitCode = await new Promise<number>((resolve) => {
-			const proc = spawn(DRAHT_BIN, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+			const proc = spawn(DRAHT_BIN, [...DRAHT_ARGS_PREFIX, ...args], { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
 			let buf = "";
 
 			const processLine = (line: string) => {

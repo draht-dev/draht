@@ -397,4 +397,77 @@ export default function (pi: ExtensionAPI) {
 			return { content: [{ type: "text" as const, text: `Provide exactly one mode. Available agents: ${available}` }], isError: true };
 		},
 	});
+
+	// ── Agent selection for user prompts ─────────────────────────────────────
+
+	let selectedAgent: string | undefined;
+
+	function updateAgentStatus(ctx: { ui: { setStatus: (key: string, text: string | undefined) => void } }) {
+		ctx.ui.setStatus("agent", selectedAgent ? `agent: ${selectedAgent}` : undefined);
+	}
+
+	// /agent command — select an agent or clear selection
+	pi.registerCommand("agent", {
+		description: "Select an agent to handle your next prompts, or clear selection. Usage: /agent [name]",
+		handler: async (args, ctx) => {
+			const agents = discoverAgents(ctx.cwd, "both");
+
+			if (args.trim()) {
+				// Direct selection: /agent architect
+				const name = args.trim();
+				if (name === "none" || name === "off" || name === "clear") {
+					selectedAgent = undefined;
+					updateAgentStatus(ctx);
+					ctx.ui.notify("Agent cleared — prompts go to default model", "info");
+					return;
+				}
+				const agent = agents.find((a) => a.name === name);
+				if (!agent) {
+					const available = agents.map((a) => a.name).join(", ") || "none";
+					ctx.ui.notify(`Unknown agent "${name}". Available: ${available}`, "warning");
+					return;
+				}
+				selectedAgent = name;
+				updateAgentStatus(ctx);
+				ctx.ui.notify(`Agent set to "${name}" — your prompts will be handled by this agent`, "info");
+				return;
+			}
+
+			// Interactive selection
+			if (!ctx.hasUI) {
+				ctx.ui.notify("Usage: /agent <name> or /agent none", "warning");
+				return;
+			}
+
+			const options = ["(none — default model)", ...agents.map((a) => `${a.name} — ${a.description}`)];
+			const choice = await ctx.ui.select("Select agent for your prompts", options);
+			if (choice === undefined) return; // cancelled
+
+			if (choice === options[0]) {
+				selectedAgent = undefined;
+				updateAgentStatus(ctx);
+				ctx.ui.notify("Agent cleared", "info");
+			} else {
+				const name = choice.split(" — ")[0];
+				selectedAgent = name;
+				updateAgentStatus(ctx);
+				ctx.ui.notify(`Agent set to "${name}"`, "info");
+			}
+		},
+		getArgumentCompletions: (partial) => {
+			const agents = discoverAgents(process.cwd(), "both");
+			const names = ["none", ...agents.map((a) => a.name)];
+			return names.filter((n) => n.startsWith(partial));
+		},
+	});
+
+	// Intercept user input when an agent is selected
+	pi.on("input", (event) => {
+		if (!selectedAgent) return { action: "continue" as const };
+		// Don't intercept slash commands
+		if (event.text.startsWith("/") || event.text.startsWith("!")) return { action: "continue" as const };
+
+		const wrapped = `Use the subagent tool to delegate to the "${selectedAgent}" agent with this task:\n\n"${event.text}"\n\nSet agentScope to "both".`;
+		return { action: "transform" as const, text: wrapped, images: event.images };
+	});
 }

@@ -13,7 +13,7 @@
  *   /review  <scope>            — ad-hoc code review + security audit
  *   /fix     <issue>            — targeted fix plan for a failing task
  *   /quick   <task>             — one-shot implement + commit (skip full GSD)
- *   /resume                     — pick up interrupted work from CONTINUE-HERE.md
+ *   /continue                   — pick up interrupted work from CONTINUE-HERE.md
  *   /status                     — show .planning/STATE.md overview
  *   /next-milestone             — plan next milestone after current one is complete
  *   /new-project <name> [path]  — create project dir, git init, scaffold .draht/
@@ -184,9 +184,9 @@ After both complete, merge into a single prioritized findings report.`,
 		},
 	});
 
-	// ── /resume ──────────────────────────────────────────────────────────────
-	pi.registerCommand("resume", {
-		description: "Resume interrupted work — reads CONTINUE-HERE.md and picks up where we left off",
+	// ── /continue ────────────────────────────────────────────────────────────
+	pi.registerCommand("continue", {
+		description: "Continue interrupted work — reads CONTINUE-HERE.md and picks up where we left off",
 		handler: async (_args, ctx) => {
 			if (isBusy(ctx, ctx.ui)) return;
 

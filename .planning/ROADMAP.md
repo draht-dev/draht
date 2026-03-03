@@ -60,7 +60,7 @@
 **Requirements:** R12-DOC.1 (full README.md for draht-mono), R12-DOC.2 (per-package README updates for all @draht/* packages), R12-DOC.3 (CONTRIBUTING.md update for Draht workflow)
 **Acceptance:** README covers installation, architecture, packages, getting started. Each package has updated README. CONTRIBUTING.md reflects current workflow.
 
-## Phase 13: Model Router — `in-progress`
+## Phase 13: Model Router — `complete`
 **Goal:** Role-based model routing with direct API calls, auto-fallback, and cost tracking in `packages/router/`.
 **Requirements:** R13-RT.1 (router config schema), R13-RT.2 (role→model mapping with fallback chains), R13-RT.3 (CLI commands: set/show/test), R13-RT.4 (auto-fallback on error/rate-limit/timeout), R13-RT.5 (cost tracking per role/session), R13-RT.6 (coding-agent extension for automatic model selection)
 **Acceptance:** `draht router show` displays config, fallback works on simulated errors, cost log written to `.draht/cost-log.jsonl`.
@@ -89,3 +89,37 @@
 **Goal:** Full content for the Astro landing page — features, architecture, getting started, blog scaffold, SEO.
 **Requirements:** R18-WEB.1 (feature descriptions), R18-WEB.2 (architecture diagram), R18-WEB.3 (getting started guide), R18-WEB.4 (pricing/positioning), R18-WEB.5 (blog scaffold), R18-WEB.6 (SEO meta/OG/sitemap)
 **Acceptance:** Landing page has real content, all sections filled, sitemap.xml generated, OG images present.
+
+---
+
+## Milestone 2: Integration Hardening
+
+## Phase 19: GSD CLI Integration — `pending`
+**Goal:** draht CLI commands work as real TypeScript modules inside coding-agent, replacing shell-script stubs.
+**Requirements:** R14-TDD.1, R14-TDD.2, R14-TDD.3, R14-TDD.7, R15-DDD.3, R15-DDD.4, R19-GSD.1, R19-GSD.2, R19-GSD.3
+**Acceptance:** `/create-plan`, `/commit-task`, `/create-domain-model`, `/map-codebase` commands execute real draht functions; enhanced hooks run during `/execute` and `/verify` flows; gsd-commands extension loads and registers all commands.
+
+## Phase 20: TDD/DDD Hook Hardening — `pending`
+**Goal:** Hooks are production-ready with auto-detected toolchains, configurable thresholds, and domain checks.
+**Requirements:** R14-TDD.4, R15-DDD.5, R15-DDD.6, R20-HOOK.1, R20-HOOK.2, R20-HOOK.3
+**Acceptance:** Hook auto-detects npm/bun/pnpm test runner (no hardcoded `bun test`); coverage threshold configurable via `.planning/config.json` (default 80%); TDD cycle check supports strict and advisory modes; domain glossary validated against DOMAIN-MODEL.md; all hooks have vitest tests.
+
+## Phase 21: GSD Integration Tests — `pending`
+**Goal:** End-to-end GSD lifecycle is verified by automated tests.
+**Requirements:** R21-INT.1, R21-INT.2, R21-INT.3, R21-INT.4
+**Acceptance:** Full lifecycle test passes (create-project → commit-task → verify-phase); map-codebase test produces valid domain extraction; quality gate pass/fail tests cover both outcomes; gsd-commands extension loading test confirms registration.
+
+## Phase 22: Router Hardening — `pending`
+**Goal:** Model router is reliable under failure conditions with accurate cost tracking.
+**Requirements:** R22-RTR.1, R22-RTR.2, R22-RTR.3
+**Acceptance:** Fallback chain integration tests pass with simulated provider failures; cost tracking matches expected values within 1% tolerance; config validation rejects invalid schemas with clear errors.
+
+## Phase 23: Invoice/Compliance Tests — `pending`
+**Goal:** Invoice and compliance modules are verified against realistic test data.
+**Requirements:** R23-API.1, R23-API.2, R23-API.3, R23-API.4
+**Acceptance:** Lexoffice mock integration tests cover CRUD operations; Toggl mock tests cover time entry import; PII scanner achieves target accuracy on German corpus; EU AI Act template validation passes against sample documentation.
+
+## Phase 24: CI & Artifact Cleanup — `pending`
+**Goal:** CI pipeline runs on PRs and all planning artifacts are accurate and consolidated.
+**Requirements:** R24-CI.1, R24-CI.2, R25-DOC.1, R25-DOC.2
+**Acceptance:** GitHub Actions PR check workflow runs lint + test on push; AI review dogfooding enabled on draht-mono PRs; Phase 14-18 summaries contain real data (not placeholders); hook files consolidated to single source of truth with no duplication.

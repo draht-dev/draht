@@ -75,3 +75,53 @@
 - Deploying any AWS resources
 - Modifying Pi Agent core logic (ai, agent, tui packages internals)
 - Custom LLM providers
+
+---
+
+## Milestone 2
+
+> Requirements carried forward from Milestone 1 (incomplete):
+> - R14-TDD.1: task template test→action→refactor — carried to Phase 19
+> - R14-TDD.2: commit-task warns on missing tests — carried to Phase 19
+> - R14-TDD.3: post-task hook runs tests — carried to Phase 19
+> - R14-TDD.4: quality gate coverage threshold — carried to Phase 20
+> - R14-TDD.7: coding-agent TDD mode — carried to Phase 19
+> - R15-DDD.3: create-domain-model command — carried to Phase 19
+> - R15-DDD.4: map-codebase domain extraction — carried to Phase 19
+> - R15-DDD.5: knowledge base domain glossary — carried to Phase 20
+> - R15-DDD.6: CI domain naming checks — carried to Phase 20
+
+### R19-GSD: GSD CLI Integration
+- R19-GSD.1: Move draht-tools shell scripts to TypeScript modules in coding-agent
+- R19-GSD.2: gsd-commands extension uses real draht functions (not shell stubs)
+- R19-GSD.3: Enhanced hooks wired into /execute and /verify flows
+
+### R20-HOOK: Hook Hardening
+- R20-HOOK.1: Toolchain auto-detection (npm/bun/pnpm) for test runner
+- R20-HOOK.2: Configurable coverage threshold via `.planning/config.json`
+- R20-HOOK.3: Configurable TDD cycle check (strict/advisory mode)
+
+### R21-INT: GSD Integration Tests
+- R21-INT.1: Full lifecycle test (create-project → commit-task → verify-phase)
+- R21-INT.2: map-codebase test produces valid domain extraction
+- R21-INT.3: Quality gate pass/fail test covers both outcomes
+- R21-INT.4: gsd-commands extension loading test confirms registration
+
+### R22-RTR: Router Hardening
+- R22-RTR.1: Fallback chain integration test with simulated provider failures
+- R22-RTR.2: Cost tracking accuracy test (within 1% tolerance)
+- R22-RTR.3: Config validation rejects invalid schemas with clear errors
+
+### R23-API: Invoice/Compliance Tests
+- R23-API.1: Lexoffice mock integration test (CRUD operations)
+- R23-API.2: Toggl mock integration test (time entry import)
+- R23-API.3: PII scanner accuracy test with German corpus
+- R23-API.4: EU AI Act template validation against sample documentation
+
+### R24-CI: CI Pipeline
+- R24-CI.1: GitHub Actions PR check workflow (lint + test on push)
+- R24-CI.2: AI review dogfooding on draht-mono PRs
+
+### R25-DOC: Artifact Cleanup
+- R25-DOC.1: Backfill empty Phase 14-18 summaries with real data
+- R25-DOC.2: Consolidate hook files to single source of truth

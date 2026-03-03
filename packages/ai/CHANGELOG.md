@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.3] - 2026-03-03
+
+### Changed
+
+- update generated models
 
 ## [2026.3.2-9] - 2026-03-02
 

@@ -16,9 +16,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@draht/ai";
 import { StringEnum } from "@draht/ai";
-import { type ExtensionAPI, getAgentDir, getPackageDir, isBunBinary, parseFrontmatter } from "@draht/coding-agent";
 import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
+import { getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
+import { parseFrontmatter } from "../../utils/frontmatter.js";
+import type { ExtensionAPI } from "../extensions/types.js";
 
 const MAX_PARALLEL = 8;
 const MAX_CONCURRENCY = 4;
@@ -55,7 +57,10 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			const content = fs.readFileSync(path.join(dir, entry.name), "utf-8");
 			const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
 			if (!frontmatter.name || !frontmatter.description) continue;
-			const tools = frontmatter.tools?.split(",").map((t: string) => t.trim()).filter(Boolean);
+			const tools = frontmatter.tools
+				?.split(",")
+				.map((t: string) => t.trim())
+				.filter(Boolean);
 			agents.push({
 				name: frontmatter.name,
 				description: frontmatter.description,
@@ -64,9 +69,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 				systemPrompt: body,
 				source,
 			});
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 	return agents;
 }
@@ -123,8 +126,12 @@ function writeTemp(name: string, content: string): { file: string; dir: string }
 }
 
 function cleanTemp(file: string, dir: string) {
-	try { fs.unlinkSync(file); } catch {}
-	try { fs.rmdirSync(dir); } catch {}
+	try {
+		fs.unlinkSync(file);
+	} catch {}
+	try {
+		fs.rmdirSync(dir);
+	} catch {}
 }
 
 function getFinalText(messages: Message[]): string {
@@ -170,7 +177,11 @@ async function runAgent(
 
 	try {
 		const exitCode = await new Promise<number>((resolve) => {
-			const proc = spawn(DRAHT_BIN, [...DRAHT_ARGS_PREFIX, ...args], { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+			const proc = spawn(DRAHT_BIN, [...DRAHT_ARGS_PREFIX, ...args], {
+				cwd,
+				shell: false,
+				stdio: ["ignore", "pipe", "pipe"],
+			});
 			let buf = "";
 
 			const processLine = (line: string) => {
@@ -185,7 +196,8 @@ async function runAgent(
 						if (event.type === "tool_execution_start") {
 							const toolArgs = event.args ?? {};
 							const detail = toolArgs.command || toolArgs.path || toolArgs.file_path || toolArgs.pattern || "";
-							const short = typeof detail === "string" && detail.length > 60 ? `${detail.slice(0, 60)}...` : detail;
+							const short =
+								typeof detail === "string" && detail.length > 60 ? `${detail.slice(0, 60)}...` : detail;
 							onProgress(short ? `${event.toolName} ${short}` : event.toolName);
 						} else if (event.type === "text_delta") {
 							// Show first line of streaming text as activity
@@ -206,7 +218,9 @@ async function runAgent(
 				buf = lines.pop() || "";
 				for (const l of lines) processLine(l);
 			});
-			proc.stderr.on("data", (d) => { stderr += d.toString(); });
+			proc.stderr.on("data", (d) => {
+				stderr += d.toString();
+			});
 			proc.on("close", (code) => {
 				if (buf.trim()) processLine(buf);
 				resolve(code ?? 0);
@@ -214,7 +228,12 @@ async function runAgent(
 			proc.on("error", () => resolve(1));
 
 			if (signal) {
-				const kill = () => { proc.kill("SIGTERM"); setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000); };
+				const kill = () => {
+					proc.kill("SIGTERM");
+					setTimeout(() => {
+						if (!proc.killed) proc.kill("SIGKILL");
+					}, 5000);
+				};
 				if (signal.aborted) kill();
 				else signal.addEventListener("abort", kill, { once: true });
 			}
@@ -262,9 +281,7 @@ const Params = Type.Object({
 	task: Type.Optional(Type.String()),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Chained tasks" })),
-	agentScope: Type.Optional(
-		StringEnum(["user", "project", "both"] as const, { default: "both" }),
-	),
+	agentScope: Type.Optional(StringEnum(["user", "project", "both"] as const, { default: "both" })),
 });
 
 // ─── Rendering helpers ──────────────────────────────────────────────────────
@@ -272,10 +289,6 @@ const Params = Type.Object({
 function truncateTask(task: string, maxLen = 120): string {
 	const oneLine = task.replace(/\n/g, " ").trim();
 	return oneLine.length > maxLen ? `${oneLine.slice(0, maxLen)}...` : oneLine;
-}
-
-interface SubagentDetails {
-	status?: string;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -291,23 +304,28 @@ export default function (pi: ExtensionAPI) {
 
 			if (args.chain?.length) {
 				const agents = args.chain.map((s: { agent: string }) => s.agent).join(" -> ");
-				lines.push(theme.fg("toolTitle", theme.bold(`subagent chain`)) + " " + theme.fg("accent", agents));
+				lines.push(`${theme.fg("toolTitle", theme.bold(`subagent chain`))} ${theme.fg("accent", agents)}`);
 				for (let i = 0; i < args.chain.length; i++) {
 					const step = args.chain[i];
 					const prefix = theme.fg("muted", `  ${i + 1}.`);
-					lines.push(`${prefix} ${theme.fg("accent", step.agent)} ${theme.fg("toolOutput", truncateTask(step.task))}`);
+					lines.push(
+						`${prefix} ${theme.fg("accent", step.agent)} ${theme.fg("toolOutput", truncateTask(step.task))}`,
+					);
 				}
 			} else if (args.tasks?.length) {
-				lines.push(theme.fg("toolTitle", theme.bold(`subagent parallel`)) + theme.fg("muted", ` (${args.tasks.length} tasks)`));
+				lines.push(
+					theme.fg("toolTitle", theme.bold(`subagent parallel`)) +
+						theme.fg("muted", ` (${args.tasks.length} tasks)`),
+				);
 				for (const t of args.tasks) {
 					lines.push(`  ${theme.fg("accent", t.agent)} ${theme.fg("toolOutput", truncateTask(t.task))}`);
 				}
 			} else if (args.agent) {
 				lines.push(
 					theme.fg("toolTitle", theme.bold("subagent")) +
-					" " +
-					theme.fg("accent", args.agent) +
-					(args.task ? " " + theme.fg("toolOutput", truncateTask(args.task)) : ""),
+						" " +
+						theme.fg("accent", args.agent) +
+						(args.task ? ` ${theme.fg("toolOutput", truncateTask(args.task))}` : ""),
 				);
 			} else {
 				lines.push(theme.fg("toolTitle", theme.bold("subagent")));
@@ -317,11 +335,12 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		renderResult(result, options, theme) {
-			const status = result.details?.status;
-			const output = result.content
-				?.filter((c) => c.type === "text")
-				.map((c) => ("text" in c ? c.text : ""))
-				.join("\n") || "";
+			const status = (result.details as { status?: string } | undefined)?.status;
+			const output =
+				result.content
+					?.filter((c) => c.type === "text")
+					.map((c) => ("text" in c ? c.text : ""))
+					.join("\n") || "";
 
 			const lines: string[] = [];
 
@@ -360,6 +379,7 @@ export default function (pi: ExtensionAPI) {
 			const notFound = (name: string) => ({
 				content: [{ type: "text" as const, text: `Unknown agent "${name}". Available: ${available}` }],
 				isError: true,
+				details: {},
 			});
 
 			// Stream live activity from the subagent process
@@ -371,12 +391,14 @@ export default function (pi: ExtensionAPI) {
 					details: { status },
 				});
 			};
-			const makeProgressFn = (agentName: string): ProgressFn => (activity) => {
-				// Keep a rolling log of recent activities
-				activityLines.push(`${agentName}: ${activity}`);
-				if (activityLines.length > 50) activityLines.splice(0, activityLines.length - 50);
-				emitProgress(agentName, activity);
-			};
+			const makeProgressFn =
+				(agentName: string): ProgressFn =>
+				(activity) => {
+					// Keep a rolling log of recent activities
+					activityLines.push(`${agentName}: ${activity}`);
+					if (activityLines.length > 50) activityLines.splice(0, activityLines.length - 50);
+					emitProgress(agentName, activity);
+				};
 
 			// ── Chain mode ──
 			if (params.chain?.length) {
@@ -393,26 +415,41 @@ export default function (pi: ExtensionAPI) {
 					results.push(result);
 					if (result.exitCode !== 0) {
 						return {
-							content: [{ type: "text" as const, text: `Chain failed at step ${i + 1} (${step.agent}):\n${result.output || result.stderr}` }],
+							content: [
+								{
+									type: "text" as const,
+									text: `Chain failed at step ${i + 1} (${step.agent}):\n${result.output || result.stderr}`,
+								},
+							],
 							isError: true,
+							details: {},
 						};
 					}
 					previous = result.output;
 				}
-				return { content: [{ type: "text" as const, text: results[results.length - 1].output || "(no output)" }] };
+				return {
+					content: [{ type: "text" as const, text: results[results.length - 1].output || "(no output)" }],
+					details: {},
+				};
 			}
 
 			// ── Parallel mode ──
 			if (params.tasks?.length) {
 				if (params.tasks.length > MAX_PARALLEL) {
-					return { content: [{ type: "text" as const, text: `Too many tasks (max ${MAX_PARALLEL})` }], isError: true };
+					return {
+						content: [{ type: "text" as const, text: `Too many tasks (max ${MAX_PARALLEL})` }],
+						isError: true,
+						details: {},
+					};
 				}
-				for (const t of params.tasks) { if (!find(t.agent)) return notFound(t.agent); }
+				for (const t of params.tasks) {
+					if (!find(t.agent)) return notFound(t.agent);
+				}
 
 				const agentNames = params.tasks.map((t: { agent: string }) => t.agent).join(", ");
 				emitProgress(agentNames);
 
-				const results = await runParallel(params.tasks, MAX_CONCURRENCY, async (t, i) => {
+				const results = await runParallel(params.tasks, MAX_CONCURRENCY, async (t, _i) => {
 					return runAgent(ctx.cwd, find(t.agent)!, t.task, signal, undefined, makeProgressFn(t.agent));
 				});
 
@@ -420,7 +457,10 @@ export default function (pi: ExtensionAPI) {
 				const summary = results
 					.map((r) => `[${r.agent}] ${r.exitCode === 0 ? "ok" : "fail"} ${r.output.slice(0, 200)}`)
 					.join("\n\n");
-				return { content: [{ type: "text" as const, text: `Parallel: ${ok}/${results.length} succeeded\n\n${summary}` }] };
+				return {
+					content: [{ type: "text" as const, text: `Parallel: ${ok}/${results.length} succeeded\n\n${summary}` }],
+					details: {},
+				};
 			}
 
 			// ── Single mode ──
@@ -433,10 +473,15 @@ export default function (pi: ExtensionAPI) {
 				return {
 					content: [{ type: "text" as const, text: result.output || result.stderr || "(no output)" }],
 					...(isError ? { isError: true } : {}),
+					details: {},
 				};
 			}
 
-			return { content: [{ type: "text" as const, text: `Provide exactly one mode. Available agents: ${available}` }], isError: true };
+			return {
+				content: [{ type: "text" as const, text: `Provide exactly one mode. Available agents: ${available}` }],
+				isError: true,
+				details: {},
+			};
 		},
 	});
 
@@ -499,7 +544,7 @@ export default function (pi: ExtensionAPI) {
 		getArgumentCompletions: (partial) => {
 			const agents = discoverAgents(process.cwd(), "both");
 			const names = ["none", ...agents.map((a) => a.name)];
-			return names.filter((n) => n.startsWith(partial));
+			return names.filter((n) => n.startsWith(partial)).map((n) => ({ value: n, label: n }));
 		},
 	});
 

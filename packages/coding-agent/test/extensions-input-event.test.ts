@@ -27,7 +27,7 @@ describe("Input Event", () => {
 		fs.rmSync(extensionsDir, { recursive: true, force: true });
 		fs.mkdirSync(extensionsDir);
 		for (let i = 0; i < extensions.length; i++) fs.writeFileSync(path.join(extensionsDir, `e${i}.ts`), extensions[i]);
-		const result = await discoverAndLoadExtensions([], tempDir, tempDir, undefined, { skipShipped: true });
+		const result = await discoverAndLoadExtensions([], tempDir, tempDir, undefined);
 		const sm = SessionManager.inMemory();
 		const mr = new ModelRegistry(AuthStorage.create(path.join(tempDir, "auth.json")));
 		return new ExtensionRunner(result.extensions, result.runtime, tempDir, sm, mr);

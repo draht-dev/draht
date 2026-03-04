@@ -19,7 +19,7 @@ import * as _bundledPiTui from "@draht/tui";
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as _bundledTypebox from "@sinclair/typebox";
-import { getAgentDir, getShippedExtensionsDir, isBunBinary } from "../../config.js";
+import { getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
 // avoiding a circular dependency. Extensions can import from @draht/coding-agent.
 import * as _bundledPiCodingAgent from "../../index.js";
@@ -501,7 +501,6 @@ export async function discoverAndLoadExtensions(
 	cwd: string,
 	agentDir: string = getAgentDir(),
 	eventBus?: EventBus,
-	options?: { skipShipped?: boolean },
 ): Promise<LoadExtensionsResult> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
@@ -516,13 +515,7 @@ export async function discoverAndLoadExtensions(
 		}
 	};
 
-	// 1. Shipped extensions: bundled with the package (batteries included)
-	if (!options?.skipShipped) {
-		const shippedExtDir = getShippedExtensionsDir();
-		addPaths(discoverExtensionsInDir(shippedExtDir));
-	}
-
-	// 2. Project-local extensions: cwd/.draht/extensions/
+	// 1. Project-local extensions: cwd/.draht/extensions/
 	const localExtDir = path.join(cwd, ".draht", "extensions");
 	addPaths(discoverExtensionsInDir(localExtDir));
 

@@ -252,19 +252,6 @@ export function getShippedHooksDir(): string {
 	return join(getPackageDir(), "hooks");
 }
 
-/**
- * Get path to shipped extensions (bundled with the package).
- * These are loaded automatically for every user — batteries included.
- * - For Bun binary: extensions/ next to executable
- * - For Node.js: extensions/ at package root
- */
-export function getShippedExtensionsDir(): string {
-	if (isBunBinary) {
-		return join(dirname(process.execPath), "extensions");
-	}
-	return join(getPackageDir(), "extensions");
-}
-
 /** Get path to sessions directory */
 export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");

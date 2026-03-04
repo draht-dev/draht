@@ -28,6 +28,8 @@
 		"release:patch": "node scripts/release.mjs patch",
 		"release:minor": "node scripts/release.mjs minor",
 		"release:major": "node scripts/release.mjs major",
+		"verify": "bash scripts/verify.sh",
+		"verify:quick": "bash scripts/verify.sh --quick",
 		"prepare": "husky"
 	},
 	"devDependencies": {
@@ -46,7 +48,7 @@
 	"version": "0.0.3",
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.5",
-		"@draht/coding-agent": "^0.30.2",
+		"@draht/coding-agent": "workspace:*",
 		"get-east-asian-width": "^1.4.0",
 		"koffi": "^2.15.1"
 	},

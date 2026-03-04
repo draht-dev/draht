@@ -262,7 +262,7 @@ describe("DefaultPackageManager git update", () => {
 			mkdirSync(join(cachedDir, "pi-extensions"), { recursive: true });
 			writeFileSync(
 				join(cachedDir, "package.json"),
-				JSON.stringify({ pi: { extensions: ["./pi-extensions"] } }, null, 2),
+				JSON.stringify({ draht: { extensions: ["./pi-extensions"] } }, null, 2),
 			);
 			writeFileSync(extensionFile, "// stale");
 
@@ -294,7 +294,7 @@ describe("DefaultPackageManager git update", () => {
 			mkdirSync(join(cachedDir, "pi-extensions"), { recursive: true });
 			writeFileSync(
 				join(cachedDir, "package.json"),
-				JSON.stringify({ pi: { extensions: ["./pi-extensions"] } }, null, 2),
+				JSON.stringify({ draht: { extensions: ["./pi-extensions"] } }, null, 2),
 			);
 			writeFileSync(extensionFile, "// pinned");
 
@@ -321,7 +321,7 @@ describe("DefaultPackageManager git update", () => {
 			createCommit(remoteDir, "extension.ts", "// v2", "Second commit");
 
 			// The project-scope install path should not exist before or after update
-			const projectGitDir = join(tempDir, ".pi", "git", "github.com", "test", "extension");
+			const projectGitDir = join(tempDir, ".draht", "git", "github.com", "test", "extension");
 			expect(existsSync(projectGitDir)).toBe(false);
 
 			await packageManager.update(gitSource);

@@ -544,7 +544,7 @@ async function handleLoginCommand(args: string[]): Promise<boolean> {
 		return false;
 	}
 
-	const { getOAuthProviders } = await import("@draht/ai");
+	const { getOAuthProviders } = await import("@draht/ai/oauth");
 	const authMod = await import("./core/auth-storage.js");
 	const AuthStorageClass = authMod.AuthStorage;
 	// open browser - use dynamic import, fallback to exec

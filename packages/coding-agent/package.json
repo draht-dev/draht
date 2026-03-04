@@ -1,6 +1,6 @@
 {
 	"name": "@draht/coding-agent",
-	"version": "0.55.4",
+	"version": "2026.3.3",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"drahtConfig": {
@@ -46,9 +46,9 @@
 	},
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.2",
-		"@draht/agent-core": "^0.55.4",
-		"@draht/ai": "^0.55.4",
-		"@draht/tui": "^0.55.4",
+		"@draht/agent-core": "workspace:*",
+		"@draht/ai": "workspace:*",
+		"@draht/tui": "workspace:*",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"chalk": "^5.5.0",
 		"cli-highlight": "^2.1.11",
@@ -62,6 +62,7 @@
 		"minimatch": "^10.2.3",
 		"proper-lockfile": "^4.1.2",
 		"strip-ansi": "^7.1.0",
+		"undici": "^7.19.1",
 		"yaml": "^2.8.2"
 	},
 	"overrides": {

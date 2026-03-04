@@ -6,6 +6,7 @@
 			"*": ["./*"],
 			"@draht/ai": ["./packages/ai/src/index.ts"],
 			"@draht/ai/oauth": ["./packages/ai/src/oauth.ts"],
+			"@draht/ai/bedrock-provider": ["./packages/ai/src/bedrock-provider.ts"],
 			"@draht/ai/*": ["./packages/ai/src/*"],
 			"@draht/ai/dist/*": ["./packages/ai/src/*"],
 			"@draht/agent-core": ["./packages/agent/src/index.ts"],

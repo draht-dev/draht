@@ -1,6 +1,6 @@
 {
 	"name": "@draht/web-ui",
-	"version": "0.56.0",
+	"version": "2026.3.3",
 	"description": "Reusable web UI components for AI chat interfaces powered by @draht/ai",
 	"type": "module",
 	"main": "dist/index.js",
@@ -18,8 +18,8 @@
 	},
 	"dependencies": {
 		"@lmstudio/sdk": "^1.5.0",
-		"@draht/ai": "^0.56.0",
-		"@draht/tui": "^0.56.0",
+		"@draht/ai": "workspace:*",
+		"@draht/tui": "workspace:*",
 		"docx-preview": "^0.3.7",
 		"jszip": "^3.10.1",
 		"lucide": "^0.544.0",

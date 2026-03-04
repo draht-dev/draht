@@ -11022,6 +11022,23 @@ export const MODELS = {
 			contextWindow: 1000000,
 			maxTokens: 64000,
 		} satisfies Model<"anthropic-messages">,
+		"inception/mercury-2": {
+			id: "inception/mercury-2",
+			name: "Mercury 2",
+			api: "anthropic-messages",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0.25,
+				output: 0.75,
+				cacheRead: 0.024999999999999998,
+				cacheWrite: 0,
+			},
+			contextWindow: 128000,
+			maxTokens: 128000,
+		} satisfies Model<"anthropic-messages">,
 		"inception/mercury-coder-small": {
 			id: "inception/mercury-coder-small",
 			name: "Mercury Coder Small Beta",

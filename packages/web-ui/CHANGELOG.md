@@ -1,6 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.4] - 2026-03-04
+
+### Added
+
+- rebrand to @draht/ namespace
+
+### Changed
+
+- rebrand all READMEs to draht naming and conventions
+- switch from npm to bun, replace tsx with bun runtime, add tsgo
+
+### Fixed
+
+- align package versions to daily versioning and use workspace:* for internal deps
+- address code review findings and fix router stream types
 
 ## [2026.3.2-8] - 2026-03-02
 
@@ -13,10 +27,6 @@
 ### Added
 
 - rebrand to @draht/ namespace
-
-## [0.56.0] - 2026-03-04
-
-## [0.55.4] - 2026-03-02
 
 ## [0.55.3] - 2026-02-27
 

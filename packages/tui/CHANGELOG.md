@@ -1,6 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.4] - 2026-03-04
+
+### Added
+
+- rebrand to @draht/ namespace
+
+### Changed
+
+- update repo URLs from badlogic/pi-mono to draht-dev/draht
+- rebrand all READMEs to draht naming and conventions
+- add publishConfig for public npm access
+- switch from npm to bun, replace tsx with bun runtime, add tsgo
+
+### Fixed
+
+- align package versions to daily versioning and use workspace:* for internal deps
+- isolate blockquote rendering from default text style
 
 ## [2026.3.2-9] - 2026-03-02
 
@@ -29,8 +45,6 @@
 - Fixed single-line paste performance by inserting pasted text atomically instead of character-by-character, preventing repeated `@` autocomplete scans during paste ([#1812](https://github.com/badlogic/pi-mono/issues/1812))
 - Fixed `visibleWidth()` to ignore generic OSC escape sequences (including OSC 133 semantic prompt markers), preventing width drift when terminals emit semantic zone markers ([#1805](https://github.com/badlogic/pi-mono/issues/1805))
 - Fixed markdown blockquotes dropping nested list content by rendering blockquote children as block-level tokens ([#1787](https://github.com/badlogic/pi-mono/issues/1787))
-
-## [0.55.4] - 2026-03-02
 
 ## [0.55.3] - 2026-02-27
 

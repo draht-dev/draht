@@ -1,6 +1,23 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.4] - 2026-03-04
+
+### Added
+
+- rename pi CLI to draht, update env vars, scaffold landing page
+- rebrand to @draht/ namespace
+
+### Changed
+
+- update repo URLs from badlogic/pi-mono to draht-dev/draht
+- rebrand all READMEs to draht naming and conventions
+- add publishConfig for public npm access
+- switch from npm to bun, replace tsx with bun runtime, add tsgo
+
+### Fixed
+
+- align package versions to daily versioning and use workspace:* for internal deps
+- bun release
 
 ## [2026.3.3] - 2026-03-03
 
@@ -49,10 +66,6 @@
 - Fixed `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` failures by replacing `Function`-based dynamic imports with module dynamic imports in browser-safe provider loading paths ([#1814](https://github.com/badlogic/pi-mono/issues/1814)).
 - Fixed Bedrock region resolution for `AWS_PROFILE` by honoring `region` from the selected profile when present ([#1800](https://github.com/badlogic/pi-mono/issues/1800)).
 - Fixed Groq Qwen3 reasoning effort mapping by translating unsupported effort values to provider-supported values ([#1745](https://github.com/badlogic/pi-mono/issues/1745)).
-
-## [0.55.4] - 2026-03-02
-
-## [0.55.3] - 2026-02-27
 
 ## [0.55.2] - 2026-02-27
 

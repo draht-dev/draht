@@ -1,6 +1,60 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.4] - 2026-03-04
+
+### Added
+
+- show 'dev' version when running from source
+- stream subagent activity to tool output for ctrl+o
+- add /agent command for routing prompts through agents
+- add shipped debugger agent
+- ship built-in GSD agents with the package
+- show agent name and progress in subagent tool UI
+- add /next-milestone command for planning after milestone completion
+- ship GSD commands + subagent runner as built-in extensions
+- post-phase report includes TDD commit metrics and domain model health
+- quality-gate adds domain glossary compliance, cross-context boundary, and TDD ratio checks
+- post-task checks TDD cycle compliance (green: requires preceding red: per task)
+- pre-execute validates DOMAIN.md, TEST-STRATEGY.md, and non-empty <test> sections
+- enforce TDD cycle in quick tasks with config/docs exception
+- add automated test suite and domain health checks to verify-work
+- rewrite execute-phase with mandatory Red→Green→Refactor TDD cycle and domain rules
+- enrich plan-phase with DDD context/domain tags, full TDD task format, and domain rules
+- add testability and domain boundaries gray areas to discuss-phase
+- add DOMAIN.md and TEST-STRATEGY.md scaffolding to new-project and map-codebase
+- integrate GSD methodology as battery-included resources
+- add draht login command
+- rename pi CLI to draht, update env vars, scaffold landing page
+- add SST v4 infrastructure, resource manager, and AGENTS.md templates
+- rebrand to @draht/ namespace
+
+### Changed
+
+- bake subagent into core, remove shipped extensions
+- remove duplicate GSD extension, consolidate into built-in prompts
+- update repo URLs from badlogic/pi-mono to draht-dev/draht
+- rebrand all READMEs to draht naming and conventions
+- rebrand package references from @mariozechner/pi-* to @draht/*
+- add publishConfig for public npm access
+- comprehensive READMEs, CONTRIBUTING.md, and phase summaries
+- add vitest config, integration tests, and draht manifest test
+- switch from npm to bun, replace tsx with bun runtime, add tsgo
+
+### Fixed
+
+- resolve post-rebase import and dependency issues
+- rebrand .pi to .draht and pi: to draht: in tests, add verify script
+- rebrand remaining @mariozechner/pi-* imports from upstream to @draht/*
+- use draht-tools binary name in GSD prompts and CLI
+- fix subagent spawn in source/dev mode
+- load shipped extensions and rename /resume to /continue
+- add coding-agent bin alias so npx @draht/coding-agent works
+- rm -rf dist/prompts and dist/hooks before copy to avoid stale permission issues
+- build packages individually to avoid workspace recursion, fix copy-assets mkdir
+- load shipped prompts unconditionally (not gated by includeDefaults)
+- remove gsd- prefix from shipped prompts and agents
+- pre-commit hooks
+- address code review findings and fix router stream types
 
 ## [2026.3.3] - 2026-03-03
 

@@ -49,7 +49,9 @@ describe("DefaultPackageManager", () => {
 	describe("resolve", () => {
 		it("should return no package-sourced paths when no sources configured", async () => {
 			const result = await packageManager.resolve();
-			expect(result.extensions).toEqual([]);
+			// Only shipped extensions (bundled with the package) should be present
+			const nonShippedExtensions = result.extensions.filter((r) => !r.path.includes("extensions/subagent"));
+			expect(nonShippedExtensions).toEqual([]);
 			expect(result.prompts).toEqual([]);
 			expect(result.themes).toEqual([]);
 			expect(result.skills.every((r) => r.metadata.source === "auto" && r.metadata.origin === "top-level")).toBe(

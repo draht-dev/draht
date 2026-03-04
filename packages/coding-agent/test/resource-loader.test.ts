@@ -193,7 +193,9 @@ Project skill`,
 			await loader.reload();
 
 			const extensionsResult = loader.getExtensions();
-			expect(extensionsResult.extensions).toHaveLength(2);
+			// Filter out shipped extensions (bundled with the package)
+			const testExtensions = extensionsResult.extensions.filter((e) => !e.path.includes("extensions/subagent"));
+			expect(testExtensions).toHaveLength(2);
 			expect(extensionsResult.errors.some((e) => e.error.includes('Command "/deploy" conflicts'))).toBe(true);
 
 			const sessionManager = SessionManager.inMemory();

@@ -501,6 +501,7 @@ export async function discoverAndLoadExtensions(
 	cwd: string,
 	agentDir: string = getAgentDir(),
 	eventBus?: EventBus,
+	options?: { skipShipped?: boolean },
 ): Promise<LoadExtensionsResult> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
@@ -516,8 +517,10 @@ export async function discoverAndLoadExtensions(
 	};
 
 	// 1. Shipped extensions: bundled with the package (batteries included)
-	const shippedExtDir = getShippedExtensionsDir();
-	addPaths(discoverExtensionsInDir(shippedExtDir));
+	if (!options?.skipShipped) {
+		const shippedExtDir = getShippedExtensionsDir();
+		addPaths(discoverExtensionsInDir(shippedExtDir));
+	}
 
 	// 2. Project-local extensions: cwd/.draht/extensions/
 	const localExtDir = path.join(cwd, ".draht", "extensions");

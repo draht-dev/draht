@@ -9,24 +9,23 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as _bundledPiAgentCore from "@draht/agent-core";
-import * as _bundledPiAi from "@draht/ai";
-import * as _bundledPiAiOauth from "@draht/ai/oauth";
-import type { KeyId } from "@draht/tui";
-import * as _bundledPiTui from "@draht/tui";
 import { createJiti } from "@mariozechner/jiti";
+import * as _bundledPiAgentCore from "@mariozechner/pi-agent-core";
+import * as _bundledPiAi from "@mariozechner/pi-ai";
+import * as _bundledPiAiOauth from "@mariozechner/pi-ai/oauth";
+import type { KeyId } from "@mariozechner/pi-tui";
+import * as _bundledPiTui from "@mariozechner/pi-tui";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as _bundledTypebox from "@sinclair/typebox";
 import { getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
-// avoiding a circular dependency. Extensions can import from @draht/coding-agent.
+// avoiding a circular dependency. Extensions can import from @mariozechner/pi-coding-agent.
 import * as _bundledPiCodingAgent from "../../index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
-import { createSyntheticSourceInfo } from "../source-info.js";
 import type {
 	Extension,
 	ExtensionAPI,
@@ -42,11 +41,11 @@ import type {
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
-	"@draht/agent-core": _bundledPiAgentCore,
-	"@draht/tui": _bundledPiTui,
-	"@draht/ai": _bundledPiAi,
-	"@draht/ai/oauth": _bundledPiAiOauth,
-	"@draht/coding-agent": _bundledPiCodingAgent,
+	"@mariozechner/pi-agent-core": _bundledPiAgentCore,
+	"@mariozechner/pi-tui": _bundledPiTui,
+	"@mariozechner/pi-ai": _bundledPiAi,
+	"@mariozechner/pi-ai/oauth": _bundledPiAiOauth,
+	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
 };
 
 const require = createRequire(import.meta.url);
@@ -75,11 +74,11 @@ function getAliases(): Record<string, string> {
 	};
 
 	_aliases = {
-		"@draht/coding-agent": packageIndex,
-		"@draht/agent-core": resolveWorkspaceOrImport("agent/dist/index.js", "@draht/agent-core"),
-		"@draht/tui": resolveWorkspaceOrImport("tui/dist/index.js", "@draht/tui"),
-		"@draht/ai": resolveWorkspaceOrImport("ai/dist/index.js", "@draht/ai"),
-		"@draht/ai/oauth": resolveWorkspaceOrImport("ai/dist/oauth.js", "@draht/ai/oauth"),
+		"@mariozechner/pi-coding-agent": packageIndex,
+		"@mariozechner/pi-agent-core": resolveWorkspaceOrImport("agent/src/index.ts", "@mariozechner/pi-agent-core"),
+		"@mariozechner/pi-tui": resolveWorkspaceOrImport("tui/src/index.ts", "@mariozechner/pi-tui"),
+		"@mariozechner/pi-ai": resolveWorkspaceOrImport("ai/src/index.ts", "@mariozechner/pi-ai"),
+		"@mariozechner/pi-ai/oauth": resolveWorkspaceOrImport("ai/src/oauth.ts", "@mariozechner/pi-ai/oauth"),
 		"@sinclair/typebox": typeboxRoot,
 	};
 
@@ -142,8 +141,8 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		pendingProviderRegistrations: [],
 		// Pre-bind: queue registrations so bindCore() can flush them once the
 		// model registry is available. bindCore() replaces both with direct calls.
-		registerProvider: (name, config, extensionPath = "<unknown>") => {
-			runtime.pendingProviderRegistrations.push({ name, config, extensionPath });
+		registerProvider: (name, config) => {
+			runtime.pendingProviderRegistrations.push({ name, config });
 		},
 		unregisterProvider: (name) => {
 			runtime.pendingProviderRegistrations = runtime.pendingProviderRegistrations.filter((r) => r.name !== name);
@@ -175,17 +174,13 @@ function createExtensionAPI(
 		registerTool(tool: ToolDefinition): void {
 			extension.tools.set(tool.name, {
 				definition: tool,
-				sourceInfo: extension.sourceInfo,
+				extensionPath: extension.path,
 			});
 			runtime.refreshTools();
 		},
 
-		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void {
-			extension.commands.set(name, {
-				name,
-				sourceInfo: extension.sourceInfo,
-				...options,
-			});
+		registerCommand(name: string, options: Omit<RegisteredCommand, "name">): void {
+			extension.commands.set(name, { name, ...options });
 		},
 
 		registerShortcut(
@@ -276,11 +271,11 @@ function createExtensionAPI(
 		},
 
 		registerProvider(name: string, config: ProviderConfig) {
-			runtime.registerProvider(name, config, extension.path);
+			runtime.registerProvider(name, config);
 		},
 
 		unregisterProvider(name: string) {
-			runtime.unregisterProvider(name, extension.path);
+			runtime.unregisterProvider(name);
 		},
 
 		events: eventBus,
@@ -307,16 +302,9 @@ async function loadExtensionModule(extensionPath: string) {
  * Create an Extension object with empty collections.
  */
 function createExtension(extensionPath: string, resolvedPath: string): Extension {
-	const source =
-		extensionPath.startsWith("<") && extensionPath.endsWith(">")
-			? extensionPath.slice(1, -1).split(":")[0] || "temporary"
-			: "local";
-	const baseDir = extensionPath.startsWith("<") ? undefined : path.dirname(resolvedPath);
-
 	return {
 		path: extensionPath,
 		resolvedPath,
-		sourceInfo: createSyntheticSourceInfo(extensionPath, { source, baseDir }),
 		handlers: new Map(),
 		tools: new Map(),
 		messageRenderers: new Map(),
@@ -396,19 +384,19 @@ export async function loadExtensions(paths: string[], cwd: string, eventBus?: Ev
 	};
 }
 
-interface DrahtManifest {
+interface PiManifest {
 	extensions?: string[];
 	themes?: string[];
 	skills?: string[];
 	prompts?: string[];
 }
 
-function readDrahtManifest(packageJsonPath: string): DrahtManifest | null {
+function readPiManifest(packageJsonPath: string): PiManifest | null {
 	try {
 		const content = fs.readFileSync(packageJsonPath, "utf-8");
 		const pkg = JSON.parse(content);
-		if (pkg.draht && typeof pkg.draht === "object") {
-			return pkg.draht as DrahtManifest;
+		if (pkg.pi && typeof pkg.pi === "object") {
+			return pkg.pi as PiManifest;
 		}
 		return null;
 	} catch {
@@ -430,10 +418,10 @@ function isExtensionFile(name: string): boolean {
  * Returns resolved paths or null if no entry points found.
  */
 function resolveExtensionEntries(dir: string): string[] | null {
-	// Check for package.json with "draht" field first
+	// Check for package.json with "pi" field first
 	const packageJsonPath = path.join(dir, "package.json");
 	if (fs.existsSync(packageJsonPath)) {
-		const manifest = readDrahtManifest(packageJsonPath);
+		const manifest = readPiManifest(packageJsonPath);
 		if (manifest?.extensions?.length) {
 			const entries: string[] = [];
 			for (const extPath of manifest.extensions) {
@@ -467,7 +455,7 @@ function resolveExtensionEntries(dir: string): string[] | null {
  * Discovery rules:
  * 1. Direct files: `extensions/*.ts` or `*.js` → load
  * 2. Subdirectory with index: `extensions/* /index.ts` or `index.js` → load
- * 3. Subdirectory with package.json: `extensions/* /package.json` with "draht" field → load what it declares
+ * 3. Subdirectory with package.json: `extensions/* /package.json` with "pi" field → load what it declares
  *
  * No recursion beyond one level. Complex packages must use package.json manifest.
  */
@@ -527,15 +515,15 @@ export async function discoverAndLoadExtensions(
 		}
 	};
 
-	// 1. Project-local extensions: cwd/.draht/extensions/
-	const localExtDir = path.join(cwd, ".draht", "extensions");
+	// 1. Project-local extensions: cwd/.pi/extensions/
+	const localExtDir = path.join(cwd, ".pi", "extensions");
 	addPaths(discoverExtensionsInDir(localExtDir));
 
-	// 3. Global extensions: agentDir/extensions/
+	// 2. Global extensions: agentDir/extensions/
 	const globalExtDir = path.join(agentDir, "extensions");
 	addPaths(discoverExtensionsInDir(globalExtDir));
 
-	// 4. Explicitly configured paths
+	// 3. Explicitly configured paths
 	for (const p of configuredPaths) {
 		const resolved = resolvePath(p, cwd);
 		if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {

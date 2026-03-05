@@ -2,6 +2,11 @@
 // Import from @draht/coding-agent for use in extensions.
 
 export { createDomainModel, mapCodebase } from "./domain.js";
+export {
+	extractGlossaryTerms,
+	loadDomainContent,
+	validateDomainGlossary,
+} from "./domain-validator.js";
 export type { CommitResult } from "./git.js";
 export { commitDocs, commitTask, hasTestFiles } from "./git.js";
 export type { HookConfig, ToolchainInfo } from "./hook-utils.js";

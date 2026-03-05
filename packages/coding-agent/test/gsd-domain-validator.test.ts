@@ -7,6 +7,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { extractGlossaryTerms, loadDomainContent, validateDomainGlossary } from "../src/gsd/domain-validator.js";
+import {
+	extractGlossaryTerms as extractFromIndex,
+	loadDomainContent as loadFromIndex,
+	validateDomainGlossary as validateFromIndex,
+} from "../src/gsd/index.js";
 
 let tmpDir: string;
 
@@ -114,5 +119,47 @@ describe("loadDomainContent", () => {
 	it("returns empty string when neither file exists", () => {
 		const content = loadDomainContent(tmpDir);
 		expect(content).toBe("");
+	});
+});
+
+describe("gsd/index re-exports for domain-validator", () => {
+	it("re-exports extractGlossaryTerms", () => {
+		expect(extractFromIndex).toBeDefined();
+		expect(typeof extractFromIndex).toBe("function");
+	});
+
+	it("re-exports validateDomainGlossary", () => {
+		expect(validateFromIndex).toBeDefined();
+		expect(typeof validateFromIndex).toBe("function");
+	});
+
+	it("re-exports loadDomainContent", () => {
+		expect(loadFromIndex).toBeDefined();
+		expect(typeof loadFromIndex).toBe("function");
+	});
+});
+
+describe("draht-quality-gate.js domain check hardening", () => {
+	const gateFile = path.join(path.dirname(new URL(import.meta.url).pathname), "../hooks/gsd/draht-quality-gate.js");
+
+	it("references DOMAIN-MODEL.md (prefers it over DOMAIN.md)", () => {
+		const content = fs.readFileSync(gateFile, "utf-8");
+		expect(content).toContain("DOMAIN-MODEL.md");
+	});
+
+	it("has extractGlossaryTerms inline helper", () => {
+		const content = fs.readFileSync(gateFile, "utf-8");
+		expect(content).toMatch(/function extractGlossaryTerms/);
+	});
+
+	it("handles **Bold** format in glossary extraction", () => {
+		const content = fs.readFileSync(gateFile, "utf-8");
+		expect(content).toMatch(/\\\*\\\*/);
+	});
+
+	it("handles - Term: list format in glossary extraction", () => {
+		const content = fs.readFileSync(gateFile, "utf-8");
+		// The inline extractGlossaryTerms must handle list format
+		expect(content).toMatch(/\[-\*\]\\s\+/);
 	});
 });

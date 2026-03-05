@@ -262,6 +262,21 @@ export {
 	type WriteToolOptions,
 	writeTool,
 } from "./core/tools/index.js";
+export type { CommitResult, PhaseVerification, PlanDiscovery } from "./gsd/index.js";
+// GSD (Get Shit Done) — phase/plan/task lifecycle functions
+export {
+	commitDocs,
+	commitTask,
+	createDomainModel,
+	createPlan,
+	discoverPlans,
+	hasTestFiles,
+	mapCodebase,
+	readPlan,
+	updateState,
+	verifyPhase,
+	writeSummary,
+} from "./gsd/index.js";
 // Main entry point
 export { main } from "./main.js";
 // Run modes for programmatic SDK usage

@@ -24,7 +24,7 @@
 		"typescript",
 		"cli"
 	],
-	"author": "Mario Zechner",
+	"author": "Oskar Freye",
 	"license": "MIT",
 	"publishConfig": {
 		"access": "public"

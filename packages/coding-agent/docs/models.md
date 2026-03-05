@@ -174,6 +174,10 @@ Current behavior:
 - `/model` and `--list-models` list entries by model `id`.
 - The configured `name` is used for model matching and detail/status text.
 
+Current behavior:
+- `/model` and `--list-models` list entries by model `id`.
+- The configured `name` is used for model matching and detail/status text.
+
 ## Overriding Built-in Providers
 
 Route a built-in provider through a proxy without redefining models:

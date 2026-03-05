@@ -10111,13 +10111,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.55,
-				output: 2,
-				cacheRead: 0,
+				input: 0.6,
+				output: 2.2,
+				cacheRead: 0.11,
 				cacheWrite: 0,
 			},
-			contextWindow: 131000,
-			maxTokens: 131000,
+			contextWindow: 131072,
+			maxTokens: 98304,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-4.5-air": {
 			id: "z-ai/glm-4.5-air",

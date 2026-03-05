@@ -1,4 +1,4 @@
-import { visibleWidth } from "@draht/tui";
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.js";
@@ -48,7 +48,6 @@ function createSession(options: {
 		sessionManager: {
 			getEntries: () => entries,
 			getSessionName: () => options.sessionName,
-			getCwd: () => "/tmp/project",
 		},
 		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
 		modelRegistry: {

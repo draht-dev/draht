@@ -1,6 +1,28 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.5] - 2026-03-05
+
+### Added
+
+- green: domain-validator exported from gsd/index, quality gate uses DOMAIN-MODEL.md
+- green: domain glossary extraction and validation with vitest tests
+- green: toolchain auto-detection and configurable hook thresholds
+- green: detectToolchain and readHookConfig with vitest tests
+
+### Changed
+
+- update terminal title icon from pi to D
+- test gsd-commands extension registers create-plan, commit-task, create-domain-model, map-codebase
+- add gsd-index test file
+- create gsd/index.ts and wire GSD exports into @draht/coding-agent
+- implement gsd git module — hasTestFiles, commitTask, commitDocs
+- test gsd git module — hasTestFiles, commitTask, commitDocs
+- implement gsd domain module — createDomainModel, mapCodebase
+- test gsd domain module — createDomainModel, mapCodebase
+- implement gsd planning module — createPlan, discoverPlans, readPlan, writeSummary, verifyPhase, updateState
+- test gsd planning module — createPlan, discoverPlans, readPlan, writeSummary, verifyPhase, updateState
+- add frontmatter metadata and parameter placeholders to prompt templates
+- update author field across all packages
 
 ## [2026.3.4] - 2026-03-04
 

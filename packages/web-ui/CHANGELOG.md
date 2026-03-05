@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.5] - 2026-03-05
+
+### Changed
+
+- update author field across all packages
 
 ## [2026.3.4] - 2026-03-04
 

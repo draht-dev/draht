@@ -15,7 +15,7 @@ Issue: $ARGUMENTS
 
 ## Steps
 1. **Diagnose via subagent**: Use the `subagent` tool in **single mode** with the `debugger` agent:
-   "Diagnose this issue: $ARGUMENTS. Reproduce the bug, trace the root cause, identify the exact files and lines involved. Do NOT fix it yet — only report the diagnosis with: root cause, affected files, and a recommended fix approach."
+   "Diagnose this issue: $ARGUMENTS. Reproduce the bug by running the relevant test or command. Trace the root cause by reading the code. Identify the exact files and lines involved. Do NOT fix it yet — only report the diagnosis with: root cause, affected files, and a recommended fix approach. Do NOT run draht, draht-tools, or pi commands."
 
 2. **Write a reproducing test**: Based on the diagnosis, write a test that demonstrates the bug (it must fail)
    - Commit: `draht-tools commit-docs "red: reproduce bug"`

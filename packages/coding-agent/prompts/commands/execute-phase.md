@@ -16,19 +16,18 @@ Arguments: $ARGUMENTS
 
 ## Steps
 1. Run `draht-tools discover-plans $1` to find and order plans
-2. Analyze plan dependencies to identify which plans can run in parallel vs which must be sequential
+2. Read each plan file yourself (from `.planning/phases/`) and analyze dependencies to identify which plans can run in parallel vs sequential
 3. **Delegate execution to subagents:**
-   - For independent plans (no shared files, no dependency chain): use the `subagent` tool in **parallel mode** with `implementer` agents, one per plan. Each task should include the full plan content and the TDD instructions below.
+   - For independent plans (no shared files, no dependency chain): use the `subagent` tool in **parallel mode** with `implementer` agents, one per plan.
    - For dependent plans: execute them sequentially, each via a **single** `subagent` call to `implementer`, waiting for the previous to complete before starting the next.
    - Each subagent task must include:
-     - The plan content (from `draht-tools read-plan $1 P`)
-     - The TDD cycle instructions (red/green/refactor)
-     - The commit command: `draht-tools commit-task $1 P T "description"`
-     - The summary command: `draht-tools write-summary $1 P`
+     - The full plan content (paste it into the task — the subagent cannot run draht-tools)
+     - The TDD cycle instructions (see template below)
+     - Instructions to commit with `git add <files> && git commit -m "description"`
 
-4. After all plans complete, collect results and check for failures
-5. Phase verification: `draht-tools verify-phase $1`
-6. Update state: `draht-tools update-state`
+4. After all subagents complete, collect results and check for failures
+5. Run `draht-tools verify-phase $1` yourself (not the subagent)
+6. Run `draht-tools update-state` yourself
 7. Final commit: `draht-tools commit-docs "complete phase $1 execution"`
 
 ## Subagent Task Template
@@ -36,21 +35,20 @@ Arguments: $ARGUMENTS
 Each implementer subagent receives a task like:
 
 ```
-Execute this plan for phase N, plan P.
+Execute this plan. Here is the full plan content:
 
-Plan content:
-<paste plan content here>
+<paste full plan XML here>
 
-TDD Cycle for each task:
-1. RED — Write failing tests from <test>. Run tests, confirm FAIL. Commit: draht-tools commit-task N P T "red: description"
-2. GREEN — Minimal implementation from <action>. Run tests, confirm PASS. Commit: draht-tools commit-task N P T "green: task name"
-3. REFACTOR — Apply <refactor> improvements. Tests must stay green. Commit: draht-tools commit-task N P T "refactor: description"
-4. VERIFY — Run <verify>, confirm <done> criteria met.
+For each <task> in the plan, follow this TDD cycle:
+1. RED — Write failing tests from <test>. Run the test runner, confirm they FAIL. Commit with: git add <test-files> && git commit -m "red: <description>"
+2. GREEN — Write minimal implementation from <action> to make tests pass. Run tests, confirm PASS. Commit with: git add <files> && git commit -m "green: <task name>"
+3. REFACTOR — Apply <refactor> improvements if any. Tests must stay green after each change. Commit with: git add <files> && git commit -m "refactor: <description>"
+4. VERIFY — Run the <verify> step, confirm <done> criteria are met.
 
-After all tasks: draht-tools write-summary N P
+Domain rules: Use ubiquitous language from .planning/DOMAIN.md (read it). Do not import across bounded context boundaries.
+Checkpoint handling: type="auto" → execute silently. type="checkpoint:human-verify" → stop and report back what was built. type="checkpoint:decision" → stop and report the options.
 
-Domain rules: Use ubiquitous language from .planning/DOMAIN.md. Do not import across bounded context boundaries.
-Checkpoint handling: type="auto" → execute silently. type="checkpoint:human-verify" → stop and report back. type="checkpoint:decision" → stop and report options.
+Important: Do NOT run draht, draht-tools, draht help, or pi commands. Use only standard tools (read, bash, edit, write, grep, find, ls).
 ```
 
 ## Parallelization Rules

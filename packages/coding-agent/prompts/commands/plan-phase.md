@@ -24,18 +24,19 @@ Phase: $1
    e. Break into plan groups of 2-5 tasks each
 4. Identify which plans are independent (no shared files, no dependency edges)
 5. **Delegate plan creation to subagents:**
-   - For independent plans: use the `subagent` tool in **parallel mode** with `architect` agents, one per plan. Each task should include the plan's observable truths, target files, and the XML task format below.
+   - For independent plans: use the `subagent` tool in **parallel mode** with `architect` agents, one per plan. Each task should include the phase context, the specific observable truths, target files, and the XML task format (below).
    - For dependent plans: create them sequentially, each via a **single** `subagent` call to `architect`, passing the outputs of predecessor plans as context.
    - Each subagent task must include:
-     - The phase context summary
+     - The phase context summary (paste it — subagents cannot run draht-tools)
      - The specific observable truths this plan must satisfy
      - The target files/artifacts
      - The XML task format specification (below)
-     - Instructions to write the plan via `draht-tools create-plan $1 P`
+     - Instruction to output the plan as XML (you will save it via `draht-tools create-plan`)
 
-6. Collect all plan outputs
-7. Validate: `draht-tools validate-plans $1`
-8. Commit: `draht-tools commit-docs "create phase $1 plans"`
+6. Collect all plan outputs from subagents
+7. Save plans yourself: `draht-tools create-plan $1 P` for each plan
+8. Validate: `draht-tools validate-plans $1`
+9. Commit: `draht-tools commit-docs "create phase $1 plans"`
 
 ## Plan Format
 Plans use XML task format:

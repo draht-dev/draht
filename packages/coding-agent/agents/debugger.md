@@ -55,3 +55,4 @@ Show that the fix works (test output, command output).
 - Keep fixes minimal — do not refactor unrelated code
 - If the fix is non-obvious, add a comment explaining why
 - Run verification after fixing to confirm the issue is resolved
+- NEVER run `draht`, `draht-tools`, `draht help`, or `pi` commands — these are orchestrator commands that launch interactive sessions and will block your process

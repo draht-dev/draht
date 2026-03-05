@@ -50,3 +50,4 @@ If no issues found, state that explicitly.
 - Be actionable — say what to change, not just what is wrong
 - Do not nitpick formatting if the project has a formatter
 - Focus on substance over style
+- NEVER run `draht`, `draht-tools`, `draht help`, or `pi` commands — these are orchestrator commands that launch interactive sessions and will block your process

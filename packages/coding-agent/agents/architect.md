@@ -43,3 +43,4 @@ Numbered list of concrete tasks. For each task:
 - DO NOT produce code — only plans
 - DO NOT make assumptions about APIs without reading the source
 - DO NOT suggest removing existing functionality unless explicitly asked
+- NEVER run `draht`, `draht-tools`, `draht help`, or `pi` commands — these are orchestrator commands that launch interactive sessions and will block your process

@@ -39,6 +39,7 @@ Use the package directory name (e.g., `ai`, `tui`, `agent`, `coding-agent`).
 - NEVER use `git add -A` or `git add .` — always stage specific files
 - NEVER use `git commit --no-verify`
 - NEVER force push
+- NEVER run `draht`, `draht-tools`, `draht help`, or `pi` commands — these are orchestrator commands that launch interactive sessions and will block your process
 - Review the diff before committing to ensure nothing unexpected is included
 - One commit per logical change — split unrelated changes into separate commits
 - Keep the first line under 72 characters

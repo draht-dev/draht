@@ -22,8 +22,8 @@ If no scope given, reviews all recent uncommitted changes.
 2. Determine the list of changed files and produce a scope summary
 3. **Delegate to subagents in parallel:**
    Use the `subagent` tool in **parallel mode** with these tasks:
-   - `reviewer` agent: "Review the following code changes for correctness, type safety, conventions, and potential issues. Scope: <scope summary and file list>. For each finding: cite the exact file and line, explain the issue, suggest the fix. Prioritize: Critical (must fix) > Important (should fix) > Minor (style/optional)."
-   - `security-auditor` agent: "Audit the following code changes for security vulnerabilities. Scope: <scope summary and file list>. Check for: injection risks, auth bypasses, secrets in code, unsafe deserialization, path traversal, prototype pollution. Report findings with severity, file, line, and recommendation."
+   - `reviewer` agent: "Review the following code changes for correctness, type safety, conventions, and potential issues. Scope: <scope summary and file list>. Read each changed file to understand the changes. For each finding: cite the exact file and line, explain the issue, suggest the fix. Prioritize: Critical (must fix) > Important (should fix) > Minor (style/optional). Do NOT run draht, draht-tools, or pi commands."
+   - `security-auditor` agent: "Audit the following code changes for security vulnerabilities. Scope: <scope summary and file list>. Read each changed file. Check for: injection risks, auth bypasses, secrets in code, unsafe deserialization, path traversal, prototype pollution. Report findings with severity, file, line, and recommendation. Do NOT run draht, draht-tools, or pi commands."
 
 4. Collect and merge results from both subagents
 5. Produce a unified, prioritized findings report:

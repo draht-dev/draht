@@ -59,3 +59,4 @@ For each vulnerability:
 - Be specific about the attack vector
 - Prioritize by exploitability and impact
 - If no security issues found, state that explicitly
+- NEVER run `draht`, `draht-tools`, `draht help`, or `pi` commands — these are orchestrator commands that launch interactive sessions and will block your process

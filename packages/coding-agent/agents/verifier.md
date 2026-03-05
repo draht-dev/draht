@@ -42,3 +42,4 @@ State whether the code is ready for production or what must be fixed first.
 - Do not attempt to fix issues — only report them
 - If a check command is not found, note it and move on
 - Include the full error output for failures (truncated if very long)
+- NEVER run `draht`, `draht-tools`, `draht help`, or `pi` commands — these are orchestrator commands that launch interactive sessions and will block your process

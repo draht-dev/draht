@@ -9,6 +9,12 @@
  *   /execute <task1, task2...>  — parallel implement → review → commit
  *   /verify                     — parallel lint/typecheck/tests + security audit
  *
+ * Planning:
+ *   /create-plan <N> <P> [title] — scaffold a new PLAN.md for phase N, plan P
+ *   /commit-task <N> <P> <T> <desc> — commit current changes as task T of plan P
+ *   /create-domain-model         — scaffold DOMAIN-MODEL.md from PROJECT.md
+ *   /map-codebase                — scan codebase, write .planning/codebase/ files
+ *
  * Utilities:
  *   /review  <scope>            — ad-hoc code review + security audit
  *   /fix     <issue>            — targeted fix plan for a failing task
@@ -19,8 +25,15 @@
  *   /init-project               — scaffold .draht/ in existing project
  */
 
+import { execSync as _execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+	commitTask,
+	createDomainModel,
+	createPlan,
+	mapCodebase,
+} from "@draht/coding-agent";
 import type { ExtensionAPI } from "@draht/coding-agent";
 
 function isBusy(ctx: { isIdle: () => boolean }, ui: { notify: (msg: string, level: string) => void }): boolean {
@@ -29,6 +42,26 @@ function isBusy(ctx: { isIdle: () => boolean }, ui: { notify: (msg: string, leve
 		return true;
 	}
 	return false;
+}
+
+function runGsdHook(cwd: string, hookName: string): void {
+	const hookPath = path.join(
+		cwd,
+		"node_modules",
+		"@draht",
+		"coding-agent",
+		"hooks",
+		"gsd",
+		`${hookName}.js`,
+	);
+	if (fs.existsSync(hookPath)) {
+		try {
+			// draht-pre-execute and draht-post-phase are invoked here
+			_execSync(`node "${hookPath}"`, { cwd, stdio: "inherit" });
+		} catch {
+			// Advisory — hook failures don't block the command
+		}
+	}
 }
 
 export default function (pi: ExtensionAPI) {
@@ -87,6 +120,9 @@ Set agentScope to "project".`,
 			}
 			if (isBusy(ctx, ctx.ui)) return;
 
+			// Run draht-pre-execute hook (validates .planning/ setup)
+			runGsdHook(ctx.cwd, "draht-pre-execute");
+
 			const tasks = args.split(",").map((t) => t.trim()).filter(Boolean);
 
 			if (tasks.length === 1) {
@@ -117,6 +153,9 @@ Step 2 — CHAIN mode (after all parallel tasks complete):
 		description: "Parallel verification: lint, typecheck, tests, and security audit",
 		handler: async (_args, ctx) => {
 			if (isBusy(ctx, ctx.ui)) return;
+
+			// Run draht-post-phase hook (records phase completion)
+			runGsdHook(ctx.cwd, "draht-post-phase");
 
 			pi.sendUserMessage(
 				`Use the subagent tool in PARALLEL mode with agentScope "project":
@@ -238,6 +277,93 @@ After both complete, merge into a single prioritized findings report.`,
 			}
 
 			pi.sendUserMessage(`Here is the current project state:\n\n${output}`);
+		},
+	});
+
+	// ── /create-plan ─────────────────────────────────────────────────────────
+	pi.registerCommand("create-plan", {
+		description: "Scaffold a new PLAN.md. Usage: /create-plan <phase> <plan> [title]",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/);
+			const phaseNum = parseInt(parts[0] ?? "", 10);
+			const planNum = parseInt(parts[1] ?? "", 10);
+			if (!phaseNum || !planNum) {
+				ctx.ui.notify("Usage: /create-plan <phase> <plan> [title]", "warning");
+				return;
+			}
+			const title = parts.slice(2).join(" ");
+			try {
+				const planFile = createPlan(ctx.cwd, phaseNum, planNum, title);
+				ctx.ui.notify(`Created: ${planFile}`, "info");
+			} catch (err) {
+				ctx.ui.notify(`Failed: ${String(err)}`, "error");
+			}
+		},
+	});
+
+	// ── /commit-task ──────────────────────────────────────────────────────────
+	pi.registerCommand("commit-task", {
+		description: "Commit changes as a GSD task. Usage: /commit-task <phase> <plan> <task> <description>",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/);
+			const phaseNum = parseInt(parts[0] ?? "", 10);
+			const planNum = parseInt(parts[1] ?? "", 10);
+			if (!phaseNum || !planNum) {
+				ctx.ui.notify("Usage: /commit-task <phase> <plan> <task> <description>", "warning");
+				return;
+			}
+			const description = parts.slice(3).join(" ") || "implement task";
+			try {
+				const result = commitTask(ctx.cwd, phaseNum, planNum, description);
+				if (!result.hash) {
+					ctx.ui.notify("Nothing to commit", "warning");
+					return;
+				}
+				if (result.tddWarning) {
+					ctx.ui.notify(
+						`⚠️  TDD: no test files in commit ${result.hash.slice(0, 8)} — write tests first`,
+						"warning",
+					);
+				} else {
+					ctx.ui.notify(`Committed: ${result.hash.slice(0, 8)} — ${description}`, "info");
+				}
+			} catch (err) {
+				ctx.ui.notify(`Failed: ${String(err)}`, "error");
+			}
+		},
+	});
+
+	// ── /create-domain-model ──────────────────────────────────────────────────
+	pi.registerCommand("create-domain-model", {
+		description: "Generate .planning/DOMAIN-MODEL.md scaffold from PROJECT.md",
+		handler: async (_args, ctx) => {
+			if (isBusy(ctx, ctx.ui)) return;
+			try {
+				const outPath = createDomainModel(ctx.cwd);
+				ctx.ui.notify(`Created: ${outPath}`, "info");
+				pi.sendUserMessage(
+					`DOMAIN-MODEL.md created at ${outPath}. Read it and fill in the sections: bounded contexts, entities, value objects, aggregates, ubiquitous language. Use the codebase and PROJECT.md as source material.`,
+				);
+			} catch (err) {
+				ctx.ui.notify(`Failed: ${String(err)}`, "error");
+			}
+		},
+	});
+
+	// ── /map-codebase ─────────────────────────────────────────────────────────
+	pi.registerCommand("map-codebase", {
+		description: "Scan codebase and write .planning/codebase/ analysis files",
+		handler: async (_args, ctx) => {
+			if (isBusy(ctx, ctx.ui)) return;
+			try {
+				const files = mapCodebase(ctx.cwd);
+				ctx.ui.notify(`Mapped ${files.length} codebase files`, "info");
+				pi.sendUserMessage(
+					`Codebase mapping complete. Files created:\n${files.join("\n")}\n\nReview each file and fill in the TODO sections with real analysis of the codebase.`,
+				);
+			} catch (err) {
+				ctx.ui.notify(`Failed: ${String(err)}`, "error");
+			}
 		},
 	});
 

@@ -1,9 +1,9 @@
-import { getKeybindings } from "../keybindings.js";
+import { getEditorKeybindings } from "../keybindings.js";
 import { decodeKittyPrintable } from "../keys.js";
 import { KillRing } from "../kill-ring.js";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui.js";
 import { UndoStack } from "../undo-stack.js";
-import { getSegmenter, isPunctuationChar, isWhitespaceChar, sliceByColumn, visibleWidth } from "../utils.js";
+import { getSegmenter, isPunctuationChar, isWhitespaceChar, visibleWidth } from "../utils.js";
 
 const segmenter = getSegmenter();
 
@@ -82,69 +82,69 @@ export class Input implements Component, Focusable {
 			return;
 		}
 
-		const kb = getKeybindings();
+		const kb = getEditorKeybindings();
 
 		// Escape/Cancel
-		if (kb.matches(data, "tui.select.cancel")) {
+		if (kb.matches(data, "selectCancel")) {
 			if (this.onEscape) this.onEscape();
 			return;
 		}
 
 		// Undo
-		if (kb.matches(data, "tui.editor.undo")) {
+		if (kb.matches(data, "undo")) {
 			this.undo();
 			return;
 		}
 
 		// Submit
-		if (kb.matches(data, "tui.input.submit") || data === "\n") {
+		if (kb.matches(data, "submit") || data === "\n") {
 			if (this.onSubmit) this.onSubmit(this.value);
 			return;
 		}
 
 		// Deletion
-		if (kb.matches(data, "tui.editor.deleteCharBackward")) {
+		if (kb.matches(data, "deleteCharBackward")) {
 			this.handleBackspace();
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.deleteCharForward")) {
+		if (kb.matches(data, "deleteCharForward")) {
 			this.handleForwardDelete();
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.deleteWordBackward")) {
+		if (kb.matches(data, "deleteWordBackward")) {
 			this.deleteWordBackwards();
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.deleteWordForward")) {
+		if (kb.matches(data, "deleteWordForward")) {
 			this.deleteWordForward();
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.deleteToLineStart")) {
+		if (kb.matches(data, "deleteToLineStart")) {
 			this.deleteToLineStart();
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.deleteToLineEnd")) {
+		if (kb.matches(data, "deleteToLineEnd")) {
 			this.deleteToLineEnd();
 			return;
 		}
 
 		// Kill ring actions
-		if (kb.matches(data, "tui.editor.yank")) {
+		if (kb.matches(data, "yank")) {
 			this.yank();
 			return;
 		}
-		if (kb.matches(data, "tui.editor.yankPop")) {
+		if (kb.matches(data, "yankPop")) {
 			this.yankPop();
 			return;
 		}
 
 		// Cursor movement
-		if (kb.matches(data, "tui.editor.cursorLeft")) {
+		if (kb.matches(data, "cursorLeft")) {
 			this.lastAction = null;
 			if (this.cursor > 0) {
 				const beforeCursor = this.value.slice(0, this.cursor);
@@ -155,7 +155,7 @@ export class Input implements Component, Focusable {
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.cursorRight")) {
+		if (kb.matches(data, "cursorRight")) {
 			this.lastAction = null;
 			if (this.cursor < this.value.length) {
 				const afterCursor = this.value.slice(this.cursor);
@@ -166,24 +166,24 @@ export class Input implements Component, Focusable {
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.cursorLineStart")) {
+		if (kb.matches(data, "cursorLineStart")) {
 			this.lastAction = null;
 			this.cursor = 0;
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.cursorLineEnd")) {
+		if (kb.matches(data, "cursorLineEnd")) {
 			this.lastAction = null;
 			this.cursor = this.value.length;
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.cursorWordLeft")) {
+		if (kb.matches(data, "cursorWordLeft")) {
 			this.moveWordBackwards();
 			return;
 		}
 
-		if (kb.matches(data, "tui.editor.cursorWordRight")) {
+		if (kb.matches(data, "cursorWordRight")) {
 			this.moveWordForwards();
 			return;
 		}
@@ -420,7 +420,7 @@ export class Input implements Component, Focusable {
 		this.pushUndo();
 
 		// Clean the pasted text - remove newlines and carriage returns
-		const cleanText = pastedText.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "").replace(/\t/g, "    ");
+		const cleanText = pastedText.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "");
 
 		// Insert at cursor position
 		this.value = this.value.slice(0, this.cursor) + cleanText + this.value.slice(this.cursor);
@@ -442,38 +442,56 @@ export class Input implements Component, Focusable {
 
 		let visibleText = "";
 		let cursorDisplay = this.cursor;
-		const totalWidth = visibleWidth(this.value);
 
-		if (totalWidth < availableWidth) {
+		if (this.value.length < availableWidth) {
 			// Everything fits (leave room for cursor at end)
 			visibleText = this.value;
 		} else {
 			// Need horizontal scrolling
-			// Reserve one column for cursor if it's at the end
+			// Reserve one character for cursor if it's at the end
 			const scrollWidth = this.cursor === this.value.length ? availableWidth - 1 : availableWidth;
-			const cursorCol = visibleWidth(this.value.slice(0, this.cursor));
+			const halfWidth = Math.floor(scrollWidth / 2);
 
-			if (scrollWidth > 0) {
-				const halfWidth = Math.floor(scrollWidth / 2);
-				let startCol = 0;
-
-				if (cursorCol < halfWidth) {
-					// Cursor near start
-					startCol = 0;
-				} else if (cursorCol > totalWidth - halfWidth) {
-					// Cursor near end
-					startCol = Math.max(0, totalWidth - scrollWidth);
-				} else {
-					// Cursor in middle
-					startCol = Math.max(0, cursorCol - halfWidth);
+			const findValidStart = (start: number) => {
+				while (start < this.value.length) {
+					const charCode = this.value.charCodeAt(start);
+					// this is low surrogate, not a valid start
+					if (charCode >= 0xdc00 && charCode < 0xe000) {
+						start++;
+						continue;
+					}
+					break;
 				}
+				return start;
+			};
 
-				visibleText = sliceByColumn(this.value, startCol, scrollWidth, true);
-				const beforeCursor = sliceByColumn(this.value, startCol, Math.max(0, cursorCol - startCol), true);
-				cursorDisplay = beforeCursor.length;
+			const findValidEnd = (end: number) => {
+				while (end > 0) {
+					const charCode = this.value.charCodeAt(end - 1);
+					// this is high surrogate, might be split.
+					if (charCode >= 0xd800 && charCode < 0xdc00) {
+						end--;
+						continue;
+					}
+					break;
+				}
+				return end;
+			};
+
+			if (this.cursor < halfWidth) {
+				// Cursor near start
+				visibleText = this.value.slice(0, findValidEnd(scrollWidth));
+				cursorDisplay = this.cursor;
+			} else if (this.cursor > this.value.length - halfWidth) {
+				// Cursor near end
+				const start = findValidStart(this.value.length - scrollWidth);
+				visibleText = this.value.slice(start);
+				cursorDisplay = this.cursor - start;
 			} else {
-				visibleText = "";
-				cursorDisplay = 0;
+				// Cursor in middle
+				const start = findValidStart(this.cursor - halfWidth);
+				visibleText = this.value.slice(start, findValidEnd(start + scrollWidth));
+				cursorDisplay = halfWidth;
 			}
 		}
 

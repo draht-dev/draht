@@ -117,8 +117,10 @@ function loadTemplateFromFile(filePath: string, source: string, sourceLabel: str
 			}
 		}
 
-		// Append source to description
-		description = description ? `${description} ${sourceLabel}` : sourceLabel;
+		// Append source to description (skip for builtins — not useful for the user)
+		if (sourceLabel && sourceLabel !== "(builtin)") {
+			description = description ? `${description} ${sourceLabel}` : sourceLabel;
+		}
 
 		return {
 			name,

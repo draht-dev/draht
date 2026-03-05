@@ -1,3 +1,7 @@
+---
+description: "Diagnose and fix a bug with TDD discipline"
+---
+
 # /fix
 
 Diagnose and fix a specific bug or failing task with TDD discipline.
@@ -6,6 +10,8 @@ Diagnose and fix a specific bug or failing task with TDD discipline.
 ```
 /fix [description of what's broken]
 ```
+
+Issue: $ARGUMENTS
 
 ## Steps
 1. **Diagnose**: Read the relevant code and error output to identify the root cause

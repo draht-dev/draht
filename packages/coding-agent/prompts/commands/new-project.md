@@ -1,11 +1,17 @@
+---
+description: "Initialize a new project with structured planning"
+---
+
 # /new-project
 
-Initialize a new GSD project: questioning → research → requirements → roadmap.
+Initialize a new project: questioning → research → requirements → roadmap.
 
 ## Usage
 ```
 /new-project [description]
 ```
+
+Description: $ARGUMENTS
 
 ## Steps
 1. Run `draht-tools init` to check preconditions
@@ -29,7 +35,7 @@ Initialize a new GSD project: questioning → research → requirements → road
 9. Run `draht-tools create-requirements` with v1/v2/out-of-scope (map requirements to bounded contexts)
 10. Run `draht-tools create-roadmap` with phases
 11. Run `draht-tools init-state`
-12. Git commit via `draht-tools commit-docs "initialize GSD project"`
+12. Git commit via `draht-tools commit-docs "initialize project planning"`
 
 ## Rules
 - Ask 1-2 questions at a time, never dump 10 at once

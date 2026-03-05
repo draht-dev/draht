@@ -1,3 +1,7 @@
+---
+description: "Analyze existing codebase before planning"
+---
+
 # /map-codebase
 
 Analyze existing codebase before planning.
@@ -7,8 +11,10 @@ Analyze existing codebase before planning.
 /map-codebase [directory]
 ```
 
+Directory: $1
+
 ## Steps
-1. Run `draht-tools map-codebase [dir]`
+1. Run `draht-tools map-codebase $1`
 2. Tool generates: STACK.md, ARCHITECTURE.md, CONVENTIONS.md, CONCERNS.md
 3. Review output, supplement with your own analysis if needed
 4. Identify implicit bounded contexts from directory structure:

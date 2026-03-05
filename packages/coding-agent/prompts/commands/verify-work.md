@@ -1,3 +1,7 @@
+---
+description: "Acceptance testing of completed phase work"
+---
+
 # /verify-work
 
 Walk through acceptance testing of completed phase work.
@@ -6,6 +10,8 @@ Walk through acceptance testing of completed phase work.
 ```
 /verify-work [N]
 ```
+
+Phase: $1
 
 ## Steps
 1. Run full test suite and capture results:
@@ -16,12 +22,12 @@ Walk through acceptance testing of completed phase work.
    - Scan source files for PascalCase identifiers not present in the glossary
    - Flag any bounded context boundary violations (cross-context direct imports)
 3. Run quality gate: `draht-tools quality-gate --strict`
-4. Run `draht-tools extract-deliverables N` to get testable items
+4. Run `draht-tools extract-deliverables $1` to get testable items
 5. Walk user through each deliverable one at a time
 6. Record results (pass/fail/partially/skip)
-7. For failures: diagnose and create fix plans via `draht-tools create-fix-plan N P`
+7. For failures: diagnose and create fix plans via `draht-tools create-fix-plan $1 P`
    - Fix plans MUST include a reproducing test that demonstrates the failure before any implementation
-8. Write UAT report: `draht-tools write-uat N`
+8. Write UAT report: `draht-tools write-uat $1`
    - Report must include: test health summary (pass/fail/coverage), domain model status (any glossary violations), deliverable results
 9. If all passed: mark phase complete
-10. If failures: route to `execute-phase N --gaps-only`
+10. If failures: route to `execute-phase $1 --gaps-only`

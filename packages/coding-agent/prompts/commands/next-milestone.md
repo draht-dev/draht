@@ -1,3 +1,7 @@
+---
+description: "Plan the next milestone after current one completes"
+---
+
 # /next-milestone
 
 Plan the next milestone after the current one is complete.

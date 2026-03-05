@@ -1,3 +1,7 @@
+---
+description: "Resume from last session state"
+---
+
 # /resume-work
 
 Resume from last session state.

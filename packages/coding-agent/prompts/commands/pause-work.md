@@ -1,3 +1,7 @@
+---
+description: "Create a handoff document for session continuity"
+---
+
 # /pause-work
 
 Create a handoff document for session continuity.

@@ -1,3 +1,7 @@
+---
+description: "Create atomic execution plans for a roadmap phase"
+---
+
 # /plan-phase
 
 Create atomic execution plans for a roadmap phase.
@@ -7,18 +11,20 @@ Create atomic execution plans for a roadmap phase.
 /plan-phase [N]
 ```
 
+Phase: $1
+
 ## Steps
-1. Run `draht-tools load-phase-context N` to gather all context
-2. Optional: `draht-tools research-phase N` for domain research
+1. Run `draht-tools load-phase-context $1` to gather all context
+2. Optional: `draht-tools research-phase $1` for domain research
 3. Goal-backward planning:
    a. State the goal (outcome, not activity)
    b. Derive observable truths (3-7 from user perspective)
    c. From each observable truth, derive the test scenarios that would prove it (specific inputs → expected outputs or state changes)
    d. Map to required artifacts (files, endpoints, schemas)
    e. Break into atomic tasks (2-5 per plan)
-4. Write plans: `draht-tools create-plan N P`
-5. Validate: `draht-tools validate-plans N`
-6. Commit: `draht-tools commit-docs "create phase N plans"`
+4. Write plans: `draht-tools create-plan $1 P`
+5. Validate: `draht-tools validate-plans $1`
+6. Commit: `draht-tools commit-docs "create phase $1 plans"`
 
 ## Plan Format
 Plans use XML task format:

@@ -1,3 +1,7 @@
+---
+description: "Code review and security audit of recent changes"
+---
+
 # /review
 
 Ad-hoc code review and security audit of recent changes or a specific scope.
@@ -6,6 +10,8 @@ Ad-hoc code review and security audit of recent changes or a specific scope.
 ```
 /review [scope]
 ```
+
+Scope: $ARGUMENTS
 
 If no scope given, reviews all recent uncommitted changes.
 

@@ -1,3 +1,7 @@
+---
+description: "Show current project status"
+---
+
 # /progress
 
 Show current project status.

@@ -1,13 +1,19 @@
+---
+description: "Initialize planning for an existing project"
+---
+
 # /init-project
 
-Initialize GSD planning framework for an existing project: codebase mapping → questioning → domain model → requirements → roadmap.
+Initialize planning framework for an existing project: codebase mapping → questioning → domain model → requirements → roadmap.
 
 ## Usage
 ```
 /init-project [focus area or goal]
 ```
 
-Use this when you have an existing codebase and want to add GSD methodology.
+Focus: $ARGUMENTS
+
+Use this when you have an existing codebase and want to add structured planning.
 For greenfield projects, use `/new-project` instead.
 
 ## Steps
@@ -37,7 +43,7 @@ For greenfield projects, use `/new-project` instead.
 10. Run `draht-tools create-requirements` with v1/v2/out-of-scope (map requirements to bounded contexts)
 11. Run `draht-tools create-roadmap` with phases
 12. Run `draht-tools init-state`
-13. Git commit via `draht-tools commit-docs "initialize GSD planning"`
+13. Git commit via `draht-tools commit-docs "initialize project planning"`
 
 ## Rules
 - Ask 1-2 questions at a time, never dump 10 at once

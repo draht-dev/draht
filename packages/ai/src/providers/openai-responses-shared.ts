@@ -2,7 +2,6 @@ import type OpenAI from "openai";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
-	ResponseFunctionCallOutputItemList,
 	ResponseFunctionToolCall,
 	ResponseInput,
 	ResponseInputContent,
@@ -63,32 +62,6 @@ function parseTextSignature(
 	return { id: signature };
 }
 
-function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
-	const payload: TextSignatureV1 = { v: 1, id };
-	if (phase) payload.phase = phase;
-	return JSON.stringify(payload);
-}
-
-function parseTextSignature(
-	signature: string | undefined,
-): { id: string; phase?: TextSignatureV1["phase"] } | undefined {
-	if (!signature) return undefined;
-	if (signature.startsWith("{")) {
-		try {
-			const parsed = JSON.parse(signature) as Partial<TextSignatureV1>;
-			if (parsed.v === 1 && typeof parsed.id === "string") {
-				if (parsed.phase === "commentary" || parsed.phase === "final_answer") {
-					return { id: parsed.id, phase: parsed.phase };
-				}
-				return { id: parsed.id };
-			}
-		} catch {
-			// Fall through to legacy plain-string handling.
-		}
-	}
-	return { id: signature };
-}
-
 export interface OpenAIResponsesStreamOptions {
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 	applyServiceTierPricing?: (
@@ -117,28 +90,21 @@ export function convertResponsesMessages<TApi extends Api>(
 ): ResponseInput {
 	const messages: ResponseInput = [];
 
-	const normalizeIdPart = (part: string): string => {
-		const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
-		const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
-		return normalized.replace(/_+$/, "");
-	};
-
-	const buildForeignResponsesItemId = (itemId: string): string => {
-		const normalized = `fc_${shortHash(itemId)}`;
-		return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
-	};
-
-	const normalizeToolCallId = (id: string, _targetModel: Model<TApi>, source: AssistantMessage): string => {
-		if (!allowedToolCallProviders.has(model.provider)) return normalizeIdPart(id);
-		if (!id.includes("|")) return normalizeIdPart(id);
+	const normalizeToolCallId = (id: string): string => {
+		if (!allowedToolCallProviders.has(model.provider)) return id;
+		if (!id.includes("|")) return id;
 		const [callId, itemId] = id.split("|");
-		const normalizedCallId = normalizeIdPart(callId);
-		const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
-		let normalizedItemId = isForeignToolCall ? buildForeignResponsesItemId(itemId) : normalizeIdPart(itemId);
+		const sanitizedCallId = callId.replace(/[^a-zA-Z0-9_-]/g, "_");
+		let sanitizedItemId = itemId.replace(/[^a-zA-Z0-9_-]/g, "_");
 		// OpenAI Responses API requires item id to start with "fc"
-		if (!normalizedItemId.startsWith("fc_")) {
-			normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
+		if (!sanitizedItemId.startsWith("fc")) {
+			sanitizedItemId = `fc_${sanitizedItemId}`;
 		}
+		// Truncate to 64 chars and strip trailing underscores (OpenAI Codex rejects them)
+		let normalizedCallId = sanitizedCallId.length > 64 ? sanitizedCallId.slice(0, 64) : sanitizedCallId;
+		let normalizedItemId = sanitizedItemId.length > 64 ? sanitizedItemId.slice(0, 64) : sanitizedItemId;
+		normalizedCallId = normalizedCallId.replace(/_+$/, "");
+		normalizedItemId = normalizedItemId.replace(/_+$/, "");
 		return `${normalizedCallId}|${normalizedItemId}`;
 	};
 
@@ -241,45 +207,48 @@ export function convertResponsesMessages<TApi extends Api>(
 			if (output.length === 0) continue;
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
+			// Extract text and image content
 			const textResult = msg.content
 				.filter((c): c is TextContent => c.type === "text")
 				.map((c) => c.text)
 				.join("\n");
 			const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
+
+			// Always send function_call_output with text (or placeholder if only images)
 			const hasText = textResult.length > 0;
 			const [callId] = msg.toolCallId.split("|");
+			messages.push({
+				type: "function_call_output",
+				call_id: callId,
+				output: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+			});
 
-			let output: string | ResponseFunctionCallOutputItemList;
+			// If there are images and model supports them, send a follow-up user message with images
 			if (hasImages && model.input.includes("image")) {
-				const contentParts: ResponseFunctionCallOutputItemList = [];
+				const contentParts: ResponseInputContent[] = [];
 
-				if (hasText) {
-					contentParts.push({
-						type: "input_text",
-						text: sanitizeSurrogates(textResult),
-					});
-				}
+				// Add text prefix
+				contentParts.push({
+					type: "input_text",
+					text: "Attached image(s) from tool result:",
+				} satisfies ResponseInputText);
 
+				// Add images
 				for (const block of msg.content) {
 					if (block.type === "image") {
 						contentParts.push({
 							type: "input_image",
 							detail: "auto",
 							image_url: `data:${block.mimeType};base64,${block.data}`,
-						});
+						} satisfies ResponseInputImage);
 					}
 				}
 
-				output = contentParts;
-			} else {
-				output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
+				messages.push({
+					role: "user",
+					content: contentParts,
+				});
 			}
-
-			messages.push({
-				type: "function_call_output",
-				call_id: callId,
-				output,
-			});
 		}
 		msgIndex++;
 	}
@@ -319,9 +288,7 @@ export async function processResponsesStream<TApi extends Api>(
 	const blockIndex = () => blocks.length - 1;
 
 	for await (const event of openaiStream) {
-		if (event.type === "response.created") {
-			output.responseId = event.response.id;
-		} else if (event.type === "response.output_item.added") {
+		if (event.type === "response.output_item.added") {
 			const item = event.item;
 			if (item.type === "reasoning") {
 				currentItem = item;
@@ -435,21 +402,8 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		} else if (event.type === "response.function_call_arguments.done") {
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-				const previousPartialJson = currentBlock.partialJson;
 				currentBlock.partialJson = event.arguments;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
-
-				if (event.arguments.startsWith(previousPartialJson)) {
-					const delta = event.arguments.slice(previousPartialJson.length);
-					if (delta.length > 0) {
-						stream.push({
-							type: "toolcall_delta",
-							contentIndex: blockIndex(),
-							delta,
-							partial: output,
-						});
-					}
-				}
 			}
 		} else if (event.type === "response.output_item.done") {
 			const item = event.item;
@@ -491,9 +445,6 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		} else if (event.type === "response.completed") {
 			const response = event.response;
-			if (response?.id) {
-				output.responseId = response.id;
-			}
 			if (response?.usage) {
 				const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
 				output.usage = {

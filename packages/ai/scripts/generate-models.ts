@@ -55,7 +55,6 @@ const COPILOT_STATIC_HEADERS = {
 
 const AI_GATEWAY_MODELS_URL = "https://ai-gateway.vercel.sh/v1";
 const AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
-const ZAI_TOOL_STREAM_UNSUPPORTED_MODELS = new Set(["glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4.5v"]);
 
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
@@ -380,29 +379,28 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			for (const [modelId, model] of Object.entries(data.zai.models)) {
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true) continue;
-				const supportsImage = m.modalities?.input?.includes("image");
+				const supportsImage = m.modalities?.input?.includes("image")
 
 				models.push({
-					id: modelId,
-					name: m.name || modelId,
-					api: "openai-completions",
-					provider: "zai",
-					baseUrl: "https://api.z.ai/api/coding/paas/v4",
-					reasoning: m.reasoning === true,
-					input: supportsImage ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
-					compat: {
-						supportsDeveloperRole: false,
-						thinkingFormat: "zai",
-						...(!ZAI_TOOL_STREAM_UNSUPPORTED_MODELS.has(modelId) ? { zaiToolStream: true } : {}),
-					},
-					contextWindow: m.limit?.context || 4096,
-					maxTokens: m.limit?.output || 4096,
+				id: modelId,
+				name: m.name || modelId,
+				api: "openai-completions",
+				provider: "zai",
+				baseUrl: "https://api.z.ai/api/coding/paas/v4",
+				reasoning: m.reasoning === true,
+				input: supportsImage ? ["text", "image"] : ["text"],
+				cost: {
+					input: m.cost?.input || 0,
+					output: m.cost?.output || 0,
+					cacheRead: m.cost?.cache_read || 0,
+					cacheWrite: m.cost?.cache_write || 0,
+				},
+				compat: {
+					supportsDeveloperRole: false,
+					thinkingFormat: "zai",
+				},
+				contextWindow: m.limit?.context || 4096,
+				maxTokens: m.limit?.output || 4096,
 				});
 			}
 		}
@@ -416,9 +414,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 				models.push({
 					id: modelId,
 					name: m.name || modelId,
-					api: "mistral-conversations",
+					api: "openai-completions",
 					provider: "mistral",
-					baseUrl: "https://api.mistral.ai",
+					baseUrl: "https://api.mistral.ai/v1",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
 					cost: {
@@ -649,10 +647,7 @@ async function generateModels() {
 	const aiGatewayModels = await fetchAiGatewayModels();
 
 	// Combine models (models.dev has priority)
-	const allModels = [...modelsDevModels, ...openRouterModels, ...aiGatewayModels].filter(
-		(model) =>
-			!((model.provider === "opencode" || model.provider === "opencode-go") && model.id === "gpt-5.3-codex-spark"),
-	);
+	const allModels = [...modelsDevModels, ...openRouterModels, ...aiGatewayModels];
 
 	// Fix incorrect cache pricing for Claude Opus 4.5 from models.dev
 	// models.dev has 3x the correct pricing (1.5/18.75 instead of 0.5/6.25)
@@ -667,26 +662,14 @@ async function generateModels() {
 		if (candidate.provider === "amazon-bedrock" && candidate.id.includes("anthropic.claude-opus-4-6-v1")) {
 			candidate.cost.cacheRead = 0.5;
 			candidate.cost.cacheWrite = 6.25;
+			candidate.contextWindow = 200000;
 		}
 		if (
-			(candidate.provider === "anthropic" ||
-				candidate.provider === "opencode" ||
-				candidate.provider === "opencode-go" ||
-				candidate.provider === "github-copilot") &&
-			(candidate.id === "claude-opus-4-6" ||
-				candidate.id === "claude-sonnet-4-6" ||
-				candidate.id === "claude-opus-4.6" ||
-				candidate.id === "claude-sonnet-4.6")
+			(candidate.provider === "anthropic" || candidate.provider === "opencode" || candidate.provider === "opencode-go") &&
+			candidate.id === "claude-opus-4-6"
 		) {
-			candidate.contextWindow = 1000000;
+			candidate.contextWindow = 200000;
 		}
-		if (
-			candidate.provider === "google-antigravity" &&
-			(candidate.id === "claude-opus-4-6-thinking" || candidate.id === "claude-sonnet-4-6")
-		) {
-			candidate.contextWindow = 1000000;
-		}
-
 		// OpenCode variants list Claude Sonnet 4/4.5 with 1M context, actual limit is 200K
 		if (
 			(candidate.provider === "opencode" || candidate.provider === "opencode-go") &&
@@ -694,28 +677,7 @@ async function generateModels() {
 		) {
 			candidate.contextWindow = 200000;
 		}
-		if ((candidate.provider === "opencode" || candidate.provider === "opencode-go") && candidate.id === "gpt-5.4") {
-			candidate.contextWindow = 272000;
-			candidate.maxTokens = 128000;
-		}
-		if (candidate.provider === "openai" && candidate.id === "gpt-5.4") {
-			candidate.contextWindow = 272000;
-			candidate.maxTokens = 128000;
-		}
-		// Keep selected OpenRouter model metadata stable until upstream settles.
-		if (candidate.provider === "openrouter" && candidate.id === "moonshotai/kimi-k2.5") {
-			candidate.cost.input = 0.41;
-			candidate.cost.output = 2.06;
-			candidate.cost.cacheRead = 0.07;
-			candidate.maxTokens = 4096;
-		}
-		if (candidate.provider === "openrouter" && candidate.id === "z-ai/glm-5") {
-			candidate.cost.input = 0.6;
-			candidate.cost.output = 1.9;
-			candidate.cost.cacheRead = 0.119;
-		}
 	}
-
 
 	// Add missing EU Opus 4.6 profile
 	if (!allModels.some((m) => m.provider === "amazon-bedrock" && m.id === "eu.anthropic.claude-opus-4-6-v1")) {
@@ -754,7 +716,7 @@ async function generateModels() {
 				cacheRead: 0.5,
 				cacheWrite: 6.25,
 			},
-			contextWindow: 1000000,
+			contextWindow: 200000,
 			maxTokens: 128000,
 		});
 	}
@@ -775,7 +737,7 @@ async function generateModels() {
 				cacheRead: 0.3,
 				cacheWrite: 3.75,
 			},
-			contextWindow: 1000000,
+			contextWindow: 200000,
 			maxTokens: 64000,
 		});
 	}
@@ -896,66 +858,6 @@ async function generateModels() {
 		}
 	}
 
-	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-5.4")) {
-		allModels.push({
-			id: "gpt-5.4",
-			name: "GPT-5.4",
-			api: "openai-responses",
-			baseUrl: "https://api.openai.com/v1",
-			provider: "openai",
-			reasoning: true,
-			input: ["text", "image"],
-			cost: {
-				input: 2.5,
-				output: 15,
-				cacheRead: 0.25,
-				cacheWrite: 0,
-			},
-			contextWindow: 272000,
-			maxTokens: 128000,
-		});
-	}
-
-	const minimaxDirectProviders = ["minimax", "minimax-cn"] as const;
-	const minimaxAnthropicIds = new Set([
-		"MiniMax-M2",
-		"MiniMax-M2.1",
-		"MiniMax-M2.1-highspeed",
-		"MiniMax-M2.5",
-		"MiniMax-M2.5-highspeed",
-		"MiniMax-M2.7",
-		"MiniMax-M2.7-highspeed",
-	]);
-
-	for (const candidate of allModels) {
-		if (
-			(candidate.provider === "minimax" || candidate.provider === "minimax-cn") &&
-			minimaxAnthropicIds.has(candidate.id)
-		) {
-			candidate.contextWindow = 204800;
-			candidate.maxTokens = 131072;
-		}
-	}
-
-	for (const provider of minimaxDirectProviders) {
-		const baseModel = allModels.find((m) => m.provider === provider && m.id === "MiniMax-M2.1");
-		if (!baseModel) continue;
-		if (allModels.some((m) => m.provider === provider && m.id === "MiniMax-M2.1-highspeed")) continue;
-
-		allModels.push({
-			...baseModel,
-			id: "MiniMax-M2.1-highspeed",
-			name: "MiniMax-M2.1-highspeed",
-			cost: {
-				...baseModel.cost,
-				input: baseModel.cost.input * 2,
-				output: baseModel.cost.output * 2,
-			},
-			contextWindow: 204800,
-			maxTokens: 131072,
-		});
-	}
-
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
 	// Context window is based on observed server limits (400s above ~272k), not marketing numbers.
@@ -1032,30 +934,6 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.4",
-			name: "GPT-5.4",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.4-mini",
-			name: "GPT-5.4 Mini",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
 			contextWindow: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
@@ -1286,18 +1164,6 @@ async function generateModels() {
 			cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 			contextWindow: 200000,
 			maxTokens: 128000,
-		},
-		{
-			id: "claude-sonnet-4-6",
-			name: "Claude Sonnet 4.6 (Antigravity)",
-			api: "google-gemini-cli",
-			provider: "google-antigravity",
-			baseUrl: ANTIGRAVITY_ENDPOINT,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-			contextWindow: 200000,
-			maxTokens: 64000,
 		},
 		{
 			id: "gpt-oss-120b-medium",

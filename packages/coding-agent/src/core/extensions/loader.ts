@@ -65,20 +65,20 @@ function getAliases(): Record<string, string> {
 	const typeboxRoot = typeboxEntry.replace(/[\\/]build[\\/]cjs[\\/]index\.js$/, "");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
-	const resolveWorkspaceOrSpecifier = (workspaceRelativePath: string, specifier: string): string => {
+	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
 		const workspacePath = path.join(packagesRoot, workspaceRelativePath);
 		if (fs.existsSync(workspacePath)) {
 			return workspacePath;
 		}
-		return specifier;
+		return fileURLToPath(import.meta.resolve(specifier));
 	};
 
 	_aliases = {
 		"@draht/coding-agent": packageIndex,
-		"@draht/agent-core": resolveWorkspaceOrSpecifier("agent/src/index.ts", "@draht/agent-core"),
-		"@draht/tui": resolveWorkspaceOrSpecifier("tui/src/index.ts", "@draht/tui"),
-		"@draht/ai": resolveWorkspaceOrSpecifier("ai/src/index.ts", "@draht/ai"),
-		"@draht/ai/oauth": resolveWorkspaceOrSpecifier("ai/src/oauth.ts", "@draht/ai/oauth"),
+		"@draht/agent-core": resolveWorkspaceOrImport("agent/src/index.ts", "@draht/agent-core"),
+		"@draht/tui": resolveWorkspaceOrImport("tui/src/index.ts", "@draht/tui"),
+		"@draht/ai": resolveWorkspaceOrImport("ai/src/index.ts", "@draht/ai"),
+		"@draht/ai/oauth": resolveWorkspaceOrImport("ai/src/oauth.ts", "@draht/ai/oauth"),
 		"@sinclair/typebox": typeboxRoot,
 	};
 

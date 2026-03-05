@@ -39,7 +39,7 @@ function getPhaseSlug(cwd: string, phaseNum: number): string {
 function getPhaseDir(cwd: string, phaseNum: number): string | null {
 	const phasesDir = planningPath(cwd, "phases");
 	if (!fs.existsSync(phasesDir)) return null;
-	const prefix = padNum(phaseNum) + "-";
+	const prefix = `${padNum(phaseNum)}-`;
 	const entry = fs.readdirSync(phasesDir).find((e) => e.startsWith(prefix));
 	return entry ? path.join(phasesDir, entry) : null;
 }

@@ -99,7 +99,7 @@
 **Requirements:** R14-TDD.1, R14-TDD.2, R14-TDD.3, R14-TDD.7, R15-DDD.3, R15-DDD.4, R19-GSD.1, R19-GSD.2, R19-GSD.3
 **Acceptance:** `/create-plan`, `/commit-task`, `/create-domain-model`, `/map-codebase` commands execute real draht functions; enhanced hooks run during `/execute` and `/verify` flows; gsd-commands extension loads and registers all commands.
 
-## Phase 20: TDD/DDD Hook Hardening — `pending`
+## Phase 20: TDD/DDD Hook Hardening — `complete`
 **Goal:** Hooks are production-ready with auto-detected toolchains, configurable thresholds, and domain checks.
 **Requirements:** R14-TDD.4, R15-DDD.5, R15-DDD.6, R20-HOOK.1, R20-HOOK.2, R20-HOOK.3
 **Acceptance:** Hook auto-detects npm/bun/pnpm test runner (no hardcoded `bun test`); coverage threshold configurable via `.planning/config.json` (default 80%); TDD cycle check supports strict and advisory modes; domain glossary validated against DOMAIN-MODEL.md; all hooks have vitest tests.

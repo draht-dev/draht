@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase: Phase 20: TDD/DDD Hook Hardening
-## Status: milestone-2-in-progress
+## Status: complete
 
 ## Decisions
 - Astro replaces Next.js in all templates and references (Oskar, 2026-02-28)
@@ -13,6 +13,7 @@
 - Milestone 2 approved: Integration hardening, Phases 19-24 (Oskar, 2026-03-03)
 
 ## Completed Phases
+- Phase 20: TDD/DDD Hook Hardening (complete)
 - Phase 19: GSD CLI Integration (complete)
 - Phase 1: Rebrand (7 commits)
 - Phase 2: SST v4 Infrastructure (1 commit)
@@ -46,4 +47,4 @@ None.
   - Phase 9: Added missing 09-01-PLAN.md and 09-01-SUMMARY.md
 - 2026-03-03: Milestone 2 approved. Phases 19-24 added to ROADMAP. Carried forward incomplete requirements from R14-TDD and R15-DDD.
 
-## Last Activity: 2026-03-05 17:43:48
+## Last Activity: 2026-03-05 18:19:22

@@ -75,10 +75,10 @@ function getAliases(): Record<string, string> {
 
 	_aliases = {
 		"@draht/coding-agent": packageIndex,
-		"@draht/agent-core": resolveWorkspaceOrImport("agent/src/index.ts", "@draht/agent-core"),
-		"@draht/tui": resolveWorkspaceOrImport("tui/src/index.ts", "@draht/tui"),
-		"@draht/ai": resolveWorkspaceOrImport("ai/src/index.ts", "@draht/ai"),
-		"@draht/ai/oauth": resolveWorkspaceOrImport("ai/src/oauth.ts", "@draht/ai/oauth"),
+		"@draht/agent-core": resolveWorkspaceOrImport("agent/dist/index.js", "@draht/agent-core"),
+		"@draht/tui": resolveWorkspaceOrImport("tui/dist/index.js", "@draht/tui"),
+		"@draht/ai": resolveWorkspaceOrImport("ai/dist/index.js", "@draht/ai"),
+		"@draht/ai/oauth": resolveWorkspaceOrImport("ai/dist/oauth.js", "@draht/ai/oauth"),
 		"@sinclair/typebox": typeboxRoot,
 	};
 

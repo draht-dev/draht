@@ -12,13 +12,67 @@
 
 const { execSync } = require("node:child_process");
 const fs = require("node:fs");
+const path = require("node:path");
 
-const strict = process.argv.includes("--strict");
+// ── Toolchain detection — mirrors src/gsd/hook-utils.ts ──────────────────────
+function detectToolchain(cwd) {
+	if (fs.existsSync(path.join(cwd, "bun.lockb")) || fs.existsSync(path.join(cwd, "bun.lock"))) {
+		return { pm: "bun", testCmd: "bun test", coverageCmd: "bun test --coverage", lintCmd: "bunx biome check ." };
+	}
+	if (fs.existsSync(path.join(cwd, "pnpm-lock.yaml"))) {
+		return { pm: "pnpm", testCmd: "pnpm test", coverageCmd: "pnpm run test:coverage", lintCmd: "pnpm run lint" };
+	}
+	if (fs.existsSync(path.join(cwd, "yarn.lock"))) {
+		return { pm: "yarn", testCmd: "yarn test", coverageCmd: "yarn run test:coverage", lintCmd: "yarn run lint" };
+	}
+	return { pm: "npm", testCmd: "npm test", coverageCmd: "npm run test:coverage", lintCmd: "npm run lint" };
+}
+
+function readHookConfig(cwd) {
+	const defaults = { coverageThreshold: 80, tddMode: "advisory", qualityGateStrict: false };
+	const configPath = path.join(cwd, ".planning", "config.json");
+	if (!fs.existsSync(configPath)) return defaults;
+	try {
+		const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+		const h = raw.hooks || {};
+		return {
+			coverageThreshold: typeof h.coverageThreshold === "number" ? h.coverageThreshold : defaults.coverageThreshold,
+			tddMode: h.tddMode === "strict" || h.tddMode === "advisory" ? h.tddMode : defaults.tddMode,
+			qualityGateStrict: typeof h.qualityGateStrict === "boolean" ? h.qualityGateStrict : defaults.qualityGateStrict,
+		};
+	} catch { return defaults; }
+}
+
+// Inline domain validator — mirrors src/gsd/domain-validator.ts
+function extractGlossaryTerms(content) {
+	const terms = new Set();
+	const sectionMatch = content.match(/## Ubiquitous Language([\s\S]*?)(?:\n## |$)/);
+	const section = sectionMatch ? sectionMatch[1] : content;
+	for (const m of section.matchAll(/\*\*([A-Z][a-zA-Z0-9]+)\*\*/g)) terms.add(m[1]);
+	for (const m of section.matchAll(/^[-*]\s+([A-Z][a-zA-Z0-9]+)\s*:/gm)) terms.add(m[1]);
+	for (const m of section.matchAll(/\|\s*([A-Z][a-zA-Z0-9]+)\s*\|/g)) terms.add(m[1]);
+	return terms;
+}
+
+function loadDomainContent(cwd) {
+	const modelPath = path.join(cwd, ".planning", "DOMAIN-MODEL.md");
+	if (fs.existsSync(modelPath)) return fs.readFileSync(modelPath, "utf-8");
+	const domainPath = path.join(cwd, ".planning", "DOMAIN.md");
+	if (fs.existsSync(domainPath)) return fs.readFileSync(domainPath, "utf-8");
+	return "";
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+const cwd = process.cwd();
+const toolchain = detectToolchain(cwd);
+const hookConfig = readHookConfig(cwd);
+const strict = process.argv.includes("--strict") || hookConfig.qualityGateStrict;
 const issues = [];
 
 // 1. TypeScript check
 try {
-	execSync("bun run tsgo --noEmit 2>&1", { timeout: 60000, encoding: "utf-8" });
+	const tsCmd = toolchain.pm === "bun" ? "bun run tsgo --noEmit 2>&1" : "npx tsc --noEmit 2>&1";
+	execSync(tsCmd, { timeout: 60000, encoding: "utf-8", cwd });
 } catch (error) {
 	const output = error.stdout || error.stderr || "";
 	const errorCount = (output.match(/error TS/g) || []).length;
@@ -27,19 +81,19 @@ try {
 	}
 }
 
-// 2. Biome lint check (if biome.json exists)
-if (fs.existsSync("biome.json")) {
+// 2. Lint check (if biome.json exists use biome, else use toolchain lint)
+if (fs.existsSync(path.join(cwd, "biome.json"))) {
 	try {
-		execSync("bunx biome check --error-on-warnings . 2>&1", { timeout: 30000, encoding: "utf-8" });
+		execSync(`${toolchain.lintCmd} --error-on-warnings 2>&1`, { timeout: 30000, encoding: "utf-8", cwd });
 	} catch (error) {
 		const output = error.stdout || error.stderr || "";
-		issues.push({ severity: strict ? "error" : "warning", message: "Biome lint issues", details: output.slice(0, 500) });
+		issues.push({ severity: strict ? "error" : "warning", message: "Lint issues", details: output.slice(0, 500) });
 	}
 }
 
 // 3. Run tests
 try {
-	const testOutput = execSync("bun test 2>&1", { timeout: 120000, encoding: "utf-8" });
+	const testOutput = execSync(`${toolchain.testCmd} 2>&1`, { timeout: 120000, encoding: "utf-8", cwd });
 	const failMatch = testOutput.match(/(\d+) fail/);
 	if (failMatch && parseInt(failMatch[1], 10) > 0) {
 		issues.push({ severity: strict ? "error" : "warning", message: `${failMatch[1]} test(s) failing` });
@@ -56,71 +110,56 @@ try {
 try {
 	const result = execSync(
 		"grep -rn 'console\\.log' src/ --include='*.ts' --include='*.tsx' 2>/dev/null | grep -v '// debug' | head -5",
-		{ encoding: "utf-8" }
+		{ encoding: "utf-8", cwd }
 	).trim();
 	if (result) {
-		issues.push({ severity: "warning", message: `console.log found in source`, details: result });
+		issues.push({ severity: "warning", message: "console.log found in source", details: result });
 	}
-} catch { /* grep returns 1 when no match — that's good */ }
+} catch { /* grep returns 1 when no match — that's fine */ }
 
-// 5. Domain glossary compliance
-// Extract terms from DOMAIN.md and flag new PascalCase classes not in the glossary
-const domainMdPath = ".planning/DOMAIN.md";
-if (fs.existsSync(domainMdPath)) {
+// 5. Domain glossary compliance (checks DOMAIN-MODEL.md, falls back to DOMAIN.md)
+const domainContent = loadDomainContent(cwd);
+if (domainContent) {
 	try {
-		const domainContent = fs.readFileSync(domainMdPath, "utf-8");
-		// Collect all PascalCase tokens that appear in the glossary section
-		const glossarySection = domainContent.match(/## Ubiquitous Language([\s\S]*?)(?:^##|\Z)/m)?.[1] || "";
-		// Each glossary entry is assumed to start the line with a PascalCase term (e.g. "**Order**" or "- Order:")
-		const glossaryTerms = new Set(
-			[...glossarySection.matchAll(/\b([A-Z][a-zA-Z0-9]+)\b/g)].map((m) => m[1])
-		);
+		const glossaryTerms = extractGlossaryTerms(domainContent);
+		const changedFiles = execSync(
+			"git diff --cached --name-only 2>/dev/null || git diff --name-only HEAD~1",
+			{ encoding: "utf-8", cwd }
+		).trim().split("\n").filter((f) => f.endsWith(".ts") || f.endsWith(".tsx"));
 
-		// Scan changed source files for PascalCase class/interface/type declarations
-		try {
-			const changedFiles = execSync(
-				"git diff --cached --name-only 2>/dev/null || git diff --name-only HEAD~1",
-				{ encoding: "utf-8" }
-			).trim().split("\n").filter((f) => f.endsWith(".ts") || f.endsWith(".tsx"));
-
-			const unknownTerms = [];
-			for (const file of changedFiles) {
-				if (!fs.existsSync(file)) continue;
-				const src = fs.readFileSync(file, "utf-8");
-				const declarations = [...src.matchAll(/(?:class|interface|type|enum)\s+([A-Z][a-zA-Z0-9]+)/g)].map((m) => m[1]);
-				for (const term of declarations) {
-					if (!glossaryTerms.has(term)) {
-						unknownTerms.push(`${file}: ${term}`);
-					}
-				}
+		const unknownTerms = [];
+		for (const file of changedFiles) {
+			if (!fs.existsSync(path.join(cwd, file))) continue;
+			const src = fs.readFileSync(path.join(cwd, file), "utf-8");
+			const declarations = [...src.matchAll(/(?:class|interface|type|enum)\s+([A-Z][a-zA-Z0-9]+)/g)].map((m) => m[1]);
+			for (const term of declarations) {
+				if (!glossaryTerms.has(term)) unknownTerms.push(`${file}: ${term}`);
 			}
-			if (unknownTerms.length > 0) {
-				issues.push({
-					severity: "warning",
-					message: `${unknownTerms.length} PascalCase type(s) not in DOMAIN.md glossary`,
-					details: unknownTerms.slice(0, 5).join(", "),
-				});
-			}
-		} catch { /* ignore git errors */ }
-	} catch { /* ignore read errors */ }
+		}
+		if (unknownTerms.length > 0) {
+			issues.push({
+				severity: hookConfig.tddMode === "strict" ? "error" : "warning",
+				message: `${unknownTerms.length} PascalCase type(s) not in domain glossary (DOMAIN-MODEL.md)`,
+				details: unknownTerms.slice(0, 5).join(", "),
+			});
+		}
+	} catch { /* ignore */ }
 }
 
 // 6. Bounded context boundary check — flag suspicious cross-directory imports
 try {
 	const changedSrcFiles = execSync(
 		"git diff --cached --name-only 2>/dev/null || git diff --name-only HEAD~1",
-		{ encoding: "utf-8" }
+		{ encoding: "utf-8", cwd }
 	).trim().split("\n").filter((f) => /^src\/[^/]+\//.test(f) && (f.endsWith(".ts") || f.endsWith(".tsx")));
 
 	const crossContextImports = [];
 	for (const file of changedSrcFiles) {
-		if (!fs.existsSync(file)) continue;
-		// Determine this file's context (first path segment under src/)
+		if (!fs.existsSync(path.join(cwd, file))) continue;
 		const ownContext = file.split("/")[1];
-		const src = fs.readFileSync(file, "utf-8");
+		const src = fs.readFileSync(path.join(cwd, file), "utf-8");
 		const imports = [...src.matchAll(/from\s+['"](\.\.\/.+?)['"]/g)].map((m) => m[1]);
 		for (const imp of imports) {
-			// Resolve relative import against the file's directory
 			const resolved = path.normalize(path.join(path.dirname(file), imp));
 			const parts = resolved.split(path.sep);
 			const srcIdx = parts.indexOf("src");
@@ -142,11 +181,11 @@ try {
 try {
 	const allSrc = execSync(
 		"find src -name '*.ts' -not -name '*.test.ts' -not -name '*.spec.ts' 2>/dev/null | wc -l",
-		{ encoding: "utf-8" }
+		{ encoding: "utf-8", cwd }
 	).trim();
 	const allTests = execSync(
 		"find src -name '*.test.ts' -o -name '*.spec.ts' 2>/dev/null | wc -l",
-		{ encoding: "utf-8" }
+		{ encoding: "utf-8", cwd }
 	).trim();
 	const srcCount = parseInt(allSrc, 10) || 0;
 	const testCount = parseInt(allTests, 10) || 0;
@@ -163,12 +202,15 @@ try {
 
 // 8. Check for TODO/FIXME/HACK comments in changed files
 try {
-	const diff = execSync("git diff --cached --name-only 2>/dev/null || git diff --name-only HEAD~1", { encoding: "utf-8" }).trim();
+	const diff = execSync(
+		"git diff --cached --name-only 2>/dev/null || git diff --name-only HEAD~1",
+		{ encoding: "utf-8", cwd }
+	).trim();
 	if (diff) {
 		const files = diff.split("\n").filter((f) => f.endsWith(".ts") || f.endsWith(".tsx"));
 		for (const file of files) {
 			try {
-				const content = fs.readFileSync(file, "utf-8");
+				const content = fs.readFileSync(path.join(cwd, file), "utf-8");
 				const todos = content.match(/\/\/\s*(TODO|FIXME|HACK|XXX):/gi) || [];
 				if (todos.length > 0) {
 					issues.push({ severity: "info", message: `${file}: ${todos.length} TODO/FIXME comment(s)` });

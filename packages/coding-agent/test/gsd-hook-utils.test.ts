@@ -7,6 +7,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectToolchain, readHookConfig } from "../src/gsd/hook-utils.js";
+import {
+	detectToolchain as detectToolchainFromIndex,
+	readHookConfig as readHookConfigFromIndex,
+} from "../src/gsd/index.js";
 
 let tmpDir: string;
 
@@ -120,5 +124,44 @@ describe("readHookConfig", () => {
 		expect(result).toHaveProperty("coverageThreshold");
 		expect(result).toHaveProperty("tddMode");
 		expect(result).toHaveProperty("qualityGateStrict");
+	});
+});
+
+describe("gsd/index re-exports", () => {
+	it("re-exports detectToolchain from gsd/index", () => {
+		expect(detectToolchainFromIndex).toBeDefined();
+		expect(typeof detectToolchainFromIndex).toBe("function");
+	});
+
+	it("re-exports readHookConfig from gsd/index", () => {
+		expect(readHookConfigFromIndex).toBeDefined();
+		expect(typeof readHookConfigFromIndex).toBe("function");
+	});
+});
+
+describe("hook files — no hardcoded bun test", () => {
+	const hooksDir = path.join(path.dirname(new URL(import.meta.url).pathname), "../hooks/gsd");
+
+	it("draht-quality-gate.js does not contain hardcoded 'bun test'", () => {
+		const content = fs.readFileSync(path.join(hooksDir, "draht-quality-gate.js"), "utf-8");
+		// Must not contain a literal `"bun test"` outside of detectToolchain
+		// Check: no hardcoded execSync("bun test ...) pattern
+		expect(content).not.toMatch(/execSync\(\s*["']bun test/);
+	});
+
+	it("draht-quality-gate.js references detectToolchain", () => {
+		const content = fs.readFileSync(path.join(hooksDir, "draht-quality-gate.js"), "utf-8");
+		expect(content).toMatch(/detectToolchain/);
+	});
+
+	it("draht-post-task.js does not contain hardcoded 'bun test'", () => {
+		const content = fs.readFileSync(path.join(hooksDir, "draht-post-task.js"), "utf-8");
+		expect(content).not.toMatch(/execSync\(\s*["']bun test/);
+	});
+
+	it("draht-post-task.js references detectToolchain and tddMode", () => {
+		const content = fs.readFileSync(path.join(hooksDir, "draht-post-task.js"), "utf-8");
+		expect(content).toMatch(/detectToolchain/);
+		expect(content).toMatch(/tddMode/);
 	});
 });

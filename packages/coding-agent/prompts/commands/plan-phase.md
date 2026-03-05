@@ -4,7 +4,7 @@ description: "Create atomic execution plans for a roadmap phase"
 
 # /plan-phase
 
-Create atomic execution plans for a roadmap phase.
+Create atomic execution plans for a roadmap phase, using subagents for parallel plan creation.
 
 ## Usage
 ```
@@ -21,10 +21,21 @@ Phase: $1
    b. Derive observable truths (3-7 from user perspective)
    c. From each observable truth, derive the test scenarios that would prove it (specific inputs → expected outputs or state changes)
    d. Map to required artifacts (files, endpoints, schemas)
-   e. Break into atomic tasks (2-5 per plan)
-4. Write plans: `draht-tools create-plan $1 P`
-5. Validate: `draht-tools validate-plans $1`
-6. Commit: `draht-tools commit-docs "create phase $1 plans"`
+   e. Break into plan groups of 2-5 tasks each
+4. Identify which plans are independent (no shared files, no dependency edges)
+5. **Delegate plan creation to subagents:**
+   - For independent plans: use the `subagent` tool in **parallel mode** with `architect` agents, one per plan. Each task should include the plan's observable truths, target files, and the XML task format below.
+   - For dependent plans: create them sequentially, each via a **single** `subagent` call to `architect`, passing the outputs of predecessor plans as context.
+   - Each subagent task must include:
+     - The phase context summary
+     - The specific observable truths this plan must satisfy
+     - The target files/artifacts
+     - The XML task format specification (below)
+     - Instructions to write the plan via `draht-tools create-plan $1 P`
+
+6. Collect all plan outputs
+7. Validate: `draht-tools validate-plans $1`
+8. Commit: `draht-tools commit-docs "create phase $1 plans"`
 
 ## Plan Format
 Plans use XML task format:

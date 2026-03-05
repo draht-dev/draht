@@ -94,7 +94,7 @@
 
 ## Milestone 2: Integration Hardening
 
-## Phase 19: GSD CLI Integration — `pending`
+## Phase 19: GSD CLI Integration — `complete`
 **Goal:** draht CLI commands work as real TypeScript modules inside coding-agent, replacing shell-script stubs.
 **Requirements:** R14-TDD.1, R14-TDD.2, R14-TDD.3, R14-TDD.7, R15-DDD.3, R15-DDD.4, R19-GSD.1, R19-GSD.2, R19-GSD.3
 **Acceptance:** `/create-plan`, `/commit-task`, `/create-domain-model`, `/map-codebase` commands execute real draht functions; enhanced hooks run during `/execute` and `/verify` flows; gsd-commands extension loads and registers all commands.

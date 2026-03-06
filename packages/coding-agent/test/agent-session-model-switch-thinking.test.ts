@@ -1,5 +1,5 @@
-import { Agent, type ThinkingLevel } from "@draht/agent-core";
-import { getModel } from "@draht/ai";
+import { Agent, type ThinkingLevel } from "@mariozechner/pi-agent-core";
+import { getModel } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -37,7 +37,7 @@ function createSession({
 		sessionManager,
 		settingsManager,
 		cwd: process.cwd(),
-		modelRegistry: ModelRegistry.inMemory(authStorage),
+		modelRegistry: new ModelRegistry(authStorage, undefined),
 		resourceLoader: createTestResourceLoader(),
 		scopedModels,
 	});

@@ -50,6 +50,8 @@
   "dependencies": {
     "@mariozechner/jiti": "^2.6.5",
     "@draht/coding-agent": "workspace:*",
+    "@draht/tui": "workspace:*",
+    "@draht/ai": "workspace:*",
     "get-east-asian-width": "^1.4.0",
     "koffi": "^2.15.1"
   },

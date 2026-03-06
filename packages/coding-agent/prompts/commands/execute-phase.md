@@ -29,6 +29,7 @@ Arguments: $ARGUMENTS
 5. Run `draht-tools verify-phase $1` yourself (not the subagent)
 6. Run `draht-tools update-state` yourself
 7. Final commit: `draht-tools commit-docs "complete phase $1 execution"`
+8. After execution, tell the user to start a new session and run `/verify-work $1`.
 
 ## Subagent Task Template
 
@@ -67,6 +68,16 @@ Important: Do NOT run draht, draht-tools, draht help, or pi commands. Use only s
 - All identifiers (class names, method names, variables) must use the ubiquitous language from `.planning/DOMAIN.md`
 - Do not import across bounded context boundaries directly — use domain events or ACL adapters
 - If implementation reveals a missing domain term, stop and update DOMAIN.md before continuing
+
+## Workflow
+This is one step in the per-phase cycle. Each step runs in its own session (`/new` between steps):
+
+```
+/discuss-phase N → /new → /plan-phase N → /new → /execute-phase N → /new → /verify-work N → /new → /discuss-phase N+1 → ...
+```
+
+After completing this command, tell the user to start a new session and run `/verify-work $1`.
+Do NOT suggest `/next-milestone` — that is only after ALL phases in the milestone are verified.
 
 ## Flags
 - `--gaps-only` → only execute FIX-PLAN.md files from failed verification

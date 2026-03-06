@@ -72,6 +72,16 @@ Plans use XML task format:
 
 Task types: `auto`, `checkpoint:human-verify`, `checkpoint:decision`
 
+## Workflow
+This is one step in the per-phase cycle. Each step runs in its own session (`/new` between steps):
+
+```
+/discuss-phase N → /new → /plan-phase N → /new → /execute-phase N → /new → /verify-work N → /new → /discuss-phase N+1 → ...
+```
+
+After completing this command, tell the user to start a new session and run `/execute-phase $1`.
+Do NOT suggest `/next-milestone` — that is only after ALL phases in the milestone are verified.
+
 ## Domain Rules for Plans
 - File/module structure should mirror bounded contexts (e.g., `src/billing/`, `src/catalog/`)
 - Never scatter one aggregate's logic across multiple contexts without an explicit ACL

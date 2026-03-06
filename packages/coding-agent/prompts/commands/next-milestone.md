@@ -1,10 +1,10 @@
 ---
-description: "Plan the next milestone after current one completes"
+description: "Plan the next milestone after ALL phases in the current milestone are complete"
 ---
 
 # /next-milestone
 
-Plan the next milestone after the current one is complete.
+Plan the next milestone after ALL phases in the current one are complete.
 
 ## Usage
 ```
@@ -13,7 +13,9 @@ Plan the next milestone after the current one is complete.
 
 ## Prerequisites
 - `.planning/ROADMAP.md` must exist
-- Current milestone should be complete or nearly complete
+- ALL phases in the current milestone must be complete (verified via /verify-work)
+- This command is ONLY for milestone transitions — NOT for moving between phases within a milestone
+- Between phases, use `/discuss-phase`, `/plan-phase`, `/execute-phase`, `/verify-work` — never `/next-milestone`
 
 ## Steps
 1. Load project context:

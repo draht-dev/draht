@@ -21,6 +21,16 @@ Phase: $1
 5. Record decisions with `draht-tools save-context $1`
 6. Commit: `draht-tools commit-docs "capture phase $1 context"`
 
+## Workflow
+This is one step in the per-phase cycle. Each step runs in its own session (`/new` between steps):
+
+```
+/discuss-phase N → /new → /plan-phase N → /new → /execute-phase N → /new → /verify-work N → /new → /discuss-phase N+1 → ...
+```
+
+After completing this command, tell the user to start a new session and run `/plan-phase $1`.
+Do NOT suggest `/next-milestone` — that is only after ALL phases in the milestone are verified.
+
 ## Gray Area Categories
 - **Visual features** → Layout, density, interactions, empty states
 - **APIs/CLIs** → Response format, error handling, auth

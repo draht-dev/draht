@@ -45,6 +45,18 @@ For greenfield projects, use `/new-project` instead.
 12. Run `draht-tools init-state`
 13. Git commit via `draht-tools commit-docs "initialize project planning"`
 
+## Workflow
+After project initialization, phases are executed one at a time in new sessions:
+
+```
+/init-project → /new → /discuss-phase 1 → /new → /plan-phase 1 → /new → /execute-phase 1 → /new → /verify-work 1
+            → /new → /discuss-phase 2 → /new → /plan-phase 2 → /new → /execute-phase 2 → /new → /verify-work 2
+            → ... (repeat for all phases in the milestone)
+            → /new → /next-milestone (only after ALL phases are complete)
+```
+
+Each step runs in its own session (`/new` between steps). Do NOT suggest `/next-milestone` until every phase in the milestone is verified.
+
 ## Rules
 - Ask 1-2 questions at a time, never dump 10 at once
 - Follow threads based on answers

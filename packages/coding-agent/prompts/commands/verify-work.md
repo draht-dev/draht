@@ -28,5 +28,20 @@ Phase: $1
    - Fix plans MUST include a reproducing test that demonstrates the failure before any implementation
 7. Write UAT report: `draht-tools write-uat $1`
    - Report must include: test health summary (pass/fail/coverage), security audit results, domain model status (any glossary violations), deliverable results
-8. If all passed: mark phase complete
+8. If all passed: mark phase complete.
+   - If more phases remain in the milestone: tell the user to start a new session and run `/discuss-phase N+1`.
+   - If ALL phases in the milestone are complete: tell the user to start a new session and run `/next-milestone`.
 9. If failures: route to `execute-phase $1 --gaps-only`
+
+## Workflow
+This is the last step in the per-phase cycle. Each step runs in its own session (`/new` between steps):
+
+```
+/discuss-phase N → /new → /plan-phase N → /new → /execute-phase N → /new → /verify-work N
+```
+
+After verify-work passes:
+- More phases remaining → `/new` → `/discuss-phase N+1`
+- ALL phases in milestone verified → `/new` → `/next-milestone`
+
+`/next-milestone` is ONLY for generating new phases after every phase in the current milestone is complete.

@@ -2,7 +2,7 @@
  * TUI component for managing package resources (enable/disable)
  */
 
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, relative } from "node:path";
 import {
 	type Component,
 	Container,
@@ -14,7 +14,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@draht/tui";
-import { CONFIG_DIR_NAME } from "../../../config.js";
+import { getProjectConfigDir } from "../../../config.js";
 import type { PathMetadata, ResolvedPaths, ResolvedResource } from "../../../core/package-manager.js";
 import type { PackageSource, SettingsManager } from "../../../core/settings-manager.js";
 import { theme } from "../theme/theme.js";
@@ -527,7 +527,7 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private getTopLevelBaseDir(scope: "user" | "project"): string {
-		return scope === "project" ? join(this.cwd, CONFIG_DIR_NAME) : this.agentDir;
+		return scope === "project" ? getProjectConfigDir(this.cwd) : this.agentDir;
 	}
 
 	private getResourcePattern(item: ResourceItem): string {

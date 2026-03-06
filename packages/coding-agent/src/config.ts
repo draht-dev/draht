@@ -166,7 +166,21 @@ const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8"));
 
 export const APP_NAME: string = pkg.drahtConfig?.name || "draht";
 export const CONFIG_DIR_NAME: string = pkg.drahtConfig?.configDir || ".draht";
+export const LEGACY_CONFIG_DIR_NAME = ".pi";
 export const VERSION: string = existsSync(join(getPackageDir(), ".dev")) ? "dev" : pkg.version;
+
+/**
+ * Resolve the project config directory. Prefers `CONFIG_DIR_NAME` (`.draht`),
+ * falls back to `LEGACY_CONFIG_DIR_NAME` (`.pi`) if the primary doesn't exist
+ * but the legacy one does.
+ */
+export function getProjectConfigDir(cwd: string): string {
+	const primary = join(cwd, CONFIG_DIR_NAME);
+	if (existsSync(primary)) return primary;
+	const legacy = join(cwd, LEGACY_CONFIG_DIR_NAME);
+	if (existsSync(legacy)) return legacy;
+	return primary; // default to primary even if it doesn't exist yet
+}
 
 // e.g., DRAHT_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;

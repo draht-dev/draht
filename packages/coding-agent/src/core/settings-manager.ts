@@ -2,7 +2,7 @@ import type { Transport } from "@draht/ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import { getAgentDir, getProjectConfigDir } from "../config.js";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -142,7 +142,7 @@ export class FileSettingsStorage implements SettingsStorage {
 
 	constructor(cwd: string = process.cwd(), agentDir: string = getAgentDir()) {
 		this.globalSettingsPath = join(agentDir, "settings.json");
-		this.projectSettingsPath = join(cwd, CONFIG_DIR_NAME, "settings.json");
+		this.projectSettingsPath = join(getProjectConfigDir(cwd), "settings.json");
 	}
 
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {

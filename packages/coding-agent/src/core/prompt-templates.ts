@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, isAbsolute, join, resolve, sep } from "path";
-import { CONFIG_DIR_NAME, getPromptsDir, getShippedPromptsDir } from "../config.js";
+import { getProjectConfigDir, getPromptsDir, getShippedPromptsDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 
 /**
@@ -242,13 +242,13 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): P
 		const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
 		templates.push(...loadTemplatesFromDir(globalPromptsDir, "user", "(user)"));
 
-		// 2. Load project templates from cwd/{CONFIG_DIR_NAME}/prompts/
-		const projectPromptsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "prompts");
+		// 2. Load project templates from cwd/{CONFIG_DIR_NAME}/prompts/ (with .pi fallback)
+		const projectPromptsDir = resolve(getProjectConfigDir(resolvedCwd), "prompts");
 		templates.push(...loadTemplatesFromDir(projectPromptsDir, "project", "(project)"));
 	}
 
 	const userPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
-	const projectPromptsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "prompts");
+	const projectPromptsDir = resolve(getProjectConfigDir(resolvedCwd), "prompts");
 
 	const isUnderPath = (target: string, root: string): boolean => {
 		const normalizedRoot = resolve(root);

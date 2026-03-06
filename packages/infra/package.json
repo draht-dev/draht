@@ -10,7 +10,7 @@
 		"clean": "rm -rf dist .sst"
 	},
 	"dependencies": {
-		"sst": "^3.14.0"
+		"sst": "^4.2.1"
 	},
 	"devDependencies": {
 		"@types/aws-lambda": "^8.10.145",

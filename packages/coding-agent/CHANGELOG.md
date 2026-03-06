@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.6] - 2026-03-06
+
+### Added
+
+- add legacy .pi config directory fallback
+
+### Fixed
+
+- clarify workflow between phases, restrict /next-milestone to milestone transitions
+- prevent subagents from running draht/pi commands
+- use subagents for parallel execution in builtin commands
 
 ## [2026.3.5] - 2026-03-05
 

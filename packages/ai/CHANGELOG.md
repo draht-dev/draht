@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.6] - 2026-03-06
+
+### Added
+
+- add gpt-5.3-codex-spark, openai/gpt-5.4-pro and update model pricing
+
+### Changed
+
+- bump @google/genai to ^1.44.0
 
 ## [2026.3.5] - 2026-03-05
 

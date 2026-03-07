@@ -11,7 +11,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
-import { type AssistantMessage, getModel, Type } from "@draht/ai";
+import { type AssistantMessage, getModel, Type } from "@mariozechner/pi-ai";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { createExtensionRuntime } from "../src/core/extensions/loader.js";
 import type { ToolDefinition } from "../src/core/extensions/types.js";
@@ -156,6 +156,7 @@ function createMinimalResourceLoader(systemPrompt: string): ResourceLoader {
 		getAgentsFiles: () => ({ agentsFiles: [] }),
 		getSystemPrompt: () => systemPrompt,
 		getAppendSystemPrompt: () => [],
+		getPathMetadata: () => new Map(),
 		extendResources: () => {},
 		reload: async () => {},
 	};
@@ -204,7 +205,7 @@ async function main(): Promise<void> {
 	mkdirSync(dirname(args.sessionPath), { recursive: true });
 
 	const authStorage = AuthStorage.create();
-	const modelRegistry = ModelRegistry.create(authStorage);
+	const modelRegistry = new ModelRegistry(authStorage);
 
 	const model = getModel("openai-codex", "gpt-5.4");
 	if (!model) {

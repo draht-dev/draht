@@ -84,11 +84,9 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 		};
 
 		try {
-			const apiKey = resolveApiKey(options);
-			// Create the client using either a Vertex API key, if provided, or ADC with project and location
-			const client = apiKey
-				? createClientWithApiKey(model, apiKey, options?.headers)
-				: createClient(model, resolveProject(options), resolveLocation(options), options?.headers);
+			const project = resolveProject(options);
+			const location = resolveLocation(options);
+			const client = createClient(model, project, location, options?.headers);
 			let params = buildParams(model, context, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -101,9 +99,6 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 			const blocks = output.content;
 			const blockIndex = () => blocks.length - 1;
 			for await (const chunk of googleStream) {
-				// Vertex uses the same @google/genai GenerateContentResponse type as Gemini.
-				// responseId is documented there as an output-only identifier for each response.
-				output.responseId ||= chunk.responseId;
 				const candidate = chunk.candidates?.[0];
 				if (candidate?.content?.parts) {
 					for (const part of candidate.content.parts) {
@@ -346,39 +341,6 @@ function createClient(
 	});
 }
 
-function createClientWithApiKey(
-	model: Model<"google-vertex">,
-	apiKey: string,
-	optionsHeaders?: Record<string, string>,
-): GoogleGenAI {
-	const httpOptions: { headers?: Record<string, string> } = {};
-
-	if (model.headers || optionsHeaders) {
-		httpOptions.headers = { ...model.headers, ...optionsHeaders };
-	}
-
-	const hasHttpOptions = Object.values(httpOptions).some(Boolean);
-
-	return new GoogleGenAI({
-		vertexai: true,
-		apiKey,
-		apiVersion: API_VERSION,
-		httpOptions: hasHttpOptions ? httpOptions : undefined,
-	});
-}
-
-function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
-	const apiKey = options?.apiKey?.trim() || process.env.GOOGLE_CLOUD_API_KEY?.trim();
-	if (!apiKey || isPlaceholderApiKey(apiKey)) {
-		return undefined;
-	}
-	return apiKey;
-}
-
-function isPlaceholderApiKey(apiKey: string): boolean {
-	return /^<[^>]+>$/.test(apiKey);
-}
-
 function resolveProject(options?: GoogleVertexOptions): string {
 	const project = options?.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
 	if (!project) {
@@ -436,8 +398,6 @@ function buildParams(
 			thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
 		}
 		config.thinkingConfig = thinkingConfig;
-	} else if (model.reasoning && options.thinking && !options.thinking.enabled) {
-		config.thinkingConfig = getDisabledThinkingConfig(model);
 	}
 
 	if (options.signal) {
@@ -464,22 +424,6 @@ function isGemini3ProModel(model: Model<"google-generative-ai">): boolean {
 
 function isGemini3FlashModel(model: Model<"google-generative-ai">): boolean {
 	return /gemini-3(?:\.\d+)?-flash/.test(model.id.toLowerCase());
-}
-
-function getDisabledThinkingConfig(model: Model<"google-vertex">): ThinkingConfig {
-	// Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
-	// do not support full thinking-off either. For Gemini 3 models, use the lowest supported
-	// thinkingLevel without includeThoughts so hidden thinking remains invisible to pi.
-	const geminiModel = model as unknown as Model<"google-generative-ai">;
-	if (isGemini3ProModel(geminiModel)) {
-		return { thinkingLevel: ThinkingLevel.LOW };
-	}
-	if (isGemini3FlashModel(geminiModel)) {
-		return { thinkingLevel: ThinkingLevel.MINIMAL };
-	}
-
-	// Gemini 2.x supports disabling via thinkingBudget = 0.
-	return { thinkingBudget: 0 };
 }
 
 function getGemini3ThinkingLevel(

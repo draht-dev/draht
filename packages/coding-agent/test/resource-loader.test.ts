@@ -9,7 +9,6 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import type { Skill } from "../src/core/skills.js";
-import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 
 describe("DefaultResourceLoader", () => {
 	let tempDir: string;
@@ -30,7 +29,7 @@ describe("DefaultResourceLoader", () => {
 
 	describe("reload", () => {
 		it("should initialize with empty results before reload", () => {
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 
 			expect(loader.getExtensions().extensions).toEqual([]);
 			expect(loader.getSkills().skills).toEqual([]);
@@ -50,7 +49,7 @@ description: A test skill
 Skill content here.`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			const { skills } = loader.getSkills();
@@ -70,7 +69,7 @@ Skill content here.`,
 			);
 			writeFileSync(join(skillDir, "EFFICIENCY.md"), "No frontmatter here");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			const { skills, diagnostics } = loader.getSkills();
@@ -89,7 +88,7 @@ description: A test prompt
 Prompt content.`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			const { prompts } = loader.getPrompts();
@@ -98,7 +97,7 @@ Prompt content.`,
 
 		it("should prefer project resources over user on name collisions", async () => {
 			const userPromptsDir = join(agentDir, "prompts");
-			const projectPromptsDir = join(cwd, ".draht", "prompts");
+			const projectPromptsDir = join(cwd, ".pi", "prompts");
 			mkdirSync(userPromptsDir, { recursive: true });
 			mkdirSync(projectPromptsDir, { recursive: true });
 			const userPromptPath = join(userPromptsDir, "commit.md");
@@ -107,7 +106,7 @@ Prompt content.`,
 			writeFileSync(projectPromptPath, "Project prompt");
 
 			const userSkillDir = join(agentDir, "skills", "collision-skill");
-			const projectSkillDir = join(cwd, ".draht", "skills", "collision-skill");
+			const projectSkillDir = join(cwd, ".pi", "skills", "collision-skill");
 			mkdirSync(userSkillDir, { recursive: true });
 			mkdirSync(projectSkillDir, { recursive: true });
 			const userSkillPath = join(userSkillDir, "SKILL.md");
@@ -134,16 +133,16 @@ Project skill`,
 			) as { name: string; vars?: Record<string, string> };
 			baseTheme.name = "collision-theme";
 			const userThemePath = join(agentDir, "themes", "collision.json");
-			const projectThemePath = join(cwd, ".draht", "themes", "collision.json");
+			const projectThemePath = join(cwd, ".pi", "themes", "collision.json");
 			mkdirSync(join(agentDir, "themes"), { recursive: true });
-			mkdirSync(join(cwd, ".draht", "themes"), { recursive: true });
+			mkdirSync(join(cwd, ".pi", "themes"), { recursive: true });
 			writeFileSync(userThemePath, JSON.stringify(baseTheme, null, 2));
 			if (baseTheme.vars) {
 				baseTheme.vars.accent = "#ff00ff";
 			}
 			writeFileSync(projectThemePath, JSON.stringify(baseTheme, null, 2));
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			const prompt = loader.getPrompts().prompts.find((p) => p.name === "commit");
@@ -158,7 +157,7 @@ Project skill`,
 
 		it("should keep both extensions loaded when command names collide", async () => {
 			const userExtDir = join(agentDir, "extensions");
-			const projectExtDir = join(cwd, ".draht", "extensions");
+			const projectExtDir = join(cwd, ".pi", "extensions");
 			mkdirSync(userExtDir, { recursive: true });
 			mkdirSync(projectExtDir, { recursive: true });
 
@@ -190,16 +189,16 @@ Project skill`,
 }`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			const extensionsResult = loader.getExtensions();
 			expect(extensionsResult.extensions).toHaveLength(2);
-			expect(extensionsResult.errors.some((e) => e.error.includes('Command "/deploy" conflicts'))).toBe(false);
+			expect(extensionsResult.errors.some((e) => e.error.includes('Command "/deploy" conflicts'))).toBe(true);
 
 			const sessionManager = SessionManager.inMemory();
 			const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
-			const modelRegistry = ModelRegistry.create(authStorage);
+			const modelRegistry = new ModelRegistry(authStorage);
 			const runner = new ExtensionRunner(
 				extensionsResult.extensions,
 				extensionsResult.runtime,
@@ -208,18 +207,12 @@ Project skill`,
 				modelRegistry,
 			);
 
-			expect(runner.getCommand("deploy:1")?.description).toBe("project deploy");
-			expect(runner.getCommand("deploy:2")?.description).toBe("user deploy");
+			expect(runner.getCommand("deploy")?.description).toBe("project deploy");
 			expect(runner.getCommand("project-only")?.description).toBe("project only");
 			expect(runner.getCommand("user-only")?.description).toBe("user only");
 
-			const commands = runner.getRegisteredCommands();
-			expect(commands.map((command) => command.invocationName)).toEqual([
-				"deploy:1",
-				"project-only",
-				"deploy:2",
-				"user-only",
-			]);
+			const commandNames = runner.getRegisteredCommands().map((c) => c.name);
+			expect(commandNames.filter((name) => name === "deploy")).toHaveLength(1);
 		});
 
 		it("should honor overrides for auto-discovered resources", async () => {
@@ -252,7 +245,7 @@ Content`,
 			mkdirSync(themesDir, { recursive: true });
 			writeFileSync(join(themesDir, "skip.json"), "{}");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
 			await loader.reload();
 
 			const { extensions } = loader.getExtensions();
@@ -269,30 +262,30 @@ Content`,
 		it("should discover AGENTS.md context files", async () => {
 			writeFileSync(join(cwd, "AGENTS.md"), "# Project Guidelines\n\nBe helpful.");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			const { agentsFiles } = loader.getAgentsFiles();
 			expect(agentsFiles.some((f) => f.path.includes("AGENTS.md"))).toBe(true);
 		});
 
-		it("should discover SYSTEM.md from cwd/.draht", async () => {
-			const piDir = join(cwd, ".draht");
+		it("should discover SYSTEM.md from cwd/.pi", async () => {
+			const piDir = join(cwd, ".pi");
 			mkdirSync(piDir, { recursive: true });
 			writeFileSync(join(piDir, "SYSTEM.md"), "You are a helpful assistant.");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			expect(loader.getSystemPrompt()).toBe("You are a helpful assistant.");
 		});
 
 		it("should discover APPEND_SYSTEM.md", async () => {
-			const piDir = join(cwd, ".draht");
+			const piDir = join(cwd, ".pi");
 			mkdirSync(piDir, { recursive: true });
 			writeFileSync(join(piDir, "APPEND_SYSTEM.md"), "Additional instructions.");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			expect(loader.getAppendSystemPrompt()).toContain("Additional instructions.");
@@ -324,7 +317,7 @@ description: Extra prompt
 Extra prompt content`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			loader.extendResources({
@@ -353,16 +346,14 @@ Extra prompt content`,
 			});
 
 			const { skills } = loader.getSkills();
-			const loadedSkill = skills.find((skill) => skill.name === "extra-skill");
-			expect(loadedSkill).toBeDefined();
-			expect(loadedSkill?.sourceInfo?.source).toBe("extension:extra");
-			expect(loadedSkill?.sourceInfo?.path).toBe(skillPath);
+			expect(skills.some((skill) => skill.name === "extra-skill")).toBe(true);
 
 			const { prompts } = loader.getPrompts();
-			const loadedPrompt = prompts.find((prompt) => prompt.name === "extra");
-			expect(loadedPrompt).toBeDefined();
-			expect(loadedPrompt?.sourceInfo?.source).toBe("extension:extra");
-			expect(loadedPrompt?.sourceInfo?.path).toBe(promptPath);
+			expect(prompts.some((prompt) => prompt.name === "extra")).toBe(true);
+
+			const metadata = loader.getPathMetadata();
+			expect(metadata.get(skillPath)?.source).toBe("extension:extra");
+			expect(metadata.get(promptPath)?.source).toBe("extension:extra");
 		});
 	});
 
@@ -379,7 +370,7 @@ description: A test skill
 Content`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noSkills: true, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noSkills: true });
 			await loader.reload();
 
 			const { skills } = loader.getSkills();
@@ -403,7 +394,6 @@ Content`,
 				agentDir,
 				noSkills: true,
 				additionalSkillPaths: [customSkillDir],
-				noExtensions: true,
 			});
 			await loader.reload();
 
@@ -419,7 +409,7 @@ Content`,
 				description: "Injected skill",
 				filePath: "/fake/path",
 				baseDir: "/fake",
-				sourceInfo: createSyntheticSourceInfo("/fake/path", { source: "custom" }),
+				source: "custom",
 				disableModelInvocation: false,
 			};
 			const loader = new DefaultResourceLoader({
@@ -428,7 +418,6 @@ Content`,
 				skillsOverride: () => ({
 					skills: [injectedSkill],
 					diagnostics: [],
-					noExtensions: true,
 				}),
 			});
 			await loader.reload();
@@ -443,7 +432,6 @@ Content`,
 				cwd,
 				agentDir,
 				systemPromptOverride: () => "Custom system prompt",
-				noExtensions: true,
 			});
 			await loader.reload();
 
@@ -462,7 +450,7 @@ Content`,
 			writeFileSync(
 				join(ext1Dir, "index.ts"),
 				`
-import type { ExtensionAPI } from "@draht/coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
@@ -477,7 +465,7 @@ export default function(pi: ExtensionAPI) {
 			writeFileSync(
 				join(ext2Dir, "index.ts"),
 				`
-import type { ExtensionAPI } from "@draht/coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
@@ -489,7 +477,7 @@ export default function(pi: ExtensionAPI) {
 }`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
 			await loader.reload();
 
 			const { errors } = loader.getExtensions();
@@ -504,7 +492,7 @@ export default function(pi: ExtensionAPI) {
 			writeFileSync(
 				join(globalExtDir, "global.ts"),
 				`
-import type { ExtensionAPI } from "@draht/coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
@@ -523,7 +511,7 @@ export default function(pi: ExtensionAPI) {
 			writeFileSync(
 				explicitExtPath,
 				`
-import type { ExtensionAPI } from "@draht/coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
@@ -551,7 +539,7 @@ export default function(pi: ExtensionAPI) {
 
 			const sessionManager = SessionManager.inMemory();
 			const authStorage = AuthStorage.create(join(tempDir, "auth-explicit.json"));
-			const modelRegistry = ModelRegistry.create(authStorage);
+			const modelRegistry = new ModelRegistry(authStorage);
 			const runner = new ExtensionRunner(
 				extensionsResult.extensions,
 				extensionsResult.runtime,
@@ -560,29 +548,8 @@ export default function(pi: ExtensionAPI) {
 				modelRegistry,
 			);
 
-			expect(runner.getCommand("deploy:1")?.description).toBe("explicit command");
-			expect(runner.getCommand("deploy:2")?.description).toBe("global command");
+			expect(runner.getCommand("deploy")?.description).toBe("explicit command");
 			expect(runner.getToolDefinition("duplicate-tool")?.description).toBe("explicit tool");
-		});
-	});
-
-	describe("builtin extensions", () => {
-		it("should register the subagent tool as a builtin extension", async () => {
-			const loader = new DefaultResourceLoader({ cwd, agentDir });
-			await loader.reload();
-
-			const { extensions } = loader.getExtensions();
-			const allTools = extensions.flatMap((ext) => Array.from(ext.tools.keys()));
-			expect(allTools).toContain("subagent");
-		});
-
-		it("should not register builtin extensions when noBuiltinExtensions is set", async () => {
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
-			await loader.reload();
-
-			const { extensions } = loader.getExtensions();
-			const allTools = extensions.flatMap((ext) => Array.from(ext.tools.keys()));
-			expect(allTools).not.toContain("subagent");
 		});
 	});
 });

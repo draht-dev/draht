@@ -5,16 +5,14 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
-import { getProjectConfigDir } from "../config.js";
+import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
-import { isStdoutTakenOver } from "./output-guard.js";
 import type { PackageSource, SettingsManager } from "./settings-manager.js";
 
 const NETWORK_TIMEOUT_MS = 10000;
-const UPDATE_CHECK_CONCURRENCY = 4;
 
 function isOfflineModeEnabled(): boolean {
-	const value = process.env.DRAHT_OFFLINE ?? process.env.PI_OFFLINE;
+	const value = process.env.PI_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
@@ -49,13 +47,6 @@ export interface ProgressEvent {
 }
 
 export type ProgressCallback = (event: ProgressEvent) => void;
-
-export interface PackageUpdate {
-	source: string;
-	displayName: string;
-	type: "npm" | "git";
-	scope: Exclude<SourceScope, "temporary">;
-}
 
 export interface PackageManager {
 	resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths>;
@@ -94,7 +85,7 @@ type LocalSource = {
 
 type ParsedSource = NpmSource | GitSource | LocalSource;
 
-interface DrahtManifest {
+interface PiManifest {
 	extensions?: string[];
 	skills?: string[];
 	prompts?: string[];
@@ -132,10 +123,6 @@ type IgnoreMatcher = ReturnType<typeof ignore>;
 
 function toPosixPath(p: string): string {
 	return p.split(sep).join("/");
-}
-
-function getHomeDir(): string {
-	return process.env.HOME || homedir();
 }
 
 function prefixIgnorePattern(line: string, prefix: string): string | null {
@@ -416,11 +403,11 @@ function collectAutoThemeEntries(dir: string): string[] {
 	return entries;
 }
 
-function readDrahtManifestFile(packageJsonPath: string): DrahtManifest | null {
+function readPiManifestFile(packageJsonPath: string): PiManifest | null {
 	try {
 		const content = readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content) as { draht?: DrahtManifest };
-		return pkg.draht ?? null;
+		const pkg = JSON.parse(content) as { pi?: PiManifest };
+		return pkg.pi ?? null;
 	} catch {
 		return null;
 	}
@@ -429,7 +416,7 @@ function readDrahtManifestFile(packageJsonPath: string): DrahtManifest | null {
 function resolveExtensionEntries(dir: string): string[] | null {
 	const packageJsonPath = join(dir, "package.json");
 	if (existsSync(packageJsonPath)) {
-		const manifest = readDrahtManifestFile(packageJsonPath);
+		const manifest = readPiManifestFile(packageJsonPath);
 		if (manifest?.extensions?.length) {
 			const entries: string[] = [];
 			for (const extPath of manifest.extensions) {
@@ -525,55 +512,44 @@ function collectResourceFiles(dir: string, resourceType: ResourceType): string[]
 }
 
 function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string): boolean {
-	const rel = toPosixPath(relative(baseDir, filePath));
+	const rel = relative(baseDir, filePath);
 	const name = basename(filePath);
-	const filePathPosix = toPosixPath(filePath);
 	const isSkillFile = name === "SKILL.md";
 	const parentDir = isSkillFile ? dirname(filePath) : undefined;
-	const parentRel = isSkillFile ? toPosixPath(relative(baseDir, parentDir!)) : undefined;
+	const parentRel = isSkillFile ? relative(baseDir, parentDir!) : undefined;
 	const parentName = isSkillFile ? basename(parentDir!) : undefined;
-	const parentDirPosix = isSkillFile ? toPosixPath(parentDir!) : undefined;
 
 	return patterns.some((pattern) => {
-		const normalizedPattern = toPosixPath(pattern);
-		if (
-			minimatch(rel, normalizedPattern) ||
-			minimatch(name, normalizedPattern) ||
-			minimatch(filePathPosix, normalizedPattern)
-		) {
+		if (minimatch(rel, pattern) || minimatch(name, pattern) || minimatch(filePath, pattern)) {
 			return true;
 		}
 		if (!isSkillFile) return false;
-		return (
-			minimatch(parentRel!, normalizedPattern) ||
-			minimatch(parentName!, normalizedPattern) ||
-			minimatch(parentDirPosix!, normalizedPattern)
-		);
+		return minimatch(parentRel!, pattern) || minimatch(parentName!, pattern) || minimatch(parentDir!, pattern);
 	});
 }
 
 function normalizeExactPattern(pattern: string): string {
-	const normalized = pattern.startsWith("./") || pattern.startsWith(".\\") ? pattern.slice(2) : pattern;
-	return toPosixPath(normalized);
+	if (pattern.startsWith("./") || pattern.startsWith(".\\")) {
+		return pattern.slice(2);
+	}
+	return pattern;
 }
 
 function matchesAnyExactPattern(filePath: string, patterns: string[], baseDir: string): boolean {
 	if (patterns.length === 0) return false;
-	const rel = toPosixPath(relative(baseDir, filePath));
+	const rel = relative(baseDir, filePath);
 	const name = basename(filePath);
-	const filePathPosix = toPosixPath(filePath);
 	const isSkillFile = name === "SKILL.md";
 	const parentDir = isSkillFile ? dirname(filePath) : undefined;
-	const parentRel = isSkillFile ? toPosixPath(relative(baseDir, parentDir!)) : undefined;
-	const parentDirPosix = isSkillFile ? toPosixPath(parentDir!) : undefined;
+	const parentRel = isSkillFile ? relative(baseDir, parentDir!) : undefined;
 
 	return patterns.some((pattern) => {
 		const normalized = normalizeExactPattern(pattern);
-		if (normalized === rel || normalized === filePathPosix) {
+		if (normalized === rel || normalized === filePath) {
 			return true;
 		}
 		if (!isSkillFile) return false;
-		return normalized === parentRel || normalized === parentDirPosix;
+		return normalized === parentRel || normalized === parentDir;
 	});
 }
 
@@ -661,7 +637,6 @@ export class DefaultPackageManager implements PackageManager {
 	private agentDir: string;
 	private settingsManager: SettingsManager;
 	private globalNpmRoot: string | undefined;
-	private globalNpmRootCommandKey: string | undefined;
 	private progressCallback: ProgressCallback | undefined;
 
 	constructor(options: PackageManagerOptions) {
@@ -769,7 +744,7 @@ export class DefaultPackageManager implements PackageManager {
 		await this.resolvePackageSources(packageSources, accumulator, onMissing);
 
 		const globalBaseDir = this.agentDir;
-		const projectBaseDir = getProjectConfigDir(this.cwd);
+		const projectBaseDir = join(this.cwd, CONFIG_DIR_NAME);
 
 		for (const resourceType of RESOURCE_TYPES) {
 			const target = this.getTargetMap(accumulator, resourceType);
@@ -861,28 +836,16 @@ export class DefaultPackageManager implements PackageManager {
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
 		const identity = source ? this.getPackageIdentity(source) : undefined;
-		let matched = false;
 
 		for (const pkg of globalSettings.packages ?? []) {
 			const sourceStr = typeof pkg === "string" ? pkg : pkg.source;
 			if (identity && this.getPackageIdentity(sourceStr, "user") !== identity) continue;
-			matched = true;
 			await this.updateSourceForScope(sourceStr, "user");
 		}
 		for (const pkg of projectSettings.packages ?? []) {
 			const sourceStr = typeof pkg === "string" ? pkg : pkg.source;
 			if (identity && this.getPackageIdentity(sourceStr, "project") !== identity) continue;
-			matched = true;
 			await this.updateSourceForScope(sourceStr, "project");
-		}
-
-		if (source && !matched) {
-			throw new Error(
-				this.buildNoMatchingPackageMessage(source, [
-					...(globalSettings.packages ?? []),
-					...(projectSettings.packages ?? []),
-				]),
-			);
 		}
 	}
 
@@ -894,14 +857,7 @@ export class DefaultPackageManager implements PackageManager {
 		if (parsed.type === "npm") {
 			if (parsed.pinned) return;
 			await this.withProgress("update", source, `Updating ${source}...`, async () => {
-				await this.installNpm(
-					{
-						...parsed,
-						spec: `${parsed.name}@latest`,
-					},
-					scope,
-					false,
-				);
+				await this.installNpm(parsed, scope, false);
 			});
 			return;
 		}
@@ -912,71 +868,6 @@ export class DefaultPackageManager implements PackageManager {
 			});
 			return;
 		}
-	}
-
-	async checkForAvailableUpdates(): Promise<PackageUpdate[]> {
-		if (isOfflineModeEnabled()) {
-			return [];
-		}
-
-		const globalSettings = this.settingsManager.getGlobalSettings();
-		const projectSettings = this.settingsManager.getProjectSettings();
-		const allPackages: Array<{ pkg: PackageSource; scope: SourceScope }> = [];
-		for (const pkg of projectSettings.packages ?? []) {
-			allPackages.push({ pkg, scope: "project" });
-		}
-		for (const pkg of globalSettings.packages ?? []) {
-			allPackages.push({ pkg, scope: "user" });
-		}
-
-		const packageSources = this.dedupePackages(allPackages);
-		const checks = packageSources
-			.filter(
-				(entry): entry is { pkg: PackageSource; scope: Exclude<SourceScope, "temporary"> } =>
-					entry.scope !== "temporary",
-			)
-			.map((entry) => async (): Promise<PackageUpdate | undefined> => {
-				const source = typeof entry.pkg === "string" ? entry.pkg : entry.pkg.source;
-				const parsed = this.parseSource(source);
-				if (parsed.type === "local" || parsed.pinned) {
-					return undefined;
-				}
-
-				if (parsed.type === "npm") {
-					const installedPath = this.getNpmInstallPath(parsed, entry.scope);
-					if (!existsSync(installedPath)) {
-						return undefined;
-					}
-					const hasUpdate = await this.npmHasAvailableUpdate(parsed, installedPath);
-					if (!hasUpdate) {
-						return undefined;
-					}
-					return {
-						source,
-						displayName: parsed.name,
-						type: "npm",
-						scope: entry.scope,
-					};
-				}
-
-				const installedPath = this.getGitInstallPath(parsed, entry.scope);
-				if (!existsSync(installedPath)) {
-					return undefined;
-				}
-				const hasUpdate = await this.gitHasAvailableUpdate(installedPath);
-				if (!hasUpdate) {
-					return undefined;
-				}
-				return {
-					source,
-					displayName: `${parsed.host}/${parsed.path}`,
-					type: "git",
-					scope: entry.scope,
-				};
-			});
-
-		const results = await this.runWithConcurrency(checks, UPDATE_CHECK_CONCURRENCY);
-		return results.filter((result): result is PackageUpdate => result !== undefined);
 	}
 
 	private async resolvePackageSources(
@@ -1013,9 +904,7 @@ export class DefaultPackageManager implements PackageManager {
 
 			if (parsed.type === "npm") {
 				const installedPath = this.getNpmInstallPath(parsed, scope);
-				const needsInstall =
-					!existsSync(installedPath) ||
-					(parsed.pinned && !(await this.installedNpmMatchesPinnedVersion(parsed, installedPath)));
+				const needsInstall = !existsSync(installedPath) || (await this.npmNeedsUpdate(parsed, installedPath));
 				if (needsInstall) {
 					const installed = await installMissing();
 					if (!installed) continue;
@@ -1108,39 +997,6 @@ export class DefaultPackageManager implements PackageManager {
 		return `local:${this.resolvePathFromBase(parsed.path, baseDir)}`;
 	}
 
-	private buildNoMatchingPackageMessage(source: string, configuredPackages: PackageSource[]): string {
-		const suggestion = this.findSuggestedConfiguredSource(source, configuredPackages);
-		if (!suggestion) {
-			return `No matching package found for ${source}`;
-		}
-		return `No matching package found for ${source}. Did you mean ${suggestion}?`;
-	}
-
-	private findSuggestedConfiguredSource(source: string, configuredPackages: PackageSource[]): string | undefined {
-		const trimmedSource = source.trim();
-		const suggestions = new Set<string>();
-
-		for (const pkg of configuredPackages) {
-			const sourceStr = this.getPackageSourceString(pkg);
-			const parsed = this.parseSource(sourceStr);
-			if (parsed.type === "npm") {
-				if (trimmedSource === parsed.name || trimmedSource === parsed.spec) {
-					suggestions.add(sourceStr);
-				}
-				continue;
-			}
-			if (parsed.type === "git") {
-				const shorthand = `${parsed.host}/${parsed.path}`;
-				const shorthandWithRef = parsed.ref ? `${shorthand}@${parsed.ref}` : undefined;
-				if (trimmedSource === shorthand || (shorthandWithRef && trimmedSource === shorthandWithRef)) {
-					suggestions.add(sourceStr);
-				}
-			}
-		}
-
-		return suggestions.values().next().value;
-	}
-
 	private packageSourcesMatch(existing: PackageSource, inputSource: string, scope: SourceScope): boolean {
 		const left = this.getSourceMatchKeyForSettings(this.getPackageSourceString(existing), scope);
 		const right = this.getSourceMatchKeyForInput(inputSource);
@@ -1191,34 +1047,31 @@ export class DefaultPackageManager implements PackageManager {
 		return { type: "local", path: source };
 	}
 
-	private async installedNpmMatchesPinnedVersion(source: NpmSource, installedPath: string): Promise<boolean> {
-		const installedVersion = this.getInstalledNpmVersion(installedPath);
-		if (!installedVersion) {
-			return false;
-		}
-
-		const { version: pinnedVersion } = this.parseNpmSpec(source.spec);
-		if (!pinnedVersion) {
-			return true;
-		}
-
-		return installedVersion === pinnedVersion;
-	}
-
-	private async npmHasAvailableUpdate(source: NpmSource, installedPath: string): Promise<boolean> {
+	/**
+	 * Check if an npm package needs to be updated.
+	 * - For unpinned packages: check if registry has a newer version
+	 * - For pinned packages: check if installed version matches the pinned version
+	 */
+	private async npmNeedsUpdate(source: NpmSource, installedPath: string): Promise<boolean> {
 		if (isOfflineModeEnabled()) {
 			return false;
 		}
 
 		const installedVersion = this.getInstalledNpmVersion(installedPath);
-		if (!installedVersion) {
-			return false;
+		if (!installedVersion) return true;
+
+		const { version: pinnedVersion } = this.parseNpmSpec(source.spec);
+		if (pinnedVersion) {
+			// Pinned: check if installed matches pinned (exact match for now)
+			return installedVersion !== pinnedVersion;
 		}
 
+		// Unpinned: check registry for latest version
 		try {
 			const latestVersion = await this.getLatestNpmVersion(source.name);
 			return latestVersion !== installedVersion;
 		} catch {
+			// If we can't check registry, assume it's fine
 			return false;
 		}
 	}
@@ -1242,155 +1095,6 @@ export class DefaultPackageManager implements PackageManager {
 		if (!response.ok) throw new Error(`Failed to fetch npm registry: ${response.status}`);
 		const data = (await response.json()) as { version: string };
 		return data.version;
-	}
-
-	private async gitHasAvailableUpdate(installedPath: string): Promise<boolean> {
-		if (isOfflineModeEnabled()) {
-			return false;
-		}
-
-		try {
-			const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
-				cwd: installedPath,
-				timeoutMs: NETWORK_TIMEOUT_MS,
-			});
-			const remoteHead = await this.getRemoteGitHead(installedPath);
-			return localHead.trim() !== remoteHead.trim();
-		} catch {
-			return false;
-		}
-	}
-
-	private async getRemoteGitHead(installedPath: string): Promise<string> {
-		const upstreamRef = await this.getGitUpstreamRef(installedPath);
-		if (upstreamRef) {
-			const remoteHead = await this.runGitRemoteCommand(installedPath, ["ls-remote", "origin", upstreamRef]);
-			const match = remoteHead.match(/^([0-9a-f]{40})\s+/m);
-			if (match?.[1]) {
-				return match[1];
-			}
-		}
-
-		const remoteHead = await this.runGitRemoteCommand(installedPath, ["ls-remote", "origin", "HEAD"]);
-		const match = remoteHead.match(/^([0-9a-f]{40})\s+HEAD$/m);
-		if (!match?.[1]) {
-			throw new Error("Failed to determine remote HEAD");
-		}
-		return match[1];
-	}
-
-	private async getLocalGitUpdateTarget(
-		installedPath: string,
-	): Promise<{ ref: string; head: string; fetchArgs: string[] }> {
-		try {
-			const upstream = await this.runCommandCapture("git", ["rev-parse", "--abbrev-ref", "@{upstream}"], {
-				cwd: installedPath,
-				timeoutMs: NETWORK_TIMEOUT_MS,
-			});
-			const trimmedUpstream = upstream.trim();
-			if (!trimmedUpstream.startsWith("origin/")) {
-				throw new Error(`Unsupported upstream remote: ${trimmedUpstream}`);
-			}
-			const branch = trimmedUpstream.slice("origin/".length);
-			if (!branch) {
-				throw new Error("Missing upstream branch name");
-			}
-			const head = await this.runCommandCapture("git", ["rev-parse", "@{upstream}"], {
-				cwd: installedPath,
-				timeoutMs: NETWORK_TIMEOUT_MS,
-			});
-			return {
-				ref: "@{upstream}",
-				head,
-				fetchArgs: [
-					"fetch",
-					"--prune",
-					"--no-tags",
-					"origin",
-					`+refs/heads/${branch}:refs/remotes/origin/${branch}`,
-				],
-			};
-		} catch {
-			await this.runCommand("git", ["remote", "set-head", "origin", "-a"], { cwd: installedPath }).catch(() => {});
-			const head = await this.runCommandCapture("git", ["rev-parse", "origin/HEAD"], {
-				cwd: installedPath,
-				timeoutMs: NETWORK_TIMEOUT_MS,
-			});
-			const originHeadRef = await this.runCommandCapture("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
-				cwd: installedPath,
-				timeoutMs: NETWORK_TIMEOUT_MS,
-			}).catch(() => "");
-			const branch = originHeadRef.trim().replace(/^refs\/remotes\/origin\//, "");
-			if (branch) {
-				return {
-					ref: "origin/HEAD",
-					head,
-					fetchArgs: [
-						"fetch",
-						"--prune",
-						"--no-tags",
-						"origin",
-						`+refs/heads/${branch}:refs/remotes/origin/${branch}`,
-					],
-				};
-			}
-			return {
-				ref: "origin/HEAD",
-				head,
-				fetchArgs: ["fetch", "--prune", "--no-tags", "origin", "+HEAD:refs/remotes/origin/HEAD"],
-			};
-		}
-	}
-
-	private async getGitUpstreamRef(installedPath: string): Promise<string | undefined> {
-		try {
-			const upstream = await this.runCommandCapture("git", ["rev-parse", "--abbrev-ref", "@{upstream}"], {
-				cwd: installedPath,
-				timeoutMs: NETWORK_TIMEOUT_MS,
-			});
-			const trimmed = upstream.trim();
-			if (!trimmed.startsWith("origin/")) {
-				return undefined;
-			}
-			const branch = trimmed.slice("origin/".length);
-			return branch ? `refs/heads/${branch}` : undefined;
-		} catch {
-			return undefined;
-		}
-	}
-
-	private runGitRemoteCommand(installedPath: string, args: string[]): Promise<string> {
-		return this.runCommandCapture("git", args, {
-			cwd: installedPath,
-			timeoutMs: NETWORK_TIMEOUT_MS,
-			env: {
-				GIT_TERMINAL_PROMPT: "0",
-			},
-		});
-	}
-
-	private async runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-		if (tasks.length === 0) {
-			return [];
-		}
-
-		const results: T[] = new Array(tasks.length);
-		let nextIndex = 0;
-		const workerCount = Math.max(1, Math.min(limit, tasks.length));
-
-		const worker = async () => {
-			while (true) {
-				const index = nextIndex;
-				nextIndex += 1;
-				if (index >= tasks.length) {
-					return;
-				}
-				results[index] = await tasks[index]();
-			}
-		};
-
-		await Promise.all(Array.from({ length: workerCount }, () => worker()));
-		return results;
 	}
 
 	/**
@@ -1452,48 +1156,26 @@ export class DefaultPackageManager implements PackageManager {
 		return { name, version };
 	}
 
-	private getNpmCommand(): { command: string; args: string[] } {
-		const configuredCommand = this.settingsManager.getNpmCommand();
-		if (!configuredCommand || configuredCommand.length === 0) {
-			return { command: "npm", args: [] };
-		}
-		const [command, ...args] = configuredCommand;
-		if (!command) {
-			throw new Error("Invalid npmCommand: first array entry must be a non-empty command");
-		}
-		return { command, args };
-	}
-
-	private async runNpmCommand(args: string[], options?: { cwd?: string }): Promise<void> {
-		const npmCommand = this.getNpmCommand();
-		await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
-	}
-
-	private runNpmCommandSync(args: string[]): string {
-		const npmCommand = this.getNpmCommand();
-		return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
-	}
-
 	private async installNpm(source: NpmSource, scope: SourceScope, temporary: boolean): Promise<void> {
 		if (scope === "user" && !temporary) {
-			await this.runNpmCommand(["install", "-g", source.spec]);
+			await this.runCommand("npm", ["install", "-g", source.spec]);
 			return;
 		}
 		const installRoot = this.getNpmInstallRoot(scope, temporary);
 		this.ensureNpmProject(installRoot);
-		await this.runNpmCommand(["install", source.spec, "--prefix", installRoot]);
+		await this.runCommand("npm", ["install", source.spec, "--prefix", installRoot]);
 	}
 
 	private async uninstallNpm(source: NpmSource, scope: SourceScope): Promise<void> {
 		if (scope === "user") {
-			await this.runNpmCommand(["uninstall", "-g", source.name]);
+			await this.runCommand("npm", ["uninstall", "-g", source.name]);
 			return;
 		}
 		const installRoot = this.getNpmInstallRoot(scope, false);
 		if (!existsSync(installRoot)) {
 			return;
 		}
-		await this.runNpmCommand(["uninstall", source.name, "--prefix", installRoot]);
+		await this.runCommand("npm", ["uninstall", source.name, "--prefix", installRoot]);
 	}
 
 	private async installGit(source: GitSource, scope: SourceScope): Promise<void> {
@@ -1513,7 +1195,7 @@ export class DefaultPackageManager implements PackageManager {
 		}
 		const packageJsonPath = join(targetDir, "package.json");
 		if (existsSync(packageJsonPath)) {
-			await this.runNpmCommand(["install"], { cwd: targetDir });
+			await this.runCommand("npm", ["install"], { cwd: targetDir });
 		}
 	}
 
@@ -1524,31 +1206,23 @@ export class DefaultPackageManager implements PackageManager {
 			return;
 		}
 
-		const target = await this.getLocalGitUpdateTarget(targetDir);
+		// Fetch latest from remote (handles force-push by getting new history)
+		await this.runCommand("git", ["fetch", "--prune", "origin"], { cwd: targetDir });
 
-		// Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
-		await this.runCommand("git", target.fetchArgs, { cwd: targetDir });
-
-		const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
-			cwd: targetDir,
-			timeoutMs: NETWORK_TIMEOUT_MS,
-		});
-		const refreshedTargetHead = await this.runCommandCapture("git", ["rev-parse", target.ref], {
-			cwd: targetDir,
-			timeoutMs: NETWORK_TIMEOUT_MS,
-		});
-		if (localHead.trim() === refreshedTargetHead.trim()) {
-			return;
+		// Reset to tracking branch. Fall back to origin/HEAD when no upstream is configured.
+		try {
+			await this.runCommand("git", ["reset", "--hard", "@{upstream}"], { cwd: targetDir });
+		} catch {
+			await this.runCommand("git", ["remote", "set-head", "origin", "-a"], { cwd: targetDir }).catch(() => {});
+			await this.runCommand("git", ["reset", "--hard", "origin/HEAD"], { cwd: targetDir });
 		}
-
-		await this.runCommand("git", ["reset", "--hard", target.ref], { cwd: targetDir });
 
 		// Clean untracked files (extensions should be pristine)
 		await this.runCommand("git", ["clean", "-fdx"], { cwd: targetDir });
 
 		const packageJsonPath = join(targetDir, "package.json");
 		if (existsSync(packageJsonPath)) {
-			await this.runNpmCommand(["install"], { cwd: targetDir });
+			await this.runCommand("npm", ["install"], { cwd: targetDir });
 		}
 	}
 
@@ -1621,20 +1295,17 @@ export class DefaultPackageManager implements PackageManager {
 			return this.getTemporaryDir("npm");
 		}
 		if (scope === "project") {
-			return join(getProjectConfigDir(this.cwd), "npm");
+			return join(this.cwd, CONFIG_DIR_NAME, "npm");
 		}
 		return join(this.getGlobalNpmRoot(), "..");
 	}
 
 	private getGlobalNpmRoot(): string {
-		const npmCommand = this.getNpmCommand();
-		const commandKey = [npmCommand.command, ...npmCommand.args].join("\0");
-		if (this.globalNpmRoot && this.globalNpmRootCommandKey === commandKey) {
+		if (this.globalNpmRoot) {
 			return this.globalNpmRoot;
 		}
-		const result = this.runNpmCommandSync(["root", "-g"]);
+		const result = this.runCommandSync("npm", ["root", "-g"]);
 		this.globalNpmRoot = result.trim();
-		this.globalNpmRootCommandKey = commandKey;
 		return this.globalNpmRoot;
 	}
 
@@ -1643,7 +1314,7 @@ export class DefaultPackageManager implements PackageManager {
 			return join(this.getTemporaryDir("npm"), "node_modules", source.name);
 		}
 		if (scope === "project") {
-			return join(getProjectConfigDir(this.cwd), "npm", "node_modules", source.name);
+			return join(this.cwd, CONFIG_DIR_NAME, "npm", "node_modules", source.name);
 		}
 		return join(this.getGlobalNpmRoot(), source.name);
 	}
@@ -1653,7 +1324,7 @@ export class DefaultPackageManager implements PackageManager {
 			return this.getTemporaryDir(`git-${source.host}`, source.path);
 		}
 		if (scope === "project") {
-			return join(getProjectConfigDir(this.cwd), "git", source.host, source.path);
+			return join(this.cwd, CONFIG_DIR_NAME, "git", source.host, source.path);
 		}
 		return join(this.agentDir, "git", source.host, source.path);
 	}
@@ -1663,7 +1334,7 @@ export class DefaultPackageManager implements PackageManager {
 			return undefined;
 		}
 		if (scope === "project") {
-			return join(getProjectConfigDir(this.cwd), "git");
+			return join(this.cwd, CONFIG_DIR_NAME, "git");
 		}
 		return join(this.agentDir, "git");
 	}
@@ -1678,7 +1349,7 @@ export class DefaultPackageManager implements PackageManager {
 
 	private getBaseDirForScope(scope: SourceScope): string {
 		if (scope === "project") {
-			return getProjectConfigDir(this.cwd);
+			return join(this.cwd, CONFIG_DIR_NAME);
 		}
 		if (scope === "user") {
 			return this.agentDir;
@@ -1688,17 +1359,17 @@ export class DefaultPackageManager implements PackageManager {
 
 	private resolvePath(input: string): string {
 		const trimmed = input.trim();
-		if (trimmed === "~") return getHomeDir();
-		if (trimmed.startsWith("~/")) return join(getHomeDir(), trimmed.slice(2));
-		if (trimmed.startsWith("~")) return join(getHomeDir(), trimmed.slice(1));
+		if (trimmed === "~") return homedir();
+		if (trimmed.startsWith("~/")) return join(homedir(), trimmed.slice(2));
+		if (trimmed.startsWith("~")) return join(homedir(), trimmed.slice(1));
 		return resolve(this.cwd, trimmed);
 	}
 
 	private resolvePathFromBase(input: string, baseDir: string): string {
 		const trimmed = input.trim();
-		if (trimmed === "~") return getHomeDir();
-		if (trimmed.startsWith("~/")) return join(getHomeDir(), trimmed.slice(2));
-		if (trimmed.startsWith("~")) return join(getHomeDir(), trimmed.slice(1));
+		if (trimmed === "~") return homedir();
+		if (trimmed.startsWith("~/")) return join(homedir(), trimmed.slice(2));
+		if (trimmed.startsWith("~")) return join(homedir(), trimmed.slice(1));
 		return resolve(baseDir, trimmed);
 	}
 
@@ -1721,10 +1392,10 @@ export class DefaultPackageManager implements PackageManager {
 			return true;
 		}
 
-		const manifest = this.readDrahtManifest(packageRoot);
+		const manifest = this.readPiManifest(packageRoot);
 		if (manifest) {
 			for (const resourceType of RESOURCE_TYPES) {
-				const entries = manifest[resourceType as keyof DrahtManifest];
+				const entries = manifest[resourceType as keyof PiManifest];
 				this.addManifestEntries(
 					entries,
 					packageRoot,
@@ -1757,8 +1428,8 @@ export class DefaultPackageManager implements PackageManager {
 		target: Map<string, { metadata: PathMetadata; enabled: boolean }>,
 		metadata: PathMetadata,
 	): void {
-		const manifest = this.readDrahtManifest(packageRoot);
-		const entries = manifest?.[resourceType as keyof DrahtManifest];
+		const manifest = this.readPiManifest(packageRoot);
+		const entries = manifest?.[resourceType as keyof PiManifest];
 		if (entries) {
 			this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
 			return;
@@ -1808,8 +1479,8 @@ export class DefaultPackageManager implements PackageManager {
 		packageRoot: string,
 		resourceType: ResourceType,
 	): { allFiles: string[]; enabledByManifest: Set<string> } {
-		const manifest = this.readDrahtManifest(packageRoot);
-		const entries = manifest?.[resourceType as keyof DrahtManifest];
+		const manifest = this.readPiManifest(packageRoot);
+		const entries = manifest?.[resourceType as keyof PiManifest];
 		if (entries && entries.length > 0) {
 			const allFiles = this.collectFilesFromManifestEntries(entries, packageRoot, resourceType);
 			const manifestPatterns = entries.filter(isPattern);
@@ -1826,7 +1497,7 @@ export class DefaultPackageManager implements PackageManager {
 		return { allFiles, enabledByManifest: new Set(allFiles) };
 	}
 
-	private readDrahtManifest(packageRoot: string): DrahtManifest | null {
+	private readPiManifest(packageRoot: string): PiManifest | null {
 		const packageJsonPath = join(packageRoot, "package.json");
 		if (!existsSync(packageJsonPath)) {
 			return null;
@@ -1834,8 +1505,8 @@ export class DefaultPackageManager implements PackageManager {
 
 		try {
 			const content = readFileSync(packageJsonPath, "utf-8");
-			const pkg = JSON.parse(content) as { draht?: DrahtManifest };
-			return pkg.draht ?? null;
+			const pkg = JSON.parse(content) as { pi?: PiManifest };
+			return pkg.pi ?? null;
 		} catch {
 			return null;
 		}
@@ -1935,7 +1606,7 @@ export class DefaultPackageManager implements PackageManager {
 			prompts: join(projectBaseDir, "prompts"),
 			themes: join(projectBaseDir, "themes"),
 		};
-		const userAgentsSkillsDir = join(getHomeDir(), ".agents", "skills");
+		const userAgentsSkillsDir = join(homedir(), ".agents", "skills");
 		const projectAgentsSkillDirs = collectAncestorAgentsSkillDirs(this.cwd).filter(
 			(dir) => resolve(dir) !== resolve(userAgentsSkillsDir),
 		);
@@ -2091,59 +1762,11 @@ export class DefaultPackageManager implements PackageManager {
 		};
 	}
 
-	private runCommandCapture(
-		command: string,
-		args: string[],
-		options?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> },
-	): Promise<string> {
-		return new Promise((resolvePromise, reject) => {
-			const child = spawn(command, args, {
-				cwd: options?.cwd,
-				stdio: ["ignore", "pipe", "pipe"],
-				shell: process.platform === "win32",
-				env: options?.env ? { ...process.env, ...options.env } : process.env,
-			});
-			let stdout = "";
-			let stderr = "";
-			let timedOut = false;
-			const timeout =
-				typeof options?.timeoutMs === "number"
-					? setTimeout(() => {
-							timedOut = true;
-							child.kill();
-						}, options.timeoutMs)
-					: undefined;
-
-			child.stdout?.on("data", (data) => {
-				stdout += data.toString();
-			});
-			child.stderr?.on("data", (data) => {
-				stderr += data.toString();
-			});
-			child.on("error", (error) => {
-				if (timeout) clearTimeout(timeout);
-				reject(error);
-			});
-			child.on("exit", (code) => {
-				if (timeout) clearTimeout(timeout);
-				if (timedOut) {
-					reject(new Error(`${command} ${args.join(" ")} timed out after ${options?.timeoutMs}ms`));
-					return;
-				}
-				if (code === 0) {
-					resolvePromise(stdout.trim());
-					return;
-				}
-				reject(new Error(`${command} ${args.join(" ")} failed with code ${code}: ${stderr || stdout}`));
-			});
-		});
-	}
-
 	private runCommand(command: string, args: string[], options?: { cwd?: string }): Promise<void> {
 		return new Promise((resolvePromise, reject) => {
 			const child = spawn(command, args, {
 				cwd: options?.cwd,
-				stdio: isStdoutTakenOver() ? ["ignore", 2, 2] : "inherit",
+				stdio: "inherit",
 				shell: process.platform === "win32",
 			});
 			child.on("error", reject);

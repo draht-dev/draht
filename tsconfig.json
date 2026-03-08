@@ -3,30 +3,86 @@
 	"compilerOptions": {
 		"noEmit": true,
 		"paths": {
-			"*": ["./*"],
-			"@draht/ai": ["./packages/ai/src/index.ts"],
-			"@draht/ai/oauth": ["./packages/ai/src/oauth.ts"],
-			"@draht/ai/bedrock-provider": ["./packages/ai/src/bedrock-provider.ts"],
-			"@draht/ai/*": ["./packages/ai/src/*"],
-			"@draht/ai/dist/*": ["./packages/ai/src/*"],
-			"@draht/agent-core": ["./packages/agent/src/index.ts"],
-			"@draht/agent-core/*": ["./packages/agent/src/*"],
-			"@draht/coding-agent": ["./packages/coding-agent/src/index.ts"],
-			"@draht/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
-			"@draht/coding-agent/*": ["./packages/coding-agent/src/*"],
-			"@sinclair/typebox": ["./node_modules/@sinclair/typebox"],
-			"@draht/mom": ["./packages/mom/src/index.ts"],
-			"@draht/mom/*": ["./packages/mom/src/*"],
-			"@draht/pods": ["./packages/pods/src/index.ts"],
-			"@draht/pods/*": ["./packages/pods/src/*"],
-			"@draht/tui": ["./packages/tui/src/index.ts"],
-			"@draht/tui/*": ["./packages/tui/src/*"],
-			"@draht/web-ui": ["./packages/web-ui/src/index.ts"],
-			"@draht/web-ui/*": ["./packages/web-ui/src/*"],
-			"@mariozechner/pi-agent-old": ["./packages/agent-old/src/index.ts"],
-			"@mariozechner/pi-agent-old/*": ["./packages/agent-old/src/*"]
+			"*": [
+				"./*"
+			],
+			"@draht/ai": [
+				"./packages/ai/src/index.ts"
+			],
+			"@draht/ai/oauth": [
+				"./packages/ai/src/oauth.ts"
+			],
+			"@draht/ai/bedrock-provider": [
+				"./packages/ai/src/bedrock-provider.ts"
+			],
+			"@draht/ai/*": [
+				"./packages/ai/src/*"
+			],
+			"@draht/ai/dist/*": [
+				"./packages/ai/src/*"
+			],
+			"@draht/agent-core": [
+				"./packages/agent/src/index.ts"
+			],
+			"@draht/agent-core/*": [
+				"./packages/agent/src/*"
+			],
+			"@draht/coding-agent": [
+				"./packages/coding-agent/src/index.ts"
+			],
+			"@draht/coding-agent/hooks": [
+				"./packages/coding-agent/src/core/hooks/index.ts"
+			],
+			"@draht/coding-agent/*": [
+				"./packages/coding-agent/src/*"
+			],
+			"@sinclair/typebox": [
+				"./node_modules/@sinclair/typebox"
+			],
+			"@draht/mom": [
+				"./packages/mom/src/index.ts"
+			],
+			"@draht/mom/*": [
+				"./packages/mom/src/*"
+			],
+			"@draht/pods": [
+				"./packages/pods/src/index.ts"
+			],
+			"@draht/pods/*": [
+				"./packages/pods/src/*"
+			],
+			"@draht/tui": [
+				"./packages/tui/src/index.ts"
+			],
+			"@draht/tui/*": [
+				"./packages/tui/src/*"
+			],
+			"@draht/web-ui": [
+				"./packages/web-ui/src/index.ts"
+			],
+			"@draht/web-ui/*": [
+				"./packages/web-ui/src/*"
+			],
+			"@mariozechner/pi-agent-old": [
+				"./packages/agent-old/src/index.ts"
+			],
+			"@mariozechner/pi-agent-old/*": [
+				"./packages/agent-old/src/*"
+			]
 		}
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
-	"exclude": ["packages/web-ui/**/*", "packages/coding-agent/examples/**/*", "**/dist/**", "packages/router/test/**/*", "packages/invoice/test/**/*", "packages/compliance/test/**/*"]
+	"include": [
+		"packages/*/src/**/*",
+		"packages/*/test/**/*",
+		"packages/coding-agent/examples/**/*"
+	],
+	"exclude": [
+		"packages/web-ui/**/*",
+		"packages/coding-agent/examples/**/*",
+		"**/dist/**",
+		"packages/router/test/**/*",
+		"packages/invoice/test/**/*",
+		"packages/compliance/test/**/*",
+		"packages/gateway/**/*"
+	]
 }

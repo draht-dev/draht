@@ -120,6 +120,13 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `selectConfirm` | `enter` | Confirm selection |
 | `selectCancel` | `escape`, `ctrl+c` | Cancel selection |
 
+### Tree Navigation
+
+| Action | Default | Description |
+|--------|---------|-------------|
+| `treeFoldOrUp` | `ctrl+left`, `alt+left` | Fold current branch segment, or jump to the previous segment start |
+| `treeUnfoldOrDown` | `ctrl+right`, `alt+right` | Unfold current branch segment, or jump to the next segment start or branch end |
+
 ### Session Picker
 
 | Action | Default | Description |

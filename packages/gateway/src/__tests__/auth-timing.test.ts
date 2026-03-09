@@ -31,7 +31,7 @@ describe("bearerAuthMiddleware — timing-safe comparison", () => {
 	test("token same length but different content → 401", async () => {
 		const app = buildApp();
 		// Same length, one character changed
-		const wrong = SECRET.slice(0, -1) + "X";
+		const wrong = `${SECRET.slice(0, -1)}X`;
 		const res = await app.request("/probe", {
 			headers: { Authorization: `Bearer ${wrong}` },
 		});

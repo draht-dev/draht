@@ -117,7 +117,7 @@ describe("WebSocket auth", () => {
 		expect(result.closeCode).toBe(4404);
 	});
 
-	test("case 4: correct token, stopped session → upgrade succeeds then close 4403", async () => {
+	test("case 4: correct token, stopped session → upgrade succeeds, stays open (new behavior)", async () => {
 		const manager = new SessionManager(new EventBus());
 		const { url } = startServer(manager);
 
@@ -126,10 +126,13 @@ describe("WebSocket auth", () => {
 		await session.process!.exited;
 		// status should now be 'stopped'
 
+		// NEW BEHAVIOR: We now allow WebSocket connections to sessions in any status
+		// This supports no-process sessions created by Adler
 		const result = await wsConnect(`${url}/sessions/${session.id}/ws`, {
 			Authorization: `Bearer ${AUTH_TOKEN}`,
 		});
-		expect(result.closeCode).toBe(4403);
+		// Connection succeeds and closes normally (no process to stream from)
+		expect(result.closeCode).toBe(1000);
 	});
 
 	test("case 5: correct token, running session → WebSocket stays OPEN", async () => {

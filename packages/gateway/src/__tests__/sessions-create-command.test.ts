@@ -52,6 +52,21 @@ describe("POST /sessions command body handling", () => {
 		expect(session?.process).toBeUndefined();
 	});
 
+	test("POST /sessions with Content-Type: application/json but empty body → 201 (Adler use case)", async () => {
+		const res = await app.request("/sessions", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: "",
+		});
+		expect(res.status).toBe(201);
+		const body = await res.json();
+		expect(body).toHaveProperty("id");
+		expect(body).toHaveProperty("status", "starting");
+		expect(body).toHaveProperty("createdAt");
+		const session = manager.get(body.id);
+		expect(session?.process).toBeUndefined(); // No process for empty body
+	});
+
 	test("POST /sessions with command array → 201, session has a process", async () => {
 		const res = await app.request("/sessions", {
 			method: "POST",

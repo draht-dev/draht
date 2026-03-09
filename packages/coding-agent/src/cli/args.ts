@@ -40,6 +40,12 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
+	/** Experimental: Start session with socket server for multi-attach */
+	attachable?: boolean;
+	/** Experimental: Attach to an existing socket session */
+	attach?: string;
+	/** Experimental: List all attachable socket sessions */
+	listSessions?: boolean;
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
@@ -154,6 +160,12 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.verbose = true;
 		} else if (arg === "--offline") {
 			result.offline = true;
+		} else if (arg === "--attachable") {
+			result.attachable = true;
+		} else if (arg === "--attach" && i + 1 < args.length) {
+			result.attach = args[++i];
+		} else if (arg === "--list-sessions") {
+			result.listSessions = true;
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (arg.startsWith("--") && extensionFlags) {
@@ -224,6 +236,11 @@ ${chalk.bold("Options:")}
   --help, -h                     Show this help
   --version, -v                  Show version number
 
+${chalk.bold("Experimental - Attachable Sessions (tmux-style multi-attach):")}
+  --attachable                   Start session with socket server for multi-client attachment
+  --attach <session-id>          Attach to an existing socket-based session
+  --list-sessions                List all running attachable sessions
+
 Extensions can register additional flags (e.g., --plan from plan-mode extension).
 
 ${chalk.bold("Examples:")}
@@ -272,6 +289,16 @@ ${chalk.bold("Examples:")}
   # Export a session file to HTML
   ${APP_NAME} --export ~/${CONFIG_DIR_NAME}/agent/sessions/--path--/session.jsonl
   ${APP_NAME} --export session.jsonl output.html
+
+  # ${chalk.bold("Experimental - Attachable Sessions")}
+  # Start an attachable session (others can attach via --attach)
+  ${APP_NAME} --attachable "Build a new feature"
+
+  # List all running attachable sessions
+  ${APP_NAME} --list-sessions
+
+  # Attach to a running session (tmux-style surveillance)
+  ${APP_NAME} --attach abc-123-session-id
 
 ${chalk.bold("Environment Variables:")}
   ANTHROPIC_API_KEY                - Anthropic Claude API key

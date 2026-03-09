@@ -798,6 +798,20 @@ export async function main(args: string[]) {
 		process.exit(0);
 	}
 
+	// Experimental: List attachable sessions
+	if (parsed.listSessions) {
+		const { listSessions } = await import("./cli/list-sessions.js");
+		await listSessions();
+		process.exit(0);
+	}
+
+	// Experimental: Attach to existing session
+	if (parsed.attach) {
+		const { runAttachMode } = await import("./cli/attach-mode.js");
+		await runAttachMode(parsed.attach);
+		process.exit(0);
+	}
+
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
 	if (parsed.mode !== "rpc") {
 		const stdinContent = await readPipedStdin();
@@ -887,6 +901,31 @@ export async function main(args: string[]) {
 	}
 
 	const { session, modelFallbackMessage } = await createAgentSession(sessionOptions);
+
+	// Experimental: Make session attachable if --attachable flag is set
+	let cleanupSocketServer: (() => Promise<void>) | null = null;
+	if (parsed.attachable) {
+		const { makeSessionAttachable } = await import("./core/socket-server/index.js");
+		cleanupSocketServer = await makeSessionAttachable({
+			session,
+			enabled: true,
+		});
+	}
+
+	// Ensure socket server is cleaned up on exit
+	const cleanup = async () => {
+		if (cleanupSocketServer) {
+			await cleanupSocketServer();
+		}
+	};
+	process.on("SIGINT", cleanup);
+	process.on("SIGTERM", cleanup);
+	process.on("exit", () => {
+		if (cleanupSocketServer) {
+			// Synchronous cleanup attempt
+			cleanupSocketServer().catch(() => {});
+		}
+	});
 
 	if (!isInteractive && !session.model) {
 		console.error(chalk.red("No models available."));

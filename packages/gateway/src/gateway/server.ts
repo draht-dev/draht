@@ -3,10 +3,12 @@ import { websocket } from "hono/bun";
 import { except } from "hono/combine";
 import { cors } from "hono/cors";
 import pkg from "../../package.json" with { type: "json" };
+import type { GatewaySettings } from "../config/config";
 import { EventBus } from "../session/event-bus";
 import { SessionManager } from "../session/session-manager";
 import { bearerAuthMiddleware } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
+import { createSessionStreamRoutes } from "./routes/session-stream";
 import { createSessionRoutes } from "./routes/sessions";
 import { createSseRoutes } from "./routes/sse";
 import { createWsRoutes } from "./routes/ws";
@@ -20,6 +22,11 @@ export interface GatewayConfig {
 	 * When omitted, a fresh SessionManager is created internally.
 	 */
 	manager?: SessionManager;
+	/**
+	 * Optional gateway settings (from config file).
+	 * Used for path validation, etc.
+	 */
+	config?: GatewaySettings;
 }
 
 /**
@@ -75,7 +82,8 @@ export function createServer(config: GatewayConfig): ServerHandle {
 			version: pkg.version,
 		});
 	});
-	app.route("/sessions", createSessionRoutes(manager));
+	app.route("/sessions", createSessionRoutes(manager, config.config));
+	app.route("/sessions", createSessionStreamRoutes(manager));
 	app.route("/sessions", createWsRoutes(manager));
 	app.route("/events", createSseRoutes(eventBus));
 

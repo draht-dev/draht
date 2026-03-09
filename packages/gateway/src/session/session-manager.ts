@@ -45,10 +45,11 @@ export class SessionManager {
 	 * events are emitted.
 	 *
 	 * @param command - Optional command + arguments to spawn as a subprocess.
+	 * @param cwd - Optional working directory for the process.
 	 * @returns The newly created Session entity.
 	 */
-	create(command?: string[]): Session {
-		const session = Session.create(command);
+	create(command?: string[], cwd?: string): Session {
+		const session = Session.create(command, cwd);
 		this.#sessions.set(session.id, session);
 
 		this.#bus.emit("session:created", {

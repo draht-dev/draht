@@ -58,9 +58,10 @@ export const Session = {
 	 * status remains 'starting'.
 	 *
 	 * @param command - Optional command + arguments array to spawn.
+	 * @param cwd - Optional working directory for the process.
 	 * @returns A new Session entity.
 	 */
-	create(command?: string[]): Session {
+	create(command?: string[], cwd?: string): Session {
 		const session: Session = {
 			id: crypto.randomUUID(),
 			status: "starting",
@@ -68,7 +69,7 @@ export const Session = {
 		};
 
 		if (command !== undefined) {
-			const proc = new SessionProcess(command);
+			const proc = new SessionProcess(command, cwd);
 			session.process = proc;
 
 			// Transition to 'running' once the process confirms it is alive.

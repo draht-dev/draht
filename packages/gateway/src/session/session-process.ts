@@ -30,6 +30,12 @@ export class SessionProcess {
 	/** Registered stdout output subscribers. */
 	#subscribers = new Set<OutputCallback>();
 
+	/** Buffer of all output for replay to new subscribers */
+	#outputBuffer: string[] = [];
+
+	/** Maximum buffer size (lines) */
+	readonly #maxBufferLines = 10000;
+
 	/**
 	 * Resolves when status transitions to 'running' (next microtick after spawn).
 	 */
@@ -44,12 +50,14 @@ export class SessionProcess {
 	 * Spawn a new subprocess with the given command.
 	 *
 	 * @param command - Command and arguments array, e.g. ['cat'] or ['echo', 'hello'].
+	 * @param cwd - Optional working directory for the process. Defaults to gateway's cwd.
 	 */
-	constructor(command: string[]) {
+	constructor(command: string[], cwd?: string) {
 		this.#proc = Bun.spawn(command, {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
+			cwd,
 		});
 
 		// ready resolves on next microtick — process is considered running immediately
@@ -81,10 +89,18 @@ export class SessionProcess {
 	 * Each chunk is a UTF-8 decoded string segment. Subscribers are called in
 	 * registration order. A subscriber added after process exit will never fire.
 	 *
+	 * NEW: Immediately replays all buffered output to the new subscriber before
+	 * subscribing to live output.
+	 *
 	 * @param callback - Function invoked with each decoded stdout chunk.
 	 * @returns An unsubscribe function; calling it removes the subscriber immediately.
 	 */
 	onOutput(callback: OutputCallback): Unsubscribe {
+		// Replay buffered output to new subscriber
+		for (const chunk of this.#outputBuffer) {
+			callback(chunk);
+		}
+
 		this.#subscribers.add(callback);
 		return () => {
 			this.#subscribers.delete(callback);
@@ -131,6 +147,8 @@ export class SessionProcess {
 	 * Runs as a fire-and-forget async loop; exits when the stdout stream is
 	 * exhausted or an error occurs. On error, all subscribers are cleared to
 	 * avoid dangling callbacks receiving no further output.
+	 *
+	 * NEW: Also buffers all output for replay to future subscribers.
 	 */
 	async #pumpStdout(): Promise<void> {
 		const decoder = new TextDecoder();
@@ -145,6 +163,15 @@ export class SessionProcess {
 				if (done) break;
 				const text = decoder.decode(value, { stream: true });
 				if (text.length > 0) {
+					// Buffer the output for replay
+					this.#outputBuffer.push(text);
+
+					// Trim buffer if it gets too large
+					if (this.#outputBuffer.length > this.#maxBufferLines) {
+						this.#outputBuffer.shift();
+					}
+
+					// Fan out to current subscribers
 					for (const cb of this.#subscribers) {
 						cb(text);
 					}

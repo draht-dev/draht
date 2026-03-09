@@ -25,7 +25,8 @@ A WebSocket/HTTP server that:
 - REST API: `POST /sessions`, `GET /sessions`, `DELETE /sessions/:id`
 - WebSocket: per-session bidirectional stream
 - SSE: event stream for session lifecycle events
-- CLI: `draht gateway start --port 7878 --auth <token>`
+- CLI: `draht-gateway --port 7878 --host 0.0.0.0 --auth <token>`
+- Binds to `0.0.0.0` by default (accessible over Tailscale)
 - Designed to run over Tailscale (remote access from Quest/mobile)
 
 ### 2. Draht Flutter Client

@@ -37,6 +37,8 @@ function timingSafeEqual(actual: string, expected: string): boolean {
  * Bearer token authentication middleware.
  *
  * Validates the `Authorization: Bearer <token>` header on every request.
+ * For WebSocket connections, also accepts `?token=XXX` query parameter
+ * (since WebSocket upgrades can't always carry custom headers from browsers).
  * Returns a 401 JSON response for missing, malformed, or incorrect tokens.
  * Uses a timing-safe comparison to prevent token oracle attacks.
  * Use with `except` from `hono/combine` to exclude public endpoints like /health.
@@ -45,22 +47,39 @@ function timingSafeEqual(actual: string, expected: string): boolean {
  */
 export function bearerAuthMiddleware(expectedToken: string): MiddlewareHandler {
 	return async function bearerAuth(c, next) {
+		const path = c.req.path;
+		const method = c.req.method;
+		console.log(`[AUTH] ${method} ${path}`);
+
+		let token: string | undefined;
+
+		// Try Authorization header first (preferred)
 		const authHeader = c.req.header("Authorization");
+		if (authHeader) {
+			const match = /^Bearer (.+)$/i.exec(authHeader);
+			if (match) {
+				token = match[1];
+			}
+		}
 
-		if (!authHeader) {
+		// Fallback to query parameter (for WebSocket connections)
+		if (!token) {
+			token = c.req.query("token");
+		}
+
+		// No token found in either location
+		if (!token) {
+			console.log(`[AUTH] No token found`);
 			return c.json({ error: "Unauthorized" }, 401);
 		}
 
-		const match = /^Bearer (.+)$/i.exec(authHeader);
-		if (!match) {
-			return c.json({ error: "Unauthorized" }, 401);
-		}
-
-		const token = match[1]!;
+		// Verify token matches
 		if (!timingSafeEqual(token, expectedToken)) {
+			console.log(`[AUTH] Invalid token`);
 			return c.json({ error: "Unauthorized" }, 401);
 		}
 
+		console.log(`[AUTH] ✓ Authorized`);
 		await next();
 	};
 }

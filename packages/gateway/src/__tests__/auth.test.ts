@@ -56,4 +56,24 @@ describe("bearerAuthMiddleware", () => {
 		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.status).toBe("ok");
 	});
+
+	test("query parameter ?token=correct → 200 (for WebSocket compat)", async () => {
+		const app = buildApp();
+		const res = await app.request("/probe?token=test-secret");
+		expect(res.status).toBe(200);
+	});
+
+	test("query parameter ?token=wrong → 401", async () => {
+		const app = buildApp();
+		const res = await app.request("/probe?token=wrongtoken");
+		expect(res.status).toBe(401);
+	});
+
+	test("both header and query param, header takes precedence", async () => {
+		const app = buildApp();
+		const res = await app.request("/probe?token=wrongtoken", {
+			headers: { Authorization: "Bearer test-secret" },
+		});
+		expect(res.status).toBe(200); // Header is correct, query is wrong, but header wins
+	});
 });

@@ -46,6 +46,8 @@
 	},
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.2",
+		"@sinclair/typebox": "^0.34.41",
+		"ajv": "^8.17.1",
 		"@draht/agent-core": "workspace:*",
 		"@draht/ai": "workspace:*",
 		"@draht/tui": "workspace:*",

@@ -18,8 +18,11 @@
 	},
 	"dependencies": {
 		"@lmstudio/sdk": "^1.5.0",
+		"@sinclair/typebox": "^0.34.41",
+		"@draht/agent-core": "workspace:*",
 		"@draht/ai": "workspace:*",
 		"@draht/tui": "workspace:*",
+		"highlight.js": "^11.11.1",
 		"docx-preview": "^0.3.7",
 		"jszip": "^3.10.1",
 		"lucide": "^0.544.0",

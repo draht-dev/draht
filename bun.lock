@@ -30,6 +30,7 @@
         "@draht/ai": "workspace:*",
       },
       "devDependencies": {
+        "@sinclair/typebox": "^0.34.41",
         "@types/node": "^24.3.0",
         "typescript": "^6.0.0-beta",
         "vitest": "^3.2.4",

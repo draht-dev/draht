@@ -323,6 +323,7 @@
         "@mariozechner/mini-lit": "^0.2.0",
         "@tailwindcss/cli": "^4.0.0-beta.14",
         "concurrently": "^9.2.1",
+        "tailwindcss": "^4.2.1",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {

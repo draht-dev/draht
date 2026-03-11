@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.11] - 2026-03-11
+
+### Fixed
+
+- add missing @sinclair/typebox devDependency
 
 ## [2026.3.5] - 2026-03-05
 

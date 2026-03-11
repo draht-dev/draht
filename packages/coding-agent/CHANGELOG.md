@@ -1,6 +1,47 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.11] - 2026-03-11
+
+### Added
+
+- add fold/unfold to tree branch navigation
+- refine session_directory hook closes #1729
+- add session_directory extension event
+- add provider payload hook
+- preserve custom editor onEscape/onCtrlD handlers
+- add treeFilterMode setting for /tree default filter (#1852)
+- add experimental attachable sessions
+
+### Changed
+
+- fix upstream branding in cherry-picked files
+- explain Windows Terminal Alt+Enter remap (#1967)
+- add codex tool-loop cache probe
+- document tool result truncation in compaction serialization
+- clarify that tool errors must be thrown, not returned
+- clarify models.json name behavior (fixes #1840)
+- update session path from ~/.pi/ to ~/.draht/
+
+### Fixed
+
+- add missing @sinclair/typebox and ajv dependencies
+- update Anthropic compaction model and HTTPS package test (#1960)
+- use shell for external editor on windows closes #1925
+- prefer explicit -e extensions closes #1896
+- handle tmux xterm extended keys and warn on tmux setup fixes #1872
+- custom tool collapsed/expanded rendering in HTML export (#1934)
+- use strict JSONL framing fixes #1911
+- keep ~/.agents skills user-scoped\n\ncloses #1915
+- guard against stale kept pre-compaction usage in error-path threshold check
+- truncate tool results in compaction summarization to prevent overflow, fixes #1796
+- allow threshold compaction for error messages using last successful usage, fixes #1834
+- retry sync lockfile acquisition to prevent false auth errors during parallel startup
+- preserve thinking defaults across model switches closes #1864
+- clear header on /new closes #1880
+- prefer workspace dist files for extension aliases
+- normalize CRLF in write preview rendering (fixes #1854)
+- make footer truncation width-aware
+- use ESM resolution for extension alias fallback (#1821)
 
 ## [2026.3.6] - 2026-03-06
 

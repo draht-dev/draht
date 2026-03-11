@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.11] - 2026-03-11
+
+### Fixed
+
+- add missing dependencies for CI build
+- add missing @draht/agent-core, @sinclair/typebox, and highlight.js dependencies
 
 ## [2026.3.5] - 2026-03-05
 

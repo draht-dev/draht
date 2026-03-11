@@ -1,6 +1,23 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.11] - 2026-03-11
+
+### Added
+
+- support digit keybindings closes #1905
+- add non-capturing overlays with focus control (#1916)
+
+### Fixed
+
+- stop wide input slice overflow closes #1982 (#2006)
+- handle wide unicode input scrolling closes #1982
+- normalize tab characters in Input paste to spaces (#1975)
+- chain slash arg autocomplete after Tab completion
+- handle tmux xterm extended keys and warn on tmux setup fixes #1872
+- autocomplete highlight follows first prefix match as user types (#1931)
+- add modifyOtherKeys fallback for modified enter keys in tmux
+- add Kitty CSI-u printable decoding to Input component, closes #1857
+- full redraw on terminal width/height resize\n\ncloses #1844
 
 ## [2026.3.5] - 2026-03-05
 

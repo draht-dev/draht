@@ -1,6 +1,35 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.11] - 2026-03-11
+
+### Added
+
+- add claude-sonnet-4-6 to Antigravity, fix Claude thinking header detection, bump UA to 1.18.4
+- add github-copilot gpt-5.3-codex fallback closes #1853
+
+### Changed
+
+- regenerate models
+- migrate mistral provider to conversations sdk
+- regenerate models with pricing and naming updates
+- add @smithy/node-http-handler dependency
+
+### Fixed
+
+- capture usage from choice.usage and send assistant content as string
+- improve GitHub Copilot OAuth polling (#1994)
+- support GOOGLE_CLOUD_API_KEY for google-vertex (#1948) (#1976)
+- improve error details in response.failed handler (#1956)
+- detect z.ai context overflow
+- restore OpenAI Responses reasoning replay closes #1878
+- keep mistral browser-safe
+- preserve mistral thinking replay
+- simplify oauth subpath exports closes #1856
+- cap gpt-5.4 context windows to 272k
+- use skip_thought_signature_validator for unsigned Gemini 3 tool calls
+- antigravity endpoint cascade on 403/404, add autopush fallback, strip extra headers
+- omit empty OpenAI Responses thinking blocks on replay
+- preserve OpenAI Responses assistant phase across turns closes #1819
 
 ## [2026.3.6] - 2026-03-06
 

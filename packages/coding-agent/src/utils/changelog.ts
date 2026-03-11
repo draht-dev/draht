@@ -4,7 +4,27 @@ export interface ChangelogEntry {
 	major: number;
 	minor: number;
 	patch: number;
+	/** Intraday release suffix for date-based versions (e.g., -1, -2) */
+	suffix: number;
 	content: string;
+}
+
+/**
+ * Parse a version string into components.
+ * Handles both semver (x.y.z) and date-based versions (YYYY.M.D or YYYY.M.D-N).
+ */
+export function parseVersion(version: string): { major: number; minor: number; patch: number; suffix: number } {
+	// Match YYYY.M.D-N or YYYY.M.D or x.y.z
+	const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?/);
+	if (!match) {
+		return { major: 0, minor: 0, patch: 0, suffix: 0 };
+	}
+	return {
+		major: Number.parseInt(match[1], 10),
+		minor: Number.parseInt(match[2], 10),
+		patch: Number.parseInt(match[3], 10),
+		suffix: match[4] ? Number.parseInt(match[4], 10) : 0,
+	};
 }
 
 /**
@@ -22,10 +42,10 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 		const entries: ChangelogEntry[] = [];
 
 		let currentLines: string[] = [];
-		let currentVersion: { major: number; minor: number; patch: number } | null = null;
+		let currentVersion: { major: number; minor: number; patch: number; suffix: number } | null = null;
 
 		for (const line of lines) {
-			// Check if this is a version header (## [x.y.z] ...)
+			// Check if this is a version header (## [x.y.z] or ## [YYYY.M.D-N] ...)
 			if (line.startsWith("## ")) {
 				// Save previous entry if exists
 				if (currentVersion && currentLines.length > 0) {
@@ -35,14 +55,10 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 					});
 				}
 
-				// Try to parse version from this line
-				const versionMatch = line.match(/##\s+\[?(\d+)\.(\d+)\.(\d+)\]?/);
+				// Try to parse version from this line (supports YYYY.M.D-N format)
+				const versionMatch = line.match(/##\s+\[?(\d+\.\d+\.\d+(?:-\d+)?)\]?/);
 				if (versionMatch) {
-					currentVersion = {
-						major: Number.parseInt(versionMatch[1], 10),
-						minor: Number.parseInt(versionMatch[2], 10),
-						patch: Number.parseInt(versionMatch[3], 10),
-					};
+					currentVersion = parseVersion(versionMatch[1]);
 					currentLines = [line];
 				} else {
 					// Reset if we can't parse version
@@ -76,19 +92,16 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 export function compareVersions(v1: ChangelogEntry, v2: ChangelogEntry): number {
 	if (v1.major !== v2.major) return v1.major - v2.major;
 	if (v1.minor !== v2.minor) return v1.minor - v2.minor;
-	return v1.patch - v2.patch;
+	if (v1.patch !== v2.patch) return v1.patch - v2.patch;
+	return v1.suffix - v2.suffix;
 }
 
 /**
  * Get entries newer than lastVersion
  */
 export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): ChangelogEntry[] {
-	// Parse lastVersion
-	const parts = lastVersion.split(".").map(Number);
 	const last: ChangelogEntry = {
-		major: parts[0] || 0,
-		minor: parts[1] || 0,
-		patch: parts[2] || 0,
+		...parseVersion(lastVersion),
 		content: "",
 	};
 

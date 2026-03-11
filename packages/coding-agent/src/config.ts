@@ -59,11 +59,11 @@ export function getUpdateInstruction(packageName: string): string {
 		case "yarn":
 			return `Run: yarn global add ${packageName}`;
 		case "bun":
-			return `Run: bun install -g ${packageName}`;
+			return `Run: bun add -g ${packageName}`;
 		case "npm":
 			return `Run: npm install -g ${packageName}`;
 		default:
-			return `Run: npm install -g ${packageName}`;
+			return `Run: bun add -g ${packageName}`;
 	}
 }
 

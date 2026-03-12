@@ -19,7 +19,7 @@ interface QualityGateRunResult {
 }
 
 interface QualityGateFixtureOptions {
-	testFiles: TempRepoFile[];
+	repoFiles: TempRepoFile[];
 	tscScriptContent?: string;
 }
 
@@ -38,7 +38,7 @@ afterEach(() => {
 describe("GSD quality gate hook", () => {
 	it("runs the real hook in an isolated temp repo", () => {
 		const repo = createQualityGateFixture({
-			testFiles: [createPassingTestFile()],
+			repoFiles: [createPassingTestFile()],
 		});
 
 		const result = runQualityGate(repo.repoPath);
@@ -49,7 +49,7 @@ describe("GSD quality gate hook", () => {
 
 	it("fails loudly for failing tests in strict mode", () => {
 		const repo = createQualityGateFixture({
-			testFiles: [createFailingTestFile()],
+			repoFiles: [createFailingTestFile()],
 		});
 
 		const result = runQualityGate(repo.repoPath);
@@ -61,7 +61,7 @@ describe("GSD quality gate hook", () => {
 
 	it("fails when TypeScript compilation reports errors even if tests pass", () => {
 		const repo = createQualityGateFixture({
-			testFiles: [createPassingTestFile(), createTypeScriptErrorSourceFile()],
+			repoFiles: [createPassingTestFile(), createTypeScriptErrorSourceFile()],
 			tscScriptContent: createFailingTypeScriptScript(),
 		});
 
@@ -79,45 +79,61 @@ function createQualityGateFixture(options: QualityGateFixtureOptions) {
 	cleanups.push(repo.cleanup);
 
 	writeRepoFiles(repo.repoPath, [
-		{
-			path: "package.json",
-			content: JSON.stringify({
-				name: "quality-gate-fixture",
-				private: true,
-				scripts: {
-					test: "node ./scripts/run-tests.mjs",
-				},
-			}),
-		},
-		{
-			path: "hooks/draht-quality-gate.cjs",
-			content: qualityGateScriptSource,
-			executable: true,
-		},
-		{
-			path: "scripts/run-tests.mjs",
-			content: [
-				'import { spawnSync } from "node:child_process";',
-				"const result = spawnSync(process.execPath, ['--test'], { encoding: 'utf-8' });",
-				"if (result.stdout) process.stdout.write(result.stdout);",
-				"if (result.stderr) process.stderr.write(result.stderr);",
-				"if ((result.status ?? 1) === 0) {",
-				"\tconsole.log('0 fail');",
-				"} else {",
-				"\tconsole.error('1 fail');",
-				"}",
-				"process.exit(result.status ?? 1);",
-			].join("\n"),
-		},
-		{
-			path: "node_modules/.bin/tsc",
-			content: options.tscScriptContent ?? defaultTypeScriptScriptContent,
-			executable: true,
-		},
-		...options.testFiles,
+		createPackageJsonFile(),
+		createHookFixtureFile(),
+		createTestRunnerFile(),
+		createTypeScriptShimFile(options.tscScriptContent),
+		...options.repoFiles,
 	]);
 
 	return repo;
+}
+
+function createPackageJsonFile(): TempRepoFile {
+	return {
+		path: "package.json",
+		content: JSON.stringify({
+			name: "quality-gate-fixture",
+			private: true,
+			scripts: {
+				test: "node ./scripts/run-tests.mjs",
+			},
+		}),
+	};
+}
+
+function createHookFixtureFile(): TempRepoFile {
+	return {
+		path: "hooks/draht-quality-gate.cjs",
+		content: qualityGateScriptSource,
+		executable: true,
+	};
+}
+
+function createTestRunnerFile(): TempRepoFile {
+	return {
+		path: "scripts/run-tests.mjs",
+		content: [
+			'import { spawnSync } from "node:child_process";',
+			"const result = spawnSync(process.execPath, ['--test'], { encoding: 'utf-8' });",
+			"if (result.stdout) process.stdout.write(result.stdout);",
+			"if (result.stderr) process.stderr.write(result.stderr);",
+			"if ((result.status ?? 1) === 0) {",
+			"\tconsole.log('0 fail');",
+			"} else {",
+			"\tconsole.error('1 fail');",
+			"}",
+			"process.exit(result.status ?? 1);",
+		].join("\n"),
+	};
+}
+
+function createTypeScriptShimFile(tscScriptContent = defaultTypeScriptScriptContent): TempRepoFile {
+	return {
+		path: "node_modules/.bin/tsc",
+		content: tscScriptContent,
+		executable: true,
+	};
 }
 
 function runQualityGate(repoPath: string): QualityGateRunResult {
@@ -146,28 +162,22 @@ function writeRepoFiles(repoPath: string, files: TempRepoFile[]): void {
 }
 
 function createPassingTestFile(): TempRepoFile {
-	return {
-		path: "test/passing.test.js",
-		content: [
-			'import test from "node:test";',
-			'import assert from "node:assert/strict";',
-			"",
-			'test("passing fixture", () => {',
-			"\tassert.equal(1, 1);",
-			"});",
-		].join("\n"),
-	};
+	return createNodeTestFile("passing", "assert.equal(1, 1);");
 }
 
 function createFailingTestFile(): TempRepoFile {
+	return createNodeTestFile("failing", "assert.equal(1, 2);");
+}
+
+function createNodeTestFile(name: string, assertion: string): TempRepoFile {
 	return {
-		path: "test/failing.test.js",
+		path: `test/${name}.test.js`,
 		content: [
 			'import test from "node:test";',
 			'import assert from "node:assert/strict";',
 			"",
-			'test("failing fixture", () => {',
-			"\tassert.equal(1, 2);",
+			`test("${name} fixture", () => {`,
+			`\t${assertion}`,
 			"});",
 		].join("\n"),
 	};

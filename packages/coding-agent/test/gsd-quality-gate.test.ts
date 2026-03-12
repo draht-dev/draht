@@ -1,22 +1,32 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempGitRepo } from "./test-utils/git-repo.js";
 
 interface TempRepoFile {
 	path: string;
 	content: string;
+	executable?: boolean;
 }
 
 interface QualityGateRunResult {
 	status: number | null;
 	stdout: string;
 	stderr: string;
+	combinedOutput: string;
+}
+
+interface QualityGateFixtureOptions {
+	testFiles: TempRepoFile[];
+	tscScriptContent?: string;
 }
 
 const cleanups: Array<() => void> = [];
 const qualityGateScriptPath = new URL("../hooks/gsd/draht-quality-gate.js", import.meta.url);
+const qualityGateScriptSource = readFileSync(fileURLToPath(qualityGateScriptPath), "utf-8");
+const defaultTypeScriptScriptContent = "#!/usr/bin/env node\nprocess.exit(0);\n";
 
 afterEach(() => {
 	while (cleanups.length > 0) {
@@ -27,42 +37,21 @@ afterEach(() => {
 
 describe("GSD quality gate hook", () => {
 	it("runs the real hook in an isolated temp repo", () => {
-		const repo = createTempGitRepo();
-		cleanups.push(repo.cleanup);
-
-		writeRepoFiles(repo.repoPath, [
-			{
-				path: "package.json",
-				content: JSON.stringify({
-					name: "quality-gate-fixture",
-					private: true,
-					scripts: {
-						test: "node ./scripts/run-tests.mjs",
-					},
-				}),
-			},
-			{
-				path: "scripts/run-tests.mjs",
-				content: [
-					'import { spawnSync } from "node:child_process";',
-					"const result = spawnSync(process.execPath, ['--test'], { encoding: 'utf-8' });",
-					"if (result.stdout) process.stdout.write(result.stdout);",
-					"if (result.stderr) process.stderr.write(result.stderr);",
-					"process.exit(result.status ?? 1);",
-				].join("\n"),
-			},
-			{
-				path: "test/passing.test.js",
-				content: [
-					'import test from "node:test";',
-					'import assert from "node:assert/strict";',
-					"",
-					'test("passing fixture", () => {',
-					"\tassert.equal(1, 1);",
-					"});",
-				].join("\n"),
-			},
-		]);
+		const repo = createQualityGateFixture({
+			testFiles: [
+				{
+					path: "test/passing.test.js",
+					content: [
+						'import test from "node:test";',
+						'import assert from "node:assert/strict";',
+						"",
+						'test("passing fixture", () => {',
+						"\tassert.equal(1, 1);",
+						"});",
+					].join("\n"),
+				},
+			],
+		});
 
 		const result = runQualityGate(repo.repoPath);
 
@@ -71,8 +60,49 @@ describe("GSD quality gate hook", () => {
 	});
 });
 
+function createQualityGateFixture(options: QualityGateFixtureOptions) {
+	const repo = createTempGitRepo();
+	cleanups.push(repo.cleanup);
+
+	writeRepoFiles(repo.repoPath, [
+		{
+			path: "package.json",
+			content: JSON.stringify({
+				name: "quality-gate-fixture",
+				private: true,
+				scripts: {
+					test: "node ./scripts/run-tests.mjs",
+				},
+			}),
+		},
+		{
+			path: "hooks/draht-quality-gate.cjs",
+			content: qualityGateScriptSource,
+			executable: true,
+		},
+		{
+			path: "scripts/run-tests.mjs",
+			content: [
+				'import { spawnSync } from "node:child_process";',
+				"const result = spawnSync(process.execPath, ['--test'], { encoding: 'utf-8' });",
+				"if (result.stdout) process.stdout.write(result.stdout);",
+				"if (result.stderr) process.stderr.write(result.stderr);",
+				"process.exit(result.status ?? 1);",
+			].join("\n"),
+		},
+		{
+			path: "node_modules/.bin/tsc",
+			content: options.tscScriptContent ?? defaultTypeScriptScriptContent,
+			executable: true,
+		},
+		...options.testFiles,
+	]);
+
+	return repo;
+}
+
 function runQualityGate(repoPath: string): QualityGateRunResult {
-	const result = spawnSync(process.execPath, [qualityGateScriptPath.pathname, "--strict"], {
+	const result = spawnSync(process.execPath, [join(repoPath, "hooks/draht-quality-gate.cjs"), "--strict"], {
 		cwd: repoPath,
 		encoding: "utf-8",
 	});
@@ -81,6 +111,7 @@ function runQualityGate(repoPath: string): QualityGateRunResult {
 		status: result.status,
 		stdout: result.stdout,
 		stderr: result.stderr,
+		combinedOutput: `${result.stdout}${result.stderr}`,
 	};
 }
 
@@ -89,5 +120,8 @@ function writeRepoFiles(repoPath: string, files: TempRepoFile[]): void {
 		const filePath = join(repoPath, file.path);
 		mkdirSync(dirname(filePath), { recursive: true });
 		writeFileSync(filePath, file.content, "utf-8");
+		if (file.executable) {
+			chmodSync(filePath, 0o755);
+		}
 	}
 }

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDomainModel } from "../src/gsd/domain.js";
 import { commitTask } from "../src/gsd/git.js";
-import { createPlan } from "../src/gsd/planning.js";
+import { createPlan, verifyPhase, writeSummary } from "../src/gsd/planning.js";
 import { createTempGitRepo } from "./test-utils/git-repo.js";
 
 interface LifecycleCommitFlowResult {
@@ -12,6 +12,12 @@ interface LifecycleCommitFlowResult {
 	commitHash: string;
 	commitSubject: string;
 	planPath: string;
+}
+
+interface LifecycleVerificationFlowResult {
+	executionLogPath: string;
+	summaryPath: string;
+	verificationPath: string;
 }
 
 function buildPhase21WorkspaceFixture(repoPath: string): string {
@@ -62,6 +68,28 @@ function runPhase21LifecycleCommitFlow(repoPath: string): LifecycleCommitFlowRes
 	};
 }
 
+function runPhase21LifecycleVerificationFlow(repoPath: string): LifecycleVerificationFlowResult {
+	runPhase21LifecycleCommitFlow(repoPath);
+
+	const summaryPath = writeSummary(repoPath, 21, 2);
+	const verification = verifyPhase(repoPath, 21);
+	if (!verification.complete) {
+		throw new Error("Expected Phase 21 verification to complete");
+	}
+
+	return {
+		executionLogPath: join(repoPath, ".planning", "execution-log.jsonl"),
+		summaryPath,
+		verificationPath: join(
+			repoPath,
+			".planning",
+			"phases",
+			"21-full-lifecycle-integration-test",
+			"21-VERIFICATION.md",
+		),
+	};
+}
+
 describe("gsd lifecycle", () => {
 	const cleanups: Array<() => void> = [];
 
@@ -98,5 +126,32 @@ describe("gsd lifecycle", () => {
 		expect(result.planPath).toContain("21-full-lifecycle-integration-test");
 		expect(result.commitSubject).toBe("feat(21-02): green: implement lifecycle integration");
 		expect(readFileSync(result.changedFilePath, "utf-8")).toContain("integration-ready");
+	});
+
+	it("writes summary and verification artifacts with strict execution log entries", () => {
+		const repo = createTempGitRepo();
+		cleanups.push(repo.cleanup);
+
+		const result = runPhase21LifecycleVerificationFlow(repo.repoPath);
+
+		expect(existsSync(result.summaryPath)).toBe(true);
+		expect(existsSync(result.verificationPath)).toBe(true);
+		expect(existsSync(result.executionLogPath)).toBe(true);
+
+		const lines = readFileSync(result.executionLogPath, "utf-8")
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		const lastEntry = lines.at(-1);
+
+		expect(lastEntry).toMatchObject({
+			commit: expect.any(String),
+			phase: 21,
+			plan: 2,
+			status: expect.any(String),
+			task: 1,
+			timestamp: expect.any(String),
+		});
 	});
 });

@@ -3,10 +3,30 @@
 // Exported via src/gsd/index.ts and @draht/coding-agent.
 
 import { execSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 export interface CommitResult {
 	hash: string | null;
 	tddWarning: boolean;
+}
+
+interface ExecutionLogEntry {
+	commit: string;
+	phase: number;
+	plan: number;
+	status: "pass" | "tdd-violation";
+	task: number;
+	timestamp: string;
+}
+
+function appendExecutionLog(cwd: string, entry: ExecutionLogEntry): void {
+	const planningDir = path.join(cwd, ".planning");
+	if (!fs.existsSync(planningDir)) {
+		return;
+	}
+	const logPath = path.join(planningDir, "execution-log.jsonl");
+	fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf-8");
 }
 
 /**
@@ -41,6 +61,14 @@ export function commitTask(cwd: string, phaseNum: number, planNum: number, descr
 		} catch {
 			// not a git repo or commit not found
 		}
+		appendExecutionLog(cwd, {
+			commit: hash,
+			phase: phaseNum,
+			plan: planNum,
+			status: tddWarning ? "tdd-violation" : "pass",
+			task: 1,
+			timestamp: new Date().toISOString(),
+		});
 		return { hash, tddWarning };
 	} catch {
 		return { hash: null, tddWarning: false };

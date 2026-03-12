@@ -1,6 +1,7 @@
 // GSD index — re-exports all GSD module functions.
 // Import from @draht/coding-agent for use in extensions.
 
+export type { MapCodebaseResult } from "./domain.js";
 export { createDomainModel, mapCodebase } from "./domain.js";
 export {
 	extractGlossaryTerms,

@@ -7,6 +7,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const PLANNING = ".planning";
+const VALUE_OBJECT_NAME = /(Address|Amount|Code|Email|Id|Identifier|Key|Money|Price|Value)$/;
+
+export type MapCodebaseResult = string[] & {
+	entities: string[];
+	valueObjects: string[];
+};
 
 function planningPath(cwd: string, ...segments: string[]): string {
 	return path.join(cwd, PLANNING, ...segments);
@@ -16,8 +22,96 @@ function ensureDir(dir: string): void {
 	if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
+function ensureCodebaseExists(cwd: string): void {
+	if (!fs.existsSync(cwd)) {
+		throw new Error(`Codebase path does not exist: ${cwd}`);
+	}
+}
+
 function timestamp(): string {
 	return new Date().toISOString().replace("T", " ").slice(0, 19);
+}
+
+function toRelativeCodePath(cwd: string, filePath: string): string {
+	return path.relative(cwd, filePath).split(path.sep).join("/");
+}
+
+function listCodeFiles(cwd: string): string[] {
+	const codeFiles: string[] = [];
+	const ignoredDirs = new Set([".git", ".planning", "dist", "node_modules"]);
+	const pendingDirs = [cwd];
+
+	while (pendingDirs.length > 0) {
+		const currentDir = pendingDirs.pop();
+		if (!currentDir) {
+			continue;
+		}
+
+		const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+		for (const entry of entries) {
+			const entryPath = path.join(currentDir, entry.name);
+			if (entry.isDirectory()) {
+				if (!ignoredDirs.has(entry.name)) {
+					pendingDirs.push(entryPath);
+				}
+				continue;
+			}
+
+			if (entry.isFile() && /\.(go|ts)$/.test(entry.name)) {
+				codeFiles.push(entryPath);
+			}
+		}
+	}
+
+	return codeFiles.sort((left, right) => toRelativeCodePath(cwd, left).localeCompare(toRelativeCodePath(cwd, right)));
+}
+
+function extractExportedTerms(fileContent: string): string[] {
+	const terms = new Set<string>();
+	const exportPattern = /export\s+(?:interface|type|class)\s+([A-Z][A-Za-z0-9_]*)/g;
+
+	for (const match of fileContent.matchAll(exportPattern)) {
+		terms.add(match[1]);
+	}
+
+	return [...terms].sort((left, right) => left.localeCompare(right));
+}
+
+function classifyTerms(terms: string[]): { entities: string[]; valueObjects: string[] } {
+	const entities: string[] = [];
+	const valueObjects: string[] = [];
+
+	for (const term of terms) {
+		if (VALUE_OBJECT_NAME.test(term)) {
+			valueObjects.push(term);
+			continue;
+		}
+
+		entities.push(term);
+	}
+
+	return { entities, valueObjects };
+}
+
+function scanStructuredDomainTerms(cwd: string): { entities: string[]; valueObjects: string[] } {
+	const uniqueTerms = new Set<string>();
+
+	for (const filePath of listCodeFiles(cwd)) {
+		const fileContent = fs.readFileSync(filePath, "utf-8");
+		for (const term of extractExportedTerms(fileContent)) {
+			uniqueTerms.add(term);
+		}
+	}
+
+	const sortedTerms = [...uniqueTerms].sort((left, right) => left.localeCompare(right));
+	return classifyTerms(sortedTerms);
+}
+
+function attachStructuredDomainTerms(
+	files: string[],
+	structuredTerms: { entities: string[]; valueObjects: string[] },
+): MapCodebaseResult {
+	return Object.assign(files, structuredTerms);
 }
 
 /**
@@ -68,9 +162,12 @@ Generated from PROJECT.md: ${timestamp()}
  * Scan the codebase and write .planning/codebase/ analysis files.
  * Returns array of created file paths.
  */
-export function mapCodebase(cwd: string): string[] {
+export function mapCodebase(cwd: string): MapCodebaseResult {
+	ensureCodebaseExists(cwd);
+
 	const outDir = planningPath(cwd, "codebase");
 	ensureDir(outDir);
+	const structuredTerms = scanStructuredDomainTerms(cwd);
 
 	// Gather file tree
 	let tree = "";
@@ -151,5 +248,5 @@ export function mapCodebase(cwd: string): string[] {
 		"utf-8",
 	);
 
-	return [stackPath, archPath, convPath, concernsPath, hintsPath];
+	return attachStructuredDomainTerms([stackPath, archPath, convPath, concernsPath, hintsPath], structuredTerms);
 }

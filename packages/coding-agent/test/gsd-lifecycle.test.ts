@@ -35,11 +35,31 @@ function buildPhase21WorkspaceFixture(repoPath: string): string {
 }
 
 function runPhase21LifecycleCommitFlow(repoPath: string): LifecycleCommitFlowResult {
-	void createPlan;
-	void commitTask;
-	void execSync;
-	void repoPath;
-	throw new Error("not implemented");
+	buildPhase21WorkspaceFixture(repoPath);
+	createDomainModel(repoPath);
+
+	const planPath = createPlan(repoPath, 21, 2, "Full lifecycle integration test");
+	const changedFilePath = join(repoPath, "src", "phase-21-lifecycle.ts");
+
+	mkdirSync(join(repoPath, "src"), { recursive: true });
+	writeFileSync(changedFilePath, "export const lifecycleStatus = 'integration-ready';\n", "utf-8");
+
+	const commitResult = commitTask(repoPath, 21, 2, "green: implement lifecycle integration");
+	if (!commitResult.hash) {
+		throw new Error("Expected commitTask() to create a real commit");
+	}
+
+	const commitSubject = execSync("git log --format=%s -1", {
+		cwd: repoPath,
+		encoding: "utf-8",
+	}).trim();
+
+	return {
+		changedFilePath,
+		commitHash: commitResult.hash,
+		commitSubject,
+		planPath,
+	};
 }
 
 describe("gsd lifecycle", () => {
@@ -74,7 +94,7 @@ describe("gsd lifecycle", () => {
 		const result = runPhase21LifecycleCommitFlow(repo.repoPath);
 
 		expect(result.commitHash).toMatch(/^[0-9a-f]{40}$/);
-		expect(result.planPath).toContain("21-01-PLAN.md");
+		expect(result.planPath).toContain("21-02-PLAN.md");
 		expect(result.planPath).toContain("21-full-lifecycle-integration-test");
 		expect(result.commitSubject).toBe("feat(21-02): green: implement lifecycle integration");
 		expect(readFileSync(result.changedFilePath, "utf-8")).toContain("integration-ready");

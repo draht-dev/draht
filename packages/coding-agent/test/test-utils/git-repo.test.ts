@@ -19,30 +19,15 @@ describe("createTempGitRepo", () => {
 
 		expect(fs.existsSync(repo.repoPath)).toBe(true);
 		expect(fs.existsSync(`${repo.repoPath}/.git`)).toBe(true);
-
-		const head = execSync("git rev-parse HEAD", {
-			cwd: repo.repoPath,
-			encoding: "utf-8",
-		}).trim();
-
-		expect(head).toMatch(/^[0-9a-f]{40}$/);
+		expect(readGitOutput(repo.repoPath, "rev-parse HEAD")).toMatch(/^[0-9a-f]{40}$/);
 	});
 
 	it("configures deterministic git identity for the temp repo", () => {
 		const repo = createTempGitRepo();
 		cleanups.push(repo.cleanup);
 
-		const email = execSync("git config user.email", {
-			cwd: repo.repoPath,
-			encoding: "utf-8",
-		}).trim();
-		const name = execSync("git config user.name", {
-			cwd: repo.repoPath,
-			encoding: "utf-8",
-		}).trim();
-
-		expect(email).toBe("gsd-test@example.com");
-		expect(name).toBe("GSD Test");
+		expect(readGitOutput(repo.repoPath, "config user.email")).toBe("gsd-test@example.com");
+		expect(readGitOutput(repo.repoPath, "config user.name")).toBe("GSD Test");
 	});
 
 	it("cleanup removes the temp directory", () => {
@@ -66,12 +51,13 @@ describe("createTempGitRepo", () => {
 		cleanups.push(repo.cleanup);
 
 		expect(fs.existsSync(`${repo.repoPath}/fixtures/domain/Order.ts`)).toBe(true);
-
-		const head = execSync("git rev-parse HEAD", {
-			cwd: repo.repoPath,
-			encoding: "utf-8",
-		}).trim();
-
-		expect(head).toMatch(/^[0-9a-f]{40}$/);
+		expect(readGitOutput(repo.repoPath, "rev-parse HEAD")).toMatch(/^[0-9a-f]{40}$/);
 	});
 });
+
+function readGitOutput(repoPath: string, args: string): string {
+	return execSync(`git ${args}`, {
+		cwd: repoPath,
+		encoding: "utf-8",
+	}).trim();
+}

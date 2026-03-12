@@ -29,32 +29,31 @@ export function createTempGitRepo(options: CreateTempGitRepoOptions = {}): TempG
 		content: DEFAULT_INITIAL_TRACKED_FILE_CONTENT,
 	};
 
-	execSync("git init", { cwd: repoPath, stdio: "pipe" });
-	execSync(`git config user.email ${JSON.stringify(DEFAULT_GIT_USER_EMAIL)}`, {
-		cwd: repoPath,
-		stdio: "pipe",
-	});
-	execSync(`git config user.name ${JSON.stringify(DEFAULT_GIT_USER_NAME)}`, {
-		cwd: repoPath,
-		stdio: "pipe",
-	});
-
-	const trackedFilePath = join(repoPath, initialTrackedFile.path);
-	mkdirSync(dirname(trackedFilePath), { recursive: true });
-	writeFileSync(trackedFilePath, initialTrackedFile.content, "utf-8");
-
-	execSync("git add .", { cwd: repoPath, stdio: "pipe" });
-	execSync(`git commit -m ${JSON.stringify("chore: initial commit")}`, {
-		cwd: repoPath,
-		stdio: "pipe",
-	});
+	git(repoPath, "init");
+	git(repoPath, `config user.email ${JSON.stringify(DEFAULT_GIT_USER_EMAIL)}`);
+	git(repoPath, `config user.name ${JSON.stringify(DEFAULT_GIT_USER_NAME)}`);
+	writeTrackedFile(repoPath, initialTrackedFile);
+	git(repoPath, "add .");
+	git(repoPath, `commit -m ${JSON.stringify("chore: initial commit")}`);
 
 	return {
 		repoPath,
-		cleanup: () => {
-			if (existsSync(repoPath)) {
-				rmSync(repoPath, { recursive: true, force: true });
-			}
-		},
+		cleanup: () => cleanupTempDir(repoPath),
 	};
+}
+
+function git(repoPath: string, args: string): void {
+	execSync(`git ${args}`, { cwd: repoPath, stdio: "pipe" });
+}
+
+function writeTrackedFile(repoPath: string, trackedFile: TempGitRepoFile): void {
+	const trackedFilePath = join(repoPath, trackedFile.path);
+	mkdirSync(dirname(trackedFilePath), { recursive: true });
+	writeFileSync(trackedFilePath, trackedFile.content, "utf-8");
+}
+
+function cleanupTempDir(repoPath: string): void {
+	if (existsSync(repoPath)) {
+		rmSync(repoPath, { recursive: true, force: true });
+	}
 }

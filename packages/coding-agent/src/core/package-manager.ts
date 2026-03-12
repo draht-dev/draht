@@ -12,7 +12,7 @@ import type { PackageSource, SettingsManager } from "./settings-manager.js";
 const NETWORK_TIMEOUT_MS = 10000;
 
 function isOfflineModeEnabled(): boolean {
-	const value = process.env.DRAHT_OFFLINE;
+	const value = process.env.DRAHT_OFFLINE ?? process.env.PI_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }

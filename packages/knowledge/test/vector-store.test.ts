@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 
 // We test pure functions extracted from vector-store (no API calls needed).
 

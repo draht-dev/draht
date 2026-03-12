@@ -62,6 +62,7 @@ describe("GSD quality gate hook", () => {
 	it("fails when TypeScript compilation reports errors even if tests pass", () => {
 		const repo = createQualityGateFixture({
 			testFiles: [createPassingTestFile(), createTypeScriptErrorSourceFile()],
+			tscScriptContent: createFailingTypeScriptScript(),
 		});
 
 		const result = runQualityGate(repo.repoPath);
@@ -177,4 +178,12 @@ function createTypeScriptErrorSourceFile(): TempRepoFile {
 		path: "src/broken.ts",
 		content: ['const value: number = "not-a-number";', "export { value };"].join("\n"),
 	};
+}
+
+function createFailingTypeScriptScript(): string {
+	return [
+		"#!/usr/bin/env node",
+		'console.error(\'src/broken.ts(1,7): error TS2322: Type "string" is not assignable to type "number".\');',
+		"process.exit(1);",
+	].join("\n");
 }

@@ -38,25 +38,25 @@ afterEach(() => {
 describe("GSD quality gate hook", () => {
 	it("runs the real hook in an isolated temp repo", () => {
 		const repo = createQualityGateFixture({
-			testFiles: [
-				{
-					path: "test/passing.test.js",
-					content: [
-						'import test from "node:test";',
-						'import assert from "node:assert/strict";',
-						"",
-						'test("passing fixture", () => {',
-						"\tassert.equal(1, 1);",
-						"});",
-					].join("\n"),
-				},
-			],
+			testFiles: [createPassingTestFile()],
 		});
 
 		const result = runQualityGate(repo.repoPath);
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("Quality gate passed");
+	});
+
+	it("fails loudly for failing tests in strict mode", () => {
+		const repo = createQualityGateFixture({
+			testFiles: [createFailingTestFile()],
+		});
+
+		const result = runQualityGate(repo.repoPath);
+
+		expect(result.status).toBe(1);
+		expect(result.stdout).toContain("Quality Gate FAILED");
+		expect(result.stdout).toContain("1 test(s) failing");
 	});
 });
 
@@ -124,4 +124,32 @@ function writeRepoFiles(repoPath: string, files: TempRepoFile[]): void {
 			chmodSync(filePath, 0o755);
 		}
 	}
+}
+
+function createPassingTestFile(): TempRepoFile {
+	return {
+		path: "test/passing.test.js",
+		content: [
+			'import test from "node:test";',
+			'import assert from "node:assert/strict";',
+			"",
+			'test("passing fixture", () => {',
+			"\tassert.equal(1, 1);",
+			"});",
+		].join("\n"),
+	};
+}
+
+function createFailingTestFile(): TempRepoFile {
+	return {
+		path: "test/failing.test.js",
+		content: [
+			'import test from "node:test";',
+			'import assert from "node:assert/strict";',
+			"",
+			'test("failing fixture", () => {',
+			"\tassert.equal(1, 2);",
+			"});",
+		].join("\n"),
+	};
 }

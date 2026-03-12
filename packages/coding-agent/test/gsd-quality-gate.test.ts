@@ -58,6 +58,19 @@ describe("GSD quality gate hook", () => {
 		expect(result.stdout).toContain("Quality Gate FAILED");
 		expect(result.stdout).toContain("1 test(s) failing");
 	});
+
+	it("fails when TypeScript compilation reports errors even if tests pass", () => {
+		const repo = createQualityGateFixture({
+			testFiles: [createPassingTestFile(), createTypeScriptErrorSourceFile()],
+		});
+
+		const result = runQualityGate(repo.repoPath);
+
+		expect(result.status).toBe(1);
+		expect(result.stdout).toContain("Quality Gate FAILED");
+		expect(result.stdout).toContain("TypeScript error(s)");
+		expect(result.stdout).toContain("error TS2322");
+	});
 });
 
 function createQualityGateFixture(options: QualityGateFixtureOptions) {
@@ -156,5 +169,12 @@ function createFailingTestFile(): TempRepoFile {
 			"\tassert.equal(1, 2);",
 			"});",
 		].join("\n"),
+	};
+}
+
+function createTypeScriptErrorSourceFile(): TempRepoFile {
+	return {
+		path: "src/broken.ts",
+		content: ['const value: number = "not-a-number";', "export { value };"].join("\n"),
 	};
 }

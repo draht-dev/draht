@@ -1,7 +1,6 @@
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-// @ts-expect-error implemented in GREEN phase
 import { createTempGitRepo } from "./git-repo.js";
 
 describe("createTempGitRepo", () => {

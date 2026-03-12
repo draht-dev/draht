@@ -4,6 +4,11 @@ import { describe, expect, it } from "vitest";
 
 const fixtureDir = path.join(import.meta.dirname, "fixtures", "domain-fixture");
 const fixtureFiles = ["Customer.ts", "Order.ts", "OrderItem.ts", "index.ts"];
+const expectedExports = [
+	["Order.ts", "export interface Order"],
+	["Customer.ts", "export interface Customer"],
+	["OrderItem.ts", "export interface OrderItem"],
+] as const;
 
 describe("gsd domain fixture", () => {
 	it("contains the expected stable fixture layout", () => {
@@ -12,14 +17,11 @@ describe("gsd domain fixture", () => {
 	});
 
 	it("contains predictable domain terms for later codebase mapping tests", () => {
-		const orderSource = readFixture("Order.ts");
-		const customerSource = readFixture("Customer.ts");
-		const orderItemSource = readFixture("OrderItem.ts");
-		const barrelSource = readFixture("index.ts");
+		for (const [fileName, expectedExport] of expectedExports) {
+			expect(readFixture(fileName)).toContain(expectedExport);
+		}
 
-		expect(orderSource).toContain("export interface Order");
-		expect(customerSource).toContain("export interface Customer");
-		expect(orderItemSource).toContain("export interface OrderItem");
+		const barrelSource = readFixture("index.ts");
 		expect(barrelSource).toContain('export * from "./Order.js";');
 		expect(barrelSource).toContain('export * from "./Customer.js";');
 		expect(barrelSource).toContain('export * from "./OrderItem.js";');

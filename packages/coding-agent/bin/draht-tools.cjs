@@ -372,7 +372,8 @@ commands["load-phase-context"] = function (n) {
 };
 
 // --- create-plan ---
-commands["create-plan"] = function (n, p, ...titleWords) {
+// Supports stdin: echo "content" | draht-tools create-plan N P [title]
+commands["create-plan"] = async function (n, p, ...titleWords) {
 	const phaseNum = parseInt(n, 10);
 	const planNum = parseInt(p, 10);
 	if (!phaseNum || !planNum) { console.error("Usage: draht-tools create-plan N P [title]"); process.exit(1); }
@@ -384,7 +385,24 @@ commands["create-plan"] = function (n, p, ...titleWords) {
 	const title = titleWords.join(" ") || `Plan ${planNum}`;
 	const planPath = path.join(dir, `${padNum(phaseNum)}-${padNum(planNum)}-PLAN.md`);
 
-	const tmpl = `---
+	// Check for stdin content (piped input)
+	let stdinContent = "";
+	if (!process.stdin.isTTY) {
+		stdinContent = await new Promise((resolve) => {
+			let data = "";
+			process.stdin.setEncoding("utf-8");
+			process.stdin.on("data", (chunk) => { data += chunk; });
+			process.stdin.on("end", () => { resolve(data.trim()); });
+		});
+	}
+
+	let content;
+	if (stdinContent) {
+		// Use stdin content directly
+		content = stdinContent;
+	} else {
+		// Generate template
+		content = `---
 phase: ${phaseNum}
 plan: ${planNum}
 depends_on: []
@@ -417,7 +435,9 @@ must_haves:
 ---
 Created: ${timestamp()}
 `;
-	writeMd(planPath, tmpl);
+	}
+
+	writeMd(planPath, content);
 	console.log(`Created: ${planPath}`);
 };
 
@@ -902,11 +922,13 @@ Version: 1.0.0
 // Dispatch
 const [cmd, ...args] = process.argv.slice(2);
 
-if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
-	commands.help();
-} else if (commands[cmd]) {
-	commands[cmd](...args);
-} else {
-	console.error(`Unknown command: ${cmd}\nRun: draht-tools help`);
-	process.exit(1);
-}
+(async () => {
+	if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+		commands.help();
+	} else if (commands[cmd]) {
+		await commands[cmd](...args);
+	} else {
+		console.error(`Unknown command: ${cmd}\nRun: draht-tools help`);
+		process.exit(1);
+	}
+})();

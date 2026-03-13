@@ -64,6 +64,7 @@ import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
+import { sendTerminalNotification } from "../../utils/notify.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { ArminComponent } from "./components/armin.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
@@ -2276,6 +2277,8 @@ export class InteractiveMode {
 				this.pendingTools.clear();
 
 				await this.checkShutdownRequested();
+
+				sendTerminalNotification(APP_NAME, "Ready for input");
 
 				this.ui.requestRender();
 				break;

@@ -18,12 +18,12 @@ Issue: $ARGUMENTS
    "Diagnose this issue: $ARGUMENTS. Reproduce the bug by running the relevant test or command. Trace the root cause by reading the code. Identify the exact files and lines involved. Do NOT fix it yet — only report the diagnosis with: root cause, affected files, and a recommended fix approach. Do NOT run draht, draht-tools, or pi commands."
 
 2. **Write a reproducing test**: Based on the diagnosis, write a test that demonstrates the bug (it must fail)
-   - Commit: `draht-tools commit-docs "red: reproduce bug"`
+   - Commit: `draht-tools commit-docs "test: reproduce bug"`
 
 3. **Minimal fix**: Write the smallest change that makes the test pass
    - Do not refactor or add features — just fix the bug
    - Run the full test suite to check for regressions
-   - Commit: `draht-tools commit-docs "green: fix description"`
+   - Commit: `draht-tools commit-docs "fix: fix description"`
 
 4. **Refactor** (if needed): Clean up without changing behavior
    - Tests must stay green after every change

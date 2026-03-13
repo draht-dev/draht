@@ -41,8 +41,8 @@ Execute this plan. Here is the full plan content:
 <paste full plan XML here>
 
 For each <task> in the plan, follow this TDD cycle:
-1. RED — Write failing tests from <test>. Run the test runner, confirm they FAIL. Commit with: git add <test-files> && git commit -m "red: <description>"
-2. GREEN — Write minimal implementation from <action> to make tests pass. Run tests, confirm PASS. Commit with: git add <files> && git commit -m "green: <task name>"
+1. RED — Write failing tests from <test>. Run the test runner, confirm they FAIL. Commit with: git add <test-files> && git commit -m "test: <description>"
+2. GREEN — Write minimal implementation from <action> to make tests pass. Run tests, confirm PASS. Commit with: git add <files> && git commit -m "feat: <task name>"
 3. REFACTOR — Apply <refactor> improvements if any. Tests must stay green after each change. Commit with: git add <files> && git commit -m "refactor: <description>"
 4. VERIFY — Run the <verify> step, confirm <done> criteria are met.
 

@@ -21,14 +21,13 @@
  */
 
 import type { TextContent } from "@draht/ai";
-import type { ExtensionAPI } from "@draht/coding-agent";
+import { type ExtensionAPI, getAgentDir } from "@draht/coding-agent";
 import { Type } from "@sinclair/typebox";
 import { appendFileSync, constants, readFileSync } from "fs";
 import { access, readFile } from "fs/promises";
-import { homedir } from "os";
 import { join, resolve } from "path";
 
-const LOG_FILE = join(homedir(), ".pi", "agent", "read-access.log");
+const LOG_FILE = join(getAgentDir(), "read-access.log");
 
 // Paths that are blocked from reading
 const BLOCKED_PATTERNS = [

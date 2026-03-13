@@ -15,7 +15,11 @@ Task: $ARGUMENTS
 
 ## Steps
 1. Run `draht-tools next-quick-number` to get task number
-2. Create quick plan: `draht-tools create-quick-plan NNN "$ARGUMENTS"`
+2. Analyze the task and write a concrete plan with actual task details (files, actions, verification). Pipe it into `draht-tools create-quick-plan`:
+   ```
+   echo 'plan content here' | draht-tools create-quick-plan NNN "$ARGUMENTS"
+   ```
+   The plan content must include: a `# Quick Task NNN: title` heading, a `## Tasks` section with one or more `<task>` XML blocks containing real file paths, real actions, and real verification steps — NOT placeholders like `[files]`.
 3. **Delegate execution to subagent**: Use the `subagent` tool in **single mode** with the `implementer` agent:
    "Execute this task: $ARGUMENTS
 

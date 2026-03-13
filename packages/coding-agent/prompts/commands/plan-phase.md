@@ -34,7 +34,11 @@ Phase: $1
      - Instruction to output the plan as XML (you will save it via `draht-tools create-plan`)
 
 6. Collect all plan outputs from subagents
-7. Save plans yourself: `draht-tools create-plan $1 P` for each plan
+7. Save each plan by piping the subagent's output into `draht-tools create-plan`:
+   ```
+   echo 'plan content from subagent' | draht-tools create-plan $1 P [title]
+   ```
+   The content must contain real task details (files, actions, tests) — NOT placeholder brackets. If `create-plan` is called without stdin, it writes a useless template.
 8. Validate: `draht-tools validate-plans $1`
 9. Commit: `draht-tools commit-docs "create phase $1 plans"`
 

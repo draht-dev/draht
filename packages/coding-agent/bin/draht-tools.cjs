@@ -711,7 +711,8 @@ commands["next-quick-number"] = function () {
 };
 
 // --- create-quick-plan ---
-commands["create-quick-plan"] = function (n, ...descWords) {
+// Supports stdin: echo "content" | draht-tools create-quick-plan NNN [desc]
+commands["create-quick-plan"] = async function (n, ...descWords) {
 	const num = padNum(parseInt(n, 10), 3);
 	const desc = descWords.join(" ") || "Quick task";
 	const slug = slugify(desc);
@@ -719,8 +720,28 @@ commands["create-quick-plan"] = function (n, ...descWords) {
 	ensureDir(dir);
 
 	const planPath = path.join(dir, `${num}-PLAN.md`);
-	const tmpl = `# Quick Task ${num}: ${desc}\n\n## Tasks\n\n<task type="auto">\n  <n>[Task]</n>\n  <files>[files]</files>\n  <action>[instructions]</action>\n  <verify>[verify]</verify>\n  <done>[done]</done>\n</task>\n\n---\nCreated: ${timestamp()}\n`;
-	writeMd(planPath, tmpl);
+
+	// Check for stdin content (piped input)
+	let stdinContent = "";
+	if (!process.stdin.isTTY) {
+		stdinContent = await new Promise((resolve) => {
+			let data = "";
+			process.stdin.setEncoding("utf-8");
+			process.stdin.on("data", (chunk) => { data += chunk; });
+			process.stdin.on("end", () => { resolve(data.trim()); });
+		});
+	}
+
+	let content;
+	if (stdinContent) {
+		// Use stdin content directly
+		content = stdinContent;
+	} else {
+		// Generate template
+		content = `# Quick Task ${num}: ${desc}\n\n## Tasks\n\n<task type="auto">\n  <n>[Task]</n>\n  <files>[files]</files>\n  <action>[instructions]</action>\n  <verify>[verify]</verify>\n  <done>[done]</done>\n</task>\n\n---\nCreated: ${timestamp()}\n`;
+	}
+
+	writeMd(planPath, content);
 	console.log(`Created: ${planPath}`);
 };
 

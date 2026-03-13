@@ -3,12 +3,14 @@
  *
  * Sends a native terminal notification when Pi agent is done and waiting for input.
  * Supports multiple terminal protocols:
+ * - cmux: uses `cmux notify` CLI
  * - OSC 777: Ghostty, iTerm2, WezTerm, rxvt-unicode
  * - OSC 99: Kitty
  * - Windows toast: Windows Terminal (WSL)
  */
 
 import type { ExtensionAPI } from "@draht/coding-agent";
+import { execFile } from "child_process";
 
 function windowsToastScript(title: string, body: string): string {
 	const type = "Windows.UI.Notifications";
@@ -33,13 +35,18 @@ function notifyOSC99(title: string, body: string): void {
 	process.stdout.write(`\x1b]99;i=1:p=body;${body}\x1b\\`);
 }
 
+function notifyCmux(title: string, body: string): void {
+	execFile("cmux", ["notify", "--title", title, "--body", body]);
+}
+
 function notifyWindows(title: string, body: string): void {
-	const { execFile } = require("child_process");
 	execFile("powershell.exe", ["-NoProfile", "-Command", windowsToastScript(title, body)]);
 }
 
 function notify(title: string, body: string): void {
-	if (process.env.WT_SESSION) {
+	if (process.env.CMUX_BUNDLE_ID) {
+		notifyCmux(title, body);
+	} else if (process.env.WT_SESSION) {
 		notifyWindows(title, body);
 	} else if (process.env.KITTY_WINDOW_ID) {
 		notifyOSC99(title, body);

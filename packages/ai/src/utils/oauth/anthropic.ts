@@ -1,12 +1,11 @@
 /**
  * Anthropic OAuth flow (Claude Pro/Max)
  *
- * NOTE: This module uses Node.js http.createServer for the OAuth callback server.
- * It is only intended for CLI use, not browser environments.
+ * NOTE: This module uses Node.js http.createServer and child_process for the OAuth callback
+ * and token exchange. It is only intended for CLI use, not browser environments.
  */
 
 import type { Server } from "node:http";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
 import { generatePKCE } from "./pkce.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthPrompt, OAuthProviderInterface } from "./types.js";
 
@@ -19,6 +18,7 @@ type CallbackServerInfo = {
 
 type NodeApis = {
 	createServer: typeof import("node:http").createServer;
+	execFile: typeof import("node:child_process").execFile;
 };
 
 let nodeApis: NodeApis | null = null;
@@ -28,21 +28,37 @@ const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const MANUAL_REDIRECT_URI = "https://platform.claude.com/oauth/code/callback";
 const CALLBACK_HOST = "127.0.0.1";
 const CALLBACK_PORT = 53692;
 const CALLBACK_PATH = "/callback";
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 const SCOPES =
 	"org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+const SUCCESS_HTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Authentication successful</title>
+</head>
+<body>
+  <p>Authentication successful. Return to your terminal to continue.</p>
+</body>
+</html>`;
+
 async function getNodeApis(): Promise<NodeApis> {
 	if (nodeApis) return nodeApis;
 	if (!nodeApisPromise) {
 		if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
 			throw new Error("Anthropic OAuth is only available in Node.js environments");
 		}
-		nodeApisPromise = import("node:http").then((httpModule) => ({
-			createServer: httpModule.createServer,
-		}));
+		nodeApisPromise = Promise.all([import("node:http"), import("node:child_process")]).then(
+			([httpModule, childProcessModule]) => ({
+				createServer: httpModule.createServer,
+				execFile: childProcessModule.execFile,
+			}),
+		);
 	}
 	nodeApis = await nodeApisPromise;
 	return nodeApis;
@@ -99,22 +115,15 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
 	const { createServer } = await getNodeApis();
 
 	return new Promise((resolve, reject) => {
-		let settleWait: ((value: { code: string; state: string } | null) => void) | undefined;
-		const waitForCodePromise = new Promise<{ code: string; state: string } | null>((resolveWait) => {
-			let settled = false;
-			settleWait = (value) => {
-				if (settled) return;
-				settled = true;
-				resolveWait(value);
-			};
-		});
+		let result: { code: string; state: string } | null = null;
+		let cancelled = false;
 
 		const server = createServer((req, res) => {
 			try {
 				const url = new URL(req.url || "", "http://localhost");
 				if (url.pathname !== CALLBACK_PATH) {
-					res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(oauthErrorHtml("Callback route not found."));
+					res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+					res.end("Not found");
 					return;
 				}
 
@@ -124,25 +133,27 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
 
 				if (error) {
 					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(oauthErrorHtml("Anthropic authentication did not complete.", `Error: ${error}`));
+					res.end(`<html><body><h1>Authentication Failed</h1><p>Error: ${error}</p></body></html>`);
 					return;
 				}
 
 				if (!code || !state) {
 					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(oauthErrorHtml("Missing code or state parameter."));
+					res.end(
+						`<html><body><h1>Authentication Failed</h1><p>Missing code or state parameter.</p></body></html>`,
+					);
 					return;
 				}
 
 				if (state !== expectedState) {
 					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(oauthErrorHtml("State mismatch."));
+					res.end(`<html><body><h1>Authentication Failed</h1><p>State mismatch.</p></body></html>`);
 					return;
 				}
 
 				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-				res.end(oauthSuccessHtml("Anthropic authentication completed. You can close this window."));
-				settleWait?.({ code, state });
+				res.end(SUCCESS_HTML);
+				result = { code, state };
 			} catch {
 				res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
 				res.end("Internal error");
@@ -158,29 +169,73 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
 				server,
 				redirectUri: REDIRECT_URI,
 				cancelWait: () => {
-					settleWait?.(null);
+					cancelled = true;
 				},
-				waitForCode: () => waitForCodePromise,
+				waitForCode: async () => {
+					const sleep = () => new Promise((r) => setTimeout(r, 100));
+					while (!result && !cancelled) {
+						await sleep();
+					}
+					return result;
+				},
 			});
 		});
 	});
 }
 
-async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
-	const response = await fetch(url, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Accept: "application/json",
-		},
-		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(30_000),
+async function postJsonWithCurl(url: string, body: Record<string, string | number>): Promise<string> {
+	const { execFile } = await getNodeApis();
+	const payload = JSON.stringify(body);
+	const marker = "__PI_CURL_HTTP_STATUS__:";
+
+	const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+		execFile(
+			"curl",
+			[
+				"-sS",
+				"--connect-timeout",
+				"15",
+				"--max-time",
+				"30",
+				"-X",
+				"POST",
+				url,
+				"-H",
+				"Content-Type: application/json",
+				"-H",
+				"Accept: application/json",
+				"--data-binary",
+				payload,
+				"-w",
+				`\n${marker}%{http_code}`,
+			],
+			(error, stdout, stderr) => {
+				if (error) {
+					reject(
+						new Error(`curl request failed. url=${url}; details=${formatErrorDetails(error)}; stderr=${stderr}`),
+					);
+					return;
+				}
+				resolve({ stdout, stderr });
+			},
+		);
 	});
 
-	const responseBody = await response.text();
+	const markerIndex = result.stdout.lastIndexOf(`\n${marker}`);
+	if (markerIndex === -1) {
+		throw new Error(
+			`curl response missing status marker. url=${url}; stdout=${result.stdout}; stderr=${result.stderr}`,
+		);
+	}
 
-	if (!response.ok) {
-		throw new Error(`HTTP request failed. status=${response.status}; url=${url}; body=${responseBody}`);
+	const responseBody = result.stdout.slice(0, markerIndex);
+	const statusText = result.stdout.slice(markerIndex + `\n${marker}`.length).trim();
+	const status = Number.parseInt(statusText, 10);
+	if (!Number.isFinite(status)) {
+		throw new Error(`curl returned invalid status. url=${url}; status=${statusText}; body=${responseBody}`);
+	}
+	if (status < 200 || status >= 300) {
+		throw new Error(`HTTP request failed. status=${status}; url=${url}; body=${responseBody}`);
 	}
 
 	return responseBody;
@@ -194,7 +249,7 @@ async function exchangeAuthorizationCode(
 ): Promise<OAuthCredentials> {
 	let responseBody: string;
 	try {
-		responseBody = await postJson(TOKEN_URL, {
+		responseBody = await postJsonWithCurl(TOKEN_URL, {
 			grant_type: "authorization_code",
 			client_id: CLIENT_ID,
 			code,
@@ -289,6 +344,7 @@ export async function loginAnthropic(options: {
 				}
 				code = parsed.code;
 				state = parsed.state ?? verifier;
+				redirectUriForExchange = MANUAL_REDIRECT_URI;
 			}
 
 			if (!code) {
@@ -303,6 +359,7 @@ export async function loginAnthropic(options: {
 					}
 					code = parsed.code;
 					state = parsed.state ?? verifier;
+					redirectUriForExchange = MANUAL_REDIRECT_URI;
 				}
 			}
 		} else {
@@ -317,7 +374,7 @@ export async function loginAnthropic(options: {
 		if (!code) {
 			const input = await options.onPrompt({
 				message: "Paste the authorization code or full redirect URL:",
-				placeholder: REDIRECT_URI,
+				placeholder: MANUAL_REDIRECT_URI,
 			});
 			const parsed = parseAuthorizationInput(input);
 			if (parsed.state && parsed.state !== verifier) {
@@ -325,6 +382,7 @@ export async function loginAnthropic(options: {
 			}
 			code = parsed.code;
 			state = parsed.state ?? verifier;
+			redirectUriForExchange = MANUAL_REDIRECT_URI;
 		}
 
 		if (!code) {
@@ -348,10 +406,11 @@ export async function loginAnthropic(options: {
 export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
 	let responseBody: string;
 	try {
-		responseBody = await postJson(TOKEN_URL, {
+		responseBody = await postJsonWithCurl(TOKEN_URL, {
 			grant_type: "refresh_token",
 			client_id: CLIENT_ID,
 			refresh_token: refreshToken,
+			scope: SCOPES,
 		});
 	} catch (error) {
 		throw new Error(`Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`);

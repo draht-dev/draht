@@ -305,7 +305,8 @@ commands["phase-info"] = function (n) {
 };
 
 // --- save-context ---
-commands["save-context"] = function (n, ...rest) {
+// Supports stdin: echo "content" | draht-tools save-context N
+commands["save-context"] = async function (n, ...rest) {
 	const num = parseInt(n, 10);
 	if (!num) { console.error("Usage: draht-tools save-context N"); process.exit(1); }
 
@@ -314,7 +315,22 @@ commands["save-context"] = function (n, ...rest) {
 	ensureDir(dir);
 
 	const contextPath = path.join(dir, `${padNum(num)}-CONTEXT.md`);
-	if (fs.existsSync(contextPath)) {
+
+	// Check for stdin content (piped input)
+	let stdinContent = "";
+	if (!process.stdin.isTTY) {
+		stdinContent = await new Promise((resolve) => {
+			let data = "";
+			process.stdin.setEncoding("utf-8");
+			process.stdin.on("data", (chunk) => { data += chunk; });
+			process.stdin.on("end", () => { resolve(data.trim()); });
+		});
+	}
+
+	if (stdinContent) {
+		writeMd(contextPath, stdinContent);
+		console.log(`Created: ${contextPath}`);
+	} else if (fs.existsSync(contextPath)) {
 		console.log(`Context already exists at ${contextPath}`);
 		console.log("Edit it directly or pass content via stdin.");
 	} else {
@@ -567,7 +583,8 @@ commands["commit-task"] = function (n, p, t, ...desc) {
 };
 
 // --- write-summary ---
-commands["write-summary"] = function (n, p) {
+// Supports stdin: echo "content" | draht-tools write-summary N P
+commands["write-summary"] = async function (n, p) {
 	const phaseNum = parseInt(n, 10);
 	const planNum = parseInt(p, 10);
 	if (!phaseNum || !planNum) { console.error("Usage: draht-tools write-summary N P"); process.exit(1); }
@@ -576,8 +593,26 @@ commands["write-summary"] = function (n, p) {
 	if (!phaseDir) { console.error(`Phase ${phaseNum} not found`); process.exit(1); }
 
 	const summaryPath = path.join(phaseDir, `${padNum(phaseNum)}-${padNum(planNum)}-SUMMARY.md`);
-	const tmpl = `# Phase ${phaseNum}, Plan ${planNum} Summary\n\n## Completed Tasks\n| # | Task | Status | Commit |\n|---|------|--------|--------|\n| 1 | [task] | ✅ Done | [hash] |\n\n## Files Changed\n- [files]\n\n## Verification Results\n- [results]\n\n## Notes\n[deviations, decisions]\n\n---\nCompleted: ${timestamp()}\n`;
-	writeMd(summaryPath, tmpl);
+
+	// Check for stdin content (piped input)
+	let stdinContent = "";
+	if (!process.stdin.isTTY) {
+		stdinContent = await new Promise((resolve) => {
+			let data = "";
+			process.stdin.setEncoding("utf-8");
+			process.stdin.on("data", (chunk) => { data += chunk; });
+			process.stdin.on("end", () => { resolve(data.trim()); });
+		});
+	}
+
+	let content;
+	if (stdinContent) {
+		content = stdinContent;
+	} else {
+		content = `# Phase ${phaseNum}, Plan ${planNum} Summary\n\n## Completed Tasks\n| # | Task | Status | Commit |\n|---|------|--------|--------|\n| 1 | [task] | ✅ Done | [hash] |\n\n## Files Changed\n- [files]\n\n## Verification Results\n- [results]\n\n## Notes\n[deviations, decisions]\n\n---\nCompleted: ${timestamp()}\n`;
+	}
+
+	writeMd(summaryPath, content);
 	console.log(`Created: ${summaryPath}`);
 };
 
@@ -648,17 +683,35 @@ commands["extract-deliverables"] = function (n) {
 };
 
 // --- create-fix-plan ---
-commands["create-fix-plan"] = function (n, p, ...issueWords) {
+// Supports stdin: echo "content" | draht-tools create-fix-plan N P [issue]
+commands["create-fix-plan"] = async function (n, p, ...issueWords) {
 	const phaseNum = parseInt(n, 10);
 	const planNum = parseInt(p, 10);
 	if (!phaseNum || !planNum) { console.error("Usage: draht-tools create-fix-plan N P [issue]"); process.exit(1); }
 
 	const slug = getPhaseSlug(phaseNum) || `phase-${phaseNum}`;
 	const dir = planningPath("phases", `${padNum(phaseNum)}-${slug}`);
+	ensureDir(dir);
 	const issue = issueWords.join(" ") || "Fix identified issues";
 
 	const fixPath = path.join(dir, `${padNum(phaseNum)}-${padNum(planNum)}-FIX-PLAN.md`);
-	const tmpl = `---
+
+	// Check for stdin content (piped input)
+	let stdinContent = "";
+	if (!process.stdin.isTTY) {
+		stdinContent = await new Promise((resolve) => {
+			let data = "";
+			process.stdin.setEncoding("utf-8");
+			process.stdin.on("data", (chunk) => { data += chunk; });
+			process.stdin.on("end", () => { resolve(data.trim()); });
+		});
+	}
+
+	let content;
+	if (stdinContent) {
+		content = stdinContent;
+	} else {
+		content = `---
 gap_closure: true
 fixes_plan: ${planNum}
 issue: "${issue}"
@@ -682,12 +735,15 @@ ${issue}
 ---
 Created: ${timestamp()}
 `;
-	writeMd(fixPath, tmpl);
+	}
+
+	writeMd(fixPath, content);
 	console.log(`Created: ${fixPath}`);
 };
 
 // --- write-uat ---
-commands["write-uat"] = function (n) {
+// Supports stdin: echo "content" | draht-tools write-uat N
+commands["write-uat"] = async function (n) {
 	const num = parseInt(n, 10);
 	if (!num) { console.error("Usage: draht-tools write-uat N"); process.exit(1); }
 
@@ -695,8 +751,26 @@ commands["write-uat"] = function (n) {
 	if (!phaseDir) { console.error(`Phase ${num} not found`); process.exit(1); }
 
 	const uatPath = path.join(phaseDir, `${padNum(num)}-UAT.md`);
-	const tmpl = `# Phase ${num} User Acceptance Testing\n\n## Test Date: ${dateStamp()}\n\n## Results\n| # | Deliverable | Status | Notes |\n|---|-------------|--------|-------|\n| 1 | [description] | ✅ Pass | |\n\n## Summary\n- Passed: X/Y\n- Failed: 0/Y\n- Skipped: 0/Y\n\n## Fix Plans Created\n(none)\n`;
-	writeMd(uatPath, tmpl);
+
+	// Check for stdin content (piped input)
+	let stdinContent = "";
+	if (!process.stdin.isTTY) {
+		stdinContent = await new Promise((resolve) => {
+			let data = "";
+			process.stdin.setEncoding("utf-8");
+			process.stdin.on("data", (chunk) => { data += chunk; });
+			process.stdin.on("end", () => { resolve(data.trim()); });
+		});
+	}
+
+	let content;
+	if (stdinContent) {
+		content = stdinContent;
+	} else {
+		content = `# Phase ${num} User Acceptance Testing\n\n## Test Date: ${dateStamp()}\n\n## Results\n| # | Deliverable | Status | Notes |\n|---|-------------|--------|-------|\n| 1 | [description] | ✅ Pass | |\n\n## Summary\n- Passed: X/Y\n- Failed: 0/Y\n- Skipped: 0/Y\n\n## Fix Plans Created\n(none)\n`;
+	}
+
+	writeMd(uatPath, content);
 	console.log(`Created: ${uatPath}`);
 };
 
@@ -746,7 +820,8 @@ commands["create-quick-plan"] = async function (n, ...descWords) {
 };
 
 // --- write-quick-summary ---
-commands["write-quick-summary"] = function (n) {
+// Supports stdin: echo "content" | draht-tools write-quick-summary NNN
+commands["write-quick-summary"] = async function (n) {
 	const num = padNum(parseInt(n, 10), 3);
 	const dir = planningPath("quick");
 	if (!fs.existsSync(dir)) { console.error("No quick tasks directory"); process.exit(1); }
@@ -754,8 +829,26 @@ commands["write-quick-summary"] = function (n) {
 	if (!match) { console.error(`Quick task ${num} not found`); process.exit(1); }
 
 	const summaryPath = path.join(dir, match, `${num}-SUMMARY.md`);
-	const tmpl = `# Quick Task ${num} Summary\n\n## Tasks Completed\n| # | Task | Status | Commit |\n|---|------|--------|--------|\n| 1 | [task] | ✅ Done | [hash] |\n\n## Files Changed\n- [files]\n\n---\nCompleted: ${timestamp()}\n`;
-	writeMd(summaryPath, tmpl);
+
+	// Check for stdin content (piped input)
+	let stdinContent = "";
+	if (!process.stdin.isTTY) {
+		stdinContent = await new Promise((resolve) => {
+			let data = "";
+			process.stdin.setEncoding("utf-8");
+			process.stdin.on("data", (chunk) => { data += chunk; });
+			process.stdin.on("end", () => { resolve(data.trim()); });
+		});
+	}
+
+	let content;
+	if (stdinContent) {
+		content = stdinContent;
+	} else {
+		content = `# Quick Task ${num} Summary\n\n## Tasks Completed\n| # | Task | Status | Commit |\n|---|------|--------|--------|\n| 1 | [task] | ✅ Done | [hash] |\n\n## Files Changed\n- [files]\n\n---\nCompleted: ${timestamp()}\n`;
+	}
+
+	writeMd(summaryPath, content);
 	console.log(`Created: ${summaryPath}`);
 };
 
@@ -867,7 +960,8 @@ commands["commit-docs"] = function (...msg) {
 };
 
 // --- research-phase ---
-commands["research-phase"] = function (n) {
+// Supports stdin: echo "content" | draht-tools research-phase N
+commands["research-phase"] = async function (n) {
 	const num = parseInt(n, 10);
 	if (!num) { console.error("Usage: draht-tools research-phase N"); process.exit(1); }
 
@@ -876,10 +970,28 @@ commands["research-phase"] = function (n) {
 	ensureDir(dir);
 
 	const resPath = path.join(dir, `${padNum(num)}-RESEARCH.md`);
-	const tmpl = `# Phase ${num} Research\n\nGenerated: ${timestamp()}\n\n## Best Practices\n[Fill in]\n\n## Patterns & Anti-Patterns\n[Fill in]\n\n## Library Recommendations\n[Fill in]\n\n## Edge Cases & Gotchas\n[Fill in]\n`;
-	writeMd(resPath, tmpl);
+
+	// Check for stdin content (piped input)
+	let stdinContent = "";
+	if (!process.stdin.isTTY) {
+		stdinContent = await new Promise((resolve) => {
+			let data = "";
+			process.stdin.setEncoding("utf-8");
+			process.stdin.on("data", (chunk) => { data += chunk; });
+			process.stdin.on("end", () => { resolve(data.trim()); });
+		});
+	}
+
+	let content;
+	if (stdinContent) {
+		content = stdinContent;
+	} else {
+		content = `# Phase ${num} Research\n\nGenerated: ${timestamp()}\n\n## Best Practices\n[Fill in]\n\n## Patterns & Anti-Patterns\n[Fill in]\n\n## Library Recommendations\n[Fill in]\n\n## Edge Cases & Gotchas\n[Fill in]\n`;
+	}
+
+	writeMd(resPath, content);
 	console.log(`Created: ${resPath}`);
-	console.log("→ Fill in research findings, then plan the phase.");
+	if (!stdinContent) console.log("→ Fill in research findings, then plan the phase.");
 };
 
 // ============================================================================

@@ -10,7 +10,7 @@ import { AuthStorage } from "../src/core/auth-storage.js";
 import { createExtensionRuntime, discoverAndLoadExtensions } from "../src/core/extensions/loader.js";
 import { ExtensionRunner } from "../src/core/extensions/runner.js";
 import type { ExtensionActions, ExtensionContextActions, ProviderConfig } from "../src/core/extensions/types.js";
-import { KeybindingsManager, type KeyId } from "../src/core/keybindings.js";
+import { DEFAULT_KEYBINDINGS, type KeyId } from "../src/core/keybindings.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { SessionManager } from "../src/core/session-manager.js";
 
@@ -19,7 +19,6 @@ describe("ExtensionRunner", () => {
 	let extensionsDir: string;
 	let sessionManager: SessionManager;
 	let modelRegistry: ModelRegistry;
-	const defaultKeybindings = new KeybindingsManager().getEffectiveConfig();
 
 	beforeEach(() => {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-runner-test-"));
@@ -27,7 +26,7 @@ describe("ExtensionRunner", () => {
 		fs.mkdirSync(extensionsDir);
 		sessionManager = SessionManager.inMemory();
 		const authStorage = AuthStorage.create(path.join(tempDir, "auth.json"));
-		modelRegistry = ModelRegistry.create(authStorage);
+		modelRegistry = new ModelRegistry(authStorage);
 	});
 
 	afterEach(() => {
@@ -95,7 +94,7 @@ describe("ExtensionRunner", () => {
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-			const shortcuts = runner.getShortcuts(defaultKeybindings);
+			const shortcuts = runner.getShortcuts(DEFAULT_KEYBINDINGS);
 
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"));
 			expect(shortcuts.has("ctrl+c")).toBe(false);
@@ -118,7 +117,7 @@ describe("ExtensionRunner", () => {
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-			const keybindings = { ...defaultKeybindings, "app.model.cycleForward": "ctrl+n" as KeyId };
+			const keybindings = { ...DEFAULT_KEYBINDINGS, cycleModelForward: "ctrl+n" as KeyId };
 			const shortcuts = runner.getShortcuts(keybindings);
 
 			expect(shortcuts.has("ctrl+p")).toBe(true);
@@ -128,9 +127,9 @@ describe("ExtensionRunner", () => {
 		});
 
 		it("warns but allows when extension uses non-reserved built-in shortcut", async () => {
-			const pasteImageKey = Array.isArray(defaultKeybindings["app.clipboard.pasteImage"])
-				? (defaultKeybindings["app.clipboard.pasteImage"][0] ?? "")
-				: defaultKeybindings["app.clipboard.pasteImage"];
+			const pasteImageKey = Array.isArray(DEFAULT_KEYBINDINGS.pasteImage)
+				? (DEFAULT_KEYBINDINGS.pasteImage[0] ?? "")
+				: DEFAULT_KEYBINDINGS.pasteImage;
 			const extCode = `
 				export default function(pi) {
 					pi.registerShortcut("${pasteImageKey}", {
@@ -145,11 +144,9 @@ describe("ExtensionRunner", () => {
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-			const shortcuts = runner.getShortcuts(defaultKeybindings);
+			const shortcuts = runner.getShortcuts(DEFAULT_KEYBINDINGS);
 
-			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining("built-in shortcut for app.clipboard.pasteImage"),
-			);
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("built-in shortcut for pasteImage"));
 			expect(shortcuts.has(pasteImageKey as KeyId)).toBe(true);
 
 			warnSpy.mockRestore();
@@ -170,7 +167,7 @@ describe("ExtensionRunner", () => {
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-			const keybindings = { ...defaultKeybindings, "app.interrupt": "ctrl+x" as KeyId };
+			const keybindings = { ...DEFAULT_KEYBINDINGS, interrupt: "ctrl+x" as KeyId };
 			const shortcuts = runner.getShortcuts(keybindings);
 
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"));
@@ -194,7 +191,7 @@ describe("ExtensionRunner", () => {
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-			const keybindings = { ...defaultKeybindings, "app.clear": ["ctrl+x", "ctrl+y"] as KeyId[] };
+			const keybindings = { ...DEFAULT_KEYBINDINGS, clear: ["ctrl+x", "ctrl+y"] as KeyId[] };
 			const shortcuts = runner.getShortcuts(keybindings);
 
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"));
@@ -218,12 +215,10 @@ describe("ExtensionRunner", () => {
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-			const keybindings = { ...defaultKeybindings, "app.clipboard.pasteImage": ["ctrl+x", "ctrl+y"] as KeyId[] };
+			const keybindings = { ...DEFAULT_KEYBINDINGS, pasteImage: ["ctrl+x", "ctrl+y"] as KeyId[] };
 			const shortcuts = runner.getShortcuts(keybindings);
 
-			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining("built-in shortcut for app.clipboard.pasteImage"),
-			);
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("built-in shortcut for pasteImage"));
 			expect(shortcuts.has("ctrl+y")).toBe(true);
 
 			warnSpy.mockRestore();
@@ -254,7 +249,7 @@ describe("ExtensionRunner", () => {
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-			const shortcuts = runner.getShortcuts(defaultKeybindings);
+			const shortcuts = runner.getShortcuts(DEFAULT_KEYBINDINGS);
 
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("shortcut conflict"));
 			// Last one wins
@@ -345,10 +340,9 @@ describe("ExtensionRunner", () => {
 
 			expect(commands.length).toBe(2);
 			expect(commands.map((c) => c.name).sort()).toEqual(["cmd-a", "cmd-b"]);
-			expect(commands.map((c) => c.invocationName).sort()).toEqual(["cmd-a", "cmd-b"]);
 		});
 
-		it("gets command by invocation name", async () => {
+		it("gets command by name", async () => {
 			const cmdCode = `
 				export default function(pi) {
 					pi.registerCommand("my-cmd", {
@@ -365,37 +359,39 @@ describe("ExtensionRunner", () => {
 			const cmd = runner.getCommand("my-cmd");
 			expect(cmd).toBeDefined();
 			expect(cmd?.name).toBe("my-cmd");
-			expect(cmd?.invocationName).toBe("my-cmd");
 			expect(cmd?.description).toBe("My command");
 
 			const missing = runner.getCommand("not-exists");
 			expect(missing).toBeUndefined();
 		});
 
-		it("suffixes duplicate extension commands in insertion order", async () => {
-			const cmdCode = (description: string) => `
+		it("filters out commands conflict with reseved", async () => {
+			const cmdCode = (name: string) => `
 				export default function(pi) {
-					pi.registerCommand("shared-cmd", {
-						description: "${description}",
+					pi.registerCommand("${name}", {
+						description: "Test command",
 						handler: async () => {},
 					});
 				}
 			`;
-			fs.writeFileSync(path.join(extensionsDir, "cmd-a.ts"), cmdCode("First command"));
-			fs.writeFileSync(path.join(extensionsDir, "cmd-b.ts"), cmdCode("Second command"));
+			fs.writeFileSync(path.join(extensionsDir, "cmd-a.ts"), cmdCode("cmd-a"));
+			fs.writeFileSync(path.join(extensionsDir, "cmd-b.ts"), cmdCode("cmd-b"));
+
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-			const commands = runner.getRegisteredCommands();
+			const commands = runner.getRegisteredCommands(new Set(["cmd-a"]));
 			const diagnostics = runner.getCommandDiagnostics();
 
-			expect(commands).toHaveLength(2);
-			expect(commands.map((command) => command.name)).toEqual(["shared-cmd", "shared-cmd"]);
-			expect(commands.map((command) => command.invocationName)).toEqual(["shared-cmd:1", "shared-cmd:2"]);
-			expect(commands.map((command) => command.description)).toEqual(["First command", "Second command"]);
-			expect(diagnostics).toEqual([]);
-			expect(runner.getCommand("shared-cmd:1")?.description).toBe("First command");
-			expect(runner.getCommand("shared-cmd:2")?.description).toBe("Second command");
+			expect(commands.length).toBe(1);
+			expect(commands.map((c) => c.name).sort()).toEqual(["cmd-b"]);
+
+			expect(diagnostics.length).toBe(1);
+			expect(diagnostics[0].path).toEqual(path.join(extensionsDir, "cmd-a.ts"));
+
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in command"));
+			warnSpy.mockRestore();
 		});
 	});
 
@@ -611,29 +607,6 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("provider registration", () => {
-		it("bindCore ignores invalid queued registrations and reports extension error", () => {
-			const runtime = createExtensionRuntime();
-			runtime.registerProvider(
-				"broken-provider",
-				{
-					streamSimple: (() => {
-						throw new Error("should not run");
-					}) as any,
-				},
-				"/tmp/broken-extension.ts",
-			);
-
-			const runner = new ExtensionRunner([], runtime, tempDir, sessionManager, modelRegistry);
-			const errors: string[] = [];
-			runner.onError((error) => errors.push(`${error.extensionPath}: ${error.error}`));
-
-			expect(() => runner.bindCore(extensionActions, extensionContextActions)).not.toThrow();
-			expect(errors).toEqual([
-				'/tmp/broken-extension.ts: Provider broken-provider: "api" is required when registering streamSimple.',
-			]);
-			expect(() => modelRegistry.refresh()).not.toThrow();
-		});
-
 		it("pre-bind unregister removes all queued registrations for a provider", () => {
 			const runtime = createExtensionRuntime();
 

@@ -1,6 +1,49 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.14] - 2026-03-14
+
+### Added
+
+- built-in terminal notification on agent turn end
+
+### Changed
+
+- fix(coding-agent): use getAgentDir() in example extensions (#2009)
+- Export the structured mapping contract through the public GSD entrypoint
+- Add typed extraction results to GSD domain mapping
+- consolidate quality gate fixture helpers
+- Cover strict-mode TypeScript error detection
+- add TypeScript-error quality gate scenario
+- Cover passing and failing test-suite outcomes
+- add failing test-suite quality gate scenario
+- Create a real-hook quality gate test harness
+- add real quality gate hook harness test
+- verify phase 21 lifecycle execution logs
+- add failing phase 21 execution log verification test
+- exercise phase 21 lifecycle task commit flow
+- add failing phase 21 lifecycle commit flow test
+- define mapCodebase structured extraction contract
+- build phase 21 lifecycle workspace fixture
+- add failing phase 21 lifecycle fixture test
+- reduce duplicated domain fixture assertions
+- Create a stable domain fixture codebase
+- replace gsd structure checks with runtime loading coverage
+- specify stable GSD domain fixture exports
+- add gsd extension runtime loading spec
+- extract reusable temp git repo setup steps
+- Implement the shared git repo helper
+- specify isolated temp git repo helper behavior
+
+### Fixed
+
+- add stdin support to all draht-tools write commands
+- add cmux support to notify example extension
+- add stdin support to create-quick-plan and fix plan prompts to pipe actual content
+- use conventional commit prefixes instead of TDD annotations in prompt templates
+- restore phase 21 verification baseline
+- The draht-tools create-plan command now reads stdin content when piped
+- handle date-based version suffixes in changelog parsing
+- change default update instruction to bun add -g
 
 ## [2026.3.11] - 2026-03-11
 

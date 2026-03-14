@@ -1,6 +1,6 @@
 {
 	"name": "@draht/orchestrator",
-	"version": "2026.3.11-1",
+	"version": "2026.3.14",
 	"private": true,
 	"description": "Multi-agent orchestration — GSD Controller pattern for task decomposition and coordination",
 	"type": "module",

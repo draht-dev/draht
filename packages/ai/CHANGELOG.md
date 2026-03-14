@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.14] - 2026-03-14
+
+### Changed
+
+- regenerate model definitions
+
+### Fixed
+
+- restore phase 21 verification baseline
 
 ## [2026.3.11] - 2026-03-11
 

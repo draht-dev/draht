@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [2026.3.14] - 2026-03-14
+
+### Changed
+
+- fix(tui): normalize tabs in editor setText and input paths (#2027)
+- fix(tui): wordWrapLine overflow with wide chars at wrap boundary (#2082)
+- fix(tui): restore shift+tab in xterm modifyOtherKeys mode (#2081)
+
+### Fixed
+
+- restore phase 21 verification baseline
 
 ## [2026.3.11] - 2026-03-11
 

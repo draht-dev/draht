@@ -5,7 +5,7 @@ import {
 	type Message,
 	type Model,
 	type UserMessage,
-} from "@draht/ai";
+} from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { agentLoop, agentLoopContinue } from "../src/agent-loop.js";
@@ -388,7 +388,7 @@ describe("agentLoop with AgentMessage", () => {
 		expect(toolResultIds).toEqual(["tool-1", "tool-2"]);
 	});
 
-	it("should inject queued messages after all tool calls complete", async () => {
+	it("should inject queued messages and skip remaining tool calls", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
@@ -423,8 +423,8 @@ describe("agentLoop with AgentMessage", () => {
 			convertToLlm: identityConverter,
 			toolExecution: "sequential",
 			getSteeringMessages: async () => {
-				// Return steering message after tool execution has started.
-				if (executed.length >= 1 && !queuedDelivered) {
+				// Return steering message after first tool executes
+				if (executed.length === 1 && !queuedDelivered) {
 					queuedDelivered = true;
 					return [queuedUserMessage];
 				}
@@ -467,28 +467,29 @@ describe("agentLoop with AgentMessage", () => {
 			events.push(event);
 		}
 
-		// Both tools should execute before steering is injected
-		expect(executed).toEqual(["first", "second"]);
+		// Only first tool should have executed
+		expect(executed).toEqual(["first"]);
 
+		// Second tool should be skipped
 		const toolEnds = events.filter(
 			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
 		);
 		expect(toolEnds.length).toBe(2);
 		expect(toolEnds[0].isError).toBe(false);
-		expect(toolEnds[1].isError).toBe(false);
+		expect(toolEnds[1].isError).toBe(true);
+		if (toolEnds[1].result.content[0]?.type === "text") {
+			expect(toolEnds[1].result.content[0].text).toContain("Skipped due to queued user message");
+		}
 
-		// Queued message should appear in events after both tool result messages
-		const eventSequence = events.flatMap((event) => {
-			if (event.type !== "message_start") return [];
-			if (event.message.role === "toolResult") return [`tool:${event.message.toolCallId}`];
-			if (event.message.role === "user" && typeof event.message.content === "string") {
-				return [event.message.content];
-			}
-			return [];
-		});
-		expect(eventSequence).toContain("interrupt");
-		expect(eventSequence.indexOf("tool:tool-1")).toBeLessThan(eventSequence.indexOf("interrupt"));
-		expect(eventSequence.indexOf("tool:tool-2")).toBeLessThan(eventSequence.indexOf("interrupt"));
+		// Queued message should appear in events
+		const queuedMessageEvent = events.find(
+			(e) =>
+				e.type === "message_start" &&
+				e.message.role === "user" &&
+				typeof e.message.content === "string" &&
+				e.message.content === "interrupt",
+		);
+		expect(queuedMessageEvent).toBeDefined();
 
 		// Interrupt message should be in context when second LLM call is made
 		expect(sawInterruptInContext).toBe(true);

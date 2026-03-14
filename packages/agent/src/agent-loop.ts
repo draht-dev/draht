@@ -10,7 +10,7 @@ import {
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
-} from "@draht/ai";
+} from "@mariozechner/pi-ai";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -46,13 +46,9 @@ export function agentLoop(
 		},
 		signal,
 		streamFn,
-	)
-		.then((messages) => {
-			stream.end(messages);
-		})
-		.catch(() => {
-			stream.end([]);
-		});
+	).then((messages) => {
+		stream.end(messages);
+	});
 
 	return stream;
 }
@@ -89,13 +85,9 @@ export function agentLoopContinue(
 		},
 		signal,
 		streamFn,
-	)
-		.then((messages) => {
-			stream.end(messages);
-		})
-		.catch(() => {
-			stream.end([]);
-		});
+	).then((messages) => {
+		stream.end(messages);
+	});
 
 	return stream;
 }
@@ -175,6 +167,7 @@ async function runLoop(
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
 		let hasMoreToolCalls = true;
+		let steeringAfterTools: AgentMessage[] | null = null;
 
 		// Inner loop: process tool calls and steering messages
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
@@ -211,7 +204,9 @@ async function runLoop(
 
 			const toolResults: ToolResultMessage[] = [];
 			if (hasMoreToolCalls) {
-				toolResults.push(...(await executeToolCalls(currentContext, message, config, signal, emit)));
+				const toolExecution = await executeToolCalls(currentContext, message, config, signal, emit);
+				toolResults.push(...toolExecution.toolResults);
+				steeringAfterTools = toolExecution.steeringMessages ?? null;
 
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
@@ -221,7 +216,13 @@ async function runLoop(
 
 			await emit({ type: "turn_end", message, toolResults });
 
-			pendingMessages = (await config.getSteeringMessages?.()) || [];
+			// Get steering messages after turn completes
+			if (steeringAfterTools && steeringAfterTools.length > 0) {
+				pendingMessages = steeringAfterTools;
+				steeringAfterTools = null;
+			} else {
+				pendingMessages = (await config.getSteeringMessages?.()) || [];
+			}
 		}
 
 		// Agent would stop here. Check for follow-up messages.
@@ -347,7 +348,7 @@ async function executeToolCalls(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
-): Promise<ToolResultMessage[]> {
+): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
 	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
 	if (config.toolExecution === "sequential") {
 		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
@@ -362,10 +363,12 @@ async function executeToolCallsSequential(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
-): Promise<ToolResultMessage[]> {
+): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
 	const results: ToolResultMessage[] = [];
+	let steeringMessages: AgentMessage[] | undefined;
 
-	for (const toolCall of toolCalls) {
+	for (let index = 0; index < toolCalls.length; index++) {
+		const toolCall = toolCalls[index];
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
@@ -390,9 +393,21 @@ async function executeToolCallsSequential(
 				),
 			);
 		}
+
+		if (config.getSteeringMessages) {
+			const steering = await config.getSteeringMessages();
+			if (steering.length > 0) {
+				steeringMessages = steering;
+				const remainingCalls = toolCalls.slice(index + 1);
+				for (const skipped of remainingCalls) {
+					results.push(await skipToolCall(skipped, emit));
+				}
+				break;
+			}
+		}
 	}
 
-	return results;
+	return { toolResults: results, steeringMessages };
 }
 
 async function executeToolCallsParallel(
@@ -402,12 +417,13 @@ async function executeToolCallsParallel(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
-): Promise<ToolResultMessage[]> {
-	const results: (ToolResultMessage | null)[] = new Array(toolCalls.length).fill(null);
-	const runnableCalls: { index: number; prepared: PreparedToolCall }[] = [];
+): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
+	const results: ToolResultMessage[] = [];
+	const runnableCalls: PreparedToolCall[] = [];
+	let steeringMessages: AgentMessage[] | undefined;
 
-	for (let i = 0; i < toolCalls.length; i++) {
-		const toolCall = toolCalls[i];
+	for (let index = 0; index < toolCalls.length; index++) {
+		const toolCall = toolCalls[index];
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
@@ -417,32 +433,55 @@ async function executeToolCallsParallel(
 
 		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		if (preparation.kind === "immediate") {
-			results[i] = await emitToolCallOutcome(toolCall, preparation.result, preparation.isError, emit);
+			results.push(await emitToolCallOutcome(toolCall, preparation.result, preparation.isError, emit));
 		} else {
-			runnableCalls.push({ index: i, prepared: preparation });
+			runnableCalls.push(preparation);
+		}
+
+		if (config.getSteeringMessages) {
+			const steering = await config.getSteeringMessages();
+			if (steering.length > 0) {
+				steeringMessages = steering;
+				for (const runnable of runnableCalls) {
+					results.push(await skipToolCall(runnable.toolCall, emit, { emitStart: false }));
+				}
+				const remainingCalls = toolCalls.slice(index + 1);
+				for (const skipped of remainingCalls) {
+					results.push(await skipToolCall(skipped, emit));
+				}
+				return { toolResults: results, steeringMessages };
+			}
 		}
 	}
 
-	const runningCalls = runnableCalls.map((entry) => ({
-		index: entry.index,
-		prepared: entry.prepared,
-		execution: executePreparedToolCall(entry.prepared, signal, emit),
+	const runningCalls = runnableCalls.map((prepared) => ({
+		prepared,
+		execution: executePreparedToolCall(prepared, signal, emit),
 	}));
 
 	for (const running of runningCalls) {
 		const executed = await running.execution;
-		results[running.index] = await finalizeExecutedToolCall(
-			currentContext,
-			assistantMessage,
-			running.prepared,
-			executed,
-			config,
-			signal,
-			emit,
+		results.push(
+			await finalizeExecutedToolCall(
+				currentContext,
+				assistantMessage,
+				running.prepared,
+				executed,
+				config,
+				signal,
+				emit,
+			),
 		);
 	}
 
-	return results.filter((r): r is ToolResultMessage => r !== null);
+	if (!steeringMessages && config.getSteeringMessages) {
+		const steering = await config.getSteeringMessages();
+		if (steering.length > 0) {
+			steeringMessages = steering;
+		}
+	}
+
+	return { toolResults: results, steeringMessages };
 }
 
 type PreparedToolCall = {
@@ -621,4 +660,23 @@ async function emitToolCallOutcome(
 	await emit({ type: "message_start", message: toolResultMessage });
 	await emit({ type: "message_end", message: toolResultMessage });
 	return toolResultMessage;
+}
+
+async function skipToolCall(
+	toolCall: AgentToolCall,
+	emit: AgentEventSink,
+	options?: { emitStart?: boolean },
+): Promise<ToolResultMessage> {
+	const result = createErrorToolResult("Skipped due to queued user message.");
+
+	if (options?.emitStart !== false) {
+		await emit({
+			type: "tool_execution_start",
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			args: toolCall.arguments,
+		});
+	}
+
+	return await emitToolCallOutcome(toolCall, result, true, emit);
 }

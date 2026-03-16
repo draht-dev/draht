@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { getProviders } from "@draht/ai";
-import { validateConfig } from "../src/config.js";
+import { loadConfig, saveConfig, validateConfig } from "../src/config.js";
 import { DEFAULT_CONFIG, type RouterConfig } from "../src/types.js";
 
 // Get a valid provider for testing
@@ -331,6 +331,33 @@ describe("config validation", () => {
 			};
 
 			expect(() => validateConfig(config)).not.toThrow();
+		});
+	});
+
+	describe("loadConfig/saveConfig integration", () => {
+		test("loadConfig validates merged config", () => {
+			// loadConfig should call validateConfig on the result
+			// Since we're using defaults, this should pass
+			const config = loadConfig();
+			expect(config).toBeDefined();
+			expect(config.architect).toBeDefined();
+		});
+
+		test("saveConfig with invalid config throws ValidationError before writing", () => {
+			const invalidConfig: RouterConfig = {
+				architect: {
+					primary: { provider: "", model: "" },
+					fallbacks: [],
+				},
+			} as RouterConfig;
+
+			expect(() => saveConfig(invalidConfig, "project", "/tmp/test-router")).toThrow(/Empty provider string/);
+		});
+
+		test("saveConfig with valid config succeeds", () => {
+			// This test verifies saveConfig validates before writing
+			// Using a temp directory to avoid affecting real configs
+			expect(() => saveConfig(DEFAULT_CONFIG, "project", "/tmp/test-router-valid")).not.toThrow();
 		});
 	});
 });

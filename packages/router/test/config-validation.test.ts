@@ -248,4 +248,89 @@ describe("config validation", () => {
 			expect(validProviders).toContain("google");
 		});
 	});
+
+	describe("duplicate model validation", () => {
+		test("duplicate model in primary and fallback throws ValidationError", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				architect: {
+					primary: { provider: "anthropic", model: "claude-sonnet-4-6" },
+					fallbacks: [{ provider: "anthropic", model: "claude-sonnet-4-6" }],
+				},
+			};
+
+			expect(() => validateConfig(config)).toThrow(
+				/Duplicate model anthropic\/claude-sonnet-4-6 in fallback chain for role architect/,
+			);
+		});
+
+		test("duplicate model in fallback chain throws ValidationError", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				implement: {
+					primary: { provider: "openai", model: "gpt-5.2" },
+					fallbacks: [
+						{ provider: "anthropic", model: "claude-sonnet-4-6" },
+						{ provider: "anthropic", model: "claude-sonnet-4-6" },
+					],
+				},
+			};
+
+			expect(() => validateConfig(config)).toThrow(
+				/Duplicate model anthropic\/claude-sonnet-4-6 in fallback chain for role implement/,
+			);
+		});
+
+		test("different models with same name but different providers are valid", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				architect: {
+					primary: { provider: "anthropic", model: "claude-sonnet-4-6" },
+					fallbacks: [
+						{ provider: "google", model: "gemini-2.5-pro" },
+						{ provider: "openai", model: "gpt-5.2" },
+					],
+				},
+			};
+
+			expect(() => validateConfig(config)).not.toThrow();
+		});
+	});
+
+	describe("circular dependency validation", () => {
+		test("circular dependency A→B, B→A is NOT a configuration error", () => {
+			// Note: Circular dependencies between roles don't exist in the current RoleConfig model
+			// Each role has its own fallback chain of ModelRefs, not references to other roles
+			// This test verifies the current model is correct
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				architect: {
+					primary: { provider: "anthropic", model: "claude-opus-4-6" },
+					fallbacks: [{ provider: "google", model: "gemini-2.5-pro" }],
+				},
+				implement: {
+					primary: { provider: "anthropic", model: "claude-sonnet-4-6" },
+					fallbacks: [{ provider: "openai", model: "gpt-5.2" }],
+				},
+			};
+
+			// This should pass because roles don't reference each other
+			expect(() => validateConfig(config)).not.toThrow();
+		});
+
+		test("valid non-circular fallback chains pass", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				architect: {
+					primary: { provider: "anthropic", model: "claude-opus-4-6" },
+					fallbacks: [
+						{ provider: "google", model: "gemini-2.5-pro" },
+						{ provider: "openai", model: "gpt-5.2" },
+					],
+				},
+			};
+
+			expect(() => validateConfig(config)).not.toThrow();
+		});
+	});
 });

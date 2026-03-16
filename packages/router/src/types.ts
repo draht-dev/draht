@@ -57,16 +57,16 @@ export const DEFAULT_CONFIG: RouterConfig = {
 		primary: { provider: "anthropic", model: "claude-sonnet-4-6" },
 		fallbacks: [
 			{ provider: "openai", model: "gpt-5.2" },
-			{ provider: "deepseek", model: "deepseek-v3" },
+			{ provider: "openrouter", model: "deepseek/deepseek-v3.2" },
 		],
 	},
 	boilerplate: {
-		primary: { provider: "deepseek", model: "deepseek-v3" },
+		primary: { provider: "openrouter", model: "deepseek/deepseek-v3.2" },
 		fallbacks: [{ provider: "google", model: "gemini-2.5-flash" }],
 	},
 	quick: {
 		primary: { provider: "google", model: "gemini-2.5-flash" },
-		fallbacks: [{ provider: "deepseek", model: "deepseek-v3" }],
+		fallbacks: [{ provider: "openrouter", model: "deepseek/deepseek-v3.2" }],
 	},
 	review: {
 		primary: { provider: "anthropic", model: "claude-sonnet-4-6" },

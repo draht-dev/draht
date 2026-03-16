@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { getModels, getProviders, type KnownProvider } from "@draht/ai";
 import { BUILT_IN_ROLES, DEFAULT_CONFIG, type ModelRef, type RoleConfig, type RouterConfig } from "./types.js";
 
 export { BUILT_IN_ROLES };
@@ -104,6 +105,60 @@ function validateRoleConfig(roleConfig: RoleConfig, role: string): string[] {
 }
 
 /**
+ * Validate a ModelRef against the @draht/ai registry.
+ * Returns errors if provider or model is not found.
+ */
+function validateModelRefAgainstRegistry(
+	ref: ModelRef,
+	role: string,
+	position: string,
+	validProviders: Set<string>,
+): string[] {
+	const errors: string[] = [];
+
+	// Skip if empty (already caught by structure validation)
+	if (!ref.provider || !ref.model) {
+		return errors;
+	}
+
+	// Check provider exists
+	if (!validProviders.has(ref.provider)) {
+		errors.push(`Invalid provider '${ref.provider}' for role ${role} (not in @draht/ai registry)`);
+		return errors; // Don't check model if provider is invalid
+	}
+
+	// Check model exists for this provider
+	const models = getModels(ref.provider as KnownProvider);
+	const modelExists = models.some((m) => m.id === ref.model);
+	if (!modelExists) {
+		errors.push(`Invalid model '${ref.model}' for provider '${ref.provider}' in role ${role} (${position})`);
+	}
+
+	return errors;
+}
+
+/**
+ * Validate a RoleConfig against the @draht/ai registry.
+ */
+function validateRoleConfigAgainstRegistry(
+	roleConfig: RoleConfig,
+	role: string,
+	validProviders: Set<string>,
+): string[] {
+	const errors: string[] = [];
+
+	// Validate primary
+	errors.push(...validateModelRefAgainstRegistry(roleConfig.primary, role, "primary", validProviders));
+
+	// Validate fallbacks
+	for (let i = 0; i < roleConfig.fallbacks.length; i++) {
+		errors.push(...validateModelRefAgainstRegistry(roleConfig.fallbacks[i], role, `fallback[${i}]`, validProviders));
+	}
+
+	return errors;
+}
+
+/**
  * Validate a router config.
  * Throws ConfigValidationError if any issues are found.
  */
@@ -120,6 +175,14 @@ export function validateConfig(config: RouterConfig): void {
 	// Validate structure of each role config
 	for (const [role, roleConfig] of Object.entries(config)) {
 		errors.push(...validateRoleConfig(roleConfig, role));
+	}
+
+	// Cache valid providers for registry validation
+	const validProviders = new Set(getProviders());
+
+	// Validate each role config against registry
+	for (const [role, roleConfig] of Object.entries(config)) {
+		errors.push(...validateRoleConfigAgainstRegistry(roleConfig, role, validProviders));
 	}
 
 	if (errors.length > 0) {

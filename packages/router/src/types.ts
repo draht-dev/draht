@@ -1,7 +1,12 @@
 /**
+ * Built-in roles that must be present in every config.
+ */
+export const BUILT_IN_ROLES = ["architect", "implement", "boilerplate", "quick", "review", "docs"] as const;
+
+/**
  * Built-in router roles. Extensible via string type.
  */
-export type RouterRole = "architect" | "implement" | "boilerplate" | "quick" | "review" | "docs" | (string & {});
+export type RouterRole = (typeof BUILT_IN_ROLES)[number] | (string & {});
 
 /**
  * Reference to a specific provider/model combination.

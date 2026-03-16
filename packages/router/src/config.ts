@@ -1,12 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { DEFAULT_CONFIG, type ModelRef, type RoleConfig, type RouterConfig } from "./types.js";
+import { BUILT_IN_ROLES, DEFAULT_CONFIG, type ModelRef, type RoleConfig, type RouterConfig } from "./types.js";
 
-/**
- * Built-in roles that must be present in every config.
- */
-export const BUILT_IN_ROLES = ["architect", "implement", "boilerplate", "quick", "review", "docs"] as const;
+export { BUILT_IN_ROLES };
 
 /**
  * Error thrown when config validation fails.

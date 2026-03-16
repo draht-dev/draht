@@ -149,8 +149,8 @@ export class ModelRouter {
 	/**
 	 * Log a cost entry for tracking.
 	 */
-	trackCost(role: string, ref: ModelRef, inputTokens: number, outputTokens: number): void {
-		const cost = estimateCost(ref.provider, ref.model, inputTokens, outputTokens);
+	trackCost(role: string, ref: ModelRef, inputTokens: number, outputTokens: number, reasoningTokens = 0): void {
+		const cost = estimateCost(ref.provider, ref.model, inputTokens, outputTokens, reasoningTokens);
 		const entry: CostEntry = {
 			timestamp: new Date().toISOString(),
 			role,
@@ -158,6 +158,7 @@ export class ModelRouter {
 			model: ref.model,
 			inputTokens,
 			outputTokens,
+			...(reasoningTokens > 0 && { reasoningTokens }),
 			estimatedCostUsd: cost,
 			sessionId: this.sessionId,
 		};

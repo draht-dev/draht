@@ -86,6 +86,43 @@ const unknownModelFixtures = [
 	},
 ];
 
+/**
+ * Test fixtures for reasoning token calculations.
+ * Reasoning tokens are billed at input token rate.
+ */
+const reasoningTokenFixtures = [
+	{
+		name: "anthropic/claude-sonnet-4-6 with reasoning tokens",
+		provider: "anthropic",
+		model: "claude-sonnet-4-6",
+		inputTokens: 100_000,
+		outputTokens: 50_000,
+		reasoningTokens: 25_000,
+		// (0.1M + 0.025M) * $3 (input rate for reasoning) + 0.05M * $15 (output) = $1.125
+		expectedCost: 1.125,
+	},
+	{
+		name: "openai/gpt-5.2 with reasoning tokens",
+		provider: "openai",
+		model: "gpt-5.2",
+		inputTokens: 200_000,
+		outputTokens: 100_000,
+		reasoningTokens: 50_000,
+		// (0.2M + 0.05M) * $5 (input rate for reasoning) + 0.1M * $15 (output) = $2.75
+		expectedCost: 2.75,
+	},
+	{
+		name: "unknown model with reasoning tokens",
+		provider: "unknown",
+		model: "unknown",
+		inputTokens: 100_000,
+		outputTokens: 50_000,
+		reasoningTokens: 25_000,
+		// (0.1M + 0.025M) * $3 (default input) + 0.05M * $15 (default output) = $1.125
+		expectedCost: 1.125,
+	},
+];
+
 describe("cost tracking", () => {
 	describe("known models", () => {
 		for (const fixture of knownModelFixtures) {
@@ -108,5 +145,26 @@ describe("cost tracking", () => {
 				assertCostWithinTolerance(cost, fixture.expectedCost);
 			});
 		}
+	});
+
+	describe("reasoning tokens", () => {
+		for (const fixture of reasoningTokenFixtures) {
+			test(`calculates cost for ${fixture.name} with reasoning billed at input rate`, () => {
+				const cost = estimateCost(
+					fixture.provider,
+					fixture.model,
+					fixture.inputTokens,
+					fixture.outputTokens,
+					fixture.reasoningTokens,
+				);
+				assertCostWithinTolerance(cost, fixture.expectedCost);
+			});
+		}
+
+		test("backward compatibility: estimateCost without reasoning param still works", () => {
+			// anthropic/claude-sonnet-4-6 with 100000 input, 50000 output → $1.05
+			const cost = estimateCost("anthropic", "claude-sonnet-4-6", 100_000, 50_000);
+			assertCostWithinTolerance(cost, 1.05);
+		});
 	});
 });

@@ -23,21 +23,41 @@ const COST_PER_MILLION: Record<string, { input: number; output: number }> = {
 };
 
 /**
+ * Calculate cost for a number of tokens at a given rate per million.
+ */
+function calculateTokenCost(tokens: number, ratePerMillion: number): number {
+	return (tokens / 1_000_000) * ratePerMillion;
+}
+
+/**
  * Estimate cost for a request in USD.
  *
  * Uses model-specific rates from COST_PER_MILLION when available.
  * Unknown models use DEFAULT_RATES: { input: $3, output: $15 } per million tokens.
  *
+ * Reasoning tokens are billed at the input token rate - this reflects the
+ * computational cost of extended reasoning/thinking during model inference.
+ *
  * @param provider - Provider name (e.g., "anthropic")
  * @param model - Model name (e.g., "claude-opus-4-6")
  * @param inputTokens - Number of input tokens
  * @param outputTokens - Number of output tokens
+ * @param reasoningTokens - Number of reasoning/thinking tokens (billed at input rate)
  * @returns Estimated cost in USD
  */
-export function estimateCost(provider: string, model: string, inputTokens: number, outputTokens: number): number {
+export function estimateCost(
+	provider: string,
+	model: string,
+	inputTokens: number,
+	outputTokens: number,
+	reasoningTokens = 0,
+): number {
 	const key = `${provider}/${model}`;
 	const rates = COST_PER_MILLION[key] ?? DEFAULT_RATES;
-	return (inputTokens / 1_000_000) * rates.input + (outputTokens / 1_000_000) * rates.output;
+	// Reasoning tokens are billed at input rate
+	const inputCost = calculateTokenCost(inputTokens + reasoningTokens, rates.input);
+	const outputCost = calculateTokenCost(outputTokens, rates.output);
+	return inputCost + outputCost;
 }
 
 /**

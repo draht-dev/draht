@@ -39,6 +39,8 @@ export interface CostEntry {
 	model: string;
 	inputTokens: number;
 	outputTokens: number;
+	/** Reasoning/thinking tokens, billed at input token rate. */
+	reasoningTokens?: number;
 	estimatedCostUsd: number;
 	sessionId: string;
 }

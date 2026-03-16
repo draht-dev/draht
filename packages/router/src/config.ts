@@ -159,6 +159,32 @@ function validateRoleConfigAgainstRegistry(
 }
 
 /**
+ * Format a ModelRef as "provider/model" for display.
+ */
+function formatModelRefForValidation(ref: ModelRef): string {
+	return `${ref.provider}/${ref.model}`;
+}
+
+/**
+ * Detect duplicate models in a fallback chain (primary + fallbacks).
+ */
+function detectDuplicateModels(roleConfig: RoleConfig, role: string): string[] {
+	const errors: string[] = [];
+	const allModels: ModelRef[] = [roleConfig.primary, ...roleConfig.fallbacks];
+	const seen = new Set<string>();
+
+	for (const ref of allModels) {
+		const key = formatModelRefForValidation(ref);
+		if (seen.has(key)) {
+			errors.push(`Duplicate model ${key} in fallback chain for role ${role}`);
+		}
+		seen.add(key);
+	}
+
+	return errors;
+}
+
+/**
  * Validate a router config.
  * Throws ConfigValidationError if any issues are found.
  */
@@ -183,6 +209,11 @@ export function validateConfig(config: RouterConfig): void {
 	// Validate each role config against registry
 	for (const [role, roleConfig] of Object.entries(config)) {
 		errors.push(...validateRoleConfigAgainstRegistry(roleConfig, role, validProviders));
+	}
+
+	// Detect duplicate models in fallback chains
+	for (const [role, roleConfig] of Object.entries(config)) {
+		errors.push(...detectDuplicateModels(roleConfig, role));
 	}
 
 	if (errors.length > 0) {

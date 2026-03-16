@@ -167,4 +167,43 @@ describe("cost tracking", () => {
 			assertCostWithinTolerance(cost, 1.05);
 		});
 	});
+
+	describe("edge cases and boundary conditions", () => {
+		test("zero tokens returns $0.00", () => {
+			const cost = estimateCost("anthropic", "claude-opus-4-6", 0, 0);
+			expect(cost).toBe(0);
+		});
+
+		test("zero output tokens: only input cost", () => {
+			// anthropic/claude-opus-4-6 with 1M input, 0 output → $15.00 (1M * $15)
+			const cost = estimateCost("anthropic", "claude-opus-4-6", 1_000_000, 0);
+			assertCostWithinTolerance(cost, 15.0);
+		});
+
+		test("zero input tokens: only output cost", () => {
+			// google/gemini-2.5-pro with 0 input, 1M output → $10.00 (1M * $10)
+			const cost = estimateCost("google", "gemini-2.5-pro", 0, 1_000_000);
+			assertCostWithinTolerance(cost, 10.0);
+		});
+
+		test("very large token counts: no overflow or precision loss", () => {
+			// deepseek/deepseek-v3 with 100M input, 50M output → $82.00 (100M * $0.27 + 50M * $1.1)
+			const cost = estimateCost("deepseek", "deepseek-v3", 100_000_000, 50_000_000);
+			assertCostWithinTolerance(cost, 82.0);
+		});
+
+		test("single token: very small but non-zero cost", () => {
+			// anthropic/claude-sonnet-4-6 with 1 input, 1 output
+			// (1 / 1_000_000) * $3 + (1 / 1_000_000) * $15 = $0.000003 + $0.000015 = $0.000018
+			const cost = estimateCost("anthropic", "claude-sonnet-4-6", 1, 1);
+			expect(cost).toBeGreaterThan(0);
+			expect(cost).toBeCloseTo(0.000018, 9);
+		});
+
+		test("zero reasoning tokens has no effect on cost", () => {
+			const costWithoutReasoning = estimateCost("anthropic", "claude-sonnet-4-6", 100_000, 50_000);
+			const costWithZeroReasoning = estimateCost("anthropic", "claude-sonnet-4-6", 100_000, 50_000, 0);
+			expect(costWithZeroReasoning).toBe(costWithoutReasoning);
+		});
+	});
 });

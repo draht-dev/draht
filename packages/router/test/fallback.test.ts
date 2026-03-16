@@ -389,4 +389,129 @@ describe("ModelRouter Fallback Chain", () => {
 			}
 		});
 	});
+
+	describe("error classification", () => {
+		it("should NOT trigger fallback for non-retryable auth errors", async () => {
+			// Configure primary to fail with non-retryable auth error
+			primaryConfig.eventsBeforeFailure = 0;
+			primaryConfig.errorMessage = "invalid API key";
+
+			const context: Context = {
+				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+			};
+
+			let thrownError: Error | null = null;
+			try {
+				const stream = router.stream("test-role", context);
+				for await (const _event of stream) {
+					// consume events
+				}
+			} catch (error) {
+				thrownError = error as Error;
+			}
+
+			// Should throw immediately with original error, NOT "No available model"
+			expect(thrownError).not.toBeNull();
+			expect(thrownError?.message).toContain("invalid API key");
+			expect(thrownError?.message).not.toContain("No available model");
+		});
+
+		it("should throw last error when all providers fail with retryable errors", async () => {
+			// Configure primary to fail with 429
+			primaryConfig.eventsBeforeFailure = 0;
+			primaryConfig.errorMessage = "429 rate limit exceeded";
+
+			// Configure fallback to fail with 503
+			fallbackConfig.eventsBeforeFailure = 0;
+			fallbackConfig.errorMessage = "503 service unavailable";
+			fallbackConfig.shouldFail = true;
+
+			const context: Context = {
+				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+			};
+
+			let thrownError: Error | null = null;
+			try {
+				const stream = router.stream("test-role", context);
+				for await (const _event of stream) {
+					// consume events
+				}
+			} catch (error) {
+				thrownError = error as Error;
+			}
+
+			// Should throw the last error (503 from fallback)
+			expect(thrownError).not.toBeNull();
+			expect(thrownError?.message).toContain("503");
+		});
+
+		it("should throw immediately on non-retryable error from fallback", async () => {
+			// Configure primary to fail with retryable 429
+			primaryConfig.eventsBeforeFailure = 0;
+			primaryConfig.errorMessage = "429 rate limit exceeded";
+
+			// Configure fallback to fail with non-retryable auth error
+			fallbackConfig.eventsBeforeFailure = 0;
+			fallbackConfig.errorMessage = "401 Unauthorized";
+			fallbackConfig.shouldFail = true;
+
+			const context: Context = {
+				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+			};
+
+			let thrownError: Error | null = null;
+			try {
+				const stream = router.stream("test-role", context);
+				for await (const _event of stream) {
+					// consume events
+				}
+			} catch (error) {
+				thrownError = error as Error;
+			}
+
+			// Should throw the non-retryable error immediately
+			expect(thrownError).not.toBeNull();
+			expect(thrownError?.message).toContain("401");
+		});
+	});
+
+	describe("empty fallback chain", () => {
+		it("should throw original error when no fallbacks are configured", async () => {
+			// Create router with role that has no fallbacks
+			const noFallbackConfig: RouterConfig = {
+				"no-fallback-role": {
+					primary: { provider: "test-primary-provider", model: "primary-model" },
+					fallbacks: [],
+				},
+			};
+
+			const noFallbackRouter = new TestableModelRouter(noFallbackConfig);
+			noFallbackRouter.registerMockModel(
+				{ provider: "test-primary-provider", model: "primary-model" },
+				createMockModel("test-primary" as Api),
+			);
+
+			// Configure primary to fail with retryable error
+			primaryConfig.eventsBeforeFailure = 0;
+			primaryConfig.errorMessage = "429 rate limit exceeded";
+
+			const context: Context = {
+				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+			};
+
+			let thrownError: Error | null = null;
+			try {
+				const stream = noFallbackRouter.stream("no-fallback-role", context);
+				for await (const _event of stream) {
+					// consume events
+				}
+			} catch (error) {
+				thrownError = error as Error;
+			}
+
+			// Should throw the original error from primary
+			expect(thrownError).not.toBeNull();
+			expect(thrownError?.message).toContain("429");
+		});
+	});
 });

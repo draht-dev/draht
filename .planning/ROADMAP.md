@@ -104,7 +104,7 @@
 **Requirements:** R14-TDD.4, R15-DDD.5, R15-DDD.6, R20-HOOK.1, R20-HOOK.2, R20-HOOK.3
 **Acceptance:** Hook auto-detects npm/bun/pnpm test runner (no hardcoded `bun test`); coverage threshold configurable via `.planning/config.json` (default 80%); TDD cycle check supports strict and advisory modes; domain glossary validated against DOMAIN-MODEL.md; all hooks have vitest tests.
 
-## Phase 21: GSD Integration Tests — `pending`
+## Phase 21: GSD Integration Tests — `complete`
 **Goal:** End-to-end GSD lifecycle is verified by automated tests.
 **Requirements:** R21-INT.1, R21-INT.2, R21-INT.3, R21-INT.4
 **Acceptance:** Full lifecycle test passes (create-project → commit-task → verify-phase); map-codebase test produces valid domain extraction; quality gate pass/fail tests cover both outcomes; gsd-commands extension loading test confirms registration.

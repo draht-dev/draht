@@ -232,7 +232,7 @@ describe("ModelRouter Fallback Chain", () => {
 	});
 
 	describe("immediate fallback", () => {
-		it("should fall back to secondary when primary fails immediately", async () => {
+		it("should fall back to secondary when primary fails immediately with stream()", async () => {
 			const context: Context = {
 				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
 			};
@@ -258,6 +258,135 @@ describe("ModelRouter Fallback Chain", () => {
 			// Should have a done event
 			const doneEvent = events.find((e) => e.type === "done");
 			expect(doneEvent).toBeDefined();
+		});
+
+		it("should fall back to secondary when primary fails immediately with streamSimple()", async () => {
+			const context: Context = {
+				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+			};
+
+			const events: AssistantMessageEvent[] = [];
+			const stream = router.streamSimple("test-role", context);
+
+			for await (const event of stream) {
+				events.push(event);
+			}
+
+			// Should have events from fallback provider, not primary
+			const textDeltas = events.filter((e) => e.type === "text_delta");
+			expect(textDeltas.length).toBeGreaterThan(0);
+
+			// All text deltas should be from fallback
+			for (const delta of textDeltas) {
+				if (delta.type === "text_delta") {
+					expect(delta.delta).toContain("fallback");
+				}
+			}
+
+			// Should have a done event
+			const doneEvent = events.find((e) => e.type === "done");
+			expect(doneEvent).toBeDefined();
+		});
+	});
+
+	describe("mid-stream fallback", () => {
+		it("should fall back when primary emits events then fails, with no primary events leaking", async () => {
+			// Configure primary to emit 3 events then fail with retryable error
+			primaryConfig.eventsBeforeFailure = 3;
+			primaryConfig.errorMessage = "503 service unavailable";
+
+			const context: Context = {
+				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+			};
+
+			const events: AssistantMessageEvent[] = [];
+			const stream = router.stream("test-role", context);
+
+			for await (const event of stream) {
+				events.push(event);
+			}
+
+			// Should only have events from fallback, not primary
+			const textDeltas = events.filter((e) => e.type === "text_delta");
+			expect(textDeltas.length).toBeGreaterThan(0);
+
+			// No primary events should leak through
+			for (const delta of textDeltas) {
+				if (delta.type === "text_delta") {
+					expect(delta.delta).not.toContain("primary");
+					expect(delta.delta).toContain("fallback");
+				}
+			}
+
+			// Should have a done event from fallback
+			const doneEvent = events.find((e) => e.type === "done");
+			expect(doneEvent).toBeDefined();
+		});
+
+		it("should throw last error when all providers fail mid-stream", async () => {
+			// Configure primary to emit 2 events then fail
+			primaryConfig.eventsBeforeFailure = 2;
+			primaryConfig.errorMessage = "503 service unavailable";
+
+			// Configure fallback to emit 1 event then fail
+			fallbackConfig.eventsBeforeFailure = 1;
+			fallbackConfig.errorMessage = "429 rate limit exceeded";
+			fallbackConfig.shouldFail = true;
+
+			const context: Context = {
+				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+			};
+
+			let thrownError: Error | null = null;
+			try {
+				const stream = router.stream("test-role", context);
+				for await (const _event of stream) {
+					// consume events
+				}
+			} catch (error) {
+				thrownError = error as Error;
+			}
+
+			// Should throw the last error (from fallback)
+			expect(thrownError).not.toBeNull();
+			expect(thrownError?.message).toContain("429");
+		});
+	});
+
+	describe("stream method parity", () => {
+		it("should handle fallback identically in stream() and streamSimple()", async () => {
+			const context: Context = {
+				messages: [{ role: "user", content: "test", timestamp: Date.now() }],
+			};
+
+			// Collect events from stream()
+			const streamEvents: AssistantMessageEvent[] = [];
+			for await (const event of router.stream("test-role", context)) {
+				streamEvents.push(event);
+			}
+
+			// Collect events from streamSimple()
+			const streamSimpleEvents: AssistantMessageEvent[] = [];
+			for await (const event of router.streamSimple("test-role", context)) {
+				streamSimpleEvents.push(event);
+			}
+
+			// Both should have same number of text_delta events
+			const streamTextDeltas = streamEvents.filter((e) => e.type === "text_delta");
+			const streamSimpleTextDeltas = streamSimpleEvents.filter((e) => e.type === "text_delta");
+			expect(streamTextDeltas.length).toBe(streamSimpleTextDeltas.length);
+
+			// Both should have events from fallback only
+			for (const delta of streamTextDeltas) {
+				if (delta.type === "text_delta") {
+					expect(delta.delta).toContain("fallback");
+				}
+			}
+			for (const delta of streamSimpleTextDeltas) {
+				if (delta.type === "text_delta") {
+					expect(delta.delta).toContain("fallback");
+				}
+			}
 		});
 	});
 });

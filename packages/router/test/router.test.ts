@@ -20,7 +20,7 @@ describe("ModelRouter", () => {
 		expect(chain).toHaveLength(3);
 		expect(chain[0].provider).toBe("anthropic");
 		expect(chain[1].provider).toBe("openai");
-		expect(chain[2].provider).toBe("deepseek");
+		expect(chain[2].provider).toBe("openrouter");
 	});
 
 	test("route uses primary on success", async () => {

@@ -13,24 +13,37 @@ import {
 import { ModelRouter } from "../src/router.js";
 import type { ModelRef, RouterConfig } from "../src/types.js";
 
+// =============================================================================
+// Mock Provider Infrastructure
+// =============================================================================
+
 /**
  * Configuration for mock stream behavior.
+ *
+ * The mock provider can be configured to:
+ * - Fail immediately before yielding any events (eventsBeforeFailure = 0, shouldFail = true)
+ * - Yield N events then fail (eventsBeforeFailure > 0, shouldFail = true)
+ * - Succeed after yielding events (shouldFail = false)
+ *
+ * Error messages containing "429", "503", "timeout", etc. are classified as retryable
+ * by the router's isRetryableError function and trigger fallback behavior.
+ * Non-retryable errors (e.g., "invalid API key") cause immediate failure without fallback.
  */
 interface MockStreamConfig {
 	/** Number of text events to yield before failing (0 = fail immediately) */
 	eventsBeforeFailure: number;
-	/** Error message when failing */
+	/** Error message when failing. Use "429" or "503" for retryable errors. */
 	errorMessage: string;
 	/** Whether this provider should fail */
 	shouldFail: boolean;
-	/** Text prefix to identify which provider produced events */
+	/** Text prefix to identify which provider produced events (for assertions) */
 	textPrefix: string;
 	/** API type for the mock stream */
 	api: Api;
 }
 
 /**
- * Creates an AssistantMessage for testing.
+ * Creates an AssistantMessage base object for testing.
  */
 function createBaseMessage(api: Api): AssistantMessage {
 	return {
@@ -53,8 +66,16 @@ function createBaseMessage(api: Api): AssistantMessage {
 }
 
 /**
- * Creates a mock stream function that throws for immediate failures
- * or returns a proper AssistantMessageEventStream for success/mid-stream failure.
+ * Creates a mock stream function with configurable behavior.
+ *
+ * For immediate failures (eventsBeforeFailure = 0), throws synchronously like
+ * real providers do for auth errors. This allows the router's try/catch to catch
+ * the error and potentially fall back to another provider.
+ *
+ * For mid-stream failures, pushes error events to the stream. Note that the current
+ * router implementation only catches synchronous throws, not error events.
+ *
+ * @param getConfig - Function that returns the current config (allows dynamic config changes)
  */
 function createMockStreamFunction(
 	getConfig: () => MockStreamConfig,
@@ -70,7 +91,7 @@ function createMockStreamFunction(
 
 		const stream = new AssistantMessageEventStream();
 
-		// For success or mid-stream failure, use async IIFE
+		// For success or mid-stream failure, use async IIFE to push events
 		(async () => {
 			stream.push({ type: "start", partial: { ...baseMessage } });
 
@@ -106,7 +127,7 @@ function createMockStreamFunction(
 }
 
 /**
- * Mock model for testing.
+ * Creates a mock Model object for testing.
  */
 function createMockModel(api: Api): Model<Api> {
 	return {
@@ -124,11 +145,30 @@ function createMockModel(api: Api): Model<Api> {
 }
 
 /**
+ * Registers a mock provider with the API registry.
+ *
+ * @param api - API identifier for this provider
+ * @param getConfig - Function that returns the current config for this provider
+ */
+function registerMockProvider(api: Api, getConfig: () => MockStreamConfig): void {
+	registerApiProvider({
+		api,
+		stream: createMockStreamFunction(getConfig),
+		streamSimple: createMockStreamFunction(getConfig),
+	});
+}
+
+/**
  * Testable ModelRouter that allows injecting mock models.
+ * Overrides resolveModel to return registered mock models instead of
+ * querying the @draht/ai model registry.
  */
 class TestableModelRouter extends ModelRouter {
 	private mockModels: Map<string, Model<Api>> = new Map();
 
+	/**
+	 * Register a mock model for a given provider/model reference.
+	 */
 	registerMockModel(ref: ModelRef, model: Model<Api>): void {
 		this.mockModels.set(`${ref.provider}/${ref.model}`, model);
 	}
@@ -172,17 +212,8 @@ describe("ModelRouter Fallback Chain", () => {
 		};
 
 		// Register mock providers with getter functions to pick up config changes
-		registerApiProvider({
-			api: "test-primary" as Api,
-			stream: createMockStreamFunction(() => primaryConfig),
-			streamSimple: createMockStreamFunction(() => primaryConfig),
-		});
-
-		registerApiProvider({
-			api: "test-fallback" as Api,
-			stream: createMockStreamFunction(() => fallbackConfig),
-			streamSimple: createMockStreamFunction(() => fallbackConfig),
-		});
+		registerMockProvider("test-primary" as Api, () => primaryConfig);
+		registerMockProvider("test-fallback" as Api, () => fallbackConfig);
 
 		// Create router with test config and mock models
 		router = new TestableModelRouter(testConfig);

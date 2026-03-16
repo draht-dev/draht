@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { getModels, getProviders, type KnownProvider } from "@draht/ai";
 import { BUILT_IN_ROLES, DEFAULT_CONFIG, type ModelRef, type RoleConfig, type RouterConfig } from "./types.js";
@@ -21,10 +21,55 @@ const PROJECT_CONFIG = ".draht/router.json";
 const GLOBAL_CONFIG = join(homedir(), ".draht", "router.json");
 
 /**
+ * Validate that a project root path is safe and doesn't contain path traversal.
+ * Throws if the path attempts to escape the current working directory or uses absolute paths to sensitive areas.
+ */
+function validateProjectRoot(projectRoot: string): void {
+	// Resolve to absolute path to check for traversal
+	const resolved = resolve(projectRoot);
+	const cwd = resolve(process.cwd());
+
+	// For relative paths: ensure resolved path is within or equal to cwd
+	if (!projectRoot.startsWith("/")) {
+		if (!resolved.startsWith(cwd)) {
+			throw new Error(`Invalid project root: path traversal detected (${projectRoot})`);
+		}
+		return;
+	}
+
+	// For absolute paths: allow safe locations (user home, temp dirs, current working directory)
+	const home = homedir();
+	const tmpDir = tmpdir();
+	const safePaths = [home, tmpDir, cwd, "/tmp", "/private/tmp"];
+
+	const isSafe = safePaths.some((safe) => resolved.startsWith(safe));
+	if (isSafe) {
+		return;
+	}
+
+	// Reject paths to system directories
+	const dangerousPaths = ["/etc", "/usr", "/bin", "/sbin", "/sys", "/proc", "/dev", "/boot"];
+	for (const dangerous of dangerousPaths) {
+		if (resolved.startsWith(dangerous)) {
+			throw new Error(`Invalid project root: access to ${dangerous} is not allowed`);
+		}
+	}
+
+	// Reject any other absolute path that's not explicitly safe
+	throw new Error(
+		`Invalid project root: absolute path must be within home, temp, or current directory (${projectRoot})`,
+	);
+}
+
+/**
  * Load router config. Project config overrides global, both fall back to defaults.
  * Validates the merged config and throws ConfigValidationError if invalid.
  */
 export function loadConfig(projectRoot?: string): RouterConfig {
+	if (projectRoot) {
+		validateProjectRoot(projectRoot);
+	}
+
 	const globalConfig = loadFile(GLOBAL_CONFIG);
 	const projectPath = projectRoot ? resolve(projectRoot, PROJECT_CONFIG) : resolve(PROJECT_CONFIG);
 	const projectConfig = loadFile(projectPath);
@@ -41,6 +86,10 @@ export function loadConfig(projectRoot?: string): RouterConfig {
 export function saveConfig(config: RouterConfig, scope: "project" | "global", projectRoot?: string): void {
 	// Validate before writing to ensure we don't save invalid configs
 	validateConfig(config);
+
+	if (scope === "project" && projectRoot) {
+		validateProjectRoot(projectRoot);
+	}
 
 	const path =
 		scope === "global" ? GLOBAL_CONFIG : projectRoot ? resolve(projectRoot, PROJECT_CONFIG) : resolve(PROJECT_CONFIG);

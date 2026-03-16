@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { getProviders } from "@draht/ai";
 import { validateConfig } from "../src/config.js";
 import { DEFAULT_CONFIG, type RouterConfig } from "../src/types.js";
+
+// Get a valid provider for testing
+const validProviders = getProviders();
 
 describe("config validation", () => {
 	describe("structure validation", () => {
@@ -158,6 +162,90 @@ describe("config validation", () => {
 			};
 
 			expect(() => validateConfig(config)).not.toThrow();
+		});
+	});
+
+	describe("registry validation", () => {
+		test("invalid provider throws ValidationError", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				architect: {
+					primary: { provider: "nonexistent-provider", model: "some-model" },
+					fallbacks: [],
+				},
+			};
+
+			expect(() => validateConfig(config)).toThrow(
+				/Invalid provider 'nonexistent-provider' for role architect \(not in @draht\/ai registry\)/,
+			);
+		});
+
+		test("valid provider with invalid model throws ValidationError", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				implement: {
+					primary: { provider: "anthropic", model: "fake-model" },
+					fallbacks: [],
+				},
+			};
+
+			expect(() => validateConfig(config)).toThrow(
+				/Invalid model 'fake-model' for provider 'anthropic' in role implement/,
+			);
+		});
+
+		test("invalid provider in fallback throws ValidationError", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				architect: {
+					primary: { provider: "anthropic", model: "claude-opus-4-6" },
+					fallbacks: [{ provider: "invalid-provider", model: "some-model" }],
+				},
+			};
+
+			expect(() => validateConfig(config)).toThrow(
+				/Invalid provider 'invalid-provider' for role architect \(not in @draht\/ai registry\)/,
+			);
+		});
+
+		test("invalid model in fallback throws ValidationError", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				docs: {
+					primary: { provider: "openai", model: "gpt-5.2" },
+					fallbacks: [{ provider: "anthropic", model: "nonexistent-model" }],
+				},
+			};
+
+			expect(() => validateConfig(config)).toThrow(
+				/Invalid model 'nonexistent-model' for provider 'anthropic' in role docs/,
+			);
+		});
+
+		test("multiple invalid providers and models reports all issues", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+				architect: {
+					primary: { provider: "bad-provider", model: "bad-model" },
+					fallbacks: [],
+				},
+				implement: {
+					primary: { provider: "anthropic", model: "nonexistent" },
+					fallbacks: [],
+				},
+			};
+
+			expect(() => validateConfig(config)).toThrow(/Invalid provider 'bad-provider'/);
+			expect(() => validateConfig(config)).toThrow(/Invalid model 'nonexistent'/);
+		});
+
+		test("valid providers and models from registry passes", () => {
+			// DEFAULT_CONFIG should use valid providers and models
+			expect(() => validateConfig(DEFAULT_CONFIG)).not.toThrow();
+			// Verify that we have valid providers
+			expect(validProviders).toContain("anthropic");
+			expect(validProviders).toContain("openai");
+			expect(validProviders).toContain("google");
 		});
 	});
 });

@@ -22,19 +22,26 @@ const GLOBAL_CONFIG = join(homedir(), ".draht", "router.json");
 
 /**
  * Load router config. Project config overrides global, both fall back to defaults.
+ * Validates the merged config and throws ConfigValidationError if invalid.
  */
 export function loadConfig(projectRoot?: string): RouterConfig {
 	const globalConfig = loadFile(GLOBAL_CONFIG);
 	const projectPath = projectRoot ? resolve(projectRoot, PROJECT_CONFIG) : resolve(PROJECT_CONFIG);
 	const projectConfig = loadFile(projectPath);
 
-	return mergeConfig(projectConfig, globalConfig);
+	const result = mergeConfig(projectConfig, globalConfig);
+	validateConfig(result);
+	return result;
 }
 
 /**
  * Save router config to project or global scope.
+ * Validates the config and throws ConfigValidationError if invalid.
  */
 export function saveConfig(config: RouterConfig, scope: "project" | "global", projectRoot?: string): void {
+	// Validate before writing to ensure we don't save invalid configs
+	validateConfig(config);
+
 	const path =
 		scope === "global" ? GLOBAL_CONFIG : projectRoot ? resolve(projectRoot, PROJECT_CONFIG) : resolve(PROJECT_CONFIG);
 

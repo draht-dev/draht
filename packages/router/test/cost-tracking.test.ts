@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { estimateCost } from "../src/cost.js";
+import { DEFAULT_RATES, estimateCost } from "../src/cost.js";
 
 /**
  * Assert cost is within 1% tolerance of expected value.
@@ -52,10 +52,58 @@ const knownModelFixtures = [
 	},
 ];
 
+/**
+ * Test fixtures for unknown models using default rates.
+ * Default rates: { input: 3, output: 15 } per million tokens.
+ */
+const unknownModelFixtures = [
+	{
+		name: "unknown-provider/unknown-model",
+		provider: "unknown-provider",
+		model: "unknown-model",
+		inputTokens: 100_000,
+		outputTokens: 50_000,
+		// 0.1M * $3 (input) + 0.05M * $15 (output) = $1.05
+		expectedCost: 1.05,
+	},
+	{
+		name: "anthropic/claude-opus-5 (unknown model, known provider)",
+		provider: "anthropic",
+		model: "claude-opus-5",
+		inputTokens: 500_000,
+		outputTokens: 250_000,
+		// 0.5M * $3 (input) + 0.25M * $15 (output) = $5.25
+		expectedCost: 5.25,
+	},
+	{
+		name: "completely-new-provider/new-model (zero output)",
+		provider: "completely-new-provider",
+		model: "new-model",
+		inputTokens: 1_000_000,
+		outputTokens: 0,
+		// 1M * $3 (input) + 0 * $15 (output) = $3.00
+		expectedCost: 3.0,
+	},
+];
+
 describe("cost tracking", () => {
 	describe("known models", () => {
 		for (const fixture of knownModelFixtures) {
 			test(`calculates cost for ${fixture.name} at expected rate`, () => {
+				const cost = estimateCost(fixture.provider, fixture.model, fixture.inputTokens, fixture.outputTokens);
+				assertCostWithinTolerance(cost, fixture.expectedCost);
+			});
+		}
+	});
+
+	describe("unknown models use default rates", () => {
+		test("DEFAULT_RATES constant is { input: 3, output: 15 }", () => {
+			expect(DEFAULT_RATES.input).toBe(3);
+			expect(DEFAULT_RATES.output).toBe(15);
+		});
+
+		for (const fixture of unknownModelFixtures) {
+			test(`calculates cost for ${fixture.name} using default rates`, () => {
 				const cost = estimateCost(fixture.provider, fixture.model, fixture.inputTokens, fixture.outputTokens);
 				assertCostWithinTolerance(cost, fixture.expectedCost);
 			});

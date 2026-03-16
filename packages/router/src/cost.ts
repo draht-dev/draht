@@ -5,6 +5,12 @@ import type { CostEntry } from "./types.js";
 const DEFAULT_LOG_PATH = ".draht/cost-log.jsonl";
 
 /**
+ * Default rates applied to unknown models (USD per million tokens).
+ * Used when a model is not found in COST_PER_MILLION.
+ */
+export const DEFAULT_RATES = { input: 3, output: 15 } as const;
+
+/**
  * Rough cost estimates per million tokens (input/output) by provider.
  */
 const COST_PER_MILLION: Record<string, { input: number; output: number }> = {
@@ -17,11 +23,20 @@ const COST_PER_MILLION: Record<string, { input: number; output: number }> = {
 };
 
 /**
- * Estimate cost for a request.
+ * Estimate cost for a request in USD.
+ *
+ * Uses model-specific rates from COST_PER_MILLION when available.
+ * Unknown models use DEFAULT_RATES: { input: $3, output: $15 } per million tokens.
+ *
+ * @param provider - Provider name (e.g., "anthropic")
+ * @param model - Model name (e.g., "claude-opus-4-6")
+ * @param inputTokens - Number of input tokens
+ * @param outputTokens - Number of output tokens
+ * @returns Estimated cost in USD
  */
 export function estimateCost(provider: string, model: string, inputTokens: number, outputTokens: number): number {
 	const key = `${provider}/${model}`;
-	const rates = COST_PER_MILLION[key] ?? { input: 3, output: 15 }; // default estimate
+	const rates = COST_PER_MILLION[key] ?? DEFAULT_RATES;
 	return (inputTokens / 1_000_000) * rates.input + (outputTokens / 1_000_000) * rates.output;
 }
 

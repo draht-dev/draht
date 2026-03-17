@@ -1,5 +1,5 @@
-import { type ExecFileException, execFile, spawnSync } from "child_process";
-import { existsSync, type FSWatcher, readFileSync, statSync, unwatchFile, watch, watchFile } from "fs";
+import { spawnSync } from "child_process";
+import { existsSync, type FSWatcher, readFileSync, statSync, watch } from "fs";
 import { dirname, join, resolve } from "path";
 
 type GitPaths = {
@@ -12,8 +12,8 @@ type GitPaths = {
  * Find git metadata paths by walking up from cwd.
  * Handles both regular git repos (.git is a directory) and worktrees (.git is a file).
  */
-function findGitPaths(cwd: string): GitPaths | null {
-	let dir = cwd;
+function findGitPaths(): GitPaths | null {
+	let dir = process.cwd();
 	while (true) {
 		const gitPath = join(dir, ".git");
 		if (existsSync(gitPath)) {
@@ -47,7 +47,7 @@ function findGitPaths(cwd: string): GitPaths | null {
 }
 
 /** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
-function resolveBranchWithGitSync(repoDir: string): string | null {
+function resolveBranchWithGit(repoDir: string): string | null {
 	const result = spawnSync("git", ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"], {
 		cwd: repoDir,
 		encoding: "utf8",
@@ -57,60 +57,28 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
 	return branch || null;
 }
 
-/** Ask git for the current branch asynchronously. Returns null on detached HEAD or if git is unavailable. */
-function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
-	return new Promise((resolvePromise) => {
-		execFile(
-			"git",
-			["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
-			{
-				cwd: repoDir,
-				encoding: "utf8",
-			},
-			(error: ExecFileException | null, stdout: string) => {
-				if (error) {
-					resolvePromise(null);
-					return;
-				}
-				const branch = stdout.trim();
-				resolvePromise(branch || null);
-			},
-		);
-	});
-}
-
 /**
  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
  * Token stats, model info available via ctx.sessionManager and ctx.model.
  */
 export class FooterDataProvider {
-	private cwd: string;
-	private static readonly WATCH_DEBOUNCE_MS = 500;
-
 	private extensionStatuses = new Map<string, string>();
 	private cachedBranch: string | null | undefined = undefined;
 	private gitPaths: GitPaths | null | undefined = undefined;
 	private headWatcher: FSWatcher | null = null;
 	private reftableWatcher: FSWatcher | null = null;
-	private reftableTablesListWatcher: FSWatcher | null = null;
-	private reftableTablesListPath: string | null = null;
 	private branchChangeCallbacks = new Set<() => void>();
 	private availableProviderCount = 0;
-	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
-	private refreshInFlight = false;
-	private refreshPending = false;
-	private disposed = false;
 
-	constructor(cwd: string = process.cwd()) {
-		this.cwd = cwd;
-		this.gitPaths = findGitPaths(cwd);
+	constructor() {
+		this.gitPaths = findGitPaths();
 		this.setupGitWatcher();
 	}
 
 	/** Current git branch, null if not in repo, "detached" if detached HEAD */
 	getGitBranch(): string | null {
 		if (this.cachedBranch === undefined) {
-			this.cachedBranch = this.resolveGitBranchSync();
+			this.cachedBranch = this.resolveGitBranch();
 		}
 		return this.cachedBranch;
 	}
@@ -150,45 +118,8 @@ export class FooterDataProvider {
 		this.availableProviderCount = count;
 	}
 
-	setCwd(cwd: string): void {
-		if (this.cwd === cwd) {
-			return;
-		}
-
-		this.cwd = cwd;
-		if (this.refreshTimer) {
-			clearTimeout(this.refreshTimer);
-			this.refreshTimer = null;
-		}
-		if (this.headWatcher) {
-			this.headWatcher.close();
-			this.headWatcher = null;
-		}
-		if (this.reftableWatcher) {
-			this.reftableWatcher.close();
-			this.reftableWatcher = null;
-		}
-		if (this.reftableTablesListWatcher) {
-			this.reftableTablesListWatcher.close();
-			this.reftableTablesListWatcher = null;
-		}
-		if (this.reftableTablesListPath) {
-			unwatchFile(this.reftableTablesListPath);
-			this.reftableTablesListPath = null;
-		}
-		this.cachedBranch = undefined;
-		this.gitPaths = findGitPaths(cwd);
-		this.setupGitWatcher();
-		this.notifyBranchChange();
-	}
-
 	/** Internal: cleanup */
 	dispose(): void {
-		this.disposed = true;
-		if (this.refreshTimer) {
-			clearTimeout(this.refreshTimer);
-			this.refreshTimer = null;
-		}
 		if (this.headWatcher) {
 			this.headWatcher.close();
 			this.headWatcher = null;
@@ -196,14 +127,6 @@ export class FooterDataProvider {
 		if (this.reftableWatcher) {
 			this.reftableWatcher.close();
 			this.reftableWatcher = null;
-		}
-		if (this.reftableTablesListWatcher) {
-			this.reftableTablesListWatcher.close();
-			this.reftableTablesListWatcher = null;
-		}
-		if (this.reftableTablesListPath) {
-			unwatchFile(this.reftableTablesListPath);
-			this.reftableTablesListPath = null;
 		}
 		this.branchChangeCallbacks.clear();
 	}
@@ -212,67 +135,23 @@ export class FooterDataProvider {
 		for (const cb of this.branchChangeCallbacks) cb();
 	}
 
-	private scheduleRefresh(): void {
-		if (this.disposed || this.refreshTimer) return;
-		if (this.refreshInFlight) {
-			this.refreshPending = true;
-			return;
-		}
-		this.refreshTimer = setTimeout(() => {
-			this.refreshTimer = null;
-			void this.refreshGitBranchAsync();
-		}, FooterDataProvider.WATCH_DEBOUNCE_MS);
-	}
-
-	private async refreshGitBranchAsync(): Promise<void> {
-		if (this.disposed) return;
-		if (this.refreshInFlight) {
-			this.refreshPending = true;
-			return;
-		}
-
-		this.refreshInFlight = true;
-		try {
-			const nextBranch = await this.resolveGitBranchAsync();
-			if (this.disposed) return;
-			if (this.cachedBranch !== undefined && this.cachedBranch !== nextBranch) {
-				this.cachedBranch = nextBranch;
-				this.notifyBranchChange();
-				return;
-			}
+	private refreshGitBranch(): void {
+		const nextBranch = this.resolveGitBranch();
+		if (this.cachedBranch !== undefined && this.cachedBranch !== nextBranch) {
 			this.cachedBranch = nextBranch;
-		} finally {
-			this.refreshInFlight = false;
-			if (this.refreshPending && !this.disposed) {
-				this.refreshPending = false;
-				this.scheduleRefresh();
-			}
+			this.notifyBranchChange();
+			return;
 		}
+		this.cachedBranch = nextBranch;
 	}
 
-	private resolveGitBranchSync(): string | null {
+	private resolveGitBranch(): string | null {
 		try {
 			if (!this.gitPaths) return null;
 			const content = readFileSync(this.gitPaths.headPath, "utf8").trim();
 			if (content.startsWith("ref: refs/heads/")) {
 				const branch = content.slice(16);
-				return branch === ".invalid" ? (resolveBranchWithGitSync(this.gitPaths.repoDir) ?? "detached") : branch;
-			}
-			return "detached";
-		} catch {
-			return null;
-		}
-	}
-
-	private async resolveGitBranchAsync(): Promise<string | null> {
-		try {
-			if (!this.gitPaths) return null;
-			const content = readFileSync(this.gitPaths.headPath, "utf8").trim();
-			if (content.startsWith("ref: refs/heads/")) {
-				const branch = content.slice(16);
-				return branch === ".invalid"
-					? ((await resolveBranchWithGitAsync(this.gitPaths.repoDir)) ?? "detached")
-					: branch;
+				return branch === ".invalid" ? (resolveBranchWithGit(this.gitPaths.repoDir) ?? "detached") : branch;
 			}
 			return "detached";
 		} catch {
@@ -289,7 +168,7 @@ export class FooterDataProvider {
 		try {
 			this.headWatcher = watch(dirname(this.gitPaths.headPath), (_eventType, filename) => {
 				if (!filename || filename.toString() === "HEAD") {
-					this.scheduleRefresh();
+					this.refreshGitBranch();
 				}
 			});
 		} catch {
@@ -302,31 +181,10 @@ export class FooterDataProvider {
 		if (existsSync(reftableDir)) {
 			try {
 				this.reftableWatcher = watch(reftableDir, () => {
-					this.scheduleRefresh();
+					this.refreshGitBranch();
 				});
 			} catch {
 				// Silently fail if we can't watch
-			}
-
-			const tablesListPath = join(reftableDir, "tables.list");
-			if (existsSync(tablesListPath)) {
-				this.reftableTablesListPath = tablesListPath;
-				try {
-					this.reftableTablesListWatcher = watch(tablesListPath, () => {
-						this.scheduleRefresh();
-					});
-				} catch {
-					// Silently fail if we can't watch
-				}
-				watchFile(tablesListPath, { interval: 250 }, (current, previous) => {
-					if (
-						current.mtimeMs !== previous.mtimeMs ||
-						current.ctimeMs !== previous.ctimeMs ||
-						current.size !== previous.size
-					) {
-						this.scheduleRefresh();
-					}
-				});
 			}
 		}
 	}

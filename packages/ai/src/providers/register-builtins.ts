@@ -34,21 +34,6 @@ interface LazyProviderModule<
 	) => AsyncIterable<AssistantMessageEvent>;
 }
 
-type DynamicImport = (specifier: string) => Promise<unknown>;
-
-const dynamicImport: DynamicImport = (specifier) => import(specifier);
-
-const ANTHROPIC_PROVIDER_SPECIFIER = "./anthropic.js";
-const AZURE_OPENAI_RESPONSES_PROVIDER_SPECIFIER = "./azure-openai-responses.js";
-const GOOGLE_PROVIDER_SPECIFIER = "./google.js";
-const GOOGLE_GEMINI_CLI_PROVIDER_SPECIFIER = "./google-gemini-cli.js";
-const GOOGLE_VERTEX_PROVIDER_SPECIFIER = "./google-vertex.js";
-const MISTRAL_PROVIDER_SPECIFIER = "./mistral.js";
-const OPENAI_CODEX_RESPONSES_PROVIDER_SPECIFIER = "./openai-codex-responses.js";
-const OPENAI_COMPLETIONS_PROVIDER_SPECIFIER = "./openai-completions.js";
-const OPENAI_RESPONSES_PROVIDER_SPECIFIER = "./openai-responses.js";
-const BEDROCK_PROVIDER_SPECIFIER = "./amazon-" + "bedrock.js";
-
 interface AnthropicProviderModule {
 	streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOptions>;
 	streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleStreamOptions>;
@@ -106,6 +91,8 @@ interface BedrockProviderModule {
 		options?: SimpleStreamOptions,
 	) => AsyncIterable<AssistantMessageEvent>;
 }
+
+const importNodeOnlyProvider = (specifier: string): Promise<unknown> => import(specifier);
 
 let anthropicProviderModulePromise:
 	| Promise<LazyProviderModule<"anthropic-messages", AnthropicOptions, SimpleStreamOptions>>
@@ -225,7 +212,7 @@ function createLazySimpleStream<
 function loadAnthropicProviderModule(): Promise<
 	LazyProviderModule<"anthropic-messages", AnthropicOptions, SimpleStreamOptions>
 > {
-	anthropicProviderModulePromise ||= dynamicImport(ANTHROPIC_PROVIDER_SPECIFIER).then((module) => {
+	anthropicProviderModulePromise ||= import("./anthropic.js").then((module) => {
 		const provider = module as AnthropicProviderModule;
 		return {
 			stream: provider.streamAnthropic,
@@ -238,22 +225,20 @@ function loadAnthropicProviderModule(): Promise<
 function loadAzureOpenAIResponsesProviderModule(): Promise<
 	LazyProviderModule<"azure-openai-responses", AzureOpenAIResponsesOptions, SimpleStreamOptions>
 > {
-	azureOpenAIResponsesProviderModulePromise ||= dynamicImport(AZURE_OPENAI_RESPONSES_PROVIDER_SPECIFIER).then(
-		(module) => {
-			const provider = module as AzureOpenAIResponsesProviderModule;
-			return {
-				stream: provider.streamAzureOpenAIResponses,
-				streamSimple: provider.streamSimpleAzureOpenAIResponses,
-			};
-		},
-	);
+	azureOpenAIResponsesProviderModulePromise ||= import("./azure-openai-responses.js").then((module) => {
+		const provider = module as AzureOpenAIResponsesProviderModule;
+		return {
+			stream: provider.streamAzureOpenAIResponses,
+			streamSimple: provider.streamSimpleAzureOpenAIResponses,
+		};
+	});
 	return azureOpenAIResponsesProviderModulePromise;
 }
 
 function loadGoogleProviderModule(): Promise<
 	LazyProviderModule<"google-generative-ai", GoogleOptions, SimpleStreamOptions>
 > {
-	googleProviderModulePromise ||= dynamicImport(GOOGLE_PROVIDER_SPECIFIER).then((module) => {
+	googleProviderModulePromise ||= import("./google.js").then((module) => {
 		const provider = module as GoogleProviderModule;
 		return {
 			stream: provider.streamGoogle,
@@ -266,7 +251,7 @@ function loadGoogleProviderModule(): Promise<
 function loadGoogleGeminiCliProviderModule(): Promise<
 	LazyProviderModule<"google-gemini-cli", GoogleGeminiCliOptions, SimpleStreamOptions>
 > {
-	googleGeminiCliProviderModulePromise ||= dynamicImport(GOOGLE_GEMINI_CLI_PROVIDER_SPECIFIER).then((module) => {
+	googleGeminiCliProviderModulePromise ||= import("./google-gemini-cli.js").then((module) => {
 		const provider = module as GoogleGeminiCliProviderModule;
 		return {
 			stream: provider.streamGoogleGeminiCli,
@@ -279,7 +264,7 @@ function loadGoogleGeminiCliProviderModule(): Promise<
 function loadGoogleVertexProviderModule(): Promise<
 	LazyProviderModule<"google-vertex", GoogleVertexOptions, SimpleStreamOptions>
 > {
-	googleVertexProviderModulePromise ||= dynamicImport(GOOGLE_VERTEX_PROVIDER_SPECIFIER).then((module) => {
+	googleVertexProviderModulePromise ||= import("./google-vertex.js").then((module) => {
 		const provider = module as GoogleVertexProviderModule;
 		return {
 			stream: provider.streamGoogleVertex,
@@ -292,7 +277,7 @@ function loadGoogleVertexProviderModule(): Promise<
 function loadMistralProviderModule(): Promise<
 	LazyProviderModule<"mistral-conversations", MistralOptions, SimpleStreamOptions>
 > {
-	mistralProviderModulePromise ||= dynamicImport(MISTRAL_PROVIDER_SPECIFIER).then((module) => {
+	mistralProviderModulePromise ||= import("./mistral.js").then((module) => {
 		const provider = module as MistralProviderModule;
 		return {
 			stream: provider.streamMistral,
@@ -305,22 +290,20 @@ function loadMistralProviderModule(): Promise<
 function loadOpenAICodexResponsesProviderModule(): Promise<
 	LazyProviderModule<"openai-codex-responses", OpenAICodexResponsesOptions, SimpleStreamOptions>
 > {
-	openAICodexResponsesProviderModulePromise ||= dynamicImport(OPENAI_CODEX_RESPONSES_PROVIDER_SPECIFIER).then(
-		(module) => {
-			const provider = module as OpenAICodexResponsesProviderModule;
-			return {
-				stream: provider.streamOpenAICodexResponses,
-				streamSimple: provider.streamSimpleOpenAICodexResponses,
-			};
-		},
-	);
+	openAICodexResponsesProviderModulePromise ||= import("./openai-codex-responses.js").then((module) => {
+		const provider = module as OpenAICodexResponsesProviderModule;
+		return {
+			stream: provider.streamOpenAICodexResponses,
+			streamSimple: provider.streamSimpleOpenAICodexResponses,
+		};
+	});
 	return openAICodexResponsesProviderModulePromise;
 }
 
 function loadOpenAICompletionsProviderModule(): Promise<
 	LazyProviderModule<"openai-completions", OpenAICompletionsOptions, SimpleStreamOptions>
 > {
-	openAICompletionsProviderModulePromise ||= dynamicImport(OPENAI_COMPLETIONS_PROVIDER_SPECIFIER).then((module) => {
+	openAICompletionsProviderModulePromise ||= import("./openai-completions.js").then((module) => {
 		const provider = module as OpenAICompletionsProviderModule;
 		return {
 			stream: provider.streamOpenAICompletions,
@@ -333,7 +316,7 @@ function loadOpenAICompletionsProviderModule(): Promise<
 function loadOpenAIResponsesProviderModule(): Promise<
 	LazyProviderModule<"openai-responses", OpenAIResponsesOptions, SimpleStreamOptions>
 > {
-	openAIResponsesProviderModulePromise ||= dynamicImport(OPENAI_RESPONSES_PROVIDER_SPECIFIER).then((module) => {
+	openAIResponsesProviderModulePromise ||= import("./openai-responses.js").then((module) => {
 		const provider = module as OpenAIResponsesProviderModule;
 		return {
 			stream: provider.streamOpenAIResponses,
@@ -349,7 +332,7 @@ function loadBedrockProviderModule(): Promise<
 	if (bedrockProviderModuleOverride) {
 		return Promise.resolve(bedrockProviderModuleOverride);
 	}
-	bedrockProviderModulePromise ||= dynamicImport(BEDROCK_PROVIDER_SPECIFIER).then((module) => {
+	bedrockProviderModulePromise ||= importNodeOnlyProvider("./amazon-bedrock.js").then((module) => {
 		const provider = module as BedrockProviderModule;
 		return {
 			stream: provider.streamBedrock,

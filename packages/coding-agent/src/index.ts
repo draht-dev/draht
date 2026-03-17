@@ -1,7 +1,7 @@
 // Core session management
 
 // Config paths
-export { getAgentDir, getPackageDir, isBunBinary, VERSION } from "./config.js";
+export { getAgentDir, VERSION } from "./config.js";
 export {
 	AgentSession,
 	type AgentSessionConfig,
@@ -53,7 +53,7 @@ export type {
 	AgentStartEvent,
 	AgentToolResult,
 	AgentToolUpdateCallback,
-	AppKeybinding,
+	AppAction,
 	BashToolCallEvent,
 	BeforeAgentStartEvent,
 	BeforeProviderRequestEvent,
@@ -97,21 +97,21 @@ export type {
 	ReadToolCallEvent,
 	RegisteredCommand,
 	RegisteredTool,
-	ResolvedCommand,
 	SessionBeforeCompactEvent,
 	SessionBeforeForkEvent,
 	SessionBeforeSwitchEvent,
 	SessionBeforeTreeEvent,
 	SessionCompactEvent,
+	SessionForkEvent,
 	SessionShutdownEvent,
 	SessionStartEvent,
+	SessionSwitchEvent,
 	SessionTreeEvent,
 	SlashCommandInfo,
+	SlashCommandLocation,
 	SlashCommandSource,
-	SourceInfo,
 	TerminalInputHandler,
 	ToolCallEvent,
-	ToolCallEventResult,
 	ToolDefinition,
 	ToolInfo,
 	ToolRenderResultOptions,
@@ -125,7 +125,6 @@ export type {
 } from "./core/extensions/index.js";
 export {
 	createExtensionRuntime,
-	defineTool,
 	discoverAndLoadExtensions,
 	ExtensionRunner,
 	isBashToolResult,
@@ -156,14 +155,10 @@ export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./co
 export { DefaultResourceLoader } from "./core/resource-loader.js";
 // SDK for programmatic usage
 export {
-	type AgentSessionRuntimeBootstrap,
-	AgentSessionRuntimeHost,
 	type CreateAgentSessionOptions,
 	type CreateAgentSessionResult,
-	type CreateAgentSessionRuntimeOptions,
 	// Factory
 	createAgentSession,
-	createAgentSessionRuntime,
 	createBashTool,
 	// Tool factories (for custom cwd)
 	createCodingTools,
@@ -218,7 +213,6 @@ export {
 	type Skill,
 	type SkillFrontmatter,
 } from "./core/skills.js";
-export { createSyntheticSourceInfo } from "./core/source-info.js";
 // Tools
 export {
 	type BashOperations,
@@ -228,16 +222,8 @@ export {
 	type BashToolInput,
 	type BashToolOptions,
 	bashTool,
-	bashToolDefinition,
 	codingTools,
-	createBashToolDefinition,
-	createEditToolDefinition,
-	createFindToolDefinition,
-	createGrepToolDefinition,
 	createLocalBashOperations,
-	createLsToolDefinition,
-	createReadToolDefinition,
-	createWriteToolDefinition,
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	type EditOperations,
@@ -245,32 +231,27 @@ export {
 	type EditToolInput,
 	type EditToolOptions,
 	editTool,
-	editToolDefinition,
 	type FindOperations,
 	type FindToolDetails,
 	type FindToolInput,
 	type FindToolOptions,
 	findTool,
-	findToolDefinition,
 	formatSize,
 	type GrepOperations,
 	type GrepToolDetails,
 	type GrepToolInput,
 	type GrepToolOptions,
 	grepTool,
-	grepToolDefinition,
 	type LsOperations,
 	type LsToolDetails,
 	type LsToolInput,
 	type LsToolOptions,
 	lsTool,
-	lsToolDefinition,
 	type ReadOperations,
 	type ReadToolDetails,
 	type ReadToolInput,
 	type ReadToolOptions,
 	readTool,
-	readToolDefinition,
 	type ToolsOptions,
 	type TruncationOptions,
 	type TruncationResult,
@@ -280,25 +261,8 @@ export {
 	type WriteOperations,
 	type WriteToolInput,
 	type WriteToolOptions,
-	withFileMutationQueue,
 	writeTool,
-	writeToolDefinition,
 } from "./core/tools/index.js";
-export type { CommitResult, PhaseVerification, PlanDiscovery } from "./gsd/index.js";
-// GSD (Get Shit Done) — phase/plan/task lifecycle functions
-export {
-	commitDocs,
-	commitTask,
-	createDomainModel,
-	createPlan,
-	discoverPlans,
-	hasTestFiles,
-	mapCodebase,
-	readPlan,
-	updateState,
-	verifyPhase,
-	writeSummary,
-} from "./gsd/index.js";
 // Main entry point
 export { main } from "./main.js";
 // Run modes for programmatic SDK usage
@@ -313,6 +277,8 @@ export {
 export {
 	ArminComponent,
 	AssistantMessageComponent,
+	appKey,
+	appKeyHint,
 	BashExecutionComponent,
 	BorderedLoader,
 	BranchSummaryMessageComponent,
@@ -323,9 +289,9 @@ export {
 	ExtensionEditorComponent,
 	ExtensionInputComponent,
 	ExtensionSelectorComponent,
+	editorKey,
 	FooterComponent,
 	keyHint,
-	keyText,
 	LoginDialogComponent,
 	ModelSelectorComponent,
 	OAuthSelectorComponent,

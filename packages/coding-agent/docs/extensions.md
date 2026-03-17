@@ -641,6 +641,8 @@ pi.on("tool_result", async (event, ctx) => {
 Fired when user executes `!` or `!!` commands. **Can intercept.**
 
 ```typescript
+import { createLocalBashOperations } from "@mariozechner/pi-coding-agent";
+
 pi.on("user_bash", (event, ctx) => {
   // event.command - the bash command
   // event.excludeFromContext - true if !! prefix
@@ -649,7 +651,17 @@ pi.on("user_bash", (event, ctx) => {
   // Option 1: Provide custom operations (e.g., SSH)
   return { operations: remoteBashOps };
 
-  // Option 2: Full replacement - return result directly
+  // Option 2: Wrap pi's built-in local bash backend
+  const local = createLocalBashOperations();
+  return {
+    operations: {
+      exec(command, cwd, options) {
+        return local.exec(`source ~/.profile\n${command}`, cwd, options);
+      }
+    }
+  };
+
+  // Option 3: Full replacement - return result directly
   return { result: { output: "...", exitCode: 0, cancelled: false, truncated: false } };
 });
 ```
@@ -1464,6 +1476,8 @@ pi.registerTool({
 ```
 
 **Operations interfaces:** `ReadOperations`, `WriteOperations`, `EditOperations`, `BashOperations`, `LsOperations`, `GrepOperations`, `FindOperations`
+
+For `user_bash`, extensions can reuse pi's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
 
 The bash tool also supports a spawn hook to adjust the command, cwd, or env before execution:
 

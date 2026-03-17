@@ -17,7 +17,6 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 	});
 }
 
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
 import { generatePKCE } from "./pkce.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthPrompt, OAuthProviderInterface } from "./types.js";
 
@@ -27,6 +26,18 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
 const SCOPE = "openid profile email offline_access";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+
+const SUCCESS_HTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Authentication successful</title>
+</head>
+<body>
+  <p>Authentication successful. Return to your terminal to continue.</p>
+</body>
+</html>`;
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
 type TokenFailure = { type: "failed" };
@@ -172,7 +183,7 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 }
 
 async function createAuthorizationFlow(
-	originator: string = "draht",
+	originator: string = "pi",
 ): Promise<{ verifier: string; state: string; url: string }> {
 	const { verifier, challenge } = await generatePKCE();
 	const state = createState();
@@ -218,31 +229,27 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 			const url = new URL(req.url || "", "http://localhost");
 			if (url.pathname !== "/auth/callback") {
 				res.statusCode = 404;
-				res.setHeader("Content-Type", "text/html; charset=utf-8");
-				res.end(oauthErrorHtml("Callback route not found."));
+				res.end("Not found");
 				return;
 			}
 			if (url.searchParams.get("state") !== state) {
 				res.statusCode = 400;
-				res.setHeader("Content-Type", "text/html; charset=utf-8");
-				res.end(oauthErrorHtml("State mismatch."));
+				res.end("State mismatch");
 				return;
 			}
 			const code = url.searchParams.get("code");
 			if (!code) {
 				res.statusCode = 400;
-				res.setHeader("Content-Type", "text/html; charset=utf-8");
-				res.end(oauthErrorHtml("Missing authorization code."));
+				res.end("Missing authorization code");
 				return;
 			}
 			res.statusCode = 200;
 			res.setHeader("Content-Type", "text/html; charset=utf-8");
-			res.end(oauthSuccessHtml("OpenAI authentication completed. You can close this window."));
+			res.end(SUCCESS_HTML);
 			settleWait?.({ code });
 		} catch {
 			res.statusCode = 500;
-			res.setHeader("Content-Type", "text/html; charset=utf-8");
-			res.end(oauthErrorHtml("Internal error while processing OAuth callback."));
+			res.end("Internal error");
 		}
 	});
 
@@ -295,7 +302,7 @@ function getAccountId(accessToken: string): string | null {
  * @param options.onManualCodeInput - Optional promise that resolves with user-pasted code.
  *                                    Races with browser callback - whichever completes first wins.
  *                                    Useful for showing paste input immediately alongside browser flow.
- * @param options.originator - OAuth originator parameter (defaults to "draht")
+ * @param options.originator - OAuth originator parameter (defaults to "pi")
  */
 export async function loginOpenAICodex(options: {
 	onAuth: (info: { url: string; instructions?: string }) => void;

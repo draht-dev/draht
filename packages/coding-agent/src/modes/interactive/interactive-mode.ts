@@ -626,6 +626,9 @@ export class InteractiveMode {
 			runTmuxShow("extended-keys-format"),
 		]);
 
+		// If we couldn't query tmux (timeout, sandbox, etc.), don't warn
+		if (extendedKeys === undefined) return undefined;
+
 		if (extendedKeys !== "on" && extendedKeys !== "always") {
 			return "tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys on` to ~/.tmux.conf and restart tmux.";
 		}

@@ -31,9 +31,11 @@ function validateProjectRoot(projectRoot: string): void {
 
 	// For relative paths: ensure resolved path is within or equal to cwd
 	if (!projectRoot.startsWith("/")) {
-		if (!resolved.startsWith(cwd)) {
+		if (!resolved.startsWith(cwd + "/") && resolved !== cwd) {
 			throw new Error(`Invalid project root: path traversal detected (${projectRoot})`);
 		}
+		return;
+	}
 		return;
 	}
 

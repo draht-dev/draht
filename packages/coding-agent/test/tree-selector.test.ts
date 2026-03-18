@@ -1,6 +1,5 @@
-import { setKeybindings } from "@draht/tui";
+import { DEFAULT_EDITOR_KEYBINDINGS, EditorKeybindingsManager, setEditorKeybindings } from "@mariozechner/pi-tui";
 import { beforeAll, beforeEach, describe, expect, test } from "vitest";
-import { KeybindingsManager } from "../src/core/keybindings.js";
 import type {
 	ModelChangeEntry,
 	SessionEntry,
@@ -15,8 +14,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-	// Ensure test isolation: keybindings are a global singleton
-	setKeybindings(new KeybindingsManager());
+	// Ensure test isolation: editor keybindings are a global singleton
+	setEditorKeybindings(new EditorKeybindingsManager(DEFAULT_EDITOR_KEYBINDINGS));
 });
 
 // Helper to create a user message entry

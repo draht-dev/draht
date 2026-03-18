@@ -5,6 +5,10 @@ import { DEFAULT_RATES, estimateCost } from "../src/cost.js";
  * Assert cost is within 1% tolerance of expected value.
  */
 function assertCostWithinTolerance(actual: number, expected: number): void {
+	if (expected === 0) {
+		expect(actual).toBe(0);
+		return;
+	}
 	const tolerance = expected * 0.01; // 1% tolerance
 	expect(Math.abs(actual - expected)).toBeLessThanOrEqual(tolerance);
 }

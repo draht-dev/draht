@@ -43,9 +43,7 @@ function validateProjectRoot(projectRoot: string): void {
 	const home = homedir();
 	const tmpDir = tmpdir();
 	const safePaths = [home, tmpDir, cwd, "/tmp", "/private/tmp"];
-
-	const isSafe = safePaths.some((safe) => resolved.startsWith(safe));
-	if (isSafe) {
+	const isSafe = safePaths.some((safe) => resolved.startsWith(safe + "/") || resolved === safe);
 		return;
 	}
 

@@ -2,12 +2,12 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
-import type { AgentMessage } from "@draht/agent-core";
-import type { ImageContent, Model } from "@draht/ai";
-import type { KeyId } from "@draht/tui";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ImageContent, Model } from "@mariozechner/pi-ai";
+import type { KeyId } from "@mariozechner/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
-import type { KeybindingsConfig } from "../keybindings.js";
+import type { KeyAction, KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
 import type {
@@ -37,7 +37,6 @@ import type {
 	ProviderConfig,
 	RegisteredCommand,
 	RegisteredTool,
-	ResolvedCommand,
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
 	SessionBeforeCompactResult,
@@ -52,41 +51,40 @@ import type {
 	UserBashEventResult,
 } from "./types.js";
 
-// Extension shortcuts compete with canonical keybinding ids from keybindings.json.
-// Only editor-global shortcuts are reserved here. Picker-specific bindings are not.
-const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
-	"app.interrupt",
-	"app.clear",
-	"app.exit",
-	"app.suspend",
-	"app.thinking.cycle",
-	"app.model.cycleForward",
-	"app.model.cycleBackward",
-	"app.model.select",
-	"app.tools.expand",
-	"app.thinking.toggle",
-	"app.editor.external",
-	"app.message.followUp",
-	"tui.input.submit",
-	"tui.select.confirm",
-	"tui.select.cancel",
-	"tui.input.copy",
-	"tui.editor.deleteToLineEnd",
-] as const;
+// Keybindings for these actions cannot be overridden by extensions
+const RESERVED_ACTIONS_FOR_EXTENSION_CONFLICTS: ReadonlyArray<KeyAction> = [
+	"interrupt",
+	"clear",
+	"exit",
+	"suspend",
+	"cycleThinkingLevel",
+	"cycleModelForward",
+	"cycleModelBackward",
+	"selectModel",
+	"expandTools",
+	"toggleThinking",
+	"externalEditor",
+	"followUp",
+	"submit",
+	"selectConfirm",
+	"selectCancel",
+	"copy",
+	"deleteToLineEnd",
+];
 
-type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
+type BuiltInKeyBindings = Partial<Record<KeyId, { action: KeyAction; restrictOverride: boolean }>>;
 
-const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
+const buildBuiltinKeybindings = (effectiveKeybindings: Required<KeybindingsConfig>): BuiltInKeyBindings => {
 	const builtinKeybindings = {} as BuiltInKeyBindings;
-	for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
-		if (keys === undefined) continue;
+	for (const [action, keys] of Object.entries(effectiveKeybindings)) {
+		const keyAction = action as KeyAction;
 		const keyList = Array.isArray(keys) ? keys : [keys];
-		const restrictOverride = (RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS as readonly string[]).includes(keybinding);
+		const restrictOverride = RESERVED_ACTIONS_FOR_EXTENSION_CONFLICTS.includes(keyAction);
 		for (const key of keyList) {
 			const normalizedKey = key.toLowerCase() as KeyId;
 			builtinKeybindings[normalizedKey] = {
-				keybinding,
-				restrictOverride,
+				action: keyAction,
+				restrictOverride: restrictOverride,
 			};
 		}
 	}
@@ -273,20 +271,11 @@ export class ExtensionRunner {
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 
 		// Flush provider registrations queued during extension loading
-		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
-			try {
-				if (providerActions?.registerProvider) {
-					providerActions.registerProvider(name, config);
-				} else {
-					this.modelRegistry.registerProvider(name, config);
-				}
-			} catch (err) {
-				this.emitError({
-					extensionPath,
-					event: "register_provider",
-					error: err instanceof Error ? err.message : String(err),
-					stack: err instanceof Error ? err.stack : undefined,
-				});
+		for (const { name, config } of this.runtime.pendingProviderRegistrations) {
+			if (providerActions?.registerProvider) {
+				providerActions.registerProvider(name, config);
+			} else {
+				this.modelRegistry.registerProvider(name, config);
 			}
 		}
 		this.runtime.pendingProviderRegistrations = [];
@@ -388,9 +377,9 @@ export class ExtensionRunner {
 		return new Map(this.runtime.flagValues);
 	}
 
-	getShortcuts(resolvedKeybindings: KeybindingsConfig): Map<KeyId, ExtensionShortcut> {
+	getShortcuts(effectiveKeybindings: Required<KeybindingsConfig>): Map<KeyId, ExtensionShortcut> {
 		this.shortcutDiagnostics = [];
-		const builtinKeybindings = buildBuiltinKeybindings(resolvedKeybindings);
+		const builtinKeybindings = buildBuiltinKeybindings(effectiveKeybindings);
 		const extensionShortcuts = new Map<KeyId, ExtensionShortcut>();
 
 		const addDiagnostic = (message: string, extensionPath: string) => {
@@ -415,7 +404,7 @@ export class ExtensionRunner {
 
 				if (builtInKeybinding?.restrictOverride === false) {
 					addDiagnostic(
-						`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.keybinding} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
+						`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.action} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
 						shortcut.extensionPath,
 					);
 				}
@@ -468,53 +457,61 @@ export class ExtensionRunner {
 		return undefined;
 	}
 
-	private resolveRegisteredCommands(): ResolvedCommand[] {
-		const commands: RegisteredCommand[] = [];
-		const counts = new Map<string, number>();
+	getRegisteredCommands(reserved?: Set<string>): RegisteredCommand[] {
+		this.commandDiagnostics = [];
 
+		const commands: RegisteredCommand[] = [];
+		const commandOwners = new Map<string, string>();
 		for (const ext of this.extensions) {
 			for (const command of ext.commands.values()) {
+				if (reserved?.has(command.name)) {
+					const message = `Extension command '${command.name}' from ${ext.path} conflicts with built-in commands. Skipping.`;
+					this.commandDiagnostics.push({ type: "warning", message, path: ext.path });
+					if (!this.hasUI()) {
+						console.warn(message);
+					}
+					continue;
+				}
+
+				const existingOwner = commandOwners.get(command.name);
+				if (existingOwner) {
+					const message = `Extension command '${command.name}' from ${ext.path} conflicts with ${existingOwner}. Skipping.`;
+					this.commandDiagnostics.push({ type: "warning", message, path: ext.path });
+					if (!this.hasUI()) {
+						console.warn(message);
+					}
+					continue;
+				}
+
+				commandOwners.set(command.name, ext.path);
 				commands.push(command);
-				counts.set(command.name, (counts.get(command.name) ?? 0) + 1);
 			}
 		}
-
-		const seen = new Map<string, number>();
-		const takenInvocationNames = new Set<string>();
-
-		return commands.map((command) => {
-			const occurrence = (seen.get(command.name) ?? 0) + 1;
-			seen.set(command.name, occurrence);
-
-			let invocationName = (counts.get(command.name) ?? 0) > 1 ? `${command.name}:${occurrence}` : command.name;
-
-			if (takenInvocationNames.has(invocationName)) {
-				let suffix = occurrence;
-				do {
-					suffix++;
-					invocationName = `${command.name}:${suffix}`;
-				} while (takenInvocationNames.has(invocationName));
-			}
-
-			takenInvocationNames.add(invocationName);
-			return {
-				...command,
-				invocationName,
-			};
-		});
-	}
-
-	getRegisteredCommands(): ResolvedCommand[] {
-		this.commandDiagnostics = [];
-		return this.resolveRegisteredCommands();
+		return commands;
 	}
 
 	getCommandDiagnostics(): ResourceDiagnostic[] {
 		return this.commandDiagnostics;
 	}
 
-	getCommand(name: string): ResolvedCommand | undefined {
-		return this.resolveRegisteredCommands().find((command) => command.invocationName === name);
+	getRegisteredCommandsWithPaths(): Array<{ command: RegisteredCommand; extensionPath: string }> {
+		const result: Array<{ command: RegisteredCommand; extensionPath: string }> = [];
+		for (const ext of this.extensions) {
+			for (const command of ext.commands.values()) {
+				result.push({ command, extensionPath: ext.path });
+			}
+		}
+		return result;
+	}
+
+	getCommand(name: string): RegisteredCommand | undefined {
+		for (const ext of this.extensions) {
+			const command = ext.commands.get(name);
+			if (command) {
+				return command;
+			}
+		}
+		return undefined;
 	}
 
 	/**

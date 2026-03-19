@@ -707,6 +707,65 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("dynamic provider lifecycle", () => {
+		test("failed registerProvider does not persist invalid streamSimple config", () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+			expect(() =>
+				registry.registerProvider("broken-provider", {
+					streamSimple: (() => {
+						throw new Error("should not run");
+					}) as any,
+				}),
+			).toThrow('Provider broken-provider: "api" is required when registering streamSimple.');
+
+			expect(() => registry.refresh()).not.toThrow();
+		});
+
+		test("failed registerProvider does not remove existing provider models", () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+			registry.registerProvider("demo-provider", {
+				baseUrl: "https://provider.test/v1",
+				apiKey: "TEST_KEY",
+				api: "openai-completions",
+				models: [
+					{
+						id: "demo-model",
+						name: "Demo Model",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 128000,
+						maxTokens: 4096,
+					},
+				],
+			});
+
+			expect(registry.find("demo-provider", "demo-model")).toBeDefined();
+
+			expect(() =>
+				registry.registerProvider("demo-provider", {
+					baseUrl: "https://provider.test/v2",
+					apiKey: "TEST_KEY",
+					models: [
+						{
+							id: "broken-model",
+							name: "Broken Model",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 128000,
+							maxTokens: 4096,
+						},
+					],
+				}),
+			).toThrow('Provider demo-provider, model broken-model: no "api" specified.');
+
+			expect(registry.find("demo-provider", "demo-model")).toBeDefined();
+			expect(() => registry.refresh()).not.toThrow();
+			expect(registry.find("demo-provider", "demo-model")).toBeDefined();
+		});
+
 		test("unregisterProvider removes custom OAuth provider and restores built-in OAuth provider", () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 

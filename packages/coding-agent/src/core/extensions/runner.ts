@@ -271,11 +271,20 @@ export class ExtensionRunner {
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 
 		// Flush provider registrations queued during extension loading
-		for (const { name, config } of this.runtime.pendingProviderRegistrations) {
-			if (providerActions?.registerProvider) {
-				providerActions.registerProvider(name, config);
-			} else {
-				this.modelRegistry.registerProvider(name, config);
+		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
+			try {
+				if (providerActions?.registerProvider) {
+					providerActions.registerProvider(name, config);
+				} else {
+					this.modelRegistry.registerProvider(name, config);
+				}
+			} catch (err) {
+				this.emitError({
+					extensionPath,
+					event: "register_provider",
+					error: err instanceof Error ? err.message : String(err),
+					stack: err instanceof Error ? err.stack : undefined,
+				});
 			}
 		}
 		this.runtime.pendingProviderRegistrations = [];

@@ -1307,15 +1307,15 @@ export type SetLabelHandler = (entryId: string, label: string | undefined) => vo
 export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
 	/** Provider registrations queued during extension loading, processed when runner binds */
-	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig }>;
+	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;
 	/**
 	 * Register or unregister a provider.
 	 *
 	 * Before bindCore(): queues registrations / removes from queue.
 	 * After bindCore(): calls ModelRegistry directly for immediate effect.
 	 */
-	registerProvider: (name: string, config: ProviderConfig) => void;
-	unregisterProvider: (name: string) => void;
+	registerProvider: (name: string, config: ProviderConfig, extensionPath?: string) => void;
+	unregisterProvider: (name: string, extensionPath?: string) => void;
 }
 
 /**

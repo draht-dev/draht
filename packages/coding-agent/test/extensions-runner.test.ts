@@ -607,6 +607,29 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("provider registration", () => {
+		it("bindCore ignores invalid queued registrations and reports extension error", () => {
+			const runtime = createExtensionRuntime();
+			runtime.registerProvider(
+				"broken-provider",
+				{
+					streamSimple: (() => {
+						throw new Error("should not run");
+					}) as any,
+				},
+				"/tmp/broken-extension.ts",
+			);
+
+			const runner = new ExtensionRunner([], runtime, tempDir, sessionManager, modelRegistry);
+			const errors: string[] = [];
+			runner.onError((error) => errors.push(`${error.extensionPath}: ${error.error}`));
+
+			expect(() => runner.bindCore(extensionActions, extensionContextActions)).not.toThrow();
+			expect(errors).toEqual([
+				'/tmp/broken-extension.ts: Provider broken-provider: "api" is required when registering streamSimple.',
+			]);
+			expect(() => modelRegistry.refresh()).not.toThrow();
+		});
+
 		it("pre-bind unregister removes all queued registrations for a provider", () => {
 			const runtime = createExtensionRuntime();
 

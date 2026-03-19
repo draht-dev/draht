@@ -569,8 +569,9 @@ export class ModelRegistry {
 	 * If provider has oauth: registers OAuth provider for /login support.
 	 */
 	registerProvider(providerName: string, config: ProviderConfigInput): void {
-		this.registeredProviders.set(providerName, config);
+		this.validateProviderConfig(providerName, config);
 		this.applyProviderConfig(providerName, config);
+		this.registeredProviders.set(providerName, config);
 	}
 
 	/**
@@ -589,6 +590,30 @@ export class ModelRegistry {
 		this.refresh();
 	}
 
+	private validateProviderConfig(providerName: string, config: ProviderConfigInput): void {
+		if (config.streamSimple && !config.api) {
+			throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
+		}
+
+		if (!config.models || config.models.length === 0) {
+			return;
+		}
+
+		if (!config.baseUrl) {
+			throw new Error(`Provider ${providerName}: "baseUrl" is required when defining models.`);
+		}
+		if (!config.apiKey && !config.oauth) {
+			throw new Error(`Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`);
+		}
+
+		for (const modelDef of config.models) {
+			const api = modelDef.api || config.api;
+			if (!api) {
+				throw new Error(`Provider ${providerName}, model ${modelDef.id}: no "api" specified.`);
+			}
+		}
+	}
+
 	private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
 		// Register OAuth provider if provided
 		if (config.oauth) {
@@ -601,13 +626,10 @@ export class ModelRegistry {
 		}
 
 		if (config.streamSimple) {
-			if (!config.api) {
-				throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
-			}
 			const streamSimple = config.streamSimple;
 			registerApiProvider(
 				{
-					api: config.api,
+					api: config.api!,
 					stream: (model, context, options) => streamSimple(model, context, options as SimpleStreamOptions),
 					streamSimple,
 				},
@@ -624,20 +646,9 @@ export class ModelRegistry {
 			// Full replacement: remove existing models for this provider
 			this.models = this.models.filter((m) => m.provider !== providerName);
 
-			// Validate required fields
-			if (!config.baseUrl) {
-				throw new Error(`Provider ${providerName}: "baseUrl" is required when defining models.`);
-			}
-			if (!config.apiKey && !config.oauth) {
-				throw new Error(`Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`);
-			}
-
 			// Parse and add new models
 			for (const modelDef of config.models) {
 				const api = modelDef.api || config.api;
-				if (!api) {
-					throw new Error(`Provider ${providerName}, model ${modelDef.id}: no "api" specified.`);
-				}
 
 				// Merge headers
 				const providerHeaders = resolveHeaders(config.headers);
@@ -657,7 +668,7 @@ export class ModelRegistry {
 					name: modelDef.name,
 					api: api as Api,
 					provider: providerName,
-					baseUrl: config.baseUrl,
+					baseUrl: config.baseUrl!,
 					reasoning: modelDef.reasoning,
 					input: modelDef.input as ("text" | "image")[],
 					cost: modelDef.cost,

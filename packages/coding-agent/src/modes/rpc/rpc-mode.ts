@@ -43,8 +43,15 @@ export type {
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
 export async function runRpcMode(session: AgentSession): Promise<never> {
+	const rawStdoutWrite = process.stdout.write.bind(process.stdout);
+	const rawStderrWrite = process.stderr.write.bind(process.stderr);
+
+	process.stdout.write = ((
+		...args: Parameters<typeof process.stdout.write>
+	): ReturnType<typeof process.stdout.write> => rawStderrWrite(...args)) as typeof process.stdout.write;
+
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
-		process.stdout.write(serializeJsonLine(obj));
+		rawStdoutWrite(serializeJsonLine(obj));
 	};
 
 	const success = <T extends RpcCommand["type"]>(

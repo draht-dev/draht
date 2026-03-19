@@ -1,6 +1,6 @@
-# @draht/web-ui
+# @mariozechner/pi-web-ui
 
-Reusable web UI components for building AI chat interfaces powered by [@draht/ai](../ai) and [@draht/agent-core](../agent).
+Reusable web UI components for building AI chat interfaces powered by [@mariozechner/pi-ai](../ai) and [@mariozechner/pi-agent-core](../agent).
 
 Built with [mini-lit](https://github.com/badlogic/mini-lit) web components and Tailwind CSS v4.
 
@@ -17,7 +17,7 @@ Built with [mini-lit](https://github.com/badlogic/mini-lit) web components and T
 ## Installation
 
 ```bash
-bun add @draht/web-ui @draht/agent-core @draht/ai
+npm install @mariozechner/pi-web-ui @mariozechner/pi-agent-core @mariozechner/pi-ai
 ```
 
 ## Quick Start
@@ -25,8 +25,8 @@ bun add @draht/web-ui @draht/agent-core @draht/ai
 See the [example](./example) directory for a complete working application.
 
 ```typescript
-import { Agent } from '@draht/agent-core';
-import { getModel } from '@draht/ai';
+import { Agent } from '@mariozechner/pi-agent-core';
+import { getModel } from '@mariozechner/pi-ai';
 import {
   ChatPanel,
   AppStorage,
@@ -37,8 +37,8 @@ import {
   setAppStorage,
   defaultConvertToLlm,
   ApiKeyPromptDialog,
-} from '@draht/web-ui';
-import '@draht/web-ui/app.css';
+} from '@mariozechner/pi-web-ui';
+import '@mariozechner/pi-web-ui/app.css';
 
 // Set up storage
 const settings = new SettingsStore();
@@ -97,7 +97,7 @@ document.body.appendChild(chatPanel);
                           │
                           ▼
 ┌─────────────────────────────────────────────────────┐
-│              Agent (from @draht/agent-core)          │
+│              Agent (from pi-agent-core)             │
 │  - State management (messages, model, tools)        │
 │  - Event emission (agent_start, message_update, ...)│
 │  - Tool execution                                   │
@@ -166,10 +166,10 @@ Properties:
 - `enableThinkingSelector`: Show thinking level selector (default: true)
 - `showThemeToggle`: Show theme toggle (default: false)
 
-### Agent (from @draht/agent-core)
+### Agent (from pi-agent-core)
 
 ```typescript
-import { Agent } from '@draht/agent-core';
+import { Agent } from '@mariozechner/pi-agent-core';
 
 const agent = new Agent({
   initialState: {
@@ -259,7 +259,7 @@ interface SystemNotification {
   timestamp: string;
 }
 
-declare module '@draht/agent-core' {
+declare module '@mariozechner/pi-agent-core' {
   interface CustomAgentMessages {
     'system-notification': SystemNotification;
   }
@@ -287,7 +287,7 @@ function myConvertToLlm(messages: AgentMessage[]): Message[] {
 `convertToLlm` transforms app messages to LLM-compatible format:
 
 ```typescript
-import { defaultConvertToLlm, convertAttachments } from '@draht/web-ui';
+import { defaultConvertToLlm, convertAttachments } from '@mariozechner/pi-web-ui';
 
 // defaultConvertToLlm handles:
 // - UserMessageWithAttachments → user message with image/text content blocks
@@ -302,7 +302,7 @@ import { defaultConvertToLlm, convertAttachments } from '@draht/web-ui';
 Execute JavaScript in a sandboxed browser environment:
 
 ```typescript
-import { createJavaScriptReplTool } from '@draht/web-ui';
+import { createJavaScriptReplTool } from '@mariozechner/pi-web-ui';
 
 const replTool = createJavaScriptReplTool();
 
@@ -320,7 +320,7 @@ agent.setTools([replTool]);
 Extract text from documents at URLs:
 
 ```typescript
-import { createExtractDocumentTool } from '@draht/web-ui';
+import { createExtractDocumentTool } from '@mariozechner/pi-web-ui';
 
 const extractTool = createExtractDocumentTool();
 extractTool.corsProxyUrl = 'https://corsproxy.io/?';
@@ -343,7 +343,7 @@ agent.setTools([artifactsPanel.tool]);
 ### Custom Tool Renderers
 
 ```typescript
-import { registerToolRenderer, type ToolRenderer } from '@draht/web-ui';
+import { registerToolRenderer, type ToolRenderer } from '@mariozechner/pi-web-ui';
 
 const myRenderer: ToolRenderer = {
   render(params, result, isStreaming) {
@@ -371,7 +371,7 @@ import {
   CustomProvidersStore,
   setAppStorage,
   getAppStorage,
-} from '@draht/web-ui';
+} from '@mariozechner/pi-web-ui';
 
 // Create stores
 const settings = new SettingsStore();
@@ -466,7 +466,7 @@ const all = await storage.customProviders.getAll();
 Load and process files:
 
 ```typescript
-import { loadAttachment, type Attachment } from '@draht/web-ui';
+import { loadAttachment, type Attachment } from '@mariozechner/pi-web-ui';
 
 // From File input
 const file = inputElement.files[0];
@@ -498,7 +498,7 @@ Supported formats: PDF, DOCX, XLSX, PPTX, images, text files.
 For browser environments with CORS restrictions:
 
 ```typescript
-import { createStreamFn, shouldUseProxyForProvider, isCorsError } from '@draht/web-ui';
+import { createStreamFn, shouldUseProxyForProvider, isCorsError } from '@mariozechner/pi-web-ui';
 
 // AgentInterface auto-configures proxy from settings
 // For manual setup:
@@ -517,7 +517,7 @@ agent.streamFn = createStreamFn(async () => {
 ### SettingsDialog
 
 ```typescript
-import { SettingsDialog, ProvidersModelsTab, ProxyTab, ApiKeysTab } from '@draht/web-ui';
+import { SettingsDialog, ProvidersModelsTab, ProxyTab, ApiKeysTab } from '@mariozechner/pi-web-ui';
 
 SettingsDialog.open([
   new ProvidersModelsTab(), // Custom providers + model list
@@ -529,7 +529,7 @@ SettingsDialog.open([
 ### SessionListDialog
 
 ```typescript
-import { SessionListDialog } from '@draht/web-ui';
+import { SessionListDialog } from '@mariozechner/pi-web-ui';
 
 SessionListDialog.open(
   async (sessionId) => { /* load session */ },
@@ -540,7 +540,7 @@ SessionListDialog.open(
 ### ApiKeyPromptDialog
 
 ```typescript
-import { ApiKeyPromptDialog } from '@draht/web-ui';
+import { ApiKeyPromptDialog } from '@mariozechner/pi-web-ui';
 
 const success = await ApiKeyPromptDialog.prompt('anthropic');
 ```
@@ -548,7 +548,7 @@ const success = await ApiKeyPromptDialog.prompt('anthropic');
 ### ModelSelector
 
 ```typescript
-import { ModelSelector } from '@draht/web-ui';
+import { ModelSelector } from '@mariozechner/pi-web-ui';
 
 ModelSelector.open(currentModel, (selectedModel) => {
   agent.setModel(selectedModel);
@@ -560,13 +560,13 @@ ModelSelector.open(currentModel, (selectedModel) => {
 Import the pre-built CSS:
 
 ```typescript
-import '@draht/web-ui/app.css';
+import '@mariozechner/pi-web-ui/app.css';
 ```
 
 Or use Tailwind with custom config:
 
 ```css
-@import '@draht/mini-lit/themes/claude.css';
+@import '@mariozechner/mini-lit/themes/claude.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -575,7 +575,7 @@ Or use Tailwind with custom config:
 ## Internationalization
 
 ```typescript
-import { i18n, setLanguage, translations } from '@draht/web-ui';
+import { i18n, setLanguage, translations } from '@mariozechner/pi-web-ui';
 
 // Add translations
 translations.de = {
@@ -590,7 +590,7 @@ console.log(i18n('Loading...')); // "Laden..."
 ## Examples
 
 - [example/](./example) - Complete web app with sessions, artifacts, custom messages
-- [sitegeist](https://sitegeist.ai) - Browser extension using @draht/web-ui
+- [sitegeist](https://sitegeist.ai) - Browser extension using pi-web-ui
 
 ## Known Issues
 

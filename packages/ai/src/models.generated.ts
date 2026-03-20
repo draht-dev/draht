@@ -13067,7 +13067,7 @@ export const MODELS = {
 		} satisfies Model<"anthropic-messages">,
 		"xiaomi/mimo-v2-pro": {
 			id: "xiaomi/mimo-v2-pro",
-			name: "Mimo V2 Pro",
+			name: "MiMo V2 Pro",
 			api: "anthropic-messages",
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",

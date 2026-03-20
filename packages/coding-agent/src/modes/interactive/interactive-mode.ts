@@ -11,9 +11,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, OAuthProviderId } from "@mariozechner/pi-ai";
 import type {
 	AutocompleteItem,
-	EditorAction,
 	EditorComponent,
 	EditorTheme,
+	Keybinding,
 	KeyId,
 	MarkdownTheme,
 	OverlayHandle,
@@ -30,6 +30,7 @@ import {
 	matchesKey,
 	ProcessTerminal,
 	Spacer,
+	setKeybindings,
 	Text,
 	TruncatedText,
 	TUI,
@@ -55,7 +56,7 @@ import type {
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.js";
-import { type AppAction, KeybindingsManager } from "../../core/keybindings.js";
+import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
 import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
@@ -81,7 +82,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.js";
 import { ExtensionInputComponent } from "./components/extension-input.js";
 import { ExtensionSelectorComponent } from "./components/extension-selector.js";
 import { FooterComponent } from "./components/footer.js";
-import { appKey, appKeyHint, editorKey, keyHint, rawKeyHint } from "./components/keybinding-hints.js";
+import { keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.js";
 import { LoginDialogComponent } from "./components/login-dialog.js";
 import { ModelSelectorComponent } from "./components/model-selector.js";
 import { OAuthSelectorComponent } from "./components/oauth-selector.js";
@@ -154,6 +155,7 @@ export class InteractiveMode {
 	private editorContainer: Container;
 	private footer: FooterComponent;
 	private footerDataProvider: FooterDataProvider;
+	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
@@ -262,6 +264,7 @@ export class InteractiveMode {
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create();
+		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
 		this.defaultEditor = new CustomEditor(this.ui, getEditorTheme(), this.keybindings, {
@@ -379,28 +382,27 @@ export class InteractiveMode {
 			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
 
 			// Build startup instructions using keybinding hint helpers
-			const kb = this.keybindings;
-			const hint = (action: AppAction, desc: string) => appKeyHint(kb, action, desc);
+			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
 
 			const instructions = [
-				hint("interrupt", "to interrupt"),
-				hint("clear", "to clear"),
-				rawKeyHint(`${appKey(kb, "clear")} twice`, "to exit"),
-				hint("exit", "to exit (empty)"),
-				hint("suspend", "to suspend"),
-				keyHint("deleteToLineEnd", "to delete to end"),
-				hint("cycleThinkingLevel", "to cycle thinking level"),
-				rawKeyHint(`${appKey(kb, "cycleModelForward")}/${appKey(kb, "cycleModelBackward")}`, "to cycle models"),
-				hint("selectModel", "to select model"),
-				hint("expandTools", "to expand tools"),
-				hint("toggleThinking", "to expand thinking"),
-				hint("externalEditor", "for external editor"),
+				hint("app.interrupt", "to interrupt"),
+				hint("app.clear", "to clear"),
+				rawKeyHint(`${keyText("app.clear")} twice`, "to exit"),
+				hint("app.exit", "to exit (empty)"),
+				hint("app.suspend", "to suspend"),
+				keyHint("tui.editor.deleteToLineEnd", "to delete to end"),
+				hint("app.thinking.cycle", "to cycle thinking level"),
+				rawKeyHint(`${keyText("app.model.cycleForward")}/${keyText("app.model.cycleBackward")}`, "to cycle models"),
+				hint("app.model.select", "to select model"),
+				hint("app.tools.expand", "to expand tools"),
+				hint("app.thinking.toggle", "to expand thinking"),
+				hint("app.editor.external", "for external editor"),
 				rawKeyHint("/", "for commands"),
 				rawKeyHint("!", "to run bash"),
 				rawKeyHint("!!", "to run bash (no context)"),
-				hint("followUp", "to queue follow-up"),
-				hint("dequeue", "to edit all queued messages"),
-				hint("pasteImage", "to paste image"),
+				hint("app.message.followUp", "to queue follow-up"),
+				hint("app.message.dequeue", "to edit all queued messages"),
+				hint("app.clipboard.pasteImage", "to paste image"),
 				rawKeyHint("drop files", "to attach"),
 			].join("\n");
 			this.builtInHeader = new Text(`${logo}\n${instructions}`, 1, 0);
@@ -1324,9 +1326,7 @@ export class InteractiveMode {
 		this.defaultEditor.onExtensionShortcut = undefined;
 		this.updateTerminalTitle();
 		if (this.loadingAnimation) {
-			this.loadingAnimation.setMessage(
-				`${this.defaultWorkingMessage} (${appKey(this.keybindings, "interrupt")} to interrupt)`,
-			);
+			this.loadingAnimation.setMessage(`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`);
 		}
 	}
 
@@ -1472,7 +1472,7 @@ export class InteractiveMode {
 						this.loadingAnimation.setMessage(message);
 					} else {
 						this.loadingAnimation.setMessage(
-							`${this.defaultWorkingMessage} (${appKey(this.keybindings, "interrupt")} to interrupt)`,
+							`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`,
 						);
 					}
 				} else {
@@ -1894,25 +1894,25 @@ export class InteractiveMode {
 		};
 
 		// Register app action handlers
-		this.defaultEditor.onAction("clear", () => this.handleCtrlC());
+		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
-		this.defaultEditor.onAction("suspend", () => this.handleCtrlZ());
-		this.defaultEditor.onAction("cycleThinkingLevel", () => this.cycleThinkingLevel());
-		this.defaultEditor.onAction("cycleModelForward", () => this.cycleModel("forward"));
-		this.defaultEditor.onAction("cycleModelBackward", () => this.cycleModel("backward"));
+		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
+		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
+		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
+		this.defaultEditor.onAction("app.model.cycleBackward", () => this.cycleModel("backward"));
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
-		this.defaultEditor.onAction("selectModel", () => this.showModelSelector());
-		this.defaultEditor.onAction("expandTools", () => this.toggleToolOutputExpansion());
-		this.defaultEditor.onAction("toggleThinking", () => this.toggleThinkingBlockVisibility());
-		this.defaultEditor.onAction("externalEditor", () => this.openExternalEditor());
-		this.defaultEditor.onAction("followUp", () => this.handleFollowUp());
-		this.defaultEditor.onAction("dequeue", () => this.handleDequeue());
-		this.defaultEditor.onAction("newSession", () => this.handleClearCommand());
-		this.defaultEditor.onAction("tree", () => this.showTreeSelector());
-		this.defaultEditor.onAction("fork", () => this.showUserMessageSelector());
-		this.defaultEditor.onAction("resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
+		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
+		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
+		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
+		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
+		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
+		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
+		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
+		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
+		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -2331,7 +2331,7 @@ export class InteractiveMode {
 					this.ui,
 					(spinner) => theme.fg("accent", spinner),
 					(text) => theme.fg("muted", text),
-					`${reasonText}Auto-compacting... (${appKey(this.keybindings, "interrupt")} to cancel)`,
+					`${reasonText}Auto-compacting... (${keyText("app.interrupt")} to cancel)`,
 				);
 				this.statusContainer.addChild(this.autoCompactionLoader);
 				this.ui.requestRender();
@@ -2388,7 +2388,7 @@ export class InteractiveMode {
 					this.ui,
 					(spinner) => theme.fg("warning", spinner),
 					(text) => theme.fg("muted", text),
-					`Retrying (${event.attempt}/${event.maxAttempts}) in ${delaySeconds}s... (${appKey(this.keybindings, "interrupt")} to cancel)`,
+					`Retrying (${event.attempt}/${event.maxAttempts}) in ${delaySeconds}s... (${keyText("app.interrupt")} to cancel)`,
 				);
 				this.statusContainer.addChild(this.retryLoader);
 				this.ui.requestRender();
@@ -2988,7 +2988,7 @@ export class InteractiveMode {
 				const text = theme.fg("dim", `Follow-up: ${message}`);
 				this.pendingMessagesContainer.addChild(new TruncatedText(text, 1, 0));
 			}
-			const dequeueHint = this.getAppKeyDisplay("dequeue");
+			const dequeueHint = this.getAppKeyDisplay("app.message.dequeue");
 			const hintText = theme.fg("dim", `↳ ${dequeueHint} to edit all queued messages`);
 			this.pendingMessagesContainer.addChild(new TruncatedText(hintText, 1, 0));
 		}
@@ -3580,7 +3580,7 @@ export class InteractiveMode {
 							this.ui,
 							(spinner) => theme.fg("accent", spinner),
 							(text) => theme.fg("muted", text),
-							`Summarizing branch... (${appKey(this.keybindings, "interrupt")} to cancel)`,
+							`Summarizing branch... (${keyText("app.interrupt")} to cancel)`,
 						);
 						this.statusContainer.addChild(summaryLoader);
 						this.ui.requestRender();
@@ -4178,59 +4178,59 @@ export class InteractiveMode {
 	/**
 	 * Get capitalized display string for an app keybinding action.
 	 */
-	private getAppKeyDisplay(action: AppAction): string {
-		return this.capitalizeKey(appKey(this.keybindings, action));
+	private getAppKeyDisplay(action: AppKeybinding): string {
+		return this.capitalizeKey(keyText(action));
 	}
 
 	/**
 	 * Get capitalized display string for an editor keybinding action.
 	 */
-	private getEditorKeyDisplay(action: EditorAction): string {
-		return this.capitalizeKey(editorKey(action));
+	private getEditorKeyDisplay(action: Keybinding): string {
+		return this.capitalizeKey(keyText(action));
 	}
 
 	private handleHotkeysCommand(): void {
 		// Navigation keybindings
-		const cursorUp = this.getEditorKeyDisplay("cursorUp");
-		const cursorDown = this.getEditorKeyDisplay("cursorDown");
-		const cursorLeft = this.getEditorKeyDisplay("cursorLeft");
-		const cursorRight = this.getEditorKeyDisplay("cursorRight");
-		const cursorWordLeft = this.getEditorKeyDisplay("cursorWordLeft");
-		const cursorWordRight = this.getEditorKeyDisplay("cursorWordRight");
-		const cursorLineStart = this.getEditorKeyDisplay("cursorLineStart");
-		const cursorLineEnd = this.getEditorKeyDisplay("cursorLineEnd");
-		const jumpForward = this.getEditorKeyDisplay("jumpForward");
-		const jumpBackward = this.getEditorKeyDisplay("jumpBackward");
-		const pageUp = this.getEditorKeyDisplay("pageUp");
-		const pageDown = this.getEditorKeyDisplay("pageDown");
+		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
+		const cursorDown = this.getEditorKeyDisplay("tui.editor.cursorDown");
+		const cursorLeft = this.getEditorKeyDisplay("tui.editor.cursorLeft");
+		const cursorRight = this.getEditorKeyDisplay("tui.editor.cursorRight");
+		const cursorWordLeft = this.getEditorKeyDisplay("tui.editor.cursorWordLeft");
+		const cursorWordRight = this.getEditorKeyDisplay("tui.editor.cursorWordRight");
+		const cursorLineStart = this.getEditorKeyDisplay("tui.editor.cursorLineStart");
+		const cursorLineEnd = this.getEditorKeyDisplay("tui.editor.cursorLineEnd");
+		const jumpForward = this.getEditorKeyDisplay("tui.editor.jumpForward");
+		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
+		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
+		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
 
 		// Editing keybindings
-		const submit = this.getEditorKeyDisplay("submit");
-		const newLine = this.getEditorKeyDisplay("newLine");
-		const deleteWordBackward = this.getEditorKeyDisplay("deleteWordBackward");
-		const deleteWordForward = this.getEditorKeyDisplay("deleteWordForward");
-		const deleteToLineStart = this.getEditorKeyDisplay("deleteToLineStart");
-		const deleteToLineEnd = this.getEditorKeyDisplay("deleteToLineEnd");
-		const yank = this.getEditorKeyDisplay("yank");
-		const yankPop = this.getEditorKeyDisplay("yankPop");
-		const undo = this.getEditorKeyDisplay("undo");
-		const tab = this.getEditorKeyDisplay("tab");
+		const submit = this.getEditorKeyDisplay("tui.input.submit");
+		const newLine = this.getEditorKeyDisplay("tui.input.newLine");
+		const deleteWordBackward = this.getEditorKeyDisplay("tui.editor.deleteWordBackward");
+		const deleteWordForward = this.getEditorKeyDisplay("tui.editor.deleteWordForward");
+		const deleteToLineStart = this.getEditorKeyDisplay("tui.editor.deleteToLineStart");
+		const deleteToLineEnd = this.getEditorKeyDisplay("tui.editor.deleteToLineEnd");
+		const yank = this.getEditorKeyDisplay("tui.editor.yank");
+		const yankPop = this.getEditorKeyDisplay("tui.editor.yankPop");
+		const undo = this.getEditorKeyDisplay("tui.editor.undo");
+		const tab = this.getEditorKeyDisplay("tui.input.tab");
 
 		// App keybindings
-		const interrupt = this.getAppKeyDisplay("interrupt");
-		const clear = this.getAppKeyDisplay("clear");
-		const exit = this.getAppKeyDisplay("exit");
-		const suspend = this.getAppKeyDisplay("suspend");
-		const cycleThinkingLevel = this.getAppKeyDisplay("cycleThinkingLevel");
-		const cycleModelForward = this.getAppKeyDisplay("cycleModelForward");
-		const selectModel = this.getAppKeyDisplay("selectModel");
-		const expandTools = this.getAppKeyDisplay("expandTools");
-		const toggleThinking = this.getAppKeyDisplay("toggleThinking");
-		const externalEditor = this.getAppKeyDisplay("externalEditor");
-		const cycleModelBackward = this.getAppKeyDisplay("cycleModelBackward");
-		const followUp = this.getAppKeyDisplay("followUp");
-		const dequeue = this.getAppKeyDisplay("dequeue");
-		const pasteImage = this.getAppKeyDisplay("pasteImage");
+		const interrupt = this.getAppKeyDisplay("app.interrupt");
+		const clear = this.getAppKeyDisplay("app.clear");
+		const exit = this.getAppKeyDisplay("app.exit");
+		const suspend = this.getAppKeyDisplay("app.suspend");
+		const cycleThinkingLevel = this.getAppKeyDisplay("app.thinking.cycle");
+		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
+		const selectModel = this.getAppKeyDisplay("app.model.select");
+		const expandTools = this.getAppKeyDisplay("app.tools.expand");
+		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
+		const externalEditor = this.getAppKeyDisplay("app.editor.external");
+		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
+		const followUp = this.getAppKeyDisplay("app.message.followUp");
+		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
+		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
 
 		let hotkeys = `
 **Navigation**
@@ -4499,7 +4499,7 @@ export class InteractiveMode {
 
 		// Show compacting status
 		this.chatContainer.addChild(new Spacer(1));
-		const cancelHint = `(${appKey(this.keybindings, "interrupt")} to cancel)`;
+		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
 		const label = isAuto ? `Auto-compacting context... ${cancelHint}` : `Compacting context... ${cancelHint}`;
 		const compactingLoader = new Loader(
 			this.ui,

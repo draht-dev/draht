@@ -7,7 +7,7 @@ import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import type { KeyId } from "@mariozechner/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
-import type { KeyAction, KeybindingsConfig } from "../keybindings.js";
+import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
 import type {
@@ -51,40 +51,41 @@ import type {
 	UserBashEventResult,
 } from "./types.js";
 
-// Keybindings for these actions cannot be overridden by extensions
-const RESERVED_ACTIONS_FOR_EXTENSION_CONFLICTS: ReadonlyArray<KeyAction> = [
-	"interrupt",
-	"clear",
-	"exit",
-	"suspend",
-	"cycleThinkingLevel",
-	"cycleModelForward",
-	"cycleModelBackward",
-	"selectModel",
-	"expandTools",
-	"toggleThinking",
-	"externalEditor",
-	"followUp",
-	"submit",
-	"selectConfirm",
-	"selectCancel",
-	"copy",
-	"deleteToLineEnd",
-];
+// Extension shortcuts compete with canonical keybinding ids from keybindings.json.
+// Only editor-global shortcuts are reserved here. Picker-specific bindings are not.
+const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
+	"app.interrupt",
+	"app.clear",
+	"app.exit",
+	"app.suspend",
+	"app.thinking.cycle",
+	"app.model.cycleForward",
+	"app.model.cycleBackward",
+	"app.model.select",
+	"app.tools.expand",
+	"app.thinking.toggle",
+	"app.editor.external",
+	"app.message.followUp",
+	"tui.input.submit",
+	"tui.select.confirm",
+	"tui.select.cancel",
+	"tui.input.copy",
+	"tui.editor.deleteToLineEnd",
+] as const;
 
-type BuiltInKeyBindings = Partial<Record<KeyId, { action: KeyAction; restrictOverride: boolean }>>;
+type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
 
-const buildBuiltinKeybindings = (effectiveKeybindings: Required<KeybindingsConfig>): BuiltInKeyBindings => {
+const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
 	const builtinKeybindings = {} as BuiltInKeyBindings;
-	for (const [action, keys] of Object.entries(effectiveKeybindings)) {
-		const keyAction = action as KeyAction;
+	for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
+		if (keys === undefined) continue;
 		const keyList = Array.isArray(keys) ? keys : [keys];
-		const restrictOverride = RESERVED_ACTIONS_FOR_EXTENSION_CONFLICTS.includes(keyAction);
+		const restrictOverride = (RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS as readonly string[]).includes(keybinding);
 		for (const key of keyList) {
 			const normalizedKey = key.toLowerCase() as KeyId;
 			builtinKeybindings[normalizedKey] = {
-				action: keyAction,
-				restrictOverride: restrictOverride,
+				keybinding,
+				restrictOverride,
 			};
 		}
 	}
@@ -386,9 +387,9 @@ export class ExtensionRunner {
 		return new Map(this.runtime.flagValues);
 	}
 
-	getShortcuts(effectiveKeybindings: Required<KeybindingsConfig>): Map<KeyId, ExtensionShortcut> {
+	getShortcuts(resolvedKeybindings: KeybindingsConfig): Map<KeyId, ExtensionShortcut> {
 		this.shortcutDiagnostics = [];
-		const builtinKeybindings = buildBuiltinKeybindings(effectiveKeybindings);
+		const builtinKeybindings = buildBuiltinKeybindings(resolvedKeybindings);
 		const extensionShortcuts = new Map<KeyId, ExtensionShortcut>();
 
 		const addDiagnostic = (message: string, extensionPath: string) => {
@@ -413,7 +414,7 @@ export class ExtensionRunner {
 
 				if (builtInKeybinding?.restrictOverride === false) {
 					addDiagnostic(
-						`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.action} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
+						`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.keybinding} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
 						shortcut.extensionPath,
 					);
 				}

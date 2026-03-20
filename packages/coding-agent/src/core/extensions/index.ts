@@ -24,9 +24,9 @@ export type {
 	// Re-exports
 	AgentToolResult,
 	AgentToolUpdateCallback,
-	// App keybindings (for custom editors)
-	AppAction,
 	AppendEntryHandler,
+	// App keybindings (for custom editors)
+	AppKeybinding,
 	// Events - Tool (ToolCallEvent types)
 	BashToolCallEvent,
 	BashToolResultEvent,

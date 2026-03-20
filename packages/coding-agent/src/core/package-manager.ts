@@ -860,16 +860,28 @@ export class DefaultPackageManager implements PackageManager {
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
 		const identity = source ? this.getPackageIdentity(source) : undefined;
+		let matched = false;
 
 		for (const pkg of globalSettings.packages ?? []) {
 			const sourceStr = typeof pkg === "string" ? pkg : pkg.source;
 			if (identity && this.getPackageIdentity(sourceStr, "user") !== identity) continue;
+			matched = true;
 			await this.updateSourceForScope(sourceStr, "user");
 		}
 		for (const pkg of projectSettings.packages ?? []) {
 			const sourceStr = typeof pkg === "string" ? pkg : pkg.source;
 			if (identity && this.getPackageIdentity(sourceStr, "project") !== identity) continue;
+			matched = true;
 			await this.updateSourceForScope(sourceStr, "project");
+		}
+
+		if (source && !matched) {
+			throw new Error(
+				this.buildNoMatchingPackageMessage(source, [
+					...(globalSettings.packages ?? []),
+					...(projectSettings.packages ?? []),
+				]),
+			);
 		}
 	}
 
@@ -881,7 +893,14 @@ export class DefaultPackageManager implements PackageManager {
 		if (parsed.type === "npm") {
 			if (parsed.pinned) return;
 			await this.withProgress("update", source, `Updating ${source}...`, async () => {
-				await this.installNpm(parsed, scope, false);
+				await this.installNpm(
+					{
+						...parsed,
+						spec: `${parsed.name}@latest`,
+					},
+					scope,
+					false,
+				);
 			});
 			return;
 		}
@@ -1086,6 +1105,39 @@ export class DefaultPackageManager implements PackageManager {
 		}
 		const baseDir = this.getBaseDirForScope(scope);
 		return `local:${this.resolvePathFromBase(parsed.path, baseDir)}`;
+	}
+
+	private buildNoMatchingPackageMessage(source: string, configuredPackages: PackageSource[]): string {
+		const suggestion = this.findSuggestedConfiguredSource(source, configuredPackages);
+		if (!suggestion) {
+			return `No matching package found for ${source}`;
+		}
+		return `No matching package found for ${source}. Did you mean ${suggestion}?`;
+	}
+
+	private findSuggestedConfiguredSource(source: string, configuredPackages: PackageSource[]): string | undefined {
+		const trimmedSource = source.trim();
+		const suggestions = new Set<string>();
+
+		for (const pkg of configuredPackages) {
+			const sourceStr = this.getPackageSourceString(pkg);
+			const parsed = this.parseSource(sourceStr);
+			if (parsed.type === "npm") {
+				if (trimmedSource === parsed.name || trimmedSource === parsed.spec) {
+					suggestions.add(sourceStr);
+				}
+				continue;
+			}
+			if (parsed.type === "git") {
+				const shorthand = `${parsed.host}/${parsed.path}`;
+				const shorthandWithRef = parsed.ref ? `${shorthand}@${parsed.ref}` : undefined;
+				if (trimmedSource === shorthand || (shorthandWithRef && trimmedSource === shorthandWithRef)) {
+					suggestions.add(sourceStr);
+				}
+			}
+		}
+
+		return suggestions.values().next().value;
 	}
 
 	private packageSourcesMatch(existing: PackageSource, inputSource: string, scope: SourceScope): boolean {

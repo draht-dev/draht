@@ -53,7 +53,7 @@ export type {
 	AgentStartEvent,
 	AgentToolResult,
 	AgentToolUpdateCallback,
-	AppAction,
+	AppKeybinding,
 	BashToolCallEvent,
 	BeforeAgentStartEvent,
 	BeforeProviderRequestEvent,
@@ -261,6 +261,7 @@ export {
 	type WriteOperations,
 	type WriteToolInput,
 	type WriteToolOptions,
+	withFileMutationQueue,
 	writeTool,
 } from "./core/tools/index.js";
 // Main entry point
@@ -277,8 +278,6 @@ export {
 export {
 	ArminComponent,
 	AssistantMessageComponent,
-	appKey,
-	appKeyHint,
 	BashExecutionComponent,
 	BorderedLoader,
 	BranchSummaryMessageComponent,
@@ -289,9 +288,9 @@ export {
 	ExtensionEditorComponent,
 	ExtensionInputComponent,
 	ExtensionSelectorComponent,
-	editorKey,
 	FooterComponent,
 	keyHint,
+	keyText,
 	LoginDialogComponent,
 	ModelSelectorComponent,
 	OAuthSelectorComponent,

@@ -15,7 +15,7 @@
  */
 
 import { mkdtemp, writeFile } from "node:fs/promises";
-import type { ExtensionAPI } from "@draht/coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -23,8 +23,8 @@ import {
 	type TruncationResult,
 	truncateHead,
 	withFileMutationQueue,
-} from "@draht/coding-agent";
-import { Text } from "@draht/tui";
+} from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { execSync } from "child_process";
 import { tmpdir } from "os";
@@ -135,7 +135,7 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		// Custom rendering of the tool call (shown before/during execution)
-		renderCall(args, theme, _context) {
+		renderCall(args, theme) {
 			let text = theme.fg("toolTitle", theme.bold("rg "));
 			text += theme.fg("accent", `"${args.pattern}"`);
 			if (args.path) {
@@ -148,7 +148,7 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		// Custom rendering of the tool result
-		renderResult(result, { expanded, isPartial }, theme, _context) {
+		renderResult(result, { expanded, isPartial }, theme) {
 			const details = result.details as RgDetails | undefined;
 
 			// Handle streaming/partial results

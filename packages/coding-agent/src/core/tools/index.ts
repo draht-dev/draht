@@ -17,6 +17,7 @@ export {
 	type EditToolOptions,
 	editTool,
 } from "./edit.js";
+export { withFileMutationQueue } from "./file-mutation-queue.js";
 export {
 	createFindTool,
 	type FindOperations,

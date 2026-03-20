@@ -35,6 +35,7 @@ import {
 	readTool,
 	type Tool,
 	type ToolName,
+	withFileMutationQueue,
 	writeTool,
 } from "./tools/index.js";
 
@@ -109,6 +110,7 @@ export {
 	codingTools,
 	readOnlyTools,
 	allTools as allBuiltInTools,
+	withFileMutationQueue,
 	// Tool factories (for custom cwd)
 	createCodingTools,
 	createReadOnlyTools,

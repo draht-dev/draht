@@ -185,18 +185,9 @@ export class KeybindingsManager {
 		}
 
 		for (const [id, definition] of Object.entries(this.definitions)) {
-			const defaults = normalizeKeys(definition.defaultKeys);
-			const keys = defaults.filter((key) => {
-				const claimants = userClaims.get(key);
-				if (!claimants) return true;
-				return claimants.size === 1 && claimants.has(id as Keybinding);
-			});
+			const userKeys = this.userBindings[id];
+			const keys = userKeys === undefined ? normalizeKeys(definition.defaultKeys) : normalizeKeys(userKeys);
 			this.keysById.set(id as Keybinding, keys);
-		}
-
-		for (const [keybinding, keys] of Object.entries(this.userBindings)) {
-			if (!(keybinding in this.definitions)) continue;
-			this.keysById.set(keybinding as Keybinding, normalizeKeys(keys));
 		}
 	}
 

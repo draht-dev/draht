@@ -7,19 +7,16 @@ import type { Tool } from "../src/types.js";
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
 	chunks: undefined as
-		| Array<
-				| null
-				| {
-						id?: string;
-						choices?: Array<{ delta: Record<string, unknown>; finish_reason: string | null; usage?: unknown }>;
-						usage?: {
-							prompt_tokens: number;
-							completion_tokens: number;
-							prompt_tokens_details: { cached_tokens: number };
-							completion_tokens_details: { reasoning_tokens: number };
-						};
-				  }
-		  >
+		| Array<null | {
+				id?: string;
+				choices?: Array<{ delta: Record<string, unknown>; finish_reason: string | null; usage?: unknown }>;
+				usage?: {
+					prompt_tokens: number;
+					completion_tokens: number;
+					prompt_tokens_details: { cached_tokens: number };
+					completion_tokens_details: { reasoning_tokens: number };
+				};
+		  }>
 		| undefined,
 }));
 

@@ -27,7 +27,7 @@ import { DefaultResourceLoader } from "./core/resource-loader.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./core/sdk.js";
 import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
-import { printTimings, time } from "./core/timings.js";
+import { printTimings, resetTimings, time } from "./core/timings.js";
 import { allTools } from "./core/tools/index.js";
 import { runMigrations, showDeprecationWarnings } from "./migrations.js";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.js";
@@ -622,6 +622,7 @@ async function handleConfigCommand(args: string[]): Promise<boolean> {
 }
 
 export async function main(args: string[]) {
+	resetTimings();
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
 		process.env.PI_OFFLINE = "1";
@@ -638,6 +639,7 @@ export async function main(args: string[]) {
 
 	// First pass: parse args to get --extension paths
 	const firstPass = parseArgs(args);
+	time("parseArgs.firstPass");
 	const shouldTakeOverStdout = firstPass.mode !== undefined || firstPass.print || !process.stdin.isTTY;
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
@@ -645,6 +647,7 @@ export async function main(args: string[]) {
 
 	// Run migrations (pass cwd for project-local migrations)
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(process.cwd());
+	time("runMigrations");
 
 	// Early load extensions to discover their CLI flags
 	const cwd = process.cwd();
@@ -669,6 +672,7 @@ export async function main(args: string[]) {
 		systemPrompt: firstPass.systemPrompt,
 		appendSystemPrompt: firstPass.appendSystemPrompt,
 	});
+	time("createResourceLoader");
 	await resourceLoader.reload();
 	time("resourceLoader.reload");
 
@@ -698,6 +702,7 @@ export async function main(args: string[]) {
 
 	// Second pass: parse args with extension flags
 	const parsed = parseArgs(args, extensionFlags);
+	time("parseArgs.secondPass");
 
 	// Pass flag values to extensions via runtime
 	for (const [name, value] of parsed.unknownFlags) {
@@ -729,6 +734,7 @@ export async function main(args: string[]) {
 			parsed.print = true;
 		}
 	}
+	time("readPipedStdin");
 
 	if (parsed.export) {
 		let result: string;
@@ -745,6 +751,7 @@ export async function main(args: string[]) {
 	}
 
 	migrateKeybindingsConfigFile(agentDir);
+	time("migrateKeybindingsConfigFile");
 
 	if (parsed.mode === "rpc" && parsed.fileArgs.length > 0) {
 		console.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
@@ -758,6 +765,7 @@ export async function main(args: string[]) {
 		settingsManager.getImageAutoResize(),
 		stdinContent,
 	);
+	time("prepareInitialMessage");
 	const isInteractive = !parsed.print && parsed.mode === undefined;
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
 	if (startupBenchmark && !isInteractive) {
@@ -766,6 +774,7 @@ export async function main(args: string[]) {
 	}
 	const mode = parsed.mode || "text";
 	initTheme(settingsManager.getTheme(), isInteractive);
+	time("initTheme");
 
 	// Show deprecation warnings in interactive mode
 	if (isInteractive && deprecationWarnings.length > 0) {
@@ -777,9 +786,11 @@ export async function main(args: string[]) {
 	if (modelPatterns && modelPatterns.length > 0) {
 		scopedModels = await resolveModelScope(modelPatterns, modelRegistry);
 	}
+	time("resolveModelScope");
 
 	// Create session manager based on CLI flags
 	let sessionManager = await createSessionManager(parsed, cwd, extensionsResult);
+	time("createSessionManager");
 
 	// Handle --resume: show session picker
 	if (parsed.resume) {
@@ -821,6 +832,7 @@ export async function main(args: string[]) {
 	}
 
 	const { session, modelFallbackMessage } = await createAgentSession(sessionOptions);
+	time("createAgentSession");
 
 	if (!isInteractive && !session.model) {
 		console.error(chalk.red("No models available."));
@@ -846,6 +858,7 @@ export async function main(args: string[]) {
 	}
 
 	if (mode === "rpc") {
+		printTimings();
 		await runRpcMode(session);
 	} else if (isInteractive) {
 		if (scopedModels.length > 0 && (parsed.verbose || !settingsManager.getQuietStartup())) {
@@ -868,6 +881,8 @@ export async function main(args: string[]) {
 		});
 		if (startupBenchmark) {
 			await interactiveMode.init();
+			time("interactiveMode.init");
+			printTimings();
 			interactiveMode.stop();
 			stopThemeWatcher();
 			if (process.stdout.writableLength > 0) {
@@ -882,6 +897,7 @@ export async function main(args: string[]) {
 		printTimings();
 		await interactiveMode.run();
 	} else {
+		printTimings();
 		const exitCode = await runPrintMode(session, {
 			mode,
 			messages: parsed.messages,

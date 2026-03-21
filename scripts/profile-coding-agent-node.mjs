@@ -37,6 +37,7 @@ Options:
   --isolated-agent-dir   Use a fresh temporary agent dir instead of the normal one
   --no-offline           Do not force PI_OFFLINE=1 / PI_SKIP_VERSION_CHECK=1
   --skip-build           Reuse the current dist/cli.js without rebuilding first (Node only)
+  --cpu-profile          Write CPU profiles for benchmark runs
   --help                 Show this help
 
 Notes:
@@ -81,6 +82,7 @@ function parseArgs(argv) {
 		runtime: "auto",
 		agentDir: undefined,
 		isolatedAgentDir: false,
+		cpuProfile: false,
 	};
 
 	for (let index = 0; index < argv.length; index++) {
@@ -103,6 +105,11 @@ function parseArgs(argv) {
 
 		if (arg === "--skip-build") {
 			options.build = false;
+			continue;
+		}
+
+		if (arg === "--cpu-profile") {
+			options.cpuProfile = true;
 			continue;
 		}
 
@@ -222,14 +229,29 @@ async function waitForExit(child, errorPrefix) {
 }
 
 async function runBuild() {
-	process.stdout.write("Building packages/coding-agent...\n");
+	process.stdout.write("Building packages/tui, packages/ai, packages/agent, and packages/coding-agent...\n");
 	const startedAt = performance.now();
-	const child = spawn("npm", ["run", "build"], {
-		cwd: packageDir,
-		env: process.env,
-		stdio: ["ignore", "pipe", "pipe"],
-		shell: process.platform === "win32",
-	});
+	const child = spawn(
+		"npm",
+		[
+			"run",
+			"build",
+			"--workspace",
+			"packages/tui",
+			"--workspace",
+			"packages/ai",
+			"--workspace",
+			"packages/agent",
+			"--workspace",
+			"packages/coding-agent",
+		],
+		{
+			cwd: repoRoot,
+			env: process.env,
+			stdio: ["ignore", "pipe", "pipe"],
+			shell: process.platform === "win32",
+		},
+	);
 
 	let stdout = "";
 	let stderr = "";
@@ -256,34 +278,32 @@ async function runBuild() {
 	process.stdout.write(`Build completed in ${formatMs(performance.now() - startedAt)}\n`);
 }
 
-function getRuntimeCommand(runtime, mode, profileDir, profileName) {
+function getRuntimeCommand(runtime, mode, profileDir, profileName, cpuProfile) {
 	const benchmarkArgs = ["--no-session"];
 	if (mode === "rpc") {
 		benchmarkArgs.push("--mode", "rpc");
 	}
 
 	if (runtime === "bun") {
+		const args = [];
+		if (cpuProfile) {
+			args.push("--cpu-prof", `--cpu-prof-dir=${profileDir}`, `--cpu-prof-name=${profileName}`);
+		}
+		args.push(srcCliPath, ...benchmarkArgs);
 		return {
 			executable: "bun",
-			args: [
-				"--cpu-prof",
-				`--cpu-prof-dir=${profileDir}`,
-				`--cpu-prof-name=${profileName}`,
-				srcCliPath,
-				...benchmarkArgs,
-			],
+			args,
 		};
 	}
 
+	const args = [];
+	if (cpuProfile) {
+		args.push("--cpu-prof", `--cpu-prof-dir=${profileDir}`, `--cpu-prof-name=${profileName}`);
+	}
+	args.push(distCliPath, ...benchmarkArgs);
 	return {
 		executable: process.execPath,
-		args: [
-			"--cpu-prof",
-			`--cpu-prof-dir=${profileDir}`,
-			`--cpu-prof-name=${profileName}`,
-			distCliPath,
-			...benchmarkArgs,
-		],
+		args,
 	};
 }
 
@@ -314,7 +334,7 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 		mkdirSync(isolatedAgentDir, { recursive: true });
 	}
 
-	const command = getRuntimeCommand(runtime, "tui", profileDir, profileName);
+	const command = getRuntimeCommand(runtime, "tui", profileDir, profileName, options.cpuProfile);
 	const child = spawn(command.executable, command.args, {
 		cwd: packageDir,
 		env: createBenchmarkEnv(options, isolatedAgentDir),
@@ -337,8 +357,8 @@ async function runTuiBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 			throw new Error(stderr.trim() || `Benchmark child exited with code ${exitCode}`);
 		}
 
-		const profilePath = join(profileDir, profileName);
-		if (!existsSync(profilePath)) {
+		const profilePath = options.cpuProfile ? join(profileDir, profileName) : undefined;
+		if (profilePath && !existsSync(profilePath)) {
 			throw new Error(`CPU profile was not written: ${profilePath}`);
 		}
 
@@ -373,7 +393,7 @@ async function runRpcBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 		mkdirSync(isolatedAgentDir, { recursive: true });
 	}
 
-	const command = getRuntimeCommand(runtime, "rpc", profileDir, profileName);
+	const command = getRuntimeCommand(runtime, "rpc", profileDir, profileName, options.cpuProfile);
 	const child = spawn(command.executable, command.args, {
 		cwd: packageDir,
 		env: createBenchmarkEnv(options, isolatedAgentDir),
@@ -439,8 +459,8 @@ async function runRpcBenchmarkRun({ runtime, runIndex, measuredIndex, options, p
 			throw new Error(stderr.trim() || `Benchmark child exited with code ${exitCode}`);
 		}
 
-		const profilePath = join(profileDir, profileName);
-		if (!existsSync(profilePath)) {
+		const profilePath = options.cpuProfile ? join(profileDir, profileName) : undefined;
+		if (profilePath && !existsSync(profilePath)) {
 			throw new Error(`CPU profile was not written: ${profilePath}`);
 		}
 
@@ -527,8 +547,10 @@ async function main() {
 		process.stdout.write(`  runtime:          ${runtime}\n`);
 		process.stdout.write(`  mode:             ${options.mode}\n`);
 		process.stdout.write(`  elapsed:          ${formatMs(measuredRuns[0].elapsedMs)}\n`);
-		process.stdout.write(`  selected profile: ${toDisplayPath(maxElapsedRun.profilePath)}\n`);
-		process.stdout.write(`  profiles dir:     ${toDisplayPath(profileDir)}\n`);
+		if (options.cpuProfile && maxElapsedRun.profilePath) {
+			process.stdout.write(`  selected profile: ${toDisplayPath(maxElapsedRun.profilePath)}\n`);
+			process.stdout.write(`  profiles dir:     ${toDisplayPath(profileDir)}\n`);
+		}
 		return;
 	}
 
@@ -539,8 +561,10 @@ async function main() {
 	process.stdout.write(`  elapsed median:   ${formatMs(elapsedSummary.median)}\n`);
 	process.stdout.write(`  elapsed avg:      ${formatMs(elapsedSummary.avg)}\n`);
 	process.stdout.write(`  elapsed max:      ${formatMs(elapsedSummary.max)}\n`);
-	process.stdout.write(`  selected profile: ${toDisplayPath(maxElapsedRun.profilePath)}\n`);
-	process.stdout.write(`  profiles dir:     ${toDisplayPath(profileDir)}\n`);
+	if (options.cpuProfile && maxElapsedRun.profilePath) {
+		process.stdout.write(`  selected profile: ${toDisplayPath(maxElapsedRun.profilePath)}\n`);
+		process.stdout.write(`  profiles dir:     ${toDisplayPath(profileDir)}\n`);
+	}
 }
 
 main().catch((error) => {

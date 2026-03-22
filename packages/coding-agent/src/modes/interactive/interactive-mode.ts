@@ -1181,9 +1181,7 @@ export class InteractiveMode {
 	 * Get a registered tool definition by name (for custom rendering).
 	 */
 	private getRegisteredToolDefinition(toolName: string) {
-		const tools = this.session.extensionRunner?.getAllRegisteredTools() ?? [];
-		const registeredTool = tools.find((t) => t.definition.name === toolName);
-		return registeredTool?.definition;
+		return this.session.getToolDefinition(toolName);
 	}
 
 	/**
@@ -2198,6 +2196,7 @@ export class InteractiveMode {
 							if (!this.pendingTools.has(content.id)) {
 								const component = new ToolExecutionComponent(
 									content.name,
+									content.id,
 									content.arguments,
 									{
 										showImages: this.settingsManager.getShowImages(),
@@ -2264,6 +2263,7 @@ export class InteractiveMode {
 				if (!component) {
 					component = new ToolExecutionComponent(
 						event.toolName,
+						event.toolCallId,
 						event.args,
 						{
 							showImages: this.settingsManager.getShowImages(),
@@ -2568,6 +2568,7 @@ export class InteractiveMode {
 					if (content.type === "toolCall") {
 						const component = new ToolExecutionComponent(
 							content.name,
+							content.id,
 							content.arguments,
 							{ showImages: this.settingsManager.getShowImages() },
 							this.getRegisteredToolDefinition(content.name),

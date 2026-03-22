@@ -1,6 +1,6 @@
-import type { AgentTool } from "@draht/agent-core";
-import type { ImageContent, TextContent } from "@draht/ai";
-import { Text } from "@draht/tui";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
@@ -160,22 +160,13 @@ export function createReadToolDefinition(
 								if (autoResizeImages) {
 									// Resize image if needed before sending it back to the model.
 									const resized = await resizeImage({ type: "image", data: base64, mimeType });
-									if (!resized) {
-										content = [
-											{
-												type: "text",
-												text: `Read image file [${mimeType}]\n[Image omitted: could not be resized below the inline image size limit.]`,
-											},
-										];
-									} else {
-										const dimensionNote = formatDimensionNote(resized);
-										let textNote = `Read image file [${resized.mimeType}]`;
-										if (dimensionNote) textNote += `\n${dimensionNote}`;
-										content = [
-											{ type: "text", text: textNote },
-											{ type: "image", data: resized.data, mimeType: resized.mimeType },
-										];
-									}
+									const dimensionNote = formatDimensionNote(resized);
+									let textNote = `Read image file [${resized.mimeType}]`;
+									if (dimensionNote) textNote += `\n${dimensionNote}`;
+									content = [
+										{ type: "text", text: textNote },
+										{ type: "image", data: resized.data, mimeType: resized.mimeType },
+									];
 								} else {
 									content = [
 										{ type: "text", text: `Read image file [${mimeType}]` },

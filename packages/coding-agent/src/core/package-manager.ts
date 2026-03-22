@@ -7,6 +7,7 @@ import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
+import { isStdoutTakenOver } from "./output-guard.js";
 import type { PackageSource, SettingsManager } from "./settings-manager.js";
 
 const NETWORK_TIMEOUT_MS = 10000;
@@ -2091,7 +2092,7 @@ export class DefaultPackageManager implements PackageManager {
 		return new Promise((resolvePromise, reject) => {
 			const child = spawn(command, args, {
 				cwd: options?.cwd,
-				stdio: "inherit",
+				stdio: isStdoutTakenOver() ? ["ignore", 2, 2] : "inherit",
 				shell: process.platform === "win32",
 			});
 			child.on("error", reject);

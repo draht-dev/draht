@@ -2,12 +2,12 @@
  * Print mode (single-shot): Send prompts, output result, exit.
  *
  * Used for:
- * - `draht -p "prompt"` - text output
- * - `draht --mode json "prompt"` - JSON event stream
+ * - `pi -p "prompt"` - text output
+ * - `pi --mode json "prompt"` - JSON event stream
  */
 
-import type { AssistantMessage, ImageContent } from "@draht/ai";
-import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.js";
+import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
+import type { AgentSession } from "../core/agent-session.js";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.js";
 
 /**
@@ -28,105 +28,93 @@ export interface PrintModeOptions {
  * Run in print (single-shot) mode.
  * Sends prompts to the agent and outputs the result.
  */
-export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options: PrintModeOptions): Promise<number> {
+export async function runPrintMode(session: AgentSession, options: PrintModeOptions): Promise<void> {
 	const { mode, messages = [], initialMessage, initialImages } = options;
-	let exitCode = 0;
-	let session = runtimeHost.session;
-	let unsubscribe: (() => void) | undefined;
-
-	const rebindSession = async (): Promise<void> => {
-		session = runtimeHost.session;
-		await session.bindExtensions({
-			commandContextActions: {
-				waitForIdle: () => session.agent.waitForIdle(),
-				newSession: async (newSessionOptions) => {
-					const result = await runtimeHost.newSession(newSessionOptions);
-					if (!result.cancelled) {
-						await rebindSession();
-					}
-					return result;
-				},
-				fork: async (entryId) => {
-					const result = await runtimeHost.fork(entryId);
-					if (!result.cancelled) {
-						await rebindSession();
-					}
-					return { cancelled: result.cancelled };
-				},
-				navigateTree: async (targetId, navigateOptions) => {
-					const result = await session.navigateTree(targetId, {
-						summarize: navigateOptions?.summarize,
-						customInstructions: navigateOptions?.customInstructions,
-						replaceInstructions: navigateOptions?.replaceInstructions,
-						label: navigateOptions?.label,
-					});
-					return { cancelled: result.cancelled };
-				},
-				switchSession: async (sessionPath) => {
-					const result = await runtimeHost.switchSession(sessionPath);
-					if (!result.cancelled) {
-						await rebindSession();
-					}
-					return result;
-				},
-				reload: async () => {
-					await session.reload();
-				},
+	if (mode === "json") {
+		const header = session.sessionManager.getHeader();
+		if (header) {
+			writeRawStdout(`${JSON.stringify(header)}\n`);
+		}
+	}
+	// Set up extensions for print mode (no UI)
+	await session.bindExtensions({
+		commandContextActions: {
+			waitForIdle: () => session.agent.waitForIdle(),
+			newSession: async (options) => {
+				const success = await session.newSession({ parentSession: options?.parentSession });
+				if (success && options?.setup) {
+					await options.setup(session.sessionManager);
+				}
+				return { cancelled: !success };
 			},
-			onError: (err) => {
-				console.error(`Extension error (${err.extensionPath}): ${err.error}`);
+			fork: async (entryId) => {
+				const result = await session.fork(entryId);
+				return { cancelled: result.cancelled };
 			},
-		});
+			navigateTree: async (targetId, options) => {
+				const result = await session.navigateTree(targetId, {
+					summarize: options?.summarize,
+					customInstructions: options?.customInstructions,
+					replaceInstructions: options?.replaceInstructions,
+					label: options?.label,
+				});
+				return { cancelled: result.cancelled };
+			},
+			switchSession: async (sessionPath) => {
+				const success = await session.switchSession(sessionPath);
+				return { cancelled: !success };
+			},
+			reload: async () => {
+				await session.reload();
+			},
+		},
+		onError: (err) => {
+			console.error(`Extension error (${err.extensionPath}): ${err.error}`);
+		},
+	});
 
-		unsubscribe?.();
-		unsubscribe = session.subscribe((event) => {
-			if (mode === "json") {
-				writeRawStdout(`${JSON.stringify(event)}\n`);
-			}
-		});
-	};
-
-	try {
+	// Always subscribe to enable session persistence via _handleAgentEvent
+	session.subscribe((event) => {
+		// In JSON mode, output all events
 		if (mode === "json") {
-			const header = session.sessionManager.getHeader();
-			if (header) {
-				writeRawStdout(`${JSON.stringify(header)}\n`);
+			writeRawStdout(`${JSON.stringify(event)}\n`);
+		}
+	});
+
+	// Send initial message with attachments
+	if (initialMessage) {
+		await session.prompt(initialMessage, { images: initialImages });
+	}
+
+	// Send remaining messages
+	for (const message of messages) {
+		await session.prompt(message);
+	}
+
+	// In text mode, output final response
+	if (mode === "text") {
+		const state = session.state;
+		const lastMessage = state.messages[state.messages.length - 1];
+
+		if (lastMessage?.role === "assistant") {
+			const assistantMsg = lastMessage as AssistantMessage;
+
+			// Check for error/aborted
+			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+				console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+				process.exit(1);
 			}
-		}
 
-		await rebindSession();
-
-		if (initialMessage) {
-			await session.prompt(initialMessage, { images: initialImages });
-		}
-
-		for (const message of messages) {
-			await session.prompt(message);
-		}
-
-		if (mode === "text") {
-			const state = session.state;
-			const lastMessage = state.messages[state.messages.length - 1];
-
-			if (lastMessage?.role === "assistant") {
-				const assistantMsg = lastMessage as AssistantMessage;
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-					exitCode = 1;
-				} else {
-					for (const content of assistantMsg.content) {
-						if (content.type === "text") {
-							writeRawStdout(`${content.text}\n`);
-						}
-					}
+			// Output text content
+			for (const content of assistantMsg.content) {
+				if (content.type === "text") {
+					writeRawStdout(`${content.text}\n`);
 				}
 			}
 		}
-
-		return exitCode;
-	} finally {
-		unsubscribe?.();
-		await runtimeHost.dispose();
-		await flushRawStdout();
 	}
+
+	// Ensure stdout is fully flushed before returning
+	// This prevents race conditions where the process exits before all output is written
+	await flushRawStdout();
 }

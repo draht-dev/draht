@@ -8,14 +8,9 @@ import type { ResourceDiagnostic } from "./diagnostics.js";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 
-import subagentExtension from "./builtins/subagent.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from "./extensions/loader.js";
 import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.js";
-
-/** Built-in extension factories that are always loaded. */
-const builtinExtensionFactories: ExtensionFactory[] = [subagentExtension];
-
 import { DefaultPackageManager, type PathMetadata } from "./package-manager.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
@@ -126,8 +121,6 @@ export interface DefaultResourceLoaderOptions {
 	additionalPromptTemplatePaths?: string[];
 	additionalThemePaths?: string[];
 	extensionFactories?: ExtensionFactory[];
-	/** Skip built-in extension factories (subagent etc). For testing only. */
-	noBuiltinExtensions?: boolean;
 	noExtensions?: boolean;
 	noSkills?: boolean;
 	noPromptTemplates?: boolean;
@@ -221,8 +214,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.additionalSkillPaths = options.additionalSkillPaths ?? [];
 		this.additionalPromptTemplatePaths = options.additionalPromptTemplatePaths ?? [];
 		this.additionalThemePaths = options.additionalThemePaths ?? [];
-		const builtins = options.noBuiltinExtensions ? [] : builtinExtensionFactories;
-		this.extensionFactories = [...builtins, ...(options.extensionFactories ?? [])];
+		this.extensionFactories = options.extensionFactories ?? [];
 		this.noExtensions = options.noExtensions ?? false;
 		this.noSkills = options.noSkills ?? false;
 		this.noPromptTemplates = options.noPromptTemplates ?? false;
@@ -478,7 +470,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 			...skill,
 			sourceInfo:
 				this.findSourceInfoForPath(skill.filePath, this.extensionSkillSourceInfos, metadataByPath) ??
-				skill.sourceInfo ??
 				this.getDefaultSourceInfoForPath(skill.filePath),
 		}));
 		this.skillDiagnostics = resolvedSkills.diagnostics;
@@ -502,7 +493,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 			...prompt,
 			sourceInfo:
 				this.findSourceInfoForPath(prompt.filePath, this.extensionPromptSourceInfos, metadataByPath) ??
-				prompt.sourceInfo ??
 				this.getDefaultSourceInfoForPath(prompt.filePath),
 		}));
 		this.promptDiagnostics = resolvedPrompts.diagnostics;
@@ -522,9 +512,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 			const sourcePath = theme.sourcePath;
 			theme.sourceInfo = sourcePath
 				? (this.findSourceInfoForPath(sourcePath, this.extensionThemeSourceInfos, metadataByPath) ??
-					theme.sourceInfo ??
 					this.getDefaultSourceInfoForPath(sourcePath))
-				: theme.sourceInfo;
+				: undefined;
 			return theme;
 		});
 		this.themeDiagnostics = resolvedThemes.diagnostics;
@@ -537,9 +526,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 				this.getDefaultSourceInfoForPath(extension.path);
 			for (const command of extension.commands.values()) {
 				command.sourceInfo = extension.sourceInfo;
-			}
-			for (const tool of extension.tools.values()) {
-				tool.sourceInfo = extension.sourceInfo;
 			}
 		}
 	}
@@ -590,7 +576,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return undefined;
 	}
 
-	private getDefaultSourceInfoForPath(filePath: string): SourceInfo {
+	private getDefaultSourceInfoForPath(filePath: string): SourceInfo | undefined {
+		if (!filePath) {
+			return undefined;
+		}
+
 		if (filePath.startsWith("<") && filePath.endsWith(">")) {
 			return {
 				path: filePath,
@@ -616,23 +606,17 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		for (const root of agentRoots) {
 			if (this.isUnderPath(normalizedPath, root)) {
-				return { path: filePath, source: "local", scope: "user", origin: "top-level", baseDir: root };
+				return { path: filePath, source: "local", scope: "user", origin: "top-level" };
 			}
 		}
 
 		for (const root of projectRoots) {
 			if (this.isUnderPath(normalizedPath, root)) {
-				return { path: filePath, source: "local", scope: "project", origin: "top-level", baseDir: root };
+				return { path: filePath, source: "local", scope: "project", origin: "top-level" };
 			}
 		}
 
-		return {
-			path: filePath,
-			source: "local",
-			scope: "temporary",
-			origin: "top-level",
-			baseDir: statSync(normalizedPath).isDirectory() ? normalizedPath : resolve(normalizedPath, ".."),
-		};
+		return undefined;
 	}
 
 	private mergePaths(primary: string[], additional: string[]): string[] {
@@ -857,8 +841,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private detectExtensionConflicts(extensions: Extension[]): Array<{ path: string; message: string }> {
 		const conflicts: Array<{ path: string; message: string }> = [];
 
-		// Track which extension registered each tool and flag
+		// Track which extension registered each tool, command, and flag
 		const toolOwners = new Map<string, string>();
+		const commandOwners = new Map<string, string>();
 		const flagOwners = new Map<string, string>();
 
 		for (const ext of extensions) {
@@ -872,6 +857,19 @@ export class DefaultResourceLoader implements ResourceLoader {
 					});
 				} else {
 					toolOwners.set(toolName, ext.path);
+				}
+			}
+
+			// Check commands
+			for (const commandName of ext.commands.keys()) {
+				const existingOwner = commandOwners.get(commandName);
+				if (existingOwner && existingOwner !== ext.path) {
+					conflicts.push({
+						path: ext.path,
+						message: `Command "/${commandName}" conflicts with ${existingOwner}`,
+					});
+				} else {
+					commandOwners.set(commandName, ext.path);
 				}
 			}
 

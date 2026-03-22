@@ -2,10 +2,10 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "f
 import ignore from "ignore";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
-import { getAgentDir, getProjectConfigDir } from "../config.js";
+import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
-import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
+import type { SourceInfo } from "./source-info.js";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -76,7 +76,8 @@ export interface Skill {
 	description: string;
 	filePath: string;
 	baseDir: string;
-	sourceInfo: SourceInfo;
+	source: string;
+	sourceInfo?: SourceInfo;
 	disableModelInvocation: boolean;
 }
 
@@ -135,30 +136,6 @@ export interface LoadSkillsFromDirOptions {
 	dir: string;
 	/** Source identifier for these skills */
 	source: string;
-}
-
-function createSkillSourceInfo(filePath: string, baseDir: string, source: string): SourceInfo {
-	switch (source) {
-		case "user":
-			return createSyntheticSourceInfo(filePath, {
-				source: "local",
-				scope: "user",
-				baseDir,
-			});
-		case "project":
-			return createSyntheticSourceInfo(filePath, {
-				source: "local",
-				scope: "project",
-				baseDir,
-			});
-		case "path":
-			return createSyntheticSourceInfo(filePath, {
-				source: "local",
-				baseDir,
-			});
-		default:
-			return createSyntheticSourceInfo(filePath, { source, baseDir });
-	}
 }
 
 /**
@@ -316,7 +293,7 @@ function loadSkillFromFile(
 				description: frontmatter.description,
 				filePath,
 				baseDir: skillDir,
-				sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
+				source,
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
 			},
 			diagnostics,
@@ -376,7 +353,7 @@ function escapeXml(str: string): string {
 export interface LoadSkillsOptions {
 	/** Working directory for project-local skills. Default: process.cwd() */
 	cwd?: string;
-	/** Agent config directory for global skills. Default: ~/.draht/agent */
+	/** Agent config directory for global skills. Default: ~/.pi/agent */
 	agentDir?: string;
 	/** Explicit skill paths (files or directories) */
 	skillPaths?: string[];
@@ -450,11 +427,11 @@ export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
 
 	if (includeDefaults) {
 		addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));
-		addSkills(loadSkillsFromDirInternal(resolve(getProjectConfigDir(cwd), "skills"), "project", true));
+		addSkills(loadSkillsFromDirInternal(resolve(cwd, CONFIG_DIR_NAME, "skills"), "project", true));
 	}
 
 	const userSkillsDir = join(resolvedAgentDir, "skills");
-	const projectSkillsDir = resolve(getProjectConfigDir(cwd), "skills");
+	const projectSkillsDir = resolve(cwd, CONFIG_DIR_NAME, "skills");
 
 	const isUnderPath = (target: string, root: string): boolean => {
 		const normalizedRoot = resolve(root);

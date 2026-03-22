@@ -179,8 +179,13 @@ function createExtensionAPI(
 			runtime.refreshTools();
 		},
 
-		registerCommand(name: string, options: Omit<RegisteredCommand, "name">): void {
-			extension.commands.set(name, { name, ...options });
+		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "extensionPath">): void {
+			extension.commands.set(name, {
+				name,
+				extensionPath: extension.path,
+				sourceInfo: extension.sourceInfo,
+				...options,
+			});
 		},
 
 		registerShortcut(

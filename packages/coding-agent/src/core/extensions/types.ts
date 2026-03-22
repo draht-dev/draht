@@ -55,6 +55,7 @@ import type {
 	SessionManager,
 } from "../session-manager.js";
 import type { SlashCommandInfo } from "../slash-commands.js";
+import type { SourceInfo } from "../source-info.js";
 import type { BashOperations } from "../tools/bash.js";
 import type { EditToolDetails } from "../tools/edit.js";
 import type {
@@ -960,6 +961,8 @@ export type MessageRenderer<T = unknown> = (
 
 export interface RegisteredCommand {
 	name: string;
+	extensionPath: string;
+	sourceInfo?: SourceInfo;
 	description?: string;
 	getArgumentCompletions?: (argumentPrefix: string) => AutocompleteItem[] | null;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
@@ -1035,7 +1038,7 @@ export interface ExtensionAPI {
 	// =========================================================================
 
 	/** Register a custom command. */
-	registerCommand(name: string, options: Omit<RegisteredCommand, "name">): void;
+	registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "extensionPath">): void;
 
 	/** Register a keyboard shortcut. */
 	registerShortcut(
@@ -1414,6 +1417,7 @@ export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionAction
 export interface Extension {
 	path: string;
 	resolvedPath: string;
+	sourceInfo?: SourceInfo;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;

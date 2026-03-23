@@ -2,15 +2,11 @@ import type { SourceInfo } from "./source-info.js";
 
 export type SlashCommandSource = "extension" | "prompt" | "skill";
 
-export type SlashCommandLocation = "user" | "project" | "path";
-
 export interface SlashCommandInfo {
 	name: string;
 	description?: string;
 	source: SlashCommandSource;
-	sourceInfo?: SourceInfo;
-	location?: SlashCommandLocation;
-	path?: string;
+	sourceInfo: SourceInfo;
 }
 
 export interface BuiltinSlashCommand {

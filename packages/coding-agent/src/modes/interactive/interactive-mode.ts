@@ -333,7 +333,7 @@ export class InteractiveMode {
 			.map((command) => ({
 				type: "warning" as const,
 				message: `Extension command '/${command.name}' conflicts with built-in interactive command. Skipping in autocomplete.`,
-				path: command.extensionPath,
+				path: command.sourceInfo.path,
 			}));
 	}
 

@@ -10,8 +10,8 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentTool } from "@draht/agent-core";
-import { Agent } from "@draht/agent-core";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Agent } from "@mariozechner/pi-agent-core";
 import type {
 	AssistantMessage,
 	AssistantMessageEvent,
@@ -24,20 +24,15 @@ import type {
 	ThinkingContent,
 	ToolCall,
 	Usage,
-} from "@draht/ai";
-import { createAssistantMessageEventStream } from "@draht/ai";
+} from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { AgentSession, type AgentSessionEvent } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import type { Settings } from "../src/core/settings-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
-import type { ExtensionFactory, ResourceLoader } from "../src/index.js";
-import {
-	type CreateTestExtensionsResultInput,
-	createTestExtensionsResult,
-	createTestResourceLoader,
-} from "./utilities.js";
+import { createTestResourceLoader } from "./utilities.js";
 
 // ============================================================================
 // Faux model
@@ -332,10 +327,6 @@ export interface HarnessOptions {
 	tools?: AgentTool[];
 	/** Base tools override (replaces built-in read/bash/edit/write). */
 	baseToolsOverride?: Record<string, AgentTool>;
-	/** Optional resource loader override. */
-	resourceLoader?: ResourceLoader;
-	/** Inline extensions to load into the session resource loader. */
-	extensionFactories?: Array<ExtensionFactory | CreateTestExtensionsResultInput>;
 }
 
 export interface Harness {
@@ -355,17 +346,10 @@ export interface Harness {
 	cleanup: () => void;
 }
 
-function createTempDir(): string {
+export function createHarness(options: HarnessOptions = {}): Harness {
 	const tempDir = join(tmpdir(), `pi-harness-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tempDir, { recursive: true });
-	return tempDir;
-}
 
-function createHarnessWithResourceLoader(
-	options: HarnessOptions,
-	resourceLoader: ResourceLoader,
-	tempDir: string,
-): Harness {
 	const baseModel = options.model ?? fauxModel;
 	const model: Model<any> = options.contextWindow ? { ...baseModel, contextWindow: options.contextWindow } : baseModel;
 
@@ -390,7 +374,7 @@ function createHarnessWithResourceLoader(
 
 	const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 	authStorage.setRuntimeApiKey(model.provider, "faux-key");
-	const modelRegistry = ModelRegistry.create(authStorage, tempDir);
+	const modelRegistry = new ModelRegistry(authStorage, tempDir);
 
 	const session = new AgentSession({
 		agent,
@@ -398,7 +382,7 @@ function createHarnessWithResourceLoader(
 		settingsManager,
 		cwd: tempDir,
 		modelRegistry,
-		resourceLoader,
+		resourceLoader: createTestResourceLoader(),
 		baseToolsOverride: options.baseToolsOverride,
 	});
 
@@ -427,20 +411,4 @@ function createHarnessWithResourceLoader(
 		tempDir,
 		cleanup,
 	};
-}
-
-export function createHarness(options: HarnessOptions = {}): Harness {
-	if (options.extensionFactories?.length) {
-		throw new Error("createHarness does not support extensionFactories. Use createHarnessWithExtensions().");
-	}
-
-	const tempDir = createTempDir();
-	return createHarnessWithResourceLoader(options, options.resourceLoader ?? createTestResourceLoader(), tempDir);
-}
-
-export async function createHarnessWithExtensions(options: HarnessOptions = {}): Promise<Harness> {
-	const tempDir = createTempDir();
-	const extensionsResult = await createTestExtensionsResult(options.extensionFactories ?? [], tempDir);
-	const resourceLoader = options.resourceLoader ?? createTestResourceLoader({ extensionsResult });
-	return createHarnessWithResourceLoader(options, resourceLoader, tempDir);
 }

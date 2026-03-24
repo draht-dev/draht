@@ -934,7 +934,7 @@ Register a custom tool callable by the LLM. See [Custom Tools](#custom-tools) fo
 
 Use `pi.setActiveTools()` to enable or disable tools (including dynamically added tools) at runtime.
 
-Use `promptSnippet` to customize that tool's one-line entry in `Available tools`, and `promptGuidelines` to append tool-specific bullets to the default `Guidelines` section when the tool is active.
+Use `promptSnippet` to opt a custom tool into a one-line entry in `Available tools`, and `promptGuidelines` to append tool-specific bullets to the default `Guidelines` section when the tool is active.
 
 See [dynamic-tools.ts](../examples/extensions/dynamic-tools.ts) for a full example.
 
@@ -1336,7 +1336,7 @@ export default function (pi: ExtensionAPI) {
 
 Register tools the LLM can call via `pi.registerTool()`. Tools appear in the system prompt and can have custom rendering.
 
-Use `promptSnippet` for a short one-line entry in the `Available tools` section in the default system prompt. If omitted, pi falls back to `description`.
+Use `promptSnippet` for a short one-line entry in the `Available tools` section in the default system prompt. If omitted, custom tools are left out of that section.
 
 Use `promptGuidelines` to add tool-specific bullets to the default system prompt `Guidelines` section. These bullets are included only while the tool is active (for example, after `pi.setActiveTools([...])`).
 

@@ -94,9 +94,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	// Build tools list based on selected tools.
 	// Built-ins use toolDescriptions. Custom tools can provide one-line snippets.
 	const tools = selectedTools || ["read", "bash", "edit", "write"];
+	const visibleTools = tools.filter((name) => name in toolDescriptions || toolSnippets?.[name]);
 	const toolsList =
-		tools.length > 0
-			? tools
+		visibleTools.length > 0
+			? visibleTools
 					.map((name) => {
 						const snippet = toolSnippets?.[name] ?? toolDescriptions[name] ?? name;
 						return `- ${name}: ${snippet}`;

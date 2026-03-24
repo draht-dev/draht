@@ -74,4 +74,50 @@ describe("AgentSession dynamic tool registration", () => {
 
 		session.dispose();
 	});
+
+	it("keeps custom tools active but omits them from available tools when promptSnippet is not provided", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		const sessionManager = SessionManager.inMemory();
+
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_start", () => {
+						pi.registerTool({
+							name: "hidden_tool",
+							label: "Hidden Tool",
+							description: "Description should not appear in available tools",
+							parameters: Type.Object({}),
+							execute: async () => ({
+								content: [{ type: "text", text: "ok" }],
+								details: {},
+							}),
+						});
+					});
+				},
+			],
+		});
+		await resourceLoader.reload();
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: getModel("anthropic", "claude-sonnet-4-5")!,
+			settingsManager,
+			sessionManager,
+			resourceLoader,
+		});
+
+		await session.bindExtensions({});
+
+		expect(session.getAllTools().map((tool) => tool.name)).toContain("hidden_tool");
+		expect(session.getActiveToolNames()).toContain("hidden_tool");
+		expect(session.systemPrompt).not.toContain("hidden_tool");
+		expect(session.systemPrompt).not.toContain("Description should not appear in available tools");
+
+		session.dispose();
+	});
 });

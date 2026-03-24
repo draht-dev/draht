@@ -141,8 +141,8 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		pendingProviderRegistrations: [],
 		// Pre-bind: queue registrations so bindCore() can flush them once the
 		// model registry is available. bindCore() replaces both with direct calls.
-		registerProvider: (name, config) => {
-			runtime.pendingProviderRegistrations.push({ name, config });
+		registerProvider: (name, config, extensionPath = "<unknown>") => {
+			runtime.pendingProviderRegistrations.push({ name, config, extensionPath });
 		},
 		unregisterProvider: (name) => {
 			runtime.pendingProviderRegistrations = runtime.pendingProviderRegistrations.filter((r) => r.name !== name);
@@ -271,11 +271,11 @@ function createExtensionAPI(
 		},
 
 		registerProvider(name: string, config: ProviderConfig) {
-			runtime.registerProvider(name, config);
+			runtime.registerProvider(name, config, extension.path);
 		},
 
 		unregisterProvider(name: string) {
-			runtime.unregisterProvider(name);
+			runtime.unregisterProvider(name, extension.path);
 		},
 
 		events: eventBus,

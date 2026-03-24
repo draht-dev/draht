@@ -674,8 +674,13 @@ export async function main(args: string[]) {
 
 	// Apply pending provider registrations from extensions immediately
 	// so they're available for model resolution before AgentSession is created
-	for (const { name, config } of extensionsResult.runtime.pendingProviderRegistrations) {
-		modelRegistry.registerProvider(name, config);
+	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
+		try {
+			modelRegistry.registerProvider(name, config);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(chalk.red(`Extension "${extensionPath}" error: ${message}`));
+		}
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
 

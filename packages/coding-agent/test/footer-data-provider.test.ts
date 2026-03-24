@@ -1,4 +1,4 @@
-import { spawnSync } from "child_process";
+import { execFile, spawnSync } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -7,6 +7,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 let resolvedBranch = "main";
 
 vi.mock("child_process", () => ({
+	execFile: vi.fn(
+		(
+			_command: string,
+			args: readonly string[],
+			_options: unknown,
+			callback: (error: Error | null, stdout: string, stderr: string) => void,
+		) => {
+			if (args[1] === "symbolic-ref") {
+				setTimeout(
+					() =>
+						callback(
+							resolvedBranch ? null : new Error("detached"),
+							resolvedBranch ? `${resolvedBranch}\n` : "",
+							"",
+						),
+					0,
+				);
+				return;
+			}
+			setTimeout(() => callback(new Error("unsupported"), "", ""), 0);
+		},
+	),
 	spawnSync: vi.fn((_command: string, args: readonly string[]) => {
 		if (args[1] === "symbolic-ref") {
 			return { status: resolvedBranch ? 0 : 1, stdout: resolvedBranch ? `${resolvedBranch}\n` : "", stderr: "" };
@@ -55,7 +77,7 @@ function createReftableWorktree(tempDir: string): WorktreeFixture {
 	return { worktreeDir, reftableDir };
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
 	const startedAt = Date.now();
 	while (!condition()) {
 		if (Date.now() - startedAt > timeoutMs) {
@@ -74,6 +96,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 		tempDir = mkdtempSync(join(tmpdir(), "footer-data-provider-"));
 		resolvedBranch = "main";
 		vi.mocked(spawnSync).mockClear();
+		vi.mocked(execFile).mockClear();
 	});
 
 	afterEach(() => {
@@ -156,10 +179,33 @@ describe("FooterDataProvider reftable branch detection", () => {
 			provider.onBranchChange(onBranchChange);
 
 			writeFileSync(join(reftableDir, "tables.list"), "1\n");
-			await waitFor(() => vi.mocked(spawnSync).mock.calls.length > 0);
+			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1);
 
+			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(spawnSync)).not.toHaveBeenCalled();
 			expect(provider.getGitBranch()).toBe("main");
 			expect(onBranchChange).not.toHaveBeenCalled();
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("debounces rapid reftable updates into a single async refresh", async () => {
+		const { worktreeDir, reftableDir } = createReftableWorktree(tempDir);
+		process.chdir(worktreeDir);
+
+		const provider = new FooterDataProvider();
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			vi.mocked(execFile).mockClear();
+
+			writeFileSync(join(reftableDir, "tables.list"), "1\n");
+			writeFileSync(join(reftableDir, "tables.list"), "2\n");
+			writeFileSync(join(reftableDir, "tables.list"), "3\n");
+			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1);
+			await new Promise((resolve) => setTimeout(resolve, 650));
+
+			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 		} finally {
 			provider.dispose();
 		}
@@ -173,17 +219,16 @@ describe("FooterDataProvider reftable branch detection", () => {
 		try {
 			expect(provider.getGitBranch()).toBe("main");
 			resolvedBranch = "foo";
+			const onBranchChange = vi.fn();
+			provider.onBranchChange(onBranchChange);
 
-			await new Promise<void>((resolve, reject) => {
-				const timeout = setTimeout(() => reject(new Error("Timed out waiting for branch change")), 2000);
-				provider.onBranchChange(() => {
-					clearTimeout(timeout);
-					resolve();
-				});
-				writeFileSync(join(reftableDir, "tables.list"), "1\n");
-			});
+			writeFileSync(join(reftableDir, "tables.list"), "1\n");
+			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1);
+			await waitFor(() => provider.getGitBranch() === "foo");
 
+			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 			expect(provider.getGitBranch()).toBe("foo");
+			expect(onBranchChange).toHaveBeenCalledTimes(1);
 		} finally {
 			provider.dispose();
 		}

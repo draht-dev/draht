@@ -2261,8 +2261,9 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
-				if (!this.pendingTools.has(event.toolCallId)) {
-					const component = new ToolExecutionComponent(
+				let component = this.pendingTools.get(event.toolCallId);
+				if (!component) {
+					component = new ToolExecutionComponent(
 						event.toolName,
 						event.args,
 						{
@@ -2274,8 +2275,9 @@ export class InteractiveMode {
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
-					this.ui.requestRender();
 				}
+				component.markExecutionStarted();
+				this.ui.requestRender();
 				break;
 			}
 

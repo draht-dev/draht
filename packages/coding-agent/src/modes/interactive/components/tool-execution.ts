@@ -105,6 +105,8 @@ export class ToolExecutionComponent extends Container {
 	private writeHighlightCache?: WriteHighlightCache;
 	// When true, this component intentionally renders no lines
 	private hideComponent = false;
+	private bashStartedAt?: number;
+	private bashElapsedInterval?: NodeJS.Timeout;
 
 	constructor(
 		toolName: string,
@@ -156,6 +158,38 @@ export class ToolExecutionComponent extends Container {
 			this.updateWriteHighlightCacheIncremental();
 		}
 		this.updateDisplay();
+	}
+
+	markExecutionStarted(): void {
+		if (this.toolName !== "bash" || this.bashStartedAt !== undefined) return;
+		this.bashStartedAt = Date.now();
+		this.ensureBashElapsedTimer();
+		this.updateDisplay();
+		this.ui.requestRender();
+	}
+
+	private ensureBashElapsedTimer(): void {
+		if (this.toolName !== "bash" || !this.isPartial || this.bashStartedAt === undefined || this.bashElapsedInterval)
+			return;
+		this.bashElapsedInterval = setInterval(() => {
+			this.updateDisplay();
+			this.ui.requestRender();
+		}, 1000);
+	}
+
+	private stopBashElapsedTimer(): void {
+		if (!this.bashElapsedInterval) return;
+		clearInterval(this.bashElapsedInterval);
+		this.bashElapsedInterval = undefined;
+	}
+
+	private getBashDurationMs(): number | undefined {
+		if (this.toolName !== "bash" || this.bashStartedAt === undefined) return undefined;
+		return Date.now() - this.bashStartedAt;
+	}
+
+	private formatDuration(ms: number): string {
+		return `${(ms / 1000).toFixed(1)}s`;
 	}
 
 	private highlightSingleLine(line: string, lang: string): string {
@@ -308,6 +342,13 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.result = result;
 		this.isPartial = isPartial;
+		if (this.toolName === "bash") {
+			if (isPartial) {
+				this.ensureBashElapsedTimer();
+			} else {
+				this.stopBashElapsedTimer();
+			}
+		}
 		if (this.toolName === "write" && !isPartial) {
 			const rawPath = str(this.args?.file_path ?? this.args?.path);
 			const fileContent = str(this.args?.content);
@@ -581,6 +622,14 @@ export class ToolExecutionComponent extends Container {
 				}
 				this.contentBox.addChild(new Text(`\n${theme.fg("warning", `[${warnings.join(". ")}]`)}`, 0, 0));
 			}
+		}
+
+		const bashDurationMs = this.getBashDurationMs();
+		if (bashDurationMs !== undefined) {
+			const label = this.isPartial ? "Elapsed" : "Took";
+			this.contentBox.addChild(
+				new Text(`\n${theme.fg("muted", `${label} ${this.formatDuration(bashDurationMs)}`)}`, 0, 0),
+			);
 		}
 	}
 

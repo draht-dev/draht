@@ -518,6 +518,8 @@ Every `AssistantMessage` includes a `stopReason` field that indicates how the ge
 - `"error"` - An error occurred during generation
 - `"aborted"` - Request was cancelled via abort signal
 
+`AssistantMessage` may also include `responseId`, a provider-specific upstream response or message identifier when the underlying API exposes one. Do not assume it is always present across providers.
+
 ## Error Handling
 
 When a request ends with an error (including aborts and tool call validation errors), the streaming API emits an error event:

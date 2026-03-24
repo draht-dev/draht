@@ -15,9 +15,16 @@
 
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@draht/agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@draht/ai";
-import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@draht/ai";
+import type {
+	Agent,
+	AgentEvent,
+	AgentMessage,
+	AgentState,
+	AgentTool,
+	ThinkingLevel,
+} from "@mariozechner/pi-agent-core";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mariozechner/pi-ai";
+import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@mariozechner/pi-ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -1729,20 +1736,8 @@ export class AgentSession {
 		// This ensures sessions that hit persistent API errors (e.g. 529) can still compact.
 		let contextTokens: number;
 		if (assistantMessage.stopReason === "error") {
-			const messages = this.agent.state.messages;
-			const estimate = estimateContextTokens(messages);
+			const estimate = estimateContextTokens(this.agent.state.messages);
 			if (estimate.lastUsageIndex === null) return; // No usage data at all
-			// Verify the usage source is post-compaction. Kept pre-compaction messages
-			// have stale usage reflecting the old (larger) context and would falsely
-			// trigger compaction right after one just finished.
-			const usageMsg = messages[estimate.lastUsageIndex];
-			if (
-				compactionEntry &&
-				usageMsg.role === "assistant" &&
-				(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
-			) {
-				return;
-			}
 			contextTokens = estimate.tokens;
 		} else {
 			contextTokens = calculateContextTokens(assistantMessage.usage);

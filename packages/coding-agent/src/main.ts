@@ -882,7 +882,7 @@ export async function main(args: string[]) {
 		printTimings();
 		await interactiveMode.run();
 	} else {
-		await runPrintMode(session, {
+		const exitCode = await runPrintMode(session, {
 			mode,
 			messages: parsed.messages,
 			initialMessage,
@@ -890,6 +890,9 @@ export async function main(args: string[]) {
 		});
 		stopThemeWatcher();
 		restoreStdout();
+		if (exitCode !== 0) {
+			process.exitCode = exitCode;
+		}
 		return;
 	}
 }

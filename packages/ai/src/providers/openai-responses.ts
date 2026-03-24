@@ -220,7 +220,7 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 				summary: options?.reasoningSummary || "auto",
 			};
 			params.include = ["reasoning.encrypted_content"];
-		} else {
+		} else if (model.provider !== "github-copilot") {
 			params.reasoning = { effort: "none" };
 		}
 	}

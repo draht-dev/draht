@@ -671,8 +671,20 @@ async function generateModels() {
 			candidate.contextWindow = 1000000;
 		}
 		if (
-			(candidate.provider === "anthropic" || candidate.provider === "opencode" || candidate.provider === "opencode-go") &&
-			(candidate.id === "claude-opus-4-6" || candidate.id === "claude-sonnet-4-6")
+			(candidate.provider === "anthropic" ||
+				candidate.provider === "opencode" ||
+				candidate.provider === "opencode-go" ||
+				candidate.provider === "github-copilot") &&
+			(candidate.id === "claude-opus-4-6" ||
+				candidate.id === "claude-sonnet-4-6" ||
+				candidate.id === "claude-opus-4.6" ||
+				candidate.id === "claude-sonnet-4.6")
+		) {
+			candidate.contextWindow = 1000000;
+		}
+		if (
+			candidate.provider === "google-antigravity" &&
+			(candidate.id === "claude-opus-4-6-thinking" || candidate.id === "claude-sonnet-4-6")
 		) {
 			candidate.contextWindow = 1000000;
 		}

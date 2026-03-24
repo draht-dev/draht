@@ -213,8 +213,17 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 	if (!_http) {
 		throw new Error("OpenAI Codex OAuth is only available in Node.js environments");
 	}
-	let lastCode: string | null = null;
-	let cancelled = false;
+
+	let settleWait: ((value: { code: string } | null) => void) | undefined;
+	const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
+		let settled = false;
+		settleWait = (value) => {
+			if (settled) return;
+			settled = true;
+			resolve(value);
+		};
+	});
+
 	const server = _http.createServer((req, res) => {
 		try {
 			const url = new URL(req.url || "", "http://localhost");
@@ -237,7 +246,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 			res.statusCode = 200;
 			res.setHeader("Content-Type", "text/html; charset=utf-8");
 			res.end(SUCCESS_HTML);
-			lastCode = code;
+			settleWait?.({ code });
 		} catch {
 			res.statusCode = 500;
 			res.end("Internal error");
@@ -250,17 +259,9 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 				resolve({
 					close: () => server.close(),
 					cancelWait: () => {
-						cancelled = true;
+						settleWait?.(null);
 					},
-					waitForCode: async () => {
-						const sleep = () => new Promise((r) => setTimeout(r, 100));
-						for (let i = 0; i < 600; i += 1) {
-							if (lastCode) return { code: lastCode };
-							if (cancelled) return null;
-							await sleep();
-						}
-						return null;
-					},
+					waitForCode: () => waitForCodePromise,
 				});
 			})
 			.on("error", (err: NodeJS.ErrnoException) => {
@@ -269,6 +270,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 					err.code,
 					") Falling back to manual paste.",
 				);
+				settleWait?.(null);
 				resolve({
 					close: () => {
 						try {

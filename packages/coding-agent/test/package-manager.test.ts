@@ -1293,6 +1293,36 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 	});
 
 	describe("offline mode and network timeouts", () => {
+		it("should update project npm packages using @latest", async () => {
+			settingsManager.setProjectPackages(["npm:example"]);
+
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.update("npm:example");
+
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"npm",
+				["install", "example@latest", "--prefix", join(tempDir, ".pi", "npm")],
+				undefined,
+			);
+		});
+
+		it("should suggest npm source prefixes for update lookups", async () => {
+			settingsManager.setProjectPackages(["npm:example"]);
+
+			await expect(packageManager.update("example")).rejects.toThrow(
+				"No matching package found for example. Did you mean npm:example?",
+			);
+		});
+
+		it("should suggest git source prefixes for update lookups", async () => {
+			settingsManager.setProjectPackages(["git:github.com/example/repo"]);
+
+			await expect(packageManager.update("github.com/example/repo")).rejects.toThrow(
+				"No matching package found for github.com/example/repo. Did you mean git:github.com/example/repo?",
+			);
+		});
+
 		it("should skip installing missing package sources when offline", async () => {
 			process.env.PI_OFFLINE = "1";
 			settingsManager.setProjectPackages(["npm:missing-package", "git:github.com/example/missing-repo"]);

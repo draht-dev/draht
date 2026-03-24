@@ -9,6 +9,7 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import type { Skill } from "../src/core/skills.js";
+import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 
 describe("DefaultResourceLoader", () => {
 	let tempDir: string;
@@ -412,7 +413,7 @@ Content`,
 				description: "Injected skill",
 				filePath: "/fake/path",
 				baseDir: "/fake",
-				source: "custom",
+				sourceInfo: createSyntheticSourceInfo("/fake/path", { source: "custom" }),
 				disableModelInvocation: false,
 			};
 			const loader = new DefaultResourceLoader({

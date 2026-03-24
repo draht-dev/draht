@@ -470,6 +470,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			...skill,
 			sourceInfo:
 				this.findSourceInfoForPath(skill.filePath, this.extensionSkillSourceInfos, metadataByPath) ??
+				skill.sourceInfo ??
 				this.getDefaultSourceInfoForPath(skill.filePath),
 		}));
 		this.skillDiagnostics = resolvedSkills.diagnostics;
@@ -493,6 +494,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			...prompt,
 			sourceInfo:
 				this.findSourceInfoForPath(prompt.filePath, this.extensionPromptSourceInfos, metadataByPath) ??
+				prompt.sourceInfo ??
 				this.getDefaultSourceInfoForPath(prompt.filePath),
 		}));
 		this.promptDiagnostics = resolvedPrompts.diagnostics;
@@ -512,8 +514,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 			const sourcePath = theme.sourcePath;
 			theme.sourceInfo = sourcePath
 				? (this.findSourceInfoForPath(sourcePath, this.extensionThemeSourceInfos, metadataByPath) ??
+					theme.sourceInfo ??
 					this.getDefaultSourceInfoForPath(sourcePath))
-				: undefined;
+				: theme.sourceInfo;
 			return theme;
 		});
 		this.themeDiagnostics = resolvedThemes.diagnostics;
@@ -526,6 +529,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 				this.getDefaultSourceInfoForPath(extension.path);
 			for (const command of extension.commands.values()) {
 				command.sourceInfo = extension.sourceInfo;
+			}
+			for (const tool of extension.tools.values()) {
+				tool.sourceInfo = extension.sourceInfo;
 			}
 		}
 	}
@@ -576,11 +582,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return undefined;
 	}
 
-	private getDefaultSourceInfoForPath(filePath: string): SourceInfo | undefined {
-		if (!filePath) {
-			return undefined;
-		}
-
+	private getDefaultSourceInfoForPath(filePath: string): SourceInfo {
 		if (filePath.startsWith("<") && filePath.endsWith(">")) {
 			return {
 				path: filePath,
@@ -606,17 +608,23 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		for (const root of agentRoots) {
 			if (this.isUnderPath(normalizedPath, root)) {
-				return { path: filePath, source: "local", scope: "user", origin: "top-level" };
+				return { path: filePath, source: "local", scope: "user", origin: "top-level", baseDir: root };
 			}
 		}
 
 		for (const root of projectRoots) {
 			if (this.isUnderPath(normalizedPath, root)) {
-				return { path: filePath, source: "local", scope: "project", origin: "top-level" };
+				return { path: filePath, source: "local", scope: "project", origin: "top-level", baseDir: root };
 			}
 		}
 
-		return undefined;
+		return {
+			path: filePath,
+			source: "local",
+			scope: "temporary",
+			origin: "top-level",
+			baseDir: statSync(normalizedPath).isDirectory() ? normalizedPath : resolve(normalizedPath, ".."),
+		};
 	}
 
 	private mergePaths(primary: string[], additional: string[]): string[] {

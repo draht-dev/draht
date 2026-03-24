@@ -544,35 +544,30 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			case "get_commands": {
 				const commands: RpcSlashCommand[] = [];
 
-				// Extension commands
 				for (const command of session.extensionRunner?.getRegisteredCommands() ?? []) {
 					commands.push({
 						name: command.name,
 						description: command.description,
 						source: "extension",
-						path: command.extensionPath,
+						sourceInfo: command.sourceInfo,
 					});
 				}
 
-				// Prompt templates (source is always "user" | "project" | "path" in coding-agent)
 				for (const template of session.promptTemplates) {
 					commands.push({
 						name: template.name,
 						description: template.description,
 						source: "prompt",
-						location: template.source as RpcSlashCommand["location"],
-						path: template.filePath,
+						sourceInfo: template.sourceInfo,
 					});
 				}
 
-				// Skills (source is always "user" | "project" | "path" in coding-agent)
 				for (const skill of session.resourceLoader.getSkills().skills) {
 					commands.push({
 						name: `skill:${skill.name}`,
 						description: skill.description,
 						source: "skill",
-						location: skill.source as RpcSlashCommand["location"],
-						path: skill.filePath,
+						sourceInfo: skill.sourceInfo,
 					});
 				}
 

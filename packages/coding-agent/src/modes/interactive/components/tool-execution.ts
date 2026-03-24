@@ -588,7 +588,7 @@ export class ToolExecutionComponent extends Container {
 							if (cachedSkipped && cachedSkipped > 0) {
 								const hint =
 									theme.fg("muted", `... (${cachedSkipped} earlier lines,`) +
-									` ${keyHint("expandTools", "to expand")})`;
+									` ${keyHint("app.tools.expand", "to expand")})`;
 								return ["", truncateToWidth(hint, width, "..."), ...cachedLines];
 							}
 							// Add blank line for spacing (matches expanded case)
@@ -695,7 +695,7 @@ export class ToolExecutionComponent extends Container {
 						.map((line: string) => (lang ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line))))
 						.join("\n");
 				if (remaining > 0) {
-					text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("expandTools", "to expand")})`;
+					text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
 				}
 
 				const truncation = this.result.details?.truncation;
@@ -772,7 +772,7 @@ export class ToolExecutionComponent extends Container {
 				if (remaining > 0) {
 					text +=
 						theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`) +
-						` ${keyHint("expandTools", "to expand")})`;
+						` ${keyHint("app.tools.expand", "to expand")})`;
 				}
 			}
 
@@ -839,7 +839,7 @@ export class ToolExecutionComponent extends Container {
 
 					text += `\n\n${displayLines.map((line: string) => theme.fg("toolOutput", line)).join("\n")}`;
 					if (remaining > 0) {
-						text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("expandTools", "to expand")})`;
+						text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
 					}
 				}
 
@@ -881,7 +881,7 @@ export class ToolExecutionComponent extends Container {
 
 					text += `\n\n${displayLines.map((line: string) => theme.fg("toolOutput", line)).join("\n")}`;
 					if (remaining > 0) {
-						text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("expandTools", "to expand")})`;
+						text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
 					}
 				}
 
@@ -927,7 +927,7 @@ export class ToolExecutionComponent extends Container {
 
 					text += `\n\n${displayLines.map((line: string) => theme.fg("toolOutput", line)).join("\n")}`;
 					if (remaining > 0) {
-						text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("expandTools", "to expand")})`;
+						text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
 					}
 				}
 

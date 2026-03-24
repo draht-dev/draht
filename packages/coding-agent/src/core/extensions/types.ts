@@ -74,7 +74,7 @@ import type {
 
 export type { ExecOptions, ExecResult } from "../exec.js";
 export type { AgentToolResult, AgentToolUpdateCallback };
-export type { AppAction, KeybindingsManager } from "../keybindings.js";
+export type { AppKeybinding, KeybindingsManager } from "../keybindings.js";
 
 // ============================================================================
 // UI Context

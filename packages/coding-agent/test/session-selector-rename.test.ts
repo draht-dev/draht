@@ -1,4 +1,4 @@
-import { DEFAULT_EDITOR_KEYBINDINGS, EditorKeybindingsManager, setEditorKeybindings } from "@mariozechner/pi-tui";
+import { setKeybindings } from "@mariozechner/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.js";
 import type { SessionInfo } from "../src/core/session-manager.js";
@@ -34,13 +34,13 @@ describe("session selector rename", () => {
 	});
 
 	beforeEach(() => {
-		// Ensure test isolation: editor keybindings are a global singleton
-		setEditorKeybindings(new EditorKeybindingsManager(DEFAULT_EDITOR_KEYBINDINGS));
+		// Ensure test isolation: keybindings are a global singleton
+		setKeybindings(new KeybindingsManager());
 	});
 
 	it("shows rename hint in interactive /resume picker configuration", async () => {
 		const sessions = [makeSession({ id: "a" })];
-		const keybindings = KeybindingsManager.inMemory();
+		const keybindings = new KeybindingsManager();
 		const selector = new SessionSelectorComponent(
 			async () => sessions,
 			async () => [],
@@ -59,7 +59,7 @@ describe("session selector rename", () => {
 
 	it("does not show rename hint in --resume picker configuration", async () => {
 		const sessions = [makeSession({ id: "a" })];
-		const keybindings = KeybindingsManager.inMemory();
+		const keybindings = new KeybindingsManager();
 		const selector = new SessionSelectorComponent(
 			async () => sessions,
 			async () => [],
@@ -80,7 +80,7 @@ describe("session selector rename", () => {
 		const sessions = [makeSession({ id: "a", name: "Old" })];
 		const renameSession = vi.fn(async () => {});
 
-		const keybindings = KeybindingsManager.inMemory();
+		const keybindings = new KeybindingsManager();
 		const selector = new SessionSelectorComponent(
 			async () => sessions,
 			async () => [],

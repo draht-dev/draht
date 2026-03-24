@@ -2,7 +2,7 @@ import {
 	type Component,
 	Container,
 	type Focusable,
-	getEditorKeybindings,
+	getKeybindings,
 	Input,
 	matchesKey,
 	Spacer,
@@ -860,12 +860,12 @@ class TreeList implements Component {
 	}
 
 	handleInput(keyData: string): void {
-		const kb = getEditorKeybindings();
-		if (kb.matches(keyData, "selectUp")) {
+		const kb = getKeybindings();
+		if (kb.matches(keyData, "tui.select.up")) {
 			this.selectedIndex = this.selectedIndex === 0 ? this.filteredNodes.length - 1 : this.selectedIndex - 1;
-		} else if (kb.matches(keyData, "selectDown")) {
+		} else if (kb.matches(keyData, "tui.select.down")) {
 			this.selectedIndex = this.selectedIndex === this.filteredNodes.length - 1 ? 0 : this.selectedIndex + 1;
-		} else if (kb.matches(keyData, "treeFoldOrUp")) {
+		} else if (kb.matches(keyData, "app.tree.foldOrUp")) {
 			const currentId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
 			if (currentId && this.isFoldable(currentId) && !this.foldedNodes.has(currentId)) {
 				this.foldedNodes.add(currentId);
@@ -873,7 +873,7 @@ class TreeList implements Component {
 			} else {
 				this.selectedIndex = this.findBranchSegmentStart("up");
 			}
-		} else if (kb.matches(keyData, "treeUnfoldOrDown")) {
+		} else if (kb.matches(keyData, "app.tree.unfoldOrDown")) {
 			const currentId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
 			if (currentId && this.foldedNodes.has(currentId)) {
 				this.foldedNodes.delete(currentId);
@@ -881,18 +881,18 @@ class TreeList implements Component {
 			} else {
 				this.selectedIndex = this.findBranchSegmentStart("down");
 			}
-		} else if (kb.matches(keyData, "cursorLeft") || kb.matches(keyData, "selectPageUp")) {
+		} else if (kb.matches(keyData, "tui.editor.cursorLeft") || kb.matches(keyData, "tui.select.pageUp")) {
 			// Page up
 			this.selectedIndex = Math.max(0, this.selectedIndex - this.maxVisibleLines);
-		} else if (kb.matches(keyData, "cursorRight") || kb.matches(keyData, "selectPageDown")) {
+		} else if (kb.matches(keyData, "tui.editor.cursorRight") || kb.matches(keyData, "tui.select.pageDown")) {
 			// Page down
 			this.selectedIndex = Math.min(this.filteredNodes.length - 1, this.selectedIndex + this.maxVisibleLines);
-		} else if (kb.matches(keyData, "selectConfirm")) {
+		} else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selected = this.filteredNodes[this.selectedIndex];
 			if (selected && this.onSelect) {
 				this.onSelect(selected.node.entry.id);
 			}
-		} else if (kb.matches(keyData, "selectCancel")) {
+		} else if (kb.matches(keyData, "tui.select.cancel")) {
 			if (this.searchQuery) {
 				this.searchQuery = "";
 				this.foldedNodes.clear();
@@ -939,7 +939,7 @@ class TreeList implements Component {
 			this.filterMode = modes[(currentIndex + 1) % modes.length];
 			this.foldedNodes.clear();
 			this.applyFilter();
-		} else if (kb.matches(keyData, "deleteCharBackward")) {
+		} else if (kb.matches(keyData, "tui.editor.deleteCharBackward")) {
 			if (this.searchQuery.length > 0) {
 				this.searchQuery = this.searchQuery.slice(0, -1);
 				this.foldedNodes.clear();
@@ -1066,17 +1066,20 @@ class LabelInput implements Component, Focusable {
 		lines.push(truncateToWidth(`${indent}${theme.fg("muted", "Label (empty to remove):")}`, width));
 		lines.push(...this.input.render(availableWidth).map((line) => truncateToWidth(`${indent}${line}`, width)));
 		lines.push(
-			truncateToWidth(`${indent}${keyHint("selectConfirm", "save")}  ${keyHint("selectCancel", "cancel")}`, width),
+			truncateToWidth(
+				`${indent}${keyHint("tui.select.confirm", "save")}  ${keyHint("tui.select.cancel", "cancel")}`,
+				width,
+			),
 		);
 		return lines;
 	}
 
 	handleInput(keyData: string): void {
-		const kb = getEditorKeybindings();
-		if (kb.matches(keyData, "selectConfirm")) {
+		const kb = getKeybindings();
+		if (kb.matches(keyData, "tui.select.confirm")) {
 			const value = this.input.getValue().trim();
 			this.onSubmit?.(this.entryId, value || undefined);
-		} else if (kb.matches(keyData, "selectCancel")) {
+		} else if (kb.matches(keyData, "tui.select.cancel")) {
 			this.onCancel?.();
 		} else {
 			this.input.handleInput(keyData);

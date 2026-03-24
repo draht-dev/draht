@@ -12,7 +12,7 @@ import {
 } from "../../../core/tools/truncate.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
-import { editorKey, keyHint } from "./keybinding-hints.js";
+import { keyHint, keyText } from "./keybinding-hints.js";
 import { truncateToVisualLines } from "./visual-truncate.js";
 
 // Preview line limit when not expanded (matches tool execution behavior)
@@ -58,7 +58,7 @@ export class BashExecutionComponent extends Container {
 			ui,
 			(spinner) => theme.fg(colorKey, spinner),
 			(text) => theme.fg("muted", text),
-			`Running... (${editorKey("selectCancel")} to cancel)`, // Plain text for loader
+			`Running... (${keyText("tui.select.cancel")} to cancel)`, // Plain text for loader
 		);
 		this.contentContainer.addChild(this.loader);
 
@@ -168,10 +168,10 @@ export class BashExecutionComponent extends Container {
 			// Show how many lines are hidden (collapsed preview)
 			if (hiddenLineCount > 0) {
 				if (this.expanded) {
-					statusParts.push(`(${keyHint("expandTools", "to collapse")})`);
+					statusParts.push(`(${keyHint("app.tools.expand", "to collapse")})`);
 				} else {
 					statusParts.push(
-						`${theme.fg("muted", `... ${hiddenLineCount} more lines`)} (${keyHint("expandTools", "to expand")})`,
+						`${theme.fg("muted", `... ${hiddenLineCount} more lines`)} (${keyHint("app.tools.expand", "to expand")})`,
 					);
 				}
 			}

@@ -8,7 +8,12 @@
  * - Interact with the user via UI primitives
  */
 
-import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback, ThinkingLevel } from "@draht/agent-core";
+import type {
+	AgentMessage,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ThinkingLevel,
+} from "@mariozechner/pi-agent-core";
 import type {
 	Api,
 	AssistantMessageEvent,
@@ -21,7 +26,7 @@ import type {
 	SimpleStreamOptions,
 	TextContent,
 	ToolResultMessage,
-} from "@draht/ai";
+} from "@mariozechner/pi-ai";
 import type {
 	AutocompleteItem,
 	Component,
@@ -31,7 +36,7 @@ import type {
 	OverlayHandle,
 	OverlayOptions,
 	TUI,
-} from "@draht/tui";
+} from "@mariozechner/pi-tui";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type { BashResult } from "../bash-executor.js";
@@ -185,12 +190,12 @@ export interface ExtensionUIContext {
 	 * - `keybindings`: KeybindingsManager for app-level keybindings
 	 *
 	 * For full app keybinding support (escape, ctrl+d, model switching, etc.),
-	 * extend `CustomEditor` from `@draht/coding-agent` and call
+	 * extend `CustomEditor` from `@mariozechner/pi-coding-agent` and call
 	 * `super.handleInput(data)` for keys you don't handle.
 	 *
 	 * @example
 	 * ```ts
-	 * import { CustomEditor } from "@draht/coding-agent";
+	 * import { CustomEditor } from "@mariozechner/pi-coding-agent";
 	 *
 	 * class VimEditor extends CustomEditor {
 	 *   private mode: "normal" | "insert" = "insert";
@@ -387,6 +392,8 @@ export interface ResourcesDiscoverResult {
 export interface SessionDirectoryEvent {
 	type: "session_directory";
 	cwd: string;
+	/** CLI-provided session directory (if any) */
+	cliSessionDir: string | undefined;
 }
 
 /** Fired on initial session load */
@@ -873,11 +880,6 @@ export interface SessionDirectoryResult {
 	sessionDir?: string;
 }
 
-/** Special startup-only handler. Unlike other events, this receives no ExtensionContext. */
-export type SessionDirectoryHandler = (
-	event: SessionDirectoryEvent,
-) => Promise<SessionDirectoryResult | undefined> | SessionDirectoryResult | undefined;
-
 export interface SessionBeforeSwitchResult {
 	cancel?: boolean;
 }
@@ -948,7 +950,7 @@ export interface ExtensionAPI {
 	// =========================================================================
 
 	on(event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void;
-	on(event: "session_directory", handler: SessionDirectoryHandler): void;
+	on(event: "session_directory", handler: ExtensionHandler<SessionDirectoryEvent, SessionDirectoryResult>): void;
 	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
 	on(
 		event: "session_before_switch",

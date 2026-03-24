@@ -5,7 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { type ImageContent, modelsAreEqual, supportsXhigh } from "@draht/ai";
+import { type ImageContent, modelsAreEqual, supportsXhigh } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { type Args, parseArgs, printHelp } from "./cli/args.js";
@@ -101,7 +101,7 @@ function printPackageCommandHelp(command: PackageCommand): void {
 Install a package and add it to settings.
 
 Options:
-  -l, --local    Install project-locally (.draht/settings.json)
+  -l, --local    Install project-locally (.pi/settings.json)
 
 Examples:
   ${APP_NAME} install npm:@foo/bar
@@ -120,7 +120,7 @@ Examples:
 Remove a package and its source from settings.
 
 Options:
-  -l, --local    Remove from project settings (.draht/settings.json)
+  -l, --local    Remove from project settings (.pi/settings.json)
 
 Example:
   ${APP_NAME} remove npm:@foo/bar
@@ -379,9 +379,30 @@ async function promptConfirm(message: string): Promise<boolean> {
 	});
 }
 
-/** Helper to call CLI-only session_directory handlers before the initial session manager is created */
-async function callSessionDirectoryHook(extensions: LoadExtensionsResult, cwd: string): Promise<string | undefined> {
+/** Helper to call session_directory handlers from extensions before runner is fully initialized */
+async function callSessionDirectoryHook(
+	extensions: LoadExtensionsResult,
+	cwd: string,
+	cliSessionDir: string | undefined,
+): Promise<string | undefined> {
 	let customSessionDir: string | undefined;
+
+	// Minimal context for this early event - most context actions will throw if called
+	const ctx = {
+		ui: { notify: () => {}, setStatus: () => {}, setWorkingMessage: () => {} } as any,
+		hasUI: false,
+		cwd,
+		sessionManager: undefined as any,
+		modelRegistry: undefined as any,
+		model: undefined,
+		isIdle: () => true,
+		abort: () => {},
+		hasPendingMessages: () => false,
+		shutdown: () => process.exit(0),
+		getContextUsage: () => undefined,
+		compact: () => {},
+		getSystemPrompt: () => "",
+	};
 
 	for (const ext of extensions.extensions) {
 		const handlers = ext.handlers.get("session_directory");
@@ -389,8 +410,8 @@ async function callSessionDirectoryHook(extensions: LoadExtensionsResult, cwd: s
 
 		for (const handler of handlers) {
 			try {
-				const event = { type: "session_directory" as const, cwd };
-				const result = (await handler(event)) as { sessionDir?: string } | undefined;
+				const event = { type: "session_directory" as const, cwd, cliSessionDir };
+				const result = (await handler(event, ctx)) as { sessionDir?: string } | undefined;
 
 				if (result?.sessionDir) {
 					customSessionDir = result.sessionDir;
@@ -417,7 +438,7 @@ async function createSessionManager(
 	// CLI flag takes precedence, otherwise ask extensions for custom session directory
 	let effectiveSessionDir = parsed.sessionDir;
 	if (!effectiveSessionDir) {
-		effectiveSessionDir = await callSessionDirectoryHook(extensions, cwd);
+		effectiveSessionDir = await callSessionDirectoryHook(extensions, cwd, parsed.sessionDir);
 	}
 
 	if (parsed.session) {
@@ -576,176 +597,11 @@ async function handleConfigCommand(args: string[]): Promise<boolean> {
 	process.exit(0);
 }
 
-async function handleLoginCommand(args: string[]): Promise<boolean> {
-	if (args[0] !== "login" && args[0] !== "--login") {
-		return false;
-	}
-
-	const { getOAuthProviders } = await import("@draht/ai/oauth");
-	const authMod = await import("./core/auth-storage.js");
-	const AuthStorageClass = authMod.AuthStorage;
-	// open browser - use dynamic import, fallback to exec
-	const openBrowser = async (url: string) => {
-		try {
-			const { exec } = await import("child_process");
-			exec(`open "${url}" 2>/dev/null || xdg-open "${url}" 2>/dev/null`);
-		} catch {
-			/* ignore */
-		}
-	};
-
-	const providers = getOAuthProviders();
-	const requestedProvider = args[1]?.toLowerCase();
-
-	// Map friendly names to provider IDs
-	const PROVIDER_ALIASES: Record<string, string> = {
-		anthropic: "anthropic",
-		claude: "anthropic",
-		google: "google-gemini-cli",
-		gemini: "google-gemini-cli",
-		openai: "openai-codex",
-		codex: "openai-codex",
-		copilot: "github-copilot",
-		github: "github-copilot",
-		antigravity: "google-antigravity",
-	};
-
-	if (requestedProvider === "--help" || requestedProvider === "-h" || requestedProvider === "help") {
-		console.log(chalk.bold("\n🔌 draht login\n"));
-		console.log("Authenticate with AI providers.\n");
-		console.log("Usage:");
-		console.log("  draht login              Interactive provider selection");
-		console.log("  draht login anthropic    Login to Anthropic (Claude Pro/Max)");
-		console.log("  draht login gemini       Login to Google Gemini CLI");
-		console.log("  draht login openai       Login to OpenAI (ChatGPT/Codex)");
-		console.log("  draht login copilot      Login to GitHub Copilot");
-		console.log("  draht login all          Login to all providers\n");
-		console.log("Aliases: claude, google, codex, github\n");
-		process.exit(0);
-	}
-
-	if (requestedProvider && requestedProvider !== "all") {
-		const providerId = PROVIDER_ALIASES[requestedProvider] ?? requestedProvider;
-		const provider = providers.find((p) => p.id === providerId);
-		if (!provider) {
-			console.log(chalk.red(`Unknown provider: ${requestedProvider}`));
-			console.log(`\nAvailable providers:`);
-			for (const p of providers) {
-				const aliases = Object.entries(PROVIDER_ALIASES)
-					.filter(([_, v]) => v === p.id)
-					.map(([k]) => k);
-				console.log(`  ${chalk.bold(p.name)} (${p.id}) — aliases: ${aliases.join(", ")}`);
-			}
-			process.exit(1);
-		}
-		await loginProvider(provider, openBrowser);
-		process.exit(0);
-	}
-
-	// Interactive: show menu
-	console.log(chalk.bold("\n🔌 Draht Login\n"));
-	console.log("Select a provider to authenticate:\n");
-
-	const providerList = providers.filter((p) =>
-		["anthropic", "gemini-cli", "openai-codex", "github-copilot"].includes(p.id),
-	);
-
-	for (let i = 0; i < providerList.length; i++) {
-		const p = providerList[i];
-		const as = AuthStorageClass.create();
-		const hasCredentials = as.has(p.id);
-		const status = hasCredentials ? chalk.green("✓ logged in") : chalk.dim("not connected");
-		console.log(`  ${chalk.bold(i + 1)}. ${p.name} ${status}`);
-	}
-	console.log(`  ${chalk.bold("a")}. Login to all`);
-	console.log(`  ${chalk.bold("q")}. Cancel\n`);
-
-	const rl = createInterface({ input: process.stdin, output: process.stdout });
-	const answer = await new Promise<string>((resolve) => {
-		rl.question("Choice: ", (ans) => {
-			rl.close();
-			resolve(ans.trim());
-		});
-	});
-
-	if (answer === "q" || answer === "") {
-		process.exit(0);
-	}
-
-	if (answer === "a") {
-		for (const p of providerList) {
-			await loginProvider(p, openBrowser);
-		}
-	} else {
-		const idx = parseInt(answer, 10) - 1;
-		if (idx >= 0 && idx < providerList.length) {
-			await loginProvider(providerList[idx], openBrowser);
-		} else {
-			console.log(chalk.red("Invalid choice"));
-		}
-	}
-
-	process.exit(0);
-}
-
-async function loginProvider(
-	provider: { id: string; name: string; login: (cb: any) => Promise<any>; usesCallbackServer?: boolean },
-	openBrowser: (url: string) => Promise<any>,
-): Promise<void> {
-	const { AuthStorage } = await import("./core/auth-storage.js");
-	const authStorage = AuthStorage.create();
-
-	console.log(`\n${chalk.bold(`Logging in to ${provider.name}...`)}`);
-
-	try {
-		const credentials = await provider.login({
-			onAuth: (info: { url: string; instructions?: string }) => {
-				console.log(`\n${chalk.blue("→")} Opening browser for authentication...`);
-				if (info.instructions) console.log(chalk.dim(info.instructions));
-				openBrowser(info.url).catch(() => {
-					console.log(`\n${chalk.yellow("Could not open browser. Visit manually:")}`);
-					console.log(chalk.underline(info.url));
-				});
-			},
-			onPrompt: async (prompt: { message: string; placeholder?: string }) => {
-				const { createInterface } = await import("readline");
-				const rl = createInterface({ input: process.stdin, output: process.stdout });
-				return new Promise<string>((resolve) => {
-					rl.question(`${prompt.message} `, (ans: string) => {
-						rl.close();
-						resolve(ans.trim());
-					});
-				});
-			},
-			onProgress: (message: string) => {
-				console.log(chalk.dim(`  ${message}`));
-			},
-			onManualCodeInput: provider.usesCallbackServer
-				? async () => {
-						const { createInterface } = await import("readline");
-						const rl = createInterface({ input: process.stdin, output: process.stdout });
-						return new Promise<string>((resolve) => {
-							rl.question("Enter the authorization code: ", (ans: string) => {
-								rl.close();
-								resolve(ans.trim());
-							});
-						});
-					}
-				: undefined,
-		});
-
-		authStorage.set(provider.id, { type: "oauth", ...credentials });
-		console.log(chalk.green(`✓ ${provider.name} — logged in successfully`));
-	} catch (error) {
-		console.log(chalk.red(`✗ ${provider.name} — login failed: ${error instanceof Error ? error.message : error}`));
-	}
-}
-
 export async function main(args: string[]) {
-	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.DRAHT_OFFLINE);
+	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
-		process.env.DRAHT_OFFLINE = "1";
-		process.env.DRAHT_SKIP_VERSION_CHECK = "1";
+		process.env.PI_OFFLINE = "1";
+		process.env.PI_SKIP_VERSION_CHECK = "1";
 	}
 
 	if (await handlePackageCommand(args)) {
@@ -753,10 +609,6 @@ export async function main(args: string[]) {
 	}
 
 	if (await handleConfigCommand(args)) {
-		return;
-	}
-
-	if (await handleLoginCommand(args)) {
 		return;
 	}
 
@@ -835,20 +687,6 @@ export async function main(args: string[]) {
 		process.exit(0);
 	}
 
-	// Experimental: List attachable sessions
-	if (parsed.listSessions) {
-		const { listSessions } = await import("./cli/list-sessions.js");
-		await listSessions();
-		process.exit(0);
-	}
-
-	// Experimental: Attach to existing session
-	if (parsed.attach) {
-		const { runAttachMode } = await import("./cli/attach-mode.js");
-		await runAttachMode(parsed.attach);
-		process.exit(0);
-	}
-
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
 	if (parsed.mode !== "rpc") {
 		const stdinContent = await readPipedStdin();
@@ -904,7 +742,8 @@ export async function main(args: string[]) {
 		KeybindingsManager.create();
 
 		// Compute effective session dir for resume (same logic as createSessionManager)
-		const effectiveSessionDir = parsed.sessionDir || (await callSessionDirectoryHook(extensionsResult, cwd));
+		const effectiveSessionDir =
+			parsed.sessionDir || (await callSessionDirectoryHook(extensionsResult, cwd, parsed.sessionDir));
 
 		const selectedPath = await selectSession(
 			(onProgress) => SessionManager.list(cwd, effectiveSessionDir, onProgress),
@@ -941,31 +780,6 @@ export async function main(args: string[]) {
 	}
 
 	const { session, modelFallbackMessage } = await createAgentSession(sessionOptions);
-
-	// Experimental: Make session attachable if --attachable flag is set
-	let cleanupSocketServer: (() => Promise<void>) | null = null;
-	if (parsed.attachable) {
-		const { makeSessionAttachable } = await import("./core/socket-server/index.js");
-		cleanupSocketServer = await makeSessionAttachable({
-			session,
-			enabled: true,
-		});
-	}
-
-	// Ensure socket server is cleaned up on exit
-	const cleanup = async () => {
-		if (cleanupSocketServer) {
-			await cleanupSocketServer();
-		}
-	};
-	process.on("SIGINT", cleanup);
-	process.on("SIGTERM", cleanup);
-	process.on("exit", () => {
-		if (cleanupSocketServer) {
-			// Synchronous cleanup attempt
-			cleanupSocketServer().catch(() => {});
-		}
-	});
 
 	if (!isInteractive && !session.model) {
 		console.error(chalk.red("No models available."));

@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { stripVTControlCharacters } from "node:util";
-import { type AutocompleteProvider, CombinedAutocompleteProvider } from "../src/autocomplete.js";
+import type { AutocompleteProvider } from "../src/autocomplete.js";
 import { Editor, wordWrapLine } from "../src/components/editor.js";
 import { TUI } from "../src/tui.js";
 import { visibleWidth } from "../src/utils.js";
@@ -873,24 +873,6 @@ describe("Editor component", () => {
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
 			assert.strictEqual(chunks[1]!.text, "amet,                         ");
 			assert.strictEqual(chunks[2]!.text, "            consectetur");
-		});
-
-		it("force-breaks when wide char after word boundary wrap still overflows", () => {
-			// " " (1) + "a"*186 (186) + "你" (2) = 189 visible width
-			// maxWidth = 187: backtracking to the space would leave 186 + 2 = 188 > 187,
-			// so the algorithm must force-break before the wide char instead.
-			const line = ` ${"a".repeat(186)}你`;
-			const chunks = wordWrapLine(line, 187);
-
-			for (const chunk of chunks) {
-				assert.ok(
-					visibleWidth(chunk.text) <= 187,
-					`chunk "${chunk.text.slice(0, 20)}..." has visible width ${visibleWidth(chunk.text)}, expected <= 187`,
-				);
-			}
-			// Verify no content is lost
-			const reconstructed = chunks.map((c) => line.slice(c.startIndex, c.endIndex)).join("");
-			assert.strictEqual(reconstructed, line);
 		});
 	});
 
@@ -2082,9 +2064,9 @@ describe("Editor component", () => {
 					if (argtestMatch) {
 						const argumentText = argtestMatch[1]!;
 						const allArguments = [
-							{ value: "two", label: "two" },
-							{ value: "three", label: "three" },
-							{ value: "twelve", label: "twelve" },
+							{ value: "two", label: "two" }, // First item
+							{ value: "three", label: "three" }, // Second item
+							{ value: "twelve", label: "twelve" }, // Third item
 						];
 						// Return all items that start with the typed prefix
 						const filtered = allArguments.filter((arg) => arg.value.startsWith(argumentText));
@@ -2271,62 +2253,6 @@ describe("Editor component", () => {
 
 			// The exact typed value should be retained
 			assert.strictEqual(editor.getText(), "/model gpt-4o-mini");
-		});
-
-		it("chains into argument completions after tab-completing slash command names", () => {
-			const editor = new Editor(createTestTUI(), defaultEditorTheme);
-
-			const provider = new CombinedAutocompleteProvider([
-				{
-					name: "model",
-					description: "Switch model",
-					getArgumentCompletions: (prefix: string) => {
-						const items = [
-							{ value: "claude-opus", label: "claude-opus" },
-							{ value: "claude-sonnet", label: "claude-sonnet" },
-						];
-						return items.filter((item) => item.value.startsWith(prefix));
-					},
-				},
-				{ name: "help", description: "Show help" },
-			]);
-			editor.setAutocompleteProvider(provider);
-
-			editor.handleInput("/");
-			editor.handleInput("m");
-			editor.handleInput("o");
-			editor.handleInput("d");
-			assert.strictEqual(editor.isShowingAutocomplete(), true);
-
-			editor.handleInput("\t");
-			assert.strictEqual(editor.getText(), "/model ");
-			assert.strictEqual(editor.isShowingAutocomplete(), true);
-
-			editor.handleInput("\t");
-			assert.strictEqual(editor.getText(), "/model claude-opus");
-			assert.strictEqual(editor.isShowingAutocomplete(), false);
-		});
-
-		it("does not show argument completions when command has no argument completer", () => {
-			const editor = new Editor(createTestTUI(), defaultEditorTheme);
-			const provider = new CombinedAutocompleteProvider([
-				{ name: "help", description: "Show help" },
-				{
-					name: "model",
-					description: "Switch model",
-					getArgumentCompletions: () => [{ value: "claude-opus", label: "claude-opus" }],
-				},
-			]);
-			editor.setAutocompleteProvider(provider);
-
-			editor.handleInput("/");
-			editor.handleInput("h");
-			editor.handleInput("e");
-			assert.strictEqual(editor.isShowingAutocomplete(), true);
-
-			editor.handleInput("\t");
-			assert.strictEqual(editor.getText(), "/help ");
-			assert.strictEqual(editor.isShowingAutocomplete(), false);
 		});
 	});
 

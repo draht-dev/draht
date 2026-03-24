@@ -2703,6 +2703,11 @@ export class InteractiveMode {
 	}
 
 	private handleCtrlZ(): void {
+		// Keep the event loop alive while suspended. Without this, stopping the TUI
+		// can leave Node with no ref'ed handles, causing the process to exit on fg
+		// before the SIGCONT handler gets a chance to restore the terminal.
+		const suspendKeepAlive = setInterval(() => {}, 2 ** 30);
+
 		// Ignore SIGINT while suspended so Ctrl+C in the terminal does not
 		// kill the backgrounded process. The handler is removed on resume.
 		const ignoreSigint = () => {};
@@ -2710,16 +2715,23 @@ export class InteractiveMode {
 
 		// Set up handler to restore TUI when resumed
 		process.once("SIGCONT", () => {
+			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
 			this.ui.requestRender(true);
 		});
 
-		// Stop the TUI (restore terminal to normal mode)
-		this.ui.stop();
+		try {
+			// Stop the TUI (restore terminal to normal mode)
+			this.ui.stop();
 
-		// Send SIGTSTP to process group (pid=0 means all processes in group)
-		process.kill(0, "SIGTSTP");
+			// Send SIGTSTP to process group (pid=0 means all processes in group)
+			process.kill(0, "SIGTSTP");
+		} catch (error) {
+			clearInterval(suspendKeepAlive);
+			process.removeListener("SIGINT", ignoreSigint);
+			throw error;
+		}
 	}
 
 	private async handleFollowUp(): Promise<void> {

@@ -2,6 +2,7 @@ import type { AgentTool } from "@draht/agent-core";
 import { type Static, Type } from "@sinclair/typebox";
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
+import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
 
 const writeSchema = Type.Object({
@@ -49,66 +50,72 @@ export function createWriteTool(cwd: string, options?: WriteToolOptions): AgentT
 			const absolutePath = resolveToCwd(path, cwd);
 			const dir = dirname(absolutePath);
 
-			return new Promise<{ content: Array<{ type: "text"; text: string }>; details: undefined }>(
-				(resolve, reject) => {
-					// Check if already aborted
-					if (signal?.aborted) {
-						reject(new Error("Operation aborted"));
-						return;
-					}
-
-					let aborted = false;
-
-					// Set up abort handler
-					const onAbort = () => {
-						aborted = true;
-						reject(new Error("Operation aborted"));
-					};
-
-					if (signal) {
-						signal.addEventListener("abort", onAbort, { once: true });
-					}
-
-					// Perform the write operation
-					(async () => {
-						try {
-							// Create parent directories if needed
-							await ops.mkdir(dir);
-
-							// Check if aborted before writing
-							if (aborted) {
+			return withFileMutationQueue(
+				absolutePath,
+				() =>
+					new Promise<{ content: Array<{ type: "text"; text: string }>; details: undefined }>(
+						(resolve, reject) => {
+							// Check if already aborted
+							if (signal?.aborted) {
+								reject(new Error("Operation aborted"));
 								return;
 							}
 
-							// Write the file
-							await ops.writeFile(absolutePath, content);
+							let aborted = false;
 
-							// Check if aborted after writing
-							if (aborted) {
-								return;
-							}
+							// Set up abort handler
+							const onAbort = () => {
+								aborted = true;
+								reject(new Error("Operation aborted"));
+							};
 
-							// Clean up abort handler
 							if (signal) {
-								signal.removeEventListener("abort", onAbort);
+								signal.addEventListener("abort", onAbort, { once: true });
 							}
 
-							resolve({
-								content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
-								details: undefined,
-							});
-						} catch (error: any) {
-							// Clean up abort handler
-							if (signal) {
-								signal.removeEventListener("abort", onAbort);
-							}
+							// Perform the write operation
+							(async () => {
+								try {
+									// Create parent directories if needed
+									await ops.mkdir(dir);
 
-							if (!aborted) {
-								reject(error);
-							}
-						}
-					})();
-				},
+									// Check if aborted before writing
+									if (aborted) {
+										return;
+									}
+
+									// Write the file
+									await ops.writeFile(absolutePath, content);
+
+									// Check if aborted after writing
+									if (aborted) {
+										return;
+									}
+
+									// Clean up abort handler
+									if (signal) {
+										signal.removeEventListener("abort", onAbort);
+									}
+
+									resolve({
+										content: [
+											{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` },
+										],
+										details: undefined,
+									});
+								} catch (error: any) {
+									// Clean up abort handler
+									if (signal) {
+										signal.removeEventListener("abort", onAbort);
+									}
+
+									if (!aborted) {
+										reject(error);
+									}
+								}
+							})();
+						},
+					),
 			);
 		},
 	};

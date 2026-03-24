@@ -14,18 +14,19 @@
  * built-in `grep` tool in src/core/tools/grep.ts for a more complete implementation.
  */
 
-import type { ExtensionAPI } from "@draht/coding-agent";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
 	type TruncationResult,
 	truncateHead,
-} from "@draht/coding-agent";
-import { Text } from "@draht/tui";
+	withFileMutationQueue,
+} from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { execSync } from "child_process";
-import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -108,9 +109,11 @@ export default function (pi: ExtensionAPI) {
 
 			if (truncation.truncated) {
 				// Save full output to a temp file so LLM can access it if needed
-				const tempDir = mkdtempSync(join(tmpdir(), "pi-rg-"));
+				const tempDir = await mkdtemp(join(tmpdir(), "pi-rg-"));
 				const tempFile = join(tempDir, "output.txt");
-				writeFileSync(tempFile, output);
+				await withFileMutationQueue(tempFile, async () => {
+					await writeFile(tempFile, output, "utf8");
+				});
 
 				details.truncation = truncation;
 				details.fullOutputPath = tempFile;

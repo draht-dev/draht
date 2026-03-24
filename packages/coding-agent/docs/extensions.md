@@ -999,7 +999,7 @@ pi.sendMessage({
 
 **Options:**
 - `deliverAs` - Delivery mode:
-  - `"steer"` (default) - Interrupts streaming. Delivered after current tool finishes, remaining tools skipped.
+  - `"steer"` (default) - Queues the message while streaming. Delivered after the current assistant turn finishes executing its tool calls, before the next LLM call.
   - `"followUp"` - Waits for agent to finish. Delivered only when agent has no more tool calls.
   - `"nextTurn"` - Queued for next user prompt. Does not interrupt or trigger anything.
 - `triggerTurn: true` - If agent is idle, trigger an LLM response immediately. Only applies to `"steer"` and `"followUp"` modes (ignored for `"nextTurn"`).
@@ -1025,7 +1025,7 @@ pi.sendUserMessage("And then summarize", { deliverAs: "followUp" });
 
 **Options:**
 - `deliverAs` - Required when agent is streaming:
-  - `"steer"` - Interrupts after current tool, remaining tools skipped
+  - `"steer"` - Queues the message for delivery after the current assistant turn finishes executing its tool calls
   - `"followUp"` - Waits for agent to finish all tools
 
 When not streaming, the message is sent immediately and triggers a new turn. When streaming without `deliverAs`, throws an error.

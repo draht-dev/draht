@@ -1066,8 +1066,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Queue a steering message to interrupt the agent mid-run.
-	 * Delivered after current tool execution, skips remaining tools.
+	 * Queue a steering message while the agent is running.
+	 * Delivered after the current assistant turn finishes executing its tool calls,
+	 * before the next LLM call.
 	 * Expands skill commands and prompt templates. Errors on extension commands.
 	 * @param images Optional image attachments to include with the message
 	 * @throws Error if text is an extension command

@@ -62,32 +62,6 @@ function parseTextSignature(
 	return { id: signature };
 }
 
-function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
-	const payload: TextSignatureV1 = { v: 1, id };
-	if (phase) payload.phase = phase;
-	return JSON.stringify(payload);
-}
-
-function parseTextSignature(
-	signature: string | undefined,
-): { id: string; phase?: TextSignatureV1["phase"] } | undefined {
-	if (!signature) return undefined;
-	if (signature.startsWith("{")) {
-		try {
-			const parsed = JSON.parse(signature) as Partial<TextSignatureV1>;
-			if (parsed.v === 1 && typeof parsed.id === "string") {
-				if (parsed.phase === "commentary" || parsed.phase === "final_answer") {
-					return { id: parsed.id, phase: parsed.phase };
-				}
-				return { id: parsed.id };
-			}
-		} catch {
-			// Fall through to legacy plain-string handling.
-		}
-	}
-	return { id: signature };
-}
-
 export interface OpenAIResponsesStreamOptions {
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 	applyServiceTierPricing?: (
@@ -186,6 +160,7 @@ export function convertResponsesMessages<TApi extends Api>(
 
 			for (const block of msg.content) {
 				if (block.type === "thinking") {
+					if (block.thinking.trim().length === 0) continue;
 					if (block.thinkingSignature) {
 						const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
 						output.push(reasoningItem);
@@ -495,14 +470,7 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
 		} else if (event.type === "response.failed") {
-			const error = event.response?.error;
-			const details = event.response?.incomplete_details;
-			const msg = error
-				? `${error.code || "unknown"}: ${error.message || "no message"}`
-				: details?.reason
-					? `incomplete: ${details.reason}`
-					: "Unknown error (no error details in response)";
-			throw new Error(msg);
+			throw new Error("Unknown error");
 		}
 	}
 }

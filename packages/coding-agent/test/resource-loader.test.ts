@@ -346,14 +346,16 @@ Extra prompt content`,
 			});
 
 			const { skills } = loader.getSkills();
-			expect(skills.some((skill) => skill.name === "extra-skill")).toBe(true);
+			const loadedSkill = skills.find((skill) => skill.name === "extra-skill");
+			expect(loadedSkill).toBeDefined();
+			expect(loadedSkill?.sourceInfo?.source).toBe("extension:extra");
+			expect(loadedSkill?.sourceInfo?.path).toBe(skillPath);
 
 			const { prompts } = loader.getPrompts();
-			expect(prompts.some((prompt) => prompt.name === "extra")).toBe(true);
-
-			const metadata = loader.getPathMetadata();
-			expect(metadata.get(skillPath)?.source).toBe("extension:extra");
-			expect(metadata.get(promptPath)?.source).toBe("extension:extra");
+			const loadedPrompt = prompts.find((prompt) => prompt.name === "extra");
+			expect(loadedPrompt).toBeDefined();
+			expect(loadedPrompt?.sourceInfo?.source).toBe("extension:extra");
+			expect(loadedPrompt?.sourceInfo?.path).toBe(promptPath);
 		});
 	});
 

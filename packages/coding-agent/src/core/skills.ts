@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "pat
 import { getAgentDir, getProjectConfigDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import type { SourceInfo } from "./source-info.js";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -76,6 +77,7 @@ export interface Skill {
 	filePath: string;
 	baseDir: string;
 	source: string;
+	sourceInfo?: SourceInfo;
 	disableModelInvocation: boolean;
 }
 

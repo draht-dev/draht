@@ -75,7 +75,7 @@ import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.j
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
-import { BUILTIN_SLASH_COMMANDS, type SlashCommandInfo, type SlashCommandLocation } from "./slash-commands.js";
+import type { SlashCommandInfo, SlashCommandLocation } from "./slash-commands.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
@@ -2079,23 +2079,20 @@ export class AgentSession {
 			return undefined;
 		};
 
-		const reservedBuiltins = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
-
 		const getCommands = (): SlashCommandInfo[] => {
-			const extensionCommands: SlashCommandInfo[] = runner
-				.getRegisteredCommandsWithPaths()
-				.filter(({ command }) => !reservedBuiltins.has(command.name))
-				.map(({ command, extensionPath }) => ({
-					name: command.name,
-					description: command.description,
-					source: "extension",
-					path: extensionPath,
-				}));
+			const extensionCommands: SlashCommandInfo[] = runner.getRegisteredCommands().map((command) => ({
+				name: command.name,
+				description: command.description,
+				source: "extension",
+				sourceInfo: command.sourceInfo,
+				path: command.extensionPath,
+			}));
 
 			const templates: SlashCommandInfo[] = this.promptTemplates.map((template) => ({
 				name: template.name,
 				description: template.description,
 				source: "prompt",
+				sourceInfo: template.sourceInfo,
 				location: normalizeLocation(template.source),
 				path: template.filePath,
 			}));
@@ -2104,6 +2101,7 @@ export class AgentSession {
 				name: `skill:${skill.name}`,
 				description: skill.description,
 				source: "skill",
+				sourceInfo: skill.sourceInfo,
 				location: normalizeLocation(skill.source),
 				path: skill.filePath,
 			}));

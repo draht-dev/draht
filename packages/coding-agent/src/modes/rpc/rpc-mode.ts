@@ -545,12 +545,12 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				const commands: RpcSlashCommand[] = [];
 
 				// Extension commands
-				for (const { command, extensionPath } of session.extensionRunner?.getRegisteredCommandsWithPaths() ?? []) {
+				for (const command of session.extensionRunner?.getRegisteredCommands() ?? []) {
 					commands.push({
 						name: command.name,
 						description: command.description,
 						source: "extension",
-						path: extensionPath,
+						path: command.extensionPath,
 					});
 				}
 

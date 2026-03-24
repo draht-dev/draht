@@ -17,6 +17,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 	});
 }
 
+import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
 import { generatePKCE } from "./pkce.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthPrompt, OAuthProviderInterface } from "./types.js";
 
@@ -26,18 +27,6 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
 const SCOPE = "openid profile email offline_access";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
-
-const SUCCESS_HTML = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Authentication successful</title>
-</head>
-<body>
-  <p>Authentication successful. Return to your terminal to continue.</p>
-</body>
-</html>`;
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
 type TokenFailure = { type: "failed" };
@@ -229,27 +218,31 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 			const url = new URL(req.url || "", "http://localhost");
 			if (url.pathname !== "/auth/callback") {
 				res.statusCode = 404;
-				res.end("Not found");
+				res.setHeader("Content-Type", "text/html; charset=utf-8");
+				res.end(oauthErrorHtml("Callback route not found."));
 				return;
 			}
 			if (url.searchParams.get("state") !== state) {
 				res.statusCode = 400;
-				res.end("State mismatch");
+				res.setHeader("Content-Type", "text/html; charset=utf-8");
+				res.end(oauthErrorHtml("State mismatch."));
 				return;
 			}
 			const code = url.searchParams.get("code");
 			if (!code) {
 				res.statusCode = 400;
-				res.end("Missing authorization code");
+				res.setHeader("Content-Type", "text/html; charset=utf-8");
+				res.end(oauthErrorHtml("Missing authorization code."));
 				return;
 			}
 			res.statusCode = 200;
 			res.setHeader("Content-Type", "text/html; charset=utf-8");
-			res.end(SUCCESS_HTML);
+			res.end(oauthSuccessHtml("OpenAI authentication completed. You can close this window."));
 			settleWait?.({ code });
 		} catch {
 			res.statusCode = 500;
-			res.end("Internal error");
+			res.setHeader("Content-Type", "text/html; charset=utf-8");
+			res.end(oauthErrorHtml("Internal error while processing OAuth callback."));
 		}
 	});
 

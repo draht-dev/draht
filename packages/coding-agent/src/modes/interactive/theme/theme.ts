@@ -978,6 +978,12 @@ function getCliHighlightTheme(t: Theme): CliHighlightTheme {
 export function highlightCode(code: string, lang?: string): string[] {
 	// Validate language before highlighting to avoid stderr spam from cli-highlight
 	const validLang = lang && supportsLanguage(lang) ? lang : undefined;
+	// Skip highlighting when no valid language is specified. cli-highlight's
+	// auto-detection is unreliable and can misidentify prose as AppleScript,
+	// LiveCodeServer, etc., coloring random English words as keywords.
+	if (!validLang) {
+		return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
+	}
 	const opts = {
 		language: validLang,
 		ignoreIllegals: true,
@@ -1080,6 +1086,12 @@ export function getMarkdownTheme(): MarkdownTheme {
 		highlightCode: (code: string, lang?: string): string[] => {
 			// Validate language before highlighting to avoid stderr spam from cli-highlight
 			const validLang = lang && supportsLanguage(lang) ? lang : undefined;
+			// Skip highlighting when no valid language is specified. cli-highlight's
+			// auto-detection is unreliable and can misidentify prose as AppleScript,
+			// LiveCodeServer, etc., coloring random English words as keywords.
+			if (!validLang) {
+				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
+			}
 			const opts = {
 				language: validLang,
 				ignoreIllegals: true,

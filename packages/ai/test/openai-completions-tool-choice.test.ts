@@ -233,4 +233,36 @@ describe("openai-completions tool_choice", () => {
 		expect(response.stopReason).toBe("error");
 		expect(response.errorMessage).toBe("Provider finish_reason: network_error");
 	});
+
+	it("uses OpenRouter reasoning object instead of reasoning_effort", async () => {
+		const model = getModel("openrouter", "deepseek/deepseek-r1")!;
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				messages: [
+					{
+						role: "user",
+						content: "Hi",
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test",
+				reasoning: "high",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as {
+			reasoning?: { effort?: string };
+			reasoning_effort?: string;
+		};
+		expect(params.reasoning).toEqual({ effort: "high" });
+		expect(params.reasoning_effort).toBeUndefined();
+	});
 });

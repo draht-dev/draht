@@ -168,7 +168,7 @@ describe("Google Antigravity thinking disable E2E", () => {
 
 describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI thinking disable E2E", () => {
 	it("disables thinking for Responses reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("openai", "gpt-5.4-mini"), {
+		await expectThinkingDisabledE2E(getModel("openai", "gpt-4o-mini"), {
 			requestOptions: { temperature: undefined },
 		});
 	});

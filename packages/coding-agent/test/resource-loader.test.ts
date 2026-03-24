@@ -30,7 +30,7 @@ describe("DefaultResourceLoader", () => {
 
 	describe("reload", () => {
 		it("should initialize with empty results before reload", () => {
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 
 			expect(loader.getExtensions().extensions).toEqual([]);
 			expect(loader.getSkills().skills).toEqual([]);
@@ -50,7 +50,7 @@ description: A test skill
 Skill content here.`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			const { skills } = loader.getSkills();
@@ -70,7 +70,7 @@ Skill content here.`,
 			);
 			writeFileSync(join(skillDir, "EFFICIENCY.md"), "No frontmatter here");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			const { skills, diagnostics } = loader.getSkills();
@@ -89,7 +89,7 @@ description: A test prompt
 Prompt content.`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			const { prompts } = loader.getPrompts();
@@ -143,7 +143,7 @@ Project skill`,
 			}
 			writeFileSync(projectThemePath, JSON.stringify(baseTheme, null, 2));
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			const prompt = loader.getPrompts().prompts.find((p) => p.name === "commit");
@@ -190,7 +190,7 @@ Project skill`,
 }`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			const extensionsResult = loader.getExtensions();
@@ -252,7 +252,7 @@ Content`,
 			mkdirSync(themesDir, { recursive: true });
 			writeFileSync(join(themesDir, "skip.json"), "{}");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, noExtensions: true });
 			await loader.reload();
 
 			const { extensions } = loader.getExtensions();
@@ -269,7 +269,7 @@ Content`,
 		it("should discover AGENTS.md context files", async () => {
 			writeFileSync(join(cwd, "AGENTS.md"), "# Project Guidelines\n\nBe helpful.");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			const { agentsFiles } = loader.getAgentsFiles();
@@ -281,7 +281,7 @@ Content`,
 			mkdirSync(piDir, { recursive: true });
 			writeFileSync(join(piDir, "SYSTEM.md"), "You are a helpful assistant.");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			expect(loader.getSystemPrompt()).toBe("You are a helpful assistant.");
@@ -292,7 +292,7 @@ Content`,
 			mkdirSync(piDir, { recursive: true });
 			writeFileSync(join(piDir, "APPEND_SYSTEM.md"), "Additional instructions.");
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			expect(loader.getAppendSystemPrompt()).toContain("Additional instructions.");
@@ -324,7 +324,7 @@ description: Extra prompt
 Extra prompt content`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			loader.extendResources({
@@ -379,7 +379,7 @@ description: A test skill
 Content`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noSkills: true, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noSkills: true, noExtensions: true });
 			await loader.reload();
 
 			const { skills } = loader.getSkills();
@@ -403,7 +403,7 @@ Content`,
 				agentDir,
 				noSkills: true,
 				additionalSkillPaths: [customSkillDir],
-				noBuiltinExtensions: true,
+				noExtensions: true,
 			});
 			await loader.reload();
 
@@ -428,7 +428,7 @@ Content`,
 				skillsOverride: () => ({
 					skills: [injectedSkill],
 					diagnostics: [],
-					noBuiltinExtensions: true,
+					noExtensions: true,
 				}),
 			});
 			await loader.reload();
@@ -443,7 +443,7 @@ Content`,
 				cwd,
 				agentDir,
 				systemPromptOverride: () => "Custom system prompt",
-				noBuiltinExtensions: true,
+				noExtensions: true,
 			});
 			await loader.reload();
 
@@ -489,7 +489,7 @@ export default function(pi: ExtensionAPI) {
 }`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
 			await loader.reload();
 
 			const { errors } = loader.getExtensions();

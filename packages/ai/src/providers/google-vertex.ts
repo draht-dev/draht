@@ -368,7 +368,15 @@ function createClientWithApiKey(
 }
 
 function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
-	return options?.apiKey || process.env.GOOGLE_CLOUD_API_KEY;
+	const apiKey = options?.apiKey?.trim() || process.env.GOOGLE_CLOUD_API_KEY?.trim();
+	if (!apiKey || isPlaceholderApiKey(apiKey)) {
+		return undefined;
+	}
+	return apiKey;
+}
+
+function isPlaceholderApiKey(apiKey: string): boolean {
+	return /^<[^>]+>$/.test(apiKey);
 }
 
 function resolveProject(options?: GoogleVertexOptions): string {

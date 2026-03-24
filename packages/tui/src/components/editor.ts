@@ -591,8 +591,6 @@ export class Editor implements Component, Focusable {
 			if (kb.matches(data, "tui.input.tab")) {
 				const selected = this.autocompleteList.getSelectedItem();
 				if (selected && this.autocompleteProvider) {
-					const shouldChainSlashArgumentAutocomplete = this.shouldChainSlashArgumentAutocompleteOnTabSelection();
-
 					this.pushUndoSnapshot();
 					this.lastAction = null;
 					const result = this.autocompleteProvider.applyCompletion(
@@ -607,10 +605,6 @@ export class Editor implements Component, Focusable {
 					this.setCursorCol(result.cursorCol);
 					this.cancelAutocomplete();
 					if (this.onChange) this.onChange(this.getText());
-
-					if (shouldChainSlashArgumentAutocomplete && this.isBareCompletedSlashCommandAtCursor()) {
-						this.tryTriggerAutocomplete();
-					}
 				}
 				return;
 			}
@@ -1984,26 +1978,6 @@ export class Editor implements Component, Focusable {
 
 	private isInSlashCommandContext(textBeforeCursor: string): boolean {
 		return this.isSlashMenuAllowed() && textBeforeCursor.trimStart().startsWith("/");
-	}
-
-	private shouldChainSlashArgumentAutocompleteOnTabSelection(): boolean {
-		if (this.autocompleteState !== "regular") {
-			return false;
-		}
-
-		const currentLine = this.state.lines[this.state.cursorLine] || "";
-		const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
-		return this.isInSlashCommandContext(textBeforeCursor) && !textBeforeCursor.trimStart().includes(" ");
-	}
-
-	private isBareCompletedSlashCommandAtCursor(): boolean {
-		const currentLine = this.state.lines[this.state.cursorLine] || "";
-		if (this.state.cursorCol !== currentLine.length) {
-			return false;
-		}
-
-		const textBeforeCursor = currentLine.slice(0, this.state.cursorCol).trimStart();
-		return /^\/\S+ $/.test(textBeforeCursor);
 	}
 
 	// Autocomplete methods

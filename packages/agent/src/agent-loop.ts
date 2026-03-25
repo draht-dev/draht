@@ -46,9 +46,13 @@ export function agentLoop(
 		},
 		signal,
 		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	)
+		.then((messages) => {
+			stream.end(messages);
+		})
+		.catch(() => {
+			stream.end([]);
+		});
 
 	return stream;
 }
@@ -85,9 +89,13 @@ export function agentLoopContinue(
 		},
 		signal,
 		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	)
+		.then((messages) => {
+			stream.end(messages);
+		})
+		.catch(() => {
+			stream.end([]);
+		});
 
 	return stream;
 }
@@ -395,10 +403,11 @@ async function executeToolCallsParallel(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ToolResultMessage[]> {
-	const results: ToolResultMessage[] = [];
-	const runnableCalls: PreparedToolCall[] = [];
+	const results: (ToolResultMessage | null)[] = new Array(toolCalls.length).fill(null);
+	const runnableCalls: { index: number; prepared: PreparedToolCall }[] = [];
 
-	for (const toolCall of toolCalls) {
+	for (let i = 0; i < toolCalls.length; i++) {
+		const toolCall = toolCalls[i];
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
@@ -408,33 +417,32 @@ async function executeToolCallsParallel(
 
 		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		if (preparation.kind === "immediate") {
-			results.push(await emitToolCallOutcome(toolCall, preparation.result, preparation.isError, emit));
+			results[i] = await emitToolCallOutcome(toolCall, preparation.result, preparation.isError, emit);
 		} else {
-			runnableCalls.push(preparation);
+			runnableCalls.push({ index: i, prepared: preparation });
 		}
 	}
 
-	const runningCalls = runnableCalls.map((prepared) => ({
-		prepared,
-		execution: executePreparedToolCall(prepared, signal, emit),
+	const runningCalls = runnableCalls.map((entry) => ({
+		index: entry.index,
+		prepared: entry.prepared,
+		execution: executePreparedToolCall(entry.prepared, signal, emit),
 	}));
 
 	for (const running of runningCalls) {
 		const executed = await running.execution;
-		results.push(
-			await finalizeExecutedToolCall(
-				currentContext,
-				assistantMessage,
-				running.prepared,
-				executed,
-				config,
-				signal,
-				emit,
-			),
+		results[running.index] = await finalizeExecutedToolCall(
+			currentContext,
+			assistantMessage,
+			running.prepared,
+			executed,
+			config,
+			signal,
+			emit,
 		);
 	}
 
-	return results;
+	return results.filter((r): r is ToolResultMessage => r !== null);
 }
 
 type PreparedToolCall = {

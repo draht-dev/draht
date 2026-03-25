@@ -788,7 +788,7 @@ export async function main(args: string[]) {
 	time("resolveModelScope");
 
 	// Create session manager based on CLI flags
-	let sessionManager = await createSessionManager(parsed, cwd, extensionsResult, 
+	let sessionManager = await createSessionManager(parsed, cwd, extensionsResult, settingsManager);
 	time("createSessionManager");
 
 	// Handle --resume: show session picker

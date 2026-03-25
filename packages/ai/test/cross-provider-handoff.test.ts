@@ -93,7 +93,7 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	// Mistral
 	{ provider: "mistral", model: "devstral-medium-latest", label: "mistral-devstral-medium" },
 	// MiniMax
-	{ provider: "minimax", model: "MiniMax-M2.7", label: "minimax-m2.1" },
+	{ provider: "minimax", model: "MiniMax-M2.7", label: "minimax-m2.7" },
 	// OpenCode Zen
 	{ provider: "opencode", model: "big-pickle", label: "zen-big-pickle" },
 	{ provider: "opencode", model: "claude-sonnet-4-5", label: "zen-claude-sonnet-4-5" },
@@ -325,8 +325,8 @@ describe.skipIf(!hasAnyApiKey())("Cross-Provider Handoff", () => {
 		console.log(`\n=== ${availablePairs.length}/${PROVIDER_MODEL_PAIRS.length} contexts available ===\n`);
 	}, 300000);
 
-	it.skipIf(!hasAnyApiKey())("should generate at least 1 fixture when provider auth is available", () => {
-		expect(Object.keys(contexts).length).toBeGreaterThanOrEqual(1);
+	it.skipIf(!hasAnyApiKey())("should have at least 2 fixtures to test handoffs", () => {
+		expect(Object.keys(contexts).length).toBeGreaterThanOrEqual(2);
 	});
 
 	it.skipIf(!hasAnyApiKey())(

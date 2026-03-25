@@ -6,13 +6,11 @@
  * Test with: npx tsx src/cli-new.ts [args...]
  */
 process.title = "draht";
+process.emitWarning = (() => {}) as typeof process.emitWarning;
 
-import { setBedrockProviderModule } from "@draht/ai";
-import { bedrockProviderModule } from "@draht/ai/bedrock-provider";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { main } from "./main.js";
 
 setGlobalDispatcher(new EnvHttpProxyAgent());
-setBedrockProviderModule(bedrockProviderModule);
 
 main(process.argv.slice(2));

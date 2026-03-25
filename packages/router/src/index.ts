@@ -6,7 +6,14 @@ export {
 	routerShow,
 	routerTest,
 } from "./cli.js";
-export { loadConfig, mergeConfig, saveConfig } from "./config.js";
+export {
+	BUILT_IN_ROLES,
+	ConfigValidationError,
+	loadConfig,
+	mergeConfig,
+	saveConfig,
+	validateConfig,
+} from "./config.js";
 export {
 	estimateCost,
 	getRoleCosts,

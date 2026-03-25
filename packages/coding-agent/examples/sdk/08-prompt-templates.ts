@@ -4,14 +4,20 @@
  * File-based templates that inject content when invoked with /templatename.
  */
 
-import { createAgentSession, DefaultResourceLoader, type PromptTemplate, SessionManager } from "@draht/coding-agent";
+import {
+	createAgentSession,
+	createSyntheticSourceInfo,
+	DefaultResourceLoader,
+	type PromptTemplate,
+	SessionManager,
+} from "@draht/coding-agent";
 
 // Define custom templates
 const deployTemplate: PromptTemplate = {
 	name: "deploy",
 	description: "Deploy the application",
-	source: "path",
 	filePath: "/virtual/prompts/deploy.md",
+	sourceInfo: createSyntheticSourceInfo("/virtual/prompts/deploy.md", { source: "sdk" }),
 	content: `# Deploy Instructions
 
 1. Build: npm run build

@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
-import { basename, isAbsolute, join, resolve, sep } from "path";
-import { getProjectConfigDir, getPromptsDir, getShippedPromptsDir } from "../config.js";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "path";
+import { CONFIG_DIR_NAME, getPromptsDir, getShippedPromptsDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
+import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
 /**
  * Represents a prompt template loaded from a markdown file
@@ -11,7 +12,7 @@ export interface PromptTemplate {
 	name: string;
 	description: string;
 	content: string;
-	source: string; // "user", "project", or "path"
+	sourceInfo: SourceInfo;
 	filePath: string; // Absolute path to the template file
 }
 
@@ -99,7 +100,7 @@ export function substituteArgs(content: string, args: string[]): string {
 	return result;
 }
 
-function loadTemplateFromFile(filePath: string, source: string, sourceLabel: string): PromptTemplate | null {
+function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptTemplate | null {
 	try {
 		const rawContent = readFileSync(filePath, "utf-8");
 		const { frontmatter, body } = parseFrontmatter<Record<string, string>>(rawContent);
@@ -117,16 +118,11 @@ function loadTemplateFromFile(filePath: string, source: string, sourceLabel: str
 			}
 		}
 
-		// Append source to description (skip for builtins — not useful for the user)
-		if (sourceLabel && sourceLabel !== "(builtin)") {
-			description = description ? `${description} ${sourceLabel}` : sourceLabel;
-		}
-
 		return {
 			name,
 			description,
 			content: body,
-			source,
+			sourceInfo,
 			filePath,
 		};
 	} catch {
@@ -137,7 +133,7 @@ function loadTemplateFromFile(filePath: string, source: string, sourceLabel: str
 /**
  * Scan a directory for .md files (non-recursive) and load them as prompt templates.
  */
-function loadTemplatesFromDir(dir: string, source: string, sourceLabel: string): PromptTemplate[] {
+function loadTemplatesFromDir(dir: string, getSourceInfo: (filePath: string) => SourceInfo): PromptTemplate[] {
 	const templates: PromptTemplate[] = [];
 
 	if (!existsSync(dir)) {
@@ -163,7 +159,7 @@ function loadTemplatesFromDir(dir: string, source: string, sourceLabel: string):
 			}
 
 			if (isFile && entry.name.endsWith(".md")) {
-				const template = loadTemplateFromFile(fullPath, source, sourceLabel);
+				const template = loadTemplateFromFile(fullPath, getSourceInfo(fullPath));
 				if (template) {
 					templates.push(template);
 				}
@@ -200,11 +196,6 @@ function resolvePromptPath(p: string, cwd: string): string {
 	return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
 }
 
-function buildPathSourceLabel(p: string): string {
-	const base = basename(p).replace(/\.md$/, "") || "path";
-	return `(path:${base})`;
-}
-
 /**
  * Load all prompt templates from:
  * 1. Global: agentDir/prompts/
@@ -222,13 +213,18 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): P
 	// 0. Always load shipped (built-in) templates — part of the package, not user config
 	const shippedPromptsDir = getShippedPromptsDir();
 	if (existsSync(shippedPromptsDir)) {
-		templates.push(...loadTemplatesFromDir(shippedPromptsDir, "builtin", "(builtin)"));
-		// Also scan subdirectories (e.g., commands/, agents/)
+		const builtinSourceInfo = (filePath: string): SourceInfo =>
+			createSyntheticSourceInfo(filePath, {
+				source: "local",
+				baseDir: shippedPromptsDir,
+			});
+		templates.push(...loadTemplatesFromDir(shippedPromptsDir, builtinSourceInfo));
+		// Also scan subdirectories (e.g., commands/)
 		try {
 			const subdirs = readdirSync(shippedPromptsDir, { withFileTypes: true });
 			for (const entry of subdirs) {
 				if (entry.isDirectory()) {
-					templates.push(...loadTemplatesFromDir(join(shippedPromptsDir, entry.name), "builtin", "(builtin)"));
+					templates.push(...loadTemplatesFromDir(join(shippedPromptsDir, entry.name), builtinSourceInfo));
 				}
 			}
 		} catch {
@@ -236,19 +232,8 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): P
 		}
 	}
 
-	if (includeDefaults) {
-		// 1. Load global templates from agentDir/prompts/
-		// Note: if agentDir is provided, it should be the agent dir, not the prompts dir
-		const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
-		templates.push(...loadTemplatesFromDir(globalPromptsDir, "user", "(user)"));
-
-		// 2. Load project templates from cwd/{CONFIG_DIR_NAME}/prompts/ (with .pi fallback)
-		const projectPromptsDir = resolve(getProjectConfigDir(resolvedCwd), "prompts");
-		templates.push(...loadTemplatesFromDir(projectPromptsDir, "project", "(project)"));
-	}
-
-	const userPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
-	const projectPromptsDir = resolve(getProjectConfigDir(resolvedCwd), "prompts");
+	const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
+	const projectPromptsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "prompts");
 
 	const isUnderPath = (target: string, root: string): boolean => {
 		const normalizedRoot = resolve(root);
@@ -259,17 +244,31 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): P
 		return target.startsWith(prefix);
 	};
 
-	const getSourceInfo = (resolvedPath: string): { source: string; label: string } => {
-		if (!includeDefaults) {
-			if (isUnderPath(resolvedPath, userPromptsDir)) {
-				return { source: "user", label: "(user)" };
-			}
-			if (isUnderPath(resolvedPath, projectPromptsDir)) {
-				return { source: "project", label: "(project)" };
-			}
+	const getSourceInfo = (resolvedPath: string): SourceInfo => {
+		if (isUnderPath(resolvedPath, globalPromptsDir)) {
+			return createSyntheticSourceInfo(resolvedPath, {
+				source: "local",
+				scope: "user",
+				baseDir: globalPromptsDir,
+			});
 		}
-		return { source: "path", label: buildPathSourceLabel(resolvedPath) };
+		if (isUnderPath(resolvedPath, projectPromptsDir)) {
+			return createSyntheticSourceInfo(resolvedPath, {
+				source: "local",
+				scope: "project",
+				baseDir: projectPromptsDir,
+			});
+		}
+		return createSyntheticSourceInfo(resolvedPath, {
+			source: "local",
+			baseDir: statSync(resolvedPath).isDirectory() ? resolvedPath : dirname(resolvedPath),
+		});
 	};
+
+	if (includeDefaults) {
+		templates.push(...loadTemplatesFromDir(globalPromptsDir, getSourceInfo));
+		templates.push(...loadTemplatesFromDir(projectPromptsDir, getSourceInfo));
+	}
 
 	// 3. Load explicit prompt paths
 	for (const rawPath of promptPaths) {
@@ -280,11 +279,10 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): P
 
 		try {
 			const stats = statSync(resolvedPath);
-			const { source, label } = getSourceInfo(resolvedPath);
 			if (stats.isDirectory()) {
-				templates.push(...loadTemplatesFromDir(resolvedPath, source, label));
+				templates.push(...loadTemplatesFromDir(resolvedPath, getSourceInfo));
 			} else if (stats.isFile() && resolvedPath.endsWith(".md")) {
-				const template = loadTemplateFromFile(resolvedPath, source, label);
+				const template = loadTemplateFromFile(resolvedPath, getSourceInfo(resolvedPath));
 				if (template) {
 					templates.push(template);
 				}

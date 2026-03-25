@@ -1,7 +1,12 @@
 /**
+ * Built-in roles that must be present in every config.
+ */
+export const BUILT_IN_ROLES = ["architect", "implement", "boilerplate", "quick", "review", "docs"] as const;
+
+/**
  * Built-in router roles. Extensible via string type.
  */
-export type RouterRole = "architect" | "implement" | "boilerplate" | "quick" | "review" | "docs" | (string & {});
+export type RouterRole = (typeof BUILT_IN_ROLES)[number] | (string & {});
 
 /**
  * Reference to a specific provider/model combination.
@@ -34,6 +39,8 @@ export interface CostEntry {
 	model: string;
 	inputTokens: number;
 	outputTokens: number;
+	/** Reasoning/thinking tokens, billed at input token rate. */
+	reasoningTokens?: number;
 	estimatedCostUsd: number;
 	sessionId: string;
 }
@@ -50,16 +57,16 @@ export const DEFAULT_CONFIG: RouterConfig = {
 		primary: { provider: "anthropic", model: "claude-sonnet-4-6" },
 		fallbacks: [
 			{ provider: "openai", model: "gpt-5.2" },
-			{ provider: "deepseek", model: "deepseek-v3" },
+			{ provider: "openrouter", model: "deepseek/deepseek-v3.2" },
 		],
 	},
 	boilerplate: {
-		primary: { provider: "deepseek", model: "deepseek-v3" },
+		primary: { provider: "openrouter", model: "deepseek/deepseek-v3.2" },
 		fallbacks: [{ provider: "google", model: "gemini-2.5-flash" }],
 	},
 	quick: {
 		primary: { provider: "google", model: "gemini-2.5-flash" },
-		fallbacks: [{ provider: "deepseek", model: "deepseek-v3" }],
+		fallbacks: [{ provider: "openrouter", model: "deepseek/deepseek-v3.2" }],
 	},
 	review: {
 		primary: { provider: "anthropic", model: "claude-sonnet-4-6" },

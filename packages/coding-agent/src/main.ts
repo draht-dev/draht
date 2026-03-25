@@ -11,15 +11,17 @@ import { createInterface } from "readline";
 import { type Args, parseArgs, printHelp } from "./cli/args.js";
 import { selectConfig } from "./cli/config-selector.js";
 import { processFileArguments } from "./cli/file-processor.js";
+import { buildInitialMessage } from "./cli/initial-message.js";
 import { listModels } from "./cli/list-models.js";
 import { selectSession } from "./cli/session-picker.js";
 import { APP_NAME, getAgentDir, getModelsPath, VERSION } from "./config.js";
 import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { LoadExtensionsResult } from "./core/extensions/index.js";
-import { KeybindingsManager } from "./core/keybindings.js";
+import { migrateKeybindingsConfigFile } from "./core/keybindings.js";
 import { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
+import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { DefaultResourceLoader } from "./core/resource-loader.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./core/sdk.js";
@@ -101,7 +103,7 @@ function printPackageCommandHelp(command: PackageCommand): void {
 Install a package and add it to settings.
 
 Options:
-  -l, --local    Install project-locally (.draht/settings.json)
+  -l, --local    Install project-locally (.pi/settings.json)
 
 Examples:
   ${APP_NAME} install npm:@foo/bar
@@ -118,12 +120,14 @@ Examples:
   ${getPackageCommandUsage("remove")}
 
 Remove a package and its source from settings.
+Alias: ${APP_NAME} uninstall <source> [-l]
 
 Options:
-  -l, --local    Remove from project settings (.draht/settings.json)
+  -l, --local    Remove from project settings (.pi/settings.json)
 
-Example:
+Examples:
   ${APP_NAME} remove npm:@foo/bar
+  ${APP_NAME} uninstall npm:@foo/bar
 `);
 			return;
 
@@ -147,8 +151,14 @@ List installed packages from user and project settings.
 }
 
 function parsePackageCommand(args: string[]): PackageCommandOptions | undefined {
-	const [command, ...rest] = args;
-	if (command !== "install" && command !== "remove" && command !== "update" && command !== "list") {
+	const [rawCommand, ...rest] = args;
+	let command: PackageCommand | undefined;
+	if (rawCommand === "uninstall") {
+		command = "remove";
+	} else if (rawCommand === "install" || rawCommand === "remove" || rawCommand === "update" || rawCommand === "list") {
+		command = rawCommand;
+	}
+	if (!command) {
 		return undefined;
 	}
 
@@ -303,28 +313,22 @@ async function handlePackageCommand(args: string[]): Promise<boolean> {
 async function prepareInitialMessage(
 	parsed: Args,
 	autoResizeImages: boolean,
+	stdinContent?: string,
 ): Promise<{
 	initialMessage?: string;
 	initialImages?: ImageContent[];
 }> {
 	if (parsed.fileArgs.length === 0) {
-		return {};
+		return buildInitialMessage({ parsed, stdinContent });
 	}
 
 	const { text, images } = await processFileArguments(parsed.fileArgs, { autoResizeImages });
-
-	let initialMessage: string;
-	if (parsed.messages.length > 0) {
-		initialMessage = text + parsed.messages[0];
-		parsed.messages.shift();
-	} else {
-		initialMessage = text;
-	}
-
-	return {
-		initialMessage,
-		initialImages: images.length > 0 ? images : undefined,
-	};
+	return buildInitialMessage({
+		parsed,
+		fileText: text,
+		fileImages: images,
+		stdinContent,
+	});
 }
 
 /** Result from resolving a session argument */
@@ -405,6 +409,32 @@ async function callSessionDirectoryHook(extensions: LoadExtensionsResult, cwd: s
 	return customSessionDir;
 }
 
+function validateForkFlags(parsed: Args): void {
+	if (!parsed.fork) return;
+
+	const conflictingFlags = [
+		parsed.session ? "--session" : undefined,
+		parsed.continue ? "--continue" : undefined,
+		parsed.resume ? "--resume" : undefined,
+		parsed.noSession ? "--no-session" : undefined,
+	].filter((flag): flag is string => flag !== undefined);
+
+	if (conflictingFlags.length > 0) {
+		console.error(chalk.red(`Error: --fork cannot be combined with ${conflictingFlags.join(", ")}`));
+		process.exit(1);
+	}
+}
+
+function forkSessionOrExit(sourcePath: string, cwd: string, sessionDir?: string): SessionManager {
+	try {
+		return SessionManager.forkFrom(sourcePath, cwd, sessionDir);
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(chalk.red(`Error: ${message}`));
+		process.exit(1);
+	}
+}
+
 async function createSessionManager(
 	parsed: Args,
 	cwd: string,
@@ -418,6 +448,21 @@ async function createSessionManager(
 	let effectiveSessionDir = parsed.sessionDir;
 	if (!effectiveSessionDir) {
 		effectiveSessionDir = await callSessionDirectoryHook(extensions, cwd);
+	}
+
+	if (parsed.fork) {
+		const resolved = await resolveSessionPath(parsed.fork, cwd, effectiveSessionDir);
+
+		switch (resolved.type) {
+			case "path":
+			case "local":
+			case "global":
+				return forkSessionOrExit(resolved.path, cwd, effectiveSessionDir);
+
+			case "not_found":
+				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
+				process.exit(1);
+		}
 	}
 
 	if (parsed.session) {
@@ -436,7 +481,7 @@ async function createSessionManager(
 					console.log(chalk.dim("Aborted."));
 					process.exit(0);
 				}
-				return SessionManager.forkFrom(resolved.path, cwd, effectiveSessionDir);
+				return forkSessionOrExit(resolved.path, cwd, effectiveSessionDir);
 			}
 
 			case "not_found":
@@ -576,176 +621,11 @@ async function handleConfigCommand(args: string[]): Promise<boolean> {
 	process.exit(0);
 }
 
-async function handleLoginCommand(args: string[]): Promise<boolean> {
-	if (args[0] !== "login" && args[0] !== "--login") {
-		return false;
-	}
-
-	const { getOAuthProviders } = await import("@draht/ai/oauth");
-	const authMod = await import("./core/auth-storage.js");
-	const AuthStorageClass = authMod.AuthStorage;
-	// open browser - use dynamic import, fallback to exec
-	const openBrowser = async (url: string) => {
-		try {
-			const { exec } = await import("child_process");
-			exec(`open "${url}" 2>/dev/null || xdg-open "${url}" 2>/dev/null`);
-		} catch {
-			/* ignore */
-		}
-	};
-
-	const providers = getOAuthProviders();
-	const requestedProvider = args[1]?.toLowerCase();
-
-	// Map friendly names to provider IDs
-	const PROVIDER_ALIASES: Record<string, string> = {
-		anthropic: "anthropic",
-		claude: "anthropic",
-		google: "google-gemini-cli",
-		gemini: "google-gemini-cli",
-		openai: "openai-codex",
-		codex: "openai-codex",
-		copilot: "github-copilot",
-		github: "github-copilot",
-		antigravity: "google-antigravity",
-	};
-
-	if (requestedProvider === "--help" || requestedProvider === "-h" || requestedProvider === "help") {
-		console.log(chalk.bold("\n🔌 draht login\n"));
-		console.log("Authenticate with AI providers.\n");
-		console.log("Usage:");
-		console.log("  draht login              Interactive provider selection");
-		console.log("  draht login anthropic    Login to Anthropic (Claude Pro/Max)");
-		console.log("  draht login gemini       Login to Google Gemini CLI");
-		console.log("  draht login openai       Login to OpenAI (ChatGPT/Codex)");
-		console.log("  draht login copilot      Login to GitHub Copilot");
-		console.log("  draht login all          Login to all providers\n");
-		console.log("Aliases: claude, google, codex, github\n");
-		process.exit(0);
-	}
-
-	if (requestedProvider && requestedProvider !== "all") {
-		const providerId = PROVIDER_ALIASES[requestedProvider] ?? requestedProvider;
-		const provider = providers.find((p) => p.id === providerId);
-		if (!provider) {
-			console.log(chalk.red(`Unknown provider: ${requestedProvider}`));
-			console.log(`\nAvailable providers:`);
-			for (const p of providers) {
-				const aliases = Object.entries(PROVIDER_ALIASES)
-					.filter(([_, v]) => v === p.id)
-					.map(([k]) => k);
-				console.log(`  ${chalk.bold(p.name)} (${p.id}) — aliases: ${aliases.join(", ")}`);
-			}
-			process.exit(1);
-		}
-		await loginProvider(provider, openBrowser);
-		process.exit(0);
-	}
-
-	// Interactive: show menu
-	console.log(chalk.bold("\n🔌 Draht Login\n"));
-	console.log("Select a provider to authenticate:\n");
-
-	const providerList = providers.filter((p) =>
-		["anthropic", "gemini-cli", "openai-codex", "github-copilot"].includes(p.id),
-	);
-
-	for (let i = 0; i < providerList.length; i++) {
-		const p = providerList[i];
-		const as = AuthStorageClass.create();
-		const hasCredentials = as.has(p.id);
-		const status = hasCredentials ? chalk.green("✓ logged in") : chalk.dim("not connected");
-		console.log(`  ${chalk.bold(i + 1)}. ${p.name} ${status}`);
-	}
-	console.log(`  ${chalk.bold("a")}. Login to all`);
-	console.log(`  ${chalk.bold("q")}. Cancel\n`);
-
-	const rl = createInterface({ input: process.stdin, output: process.stdout });
-	const answer = await new Promise<string>((resolve) => {
-		rl.question("Choice: ", (ans) => {
-			rl.close();
-			resolve(ans.trim());
-		});
-	});
-
-	if (answer === "q" || answer === "") {
-		process.exit(0);
-	}
-
-	if (answer === "a") {
-		for (const p of providerList) {
-			await loginProvider(p, openBrowser);
-		}
-	} else {
-		const idx = parseInt(answer, 10) - 1;
-		if (idx >= 0 && idx < providerList.length) {
-			await loginProvider(providerList[idx], openBrowser);
-		} else {
-			console.log(chalk.red("Invalid choice"));
-		}
-	}
-
-	process.exit(0);
-}
-
-async function loginProvider(
-	provider: { id: string; name: string; login: (cb: any) => Promise<any>; usesCallbackServer?: boolean },
-	openBrowser: (url: string) => Promise<any>,
-): Promise<void> {
-	const { AuthStorage } = await import("./core/auth-storage.js");
-	const authStorage = AuthStorage.create();
-
-	console.log(`\n${chalk.bold(`Logging in to ${provider.name}...`)}`);
-
-	try {
-		const credentials = await provider.login({
-			onAuth: (info: { url: string; instructions?: string }) => {
-				console.log(`\n${chalk.blue("→")} Opening browser for authentication...`);
-				if (info.instructions) console.log(chalk.dim(info.instructions));
-				openBrowser(info.url).catch(() => {
-					console.log(`\n${chalk.yellow("Could not open browser. Visit manually:")}`);
-					console.log(chalk.underline(info.url));
-				});
-			},
-			onPrompt: async (prompt: { message: string; placeholder?: string }) => {
-				const { createInterface } = await import("readline");
-				const rl = createInterface({ input: process.stdin, output: process.stdout });
-				return new Promise<string>((resolve) => {
-					rl.question(`${prompt.message} `, (ans: string) => {
-						rl.close();
-						resolve(ans.trim());
-					});
-				});
-			},
-			onProgress: (message: string) => {
-				console.log(chalk.dim(`  ${message}`));
-			},
-			onManualCodeInput: provider.usesCallbackServer
-				? async () => {
-						const { createInterface } = await import("readline");
-						const rl = createInterface({ input: process.stdin, output: process.stdout });
-						return new Promise<string>((resolve) => {
-							rl.question("Enter the authorization code: ", (ans: string) => {
-								rl.close();
-								resolve(ans.trim());
-							});
-						});
-					}
-				: undefined,
-		});
-
-		authStorage.set(provider.id, { type: "oauth", ...credentials });
-		console.log(chalk.green(`✓ ${provider.name} — logged in successfully`));
-	} catch (error) {
-		console.log(chalk.red(`✗ ${provider.name} — login failed: ${error instanceof Error ? error.message : error}`));
-	}
-}
-
 export async function main(args: string[]) {
-	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.DRAHT_OFFLINE);
+	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
-		process.env.DRAHT_OFFLINE = "1";
-		process.env.DRAHT_SKIP_VERSION_CHECK = "1";
+		process.env.PI_OFFLINE = "1";
+		process.env.PI_SKIP_VERSION_CHECK = "1";
 	}
 
 	if (await handlePackageCommand(args)) {
@@ -756,15 +636,15 @@ export async function main(args: string[]) {
 		return;
 	}
 
-	if (await handleLoginCommand(args)) {
-		return;
+	// First pass: parse args to get --extension paths
+	const firstPass = parseArgs(args);
+	const shouldTakeOverStdout = firstPass.mode !== undefined || firstPass.print || !process.stdin.isTTY;
+	if (shouldTakeOverStdout) {
+		takeOverStdout();
 	}
 
 	// Run migrations (pass cwd for project-local migrations)
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(process.cwd());
-
-	// First pass: parse args to get --extension paths
-	const firstPass = parseArgs(args);
 
 	// Early load extensions to discover their CLI flags
 	const cwd = process.cwd();
@@ -799,8 +679,13 @@ export async function main(args: string[]) {
 
 	// Apply pending provider registrations from extensions immediately
 	// so they're available for model resolution before AgentSession is created
-	for (const { name, config } of extensionsResult.runtime.pendingProviderRegistrations) {
-		modelRegistry.registerProvider(name, config);
+	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
+		try {
+			modelRegistry.registerProvider(name, config);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(chalk.red(`Extension "${extensionPath}" error: ${message}`));
+		}
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
 
@@ -835,28 +720,13 @@ export async function main(args: string[]) {
 		process.exit(0);
 	}
 
-	// Experimental: List attachable sessions
-	if (parsed.listSessions) {
-		const { listSessions } = await import("./cli/list-sessions.js");
-		await listSessions();
-		process.exit(0);
-	}
-
-	// Experimental: Attach to existing session
-	if (parsed.attach) {
-		const { runAttachMode } = await import("./cli/attach-mode.js");
-		await runAttachMode(parsed.attach);
-		process.exit(0);
-	}
-
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
+	let stdinContent: string | undefined;
 	if (parsed.mode !== "rpc") {
-		const stdinContent = await readPipedStdin();
+		stdinContent = await readPipedStdin();
 		if (stdinContent !== undefined) {
 			// Force print mode since interactive mode requires a TTY for keyboard input
 			parsed.print = true;
-			// Prepend stdin content to messages
-			parsed.messages.unshift(stdinContent);
 		}
 	}
 
@@ -874,13 +744,26 @@ export async function main(args: string[]) {
 		process.exit(0);
 	}
 
+	migrateKeybindingsConfigFile(agentDir);
+
 	if (parsed.mode === "rpc" && parsed.fileArgs.length > 0) {
 		console.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
 		process.exit(1);
 	}
 
-	const { initialMessage, initialImages } = await prepareInitialMessage(parsed, settingsManager.getImageAutoResize());
+	validateForkFlags(parsed);
+
+	const { initialMessage, initialImages } = await prepareInitialMessage(
+		parsed,
+		settingsManager.getImageAutoResize(),
+		stdinContent,
+	);
 	const isInteractive = !parsed.print && parsed.mode === undefined;
+	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+	if (startupBenchmark && !isInteractive) {
+		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
+		process.exit(1);
+	}
 	const mode = parsed.mode || "text";
 	initTheme(settingsManager.getTheme(), isInteractive);
 
@@ -900,9 +783,6 @@ export async function main(args: string[]) {
 
 	// Handle --resume: show session picker
 	if (parsed.resume) {
-		// Initialize keybindings so session picker respects user config
-		KeybindingsManager.create();
-
 		// Compute effective session dir for resume (same logic as createSessionManager)
 		const effectiveSessionDir = parsed.sessionDir || (await callSessionDirectoryHook(extensionsResult, cwd));
 
@@ -942,31 +822,6 @@ export async function main(args: string[]) {
 
 	const { session, modelFallbackMessage } = await createAgentSession(sessionOptions);
 
-	// Experimental: Make session attachable if --attachable flag is set
-	let cleanupSocketServer: (() => Promise<void>) | null = null;
-	if (parsed.attachable) {
-		const { makeSessionAttachable } = await import("./core/socket-server/index.js");
-		cleanupSocketServer = await makeSessionAttachable({
-			session,
-			enabled: true,
-		});
-	}
-
-	// Ensure socket server is cleaned up on exit
-	const cleanup = async () => {
-		if (cleanupSocketServer) {
-			await cleanupSocketServer();
-		}
-	};
-	process.on("SIGINT", cleanup);
-	process.on("SIGTERM", cleanup);
-	process.on("exit", () => {
-		if (cleanupSocketServer) {
-			// Synchronous cleanup attempt
-			cleanupSocketServer().catch(() => {});
-		}
-	});
-
 	if (!isInteractive && !session.model) {
 		console.error(chalk.red("No models available."));
 		console.error(chalk.yellow("\nSet an API key environment variable:"));
@@ -1003,8 +858,7 @@ export async function main(args: string[]) {
 			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
 		}
 
-		printTimings();
-		const mode = new InteractiveMode(session, {
+		const interactiveMode = new InteractiveMode(session, {
 			migratedProviders,
 			modelFallbackMessage,
 			initialMessage,
@@ -1012,7 +866,21 @@ export async function main(args: string[]) {
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
 		});
-		await mode.run();
+		if (startupBenchmark) {
+			await interactiveMode.init();
+			interactiveMode.stop();
+			stopThemeWatcher();
+			if (process.stdout.writableLength > 0) {
+				await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+			}
+			if (process.stderr.writableLength > 0) {
+				await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
+			}
+			return;
+		}
+
+		printTimings();
+		await interactiveMode.run();
 	} else {
 		await runPrintMode(session, {
 			mode,
@@ -1021,9 +889,7 @@ export async function main(args: string[]) {
 			initialImages,
 		});
 		stopThemeWatcher();
-		if (process.stdout.writableLength > 0) {
-			await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
-		}
-		process.exit(0);
+		restoreStdout();
+		return;
 	}
 }

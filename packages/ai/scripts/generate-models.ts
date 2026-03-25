@@ -665,14 +665,26 @@ async function generateModels() {
 		if (candidate.provider === "amazon-bedrock" && candidate.id.includes("anthropic.claude-opus-4-6-v1")) {
 			candidate.cost.cacheRead = 0.5;
 			candidate.cost.cacheWrite = 6.25;
-			candidate.contextWindow = 200000;
 		}
 		if (
-			(candidate.provider === "anthropic" || candidate.provider === "opencode" || candidate.provider === "opencode-go") &&
-			candidate.id === "claude-opus-4-6"
+			(candidate.provider === "anthropic" ||
+				candidate.provider === "opencode" ||
+				candidate.provider === "opencode-go" ||
+				candidate.provider === "github-copilot") &&
+			(candidate.id === "claude-opus-4-6" ||
+				candidate.id === "claude-sonnet-4-6" ||
+				candidate.id === "claude-opus-4.6" ||
+				candidate.id === "claude-sonnet-4.6")
 		) {
-			candidate.contextWindow = 200000;
+			candidate.contextWindow = 1000000;
 		}
+		if (
+			candidate.provider === "google-antigravity" &&
+			(candidate.id === "claude-opus-4-6-thinking" || candidate.id === "claude-sonnet-4-6")
+		) {
+			candidate.contextWindow = 1000000;
+		}
+
 		// OpenCode variants list Claude Sonnet 4/4.5 with 1M context, actual limit is 200K
 		if (
 			(candidate.provider === "opencode" || candidate.provider === "opencode-go") &&
@@ -740,7 +752,7 @@ async function generateModels() {
 				cacheRead: 0.5,
 				cacheWrite: 6.25,
 			},
-			contextWindow: 200000,
+			contextWindow: 1000000,
 			maxTokens: 128000,
 		});
 	}
@@ -761,7 +773,7 @@ async function generateModels() {
 				cacheRead: 0.3,
 				cacheWrite: 3.75,
 			},
-			contextWindow: 200000,
+			contextWindow: 1000000,
 			maxTokens: 64000,
 		});
 	}
@@ -902,6 +914,46 @@ async function generateModels() {
 		});
 	}
 
+	const minimaxDirectProviders = ["minimax", "minimax-cn"] as const;
+	const minimaxAnthropicIds = new Set([
+		"MiniMax-M2",
+		"MiniMax-M2.1",
+		"MiniMax-M2.1-highspeed",
+		"MiniMax-M2.5",
+		"MiniMax-M2.5-highspeed",
+		"MiniMax-M2.7",
+		"MiniMax-M2.7-highspeed",
+	]);
+
+	for (const candidate of allModels) {
+		if (
+			(candidate.provider === "minimax" || candidate.provider === "minimax-cn") &&
+			minimaxAnthropicIds.has(candidate.id)
+		) {
+			candidate.contextWindow = 204800;
+			candidate.maxTokens = 131072;
+		}
+	}
+
+	for (const provider of minimaxDirectProviders) {
+		const baseModel = allModels.find((m) => m.provider === provider && m.id === "MiniMax-M2.1");
+		if (!baseModel) continue;
+		if (allModels.some((m) => m.provider === provider && m.id === "MiniMax-M2.1-highspeed")) continue;
+
+		allModels.push({
+			...baseModel,
+			id: "MiniMax-M2.1-highspeed",
+			name: "MiniMax-M2.1-highspeed",
+			cost: {
+				...baseModel.cost,
+				input: baseModel.cost.input * 2,
+				output: baseModel.cost.output * 2,
+			},
+			contextWindow: 204800,
+			maxTokens: 131072,
+		});
+	}
+
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
 	// Context window is based on observed server limits (400s above ~272k), not marketing numbers.
@@ -990,6 +1042,18 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.4-mini",
+			name: "GPT-5.4 Mini",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
 			contextWindow: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},

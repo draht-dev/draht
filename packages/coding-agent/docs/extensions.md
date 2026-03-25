@@ -293,10 +293,11 @@ Fired by the `pi` CLI during startup session resolution, before the initial sess
 This event is:
 - CLI-only. It is not emitted in SDK mode.
 - Startup-only. It is not emitted for later interactive `/new` or `/resume` actions.
-- Bypassed when `--session-dir` is provided.
+- Lower priority than `--session-dir` and `sessionDir` in `settings.json`.
 - Special-cased to receive no `ctx` argument.
 
 If multiple extensions return `sessionDir`, the last one wins.
+Combined precedence is: `--session-dir` CLI flag, then `sessionDir` in settings, then extension `session_directory` hooks.
 
 ```typescript
 pi.on("session_directory", async (event) => {

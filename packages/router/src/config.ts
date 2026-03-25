@@ -31,11 +31,9 @@ function validateProjectRoot(projectRoot: string): void {
 
 	// For relative paths: ensure resolved path is within or equal to cwd
 	if (!projectRoot.startsWith("/")) {
-		if (!resolved.startsWith(cwd + "/") && resolved !== cwd) {
+		if (!resolved.startsWith(`${cwd}/`) && resolved !== cwd) {
 			throw new Error(`Invalid project root: path traversal detected (${projectRoot})`);
 		}
-		return;
-	}
 		return;
 	}
 
@@ -43,7 +41,8 @@ function validateProjectRoot(projectRoot: string): void {
 	const home = homedir();
 	const tmpDir = tmpdir();
 	const safePaths = [home, tmpDir, cwd, "/tmp", "/private/tmp"];
-	const isSafe = safePaths.some((safe) => resolved.startsWith(safe + "/") || resolved === safe);
+	const isSafe = safePaths.some((safe) => resolved.startsWith(`${safe}/`) || resolved === safe);
+	if (isSafe) {
 		return;
 	}
 

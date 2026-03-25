@@ -1,6 +1,6 @@
 # Extension Examples
 
-Example extensions for pi-coding-agent.
+Example extensions for @draht/coding-agent.
 
 ## Usage
 
@@ -119,7 +119,7 @@ cp permission-gate.ts ~/.draht/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `custom-provider-anthropic/` | Custom Anthropic provider with OAuth support and custom streaming implementation |
-| `custom-provider-gitlab-duo/` | GitLab Duo provider using pi-ai's built-in Anthropic/OpenAI streaming via proxy |
+| `custom-provider-gitlab-duo/` | GitLab Duo provider using @draht/ai's built-in Anthropic/OpenAI streaming via proxy |
 | `custom-provider-qwen-cli/` | Qwen CLI provider with OAuth device flow and OpenAI-compatible models |
 
 ### External Dependencies

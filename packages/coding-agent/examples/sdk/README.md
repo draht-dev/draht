@@ -1,6 +1,6 @@
 # SDK Examples
 
-Programmatic usage of pi-coding-agent via `createAgentSession()`.
+Programmatic usage of @draht/coding-agent via `createAgentSession()`.
 
 ## Examples
 

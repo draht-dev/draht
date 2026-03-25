@@ -1,62 +1,108 @@
-<!-- OSS_WEEKEND_START -->
-# 🏖️ OSS Weekend
-
-**Issue tracker reopens Monday, March 30, 2026.**
-
-OSS weekend runs Sunday, March 22, 2026 through Monday, March 30, 2026. New issues are auto-closed during this time. For support, join [Discord](https://discord.com/invite/3cU7Bz4UPx).
-<!-- OSS_WEEKEND_END -->
-
----
-
 <p align="center">
-  <a href="https://shittycodingagent.ai">
-    <img src="https://shittycodingagent.ai/logo.svg" alt="pi logo" width="128">
-  </a>
-</p>
-<p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://github.com/badlogic/pi-mono/actions/workflows/ci.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/badlogic/pi-mono/ci.yml?style=flat-square&branch=main" /></a>
-</p>
-<p align="center">
-  <a href="https://pi.dev">pi.dev</a> domain graciously donated by
-  <br /><br />
-  <a href="https://exe.dev"><img src="packages/coding-agent/docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
+  <img src="packages/landing/public/draht-logo@0.5.jpg" alt="Draht" width="400">
 </p>
 
-# Pi Monorepo
+<h1 align="center">Draht</h1>
 
-> **Looking for the pi coding agent?** See **[packages/coding-agent](packages/coding-agent)** for installation and usage.
+<p align="center">
+  <strong>Dynamic Routing for Agent & Task Handling</strong>
+</p>
 
-Tools for building AI agents and managing LLM deployments.
+<p align="center">
+  <a href="https://draht.dev">Website</a>
+</p>
+
+> [!WARNING]
+> Draht is in early development. APIs, packages, and features may change without notice. Use at your own risk.
+
+A modular, extensible AI coding agent framework. Extensions, skills, multi-model support — all in your terminal.
+
+## Quick Start
+
+```bash
+# Install globally (requires bun: https://bun.sh)
+bun add -g @draht/coding-agent
+
+# Or run directly
+bunx @draht/coding-agent
+
+# Interactive mode with a prompt
+draht "Refactor this module to use dependency injection"
+
+# Non-interactive (process and exit)
+draht -p "List all TODO comments in src/"
+```
+
+Or use the 1-command installer:
+
+```bash
+curl -fsSL https://draht.dev/install.sh | bash
+```
 
 ## Packages
 
 | Package | Description |
 |---------|-------------|
-| **[@mariozechner/pi-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
-| **[@mariozechner/pi-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
-| **[@mariozechner/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
-| **[@mariozechner/pi-mom](packages/mom)** | Slack bot that delegates messages to the pi coding agent |
-| **[@mariozechner/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
-| **[@mariozechner/pi-web-ui](packages/web-ui)** | Web components for AI chat interfaces |
-| **[@mariozechner/pi-pods](packages/pods)** | CLI for managing vLLM deployments on GPU pods |
+| **[@draht/coding-agent](packages/coding-agent)** | Interactive coding agent CLI (`draht`) |
+| **[@draht/ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, Bedrock, etc.) |
+| **[@draht/agent-core](packages/agent)** | Agent runtime with tool calling and state management |
+| **[@draht/tui](packages/tui)** | Terminal UI library with differential rendering |
+| **[@draht/web-ui](packages/web-ui)** | Web components for AI chat interfaces |
+| **[@draht/mom](packages/mom)** | Slack bot that delegates messages to the coding agent |
+| **[@draht/pods](packages/pods)** | CLI for managing vLLM deployments on GPU pods |
 
-## Contributing
+## Architecture
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).
+```
+draht (CLI)
+├── @draht/coding-agent    ← main CLI, extension loader, session management
+│   ├── @draht/agent-core  ← tool execution, message handling
+│   │   └── @draht/ai      ← LLM providers (Anthropic, OpenAI, Google, Bedrock)
+│   └── @draht/tui         ← terminal rendering
+```
+
+## Extensions
+
+Draht supports a rich extension system. Extensions can register tools, commands, providers, themes, skills, and prompt templates.
+
+```json
+// package.json
+{
+  "draht": {
+    "extensions": ["./my-extension.ts"]
+  }
+}
+```
+
+```typescript
+// my-extension.ts
+export default function(draht) {
+  draht.registerCommand("hello", {
+    handler: async () => console.log("Hello from my extension!")
+  });
+}
+```
+
+See [Extension Docs](packages/coding-agent/docs/extensions.md) for the full API.
 
 ## Development
 
 ```bash
-npm install          # Install all dependencies
-npm run build        # Build all packages
-npm run check        # Lint, format, and type check
-./test.sh            # Run tests (skips LLM-dependent tests without API keys)
-./pi-test.sh         # Run pi from sources (must be run from repo root)
+bun install          # Install all dependencies
+bun run build        # Build all packages
+bun run check        # Lint, format, and type check (biome + tsgo)
 ```
 
-> **Note:** `npm run check` requires `npm run build` to be run first. The web-ui package uses `tsc` which needs compiled `.d.ts` files from dependencies.
+## Environment Variables
 
-## License
+| Variable | Description |
+|----------|-------------|
+| `DRAHT_OFFLINE` | Disable startup network operations (`1`/`true`/`yes`) |
+| `DRAHT_CACHE_RETENTION` | Cache retention mode (`short`/`long`) |
+| `DRAHT_PACKAGE_DIR` | Override package directory (for Nix/Guix store paths) |
+| `DRAHT_SHARE_VIEWER_URL` | Base URL for /share command |
+| `DRAHT_TIMING` | Enable performance timing (`1`) |
 
-MIT
+## Fork Attribution
+
+This project is forked from [badlogic/pi-mono](https://github.com/badlogic/pi-mono) (Pi Agent by Mario Zechner). Licensed under MIT — see [LICENSE](LICENSE).

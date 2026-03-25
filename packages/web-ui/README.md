@@ -97,7 +97,7 @@ document.body.appendChild(chatPanel);
                           │
                           ▼
 ┌─────────────────────────────────────────────────────┐
-│              Agent (from pi-agent-core)             │
+│              Agent (from @draht/agent-core)          │
 │  - State management (messages, model, tools)        │
 │  - Event emission (agent_start, message_update, ...)│
 │  - Tool execution                                   │
@@ -166,7 +166,7 @@ Properties:
 - `enableThinkingSelector`: Show thinking level selector (default: true)
 - `showThemeToggle`: Show theme toggle (default: false)
 
-### Agent (from pi-agent-core)
+### Agent (from @draht/agent-core)
 
 ```typescript
 import { Agent } from '@draht/agent-core';
@@ -566,7 +566,7 @@ import '@draht/web-ui/app.css';
 Or use Tailwind with custom config:
 
 ```css
-@import '@mariozechner/mini-lit/themes/claude.css';
+@import '@draht/mini-lit/themes/claude.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -590,7 +590,7 @@ console.log(i18n('Loading...')); // "Laden..."
 ## Examples
 
 - [example/](./example) - Complete web app with sessions, artifacts, custom messages
-- [sitegeist](https://sitegeist.ai) - Browser extension using pi-web-ui
+- [sitegeist](https://sitegeist.ai) - Browser extension using @draht/web-ui
 
 ## Known Issues
 

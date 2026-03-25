@@ -392,7 +392,7 @@ pi agent qwen -i
 pi agent qwen -i -c
 ```
 
-Sessions are stored in `~/.pi/sessions/` organized by project path and include:
+Sessions are stored in `~/.draht/sessions/` organized by project path and include:
 - Complete conversation history
 - Tool call results
 - Token usage statistics
@@ -496,7 +496,7 @@ pi ssh "du -sh ~/.cache/huggingface/hub/*"
 pi ssh "ls -la ~/.vllm_logs/"
 
 # Check agent session history
-ls -la ~/.pi/sessions/
+ls -la ~/.draht/sessions/
 ```
 
 ## Environment Variables

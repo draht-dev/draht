@@ -72,8 +72,8 @@ function createBaseMessage(api: Api): AssistantMessage {
  * real providers do for auth errors. This allows the router's try/catch to catch
  * the error and potentially fall back to another provider.
  *
- * For mid-stream failures, pushes error events to the stream. Note that the current
- * router implementation only catches synchronous throws, not error events.
+ * For mid-stream failures, pushes error events to the stream. The router catches
+ * both synchronous throws and error events, enabling mid-stream fallback.
  *
  * @param getConfig - Function that returns the current config (allows dynamic config changes)
  */

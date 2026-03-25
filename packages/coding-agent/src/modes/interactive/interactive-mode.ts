@@ -553,9 +553,9 @@ export class InteractiveMode {
 		const cwdBasename = path.basename(process.cwd());
 		const sessionName = this.sessionManager.getSessionName();
 		if (sessionName) {
-			this.ui.terminal.setTitle(`π - ${sessionName} - ${cwdBasename}`);
+			this.ui.terminal.setTitle(`D - ${sessionName} - ${cwdBasename}`);
 		} else {
-			this.ui.terminal.setTitle(`π - ${cwdBasename}`);
+			this.ui.terminal.setTitle(`D - ${cwdBasename}`);
 		}
 	}
 

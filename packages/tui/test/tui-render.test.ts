@@ -398,4 +398,112 @@ describe("TUI differential rendering", () => {
 
 		tui.stop();
 	});
+
+	it("full re-renders when deleted lines move the viewport upward", async () => {
+		const terminal = new VirtualTerminal(20, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await terminal.flush();
+
+		const initialRedraws = tui.fullRedraws;
+
+		component.lines = Array.from({ length: 7 }, (_, i) => `Line ${i}`);
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(tui.fullRedraws > initialRedraws, "Shrink should trigger a full redraw");
+		assert.deepStrictEqual(terminal.getViewport(), ["Line 2", "Line 3", "Line 4", "Line 5", "Line 6"]);
+
+		tui.stop();
+	});
+
+	it("appends after a shrink without another full redraw once the viewport is reset", async () => {
+		const terminal = new VirtualTerminal(20, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 8 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await terminal.flush();
+
+		const initialRedraws = tui.fullRedraws;
+
+		component.lines = ["Line 0", "Line 1"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(tui.fullRedraws > initialRedraws, "Shrink should reset the viewport with a full redraw");
+		const redrawsAfterShrink = tui.fullRedraws;
+
+		component.lines = ["Line 0", "Line 1", "Line 2"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.strictEqual(tui.fullRedraws, redrawsAfterShrink, "Append should stay on the differential path");
+		assert.deepStrictEqual(terminal.getViewport(), ["Line 0", "Line 1", "Line 2", "", ""]);
+
+		tui.stop();
+	});
+
+	it("clears stale content when maxLinesRendered was inflated by a transient component", async () => {
+		const terminal = new VirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const chat = new TestComponent();
+		const editor = new TestComponent();
+		tui.addChild(chat);
+		tui.addChild(editor);
+
+		const longChat = Array.from({ length: 15 }, (_, i) => `Chat ${i}`);
+		const shortChat = Array.from({ length: 12 }, (_, i) => `Chat ${i}`);
+		const editorLines = ["Editor 0", "Editor 1", "Editor 2"];
+		const selectorLines = Array.from({ length: 8 }, (_, i) => `Selector ${i}`);
+
+		chat.lines = longChat;
+		editor.lines = editorLines;
+		tui.start();
+		await terminal.flush();
+
+		editor.lines = selectorLines;
+		tui.requestRender();
+		await terminal.flush();
+
+		editor.lines = editorLines;
+		tui.requestRender();
+		await terminal.flush();
+
+		const redrawsBeforeSwitch = tui.fullRedraws;
+		chat.lines = shortChat;
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(tui.fullRedraws > redrawsBeforeSwitch, "Branch switch should trigger a full redraw");
+
+		const viewport = terminal.getViewport();
+		for (let i = 0; i < 10; i++) {
+			const line = viewport[i] ?? "";
+			assert.ok(!line.includes("Chat 12"), `Stale "Chat 12" at viewport row ${i}`);
+			assert.ok(!line.includes("Chat 13"), `Stale "Chat 13" at viewport row ${i}`);
+			assert.ok(!line.includes("Chat 14"), `Stale "Chat 14" at viewport row ${i}`);
+		}
+
+		assert.deepStrictEqual(viewport, [
+			"Chat 5",
+			"Chat 6",
+			"Chat 7",
+			"Chat 8",
+			"Chat 9",
+			"Chat 10",
+			"Chat 11",
+			"Editor 0",
+			"Editor 1",
+			"Editor 2",
+		]);
+
+		tui.stop();
+	});
 });

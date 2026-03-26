@@ -1,4 +1,4 @@
-import { spawnSync } from "child_process";
+import { spawn } from "child_process";
 import { readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
@@ -121,12 +121,13 @@ function buildCompletionValue(
 }
 
 // Use fd to walk directory tree (fast, respects .gitignore)
-function walkDirectoryWithFd(
+async function walkDirectoryWithFd(
 	baseDir: string,
 	fdPath: string,
 	query: string,
 	maxResults: number,
-): Array<{ path: string; isDirectory: boolean }> {
+	signal: AbortSignal,
+): Promise<Array<{ path: string; isDirectory: boolean }>> {
 	const args = [
 		"--base-directory",
 		baseDir,
@@ -146,41 +147,69 @@ function walkDirectoryWithFd(
 		".git/**",
 	];
 
-	// Add query as pattern if provided
 	if (query) {
 		args.push(buildFdPathQuery(query));
 	}
 
-	const result = spawnSync(fdPath, args, {
-		encoding: "utf-8",
-		stdio: ["pipe", "pipe", "pipe"],
-		maxBuffer: 10 * 1024 * 1024,
-	});
-
-	if (result.status !== 0 || !result.stdout) {
-		return [];
-	}
-
-	const lines = result.stdout.trim().split("\n").filter(Boolean);
-	const results: Array<{ path: string; isDirectory: boolean }> = [];
-
-	for (const line of lines) {
-		const displayLine = toDisplayPath(line);
-		const hasTrailingSeparator = displayLine.endsWith("/");
-		const normalizedPath = hasTrailingSeparator ? displayLine.slice(0, -1) : displayLine;
-		if (normalizedPath === ".git" || normalizedPath.startsWith(".git/") || normalizedPath.includes("/.git/")) {
-			continue;
+	return await new Promise((resolve) => {
+		if (signal.aborted) {
+			resolve([]);
+			return;
 		}
 
-		// fd outputs directories with trailing /
-		const isDirectory = hasTrailingSeparator;
-		results.push({
-			path: displayLine,
-			isDirectory,
+		const child = spawn(fdPath, args, {
+			stdio: ["ignore", "pipe", "pipe"],
 		});
-	}
+		let stdout = "";
+		let resolved = false;
 
-	return results;
+		const finish = (results: Array<{ path: string; isDirectory: boolean }>) => {
+			if (resolved) return;
+			resolved = true;
+			signal.removeEventListener("abort", onAbort);
+			resolve(results);
+		};
+
+		const onAbort = () => {
+			if (child.exitCode === null) {
+				child.kill("SIGKILL");
+			}
+		};
+
+		signal.addEventListener("abort", onAbort, { once: true });
+		child.stdout.setEncoding("utf-8");
+		child.stdout.on("data", (chunk: string) => {
+			stdout += chunk;
+		});
+		child.on("error", () => {
+			finish([]);
+		});
+		child.on("close", (code) => {
+			if (signal.aborted || code !== 0 || !stdout) {
+				finish([]);
+				return;
+			}
+
+			const lines = stdout.trim().split("\n").filter(Boolean);
+			const results: Array<{ path: string; isDirectory: boolean }> = [];
+
+			for (const line of lines) {
+				const displayLine = toDisplayPath(line);
+				const hasTrailingSeparator = displayLine.endsWith("/");
+				const normalizedPath = hasTrailingSeparator ? displayLine.slice(0, -1) : displayLine;
+				if (normalizedPath === ".git" || normalizedPath.startsWith(".git/") || normalizedPath.includes("/.git/")) {
+					continue;
+				}
+
+				results.push({
+					path: displayLine,
+					isDirectory: hasTrailingSeparator,
+				});
+			}
+
+			finish(results);
+		});
+	});
 }
 
 export interface AutocompleteItem {
@@ -189,14 +218,17 @@ export interface AutocompleteItem {
 	description?: string;
 }
 
-type Awaitable<T> = T | Promise<T>;
-
 export interface SlashCommand {
 	name: string;
 	description?: string;
 	// Function to get argument completions for this command
 	// Returns null if no argument completion is available
-	getArgumentCompletions?(argumentPrefix: string): Awaitable<AutocompleteItem[] | null>;
+	getArgumentCompletions?(argumentPrefix: string): AutocompleteItem[] | null;
+}
+
+export interface AutocompleteSuggestions {
+	items: AutocompleteItem[];
+	prefix: string; // What we're matching against (e.g., "/" or "src/")
 }
 
 export interface AutocompleteProvider {
@@ -206,10 +238,8 @@ export interface AutocompleteProvider {
 		lines: string[],
 		cursorLine: number,
 		cursorCol: number,
-	): {
-		items: AutocompleteItem[];
-		prefix: string; // What we're matching against (e.g., "/" or "src/")
-	} | null;
+		options: { signal: AbortSignal; force?: boolean },
+	): Promise<AutocompleteSuggestions | null>;
 
 	// Apply the selected item
 	// Returns the new text and cursor position
@@ -242,19 +272,22 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		this.fdPath = fdPath;
 	}
 
-	getSuggestions(
+	async getSuggestions(
 		lines: string[],
 		cursorLine: number,
 		cursorCol: number,
-	): { items: AutocompleteItem[]; prefix: string } | null {
+		options: { signal: AbortSignal; force?: boolean },
+	): Promise<AutocompleteSuggestions | null> {
 		const currentLine = lines[cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
 
-		// Check for @ file reference (fuzzy search) - must be after a delimiter or at start
 		const atPrefix = this.extractAtPrefix(textBeforeCursor);
 		if (atPrefix) {
 			const { rawPrefix, isQuotedPrefix } = parsePathPrefix(atPrefix);
-			const suggestions = this.getFuzzyFileSuggestions(rawPrefix, { isQuotedPrefix: isQuotedPrefix });
+			const suggestions = await this.getFuzzyFileSuggestions(rawPrefix, {
+				isQuotedPrefix,
+				signal: options.signal,
+			});
 			if (suggestions.length === 0) return null;
 
 			return {
@@ -263,13 +296,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			};
 		}
 
-		// Check for slash commands
-		if (textBeforeCursor.startsWith("/")) {
+		if (!options.force && textBeforeCursor.startsWith("/")) {
 			const spaceIndex = textBeforeCursor.indexOf(" ");
 
 			if (spaceIndex === -1) {
-				// No space yet - complete command names with fuzzy matching
-				const prefix = textBeforeCursor.slice(1); // Remove the "/"
+				const prefix = textBeforeCursor.slice(1);
 				const commandItems = this.commands.map((cmd) => ({
 					name: "name" in cmd ? cmd.name : cmd.value,
 					label: "name" in cmd ? cmd.name : cmd.label,
@@ -288,61 +319,42 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					items: filtered,
 					prefix: textBeforeCursor,
 				};
-			} else {
-				// Space found - complete command arguments
-				const commandName = textBeforeCursor.slice(1, spaceIndex); // Command without "/"
-				const argumentText = textBeforeCursor.slice(spaceIndex + 1); // Text after space
-
-				const command = this.commands.find((cmd) => {
-					const name = "name" in cmd ? cmd.name : cmd.value;
-					return name === commandName;
-				});
-				if (!command || !("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
-					return null; // No argument completion for this command
-				}
-
-				const argumentSuggestions = command.getArgumentCompletions(argumentText);
-				if (
-					argumentSuggestions instanceof Promise ||
-					!Array.isArray(argumentSuggestions) ||
-					argumentSuggestions.length === 0
-				) {
-					return null;
-				}
-
-				return {
-					items: argumentSuggestions,
-					prefix: argumentText,
-				};
 			}
-		}
 
-		// Check for file paths - triggered by Tab or if we detect a path pattern
-		const pathMatch = this.extractPathPrefix(textBeforeCursor, false);
+			const commandName = textBeforeCursor.slice(1, spaceIndex);
+			const argumentText = textBeforeCursor.slice(spaceIndex + 1);
 
-		if (pathMatch !== null) {
-			const suggestions = this.getFileSuggestions(pathMatch);
-			if (suggestions.length === 0) return null;
+			const command = this.commands.find((cmd) => {
+				const name = "name" in cmd ? cmd.name : cmd.value;
+				return name === commandName;
+			});
+			if (!command || !("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
+				return null;
+			}
 
-			// Check if we have an exact match that is a directory
-			// In that case, we might want to return suggestions for the directory content instead
-			// But only if the prefix ends with /
-			if (suggestions.length === 1 && suggestions[0]?.value === pathMatch && !pathMatch.endsWith("/")) {
-				// Exact match found (e.g. user typed "src" and "src/" is the only match)
-				// We still return it so user can select it and add /
-				return {
-					items: suggestions,
-					prefix: pathMatch,
-				};
+			const argumentSuggestions = command.getArgumentCompletions(argumentText);
+			if (!argumentSuggestions || argumentSuggestions.length === 0) {
+				return null;
 			}
 
 			return {
-				items: suggestions,
-				prefix: pathMatch,
+				items: argumentSuggestions,
+				prefix: argumentText,
 			};
 		}
 
-		return null;
+		const pathMatch = this.extractPathPrefix(textBeforeCursor, options.force ?? false);
+		if (pathMatch === null) {
+			return null;
+		}
+
+		const suggestions = this.getFileSuggestions(pathMatch);
+		if (suggestions.length === 0) return null;
+
+		return {
+			items: suggestions,
+			prefix: pathMatch,
+		};
 	}
 
 	applyCompletion(
@@ -690,9 +702,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 	}
 
 	// Fuzzy file search using fd (fast, respects .gitignore)
-	private getFuzzyFileSuggestions(query: string, options: { isQuotedPrefix: boolean }): AutocompleteItem[] {
-		if (!this.fdPath) {
-			// fd not available, return empty results
+	private async getFuzzyFileSuggestions(
+		query: string,
+		options: { isQuotedPrefix: boolean; signal: AbortSignal },
+	): Promise<AutocompleteItem[]> {
+		if (!this.fdPath || options.signal.aborted) {
 			return [];
 		}
 
@@ -700,9 +714,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			const scopedQuery = this.resolveScopedFuzzyQuery(query);
 			const fdBaseDir = scopedQuery?.baseDir ?? this.basePath;
 			const fdQuery = scopedQuery?.query ?? query;
-			const entries = walkDirectoryWithFd(fdBaseDir, this.fdPath, fdQuery, 100);
+			const entries = await walkDirectoryWithFd(fdBaseDir, this.fdPath, fdQuery, 100, options.signal);
+			if (options.signal.aborted) {
+				return [];
+			}
 
-			// Score entries
 			const scoredEntries = entries
 				.map((entry) => ({
 					...entry,
@@ -710,14 +726,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				}))
 				.filter((entry) => entry.score > 0);
 
-			// Sort by score (descending) and take top 20
 			scoredEntries.sort((a, b) => b.score - a.score);
 			const topEntries = scoredEntries.slice(0, 20);
 
-			// Build suggestions
 			const suggestions: AutocompleteItem[] = [];
 			for (const { path: entryPath, isDirectory } of topEntries) {
-				// fd already includes trailing / for directories
 				const pathWithoutSlash = isDirectory ? entryPath.slice(0, -1) : entryPath;
 				const displayPath = scopedQuery
 					? this.scopedPathForDisplay(scopedQuery.displayBase, pathWithoutSlash)
@@ -741,35 +754,6 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		} catch {
 			return [];
 		}
-	}
-
-	// Force file completion (called on Tab key) - always returns suggestions
-	getForceFileSuggestions(
-		lines: string[],
-		cursorLine: number,
-		cursorCol: number,
-	): { items: AutocompleteItem[]; prefix: string } | null {
-		const currentLine = lines[cursorLine] || "";
-		const textBeforeCursor = currentLine.slice(0, cursorCol);
-
-		// Don't trigger if we're typing a slash command at the start of the line
-		if (textBeforeCursor.trim().startsWith("/") && !textBeforeCursor.trim().includes(" ")) {
-			return null;
-		}
-
-		// Force extract path prefix - this will always return something
-		const pathMatch = this.extractPathPrefix(textBeforeCursor, true);
-		if (pathMatch !== null) {
-			const suggestions = this.getFileSuggestions(pathMatch);
-			if (suggestions.length === 0) return null;
-
-			return {
-				items: suggestions,
-				prefix: pathMatch,
-			};
-		}
-
-		return null;
 	}
 
 	// Check if we should trigger file completion (called on Tab key)

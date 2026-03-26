@@ -33,6 +33,11 @@ function applyCompletion(
 	};
 }
 
+async function flushAutocomplete(): Promise<void> {
+	await Promise.resolve();
+	await new Promise((resolve) => setImmediate(resolve));
+}
+
 describe("Editor component", () => {
 	describe("Prompt history navigation", () => {
 		it("does nothing on Up arrow when history is empty", () => {
@@ -1641,7 +1646,7 @@ describe("Editor component", () => {
 			let suggestionCalls = 0;
 
 			const mockProvider: AutocompleteProvider = {
-				getSuggestions: () => {
+				getSuggestions: async () => {
 					suggestionCalls += 1;
 					return null;
 				},
@@ -1902,12 +1907,12 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "hello");
 		});
 
-		it("undoes autocomplete", () => {
+		it("undoes autocomplete", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			// Create a mock autocomplete provider
 			const mockProvider: AutocompleteProvider = {
-				getSuggestions: (lines, _cursorLine, cursorCol) => {
+				getSuggestions: async (lines, _cursorLine, cursorCol) => {
 					const text = lines[0] || "";
 					const prefix = text.slice(0, cursorCol);
 					if (prefix === "di") {
@@ -1930,11 +1935,7 @@ describe("Editor component", () => {
 
 			// Press Tab to trigger autocomplete
 			editor.handleInput("\t");
-			// Autocomplete should be showing with "dist/" suggestion
-			assert.strictEqual(editor.isShowingAutocomplete(), true);
-
-			// Press Tab again to accept the suggestion
-			editor.handleInput("\t");
+			await flushAutocomplete();
 			assert.strictEqual(editor.getText(), "dist/");
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 
@@ -1945,15 +1946,14 @@ describe("Editor component", () => {
 	});
 
 	describe("Autocomplete", () => {
-		it("auto-applies single force-file suggestion without showing menu", () => {
+		it("auto-applies single force-file suggestion without showing menu", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
-			// Create a mock provider with getForceFileSuggestions that returns single item
-			const mockProvider: AutocompleteProvider & {
-				getForceFileSuggestions: AutocompleteProvider["getSuggestions"];
-			} = {
-				getSuggestions: () => null,
-				getForceFileSuggestions: (lines, _cursorLine, cursorCol) => {
+			const mockProvider: AutocompleteProvider = {
+				getSuggestions: async (lines, _cursorLine, cursorCol, options) => {
+					if (!options.force) {
+						return null;
+					}
 					const text = lines[0] || "";
 					const prefix = text.slice(0, cursorCol);
 					if (prefix === "Work") {
@@ -1978,6 +1978,7 @@ describe("Editor component", () => {
 
 			// Press Tab - should auto-apply without showing menu
 			editor.handleInput("\t");
+			await flushAutocomplete();
 			assert.strictEqual(editor.getText(), "Workspace/");
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 
@@ -1986,15 +1987,14 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "Work");
 		});
 
-		it("shows menu when force-file has multiple suggestions", () => {
+		it("shows menu when force-file has multiple suggestions", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
-			// Create a mock provider with getForceFileSuggestions that returns multiple items
-			const mockProvider: AutocompleteProvider & {
-				getForceFileSuggestions: AutocompleteProvider["getSuggestions"];
-			} = {
-				getSuggestions: () => null,
-				getForceFileSuggestions: (lines, _cursorLine, cursorCol) => {
+			const mockProvider: AutocompleteProvider = {
+				getSuggestions: async (lines, _cursorLine, cursorCol, options) => {
+					if (!options.force) {
+						return null;
+					}
 					const text = lines[0] || "";
 					const prefix = text.slice(0, cursorCol);
 					if (prefix === "src") {
@@ -2021,7 +2021,8 @@ describe("Editor component", () => {
 
 			// Press Tab - should show menu because there are multiple suggestions
 			editor.handleInput("\t");
-			assert.strictEqual(editor.getText(), "src"); // Text unchanged
+			await flushAutocomplete();
+			assert.strictEqual(editor.getText(), "src");
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Press Tab again to accept first suggestion
@@ -2030,12 +2031,9 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 		});
 
-		it("keeps suggestions open when typing in force mode (Tab-triggered)", () => {
+		it("keeps suggestions open when typing in force mode (Tab-triggered)", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
-			// Mock provider with both getSuggestions and getForceFileSuggestions
-			// getSuggestions only returns results for path-like patterns
-			// getForceFileSuggestions always extracts prefix and filters
 			const allFiles = [
 				{ value: "readme.md", label: "readme.md" },
 				{ value: "package.json", label: "package.json" },
@@ -2043,29 +2041,14 @@ describe("Editor component", () => {
 				{ value: "dist/", label: "dist/" },
 			];
 
-			const mockProvider: AutocompleteProvider & {
-				getForceFileSuggestions: (
-					lines: string[],
-					cursorLine: number,
-					cursorCol: number,
-				) => { items: { value: string; label: string }[]; prefix: string } | null;
-			} = {
-				getSuggestions: (lines, _cursorLine, cursorCol) => {
+			const mockProvider: AutocompleteProvider = {
+				getSuggestions: async (lines, _cursorLine, cursorCol, options) => {
 					const text = lines[0] || "";
 					const prefix = text.slice(0, cursorCol);
-					// Only return suggestions for path-like patterns (contains / or starts with .)
-					if (prefix.includes("/") || prefix.startsWith(".")) {
-						const filtered = allFiles.filter((f) => f.value.toLowerCase().startsWith(prefix.toLowerCase()));
-						if (filtered.length > 0) {
-							return { items: filtered, prefix };
-						}
+					const shouldMatch = options.force || prefix.includes("/") || prefix.startsWith(".");
+					if (!shouldMatch) {
+						return null;
 					}
-					return null;
-				},
-				getForceFileSuggestions: (lines, _cursorLine, cursorCol) => {
-					const text = lines[0] || "";
-					const prefix = text.slice(0, cursorCol);
-					// Always filter files by prefix
 					const filtered = allFiles.filter((f) => f.value.toLowerCase().startsWith(prefix.toLowerCase()));
 					if (filtered.length > 0) {
 						return { items: filtered, prefix };
@@ -2079,15 +2062,18 @@ describe("Editor component", () => {
 
 			// Press Tab on empty prompt - should show all files (force mode)
 			editor.handleInput("\t");
+			await flushAutocomplete();
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Type "r" - should narrow to "readme.md" (force mode keeps suggestions open)
 			editor.handleInput("r");
+			await flushAutocomplete();
 			assert.strictEqual(editor.getText(), "r");
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Type "e" - should still show "readme.md"
 			editor.handleInput("e");
+			await flushAutocomplete();
 			assert.strictEqual(editor.getText(), "re");
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
@@ -2097,12 +2083,85 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 		});
 
-		it("hides autocomplete when backspacing slash command to empty", () => {
+		it("debounces @ autocomplete while typing", async () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			let suggestionCalls = 0;
+
+			const mockProvider: AutocompleteProvider = {
+				getSuggestions: async (lines, _cursorLine, cursorCol) => {
+					suggestionCalls += 1;
+					const text = (lines[0] || "").slice(0, cursorCol);
+					return {
+						items: [{ value: "@main.ts", label: "main.ts" }],
+						prefix: text,
+					};
+				},
+				applyCompletion,
+			};
+
+			editor.setAutocompleteProvider(mockProvider);
+
+			editor.handleInput("@");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			editor.handleInput("m");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			editor.handleInput("a");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			editor.handleInput("i");
+
+			assert.strictEqual(suggestionCalls, 0);
+			assert.strictEqual(editor.isShowingAutocomplete(), false);
+
+			await new Promise((resolve) => setTimeout(resolve, 250));
+			await flushAutocomplete();
+
+			assert.strictEqual(suggestionCalls, 1);
+			assert.strictEqual(editor.isShowingAutocomplete(), true);
+		});
+
+		it("aborts active @ autocomplete when typing continues", async () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			let aborts = 0;
+
+			const mockProvider: AutocompleteProvider = {
+				getSuggestions: async (_lines, _cursorLine, _cursorCol, options) => {
+					return await new Promise((resolve) => {
+						const timeout = setTimeout(() => {
+							resolve({ items: [{ value: "@main.ts", label: "main.ts" }], prefix: "@main" });
+						}, 500);
+						options.signal.addEventListener(
+							"abort",
+							() => {
+								aborts += 1;
+								clearTimeout(timeout);
+								resolve(null);
+							},
+							{ once: true },
+						);
+					});
+				},
+				applyCompletion,
+			};
+
+			editor.setAutocompleteProvider(mockProvider);
+
+			editor.handleInput("@");
+			editor.handleInput("m");
+			editor.handleInput("a");
+			editor.handleInput("i");
+			await new Promise((resolve) => setTimeout(resolve, 250));
+			editor.handleInput("n");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+
+			assert.strictEqual(aborts, 1);
+		});
+
+		it("hides autocomplete when backspacing slash command to empty", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			// Mock provider with slash commands
 			const mockProvider: AutocompleteProvider = {
-				getSuggestions: (lines, _cursorLine, cursorCol) => {
+				getSuggestions: async (lines, _cursorLine, cursorCol) => {
 					const text = lines[0] || "";
 					const prefix = text.slice(0, cursorCol);
 					// Only return slash command suggestions when line starts with /
@@ -2126,21 +2185,23 @@ describe("Editor component", () => {
 
 			// Type "/" - should show slash command suggestions
 			editor.handleInput("/");
+			await flushAutocomplete();
 			assert.strictEqual(editor.getText(), "/");
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Backspace to delete "/" - should hide autocomplete completely
 			editor.handleInput("\x7f"); // Backspace
+			await flushAutocomplete();
 			assert.strictEqual(editor.getText(), "");
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 		});
 
-		it("applies exact typed slash-argument value on Enter even when first item is highlighted", () => {
+		it("applies exact typed slash-argument value on Enter even when first item is highlighted", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			// Mock provider for /argtest command with argument completions
 			const mockProvider: AutocompleteProvider = {
-				getSuggestions: (lines, _cursorLine, cursorCol) => {
+				getSuggestions: async (lines, _cursorLine, cursorCol) => {
 					const text = lines[0] || "";
 					const beforeCursor = text.slice(0, cursorCol);
 
@@ -2181,6 +2242,7 @@ describe("Editor component", () => {
 			editor.handleInput("o");
 
 			assert.strictEqual(editor.getText(), "/argtest two");
+			await flushAutocomplete();
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Press Enter - should apply the exact typed value "two", not the first item
@@ -2190,12 +2252,12 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "/argtest two");
 		});
 
-		it("selects first prefix match on Enter when typed arg is not exact match", () => {
+		it("selects first prefix match on Enter when typed arg is not exact match", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			// Mock provider for /argtest command with argument completions
 			const mockProvider: AutocompleteProvider = {
-				getSuggestions: (lines, _cursorLine, cursorCol) => {
+				getSuggestions: async (lines, _cursorLine, cursorCol) => {
 					const text = lines[0] || "";
 					const beforeCursor = text.slice(0, cursorCol);
 
@@ -2233,6 +2295,7 @@ describe("Editor component", () => {
 			editor.handleInput(" ");
 			editor.handleInput("t");
 
+			await flushAutocomplete();
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Press Enter - "t" prefix matches "two" (first in list), so "two" is applied
@@ -2240,12 +2303,12 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "/argtest two");
 		});
 
-		it("highlights unique prefix match as user types (before full exact match)", () => {
+		it("highlights unique prefix match as user types (before full exact match)", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			// Mock provider that returns all items unfiltered (like real extensions do)
 			const mockProvider: AutocompleteProvider = {
-				getSuggestions: (lines, _cursorLine, cursorCol) => {
+				getSuggestions: async (lines, _cursorLine, cursorCol) => {
 					const text = lines[0] || "";
 					const beforeCursor = text.slice(0, cursorCol);
 
@@ -2281,6 +2344,7 @@ describe("Editor component", () => {
 			editor.handleInput("w");
 
 			assert.strictEqual(editor.getText(), "/argtest tw");
+			await flushAutocomplete();
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Press Enter - "tw" uniquely matches "two", so "two" should be applied
@@ -2288,12 +2352,12 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "/argtest two");
 		});
 
-		it("selects first prefix match when multiple items match", () => {
+		it("selects first prefix match when multiple items match", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			// Mock provider that returns all items unfiltered
 			const mockProvider: AutocompleteProvider = {
-				getSuggestions: (lines, _cursorLine, cursorCol) => {
+				getSuggestions: async (lines, _cursorLine, cursorCol) => {
 					const text = lines[0] || "";
 					const beforeCursor = text.slice(0, cursorCol);
 
@@ -2326,6 +2390,7 @@ describe("Editor component", () => {
 			editor.handleInput(" ");
 			editor.handleInput("t");
 
+			await flushAutocomplete();
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Press Enter - "t" matches "two" first, so "two" is selected
@@ -2333,12 +2398,12 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "/argtest two");
 		});
 
-		it("works for built-in-style command argument completion path (model-like)", () => {
+		it("works for built-in-style command argument completion path (model-like)", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			// Mock provider for /model command with model completions
 			const mockProvider: AutocompleteProvider = {
-				getSuggestions: (lines, _cursorLine, cursorCol) => {
+				getSuggestions: async (lines, _cursorLine, cursorCol) => {
 					const text = lines[0] || "";
 					const beforeCursor = text.slice(0, cursorCol);
 
@@ -2386,6 +2451,7 @@ describe("Editor component", () => {
 			editor.handleInput("i");
 
 			assert.strictEqual(editor.getText(), "/model gpt-4o-mini");
+			await flushAutocomplete();
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			// Press Enter - should retain exact typed value, not apply first highlighted item
@@ -2395,7 +2461,7 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "/model gpt-4o-mini");
 		});
 
-		it("does not show argument completions when command has no argument completer", () => {
+		it("does not show argument completions when command has no argument completer", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			const provider = new CombinedAutocompleteProvider([
 				{ name: "help", description: "Show help" },
@@ -2410,6 +2476,7 @@ describe("Editor component", () => {
 			editor.handleInput("/");
 			editor.handleInput("h");
 			editor.handleInput("e");
+			await flushAutocomplete();
 			assert.strictEqual(editor.isShowingAutocomplete(), true);
 
 			editor.handleInput("\t");

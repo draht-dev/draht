@@ -116,7 +116,7 @@ describe("ModelRegistry", () => {
 			}
 		});
 
-		test("overriding headers merges with model headers", () => {
+		test("overriding headers resolves at request time", async () => {
 			writeRawModelsJson({
 				anthropic: overrideConfig("https://my-proxy.example.com/v1", {
 					"X-Custom-Header": "custom-value",
@@ -127,7 +127,11 @@ describe("ModelRegistry", () => {
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 
 			for (const model of anthropicModels) {
-				expect(model.headers?.["X-Custom-Header"]).toBe("custom-value");
+				const auth = await registry.getApiKeyAndHeaders(model);
+				expect(auth.ok).toBe(true);
+				if (auth.ok) {
+					expect(auth.headers?.["X-Custom-Header"]).toBe("custom-value");
+				}
 			}
 		});
 
@@ -627,7 +631,7 @@ describe("ModelRegistry", () => {
 			expect(sonnet?.cost.output).toBeGreaterThan(0);
 		});
 
-		test("model override can add headers", () => {
+		test("model override can add headers at request time", async () => {
 			writeRawModelsJson({
 				openrouter: {
 					modelOverrides: {
@@ -641,8 +645,13 @@ describe("ModelRegistry", () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 			const sonnet = models.find((m) => m.id === "anthropic/claude-sonnet-4");
+			expect(sonnet).toBeDefined();
 
-			expect(sonnet?.headers?.["X-Custom-Model-Header"]).toBe("value");
+			const auth = await registry.getApiKeyAndHeaders(sonnet!);
+			expect(auth.ok).toBe(true);
+			if (auth.ok) {
+				expect(auth.headers?.["X-Custom-Model-Header"]).toBe("value");
+			}
 		});
 
 		test("refresh() picks up model override changes", () => {
@@ -954,9 +963,8 @@ describe("ModelRegistry", () => {
 			expect(apiKey).toBe("hello-world");
 		});
 
-		describe("caching", () => {
-			test("command is only executed once per process", async () => {
-				// Use a command that writes to a file to count invocations
+		describe("request-time resolution", () => {
+			test("command is executed on every provider lookup", async () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");
 
@@ -967,18 +975,15 @@ describe("ModelRegistry", () => {
 				});
 
 				const registry = new ModelRegistry(authStorage, modelsJsonPath);
-
-				// Call multiple times
 				await registry.getApiKeyForProvider("custom-provider");
 				await registry.getApiKeyForProvider("custom-provider");
 				await registry.getApiKeyForProvider("custom-provider");
 
-				// Command should have only run once
 				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
-				expect(count).toBe(1);
+				expect(count).toBe(3);
 			});
 
-			test("cache persists across registry instances", async () => {
+			test("commands are re-executed across registry instances", async () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");
 
@@ -988,41 +993,17 @@ describe("ModelRegistry", () => {
 					"custom-provider": providerWithApiKey(command),
 				});
 
-				// Create multiple registry instances
 				const registry1 = new ModelRegistry(authStorage, modelsJsonPath);
 				await registry1.getApiKeyForProvider("custom-provider");
 
 				const registry2 = new ModelRegistry(authStorage, modelsJsonPath);
 				await registry2.getApiKeyForProvider("custom-provider");
 
-				// Command should still have only run once
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
-				expect(count).toBe(1);
-			});
-
-			test("clearApiKeyCache allows command to run again", async () => {
-				const counterFile = join(tempDir, "counter");
-				writeFileSync(counterFile, "0");
-
-				const counterPath = toShPath(counterFile);
-				const command = `!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; echo "key-value"'`;
-				writeRawModelsJson({
-					"custom-provider": providerWithApiKey(command),
-				});
-
-				const registry = new ModelRegistry(authStorage, modelsJsonPath);
-				await registry.getApiKeyForProvider("custom-provider");
-
-				// Clear cache and call again
-				clearApiKeyCache();
-				await registry.getApiKeyForProvider("custom-provider");
-
-				// Command should have run twice
 				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(2);
 			});
 
-			test("different commands are cached separately", async () => {
+			test("different commands resolve independently", async () => {
 				writeRawModelsJson({
 					"provider-a": providerWithApiKey("!echo key-a"),
 					"provider-b": providerWithApiKey("!echo key-b"),
@@ -1037,7 +1018,7 @@ describe("ModelRegistry", () => {
 				expect(keyB).toBe("key-b");
 			});
 
-			test("failed commands are cached (not retried)", async () => {
+			test("failed commands are retried", async () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");
 
@@ -1048,17 +1029,14 @@ describe("ModelRegistry", () => {
 				});
 
 				const registry = new ModelRegistry(authStorage, modelsJsonPath);
-
-				// Call multiple times - all should return undefined
 				const key1 = await registry.getApiKeyForProvider("custom-provider");
 				const key2 = await registry.getApiKeyForProvider("custom-provider");
 
 				expect(key1).toBeUndefined();
 				expect(key2).toBeUndefined();
 
-				// Command should have only run once despite failures
 				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
-				expect(count).toBe(1);
+				expect(count).toBe(2);
 			});
 
 			test("environment variables are not cached (changes are picked up)", async () => {
@@ -1077,7 +1055,6 @@ describe("ModelRegistry", () => {
 					const key1 = await registry.getApiKeyForProvider("custom-provider");
 					expect(key1).toBe("first-value");
 
-					// Change env var
 					process.env[envVarName] = "second-value";
 
 					const key2 = await registry.getApiKeyForProvider("custom-provider");
@@ -1088,6 +1065,76 @@ describe("ModelRegistry", () => {
 					} else {
 						process.env[envVarName] = originalEnv;
 					}
+				}
+			});
+
+			test("getAvailable does not execute command-backed apiKey resolution", async () => {
+				const counterFile = join(tempDir, "counter");
+				writeFileSync(counterFile, "0");
+
+				const counterPath = toShPath(counterFile);
+				const command = `!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; echo "key-value"'`;
+				writeRawModelsJson({
+					"custom-provider": providerWithApiKey(command),
+				});
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const available = registry.getAvailable();
+
+				expect(available.some((m) => m.provider === "custom-provider")).toBe(true);
+				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				expect(count).toBe(0);
+			});
+
+			test("getApiKeyAndHeaders resolves authHeader on every request", async () => {
+				const tokenFile = join(tempDir, "token");
+				writeFileSync(tokenFile, "token-1");
+				const tokenPath = toShPath(tokenFile);
+
+				writeRawModelsJson({
+					"custom-provider": {
+						...providerWithApiKey(`!sh -c 'cat "${tokenPath}"'`),
+						authHeader: true,
+					},
+				});
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const model = registry.find("custom-provider", "test-model");
+				expect(model).toBeDefined();
+
+				const auth1 = await registry.getApiKeyAndHeaders(model!);
+				expect(auth1).toEqual({
+					ok: true,
+					apiKey: "token-1",
+					headers: { Authorization: "Bearer token-1" },
+				});
+
+				writeFileSync(tokenFile, "token-2");
+
+				const auth2 = await registry.getApiKeyAndHeaders(model!);
+				expect(auth2).toEqual({
+					ok: true,
+					apiKey: "token-2",
+					headers: { Authorization: "Bearer token-2" },
+				});
+			});
+
+			test("getApiKeyAndHeaders returns an error for failed authHeader resolution", async () => {
+				writeRawModelsJson({
+					"custom-provider": {
+						...providerWithApiKey("!exit 1"),
+						authHeader: true,
+					},
+				});
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const model = registry.find("custom-provider", "test-model");
+				expect(model).toBeDefined();
+
+				const auth = await registry.getApiKeyAndHeaders(model!);
+				expect(auth.ok).toBe(false);
+				if (!auth.ok) {
+					expect(auth.error).toContain('Failed to resolve API key for provider "custom-provider"');
 				}
 			});
 		});

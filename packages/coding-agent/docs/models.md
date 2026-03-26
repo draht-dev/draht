@@ -131,6 +131,12 @@ The `apiKey` and `headers` fields support three formats:
   "apiKey": "sk-..."
   ```
 
+For `models.json`, shell commands are resolved at request time. pi intentionally does not apply built-in TTL, stale reuse, or recovery logic for arbitrary commands. Different commands need different caching and failure strategies, and pi cannot infer the right one.
+
+If your command is slow, expensive, rate-limited, or should keep using a previous value on transient failures, wrap it in your own script or command that implements the caching or TTL behavior you want.
+
+`/model` availability checks use configured auth presence and do not execute shell commands.
+
 ### Custom Headers
 
 ```json

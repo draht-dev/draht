@@ -106,8 +106,24 @@ Content`,
 			expect(result.skills.some((r) => r.path === skillFile && r.enabled)).toBe(true);
 		});
 
-		it("should resolve project paths relative to .draht", async () => {
-			const extDir = join(tempDir, ".draht", "extensions");
+		it("should auto-discover root markdown skills from .pi skill dirs", async () => {
+			const skillFile = join(agentDir, "skills", "single-file.md");
+			mkdirSync(join(agentDir, "skills"), { recursive: true });
+			writeFileSync(
+				skillFile,
+				`---
+name: single-file
+description: A root markdown skill
+---
+Content`,
+			);
+
+			const result = await packageManager.resolve();
+			expect(result.skills.some((r) => r.path === skillFile && r.enabled)).toBe(true);
+		});
+
+		it("should resolve project paths relative to .pi", async () => {
+			const extDir = join(tempDir, ".pi", "extensions");
 			mkdirSync(extDir, { recursive: true });
 			const extPath = join(extDir, "project-ext.ts");
 			writeFileSync(extPath, "export default function() {}");
@@ -131,7 +147,7 @@ Content`,
 		});
 
 		it("should auto-discover project prompts with overrides", async () => {
-			const promptsDir = join(tempDir, ".draht", "prompts");
+			const promptsDir = join(tempDir, ".pi", "prompts");
 			mkdirSync(promptsDir, { recursive: true });
 			const promptPath = join(promptsDir, "is.md");
 			writeFileSync(promptPath, "Is prompt");
@@ -150,7 +166,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "my-extensions-pkg",
-					draht: {
+					pi: {
 						extensions: ["./extensions/clip.ts", "./extensions/cost.ts"],
 					},
 				}),
@@ -232,6 +248,26 @@ Content`,
 			expect(result.skills.some((r) => r.path === middleSkill && r.enabled)).toBe(true);
 		});
 
+		it("should ignore root markdown files in .agents/skills", async () => {
+			const agentsSkillsDir = join(tempDir, ".agents", "skills");
+			mkdirSync(join(agentsSkillsDir, "nested-skill"), { recursive: true });
+			const rootSkill = join(agentsSkillsDir, "root-file.md");
+			const nestedSkill = join(agentsSkillsDir, "nested-skill", "SKILL.md");
+			writeFileSync(rootSkill, "---\nname: root-file\ndescription: Root markdown file\n---\n");
+			writeFileSync(nestedSkill, "---\nname: nested-skill\ndescription: Nested skill\n---\n");
+
+			const pm = new DefaultPackageManager({
+				cwd: join(tempDir, "work"),
+				agentDir,
+				settingsManager,
+			});
+			mkdirSync(join(tempDir, "work"), { recursive: true });
+
+			const result = await pm.resolve();
+			expect(result.skills.some((r) => r.path === rootSkill)).toBe(false);
+			expect(result.skills.some((r) => r.path === nestedSkill && r.enabled)).toBe(true);
+		});
+
 		it("should keep ~/.agents/skills user-scoped when cwd is under home in a non-git directory", async () => {
 			const previousHome = process.env.HOME;
 			process.env.HOME = tempDir;
@@ -293,7 +329,7 @@ Content`,
 		it("should not apply parent .gitignore to .pi auto-discovery", async () => {
 			writeFileSync(join(tempDir, ".gitignore"), ".pi\n");
 
-			const skillDir = join(tempDir, ".draht", "skills", "auto-skill");
+			const skillDir = join(tempDir, ".pi", "skills", "auto-skill");
 			mkdirSync(skillDir, { recursive: true });
 			const skillPath = join(skillDir, "SKILL.md");
 			writeFileSync(skillPath, "---\nname: auto-skill\ndescription: Auto\n---\nContent");
@@ -319,7 +355,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "my-package",
-					draht: {
+					pi: {
 						extensions: ["./src/index.ts"],
 						skills: ["./skills"],
 					},
@@ -351,6 +387,19 @@ Content`,
 			const result = await packageManager.resolveExtensionSources([pkgDir]);
 			expect(result.extensions.some((r) => pathEndsWith(r.path, "main.ts") && r.enabled)).toBe(true);
 			expect(result.themes.some((r) => pathEndsWith(r.path, "dark.json") && r.enabled)).toBe(true);
+		});
+
+		it("should stop recursing when a package skill directory contains SKILL.md", async () => {
+			const pkgDir = join(tempDir, "skill-root-pkg");
+			mkdirSync(join(pkgDir, "skills", "root-skill", "nested-skill"), { recursive: true });
+			const rootSkill = join(pkgDir, "skills", "root-skill", "SKILL.md");
+			const nestedSkill = join(pkgDir, "skills", "root-skill", "nested-skill", "SKILL.md");
+			writeFileSync(rootSkill, "---\nname: root-skill\ndescription: Root skill\n---\n");
+			writeFileSync(nestedSkill, "---\nname: nested-skill\ndescription: Nested skill\n---\n");
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+			expect(result.skills.some((r) => r.path === rootSkill && r.enabled)).toBe(true);
+			expect(result.skills.some((r) => r.path === nestedSkill)).toBe(false);
 		});
 	});
 
@@ -524,7 +573,7 @@ Content`,
 			expect(added).toBe(true);
 
 			const settings = settingsManager.getProjectSettings();
-			const rel = relative(join(tempDir, ".draht"), projectPkgDir);
+			const rel = relative(join(tempDir, ".pi"), projectPkgDir);
 			const expected = rel.startsWith(".") ? rel : `./${rel}`;
 			expect(settings.packages?.[0]).toBe(expected);
 		});
@@ -740,7 +789,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "manifest-pkg",
-					draht: {
+					pi: {
 						extensions: ["extensions", "node_modules/dep/extensions", "!**/skip.ts"],
 					},
 				}),
@@ -768,7 +817,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "skill-manifest-pkg",
-					draht: {
+					pi: {
 						skills: ["skills", "!**/bad-skill"],
 					},
 				}),
@@ -793,7 +842,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "layered-pkg",
-					draht: {
+					pi: {
 						extensions: ["extensions", "!**/baz.ts"],
 					},
 				}),
@@ -997,7 +1046,7 @@ Content`,
 				join(pkgDir, "package.json"),
 				JSON.stringify({
 					name: "manifest-force-pkg",
-					draht: {
+					pi: {
 						extensions: ["extensions", "!**/two.ts", "+extensions/two.ts"],
 					},
 				}),
@@ -1227,7 +1276,7 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			writeFileSync(
 				join(pkgDir, "extensions", "custom", "package.json"),
 				JSON.stringify({
-					draht: {
+					pi: {
 						extensions: ["./main.ts"],
 					},
 				}),

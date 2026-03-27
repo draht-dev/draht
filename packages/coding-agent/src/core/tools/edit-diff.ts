@@ -311,46 +311,69 @@ export function generateDiffString(
 		} else {
 			// Context lines - only show a few before/after changes
 			const nextPartIsChange = i < parts.length - 1 && (parts[i + 1].added || parts[i + 1].removed);
+			const hasLeadingChange = lastWasChange;
+			const hasTrailingChange = nextPartIsChange;
 
-			if (lastWasChange || nextPartIsChange) {
-				// Show context
-				let linesToShow = raw;
-				let skipStart = 0;
-				let skipEnd = 0;
+			if (hasLeadingChange && hasTrailingChange) {
+				if (raw.length <= contextLines * 2) {
+					for (const line of raw) {
+						const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
+						output.push(` ${lineNum} ${line}`);
+						oldLineNum++;
+						newLineNum++;
+					}
+				} else {
+					const leadingLines = raw.slice(0, contextLines);
+					const trailingLines = raw.slice(raw.length - contextLines);
+					const skippedLines = raw.length - leadingLines.length - trailingLines.length;
 
-				if (!lastWasChange) {
-					// Show only last N lines as leading context
-					skipStart = Math.max(0, raw.length - contextLines);
-					linesToShow = raw.slice(skipStart);
-				}
+					for (const line of leadingLines) {
+						const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
+						output.push(` ${lineNum} ${line}`);
+						oldLineNum++;
+						newLineNum++;
+					}
 
-				if (!nextPartIsChange && linesToShow.length > contextLines) {
-					// Show only first N lines as trailing context
-					skipEnd = linesToShow.length - contextLines;
-					linesToShow = linesToShow.slice(0, contextLines);
-				}
-
-				// Add ellipsis if we skipped lines at start
-				if (skipStart > 0) {
 					output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-					// Update line numbers for the skipped leading context
-					oldLineNum += skipStart;
-					newLineNum += skipStart;
-				}
+					oldLineNum += skippedLines;
+					newLineNum += skippedLines;
 
-				for (const line of linesToShow) {
+					for (const line of trailingLines) {
+						const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
+						output.push(` ${lineNum} ${line}`);
+						oldLineNum++;
+						newLineNum++;
+					}
+				}
+			} else if (hasLeadingChange) {
+				const shownLines = raw.slice(0, contextLines);
+				const skippedLines = raw.length - shownLines.length;
+
+				for (const line of shownLines) {
 					const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
 					output.push(` ${lineNum} ${line}`);
 					oldLineNum++;
 					newLineNum++;
 				}
 
-				// Add ellipsis if we skipped lines at end
-				if (skipEnd > 0) {
+				if (skippedLines > 0) {
 					output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-					// Update line numbers for the skipped trailing context
-					oldLineNum += skipEnd;
-					newLineNum += skipEnd;
+					oldLineNum += skippedLines;
+					newLineNum += skippedLines;
+				}
+			} else if (hasTrailingChange) {
+				const skippedLines = Math.max(0, raw.length - contextLines);
+				if (skippedLines > 0) {
+					output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
+					oldLineNum += skippedLines;
+					newLineNum += skippedLines;
+				}
+
+				for (const line of raw.slice(skippedLines)) {
+					const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
+					output.push(` ${lineNum} ${line}`);
+					oldLineNum++;
+					newLineNum++;
 				}
 			} else {
 				// Skip these context lines entirely

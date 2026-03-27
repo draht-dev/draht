@@ -277,6 +277,29 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.diff).toContain("GAMMA");
 		});
 
+		it("should collapse large unchanged gaps in multi-edit diffs", async () => {
+			const testFile = join(testDir, "edit-multi-large-gap.txt");
+			const lines = Array.from({ length: 600 }, (_, i) => `line ${String(i + 1).padStart(3, "0")}`);
+			writeFileSync(testFile, `${lines.join("\n")}\n`);
+
+			const result = await editTool.execute("test-call-8b", {
+				path: testFile,
+				edits: [
+					{ oldText: "line 100\n", newText: "LINE 100\n" },
+					{ oldText: "line 300\n", newText: "LINE 300\n" },
+					{ oldText: "line 500\n", newText: "LINE 500\n" },
+				],
+			});
+
+			const diff = result.details?.diff ?? "";
+			expect(diff).toContain("LINE 100");
+			expect(diff).toContain("LINE 300");
+			expect(diff).toContain("LINE 500");
+			expect(diff).toContain("...");
+			expect(diff).not.toContain("line 250");
+			expect(diff.split("\n").length).toBeLessThan(50);
+		});
+
 		it("should match edits against the original file, not incrementally", async () => {
 			const testFile = join(testDir, "edit-multi-original.txt");
 			writeFileSync(testFile, "foo\nbar\nbaz\n");

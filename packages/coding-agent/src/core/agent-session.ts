@@ -112,9 +112,10 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
-	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" }
+	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
 	| {
-			type: "auto_compaction_end";
+			type: "compaction_end";
+			reason: "manual" | "threshold" | "overflow";
 			result: CompactionResult | undefined;
 			aborted: boolean;
 			willRetry: boolean;
@@ -1627,6 +1628,7 @@ export class AgentSession {
 		this._disconnectFromAgent();
 		await this.abort();
 		this._compactionAbortController = new AbortController();
+		this._emit({ type: "compaction_start", reason: "manual" });
 
 		try {
 			if (!this.model) {
@@ -1719,12 +1721,32 @@ export class AgentSession {
 				});
 			}
 
-			return {
+			const compactionResult = {
 				summary,
 				firstKeptEntryId,
 				tokensBefore,
 				details,
 			};
+			this._emit({
+				type: "compaction_end",
+				reason: "manual",
+				result: compactionResult,
+				aborted: false,
+				willRetry: false,
+			});
+			return compactionResult;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
+			this._emit({
+				type: "compaction_end",
+				reason: "manual",
+				result: undefined,
+				aborted,
+				willRetry: false,
+				errorMessage: aborted ? undefined : `Compaction failed: ${message}`,
+			});
+			throw error;
 		} finally {
 			this._compactionAbortController = undefined;
 			this._reconnectToAgent();
@@ -1787,7 +1809,8 @@ export class AgentSession {
 		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
 			if (this._overflowRecoveryAttempted) {
 				this._emit({
-					type: "auto_compaction_end",
+					type: "compaction_end",
+					reason: "overflow",
 					result: undefined,
 					aborted: false,
 					willRetry: false,
@@ -1842,18 +1865,30 @@ export class AgentSession {
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
 
-		this._emit({ type: "auto_compaction_start", reason });
+		this._emit({ type: "compaction_start", reason });
 		this._autoCompactionAbortController = new AbortController();
 
 		try {
 			if (!this.model) {
-				this._emit({ type: "auto_compaction_end", result: undefined, aborted: false, willRetry: false });
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+				});
 				return;
 			}
 
 			const authResult = await this._modelRegistry.getApiKeyAndHeaders(this.model);
 			if (!authResult.ok || !authResult.apiKey) {
-				this._emit({ type: "auto_compaction_end", result: undefined, aborted: false, willRetry: false });
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+				});
 				return;
 			}
 			const { apiKey, headers } = authResult;
@@ -1862,7 +1897,13 @@ export class AgentSession {
 
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
-				this._emit({ type: "auto_compaction_end", result: undefined, aborted: false, willRetry: false });
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+				});
 				return;
 			}
 
@@ -1879,7 +1920,13 @@ export class AgentSession {
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (extensionResult?.cancel) {
-					this._emit({ type: "auto_compaction_end", result: undefined, aborted: true, willRetry: false });
+					this._emit({
+						type: "compaction_end",
+						reason,
+						result: undefined,
+						aborted: true,
+						willRetry: false,
+					});
 					return;
 				}
 
@@ -1917,7 +1964,13 @@ export class AgentSession {
 			}
 
 			if (this._autoCompactionAbortController.signal.aborted) {
-				this._emit({ type: "auto_compaction_end", result: undefined, aborted: true, willRetry: false });
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: true,
+					willRetry: false,
+				});
 				return;
 			}
 
@@ -1945,7 +1998,7 @@ export class AgentSession {
 				tokensBefore,
 				details,
 			};
-			this._emit({ type: "auto_compaction_end", result, aborted: false, willRetry });
+			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
 
 			if (willRetry) {
 				const messages = this.agent.state.messages;
@@ -1967,7 +2020,8 @@ export class AgentSession {
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			this._emit({
-				type: "auto_compaction_end",
+				type: "compaction_end",
+				reason,
 				result: undefined,
 				aborted: false,
 				willRetry: false,

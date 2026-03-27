@@ -136,10 +136,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 			)
 			.mockResolvedValue();
 
-		const events: Array<{ type: string; errorMessage?: string }> = [];
+		const events: Array<{ type: string; reason: string; errorMessage?: string }> = [];
 		session.subscribe((event) => {
-			if (event.type === "auto_compaction_end") {
-				events.push({ type: event.type, errorMessage: event.errorMessage });
+			if (event.type === "compaction_end") {
+				events.push({ type: event.type, reason: event.reason, errorMessage: event.errorMessage });
 			}
 		});
 
@@ -154,7 +154,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(1);
 		expect(events).toContainEqual({
-			type: "auto_compaction_end",
+			type: "compaction_end",
+			reason: "overflow",
 			errorMessage:
 				"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
 		});

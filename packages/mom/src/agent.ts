@@ -600,15 +600,14 @@ function createRunner(sandboxConfig: SandboxConfig, channelId: string, channelDi
 					queue.enqueueMessage(text, "thread", "response thread", false);
 				}
 			}
-		} else if (event.type === "auto_compaction_start") {
-			log.logInfo(`Auto-compaction started (reason: ${(event as any).reason})`);
+		} else if (event.type === "compaction_start") {
+			log.logInfo(`Compaction started (reason: ${event.reason})`);
 			queue.enqueue(() => ctx.respond("_Compacting context..._", false), "compaction start");
-		} else if (event.type === "auto_compaction_end") {
-			const compEvent = event as any;
-			if (compEvent.result) {
-				log.logInfo(`Auto-compaction complete: ${compEvent.result.tokensBefore} tokens compacted`);
-			} else if (compEvent.aborted) {
-				log.logInfo("Auto-compaction aborted");
+		} else if (event.type === "compaction_end") {
+			if (event.result) {
+				log.logInfo(`Compaction complete: ${event.result.tokensBefore} tokens compacted`);
+			} else if (event.aborted) {
+				log.logInfo("Compaction aborted");
 			}
 		} else if (event.type === "auto_retry_start") {
 			const retryEvent = event as any;

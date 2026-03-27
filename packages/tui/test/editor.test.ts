@@ -2102,17 +2102,14 @@ describe("Editor component", () => {
 			editor.setAutocompleteProvider(mockProvider);
 
 			editor.handleInput("@");
-			await new Promise((resolve) => setTimeout(resolve, 50));
 			editor.handleInput("m");
-			await new Promise((resolve) => setTimeout(resolve, 50));
 			editor.handleInput("a");
-			await new Promise((resolve) => setTimeout(resolve, 50));
 			editor.handleInput("i");
 
 			assert.strictEqual(suggestionCalls, 0);
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 
-			await new Promise((resolve) => setTimeout(resolve, 250));
+			await new Promise((resolve) => setTimeout(resolve, 50));
 			await flushAutocomplete();
 
 			assert.strictEqual(suggestionCalls, 1);

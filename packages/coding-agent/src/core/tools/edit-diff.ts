@@ -70,6 +70,23 @@ export interface FuzzyMatchResult {
 	contentForReplacement: string;
 }
 
+export interface ReplaceEdit {
+	oldText: string;
+	newText: string;
+}
+
+interface MatchedEdit {
+	editIndex: number;
+	matchIndex: number;
+	matchLength: number;
+	newText: string;
+}
+
+export interface AppliedEditsResult {
+	baseContent: string;
+	newContent: string;
+}
+
 /**
  * Find oldText in content, trying exact match first, then fuzzy match.
  * When fuzzy matching is used, the returned contentForReplacement is the
@@ -119,6 +136,127 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
 /** Strip UTF-8 BOM if present, return both the BOM (if any) and the text without it */
 export function stripBom(content: string): { bom: string; text: string } {
 	return content.startsWith("\uFEFF") ? { bom: "\uFEFF", text: content.slice(1) } : { bom: "", text: content };
+}
+
+function countOccurrences(content: string, oldText: string): number {
+	const fuzzyContent = normalizeForFuzzyMatch(content);
+	const fuzzyOldText = normalizeForFuzzyMatch(oldText);
+	return fuzzyContent.split(fuzzyOldText).length - 1;
+}
+
+function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
+	if (totalEdits === 1) {
+		return new Error(
+			`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
+		);
+	}
+	return new Error(
+		`Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
+	);
+}
+
+function getDuplicateError(path: string, editIndex: number, totalEdits: number, occurrences: number): Error {
+	if (totalEdits === 1) {
+		return new Error(
+			`Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`,
+		);
+	}
+	return new Error(
+		`Found ${occurrences} occurrences of edits[${editIndex}] in ${path}. Each oldText must be unique. Please provide more context to make it unique.`,
+	);
+}
+
+function getEmptyOldTextError(path: string, editIndex: number, totalEdits: number): Error {
+	if (totalEdits === 1) {
+		return new Error(`oldText must not be empty in ${path}.`);
+	}
+	return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
+}
+
+function getNoChangeError(path: string, totalEdits: number): Error {
+	if (totalEdits === 1) {
+		return new Error(
+			`No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
+		);
+	}
+	return new Error(`No changes made to ${path}. The replacements produced identical content.`);
+}
+
+/**
+ * Apply one or more exact-text replacements to LF-normalized content.
+ *
+ * All edits are matched against the same original content. Replacements are
+ * then applied in reverse order so offsets remain stable. If any edit needs
+ * fuzzy matching, the operation runs in fuzzy-normalized content space to
+ * preserve current single-edit behavior.
+ */
+export function applyEditsToNormalizedContent(
+	normalizedContent: string,
+	edits: ReplaceEdit[],
+	path: string,
+): AppliedEditsResult {
+	const normalizedEdits = edits.map((edit) => ({
+		oldText: normalizeToLF(edit.oldText),
+		newText: normalizeToLF(edit.newText),
+	}));
+
+	for (let i = 0; i < normalizedEdits.length; i++) {
+		if (normalizedEdits[i].oldText.length === 0) {
+			throw getEmptyOldTextError(path, i, normalizedEdits.length);
+		}
+	}
+
+	const initialMatches = normalizedEdits.map((edit) => fuzzyFindText(normalizedContent, edit.oldText));
+	const baseContent = initialMatches.some((match) => match.usedFuzzyMatch)
+		? normalizeForFuzzyMatch(normalizedContent)
+		: normalizedContent;
+
+	const matchedEdits: MatchedEdit[] = [];
+	for (let i = 0; i < normalizedEdits.length; i++) {
+		const edit = normalizedEdits[i];
+		const matchResult = fuzzyFindText(baseContent, edit.oldText);
+		if (!matchResult.found) {
+			throw getNotFoundError(path, i, normalizedEdits.length);
+		}
+
+		const occurrences = countOccurrences(baseContent, edit.oldText);
+		if (occurrences > 1) {
+			throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
+		}
+
+		matchedEdits.push({
+			editIndex: i,
+			matchIndex: matchResult.index,
+			matchLength: matchResult.matchLength,
+			newText: edit.newText,
+		});
+	}
+
+	matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
+	for (let i = 1; i < matchedEdits.length; i++) {
+		const previous = matchedEdits[i - 1];
+		const current = matchedEdits[i];
+		if (previous.matchIndex + previous.matchLength > current.matchIndex) {
+			throw new Error(
+				`edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${path}. Merge them into one edit or target disjoint regions.`,
+			);
+		}
+	}
+
+	let newContent = baseContent;
+	for (let i = matchedEdits.length - 1; i >= 0; i--) {
+		const edit = matchedEdits[i];
+		newContent =
+			newContent.substring(0, edit.matchIndex) +
+			edit.newText +
+			newContent.substring(edit.matchIndex + edit.matchLength);
+	}
+
+	if (baseContent === newContent) {
+		throw getNoChangeError(path, normalizedEdits.length);
+	}
+
+	return { baseContent, newContent };
 }
 
 /**
@@ -237,13 +375,12 @@ export interface EditDiffError {
 }
 
 /**
- * Compute the diff for an edit operation without applying it.
+ * Compute the diff for one or more edit operations without applying them.
  * Used for preview rendering in the TUI before the tool executes.
  */
-export async function computeEditDiff(
+export async function computeEditsDiff(
 	path: string,
-	oldText: string,
-	newText: string,
+	edits: ReplaceEdit[],
 	cwd: string,
 ): Promise<EditDiffResult | EditDiffError> {
 	const absolutePath = resolveToCwd(path, cwd);
@@ -261,49 +398,25 @@ export async function computeEditDiff(
 
 		// Strip BOM before matching (LLM won't include invisible BOM in oldText)
 		const { text: content } = stripBom(rawContent);
-
 		const normalizedContent = normalizeToLF(content);
-		const normalizedOldText = normalizeToLF(oldText);
-		const normalizedNewText = normalizeToLF(newText);
-
-		// Find the old text using fuzzy matching (tries exact match first, then fuzzy)
-		const matchResult = fuzzyFindText(normalizedContent, normalizedOldText);
-
-		if (!matchResult.found) {
-			return {
-				error: `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-			};
-		}
-
-		// Count occurrences using fuzzy-normalized content for consistency
-		const fuzzyContent = normalizeForFuzzyMatch(normalizedContent);
-		const fuzzyOldText = normalizeForFuzzyMatch(normalizedOldText);
-		const occurrences = fuzzyContent.split(fuzzyOldText).length - 1;
-
-		if (occurrences > 1) {
-			return {
-				error: `Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`,
-			};
-		}
-
-		// Compute the new content using the matched position
-		// When fuzzy matching was used, contentForReplacement is the normalized version
-		const baseContent = matchResult.contentForReplacement;
-		const newContent =
-			baseContent.substring(0, matchResult.index) +
-			normalizedNewText +
-			baseContent.substring(matchResult.index + matchResult.matchLength);
-
-		// Check if it would actually change anything
-		if (baseContent === newContent) {
-			return {
-				error: `No changes would be made to ${path}. The replacement produces identical content.`,
-			};
-		}
+		const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
 
 		// Generate the diff
 		return generateDiffString(baseContent, newContent);
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
+}
+
+/**
+ * Compute the diff for a single edit operation without applying it.
+ * Kept as a convenience wrapper for single-edit callers.
+ */
+export async function computeEditDiff(
+	path: string,
+	oldText: string,
+	newText: string,
+	cwd: string,
+): Promise<EditDiffResult | EditDiffError> {
+	return computeEditsDiff(path, [{ oldText, newText }], cwd);
 }

@@ -6,14 +6,14 @@ import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } 
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
-	computeEditDiff,
+	applyEditsToNormalizedContent,
+	computeEditsDiff,
 	detectLineEnding,
 	type EditDiffError,
 	type EditDiffResult,
-	fuzzyFindText,
 	generateDiffString,
-	normalizeForFuzzyMatch,
 	normalizeToLF,
+	type ReplaceEdit,
 	restoreLineEndings,
 	stripBom,
 } from "./edit-diff.js";
@@ -27,13 +27,59 @@ type EditRenderState = {
 	preview?: EditDiffResult | EditDiffError;
 };
 
-const editSchema = Type.Object({
-	path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
-	oldText: Type.String({ description: "Exact text to find and replace (must match exactly)" }),
-	newText: Type.String({ description: "New text to replace the old text with" }),
-});
+const replaceEditSchema = Type.Object(
+	{
+		oldText: Type.String({
+			description:
+				"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+		}),
+		newText: Type.String({ description: "Replacement text for this targeted edit." }),
+	},
+	{ additionalProperties: false },
+);
+
+const editSchema = Type.Object(
+	{
+		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
+		oldText: Type.Optional(
+			Type.String({
+				description:
+					"Exact text to replace for one contiguous change. Include only enough surrounding context to make the match unique. Do not use this to cover multiple distant changes in one large block.",
+			}),
+		),
+		newText: Type.Optional(
+			Type.String({
+				description: "Replacement text for oldText in single-replacement mode.",
+			}),
+		),
+		edits: Type.Optional(
+			Type.Array(replaceEditSchema, {
+				description:
+					"Use this when changing multiple separate, disjoint regions in the same file. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+			}),
+		),
+	},
+	{ additionalProperties: false },
+);
 
 export type EditToolInput = Static<typeof editSchema>;
+
+interface ReplaceModeInput {
+	path: string;
+	oldText: string;
+	newText: string;
+}
+
+interface MultiReplaceModeInput {
+	path: string;
+	edits: ReplaceEdit[];
+}
+
+interface NormalizedEditInput {
+	path: string;
+	edits: ReplaceEdit[];
+	mode: "single" | "multi";
+}
 
 export interface EditToolDetails {
 	/** Unified diff of the changes made */
@@ -66,8 +112,73 @@ export interface EditToolOptions {
 	operations?: EditOperations;
 }
 
+function getMultiReplaceModeInput(input: EditToolInput): MultiReplaceModeInput | null {
+	if (input.edits === undefined) return null;
+	if (input.oldText !== undefined || input.newText !== undefined) {
+		throw new Error("Edit tool input is invalid. Use either edits or single replacement mode, not both.");
+	}
+	if (input.edits.length === 0) {
+		throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
+	}
+	return { path: input.path, edits: input.edits };
+}
+
+function getReplaceModeInput(input: EditToolInput): ReplaceModeInput | null {
+	const { oldText, newText } = input;
+	if (oldText === undefined && newText === undefined) return null;
+	if (input.edits !== undefined) {
+		throw new Error("Edit tool input is invalid. Use either single replacement mode or edits mode, not both.");
+	}
+	if (oldText === undefined || newText === undefined) {
+		throw new Error("Edit tool input is invalid. Single replacement mode requires both oldText and newText.");
+	}
+	return { path: input.path, oldText, newText };
+}
+
+function normalizeEditInput(input: EditToolInput): NormalizedEditInput {
+	const multiReplaceModeInput = getMultiReplaceModeInput(input);
+	if (multiReplaceModeInput) {
+		return { path: multiReplaceModeInput.path, edits: multiReplaceModeInput.edits, mode: "multi" };
+	}
+
+	const replaceModeInput = getReplaceModeInput(input);
+	if (replaceModeInput) {
+		return {
+			path: replaceModeInput.path,
+			edits: [{ oldText: replaceModeInput.oldText, newText: replaceModeInput.newText }],
+			mode: "single",
+		};
+	}
+
+	throw new Error("Edit tool input is invalid. Provide either oldText and newText, or edits.");
+}
+
+function getRenderablePreviewInput(
+	args: { path?: string; oldText?: string; newText?: string; edits?: ReplaceEdit[] } | undefined,
+): { path: string; edits: ReplaceEdit[] } | null {
+	if (!args || typeof args.path !== "string") {
+		return null;
+	}
+
+	if (
+		args.oldText === undefined &&
+		args.newText === undefined &&
+		Array.isArray(args.edits) &&
+		args.edits.length > 0 &&
+		args.edits.every((edit) => typeof edit?.oldText === "string" && typeof edit?.newText === "string")
+	) {
+		return { path: args.path, edits: args.edits };
+	}
+
+	if (typeof args.oldText === "string" && typeof args.newText === "string" && args.edits === undefined) {
+		return { path: args.path, edits: [{ oldText: args.oldText, newText: args.newText }] };
+	}
+
+	return null;
+}
+
 function formatEditCall(
-	args: { path?: string; file_path?: string; oldText?: string; newText?: string } | undefined,
+	args: { path?: string; file_path?: string; oldText?: string; newText?: string; edits?: ReplaceEdit[] } | undefined,
 	state: EditRenderState,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
 ): string {
@@ -89,7 +200,7 @@ function formatEditCall(
 }
 
 function formatEditResult(
-	args: { path?: string; file_path?: string; oldText?: string; newText?: string } | undefined,
+	args: { path?: string; file_path?: string; oldText?: string; newText?: string; edits?: ReplaceEdit[] } | undefined,
 	state: EditRenderState,
 	result: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
@@ -124,17 +235,18 @@ export function createEditToolDefinition(
 		name: "edit",
 		label: "edit",
 		description:
-			"Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.",
-		promptSnippet: "Make surgical edits to files (find exact text and replace)",
-		promptGuidelines: ["Use edit for precise changes (old text must match exactly)."],
+			"Edit a single file using exact text replacement. Use oldText/newText only for one contiguous replacement. Use edits when changing multiple separate, disjoint regions in the same file. In edits mode, every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes. Do not provide both modes at once.",
+		promptSnippet:
+			"Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+		promptGuidelines: [
+			"Use edit for precise changes (old text must match exactly)",
+			"When changing multiple separate locations in one file, use one edit call with edits[] instead of multiple edit calls",
+			"Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
+			"Keep oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+		],
 		parameters: editSchema,
-		async execute(
-			_toolCallId,
-			{ path, oldText, newText }: { path: string; oldText: string; newText: string },
-			signal?: AbortSignal,
-			_onUpdate?,
-			_ctx?,
-		) {
+		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, _ctx?) {
+			const { path, edits, mode } = normalizeEditInput(input);
 			const absolutePath = resolveToCwd(path, cwd);
 
 			return withFileMutationQueue(
@@ -163,7 +275,7 @@ export function createEditToolDefinition(
 						}
 
 						// Perform the edit operation.
-						(async () => {
+						void (async () => {
 							try {
 								// Check if file exists.
 								try {
@@ -192,67 +304,16 @@ export function createEditToolDefinition(
 
 								// Strip BOM before matching. The model will not include an invisible BOM in oldText.
 								const { bom, text: content } = stripBom(rawContent);
-
 								const originalEnding = detectLineEnding(content);
 								const normalizedContent = normalizeToLF(content);
-								const normalizedOldText = normalizeToLF(oldText);
-								const normalizedNewText = normalizeToLF(newText);
-
-								// Find the old text using fuzzy matching. This tries exact match first, then a normalized fallback.
-								const matchResult = fuzzyFindText(normalizedContent, normalizedOldText);
-
-								if (!matchResult.found) {
-									if (signal) {
-										signal.removeEventListener("abort", onAbort);
-									}
-									reject(
-										new Error(
-											`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-										),
-									);
-									return;
-								}
-
-								// Count occurrences using fuzzy-normalized content for consistency with the matcher.
-								const fuzzyContent = normalizeForFuzzyMatch(normalizedContent);
-								const fuzzyOldText = normalizeForFuzzyMatch(normalizedOldText);
-								const occurrences = fuzzyContent.split(fuzzyOldText).length - 1;
-
-								if (occurrences > 1) {
-									if (signal) {
-										signal.removeEventListener("abort", onAbort);
-									}
-									reject(
-										new Error(
-											`Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`,
-										),
-									);
-									return;
-								}
+								const { baseContent, newContent } = applyEditsToNormalizedContent(
+									normalizedContent,
+									edits,
+									path,
+								);
 
 								// Check if aborted before writing.
 								if (aborted) {
-									return;
-								}
-
-								// Perform replacement using the matched text position.
-								// When fuzzy matching was used, contentForReplacement is the normalized version.
-								const baseContent = matchResult.contentForReplacement;
-								const newContent =
-									baseContent.substring(0, matchResult.index) +
-									normalizedNewText +
-									baseContent.substring(matchResult.index + matchResult.matchLength);
-
-								// Verify the replacement actually changed something.
-								if (baseContent === newContent) {
-									if (signal) {
-										signal.removeEventListener("abort", onAbort);
-									}
-									reject(
-										new Error(
-											`No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
-										),
-									);
 									return;
 								}
 
@@ -274,19 +335,22 @@ export function createEditToolDefinition(
 									content: [
 										{
 											type: "text",
-											text: `Successfully replaced text in ${path}.`,
+											text:
+												mode === "single"
+													? `Successfully replaced text in ${path}.`
+													: `Successfully replaced ${edits.length} block(s) in ${path}.`,
 										},
 									],
 									details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine },
 								});
-							} catch (error: any) {
+							} catch (error: unknown) {
 								// Clean up abort handler.
 								if (signal) {
 									signal.removeEventListener("abort", onAbort);
 								}
 
 								if (!aborted) {
-									reject(error);
+									reject(error instanceof Error ? error : new Error(String(error)));
 								}
 							}
 						})();
@@ -294,18 +358,21 @@ export function createEditToolDefinition(
 			);
 		},
 		renderCall(args, theme, context) {
-			const isSingleMode =
-				typeof args?.path === "string" && typeof args?.oldText === "string" && typeof args?.newText === "string";
-			if (context.argsComplete && isSingleMode) {
-				const argsKey = JSON.stringify({ path: args.path, oldText: args.oldText, newText: args.newText });
-				if (context.state.argsKey !== argsKey) {
-					context.state.argsKey = argsKey;
-					computeEditDiff(args.path!, args.oldText!, args.newText!, context.cwd).then((preview) => {
-						if (context.state.argsKey === argsKey) {
-							context.state.preview = preview;
-							context.invalidate();
-						}
-					});
+			if (context.argsComplete) {
+				const previewInput = getRenderablePreviewInput(
+					args as { path?: string; oldText?: string; newText?: string; edits?: ReplaceEdit[] },
+				);
+				if (previewInput) {
+					const argsKey = JSON.stringify({ path: previewInput.path, edits: previewInput.edits });
+					if (context.state.argsKey !== argsKey) {
+						context.state.argsKey = argsKey;
+						computeEditsDiff(previewInput.path, previewInput.edits, context.cwd).then((preview) => {
+							if (context.state.argsKey === argsKey) {
+								context.state.preview = preview;
+								context.invalidate();
+							}
+						});
+					}
 				}
 			}
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);

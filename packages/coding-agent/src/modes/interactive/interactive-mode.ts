@@ -47,7 +47,6 @@ import {
 	VERSION,
 } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
-import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
 	ExtensionRunner,
@@ -4576,10 +4575,6 @@ export class InteractiveMode {
 			return;
 		}
 
-		await this.executeCompaction(customInstructions);
-	}
-
-	private async executeCompaction(customInstructions?: string): Promise<CompactionResult | undefined> {
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
@@ -4587,9 +4582,9 @@ export class InteractiveMode {
 		this.statusContainer.clear();
 
 		try {
-			return await this.session.compact(customInstructions);
+			await this.session.compact(customInstructions);
 		} catch {
-			return undefined;
+			// Ignore, will be emitted as an event
 		}
 	}
 

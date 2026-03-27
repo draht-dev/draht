@@ -4,7 +4,7 @@ import stripAnsi from "strip-ansi";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { ToolDefinition } from "../src/core/extensions/types.js";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.js";
-import { createReadToolDefinition } from "../src/core/tools/read.js";
+import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.js";
 import { createWriteToolDefinition } from "../src/core/tools/write.js";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
@@ -164,6 +164,48 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("read");
 		expect(rendered).toContain("README.md");
 		expect(rendered).toContain("override result");
+	});
+
+	test("uses custom renderers for built-in overrides that reuse built-in definition parameters", () => {
+		const builtInDefinition = createReadToolDefinition(process.cwd());
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-4d",
+			{ path: "README.md" },
+			{},
+			{
+				...builtInDefinition,
+				renderCall: () => new Text("override call", 0, 0),
+				renderResult: () => new Text("override result", 0, 0),
+			},
+			createFakeTui(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("override call");
+		expect(rendered).toContain("override result");
+		expect(rendered).not.toContain("read README.md");
+	});
+
+	test("uses custom renderers for built-in overrides that reuse wrapped built-in tool parameters", () => {
+		const builtInTool = createReadTool(process.cwd());
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-4e",
+			{ path: "README.md" },
+			{},
+			{
+				...createBaseToolDefinition("read"),
+				parameters: builtInTool.parameters,
+				renderCall: () => new Text("wrapped override call", 0, 0),
+				renderResult: () => new Text("wrapped override result", 0, 0),
+			},
+			createFakeTui(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("wrapped override call");
+		expect(rendered).toContain("wrapped override result");
 	});
 
 	test("shares renderer state across custom call and result slots", () => {

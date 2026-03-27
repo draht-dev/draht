@@ -72,19 +72,11 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
-	private isBuiltInDefinition(definition: ToolDefinition<any, any> | undefined): boolean {
-		return (
-			definition !== undefined &&
-			this.builtInToolDefinition !== undefined &&
-			definition.parameters === this.builtInToolDefinition.parameters
-		);
-	}
-
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
 		if (!this.builtInToolDefinition) {
 			return this.toolDefinition?.renderCall;
 		}
-		if (!this.toolDefinition || this.isBuiltInDefinition(this.toolDefinition)) {
+		if (!this.toolDefinition) {
 			return this.builtInToolDefinition.renderCall;
 		}
 		return this.toolDefinition.renderCall ?? this.builtInToolDefinition.renderCall;
@@ -94,7 +86,7 @@ export class ToolExecutionComponent extends Container {
 		if (!this.builtInToolDefinition) {
 			return this.toolDefinition?.renderResult;
 		}
-		if (!this.toolDefinition || this.isBuiltInDefinition(this.toolDefinition)) {
+		if (!this.toolDefinition) {
 			return this.builtInToolDefinition.renderResult;
 		}
 		return this.toolDefinition.renderResult ?? this.builtInToolDefinition.renderResult;

@@ -565,17 +565,27 @@ Before `tool_call` runs, pi waits for previously emitted Agent events to finish 
 
 In the default parallel tool execution mode, sibling tool calls from the same assistant message are preflighted sequentially, then executed concurrently. `tool_call` is not guaranteed to see sibling tool results from that same assistant message in `ctx.sessionManager`.
 
+`event.input` is mutable. Mutate it in place to patch tool arguments before execution.
+
+Behavior guarantees:
+- Mutations to `event.input` affect the actual tool execution
+- Later `tool_call` handlers see mutations made by earlier handlers
+- No re-validation is performed after your mutation
+- Return values from `tool_call` only control blocking via `{ block: true, reason?: string }`
+
 ```typescript
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 
 pi.on("tool_call", async (event, ctx) => {
   // event.toolName - "bash", "read", "write", "edit", etc.
   // event.toolCallId
-  // event.input - tool parameters
+  // event.input - tool parameters (mutable)
 
   // Built-in tools: no type params needed
   if (isToolCallEventType("bash", event)) {
     // event.input is { command: string; timeout?: number }
+    event.input.command = `source ~/.profile\n${event.input.command}`;
+
     if (event.input.command.includes("rm -rf")) {
       return { block: true, reason: "Dangerous command" };
     }

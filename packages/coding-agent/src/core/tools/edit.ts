@@ -215,7 +215,14 @@ function formatEditResult(
 			.filter((c) => c.type === "text")
 			.map((c) => c.text || "")
 			.join("\n");
-		return errorText ? `\n${theme.fg("error", errorText)}` : undefined;
+		let previewError: string | undefined;
+		if (state.preview && "error" in state.preview) {
+			previewError = state.preview.error;
+		}
+		if (!errorText || errorText === previewError) {
+			return undefined;
+		}
+		return `\n${theme.fg("error", errorText)}`;
 	}
 
 	const previewDiff = state.preview && !("error" in state.preview) ? state.preview.diff : undefined;

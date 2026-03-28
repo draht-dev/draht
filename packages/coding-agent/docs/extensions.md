@@ -629,6 +629,8 @@ Fired after tool execution finishes and before `tool_execution_end` plus the fin
 - Each handler sees the latest result after previous handler changes
 - Handlers can return partial patches (`content`, `details`, or `isError`); omitted fields keep their current values
 
+Use `ctx.signal` for nested async work inside the handler. This lets Esc cancel model calls, `fetch()`, and other abort-aware operations started by the extension.
+
 ```typescript
 import { isBashToolResult } from "@mariozechner/pi-coding-agent";
 
@@ -639,6 +641,12 @@ pi.on("tool_result", async (event, ctx) => {
   if (isBashToolResult(event)) {
     // event.details is typed as BashToolDetails
   }
+
+  const response = await fetch("https://example.com/summarize", {
+    method: "POST",
+    body: JSON.stringify({ content: event.content }),
+    signal: ctx.signal,
+  });
 
   // Modify result:
   return { content: [...], details: {...}, isError: false };
@@ -758,6 +766,31 @@ ctx.sessionManager.getLeafId()        // Current leaf entry ID
 ### ctx.modelRegistry / ctx.model
 
 Access to models and API keys.
+
+### ctx.signal
+
+The current agent abort signal, or `undefined` when no agent turn is active.
+
+Use this for abort-aware nested work started by extension handlers, for example:
+- `fetch(..., { signal: ctx.signal })`
+- model calls that accept `signal`
+- file or process helpers that accept `AbortSignal`
+
+`ctx.signal` is typically defined during active turn events such as `tool_call`, `tool_result`, `message_update`, and `turn_end`.
+It is usually `undefined` in idle or non-turn contexts such as session events, extension commands, and shortcuts fired while pi is idle.
+
+```typescript
+pi.on("tool_result", async (event, ctx) => {
+  const response = await fetch("https://example.com/api", {
+    method: "POST",
+    body: JSON.stringify(event),
+    signal: ctx.signal,
+  });
+
+  const data = await response.json();
+  return { details: data };
+});
+```
 
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 

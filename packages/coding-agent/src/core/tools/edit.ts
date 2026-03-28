@@ -9,11 +9,11 @@ import {
 	applyEditsToNormalizedContent,
 	computeEditsDiff,
 	detectLineEnding,
+	type Edit,
 	type EditDiffError,
 	type EditDiffResult,
 	generateDiffString,
 	normalizeToLF,
-	type ReplaceEdit,
 	restoreLineEndings,
 	stripBom,
 } from "./edit-diff.js";
@@ -41,45 +41,15 @@ const replaceEditSchema = Type.Object(
 const editSchema = Type.Object(
 	{
 		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
-		oldText: Type.Optional(
-			Type.String({
-				description:
-					"Exact text to replace for one contiguous change. Include only enough surrounding context to make the match unique. Do not use this to cover multiple distant changes in one large block.",
-			}),
-		),
-		newText: Type.Optional(
-			Type.String({
-				description: "Replacement text for oldText in single-replacement mode.",
-			}),
-		),
-		edits: Type.Optional(
-			Type.Array(replaceEditSchema, {
-				description:
-					"Use this when changing multiple separate, disjoint regions in the same file. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
-			}),
-		),
+		edits: Type.Array(replaceEditSchema, {
+			description:
+				"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+		}),
 	},
 	{ additionalProperties: false },
 );
 
 export type EditToolInput = Static<typeof editSchema>;
-
-interface ReplaceModeInput {
-	path: string;
-	oldText: string;
-	newText: string;
-}
-
-interface MultiReplaceModeInput {
-	path: string;
-	edits: ReplaceEdit[];
-}
-
-interface NormalizedEditInput {
-	path: string;
-	edits: ReplaceEdit[];
-	mode: "single" | "multi";
-}
 
 export interface EditToolDetails {
 	/** Unified diff of the changes made */
@@ -112,10 +82,11 @@ export interface EditToolOptions {
 	operations?: EditOperations;
 }
 
-function getMultiReplaceModeInput(input: EditToolInput): MultiReplaceModeInput | null {
-	if (input.edits === undefined) return null;
-	if (input.oldText !== undefined || input.newText !== undefined) {
-		throw new Error("Edit tool input is invalid. Use either edits or single replacement mode, not both.");
+function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
+	if (!Array.isArray(input.edits)) {
+		throw new Error(
+			"Edit tool input is invalid. edits must be an array of replacements in the form { oldText: string, newText: string }.",
+		);
 	}
 	if (input.edits.length === 0) {
 		throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
@@ -123,46 +94,20 @@ function getMultiReplaceModeInput(input: EditToolInput): MultiReplaceModeInput |
 	return { path: input.path, edits: input.edits };
 }
 
-function getReplaceModeInput(input: EditToolInput): ReplaceModeInput | null {
-	const { oldText, newText } = input;
-	if (oldText === undefined && newText === undefined) return null;
-	if (input.edits !== undefined) {
-		throw new Error("Edit tool input is invalid. Use either single replacement mode or edits mode, not both.");
-	}
-	if (oldText === undefined || newText === undefined) {
-		throw new Error("Edit tool input is invalid. Single replacement mode requires both oldText and newText.");
-	}
-	return { path: input.path, oldText, newText };
-}
+type RenderableEditArgs = {
+	path?: string;
+	file_path?: string;
+	edits?: Edit[];
+	oldText?: string;
+	newText?: string;
+};
 
-function normalizeEditInput(input: EditToolInput): NormalizedEditInput {
-	const multiReplaceModeInput = getMultiReplaceModeInput(input);
-	if (multiReplaceModeInput) {
-		return { path: multiReplaceModeInput.path, edits: multiReplaceModeInput.edits, mode: "multi" };
-	}
-
-	const replaceModeInput = getReplaceModeInput(input);
-	if (replaceModeInput) {
-		return {
-			path: replaceModeInput.path,
-			edits: [{ oldText: replaceModeInput.oldText, newText: replaceModeInput.newText }],
-			mode: "single",
-		};
-	}
-
-	throw new Error("Edit tool input is invalid. Provide either oldText and newText, or edits.");
-}
-
-function getRenderablePreviewInput(
-	args: { path?: string; oldText?: string; newText?: string; edits?: ReplaceEdit[] } | undefined,
-): { path: string; edits: ReplaceEdit[] } | null {
+function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path: string; edits: Edit[] } | null {
 	if (!args || typeof args.path !== "string") {
 		return null;
 	}
 
 	if (
-		args.oldText === undefined &&
-		args.newText === undefined &&
 		Array.isArray(args.edits) &&
 		args.edits.length > 0 &&
 		args.edits.every((edit) => typeof edit?.oldText === "string" && typeof edit?.newText === "string")
@@ -170,7 +115,7 @@ function getRenderablePreviewInput(
 		return { path: args.path, edits: args.edits };
 	}
 
-	if (typeof args.oldText === "string" && typeof args.newText === "string" && args.edits === undefined) {
+	if (typeof args.oldText === "string" && typeof args.newText === "string") {
 		return { path: args.path, edits: [{ oldText: args.oldText, newText: args.newText }] };
 	}
 
@@ -178,7 +123,7 @@ function getRenderablePreviewInput(
 }
 
 function formatEditCall(
-	args: { path?: string; file_path?: string; oldText?: string; newText?: string; edits?: ReplaceEdit[] } | undefined,
+	args: RenderableEditArgs | undefined,
 	state: EditRenderState,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
 ): string {
@@ -200,7 +145,7 @@ function formatEditCall(
 }
 
 function formatEditResult(
-	args: { path?: string; file_path?: string; oldText?: string; newText?: string; edits?: ReplaceEdit[] } | undefined,
+	args: RenderableEditArgs | undefined,
 	state: EditRenderState,
 	result: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
@@ -242,18 +187,18 @@ export function createEditToolDefinition(
 		name: "edit",
 		label: "edit",
 		description:
-			"Edit a single file using exact text replacement. Use oldText/newText only for one contiguous replacement. Use edits when changing multiple separate, disjoint regions in the same file. In edits mode, every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes. Do not provide both modes at once.",
+			"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
 		promptSnippet:
 			"Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
 		promptGuidelines: [
-			"Use edit for precise changes (old text must match exactly)",
-			"When changing multiple separate locations in one file, use one edit call with edits[] instead of multiple edit calls",
+			"Use edit for precise changes (edits[].oldText must match exactly)",
+			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
 			"Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
-			"Keep oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+			"Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
 		],
 		parameters: editSchema,
 		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, _ctx?) {
-			const { path, edits, mode } = normalizeEditInput(input);
+			const { path, edits } = validateEditInput(input);
 			const absolutePath = resolveToCwd(path, cwd);
 
 			return withFileMutationQueue(
@@ -342,10 +287,7 @@ export function createEditToolDefinition(
 									content: [
 										{
 											type: "text",
-											text:
-												mode === "single"
-													? `Successfully replaced text in ${path}.`
-													: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+											text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
 										},
 									],
 									details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine },
@@ -366,9 +308,7 @@ export function createEditToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			if (context.argsComplete) {
-				const previewInput = getRenderablePreviewInput(
-					args as { path?: string; oldText?: string; newText?: string; edits?: ReplaceEdit[] },
-				);
+				const previewInput = getRenderablePreviewInput(args as RenderableEditArgs);
 				if (previewInput) {
 					const argsKey = JSON.stringify({ path: previewInput.path, edits: previewInput.edits });
 					if (context.state.argsKey !== argsKey) {

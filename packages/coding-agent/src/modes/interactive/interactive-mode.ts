@@ -164,6 +164,8 @@ export class InteractiveMode {
 	private loadingAnimation: Loader | undefined = undefined;
 	private pendingWorkingMessage: string | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working...";
+	private readonly defaultHiddenThinkingLabel = "Thinking...";
+	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
 	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
@@ -1325,6 +1327,19 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private setHiddenThinkingLabel(label?: string): void {
+		this.hiddenThinkingLabel = label ?? this.defaultHiddenThinkingLabel;
+		for (const child of this.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) {
+				child.setHiddenThinkingLabel(this.hiddenThinkingLabel);
+			}
+		}
+		if (this.streamingComponent) {
+			this.streamingComponent.setHiddenThinkingLabel(this.hiddenThinkingLabel);
+		}
+		this.ui.requestRender();
+	}
+
 	/**
 	 * Set an extension widget (string array or custom component).
 	 */
@@ -1405,6 +1420,7 @@ export class InteractiveMode {
 		if (this.loadingAnimation) {
 			this.loadingAnimation.setMessage(`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`);
 		}
+		this.setHiddenThinkingLabel();
 	}
 
 	// Maximum total widget lines to prevent viewport overflow
@@ -1557,6 +1573,7 @@ export class InteractiveMode {
 					this.pendingWorkingMessage = message;
 				}
 			},
+			setHiddenThinkingLabel: (label) => this.setHiddenThinkingLabel(label),
 			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
@@ -2262,6 +2279,7 @@ export class InteractiveMode {
 						undefined,
 						this.hideThinkingBlock,
 						this.getMarkdownThemeWithSettings(),
+						this.hiddenThinkingLabel,
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
@@ -2617,6 +2635,7 @@ export class InteractiveMode {
 					message,
 					this.hideThinkingBlock,
 					this.getMarkdownThemeWithSettings(),
+					this.hiddenThinkingLabel,
 				);
 				this.chatContainer.addChild(assistantComponent);
 				break;

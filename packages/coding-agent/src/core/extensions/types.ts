@@ -127,6 +127,9 @@ export interface ExtensionUIContext {
 	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
 	setWorkingMessage(message?: string): void;
 
+	/** Set the label shown for hidden thinking blocks. Call with no argument to restore default. */
+	setHiddenThinkingLabel(label?: string): void;
+
 	/** Set a widget to display above or below the editor. Accepts string array or component factory. */
 	setWidget(key: string, content: string[] | undefined, options?: ExtensionWidgetOptions): void;
 	setWidget(

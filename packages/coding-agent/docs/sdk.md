@@ -232,9 +232,12 @@ session.subscribe((event) => {
       // event.toolResults: tool results from this turn
       break;
     
-    // Session events (auto-compaction, retry)
-    case "auto_compaction_start":
-    case "auto_compaction_end":
+    // Session events (queue, compaction, retry)
+    case "queue_update":
+      console.log(event.steering, event.followUp);
+      break;
+    case "compaction_start":
+    case "compaction_end":
     case "auto_retry_start":
     case "auto_retry_end":
       break;

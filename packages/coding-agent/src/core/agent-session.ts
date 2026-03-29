@@ -1299,7 +1299,7 @@ export class AgentSession {
 			expandPromptTemplates: false,
 			streamingBehavior: options?.deliverAs,
 			images,
-			source: "interactive",
+			source: "extension",
 		});
 	}
 

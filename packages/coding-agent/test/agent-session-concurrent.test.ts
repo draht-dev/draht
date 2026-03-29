@@ -281,7 +281,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		expect(session.pendingMessageCount).toBe(1);
 		expect(session.getSteeringMessages()).toContain("Steer from extension");
-		expect(lastInputSource).toBe("interactive");
+		expect(lastInputSource).toBe("extension");
 		expect(queueEvents.some((event) => event.steering.includes("Steer from extension"))).toBe(true);
 
 		await session.abort();

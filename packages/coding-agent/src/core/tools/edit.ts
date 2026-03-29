@@ -7,11 +7,8 @@ import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
 	applyEditsToNormalizedContent,
-	computeEditsDiff,
 	detectLineEnding,
 	type Edit,
-	type EditDiffError,
-	type EditDiffResult,
 	generateDiffString,
 	normalizeToLF,
 	restoreLineEndings,
@@ -22,10 +19,7 @@ import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
-type EditRenderState = {
-	argsKey?: string;
-	preview?: EditDiffResult | EditDiffError;
-};
+type EditRenderState = Record<string, never>;
 
 const replaceEditSchema = Type.Object(
 	{
@@ -102,51 +96,19 @@ type RenderableEditArgs = {
 	newText?: string;
 };
 
-function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path: string; edits: Edit[] } | null {
-	if (!args || typeof args.path !== "string") {
-		return null;
-	}
-
-	if (
-		Array.isArray(args.edits) &&
-		args.edits.length > 0 &&
-		args.edits.every((edit) => typeof edit?.oldText === "string" && typeof edit?.newText === "string")
-	) {
-		return { path: args.path, edits: args.edits };
-	}
-
-	if (typeof args.oldText === "string" && typeof args.newText === "string") {
-		return { path: args.path, edits: [{ oldText: args.oldText, newText: args.newText }] };
-	}
-
-	return null;
-}
-
 function formatEditCall(
 	args: RenderableEditArgs | undefined,
-	state: EditRenderState,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
 ): string {
 	const invalidArg = invalidArgText(theme);
 	const rawPath = str(args?.file_path ?? args?.path);
 	const path = rawPath !== null ? shortenPath(rawPath) : null;
 	const pathDisplay = path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...");
-	let text = `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
-
-	if (state.preview) {
-		if ("error" in state.preview) {
-			text += `\n\n${theme.fg("error", state.preview.error)}`;
-		} else if (state.preview.diff) {
-			text += `\n\n${renderDiff(state.preview.diff, { filePath: rawPath ?? undefined })}`;
-		}
-	}
-
-	return text;
+	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
 }
 
 function formatEditResult(
 	args: RenderableEditArgs | undefined,
-	state: EditRenderState,
 	result: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		details?: EditToolDetails;
@@ -160,19 +122,14 @@ function formatEditResult(
 			.filter((c) => c.type === "text")
 			.map((c) => c.text || "")
 			.join("\n");
-		let previewError: string | undefined;
-		if (state.preview && "error" in state.preview) {
-			previewError = state.preview.error;
-		}
-		if (!errorText || errorText === previewError) {
+		if (!errorText) {
 			return undefined;
 		}
 		return `\n${theme.fg("error", errorText)}`;
 	}
 
-	const previewDiff = state.preview && !("error" in state.preview) ? state.preview.diff : undefined;
 	const resultDiff = result.details?.diff;
-	if (!resultDiff || resultDiff === previewDiff) {
+	if (!resultDiff) {
 		return undefined;
 	}
 	return `\n${renderDiff(resultDiff, { filePath: rawPath ?? undefined })}`;
@@ -307,27 +264,12 @@ export function createEditToolDefinition(
 			);
 		},
 		renderCall(args, theme, context) {
-			if (context.argsComplete) {
-				const previewInput = getRenderablePreviewInput(args as RenderableEditArgs);
-				if (previewInput) {
-					const argsKey = JSON.stringify({ path: previewInput.path, edits: previewInput.edits });
-					if (context.state.argsKey !== argsKey) {
-						context.state.argsKey = argsKey;
-						computeEditsDiff(previewInput.path, previewInput.edits, context.cwd).then((preview) => {
-							if (context.state.argsKey === argsKey) {
-								context.state.preview = preview;
-								context.invalidate();
-							}
-						});
-					}
-				}
-			}
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatEditCall(args, context.state, theme));
+			text.setText(formatEditCall(args, theme));
 			return text;
 		},
 		renderResult(result, _options, theme, context) {
-			const output = formatEditResult(context.args, context.state, result as any, theme, context.isError);
+			const output = formatEditResult(context.args, result as any, theme, context.isError);
 			if (!output) {
 				const component = (context.lastComponent as Container | undefined) ?? new Container();
 				component.clear();

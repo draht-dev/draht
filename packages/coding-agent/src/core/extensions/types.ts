@@ -377,6 +377,9 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	/** Parameter schema (TypeBox) */
 	parameters: TParams;
 
+	/** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
+	prepareArguments?: (args: unknown) => Static<TParams>;
+
 	/** Execute the tool. */
 	execute(
 		toolCallId: string,

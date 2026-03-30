@@ -141,7 +141,7 @@ Flow:
 4. Fire `session_before_tree` event (hook can cancel or provide summary)
 5. Run default summarizer if needed
 6. Switch leaf via `branch()` or `branchWithSummary()`
-7. Update agent: `agent.replaceMessages(sessionManager.buildSessionContext().messages)`
+7. Update agent: `agent.state.messages = sessionManager.buildSessionContext().messages`
 8. Fire `session_tree` event
 9. Notify custom tools via session event
 10. Return result with `editorText` if user message was selected

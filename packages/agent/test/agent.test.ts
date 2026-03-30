@@ -47,9 +47,9 @@ describe("Agent", () => {
 		expect(agent.state.tools).toEqual([]);
 		expect(agent.state.messages).toEqual([]);
 		expect(agent.state.isStreaming).toBe(false);
-		expect(agent.state.streamMessage).toBe(null);
+		expect(agent.state.streamingMessage).toBe(undefined);
 		expect(agent.state.pendingToolCalls).toEqual(new Set());
-		expect(agent.state.error).toBeUndefined();
+		expect(agent.state.errorMessage).toBeUndefined();
 	});
 
 	it("should create an agent instance with custom initial state", () => {
@@ -79,13 +79,13 @@ describe("Agent", () => {
 		expect(eventCount).toBe(0);
 
 		// State mutators don't emit events
-		agent.setSystemPrompt("Test prompt");
+		agent.state.systemPrompt = "Test prompt";
 		expect(eventCount).toBe(0);
 		expect(agent.state.systemPrompt).toBe("Test prompt");
 
 		// Unsubscribe should work
 		unsubscribe();
-		agent.setSystemPrompt("Another prompt");
+		agent.state.systemPrompt = "Another prompt";
 		expect(eventCount).toBe(0); // Should not increase
 	});
 
@@ -93,37 +93,38 @@ describe("Agent", () => {
 		const agent = new Agent();
 
 		// Test setSystemPrompt
-		agent.setSystemPrompt("Custom prompt");
+		agent.state.systemPrompt = "Custom prompt";
 		expect(agent.state.systemPrompt).toBe("Custom prompt");
 
 		// Test setModel
 		const newModel = getModel("google", "gemini-2.5-flash");
-		agent.setModel(newModel);
+		agent.state.model = newModel;
 		expect(agent.state.model).toBe(newModel);
 
 		// Test setThinkingLevel
-		agent.setThinkingLevel("high");
+		agent.state.thinkingLevel = "high";
 		expect(agent.state.thinkingLevel).toBe("high");
 
 		// Test setTools
 		const tools = [{ name: "test", description: "test tool" } as any];
-		agent.setTools(tools);
-		expect(agent.state.tools).toBe(tools);
+		agent.state.tools = tools;
+		expect(agent.state.tools).toEqual(tools);
+		expect(agent.state.tools).not.toBe(tools); // Should be a copy
 
 		// Test replaceMessages
 		const messages = [{ role: "user" as const, content: "Hello", timestamp: Date.now() }];
-		agent.replaceMessages(messages);
+		agent.state.messages = messages;
 		expect(agent.state.messages).toEqual(messages);
 		expect(agent.state.messages).not.toBe(messages); // Should be a copy
 
 		// Test appendMessage
 		const newMessage = { role: "assistant" as const, content: [{ type: "text" as const, text: "Hi" }] };
-		agent.appendMessage(newMessage as any);
+		agent.state.messages.push(newMessage as any);
 		expect(agent.state.messages).toHaveLength(2);
 		expect(agent.state.messages[1]).toBe(newMessage);
 
 		// Test clearMessages
-		agent.clearMessages();
+		agent.state.messages = [];
 		expect(agent.state.messages).toEqual([]);
 	});
 
@@ -241,14 +242,14 @@ describe("Agent", () => {
 			},
 		});
 
-		agent.replaceMessages([
+		agent.state.messages = [
 			{
 				role: "user",
 				content: [{ type: "text", text: "Initial" }],
 				timestamp: Date.now() - 10,
 			},
 			createAssistantMessage("Initial response"),
-		]);
+		];
 
 		agent.followUp({
 			role: "user",
@@ -285,14 +286,14 @@ describe("Agent", () => {
 			},
 		});
 
-		agent.replaceMessages([
+		agent.state.messages = [
 			{
 				role: "user",
 				content: [{ type: "text", text: "Initial" }],
 				timestamp: Date.now() - 10,
 			},
 			createAssistantMessage("Initial response"),
-		]);
+		];
 
 		agent.steer({
 			role: "user",

@@ -204,14 +204,18 @@ interface AgentState {
   thinkingLevel: ThinkingLevel;
   tools: AgentTool<any>[];
   messages: AgentMessage[];
-  isStreaming: boolean;
-  streamMessage: AgentMessage | null;  // Current partial during streaming
-  pendingToolCalls: Set<string>;
-  error?: string;
+  readonly isStreaming: boolean;
+  readonly streamingMessage?: AgentMessage;
+  readonly pendingToolCalls: ReadonlySet<string>;
+  readonly errorMessage?: string;
 }
 ```
 
-Access via `agent.state`. During streaming, `streamMessage` contains the partial assistant message.
+Access state via `agent.state`.
+
+Assigning `agent.state.tools = [...]` or `agent.state.messages = [...]` copies the top-level array before storing it. Mutating the returned array mutates the current agent state.
+
+During streaming, `agent.state.streamingMessage` contains the current partial assistant message.
 
 ## Methods
 
@@ -236,17 +240,16 @@ await agent.continue();
 ### State Management
 
 ```typescript
-agent.setSystemPrompt("New prompt");
-agent.setModel(getModel("openai", "gpt-4o"));
-agent.setThinkingLevel("medium");
-agent.setTools([myTool]);
-agent.setToolExecution("sequential");
-agent.setBeforeToolCall(async ({ toolCall }) => undefined);
-agent.setAfterToolCall(async ({ toolCall, result }) => undefined);
-agent.replaceMessages(newMessages);
-agent.appendMessage(message);
-agent.clearMessages();
-agent.reset();  // Clear everything
+agent.state.systemPrompt = "New prompt";
+agent.state.model = getModel("openai", "gpt-4o");
+agent.state.thinkingLevel = "medium";
+agent.state.tools = [myTool];
+agent.toolExecution = "sequential";
+agent.beforeToolCall = async ({ toolCall }) => undefined;
+agent.afterToolCall = async ({ toolCall, result }) => undefined;
+agent.state.messages = newMessages; // top-level array is copied
+agent.state.messages.push(message);
+agent.reset();
 ```
 
 ### Session and Thinking Budgets
@@ -283,8 +286,8 @@ unsubscribe();
 Steering messages let you interrupt the agent while tools are running. Follow-up messages let you queue work after the agent would otherwise stop.
 
 ```typescript
-agent.setSteeringMode("one-at-a-time");
-agent.setFollowUpMode("one-at-a-time");
+agent.steeringMode = "one-at-a-time";
+agent.followUpMode = "one-at-a-time";
 
 // While agent is running tools
 agent.steer({
@@ -300,8 +303,8 @@ agent.followUp({
   timestamp: Date.now(),
 });
 
-const steeringMode = agent.getSteeringMode();
-const followUpMode = agent.getFollowUpMode();
+const steeringMode = agent.steeringMode;
+const followUpMode = agent.followUpMode;
 
 agent.clearSteeringQueue();
 agent.clearFollowUpQueue();
@@ -370,7 +373,7 @@ const readFileTool: AgentTool = {
   },
 };
 
-agent.setTools([readFileTool]);
+agent.state.tools = [readFileTool];
 ```
 
 ### Error Handling

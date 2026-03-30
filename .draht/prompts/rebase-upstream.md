@@ -69,14 +69,53 @@ Rules:
 - draht changelogs are auto-generated from conventional commits at release time.
 - If a conflict arises on `CHANGELOG.md`, keep draht's version unconditionally (use `git checkout --ours CHANGELOG.md`).
 
-### 6. Branding — draht not pi
+### 6. Branding — draht always wins
 
-After cherry-picking, scan touched files for upstream branding that conflicts with draht:
+**draht branding is non-negotiable.** No upstream cherry-pick may introduce or reintroduce pi branding anywhere in the codebase. This applies to every file touched by the cherry-pick AND any file that references content changed by the cherry-pick.
 
-- Package names: `@mariozechner/pi-*` → `@draht/*`
-- Binary names: `pi` → `draht`
-- Display strings, titles, docs referencing "pi" as the product name → "draht"
-- Do **not** rename internal code identifiers that happen to contain "pi" if they refer to the upstream remote or integration layer (e.g. `pi-test.sh` for testing against upstream is fine).
+After every cherry-pick, run a full branding sweep:
+
+```bash
+# Scan the entire diff for pi branding leaks
+git diff HEAD~1 --unified=0 | grep -iE '@mariozechner/pi|"pi"|pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-mom|pi-pods|pi-web-ui'
+```
+
+#### Mandatory replacements
+
+| Upstream (pi)                        | draht                              |
+| ------------------------------------ | ---------------------------------- |
+| `@mariozechner/pi-*`                 | `@draht/*`                         |
+| `@mariozechner/pi`                   | `@draht/coding-agent`              |
+| Binary/command name `pi`             | `draht`                            |
+| `pi-mono`                            | `draht-mono`                       |
+| `pi-test.sh`                         | `pi-test.sh` (keep — tests upstream compat) |
+| Display strings / titles / CLI help / `description` fields / README text referencing "pi" as the product | "draht" |
+| GitHub URLs `github.com/badlogic/pi*`| Keep as-is **only** when referring to the upstream remote |
+| npm registry references to `@mariozechner/pi-*` | `@draht/*` |
+
+#### Scope
+
+- **`package.json`**: `name`, `description`, `bin`, `repository`, `homepage`, `bugs`, dependency names.
+- **Source code**: Import paths, string literals, error messages, user-facing text, comments that say "pi" meaning the product.
+- **Documentation**: README files, inline docs, JSDoc, help text, prompt templates, skill files.
+- **Config files**: `.draht/`, CI configs, build scripts.
+- **Prompt templates & skills**: Any `.md` file under `.draht/`, `.agents/`, or `docs/` that references the product.
+
+#### What NOT to rename
+
+- The `pi` git remote name — it refers to the upstream repo.
+- `pi-test.sh` — it exists to test against the upstream pi project.
+- Internal variable names where `pi` is an abbreviation for something else (e.g., `Math.PI`).
+- Upstream GitHub URLs when used exclusively as remote references.
+
+#### If in doubt, grep the whole tree
+
+```bash
+rg -i --glob '!node_modules' --glob '!.git' '@mariozechner/pi' .
+rg --glob '!node_modules' --glob '!.git' --glob '!pi-test.sh' --glob '!rebase-upstream.md' '"pi"' .
+```
+
+Fix every hit before proceeding to verification.
 
 ### 7. Verify
 
@@ -104,6 +143,7 @@ Do **not** push until explicitly told to.
 - [ ] Cherry-picked meaningful patches (oldest first)
 - [ ] No upstream version numbers leaked into `package.json`
 - [ ] No upstream changelog entries leaked into `CHANGELOG.md`
-- [ ] Branding is draht throughout
+- [ ] Full branding sweep done — no pi product references leaked into any file
+- [ ] `rg` confirms no `@mariozechner/pi` hits outside upstream remote refs
 - [ ] `npm run check` passes
 - [ ] Merged into `main`

@@ -36,6 +36,17 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
+function createDeferred(): {
+	promise: Promise<void>;
+	resolve: () => void;
+} {
+	let resolve = () => {};
+	const promise = new Promise<void>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
 describe("Agent", () => {
 	it("should create an agent instance with default state", () => {
 		const agent = new Agent();
@@ -87,6 +98,117 @@ describe("Agent", () => {
 		unsubscribe();
 		agent.state.systemPrompt = "Another prompt";
 		expect(eventCount).toBe(0); // Should not increase
+	});
+
+	it("should await async subscribers before prompt resolves", async () => {
+		const barrier = createDeferred();
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") });
+				});
+				return stream;
+			},
+		});
+
+		let listenerFinished = false;
+		agent.subscribe(async (event) => {
+			if (event.type === "agent_end") {
+				await barrier.promise;
+				listenerFinished = true;
+			}
+		});
+
+		let promptResolved = false;
+		const promptPromise = agent.prompt("hello").then(() => {
+			promptResolved = true;
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(promptResolved).toBe(false);
+		expect(listenerFinished).toBe(false);
+		expect(agent.state.isStreaming).toBe(true);
+
+		barrier.resolve();
+		await promptPromise;
+
+		expect(listenerFinished).toBe(true);
+		expect(promptResolved).toBe(true);
+		expect(agent.state.isStreaming).toBe(false);
+	});
+
+	it("waitForIdle should wait for async subscribers", async () => {
+		const barrier = createDeferred();
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") });
+				});
+				return stream;
+			},
+		});
+
+		agent.subscribe(async (event) => {
+			if (event.type === "message_end" && event.message.role === "assistant") {
+				await barrier.promise;
+			}
+		});
+
+		const promptPromise = agent.prompt("hello");
+		let idleResolved = false;
+		const idlePromise = agent.waitForIdle().then(() => {
+			idleResolved = true;
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(idleResolved).toBe(false);
+		expect(agent.state.isStreaming).toBe(true);
+
+		barrier.resolve();
+		await Promise.all([promptPromise, idlePromise]);
+
+		expect(idleResolved).toBe(true);
+		expect(agent.state.isStreaming).toBe(false);
+	});
+
+	it("should pass the active abort signal to subscribers", async () => {
+		let receivedSignal: AbortSignal | undefined;
+		const agent = new Agent({
+			streamFn: (_model, _context, options) => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					const checkAbort = () => {
+						if (options?.signal?.aborted) {
+							stream.push({ type: "error", reason: "aborted", error: createAssistantMessage("Aborted") });
+						} else {
+							setTimeout(checkAbort, 5);
+						}
+					};
+					checkAbort();
+				});
+				return stream;
+			},
+		});
+
+		agent.subscribe((event, signal) => {
+			if (event.type === "agent_start") {
+				receivedSignal = signal;
+			}
+		});
+
+		const promptPromise = agent.prompt("hello");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(receivedSignal).toBeDefined();
+		expect(receivedSignal?.aborted).toBe(false);
+
+		agent.abort();
+		await promptPromise;
+
+		expect(receivedSignal?.aborted).toBe(true);
 	});
 
 	it("should update state with mutators", () => {

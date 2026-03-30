@@ -263,7 +263,11 @@ export interface AgentState {
 	/** Conversation transcript. Assigning a new array copies the top-level array. */
 	set messages(messages: AgentMessage[]);
 	get messages(): AgentMessage[];
-	/** True while the agent is processing a prompt or continuation. */
+	/**
+	 * True while the agent is processing a prompt or continuation.
+	 *
+	 * This remains true until awaited `agent_end` listeners settle.
+	 */
 	readonly isStreaming: boolean;
 	/** Partial assistant message for the current streamed response, if any. */
 	readonly streamingMessage?: AgentMessage;
@@ -314,7 +318,10 @@ export interface AgentContext {
 
 /**
  * Events emitted by the Agent for UI updates.
- * These events provide fine-grained lifecycle information for messages, turns, and tool executions.
+ *
+ * `agent_end` is the last event emitted for a run, but awaited `Agent.subscribe()`
+ * listeners for that event are still part of run settlement. The agent becomes
+ * idle only after those listeners finish.
  */
 export type AgentEvent =
 	// Agent lifecycle

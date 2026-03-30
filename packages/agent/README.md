@@ -124,7 +124,7 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 | Event | Description |
 |-------|-------------|
 | `agent_start` | Agent begins processing |
-| `agent_end` | Agent completes with all new messages |
+| `agent_end` | Final event for the run. Awaited subscribers for this event still count toward settlement |
 | `turn_start` | New turn begins (one LLM call + tool executions) |
 | `turn_end` | Turn completes with assistant message and tool results |
 | `message_start` | Any message begins (user, assistant, toolResult) |
@@ -133,6 +133,8 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 | `tool_execution_start` | Tool begins |
 | `tool_execution_update` | Tool streams progress |
 | `tool_execution_end` | Tool completes |
++
++`Agent.subscribe()` listeners are awaited in registration order. `agent_end` means no more loop events will be emitted, but `await agent.waitForIdle()` and `await agent.prompt(...)` only settle after awaited `agent_end` listeners finish.
 
 ## Agent Options
 
@@ -217,6 +219,8 @@ Assigning `agent.state.tools = [...]` or `agent.state.messages = [...]` copies t
 
 During streaming, `agent.state.streamingMessage` contains the current partial assistant message.
 
+`agent.state.isStreaming` remains `true` until the run fully settles, including awaited `agent_end` subscribers.
+
 ## Methods
 
 ### Prompting
@@ -275,8 +279,11 @@ await agent.waitForIdle(); // Wait for completion
 ### Events
 
 ```typescript
-const unsubscribe = agent.subscribe((event) => {
-  console.log(event.type);
+const unsubscribe = agent.subscribe(async (event, signal) => {
+  if (event.type === "agent_end") {
+    // Final barrier work for the run
+    await flushSessionState(signal);
+  }
 });
 unsubscribe();
 ```

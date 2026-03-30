@@ -156,7 +156,7 @@ type ActiveRun = {
  */
 export class Agent {
 	private _state: MutableAgentState;
-	private readonly listeners = new Set<(event: AgentEvent) => void>();
+	private readonly listeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
 	private readonly steeringQueue: PendingMessageQueue;
 	private readonly followUpQueue: PendingMessageQueue;
 
@@ -203,8 +203,17 @@ export class Agent {
 		this.toolExecution = options.toolExecution ?? "parallel";
 	}
 
-	/** Subscribe to agent lifecycle events. Returns an unsubscribe function. */
-	subscribe(listener: (event: AgentEvent) => void): () => void {
+	/**
+	 * Subscribe to agent lifecycle events.
+	 *
+	 * Listener promises are awaited in subscription order and are included in
+	 * the current run's settlement. Listeners also receive the active abort
+	 * signal for the current run.
+	 *
+	 * `agent_end` is the final emitted event for a run, but the agent does not
+	 * become idle until all awaited listeners for that event have settled.
+	 */
+	subscribe(listener: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
@@ -277,7 +286,11 @@ export class Agent {
 		this.activeRun?.abortController.abort();
 	}
 
-	/** Resolve when the current run has finished. */
+	/**
+	 * Resolve when the current run and all awaited event listeners have finished.
+	 *
+	 * This resolves after `agent_end` listeners settle.
+	 */
 	waitForIdle(): Promise<void> {
 		return this.activeRun?.promise ?? Promise.resolve();
 	}
@@ -437,13 +450,13 @@ export class Agent {
 		try {
 			await executor(abortController.signal);
 		} catch (error) {
-			this.handleRunFailure(error, abortController.signal.aborted);
+			await this.handleRunFailure(error, abortController.signal.aborted);
 		} finally {
 			this.finishRun();
 		}
 	}
 
-	private handleRunFailure(error: unknown, aborted: boolean): void {
+	private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
 		const failureMessage = {
 			role: "assistant",
 			content: [{ type: "text", text: "" }],
@@ -457,7 +470,7 @@ export class Agent {
 		} satisfies AgentMessage;
 		this._state.messages.push(failureMessage);
 		this._state.errorMessage = failureMessage.errorMessage;
-		this.processEvents({ type: "agent_end", messages: [failureMessage] });
+		await this.processEvents({ type: "agent_end", messages: [failureMessage] });
 	}
 
 	private finishRun(): void {
@@ -468,7 +481,14 @@ export class Agent {
 		this.activeRun = undefined;
 	}
 
-	private processEvents(event: AgentEvent): void {
+	/**
+	 * Reduce internal state for a loop event, then await listeners.
+	 *
+	 * `agent_end` only means no further loop events will be emitted. The run is
+	 * considered idle later, after all awaited listeners for `agent_end` finish
+	 * and `finishRun()` clears runtime-owned state.
+	 */
+	private async processEvents(event: AgentEvent): Promise<void> {
 		switch (event.type) {
 			case "message_start":
 				this._state.streamingMessage = event.message;
@@ -504,13 +524,16 @@ export class Agent {
 				break;
 
 			case "agent_end":
-				this._state.isStreaming = false;
 				this._state.streamingMessage = undefined;
 				break;
 		}
 
+		const signal = this.activeRun?.abortController.signal;
+		if (!signal) {
+			throw new Error("Agent listener invoked outside active run");
+		}
 		for (const listener of this.listeners) {
-			listener(event);
+			await listener(event, signal);
 		}
 	}
 }

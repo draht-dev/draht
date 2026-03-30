@@ -2547,9 +2547,12 @@ export class AgentSession {
 	 * Returns immediately if no retry is in progress.
 	 */
 	private async waitForRetry(): Promise<void> {
-		if (this._retryPromise) {
-			await this._retryPromise;
+		if (!this._retryPromise) {
+			return;
 		}
+
+		await this._retryPromise;
+		await this.agent.waitForIdle();
 	}
 
 	/** Whether auto-retry is currently in progress */

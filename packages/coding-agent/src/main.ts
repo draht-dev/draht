@@ -5,6 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
+import { resolve } from "node:path";
 import { type ImageContent, modelsAreEqual, supportsXhigh } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import { createInterface } from "readline";
@@ -15,6 +16,11 @@ import { buildInitialMessage } from "./cli/initial-message.js";
 import { listModels } from "./cli/list-models.js";
 import { selectSession } from "./cli/session-picker.js";
 import { APP_NAME, getAgentDir, getModelsPath, VERSION } from "./config.js";
+import {
+	type AgentSessionRuntimeBootstrap,
+	AgentSessionRuntimeHost,
+	createAgentSessionRuntime,
+} from "./core/agent-session-runtime.js";
 import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { LoadExtensionsResult } from "./core/extensions/index.js";
@@ -24,7 +30,7 @@ import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/mod
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { DefaultResourceLoader } from "./core/resource-loader.js";
-import { type CreateAgentSessionOptions, createAgentSession } from "./core/sdk.js";
+import type { CreateAgentSessionOptions } from "./core/sdk.js";
 import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
@@ -597,6 +603,40 @@ function buildSessionOptions(
 	return { options, cliThinkingFromModel };
 }
 
+function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | undefined {
+	return paths?.map((value) => resolve(cwd, value));
+}
+
+function buildRuntimeBootstrap(
+	parsed: Args,
+	cwd: string,
+	agentDir: string,
+	authStorage: AuthStorage,
+	sessionOptions: CreateAgentSessionOptions,
+): AgentSessionRuntimeBootstrap {
+	return {
+		agentDir,
+		authStorage,
+		model: sessionOptions.model,
+		thinkingLevel: sessionOptions.thinkingLevel,
+		scopedModels: sessionOptions.scopedModels,
+		tools: sessionOptions.tools,
+		customTools: sessionOptions.customTools,
+		resourceLoader: {
+			additionalExtensionPaths: resolveCliPaths(cwd, parsed.extensions),
+			additionalSkillPaths: resolveCliPaths(cwd, parsed.skills),
+			additionalPromptTemplatePaths: resolveCliPaths(cwd, parsed.promptTemplates),
+			additionalThemePaths: resolveCliPaths(cwd, parsed.themes),
+			noExtensions: parsed.noExtensions,
+			noSkills: parsed.noSkills,
+			noPromptTemplates: parsed.noPromptTemplates,
+			noThemes: parsed.noThemes,
+			systemPrompt: parsed.systemPrompt,
+			appendSystemPrompt: parsed.appendSystemPrompt,
+		},
+	};
+}
+
 async function handleConfigCommand(args: string[]): Promise<boolean> {
 	if (args[0] !== "config") {
 		return false;
@@ -818,11 +858,7 @@ export async function main(args: string[]) {
 		modelRegistry,
 		settingsManager,
 	);
-	sessionOptions.authStorage = authStorage;
-	sessionOptions.modelRegistry = modelRegistry;
-	sessionOptions.resourceLoader = resourceLoader;
 
-	// Handle CLI --api-key as runtime override (not persisted)
 	if (parsed.apiKey) {
 		if (!sessionOptions.model) {
 			console.error(
@@ -833,7 +869,16 @@ export async function main(args: string[]) {
 		authStorage.setRuntimeApiKey(sessionOptions.model.provider, parsed.apiKey);
 	}
 
-	const { session, modelFallbackMessage } = await createAgentSession(sessionOptions);
+	const runtimeBootstrap = buildRuntimeBootstrap(parsed, cwd, agentDir, authStorage, sessionOptions);
+	const runtime = await createAgentSessionRuntime(runtimeBootstrap, {
+		cwd: sessionManager?.getCwd() ?? cwd,
+		sessionManager,
+	});
+	if (process.cwd() !== runtime.cwd) {
+		process.chdir(runtime.cwd);
+	}
+	const runtimeHost = new AgentSessionRuntimeHost(runtimeBootstrap, runtime);
+	const { session, modelFallbackMessage } = runtime;
 	time("createAgentSession");
 
 	if (!isInteractive && !session.model) {
@@ -861,7 +906,7 @@ export async function main(args: string[]) {
 
 	if (mode === "rpc") {
 		printTimings();
-		await runRpcMode(session);
+		await runRpcMode(runtimeHost);
 	} else if (isInteractive) {
 		if (scopedModels.length > 0 && (parsed.verbose || !settingsManager.getQuietStartup())) {
 			const modelList = scopedModels
@@ -873,7 +918,7 @@ export async function main(args: string[]) {
 			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
 		}
 
-		const interactiveMode = new InteractiveMode(session, {
+		const interactiveMode = new InteractiveMode(runtimeHost, {
 			migratedProviders,
 			modelFallbackMessage,
 			initialMessage,
@@ -900,7 +945,7 @@ export async function main(args: string[]) {
 		await interactiveMode.run();
 	} else {
 		printTimings();
-		const exitCode = await runPrintMode(session, {
+		const exitCode = await runPrintMode(runtimeHost, {
 			mode,
 			messages: parsed.messages,
 			initialMessage,

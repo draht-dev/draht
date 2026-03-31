@@ -8,7 +8,7 @@
  * session-local subscriptions and extension bindings to `runtimeHost.session`.
  */
 
-import { AgentSessionRuntimeHost, createAgentSessionRuntime, SessionManager } from "@draht/coding-agent";
+import { AgentSessionRuntimeHost, createAgentSessionRuntime, SessionManager } from "@mariozechner/pi-coding-agent";
 
 const bootstrap = {};
 const runtime = await createAgentSessionRuntime(bootstrap, {

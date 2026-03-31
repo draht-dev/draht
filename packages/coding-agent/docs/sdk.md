@@ -49,7 +49,7 @@ The SDK is included in the main package. No separate installation needed.
 
 ### createAgentSession()
 
-The main factory function. Creates an `AgentSession` with configurable options.
+The main factory function for a single `AgentSession`.
 
 `createAgentSession()` uses a `ResourceLoader` to supply extensions, skills, prompt templates, themes, and context files. If you do not provide one, it uses `DefaultResourceLoader` with standard discovery.
 
@@ -69,59 +69,100 @@ const { session } = await createAgentSession({
 
 ### AgentSession
 
-The session manages the agent lifecycle, message history, and event streaming.
+The session manages agent lifecycle, message history, model state, compaction, and event streaming.
 
 ```typescript
 interface AgentSession {
   // Send a prompt and wait for completion
-  // If streaming, requires streamingBehavior option to queue the message
   prompt(text: string, options?: PromptOptions): Promise<void>;
-  
+
   // Queue messages during streaming
-  steer(text: string): Promise<void>;    // Queue for delivery after the current assistant turn finishes its tool calls
-  followUp(text: string): Promise<void>; // Wait: delivered only when agent finishes
-  
+  steer(text: string): Promise<void>;
+  followUp(text: string): Promise<void>;
+
   // Subscribe to events (returns unsubscribe function)
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
-  
+
   // Session info
-  sessionFile: string | undefined;  // undefined for in-memory
+  sessionFile: string | undefined;
   sessionId: string;
-  
+
   // Model control
   setModel(model: Model): Promise<void>;
   setThinkingLevel(level: ThinkingLevel): void;
   cycleModel(): Promise<ModelCycleResult | undefined>;
   cycleThinkingLevel(): ThinkingLevel | undefined;
-  
+
   // State access
   agent: Agent;
   model: Model | undefined;
   thinkingLevel: ThinkingLevel;
   messages: AgentMessage[];
   isStreaming: boolean;
-  
-  // Session management
-  newSession(options?: { parentSession?: string }): Promise<boolean>;  // Returns false if cancelled by hook
-  switchSession(sessionPath: string): Promise<boolean>;
-  
-  // Forking
-  fork(entryId: string): Promise<{ selectedText: string; cancelled: boolean }>;  // Creates new session file
-  navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;  // In-place navigation
-  
-  // Hook message injection
-  sendHookMessage(message: HookMessage, triggerTurn?: boolean): Promise<void>;
-  
+
+  // In-place tree navigation within the current session file
+  navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;
+
   // Compaction
   compact(customInstructions?: string): Promise<CompactionResult>;
   abortCompaction(): void;
-  
+
   // Abort current operation
   abort(): Promise<void>;
-  
+
   // Cleanup
   dispose(): void;
 }
+```
+
+Session replacement APIs such as new-session, resume, fork, and import live on `AgentSessionRuntimeHost`, not on `AgentSession`.
+
+### createAgentSessionRuntime() and AgentSessionRuntimeHost
+
+Use the runtime API when you need to replace the active session and rebuild cwd-bound runtime state.
+This is the same layer used by the built-in interactive, print, and RPC modes.
+
+```typescript
+import {
+  AgentSessionRuntimeHost,
+  createAgentSessionRuntime,
+  SessionManager,
+} from "@mariozechner/pi-coding-agent";
+
+const bootstrap = {
+  // Optional: authStorage, model, thinkingLevel, tools, customTools, resourceLoader
+};
+
+const runtime = await createAgentSessionRuntime(bootstrap, {
+  cwd: process.cwd(),
+  sessionManager: SessionManager.create(process.cwd()),
+});
+
+const runtimeHost = new AgentSessionRuntimeHost(bootstrap, runtime);
+```
+
+`createAgentSessionRuntime()` returns an internal runtime bundle. `AgentSessionRuntimeHost` owns replacement of that bundle across:
+
+- `newSession()`
+- `switchSession()`
+- `fork()`
+- `importFromJsonl()`
+
+Important behavior:
+
+- `runtimeHost.session` changes after those operations
+- event subscriptions are attached to a specific `AgentSession`, so re-subscribe after replacement
+- if you use extensions, call `runtimeHost.session.bindExtensions(...)` again for the new session
+
+```typescript
+let session = runtimeHost.session;
+let unsubscribe = session.subscribe(() => {});
+
+await runtimeHost.newSession();
+
+unsubscribe();
+session = runtimeHost.session;
+unsubscribe = session.subscribe(() => {});
 ```
 
 ### Prompting and Message Queueing
@@ -602,7 +643,12 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 Sessions use a tree structure with `id`/`parentId` linking, enabling in-place branching.
 
 ```typescript
-import { createAgentSession, SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  AgentSessionRuntimeHost,
+  createAgentSession,
+  createAgentSessionRuntime,
+  SessionManager,
+} from "@mariozechner/pi-coding-agent";
 
 // In-memory (no persistence)
 const { session } = await createAgentSession({
@@ -610,12 +656,12 @@ const { session } = await createAgentSession({
 });
 
 // New persistent session
-const { session } = await createAgentSession({
+const { session: persisted } = await createAgentSession({
   sessionManager: SessionManager.create(process.cwd()),
 });
 
 // Continue most recent
-const { session, modelFallbackMessage } = await createAgentSession({
+const { session: continued, modelFallbackMessage } = await createAgentSession({
   sessionManager: SessionManager.continueRecent(process.cwd()),
 });
 if (modelFallbackMessage) {
@@ -623,32 +669,40 @@ if (modelFallbackMessage) {
 }
 
 // Open specific file
-const { session } = await createAgentSession({
+const { session: opened } = await createAgentSession({
   sessionManager: SessionManager.open("/path/to/session.jsonl"),
 });
 
-// List available sessions (async with optional progress callback)
-const sessions = await SessionManager.list(process.cwd());
-for (const info of sessions) {
-  console.log(`${info.id}: ${info.firstMessage} (${info.messageCount} messages, cwd: ${info.cwd})`);
-}
+// List sessions
+const currentProjectSessions = await SessionManager.list(process.cwd());
+const allSessions = await SessionManager.listAll(process.cwd());
 
-// List all sessions across all projects
-const allSessions = await SessionManager.listAll((loaded, total) => {
-  console.log(`Loading ${loaded}/${total}...`);
+// Session replacement API for /new, /resume, /fork, and import flows.
+const bootstrap = {};
+const runtime = await createAgentSessionRuntime(bootstrap, {
+  cwd: process.cwd(),
+  sessionManager: SessionManager.create(process.cwd()),
 });
+const runtimeHost = new AgentSessionRuntimeHost(bootstrap, runtime);
 
-// Custom session directory (no cwd encoding)
-const customDir = "/path/to/my-sessions";
-const { session } = await createAgentSession({
-  sessionManager: SessionManager.create(process.cwd(), customDir),
-});
+// Replace the active session with a fresh one
+await runtimeHost.newSession();
+
+// Replace the active session with another saved session
+await runtimeHost.switchSession("/path/to/session.jsonl");
+
+// Replace the active session with a fork from a specific entry
+await runtimeHost.fork("entry-id");
 ```
 
 **SessionManager tree API:**
 
 ```typescript
 const sm = SessionManager.open("/path/to/session.jsonl");
+
+// Session listing
+const currentProjectSessions = await SessionManager.list(process.cwd());
+const allSessions = await SessionManager.listAll(process.cwd());
 
 // Tree traversal
 const entries = sm.getEntries();        // All entries (excludes header)
@@ -859,20 +913,29 @@ The SDK exports run mode utilities for building custom interfaces on top of `cre
 Full TUI interactive mode with editor, chat history, and all built-in commands:
 
 ```typescript
-import { createAgentSession, InteractiveMode } from "@mariozechner/pi-coding-agent";
+import {
+  AgentSessionRuntimeHost,
+  createAgentSessionRuntime,
+  InteractiveMode,
+  SessionManager,
+} from "@mariozechner/pi-coding-agent";
 
-const { session } = await createAgentSession({ /* ... */ });
+const bootstrap = {};
+const runtime = await createAgentSessionRuntime(bootstrap, {
+  cwd: process.cwd(),
+  sessionManager: SessionManager.create(process.cwd()),
+});
+const runtimeHost = new AgentSessionRuntimeHost(bootstrap, runtime);
 
-const mode = new InteractiveMode(session, {
-  // All optional
-  migratedProviders: [],           // Show migration warnings
-  modelFallbackMessage: undefined, // Show model restore warning
-  initialMessage: "Hello",         // Send on startup
-  initialImages: [],               // Images with initial message
-  initialMessages: [],             // Additional startup prompts
+const mode = new InteractiveMode(runtimeHost, {
+  migratedProviders: [],
+  modelFallbackMessage: undefined,
+  initialMessage: "Hello",
+  initialImages: [],
+  initialMessages: [],
 });
 
-await mode.run();  // Blocks until exit
+await mode.run();
 ```
 
 ### runPrintMode
@@ -880,15 +943,25 @@ await mode.run();  // Blocks until exit
 Single-shot mode: send prompts, output result, exit:
 
 ```typescript
-import { createAgentSession, runPrintMode } from "@mariozechner/pi-coding-agent";
+import {
+  AgentSessionRuntimeHost,
+  createAgentSessionRuntime,
+  runPrintMode,
+  SessionManager,
+} from "@mariozechner/pi-coding-agent";
 
-const { session } = await createAgentSession({ /* ... */ });
+const bootstrap = {};
+const runtime = await createAgentSessionRuntime(bootstrap, {
+  cwd: process.cwd(),
+  sessionManager: SessionManager.create(process.cwd()),
+});
+const runtimeHost = new AgentSessionRuntimeHost(bootstrap, runtime);
 
-await runPrintMode(session, {
-  mode: "text",              // "text" for final response, "json" for all events
-  initialMessage: "Hello",   // First message (can include @file content)
-  initialImages: [],         // Images with initial message
-  messages: ["Follow up"],   // Additional prompts
+await runPrintMode(runtimeHost, {
+  mode: "text",
+  initialMessage: "Hello",
+  initialImages: [],
+  messages: ["Follow up"],
 });
 ```
 
@@ -897,11 +970,21 @@ await runPrintMode(session, {
 JSON-RPC mode for subprocess integration:
 
 ```typescript
-import { createAgentSession, runRpcMode } from "@mariozechner/pi-coding-agent";
+import {
+  AgentSessionRuntimeHost,
+  createAgentSessionRuntime,
+  runRpcMode,
+  SessionManager,
+} from "@mariozechner/pi-coding-agent";
 
-const { session } = await createAgentSession({ /* ... */ });
+const bootstrap = {};
+const runtime = await createAgentSessionRuntime(bootstrap, {
+  cwd: process.cwd(),
+  sessionManager: SessionManager.create(process.cwd()),
+});
+const runtimeHost = new AgentSessionRuntimeHost(bootstrap, runtime);
 
-await runRpcMode(session);  // Reads JSON commands from stdin, writes to stdout
+await runRpcMode(runtimeHost);
 ```
 
 See [RPC documentation](rpc.md) for the JSON protocol.
@@ -934,6 +1017,8 @@ The main entry point exports:
 ```typescript
 // Factory
 createAgentSession
+createAgentSessionRuntime
+AgentSessionRuntimeHost
 
 // Auth and Models
 AuthStorage

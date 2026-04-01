@@ -404,6 +404,21 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	) => Component;
 }
 
+type AnyToolDefinition = ToolDefinition<any, any, any>;
+
+/**
+ * Preserve parameter inference for standalone tool definitions.
+ *
+ * Use this when assigning a tool to a variable or passing it through arrays such
+ * as `customTools`, where contextual typing would otherwise widen params to
+ * `unknown`.
+ */
+export function defineTool<TParams extends TSchema, TDetails = unknown, TState = any>(
+	tool: ToolDefinition<TParams, TDetails, TState>,
+): ToolDefinition<TParams, TDetails, TState> & AnyToolDefinition {
+	return tool;
+}
+
 // ============================================================================
 // Resource Events
 // ============================================================================

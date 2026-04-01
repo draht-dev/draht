@@ -493,27 +493,29 @@ const { session } = await createAgentSession({
 
 ```typescript
 import { Type } from "@sinclair/typebox";
-import { createAgentSession, type ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { createAgentSession, defineTool } from "@mariozechner/pi-coding-agent";
 
 // Inline custom tool
-const myTool: ToolDefinition = {
+const myTool = defineTool({
   name: "my_tool",
   label: "My Tool",
   description: "Does something useful",
   parameters: Type.Object({
     input: Type.String({ description: "Input value" }),
   }),
-  execute: async (toolCallId, params, onUpdate, ctx, signal) => ({
+  execute: async (_toolCallId, params) => ({
     content: [{ type: "text", text: `Result: ${params.input}` }],
     details: {},
   }),
-};
+});
 
 // Pass custom tools directly
 const { session } = await createAgentSession({
   customTools: [myTool],
 });
 ```
+
+Use `defineTool()` for standalone definitions and arrays like `customTools: [myTool]`. Inline `pi.registerTool({ ... })` already infers parameter types correctly.
 
 Custom tools passed via `customTools` are combined with extension-registered tools. Extensions loaded by the ResourceLoader can also register tools via `pi.registerTool()`.
 
@@ -828,14 +830,14 @@ import { getModel } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import {
   AuthStorage,
+  bashTool,
   createAgentSession,
   DefaultResourceLoader,
+  defineTool,
   ModelRegistry,
+  readTool,
   SessionManager,
   SettingsManager,
-  readTool,
-  bashTool,
-  type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 
 // Set up auth storage (custom location)
@@ -850,7 +852,7 @@ if (process.env.MY_KEY) {
 const modelRegistry = ModelRegistry.create(authStorage);
 
 // Inline tool
-const statusTool: ToolDefinition = {
+const statusTool = defineTool({
   name: "status",
   label: "Status",
   description: "Get system status",
@@ -859,7 +861,7 @@ const statusTool: ToolDefinition = {
     content: [{ type: "text", text: `Uptime: ${process.uptime()}s` }],
     details: {},
   }),
-};
+});
 
 const model = getModel("anthropic", "claude-opus-4-5");
 if (!model) throw new Error("Model not found");
@@ -1030,6 +1032,7 @@ type ResourceLoader
 createEventBus
 
 // Helpers
+defineTool
 
 // Session management
 SessionManager

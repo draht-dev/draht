@@ -111,7 +111,7 @@ Add a `pi` manifest to `package.json` or use conventional directories. Include t
 {
   "name": "my-package",
   "keywords": ["pi-package"],
-  "pi": {
+  "draht": {
     "extensions": ["./extensions"],
     "skills": ["./skills"],
     "prompts": ["./prompts"],
@@ -130,7 +130,7 @@ The [package gallery](https://shittycodingagent.ai/packages) displays packages t
 {
   "name": "my-package",
   "keywords": ["pi-package"],
-  "pi": {
+  "draht": {
     "extensions": ["./extensions"],
     "video": "https://example.com/demo.mp4",
     "image": "https://example.com/screenshot.png"
@@ -170,7 +170,7 @@ Example:
     "shitty-extensions": "^1.0.1"
   },
   "bundledDependencies": ["shitty-extensions"],
-  "pi": {
+  "draht": {
     "extensions": ["extensions", "node_modules/shitty-extensions/extensions"],
     "skills": ["skills", "node_modules/shitty-extensions/skills"]
   }

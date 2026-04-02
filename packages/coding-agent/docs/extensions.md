@@ -213,7 +213,7 @@ Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript wo
     "zod": "^3.0.0",
     "chalk": "^5.0.0"
   },
-  "pi": {
+  "draht": {
     "extensions": ["./src/index.ts"]
   }
 }

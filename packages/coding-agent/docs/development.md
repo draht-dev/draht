@@ -6,7 +6,7 @@ See [AGENTS.md](../../../AGENTS.md) for additional guidelines.
 
 ```bash
 git clone https://github.com/draht-dev/draht
-cd pi-mono
+cd draht-mono
 npm install
 npm run build
 ```
@@ -24,7 +24,7 @@ Configure via `package.json`:
 ```json
 {
   "piConfig": {
-    "name": "pi",
+    "name": "draht",
     "configDir": ".pi"
   }
 }

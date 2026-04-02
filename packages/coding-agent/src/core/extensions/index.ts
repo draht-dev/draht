@@ -120,11 +120,9 @@ export type {
 	SessionDirectoryHandler,
 	SessionDirectoryResult,
 	SessionEvent,
-	SessionForkEvent,
 	SessionShutdownEvent,
 	// Events - Session
 	SessionStartEvent,
-	SessionSwitchEvent,
 	SessionTreeEvent,
 	SetActiveToolsHandler,
 	SetLabelHandler,

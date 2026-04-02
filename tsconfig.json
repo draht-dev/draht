@@ -63,10 +63,10 @@
 			"@draht/web-ui/*": [
 				"./packages/web-ui/src/*"
 			],
-			"@mariozechner/pi-agent-old": [
+			"@draht/coding-agent-agent-old": [
 				"./packages/agent-old/src/index.ts"
 			],
-			"@mariozechner/pi-agent-old/*": [
+			"@draht/coding-agent-agent-old/*": [
 				"./packages/agent-old/src/*"
 			]
 		}

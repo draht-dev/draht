@@ -373,14 +373,18 @@ See [docs/packages.md](docs/packages.md).
 ```typescript
 import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@draht/coding-agent";
 
+const authStorage = AuthStorage.create();
+const modelRegistry = ModelRegistry.create(authStorage);
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
-  authStorage: AuthStorage.create(),
-  modelRegistry: ModelRegistry.create(authStorage),
+  authStorage,
+  modelRegistry,
 });
 
 await session.prompt("What files are in the current directory?");
 ```
+
+For advanced multi-session runtime replacement, use `createAgentSessionRuntime()` and `AgentSessionRuntimeHost`.
 
 See [docs/sdk.md](docs/sdk.md) and [examples/sdk/](examples/sdk/).
 

@@ -419,9 +419,13 @@ export interface SessionDirectoryEvent {
 	cwd: string;
 }
 
-/** Fired on initial session load */
+/** Fired when a session is started, loaded, or reloaded */
 export interface SessionStartEvent {
 	type: "session_start";
+	/** Why this session start happened. */
+	reason: "startup" | "reload" | "new" | "resume" | "fork";
+	/** Previously active session file. Present for "new", "resume", and "fork". */
+	previousSessionFile?: string;
 }
 
 /** Fired before switching to another session (can be cancelled) */
@@ -431,23 +435,10 @@ export interface SessionBeforeSwitchEvent {
 	targetSessionFile?: string;
 }
 
-/** Fired after switching to another session */
-export interface SessionSwitchEvent {
-	type: "session_switch";
-	reason: "new" | "resume";
-	previousSessionFile: string | undefined;
-}
-
 /** Fired before forking a session (can be cancelled) */
 export interface SessionBeforeForkEvent {
 	type: "session_before_fork";
 	entryId: string;
-}
-
-/** Fired after forking a session */
-export interface SessionForkEvent {
-	type: "session_fork";
-	previousSessionFile: string | undefined;
 }
 
 /** Fired before context compaction (can be cancelled or customized) */
@@ -506,9 +497,7 @@ export type SessionEvent =
 	| SessionDirectoryEvent
 	| SessionStartEvent
 	| SessionBeforeSwitchEvent
-	| SessionSwitchEvent
 	| SessionBeforeForkEvent
-	| SessionForkEvent
 	| SessionBeforeCompactEvent
 	| SessionCompactEvent
 	| SessionShutdownEvent
@@ -989,9 +978,7 @@ export interface ExtensionAPI {
 		event: "session_before_switch",
 		handler: ExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>,
 	): void;
-	on(event: "session_switch", handler: ExtensionHandler<SessionSwitchEvent>): void;
 	on(event: "session_before_fork", handler: ExtensionHandler<SessionBeforeForkEvent, SessionBeforeForkResult>): void;
-	on(event: "session_fork", handler: ExtensionHandler<SessionForkEvent>): void;
 	on(
 		event: "session_before_compact",
 		handler: ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,

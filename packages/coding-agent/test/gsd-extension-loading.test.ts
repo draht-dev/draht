@@ -57,7 +57,7 @@ describe("gsd extension runtime loading", () => {
 	async function loadGsdRunner() {
 		const result = await loadExtensions([GSD_COMMANDS_PATH], tempDir);
 		const sessionManager = SessionManager.inMemory();
-		const modelRegistry = new ModelRegistry(AuthStorage.create(path.join(tempDir, "auth.json")));
+		const modelRegistry = ModelRegistry.create(AuthStorage.create(path.join(tempDir, "auth.json")));
 		const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
 
 		return { result, runner };

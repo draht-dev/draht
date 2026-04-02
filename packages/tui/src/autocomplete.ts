@@ -301,8 +301,12 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					return null; // No argument completion for this command
 				}
 
-				const argumentSuggestions = await command.getArgumentCompletions(argumentText);
-				if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
+				const argumentSuggestions = command.getArgumentCompletions(argumentText);
+				if (
+					argumentSuggestions instanceof Promise ||
+					!Array.isArray(argumentSuggestions) ||
+					argumentSuggestions.length === 0
+				) {
 					return null;
 				}
 

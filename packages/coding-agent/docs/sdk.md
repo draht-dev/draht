@@ -20,7 +20,7 @@ import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "
 
 // Set up credential storage and model registry
 const authStorage = AuthStorage.create();
-const modelRegistry = new ModelRegistry(authStorage);
+const modelRegistry = ModelRegistry.create(authStorage);
 
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
@@ -286,7 +286,7 @@ import { getModel } from "@draht/ai";
 import { AuthStorage, ModelRegistry } from "@draht/coding-agent";
 
 const authStorage = AuthStorage.create();
-const modelRegistry = new ModelRegistry(authStorage);
+const modelRegistry = ModelRegistry.create(authStorage);
 
 // Find specific built-in model (doesn't check if API key exists)
 const opus = getModel("anthropic", "claude-opus-4-5");
@@ -334,7 +334,7 @@ import { AuthStorage, ModelRegistry } from "@draht/coding-agent";
 
 // Default: uses ~/.pi/agent/auth.json and ~/.pi/agent/models.json
 const authStorage = AuthStorage.create();
-const modelRegistry = new ModelRegistry(authStorage);
+const modelRegistry = ModelRegistry.create(authStorage);
 
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
@@ -347,7 +347,7 @@ authStorage.setRuntimeApiKey("anthropic", "sk-my-temp-key");
 
 // Custom auth storage location
 const customAuth = AuthStorage.create("/my/app/auth.json");
-const customRegistry = new ModelRegistry(customAuth, "/my/app/models.json");
+const customRegistry = ModelRegistry.create(customAuth, "/my/app/models.json");
 
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
@@ -356,7 +356,7 @@ const { session } = await createAgentSession({
 });
 
 // No custom models.json (built-in models only)
-const simpleRegistry = new ModelRegistry(authStorage);
+const simpleRegistry = ModelRegistry.inMemory(authStorage);
 ```
 
 > See [examples/sdk/09-api-keys-and-oauth.ts](../examples/sdk/09-api-keys-and-oauth.ts)
@@ -785,7 +785,7 @@ if (process.env.MY_KEY) {
 }
 
 // Model registry (no custom models.json)
-const modelRegistry = new ModelRegistry(authStorage);
+const modelRegistry = ModelRegistry.create(authStorage);
 
 // Inline tool
 const statusTool: ToolDefinition = {

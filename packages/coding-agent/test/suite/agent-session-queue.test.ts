@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@draht/agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@draht/ai";
 import type { ExtensionAPI } from "@draht/coding-agent";
 import { Type } from "@sinclair/typebox";

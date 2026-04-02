@@ -28,6 +28,7 @@ export {
 	type AgentToolUpdateCallback,
 	type BeforeAgentStartEvent,
 	type ContextEvent,
+	defineTool,
 	discoverAndLoadExtensions,
 	type ExecOptions,
 	type ExecResult,

@@ -189,12 +189,14 @@ export interface AutocompleteItem {
 	description?: string;
 }
 
+type Awaitable<T> = T | Promise<T>;
+
 export interface SlashCommand {
 	name: string;
 	description?: string;
 	// Function to get argument completions for this command
 	// Returns null if no argument completion is available
-	getArgumentCompletions?(argumentPrefix: string): AutocompleteItem[] | null;
+	getArgumentCompletions?(argumentPrefix: string): Awaitable<AutocompleteItem[] | null>;
 }
 
 export interface AutocompleteProvider {
@@ -299,8 +301,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					return null; // No argument completion for this command
 				}
 
-				const argumentSuggestions = command.getArgumentCompletions(argumentText);
-				if (!argumentSuggestions || argumentSuggestions.length === 0) {
+				const argumentSuggestions = await command.getArgumentCompletions(argumentText);
+				if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
 					return null;
 				}
 

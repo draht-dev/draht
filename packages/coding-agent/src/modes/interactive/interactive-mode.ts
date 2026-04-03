@@ -47,7 +47,7 @@ import {
 	VERSION,
 } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
-import type { AgentSessionRuntimeHost } from "../../core/agent-session-runtime.js";
+import type { AgentSessionRuntime } from "../../core/agent-session-runtime.js";
 import type {
 	ExtensionContext,
 	ExtensionRunner,
@@ -107,6 +107,7 @@ import {
 	setRegisteredThemes,
 	setTheme,
 	setThemeInstance,
+	stopThemeWatcher,
 	Theme,
 	type ThemeColor,
 	theme,
@@ -145,7 +146,7 @@ export interface InteractiveModeOptions {
 }
 
 export class InteractiveMode {
-	private runtimeHost: AgentSessionRuntimeHost;
+	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
 	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
@@ -257,7 +258,7 @@ export class InteractiveMode {
 	}
 
 	constructor(
-		runtimeHost: AgentSessionRuntimeHost,
+		runtimeHost: AgentSessionRuntime,
 		private options: InteractiveModeOptions = {},
 	) {
 		this.runtimeHost = runtimeHost;
@@ -1177,23 +1178,31 @@ export class InteractiveMode {
 						this.loadingAnimation = undefined;
 					}
 					this.statusContainer.clear();
-					const result = await this.runtimeHost.newSession(options);
-					if (!result.cancelled) {
-						await this.handleRuntimeSessionChange();
-						this.renderCurrentSessionState();
-						this.ui.requestRender();
+					try {
+						const result = await this.runtimeHost.newSession(options);
+						if (!result.cancelled) {
+							await this.handleRuntimeSessionChange();
+							this.renderCurrentSessionState();
+							this.ui.requestRender();
+						}
+						return result;
+					} catch (error: unknown) {
+						return this.handleFatalRuntimeError("Failed to create session", error);
 					}
-					return result;
 				},
 				fork: async (entryId) => {
-					const result = await this.runtimeHost.fork(entryId);
-					if (!result.cancelled) {
-						await this.handleRuntimeSessionChange();
-						this.renderCurrentSessionState();
-						this.editor.setText(result.selectedText ?? "");
-						this.showStatus("Forked to new session");
+					try {
+						const result = await this.runtimeHost.fork(entryId);
+						if (!result.cancelled) {
+							await this.handleRuntimeSessionChange();
+							this.renderCurrentSessionState();
+							this.editor.setText(result.selectedText ?? "");
+							this.showStatus("Forked to new session");
+						}
+						return { cancelled: result.cancelled };
+					} catch (error: unknown) {
+						return this.handleFatalRuntimeError("Failed to fork session", error);
 					}
-					return { cancelled: result.cancelled };
 				},
 				navigateTree: async (targetId, options) => {
 					const result = await this.session.navigateTree(targetId, {
@@ -1273,6 +1282,14 @@ export class InteractiveMode {
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
 		this.updateTerminalTitle();
+	}
+
+	private async handleFatalRuntimeError(prefix: string, error: unknown): Promise<never> {
+		const message = error instanceof Error ? error.message : String(error);
+		this.showError(`${prefix}: ${message}`);
+		stopThemeWatcher();
+		this.stop();
+		process.exit(1);
 	}
 
 	private renderCurrentSessionState(): void {
@@ -3817,13 +3834,17 @@ export class InteractiveMode {
 			this.loadingAnimation = undefined;
 		}
 		this.statusContainer.clear();
-		const result = await this.runtimeHost.switchSession(sessionPath);
-		if (result.cancelled) {
-			return;
+		try {
+			const result = await this.runtimeHost.switchSession(sessionPath);
+			if (result.cancelled) {
+				return;
+			}
+			await this.handleRuntimeSessionChange();
+			this.renderCurrentSessionState();
+			this.showStatus("Resumed session");
+		} catch (error: unknown) {
+			await this.handleFatalRuntimeError("Failed to resume session", error);
 		}
-		await this.handleRuntimeSessionChange();
-		this.renderCurrentSessionState();
-		this.showStatus("Resumed session");
 	}
 
 	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
@@ -4088,7 +4109,7 @@ export class InteractiveMode {
 			this.renderCurrentSessionState();
 			this.showStatus(`Session imported from: ${inputPath}`);
 		} catch (error: unknown) {
-			this.showError(`Failed to import session: ${error instanceof Error ? error.message : "Unknown error"}`);
+			await this.handleFatalRuntimeError("Failed to import session", error);
 		}
 	}
 
@@ -4432,15 +4453,19 @@ export class InteractiveMode {
 			this.loadingAnimation = undefined;
 		}
 		this.statusContainer.clear();
-		const result = await this.runtimeHost.newSession();
-		if (result.cancelled) {
-			return;
+		try {
+			const result = await this.runtimeHost.newSession();
+			if (result.cancelled) {
+				return;
+			}
+			await this.handleRuntimeSessionChange();
+			this.renderCurrentSessionState();
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
+			this.ui.requestRender();
+		} catch (error: unknown) {
+			await this.handleFatalRuntimeError("Failed to create session", error);
 		}
-		await this.handleRuntimeSessionChange();
-		this.renderCurrentSessionState();
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
-		this.ui.requestRender();
 	}
 
 	private handleDebugCommand(): void {

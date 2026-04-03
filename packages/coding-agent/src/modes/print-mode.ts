@@ -7,7 +7,7 @@
  */
 
 import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
-import type { AgentSessionRuntimeHost } from "../core/agent-session-runtime.js";
+import type { AgentSessionRuntime } from "../core/agent-session-runtime.js";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.js";
 
 /**
@@ -28,7 +28,7 @@ export interface PrintModeOptions {
  * Run in print (single-shot) mode.
  * Sends prompts to the agent and outputs the result.
  */
-export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options: PrintModeOptions): Promise<number> {
+export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: PrintModeOptions): Promise<number> {
 	const { mode, messages = [], initialMessage, initialImages } = options;
 	let exitCode = 0;
 	let session = runtimeHost.session;
@@ -124,6 +124,9 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 		}
 
 		return exitCode;
+	} catch (error: unknown) {
+		console.error(error instanceof Error ? error.message : String(error));
+		return 1;
 	} finally {
 		unsubscribe?.();
 		await runtimeHost.dispose();

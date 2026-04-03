@@ -12,11 +12,19 @@ export {
 	type SessionStats,
 } from "./agent-session.js";
 export {
-	type AgentSessionRuntimeBootstrap,
-	AgentSessionRuntimeHost,
-	type CreateAgentSessionRuntimeOptions,
+	AgentSessionRuntime,
+	type CreateAgentSessionRuntimeFactory,
+	type CreateAgentSessionRuntimeResult,
 	createAgentSessionRuntime,
 } from "./agent-session-runtime.js";
+export {
+	type AgentSessionRuntimeDiagnostic,
+	type AgentSessionServices,
+	type CreateAgentSessionFromServicesOptions,
+	type CreateAgentSessionServicesOptions,
+	createAgentSessionFromServices,
+	createAgentSessionServices,
+} from "./agent-session-services.js";
 export { type BashExecutorOptions, type BashResult, executeBash, executeBashWithOperations } from "./bash-executor.js";
 export type { CompactionResult } from "./compaction/index.js";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.js";

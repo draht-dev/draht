@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	type AgentSessionRuntimeBootstrap,
-	AgentSessionRuntimeHost,
+	type CreateAgentSessionRuntimeFactory,
+	createAgentSessionFromServices,
 	createAgentSessionRuntime,
+	createAgentSessionServices,
 } from "../src/core/agent-session-runtime.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { SessionManager } from "../src/core/session-manager.js";
@@ -19,7 +20,7 @@ import type {
 
 type RecordedSessionEvent = SessionBeforeSwitchEvent | SessionBeforeForkEvent | SessionStartEvent;
 
-describe("AgentSessionRuntimeHost session lifecycle events", () => {
+describe("AgentSessionRuntime session lifecycle events", () => {
 	const cleanups: Array<() => Promise<void> | void> = [];
 
 	afterEach(async () => {
@@ -38,22 +39,38 @@ describe("AgentSessionRuntimeHost session lifecycle events", () => {
 		const authStorage = AuthStorage.inMemory();
 		authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
 
-		const bootstrap: AgentSessionRuntimeBootstrap = {
+		const runtimeOptions = {
 			agentDir: tempDir,
 			authStorage,
 			model: faux.getModel(),
-			resourceLoader: {
+			resourceLoaderOptions: {
 				extensionFactories: [extensionFactory],
 				noSkills: true,
 				noPromptTemplates: true,
 				noThemes: true,
 			},
 		};
-		const runtime = await createAgentSessionRuntime(bootstrap, {
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({
+				...runtimeOptions,
+				cwd,
+			});
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+					model: faux.getModel(),
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		const runtimeHost = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
+			agentDir: tempDir,
 			sessionManager: SessionManager.create(tempDir),
 		});
-		const runtimeHost = new AgentSessionRuntimeHost(bootstrap, runtime);
 		await runtimeHost.session.bindExtensions({});
 
 		cleanups.push(async () => {

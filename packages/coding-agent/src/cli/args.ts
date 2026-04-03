@@ -2,9 +2,10 @@
  * CLI argument parsing and help display
  */
 
-import type { ThinkingLevel } from "@draht/agent-core";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR } from "../config.js";
+import type { ExtensionFlag } from "../core/extensions/types.js";
 import { allTools, type ToolName } from "../core/tools/index.js";
 
 export type Mode = "text" | "json" | "rpc";
@@ -41,16 +42,11 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
-	/** Experimental: Start session with socket server for multi-attach */
-	attachable?: boolean;
-	/** Experimental: Attach to an existing socket session */
-	attach?: string;
-	/** Experimental: List all attachable socket sessions */
-	listSessions?: boolean;
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
 	unknownFlags: Map<string, boolean | string>;
+	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
 
 const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -59,11 +55,12 @@ export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
 }
 
-export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		diagnostics: [],
 	};
 
 	for (let i = 0; i < args.length; i++) {
@@ -111,9 +108,10 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 				if (name in allTools) {
 					validTools.push(name as ToolName);
 				} else {
-					console.error(
-						chalk.yellow(`Warning: Unknown tool "${name}". Valid tools: ${Object.keys(allTools).join(", ")}`),
-					);
+					result.diagnostics.push({
+						type: "warning",
+						message: `Unknown tool "${name}". Valid tools: ${Object.keys(allTools).join(", ")}`,
+					});
 				}
 			}
 			result.tools = validTools;
@@ -122,11 +120,10 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			if (isValidThinkingLevel(level)) {
 				result.thinking = level;
 			} else {
-				console.error(
-					chalk.yellow(
-						`Warning: Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
-					),
-				);
+				result.diagnostics.push({
+					type: "warning",
+					message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+				});
 			}
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
@@ -163,26 +160,24 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.verbose = true;
 		} else if (arg === "--offline") {
 			result.offline = true;
-		} else if (arg === "--attachable") {
-			result.attachable = true;
-		} else if (arg === "--attach" && i + 1 < args.length) {
-			result.attach = args[++i];
-		} else if (arg === "--list-sessions") {
-			result.listSessions = true;
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
-		} else if (arg.startsWith("--") && extensionFlags) {
-			// Check if it's an extension-registered flag
-			const flagName = arg.slice(2);
-			const extFlag = extensionFlags.get(flagName);
-			if (extFlag) {
-				if (extFlag.type === "boolean") {
+		} else if (arg.startsWith("--")) {
+			const eqIndex = arg.indexOf("=");
+			if (eqIndex !== -1) {
+				result.unknownFlags.set(arg.slice(2, eqIndex), arg.slice(eqIndex + 1));
+			} else {
+				const flagName = arg.slice(2);
+				const next = args[i + 1];
+				if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) {
+					result.unknownFlags.set(flagName, next);
+					i++;
+				} else {
 					result.unknownFlags.set(flagName, true);
-				} else if (extFlag.type === "string" && i + 1 < args.length) {
-					result.unknownFlags.set(flagName, args[++i]);
 				}
 			}
-			// Unknown flags without extensionFlags are silently ignored (first pass)
+		} else if (arg.startsWith("-") && !arg.startsWith("--")) {
+			result.diagnostics.push({ type: "error", message: `Unknown option: ${arg}` });
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
 		}
@@ -191,7 +186,17 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 	return result;
 }
 
-export function printHelp(): void {
+export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+	const extensionFlagsText =
+		extensionFlags && extensionFlags.length > 0
+			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags
+					.map((flag) => {
+						const value = flag.type === "string" ? " <value>" : "";
+						const description = flag.description ?? `Registered by ${flag.extensionPath}`;
+						return `  --${flag.name}${value}`.padEnd(30) + description;
+					})
+					.join("\n")}\n`
+			: "";
 	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
 
 ${chalk.bold("Usage:")}
@@ -237,16 +242,11 @@ ${chalk.bold("Options:")}
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
-  --offline                      Disable startup network operations (same as DRAHT_OFFLINE=1)
+  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
   --help, -h                     Show this help
   --version, -v                  Show version number
 
-${chalk.bold("Experimental - Attachable Sessions (tmux-style multi-attach):")}
-  --attachable                   Start session with socket server for multi-client attachment
-  --attach <session-id>          Attach to an existing socket-based session
-  --list-sessions                List all running attachable sessions
-
-Extensions can register additional flags (e.g., --plan from plan-mode extension).
+Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 
 ${chalk.bold("Examples:")}
   # Interactive mode
@@ -295,16 +295,6 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} --export ~/${CONFIG_DIR_NAME}/agent/sessions/--path--/session.jsonl
   ${APP_NAME} --export session.jsonl output.html
 
-  # ${chalk.bold("Experimental - Attachable Sessions")}
-  # Start an attachable session (others can attach via --attach)
-  ${APP_NAME} --attachable "Build a new feature"
-
-  # List all running attachable sessions
-  ${APP_NAME} --list-sessions
-
-  # Attach to a running session (tmux-style surveillance)
-  ${APP_NAME} --attach abc-123-session-id
-
 ${chalk.bold("Environment Variables:")}
   ANTHROPIC_API_KEY                - Anthropic Claude API key
   ANTHROPIC_OAUTH_TOKEN            - Anthropic OAuth token (alternative to API key)
@@ -331,10 +321,10 @@ ${chalk.bold("Environment Variables:")}
   AWS_BEARER_TOKEN_BEDROCK         - Bedrock API key (bearer token)
   AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
   ${ENV_AGENT_DIR.padEnd(32)} - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
-  DRAHT_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
-  DRAHT_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  DRAHT_SHARE_VIEWER_URL              - Base URL for /share command (default: https://draht.dev/session/)
-  DRAHT_AI_ANTIGRAVITY_VERSION        - Override Antigravity User-Agent version (e.g., 1.23.0)
+  PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
+  PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
+  PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
+  PI_AI_ANTIGRAVITY_VERSION        - Override Antigravity User-Agent version (e.g., 1.23.0)
 
 ${chalk.bold("Available Tools (default: read, bash, edit, write):")}
   read   - Read file contents

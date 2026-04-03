@@ -1,27 +1,45 @@
 /**
- * Session Runtime Host
+ * Session runtime
  *
- * Use the runtime host when you need to replace the active AgentSession,
+ * Use AgentSessionRuntime when you need to replace the active AgentSession,
  * for example for new-session, resume, fork, or import flows.
  *
- * The important pattern is: after the host replaces the runtime, rebind any
- * session-local subscriptions and extension bindings to `runtimeHost.session`.
+ * The important pattern is: after the runtime replaces the active session,
+ * rebind any session-local subscriptions and extension bindings to `runtime.session`.
  */
 
-import { AgentSessionRuntimeHost, createAgentSessionRuntime, SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+	type CreateAgentSessionRuntimeFactory,
+	createAgentSessionFromServices,
+	createAgentSessionRuntime,
+	createAgentSessionServices,
+	getAgentDir,
+	SessionManager,
+} from "@mariozechner/pi-coding-agent";
 
-const bootstrap = {};
-const runtime = await createAgentSessionRuntime(bootstrap, {
+const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+	const services = await createAgentSessionServices({ cwd });
+	return {
+		...(await createAgentSessionFromServices({
+			services,
+			sessionManager,
+			sessionStartEvent,
+		})),
+		services,
+		diagnostics: services.diagnostics,
+	};
+};
+const runtime = await createAgentSessionRuntime(createRuntime, {
 	cwd: process.cwd(),
+	agentDir: getAgentDir(),
 	sessionManager: SessionManager.create(process.cwd()),
 });
-const runtimeHost = new AgentSessionRuntimeHost(bootstrap, runtime);
 
 let unsubscribe: (() => void) | undefined;
 
 async function bindSession() {
 	unsubscribe?.();
-	const session = runtimeHost.session;
+	const session = runtime.session;
 	await session.bindExtensions({});
 	unsubscribe = session.subscribe((event) => {
 		if (event.type === "queue_update") {
@@ -35,15 +53,15 @@ let session = await bindSession();
 const originalSessionFile = session.sessionFile;
 console.log("Initial session:", originalSessionFile);
 
-await runtimeHost.newSession();
+await runtime.newSession();
 session = await bindSession();
 console.log("After newSession():", session.sessionFile);
 
 if (originalSessionFile) {
-	await runtimeHost.switchSession(originalSessionFile);
+	await runtime.switchSession(originalSessionFile);
 	session = await bindSession();
 	console.log("After switchSession():", session.sessionFile);
 }
 
 unsubscribe?.();
-await runtimeHost.dispose();
+await runtime.dispose();

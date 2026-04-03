@@ -86,12 +86,7 @@ export interface CreateAgentSessionResult {
 
 // Re-exports
 
-export {
-	type AgentSessionRuntimeBootstrap,
-	AgentSessionRuntimeHost,
-	type CreateAgentSessionRuntimeOptions,
-	createAgentSessionRuntime,
-} from "./agent-session-runtime.js";
+export * from "./agent-session-runtime.js";
 export type {
 	ExtensionAPI,
 	ExtensionCommandContext,

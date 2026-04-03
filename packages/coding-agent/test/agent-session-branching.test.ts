@@ -14,9 +14,11 @@ import { getModel } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.js";
 import {
-	type AgentSessionRuntimeHost,
+	type AgentSessionRuntime,
+	type CreateAgentSessionRuntimeFactory,
+	createAgentSessionFromServices,
 	createAgentSessionRuntime,
-	AgentSessionRuntimeHost as RuntimeHost,
+	createAgentSessionServices,
 } from "../src/core/agent-session-runtime.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { SessionManager } from "../src/core/session-manager.js";
@@ -25,7 +27,7 @@ import { API_KEY } from "./utilities.js";
 
 describe.skipIf(!API_KEY)("AgentSession forking", () => {
 	let session: AgentSession;
-	let runtimeHost: AgentSessionRuntimeHost;
+	let runtimeHost: AgentSessionRuntime;
 	let tempDir: string;
 	let sessionManager: SessionManager;
 
@@ -50,23 +52,38 @@ describe.skipIf(!API_KEY)("AgentSession forking", () => {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		authStorage.setRuntimeApiKey("anthropic", API_KEY!);
 
-		const bootstrap = {
+		const servicesOptions = {
 			agentDir: tempDir,
 			authStorage,
-			model,
-			tools: codingTools,
-			resourceLoader: {
+			resourceLoaderOptions: {
 				noExtensions: true,
 				noSkills: true,
 				noPromptTemplates: true,
 				noThemes: true,
 			},
 		};
-		const runtime = await createAgentSessionRuntime(bootstrap, {
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({
+				...servicesOptions,
+				cwd,
+			});
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+					model,
+					tools: codingTools,
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		runtimeHost = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
+			agentDir: tempDir,
 			sessionManager,
 		});
-		runtimeHost = new RuntimeHost(bootstrap, runtime);
 		session = runtimeHost.session;
 		session.subscribe(() => {});
 		return session;

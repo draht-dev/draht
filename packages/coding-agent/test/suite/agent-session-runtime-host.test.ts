@@ -4,13 +4,15 @@ import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	type AgentSessionRuntimeBootstrap,
-	AgentSessionRuntimeHost,
+	type CreateAgentSessionRuntimeFactory,
+	createAgentSessionFromServices,
 	createAgentSessionRuntime,
+	createAgentSessionServices,
 } from "../../src/core/agent-session-runtime.js";
 import { AuthStorage } from "../../src/core/auth-storage.js";
 import { SessionManager } from "../../src/core/session-manager.js";
 import type {
+	ExtensionAPI,
 	ExtensionFactory,
 	SessionBeforeForkEvent,
 	SessionBeforeSwitchEvent,
@@ -19,7 +21,7 @@ import type {
 
 type RecordedSessionEvent = SessionBeforeSwitchEvent | SessionBeforeForkEvent | SessionStartEvent;
 
-describe("AgentSessionRuntimeHost characterization", () => {
+describe("AgentSessionRuntime characterization", () => {
 	const cleanups: Array<() => Promise<void> | void> = [];
 
 	afterEach(async () => {
@@ -48,14 +50,14 @@ describe("AgentSessionRuntimeHost characterization", () => {
 		const authStorage = AuthStorage.inMemory();
 		authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
 
-		const bootstrap: AgentSessionRuntimeBootstrap = {
+		const runtimeOptions = {
 			agentDir: tempDir,
 			authStorage,
 			model: options?.bootstrapModel === false ? undefined : faux.getModel(),
 			thinkingLevel: options?.bootstrapThinkingLevel === false ? undefined : undefined,
-			resourceLoader: {
+			resourceLoaderOptions: {
 				extensionFactories: [
-					(pi) => {
+					(pi: ExtensionAPI) => {
 						pi.registerProvider(faux.getModel().provider, {
 							baseUrl: faux.getModel().baseUrl,
 							apiKey: "faux-key",
@@ -79,11 +81,28 @@ describe("AgentSessionRuntimeHost characterization", () => {
 				noThemes: true,
 			},
 		};
-		const runtime = await createAgentSessionRuntime(bootstrap, {
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({
+				...runtimeOptions,
+				cwd,
+			});
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+					model: runtimeOptions.model,
+					thinkingLevel: runtimeOptions.thinkingLevel,
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		const runtimeHost = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
+			agentDir: tempDir,
 			sessionManager: SessionManager.create(tempDir),
 		});
-		const runtimeHost = new AgentSessionRuntimeHost(bootstrap, runtime);
 		await runtimeHost.session.bindExtensions({});
 
 		cleanups.push(async () => {
@@ -99,7 +118,7 @@ describe("AgentSessionRuntimeHost characterization", () => {
 
 	it("emits session_before_switch and session_start for new and resume flows", async () => {
 		const events: RecordedSessionEvent[] = [];
-		const { runtimeHost } = await createRuntimeHost((pi) => {
+		const { runtimeHost } = await createRuntimeHost((pi: ExtensionAPI) => {
 			pi.on("session_before_switch", (event) => {
 				events.push(event);
 			});
@@ -140,7 +159,7 @@ describe("AgentSessionRuntimeHost characterization", () => {
 	it("honors session_before_switch cancellation for new and resume", async () => {
 		const events: RecordedSessionEvent[] = [];
 		let cancelReason: "new" | "resume" | undefined;
-		const { runtimeHost } = await createRuntimeHost((pi) => {
+		const { runtimeHost } = await createRuntimeHost((pi: ExtensionAPI) => {
 			pi.on("session_before_switch", (event) => {
 				events.push(event);
 				if (event.reason === cancelReason) {
@@ -175,7 +194,7 @@ describe("AgentSessionRuntimeHost characterization", () => {
 	it("emits session_before_fork and session_start and honors cancellation", async () => {
 		const events: RecordedSessionEvent[] = [];
 		let cancelNextFork = false;
-		const { runtimeHost } = await createRuntimeHost((pi) => {
+		const { runtimeHost } = await createRuntimeHost((pi: ExtensionAPI) => {
 			pi.on("session_before_fork", (event) => {
 				events.push(event);
 				if (cancelNextFork) {
@@ -222,39 +241,60 @@ describe("AgentSessionRuntimeHost characterization", () => {
 		const { runtimeHost, faux, tempDir } = await createRuntimeHost(() => {}, { cwd: firstDir });
 		const otherAuthStorage = AuthStorage.inMemory();
 		otherAuthStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
-		const otherRuntime = await createAgentSessionRuntime(
-			{
-				agentDir: tempDir,
-				authStorage: otherAuthStorage,
-				resourceLoader: {
-					extensionFactories: [
-						(pi) => {
-							pi.registerProvider(faux.getModel().provider, {
-								baseUrl: faux.getModel().baseUrl,
-								apiKey: "faux-key",
-								api: faux.api,
-								models: faux.models.map((registeredModel) => ({
-									id: registeredModel.id,
-									name: registeredModel.name,
-									api: registeredModel.api,
-									reasoning: registeredModel.reasoning,
-									input: registeredModel.input,
-									cost: registeredModel.cost,
-									contextWindow: registeredModel.contextWindow,
-									maxTokens: registeredModel.maxTokens,
-								})),
-							});
-						},
-					],
-					noSkills: true,
-					noPromptTemplates: true,
-					noThemes: true,
-				},
+		const otherRuntimeOptions = {
+			agentDir: tempDir,
+			authStorage: otherAuthStorage,
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((registeredModel) => ({
+								id: registeredModel.id,
+								name: registeredModel.name,
+								api: registeredModel.api,
+								reasoning: registeredModel.reasoning,
+								input: registeredModel.input,
+								cost: registeredModel.cost,
+								contextWindow: registeredModel.contextWindow,
+								maxTokens: registeredModel.maxTokens,
+							})),
+						});
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
 			},
-			{ cwd: secondDir, sessionManager: SessionManager.create(secondDir) },
-		);
+		};
+		const createOtherRuntime: CreateAgentSessionRuntimeFactory = async ({
+			cwd,
+			sessionManager,
+			sessionStartEvent,
+		}) => {
+			const services = await createAgentSessionServices({
+				...otherRuntimeOptions,
+				cwd,
+			});
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		const otherRuntime = await createAgentSessionRuntime(createOtherRuntime, {
+			cwd: secondDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.create(secondDir),
+		});
 		cleanups.push(async () => {
-			otherRuntime.session.dispose();
+			await otherRuntime.dispose();
 		});
 		await otherRuntime.session.prompt("other");
 		const otherSessionFile = otherRuntime.session.sessionFile!;
@@ -274,39 +314,60 @@ describe("AgentSessionRuntimeHost characterization", () => {
 		mkdirSync(otherDir, { recursive: true });
 		const otherAuthStorage = AuthStorage.inMemory();
 		otherAuthStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
-		const otherRuntime = await createAgentSessionRuntime(
-			{
-				agentDir: tempDir,
-				authStorage: otherAuthStorage,
-				resourceLoader: {
-					extensionFactories: [
-						(pi) => {
-							pi.registerProvider(faux.getModel().provider, {
-								baseUrl: faux.getModel().baseUrl,
-								apiKey: "faux-key",
-								api: faux.api,
-								models: faux.models.map((registeredModel) => ({
-									id: registeredModel.id,
-									name: registeredModel.name,
-									api: registeredModel.api,
-									reasoning: registeredModel.reasoning,
-									input: registeredModel.input,
-									cost: registeredModel.cost,
-									contextWindow: registeredModel.contextWindow,
-									maxTokens: registeredModel.maxTokens,
-								})),
-							});
-						},
-					],
-					noSkills: true,
-					noPromptTemplates: true,
-					noThemes: true,
-				},
+		const otherRuntimeOptions = {
+			agentDir: tempDir,
+			authStorage: otherAuthStorage,
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((registeredModel) => ({
+								id: registeredModel.id,
+								name: registeredModel.name,
+								api: registeredModel.api,
+								reasoning: registeredModel.reasoning,
+								input: registeredModel.input,
+								cost: registeredModel.cost,
+								contextWindow: registeredModel.contextWindow,
+								maxTokens: registeredModel.maxTokens,
+							})),
+						});
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
 			},
-			{ cwd: otherDir, sessionManager: SessionManager.create(otherDir) },
-		);
+		};
+		const createOtherRuntime: CreateAgentSessionRuntimeFactory = async ({
+			cwd,
+			sessionManager,
+			sessionStartEvent,
+		}) => {
+			const services = await createAgentSessionServices({
+				...otherRuntimeOptions,
+				cwd,
+			});
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+		const otherRuntime = await createAgentSessionRuntime(createOtherRuntime, {
+			cwd: otherDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.create(otherDir),
+		});
 		cleanups.push(async () => {
-			otherRuntime.session.dispose();
+			await otherRuntime.dispose();
 		});
 		await otherRuntime.session.setModel(faux.getModel("faux-2")!);
 		otherRuntime.session.setThinkingLevel("off");

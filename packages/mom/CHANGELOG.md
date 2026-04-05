@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.5] - 2026-04-05
+
+### Changed
+
+- refactor(coding-agent): add runtime host for session switching closes #2024
+- feat(ai,coding-agent): add faux provider and ModelRegistry factories
 
 ## [2026.3.5] - 2026-03-05
 

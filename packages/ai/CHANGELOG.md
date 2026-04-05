@@ -1,6 +1,63 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.5] - 2026-04-05
+
+### Added
+
+- add requestMetadata support to BedrockOptions for cost allocation tagging (#2511)
+- add openai-codex gpt-5.4-mini (#2334)
+- lazy-load provider modules for faster startup fixes #2297
+- allow injecting pre-built Anthropic client
+
+### Changed
+
+- refactor(coding-agent): add runtime host for session switching closes #2024
+- feat(ai,coding-agent): add faux provider and ModelRegistry factories
+- fix(ai): emit missing responses toolcall delta closes #2745
+- fix(ai): detect anthropic request_too_large overflow closes #2734
+- enable tool streaming for newer Z.ai models (#2732)
+- sync generated models from upstream
+- format openai completions test
+- drop anthropic client injection test closes #2057
+- clarify compat flags for openai-compatible local servers closes #2177
+- clarify non-throwing stream and hook contracts
+- migrate mistral provider to conversations sdk
+
+### Fixed
+
+- branding sweep for upstream cherry-picks
+- update test model refs to match pruned minimax models
+- resolve upstream sync conflicts and fix branding
+- omit copilot responses reasoning default closes #2567
+- handle explicit thinking off across providers closes #2490
+- explicitly disable Anthropic thinking when off closes #2022
+- hash foreign responses tool item ids
+- align minimax and zai defaults (#2445)
+- skip AJV validation in restricted runtimes closes #2395
+- ignore placeholder vertex api keys closes #2335
+- use OpenRouter reasoning payload (#2298)
+- support prompt caching for Bedrock application inference profiles (#2346)
+- normalize replayed responses tool call ids closes #2328
+- keep image tool results inline for gemini 3+ and antigravity closes #2052
+- restore antigravity context override block
+- correct Bedrock Claude 4.6 context window to 200k
+- restore Bun binary lazy provider loading closes #2314
+- align oauth callback flows closes #2316
+- resolve codex oauth callback immediately closes #2316
+- expose provider response ids on assistant messages fixes #2245
+- correct Claude 4.6 context overrides closes #2286
+- fix anthropic oauth manual callback and refresh flow closes #2169
+- align codex websocket headers and terminate SSE closes #1961
+- limit Bedrock prompt caching to Claude models\n\ncloses #2053
+- add qwen-chat-template compat mode closes #2020
+- harden Bedrock unsigned thinking replay closes #2063
+- support xhigh for opus 4.6 by model id closes #2040
+- handle unknown finish_reason in openai-completions gracefully
+- replace curl with fetch in Anthropic OAuth token exchange
+- send tool result images in function_call_output closes #2104
+- improve anthropic oauth flow fixes #2119
+- keep mistral browser-safe
+- preserve OpenAI Responses assistant phase across turns closes #1819
 
 ## [2026.3.14] - 2026-03-14
 

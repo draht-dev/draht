@@ -1,6 +1,44 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.5] - 2026-04-05
+
+### Added
+
+- PI_TUI_WRITE_LOG now accepts a directory path (#2508)
+- make select list column sizing configurable (#2154)
+- treat paste markers as atomic segments in editor (#2111)
+- support digit keybindings closes #1905
+- add non-capturing overlays with focus control (#1916)
+
+### Changed
+
+- fix(tui): avoid overlay scrollback inflation on widen
+- fix(tui): stop heading underline leaking into padding
+- fix(tui): await async slash command completions closes #2719
+- apply import ordering in terminal
+
+### Fixed
+
+- resolve type errors and branding from upstream sync
+- restore blockquote styling after inline links
+- preserve heading styling after inline code spans
+- stream truncateToWidth for large strings closes #2447
+- skip Termux height redraws closes #2467
+- stop evicting unrelated default keybindings closes #2455
+- migrate to namespaced ids closes #2391
+- resolve raw backspace ambiguity closes #2293
+- clear stale scrollback on session switch (#2155)
+- remove trailing markdown block spacing (#2152)
+- stabilize windows shell/path handling
+- preserve literal paste content closes #2064
+- preserve ./ prefix in tab completion, closes #2087
+- distinguish ctrl+backspace from backspace on Windows Terminal
+- handle narrow terminal width in editor scroll indicator (#2103)
+- restore shift+tab in xterm modifyOtherKeys mode (#2081)
+- stop wide input slice overflow closes #1982 (#2006)
+- handle wide unicode input scrolling closes #1982
+- handle tmux xterm extended keys and warn on tmux setup fixes #1872
+- autocomplete highlight follows first prefix match as user types (#1931)
 
 ## [2026.3.14] - 2026-03-14
 

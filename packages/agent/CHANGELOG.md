@@ -1,6 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.5] - 2026-04-05
+
+### Changed
+
+- update steering docs for deferred tool execution closes #2330
+- clarify non-throwing stream and hook contracts
+- clarify non-throwing stream contracts fixes #2119
+
+### Fixed
+
+- preserve tool result order in parallel execution and handle stream rejections
+- resolve upstream sync conflicts and fix branding
+- defer steering until after tool execution
+- remove broken async loop test
 
 ## [2026.3.11] - 2026-03-11
 

@@ -1,6 +1,111 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.5] - 2026-04-05
+
+### Added
+
+- add startup profiling scripts for tui/rpc (#2497)
+- add resizable share sidebar (#2435)
+- add JSONL export/import for sessions (#2356)
+- add --fork session flag closes #2290
+- expose local bash operations closes #2299
+- allow supplying custom session ID in newSession() (#2130)
+- refine session_directory hook closes #1729
+- add session_directory extension event
+
+### Changed
+
+- reproduce missing subagent builtin extension registration
+- fix(coding-agent): reuse initial resource loader on startup closes #2766
+- feat(coding-agent): add defineTool helper closes #2746
+- test(coding-agent): add session lifecycle characterization suite
+- test(coding-agent): add queue characterization coverage
+- fix(coding-agent): resolve theme export variables closes #2707
+- refactor(coding-agent): add runtime host for session switching closes #2024
+- fix(coding-agent): resolve models.json auth per request closes #1835
+- feat(ai,coding-agent): add faux provider and ModelRegistry factories
+- docs: add switchSession to ExtensionCommandContext in extensions.md
+- fix(tui): await async slash command completions closes #2719
+- expand branding sweep rules in rebase-upstream prompt
+- rename pi to draht in process title and system prompt
+- add AgentSession test harness with faux provider
+- extend OSS weekend to 2026-03-30
+- document xfce4-terminal and terminator keyboard protocol limitations (#2166)
+- clarify compat flags for openai-compatible local servers closes #2177
+
+### Fixed
+
+- register subagent builtin extension in DefaultResourceLoader
+- resolve type errors and branding from upstream sync
+- branding sweep for upstream cherry-picks
+- emit session_shutdown in print mode closes #2576
+- replace π with D in terminal title
+- update changelog URL from pi-mono to draht
+- resolve upstream sync conflicts and fix branding
+- respect export theme backgrounds closes #2565
+- recompute interactive bash preview width closes #2569
+- reduce git update fetch noise closes #2548
+- expose rpc context usage closes #2550
+- disambiguate duplicate slash commands, fixes #1061
+- unify source provenance, closes #1734
+- attach source info to resources and commands, fixes #1734
+- enforce safe auto-resized image limits closes #2055
+- reserve stdout in print and json mode closes #2482
+- skip no-op git package reinstalls
+- built-in tools work like extension tools
+- disable cli-highlight auto-detection for languageless code blocks
+- update project npm packages
+- reuse current pi invocation for child agents closes #2464 (#2465)
+- export ToolCallEventResult closes #2458
+- respect agentDir for sdk session paths closes #2457
+- keep suspend resume alive on fg closes #2454
+- align minimax and zai defaults (#2445)
+- migrate to namespaced ids closes #2391
+- queue file mutations across edit and write
+- protect rpc stdout fixes #2388
+- resolve waitForRetry() race when auto-retry produces tool calls (#2440)
+- /model shows stale scoped models (#2408)
+- suppress process warnings in CLI closes #2404
+- show bash tool elapsed time at bottom closes #2406
+- reload custom themes from disk watcher\n\ncloses #2417\ncloses #2003
+- avoid blocking footer branch refresh and isolate invalid extension provider registrations closes #2418 closes #2431
+- fix windows hanging when descendants inherit stdout/stderr handles (#2389)
+- use native clipboard text copy on desktop closes #2347
+- make tests keybinding-agnostic
+- use `setBedrockProviderModule` in Bun entrypoint closes #2349 (#2350)
+- stop updating packages on startup closes #1963
+- refresh active model after provider updates closes #2291
+- reload keybindings on /reload closes #2309
+- restore Bun binary lazy provider loading closes #2314
+- handle z.ai network_error closes #2313
+- merge piped stdin into initial prompt closes #2315
+- skip tmux extended-keys warning when tmux is unreachable (#2311)
+- handle empty session titles and session info metadata (#2304)
+- handle reftable footer branch detection (#2300)
+- emit OSC 133 command-executed marker closes #2242
+- make prompt snippets opt in closes #2285
+- retry provider returned error closes #2264
+- normalize fuzzy edit matching and run touched tests closes #2044
+- handle slash-delimited /model refs closes #2174
+- handle WSL clipboard image fallback\n\nCloses #1722
+- start UI before session_start closes #2035
+- add uninstall alias
+- stabilize windows shell/path handling
+- silence headless clipboard fallback errors closes #2056
+- honor provider compat in models.json closes #2062
+- normalize prompt cwd for bash-safe windows paths closes #2080
+- support configurable npm wrapper command closes #2072
+- stop skill recursion at root closes #2075
+- expand paste markers in ctx.ui.getEditorText(), closes #2084
+- fix startup crash when downloading fd/ripgrep on first run
+- sync tool hooks with agent event processing closes #2113
+- keep only ISO date in system prompt closes #2131
+- match server_error and internal_error in retry regex (#2117)
+- Fix EXIF orientation for JPEG and WebP images (#2105)
+- support PI_CODING_AGENT_DIR env var in example extensions (#2009)
+- use strict JSONL framing fixes #1911
+- allow threshold compaction for error messages using last successful usage, fixes #1834
+- retry sync lockfile acquisition to prevent false auth errors during parallel startup
 
 ## [2026.3.14] - 2026-03-14
 

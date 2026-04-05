@@ -1,6 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.5] - 2026-04-05
+
+### Added
+
+- export CustomProviderDialog closes #2267
+
+### Changed
+
+- refactor(coding-agent): add runtime host for session switching closes #2024
+
+### Fixed
+
+- align README architecture diagram closes #2425
+- update thinking selector immediately closes #2306
+- add model selector filter, onModelSelect callback, onClose callback, fuzzy search, fix streaming duplicates
+- build with tsc instead of tsgo
 
 ## [2026.3.11] - 2026-03-11
 

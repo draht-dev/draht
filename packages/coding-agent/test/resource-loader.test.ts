@@ -565,4 +565,24 @@ export default function(pi: ExtensionAPI) {
 			expect(runner.getToolDefinition("duplicate-tool")?.description).toBe("explicit tool");
 		});
 	});
+
+	describe("builtin extensions", () => {
+		it("should register the subagent tool as a builtin extension", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			const { extensions } = loader.getExtensions();
+			const allTools = extensions.flatMap((ext) => Array.from(ext.tools.keys()));
+			expect(allTools).toContain("subagent");
+		});
+
+		it("should not register builtin extensions when noBuiltinExtensions is set", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true } as any);
+			await loader.reload();
+
+			const { extensions } = loader.getExtensions();
+			const allTools = extensions.flatMap((ext) => Array.from(ext.tools.keys()));
+			expect(allTools).not.toContain("subagent");
+		});
+	});
 });

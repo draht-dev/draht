@@ -577,7 +577,7 @@ export default function(pi: ExtensionAPI) {
 		});
 
 		it("should not register builtin extensions when noBuiltinExtensions is set", async () => {
-			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true } as any);
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
 			await loader.reload();
 
 			const { extensions } = loader.getExtensions();

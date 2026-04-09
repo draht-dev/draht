@@ -23,13 +23,13 @@
 ## Packages (7)
 | Package | npm Name | Purpose |
 |---------|----------|---------|
-| ai | @mariozechner/pi-ai | Multi-provider LLM API |
-| agent | @mariozechner/pi-agent-core | Agent runtime + state |
-| coding-agent | @mariozechner/pi-coding-agent | CLI coding agent (4 tools + extensions) |
-| tui | @mariozechner/pi-tui | Terminal UI library |
-| web-ui | @mariozechner/pi-web-ui | Web chat components |
-| mom | @mariozechner/pi-mom | Slack bot delegate |
-| pods | @mariozechner/pi | vLLM GPU pod management |
+| ai | @draht/ai | Multi-provider LLM API |
+| agent | @draht/agent-core | Agent runtime + state |
+| coding-agent | @draht/coding-agent | CLI coding agent (4 tools + extensions) |
+| tui | @draht/tui | Terminal UI library |
+| web-ui | @draht/web-ui | Web chat components |
+| mom | @draht/mom | Slack bot delegate |
+| pods | @draht/coding-agent | vLLM GPU pod management |
 
 ## Extension System
 - Factory function pattern: `(pi: ExtensionAPI) => void`

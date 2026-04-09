@@ -47,7 +47,7 @@ const configs = [
 
 // Create backend
 const backend = new IndexedDBStorageBackend({
-	dbName: "pi-web-ui-example",
+	dbName: "draht-web-ui-example",
 	version: 2, // Incremented for custom-providers store
 	stores: configs,
 });

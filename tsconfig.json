@@ -22,10 +22,19 @@
 			"@draht/tui/*": ["./packages/tui/src/*"],
 			"@draht/web-ui": ["./packages/web-ui/src/index.ts"],
 			"@draht/web-ui/*": ["./packages/web-ui/src/*"],
-			"@mariozechner/pi-agent-old": ["./packages/agent-old/src/index.ts"],
-			"@mariozechner/pi-agent-old/*": ["./packages/agent-old/src/*"]
+			"@draht/agent-old": ["./packages/agent-old/src/index.ts"],
+			"@draht/agent-old/*": ["./packages/agent-old/src/*"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
-	"exclude": ["packages/web-ui/**/*", "**/dist/**"]
+	"exclude": [
+		"packages/web-ui/**/*",
+		"packages/coding-agent/examples/**/*",
+		"**/dist/**",
+		"packages/router/test/**/*",
+		"packages/invoice/test/**/*",
+		"packages/compliance/test/**/*",
+		"packages/gateway/**/*",
+		"packages/landing/**/*"
+	]
 }

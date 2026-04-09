@@ -23,7 +23,7 @@
 
 ### Changed
 
-- update repo URLs from badlogic/pi-mono to draht-dev/draht
+- update repo URLs from draht-dev/draht to draht-dev/draht
 - rebrand all READMEs to draht naming and conventions
 - switch from npm to bun, replace tsx with bun runtime, add tsgo
 
@@ -36,7 +36,7 @@
 
 ### Changed
 
-- update repo URLs from badlogic/pi-mono to draht-dev/draht
+- update repo URLs from draht-dev/draht to draht-dev/draht
 
 ## [2026.3.2-8] - 2026-03-02
 
@@ -54,7 +54,7 @@
 
 ### Fixed
 
-- Fixed mom startup crash caused by settings API drift by using `SettingsManager` with workspace-backed storage ([#1444](https://github.com/badlogic/pi-mono/issues/1444))
+- Fixed mom startup crash caused by settings API drift by using `SettingsManager` with workspace-backed storage ([#1444](https://github.com/draht-dev/draht/issues/1444))
 
 ## [0.55.3] - 2026-02-27
 
@@ -71,13 +71,13 @@
 
 ### Fixed
 
-- Use coding-agent's SessionManager instead of custom MomSessionManager to fix API mismatch crash ([#595](https://github.com/badlogic/pi-mono/issues/595))
+- Use coding-agent's SessionManager instead of custom MomSessionManager to fix API mismatch crash ([#595](https://github.com/draht-dev/draht/issues/595))
 
 ## [0.31.0] - 2026-01-02
 
 ### Breaking Changes
 
-- `AgentTool` import moved from `@mariozechner/pi-ai` to `@mariozechner/pi-agent-core`
+- `AgentTool` import moved from `@draht/ai` to `@draht/agent-core`
 - `AppMessage` type renamed to `AgentMessage`
 - `Attachment` type replaced with `ImageContent` for image handling
 - `MomSessionManager.loadSession()` renamed to `buildSessionContex()`

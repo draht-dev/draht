@@ -37,7 +37,7 @@
 
 ### Changed
 
-- update repo URLs from badlogic/pi-mono to draht-dev/draht
+- update repo URLs from draht-dev/draht to draht-dev/draht
 - rebrand all READMEs to draht naming and conventions
 - add publishConfig for public npm access
 - switch from npm to bun, replace tsx with bun runtime, add tsgo
@@ -51,7 +51,7 @@
 
 ### Changed
 
-- update repo URLs from badlogic/pi-mono to draht-dev/draht
+- update repo URLs from draht-dev/draht to draht-dev/draht
 
 ## [2026.3.2-8] - 2026-03-02
 
@@ -85,19 +85,19 @@
 
 ### Fixed
 
-- Fixed `continue()` to resume queued steering/follow-up messages when context currently ends in an assistant message, and preserved one-at-a-time steering ordering during assistant-tail resumes ([#1312](https://github.com/badlogic/pi-mono/pull/1312) by [@ferologics](https://github.com/ferologics))
+- Fixed `continue()` to resume queued steering/follow-up messages when context currently ends in an assistant message, and preserved one-at-a-time steering ordering during assistant-tail resumes ([#1312](https://github.com/draht-dev/draht/pull/1312) by [@ferologics](https://github.com/ferologics))
 
 ## [0.50.8] - 2026-02-01
 
 ### Added
 
-- Added `maxRetryDelayMs` option to `AgentOptions` to cap server-requested retry delays. Passed through to the underlying stream function. ([#1123](https://github.com/badlogic/pi-mono/issues/1123))
+- Added `maxRetryDelayMs` option to `AgentOptions` to cap server-requested retry delays. Passed through to the underlying stream function. ([#1123](https://github.com/draht-dev/draht/issues/1123))
 
 ## [0.38.0] - 2026-01-08
 
 ### Added
 
-- `thinkingBudgets` option on `Agent` and `AgentOptions` to customize token budgets per thinking level ([#529](https://github.com/badlogic/pi-mono/pull/529) by [@melihmucuk](https://github.com/melihmucuk))
+- `thinkingBudgets` option on `Agent` and `AgentOptions` to customize token budgets per thinking level ([#529](https://github.com/draht-dev/draht/pull/529) by [@melihmucuk](https://github.com/melihmucuk))
 
 ## [0.37.3] - 2026-01-06
 
@@ -115,7 +115,7 @@
 
 ### Breaking Changes
 
-- **Queue API replaced with steer/followUp**: The `queueMessage()` method has been split into two methods with different delivery semantics ([#403](https://github.com/badlogic/pi-mono/issues/403)):
+- **Queue API replaced with steer/followUp**: The `queueMessage()` method has been split into two methods with different delivery semantics ([#403](https://github.com/draht-dev/draht/issues/403)):
   - `steer(msg)`: Interrupts the agent mid-run. Delivered after current tool execution, skips remaining tools.
   - `followUp(msg)`: Waits until the agent finishes. Delivered only when there are no more tool calls or steering messages.
 - **Queue mode renamed**: `queueMode` option renamed to `steeringMode`. Added new `followUpMode` option. Both control whether messages are delivered one-at-a-time or all at once.
@@ -146,11 +146,11 @@
 
 - **`UserMessageWithAttachments` and `Attachment` types removed**: Attachment handling is now the responsibility of the `convertToLlm` function.
 
-- **Agent loop moved from `@mariozechner/pi-ai`**: The `agentLoop`, `agentLoopContinue`, and related types have moved to this package. Import from `@mariozechner/pi-agent-core` instead.
+- **Agent loop moved from `@draht/ai`**: The `agentLoop`, `agentLoopContinue`, and related types have moved to this package. Import from `@draht/agent-core` instead.
 
 ### Added
 
-- `streamFn` option on `Agent` for custom stream implementations. Default uses `streamSimple` from pi-ai.
+- `streamFn` option on `Agent` for custom stream implementations. Default uses `streamSimple` from @draht/ai.
 
 - `streamProxy()` utility function for browser apps that need to proxy LLM calls through a backend server. Replaces the removed `AppTransport`.
 

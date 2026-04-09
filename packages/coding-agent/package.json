@@ -1,14 +1,14 @@
 {
-	"name": "@mariozechner/pi-coding-agent",
+	"name": "@draht/coding-agent",
 	"version": "2026.4.5",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {
-		"name": "pi",
-		"configDir": ".pi"
+		"name": "draht",
+		"configDir": ".draht"
 	},
 	"bin": {
-		"pi": "dist/cli.js"
+		"draht": "dist/cli.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -40,9 +40,9 @@
 	},
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.2",
-		"@mariozechner/pi-agent-core": "^0.59.0",
-		"@mariozechner/pi-ai": "^0.59.0",
-		"@mariozechner/pi-tui": "^0.59.0",
+		"@draht/agent-core": "^0.59.0",
+		"@draht/ai": "^0.59.0",
+		"@draht/tui": "^0.59.0",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"ajv": "^8.17.1",
 		"chalk": "^5.5.0",
@@ -91,7 +91,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/badlogic/pi-mono.git",
+		"url": "git+https://github.com/draht-dev/draht.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {

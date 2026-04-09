@@ -1,7 +1,7 @@
 # Concerns
 
 ## Rebranding Scope
-- 7 packages all under `@mariozechner/pi-*` namespace — cross-references everywhere
+- 7 packages all under `@draht/coding-agent-*` namespace — cross-references everywhere
 - Internal imports reference package names extensively
 - README, AGENTS.md, CONTRIBUTING.md all reference pi-mono/badlogic
 

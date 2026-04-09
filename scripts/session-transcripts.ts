@@ -77,7 +77,7 @@ interface JsonEvent {
 
 function runSubagent(prompt: string, cwd: string): Promise<{ success: boolean }> {
 	return new Promise((resolve) => {
-		const child = spawn("pi", ["--mode", "json", "--tools", "read,write", "-p", prompt], {
+		const child = spawn("draht", ["--mode", "json", "--tools", "read,write", "-p", prompt], {
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 		});

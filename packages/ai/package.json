@@ -1,5 +1,5 @@
 {
-	"name": "@mariozechner/pi-ai",
+	"name": "@draht/ai",
 	"version": "2026.4.5",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
@@ -56,7 +56,7 @@
 		}
 	},
 	"bin": {
-		"pi-ai": "./dist/cli.js"
+		"draht-ai": "./dist/cli.js"
 	},
 	"files": [
 		"dist",
@@ -100,7 +100,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/badlogic/pi-mono.git",
+		"url": "git+https://github.com/draht-dev/draht.git",
 		"directory": "packages/ai"
 	},
 	"engines": {

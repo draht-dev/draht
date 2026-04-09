@@ -43,7 +43,7 @@ Model Management:
   pi agent <name> [options]                         Interactive chat mode
     --continue, -c       Continue previous session
     --json              Output as JSONL
-    (All pi-agent options are supported)
+    (All draht-agent options are supported)
 
   All model commands support --pod <name> to override the active pod.
 

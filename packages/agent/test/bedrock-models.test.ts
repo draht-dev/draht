@@ -174,8 +174,8 @@ describe("Amazon Bedrock Models - Agent Loop", () => {
 
 					await agent.prompt("Reply with exactly: 'OK'");
 
-					if (agent.state.error) {
-						throw new Error(`Basic prompt error: ${agent.state.error}`);
+					if (agent.state.errorMessage) {
+						throw new Error(`Basic prompt error: ${agent.state.errorMessage}`);
 					}
 
 					expect(agent.state.isStreaming).toBe(false);
@@ -206,15 +206,15 @@ describe("Amazon Bedrock Models - Agent Loop", () => {
 						// First turn
 						await agent.prompt("My name is Alice.");
 
-						if (agent.state.error) {
-							throw new Error(`First turn error: ${agent.state.error}`);
+						if (agent.state.errorMessage) {
+							throw new Error(`First turn error: ${agent.state.errorMessage}`);
 						}
 
 						// Second turn - this should replay the first assistant message which may contain thinking
 						await agent.prompt("What is my name?");
 
-						if (agent.state.error) {
-							throw new Error(`Second turn error: ${agent.state.error}`);
+						if (agent.state.errorMessage) {
+							throw new Error(`Second turn error: ${agent.state.errorMessage}`);
 						}
 
 						expect(agent.state.messages.length).toBe(4);
@@ -264,15 +264,15 @@ describe("Amazon Bedrock Models - Agent Loop", () => {
 							timestamp: Date.now(),
 						};
 
-						agent.replaceMessages([
+						agent.state.messages = [
 							{ role: "user", content: "My name is Alice.", timestamp: Date.now() },
 							syntheticAssistantMessage,
-						]);
+						];
 
 						await agent.prompt("What is my name?");
 
-						if (agent.state.error) {
-							throw new Error(`Synthetic signature error: ${agent.state.error}`);
+						if (agent.state.errorMessage) {
+							throw new Error(`Synthetic signature error: ${agent.state.errorMessage}`);
 						}
 
 						expect(agent.state.messages.length).toBe(4);

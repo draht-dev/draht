@@ -2,13 +2,13 @@
 
 ## Decisions
 - Package name mapping:
-  - `@mariozechner/pi-ai` → `@draht/ai`
-  - `@mariozechner/pi-agent-core` → `@draht/agent-core`
-  - `@mariozechner/pi-coding-agent` → `@draht/coding-agent`
-  - `@mariozechner/pi-tui` → `@draht/tui`
-  - `@mariozechner/pi-web-ui` → `@draht/web-ui`
-  - `@mariozechner/pi-mom` → `@draht/mom`
-  - `@mariozechner/pi` → `@draht/pods`
+  - `@draht/ai` → `@draht/ai`
+  - `@draht/agent-core` → `@draht/agent-core`
+  - `@draht/coding-agent` → `@draht/coding-agent`
+  - `@draht/tui` → `@draht/tui`
+  - `@draht/web-ui` → `@draht/web-ui`
+  - `@draht/mom` → `@draht/mom`
+  - `@draht/coding-agent` → `@draht/pods`
   - `@mariozechner/jiti` → keep as-is (external dep, not ours)
 - Root package: `pi-monorepo` → `draht-monorepo`
 - README: Replace Pi branding with Draht, keep fork attribution section

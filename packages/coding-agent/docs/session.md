@@ -28,7 +28,7 @@ Existing sessions are automatically migrated to the current version (v3) when lo
 
 ## Source Files
 
-Source on GitHub ([pi-mono](https://github.com/draht-dev/draht)):
+Source on GitHub ([draht-mono](https://github.com/draht-dev/draht)):
 - [`packages/coding-agent/src/core/session-manager.ts`](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/src/core/session-manager.ts) - Session entry types and SessionManager
 - [`packages/coding-agent/src/core/messages.ts`](https://github.com/draht-dev/draht/blob/main/packages/coding-agent/src/core/messages.ts) - Extended message types (BashExecutionMessage, CustomMessage, etc.)
 - [`packages/ai/src/types.ts`](https://github.com/draht-dev/draht/blob/main/packages/ai/src/types.ts) - Base message types (UserMessage, AssistantMessage, ToolResultMessage)
@@ -69,7 +69,7 @@ interface ToolCall {
 }
 ```
 
-### Base Message Types (from pi-ai)
+### Base Message Types (from draht-ai)
 
 ```typescript
 interface UserMessage {
@@ -116,7 +116,7 @@ interface Usage {
 }
 ```
 
-### Extended Message Types (from pi-coding-agent)
+### Extended Message Types (from draht coding agent)
 
 ```typescript
 interface BashExecutionMessage {

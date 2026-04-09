@@ -504,7 +504,7 @@ ls -la ~/.draht/sessions/
 - `HF_TOKEN` - HuggingFace token for model downloads
 - `DRAHT_API_KEY` - API key for vLLM endpoints
 - `DRAHT_CONFIG_DIR` - Config directory (default: `~/.pi`)
-- `OPENAI_API_KEY` - Used by `pi-agent` when no `--api-key` provided
+- `OPENAI_API_KEY` - Used by `draht-agent` when no `--api-key` provided
 
 ## License
 

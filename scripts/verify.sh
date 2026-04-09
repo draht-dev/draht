@@ -3,7 +3,7 @@
 # Post-rebase verification suite for draht.
 #
 # Runs in order:
-#   1. Branding integrity (no stale @draht/coding-agent-* refs)
+#   1. Branding integrity (no stale @mariozechner/pi-* refs)
 #   2. bun install
 #   3. Lint + type check (npm run check)
 #   4. Build all packages
@@ -53,13 +53,13 @@ skip() {
 # ── 1. Branding integrity ────────────────────────────────────────────
 step "Branding integrity check"
 
-STALE_REFS=$(grep -r "@draht/coding-agent-" packages/*/src/ packages/*/test/ packages/*/package.json \
+STALE_REFS=$(grep -r "@mariozechner/pi-" packages/*/src/ packages/*/test/ packages/*/package.json \
     --include="*.ts" --include="*.json" -l 2>/dev/null | grep -v node_modules || true)
 
 if [[ -z "$STALE_REFS" ]]; then
-    pass "No stale @draht/coding-agent-* references in source"
+    pass "No stale @mariozechner/pi-* references in source"
 else
-    fail "Stale @draht/coding-agent-* references found:"
+    fail "Stale @mariozechner/pi-* references found:"
     echo "$STALE_REFS" | while read -r f; do
         echo "      $f"
     done

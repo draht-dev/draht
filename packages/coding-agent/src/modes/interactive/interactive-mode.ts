@@ -81,6 +81,7 @@ import { CustomEditor } from "./components/custom-editor.js";
 import { CustomMessageComponent } from "./components/custom-message.js";
 import { DaxnutsComponent } from "./components/daxnuts.js";
 import { DynamicBorder } from "./components/dynamic-border.js";
+import { EarendilAnnouncementComponent } from "./components/earendil-announcement.js";
 import { ExtensionEditorComponent } from "./components/extension-editor.js";
 import { ExtensionInputComponent } from "./components/extension-input.js";
 import { ExtensionSelectorComponent } from "./components/extension-selector.js";
@@ -173,6 +174,7 @@ export class InteractiveMode {
 	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
 	private changelogMarkdown: string | undefined = undefined;
+	private startupNoticesShown = false;
 
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
@@ -427,6 +429,48 @@ export class InteractiveMode {
 		}
 	}
 
+	private shouldShowEarendilAnnouncement(): boolean {
+		const now = new Date();
+		return now.getFullYear() === 2026 && now.getMonth() === 3 && now.getDate() === 8;
+	}
+
+	private showStartupNoticesIfNeeded(): void {
+		if (this.startupNoticesShown) {
+			return;
+		}
+		this.startupNoticesShown = true;
+
+		if (this.shouldShowEarendilAnnouncement()) {
+			if (this.chatContainer.children.length > 0) {
+				this.chatContainer.addChild(new Spacer(1));
+			}
+			this.chatContainer.addChild(new EarendilAnnouncementComponent());
+		}
+
+		if (!this.changelogMarkdown) {
+			return;
+		}
+
+		if (this.chatContainer.children.length > 0) {
+			this.chatContainer.addChild(new Spacer(1));
+		}
+		this.chatContainer.addChild(new DynamicBorder());
+		if (this.settingsManager.getCollapseChangelog()) {
+			const versionMatch = this.changelogMarkdown.match(/##\s+\[?(\d+\.\d+\.\d+)\]?/);
+			const latestVersion = versionMatch ? versionMatch[1] : this.version;
+			const condensedText = `Updated to v${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
+			this.chatContainer.addChild(new Text(condensedText, 1, 0));
+		} else {
+			this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "What's New")), 1, 0));
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(
+				new Markdown(this.changelogMarkdown.trim(), 1, 0, this.getMarkdownThemeWithSettings()),
+			);
+			this.chatContainer.addChild(new Spacer(1));
+		}
+		this.chatContainer.addChild(new DynamicBorder());
+	}
+
 	async init(): Promise<void> {
 		if (this.isInitialized) return;
 
@@ -479,37 +523,10 @@ export class InteractiveMode {
 			this.headerContainer.addChild(new Spacer(1));
 			this.headerContainer.addChild(this.builtInHeader);
 			this.headerContainer.addChild(new Spacer(1));
-
-			// Add changelog if provided
-			if (this.changelogMarkdown) {
-				this.headerContainer.addChild(new DynamicBorder());
-				if (this.settingsManager.getCollapseChangelog()) {
-					const versionMatch = this.changelogMarkdown.match(/##\s+\[?(\d+\.\d+\.\d+)\]?/);
-					const latestVersion = versionMatch ? versionMatch[1] : this.version;
-					const condensedText = `Updated to v${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
-					this.headerContainer.addChild(new Text(condensedText, 1, 0));
-				} else {
-					this.headerContainer.addChild(new Text(theme.bold(theme.fg("accent", "What's New")), 1, 0));
-					this.headerContainer.addChild(new Spacer(1));
-					this.headerContainer.addChild(
-						new Markdown(this.changelogMarkdown.trim(), 1, 0, this.getMarkdownThemeWithSettings()),
-					);
-					this.headerContainer.addChild(new Spacer(1));
-				}
-				this.headerContainer.addChild(new DynamicBorder());
-			}
 		} else {
 			// Minimal header when silenced
 			this.builtInHeader = new Text("", 0, 0);
 			this.headerContainer.addChild(this.builtInHeader);
-			if (this.changelogMarkdown) {
-				// Still show changelog notification even in silent mode
-				this.headerContainer.addChild(new Spacer(1));
-				const versionMatch = this.changelogMarkdown.match(/##\s+\[?(\d+\.\d+\.\d+)\]?/);
-				const latestVersion = versionMatch ? versionMatch[1] : this.version;
-				const condensedText = `Updated to v${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
-				this.headerContainer.addChild(new Text(condensedText, 1, 0));
-			}
 		}
 
 		this.ui.addChild(this.chatContainer);
@@ -1249,11 +1266,13 @@ export class InteractiveMode {
 		const extensionRunner = this.session.extensionRunner;
 		if (!extensionRunner) {
 			this.showLoadedResources({ extensions: [], force: false });
+			this.showStartupNoticesIfNeeded();
 			return;
 		}
 
 		this.setupExtensionShortcuts(extensionRunner);
 		this.showLoadedResources({ force: false });
+		this.showStartupNoticesIfNeeded();
 	}
 
 	private applyRuntimeSettings(): void {

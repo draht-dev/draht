@@ -83,6 +83,7 @@
 		"packages/router/test/**/*",
 		"packages/invoice/test/**/*",
 		"packages/compliance/test/**/*",
-		"packages/gateway/**/*"
+		"packages/gateway/**/*",
+		"packages/landing/**/*"
 	]
 }

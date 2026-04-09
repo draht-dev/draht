@@ -30,7 +30,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringEnum } from "@draht/ai";
-import { type ExtensionAPI, getAgentDir, withFileMutationQueue } from "@draht/coding-agent";
+import { type ExtensionAPI, getAgentDir } from "@draht/coding-agent";
 import { type Static, Type } from "@sinclair/typebox";
 
 const PROVIDER = "google-antigravity";
@@ -228,14 +228,12 @@ function imageExtension(mimeType: string): string {
 }
 
 async function saveImage(base64Data: string, mimeType: string, outputDir: string): Promise<string> {
+	await mkdir(outputDir, { recursive: true });
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 	const ext = imageExtension(mimeType);
 	const filename = `image-${timestamp}-${randomUUID().slice(0, 8)}.${ext}`;
 	const filePath = join(outputDir, filename);
-	await withFileMutationQueue(filePath, async () => {
-		await mkdir(outputDir, { recursive: true });
-		await writeFile(filePath, Buffer.from(base64Data, "base64"));
-	});
+	await writeFile(filePath, Buffer.from(base64Data, "base64"));
 	return filePath;
 }
 

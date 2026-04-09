@@ -437,23 +437,11 @@ export class InteractiveMode {
 		}
 	}
 
-	private shouldShowEarendilAnnouncement(): boolean {
-		const now = new Date();
-		return now.getFullYear() === 2026 && now.getMonth() === 3 && (now.getDate() === 8 || now.getDate() === 9);
-	}
-
 	private showStartupNoticesIfNeeded(): void {
 		if (this.startupNoticesShown) {
 			return;
 		}
 		this.startupNoticesShown = true;
-
-		if (this.shouldShowEarendilAnnouncement()) {
-			if (this.chatContainer.children.length > 0) {
-				this.chatContainer.addChild(new Spacer(1));
-			}
-			this.chatContainer.addChild(new EarendilAnnouncementComponent());
-		}
 
 		if (!this.changelogMarkdown) {
 			return;
@@ -2230,6 +2218,11 @@ export class InteractiveMode {
 			}
 			if (text === "/arminsayshi") {
 				this.handleArminSaysHi();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/dementedelves") {
+				this.handleDementedDelves();
 				this.editor.setText("");
 				return;
 			}
@@ -4605,6 +4598,12 @@ export class InteractiveMode {
 	private handleArminSaysHi(): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new ArminComponent(this.ui));
+		this.ui.requestRender();
+	}
+
+	private handleDementedDelves(): void {
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new EarendilAnnouncementComponent());
 		this.ui.requestRender();
 	}
 

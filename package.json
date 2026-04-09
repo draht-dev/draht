@@ -33,6 +33,7 @@
 		"dev:unlink": "bun scripts/dev-unlink.mjs",
 		"verify": "bash scripts/verify.sh",
 		"verify:quick": "bash scripts/verify.sh --quick",
+		"check:draht": "node scripts/check-draht-customizations.mjs",
 		"prepare": "husky"
 	},
 	"devDependencies": {

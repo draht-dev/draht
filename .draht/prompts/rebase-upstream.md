@@ -62,7 +62,26 @@ agent: "branding-guard"
 task: "Scan the codebase and the diff main..upstream-sync for pi branding leaks. Fix all hits."
 ```
 
-### 5. Verify (subagent: verifier)
+### 5. Draht customization guard
+
+Run the customization check yourself (no subagent). This catches upstream overwrites
+of draht-specific `package.json` fields, scripts, workspace deps, and planning docs:
+
+```bash
+node scripts/check-draht-customizations.mjs
+```
+
+If any checks fail, fix the issues before proceeding. Common problems:
+
+- `version` reverted to upstream semver → restore `YYYY.M.D` format
+- `drahtConfig` reverted to `piConfig` → rename the key
+- `workspace:*` deps replaced with semver ranges → restore `workspace:*`
+- Draht-only scripts removed (`dev:link`, `release`, `verify`, etc.) → re-add them
+- `build:binary` outputs `dist/pi` → change to `dist/draht`
+- `.planning/` files modified → revert with `git checkout main -- .planning/`
+- `verify.sh` branding check rewritten → revert with `git checkout main -- scripts/verify.sh`
+
+### 6. Verify (subagent: verifier)
 
 Use the subagent tool in **single** mode:
 
@@ -71,7 +90,7 @@ agent: "verifier"
 task: "Run bun run check and fix all errors, warnings, and infos until clean."
 ```
 
-### 6. Final branding audit (subagent: branding-guard)
+### 7. Final branding audit (subagent: branding-guard)
 
 Run branding-guard again — verification fixes can reintroduce pi references:
 
@@ -80,7 +99,18 @@ agent: "branding-guard"
 task: "Final audit. Scan the entire codebase for pi branding leaks. Fix all hits and confirm zero remaining."
 ```
 
-### 7. Merge into main
+### 8. Final customization guard
+
+Run the customization check one last time — branding fixes and verification can
+re-break draht-specific fields:
+
+```bash
+node scripts/check-draht-customizations.mjs
+```
+
+All checks must pass before merging.
+
+### 9. Merge into main
 
 Do this yourself after all subagents report success:
 
@@ -132,6 +162,8 @@ See the `branding-guard` agent for the full replacement table and rules. Key poi
 - [ ] No upstream version numbers leaked into `package.json`
 - [ ] No upstream changelog entries leaked into `CHANGELOG.md`
 - [ ] **branding-guard** subagent: full sweep done, no pi product references leaked
+- [ ] `check:draht` passed (draht customizations intact)
 - [ ] **verifier** subagent: `bun run check` passes
 - [ ] **branding-guard** subagent: final audit confirmed zero branding hits
+- [ ] `check:draht` passed again after final fixes
 - [ ] Merged into `main`

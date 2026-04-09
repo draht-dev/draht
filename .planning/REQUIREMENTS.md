@@ -3,7 +3,7 @@
 ## v1 (Must Have)
 
 ### R1: Rebrand to @draht/ namespace
-- R1.1: Update all package.json names from `@draht/coding-agent-*` to `@draht/*`
+- R1.1: Update all package.json names from `@mariozechner/pi-*` to `@draht/*`
 - R1.2: Update internal cross-package imports/references
 - R1.3: Update README.md with Draht branding, keep fork attribution
 - R1.4: Update AGENTS.md, CONTRIBUTING.md references

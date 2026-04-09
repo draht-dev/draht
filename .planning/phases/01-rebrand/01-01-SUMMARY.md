@@ -10,11 +10,11 @@
 
 ## Files Changed
 - 232 files changed across all packages
-- All `@draht/coding-agent-*` → `@draht/*` in package.json, .ts, tsconfig files
+- All `@mariozechner/pi-*` → `@draht/*` in package.json, .ts, tsconfig files
 - External deps (@mariozechner/jiti, clipboard, mini-lit) kept as-is
 
 ## Verification Results
-- No `@draht/coding-agent-` references remain in package.json or .ts files: ✅ Pass
+- No `@mariozechner/pi-` references remain in package.json or .ts files: ✅ Pass
 - `npm install` completes cleanly: ✅ Pass
 - `npm run build` succeeds: ✅ Pass
 - `npm run check` passes: ✅ Pass

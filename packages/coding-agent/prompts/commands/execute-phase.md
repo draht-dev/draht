@@ -14,6 +14,20 @@ Execute all plans in a phase with atomic commits, parallelizing independent plan
 Phase: $1
 Arguments: $ARGUMENTS
 
+## Atomic Reasoning
+
+Before executing, decompose this phase execution into atomic reasoning units:
+
+**For each plan in the phase:**
+1. **State the logical component** — What is this plan's singular purpose? What observable outcome does it produce?
+2. **Validate independence** — Can this plan execute in parallel with others, or does it depend on their outputs? Which files does it touch?
+3. **Verify correctness** — What tests will prove this plan works? What failure modes exist?
+
+**Synthesize execution strategy:**
+- Identify parallel execution groups (plans with no shared files/dependencies)
+- Order dependent plans (plan B depends on plan A's outputs)
+- Map each plan to a subagent task with clear success criteria
+
 ## Steps
 1. Run `draht-tools discover-plans $1` to find and order plans
 2. Read each plan file yourself (from `.planning/phases/`) and analyze dependencies to identify which plans can run in parallel vs sequential

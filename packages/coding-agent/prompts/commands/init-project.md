@@ -16,6 +16,22 @@ Focus: $ARGUMENTS
 Use this when you have an existing codebase and want to add structured planning.
 For greenfield projects, use `/new-project` instead.
 
+## Atomic Reasoning
+
+Before initializing, decompose project understanding into atomic reasoning units:
+
+**For each aspect of the existing project:**
+1. **State the logical component** — What does this project do? Who are the users? What problems does it solve?
+2. **Validate independence** — What bounded contexts exist in the code? What domain concepts are already present? Can they be separated cleanly?
+3. **Verify correctness** — What works well that we must preserve? What pain points exist? What constraints limit changes?
+
+**Synthesize initialization strategy:**
+- Map existing architecture and conventions
+- Extract domain model from code (bounded contexts, aggregates, ubiquitous language)
+- Identify test strategy and coverage
+- Define requirements that align with existing structure
+- Create roadmap that respects what already works
+
 ## Steps
 1. Run `draht-tools init` to check preconditions (git repo, etc.)
 2. Run `draht-tools map-codebase` to build a structural map of the existing code

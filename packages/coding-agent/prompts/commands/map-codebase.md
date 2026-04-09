@@ -13,6 +13,22 @@ Analyze existing codebase before planning, using subagents for parallel analysis
 
 Directory: $1
 
+## Atomic Reasoning
+
+Before analyzing, decompose codebase understanding into atomic reasoning units:
+
+**For each architectural layer:**
+1. **State the logical component** — What is this directory/module's responsibility? What concepts does it encapsulate?
+2. **Validate independence** — Is this a bounded context? What are its dependencies? Does it leak abstractions across boundaries?
+3. **Verify correctness** — What domain terms appear in code? What aggregates exist? What test infrastructure is present?
+
+**Synthesize analysis strategy:**
+- Map directory structure to bounded contexts
+- Extract domain language from identifiers (classes, functions, types)
+- Identify context relationships (upstream/downstream, shared kernel)
+- Document test strategy and coverage
+- Note architectural concerns and patterns
+
 ## Steps
 1. Run `draht-tools map-codebase $1`
 2. Tool generates: STACK.md, ARCHITECTURE.md, CONVENTIONS.md, CONCERNS.md

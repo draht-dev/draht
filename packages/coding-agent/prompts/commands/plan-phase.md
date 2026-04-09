@@ -13,6 +13,21 @@ Create atomic execution plans for a roadmap phase, using subagents for parallel 
 
 Phase: $1
 
+## Atomic Reasoning
+
+Before creating plans, decompose this phase goal into atomic reasoning units:
+
+**For each observable truth (user-visible outcome):**
+1. **State the logical component** — What must be true for the user? What can they do/see/verify?
+2. **Validate independence** — Which artifacts (files, endpoints, schemas) prove this truth exists? Can it be built independently?
+3. **Verify correctness** — What test scenarios would prove this observable truth? What are the specific inputs → expected outputs?
+
+**Synthesize planning strategy:**
+- Group related observable truths into cohesive plans (2-5 tasks each)
+- Identify which plans can be created in parallel vs sequentially
+- Map each plan to specific bounded contexts and domain concepts
+- Ensure each plan produces testable, verifiable outcomes
+
 ## Steps
 1. Run `draht-tools load-phase-context $1` to gather all context
 2. Optional: `draht-tools research-phase $1` for domain research

@@ -13,6 +13,21 @@ Capture implementation decisions before planning a phase.
 
 Phase: $1
 
+## Atomic Reasoning
+
+Before questioning, decompose this phase scope into atomic reasoning units:
+
+**For each implementation decision:**
+1. **State the logical component** — What gray area exists? What choice needs to be made? Why does this matter?
+2. **Validate independence** — Can this decision be made independently, or does it depend on other choices? What downstream impacts does it have?
+3. **Verify correctness** — What criteria determine the right answer? What trade-offs exist? What domain terms need clarification?
+
+**Synthesize discussion strategy:**
+- Identify critical decisions that block planning
+- Group related decisions (e.g., all API decisions together)
+- Sequence questions from foundational to detailed
+- Ensure domain language is established first
+
 ## Steps
 1. Run `draht-tools phase-info $1` to load phase context
 2. Identify gray areas based on what's being built

@@ -13,6 +13,21 @@ Walk through acceptance testing of completed phase work, using subagents for par
 
 Phase: $1
 
+## Atomic Reasoning
+
+Before verifying, decompose phase acceptance into atomic reasoning units:
+
+**For each deliverable:**
+1. **State the logical component** — What was this deliverable meant to produce? What user value does it provide?
+2. **Validate independence** — Can this deliverable be tested independently? What are its dependencies?
+3. **Verify correctness** — What tests prove it works? What edge cases must pass? What security concerns exist?
+
+**Synthesize verification strategy:**
+- Group parallel verification tasks (test suite, security audit, code review, domain compliance)
+- Map each deliverable to specific test scenarios and acceptance criteria
+- Identify critical vs optional checks
+- Plan fix strategies for potential failures
+
 ## Steps
 1. Run `draht-tools extract-deliverables $1` to get testable items
 2. **Run parallel verification via subagents:**

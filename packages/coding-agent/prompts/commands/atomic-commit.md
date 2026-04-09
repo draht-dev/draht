@@ -4,6 +4,23 @@ description: "Analyze changes and create atomic commits"
 
 # Git Atomic Commit Analysis
 
+## Atomic Reasoning
+
+Before creating commits, decompose changes into atomic reasoning units:
+
+**For each file change:**
+1. **State the logical component** — What does this change do? What is its purpose? Does it complete a thought?
+2. **Validate independence** — Can this change be applied independently? Does it depend on other changes? Does it break the build alone?
+3. **Verify correctness** — Is this change logically complete? Does it mix concerns? Should it be split further?
+
+**Synthesize commit strategy:**
+- Group changes by logical concern (one commit = one idea)
+- Order commits so each builds successfully
+- Write clear commit messages that explain WHY, not just WHAT
+- Ensure each commit is self-contained and reviewable
+
+## Gathering Current State
+
 First, gather the current state:
 
 1. Run `git status` to see what changed

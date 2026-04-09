@@ -13,6 +13,20 @@ Diagnose and fix a specific bug or failing task with TDD discipline, using a sub
 
 Issue: $ARGUMENTS
 
+## Atomic Reasoning
+
+Before diagnosing, decompose this bug into atomic reasoning units:
+
+1. **State the logical component** — What is the observed failure? What should happen vs what actually happens?
+2. **Validate independence** — Which components/files are involved? Can we isolate the failure? Are there related bugs that should be fixed separately?
+3. **Verify correctness** — What test will reproduce this bug reliably? What would prove it's fixed? What regressions could the fix introduce?
+
+**Synthesize fix strategy:**
+- Trace the failure to root cause
+- Write a minimal reproducing test
+- Identify the smallest change that makes the test pass
+- Plan regression checks
+
 ## Steps
 1. **Diagnose via subagent**: Use the `subagent` tool in **single mode** with the `debugger` agent:
    "Diagnose this issue: $ARGUMENTS. Reproduce the bug by running the relevant test or command. Trace the root cause by reading the code. Identify the exact files and lines involved. Do NOT fix it yet — only report the diagnosis with: root cause, affected files, and a recommended fix approach. Do NOT run draht, draht-tools, or pi commands."

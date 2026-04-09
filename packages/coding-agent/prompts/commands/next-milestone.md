@@ -11,6 +11,22 @@ Plan the next milestone after ALL phases in the current one are complete.
 /next-milestone
 ```
 
+## Atomic Reasoning
+
+Before planning the next milestone, decompose progress into atomic reasoning units:
+
+**For each completed phase:**
+1. **State the logical component** — What was built? What user value was delivered? What requirements were satisfied?
+2. **Validate independence** — What worked well? What had issues? What assumptions proved wrong?
+3. **Verify correctness** — What tests passed? What domain model evolved? What new knowledge emerged?
+
+**Synthesize next milestone:**
+- Assess which v1 requirements remain vs are complete
+- Identify requirements that should be promoted or descoped based on learning
+- Define 3-5 new phases with clear, testable goals
+- Order phases by dependency and risk
+- Map each phase to specific requirements and domain contexts
+
 ## Prerequisites
 - `.planning/ROADMAP.md` must exist
 - ALL phases in the current milestone must be complete (verified via /verify-work)

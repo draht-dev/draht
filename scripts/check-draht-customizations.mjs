@@ -10,10 +10,17 @@
  *   1. Root package.json: version format, scripts, workspace deps, draht-only deps
  *   2. coding-agent package.json: drahtConfig, bin entries, files, workspace deps,
  *      build scripts, publishConfig, typescript version
- *   3. Draht-only scripts exist on disk
- *   4. verify.sh branding check targets @mariozechner/pi-* (not @draht/*)
- *   5. .planning/ files are not modified vs main (branding guard must not touch them)
- *   6. All upstream-shared packages use workspace:* deps
+ *   3. All upstream-shared packages use workspace:* deps
+ *   4. Draht-only scripts exist on disk
+ *   5. verify.sh branding check targets @mariozechner/pi-* (not @draht/*)
+ *   6. .planning/ files are not modified vs main (branding guard must not touch them)
+ *   7. Repo-level subagents exist in .draht/agents/
+ *   8. GSD sources exist in packages/coding-agent/src/gsd/
+ *   9. GSD hooks exist in packages/coding-agent/hooks/gsd/
+ *  10. GSD prompt templates exist in packages/coding-agent/prompts/
+ *  11. Built-in agents exist in packages/coding-agent/agents/
+ *  12. draht-tools binary exists in packages/coding-agent/bin/
+ *  13. GSD test suite is intact in packages/coding-agent/test/
  */
 
 import { readFileSync, existsSync } from "node:fs";
@@ -225,6 +232,168 @@ try {
 } catch {
 	// If not on a branch or main doesn't exist, skip
 	pass(`.planning/ check skipped (no main ref)`);
+}
+
+// ── 7. Repo-level subagents ─────────────────────────────────────────
+
+console.log("\nRepo-level subagents (.draht/agents/)");
+
+const requiredRepoAgents = [
+	".draht/agents/branding-guard.md",
+	".draht/agents/cherry-picker.md",
+	".draht/agents/verifier.md",
+];
+for (const agent of requiredRepoAgents) {
+	check(existsSync(resolve(root, agent)), `${agent} exists`);
+}
+
+// ── 8. GSD sources ──────────────────────────────────────────────────
+
+console.log("\nGSD sources (packages/coding-agent/src/gsd/)");
+
+const requiredGsdSources = [
+	"packages/coding-agent/src/gsd/index.ts",
+	"packages/coding-agent/src/gsd/domain.ts",
+	"packages/coding-agent/src/gsd/domain-validator.ts",
+	"packages/coding-agent/src/gsd/git.ts",
+	"packages/coding-agent/src/gsd/hook-utils.ts",
+	"packages/coding-agent/src/gsd/planning.ts",
+];
+for (const src of requiredGsdSources) {
+	check(existsSync(resolve(root, src)), `${src} exists`);
+}
+
+// Verify gsd/index.ts still exports the expected API surface
+if (existsSync(resolve(root, "packages/coding-agent/src/gsd/index.ts"))) {
+	const gsdIndex = readFileSync(
+		resolve(root, "packages/coding-agent/src/gsd/index.ts"),
+		"utf-8",
+	);
+	const requiredGsdExports = [
+		"mapCodebase",
+		"createDomainModel",
+		"validateDomainGlossary",
+		"commitTask",
+		"commitDocs",
+		"detectToolchain",
+		"readHookConfig",
+		"createPlan",
+		"discoverPlans",
+		"readPlan",
+		"updateState",
+		"verifyPhase",
+		"writeSummary",
+	];
+	for (const name of requiredGsdExports) {
+		check(gsdIndex.includes(name), `gsd/index.ts exports ${name}`);
+	}
+}
+
+// ── 9. GSD hooks ────────────────────────────────────────────────────
+
+console.log("\nGSD hooks (packages/coding-agent/hooks/gsd/)");
+
+const requiredGsdHooks = [
+	"packages/coding-agent/hooks/gsd/draht-pre-execute.js",
+	"packages/coding-agent/hooks/gsd/draht-quality-gate.js",
+	"packages/coding-agent/hooks/gsd/draht-post-task.js",
+	"packages/coding-agent/hooks/gsd/draht-post-phase.js",
+];
+for (const hook of requiredGsdHooks) {
+	check(existsSync(resolve(root, hook)), `${hook} exists`);
+}
+
+// ── 10. GSD command & agent prompt templates ───────────────────────
+
+console.log("\nGSD prompt templates (packages/coding-agent/prompts/)");
+
+const requiredCommandPrompts = [
+	"atomic-commit",
+	"discuss-phase",
+	"execute-phase",
+	"fix",
+	"init-project",
+	"map-codebase",
+	"new-project",
+	"next-milestone",
+	"pause-work",
+	"plan-phase",
+	"progress",
+	"quick",
+	"resume-work",
+	"review",
+	"verify-work",
+];
+for (const name of requiredCommandPrompts) {
+	check(
+		existsSync(
+			resolve(root, `packages/coding-agent/prompts/commands/${name}.md`),
+		),
+		`prompts/commands/${name}.md exists`,
+	);
+}
+
+const requiredAgentPrompts = ["build", "plan", "verify"];
+for (const name of requiredAgentPrompts) {
+	check(
+		existsSync(
+			resolve(root, `packages/coding-agent/prompts/agents/${name}.md`),
+		),
+		`prompts/agents/${name}.md exists`,
+	);
+}
+
+// ── 11. Built-in agents ─────────────────────────────────────────────
+
+console.log("\nBuilt-in agents (packages/coding-agent/agents/)");
+
+const requiredBuiltinAgents = [
+	"architect",
+	"debugger",
+	"git-committer",
+	"implementer",
+	"reviewer",
+	"security-auditor",
+	"verifier",
+];
+for (const name of requiredBuiltinAgents) {
+	check(
+		existsSync(resolve(root, `packages/coding-agent/agents/${name}.md`)),
+		`agents/${name}.md exists`,
+	);
+}
+
+// ── 12. draht-tools binary ─────────────────────────────────────────
+
+console.log("\nDraht-tools binary");
+
+check(
+	existsSync(resolve(root, "packages/coding-agent/bin/draht-tools.cjs")),
+	`packages/coding-agent/bin/draht-tools.cjs exists`,
+);
+
+// ── 13. GSD test suite ─────────────────────────────────────────────
+
+console.log("\nGSD test suite (packages/coding-agent/test/)");
+
+const requiredGsdTests = [
+	"gsd-domain.test.ts",
+	"gsd-domain-fixture.test.ts",
+	"gsd-domain-validator.test.ts",
+	"gsd-extension-loading.test.ts",
+	"gsd-git.test.ts",
+	"gsd-hook-utils.test.ts",
+	"gsd-index.test.ts",
+	"gsd-lifecycle.test.ts",
+	"gsd-map-codebase.test.ts",
+	"gsd-planning.test.ts",
+	"gsd-quality-gate.test.ts",
+];
+for (const name of requiredGsdTests) {
+	check(
+		existsSync(resolve(root, `packages/coding-agent/test/${name}`)),
+		`test/${name} exists`,
+	);
 }
 
 // ── Summary ─────────────────────────────────────────────────────────

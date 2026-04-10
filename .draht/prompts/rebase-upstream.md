@@ -65,11 +65,28 @@ task: "Scan the codebase and the diff main..upstream-sync for pi branding leaks.
 ### 5. Draht customization guard
 
 Run the customization check yourself (no subagent). This catches upstream overwrites
-of draht-specific `package.json` fields, scripts, workspace deps, and planning docs:
+of draht-specific `package.json` fields, scripts, workspace deps, planning docs,
+repo-level subagents, and all GSD workflow assets:
 
 ```bash
 node scripts/check-draht-customizations.mjs
 ```
+
+What it verifies:
+
+- Root `package.json` version format, draht-only scripts, workspace deps
+- `coding-agent/package.json` `drahtConfig`, bin entries, files array, build scripts, publishConfig
+- All shared packages use `workspace:*` for `@draht/*` deps
+- Draht-only scripts on disk (`dev-link.mjs`, `verify.sh`, `release.mjs`, etc.)
+- `verify.sh` still targets `@mariozechner/pi-*`
+- `.planning/` docs unchanged vs main
+- Repo-level subagents in `.draht/agents/` (`branding-guard`, `cherry-picker`, `verifier`)
+- GSD sources in `packages/coding-agent/src/gsd/` and their public exports
+- GSD hooks in `packages/coding-agent/hooks/gsd/`
+- GSD command & agent prompt templates in `packages/coding-agent/prompts/`
+- Built-in agents in `packages/coding-agent/agents/`
+- `draht-tools` binary at `packages/coding-agent/bin/draht-tools.cjs`
+- GSD test suite in `packages/coding-agent/test/`
 
 If any checks fail, fix the issues before proceeding. Common problems:
 
@@ -80,6 +97,9 @@ If any checks fail, fix the issues before proceeding. Common problems:
 - `build:binary` outputs `dist/pi` → change to `dist/draht`
 - `.planning/` files modified → revert with `git checkout main -- .planning/`
 - `verify.sh` branding check rewritten → revert with `git checkout main -- scripts/verify.sh`
+- Any GSD/subagent/prompt/agent/hook file missing → restore with
+  `git checkout main -- <path>` (upstream cannot remove them; a missing file means
+  a merge/cherry-pick accidentally dropped it)
 
 ### 6. Verify (subagent: verifier)
 

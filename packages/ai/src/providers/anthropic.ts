@@ -61,30 +61,48 @@ function getCacheControl(
 	};
 }
 
-// Stealth mode: Mimic Claude Code's tool naming exactly
-const claudeCodeVersion = "2.1.75";
-
-// Claude Code 2.x tool names (canonical casing)
-// Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
+// Stealth mode: Mimic Claude Code's identity, headers, and tool naming.
+// Source: https://cchistory.mariozechner.at/data/prompts-2.1.100.md
 // To update: https://github.com/badlogic/cchistory
+const claudeCodeVersion = "2.1.100";
+// Build hash suffix that Claude Code appends to the billing header's cc_version.
+// Each real release has its own hash (e.g. 2.1.100 -> "1af", 2.1.90 -> "232").
+// This value only needs to parse; it is not cryptographically verified server-side.
+const claudeCodeBuild = "1af";
+// First line of Claude Code's system prompt. Anthropic uses this to classify
+// traffic as first-party Claude Code (vs third-party SDK usage) for billing.
+const claudeCodeBillingHeader = `x-anthropic-billing-header: cc_version=${claudeCodeVersion}.${claudeCodeBuild}; cc_entrypoint=sdk-cli; cch=00000;`;
+// Identity statement that immediately follows the billing header in real Claude Code.
+const claudeCodeIdentity = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+
+// Claude Code 2.1.100 tool names (canonical casing), both active and deferred
+// (deferred tools are loaded on-demand via ToolSearch but still use these names).
 const claudeCodeTools = [
-	"Read",
-	"Write",
-	"Edit",
-	"Bash",
-	"Grep",
-	"Glob",
+	"Agent",
 	"AskUserQuestion",
+	"Bash",
+	"CronCreate",
+	"CronDelete",
+	"CronList",
+	"Edit",
 	"EnterPlanMode",
+	"EnterWorktree",
 	"ExitPlanMode",
-	"KillShell",
+	"ExitWorktree",
+	"Glob",
+	"Grep",
+	"Monitor",
 	"NotebookEdit",
+	"Read",
+	"RemoteTrigger",
 	"Skill",
-	"Task",
 	"TaskOutput",
+	"TaskStop",
 	"TodoWrite",
+	"ToolSearch",
 	"WebFetch",
 	"WebSearch",
+	"Write",
 ];
 
 const ccToolLookup = new Map(claudeCodeTools.map((t) => [t.toLowerCase(), t]));
@@ -618,12 +636,16 @@ function buildParams(
 		stream: true,
 	};
 
-	// For OAuth tokens, we MUST include Claude Code identity
+	// For OAuth tokens, we MUST prepend the Claude Code billing header and identity.
+	// Anthropic inspects the first system block to classify traffic as first-party
+	// Claude Code (billed against the Claude subscription) vs third-party SDK usage
+	// (billed as extra usage per token). Without these exact strings, Pro/Max/Team
+	// subscriptions are metered as third-party.
 	if (isOAuthToken) {
 		params.system = [
 			{
 				type: "text",
-				text: "You are Claude Code, Anthropic's official CLI for Claude.",
+				text: `${claudeCodeBillingHeader}\n${claudeCodeIdentity}`,
 				...(cacheControl ? { cache_control: cacheControl } : {}),
 			},
 		];

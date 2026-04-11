@@ -137,6 +137,7 @@ const SCOPE_TO_PACKAGE = {
 	agent: "agent",
 	"agent-core": "agent",
 	"coding-agent": "coding-agent",
+	"draht-claude": "draht-claude",
 	mom: "mom",
 	pods: "pods",
 	"web-ui": "web-ui",

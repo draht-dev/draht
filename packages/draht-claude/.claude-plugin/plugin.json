@@ -1,0 +1,21 @@
+{
+  "name": "draht",
+  "version": "2026.4.5",
+  "description": "Draht's GSD (Get Shit Done) workflow, multi-agent orchestration, TDD/DDD discipline, and planning framework as a Claude Code plugin.",
+  "author": {
+    "name": "Mario Zechner",
+    "url": "https://draht.dev"
+  },
+  "homepage": "https://draht.dev",
+  "repository": "https://github.com/draht-dev/draht",
+  "license": "MIT",
+  "keywords": [
+    "gsd",
+    "planning",
+    "tdd",
+    "ddd",
+    "multi-agent",
+    "workflow",
+    "draht"
+  ]
+}

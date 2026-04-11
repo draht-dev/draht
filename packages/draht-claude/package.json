@@ -1,0 +1,50 @@
+{
+	"name": "draht-claude",
+	"version": "2026.4.5",
+	"description": "Draht GSD, multi-agent, TDD and DDD workflows as a Claude Code plugin. Install with `npx draht-claude install`.",
+	"type": "module",
+	"bin": {
+		"draht-claude": "./cli.mjs"
+	},
+	"files": [
+		".claude-plugin",
+		"bin",
+		"scripts",
+		"hooks",
+		"commands",
+		"agents",
+		"skills",
+		"cli.mjs",
+		"README.md",
+		"LICENSE",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"test": "node cli.mjs --help > /dev/null && node scripts/gsd-pre-execute.cjs --self-check 2>/dev/null || true"
+	},
+	"keywords": [
+		"claude-code",
+		"claude-code-plugin",
+		"draht",
+		"gsd",
+		"planning",
+		"tdd",
+		"ddd",
+		"multi-agent",
+		"workflow",
+		"installer"
+	],
+	"author": "Mario Zechner",
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/draht-dev/draht.git",
+		"directory": "packages/draht-claude"
+	},
+	"engines": {
+		"node": ">=20.6.0"
+	}
+}

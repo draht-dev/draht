@@ -26,28 +26,59 @@ const description = "Install Draht's GSD workflow, 7 specialist subagents, and T
 				Dynamic Routing for Agent &amp; Task Handling
 			</p>
 			<p class="hero-desc">
-				GSD workflow, multi-agent orchestration, and TDD/DDD discipline —<br />
-				now as a <a href="https://claude.com/claude-code" class="hero-link">Claude Code</a> plugin.
+				GSD workflow, multi-agent orchestration, and TDD/DDD discipline.<br />
+				Two ways to run it — pick the one that matches your stack.
 			</p>
 
-			<div class="install-box">
-				<span class="install-text"><span class="install-prompt">$</span> npx draht-claude install</span>
-				<button id="copy-install" class="copy-btn" aria-label="Copy install command">copy</button>
+			<div class="install-grid">
+				<div class="install-option">
+					<div class="install-label">
+						<span class="install-label-tag">Option A</span>
+						<span class="install-label-title"><a href="https://claude.com/claude-code" class="hero-link">Claude Code</a> plugin</span>
+					</div>
+					<div class="install-box">
+						<span class="install-text"><span class="install-prompt">$</span> npx draht-claude install</span>
+						<button id="copy-plugin" class="copy-btn" data-copy="npx draht-claude install" aria-label="Copy plugin install command">copy</button>
+					</div>
+					<p class="install-note">
+						Uses your <strong>Claude Pro / Max subscription</strong>.<br />
+						Restart Claude Code — <code>/new-project</code> is ready.
+					</p>
+				</div>
+
+				<div class="install-divider" aria-hidden="true"><span>or</span></div>
+
+				<div class="install-option">
+					<div class="install-label">
+						<span class="install-label-tag">Option B</span>
+						<span class="install-label-title">Standalone CLI</span>
+					</div>
+					<div class="install-box">
+						<span class="install-text"><span class="install-prompt">$</span> bun add -g @draht/coding-agent</span>
+						<button id="copy-cli" class="copy-btn" data-copy="bun add -g @draht/coding-agent" aria-label="Copy CLI install command">copy</button>
+					</div>
+					<p class="install-note">
+						Bring your own keys or <strong>ChatGPT / opencode</strong>.<br />
+						Route per role across any provider you pay for.
+					</p>
+				</div>
 			</div>
-			<p class="install-note">
-				16 slash commands, 7 specialist subagents, workflow hooks.
-				Restart Claude Code and <code>/new-project</code> is ready.
-			</p>
 
 			<div class="hero-actions">
-				<a href="https://www.npmjs.com/package/draht-claude" class="btn btn-primary">draht-claude on npm</a>
-				<a href="https://github.com/draht-dev/draht/tree/main/packages/draht-claude" class="btn btn-secondary">Plugin README</a>
+				<a href="https://github.com/draht-dev/draht" class="btn btn-primary">View on GitHub</a>
+				<a href="https://www.npmjs.com/package/draht-claude" class="btn btn-secondary">Plugin on npm</a>
 				<a href="#features" class="btn btn-secondary">See Features</a>
 			</div>
 
-			<p class="hero-alt">
-				Prefer a standalone TUI? <code>bun add -g @draht/coding-agent</code>
-			</p>
+			<div class="hero-why">
+				<div class="hero-why-badge">Why two install paths?</div>
+				<p class="hero-why-text">
+					Anthropic doesn't let third-party clients reuse your <strong>Claude Pro or Max subscription</strong> — only first-party Claude Code does. So for Claude, the plugin is the only way to avoid a second API invoice on top of the subscription you already pay.
+				</p>
+				<p class="hero-why-text hero-why-note">
+					<strong>Every other provider works with the standalone CLI.</strong> Bring your <strong>ChatGPT Plus / Pro</strong> login, <strong>opencode</strong>, OpenAI / Google / DeepSeek API keys, or local models — the TUI routes per role across all of them. Claude is the only one that needs the plugin detour.
+				</p>
+			</div>
 		</section>
 
 		<!-- Features -->
@@ -165,15 +196,17 @@ const description = "Install Draht's GSD workflow, 7 specialist subagents, and T
 	</main>
 
 	<script>
-		document.getElementById("copy-install")?.addEventListener("click", async (e) => {
-			const btn = e.currentTarget as HTMLButtonElement;
-			await navigator.clipboard.writeText("npx draht-claude install");
-			btn.textContent = "copied";
-			btn.classList.add("copied");
-			setTimeout(() => {
-				btn.textContent = "copy";
-				btn.classList.remove("copied");
-			}, 2000);
+		document.querySelectorAll<HTMLButtonElement>(".copy-btn[data-copy]").forEach((btn) => {
+			btn.addEventListener("click", async () => {
+				const text = btn.dataset.copy ?? "";
+				await navigator.clipboard.writeText(text);
+				btn.textContent = "copied";
+				btn.classList.add("copied");
+				setTimeout(() => {
+					btn.textContent = "copy";
+					btn.classList.remove("copied");
+				}, 2000);
+			});
 		});
 	</script>
 </Base>
@@ -293,12 +326,80 @@ const description = "Install Draht's GSD workflow, 7 specialist subagents, and T
 	.install-note {
 		font-size: 0.75rem;
 		color: var(--muted);
-		margin-bottom: 2.5rem;
+		line-height: 1.6;
+	}
+	.install-note strong {
+		color: var(--fg);
+		font-weight: 600;
 	}
 	.install-note code {
 		color: var(--fg);
 		font-family: var(--mono);
 	}
+
+	/* Install grid (two options) */
+	.install-grid {
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
+		gap: 1.25rem;
+		align-items: stretch;
+		margin-bottom: 2.5rem;
+		text-align: left;
+	}
+	.install-option {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		padding: 1.25rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 10px;
+	}
+	.install-option .install-box {
+		margin-bottom: 0;
+		width: 100%;
+		box-sizing: border-box;
+		background: var(--bg);
+	}
+	.install-label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+	.install-label-tag {
+		font-family: var(--mono);
+		font-size: 0.6rem;
+		letter-spacing: 0.16em;
+		text-transform: uppercase;
+		color: var(--accent-dim);
+	}
+	.install-label-title {
+		font-size: 0.9rem;
+		font-weight: 600;
+		color: var(--fg);
+	}
+	.install-divider {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: var(--muted);
+		font-family: var(--mono);
+		font-size: 0.7rem;
+		letter-spacing: 0.2em;
+		text-transform: uppercase;
+		position: relative;
+	}
+	.install-divider::before,
+	.install-divider::after {
+		content: "";
+		position: absolute;
+		left: 50%;
+		width: 1px;
+		background: var(--border);
+	}
+	.install-divider::before { top: 0; bottom: calc(50% + 1rem); }
+	.install-divider::after { top: calc(50% + 1rem); bottom: 0; }
+	.install-divider span { position: relative; padding: 0.25rem 0; }
 	.install-link {
 		color: var(--accent-dim);
 		text-decoration: underline;
@@ -315,19 +416,49 @@ const description = "Install Draht's GSD workflow, 7 specialist subagents, and T
 	.hero-link:hover {
 		color: var(--accent);
 	}
-	.hero-alt {
-		font-size: 0.75rem;
-		color: var(--muted);
-		margin-top: 1.5rem;
-	}
-	.hero-alt code {
-		font-family: var(--mono);
-		color: var(--fg);
+	.hero-why {
+		margin-top: 2.5rem;
+		padding: 1.25rem 1.5rem;
 		background: var(--surface);
 		border: 1px solid var(--border);
+		border-left: 2px solid var(--accent-dim);
+		border-radius: 8px;
+		text-align: left;
+		max-width: 560px;
+		margin-left: auto;
+		margin-right: auto;
+	}
+	.hero-why-badge {
+		font-family: var(--mono);
+		font-size: 0.65rem;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--accent-dim);
+		margin-bottom: 0.5rem;
+	}
+	.hero-why-text {
+		font-size: 0.82rem;
+		line-height: 1.65;
+		color: var(--muted);
+	}
+	.hero-why-text strong {
+		color: var(--fg);
+		font-weight: 600;
+	}
+	.hero-why-text code {
+		font-family: var(--mono);
+		color: var(--fg);
+		background: var(--bg);
+		border: 1px solid var(--border);
 		border-radius: 4px;
-		padding: 0.15rem 0.4rem;
+		padding: 0.1rem 0.35rem;
 		font-size: 0.75rem;
+	}
+	.hero-why-note {
+		margin-top: 0.75rem;
+		padding-top: 0.75rem;
+		border-top: 1px solid var(--border);
+		font-size: 0.78rem;
 	}
 
 	/* Buttons */
@@ -523,10 +654,22 @@ const description = "Install Draht's GSD workflow, 7 specialist subagents, and T
 		color: var(--accent-dim);
 	}
 
+	@media (max-width: 720px) {
+		.install-grid {
+			grid-template-columns: 1fr;
+		}
+		.install-divider {
+			padding: 0.25rem 0;
+		}
+		.install-divider::before { left: 0; right: calc(50% + 1.5rem); top: 50%; bottom: auto; width: auto; height: 1px; }
+		.install-divider::after { left: calc(50% + 1.5rem); right: 0; top: 50%; bottom: auto; width: auto; height: 1px; }
+	}
+
 	@media (max-width: 600px) {
 		.hero-title { font-size: 2.75rem; }
 		.feature-grid { grid-template-columns: 1fr; }
 		.main { padding: 0 1.25rem; }
 		.hero-logo img { width: 90px; height: 90px; }
+		.install-box { font-size: 0.78rem; gap: 0.5rem; padding: 0.75rem 1rem; }
 	}
 </style>

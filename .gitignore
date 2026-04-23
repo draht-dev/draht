@@ -39,3 +39,4 @@ plans/
 .draht/hf-sessions-backup/
 collect.sh
 packages/landing/.astro
+packages/landing/.sst

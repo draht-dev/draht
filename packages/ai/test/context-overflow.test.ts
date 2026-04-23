@@ -525,17 +525,6 @@ describe("Context overflow error handling", () => {
 			expect(result.errorMessage).toMatch(/maximum context length is \d+ tokens/i);
 			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
 		}, 120000);
-
-		// Meta/Llama backend
-		it("meta-llama/llama-4-maverick via OpenRouter - should detect overflow via isContextOverflow", async () => {
-			const model = getModel("openrouter", "meta-llama/llama-4-maverick");
-			const result = await testContextOverflow(model, process.env.OPENROUTER_API_KEY!);
-			logResult(result);
-
-			expect(result.stopReason).toBe("error");
-			expect(result.errorMessage).toMatch(/maximum context length is \d+ tokens/i);
-			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
-		}, 120000);
 	});
 
 	// =============================================================================

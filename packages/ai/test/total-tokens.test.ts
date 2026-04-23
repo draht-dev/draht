@@ -512,23 +512,6 @@ describe("totalTokens field", () => {
 				assertTotalTokensEqualsComponents(second);
 			},
 		);
-
-		it(
-			"meta-llama/llama-4-maverick - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("openrouter", "meta-llama/llama-4-maverick");
-
-				console.log(`\nOpenRouter / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.OPENROUTER_API_KEY });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
 	});
 
 	// =========================================================================

@@ -1,6 +1,169 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.23] - 2026-04-23
+
+### Added
+
+- add label timestamps to the session tree (#2691)
+- add hidden thinking label api closes #2673
+- add faux provider and ModelRegistry factories
+- add prepareArguments hook for pre-validation argument preparation
+- support multi-edit in edit tool
+- Add sessionDir support in settings.json (#2598)
+- add startup profiling scripts for tui/rpc (#2497)
+- add JSONL export/import for sessions (#2356)
+- add --fork session flag closes #2290
+- expose local bash operations closes #2299
+- refine session_directory hook closes #1729
+- add session_directory extension event
+- add provider payload hook
+- preserve custom editor onEscape/onCtrlD handlers
+- add subagent-based rebase-upstream workflow
+- add atomic reasoning sections to all command prompts
+
+### Changed
+
+- rebrand and fix after upstream sync
+- feat(coding-agent): set DRAHT_CODING_AGENT=true env var at startup
+- Update sandbox extension configuration instructions (#2915)
+- fix(coding-agent): hide Earendil startup notice
+- fix(coding-agent): warn on Anthropic subscription auth
+- fix(coding-agent): add earendil startup announcement
+- remove dead main-package-command.ts (replaced by package-manager-cli.ts)
+- replace AgentSessionRuntimeHost with closure-based AgentSessionRuntime
+- add switchSession to ExtensionCommandContext in extensions.md
+- add defineTool helper closes #2746
+- add session lifecycle characterization suite
+- add queue characterization coverage
+- add runtime host for session switching closes #2024
+- clarify /tree active branch ordering (#2695)
+- clarify repeated compaction boundary behavior (#2662)
+- clarify sandbox example alternative to bash override (#2663)
+- remove unused compaction import
+- chore(coding-agent): add startup onboarding hint (#2620)
+- make pi-test.sh runnable from any directory
+- emit startup benchmark metrics
+- refine startup profiling tooling
+- add startup phase timings
+- use valid PNG fixture for read tool
+- fix showLoadedResources mocks
+- stabilize git update branch setup
+- add AgentSession test harness with faux provider
+- fix(subagent): reuse current draht invocation for child agents closes #2464 (#2465)
+- document xfce4-terminal and terminator keyboard protocol limitations (#2166)
+- clarify compat flags for openai-compatible local servers closes #2177
+- fix(coding-agent): support DRAHT_CODING_AGENT_DIR env var in example extensions (#2009)
+- explain Windows Terminal Alt+Enter remap (#1967)
+- Pr 1724 - feat(coding-agent): add fold/unfold to tree branch navigation (#1939)
+- add codex tool-loop cache probe
+- clarify that tool errors must be thrown, not returned
+- clarify models.json name behavior (fixes #1840)
+- document built-in sub-agent system
+- add Phase 23 multi-agent layer to roadmap and plan
+
+### Fixed
+
+- restore draht-specific package.json fields and scripts lost in upstream sync
+- bump antigravity User-Agent header version (#2901)
+- update google provider to handle gemma 4 thinking levels and route between MINIMAL and HIGH (#2903)
+- retry ended-without stream errors closes #2892
+- use node:readline import prefix for Deno compatibility
+- persist bash output on line truncation closes #2852
+- remove stale /exit docs closes #2850
+- handle missing session cwd
+- preserve json mode for piped stdin (#2848)
+- handle git/npm extension paths in CLI resolution (#2845)
+- quote $RESX and $RESY in doom build script (SC2086) (#2817)
+- resource collision precedence, user/project skills override package skills
+- handle async fs.watch error events in theme watcher
+- forward RpcClient subprocess stderr to parent in real-time
+- reuse initial resource loader on startup closes #2766
+- wait for retried runs to settle
+- restore extension input source semantics
+- properly queue extension messages (#2674)
+- avoid full redraw on large edit results closes #2664
+- expose abort signal to extensions closes #2660
+- simplify edit tool input closes #2639
+- document mutable tool_call input closes #2611
+- restore compaction summary and dedupe edit errors
+- tighten skill discovery and edit diffs closes #2603
+- preserve kept messages across repeated compaction closes #2608
+- unify compaction UI events closes #2617
+- honor custom renderers for built-in tool overrides closes #2595
+- resolve models.json auth per request closes #1835
+- add follow-up docs, changelog, and precedence tests closes #2429
+- restore main syntax and apply biome formatting
+- preserve file mutation queue ordering
+- add missing ajv direct dependency, fixes #2252
+- emit session_shutdown in print mode closes #2576
+- respect export theme backgrounds closes #2565
+- recompute interactive bash preview width closes #2569
+- reduce git update fetch noise closes #2548
+- expose rpc context usage closes #2550
+- disambiguate duplicate slash commands, fixes #1061
+- unify source provenance, closes #1734
+- attach source info to resources and commands, fixes #1734
+- enforce safe auto-resized image limits closes #2055
+- reserve stdout in print and json mode closes #2482
+- skip no-op git package reinstalls
+- built-in tools work like extension tools
+- update project npm packages
+- export ToolCallEventResult closes #2458
+- respect agentDir for sdk session paths closes #2457
+- keep suspend resume alive on fg closes #2454
+- align minimax and zai defaults (#2445)
+- migrate to namespaced ids closes #2391
+- queue file mutations across edit and write
+- protect rpc stdout fixes #2388
+- resolve waitForRetry() race when auto-retry produces tool calls (#2440)
+- suppress process warnings in CLI closes #2404
+- show bash tool elapsed time at bottom closes #2406
+- avoid blocking footer branch refresh and isolate invalid extension provider registrations closes #2418 closes #2431
+- fix windows hanging when descendants inherit stdout/stderr handles (#2389)
+- use native clipboard text copy on desktop closes #2347
+- make tests keybinding-agnostic
+- use `setBedrockProviderModule` in Bun entrypoint closes #2349 (#2350)
+- stop updating packages on startup closes #1963
+- refresh active model after provider updates closes #2291
+- reload keybindings on /reload closes #2309
+- restore Bun binary lazy provider loading closes #2314
+- handle z.ai network_error closes #2313
+- merge piped stdin into initial prompt closes #2315
+- skip tmux extended-keys warning when tmux is unreachable (#2311)
+- handle empty session titles and session info metadata (#2304)
+- handle reftable footer branch detection (#2300)
+- make prompt snippets opt in closes #2285
+- retry provider returned error closes #2264
+- handle slash-delimited /model refs closes #2174
+- start UI before session_start closes #2035
+- add uninstall alias
+- stabilize windows shell/path handling
+- silence headless clipboard fallback errors closes #2056
+- honor provider compat in models.json closes #2062
+- normalize prompt cwd for bash-safe windows paths closes #2080
+- support configurable npm wrapper command closes #2072
+- expand paste markers in ctx.ui.getEditorText(), closes #2084
+- sync tool hooks with agent event processing closes #2113
+- keep only ISO date in system prompt closes #2131
+- match server_error and internal_error in retry regex (#2117)
+- Fix EXIF orientation for JPEG and WebP images (#2105)
+- use shell for external editor on windows closes #1925
+- prefer explicit -e extensions closes #1896
+- ignore stale pre-compaction assistant usage in threshold compaction checks, fixes #1860
+- handle tmux xterm extended keys and warn on tmux setup fixes #1872
+- custom tool collapsed/expanded rendering in HTML export (#1934)
+- use strict JSONL framing fixes #1911
+- keep ~/.agents skills user-scoped\n\ncloses #1915
+- guard against stale kept pre-compaction usage in error-path threshold check
+- truncate tool results in compaction summarization to prevent overflow, fixes #1796
+- allow threshold compaction for error messages using last successful usage, fixes #1834
+- retry sync lockfile acquisition to prevent false auth errors during parallel startup
+- preserve thinking defaults across model switches closes #1864
+- clear header on /new closes #1880
+- prefer workspace dist files for extension aliases
+- normalize CRLF in write preview rendering (fixes #1854)
+- make footer truncation width-aware
+- use ESM resolution for extension alias fallback (#1821)
 
 ## [2026.4.5] - 2026-04-05
 

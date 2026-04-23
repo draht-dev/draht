@@ -1,6 +1,56 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.23] - 2026-04-23
+
+### Added
+
+- make select list column sizing configurable (#2154)
+- treat paste markers as atomic segments in editor (#2111)
+- support digit keybindings closes #1905
+- add non-capturing overlays with focus control (#1916)
+
+### Changed
+
+- rebrand and fix after upstream sync
+- remove stale slash autocomplete chaining case
+- apply import ordering in terminal
+- feat(tui): DRAHT_TUI_WRITE_LOG now accepts a directory path (#2508)
+- Pr 1724 - feat(coding-agent): add fold/unfold to tree branch navigation (#1939)
+
+### Fixed
+
+- replace spread-into-push in Container.render() to prevent stack overflow, closes #2651
+- throttle render scheduling under streaming load
+- avoid overlay scrollback inflation on widen
+- stop heading underline leaking into padding
+- await async slash command completions closes #2719
+- normalize keypad functional keys closes #2650
+- stop swallowing escape during cell size detection closes #2661
+- align attachment debounce test
+- keep @ autocomplete responsive in large trees closes #1278
+- reset viewport state after shrink
+- stop chaining slash arg autocomplete after Tab closes #2577
+- preserve heading styling after inline code spans
+- skip Termux height redraws closes #2467
+- stop evicting unrelated default keybindings closes #2455
+- migrate to namespaced ids closes #2391
+- resolve raw backspace ambiguity closes #2293
+- clear stale scrollback on session switch (#2155)
+- preserve literal paste content closes #2064
+- distinguish ctrl+backspace from backspace on Windows Terminal
+- handle narrow terminal width in editor scroll indicator (#2103)
+- normalize tabs in editor setText and input paths (#2027)
+- wordWrapLine overflow with wide chars at wrap boundary (#2082)
+- restore shift+tab in xterm modifyOtherKeys mode (#2081)
+- stop wide input slice overflow closes #1982 (#2006)
+- handle wide unicode input scrolling closes #1982
+- normalize tab characters in Input paste to spaces (#1975)
+- chain slash arg autocomplete after Tab completion
+- handle tmux xterm extended keys and warn on tmux setup fixes #1872
+- autocomplete highlight follows first prefix match as user types (#1931)
+- add modifyOtherKeys fallback for modified enter keys in tmux
+- add Kitty CSI-u printable decoding to Input component, closes #1857
+- full redraw on terminal width/height resize\n\ncloses #1844
 
 ## [2026.4.5] - 2026-04-05
 

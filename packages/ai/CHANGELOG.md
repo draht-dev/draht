@@ -1,6 +1,87 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.23] - 2026-04-23
+
+### Added
+
+- mirror Claude Code 2.1.100 billing header and tool names
+- add faux provider and ModelRegistry factories
+- add google-vertex gemini-3.1-pro-preview-customtools (#2610)
+- add requestMetadata support to BedrockOptions for cost allocation tagging (#2511)
+- add openai-codex gpt-5.4-mini (#2334)
+- lazy-load provider modules for faster startup fixes #2297
+- allow injecting pre-built Anthropic client
+- add claude-sonnet-4-6 to Antigravity, fix Claude thinking header detection, bump UA to 1.18.4
+- add github-copilot gpt-5.3-codex fallback closes #1853
+
+### Changed
+
+- regenerate models registry
+- regenerate models registry
+- rebrand and fix after upstream sync
+- update generated model catalog
+- update generated models
+- format openai completions test
+- normalize MiMo V2 Pro model name
+- drop anthropic client injection test closes #2057
+- refresh generated models
+- clarify non-throwing stream and hook contracts
+- migrate mistral provider to conversations sdk
+
+### Fixed
+
+- restore @smithy/node-http-handler direct dep for bedrock proxy
+- bump antigravity User-Agent header version (#2901)
+- update google provider to handle gemma 4 thinking levels and route between MINIMAL and HIGH (#2903)
+- correct thinking budget for 2.5-flash-lite models (#2861)
+- use node:readline import prefix for Deno compatibility
+- update zai processing logic (#2855)
+- preserve cache_write_tokens in completions stream usage closes #2802
+- emit missing responses toolcall delta closes #2745
+- detect anthropic request_too_large overflow closes #2734
+- fix bedrock throttling misidentification (#2699)
+- detect Ollama overflow errors closes #2626
+- restore main syntax and apply biome formatting
+- prune deprecated direct minimax models
+- subtract cached tokens from input in Google and Vertex cost calculation (#2588)
+- omit copilot responses reasoning default closes #2567
+- handle explicit thinking off across providers closes #2490
+- explicitly disable Anthropic thinking when off closes #2022
+- hash foreign responses tool item ids
+- align minimax and zai defaults (#2445)
+- ignore placeholder vertex api keys closes #2335
+- use OpenRouter reasoning payload (#2298)
+- support prompt caching for Bedrock application inference profiles (#2346)
+- normalize replayed responses tool call ids closes #2328
+- restore antigravity context override block
+- correct Bedrock Claude 4.6 context window to 200k
+- restore Bun binary lazy provider loading closes #2314
+- align oauth callback flows closes #2316
+- resolve codex oauth callback immediately closes #2316
+- expose provider response ids on assistant messages fixes #2245
+- correct Claude 4.6 context overrides closes #2286
+- fix anthropic oauth manual callback and refresh flow closes #2169
+- align codex websocket headers and terminate SSE closes #1961
+- limit Bedrock prompt caching to Claude models\n\ncloses #2053
+- add qwen-chat-template compat mode closes #2020
+- support xhigh for opus 4.6 by model id closes #2040
+- handle unknown finish_reason in openai-completions gracefully
+- replace curl with fetch in Anthropic OAuth token exchange
+- send tool result images in function_call_output closes #2104
+- improve anthropic oauth flow fixes #2119
+- capture usage from choice.usage for non-standard OpenAI-compatible providers
+- send assistant content as string in openai-completions provider (#2008)
+- support GOOGLE_CLOUD_API_KEY for google-vertex (#1948) (#1976)
+- improve error details in response.failed handler (#1956)
+- detect z.ai context overflow
+- omit empty OpenAI Responses thinking blocks on replay
+- restore OpenAI Responses reasoning replay closes #1878
+- keep mistral browser-safe
+- preserve mistral thinking replay
+- simplify oauth subpath exports closes #1856
+- cap gpt-5.4 context windows to 272k
+- preserve OpenAI Responses assistant phase across turns closes #1819
+- correct model IDs and name capitalization
 
 ## [2026.4.5] - 2026-04-05
 

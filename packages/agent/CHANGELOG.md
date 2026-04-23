@@ -1,6 +1,23 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.23] - 2026-04-23
+
+### Added
+
+- add prepareArguments hook for pre-validation argument preparation
+
+### Changed
+
+- rebrand and fix after upstream sync
+- update steering docs for deferred tool execution closes #2330
+
+### Fixed
+
+- await subscribed event handlers
+- simplify state API and update consumers fixes #2633
+- expose abort signal to extensions closes #2660
+- defer steering until after tool execution
+- remove broken async loop test
 
 ## [2026.4.5] - 2026-04-05
 

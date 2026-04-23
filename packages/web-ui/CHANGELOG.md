@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.23] - 2026-04-23
+
+### Changed
+
+- rebrand and fix after upstream sync
+
+### Fixed
+
+- align README architecture diagram closes #2425
 
 ## [2026.4.5] - 2026-04-05
 

@@ -1,8 +1,8 @@
 ---
 import Base from "../layouts/Base.astro";
 
-const title = "Draht — AI Coding Agent for Freelancers";
-const description = "A modular, extensible AI coding agent with model routing, TDD/DDD workflows, invoicing, and compliance. Built for German freelance developers.";
+const title = "Draht — GSD, Multi-Agent, TDD/DDD as a Claude Code Plugin";
+const description = "Install Draht's GSD workflow, 7 specialist subagents, and TDD/DDD discipline into Claude Code with a single command: npx draht-claude install.";
 ---
 
 <Base title={title} description={description}>
@@ -26,21 +26,28 @@ const description = "A modular, extensible AI coding agent with model routing, T
 				Dynamic Routing for Agent &amp; Task Handling
 			</p>
 			<p class="hero-desc">
-				The AI coding agent built for freelancers.<br />
-				Multi-model. TDD-first. DDD-native. German-compliant.
+				GSD workflow, multi-agent orchestration, and TDD/DDD discipline —<br />
+				now as a <a href="https://claude.com/claude-code" class="hero-link">Claude Code</a> plugin.
 			</p>
 
 			<div class="install-box">
-				<span class="install-text"><span class="install-prompt">$</span> bun add -g @draht/coding-agent</span>
+				<span class="install-text"><span class="install-prompt">$</span> npx draht-claude install</span>
 				<button id="copy-install" class="copy-btn" aria-label="Copy install command">copy</button>
 			</div>
-			<p class="install-note"><a href="https://bun.sh" class="install-link">Bun</a> recommended. Then run <code>draht</code> in any project.</p>
+			<p class="install-note">
+				16 slash commands, 7 specialist subagents, workflow hooks.
+				Restart Claude Code and <code>/new-project</code> is ready.
+			</p>
 
 			<div class="hero-actions">
-				<a href="https://github.com/draht-dev/draht" class="btn btn-primary">View on GitHub</a>
-				<a href="/docs" class="btn btn-secondary">Read the Docs</a>
+				<a href="https://www.npmjs.com/package/draht-claude" class="btn btn-primary">draht-claude on npm</a>
+				<a href="https://github.com/draht-dev/draht/tree/main/packages/draht-claude" class="btn btn-secondary">Plugin README</a>
 				<a href="#features" class="btn btn-secondary">See Features</a>
 			</div>
+
+			<p class="hero-alt">
+				Prefer a standalone TUI? <code>bun add -g @draht/coding-agent</code>
+			</p>
 		</section>
 
 		<!-- Features -->
@@ -160,7 +167,7 @@ const description = "A modular, extensible AI coding agent with model routing, T
 	<script>
 		document.getElementById("copy-install")?.addEventListener("click", async (e) => {
 			const btn = e.currentTarget as HTMLButtonElement;
-			await navigator.clipboard.writeText("bun add -g @draht/coding-agent");
+			await navigator.clipboard.writeText("npx draht-claude install");
 			btn.textContent = "copied";
 			btn.classList.add("copied");
 			setTimeout(() => {
@@ -299,6 +306,28 @@ const description = "A modular, extensible AI coding agent with model routing, T
 	}
 	.install-link:hover {
 		color: var(--accent);
+	}
+	.hero-link {
+		color: var(--accent-dim);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+	.hero-link:hover {
+		color: var(--accent);
+	}
+	.hero-alt {
+		font-size: 0.75rem;
+		color: var(--muted);
+		margin-top: 1.5rem;
+	}
+	.hero-alt code {
+		font-family: var(--mono);
+		color: var(--fg);
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		padding: 0.15rem 0.4rem;
+		font-size: 0.75rem;
 	}
 
 	/* Buttons */

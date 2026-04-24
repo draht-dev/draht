@@ -11,6 +11,7 @@
 - Extension placed in examples/extensions/ following Pi Agent convention
 - Phases 5-9: Zvec-based knowledge, GitHub Action CI, Anthropic SDK orchestration, n8n JSON templates, git-based rollback
 - Milestone 2 approved: Integration hardening, Phases 19-24 (Oskar, 2026-03-03)
+- Milestone 3 approved: Recursive Language Models, Phases 26-30 — inference-time scaffold per Zhang/Kraska/Khattab 2026 (arXiv:2512.24601). Phases 22-25 remain pending backlog, not a blocker. (Oskar, 2026-04-24)
 
 ## Completed Phases
 - Phase 21: GSD Integration Tests (complete)
@@ -48,5 +49,6 @@ None.
   - Phase 9: Added missing 09-01-PLAN.md and 09-01-SUMMARY.md
 - 2026-03-03: Milestone 2 approved. Phases 19-24 added to ROADMAP. Carried forward incomplete requirements from R14-TDD and R15-DDD.
 - 2026-03-16: Phase 21 verification completed. All 31 deliverables passed UAT. 22/22 tests passed. No fix plans required.
+- 2026-04-24: Milestone 3 (RLM) planned. Added Phases 26-30 to ROADMAP and R26-R30 requirement blocks. Milestone 2 phases 22-25 deferred to backlog.
 
 ## Last Activity: 2026-03-16 21:44:01

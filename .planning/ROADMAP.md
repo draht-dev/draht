@@ -128,3 +128,38 @@
 **Goal:** CI pipeline runs on PRs and all planning artifacts are accurate and consolidated.
 **Requirements:** R25-CI.1, R25-CI.2, R25-DOC.1, R25-DOC.2
 **Acceptance:** GitHub Actions PR check workflow runs lint + test on push; AI review dogfooding enabled on draht-mono PRs; Phase 14-18 summaries contain real data (not placeholders); hook files consolidated to single source of truth with no duplication.
+
+---
+
+## Milestone 3: Recursive Language Models
+
+> **Paradigm:** Zhang, Kraska, Khattab (2026) — *Recursive Language Models* (arXiv:2512.24601). Treat long prompts as external objects inside a REPL environment; root LLM writes code to peek, decompose, and recursively invoke sub-LLMs over slices of the prompt. Scales effective context 10×–1000× without finetuning.
+>
+> **Scope for v1:** inference-time scaffold only (no RLM-native training). Use existing frontier models via `@draht/router`. Python-subprocess REPL for model-prompt parity with the paper; Node `vm` considered as a v2 fallback.
+>
+> **Milestone 2 carry-forward:** Phases 22–25 remain pending backlog and are not a prerequisite for Milestone 3.
+
+## Phase 26: RLM Core Primitives — `pending`
+**Goal:** `@draht/rlm` package exposes an `RlmSession` that runs the root loop: root-LLM-produces-code → REPL-executes → truncated-stdout → history-append → FINAL-check, with a working `llm_query` and `FINAL`/`FINAL_VAR` sentinels.
+**Requirements:** R26-RLM.1, R26-RLM.2, R26-RLM.3, R26-RLM.4, R26-RLM.5, R26-RLM.6, R26-RLM.7
+**Acceptance:** Unit tests prove: a seeded needle-in-haystack prompt completes via a mocked root LLM that writes Python; REPL persists variables across steps; `context` variable holds the full prompt; `llm_query` stub returns a canned response; `FINAL("x")` and `FINAL_VAR("ans")` both terminate the loop and return the correct value.
+
+## Phase 27: Sub-LLM Integration & System Prompts — `pending`
+**Goal:** RLM sessions route root and sub-LLM calls through `@draht/router` with model-tiered system prompts (frontier / coder-mid / small-context) and cost accounting per trajectory.
+**Requirements:** R27-SLM.1, R27-SLM.2, R27-SLM.3, R27-SLM.4, R27-SLM.5
+**Acceptance:** Router has new roles `rlm-root` and `rlm-sub` with configurable fallback chains; three system-prompt templates in `packages/rlm/prompts/` select automatically from resolved model context window; prompt template substitutes `context_type`, `context_total_length`, `chunk_lengths`, `max_sub_call_budget`; every RLM session appends per-call cost entries to `.draht/cost-log.jsonl` tagged with trajectory id.
+
+## Phase 28: REPL Sandbox & Safety — `pending`
+**Goal:** REPL execution is sandboxed with hard resource limits, stdout caps, and session-wide sub-LLM budgets so RLM cannot exfiltrate or runaway.
+**Requirements:** R28-SBX.1, R28-SBX.2, R28-SBX.3, R28-SBX.4, R28-SBX.5, R28-SBX.6
+**Acceptance:** Python REPL runs as a sandboxed child process with no network, no filesystem outside an explicit session workdir, and seccomp/ulimit-style CPU + memory ceilings; per-step timeout default 30s, max-iterations default 24, max-sub-calls and max-session-cost enforced; stdout truncated to configurable cap (default 2 KB) with explicit `[truncated N chars]` marker; security test suite proves `import os; os.system("...")`, `open("/etc/passwd")`, and `urllib.request.urlopen(...)` all fail; budget-exhausted stop returns a typed error the agent can handle.
+
+## Phase 29: Draht Agent & CLI Integration — `pending`
+**Goal:** RLM is invokable from the coding-agent (`/rlm`), the `draht` CLI, and from inside other agent tools (`rlm_query` tool), with input loaders for files, directories, URLs, and the client knowledge base.
+**Requirements:** R29-INT.1, R29-INT.2, R29-INT.3, R29-INT.4, R29-INT.5
+**Acceptance:** `packages/rlm-agent/` extension registers `/rlm <input> <query>` in coding-agent; `draht rlm --input <path|glob|url> --query "..."` CLI returns an answer on a 500 KB+ fixture; `rlm_query` tool usable inside normal agent flow to defer long reads; `@draht/knowledge` loader pulls client AGENTS.md + decisions into RLM context; a GSD plan can declare `rlm: true` and `/execute-phase` routes oversize inputs through RLM automatically.
+
+## Phase 30: Evaluation, Observability & Docs — `pending`
+**Goal:** RLM trajectories are measurable, replayable, and documented so developers can trust and tune them.
+**Requirements:** R30-EVAL.1, R30-EVAL.2, R30-EVAL.3, R30-EVAL.4, R30-EVAL.5
+**Acceptance:** Every RLM session emits a trajectory JSONL (step, code, truncated-stdout, sub-calls, cost, final); synthetic S-NIAH regression test passes on input 10× the root model's window; cost comparison harness records RLM vs base-LLM-with-truncation on the same task; `draht rlm replay <trajectory-id>` reconstructs the final answer from the log alone; README + AGENTS.md sections document when to use RLM, how to bound costs, and a worked end-to-end example.

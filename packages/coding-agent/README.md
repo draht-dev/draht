@@ -1,6 +1,6 @@
 <p align="center">
-  <a href="https://shittycodingagent.ai">
-    <img src="https://shittycodingagent.ai/logo.svg" alt="pi logo" width="128">
+  <a href="https://draht.dev">
+    <img src="https://draht.dev/draht-logo.png" alt="draht logo" width="128">
   </a>
 </p>
 <p align="center">
@@ -9,16 +9,16 @@
   <a href="https://github.com/draht-dev/draht/actions/workflows/ci.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/draht-dev/draht/ci.yml?style=flat-square&branch=main" /></a>
 </p>
 <p align="center">
-  <a href="https://pi.dev">pi.dev</a> domain graciously donated by
+  <a href="https://draht.dev">draht.dev</a> domain graciously donated by
   <br /><br />
   <a href="https://exe.dev"><img src="docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
 </p>
 
-Pi is a minimal terminal coding harness. Adapt pi to your workflows, not the other way around, without having to fork and modify pi internals. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Put your extensions, skills, prompt templates, and themes in [Pi Packages](#pi-packages) and share them with others via npm or git.
+Draht is a minimal terminal coding harness. Adapt draht to your workflows, not the other way around, without having to fork and modify draht internals. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Put your extensions, skills, prompt templates, and themes in [Draht Packages](#draht-packages) and share them with others via npm or git.
 
-Pi ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask pi to build what you want or install a third party pi package that matches your workflow.
+Draht ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask draht to build what you want or install a third party draht package that matches your workflow.
 
-Pi runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
+Draht runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
 
 ## Table of Contents
 
@@ -39,7 +39,7 @@ Pi runs in four modes: interactive, print or JSON, RPC for process integration, 
   - [Skills](#skills)
   - [Extensions](#extensions)
   - [Themes](#themes)
-  - [Pi Packages](#pi-packages)
+  - [Draht Packages](#draht-packages)
 - [Programmatic Usage](#programmatic-usage)
 - [Philosophy](#philosophy)
 - [CLI Reference](#cli-reference)
@@ -56,17 +56,17 @@ Authenticate with an API key:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-pi
+draht
 ```
 
 Or use your existing subscription:
 
 ```bash
-pi
+draht
 /login  # Then select provider
 ```
 
-Then just talk to pi. By default, pi gives the model four tools: `read`, `write`, `edit`, and `bash`. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [pi packages](#pi-packages).
+Then just talk to draht. By default, draht gives the model four tools: `read`, `write`, `edit`, and `bash`. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [draht packages](#draht-packages).
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -74,7 +74,7 @@ Then just talk to pi. By default, pi gives the model four tools: `read`, `write`
 
 ## Providers & Models
 
-For each built-in provider, pi maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
+For each built-in provider, draht maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
 
 **Subscriptions:**
 - Anthropic Claude Pro/Max
@@ -105,7 +105,7 @@ For each built-in provider, pi maintains a list of tool-capable models, updated 
 
 See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 
-**Custom providers & models:** Add providers via `~/.pi/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
+**Custom providers & models:** Add providers via `~/.draht/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
 
 ---
 
@@ -186,7 +186,7 @@ Submit messages while the agent is working:
 - **Escape** aborts and restores queued messages to editor
 - **Alt+Up** retrieves queued messages back to editor
 
-On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so pi can receive the follow-up shortcut.
+On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so draht can receive the follow-up shortcut.
 
 Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
 
@@ -198,14 +198,14 @@ Sessions are stored as JSONL files with a tree structure. Each entry has an `id`
 
 ### Management
 
-Sessions auto-save to `~/.pi/agent/sessions/` organized by working directory.
+Sessions auto-save to `~/.draht/agent/sessions/` organized by working directory.
 
 ```bash
-pi -c                  # Continue most recent session
-pi -r                  # Browse and select from past sessions
-pi --no-session        # Ephemeral mode (don't save)
-pi --session <path>    # Use specific session file or ID
-pi --fork <path>       # Fork specific session file or ID into a new session
+draht -c                  # Continue most recent session
+draht -r                  # Browse and select from past sessions
+draht --no-session        # Ephemeral mode (don't save)
+draht --session <path>    # Use specific session file or ID
+draht --fork <path>       # Fork specific session file or ID into a new session
 ```
 
 ### Branching
@@ -240,8 +240,8 @@ Use `/settings` to modify common options, or edit JSON files directly:
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/settings.json` | Global (all projects) |
-| `.pi/settings.json` | Project (overrides global) |
+| `~/.draht/agent/settings.json` | Global (all projects) |
+| `.draht/settings.json` | Project (overrides global) |
 
 See [docs/settings.md](docs/settings.md) for all options.
 
@@ -249,8 +249,8 @@ See [docs/settings.md](docs/settings.md) for all options.
 
 ## Context Files
 
-Pi loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
-- `~/.pi/agent/AGENTS.md` (global)
+Draht loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
+- `~/.draht/agent/AGENTS.md` (global)
 - Parent directories (walking up from cwd)
 - Current directory
 
@@ -258,7 +258,7 @@ Use for project instructions, conventions, common commands. All matching files a
 
 ### System Prompt
 
-Replace the default system prompt with `.pi/SYSTEM.md` (project) or `~/.pi/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
+Replace the default system prompt with `.draht/SYSTEM.md` (project) or `~/.draht/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
 
 ---
 

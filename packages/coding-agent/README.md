@@ -157,11 +157,11 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files (themes hot-reload automatically) |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
-| `/quit` | Quit pi |
+| `/quit` | Quit draht |
 
 ### Keyboard Shortcuts
 
-See `/hotkeys` for the full list. Customize via `~/.pi/agent/keybindings.json`. See [docs/keybindings.md](docs/keybindings.md).
+See `/hotkeys` for the full list. Customize via `~/.draht/agent/keybindings.json`. See [docs/keybindings.md](docs/keybindings.md).
 
 **Commonly used:**
 
@@ -269,19 +269,19 @@ Replace the default system prompt with `.draht/SYSTEM.md` (project) or `~/.draht
 Reusable prompts as Markdown files. Type `/name` to expand.
 
 ```markdown
-<!-- ~/.pi/agent/prompts/review.md -->
+<!-- ~/.draht/agent/prompts/review.md -->
 Review this code for bugs, security issues, and performance problems.
 Focus on: {{focus}}
 ```
 
-Place in `~/.pi/agent/prompts/`, `.pi/prompts/`, or a [pi package](#pi-packages) to share with others. See [docs/prompt-templates.md](docs/prompt-templates.md).
+Place in `~/.draht/agent/prompts/`, `.draht/prompts/`, or a [draht package](#draht-packages) to share with others. See [docs/prompt-templates.md](docs/prompt-templates.md).
 
 ### Skills
 
 On-demand capability packages following the [Agent Skills standard](https://agentskills.io). Invoke via `/skill:name` or let the agent load them automatically.
 
 ```markdown
-<!-- ~/.pi/agent/skills/my-skill/SKILL.md -->
+<!-- ~/.draht/agent/skills/my-skill/SKILL.md -->
 # My Skill
 Use this skill when the user asks about X.
 
@@ -290,19 +290,19 @@ Use this skill when the user asks about X.
 2. Then that
 ```
 
-Place in `~/.pi/agent/skills/`, `~/.agents/skills/`, `.pi/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [pi package](#pi-packages) to share with others. See [docs/skills.md](docs/skills.md).
+Place in `~/.draht/agent/skills/`, `~/.agents/skills/`, `.draht/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [draht package](#draht-packages) to share with others. See [docs/skills.md](docs/skills.md).
 
 ### Extensions
 
 <p align="center"><img src="docs/images/doom-extension.png" alt="Doom Extension" width="600"></p>
 
-TypeScript modules that extend pi with custom tools, commands, keyboard shortcuts, event handlers, and UI components.
+TypeScript modules that extend draht with custom tools, commands, keyboard shortcuts, event handlers, and UI components.
 
 ```typescript
-export default function (pi: ExtensionAPI) {
-  pi.registerTool({ name: "deploy", ... });
-  pi.registerCommand("stats", { ... });
-  pi.on("tool_call", async (event, ctx) => { ... });
+export default function (draht: ExtensionAPI) {
+  draht.registerTool({ name: "deploy", ... });
+  draht.registerCommand("stats", { ... });
+  draht.on("tool_call", async (event, ctx) => { ... });
 }
 ```
 
@@ -316,50 +316,50 @@ export default function (pi: ExtensionAPI) {
 - Git checkpointing and auto-commit
 - SSH and sandbox execution
 - MCP server integration
-- Make pi look like Claude Code
+- Make draht look like Claude Code
 - Games while waiting (yes, Doom runs)
 - ...anything you can dream up
 
-Place in `~/.pi/agent/extensions/`, `.pi/extensions/`, or a [pi package](#pi-packages) to share with others. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/).
+Place in `~/.draht/agent/extensions/`, `.draht/extensions/`, or a [draht package](#draht-packages) to share with others. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/).
 
 ### Themes
 
-Built-in: `dark`, `light`. Themes hot-reload: modify the active theme file and pi immediately applies changes.
+Built-in: `dark`, `light`. Themes hot-reload: modify the active theme file and draht immediately applies changes.
 
-Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) to share with others. See [docs/themes.md](docs/themes.md).
+Place in `~/.draht/agent/themes/`, `.draht/themes/`, or a [draht package](#draht-packages) to share with others. See [docs/themes.md](docs/themes.md).
 
-### Pi Packages
+### Draht Packages
 
-Bundle and share extensions, skills, prompts, and themes via npm or git. Find packages on [npmjs.com](https://www.npmjs.com/search?q=keywords%3Api-package) or [Discord](https://discord.com/channels/1456806362351669492/1457744485428629628).
+Bundle and share extensions, skills, prompts, and themes via npm or git. Find packages on [npmjs.com](https://www.npmjs.com/search?q=keywords%3Adraht-package) or [Discord](https://discord.com/channels/1456806362351669492/1457744485428629628).
 
-> **Security:** Pi packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
+> **Security:** Draht packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
 
 ```bash
-pi install npm:@foo/pi-tools
-pi install npm:@foo/pi-tools@1.2.3      # pinned version
-pi install git:github.com/user/repo
-pi install git:github.com/user/repo@v1  # tag or commit
-pi install git:git@github.com:user/repo
-pi install git:git@github.com:user/repo@v1  # tag or commit
-pi install https://github.com/user/repo
-pi install https://github.com/user/repo@v1      # tag or commit
-pi install ssh://git@github.com/user/repo
-pi install ssh://git@github.com/user/repo@v1    # tag or commit
-pi remove npm:@foo/pi-tools
-pi uninstall npm:@foo/pi-tools          # alias for remove
-pi list
-pi update                               # skips pinned packages
-pi config                               # enable/disable extensions, skills, prompts, themes
+draht install npm:@foo/draht-tools
+draht install npm:@foo/draht-tools@1.2.3      # pinned version
+draht install git:github.com/user/repo
+draht install git:github.com/user/repo@v1  # tag or commit
+draht install git:git@github.com:user/repo
+draht install git:git@github.com:user/repo@v1  # tag or commit
+draht install https://github.com/user/repo
+draht install https://github.com/user/repo@v1      # tag or commit
+draht install ssh://git@github.com/user/repo
+draht install ssh://git@github.com/user/repo@v1    # tag or commit
+draht remove npm:@foo/draht-tools
+draht uninstall npm:@foo/draht-tools          # alias for remove
+draht list
+draht update                               # skips pinned packages
+draht config                               # enable/disable extensions, skills, prompts, themes
 ```
 
-Packages install to `~/.pi/agent/git/` (git) or global npm. Use `-l` for project-local installs (`.pi/git/`, `.pi/npm/`). If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
+Packages install to `~/.draht/agent/git/` (git) or global npm. Use `-l` for project-local installs (`.draht/git/`, `.draht/npm/`). If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
 
-Create a package by adding a `pi` key to `package.json`:
+Create a package by adding a `draht` key to `package.json`:
 
 ```json
 {
-  "name": "my-pi-package",
-  "keywords": ["pi-package"],
+  "name": "my-draht-package",
+  "keywords": ["draht-package"],
   "draht": {
     "extensions": ["./extensions"],
     "skills": ["./skills"],
@@ -369,7 +369,7 @@ Create a package by adding a `pi` key to `package.json`:
 }
 ```
 
-Without a `pi` manifest, pi auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
+Without a `draht` manifest, draht auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
 
 See [docs/packages.md](docs/packages.md).
 
@@ -402,7 +402,7 @@ See [docs/sdk.md](docs/sdk.md) and [examples/sdk/](examples/sdk/).
 For non-Node.js integrations, use RPC mode over stdin/stdout:
 
 ```bash
-pi --mode rpc
+draht --mode rpc
 ```
 
 RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `\n` only. Do not use generic line readers like Node `readline`, which also split on Unicode separators inside JSON payloads.
@@ -413,11 +413,11 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 
 ## Philosophy
 
-Pi is aggressively extensible so it doesn't have to dictate your workflow. Features that other tools bake in can be built with [extensions](#extensions), [skills](#skills), or installed from third-party [pi packages](#pi-packages). This keeps the core minimal while letting you shape pi to fit how you work.
+Draht is aggressively extensible so it doesn't have to dictate your workflow. Features that other tools bake in can be built with [extensions](#extensions), [skills](#skills), or installed from third-party [draht packages](#draht-packages). This keeps the core minimal while letting you shape draht to fit how you work.
 
 **No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. [Why?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
 
-**No sub-agents.** There's many ways to do this. Spawn pi instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
+**No sub-agents.** There's many ways to do this. Spawn draht instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
 
 **No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions) inline with your environment and security requirements.
 
@@ -434,18 +434,18 @@ Read the [blog post](https://mariozechner.at/posts/2025-11-30-draht-coding-agent
 ## CLI Reference
 
 ```bash
-pi [options] [@files...] [messages...]
+draht [options] [@files...] [messages...]
 ```
 
 ### Package Commands
 
 ```bash
-pi install <source> [-l]     # Install package, -l for project-local
-pi remove <source> [-l]      # Remove package
-pi uninstall <source> [-l]   # Alias for remove
-pi update [source]           # Update packages (skips pinned)
-pi list                      # List installed packages
-pi config                    # Enable/disable package resources
+draht install <source> [-l]     # Install package, -l for project-local
+draht remove <source> [-l]      # Remove package
+draht uninstall <source> [-l]   # Alias for remove
+draht update [source]           # Update packages (skips pinned)
+draht list                      # List installed packages
+draht config                    # Enable/disable package resources
 ```
 
 ### Modes
@@ -458,10 +458,10 @@ pi config                    # Enable/disable package resources
 | `--mode rpc` | RPC mode for process integration (see [docs/rpc.md](docs/rpc.md)) |
 | `--export <in> [out]` | Export session to HTML |
 
-In print mode, pi also reads piped stdin and merges it into the initial prompt:
+In print mode, draht also reads piped stdin and merges it into the initial prompt:
 
 ```bash
-cat README.md | pi -p "Summarize this text"
+cat README.md | draht -p "Summarize this text"
 ```
 
 ### Model Options
@@ -525,50 +525,50 @@ Combine `--no-*` with explicit flags to load exactly what you need, ignoring set
 Prefix files with `@` to include in the message:
 
 ```bash
-pi @prompt.md "Answer this"
-pi -p @screenshot.png "What's in this image?"
-pi @code.ts @test.ts "Review these files"
+draht @prompt.md "Answer this"
+draht -p @screenshot.png "What's in this image?"
+draht @code.ts @test.ts "Review these files"
 ```
 
 ### Examples
 
 ```bash
 # Interactive with initial prompt
-pi "List all .ts files in src/"
+draht "List all .ts files in src/"
 
 # Non-interactive
-pi -p "Summarize this codebase"
+draht -p "Summarize this codebase"
 
 # Non-interactive with piped stdin
-cat README.md | pi -p "Summarize this text"
+cat README.md | draht -p "Summarize this text"
 
 # Different model
-pi --provider openai --model gpt-4o "Help me refactor"
+draht --provider openai --model gpt-4o "Help me refactor"
 
 # Model with provider prefix (no --provider needed)
-pi --model openai/gpt-4o "Help me refactor"
+draht --model openai/gpt-4o "Help me refactor"
 
 # Model with thinking level shorthand
-pi --model sonnet:high "Solve this complex problem"
+draht --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
-pi --models "claude-*,gpt-4o"
+draht --models "claude-*,gpt-4o"
 
 # Read-only mode
-pi --tools read,grep,find,ls -p "Review the code"
+draht --tools read,grep,find,ls -p "Review the code"
 
 # High thinking level
-pi --thinking high "Solve this complex problem"
+draht --thinking high "Solve this complex problem"
 ```
 
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `PI_CODING_AGENT_DIR` | Override config directory (default: `~/.pi/agent`) |
-| `PI_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
-| `PI_SKIP_VERSION_CHECK` | Skip version check at startup |
-| `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
+| `DRAHT_CODING_AGENT_DIR` | Override config directory (default: `~/.draht/agent`) |
+| `DRAHT_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
+| `DRAHT_SKIP_VERSION_CHECK` | Skip version check at startup |
+| `DRAHT_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
 ---
@@ -586,5 +586,5 @@ MIT
 ## See Also
 
 - [@draht/ai](https://www.npmjs.com/package/@draht/ai): Core LLM toolkit
-- [@draht/coding-agent-agent](https://www.npmjs.com/package/@draht/coding-agent-agent): Agent framework
+- [@draht/agent-core](https://www.npmjs.com/package/@draht/agent-core): Agent framework
 - [@draht/tui](https://www.npmjs.com/package/@draht/tui): Terminal UI components

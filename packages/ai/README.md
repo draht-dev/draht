@@ -1046,17 +1046,17 @@ const response = await complete(model, context, {
 
 #### Antigravity Version Override
 
-Set `PI_AI_ANTIGRAVITY_VERSION` to override the Antigravity User-Agent version when Google updates their requirements:
+Set `DRAHT_AI_ANTIGRAVITY_VERSION` to override the Antigravity User-Agent version when Google updates their requirements:
 
 ```bash
-export PI_AI_ANTIGRAVITY_VERSION="1.23.0"
+export DRAHT_AI_ANTIGRAVITY_VERSION="1.23.0"
 ```
 
 #### Cache Retention
 
-Set `PI_CACHE_RETENTION=long` to extend prompt cache retention:
+Set `DRAHT_CACHE_RETENTION=long` to extend prompt cache retention:
 
-| Provider | Default | With `PI_CACHE_RETENTION=long` |
+| Provider | Default | With `DRAHT_CACHE_RETENTION=long` |
 |----------|---------|-------------------------------|
 | Anthropic | 5 minutes | 1 hour |
 | OpenAI | in-memory | 24 hours |

@@ -1,4 +1,6 @@
 ---
+import Navbar from "../components/Navbar.astro";
+
 interface Props {
 	title: string;
 	description: string;
@@ -53,8 +55,8 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 				--paper-soft: #8b8472;
 				--rule:       rgba(239, 231, 216, 0.14);
 				--rule-strong:rgba(239, 231, 216, 0.28);
-				--copper:     oklch(0.72 0.13 55);
-				--copper-dim: oklch(0.55 0.11 55);
+				--copper:     #e8c828;
+				--copper-dim: #b89e1e;
 				--patina:     oklch(0.68 0.06 175);
 
 				--f-display: "Instrument Serif", "Times New Roman", serif;
@@ -112,151 +114,7 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 				padding: 0 var(--gutter);
 			}
 
-			/* ---------- Topbar ---------- */
-			.topbar {
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				padding-top: 28px;
-				padding-bottom: 14px;
-				border-bottom: 1px solid var(--rule);
-				gap: 16px;
-			}
-			.brand {
-				display: flex;
-				align-items: center;
-				gap: 14px;
-				font-family: var(--f-ui);
-				letter-spacing: 0.02em;
-			}
-			.brand .mark {
-				width: 34px;
-				height: 34px;
-				display: grid;
-				place-items: center;
-				position: relative;
-			}
-			.brand .mark img {
-				width: 100%;
-				height: 100%;
-				object-fit: contain;
-				filter: drop-shadow(0 0 6px rgba(217, 140, 70, 0.18));
-			}
-			.brand .wordmark {
-				font-size: 15px;
-				letter-spacing: 0.06em;
-				text-transform: lowercase;
-			}
-			.brand .wordmark em {
-				font-style: normal;
-				color: var(--paper-soft);
-			}
-
-			.topnav {
-				display: flex;
-				gap: 28px;
-				font-size: 13px;
-				letter-spacing: 0.06em;
-				text-transform: uppercase;
-				color: var(--paper-soft);
-			}
-			.topnav a {
-				position: relative;
-				padding: 4px 0;
-			}
-			.topnav a:hover { color: var(--paper); }
-			.topnav a::after {
-				content: "";
-				position: absolute;
-				left: 0;
-				right: 0;
-				bottom: -2px;
-				height: 1px;
-				background: var(--copper);
-				transform: scaleX(0);
-				transform-origin: left;
-				transition: transform 0.3s ease;
-			}
-			.topnav a:hover::after { transform: scaleX(1); }
-			.topnav a.active { color: var(--paper); }
-			.topnav a.active::after { transform: scaleX(1); }
-
-			.burger {
-				display: none;
-				flex-direction: column;
-				justify-content: center;
-				gap: 4px;
-				width: 32px;
-				height: 32px;
-				background: none;
-				border: none;
-				cursor: pointer;
-				padding: 4px;
-			}
-			.burger-line {
-				display: block;
-				width: 100%;
-				height: 2px;
-				background: var(--paper);
-				border-radius: 1px;
-				transition: transform 0.3s, opacity 0.3s;
-			}
-			.burger[aria-expanded="true"] .burger-line:nth-child(1) { transform: translateY(6px) rotate(45deg); }
-			.burger[aria-expanded="true"] .burger-line:nth-child(2) { opacity: 0; }
-			.burger[aria-expanded="true"] .burger-line:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
-
-			@media (max-width: 820px) {
-				.burger { display: flex; }
-				.topnav {
-					display: none;
-					position: absolute;
-					top: calc(100% + 8px);
-					right: 0;
-					left: 0;
-					flex-direction: column;
-					gap: 0;
-					background: var(--ink);
-					border: 1px solid var(--rule);
-					padding: 8px 0;
-					z-index: 10;
-				}
-				.topnav.open { display: flex; }
-				.topnav a {
-					padding: 10px 20px;
-				}
-				.topnav a::after { display: none; }
-				.topbar { position: relative; }
-			}
-
 			/* ---------- Shared page components ---------- */
-			.meta-strip {
-				display: flex;
-				justify-content: space-between;
-				align-items: center;
-				font-family: var(--f-mono);
-				font-size: 11px;
-				color: var(--paper-soft);
-				letter-spacing: 0.04em;
-				padding: 10px 0;
-				border-bottom: 1px solid var(--rule);
-				gap: 12px;
-				flex-wrap: wrap;
-			}
-			.meta-strip .dot {
-				width: 6px;
-				height: 6px;
-				border-radius: 50%;
-				background: var(--patina);
-				display: inline-block;
-				margin-right: 8px;
-				vertical-align: middle;
-				animation: blink 2.4s infinite;
-			}
-			@keyframes blink {
-				0%, 100% { opacity: 1; }
-				50%      { opacity: 0.25; }
-			}
-
 			.page-head {
 				padding: clamp(48px, 8vw, 96px) 0 clamp(28px, 4vw, 48px);
 				border-bottom: 1px solid var(--rule);
@@ -438,26 +296,7 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 	</head>
 	<body>
 		<div class="wrap">
-			<header class="topbar">
-				<a class="brand" href="/">
-					<span class="mark"><img src="/draht-logo.webp" alt="draht logo" width="34" height="34" /></span>
-					<span class="wordmark">draht &nbsp; <em>/dʁaːt/</em></span>
-				</a>
-				<nav class="topnav" id="topnav">
-					<a href="/#werkstatt">Workflow</a>
-					<a href="/#packages">Packages</a>
-					<a href="/#philosophie">Prinzipien</a>
-					<a href="/#pricing">Pricing</a>
-					<a href="/docs">Docs</a>
-					<a href="/blog">Blog</a>
-					<a href="https://github.com/draht-dev/draht">GitHub ↗</a>
-				</nav>
-				<button class="burger" id="burger" aria-label="Toggle menu" aria-expanded="false">
-					<span class="burger-line"></span>
-					<span class="burger-line"></span>
-					<span class="burger-line"></span>
-				</button>
-			</header>
+			<Navbar />
 
 			<slot />
 
@@ -475,7 +314,7 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 						<defs>
 							<path id="stamp-circle" d="M 100,100 m -78,0 a 78,78 0 1,1 156,0 a 78,78 0 1,1 -156,0" />
 						</defs>
-						<text fill="oklch(0.55 0.11 55)" font-family="Geist Mono" font-size="10" letter-spacing="4">
+						<text fill="#b89e1e" font-family="Geist Mono" font-size="10" letter-spacing="4">
 							<textPath href="#stamp-circle" startOffset="0">HANDGEFERTIGT · DORTMUND · MMXXVI · OPEN SOURCE · </textPath>
 						</text>
 					</svg>
@@ -505,31 +344,5 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 			</div>
 		</div>
 
-		<script is:inline>
-			const burger = document.getElementById("burger");
-			const topnav = document.getElementById("topnav");
-			if (burger && topnav) {
-				burger.addEventListener("click", () => {
-					const open = burger.getAttribute("aria-expanded") === "true";
-					burger.setAttribute("aria-expanded", String(!open));
-					topnav.classList.toggle("open");
-				});
-				topnav.querySelectorAll("a").forEach(a => {
-					a.addEventListener("click", () => {
-						burger.setAttribute("aria-expanded", "false");
-						topnav.classList.remove("open");
-					});
-				});
-			}
-
-			// Highlight active nav link
-			const path = window.location.pathname;
-			document.querySelectorAll(".topnav a").forEach(a => {
-				const href = a.getAttribute("href") || "";
-				if (href.startsWith("/") && !href.startsWith("/#") && path.startsWith(href)) {
-					a.classList.add("active");
-				}
-			});
-		</script>
 	</body>
 </html>

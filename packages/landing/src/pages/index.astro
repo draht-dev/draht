@@ -1,5 +1,6 @@
 ---
 import Atelier from "../layouts/Atelier.astro";
+import Navbar from "../components/Navbar.astro";
 
 const title = "draht — a coding agent, handgefertigt";
 const description = "A GSD workflow engine for coding agents. Routes each task to the cheapest capable model, writes the test first, and logs every call. Install as a Claude Code plugin or run it standalone.";
@@ -21,26 +22,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 
 	<div class="wrap">
 		<!-- ===================== TOP ===================== -->
-		<header class="topbar">
-			<a class="brand" href="/">
-				<span class="mark"><img src="/draht-logo.webp" alt="draht logo" /></span>
-				<span class="wordmark">draht &nbsp; <em>/dʁaːt/</em></span>
-			</a>
-			<nav class="nav">
-				<a href="#werkstatt">Workflow</a>
-				<a href="#packages">Packages</a>
-				<a href="#philosophie">Prinzipien</a>
-				<a href="#pricing">Pricing</a>
-				<a href="/docs">Docs</a>
-				<a href="https://github.com/draht-dev/draht">GitHub ↗</a>
-			</nav>
-		</header>
-
-		<div class="meta-strip">
-			<span><span class="dot"></span>v2026.4.23 · built in Dortmund · MIT</span>
-			<span>N° 001 / MONOREPO · 15 PACKAGES</span>
-			<span>HANDGEFERTIGT — OSKAR FREYE, MMXXVI</span>
-		</div>
+		<Navbar />
 
 		<!-- ===================== HERO ===================== -->
 		<section class="hero">
@@ -417,7 +399,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 					<defs>
 						<path id="stamp-circle" d="M 100,100 m -78,0 a 78,78 0 1,1 156,0 a 78,78 0 1,1 -156,0" />
 					</defs>
-					<text fill="oklch(0.55 0.11 55)" font-family="Geist Mono" font-size="10" letter-spacing="4">
+					<text fill="#b89e1e" font-family="Geist Mono" font-size="10" letter-spacing="4">
 						<textPath href="#stamp-circle" startOffset="0">HANDGEFERTIGT · DORTMUND · MMXXVI · OPEN SOURCE · </textPath>
 					</text>
 				</svg>
@@ -560,6 +542,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 		const SVG_NS = "http://www.w3.org/2000/svg";
 		const wireSvg = document.getElementById("wire-svg");
 		const wirePlan = document.getElementById("wireplan");
+		const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 		function el(name, attrs = {}) {
 			const n = document.createElementNS(SVG_NS, name);
@@ -598,9 +581,13 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 		}
 		function addPulse(d, dur = 6, delay = 0) {
 			const p = el("path", { d, class: "wire-pulse" });
-			p.style.animationDuration = dur + "s";
-			p.style.animationDelay = -delay + "s";
 			wireSvg.appendChild(p);
+			if (prefersReducedMotion) return p;
+			const anim = p.animate(
+				[{ strokeDashoffset: 0 }, { strokeDashoffset: -2018 }],
+				{ duration: dur * 1000, iterations: Infinity, easing: "linear" }
+			);
+			anim.currentTime = delay * 1000;
 			return p;
 		}
 		// Emission that fires from a branch point whenever the main bus pulse
@@ -612,8 +599,13 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			const cycle = 7;
 			const advance = ((cycle - (tFire % cycle)) % cycle + cycle) % cycle;
 			const p = el("path", { d, class: "wire-emission" });
-			p.style.animationDelay = (-advance) + "s";
 			wireSvg.appendChild(p);
+			if (prefersReducedMotion) return p;
+			const anim = p.animate(
+				[{ strokeDashoffset: 0 }, { strokeDashoffset: -204 }],
+				{ duration: cycle * 1000, iterations: Infinity, easing: "linear" }
+			);
+			anim.currentTime = advance * 1000;
 			return p;
 		}
 		// Bus-synced version of addPulse: an existing branch trace gets a flowing
@@ -926,8 +918,8 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			--paper-soft: #8b8472;
 			--rule:       rgba(239, 231, 216, 0.14);
 			--rule-strong:rgba(239, 231, 216, 0.28);
-			--copper:     oklch(0.72 0.13 55);
-			--copper-dim: oklch(0.55 0.11 55);
+			--copper:     #e8c828;
+			--copper-dim: #b89e1e;
 			--patina:     oklch(0.68 0.06 175);
 
 			--f-display: "Instrument Serif", "Times New Roman", serif;
@@ -984,96 +976,6 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 		}
 
 		/* ---------- Topbar ---------- */
-		.topbar {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			padding-top: 28px;
-			padding-bottom: 14px;
-			border-bottom: 1px solid var(--rule);
-		}
-		.brand {
-			display: flex;
-			align-items: center;
-			gap: 14px;
-			font-family: var(--f-ui);
-			letter-spacing: 0.02em;
-		}
-		.brand .mark {
-			width: 34px;
-			height: 34px;
-			display: grid;
-			place-items: center;
-			position: relative;
-		}
-		.brand .mark img {
-			width: 100%;
-			height: 100%;
-			object-fit: contain;
-			filter: drop-shadow(0 0 6px rgba(217, 140, 70, 0.18));
-		}
-		.brand .wordmark {
-			font-size: 15px;
-			letter-spacing: 0.06em;
-			text-transform: lowercase;
-		}
-		.brand .wordmark em {
-			font-style: normal;
-			color: var(--paper-soft);
-		}
-
-		.nav {
-			display: flex;
-			gap: 28px;
-			font-size: 13px;
-			letter-spacing: 0.06em;
-			text-transform: uppercase;
-			color: var(--paper-soft);
-		}
-		.nav a {
-			position: relative;
-			padding: 4px 0;
-		}
-		.nav a:hover { color: var(--paper); }
-		.nav a::after {
-			content: "";
-			position: absolute;
-			left: 0;
-			right: 0;
-			bottom: -2px;
-			height: 1px;
-			background: var(--copper);
-			transform: scaleX(0);
-			transform-origin: left;
-			transition: transform 0.3s ease;
-		}
-		.nav a:hover::after { transform: scaleX(1); }
-
-		.meta-strip {
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
-			font-family: var(--f-mono);
-			font-size: 11px;
-			color: var(--paper-soft);
-			letter-spacing: 0.04em;
-			padding: 10px 0;
-			border-bottom: 1px solid var(--rule);
-		}
-		.meta-strip .dot {
-			width: 6px;
-			height: 6px;
-			border-radius: 50%;
-			background: var(--patina);
-			display: inline-block;
-			margin-right: 8px;
-			vertical-align: middle;
-			animation: blink 2.4s infinite;
-		}
-		@keyframes blink {
-			0%, 100% { opacity: 1; }
-			50%      { opacity: 0.25; }
-		}
 
 		/* ---------- Hero ---------- */
 		.hero {
@@ -1324,11 +1226,6 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			stroke-linecap: round;
 			filter: drop-shadow(0 0 6px var(--copper)) drop-shadow(0 0 14px var(--copper-dim));
 			stroke-dasharray: 18 2000;
-			animation: flow linear infinite;
-		}
-		@keyframes flow {
-			from { stroke-dashoffset: 0; }
-			to   { stroke-dashoffset: -2018; }
 		}
 
 		.wire-emission {
@@ -1338,11 +1235,6 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			stroke-linecap: round;
 			stroke-dasharray: 4 200;
 			filter: drop-shadow(0 0 5px var(--copper)) drop-shadow(0 0 12px var(--copper-dim));
-			animation: emitFlow 7s linear infinite;
-		}
-		@keyframes emitFlow {
-			from { stroke-dashoffset: 0; }
-			to   { stroke-dashoffset: -204; }
 		}
 
 		.wire-node {
@@ -1997,7 +1889,6 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			.pkg-desc, .pkg-tag { grid-column: 2; text-align: left; }
 			.foot { grid-template-columns: 1fr; }
 			.foot-col.right { text-align: left; }
-			.nav { display: none; }
 			.section-head { grid-template-columns: auto 1fr; }
 			.section-kicker { display: none; }
 		}

@@ -40,3 +40,4 @@ plans/
 collect.sh
 packages/landing/.astro
 packages/landing/.sst
+packages/landing/.playwright-mcp

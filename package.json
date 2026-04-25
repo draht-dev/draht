@@ -50,7 +50,7 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "version": "2026.4.23",
+  "version": "2026.4.25",
   "dependencies": {
     "@mariozechner/jiti": "^2.6.5",
     "@draht/coding-agent": "workspace:*",

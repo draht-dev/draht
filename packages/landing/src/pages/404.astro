@@ -1,80 +1,71 @@
 ---
-import Base from "../layouts/Base.astro";
+import AtelierPage from "../layouts/AtelierPage.astro";
 
-const title = "404 — Page Not Found";
+const title = "404 — Page Not Found · Draht";
 const description = "The page you're looking for doesn't exist.";
 ---
 
-<Base title={title} description={description}>
-	<main class="main">
+<AtelierPage title={title} description={description}>
+	<main class="error-main">
 		<section class="error-page">
 			<div class="error-code">404</div>
-			<p class="error-message">Page not found</p>
+			<h1 class="error-title">Nicht gefunden<span class="amp">.</span></h1>
 			<p class="error-desc">The page you're looking for doesn't exist or has been moved.</p>
-			<a href="/" class="btn btn-primary">Back to Home</a>
+			<div class="error-actions">
+				<a href="/" class="btn">Back to Home →</a>
+				<a href="/docs" class="btn ghost">Read the docs</a>
+			</div>
 		</section>
 	</main>
-</Base>
+</AtelierPage>
 
 <style>
-	.main {
-		position: relative;
-		z-index: 1;
-		max-width: 740px;
+	.error-main {
+		max-width: 720px;
 		margin: 0 auto;
-		padding: 0 2rem;
 	}
-
 	.error-page {
-		text-align: center;
-		padding: 10rem 0 12rem;
+		padding: clamp(80px, 14vw, 180px) 0;
 		display: flex;
 		flex-direction: column;
-		align-items: center;
+		align-items: flex-start;
 	}
-
 	.error-code {
-		font-family: var(--mono);
-		font-size: 6rem;
-		font-weight: 700;
-		letter-spacing: -0.04em;
-		color: var(--fg);
-		line-height: 1;
-		margin-bottom: 1rem;
-		opacity: 0.15;
+		font-family: var(--f-mono);
+		font-size: clamp(11px, 1vw, 12px);
+		letter-spacing: 0.2em;
+		color: var(--copper);
+		text-transform: uppercase;
+		margin-bottom: 28px;
 	}
-
-	.error-message {
-		font-family: var(--mono);
-		font-size: 1.25rem;
-		color: var(--fg);
-		margin-bottom: 0.75rem;
+	.error-code::before {
+		content: "· ";
+		color: var(--copper-dim);
 	}
-
+	.error-title {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 300;
+		font-size: clamp(64px, 14vw, 180px);
+		line-height: 0.9;
+		letter-spacing: -0.035em;
+		color: var(--paper);
+		margin: 0 0 32px;
+	}
+	.error-title .amp {
+		color: var(--copper);
+	}
 	.error-desc {
-		color: var(--muted);
-		font-size: 0.9rem;
-		margin-bottom: 2.5rem;
-		max-width: 360px;
+		color: var(--paper-dim);
+		font-family: var(--f-display);
+		font-size: clamp(18px, 2vw, 22px);
+		line-height: 1.5;
+		margin: 0 0 40px;
+		max-width: 36ch;
 	}
-
-	.btn {
-		padding: 0.7rem 1.75rem;
-		border-radius: 6px;
-		font-size: 0.8rem;
-		font-weight: 600;
-		letter-spacing: 0.02em;
-		transition: all 0.2s;
-	}
-
-	.btn-primary {
-		background: var(--accent);
-		color: #08080a;
-	}
-
-	.btn-primary:hover {
-		background: #f0dc60;
-		color: #08080a;
-		box-shadow: 0 0 24px var(--accent-glow);
+	.error-actions {
+		display: flex;
+		gap: 16px;
+		flex-wrap: wrap;
 	}
 </style>

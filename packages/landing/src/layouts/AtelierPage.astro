@@ -1,0 +1,535 @@
+---
+interface Props {
+	title: string;
+	description: string;
+	ogImage?: string;
+}
+
+const { title, description, ogImage = "/og.png" } = Astro.props;
+const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="description" content={description} />
+
+		<title>{title}</title>
+		<link rel="canonical" href={canonicalUrl.toString()} />
+		<meta name="robots" content="index, follow" />
+
+		<meta property="og:type" content="website" />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:image" content={new URL(ogImage, "https://draht.dev").toString()} />
+		<meta property="og:url" content={canonicalUrl.toString()} />
+		<meta property="og:site_name" content="Draht" />
+
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:title" content={title} />
+		<meta name="twitter:description" content={description} />
+		<meta name="twitter:image" content={new URL(ogImage, "https://draht.dev").toString()} />
+
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+		<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+		<link rel="sitemap" href="/sitemap-index.xml" />
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital,wght@0,400;1,400&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Geist+Mono:wght@300;400;500;600&display=swap"
+			rel="stylesheet"
+		/>
+
+		<style is:global>
+			:root {
+				--ink:        #0e0d0b;
+				--ink-2:      #14110d;
+				--paper:      #efe7d8;
+				--paper-dim:  #c9bfae;
+				--paper-soft: #8b8472;
+				--rule:       rgba(239, 231, 216, 0.14);
+				--rule-strong:rgba(239, 231, 216, 0.28);
+				--copper:     oklch(0.72 0.13 55);
+				--copper-dim: oklch(0.55 0.11 55);
+				--patina:     oklch(0.68 0.06 175);
+
+				--f-display: "Instrument Serif", "Times New Roman", serif;
+				--f-ui:      "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+				--f-mono:    "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+
+				--gutter: clamp(20px, 4vw, 56px);
+				--max:    1240px;
+			}
+
+			* { box-sizing: border-box; }
+			html, body { margin: 0; padding: 0; }
+			body {
+				background: var(--ink);
+				color: var(--paper);
+				font-family: var(--f-ui);
+				font-weight: 400;
+				-webkit-font-smoothing: antialiased;
+				font-feature-settings: "ss01", "ss02", "cv01";
+				overflow-x: hidden;
+				min-height: 100vh;
+			}
+
+			body::before {
+				content: "";
+				position: fixed;
+				inset: 0;
+				pointer-events: none;
+				background-image:
+					radial-gradient(circle at 20% 10%, rgba(217, 185, 128, 0.06), transparent 40%),
+					radial-gradient(circle at 80% 60%, rgba(120, 150, 150, 0.04), transparent 45%);
+				mix-blend-mode: screen;
+				z-index: 0;
+			}
+			body::after {
+				content: "";
+				position: fixed;
+				inset: 0;
+				pointer-events: none;
+				background-image:
+					repeating-linear-gradient(0deg, transparent 0 3px, rgba(0, 0, 0, 0.18) 3px 4px);
+				opacity: 0.25;
+				mix-blend-mode: multiply;
+				z-index: 1;
+			}
+
+			a { color: inherit; text-decoration: none; }
+			img { max-width: 100%; display: block; }
+
+			.wrap {
+				position: relative;
+				z-index: 2;
+				max-width: var(--max);
+				margin: 0 auto;
+				padding: 0 var(--gutter);
+			}
+
+			/* ---------- Topbar ---------- */
+			.topbar {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding-top: 28px;
+				padding-bottom: 14px;
+				border-bottom: 1px solid var(--rule);
+				gap: 16px;
+			}
+			.brand {
+				display: flex;
+				align-items: center;
+				gap: 14px;
+				font-family: var(--f-ui);
+				letter-spacing: 0.02em;
+			}
+			.brand .mark {
+				width: 34px;
+				height: 34px;
+				display: grid;
+				place-items: center;
+				position: relative;
+			}
+			.brand .mark img {
+				width: 100%;
+				height: 100%;
+				object-fit: contain;
+				filter: drop-shadow(0 0 6px rgba(217, 140, 70, 0.18));
+			}
+			.brand .wordmark {
+				font-size: 15px;
+				letter-spacing: 0.06em;
+				text-transform: lowercase;
+			}
+			.brand .wordmark em {
+				font-style: normal;
+				color: var(--paper-soft);
+			}
+
+			.topnav {
+				display: flex;
+				gap: 28px;
+				font-size: 13px;
+				letter-spacing: 0.06em;
+				text-transform: uppercase;
+				color: var(--paper-soft);
+			}
+			.topnav a {
+				position: relative;
+				padding: 4px 0;
+			}
+			.topnav a:hover { color: var(--paper); }
+			.topnav a::after {
+				content: "";
+				position: absolute;
+				left: 0;
+				right: 0;
+				bottom: -2px;
+				height: 1px;
+				background: var(--copper);
+				transform: scaleX(0);
+				transform-origin: left;
+				transition: transform 0.3s ease;
+			}
+			.topnav a:hover::after { transform: scaleX(1); }
+			.topnav a.active { color: var(--paper); }
+			.topnav a.active::after { transform: scaleX(1); }
+
+			.burger {
+				display: none;
+				flex-direction: column;
+				justify-content: center;
+				gap: 4px;
+				width: 32px;
+				height: 32px;
+				background: none;
+				border: none;
+				cursor: pointer;
+				padding: 4px;
+			}
+			.burger-line {
+				display: block;
+				width: 100%;
+				height: 2px;
+				background: var(--paper);
+				border-radius: 1px;
+				transition: transform 0.3s, opacity 0.3s;
+			}
+			.burger[aria-expanded="true"] .burger-line:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+			.burger[aria-expanded="true"] .burger-line:nth-child(2) { opacity: 0; }
+			.burger[aria-expanded="true"] .burger-line:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+			@media (max-width: 820px) {
+				.burger { display: flex; }
+				.topnav {
+					display: none;
+					position: absolute;
+					top: calc(100% + 8px);
+					right: 0;
+					left: 0;
+					flex-direction: column;
+					gap: 0;
+					background: var(--ink);
+					border: 1px solid var(--rule);
+					padding: 8px 0;
+					z-index: 10;
+				}
+				.topnav.open { display: flex; }
+				.topnav a {
+					padding: 10px 20px;
+				}
+				.topnav a::after { display: none; }
+				.topbar { position: relative; }
+			}
+
+			/* ---------- Shared page components ---------- */
+			.meta-strip {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				font-family: var(--f-mono);
+				font-size: 11px;
+				color: var(--paper-soft);
+				letter-spacing: 0.04em;
+				padding: 10px 0;
+				border-bottom: 1px solid var(--rule);
+				gap: 12px;
+				flex-wrap: wrap;
+			}
+			.meta-strip .dot {
+				width: 6px;
+				height: 6px;
+				border-radius: 50%;
+				background: var(--patina);
+				display: inline-block;
+				margin-right: 8px;
+				vertical-align: middle;
+				animation: blink 2.4s infinite;
+			}
+			@keyframes blink {
+				0%, 100% { opacity: 1; }
+				50%      { opacity: 0.25; }
+			}
+
+			.page-head {
+				padding: clamp(48px, 8vw, 96px) 0 clamp(28px, 4vw, 48px);
+				border-bottom: 1px solid var(--rule);
+			}
+			.page-kicker {
+				display: inline-flex;
+				align-items: center;
+				gap: 10px;
+				font-family: var(--f-mono);
+				font-size: 11px;
+				letter-spacing: 0.18em;
+				text-transform: uppercase;
+				color: var(--copper);
+				margin-bottom: 28px;
+			}
+			.page-kicker::before {
+				content: "";
+				width: 24px;
+				height: 1px;
+				background: var(--copper);
+			}
+			.page-title {
+				font-family: var(--f-display);
+				font-weight: 300;
+				font-style: italic;
+				font-size: clamp(48px, 8vw, 96px);
+				line-height: 0.95;
+				letter-spacing: -0.03em;
+				color: var(--paper);
+				margin: 0 0 18px;
+			}
+			.page-title .ampersand {
+				color: var(--copper);
+			}
+			.page-lede {
+				font-family: var(--f-display);
+				font-size: clamp(18px, 2vw, 22px);
+				font-weight: 400;
+				line-height: 1.5;
+				color: var(--paper-dim);
+				max-width: 52ch;
+				margin: 0;
+				text-wrap: pretty;
+			}
+
+			/* ---------- Buttons ---------- */
+			.btn {
+				display: inline-flex;
+				align-items: center;
+				gap: 10px;
+				padding: 12px 22px;
+				background: var(--paper);
+				color: var(--ink);
+				font-family: var(--f-ui);
+				font-weight: 500;
+				font-size: 13px;
+				letter-spacing: 0.02em;
+				border: 1px solid var(--paper);
+				transition: all 0.2s;
+				cursor: pointer;
+			}
+			.btn:hover {
+				background: var(--copper);
+				border-color: var(--copper);
+				color: var(--ink);
+			}
+			.btn.ghost {
+				background: transparent;
+				color: var(--paper-soft);
+				border-color: var(--rule-strong);
+			}
+			.btn.ghost:hover {
+				color: var(--paper);
+				border-color: var(--paper);
+			}
+
+			/* ---------- Footer ---------- */
+			.site-foot {
+				padding: clamp(60px, 8vw, 100px) 0 40px;
+				border-top: 1px solid var(--rule);
+				display: grid;
+				grid-template-columns: 1fr auto 1fr;
+				gap: 40px;
+				align-items: center;
+				margin-top: clamp(64px, 10vw, 120px);
+			}
+			.site-foot .foot-col {
+				font-family: var(--f-mono);
+				font-size: 11px;
+				color: var(--paper-soft);
+				line-height: 1.8;
+				letter-spacing: 0.03em;
+			}
+			.site-foot .foot-col a {
+				color: var(--paper-dim);
+				display: block;
+				transition: color 0.2s;
+			}
+			.site-foot .foot-col a:hover { color: var(--copper); }
+			.site-foot .foot-col h6 {
+				font-family: var(--f-ui);
+				font-weight: 500;
+				font-size: 11px;
+				color: var(--paper);
+				letter-spacing: 0.18em;
+				text-transform: uppercase;
+				margin: 0 0 12px;
+			}
+			.site-foot .foot-col.right { text-align: right; }
+
+			.site-foot .stamp {
+				width: 160px;
+				height: 160px;
+				border: 1.5px solid var(--copper);
+				border-radius: 50%;
+				display: grid;
+				place-items: center;
+				position: relative;
+				transform: rotate(-6deg);
+				justify-self: center;
+			}
+			.site-foot .stamp::before {
+				content: "";
+				position: absolute;
+				inset: 8px;
+				border: 1px dashed var(--copper-dim);
+				border-radius: 50%;
+				opacity: 0.6;
+			}
+			.site-foot .stamp .inner {
+				text-align: center;
+				font-family: var(--f-display);
+				font-style: italic;
+				color: var(--copper);
+				line-height: 1;
+			}
+			.site-foot .stamp .inner .big {
+				font-size: 22px;
+				display: block;
+				margin-bottom: 4px;
+			}
+			.site-foot .stamp .inner .sm {
+				font-family: var(--f-mono);
+				font-style: normal;
+				font-size: 9px;
+				letter-spacing: 0.2em;
+				text-transform: uppercase;
+				color: var(--copper-dim);
+			}
+			.site-foot .stamp svg {
+				position: absolute;
+				width: 100%;
+				height: 100%;
+			}
+
+			.colophon {
+				font-family: var(--f-mono);
+				font-size: 10px;
+				color: var(--paper-soft);
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+				text-align: center;
+				padding: 24px 0;
+				border-top: 1px solid var(--rule);
+				margin-top: 40px;
+			}
+			.colophon .sep {
+				color: var(--rule-strong);
+				margin: 0 14px;
+			}
+
+			@media (max-width: 900px) {
+				.site-foot { grid-template-columns: 1fr; text-align: left; }
+				.site-foot .foot-col.right { text-align: left; }
+			}
+
+			::selection { background: var(--copper); color: var(--ink); }
+		</style>
+	</head>
+	<body>
+		<div class="wrap">
+			<header class="topbar">
+				<a class="brand" href="/">
+					<span class="mark"><img src="/draht-logo.webp" alt="draht logo" width="34" height="34" /></span>
+					<span class="wordmark">draht &nbsp; <em>/dʁaːt/</em></span>
+				</a>
+				<nav class="topnav" id="topnav">
+					<a href="/#werkstatt">Workflow</a>
+					<a href="/#packages">Packages</a>
+					<a href="/#philosophie">Prinzipien</a>
+					<a href="/#pricing">Pricing</a>
+					<a href="/docs">Docs</a>
+					<a href="/blog">Blog</a>
+					<a href="https://github.com/draht-dev/draht">GitHub ↗</a>
+				</nav>
+				<button class="burger" id="burger" aria-label="Toggle menu" aria-expanded="false">
+					<span class="burger-line"></span>
+					<span class="burger-line"></span>
+					<span class="burger-line"></span>
+				</button>
+			</header>
+
+			<slot />
+
+			<footer class="site-foot">
+				<div class="foot-col">
+					<h6>Werkstatt</h6>
+					<a href="https://github.com/draht-dev/draht">Source on GitHub</a>
+					<a href="https://www.npmjs.com/package/draht-claude">Plugin on npm</a>
+					<a href="/docs">Documentation</a>
+					<a href="/blog">Blog</a>
+				</div>
+
+				<div class="stamp">
+					<svg viewBox="0 0 200 200">
+						<defs>
+							<path id="stamp-circle" d="M 100,100 m -78,0 a 78,78 0 1,1 156,0 a 78,78 0 1,1 -156,0" />
+						</defs>
+						<text fill="oklch(0.55 0.11 55)" font-family="Geist Mono" font-size="10" letter-spacing="4">
+							<textPath href="#stamp-circle" startOffset="0">HANDGEFERTIGT · DORTMUND · MMXXVI · OPEN SOURCE · </textPath>
+						</text>
+					</svg>
+					<div class="inner">
+						<span class="big">Draht</span>
+						<span class="sm">Est. 2026</span>
+					</div>
+				</div>
+
+				<div class="foot-col right">
+					<h6>Lesen</h6>
+					<a href="/#werkstatt">Workflow</a>
+					<a href="/#packages">Packages</a>
+					<a href="/#pricing">Pricing</a>
+					<a href="https://freye.tech">Oskar Freye ↗</a>
+				</div>
+			</footer>
+
+			<div class="colophon">
+				<span>© MMXXVI Oskar Freye</span>
+				<span class="sep">·</span>
+				<span>MIT licensed</span>
+				<span class="sep">·</span>
+				<span>set in Instrument Serif &amp; Geist Mono</span>
+				<span class="sep">·</span>
+				<span>Dortmund · Gemeinnützig im Geist</span>
+			</div>
+		</div>
+
+		<script is:inline>
+			const burger = document.getElementById("burger");
+			const topnav = document.getElementById("topnav");
+			if (burger && topnav) {
+				burger.addEventListener("click", () => {
+					const open = burger.getAttribute("aria-expanded") === "true";
+					burger.setAttribute("aria-expanded", String(!open));
+					topnav.classList.toggle("open");
+				});
+				topnav.querySelectorAll("a").forEach(a => {
+					a.addEventListener("click", () => {
+						burger.setAttribute("aria-expanded", "false");
+						topnav.classList.remove("open");
+					});
+				});
+			}
+
+			// Highlight active nav link
+			const path = window.location.pathname;
+			document.querySelectorAll(".topnav a").forEach(a => {
+				const href = a.getAttribute("href") || "";
+				if (href.startsWith("/") && !href.startsWith("/#") && path.startsWith(href)) {
+					a.classList.add("active");
+				}
+			});
+		</script>
+	</body>
+</html>

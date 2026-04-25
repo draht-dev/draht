@@ -1,6 +1,6 @@
 ---
 import { getCollection } from "astro:content";
-import Base from "../../layouts/Base.astro";
+import AtelierPage from "../../layouts/AtelierPage.astro";
 
 const title = "Blog — Draht";
 const description = "Articles about AI coding agents, freelance development, TDD, DDD, and building with Draht.";
@@ -9,33 +9,187 @@ const posts = (await getCollection("blog", ({ data }) => !data.draft))
 	.sort((a, b) => new Date(b.data.date).getTime() - new Date(a.data.date).getTime());
 ---
 
-<Base title={title} description={description}>
-	<main style="max-width: 700px; margin: 0 auto; padding: 2rem;">
-		<h1 style="font-size: 2rem; font-weight: 700; margin-bottom: 2rem;">Blog</h1>
+<AtelierPage title={title} description={description}>
+	<main class="blog-index">
+		<header class="page-head">
+			<div class="page-kicker">Journal · Notes from the Werkstatt</div>
+			<h1 class="page-title">Blog<span class="ampersand">.</span></h1>
+			<p class="page-lede">
+				Longform on AI coding agents, freelance engineering, TDD, DDD, and the pieces we solder together along the way.
+			</p>
+		</header>
 
 		{posts.length === 0 && (
-			<p style="color: var(--muted); font-size: 0.875rem;">No posts yet. Check back soon.</p>
+			<div class="empty">
+				<p>No posts yet. Check back soon.</p>
+			</div>
 		)}
 
-		{posts.map((post) => (
-			<article style="margin-bottom: 2rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border);">
-				<time style="color: var(--muted); font-size: 0.75rem;">{post.data.date}</time>
-				<h2 style="font-size: 1.25rem; margin: 0.5rem 0;">
-					<a href={`/blog/${post.id}`} style="color: var(--fg);">{post.data.title}</a>
-				</h2>
-				<p style="color: var(--muted); font-size: 0.875rem;">{post.data.description}</p>
-				{post.data.tags && post.data.tags.length > 0 && (
-					<div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem;">
-						{post.data.tags.map((tag: string) => (
-							<span style="font-family: var(--mono); font-size: 0.65rem; color: var(--accent-dim); background: var(--accent-dark); padding: 0.15rem 0.5rem; border-radius: 3px;">{tag}</span>
-						))}
-					</div>
-				)}
-			</article>
-		))}
+		<ol class="post-list">
+			{posts.map((post, i) => (
+				<li class="post-item">
+					<a href={`/blog/${post.id}`} class="post-link">
+						<span class="post-idx">N° {String(i + 1).padStart(3, "0")}</span>
+						<div class="post-body">
+							<time class="post-date">{post.data.date}</time>
+							<h2 class="post-title-item">{post.data.title}</h2>
+							<p class="post-desc">{post.data.description}</p>
+							{post.data.tags && post.data.tags.length > 0 && (
+								<div class="post-tags">
+									{post.data.tags.map((tag: string) => (
+										<span class="tag">{tag}</span>
+									))}
+								</div>
+							)}
+						</div>
+						<span class="post-arrow">→</span>
+					</a>
+				</li>
+			))}
+		</ol>
 
-		<p style="color: var(--muted); font-size: 0.875rem; text-align: center; margin-top: 2rem;">
-			More articles coming soon. Follow us on <a href="https://github.com/draht-dev/draht">GitHub</a> for updates.
+		<p class="blog-outro">
+			More articles coming. Follow along on <a href="https://github.com/draht-dev/draht">GitHub</a>.
 		</p>
 	</main>
-</Base>
+</AtelierPage>
+
+<style>
+	.blog-index {
+		max-width: 900px;
+		margin: 0 auto;
+	}
+
+	.empty {
+		padding: 80px 0;
+		text-align: center;
+		color: var(--paper-soft);
+		font-family: var(--f-mono);
+		font-size: 13px;
+	}
+
+	.post-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		border-bottom: 1px solid var(--rule);
+	}
+
+	.post-item {
+		border-top: 1px solid var(--rule);
+	}
+	.post-item:first-child {
+		border-top: none;
+	}
+
+	.post-link {
+		display: grid;
+		grid-template-columns: 80px 1fr 40px;
+		gap: 24px;
+		align-items: start;
+		padding: 32px 4px;
+		transition: background 0.2s;
+		color: var(--paper);
+	}
+	.post-link:hover {
+		background: rgba(239, 231, 216, 0.02);
+	}
+	.post-link:hover .post-title-item {
+		color: var(--copper);
+	}
+	.post-link:hover .post-arrow {
+		color: var(--copper);
+		transform: translateX(4px);
+	}
+
+	.post-idx {
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.1em;
+		color: var(--paper-soft);
+		padding-top: 6px;
+	}
+
+	.post-body {
+		min-width: 0;
+	}
+
+	.post-date {
+		display: block;
+		font-family: var(--f-mono);
+		font-size: 10px;
+		letter-spacing: 0.15em;
+		text-transform: uppercase;
+		color: var(--copper);
+		margin-bottom: 10px;
+	}
+
+	.post-title-item {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 400;
+		font-size: clamp(24px, 3vw, 32px);
+		line-height: 1.1;
+		letter-spacing: -0.02em;
+		color: var(--paper);
+		margin: 0 0 10px;
+		transition: color 0.2s;
+	}
+
+	.post-desc {
+		color: var(--paper-dim);
+		font-size: 15px;
+		line-height: 1.55;
+		margin: 0 0 14px;
+		max-width: 58ch;
+		text-wrap: pretty;
+	}
+
+	.post-tags {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.tag {
+		font-family: var(--f-mono);
+		font-size: 10px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--copper-dim);
+		padding: 3px 8px;
+		border: 1px solid var(--rule-strong);
+	}
+
+	.post-arrow {
+		font-family: var(--f-mono);
+		font-size: 20px;
+		color: var(--paper-soft);
+		transition: color 0.2s, transform 0.2s;
+		text-align: right;
+		padding-top: 6px;
+	}
+
+	.blog-outro {
+		font-family: var(--f-mono);
+		font-size: 12px;
+		letter-spacing: 0.05em;
+		color: var(--paper-soft);
+		text-align: center;
+		padding: 40px 0 20px;
+	}
+	.blog-outro a {
+		color: var(--copper);
+	}
+	.blog-outro a:hover {
+		color: var(--paper);
+	}
+
+	@media (max-width: 640px) {
+		.post-link {
+			grid-template-columns: 1fr;
+			gap: 4px;
+		}
+		.post-idx { padding-top: 0; }
+		.post-arrow { display: none; }
+	}
+</style>

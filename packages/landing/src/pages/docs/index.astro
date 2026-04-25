@@ -1,21 +1,18 @@
 ---
-import Base from "../../layouts/Base.astro";
+import AtelierPage from "../../layouts/AtelierPage.astro";
 
 const title = "Documentation — Draht";
 const description = "Get started with Draht from zero to hero. Installation, configuration, providers, extensions, skills, and more.";
-
-// Features still in development get a construction marker
-const wip = true;
-const ready = false;
 ---
 
-<Base title={title} description={description}>
+<AtelierPage title={title} description={description}>
 	<main class="docs">
 
-		<div class="docs-header">
-			<h1>Documentation</h1>
-			<p class="docs-lead">From zero to hero with Draht.</p>
-		</div>
+		<header class="page-head docs-header">
+			<div class="page-kicker">Handbuch · From zero to hero</div>
+			<h1 class="page-title">Documentation<span class="ampersand">.</span></h1>
+			<p class="page-lede">Installation, configuration, providers, extensions, skills, and everything Draht can be bent to do.</p>
+		</header>
 
 		<!-- Table of Contents -->
 		<nav class="toc">
@@ -505,118 +502,141 @@ const ready = false;
 		</div>
 
 	</main>
-</Base>
+</AtelierPage>
 
 <style>
 	.docs {
-		max-width: 740px;
+		max-width: 860px;
 		margin: 0 auto;
-		padding: 0 2rem 4rem;
 	}
 
 	.docs-header {
-		text-align: center;
-		padding: 4rem 0 2rem;
-	}
-	.docs-header h1 {
-		font-size: 2.5rem;
-		font-weight: 700;
-		letter-spacing: -0.03em;
-		margin-bottom: 0.5rem;
-	}
-	.docs-lead {
-		color: var(--muted);
-		font-size: 1.05rem;
+		padding-bottom: clamp(28px, 4vw, 48px);
 	}
 
 	/* Table of Contents */
 	.toc {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 10px;
-		padding: 1.75rem 2rem;
-		margin-bottom: 3rem;
+		background: var(--ink-2);
+		border: 1px solid var(--rule-strong);
+		padding: clamp(24px, 3vw, 40px);
+		margin: clamp(40px, 5vw, 64px) 0 clamp(48px, 6vw, 80px);
+		position: relative;
+	}
+	.toc::before {
+		content: "";
+		position: absolute;
+		left: -1px;
+		top: -1px;
+		width: 3px;
+		height: 40px;
+		background: var(--copper);
 	}
 	.toc h2 {
-		font-size: 0.8rem;
+		font-family: var(--f-mono);
+		font-size: 11px;
 		text-transform: uppercase;
-		letter-spacing: 0.1em;
-		color: var(--muted);
-		margin-bottom: 1rem;
+		letter-spacing: 0.18em;
+		color: var(--copper);
+		margin: 0 0 18px;
+		font-weight: 400;
 	}
 	.toc ol {
 		list-style: none;
 		counter-reset: toc;
 		columns: 2;
-		column-gap: 2rem;
+		column-gap: 2.5rem;
+		margin: 0;
+		padding: 0;
 	}
 	.toc li {
 		counter-increment: toc;
-		padding: 0.25rem 0;
-		font-size: 0.85rem;
+		padding: 6px 0;
+		font-size: 14px;
 		break-inside: avoid;
+		border-bottom: 1px dashed rgba(239, 231, 216, 0.08);
 	}
 	.toc li::before {
-		content: counter(toc) ". ";
-		color: var(--accent-dim);
-		font-family: var(--mono);
-		font-size: 0.75rem;
+		content: counter(toc, decimal-leading-zero) " — ";
+		color: var(--copper-dim);
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.05em;
 	}
 	.toc a {
-		color: var(--fg);
-		text-decoration: none;
+		color: var(--paper-dim);
+		transition: color 0.2s;
 	}
 	.toc a:hover {
-		color: var(--accent);
+		color: var(--copper);
 	}
 
 	/* Sections */
 	.doc-section {
-		padding: 2.5rem 0;
-		border-bottom: 1px solid var(--border);
+		padding: clamp(40px, 5vw, 64px) 0;
+		border-bottom: 1px solid var(--rule);
 	}
 	.doc-section:last-of-type {
 		border-bottom: none;
 	}
 	.doc-section h2 {
-		font-size: 1.5rem;
-		font-weight: 700;
-		margin-bottom: 1rem;
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 400;
+		font-size: clamp(28px, 3.5vw, 40px);
+		line-height: 1.1;
 		letter-spacing: -0.02em;
+		color: var(--paper);
+		margin: 0 0 20px;
 	}
 	.doc-section h3 {
-		font-size: 1rem;
-		font-weight: 600;
-		margin: 1.75rem 0 0.75rem;
-		color: var(--fg);
+		font-family: var(--f-display);
+		font-weight: 400;
+		font-size: clamp(20px, 2.2vw, 24px);
+		letter-spacing: -0.01em;
+		color: var(--paper);
+		margin: 2rem 0 0.75rem;
 	}
 	.doc-section p {
-		color: var(--muted);
-		font-size: 0.9rem;
+		color: var(--paper-dim);
+		font-size: 15px;
 		line-height: 1.7;
-		margin-bottom: 0.75rem;
+		margin: 0 0 1rem;
+		text-wrap: pretty;
 	}
 	.doc-section ul, .doc-section ol {
-		color: var(--muted);
-		font-size: 0.9rem;
+		color: var(--paper-dim);
+		font-size: 15px;
 		line-height: 1.7;
 		padding-left: 1.5rem;
-		margin-bottom: 0.75rem;
+		margin: 0 0 1rem;
 	}
 	.doc-section li {
 		padding: 0.15rem 0;
 	}
+	.doc-section ul li::marker,
+	.doc-section ol li::marker {
+		color: var(--copper);
+	}
 	.doc-section code {
-		font-family: var(--mono);
-		font-size: 0.82rem;
-		color: var(--fg);
-		background: var(--surface);
-		padding: 0.15rem 0.4rem;
-		border-radius: 3px;
+		font-family: var(--f-mono);
+		font-size: 0.85em;
+		color: var(--paper);
+		background: var(--ink-2);
+		padding: 0.15rem 0.45rem;
+		border: 1px solid var(--rule);
 	}
 	.doc-section strong {
-		color: var(--fg);
+		color: var(--paper);
 		font-weight: 600;
+	}
+	.doc-section a {
+		color: var(--copper);
+		border-bottom: 1px solid var(--copper-dim);
+		transition: color 0.2s, border-color 0.2s;
+	}
+	.doc-section a:hover {
+		color: var(--paper);
+		border-bottom-color: var(--paper);
 	}
 
 	.cols-2 {
@@ -626,121 +646,155 @@ const ready = false;
 
 	/* Code block */
 	.code-block {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 1.25rem 1.5rem;
-		font-family: var(--mono);
-		font-size: 0.8rem;
-		margin: 0.75rem 0 1rem;
+		background: var(--ink-2);
+		border: 1px solid var(--rule-strong);
+		padding: 18px 22px;
+		font-family: var(--f-mono);
+		font-size: 13px;
+		margin: 1rem 0 1.25rem;
 		overflow-x: auto;
+		position: relative;
+	}
+	.code-block::before {
+		content: "";
+		position: absolute;
+		left: -6px;
+		top: 20px;
+		width: 10px;
+		height: 10px;
+		border-radius: 50%;
+		background: var(--copper);
+		box-shadow: 0 0 0 2px var(--ink), 0 0 10px rgba(217, 140, 70, 0.5);
 	}
 	.code-line {
-		line-height: 2;
+		line-height: 1.9;
 		white-space: pre;
+		color: var(--paper);
 	}
 	.code-line.comment {
-		color: var(--muted);
+		color: var(--paper-soft);
 	}
 	.code-line.comment::before {
 		content: "# ";
+		color: var(--copper-dim);
 	}
 	.code-line.cmd::before {
 		content: "$ ";
-		color: var(--accent);
+		color: var(--copper);
 		user-select: none;
 	}
 	.code-line.spacer {
 		height: 0.4rem;
 	}
 	.code-line.plain {
-		color: var(--fg);
+		color: var(--paper);
 	}
 
 	/* Tables */
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		margin: 0.75rem 0 1rem;
-		font-size: 0.825rem;
+		margin: 1rem 0 1.25rem;
+		font-size: 14px;
+		border-top: 1px solid var(--rule-strong);
+		border-bottom: 1px solid var(--rule-strong);
 	}
 	thead {
-		border-bottom: 1px solid var(--border);
+		border-bottom: 1px solid var(--rule-strong);
 	}
 	th {
 		text-align: left;
-		padding: 0.5rem 0.75rem;
-		color: var(--muted);
-		font-weight: 600;
-		font-size: 0.75rem;
+		padding: 10px 14px 10px 0;
+		color: var(--copper);
+		font-family: var(--f-mono);
+		font-weight: 400;
+		font-size: 11px;
 		text-transform: uppercase;
-		letter-spacing: 0.05em;
+		letter-spacing: 0.12em;
 	}
 	td {
-		padding: 0.4rem 0.75rem;
-		color: var(--muted);
-		border-bottom: 1px solid var(--border);
+		padding: 10px 14px 10px 0;
+		color: var(--paper-dim);
+		border-bottom: 1px dashed rgba(239, 231, 216, 0.08);
+		vertical-align: top;
+	}
+	tbody tr:last-child td {
+		border-bottom: none;
 	}
 	td code {
-		font-size: 0.78rem;
+		font-size: 0.82em;
 	}
 
 	/* WIP badge */
 	.wip-title {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
+		gap: 14px;
 		flex-wrap: wrap;
 	}
 	.wip-badge {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
-		font-size: 0.7rem;
-		font-weight: 500;
-		color: #d4a017;
-		background: rgba(212, 160, 23, 0.1);
-		border: 1px solid rgba(212, 160, 23, 0.25);
-		border-radius: 4px;
-		padding: 0.2rem 0.6rem;
-		letter-spacing: 0.03em;
+		gap: 6px;
+		font-family: var(--f-mono);
+		font-size: 10px;
+		font-weight: 400;
+		color: var(--copper);
+		background: transparent;
+		border: 1px solid var(--copper);
+		padding: 4px 10px;
+		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		white-space: nowrap;
 	}
 	.wip-badge::before {
-		content: "\1F6A7";
+		content: "◦";
+		color: var(--copper);
 	}
 
 	/* Callout */
 	.callout {
-		border-radius: 8px;
-		padding: 1rem 1.25rem;
-		font-size: 0.85rem;
+		padding: 18px 22px;
+		font-size: 14px;
 		line-height: 1.6;
-		margin: 1rem 0;
+		margin: 1.25rem 0;
+		border: 1px solid var(--rule-strong);
+		background: var(--ink-2);
+		position: relative;
 	}
 	.callout-warning {
-		background: rgba(212, 160, 23, 0.06);
-		border: 1px solid rgba(212, 160, 23, 0.2);
-		color: var(--muted);
+		border-left: 2px solid var(--copper);
 	}
 	.callout-warning strong {
-		color: #d4a017;
+		color: var(--copper);
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		display: inline-block;
+		margin-right: 4px;
 	}
 
 	/* Footer */
 	.docs-footer {
-		text-align: center;
-		padding: 3rem 0 1rem;
-		color: var(--muted);
-		font-size: 0.85rem;
+		padding: clamp(32px, 4vw, 56px) 0 0;
+		font-family: var(--f-mono);
+		font-size: 12px;
+		letter-spacing: 0.05em;
+		color: var(--paper-soft);
+	}
+	.docs-footer p { margin: 0; }
+	.docs-footer a {
+		color: var(--copper);
+	}
+	.docs-footer a:hover {
+		color: var(--paper);
 	}
 
-	@media (max-width: 600px) {
-		.docs { padding: 0 1.25rem 3rem; }
-		.docs-header h1 { font-size: 2rem; }
+	@media (max-width: 640px) {
 		.toc ol { columns: 1; }
 		.cols-2 { columns: 1; }
-		table { font-size: 0.75rem; }
+		table { font-size: 13px; }
+		th, td { padding-right: 10px; }
 	}
 </style>

@@ -1,5 +1,5 @@
 ---
-import Base from "./Base.astro";
+import AtelierPage from "./AtelierPage.astro";
 
 interface Props {
 	title: string;
@@ -13,14 +13,16 @@ const { title, description, date, author, tags } = Astro.props;
 const pageTitle = `${title} — Draht Blog`;
 ---
 
-<Base title={pageTitle} description={description}>
-	<main class="post">
+<AtelierPage title={pageTitle} description={description}>
+	<article class="post">
 		<header class="post-header">
-			<a href="/blog" class="back-link">&larr; Back to Blog</a>
-			<time class="post-date">{date}</time>
+			<a href="/blog" class="back-link">← Back to Journal</a>
+			<div class="post-meta-row">
+				<time class="post-date">{date}</time>
+				{author && <span class="post-author">· {author}</span>}
+			</div>
 			<h1 class="post-title">{title}</h1>
 			<p class="post-desc">{description}</p>
-			{author && <p class="post-author">By {author}</p>}
 			{tags && tags.length > 0 && (
 				<div class="post-tags">
 					{tags.map((tag) => (
@@ -30,142 +32,197 @@ const pageTitle = `${title} — Draht Blog`;
 			)}
 		</header>
 
-		<article class="post-content">
+		<div class="post-content">
 			<slot />
-		</article>
+		</div>
 
 		<footer class="post-footer">
-			<a href="/blog" class="back-link">&larr; Back to Blog</a>
+			<a href="/blog" class="back-link">← Back to Journal</a>
 		</footer>
-	</main>
-</Base>
+	</article>
+</AtelierPage>
 
 <style>
 	.post {
-		max-width: 700px;
+		max-width: 720px;
 		margin: 0 auto;
-		padding: 2rem;
 	}
 
 	.post-header {
-		margin-bottom: 3rem;
-		padding-bottom: 2rem;
-		border-bottom: 1px solid var(--border);
+		padding: clamp(40px, 7vw, 80px) 0 clamp(28px, 4vw, 48px);
+		border-bottom: 1px solid var(--rule);
 	}
 
 	.back-link {
 		display: inline-block;
-		color: var(--muted);
-		font-size: 0.8rem;
-		margin-bottom: 1.5rem;
-		letter-spacing: 0.02em;
+		font-family: var(--f-mono);
+		color: var(--paper-soft);
+		font-size: 11px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		margin-bottom: 32px;
+		transition: color 0.2s;
 	}
 	.back-link:hover {
-		color: var(--fg);
+		color: var(--copper);
+	}
+
+	.post-meta-row {
+		display: flex;
+		gap: 10px;
+		align-items: center;
+		margin-bottom: 20px;
+		font-family: var(--f-mono);
+		font-size: 11px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
 	}
 
 	.post-date {
-		display: block;
-		color: var(--muted);
-		font-size: 0.75rem;
-		font-family: var(--mono);
-		margin-bottom: 0.75rem;
-	}
-
-	.post-title {
-		font-size: 2rem;
-		font-weight: 700;
-		line-height: 1.2;
-		letter-spacing: -0.02em;
-		margin-bottom: 0.75rem;
-	}
-
-	.post-desc {
-		color: var(--muted);
-		font-size: 0.95rem;
-		line-height: 1.6;
-		margin-bottom: 0.75rem;
+		color: var(--copper);
 	}
 
 	.post-author {
-		color: var(--muted);
-		font-size: 0.8rem;
+		color: var(--paper-soft);
+	}
+
+	.post-title {
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 300;
+		font-size: clamp(40px, 6vw, 68px);
+		line-height: 1.02;
+		letter-spacing: -0.025em;
+		color: var(--paper);
+		margin: 0 0 24px;
+		text-wrap: balance;
+	}
+
+	.post-desc {
+		font-family: var(--f-display);
+		color: var(--paper-dim);
+		font-size: clamp(18px, 2vw, 22px);
+		line-height: 1.5;
+		margin: 0 0 24px;
+		max-width: 50ch;
+		text-wrap: pretty;
 	}
 
 	.post-tags {
 		display: flex;
-		gap: 0.5rem;
+		gap: 8px;
 		flex-wrap: wrap;
-		margin-top: 1rem;
+		margin-top: 20px;
 	}
 
 	.tag {
-		font-family: var(--mono);
-		font-size: 0.7rem;
-		color: var(--accent-dim);
-		background: var(--accent-dark);
-		padding: 0.2rem 0.6rem;
-		border-radius: 4px;
-		letter-spacing: 0.02em;
+		font-family: var(--f-mono);
+		font-size: 10px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--copper-dim);
+		padding: 4px 10px;
+		border: 1px solid var(--rule-strong);
 	}
 
 	.post-content {
-		line-height: 1.8;
-		font-size: 0.95rem;
+		padding: clamp(32px, 5vw, 64px) 0;
+		font-family: var(--f-ui);
+		font-size: 16px;
+		line-height: 1.75;
+		color: var(--paper);
 	}
 
 	.post-content :global(h2) {
-		font-size: 1.4rem;
-		font-weight: 700;
-		margin-top: 2.5rem;
-		margin-bottom: 0.75rem;
-		letter-spacing: -0.01em;
+		font-family: var(--f-display);
+		font-style: italic;
+		font-weight: 400;
+		font-size: clamp(28px, 3.5vw, 36px);
+		letter-spacing: -0.02em;
+		line-height: 1.15;
+		color: var(--paper);
+		margin: 3rem 0 1rem;
+		padding-top: 2rem;
+		border-top: 1px solid var(--rule);
+	}
+	.post-content :global(h2:first-child) {
+		border-top: none;
+		padding-top: 0;
+		margin-top: 0;
 	}
 
 	.post-content :global(h3) {
-		font-size: 1.1rem;
-		font-weight: 600;
-		margin-top: 2rem;
-		margin-bottom: 0.5rem;
+		font-family: var(--f-display);
+		font-weight: 400;
+		font-size: clamp(20px, 2.2vw, 24px);
+		letter-spacing: -0.01em;
+		color: var(--paper);
+		margin: 2rem 0 0.75rem;
 	}
 
 	.post-content :global(p) {
-		margin-bottom: 1.25rem;
-		color: var(--fg);
+		margin: 0 0 1.25rem;
+		color: var(--paper);
+		text-wrap: pretty;
 	}
 
 	.post-content :global(ul),
 	.post-content :global(ol) {
-		margin-bottom: 1.25rem;
+		margin: 0 0 1.25rem;
 		padding-left: 1.5rem;
+		color: var(--paper);
 	}
 
 	.post-content :global(li) {
-		margin-bottom: 0.35rem;
-		color: var(--fg);
+		margin-bottom: 0.4rem;
+	}
+
+	.post-content :global(ul li::marker) {
+		color: var(--copper);
+	}
+	.post-content :global(ol li::marker) {
+		color: var(--copper);
+		font-family: var(--f-mono);
+		font-size: 0.85em;
 	}
 
 	.post-content :global(strong) {
 		font-weight: 600;
-		color: var(--fg);
+		color: var(--paper);
+	}
+
+	.post-content :global(em) {
+		font-family: var(--f-display);
+		font-style: italic;
+		color: var(--paper);
+	}
+
+	.post-content :global(a) {
+		color: var(--copper);
+		border-bottom: 1px solid var(--copper-dim);
+		transition: color 0.2s, border-color 0.2s;
+	}
+	.post-content :global(a:hover) {
+		color: var(--paper);
+		border-bottom-color: var(--paper);
 	}
 
 	.post-content :global(code) {
-		font-family: var(--mono);
-		font-size: 0.85em;
-		background: var(--surface);
-		padding: 0.15rem 0.4rem;
-		border-radius: 4px;
-		border: 1px solid var(--border);
+		font-family: var(--f-mono);
+		font-size: 0.88em;
+		background: var(--ink-2);
+		color: var(--paper);
+		padding: 0.15rem 0.45rem;
+		border: 1px solid var(--rule);
 	}
 
 	.post-content :global(pre) {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 8px;
+		font-family: var(--f-mono);
+		background: var(--ink-2);
+		border: 1px solid var(--rule-strong);
 		padding: 1.25rem 1.5rem;
 		overflow-x: auto;
-		margin-bottom: 1.5rem;
+		margin: 0 0 1.5rem;
 		line-height: 1.6;
 	}
 
@@ -173,26 +230,34 @@ const pageTitle = `${title} — Draht Blog`;
 		background: none;
 		border: none;
 		padding: 0;
-		font-size: 0.8rem;
+		font-size: 13px;
+		color: var(--paper);
 	}
 
 	.post-content :global(blockquote) {
-		border-left: 3px solid var(--accent-dim);
-		padding-left: 1rem;
+		border-left: 2px solid var(--copper);
+		padding: 0.25rem 0 0.25rem 1.25rem;
 		margin: 1.5rem 0;
-		color: var(--muted);
+		color: var(--paper-dim);
+		font-family: var(--f-display);
 		font-style: italic;
+		font-size: 1.1em;
 	}
 
 	.post-content :global(hr) {
 		border: none;
-		border-top: 1px solid var(--border);
-		margin: 2rem 0;
+		border-top: 1px solid var(--rule);
+		margin: 2.5rem 0;
+	}
+
+	.post-content :global(img) {
+		max-width: 100%;
+		margin: 1.5rem 0;
+		border: 1px solid var(--rule);
 	}
 
 	.post-footer {
-		margin-top: 3rem;
-		padding-top: 2rem;
-		border-top: 1px solid var(--border);
+		padding: clamp(32px, 4vw, 48px) 0;
+		border-top: 1px solid var(--rule);
 	}
 </style>

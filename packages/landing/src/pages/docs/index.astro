@@ -34,7 +34,7 @@ const description = "Get started with Draht from zero to hero. Installation, con
 				<li><a href="#invoicing">Invoicing</a></li>
 				<li><a href="#compliance">Compliance</a></li>
 				<li><a href="#deploy-guardian">Deploy Guardian</a></li>
-				<li><a href="#orchestrator">Orchestrator</a></li>
+				<li><a href="#gsd-workflow">GSD Workflow & Built-in Commands</a></li>
 				<li><a href="#cli-reference">CLI Reference</a></li>
 			</ol>
 		</nav>
@@ -404,17 +404,141 @@ const description = "Get started with Draht from zero to hero. Installation, con
 			</div>
 		</section>
 
-		<!-- 17. Orchestrator -->
-		<section id="orchestrator" class="doc-section">
-			<h2 class="wip-title">17. Orchestrator <span class="wip-badge">Under Construction</span></h2>
-			<p>Multi-agent task decomposition using the GSD (Get Shit Done) methodology. Breaks complex projects into phases, then decomposes phases into tasks for parallel execution.</p>
+		<!-- 17. GSD Workflow & Built-in Commands -->
+		<section id="gsd-workflow" class="doc-section">
+			<h2>17. GSD Workflow & Built-in Commands</h2>
+			<p>Draht ships with the <strong>GSD (Get Shit Done)</strong> methodology pre-installed: 16 slash commands, 7 specialist subagents, and 3 workflow skills for taking a project from idea to shipping with TDD and DDD discipline. Everything below is built in — no install, no config.</p>
+
+			<h3>Project lifecycle</h3>
+			<table>
+				<thead><tr><th>Command</th><th>Use</th></tr></thead>
+				<tbody>
+					<tr><td><code>/new-project &lt;idea&gt;</code></td><td>Greenfield: questioning → domain model → requirements → roadmap</td></tr>
+					<tr><td><code>/init-project &lt;goal&gt;</code></td><td>Existing codebase: map → extract domain → roadmap</td></tr>
+					<tr><td><code>/map-codebase</code></td><td>Standalone codebase analysis (parallel architect + verifier subagents)</td></tr>
+					<tr><td><code>/next-milestone</code></td><td>Plan the next milestone after all current phases are verified</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Per-phase cycle</h3>
+			<table>
+				<thead><tr><th>Command</th><th>Use</th></tr></thead>
+				<tbody>
+					<tr><td><code>/discuss-phase N</code></td><td>Capture decisions and gray areas</td></tr>
+					<tr><td><code>/plan-phase N</code></td><td>Atomic execution plans (parallel architect subagents)</td></tr>
+					<tr><td><code>/execute-phase N</code></td><td>TDD red→green→refactor (parallel implementer subagents)</td></tr>
+					<tr><td><code>/verify-work N</code></td><td>Parallel verifier + security-auditor + reviewer + quality gate</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Session continuity</h3>
+			<table>
+				<thead><tr><th>Command</th><th>Use</th></tr></thead>
+				<tbody>
+					<tr><td><code>/pause-work</code></td><td>Create handoff document</td></tr>
+					<tr><td><code>/resume-work</code></td><td>Read handoff, verify state, continue</td></tr>
+					<tr><td><code>/progress</code></td><td>Show current position in the roadmap</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Ad-hoc</h3>
+			<table>
+				<thead><tr><th>Command</th><th>Use</th></tr></thead>
+				<tbody>
+					<tr><td><code>/quick &lt;task&gt;</code></td><td>Small tracked task with TDD cycle</td></tr>
+					<tr><td><code>/fix &lt;bug&gt;</code></td><td>Diagnose → reproducing test → minimal fix (debugger + implementer subagents)</td></tr>
+					<tr><td><code>/review [scope]</code></td><td>Parallel code review + security audit</td></tr>
+					<tr><td><code>/atomic-commit</code></td><td>Analyze diff, split into atomic conventional commits</td></tr>
+					<tr><td><code>/orchestrate &lt;task&gt;</code></td><td>Decompose work and dispatch the right mix of specialist subagents</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Specialist subagents</h3>
+			<p>All seven are invokable through the built-in <code>subagent</code> tool. Use <code>/agent &lt;name&gt;</code> to route your prompts through one, or call them directly via the tool with <code>{ agent, task }</code>, <code>{ tasks: [...] }</code> for parallel, or <code>{ chain: [...] }</code> for sequential pipelines.</p>
+			<table>
+				<thead><tr><th>Agent</th><th>Use</th></tr></thead>
+				<tbody>
+					<tr><td><code>architect</code></td><td>Reads codebase, produces structured implementation plans</td></tr>
+					<tr><td><code>implementer</code></td><td>Writes code following TDD cycle from plan tasks</td></tr>
+					<tr><td><code>reviewer</code></td><td>Reviews changes for correctness, types, conventions, domain language</td></tr>
+					<tr><td><code>debugger</code></td><td>Reproduces and diagnoses bugs to root cause</td></tr>
+					<tr><td><code>verifier</code></td><td>Runs lint + typecheck + tests, reports results without fixing</td></tr>
+					<tr><td><code>git-committer</code></td><td>Stages and commits with conventional commit messages</td></tr>
+					<tr><td><code>security-auditor</code></td><td>Scans for injection, auth, secrets, unsafe patterns</td></tr>
+				</tbody>
+			</table>
+
+			<h3>Workflow skills</h3>
+			<p>Auto-loaded when relevant; also invokable as <code>/skill:&lt;name&gt;</code>:</p>
+			<ul>
+				<li><strong><code>gsd-workflow</code></strong> — complete GSD methodology reference (directory structure, cycle, hooks, config)</li>
+				<li><strong><code>tdd-workflow</code></strong> — red→green→refactor discipline, commit conventions, cycle violations</li>
+				<li><strong><code>ddd-workflow</code></strong> — bounded contexts, ubiquitous language, aggregates, domain events</li>
+			</ul>
+
+			<h3>Quick start — greenfield</h3>
 			<div class="code-block">
-				<div class="code-line cmd">draht init</div>
-				<div class="code-line cmd">draht create-project "My App"</div>
-				<div class="code-line cmd">draht create-requirements</div>
-				<div class="code-line cmd">draht create-domain-model</div>
-				<div class="code-line cmd">draht create-roadmap</div>
+				<div class="code-line cmd">draht</div>
+				<div class="code-line cmd">/new-project a team calendar with slot-based booking</div>
 			</div>
+			<p>Draht will question you through problem, audience, and MVP scope, then generate <code>.planning/PROJECT.md</code>, <code>.planning/DOMAIN.md</code>, <code>.planning/TEST-STRATEGY.md</code>, <code>.planning/REQUIREMENTS.md</code>, <code>.planning/ROADMAP.md</code>, and <code>.planning/STATE.md</code>.</p>
+
+			<h3>Quick start — existing codebase</h3>
+			<div class="code-block">
+				<div class="code-line cmd">draht</div>
+				<div class="code-line cmd">/init-project refactor the billing module</div>
+			</div>
+
+			<h3>Per-phase cycle in practice</h3>
+			<div class="code-block">
+				<div class="code-line cmd">/discuss-phase 1</div>
+				<div class="code-line comment">capture decisions</div>
+				<div class="code-line cmd">/new</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line cmd">/plan-phase 1</div>
+				<div class="code-line comment">parallel architect subagents produce atomic plans</div>
+				<div class="code-line cmd">/new</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line cmd">/execute-phase 1</div>
+				<div class="code-line comment">parallel implementer subagents run TDD cycles</div>
+				<div class="code-line cmd">/new</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line cmd">/verify-work 1</div>
+				<div class="code-line comment">parallel verifier + security + reviewer + quality gate</div>
+			</div>
+			<p>Between every step, run <code>/new</code> to start a fresh session. This is by design — each cycle step is meant to run in a clean context.</p>
+
+			<h3>Pause and resume</h3>
+			<div class="code-block">
+				<div class="code-line cmd">/pause-work</div>
+				<div class="code-line comment">creates .planning/CONTINUE-HERE.md</div>
+				<div class="code-line spacer"></div>
+				<div class="code-line cmd">/resume-work</div>
+				<div class="code-line comment">reads handoff, checks state, continues</div>
+			</div>
+
+			<h3>Configuration</h3>
+			<p>Tune the workflow hooks via <code>.planning/config.json</code>:</p>
+			<div class="code-block">
+				<div class="code-line plain">{"{"}</div>
+				<div class="code-line plain">  "hooks": {"{"}</div>
+				<div class="code-line plain">    "coverageThreshold": 80,</div>
+				<div class="code-line plain">    "tddMode": "advisory",</div>
+				<div class="code-line plain">    "qualityGateStrict": false</div>
+				<div class="code-line plain">  {"}"}</div>
+				<div class="code-line plain">{"}"}</div>
+			</div>
+			<ul>
+				<li><code>tddMode: "strict"</code> aborts on <code>green:</code> commits without a preceding <code>red:</code>; <code>"advisory"</code> logs a warning</li>
+				<li><code>qualityGateStrict: true</code> fails the gate on any lint/type/test/coverage miss</li>
+				<li><code>coverageThreshold</code> — minimum coverage percent required by the quality gate</li>
+			</ul>
+
+			<h3>Override a built-in</h3>
+			<p>All commands ship as Markdown templates. Drop a same-named file into <code>~/.draht/agent/prompts/</code> or <code>.draht/prompts/</code> to override the built-in for your user or for the project.</p>
+
+			<h3>Also available in Claude Code</h3>
+			<p>The same workflow ships as a Claude Code plugin via <a href="https://www.npmjs.com/package/draht-claude"><code>draht-claude</code></a>: <code>npx draht-claude install</code>.</p>
 		</section>
 
 		<!-- 18. CLI Reference -->

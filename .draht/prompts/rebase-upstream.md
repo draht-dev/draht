@@ -62,6 +62,15 @@ agent: "branding-guard"
 task: "Scan the codebase and the diff main..upstream-sync for pi branding leaks. Fix all hits."
 ```
 
+### README — never modify
+
+**Never edit `README.md` at any level** (root or any package). If a cherry-picked commit
+touches a `README.md`, skip that file hunk entirely:
+
+```bash
+git checkout HEAD -- README.md packages/*/README.md
+```
+
 ### 5. Draht customization guard
 
 Run the customization check yourself (no subagent). This catches upstream overwrites
@@ -181,6 +190,7 @@ See the `branding-guard` agent for the full replacement table and rules. Key poi
 - [ ] **cherry-picker** subagent: cherry-picked meaningful patches (oldest first)
 - [ ] No upstream version numbers leaked into `package.json`
 - [ ] No upstream changelog entries leaked into `CHANGELOG.md`
+- [ ] No `README.md` files modified (root or any package)
 - [ ] **branding-guard** subagent: full sweep done, no pi product references leaked
 - [ ] `check:draht` passed (draht customizations intact)
 - [ ] **verifier** subagent: `bun run check` passes

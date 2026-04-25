@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.25] - 2026-04-25
+
+### Added
+
+- add "max" to ThinkingLevel type
+
+### Changed
+
+- bump workspace version to 2026.4.25
 
 ## [2026.4.23] - 2026-04-23
 

@@ -1,6 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.25] - 2026-04-25
+
+### Added
+
+- add OpenCode Go OAuth login flow
+- add "max" thinking level and new models
+
+### Changed
+
+- bump workspace version to 2026.4.25
+- regenerate models and align zai test references
+- emit reasoning_content on every replayed DeepSeek turn
+- reproduce DeepSeek reasoning_content replay failure
+- rebrand all package READMEs from pi to draht
 
 ## [2026.4.23] - 2026-04-23
 

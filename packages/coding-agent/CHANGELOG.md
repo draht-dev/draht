@@ -1,6 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [2026.4.25] - 2026-04-25
+
+### Added
+
+- add GSD workflow shipped prompts and API exports
+- add "max" thinking level, copper theme, and error retry
+
+### Changed
+
+- bump workspace version to 2026.4.25
+- rebrand all package READMEs from pi to draht
+- rebrand pi to draht in README
+- add ASCII art logo and dev changelog skip
 
 ## [2026.4.23] - 2026-04-23
 

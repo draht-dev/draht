@@ -483,7 +483,19 @@ export class InteractiveMode {
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
-			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
+			const asciiArt = [
+				" ╭─╮",
+				" ╰─┼──────────╮",
+				"   │ ┌──────╮ │",
+				"   │ │      │ │",
+				"   │ │      │ │",
+				"   └─┼──────╯ │",
+				"     └────────╯",
+			]
+				.map((line) => theme.fg("border", line))
+				.join("\n");
+			const wordmark = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}  ·  /dʁaːt/`);
+			const logo = `${asciiArt}\n${wordmark}`;
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -759,6 +771,11 @@ export class InteractiveMode {
 	private getChangelogForDisplay(): string | undefined {
 		// Skip changelog for resumed/continued sessions (already have messages)
 		if (this.session.state.messages.length > 0) {
+			return undefined;
+		}
+
+		// Skip changelog in dev mode — "dev" parses as 0.0.0 and would surface every entry.
+		if (VERSION === "dev") {
 			return undefined;
 		}
 

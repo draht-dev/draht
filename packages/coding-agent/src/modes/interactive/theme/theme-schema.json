@@ -85,6 +85,7 @@
 				"thinkingMedium",
 				"thinkingHigh",
 				"thinkingXhigh",
+				"thinkingMax",
 				"bashMode"
 			],
 			"properties": {
@@ -286,7 +287,11 @@
 				},
 				"thinkingXhigh": {
 					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: xhigh (OpenAI codex-max only)"
+					"description": "Thinking level border: xhigh (OpenAI codex-max and Claude 4.x family)"
+				},
+				"thinkingMax": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking level border: max (Anthropic Opus 4.6/4.7 only)"
 				},
 				"bashMode": {
 					"$ref": "#/$defs/colorValue",

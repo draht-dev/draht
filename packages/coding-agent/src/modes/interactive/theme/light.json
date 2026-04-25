@@ -4,6 +4,8 @@
 	"vars": {
 		"teal": "#5a8080",
 		"blue": "#547da7",
+		"copper": "#b89e1e",
+		"copperDim": "#8a751a",
 		"green": "#588458",
 		"red": "#aa5555",
 		"yellow": "#9a7326",
@@ -19,7 +21,7 @@
 	},
 	"colors": {
 		"accent": "teal",
-		"border": "blue",
+		"border": "copper",
 		"borderAccent": "teal",
 		"borderMuted": "lightGray",
 		"success": "green",
@@ -69,10 +71,11 @@
 
 		"thinkingOff": "lightGray",
 		"thinkingMinimal": "#767676",
-		"thinkingLow": "blue",
-		"thinkingMedium": "teal",
-		"thinkingHigh": "#875f87",
-		"thinkingXhigh": "#8b008b",
+		"thinkingLow": "copperDim",
+		"thinkingMedium": "copper",
+		"thinkingHigh": "#8a5a14",
+		"thinkingXhigh": "#5c3d0d",
+		"thinkingMax": "#3d2807",
 
 		"bashMode": "green"
 	},

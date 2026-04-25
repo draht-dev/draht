@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@draht/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@draht/ai";
-import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@draht/ai";
+import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsMax, supportsXhigh } from "@draht/ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -217,6 +217,9 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 
 /** Thinking levels including xhigh (for supported models) */
 const THINKING_LEVELS_WITH_XHIGH: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+/** Thinking levels including xhigh and max (Anthropic Opus only) */
+const THINKING_LEVELS_WITH_MAX: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 // ============================================================================
 // AgentSession Class
@@ -1498,6 +1501,7 @@ export class AgentSession {
 	 */
 	getAvailableThinkingLevels(): ThinkingLevel[] {
 		if (!this.supportsThinking()) return ["off"];
+		if (this.supportsMaxThinking()) return THINKING_LEVELS_WITH_MAX;
 		return this.supportsXhighThinking() ? THINKING_LEVELS_WITH_XHIGH : THINKING_LEVELS;
 	}
 
@@ -1506,6 +1510,13 @@ export class AgentSession {
 	 */
 	supportsXhighThinking(): boolean {
 		return this.model ? supportsXhigh(this.model) : false;
+	}
+
+	/**
+	 * Check if current model supports the `max` thinking level (Anthropic Opus 4.6/4.7 only).
+	 */
+	supportsMaxThinking(): boolean {
+		return this.model ? supportsMax(this.model) : false;
 	}
 
 	/**
@@ -1526,7 +1537,7 @@ export class AgentSession {
 	}
 
 	private _clampThinkingLevel(level: ThinkingLevel, availableLevels: ThinkingLevel[]): ThinkingLevel {
-		const ordered = THINKING_LEVELS_WITH_XHIGH;
+		const ordered = THINKING_LEVELS_WITH_MAX;
 		const available = new Set(availableLevels);
 		const requestedIndex = ordered.indexOf(level);
 		if (requestedIndex === -1) {
@@ -2379,8 +2390,8 @@ export class AgentSession {
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		const err = message.errorMessage;
-		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors, fetch failed, request ended without sending chunks, terminated, retry delay exceeded
-		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|timed? out|timeout|terminated|retry delay/i.test(
+		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors, fetch failed, request ended without sending chunks, terminated, retry delay exceeded, peer-closed/incomplete-chunked stream truncations
+		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?reset|peer closed|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|incomplete.?chunked.?read|chunked.?read|premature.?close|timed? out|timeout|terminated|retry delay/i.test(
 			err,
 		);
 	}

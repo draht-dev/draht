@@ -4,6 +4,8 @@
 	"vars": {
 		"cyan": "#00d7ff",
 		"blue": "#5f87ff",
+		"copper": "#e8c828",
+		"copperDim": "#b89e1e",
 		"green": "#b5bd68",
 		"red": "#cc6666",
 		"yellow": "#ffff00",
@@ -20,7 +22,7 @@
 	},
 	"colors": {
 		"accent": "accent",
-		"border": "blue",
+		"border": "copper",
 		"borderAccent": "cyan",
 		"borderMuted": "darkGray",
 		"success": "green",
@@ -70,10 +72,11 @@
 
 		"thinkingOff": "darkGray",
 		"thinkingMinimal": "#6e6e6e",
-		"thinkingLow": "#5f87af",
-		"thinkingMedium": "#81a2be",
-		"thinkingHigh": "#b294bb",
-		"thinkingXhigh": "#d183e8",
+		"thinkingLow": "#8a751a",
+		"thinkingMedium": "copperDim",
+		"thinkingHigh": "copper",
+		"thinkingXhigh": "#f5dc4e",
+		"thinkingMax": "#fff1a8",
 
 		"bashMode": "green"
 	},

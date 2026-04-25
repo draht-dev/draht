@@ -1,7 +1,7 @@
 
 <p align="center">
   <a href="https://draht.dev">
-    <img src="https://draht.dev/logo.svg" alt="draht logo" width="128">
+        <img src="https://draht.dev/draht-logo.png" alt="draht logo" width="128">
   </a>
 </p>
 <p align="center">

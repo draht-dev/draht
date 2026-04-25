@@ -201,7 +201,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("enables tool_stream for supported z.ai models with tools", async () => {
-		const model = getModel("zai", "glm-5")!;
+		const model = getModel("zai", "glm-5.1")!;
 		const tools: Tool[] = [
 			{
 				name: "ping",
@@ -238,10 +238,9 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("stores z.ai tool_stream support in model compat metadata", () => {
-		expect(getModel("zai", "glm-5")?.compat?.zaiToolStream).toBe(true);
+		expect(getModel("zai", "glm-5.1")?.compat?.zaiToolStream).toBe(true);
+		expect(getModel("zai", "glm-5-turbo")?.compat?.zaiToolStream).toBe(true);
 		expect(getModel("zai", "glm-4.7")?.compat?.zaiToolStream).toBe(true);
-		expect(getModel("zai", "glm-4.7-flash")?.compat?.zaiToolStream).toBe(true);
-		expect(getModel("zai", "glm-4.6v")?.compat?.zaiToolStream).toBe(true);
 		expect(getModel("zai", "glm-4.5-air")?.compat?.zaiToolStream).toBeUndefined();
 	});
 
@@ -327,7 +326,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("omits tool_stream when no tools are provided", async () => {
-		const model = getModel("zai", "glm-5")!;
+		const model = getModel("zai", "glm-5.1")!;
 		let payload: unknown;
 
 		await streamSimple(
@@ -369,7 +368,7 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 
-		const model = getModel("zai", "glm-5")!;
+		const model = getModel("zai", "glm-5.1")!;
 		const response = await streamSimple(
 			model,
 			{

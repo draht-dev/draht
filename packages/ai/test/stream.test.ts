@@ -722,8 +722,8 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider (glm-5 via OpenAI Completions)", () => {
-		const llm = getModel("zai", "glm-5");
+	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider (glm-5.1 via OpenAI Completions)", () => {
+		const llm = getModel("zai", "glm-5.1");
 
 		it("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm);

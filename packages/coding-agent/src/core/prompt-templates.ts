@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "path";
-import { CONFIG_DIR_NAME, getPromptsDir } from "../config.js";
+import { CONFIG_DIR_NAME, getPromptsDir, getShippedPromptsDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
@@ -267,6 +267,28 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): P
 			}
 		} catch {
 			// Ignore read failures
+		}
+	}
+
+	// 4. Always append shipped (built-in) templates — lowest priority so user/project overrides win
+	const shippedPromptsDir = getShippedPromptsDir();
+	if (existsSync(shippedPromptsDir)) {
+		const shippedSourceInfo = (filePath: string): SourceInfo =>
+			createSyntheticSourceInfo(filePath, {
+				source: "builtin",
+				scope: "user",
+				origin: "package",
+				baseDir: shippedPromptsDir,
+			});
+		templates.push(...loadTemplatesFromDir(shippedPromptsDir, shippedSourceInfo));
+		try {
+			const subdirs = readdirSync(shippedPromptsDir, { withFileTypes: true });
+			for (const entry of subdirs) {
+				if (!entry.isDirectory()) continue;
+				templates.push(...loadTemplatesFromDir(join(shippedPromptsDir, entry.name), shippedSourceInfo));
+			}
+		} catch {
+			// ignore
 		}
 	}
 

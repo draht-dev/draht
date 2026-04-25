@@ -290,6 +290,33 @@ export {
 	writeTool,
 	writeToolDefinition,
 } from "./core/tools/index.js";
+// GSD (Get Shit Done) workflow API — used by .draht/extensions/gsd-commands.ts
+export type {
+	CommitResult,
+	HookConfig,
+	MapCodebaseResult,
+	PhaseVerification,
+	PlanDiscovery,
+	ToolchainInfo,
+} from "./gsd/index.js";
+export {
+	commitDocs,
+	commitTask,
+	createDomainModel,
+	createPlan,
+	detectToolchain,
+	discoverPlans,
+	extractGlossaryTerms,
+	hasTestFiles,
+	loadDomainContent,
+	mapCodebase,
+	readHookConfig,
+	readPlan,
+	updateState,
+	validateDomainGlossary,
+	verifyPhase,
+	writeSummary,
+} from "./gsd/index.js";
 // Main entry point
 export { main } from "./main.js";
 // Run modes for programmatic SDK usage

@@ -316,6 +316,7 @@ const requiredCommandPrompts = [
 	"map-codebase",
 	"new-project",
 	"next-milestone",
+	"orchestrate",
 	"pause-work",
 	"plan-phase",
 	"progress",

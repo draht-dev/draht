@@ -215,9 +215,10 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 /**
  * Thinking/reasoning level for models that support it.
- * Note: "xhigh" is only supported by OpenAI gpt-5.1-codex-max, gpt-5.2, gpt-5.2-codex, gpt-5.3, and gpt-5.3-codex models.
+ * Note: "xhigh" is supported by OpenAI gpt-5.2/5.3/5.4 families and the Anthropic Claude 4.x family
+ * (Opus 4.6/4.7, Sonnet 4.6, Haiku 4.5). "max" is Anthropic-only and currently gated to Opus 4.6/4.7.
  */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Extensible interface for custom app messages.

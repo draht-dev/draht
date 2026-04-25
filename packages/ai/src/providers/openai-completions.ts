@@ -584,8 +584,8 @@ export function convertMessages(
 			const thinkingBlocks = msg.content.filter((b) => b.type === "thinking") as ThinkingContent[];
 			// Filter out empty thinking blocks to avoid API validation errors
 			const nonEmptyThinkingBlocks = thinkingBlocks.filter((b) => b.thinking && b.thinking.trim().length > 0);
-			if (nonEmptyThinkingBlocks.length > 0) {
-				if (compat.requiresThinkingAsText) {
+			if (compat.requiresThinkingAsText) {
+				if (nonEmptyThinkingBlocks.length > 0) {
 					// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
 					const thinkingText = nonEmptyThinkingBlocks.map((b) => b.thinking).join("\n\n");
 					const textContent = assistantMsg.content as Array<{ type: "text"; text: string }> | null;
@@ -594,12 +594,20 @@ export function convertMessages(
 					} else {
 						assistantMsg.content = [{ type: "text", text: thinkingText }];
 					}
-				} else {
-					// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
-					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
-					if (signature && signature.length > 0) {
-						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map((b) => b.thinking).join("\n");
-					}
+				}
+			} else {
+				// Replay the reasoning field (e.g. "reasoning_content" for llama.cpp,
+				// gpt-oss, and DeepSeek reasoner) under its captured signature.
+				// DeepSeek requires this field on every assistant turn produced under
+				// thinking mode — even if the captured reasoning text was empty —
+				// otherwise the next request fails with:
+				//   400: The `reasoning_content` in the thinking mode must be passed back to the API.
+				const signature = thinkingBlocks.find(
+					(b) => b.thinkingSignature && b.thinkingSignature.length > 0,
+				)?.thinkingSignature;
+				if (signature) {
+					const matchingBlocks = thinkingBlocks.filter((b) => b.thinkingSignature === signature);
+					(assistantMsg as any)[signature] = matchingBlocks.map((b) => b.thinking || "").join("\n");
 				}
 			}
 

@@ -5,7 +5,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost } from "../models.js";
+import { calculateCost, supportsMax } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -473,9 +473,10 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 
 /**
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
- * Note: effort "max" is only valid on Opus 4.6.
+ * Note: effort "max" is only valid on Opus models that pass `supportsMax`.
  */
 function mapThinkingLevelToEffort(level: SimpleStreamOptions["reasoning"], modelId: string): AnthropicEffort {
+	const supportsMaxEffort = supportsMax({ id: modelId } as Model<Api>);
 	switch (level) {
 		case "minimal":
 			return "low";
@@ -486,7 +487,9 @@ function mapThinkingLevelToEffort(level: SimpleStreamOptions["reasoning"], model
 		case "high":
 			return "high";
 		case "xhigh":
-			return modelId.includes("opus-4-6") || modelId.includes("opus-4.6") ? "max" : "high";
+			return supportsMaxEffort ? "max" : "high";
+		case "max":
+			return supportsMaxEffort ? "max" : "high";
 		default:
 			return "high";
 	}

@@ -50,18 +50,41 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
  *
  * Supported today:
  * - GPT-5.2 / GPT-5.3 / GPT-5.4 model families
- * - Opus 4.6 models (xhigh maps to adaptive effort "max" on Anthropic-compatible providers)
+ * - Anthropic Claude 4.x family: Opus 4.6/4.7, Sonnet 4.6, Haiku 4.5 (xhigh maps to adaptive
+ *   effort "high" on most, and to "max" on Opus where supportsMax also returns true).
  */
 export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 	if (model.id.includes("gpt-5.2") || model.id.includes("gpt-5.3") || model.id.includes("gpt-5.4")) {
 		return true;
 	}
 
-	if (model.id.includes("opus-4-6") || model.id.includes("opus-4.6")) {
+	if (
+		model.id.includes("opus-4-6") ||
+		model.id.includes("opus-4.6") ||
+		model.id.includes("opus-4-7") ||
+		model.id.includes("opus-4.7") ||
+		model.id.includes("sonnet-4-6") ||
+		model.id.includes("sonnet-4.6") ||
+		model.id.includes("haiku-4-5") ||
+		model.id.includes("haiku-4.5")
+	) {
 		return true;
 	}
 
 	return false;
+}
+
+/**
+ * Check if a model supports the `max` thinking level (adaptive effort with no constraints).
+ * Currently Anthropic Opus 4.6 and Opus 4.7 only.
+ */
+export function supportsMax<TApi extends Api>(model: Model<TApi>): boolean {
+	return (
+		model.id.includes("opus-4-6") ||
+		model.id.includes("opus-4.6") ||
+		model.id.includes("opus-4-7") ||
+		model.id.includes("opus-4.7")
+	);
 }
 
 /**

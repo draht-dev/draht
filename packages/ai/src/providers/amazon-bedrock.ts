@@ -21,7 +21,7 @@ import {
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 
-import { calculateCost } from "../models.js";
+import { calculateCost, supportsMax } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -435,6 +435,7 @@ function mapThinkingLevelToEffort(
 	level: SimpleStreamOptions["reasoning"],
 	modelId: string,
 ): "low" | "medium" | "high" | "max" {
+	const supportsMaxEffort = supportsMax({ id: modelId } as Model<Api>);
 	switch (level) {
 		case "minimal":
 		case "low":
@@ -444,7 +445,9 @@ function mapThinkingLevelToEffort(
 		case "high":
 			return "high";
 		case "xhigh":
-			return modelId.includes("opus-4-6") || modelId.includes("opus-4.6") ? "max" : "high";
+			return supportsMaxEffort ? "max" : "high";
+		case "max":
+			return supportsMaxEffort ? "max" : "high";
 		default:
 			return "high";
 	}
@@ -752,11 +755,12 @@ function buildAdditionalModelRequestFields(
 						low: 2048,
 						medium: 8192,
 						high: 16384,
-						xhigh: 16384, // Claude doesn't support xhigh, clamp to high
+						xhigh: 16384, // Older Claude models don't support xhigh, clamp to high budget
+						max: 16384, // Older Claude models don't support max, clamp to high budget
 					};
 
-					// Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
-					const level = options.reasoning === "xhigh" ? "high" : options.reasoning;
+					// Custom budgets override defaults (xhigh/max not in ThinkingBudgets, use high)
+					const level = options.reasoning === "xhigh" || options.reasoning === "max" ? "high" : options.reasoning;
 					const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning];
 
 					return {

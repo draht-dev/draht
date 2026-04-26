@@ -1,6 +1,6 @@
 {
 	"name": "@draht/mom",
-	"version": "2026.4.25-1",
+	"version": "2026.4.26",
 	"description": "Slack bot that delegates messages to the pi coding agent",
 	"type": "module",
 	"bin": {

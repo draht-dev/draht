@@ -1,6 +1,6 @@
 {
 	"name": "@draht/invoice",
-	"version": "2026.4.25-1",
+	"version": "2026.4.26",
 	"private": true,
 	"description": "Invoice generator with Lexoffice API and Toggl time tracking integration",
 	"type": "module",

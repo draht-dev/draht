@@ -1,6 +1,6 @@
 {
 	"name": "@draht/compliance",
-	"version": "2026.4.25-1",
+	"version": "2026.4.26",
 	"private": true,
 	"description": "GDPR and EU AI Act compliance checker with German legal templates",
 	"type": "module",

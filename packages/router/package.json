@@ -1,6 +1,6 @@
 {
 	"name": "@draht/router",
-	"version": "2026.4.25-1",
+	"version": "2026.4.26",
 	"private": true,
 	"description": "Role-based model routing with direct API calls, auto-fallback, and cost tracking",
 	"type": "module",

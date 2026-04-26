@@ -1,6 +1,6 @@
 {
 	"name": "@draht/gateway",
-	"version": "2026.4.25-1",
+	"version": "2026.4.26",
 	"type": "module",
 	"bin": {
 		"draht-gateway": "src/cli.ts"

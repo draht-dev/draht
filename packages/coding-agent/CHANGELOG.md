@@ -220,7 +220,7 @@
 - resolve type errors and branding from upstream sync
 - branding sweep for upstream cherry-picks
 - emit session_shutdown in print mode closes #2576
-- replace π with D in terminal title
+- replace π with draht in terminal title
 - update changelog URL from draht-mono to draht
 - resolve upstream sync conflicts and fix branding
 - respect export theme backgrounds closes #2565

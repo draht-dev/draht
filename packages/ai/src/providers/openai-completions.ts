@@ -644,7 +644,8 @@ export function convertMessages(
 				content !== null &&
 				content !== undefined &&
 				(typeof content === "string" ? content.length > 0 : content.length > 0);
-			if (!hasContent && !assistantMsg.tool_calls) {
+			const hasReasoning = thinkingBlocks.some((b) => b.thinkingSignature && b.thinkingSignature.length > 0);
+			if (!hasContent && !hasReasoning && !assistantMsg.tool_calls) {
 				continue;
 			}
 			params.push(assistantMsg);

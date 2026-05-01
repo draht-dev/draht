@@ -45,7 +45,102 @@ function makeDeepSeekModel(): Model<"openai-completions"> {
 	};
 }
 
+function makeOpenCodeGoModel(): Model<"openai-completions"> {
+	return {
+		id: "deepseek-v4-flash",
+		name: "DeepSeek V4 Flash",
+		api: "openai-completions",
+		provider: "opencode-go",
+		baseUrl: "https://opencode.ai/zen/go/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1000000,
+		maxTokens: 384000,
+	};
+}
+
 describe("openai-completions DeepSeek reasoning_content replay", () => {
+	it("preserves reasoning_content on an assistant message that has no text or tool calls", () => {
+		const model = makeDeepSeekModel();
+		const now = Date.now();
+
+		// Edge case: assistant message contains only a thinking block with
+		// reasoning_content — no text content and no tool calls.
+		// Previously this message was skipped by the hasContent check,
+		// causing DeepSeek to fail with:
+		//   400: The `reasoning_content` in the thinking mode must be passed back to the API.
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "The user asked for the README.",
+					thinkingSignature: "reasoning_content",
+				},
+			],
+			api: "openai-completions",
+			provider: "deepseek",
+			model: "deepseek-reasoner",
+			usage: emptyUsage,
+			stopReason: "stop",
+			timestamp: now,
+		};
+
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Read the README", timestamp: now - 1 },
+				assistantMessage,
+				{ role: "user", content: "Summarize it", timestamp: now + 1 },
+			],
+		};
+
+		const messages = convertMessages(model, context, deepseekCompat);
+		const replayedAssistant = messages.find((m) => m.role === "assistant");
+		expect(replayedAssistant).toBeDefined();
+		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBe(
+			"The user asked for the README.",
+		);
+	});
+
+	it("preserves reasoning_content for opencode-go provider (deepseek via proxy)", () => {
+		const model = makeOpenCodeGoModel();
+		const now = Date.now();
+
+		// opencode-go proxies DeepSeek models. The reasoning_content replay
+		// must work correctly for these models too.
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Let me think about this.",
+					thinkingSignature: "reasoning_content",
+				},
+				{ type: "text", text: "Here is my answer." },
+			],
+			api: "openai-completions",
+			provider: "opencode-go",
+			model: "deepseek-v4-flash",
+			usage: emptyUsage,
+			stopReason: "stop",
+			timestamp: now,
+		};
+
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Hello", timestamp: now - 1 },
+				assistantMessage,
+				{ role: "user", content: "Thanks", timestamp: now + 1 },
+			],
+		};
+
+		const messages = convertMessages(model, context, deepseekCompat);
+		const replayedAssistant = messages.find((m) => m.role === "assistant");
+		expect(replayedAssistant).toBeDefined();
+		expect((replayedAssistant as { reasoning_content?: string }).reasoning_content).toBe("Let me think about this.");
+	});
+
 	it("preserves reasoning_content on a tool-calling assistant message even when thinking text is empty", () => {
 		const model = makeDeepSeekModel();
 		const now = Date.now();

@@ -98,6 +98,11 @@ npx draht-claude install --path /path/to/plugins/draht
 # Check install status
 npx draht-claude status
 
+# Configure subagent models
+npx draht-claude configure --agent architect --model opus
+npx draht-claude configure --agent implementer --model sonnet
+npx draht-claude configure --list
+
 # Remove
 npx draht-claude uninstall
 ```
@@ -157,6 +162,44 @@ Between every step, run `/clear` to start a fresh session. This is a feature —
 ```
 
 ## Configuration
+
+### Subagent models
+
+Each specialist subagent ships with a default model tuned to its workload:
+
+| Agent | Default | Used by |
+|---|---|---|
+| `architect` | `opus` | `/plan-phase` — deep reasoning for architectural plans |
+| `implementer` | `sonnet` | `/execute-phase` — fast, reliable code changes |
+| `verifier` | `sonnet` | `/verify-work` — lint, typecheck, test runs |
+| `security-auditor` | `opus` | `/verify-work` — security audit and CVE analysis |
+| `reviewer` | `inherit` | `/verify-work`, `/review` — code review |
+| `debugger` | `inherit` | `/fix` — bug diagnosis |
+| `git-committer` | `inherit` | `/atomic-commit` — commit staging |
+
+You can override any agent with the `configure` command:
+
+```bash
+# Set architect (planning) to Opus and implementer to Sonnet
+npx draht-claude configure --agent architect --model opus
+npx draht-claude configure --agent implementer --model sonnet
+
+# Use a full model ID
+npx draht-claude configure --agent verifier --model claude-opus-4-7
+
+# List current assignments
+npx draht-claude configure --list
+
+# Reset a single agent to default
+npx draht-claude configure --agent architect --reset
+
+# Reset all agents to defaults
+npx draht-claude configure --reset
+```
+
+Supported values: `opus`, `sonnet`, `haiku`, a full model ID (e.g. `claude-sonnet-4-6`), or `inherit`.
+
+### Hooks
 
 Create `.planning/config.json` in your project to tune the hooks:
 

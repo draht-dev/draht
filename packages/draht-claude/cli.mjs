@@ -49,7 +49,7 @@ const IGNORE = new Set([
 function parseArgs(argv) {
 	const args = argv.slice(2);
 	const command = args[0];
-	const flags = { path: null, force: false, help: false };
+	const flags = { path: null, force: false, help: false, agent: null, model: null, list: false, reset: false };
 	for (let i = 1; i < args.length; i++) {
 		const a = args[i];
 		if (a === "--path" || a === "-p") {
@@ -58,6 +58,14 @@ function parseArgs(argv) {
 			flags.force = true;
 		} else if (a === "--help" || a === "-h") {
 			flags.help = true;
+		} else if (a === "--agent" || a === "-a") {
+			flags.agent = args[++i];
+		} else if (a === "--model" || a === "-m") {
+			flags.model = args[++i];
+		} else if (a === "--list" || a === "-l") {
+			flags.list = true;
+		} else if (a === "--reset" || a === "-r") {
+			flags.reset = true;
 		}
 	}
 	if (!command || command === "--help" || command === "-h") flags.help = true;
@@ -65,7 +73,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-	console.log(`draht-claude — install the draht Claude Code plugin
+	console.log(`draht-claude — install and configure the draht Claude Code plugin
 
 Usage:
   npx draht-claude install            Install as a Claude Code plugin
@@ -74,6 +82,11 @@ Usage:
   npx draht-claude uninstall          Remove the plugin and marketplace
   npx draht-claude update             Reinstall (same as install --force)
   npx draht-claude status             Show install + enabled state
+  npx draht-claude configure          Configure subagent models
+    --agent <name> --model <model>    Set model for a specific agent
+    --agent <name> --reset            Reset agent to inherit default model
+    --reset                           Reset all agents to inherit
+    --list                            List current agent model assignments
 
 Options:
   -p, --path <dir>   Custom local marketplace directory
@@ -152,6 +165,25 @@ function runClaude(args, { allowFail = false } = {}) {
 		process.exit(1);
 	}
 	return res.status === 0;
+}
+
+function setModelInFrontmatter(content, model) {
+	const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
+	if (!match) return content;
+	const lines = match[1].split("\n");
+	const modelIdx = lines.findIndex((l) => l.trim().startsWith("model:"));
+	if (model === null || model === undefined) {
+		if (modelIdx >= 0) lines.splice(modelIdx, 1);
+	} else {
+		const modelLine = `model: ${model}`;
+		if (modelIdx >= 0) {
+			lines[modelIdx] = modelLine;
+		} else {
+			lines.push(modelLine);
+		}
+	}
+	const body = content.slice(match[0].length);
+	return `---\n${lines.join("\n")}\n---\n${body}`;
 }
 
 function writeMarketplaceManifest(marketplaceDir, pluginManifest) {
@@ -317,6 +349,90 @@ function cmdStatus(flags) {
 	}
 }
 
+function cmdConfigure(flags) {
+	const marketplaceDir = flags.path || DEFAULT_MARKETPLACE_DIR;
+	const pluginDir = path.join(marketplaceDir, "plugins", PLUGIN_NAME);
+	const agentsDir = path.join(pluginDir, "agents");
+
+	if (!fs.existsSync(pluginDir)) {
+		err(`plugin not installed at ${pluginDir}`);
+		err("run 'draht-claude install' first");
+		process.exit(1);
+	}
+
+	if (flags.list) {
+		if (!fs.existsSync(agentsDir)) {
+			log("no agents directory found");
+			return;
+		}
+		const files = fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
+		if (files.length === 0) {
+			log("no agents found");
+			return;
+		}
+		log("Agent models:");
+		for (const file of files.sort()) {
+			const content = fs.readFileSync(path.join(agentsDir, file), "utf-8");
+			const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
+			let model = "inherit (default)";
+			if (match) {
+				const modelLine = match[1].split("\n").find((l) => l.trim().startsWith("model:"));
+				if (modelLine) {
+					model = modelLine.split(":").slice(1).join(":").trim();
+				}
+			}
+			log(`  ${file.replace(".md", "")}: ${model}`);
+		}
+		return;
+	}
+
+	if (flags.reset) {
+		if (flags.agent) {
+			const agentFile = path.join(agentsDir, `${flags.agent}.md`);
+			if (!fs.existsSync(agentFile)) {
+				err(`agent not found: ${flags.agent}`);
+				process.exit(1);
+			}
+			const content = fs.readFileSync(agentFile, "utf-8");
+			const updated = setModelInFrontmatter(content, null);
+			fs.writeFileSync(agentFile, updated);
+			log(`✓ reset model for ${flags.agent} to inherit`);
+		} else {
+			if (!fs.existsSync(agentsDir)) return;
+			const files = fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
+			for (const file of files) {
+				const agentFile = path.join(agentsDir, file);
+				const content = fs.readFileSync(agentFile, "utf-8");
+				const updated = setModelInFrontmatter(content, null);
+				fs.writeFileSync(agentFile, updated);
+			}
+			log("✓ reset model for all agents to inherit");
+		}
+		return;
+	}
+
+	if (!flags.agent || !flags.model) {
+		err("configure requires --agent <name> and --model <model>");
+		err("run 'draht-claude configure --help' for usage");
+		process.exit(1);
+	}
+
+	const agentFile = path.join(agentsDir, `${flags.agent}.md`);
+	if (!fs.existsSync(agentFile)) {
+		err(`agent not found: ${flags.agent}`);
+		const available = fs.existsSync(agentsDir)
+			? fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md")).map((f) => f.replace(".md", "")).join(", ")
+			: "(none)";
+		err(`available agents: ${available}`);
+		process.exit(1);
+	}
+
+	const content = fs.readFileSync(agentFile, "utf-8");
+	const updated = setModelInFrontmatter(content, flags.model);
+	fs.writeFileSync(agentFile, updated);
+	log(`✓ set model for ${flags.agent} to ${flags.model}`);
+}
+
 // ─── main ───────────────────────────────────────────────────────────────────
 
 const { command, flags } = parseArgs(process.argv);
@@ -340,6 +456,9 @@ switch (command) {
 		break;
 	case "status":
 		cmdStatus(flags);
+		break;
+	case "configure":
+		cmdConfigure(flags);
 		break;
 	default:
 		err(`unknown command: ${command}`);

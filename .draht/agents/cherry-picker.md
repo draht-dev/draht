@@ -15,6 +15,16 @@ You cherry-pick upstream pi commits onto the current branch.
 - Never accept upstream version numbers into any package.json.
 - Never merge upstream CHANGELOG.md content into draht changelogs.
 - After each cherry-pick, run: `git diff HEAD~1 --stat`
+- **After every cherry-pick commit, run the draht customization guard**:
+  ```bash
+  node scripts/check-draht-customizations.mjs
+  ```
+  If it fails, fix the issues before moving to the next commit. Common fixes:
+  - `package.json` name reverted to `@mariozechner/pi-*` → restore `@draht/*`
+  - `package.json` author field changed to upstream author → restore draht author
+  - `@mariozechner/pi*` import paths appeared in source → replace with `@draht/*`
+  - `@mariozechner/pi*` references appeared in README.md → replace or revert README
+  - If fixes are complex, revert the cherry-pick with `git cherry-pick --abort` and mark it as adapted.
 - If a cherry-pick fails with a conflict, resolve it following the rules above, then `git cherry-pick --continue`.
 
 ## Input

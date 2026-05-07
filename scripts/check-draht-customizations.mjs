@@ -21,11 +21,15 @@
  *  11. Built-in agents exist in packages/coding-agent/agents/
  *  12. draht-tools binary exists in packages/coding-agent/bin/
  *  13. GSD test suite is intact in packages/coding-agent/test/
+ *  14. All package.json names use @draht/* or draht-* (not @mariozechner/pi*)
+ *  15. All package.json author fields are draht authors (not upstream)
+ *  16. No @mariozechner/pi* import paths in source files
+ *  17. No @mariozechner/pi* references in README.md files
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -395,6 +399,184 @@ for (const name of requiredGsdTests) {
 		existsSync(resolve(root, `packages/coding-agent/test/${name}`)),
 		`test/${name} exists`,
 	);
+}
+
+// ── 14. Package names use @draht/* or draht-* ──────────────────────
+
+console.log("\nPackage names (@draht/* not @mariozechner/pi*)");
+
+const allPkgJsons = findPackageJsons(root);
+const upstreamPrefixes = ["@mariozechner/pi-", "@mariozechner/pi"];
+
+for (const pkgPath of allPkgJsons) {
+	const pkg = readJson(pkgPath);
+	// Skip root private package (it's draht-monorepo, not @draht/*)
+	if (pkg.private && pkgPath === "package.json") {
+		check(
+			pkg.name !== "pi-monorepo",
+			`${pkgPath}: name is "${pkg.name}" (not pi-monorepo)`,
+		);
+		continue;
+	}
+	if (pkg.private) continue;
+	for (const prefix of upstreamPrefixes) {
+		check(
+			!pkg.name?.startsWith(prefix),
+			`${pkgPath}: name "${pkg.name}" does not start with upstream prefix "${prefix}"`,
+		);
+	}
+}
+
+// ── 15. Author fields are draht authors ─────────────────────────────
+
+console.log("\nAuthor fields (not upstream authors)");
+
+const upstreamAuthors = ["Mario Zechner", "badlogic", "mariozechner"];
+
+for (const pkgPath of allPkgJsons) {
+	const pkg = readJson(pkgPath);
+	if (!pkg.author) continue;
+	const author = typeof pkg.author === "string" ? pkg.author : pkg.author?.name;
+	if (!author) continue;
+	const authorLower = author.toLowerCase();
+	for (const upstream of upstreamAuthors) {
+		check(
+			!authorLower.includes(upstream.toLowerCase()),
+			`${pkgPath}: author "${author}" is not upstream (${upstream})`,
+		);
+	}
+}
+
+// ── 16. No @mariozechner/pi* import paths in source files ──────────
+
+console.log("\nImport paths (no @mariozechner/pi* imports)");
+
+const sourceExtensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+const sourceDirs = ["packages", "scripts"];
+const importPattern = /@mariozechner\/pi[a-z0-9-]*/gi;
+
+// Files that intentionally reference upstream patterns (documentation, verification)
+const selfReferencingFiles = new Set([
+	resolve(root, "scripts/check-draht-customizations.mjs"),
+	resolve(root, "scripts/verify.sh"),
+]);
+
+for (const dir of sourceDirs) {
+	const absDir = resolve(root, dir);
+	if (!existsSync(absDir)) continue;
+	walkDir(absDir, (filePath) => {
+		// Skip self-referencing files that document upstream patterns
+		if (selfReferencingFiles.has(filePath)) return;
+		// Skip .draht/ agent/prompt files that document upstream mapping
+		if (filePath.includes("/.draht/") || filePath.includes("/.agents/")) return;
+		const ext = filePath.slice(filePath.lastIndexOf("."));
+		if (!sourceExtensions.includes(ext)) return;
+		// Skip node_modules and dist
+		if (filePath.includes("/node_modules/") || filePath.includes("/dist/")) return;
+		try {
+			const content = readFileSync(filePath, "utf-8");
+			const relPath = relative(root, filePath);
+			// Check line by line for precise reporting
+			const lines = content.split("\n");
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i];
+				// Skip comment lines
+				const trimmed = line.trim();
+				if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("<!--"))
+					continue;
+				if (importPattern.test(line)) {
+					fail(
+						`${relPath}:${i + 1}: upstream import reference "${line.trim()}"`,
+					);
+				}
+			}
+		} catch {
+			// skip unreadable files
+		}
+	});
+}
+
+// ── 17. No @mariozechner/pi* references in README.md files ─────────
+
+console.log("\nREADME integrity (no @mariozechner/pi* references)");
+
+const readmeFiles = findReadmes(root);
+const readmeUpstreamPattern = /@mariozechner\/pi[a-z0-9-]*/gi;
+const readmePiMonoPattern = /\bpi-mono\b/gi;
+
+for (const readmePath of readmeFiles) {
+	try {
+		const content = readFileSync(readmePath, "utf-8");
+		const relPath = relative(root, readmePath);
+
+		if (readmeUpstreamPattern.test(content)) {
+			fail(`${relPath}: contains @mariozechner/pi* reference`);
+		} else {
+			pass(`${relPath}: clean`);
+		}
+
+		// Also check for pi-mono references specifically in READMEs
+		readmeUpstreamPattern.lastIndex = 0; // reset regex
+		if (readmePiMonoPattern.test(content)) {
+			// pi-mono is sometimes used as a monorepo reference; flag if it's about the product
+			// Only flag if it appears alongside "install" or "npm" context
+			const contextMatch = content.match(
+				/(?:npm install|npm i|npx)\s+.*pi-mono|pi-mono.*(?:install|package)/gi,
+			);
+			if (contextMatch) {
+				fail(`${relPath}: contains pi-mono in install context`);
+			}
+		}
+	} catch {
+		// skip unreadable files
+	}
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+function findPackageJsons(baseDir) {
+	const results = [];
+	walkDir(baseDir, (filePath) => {
+		if (filePath.endsWith("/package.json")) {
+			results.push(relative(root, filePath));
+		}
+	});
+	return results.sort();
+}
+
+function findReadmes(baseDir) {
+	const results = [];
+	walkDir(baseDir, (filePath) => {
+		if (filePath.endsWith("/README.md") || filePath.endsWith("/readme.md")) {
+			results.push(filePath);
+		}
+	});
+	return results.sort();
+}
+
+function walkDir(dir, visit) {
+	if (!existsSync(dir)) return;
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		const fullPath = resolve(dir, entry.name);
+		if (entry.isDirectory()) {
+			if (
+				entry.name === "node_modules" ||
+				entry.name === ".git" ||
+				entry.name === "dist" ||
+				entry.name === ".next"
+			)
+				continue;
+			walkDir(fullPath, visit);
+		} else if (entry.isFile()) {
+			visit(fullPath);
+		}
+	}
 }
 
 // ── Summary ─────────────────────────────────────────────────────────

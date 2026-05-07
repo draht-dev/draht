@@ -11,6 +11,22 @@ pi  https://github.com/badlogic/pi-mono.git
 
 ---
 
+## Commit hooks (enforced at every commit)
+
+Every commit made during the rebase (cherry-picks, conflict resolutions, branding fixes)
+must pass these hooks. The cherry-picker subagent enforces them automatically after
+each cherry-pick; for manual commits, run `node scripts/check-draht-customizations.mjs`.
+
+| Hook | What it blocks |
+| ---- | -------------- |
+| **Package name** | Any `package.json` `name` field containing `@mariozechner/pi*` |
+| **Author name** | Any `package.json` `author` field referencing upstream authors (Mario Zechner, badlogic, etc.) |
+| **Import paths** | Any `@mariozechner/pi*` import/require in source files (`.ts`, `.js`, `.mjs`, etc.) |
+| **README references** | Any `@mariozechner/pi*` references in `README.md` files |
+| **README modification** | Any diff touching `README.md` files (revert with `git checkout HEAD -- <readme>`) |
+
+---
+
 ## Procedure
 
 ### 1. Fetch and classify commits
@@ -69,6 +85,12 @@ touches a `README.md`, skip that file hunk entirely:
 
 ```bash
 git checkout HEAD -- README.md packages/*/README.md
+```
+
+If any README was modified, re-run the commit hook to confirm zero remaining pi references:
+
+```bash
+node scripts/check-draht-customizations.mjs
 ```
 
 ### 5. Draht customization guard

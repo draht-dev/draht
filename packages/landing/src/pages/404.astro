@@ -1,71 +1,199 @@
 ---
 import AtelierPage from "../layouts/AtelierPage.astro";
 
-const title = "404 — Page Not Found · Draht";
-const description = "The page you're looking for doesn't exist.";
+const title = "404 — Trace Interrupted · Draht";
+const description = "The page you are looking for does not exist on this circuit.";
 ---
 
 <AtelierPage title={title} description={description}>
 	<main class="error-main">
 		<section class="error-page">
-			<div class="error-code">404</div>
-			<h1 class="error-title">Nicht gefunden<span class="amp">.</span></h1>
-			<p class="error-desc">The page you're looking for doesn't exist or has been moved.</p>
+			<div class="error-kicker">
+				<span class="dot" aria-hidden="true"></span>
+				§ 404 · trace interrupted · keine verbindung
+			</div>
+
+			<h1 class="error-title">Nicht<br />gefunden<span class="amp">.</span></h1>
+
+			<p class="error-desc">
+				This page was not soldered onto the board. The route went open-circuit somewhere between the URL bar and the file system.
+			</p>
+
+			<svg class="error-trace" viewBox="0 0 880 110" aria-hidden="true">
+				<defs>
+					<radialGradient id="errGlow" cx="50%" cy="50%" r="50%">
+						<stop offset="0%" stop-color="var(--copper)" stop-opacity="0.9" />
+						<stop offset="100%" stop-color="var(--copper)" stop-opacity="0" />
+					</radialGradient>
+				</defs>
+				<line x1="0" y1="55" x2="380" y2="55" class="t" />
+				<line x1="380" y1="55" x2="380" y2="20" class="t" />
+				<line x1="380" y1="20" x2="430" y2="20" class="t" />
+				<circle cx="430" cy="20" r="3" class="n" />
+				<text x="448" y="24" class="lbl">break · 404</text>
+
+				<line x1="500" y1="20" x2="540" y2="20" class="t faint" stroke-dasharray="3 5" />
+				<line x1="540" y1="20" x2="540" y2="90" class="t faint" stroke-dasharray="3 5" />
+				<line x1="540" y1="90" x2="600" y2="90" class="t faint" stroke-dasharray="3 5" />
+
+				<line x1="600" y1="90" x2="880" y2="90" class="t" />
+				<circle cx="600" cy="90" r="3" class="n" />
+				<circle cx="600" cy="90" r="14" fill="url(#errGlow)" />
+				<text x="600" y="76" class="lbl">resume</text>
+			</svg>
+
 			<div class="error-actions">
-				<a href="/" class="btn">Back to Home →</a>
+				<a href="/" class="btn">Back to home &nbsp;→</a>
 				<a href="/docs" class="btn ghost">Read the docs</a>
 			</div>
+
+			<dl class="error-specs">
+				<div><dt>Endpoint</dt><dd>{Astro.url.pathname}</dd></div>
+				<div><dt>Status</dt><dd class="warn">404 · open</dd></div>
+				<div><dt>Suggestion</dt><dd>retry the bus</dd></div>
+			</dl>
 		</section>
 	</main>
 </AtelierPage>
 
 <style>
 	.error-main {
-		max-width: 720px;
+		max-width: 880px;
 		margin: 0 auto;
 	}
 	.error-page {
-		padding: clamp(80px, 14vw, 180px) 0;
+		padding: clamp(64px, 10vw, 140px) 0 clamp(80px, 12vw, 160px);
 		display: flex;
 		flex-direction: column;
 		align-items: flex-start;
+		position: relative;
 	}
-	.error-code {
+
+	.error-kicker {
+		display: inline-flex;
+		align-items: center;
+		gap: 12px;
 		font-family: var(--f-mono);
-		font-size: clamp(11px, 1vw, 12px);
-		letter-spacing: 0.2em;
-		color: var(--copper);
+		font-size: 11px;
+		letter-spacing: 0.18em;
 		text-transform: uppercase;
-		margin-bottom: 28px;
+		color: var(--copper);
+		margin-bottom: 36px;
 	}
-	.error-code::before {
-		content: "· ";
-		color: var(--copper-dim);
+	.error-kicker .dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--copper);
+		box-shadow: 0 0 0 2px var(--ink), 0 0 10px color-mix(in oklab, var(--copper), transparent 50%);
+		animation: errPulse 2.4s ease-in-out infinite;
 	}
+	@keyframes errPulse {
+		0%, 100% { opacity: 1; }
+		50%      { opacity: 0.35; }
+	}
+
 	.error-title {
 		font-family: var(--f-display);
 		font-style: italic;
 		font-weight: 300;
-		font-size: clamp(64px, 14vw, 180px);
-		line-height: 0.9;
-		letter-spacing: -0.035em;
+		font-size: clamp(72px, 16vw, 220px);
+		line-height: 0.86;
+		letter-spacing: -0.04em;
 		color: var(--paper);
 		margin: 0 0 32px;
+		text-wrap: balance;
 	}
 	.error-title .amp {
 		color: var(--copper);
 	}
+
 	.error-desc {
 		color: var(--paper-dim);
 		font-family: var(--f-display);
-		font-size: clamp(18px, 2vw, 22px);
-		line-height: 1.5;
-		margin: 0 0 40px;
-		max-width: 36ch;
+		font-style: italic;
+		font-size: clamp(20px, 2.2vw, 26px);
+		line-height: 1.45;
+		margin: 0 0 36px;
+		max-width: 38ch;
 	}
+
+	.error-trace {
+		width: 100%;
+		max-width: 880px;
+		height: auto;
+		margin: 8px 0 40px;
+	}
+	.error-trace .t {
+		stroke: var(--copper);
+		stroke-width: 1.25;
+		opacity: 0.65;
+		fill: none;
+		stroke-linecap: round;
+	}
+	.error-trace .t.faint {
+		stroke: var(--copper-dim);
+		opacity: 0.4;
+	}
+	.error-trace .n {
+		fill: var(--copper);
+	}
+	.error-trace .lbl {
+		font-family: var(--f-mono);
+		font-size: 9px;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		fill: var(--paper-soft);
+	}
+
 	.error-actions {
 		display: flex;
 		gap: 16px;
 		flex-wrap: wrap;
+		margin-bottom: 56px;
+	}
+
+	.error-specs {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 0;
+		margin: 0;
+		padding: 0;
+		border-top: 1px solid var(--rule);
+		border-bottom: 1px solid var(--rule);
+		width: 100%;
+	}
+	.error-specs > div {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 16px 20px 16px 0;
+		border-right: 1px dashed rgba(239, 231, 216, 0.10);
+	}
+	.error-specs > div:last-child {
+		border-right: none;
+	}
+	.error-specs dt {
+		font-family: var(--f-mono);
+		font-size: 9px;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		color: var(--paper-soft);
+	}
+	.error-specs dd {
+		margin: 0;
+		font-family: var(--f-mono);
+		font-size: 13px;
+		color: var(--paper);
+		word-break: break-all;
+	}
+	.error-specs dd.warn {
+		color: var(--copper);
+	}
+
+	@media (max-width: 720px) {
+		.error-specs { grid-template-columns: 1fr; }
+		.error-specs > div { border-right: none; border-bottom: 1px dashed rgba(239, 231, 216, 0.10); padding: 14px 0; }
+		.error-specs > div:last-child { border-bottom: none; }
 	}
 </style>

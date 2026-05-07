@@ -39,14 +39,17 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 
 			<div class="tag">Dynamic Routing for Agent &amp; Task Handling — handgefertigt in Dortmund</div>
 
-			<h1>
-				draht<span class="ampersand">.</span>
-				<span class="small">The right model for every task. Test before code, domain before edits, orchestration where it pays for itself.</span>
-			</h1>
+			<h1>draht<span class="ampersand">.</span></h1>
+
+			<p class="hero-subhead">
+				The right model for every task. Test before code,
+				<span class="hb">domain</span> before edits,
+				orchestration where it pays for itself.
+			</p>
 
 			<div class="hero-grid">
 				<div class="hero-lede">
-					<span class="drop">Draht</span> is German for <em style="font-style:italic;color:var(--paper-soft)">wire</em>. It's a GSD workflow engine for coding agents: picks the cheapest model that can actually do the step, writes the test before the code, checks your domain model before editing anything, and logs every call so you can hand an auditor a PDF.
+					<span class="drop">Draht</span> is German for <em class="wire">wire</em>. It&rsquo;s a GSD workflow engine for coding agents: picks the cheapest model that can actually do the step, writes the test before the code, checks your domain model before editing anything, and logs every call so you can hand an auditor a PDF.
 				</div>
 
 				<div class="hero-cta">
@@ -54,9 +57,12 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<a class="btn" href="#packages">Browse packages &nbsp;→</a>
 						<a class="btn ghost" href="https://github.com/draht-dev/draht">Read the source</a>
 					</div>
-					<div class="hero-meta">
-						MIT · 15 packages · 17 providers · no telemetry
-					</div>
+					<dl class="hero-specs">
+						<div><dt>License</dt><dd>MIT</dd></div>
+						<div><dt>Packages</dt><dd>15</dd></div>
+						<div><dt>Providers</dt><dd>17</dd></div>
+						<div><dt>Telemetry</dt><dd class="zero">0</dd></div>
+					</dl>
 				</div>
 			</div>
 
@@ -161,7 +167,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<div class="fnum">F/03</div>
 						<div>
 							<h4>Sub-agents that <em>finish.</em></h4>
-							<p>The orchestrator splits work that doesn't depend on itself, runs the pieces in parallel, and merges the diffs back. Each sub-agent runs on Haiku where Haiku can handle it, and every step lands in the log.</p>
+							<p>Seven specialists — architect, implementer, reviewer, debugger, verifier, security-auditor, git-committer. Each runs on a model you configure. Parallel where the work allows, sequential where it doesn't. Commits land with red:/green:/refactor: discipline.</p>
 						</div>
 					</div>
 					<div class="feat">
@@ -433,51 +439,67 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 		// ---------- Terminal demo ----------
 		const term = document.getElementById("term-body");
 		const scenes = [
+			// Scene 1: standalone REPL — real interactive session
 			[
 				{ t: "prompt", v: "$ " }, { t: "user", v: "draht" },
 				{ t: "nl" },
-				{ t: "dim", v: "  draht v2026.4.23 · router: auto · ~/projects/checkout-svc" },
-				{ t: "dim", v: "  domain: 4 contexts · tdd: enforced · compliance: gdpr" },
+				{ t: "dim", v: "  draht v2026.4.26 · anthropic · claude-sonnet-4-6" },
 				{ t: "nl" },
-				{ t: "prompt", v: "› " }, { t: "user", v: "add idempotency keys to the payments endpoint." },
+				{ t: "dim", v: "  ~/projects/checkout-svc  ·  €0.000  ·  0 tok" },
 				{ t: "nl" },
-				{ t: "dim", v: "  ⚙︎  grading task… " }, { t: "key", v: "[reasoning: med · ctx: 12k]" },
-				{ t: "dim", v: "  ↳ " }, { t: "key", v: "router   " }, { t: "dim", v: "→ " }, { t: "ok", v: "sonnet-4.5" }, { t: "dim", v: "  (est. €0.08)" },
-				{ t: "dim", v: "  ↳ " }, { t: "key", v: "knowledge " }, { t: "dim", v: "context: Payments · aggregate: Charge" },
-				{ t: "dim", v: "  ↳ " }, { t: "key", v: "tdd      " }, { t: "dim", v: "writing test first… " }, { t: "ok", v: "✓ red" },
-				{ t: "dim", v: "  ↳ " }, { t: "key", v: "edit     " }, { t: "dim", v: "src/payments/charge.ts        " }, { t: "ok", v: "±34" },
-				{ t: "dim", v: "  ↳ " }, { t: "key", v: "ci       " }, { t: "dim", v: "bun test · 142 pass          " }, { t: "ok", v: "✓ green" },
-				{ t: "dim", v: "  ↳ " }, { t: "key", v: "invoice  " }, { t: "dim", v: "logged · 18,402 tok · €0.074" },
 				{ t: "nl" },
-				{ t: "user", v: "  Done. Idempotency-Key header; 24h Redis TTL;" },
-				{ t: "user", v: "  test covers replay + concurrent writes." }
+				{ t: "prompt", v: "› " }, { t: "user", v: "add idempotency keys to the payments endpoint" },
+				{ t: "nl" },
+				{ t: "nl" },
+				{ t: "dim", v: "  ● " }, { t: "key", v: "read  " }, { t: "dim", v: "src/payments/charge.ts" },
+				{ t: "nl" },
+				{ t: "dim", v: "  ● " }, { t: "key", v: "edit  " }, { t: "dim", v: "src/payments/charge.ts  +42 / -3" },
+				{ t: "nl" },
+				{ t: "dim", v: "  ● " }, { t: "key", v: "bash  " }, { t: "dim", v: "bun test payments/  " }, { t: "ok", v: "142 pass ✓" },
+				{ t: "nl" },
+				{ t: "nl" },
+				{ t: "user", v: "  Done. Idempotency-Key header; 24h Redis TTL." },
+				{ t: "nl" },
+				{ t: "user", v: "  Replay detection covers concurrent writes." }
 			],
+			// Scene 2: GSD execute-phase — parallel subagents, TDD commits
 			[
-				{ t: "prompt", v: "$ " }, { t: "user", v: 'draht orchestrate "migrate auth to jwks"' },
+				{ t: "prompt", v: "› " }, { t: "user", v: "/execute-phase 1" },
 				{ t: "nl" },
-				{ t: "dim", v: "  ⚙︎  planning… 3 independent tracks identified" },
 				{ t: "nl" },
-				{ t: "dim", v: "  ├─ " }, { t: "key", v: "◆ " }, { t: "dim", v: "track/jwks-client      " }, { t: "ok", v: "haiku-4.5 · running" },
-				{ t: "dim", v: "  ├─ " }, { t: "key", v: "◆ " }, { t: "dim", v: "track/middleware-swap  " }, { t: "ok", v: "sonnet-4.5 · running" },
-				{ t: "dim", v: "  └─ " }, { t: "key", v: "◆ " }, { t: "dim", v: "track/key-rotation-doc " }, { t: "ok", v: "haiku-4.5 · running" },
+				{ t: "dim", v: "  → " }, { t: "key", v: "implementer" }, { t: "dim", v: "  sonnet   feature/idempotency" },
 				{ t: "nl" },
-				{ t: "dim", v: "  merged 3/3 branches · 0 conflicts · €0.21 total" },
-				{ t: "dim", v: "  ⏎ review diff · ⇧M open merge report" }
+				{ t: "dim", v: "  → " }, { t: "key", v: "implementer" }, { t: "dim", v: "  sonnet   feature/auth-refresh" },
+				{ t: "nl" },
+				{ t: "nl" },
+				{ t: "ok", v: "  red:     " }, { t: "dim", v: "add ChargeIdempotency aggregate test" },
+				{ t: "nl" },
+				{ t: "ok", v: "  green:   " }, { t: "dim", v: "IdempotencyKey.create() passing" },
+				{ t: "nl" },
+				{ t: "ok", v: "  refactor:" }, { t: "dim", v: " extract KeyStore adapter" },
+				{ t: "nl" },
+				{ t: "nl" },
+				{ t: "dim", v: "  ✓ phase/1 · 3 commits · 2 subagents · 41 min" }
 			],
+			// Scene 3: session fork — branch and diverge freely
 			[
-				{ t: "prompt", v: "$ " }, { t: "user", v: "draht invoice --month 2026-04 --client acme" },
+				{ t: "prompt", v: "› " }, { t: "user", v: "/fork" },
 				{ t: "nl" },
-				{ t: "dim", v: "  ACME GmbH · 2026-04 · 47 tasks · 412,881 tokens" },
-				{ t: "dim", v: "  ─────────────────────────────────────────" },
-				{ t: "dim", v: "  haiku-4.5     " }, { t: "ok", v: "€  3.42" }, { t: "dim", v: "   · 31 tasks" },
-				{ t: "dim", v: "  sonnet-4.5    " }, { t: "ok", v: "€ 18.07" }, { t: "dim", v: "   · 14 tasks" },
-				{ t: "dim", v: "  opus-4.5      " }, { t: "ok", v: "€  4.91" }, { t: "dim", v: "   ·  2 tasks" },
-				{ t: "dim", v: "  ─────────────────────────────────────────" },
-				{ t: "dim", v: "  subtotal      " }, { t: "ok", v: "€ 26.40" },
-				{ t: "dim", v: "  + margin 3×   " }, { t: "ok", v: "€ 79.20" },
-				{ t: "dim", v: "  + 19% VAT     " }, { t: "ok", v: "€ 94.25" },
 				{ t: "nl" },
-				{ t: "dim", v: "  → invoice-2026-04-acme.pdf generated " }, { t: "ok", v: "✓" }
+				{ t: "dim", v: "  forked " }, { t: "key", v: "session/e4b3a" }, { t: "dim", v: " → " }, { t: "ok", v: "experimental" },
+				{ t: "nl" },
+				{ t: "dim", v: "  sessions/e4b3a-experimental.jsonl" },
+				{ t: "nl" },
+				{ t: "nl" },
+				{ t: "prompt", v: "› " }, { t: "user", v: "try the redis streams approach instead" },
+				{ t: "nl" },
+				{ t: "nl" },
+				{ t: "dim", v: "  ● " }, { t: "key", v: "read  " }, { t: "dim", v: "src/payments/charge.ts" },
+				{ t: "nl" },
+				{ t: "dim", v: "  ● " }, { t: "key", v: "edit  " }, { t: "dim", v: "src/payments/charge.ts  different approach" },
+				{ t: "nl" },
+				{ t: "nl" },
+				{ t: "dim", v: "  diverged from main · original session unchanged" }
 			]
 		];
 
@@ -1007,7 +1029,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			font-size: clamp(72px, 16vw, 240px);
 			line-height: 0.88;
 			letter-spacing: -0.035em;
-			margin: 0 0 36px;
+			margin: 0 0 28px;
 			color: var(--paper);
 			font-style: italic;
 		}
@@ -1016,16 +1038,22 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			color: var(--copper);
 			font-weight: 300;
 		}
-		.hero h1 .small {
-			display: block;
-			font-size: 0.18em;
-			letter-spacing: -0.01em;
-			color: var(--paper-dim);
+
+		.hero-subhead {
+			font-family: var(--f-display);
 			font-style: normal;
 			font-weight: 400;
-			margin-top: 18px;
-			max-width: 12em;
-			line-height: 1.2;
+			font-size: clamp(22px, 2.6vw, 34px);
+			line-height: 1.25;
+			letter-spacing: -0.012em;
+			color: var(--paper-dim);
+			margin: 0 0 clamp(48px, 6vw, 80px);
+			max-width: 22ch;
+			text-wrap: balance;
+		}
+		.hero-subhead .hb {
+			font-style: italic;
+			color: var(--paper);
 		}
 
 		.hero-grid {
@@ -1048,19 +1076,58 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			font-style: italic;
 			color: var(--copper);
 		}
+		.hero-lede .wire {
+			font-style: italic;
+			color: var(--paper-soft);
+		}
 
 		.hero-cta {
 			display: flex;
 			flex-direction: column;
-			gap: 20px;
+			gap: 28px;
 			align-items: flex-start;
 		}
-		.hero-meta {
+		.hero-specs {
+			display: grid;
+			grid-template-columns: repeat(4, auto);
+			gap: 0;
+			margin: 0;
+			padding: 0;
+			border-top: 1px solid var(--rule);
+			border-bottom: 1px solid var(--rule);
+			width: 100%;
+		}
+		.hero-specs > div {
+			display: flex;
+			flex-direction: column;
+			gap: 4px;
+			padding: 14px 18px 14px 0;
+			border-right: 1px dashed rgba(239, 231, 216, 0.10);
+			min-width: 0;
+		}
+		.hero-specs > div:last-child {
+			border-right: none;
+			padding-right: 0;
+		}
+		.hero-specs dt {
 			font-family: var(--f-mono);
-			font-size: 10px;
-			letter-spacing: 0.14em;
+			font-size: 9px;
+			letter-spacing: 0.18em;
 			text-transform: uppercase;
 			color: var(--paper-soft);
+		}
+		.hero-specs dd {
+			margin: 0;
+			font-family: var(--f-display);
+			font-style: italic;
+			font-weight: 400;
+			font-size: 22px;
+			line-height: 1;
+			color: var(--paper);
+			letter-spacing: -0.01em;
+		}
+		.hero-specs dd.zero {
+			color: var(--copper);
 		}
 		.hero-install {
 			margin-top: clamp(40px, 5vw, 72px);
@@ -1108,7 +1175,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			height: 12px;
 			border-radius: 50%;
 			background: var(--copper);
-			box-shadow: 0 0 0 2px var(--ink), 0 0 12px rgba(217, 140, 70, 0.6);
+			box-shadow: 0 0 0 2px var(--ink), 0 0 12px color-mix(in oklab, var(--copper), transparent 40%);
 		}
 		.install .prompt {
 			color: var(--copper);
@@ -1361,7 +1428,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			height: 8px;
 			border-radius: 50%;
 			background: var(--copper);
-			box-shadow: 0 0 12px rgba(217, 140, 70, 0.8);
+			box-shadow: 0 0 12px color-mix(in oklab, var(--copper), transparent 20%);
 		}
 		.card h3 {
 			font-family: var(--f-display);
@@ -1603,7 +1670,9 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			position: relative;
 		}
 		.tier.featured {
-			background: linear-gradient(180deg, rgba(217, 140, 70, 0.05), transparent 70%);
+			background:
+				linear-gradient(180deg, color-mix(in oklab, var(--copper), transparent 92%), transparent 70%),
+				radial-gradient(140% 90% at 50% 0%, color-mix(in oklab, var(--copper), transparent 95%), transparent 60%);
 		}
 		.tier.featured::before {
 			content: "Empfohlen";
@@ -1880,6 +1949,10 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 		/* ---------- Responsive ---------- */
 		@media (max-width: 900px) {
 			.hero-grid { grid-template-columns: 1fr; }
+			.hero-specs { grid-template-columns: repeat(2, 1fr); }
+			.hero-specs > div:nth-child(2) { border-right: none; }
+			.hero-specs > div:nth-child(1),
+			.hero-specs > div:nth-child(2) { border-bottom: 1px dashed rgba(239, 231, 216, 0.10); }
 			.wires { grid-template-columns: 1fr; gap: 36px; }
 			.workbench { grid-template-columns: 1fr; }
 			.manifest { grid-template-columns: 1fr; }

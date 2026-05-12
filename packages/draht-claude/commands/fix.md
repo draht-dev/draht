@@ -1,16 +1,35 @@
 ---
-description: Diagnose and fix a bug with TDD discipline (debugger subagent → reproducing test → minimal fix)
+description: Diagnose and fix a bug using a 4-phase systematic debugging protocol with TDD discipline
 argument-hint: "<description of what's broken>"
 allowed-tools: Bash, Read, Write, Edit, Task
 ---
 
 # /fix
 
-Diagnose and fix a specific bug or failing task with TDD discipline, using a subagent for diagnosis.
+Diagnose and fix a bug using the **four-phase systematic debugging protocol**: root cause investigation → pattern analysis → hypothesis & testing → implementation with a reproducing test.
 
 Issue: $ARGUMENTS
 
 > **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`. For subagents, use the **Task tool** with `subagent_type: "debugger"` or `"implementer"`.
+
+## The Iron Law
+
+> **NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.**
+
+Symptom fixes are failure — they create new bugs in different places. If you find yourself proposing a "quick fix for now, investigate later", STOP and return to Phase 1.
+
+## Red Flags — STOP
+
+Stop immediately if you catch yourself:
+- Proposing "quick fixes for now, investigate later"
+- Attempting multiple changes simultaneously
+- Skipping a reproducing test before fixing
+- Proposing solutions before understanding data flow
+- Making "one more fix attempt" after already trying 2+
+- Watching each fix reveal new problems elsewhere
+- Implementing before a failing test exists for the bug
+
+When you've tried **3 fix attempts and still failing**, STOP. This is an architectural problem, not a hypothesis problem. Report back to the user — do not try a 4th fix.
 
 ## Atomic Reasoning
 
@@ -20,31 +39,81 @@ Before diagnosing, decompose this bug into atomic reasoning units:
 2. **Validate independence** — Which components/files are involved? Can we isolate the failure? Are there related bugs that should be fixed separately?
 3. **Verify correctness** — What test will reproduce this bug reliably? What would prove it's fixed? What regressions could the fix introduce?
 
-**Synthesize fix strategy:**
-- Trace the failure to root cause
-- Write a minimal reproducing test
-- Identify the smallest change that makes the test pass
-- Plan regression checks
+## The Four Phases
 
-## Steps
-1. **Diagnose via Task tool** with `subagent_type: "debugger"` and prompt:
-   "Diagnose this issue: $ARGUMENTS. Reproduce the bug by running the relevant test or command. Trace the root cause by reading the code. Identify the exact files and lines involved. Do NOT fix it yet — only report the diagnosis with: root cause, affected files, and a recommended fix approach."
+### Phase 1 — Root Cause Investigation (before ANY fix)
 
-2. **Write a reproducing test**: Based on the diagnosis, write a test that demonstrates the bug (it must fail)
-   - Commit: `git add <test-files> && git commit -m "red: reproduce <bug description>"`
+Dispatch the `debugger` subagent with this prompt:
 
-3. **Minimal fix**: Write the smallest change that makes the test pass
-   - Do not refactor or add features — just fix the bug
-   - Run the full test suite to check for regressions
-   - Commit: `git add <files> && git commit -m "green: fix <bug description>"`
+```
+Investigate this issue using Phase 1 root-cause discipline. Do NOT fix anything — only diagnose.
 
-4. **Refactor** (if needed): Clean up without changing behavior
-   - Tests must stay green after every change
+Issue: $ARGUMENTS
+
+Walk through these steps and report on each:
+1. Read the error message / stack trace carefully — exact line numbers, exact file paths.
+2. Reproduce consistently — what are the exact steps to trigger it? If you cannot reproduce, gather more data instead of guessing.
+3. Check recent changes — `git log --oneline -20` and `git diff HEAD~5` against the affected files. What changed?
+4. For multi-component flows: trace data flow. Where does the bad value originate? What called this with that value? Keep tracing UPWARD until you find the source. Fix at source, not at symptom.
+5. State the root cause as one sentence: "X happens because Y at <file:line>."
+
+End your response with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
+```
+
+If `BLOCKED` or `NEEDS_CONTEXT`: provide the missing info and re-dispatch. Do not skip ahead.
+
+### Phase 2 — Pattern Analysis
+
+Read the root cause from Phase 1. Then:
+
+1. Find working examples in the codebase that do the same kind of thing correctly
+2. Read those reference implementations **completely** — not skimmed
+3. List every difference between the working code and the broken code, however small
+4. Note dependencies: what config, settings, environment, or call-order does the working version assume?
+
+If Phase 2 reveals a different root cause than Phase 1, go back to Phase 1 and re-investigate. Do not paper over the disagreement.
+
+### Phase 3 — Single Hypothesis Test
+
+1. State ONE hypothesis: "I think the root cause is X because Y."
+2. Design the **smallest possible change** that would prove the hypothesis — one variable, one line if possible.
+3. Apply it and observe. Did it fix the issue?
+   - **Yes** → proceed to Phase 4 with this fix.
+   - **No** → form a NEW hypothesis (do not pile changes on top). Revert the test change.
+4. If after 3 hypotheses you are still failing, STOP. Question the architecture, not the hypothesis. Report to the user.
+
+You may also say "I don't understand X" rather than pretend. That is the correct answer when it's true.
+
+### Phase 4 — Implementation
+
+1. **Write the reproducing test FIRST.** Smallest possible test that demonstrates the bug. Run it — confirm it FAILS for the right reason (not for a syntax error, not for a missing import).
+   - Commit: `git add <test-files> && git commit -m "red: reproduce <bug>"`
+
+2. **Apply the single fix** identified in Phase 3. No other changes — no opportunistic refactor, no "while I'm here".
+   - Run the failing test — confirm it now PASSES.
+   - Run the FULL test suite — confirm no regressions.
+   - Commit: `git add <files> && git commit -m "green: fix <bug>"`
+
+3. **Refactor (optional)** — only if there's clear improvement that doesn't change behaviour. Tests must stay green after every change.
    - Commit: `git add <files> && git commit -m "refactor: <description>"`
 
+4. **Verify the fix solved the original symptom**, not just the unit test. Run the user-level reproduction one more time.
+
 5. **Update state**: `draht-tools update-state`
+
+## Rationalization Table
+
+| Excuse | Reality |
+|--------|---------|
+| "Simple bug, skip the process" | Simple bugs have root causes too. The process is fast. |
+| "It's an emergency, no time" | Systematic debugging is *faster* than thrashing on guesses. |
+| "I'll write the test after I confirm the fix" | Untested fixes don't stick. The test-first proves the bug existed. |
+| "I'll just try a few things and see what works" | Can't isolate what worked. Creates new bugs. |
+| "I already manually tested it" | A reproducing test is the only durable proof. |
 
 ## Rules
 - Always reproduce before fixing — a fix without a test is a guess
 - One bug, one fix, one commit series. Do not bundle unrelated changes.
-- If the root cause spans multiple files, explain the chain in the commit message body
+- Fix at the source, not the symptom
+- If 3 fix attempts have failed, the architecture is wrong — stop and discuss
+- If the fix is non-obvious, the commit body explains the chain

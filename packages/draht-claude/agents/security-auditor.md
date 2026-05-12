@@ -108,3 +108,12 @@ For each issue:
 - ALWAYS cite exact file:line and quote the vulnerable snippet if under 80 chars
 - ALWAYS check existing project patterns before flagging "missing X" (middleware, framework defaults, central validators may already handle it)
 - If the diff touches no security boundary, output `no findings — diff does not touch security boundaries` and stop
+
+## Final Status
+
+End your output with exactly one of these lines:
+
+- `STATUS: DONE` — no findings, or only Low-severity defense-in-depth gaps.
+- `STATUS: DONE_WITH_CONCERNS` — Medium findings exist; safe to merge but should be tracked.
+- `STATUS: NEEDS_CONTEXT` — you cannot finish the audit without more information (env config, threat model, where this code runs).
+- `STATUS: BLOCKED` — Critical or High findings exist. The change must NOT merge until they are addressed. List exploit vector and fix for each.

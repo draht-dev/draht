@@ -34,3 +34,12 @@ Skip the TDD cycle only for pure config or documentation-only changes with no te
 - Keep changes minimal — do only what the task asks for
 - If a task is ambiguous, implement the most conservative interpretation
 - Run `npm run check` or equivalent after changes if the project has one
+
+## Final Status
+
+End your output with exactly one of these lines so the caller can branch deterministically:
+
+- `STATUS: DONE` — task complete, tests green, no concerns.
+- `STATUS: DONE_WITH_CONCERNS` — task complete and tests green, but list concerns: tech debt incurred, edge cases the spec didn't cover, surprises uncovered while implementing. The caller decides whether to address before moving on.
+- `STATUS: NEEDS_CONTEXT` — you cannot proceed without more information. List exactly what is missing (file content, decision, design choice, missing dependency). Do not guess.
+- `STATUS: BLOCKED` — the task cannot be completed as specified. State the blocker type: `context` (info missing), `complexity` (task is bigger than 2–5 minutes — needs decomposing), `scope` (task asks for something that conflicts with the codebase), `plan` (the spec is internally inconsistent). Do not write partial code; revert and report.

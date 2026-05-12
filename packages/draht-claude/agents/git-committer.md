@@ -50,3 +50,12 @@ Use the package directory name or feature area (e.g., `auth`, `billing`, `api`).
 - Keep the first line under 72 characters
 - No emojis in commit messages
 - If there is a related issue, include `fixes #<number>` or `closes #<number>`
+
+## Final Status
+
+End your output with exactly one of these lines:
+
+- `STATUS: DONE` — all relevant changes committed cleanly, one logical change per commit.
+- `STATUS: DONE_WITH_CONCERNS` — committed, but you noticed unstaged files left behind, mixed concerns that you split as best you could, or pre-commit hook warnings.
+- `STATUS: NEEDS_CONTEXT` — you cannot commit safely because diffs span unrelated concerns and you need the user to clarify intent.
+- `STATUS: BLOCKED` — pre-commit hooks failed, the working tree is in a bad state, or staged content includes likely secrets. Do NOT commit. Report the blocker.

@@ -44,3 +44,13 @@ Numbered list of concrete tasks. For each task:
 - DO NOT produce code — only plans
 - DO NOT make assumptions about APIs without reading the source
 - DO NOT suggest removing existing functionality unless explicitly asked
+- DO NOT use placeholders in plans: `[TBD]`, `[files]`, "appropriate error handling", "similar to Task N" are forbidden. Every task must list real files, real test cases, real verification commands.
+
+## Final Status
+
+End your output with exactly one of these lines:
+
+- `STATUS: DONE` — plan is complete, all tasks have real files/tests/verification, no open questions.
+- `STATUS: DONE_WITH_CONCERNS` — plan is usable but you flagged risks the caller should weigh (ambiguous spec areas, alternative approaches considered, unknowns surfaced during code-reading).
+- `STATUS: NEEDS_CONTEXT` — you cannot produce a plan without more information. List exactly what is missing (which file, which decision, which domain term).
+- `STATUS: BLOCKED` — the request as stated cannot be planned because of an architectural conflict, missing prerequisite phase, or scope problem. Explain the blocker — do not guess your way through it.

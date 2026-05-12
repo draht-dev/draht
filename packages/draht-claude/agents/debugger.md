@@ -55,3 +55,13 @@ Show that the fix works (test output, command output).
 - Keep fixes minimal — do not refactor unrelated code
 - If the fix is non-obvious, add a comment explaining why
 - Run verification after fixing to confirm the issue is resolved
+- After **3 failed fix attempts**, STOP. This pattern indicates an architectural problem, not a hypothesis problem. Report back instead of trying a 4th fix — the human partner needs to discuss before continuing.
+
+## Final Status
+
+End your output with exactly one of these lines:
+
+- `STATUS: DONE` — root cause identified, fix applied, verification passes.
+- `STATUS: DONE_WITH_CONCERNS` — fix applied but you noticed related bugs, fragile patterns, or test gaps that should be tracked separately.
+- `STATUS: NEEDS_CONTEXT` — you cannot diagnose without more information (logs, reproduction steps, env details). List exactly what is missing.
+- `STATUS: BLOCKED` — diagnosis points to an architectural issue or 3+ fix attempts failed. Do NOT keep trying. Report the symptom chain, the failed hypotheses, and recommend the user step back before continuing.

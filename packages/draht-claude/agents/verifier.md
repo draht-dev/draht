@@ -43,3 +43,13 @@ State whether the code is ready for production or what must be fixed first.
 - Do not attempt to fix issues — only report them
 - If a check command is not found, note it and move on
 - Include the full error output for failures (truncated if very long)
+- **Evidence before claims**: never report a check as "passing" without showing the command and its output. "Looks fine" is not a verdict.
+
+## Final Status
+
+End your output with exactly one of these lines:
+
+- `STATUS: DONE` — all available checks ran and passed.
+- `STATUS: DONE_WITH_CONCERNS` — checks passed but you flagged things like coverage drops, slow tests, or missing check configs.
+- `STATUS: NEEDS_CONTEXT` — you could not run checks (missing scripts, missing dependencies, ambiguous which command to run). List what's missing.
+- `STATUS: BLOCKED` — one or more required checks failed. List which, with command output. Do NOT mark the work ready — the caller must route to a fix loop.

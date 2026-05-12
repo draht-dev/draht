@@ -55,3 +55,13 @@ If no issues found, state that explicitly.
 - Be actionable — say what to change, not just what is wrong
 - Do not nitpick formatting if the project has a formatter
 - Focus on substance over style
+- This agent is the **code quality** review. Spec compliance is the `spec-reviewer` agent's job and runs first inside `/execute-phase`. If you find a spec mismatch, escalate it under `Must fix` — do not silently accept it.
+
+## Final Status
+
+End your output with exactly one of these lines:
+
+- `STATUS: DONE` — no issues found, or only `Consider`-level suggestions.
+- `STATUS: DONE_WITH_CONCERNS` — `Should fix` issues exist but nothing blocking. List them under that heading.
+- `STATUS: NEEDS_CONTEXT` — you could not review because the diff or surrounding code was not accessible. List what is missing.
+- `STATUS: BLOCKED` — `Must fix` issues exist. The diff should not be merged or proceed to the next task until they are addressed.

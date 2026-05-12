@@ -1,6 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [2026.5.12] - 2026-05-12
+
+### Added
+
+- flag plan placeholders and empty sections in validate-plans
+- integrate spec-reviewer, STATUS protocol, and Red Flag gates across commands
+- rewrite /fix as 4-phase systematic debugging protocol
+- add commit-level branding hooks to rebase guard
+
+### Changed
+
+- ignore local .dev scratch file
+
+### Fixed
+
+- add missing @sinclair/typebox dependency
 
 ## [2026.4.25] - 2026-04-25
 

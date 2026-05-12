@@ -1,6 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [2026.5.12] - 2026-05-12
+
+### Changed
+
+- regenerate models and align github-copilot test references
+- update model registry
+
+### Fixed
+
+- preserve reasoning_content on assistant messages with only thinking blocks
 
 ## [2026.4.25] - 2026-04-25
 

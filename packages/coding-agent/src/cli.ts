@@ -10,7 +10,7 @@ import { APP_NAME } from "./config.js";
 import { main } from "./main.js";
 
 process.title = APP_NAME;
-process.env.PI_CODING_AGENT = "true";
+process.env.DRAHT_CODING_AGENT = "true";
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 
 // bodyTimeout/headersTimeout default to 300s in undici; long local-LLM stalls

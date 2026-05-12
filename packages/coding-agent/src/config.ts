@@ -302,7 +302,7 @@ export function getUpdateInstruction(packageName: string): string {
  */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
-	const envDir = process.env.PI_PACKAGE_DIR;
+	const envDir = process.env.DRAHT_PACKAGE_DIR;
 	if (envDir) {
 		if (envDir === "~") return homedir();
 		if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
@@ -402,13 +402,13 @@ export function getBundledInteractiveAssetPath(name: string): string {
 }
 
 // =============================================================================
-// App Config (from package.json piConfig)
+// App Config (from package.json drahtConfig)
 // =============================================================================
 
 interface PackageJson {
 	name?: string;
 	version?: string;
-	piConfig?: {
+	drahtConfig?: {
 		name?: string;
 		configDir?: string;
 	};
@@ -416,14 +416,27 @@ interface PackageJson {
 
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
 
-const piConfigName: string | undefined = pkg.piConfig?.name;
+const drahtConfigName: string | undefined = pkg.drahtConfig?.name;
 export const PACKAGE_NAME: string = pkg.name || "@draht/coding-agent";
-export const APP_NAME: string = piConfigName || "pi";
-export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
-export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
+export const APP_NAME: string = drahtConfigName || "draht";
+export const APP_TITLE: string = drahtConfigName ? APP_NAME : "draht";
+export const CONFIG_DIR_NAME: string = pkg.drahtConfig?.configDir || ".draht";
+export const LEGACY_CONFIG_DIR_NAME = ".pi";
 export const VERSION: string = pkg.version || "0.0.0";
 
-// e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
+/**
+ * Resolve the project config directory. Prefers CONFIG_DIR_NAME (.draht),
+ * falls back to LEGACY_CONFIG_DIR_NAME (.pi) if the primary doesn't exist.
+ */
+export function getProjectConfigDir(cwd: string): string {
+	const primary = join(cwd, CONFIG_DIR_NAME);
+	if (existsSync(primary)) return primary;
+	const legacy = join(cwd, LEGACY_CONFIG_DIR_NAME);
+	if (existsSync(legacy)) return legacy;
+	return primary;
+}
+
+// e.g., DRAHT_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
 export const ENV_SESSION_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_SESSION_DIR`;
 
@@ -437,7 +450,7 @@ const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
 
 /** Get the share viewer URL for a gist ID */
 export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
+	const baseUrl = process.env.DRAHT_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
 	return `${baseUrl}#${gistId}`;
 }
 

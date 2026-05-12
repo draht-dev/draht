@@ -7230,6 +7230,23 @@ export const MODELS = {
 			contextWindow: 1000000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
+		"anthropic/claude-opus-4.7-fast": {
+			id: "anthropic/claude-opus-4.7-fast",
+			name: "Anthropic: Claude Opus 4.7 (Fast)",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 30,
+				output: 150,
+				cacheRead: 3,
+				cacheWrite: 37.5,
+			},
+			contextWindow: 1000000,
+			maxTokens: 128000,
+		} satisfies Model<"openai-completions">,
 		"anthropic/claude-sonnet-4": {
 			id: "anthropic/claude-sonnet-4",
 			name: "Anthropic: Claude Sonnet 4",
@@ -7737,7 +7754,7 @@ export const MODELS = {
 				cacheRead: 0.024999999999999998,
 				cacheWrite: 0.08333333333333334,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1048576,
 			maxTokens: 8192,
 		} satisfies Model<"openai-completions">,
 		"google/gemini-2.0-flash-lite-001": {
@@ -8570,7 +8587,7 @@ export const MODELS = {
 				cacheRead: 0.04,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 262144,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"mistralai/mistral-nemo": {
@@ -8774,8 +8791,8 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 32768,
-			maxTokens: 32768,
+			contextWindow: 262142,
+			maxTokens: 262142,
 		} satisfies Model<"openai-completions">,
 		"nex-agi/deepseek-v3.1-nex-n1": {
 			id: "nex-agi/deepseek-v3.1-nex-n1",
@@ -11562,8 +11579,8 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 32768,
-			maxTokens: 32768,
+			contextWindow: 262142,
+			maxTokens: 262142,
 		} satisfies Model<"openai-completions">,
 		"~openai/gpt-latest": {
 			id: "~openai/gpt-latest",

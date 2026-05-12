@@ -17,7 +17,7 @@ pkg update && pkg upgrade
 pkg install nodejs termux-api git
 
 # Install pi
-npm install -g @draht/coding-agent
+npm install -g @earendil-works/pi-coding-agent
 
 # Create config directory
 mkdir -p ~/.pi/agent
@@ -53,7 +53,7 @@ termux-open-url "https://example.com"
 ## Opening Files
 ```bash
 termux-open file.pdf          # Opens with default app
-termux-open -c image.jpg      # Choose app
+termux-open --chooser image.jpg      # Choose app
 ```
 
 ## Clipboard

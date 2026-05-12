@@ -15,36 +15,31 @@ Pi supports subscription-based providers via OAuth and API key providers via env
 
 Use `/login` in interactive mode, then select a provider:
 
-- Claude Pro/Max
 - ChatGPT Plus/Pro (Codex)
+- Claude Pro/Max
 - GitHub Copilot
-- Google Gemini CLI
-- Google Antigravity
 
 Use `/logout` to clear credentials. Tokens are stored in `~/.pi/agent/auth.json` and auto-refresh when expired.
+
+### OpenAI Codex
+
+- Requires ChatGPT Plus or Pro subscription
+- Officially endorsed by OpenAI: [Codex for OSS](https://developers.openai.com/community/codex-for-oss)
+
+### Claude Pro/Max
+
+Anthropic subscription auth is active for Claude Pro/Max accounts. Third-party harness usage draws from [extra usage](https://claude.ai/settings/usage) and is billed per token, not against Claude plan limits.
 
 ### GitHub Copilot
 
 - Press Enter for github.com, or enter your GitHub Enterprise Server domain
 - If you get "model not supported", enable it in VS Code: Copilot Chat → model selector → select model → "Enable"
 
-### Google Providers
-
-- **Gemini CLI**: Standard Gemini models via Cloud Code Assist
-- **Antigravity**: Sandbox with Gemini 3, Claude, and GPT-OSS models
-- Both free with any Google account, subject to rate limits
-- For paid Cloud Code Assist: set `GOOGLE_CLOUD_PROJECT` env var
-
-### OpenAI Codex
-
-- Requires ChatGPT Plus or Pro subscription
-- Personal use only; for production, use the OpenAI Platform API
-
 ## API Keys
 
 ### Environment Variables or Auth File
 
-Set via environment variable:
+Use `/login` in interactive mode and select a provider to store an API key in `auth.json`, or set credentials via environment variable:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -56,10 +51,13 @@ pi
 | Anthropic | `ANTHROPIC_API_KEY` | `anthropic` |
 | Azure OpenAI Responses | `AZURE_OPENAI_API_KEY` | `azure-openai-responses` |
 | OpenAI | `OPENAI_API_KEY` | `openai` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek` |
 | Google Gemini | `GEMINI_API_KEY` | `google` |
 | Mistral | `MISTRAL_API_KEY` | `mistral` |
 | Groq | `GROQ_API_KEY` | `groq` |
 | Cerebras | `CEREBRAS_API_KEY` | `cerebras` |
+| Cloudflare AI Gateway | `CLOUDFLARE_API_KEY` (+ `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_GATEWAY_ID`) | `cloudflare-ai-gateway` |
+| Cloudflare Workers AI | `CLOUDFLARE_API_KEY` (+ `CLOUDFLARE_ACCOUNT_ID`) | `cloudflare-workers-ai` |
 | xAI | `XAI_API_KEY` | `xai` |
 | OpenRouter | `OPENROUTER_API_KEY` | `openrouter` |
 | Vercel AI Gateway | `AI_GATEWAY_API_KEY` | `vercel-ai-gateway` |
@@ -67,11 +65,17 @@ pi
 | OpenCode Zen | `OPENCODE_API_KEY` | `opencode` |
 | OpenCode Go | `OPENCODE_API_KEY` | `opencode-go` |
 | Hugging Face | `HF_TOKEN` | `huggingface` |
+| Fireworks | `FIREWORKS_API_KEY` | `fireworks` |
+| Together AI | `TOGETHER_API_KEY` | `together` |
 | Kimi For Coding | `KIMI_API_KEY` | `kimi-coding` |
 | MiniMax | `MINIMAX_API_KEY` | `minimax` |
 | MiniMax (China) | `MINIMAX_CN_API_KEY` | `minimax-cn` |
+| Xiaomi MiMo | `XIAOMI_API_KEY` | `xiaomi` |
+| Xiaomi MiMo Token Plan (China) | `XIAOMI_TOKEN_PLAN_CN_API_KEY` | `xiaomi-token-plan-cn` |
+| Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` | `xiaomi-token-plan-ams` |
+| Xiaomi MiMo Token Plan (Singapore) | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` | `xiaomi-token-plan-sgp` |
 
-Reference for environment variables and `auth.json` keys: [`const envMap`](https://github.com/draht-dev/draht/blob/main/packages/ai/src/env-api-keys.ts) in [`packages/ai/src/env-api-keys.ts`](https://github.com/draht-dev/draht/blob/main/packages/ai/src/env-api-keys.ts).
+Reference for environment variables and `auth.json` keys: [`const envMap`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/env-api-keys.ts) in [`packages/ai/src/env-api-keys.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/env-api-keys.ts).
 
 #### Auth File
 
@@ -81,9 +85,15 @@ Store credentials in `~/.pi/agent/auth.json`:
 {
   "anthropic": { "type": "api_key", "key": "sk-ant-..." },
   "openai": { "type": "api_key", "key": "sk-..." },
+  "deepseek": { "type": "api_key", "key": "sk-..." },
   "google": { "type": "api_key", "key": "..." },
   "opencode": { "type": "api_key", "key": "..." },
-  "opencode-go": { "type": "api_key", "key": "..." }
+  "opencode-go": { "type": "api_key", "key": "..." },
+  "together": { "type": "api_key", "key": "..." },
+  "xiaomi": { "type": "api_key", "key": "..." },
+  "xiaomi-token-plan-cn":  { "type": "api_key", "key": "..." },
+  "xiaomi-token-plan-ams": { "type": "api_key", "key": "..." },
+  "xiaomi-token-plan-sgp": { "type": "api_key", "key": "..." }
 }
 ```
 
@@ -116,6 +126,8 @@ OAuth credentials are also stored here after `/login` and managed automatically.
 ```bash
 export AZURE_OPENAI_API_KEY=...
 export AZURE_OPENAI_BASE_URL=https://your-resource.openai.azure.com
+# also supported: https://your-resource.cognitiveservices.azure.com
+# root endpoints are auto-normalized to /openai/v1
 # or use resource name instead of base URL
 export AZURE_OPENAI_RESOURCE_NAME=your-resource
 
@@ -166,6 +178,42 @@ export AWS_BEDROCK_SKIP_AUTH=1
 # Set if your proxy only supports HTTP/1.1
 export AWS_BEDROCK_FORCE_HTTP1=1
 ```
+
+### Cloudflare AI Gateway
+
+`CLOUDFLARE_API_KEY` can be set via `/login`. The account ID and gateway slug must be set as environment variables.
+
+```bash
+export CLOUDFLARE_API_KEY=...           # or use /login
+export CLOUDFLARE_ACCOUNT_ID=...
+export CLOUDFLARE_GATEWAY_ID=...        # create at dash.cloudflare.com → AI → AI Gateway
+pi --provider cloudflare-ai-gateway --model "claude-sonnet-4-5"
+```
+
+Routes to OpenAI, Anthropic, and Workers AI through Cloudflare AI Gateway. Workers AI uses the Unified API (`/compat`) and prefixed model IDs (`workers-ai/@cf/...`). OpenAI uses the OpenAI passthrough route (`/openai`) with native OpenAI model IDs such as `gpt-5.1`. Anthropic uses the Anthropic passthrough route (`/anthropic`) with native Anthropic model IDs such as `claude-sonnet-4-5`.
+
+AI Gateway authentication uses `CLOUDFLARE_API_KEY` as `cf-aig-authorization`. Upstream authentication can be one of:
+
+| Mode | Request auth | Upstream auth |
+|------|--------------|---------------|
+| Workers AI | Cloudflare token only | Cloudflare-native |
+| Unified billing | Cloudflare token only | Cloudflare handles upstream auth and deducts credits |
+| Stored BYOK | Cloudflare token only | Cloudflare injects provider keys stored in the AI Gateway dashboard |
+| Inline BYOK | Cloudflare token plus upstream `Authorization` header | The request supplies the upstream provider key |
+
+For normal pi usage, prefer unified billing or stored BYOK. Inline BYOK requires configuring an additional upstream `Authorization` header for the Cloudflare AI Gateway provider, for example via a `models.json` provider/model override.
+
+### Cloudflare Workers AI
+
+`CLOUDFLARE_API_KEY` can be set via `/login`. `CLOUDFLARE_ACCOUNT_ID` must be set as an environment variable.
+
+```bash
+export CLOUDFLARE_API_KEY=...           # or use /login
+export CLOUDFLARE_ACCOUNT_ID=...
+pi --provider cloudflare-workers-ai --model "@cf/moonshotai/kimi-k2.6"
+```
+
+Pi automatically sets `x-session-affinity` for [prefix caching](https://developers.cloudflare.com/workers-ai/features/prompt-caching/) discounts.
 
 ### Google Vertex AI
 

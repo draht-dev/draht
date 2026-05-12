@@ -2,7 +2,7 @@
 
 RPC mode enables headless operation of the coding agent via a JSON protocol over stdin/stdout. This is useful for embedding the agent in other applications, IDEs, or custom UIs.
 
-**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@draht/coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
+**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@earendil-works/pi-coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
 
 ## Starting RPC Mode
 
@@ -41,7 +41,7 @@ In particular, Node `readline` is not protocol-compliant for RPC mode because it
 
 #### prompt
 
-Send a user prompt to the agent. Returns immediately; events stream asynchronously.
+Send a user prompt to the agent. The command response is emitted after the prompt is accepted, queued, or handled. Events continue streaming asynchronously after acceptance.
 
 ```json
 {"id": "req-1", "type": "prompt", "message": "Hello, world!"}
@@ -71,6 +71,8 @@ Response:
 ```json
 {"id": "req-1", "type": "response", "command": "prompt", "success": true}
 ```
+
+`success: true` means the prompt was accepted, queued, or handled immediately. `success: false` means the prompt was rejected before acceptance. Failures after acceptance are reported through the normal event and message stream, not as a second `response` for the same request id.
 
 The `images` field is optional. Each image uses `ImageContent` format: `{"type": "image", "data": "base64-encoded-data", "mimeType": "image/png"}`.
 
@@ -464,13 +466,13 @@ The `bash` command executes immediately and returns a `BashResult`. Internally, 
 
 When the next `prompt` command is sent, all messages (including `BashExecutionMessage`) are transformed before being sent to the LLM. The `BashExecutionMessage` is converted to a `UserMessage` with this format:
 
-```
+````
 Ran `ls -la`
-\`\`\`
+```
 total 48
 drwxr-xr-x ...
-\`\`\`
 ```
+````
 
 This means:
 1. Bash output is included in the LLM context on the **next prompt**, not immediately
@@ -578,7 +580,7 @@ If an extension cancelled the switch:
 
 #### fork
 
-Create a new fork from a previous user message. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from.
+Create a new fork from a previous user message on the active branch. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from.
 
 ```json
 {"type": "fork", "entryId": "abc123"}
@@ -601,6 +603,34 @@ If an extension cancelled the fork:
   "command": "fork",
   "success": true,
   "data": {"text": "The original prompt text...", "cancelled": true}
+}
+```
+
+#### clone
+
+Duplicate the current active branch into a new session at the current position. Can be cancelled by a `session_before_fork` extension event handler.
+
+```json
+{"type": "clone"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "clone",
+  "success": true,
+  "data": {"cancelled": false}
+}
+```
+
+If an extension cancelled the clone:
+```json
+{
+  "type": "response",
+  "command": "clone",
+  "success": true,
+  "data": {"cancelled": true}
 }
 ```
 
@@ -964,7 +994,7 @@ If a dialog method includes a `timeout` field, the agent-side will auto-resolve 
 
 Some `ExtensionUIContext` methods are not supported or degraded in RPC mode because they require direct TUI access:
 - `custom()` returns `undefined`
-- `setWorkingMessage()`, `setFooter()`, `setHeader()`, `setEditorComponent()`, `setToolsExpanded()` are no-ops
+- `setWorkingMessage()`, `setWorkingIndicator()`, `setFooter()`, `setHeader()`, `setEditorComponent()`, `setToolsExpanded()` are no-ops
 - `getEditorText()` returns `""`
 - `getToolsExpanded()` returns `false`
 - `pasteToEditor()` delegates to `setEditorText()` (no paste/collapse handling)
@@ -1289,7 +1319,7 @@ import subprocess
 import json
 
 proc = subprocess.Popen(
-    ["draht", "--mode", "rpc", "--no-session"],
+    ["pi", "--mode", "rpc", "--no-session"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     text=True
@@ -1328,7 +1358,7 @@ For a complete example of handling the extension UI protocol, see [`examples/rpc
 const { spawn } = require("child_process");
 const { StringDecoder } = require("string_decoder");
 
-const agent = spawn("draht", ["--mode", "rpc", "--no-session"]);
+const agent = spawn("pi", ["--mode", "rpc", "--no-session"]);
 
 function attachJsonlReader(stream, onLine) {
     const decoder = new StringDecoder("utf8");

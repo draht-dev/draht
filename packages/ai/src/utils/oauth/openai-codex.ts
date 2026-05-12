@@ -21,6 +21,7 @@ import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
 import { generatePKCE } from "./pkce.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthPrompt, OAuthProviderInterface } from "./types.js";
 
+const CALLBACK_HOST = process.env.PI_OAUTH_CALLBACK_HOST || "127.0.0.1";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -29,7 +30,7 @@ const SCOPE = "openid profile email offline_access";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
-type TokenFailure = { type: "failed" };
+type TokenFailure = { type: "failed"; message: string; status?: number };
 type TokenResult = TokenSuccess | TokenFailure;
 
 type JwtPayload = {
@@ -107,8 +108,11 @@ async function exchangeAuthorizationCode(
 
 	if (!response.ok) {
 		const text = await response.text().catch(() => "");
-		console.error("[openai-codex] code->token failed:", response.status, text);
-		return { type: "failed" };
+		return {
+			type: "failed",
+			status: response.status,
+			message: `OpenAI Codex token exchange failed (${response.status}): ${text || response.statusText}`,
+		};
 	}
 
 	const json = (await response.json()) as {
@@ -118,8 +122,10 @@ async function exchangeAuthorizationCode(
 	};
 
 	if (!json.access_token || !json.refresh_token || typeof json.expires_in !== "number") {
-		console.error("[openai-codex] token response missing fields:", json);
-		return { type: "failed" };
+		return {
+			type: "failed",
+			message: `OpenAI Codex token exchange response missing fields: ${JSON.stringify(json)}`,
+		};
 	}
 
 	return {
@@ -144,8 +150,11 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 
 		if (!response.ok) {
 			const text = await response.text().catch(() => "");
-			console.error("[openai-codex] Token refresh failed:", response.status, text);
-			return { type: "failed" };
+			return {
+				type: "failed",
+				status: response.status,
+				message: `OpenAI Codex token refresh failed (${response.status}): ${text || response.statusText}`,
+			};
 		}
 
 		const json = (await response.json()) as {
@@ -155,8 +164,10 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 		};
 
 		if (!json.access_token || !json.refresh_token || typeof json.expires_in !== "number") {
-			console.error("[openai-codex] Token refresh response missing fields:", json);
-			return { type: "failed" };
+			return {
+				type: "failed",
+				message: `OpenAI Codex token refresh response missing fields: ${JSON.stringify(json)}`,
+			};
 		}
 
 		return {
@@ -166,13 +177,15 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 			expires: Date.now() + json.expires_in * 1000,
 		};
 	} catch (error) {
-		console.error("[openai-codex] Token refresh error:", error);
-		return { type: "failed" };
+		return {
+			type: "failed",
+			message: `OpenAI Codex token refresh error: ${error instanceof Error ? error.message : String(error)}`,
+		};
 	}
 }
 
 async function createAuthorizationFlow(
-	originator: string = "draht",
+	originator: string = "pi",
 ): Promise<{ verifier: string; state: string; url: string }> {
 	const { verifier, challenge } = await generatePKCE();
 	const state = createState();
@@ -248,7 +261,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 
 	return new Promise((resolve) => {
 		server
-			.listen(1455, "127.0.0.1", () => {
+			.listen(1455, CALLBACK_HOST, () => {
 				resolve({
 					close: () => server.close(),
 					cancelWait: () => {
@@ -257,12 +270,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 					waitForCode: () => waitForCodePromise,
 				});
 			})
-			.on("error", (err: NodeJS.ErrnoException) => {
-				console.error(
-					"[openai-codex] Failed to bind http://127.0.0.1:1455 (",
-					err.code,
-					") Falling back to manual paste.",
-				);
+			.on("error", (_err: NodeJS.ErrnoException) => {
 				settleWait?.(null);
 				resolve({
 					close: () => {
@@ -295,7 +303,7 @@ function getAccountId(accessToken: string): string | null {
  * @param options.onManualCodeInput - Optional promise that resolves with user-pasted code.
  *                                    Races with browser callback - whichever completes first wins.
  *                                    Useful for showing paste input immediately alongside browser flow.
- * @param options.originator - OAuth originator parameter (defaults to "draht")
+ * @param options.originator - OAuth originator parameter (defaults to "pi")
  */
 export async function loginOpenAICodex(options: {
 	onAuth: (info: { url: string; instructions?: string }) => void;
@@ -385,7 +393,7 @@ export async function loginOpenAICodex(options: {
 
 		const tokenResult = await exchangeAuthorizationCode(code, verifier);
 		if (tokenResult.type !== "success") {
-			throw new Error("Token exchange failed");
+			throw new Error(tokenResult.message);
 		}
 
 		const accountId = getAccountId(tokenResult.access);
@@ -410,7 +418,7 @@ export async function loginOpenAICodex(options: {
 export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
 	const result = await refreshAccessToken(refreshToken);
 	if (result.type !== "success") {
-		throw new Error("Failed to refresh OpenAI Codex token");
+		throw new Error(result.message);
 	}
 
 	const accountId = getAccountId(result.access);

@@ -22,13 +22,14 @@
  * Fixtures are generated fresh on each run.
  */
 
-import { Type } from "@sinclair/typebox";
 import { writeFileSync } from "fs";
+import { Type } from "typebox";
 import { beforeAll, describe, expect, it } from "vitest";
 import { getModel } from "../src/models.js";
 import { completeSimple, getEnvApiKey } from "../src/stream.js";
 import type { Api, AssistantMessage, Message, Model, Tool, ToolResultMessage } from "../src/types.js";
 import { hasAzureOpenAICredentials } from "./azure-utils.js";
+import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.js";
 import { resolveApiKey } from "./oauth.js";
 
 // Simple tool for testing
@@ -48,6 +49,7 @@ interface ProviderModelPair {
 	model: string;
 	label: string;
 	apiOverride?: Api;
+	upstreamApiKeyEnv?: string;
 }
 
 const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
@@ -66,9 +68,6 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	{ provider: "azure-openai-responses", model: "gpt-4o-mini", label: "azure-openai-responses-gpt-4o-mini" },
 	// OpenAI Codex
 	{ provider: "openai-codex", model: "gpt-5.2-codex", label: "openai-codex-gpt-5.2-codex" },
-	// Google Antigravity
-	{ provider: "google-antigravity", model: "gemini-3-flash", label: "antigravity-gemini-3-flash" },
-	{ provider: "google-antigravity", model: "claude-sonnet-4-5", label: "antigravity-claude-sonnet-4-5" },
 	// GitHub Copilot
 	{ provider: "github-copilot", model: "claude-sonnet-4.5", label: "copilot-claude-sonnet-4.5" },
 	{ provider: "github-copilot", model: "gpt-5.1-codex", label: "copilot-gpt-5.1-codex" },
@@ -84,16 +83,39 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	{ provider: "xai", model: "grok-code-fast-1", label: "xai-grok-code-fast-1" },
 	// Cerebras
 	{ provider: "cerebras", model: "zai-glm-4.7", label: "cerebras-zai-glm-4.7" },
+	// Cloudflare Workers AI
+	{ provider: "cloudflare-workers-ai", model: "@cf/moonshotai/kimi-k2.6", label: "cloudflare-kimi-k2.6" },
+	// Cloudflare AI Gateway
+	{
+		provider: "cloudflare-ai-gateway",
+		model: "workers-ai/@cf/moonshotai/kimi-k2.6",
+		label: "cloudflare-gateway-kimi-k2.6",
+	},
+	{
+		provider: "cloudflare-ai-gateway",
+		model: "claude-sonnet-4-5",
+		label: "cloudflare-gateway-claude-sonnet-4-5",
+		upstreamApiKeyEnv: "ANTHROPIC_API_KEY",
+	},
+	{
+		provider: "cloudflare-ai-gateway",
+		model: "gpt-5.1",
+		label: "cloudflare-gateway-gpt-5.1",
+		upstreamApiKeyEnv: "OPENAI_API_KEY",
+	},
 	// Groq
 	{ provider: "groq", model: "openai/gpt-oss-120b", label: "groq-gpt-oss-120b" },
 	// Hugging Face
 	{ provider: "huggingface", model: "moonshotai/Kimi-K2.5", label: "huggingface-kimi-k2.5" },
+	// Together AI
+	{ provider: "together", model: "moonshotai/Kimi-K2.6", label: "together-kimi-k2.6" },
 	// Kimi For Coding
 	{ provider: "kimi-coding", model: "kimi-k2-thinking", label: "kimi-coding-k2-thinking" },
 	// Mistral
 	{ provider: "mistral", model: "devstral-medium-latest", label: "mistral-devstral-medium" },
 	// MiniMax
 	{ provider: "minimax", model: "MiniMax-M2.7", label: "minimax-m2.7" },
+	{ provider: "minimax-cn", model: "MiniMax-M2.7", label: "minimax-m2.7" },
 	// OpenCode Zen
 	{ provider: "opencode", model: "big-pickle", label: "zen-big-pickle" },
 	{ provider: "opencode", model: "claude-sonnet-4-5", label: "zen-claude-sonnet-4-5" },
@@ -104,6 +126,11 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	// OpenCode Go
 	{ provider: "opencode-go", model: "kimi-k2.5", label: "go-kimi-k2.5" },
 	{ provider: "opencode-go", model: "minimax-m2.5", label: "go-minimax-m2.5" },
+	// Xiaomi MiMo
+	{ provider: "xiaomi", model: "mimo-v2.5-pro", label: "xiaomi-mimo-v2.5-pro" },
+	{ provider: "xiaomi-token-plan-cn", model: "mimo-v2.5-pro", label: "xiaomi-token-plan-cn-mimo-v2.5-pro" },
+	{ provider: "xiaomi-token-plan-ams", model: "mimo-v2.5-pro", label: "xiaomi-token-plan-ams-mimo-v2.5-pro" },
+	{ provider: "xiaomi-token-plan-sgp", model: "mimo-v2.5-pro", label: "xiaomi-token-plan-sgp-mimo-v2.5-pro" },
 ];
 
 // Cached context structure
@@ -128,18 +155,31 @@ async function getApiKey(provider: string): Promise<string | undefined> {
 /**
  * Synchronous check for API key availability (env vars only, for skipIf)
  */
-function hasApiKey(provider: string): boolean {
-	if (provider === "azure-openai-responses") {
+function hasApiKey(pair: ProviderModelPair): boolean {
+	if (pair.provider === "azure-openai-responses") {
 		return hasAzureOpenAICredentials();
 	}
-	return !!getEnvApiKey(provider);
+	if (pair.provider === "cloudflare-workers-ai") {
+		return hasCloudflareWorkersAICredentials();
+	}
+	if (pair.provider === "cloudflare-ai-gateway") {
+		if (!hasCloudflareAiGatewayCredentials()) return false;
+		return pair.upstreamApiKeyEnv ? !!process.env[pair.upstreamApiKeyEnv] : true;
+	}
+	return !!getEnvApiKey(pair.provider);
+}
+
+function getHeaders(pair: ProviderModelPair): Record<string, string> | undefined {
+	if (!pair.upstreamApiKeyEnv) return undefined;
+	const upstreamApiKey = process.env[pair.upstreamApiKeyEnv];
+	return upstreamApiKey ? { Authorization: `Bearer ${upstreamApiKey}` } : undefined;
 }
 
 /**
  * Check if any provider has API keys available (for skipIf at describe level)
  */
 function hasAnyApiKey(): boolean {
-	return PROVIDER_MODEL_PAIRS.some((pair) => hasApiKey(pair.provider));
+	return PROVIDER_MODEL_PAIRS.some((pair) => hasApiKey(pair));
 }
 
 function dumpFailurePayload(params: { label: string; error: string; payload?: unknown; messages: Message[] }): void {
@@ -177,6 +217,7 @@ async function generateContext(
 	};
 
 	const supportsReasoning = model.reasoning === true;
+	const headers = getHeaders(pair);
 	let lastPayload: unknown;
 	let assistantResponse: AssistantMessage;
 	try {
@@ -190,6 +231,7 @@ async function generateContext(
 			{
 				apiKey,
 				reasoning: supportsReasoning ? "high" : undefined,
+				headers,
 				onPayload: (payload) => {
 					lastPayload = payload;
 				},
@@ -251,6 +293,7 @@ async function generateContext(
 			{
 				apiKey,
 				reasoning: supportsReasoning ? "high" : undefined,
+				headers,
 				onPayload: (payload) => {
 					lastPayload = payload;
 				},
@@ -297,7 +340,7 @@ describe.skipIf(!hasAnyApiKey())("Cross-Provider Handoff", () => {
 
 		for (const pair of PROVIDER_MODEL_PAIRS) {
 			const apiKey = await getApiKey(pair.provider);
-			if (!apiKey) {
+			if (!apiKey || !hasApiKey(pair)) {
 				console.log(`[${pair.label}] Skipping - no auth for ${pair.provider}`);
 				continue;
 			}
@@ -345,7 +388,7 @@ describe.skipIf(!hasAnyApiKey())("Cross-Provider Handoff", () => {
 
 			for (const targetPair of availablePairs) {
 				const apiKey = await getApiKey(targetPair.provider);
-				if (!apiKey) {
+				if (!apiKey || !hasApiKey(targetPair)) {
 					console.log(`[Target: ${targetPair.label}] Skipping - no auth`);
 					continue;
 				}
@@ -385,6 +428,7 @@ describe.skipIf(!hasAnyApiKey())("Cross-Provider Handoff", () => {
 					? { ...baseModel, api: targetPair.apiOverride }
 					: baseModel;
 				const supportsReasoning = model.reasoning === true;
+				const headers = getHeaders(targetPair);
 
 				console.log(
 					`[Target: ${targetPair.label}] Testing with ${otherMessages.length} messages from other providers...`,
@@ -402,6 +446,7 @@ describe.skipIf(!hasAnyApiKey())("Cross-Provider Handoff", () => {
 						{
 							apiKey,
 							reasoning: supportsReasoning ? "high" : undefined,
+							headers,
 							onPayload: (payload) => {
 								lastPayload = payload;
 							},

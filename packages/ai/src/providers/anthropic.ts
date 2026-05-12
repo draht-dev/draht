@@ -1,12 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type {
+	CacheControlEphemeral,
 	ContentBlockParam,
 	MessageCreateParamsStreaming,
 	MessageParam,
+	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost, supportsMax } from "../models.js";
+import { calculateCost } from "../models.js";
 import type {
+	AnthropicMessagesCompat,
 	Api,
 	AssistantMessage,
 	CacheRetention,
@@ -25,9 +28,11 @@ import type {
 	ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import { headersToRecord } from "../utils/headers.js";
+import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
+import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
@@ -47,62 +52,44 @@ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention 
 }
 
 function getCacheControl(
-	baseUrl: string,
+	model: Model<"anthropic-messages">,
 	cacheRetention?: CacheRetention,
-): { retention: CacheRetention; cacheControl?: { type: "ephemeral"; ttl?: "1h" } } {
+): { retention: CacheRetention; cacheControl?: CacheControlEphemeral } {
 	const retention = resolveCacheRetention(cacheRetention);
 	if (retention === "none") {
 		return { retention };
 	}
-	const ttl = retention === "long" && baseUrl.includes("api.anthropic.com") ? "1h" : undefined;
+	const ttl = retention === "long" && getAnthropicCompat(model).supportsLongCacheRetention ? "1h" : undefined;
 	return {
 		retention,
 		cacheControl: { type: "ephemeral", ...(ttl && { ttl }) },
 	};
 }
 
-// Stealth mode: Mimic Claude Code's identity, headers, and tool naming.
-// Source: https://cchistory.mariozechner.at/data/prompts-2.1.100.md
-// To update: https://github.com/badlogic/cchistory
-const claudeCodeVersion = "2.1.100";
-// Build hash suffix that Claude Code appends to the billing header's cc_version.
-// Each real release has its own hash (e.g. 2.1.100 -> "1af", 2.1.90 -> "232").
-// This value only needs to parse; it is not cryptographically verified server-side.
-const claudeCodeBuild = "1af";
-// First line of Claude Code's system prompt. Anthropic uses this to classify
-// traffic as first-party Claude Code (vs third-party SDK usage) for billing.
-const claudeCodeBillingHeader = `x-anthropic-billing-header: cc_version=${claudeCodeVersion}.${claudeCodeBuild}; cc_entrypoint=sdk-cli; cch=00000;`;
-// Identity statement that immediately follows the billing header in real Claude Code.
-const claudeCodeIdentity = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+// Stealth mode: Mimic Claude Code's tool naming exactly
+const claudeCodeVersion = "2.1.75";
 
-// Claude Code 2.1.100 tool names (canonical casing), both active and deferred
-// (deferred tools are loaded on-demand via ToolSearch but still use these names).
+// Claude Code 2.x tool names (canonical casing)
+// Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
+// To update: https://github.com/badlogic/cchistory
 const claudeCodeTools = [
-	"Agent",
-	"AskUserQuestion",
-	"Bash",
-	"CronCreate",
-	"CronDelete",
-	"CronList",
-	"Edit",
-	"EnterPlanMode",
-	"EnterWorktree",
-	"ExitPlanMode",
-	"ExitWorktree",
-	"Glob",
-	"Grep",
-	"Monitor",
-	"NotebookEdit",
 	"Read",
-	"RemoteTrigger",
+	"Write",
+	"Edit",
+	"Bash",
+	"Grep",
+	"Glob",
+	"AskUserQuestion",
+	"EnterPlanMode",
+	"ExitPlanMode",
+	"KillShell",
+	"NotebookEdit",
 	"Skill",
+	"Task",
 	"TaskOutput",
-	"TaskStop",
 	"TodoWrite",
-	"ToolSearch",
 	"WebFetch",
 	"WebSearch",
-	"Write",
 ];
 
 const ccToolLookup = new Map(claudeCodeTools.map((t) => [t.toLowerCase(), t]));
@@ -170,7 +157,26 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	return blocks;
 }
 
-export type AnthropicEffort = "low" | "medium" | "high" | "max";
+export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export type AnthropicThinkingDisplay = "summarized" | "omitted";
+
+const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
+const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
+
+function getAnthropicCompat(model: Model<"anthropic-messages">): Required<AnthropicMessagesCompat> {
+	// Auto-detect session affinity and cache control support from provider
+	const isFireworks = model.provider === "fireworks";
+	const isCloudflareAiGatewayAnthropic =
+		model.provider === "cloudflare-ai-gateway" && model.baseUrl.includes("anthropic");
+	return {
+		supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? !isFireworks,
+		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? !isFireworks,
+		sendSessionAffinityHeaders:
+			model.compat?.sendSessionAffinityHeaders ?? !!(isFireworks || isCloudflareAiGatewayAnthropic),
+		supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? !isFireworks,
+	};
+}
 
 export interface AnthropicOptions extends StreamOptions {
 	/**
@@ -185,15 +191,28 @@ export interface AnthropicOptions extends StreamOptions {
 	 */
 	thinkingBudgetTokens?: number;
 	/**
-	 * Effort level for adaptive thinking (Opus 4.6 and Sonnet 4.6).
+	 * Effort level for adaptive thinking (Opus 4.6+ and Sonnet 4.6).
 	 * Controls how much thinking Claude allocates:
 	 * - "max": Always thinks with no constraints (Opus 4.6 only)
+	 * - "xhigh": Highest reasoning level (Opus 4.7)
 	 * - "high": Always thinks, deep reasoning (default)
 	 * - "medium": Moderate thinking, may skip for simple queries
 	 * - "low": Minimal thinking, skips for simple tasks
 	 * Ignored for older models.
 	 */
 	effort?: AnthropicEffort;
+	/**
+	 * Controls how thinking content is returned in API responses.
+	 * - "summarized": Thinking blocks contain summarized thinking text (default here).
+	 * - "omitted": Thinking blocks return an empty thinking field; the encrypted
+	 *   signature still travels back for multi-turn continuity. Use for faster
+	 *   time-to-first-text-token when your UI does not surface thinking.
+	 *
+	 * Note: Anthropic's API default for Claude Opus 4.7 and Claude Mythos Preview
+	 * is "omitted". We default to "summarized" here to keep behavior consistent
+	 * with older Claude 4 models. Set this explicitly to "omitted" to opt in.
+	 */
+	thinkingDisplay?: AnthropicThinkingDisplay;
 	interleavedThinking?: boolean;
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	/**
@@ -204,14 +223,206 @@ export interface AnthropicOptions extends StreamOptions {
 	client?: Anthropic;
 }
 
-function mergeHeaders(...headerSources: (Record<string, string> | undefined)[]): Record<string, string> {
-	const merged: Record<string, string> = {};
+function mergeHeaders(...headerSources: (Record<string, string | null> | undefined)[]): Record<string, string | null> {
+	const merged: Record<string, string | null> = {};
 	for (const headers of headerSources) {
 		if (headers) {
 			Object.assign(merged, headers);
 		}
 	}
 	return merged;
+}
+
+interface ServerSentEvent {
+	event: string | null;
+	data: string;
+	raw: string[];
+}
+
+interface SseDecoderState {
+	event: string | null;
+	data: string[];
+	raw: string[];
+}
+
+const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
+	"message_start",
+	"message_delta",
+	"message_stop",
+	"content_block_start",
+	"content_block_delta",
+	"content_block_stop",
+]);
+
+function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
+	if (!state.event && state.data.length === 0) {
+		return null;
+	}
+
+	const event: ServerSentEvent = {
+		event: state.event,
+		data: state.data.join("\n"),
+		raw: [...state.raw],
+	};
+	state.event = null;
+	state.data = [];
+	state.raw = [];
+	return event;
+}
+
+function decodeSseLine(line: string, state: SseDecoderState): ServerSentEvent | null {
+	if (line === "") {
+		return flushSseEvent(state);
+	}
+
+	state.raw.push(line);
+	if (line.startsWith(":")) {
+		return null;
+	}
+
+	const delimiterIndex = line.indexOf(":");
+	const fieldName = delimiterIndex === -1 ? line : line.slice(0, delimiterIndex);
+	let value = delimiterIndex === -1 ? "" : line.slice(delimiterIndex + 1);
+	if (value.startsWith(" ")) {
+		value = value.slice(1);
+	}
+
+	if (fieldName === "event") {
+		state.event = value;
+	} else if (fieldName === "data") {
+		state.data.push(value);
+	}
+
+	return null;
+}
+
+function nextLineBreakIndex(text: string): number {
+	const carriageReturnIndex = text.indexOf("\r");
+	const newlineIndex = text.indexOf("\n");
+	if (carriageReturnIndex === -1) {
+		return newlineIndex;
+	}
+	if (newlineIndex === -1) {
+		return carriageReturnIndex;
+	}
+	return Math.min(carriageReturnIndex, newlineIndex);
+}
+
+function consumeLine(text: string): { line: string; rest: string } | null {
+	const lineBreakIndex = nextLineBreakIndex(text);
+	if (lineBreakIndex === -1) {
+		return null;
+	}
+
+	let nextIndex = lineBreakIndex + 1;
+	if (text[lineBreakIndex] === "\r" && text[nextIndex] === "\n") {
+		nextIndex += 1;
+	}
+
+	return {
+		line: text.slice(0, lineBreakIndex),
+		rest: text.slice(nextIndex),
+	};
+}
+
+async function* iterateSseMessages(
+	body: ReadableStream<Uint8Array>,
+	signal?: AbortSignal,
+): AsyncGenerator<ServerSentEvent> {
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	const state: SseDecoderState = { event: null, data: [], raw: [] };
+	let buffer = "";
+
+	try {
+		while (true) {
+			if (signal?.aborted) {
+				throw new Error("Request was aborted");
+			}
+
+			const { value, done } = await reader.read();
+			if (done) {
+				break;
+			}
+
+			buffer += decoder.decode(value, { stream: true });
+			let consumed = consumeLine(buffer);
+			while (consumed) {
+				buffer = consumed.rest;
+				const event = decodeSseLine(consumed.line, state);
+				if (event) {
+					yield event;
+				}
+				consumed = consumeLine(buffer);
+			}
+		}
+
+		buffer += decoder.decode();
+		let consumed = consumeLine(buffer);
+		while (consumed) {
+			buffer = consumed.rest;
+			const event = decodeSseLine(consumed.line, state);
+			if (event) {
+				yield event;
+			}
+			consumed = consumeLine(buffer);
+		}
+
+		if (buffer.length > 0) {
+			const event = decodeSseLine(buffer, state);
+			if (event) {
+				yield event;
+			}
+		}
+
+		const trailingEvent = flushSseEvent(state);
+		if (trailingEvent) {
+			yield trailingEvent;
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+async function* iterateAnthropicEvents(
+	response: Response,
+	signal?: AbortSignal,
+): AsyncGenerator<RawMessageStreamEvent> {
+	if (!response.body) {
+		throw new Error("Attempted to iterate over an Anthropic response with no body");
+	}
+
+	let sawMessageStart = false;
+	let sawMessageEnd = false;
+
+	for await (const sse of iterateSseMessages(response.body, signal)) {
+		if (sse.event === "error") {
+			throw new Error(sse.data);
+		}
+
+		if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
+			continue;
+		}
+
+		try {
+			const event = parseJsonWithRepair<RawMessageStreamEvent>(sse.data);
+			if (event.type === "message_start") {
+				sawMessageStart = true;
+			} else if (event.type === "message_stop") {
+				sawMessageEnd = true;
+			}
+			yield event;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(
+				`Could not parse Anthropic SSE event ${sse.event}: ${message}; data=${sse.data}; raw=${sse.raw.join("\\n")}`,
+			);
+		}
+	}
+
+	if (sawMessageStart && !sawMessageEnd) {
+		throw new Error("Anthropic stream ended before message_stop");
+	}
 }
 
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOptions> = (
@@ -259,12 +470,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					});
 				}
 
+				const cacheRetention = options?.cacheRetention ?? resolveCacheRetention();
+				const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
+
 				const created = createClient(
 					model,
 					apiKey,
 					options?.interleavedThinking ?? true,
+					shouldUseFineGrainedToolStreamingBeta(model, context),
 					options?.headers,
 					copilotDynamicHeaders,
+					cacheSessionId,
 				);
 				client = created.client;
 				isOAuth = created.isOAuthToken;
@@ -274,13 +490,19 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			if (nextParams !== undefined) {
 				params = nextParams as MessageCreateParamsStreaming;
 			}
-			const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: options?.signal });
+			const requestOptions = {
+				...(options?.signal ? { signal: options.signal } : {}),
+				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+			};
+			const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
 			const blocks = output.content as Block[];
 
-			for await (const event of anthropicStream) {
+			for await (const event of iterateAnthropicEvents(response, options?.signal)) {
 				if (event.type === "message_start") {
 					output.responseId = event.message.id;
 					// Capture initial token usage from message_start event
@@ -402,7 +624,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							});
 						} else if (block.type === "toolCall") {
 							block.arguments = parseStreamingJson(block.partialJson);
-							delete (block as any).partialJson;
+							// Finalize in-place and strip the scratch buffer so replay only
+							// carries parsed arguments.
+							delete (block as { partialJson?: string }).partialJson;
 							stream.push({
 								type: "toolcall_end",
 								contentIndex: index,
@@ -447,7 +671,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) delete (block as any).index;
+			for (const block of output.content) {
+				delete (block as { index?: number }).index;
+				// partialJson is only a streaming scratch buffer; never persist it.
+				delete (block as { partialJson?: string }).partialJson;
+			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -459,13 +687,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 };
 
 /**
- * Check if a model supports adaptive thinking (Opus 4.6 and Sonnet 4.6)
+ * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.6)
  */
 function supportsAdaptiveThinking(modelId: string): boolean {
-	// Opus 4.6 and Sonnet 4.6 model IDs (with or without date suffix)
+	// Adaptive-thinking model IDs (with or without date suffix)
 	return (
 		modelId.includes("opus-4-6") ||
 		modelId.includes("opus-4.6") ||
+		modelId.includes("opus-4-7") ||
+		modelId.includes("opus-4.7") ||
 		modelId.includes("sonnet-4-6") ||
 		modelId.includes("sonnet-4.6")
 	);
@@ -473,23 +703,23 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 
 /**
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
- * Note: effort "max" is only valid on Opus models that pass `supportsMax`.
+ * Note: effort "max" is only valid on Opus 4.6, while Opus 4.7 supports "xhigh".
  */
-function mapThinkingLevelToEffort(level: SimpleStreamOptions["reasoning"], modelId: string): AnthropicEffort {
-	const supportsMaxEffort = supportsMax({ id: modelId } as Model<Api>);
+function mapThinkingLevelToEffort(
+	model: Model<"anthropic-messages">,
+	level: SimpleStreamOptions["reasoning"],
+): AnthropicEffort {
+	const mapped = level ? model.thinkingLevelMap?.[level] : undefined;
+	if (typeof mapped === "string") return mapped as AnthropicEffort;
+
 	switch (level) {
 		case "minimal":
-			return "low";
 		case "low":
 			return "low";
 		case "medium":
 			return "medium";
 		case "high":
 			return "high";
-		case "xhigh":
-			return supportsMaxEffort ? "max" : "high";
-		case "max":
-			return supportsMaxEffort ? "max" : "high";
 		default:
 			return "high";
 	}
@@ -513,7 +743,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 	// For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
 	// For older models: use budget-based thinking
 	if (supportsAdaptiveThinking(model.id)) {
-		const effort = mapThinkingLevelToEffort(options.reasoning, model.id);
+		const effort = mapThinkingLevelToEffort(model, options.reasoning);
 		return streamAnthropic(model, context, {
 			...base,
 			thinkingEnabled: true,
@@ -544,20 +774,47 @@ function createClient(
 	model: Model<"anthropic-messages">,
 	apiKey: string,
 	interleavedThinking: boolean,
+	useFineGrainedToolStreamingBeta: boolean,
 	optionsHeaders?: Record<string, string>,
 	dynamicHeaders?: Record<string, string>,
+	sessionId?: string,
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
 	// The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model.id);
+	const betaFeatures: string[] = [];
+	if (useFineGrainedToolStreamingBeta) {
+		betaFeatures.push(FINE_GRAINED_TOOL_STREAMING_BETA);
+	}
+	if (needsInterleavedBeta) {
+		betaFeatures.push(INTERLEAVED_THINKING_BETA);
+	}
 
-	// Copilot: Bearer auth, selective betas (no fine-grained-tool-streaming)
+	if (model.provider === "cloudflare-ai-gateway") {
+		const client = new Anthropic({
+			apiKey: null,
+			authToken: null,
+			baseURL: resolveCloudflareBaseUrl(model),
+			dangerouslyAllowBrowser: true,
+			defaultHeaders: mergeHeaders(
+				{
+					accept: "application/json",
+					"anthropic-dangerous-direct-browser-access": "true",
+					"cf-aig-authorization": `Bearer ${apiKey}`,
+					"x-api-key": null,
+					Authorization: null,
+					...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
+				},
+				model.headers,
+				optionsHeaders,
+			),
+		});
+
+		return { client, isOAuthToken: false };
+	}
+
+	// Copilot: Bearer auth, selective betas.
 	if (model.provider === "github-copilot") {
-		const betaFeatures: string[] = [];
-		if (needsInterleavedBeta) {
-			betaFeatures.push("interleaved-thinking-2025-05-14");
-		}
-
 		const client = new Anthropic({
 			apiKey: null,
 			authToken: apiKey,
@@ -578,11 +835,6 @@ function createClient(
 		return { client, isOAuthToken: false };
 	}
 
-	const betaFeatures = ["fine-grained-tool-streaming-2025-05-14"];
-	if (needsInterleavedBeta) {
-		betaFeatures.push("interleaved-thinking-2025-05-14");
-	}
-
 	// OAuth: Bearer auth, Claude Code identity headers
 	if (isOAuthToken(apiKey)) {
 		const client = new Anthropic({
@@ -594,7 +846,7 @@ function createClient(
 				{
 					accept: "application/json",
 					"anthropic-dangerous-direct-browser-access": "true",
-					"anthropic-beta": `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`,
+					"anthropic-beta": ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
 					"user-agent": `claude-cli/${claudeCodeVersion}`,
 					"x-app": "cli",
 				},
@@ -607,6 +859,8 @@ function createClient(
 	}
 
 	// API key auth
+	const sessionAffinityHeaders: Record<string, string | null> =
+		sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders ? { "x-session-affinity": sessionId } : {};
 	const client = new Anthropic({
 		apiKey,
 		baseURL: model.baseUrl,
@@ -615,8 +869,9 @@ function createClient(
 			{
 				accept: "application/json",
 				"anthropic-dangerous-direct-browser-access": "true",
-				"anthropic-beta": betaFeatures.join(","),
+				...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
 			},
+			sessionAffinityHeaders,
 			model.headers,
 			optionsHeaders,
 		),
@@ -631,7 +886,7 @@ function buildParams(
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
-	const { cacheControl } = getCacheControl(model.baseUrl, options?.cacheRetention);
+	const { cacheControl } = getCacheControl(model, options?.cacheRetention);
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
 		messages: convertMessages(context.messages, model, isOAuthToken, cacheControl),
@@ -639,16 +894,12 @@ function buildParams(
 		stream: true,
 	};
 
-	// For OAuth tokens, we MUST prepend the Claude Code billing header and identity.
-	// Anthropic inspects the first system block to classify traffic as first-party
-	// Claude Code (billed against the Claude subscription) vs third-party SDK usage
-	// (billed as extra usage per token). Without these exact strings, Pro/Max/Team
-	// subscriptions are metered as third-party.
+	// For OAuth tokens, we MUST include Claude Code identity
 	if (isOAuthToken) {
 		params.system = [
 			{
 				type: "text",
-				text: `${claudeCodeBillingHeader}\n${claudeCodeIdentity}`,
+				text: "You are Claude Code, Anthropic's official CLI for Claude.",
 				...(cacheControl ? { cache_control: cacheControl } : {}),
 			},
 		];
@@ -675,25 +926,41 @@ function buildParams(
 		params.temperature = options.temperature;
 	}
 
-	if (context.tools) {
-		params.tools = convertTools(context.tools, isOAuthToken);
+	if (context.tools && context.tools.length > 0) {
+		const compat = getAnthropicCompat(model);
+		params.tools = convertTools(
+			context.tools,
+			isOAuthToken,
+			compat.supportsEagerToolInputStreaming,
+			compat.supportsCacheControlOnTools ? cacheControl : undefined,
+		);
 	}
 
-	// Configure thinking mode: adaptive (Opus 4.6 and Sonnet 4.6),
+	// Configure thinking mode: adaptive (Opus 4.6+ and Sonnet 4.6),
 	// budget-based (older models), or explicitly disabled.
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
+			// Default to "summarized" so Opus 4.7 and Mythos Preview behave like
+			// older Claude 4 models (whose API default is also "summarized").
+			const display: AnthropicThinkingDisplay = options.thinkingDisplay ?? "summarized";
 			if (supportsAdaptiveThinking(model.id)) {
-				// Adaptive thinking: Claude decides when and how much to think
-				params.thinking = { type: "adaptive" };
+				// Adaptive thinking: Claude decides when and how much to think.
+				params.thinking = { type: "adaptive", display };
 				if (options.effort) {
-					params.output_config = { effort: options.effort };
+					// The Anthropic SDK types can lag newly supported effort values such as "xhigh".
+					params.output_config =
+						options.effort === "xhigh"
+							? ({ effort: options.effort } as unknown as NonNullable<
+									MessageCreateParamsStreaming["output_config"]
+								>)
+							: { effort: options.effort };
 				}
 			} else {
 				// Budget-based thinking for older models
 				params.thinking = {
 					type: "enabled",
 					budget_tokens: options.thinkingBudgetTokens || 1024,
+					display,
 				};
 			}
 		} else if (options?.thinkingEnabled === false) {
@@ -728,7 +995,7 @@ function convertMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
-	cacheControl?: { type: "ephemeral"; ttl?: "1h" },
+	cacheControl?: CacheControlEphemeral,
 ): MessageParam[] {
 	const params: MessageParam[] = [];
 
@@ -764,8 +1031,7 @@ function convertMessages(
 						};
 					}
 				});
-				let filteredBlocks = !model?.input.includes("image") ? blocks.filter((b) => b.type !== "image") : blocks;
-				filteredBlocks = filteredBlocks.filter((b) => {
+				const filteredBlocks = blocks.filter((b) => {
 					if (b.type === "text") {
 						return b.text.trim().length > 0;
 					}
@@ -889,20 +1155,31 @@ function convertMessages(
 	return params;
 }
 
-function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.Tool[] {
+function shouldUseFineGrainedToolStreamingBeta(model: Model<"anthropic-messages">, context: Context): boolean {
+	return !!context.tools?.length && !getAnthropicCompat(model).supportsEagerToolInputStreaming;
+}
+
+function convertTools(
+	tools: Tool[],
+	isOAuthToken: boolean,
+	supportsEagerToolInputStreaming: boolean,
+	cacheControl?: CacheControlEphemeral,
+): Anthropic.Messages.Tool[] {
 	if (!tools) return [];
 
-	return tools.map((tool) => {
-		const jsonSchema = tool.parameters as any; // TypeBox already generates JSON Schema
+	return tools.map((tool, index) => {
+		const schema = tool.parameters as { properties?: unknown; required?: string[] };
 
 		return {
 			name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
 			description: tool.description,
+			...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
 			input_schema: {
-				type: "object" as const,
-				properties: jsonSchema.properties || {},
-				required: jsonSchema.required || [],
+				type: "object",
+				properties: schema.properties ?? {},
+				required: schema.required ?? [],
 			},
+			...(cacheControl && index === tools.length - 1 ? { cache_control: cacheControl } : {}),
 		};
 	});
 }

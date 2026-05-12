@@ -23,13 +23,8 @@ import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
-const oauthTokens = await Promise.all([
-	resolveApiKey("github-copilot"),
-	resolveApiKey("google-gemini-cli"),
-	resolveApiKey("google-antigravity"),
-	resolveApiKey("openai-codex"),
-]);
-const [githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
+const oauthTokens = await Promise.all([resolveApiKey("github-copilot"), resolveApiKey("openai-codex")]);
+const [githubCopilotToken, openaiCodexToken] = oauthTokens;
 
 // Lorem ipsum paragraph for realistic token estimation
 const LOREM_IPSUM = `Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. `;
@@ -100,8 +95,8 @@ function logResult(result: OverflowResult) {
 
 describe("Context overflow error handling", () => {
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic (API Key)", () => {
-		it("claude-3-5-haiku - should detect overflow via isContextOverflow", async () => {
-			const model = getModel("anthropic", "claude-3-5-haiku-20241022");
+		it("claude-haiku-4-5 - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("anthropic", "claude-haiku-4-5");
 			const result = await testContextOverflow(model, process.env.ANTHROPIC_API_KEY!);
 			logResult(result);
 
@@ -113,7 +108,7 @@ describe("Context overflow error handling", () => {
 
 	describe.skipIf(!process.env.ANTHROPIC_OAUTH_TOKEN)("Anthropic (OAuth)", () => {
 		it("claude-sonnet-4 - should detect overflow via isContextOverflow", async () => {
-			const model = getModel("anthropic", "claude-sonnet-4-20250514");
+			const model = getModel("anthropic", "claude-sonnet-4-6");
 			const result = await testContextOverflow(model, process.env.ANTHROPIC_OAUTH_TOKEN!);
 			logResult(result);
 
@@ -148,7 +143,7 @@ describe("Context overflow error handling", () => {
 		it.skipIf(!githubCopilotToken)(
 			"claude-sonnet-4 - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("github-copilot", "claude-sonnet-4.5");
+				const model = getModel("github-copilot", "claude-sonnet-4.6");
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 
@@ -220,63 +215,11 @@ describe("Context overflow error handling", () => {
 	});
 
 	// =============================================================================
-	// Google Gemini CLI (OAuth)
 	// Uses same API as Google, expects same error pattern
 	// =============================================================================
 
-	describe("Google Gemini CLI (OAuth)", () => {
-		it.skipIf(!geminiCliToken)(
-			"gemini-2.5-flash - should detect overflow via isContextOverflow",
-			async () => {
-				const model = getModel("google-gemini-cli", "gemini-2.5-flash");
-				const result = await testContextOverflow(model, geminiCliToken!);
-				logResult(result);
-
-				expect(result.stopReason).toBe("error");
-				expect(result.errorMessage).toMatch(/input token count.*exceeds the maximum/i);
-				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
-			},
-			120000,
-		);
-	});
-
 	// =============================================================================
-	// Google Antigravity (OAuth)
-	// Tests both Gemini and Anthropic models via Antigravity
 	// =============================================================================
-
-	describe("Google Antigravity (OAuth)", () => {
-		// Gemini model
-		it.skipIf(!antigravityToken)(
-			"gemini-3-flash - should detect overflow via isContextOverflow",
-			async () => {
-				const model = getModel("google-antigravity", "gemini-3-flash");
-				const result = await testContextOverflow(model, antigravityToken!);
-				logResult(result);
-
-				expect(result.stopReason).toBe("error");
-				expect(result.errorMessage).toMatch(/input token count.*exceeds the maximum/i);
-				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
-			},
-			120000,
-		);
-
-		// Anthropic model via Antigravity
-		it.skipIf(!antigravityToken)(
-			"claude-sonnet-4-5 - should detect overflow via isContextOverflow",
-			async () => {
-				const model = getModel("google-antigravity", "claude-sonnet-4-5");
-				const result = await testContextOverflow(model, antigravityToken!);
-				logResult(result);
-
-				expect(result.stopReason).toBe("error");
-				// Anthropic models return "prompt is too long" pattern
-				expect(result.errorMessage).toMatch(/prompt is too long/i);
-				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
-			},
-			120000,
-		);
-	});
 
 	// =============================================================================
 	// OpenAI Codex (OAuth)
@@ -383,6 +326,22 @@ describe("Context overflow error handling", () => {
 	});
 
 	// =============================================================================
+	// Together AI
+	// Uses OpenAI-compatible Chat Completions API
+	// =============================================================================
+
+	describe.skipIf(!process.env.TOGETHER_API_KEY)("Together AI", () => {
+		it("Kimi-K2.6 - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("together", "moonshotai/Kimi-K2.6");
+			const result = await testContextOverflow(model, process.env.TOGETHER_API_KEY!);
+			logResult(result);
+
+			expect(result.stopReason).toBe("error");
+			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+		}, 120000);
+	});
+
+	// =============================================================================
 	// z.ai
 	// Special case: may return explicit overflow error text, may accept overflow silently,
 	// or may rate limit instead
@@ -442,6 +401,61 @@ describe("Context overflow error handling", () => {
 			logResult(result);
 
 			expect(result.stopReason).toBe("error");
+			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+		}, 120000);
+	});
+
+	// =============================================================================
+	// Xiaomi MiMo
+	// =============================================================================
+
+	describe.skipIf(!process.env.XIAOMI_API_KEY)("Xiaomi MiMo (API billing)", () => {
+		// Xiaomi silently truncates oversized input to fill the context window exactly,
+		// then returns finish_reason "length" with output=0 (no room left to generate).
+		// This is a detectable overflow signal but uses stopReason "length" rather than "error".
+		it("mimo-v2.5-pro - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("xiaomi", "mimo-v2.5-pro");
+			const result = await testContextOverflow(model, process.env.XIAOMI_API_KEY!);
+			logResult(result);
+
+			expect(result.stopReason).toBe("length");
+			expect(result.usage.output).toBe(0);
+			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+		}, 120000);
+	});
+
+	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_CN_API_KEY)("Xiaomi MiMo Token Plan (CN)", () => {
+		it("mimo-v2.5-pro - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("xiaomi-token-plan-cn", "mimo-v2.5-pro");
+			const result = await testContextOverflow(model, process.env.XIAOMI_TOKEN_PLAN_CN_API_KEY!);
+			logResult(result);
+
+			expect(result.stopReason).toBe("length");
+			expect(result.usage.output).toBe(0);
+			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+		}, 120000);
+	});
+
+	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_AMS_API_KEY)("Xiaomi MiMo Token Plan (AMS)", () => {
+		it("mimo-v2.5-pro - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("xiaomi-token-plan-ams", "mimo-v2.5-pro");
+			const result = await testContextOverflow(model, process.env.XIAOMI_TOKEN_PLAN_AMS_API_KEY!);
+			logResult(result);
+
+			expect(result.stopReason).toBe("length");
+			expect(result.usage.output).toBe(0);
+			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+		}, 120000);
+	});
+
+	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_SGP_API_KEY)("Xiaomi MiMo Token Plan (SGP)", () => {
+		it("mimo-v2.5-pro - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("xiaomi-token-plan-sgp", "mimo-v2.5-pro");
+			const result = await testContextOverflow(model, process.env.XIAOMI_TOKEN_PLAN_SGP_API_KEY!);
+			logResult(result);
+
+			expect(result.stopReason).toBe("length");
+			expect(result.usage.output).toBe(0);
 			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
 		}, 120000);
 	});
@@ -518,6 +532,17 @@ describe("Context overflow error handling", () => {
 		// Google backend
 		it("google/gemini-2.5-flash via OpenRouter - should detect overflow via isContextOverflow", async () => {
 			const model = getModel("openrouter", "google/gemini-2.5-flash");
+			const result = await testContextOverflow(model, process.env.OPENROUTER_API_KEY!);
+			logResult(result);
+
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toMatch(/maximum context length is \d+ tokens/i);
+			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+		}, 120000);
+
+		// Meta/Llama backend
+		it("meta-llama/llama-4-scout via OpenRouter - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("openrouter", "meta-llama/llama-4-scout");
 			const result = await testContextOverflow(model, process.env.OPENROUTER_API_KEY!);
 			logResult(result);
 

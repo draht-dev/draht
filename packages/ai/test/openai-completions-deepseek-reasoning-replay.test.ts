@@ -17,7 +17,6 @@ const deepseekCompat: Required<OpenAICompletionsCompat> = {
 	supportsStore: false,
 	supportsDeveloperRole: false,
 	supportsReasoningEffort: true,
-	reasoningEffortMap: {},
 	supportsUsageInStreaming: true,
 	maxTokensField: "max_completion_tokens",
 	requiresToolResultName: false,
@@ -28,6 +27,10 @@ const deepseekCompat: Required<OpenAICompletionsCompat> = {
 	vercelGatewayRouting: {},
 	zaiToolStream: false,
 	supportsStrictMode: true,
+	requiresReasoningContentOnAssistantMessages: false,
+	cacheControlFormat: "anthropic",
+	sendSessionAffinityHeaders: false,
+	supportsLongCacheRetention: false,
 };
 
 function makeDeepSeekModel(): Model<"openai-completions"> {

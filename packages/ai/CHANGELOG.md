@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Add missing `@smithy/node-http-handler` dependency for Amazon Bedrock provider
+
 ## [2026.5.12] - 2026-05-12
 
 ### Changed

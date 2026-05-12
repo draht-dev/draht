@@ -51,6 +51,7 @@ import { spawn, spawnSync } from "child_process";
 import {
 	APP_NAME,
 	APP_TITLE,
+	DISPLAY_VERSION,
 	getAgentDir,
 	getAuthPath,
 	getDebugLogPath,
@@ -588,7 +589,8 @@ export class InteractiveMode {
 			]
 				.map((line) => theme.fg("border", line))
 				.join("\n");
-			const wordmark = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}  ·  /dʁaːt/`);
+			const wordmark =
+				theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${DISPLAY_VERSION}  ·  /dʁaːt/`);
 			const logo = `${asciiArt}\n${wordmark}`;
 
 			// Build startup instructions using keybinding hint helpers

@@ -1,10 +1,10 @@
 import type { AgentTool } from "@draht/agent-core";
 import type { ToolResultMessage } from "@draht/ai";
 import { i18n } from "@mariozechner/mini-lit";
-import { type Static, Type } from "@sinclair/typebox";
 import { html } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { Code } from "lucide";
+import { type Static, Type } from "typebox";
 import { type SandboxFile, SandboxIframe, type SandboxResult } from "../components/SandboxedIframe.js";
 import type { SandboxRuntimeProvider } from "../components/sandbox/SandboxRuntimeProvider.js";
 import { JAVASCRIPT_REPL_TOOL_DESCRIPTION } from "../prompts/prompts.js";
@@ -137,8 +137,8 @@ export function createJavaScriptReplTool(): AgentTool<typeof javascriptReplSchem
 		get description() {
 			const runtimeProviderDescriptions =
 				this.runtimeProvidersFactory?.()
-					.map((d: any) => d.getDescription())
-					.filter((d: any) => d.trim().length > 0) || [];
+					.map((d) => d.getDescription())
+					.filter((d) => d.trim().length > 0) || [];
 			return JAVASCRIPT_REPL_TOOL_DESCRIPTION(runtimeProviderDescriptions);
 		},
 		parameters: javascriptReplSchema,

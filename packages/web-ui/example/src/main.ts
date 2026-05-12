@@ -1,6 +1,6 @@
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { Agent, type AgentMessage } from "@draht/agent-core";
-import { getModel } from "@draht/ai";
+import { getModel, type TextContent } from "@draht/ai";
 import {
 	type AgentState,
 	ApiKeyPromptDialog,
@@ -47,7 +47,7 @@ const configs = [
 
 // Create backend
 const backend = new IndexedDBStorageBackend({
-	dbName: "draht-web-ui-example",
+	dbName: "pi-web-ui-example",
 	version: 2, // Incremented for custom-providers store
 	stores: configs,
 });
@@ -70,8 +70,8 @@ let chatPanel: ChatPanel;
 let agentUnsubscribe: (() => void) | undefined;
 
 const generateTitle = (messages: AgentMessage[]): string => {
-	const firstUserMsg = messages.find((m) => m.role === "user" || m.role === "user-with-attachments");
-	if (!firstUserMsg || (firstUserMsg.role !== "user" && firstUserMsg.role !== "user-with-attachments")) return "";
+	const firstUserMsg = messages.find((m) => m.role === "user");
+	if (!firstUserMsg) return "";
 
 	let text = "";
 	const content = firstUserMsg.content;
@@ -79,8 +79,8 @@ const generateTitle = (messages: AgentMessage[]): string => {
 	if (typeof content === "string") {
 		text = content;
 	} else {
-		const textBlocks = content.filter((c: any) => c.type === "text");
-		text = textBlocks.map((c: any) => c.text || "").join(" ");
+		const textBlocks = content.filter((c): c is TextContent => c.type === "text");
+		text = textBlocks.map((c) => c.text || "").join(" ");
 	}
 
 	text = text.trim();
@@ -94,8 +94,8 @@ const generateTitle = (messages: AgentMessage[]): string => {
 };
 
 const shouldSaveSession = (messages: AgentMessage[]): boolean => {
-	const hasUserMsg = messages.some((m: any) => m.role === "user" || m.role === "user-with-attachments");
-	const hasAssistantMsg = messages.some((m: any) => m.role === "assistant");
+	const hasUserMsg = messages.some((m) => m.role === "user");
+	const hasAssistantMsg = messages.some((m) => m.role === "assistant");
 	return hasUserMsg && hasAssistantMsg;
 };
 

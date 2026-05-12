@@ -424,6 +424,12 @@ export const CONFIG_DIR_NAME: string = pkg.drahtConfig?.configDir || ".draht";
 export const LEGACY_CONFIG_DIR_NAME = ".pi";
 export const VERSION: string = pkg.version || "0.0.0";
 
+/** True when running from source (src/ directory exists), not a compiled/installed build. */
+export const IS_DEV_MODE: boolean = existsSync(join(getPackageDir(), "src"));
+
+/** Version string for display. "dev" in dev mode, the package version otherwise. */
+export const DISPLAY_VERSION: string = IS_DEV_MODE ? "dev" : VERSION;
+
 /**
  * Resolve the project config directory. Prefers CONFIG_DIR_NAME (.draht),
  * falls back to LEGACY_CONFIG_DIR_NAME (.pi) if the primary doesn't exist.

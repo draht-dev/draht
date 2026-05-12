@@ -287,6 +287,14 @@ export class ExtensionRunner {
 		this.runtime.getThinkingLevel = actions.getThinkingLevel;
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
 
+		// Bind runtime state methods to the runner
+		this.runtime.assertActive = () => this.assertActive();
+		this.runtime.invalidate = (message?: string) => {
+			if (!this.staleMessage) {
+				this.staleMessage = message ?? "This extension ctx is stale.";
+			}
+		};
+
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
 		this.isIdleFn = contextActions.isIdle;

@@ -447,13 +447,13 @@ for (const pkgPath of allPkgJsons) {
 	}
 }
 
-// ── 16. No @mariozechner/pi* import paths in source files ──────────
+// ── 16. No @mariozechner/pi* or @earendil-works/pi* import paths in source files ──────────
 
-console.log("\nImport paths (no @mariozechner/pi* imports)");
+console.log("\nImport paths (no @mariozechner/pi* or @earendil-works/pi* imports)");
 
 const sourceExtensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 const sourceDirs = ["packages", "scripts"];
-const importPattern = /@mariozechner\/pi[a-z0-9-]*/gi;
+const importPattern = /@(mariozechner|earendil-works)\/pi[a-z0-9-]*/gi;
 
 // Files that intentionally reference upstream patterns (documentation, verification)
 const selfReferencingFiles = new Set([
@@ -501,7 +501,7 @@ for (const dir of sourceDirs) {
 console.log("\nREADME integrity (no @mariozechner/pi* references)");
 
 const readmeFiles = findReadmes(root);
-const readmeUpstreamPattern = /@mariozechner\/pi[a-z0-9-]*/gi;
+const readmeUpstreamPattern = /@(mariozechner|earendil-works)\/pi[a-z0-9-]*/gi;
 const readmePiMonoPattern = /\bpi-mono\b/gi;
 
 for (const readmePath of readmeFiles) {

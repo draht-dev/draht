@@ -7,7 +7,7 @@
 
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { type ImageContent, modelsAreEqual } from "@draht/ai";
+import { type ImageContent, modelsAreEqual, supportsMax, supportsXhigh } from "@draht/ai";
 import { ProcessTerminal, setKeybindings, TUI } from "@draht/tui";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
@@ -595,7 +595,17 @@ export async function main(args: string[], options?: MainOptions) {
 		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {
-			created.session.setThinkingLevel(created.session.thinkingLevel);
+			let effectiveThinking = created.session.thinkingLevel;
+			if (!created.session.model.reasoning) {
+				effectiveThinking = "off";
+			} else if (effectiveThinking === "max" && !supportsMax(created.session.model)) {
+				effectiveThinking = supportsXhigh(created.session.model) ? "xhigh" : "high";
+			} else if (effectiveThinking === "xhigh" && !supportsXhigh(created.session.model)) {
+				effectiveThinking = "high";
+			}
+			if (effectiveThinking !== created.session.thinkingLevel) {
+				created.session.setThinkingLevel(effectiveThinking);
+			}
 		}
 
 		return {

@@ -3,24 +3,29 @@ import type { Api, Model, SimpleStreamOptions, StreamOptions, ThinkingBudgets, T
 export function buildBaseOptions(model: Model<Api>, options?: SimpleStreamOptions, apiKey?: string): StreamOptions {
 	return {
 		temperature: options?.temperature,
-		maxTokens: options?.maxTokens ?? (model.maxTokens > 0 ? Math.min(model.maxTokens, 32000) : undefined),
+		maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32000),
 		signal: options?.signal,
 		apiKey: apiKey || options?.apiKey,
-		transport: options?.transport,
 		cacheRetention: options?.cacheRetention,
 		sessionId: options?.sessionId,
 		headers: options?.headers,
 		onPayload: options?.onPayload,
-		onResponse: options?.onResponse,
-		timeoutMs: options?.timeoutMs,
-		maxRetries: options?.maxRetries,
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,
 	};
 }
 
-export function clampReasoning(effort: ThinkingLevel | undefined): Exclude<ThinkingLevel, "xhigh"> | undefined {
-	return effort === "xhigh" ? "high" : effort;
+export function clampReasoning(effort: ThinkingLevel | undefined): Exclude<ThinkingLevel, "xhigh" | "max"> | undefined {
+	if (effort === "xhigh" || effort === "max") return "high";
+	return effort;
+}
+
+/**
+ * Clamp `max` down to `xhigh` while leaving everything else untouched.
+ * Used by providers (e.g. OpenAI families) that support up to xhigh but not max.
+ */
+export function clampToXhigh(effort: ThinkingLevel | undefined): Exclude<ThinkingLevel, "max"> | undefined {
+	return effort === "max" ? "xhigh" : effort;
 }
 
 export function adjustMaxTokensForThinking(

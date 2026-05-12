@@ -45,7 +45,7 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
 	return usage.cost;
 }
 
-const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export function getSupportedThinkingLevels<TApi extends Api>(model: Model<TApi>): ModelThinkingLevel[] {
 	if (!model.reasoning) return ["off"];
@@ -77,6 +77,41 @@ export function clampThinkingLevel<TApi extends Api>(
 		if (availableLevels.includes(candidate)) return candidate;
 	}
 	return availableLevels[0] ?? "off";
+}
+
+/**
+ * Check if a model supports xhigh thinking level.
+ */
+export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
+	if (model.id.includes("gpt-5.2") || model.id.includes("gpt-5.3") || model.id.includes("gpt-5.4")) {
+		return true;
+	}
+	if (
+		model.id.includes("opus-4-6") ||
+		model.id.includes("opus-4.6") ||
+		model.id.includes("opus-4-7") ||
+		model.id.includes("opus-4.7") ||
+		model.id.includes("sonnet-4-6") ||
+		model.id.includes("sonnet-4.6") ||
+		model.id.includes("haiku-4-5") ||
+		model.id.includes("haiku-4.5")
+	) {
+		return true;
+	}
+	return false;
+}
+
+/**
+ * Check if a model supports the max thinking level.
+ * Currently Anthropic Opus 4.6 and Opus 4.7 only.
+ */
+export function supportsMax<TApi extends Api>(model: Model<TApi>): boolean {
+	return (
+		model.id.includes("opus-4-6") ||
+		model.id.includes("opus-4.6") ||
+		model.id.includes("opus-4-7") ||
+		model.id.includes("opus-4.7")
+	);
 }
 
 /**

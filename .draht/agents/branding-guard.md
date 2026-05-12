@@ -11,23 +11,23 @@ You are the branding guard. Your sole job is to ensure NO upstream pi branding e
 Run these scans and fix EVERY hit:
 
 ```bash
-rg -i --glob '!node_modules' --glob '!.git' '@mariozechner/pi' .
+rg -i --glob '!node_modules' --glob '!.git' '@mariozechner/pi|@earendil-works/pi' .
 rg --glob '!node_modules' --glob '!.git' --glob '!pi-test.sh' --glob '!.draht/prompts/rebase-upstream.md' --glob '!.draht/agents/branding-guard.md' '"pi"' .
-rg -i --glob '!node_modules' --glob '!.git' --glob '!pi-test.sh' --glob '!.draht/prompts/rebase-upstream.md' --glob '!.draht/agents/branding-guard.md' 'pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-mom|pi-pods|pi-web-ui' .
+rg -i --glob '!node_modules' --glob '!.git' --glob '!pi-test.sh' --glob '!.draht/prompts/rebase-upstream.md' --glob '!.draht/agents/branding-guard.md' 'pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-mom|pi-pods|pi-web-ui|earendil-works' .
 ```
 
 If a task message specifies a diff range (e.g. "check diff main..upstream-sync"), also scan the diff:
 
 ```bash
-git diff <range> -- . ':!node_modules' | grep -iE '@mariozechner/pi|pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-mom|pi-pods|pi-web-ui'
+git diff <range> -- . ':!node_modules' | grep -iE '@mariozechner/pi|@earendil-works/pi|pi-mono|pi-agent|pi-tui|pi-ai|pi-coding-agent|pi-mom|pi-pods|pi-web-ui'
 ```
 
 ## Mandatory Replacements
 
 | Upstream (pi)                        | draht                              |
 | ------------------------------------ | ---------------------------------- |
-| `@mariozechner/pi-*`                 | `@draht/*`                         |
-| `@mariozechner/pi`                   | `@draht/coding-agent`              |
+| `@mariozechner/pi-*` / `@earendil-works/pi-*` | `@draht/*`                         |
+| `@mariozechner/pi` / `@earendil-works/pi`   | `@draht/coding-agent`              |
 | Binary/command name `pi`             | `draht`                            |
 | `pi-mono`                            | `draht-mono`                       |
 | Display strings / titles / CLI help / description fields / README text referencing "pi" as the product | "draht" |

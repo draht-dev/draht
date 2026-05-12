@@ -17,7 +17,11 @@
 		"prepublishOnly": "bun run clean && bun run build"
 	},
 	"dependencies": {
-		"@draht/ai": "workspace:*"
+		"@draht/ai": "workspace:*",
+		"ignore": "^7.0.5",
+		"typebox": "^1.1.24",
+		"yaml": "^2.8.2",
+		"uuid": "^14.0.0"
 	},
 	"keywords": [
 		"ai",
@@ -40,7 +44,6 @@
 		"node": ">=20.0.0"
 	},
 	"devDependencies": {
-		"@sinclair/typebox": "^0.34.41",
 		"@types/node": "^24.3.0",
 		"typescript": "^6.0.0-beta",
 		"vitest": "^3.2.4"

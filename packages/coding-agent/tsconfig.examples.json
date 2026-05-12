@@ -7,7 +7,7 @@
 			"@draht/coding-agent/hooks": ["./src/core/hooks/index.ts"],
 			"@draht/tui": ["../tui/src/index.ts"],
 			"@draht/ai": ["../ai/src/index.ts"],
-			"@sinclair/typebox": ["../../node_modules/@sinclair/typebox"]
+			"typebox": ["../../node_modules/typebox"]
 		},
 		"skipLibCheck": true
 	},

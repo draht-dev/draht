@@ -30,18 +30,21 @@ export class LoginDialogComponent extends Container implements Focusable {
 		tui: TUI,
 		providerId: string,
 		private onComplete: (success: boolean, message?: string) => void,
+		providerNameOverride?: string,
+		titleOverride?: string,
 	) {
 		super();
 		this.tui = tui;
 
 		const providerInfo = getOAuthProviders().find((p) => p.id === providerId);
-		const providerName = providerInfo?.name || providerId;
+		const providerName = providerNameOverride || providerInfo?.name || providerId;
+		const title = titleOverride ?? `Login to ${providerName}`;
 
 		// Top border
 		this.addChild(new DynamicBorder());
 
 		// Title
-		this.addChild(new Text(theme.fg("warning", `Login to ${providerName}`), 1, 0));
+		this.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
 
 		// Dynamic content area
 		this.contentContainer = new Container();
@@ -84,7 +87,8 @@ export class LoginDialogComponent extends Container implements Focusable {
 	showAuth(url: string, instructions?: string): void {
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
-		this.contentContainer.addChild(new Text(theme.fg("accent", url), 1, 0));
+		const linkedUrl = `\x1b]8;;${url}\x07${url}\x1b]8;;\x07`;
+		this.contentContainer.addChild(new Text(theme.fg("accent", linkedUrl), 1, 0));
 
 		const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
 		const hyperlink = `\x1b]8;;${url}\x07${clickHint}\x1b]8;;\x07`;
@@ -144,6 +148,20 @@ export class LoginDialogComponent extends Container implements Focusable {
 			this.inputResolver = resolve;
 			this.inputRejecter = reject;
 		});
+	}
+
+	/**
+	 * Show informational text without prompting for input.
+	 */
+	showInfo(lines: string[]): void {
+		this.contentContainer.clear();
+		this.contentContainer.addChild(new Spacer(1));
+		for (const line of lines) {
+			this.contentContainer.addChild(new Text(line, 1, 0));
+		}
+		this.contentContainer.addChild(new Spacer(1));
+		this.contentContainer.addChild(new Text(`(${keyHint("tui.select.cancel", "to close")})`, 1, 0));
+		this.tui.requestRender();
 	}
 
 	/**

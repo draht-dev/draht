@@ -14,13 +14,14 @@ import {
 	type ImageContent,
 	type TextContent,
 } from "@draht/ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import type { BuildSystemPromptOptions } from "../src/core/system-prompt.js";
 import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.js";
 
 // Mock stream that mimics AssistantMessageEventStream
@@ -437,18 +438,26 @@ describe("AgentSession concurrent prompt guard", () => {
 			_extensionRunner?: {
 				hasHandlers: (eventType: string) => boolean;
 				emit: (event: { type: string; message?: { role?: string } }) => Promise<void>;
+				emitMessageEnd: (event: { type: string; message?: { role?: string } }) => Promise<undefined>;
 				emitToolCall: (event: { type: string; toolCallId: string }) => Promise<undefined>;
 				emitInput: (
 					text: string,
 					images: unknown,
 					source: "interactive" | "rpc" | "extension",
 				) => Promise<{ action: "continue" }>;
-				emitBeforeAgentStart: (prompt: string, images: unknown, systemPrompt: string) => Promise<undefined>;
+				emitBeforeAgentStart: (
+					prompt: string,
+					images: unknown,
+					systemPrompt: string,
+					systemPromptOptions: BuildSystemPromptOptions,
+				) => Promise<undefined>;
+				invalidate: (message?: string) => void;
 			};
 		};
 		sessionWithRunner._extensionRunner = {
 			hasHandlers: (eventType) => eventType === "tool_call",
 			emit: async () => {},
+			emitMessageEnd: async () => undefined,
 			emitToolCall: async () => {
 				snapshots.push(
 					sessionManager
@@ -460,6 +469,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			},
 			emitInput: async () => ({ action: "continue" }),
 			emitBeforeAgentStart: async () => undefined,
+			invalidate: () => {},
 		};
 
 		await session.prompt("hi");
@@ -573,23 +583,33 @@ describe("AgentSession concurrent prompt guard", () => {
 			_extensionRunner?: {
 				hasHandlers: (eventType: string) => boolean;
 				emit: (event: { type: string; message?: { role?: string } }) => Promise<void>;
+				emitMessageEnd: (event: { type: string; message?: { role?: string } }) => Promise<undefined>;
 				emitInput: (
 					text: string,
 					images: unknown,
 					source: "interactive" | "rpc" | "extension",
 				) => Promise<{ action: "continue" }>;
-				emitBeforeAgentStart: (prompt: string, images: unknown, systemPrompt: string) => Promise<undefined>;
+				emitBeforeAgentStart: (
+					prompt: string,
+					images: unknown,
+					systemPrompt: string,
+					systemPromptOptions: BuildSystemPromptOptions,
+				) => Promise<undefined>;
+				invalidate: (message?: string) => void;
 			};
 		};
 		sessionWithRunner._extensionRunner = {
 			hasHandlers: () => false,
-			emit: async (event) => {
+			emit: async () => {},
+			emitMessageEnd: async (event) => {
 				if (event.type === "message_end" && event.message?.role === "assistant") {
 					await new Promise((resolve) => setTimeout(resolve, 40));
 				}
+				return undefined;
 			},
 			emitInput: async () => ({ action: "continue" }),
 			emitBeforeAgentStart: async () => undefined,
+			invalidate: () => {},
 		};
 
 		await session.prompt("hi");

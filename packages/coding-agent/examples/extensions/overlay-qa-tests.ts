@@ -473,13 +473,13 @@ class StreamingOverflowComponent extends BaseOverlay {
 			echo ""
 			for i in $(seq 1 100); do
 				# Simulate long file paths with OSC 8 hyperlinks (clickable) - tests width overflow
-				DIR="/Users/nicobailon/Documents/development/draht-mono/packages/coding-agent/src/modes/interactive"
+				DIR="/Users/nicobailon/Documents/development/pi-mono/packages/coding-agent/src/modes/interactive"
 				FILE="\${DIR}/components/very-long-component-name-that-exceeds-width-\${i}.ts"
 				echo -e "\\033]8;;file://\${FILE}\\007▶ read: \${FILE}\\033]8;;\\007"
 
 				# Add some colored status messages with long text
 				if [ $((i % 5)) -eq 0 ]; then
-					echo -e "  \\033[32m✓ Successfully processed \${i} files in /Users/nicobailon/Documents/development/draht-mono\\033[0m"
+					echo -e "  \\033[32m✓ Successfully processed \${i} files in /Users/nicobailon/Documents/development/pi-mono\\033[0m"
 				fi
 				if [ $((i % 7)) -eq 0 ]; then
 					echo -e "  \\033[33m⚠ Warning: potential issue detected at line \${i} in very-long-component-name-that-exceeds-width.ts\\033[0m"

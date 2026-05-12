@@ -15,7 +15,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@draht/ai";
-import { StringEnum } from "@draht/ai";
 import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import { getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
@@ -281,7 +280,9 @@ const Params = Type.Object({
 	task: Type.Optional(Type.String()),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Chained tasks" })),
-	agentScope: Type.Optional(StringEnum(["user", "project", "both"] as const, { default: "both" })),
+	agentScope: Type.Optional(
+		Type.Union([Type.Literal("user"), Type.Literal("project"), Type.Literal("both")], { default: "both" }),
+	),
 });
 
 // ─── Rendering helpers ──────────────────────────────────────────────────────
@@ -371,7 +372,7 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		async execute(_id, params, signal, onUpdate, ctx) {
-			const scope: AgentScope = (params.agentScope as AgentScope) ?? "both";
+			const scope: AgentScope = (params.agentScope as string as AgentScope) ?? "both";
 			const agents = discoverAgents(ctx.cwd, scope);
 			const available = agents.map((a) => a.name).join(", ") || "none";
 

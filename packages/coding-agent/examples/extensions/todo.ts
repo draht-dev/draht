@@ -13,7 +13,7 @@
 import { StringEnum } from "@draht/ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@draht/coding-agent";
 import { matchesKey, Text, truncateToWidth } from "@draht/tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 interface Todo {
 	id: number;

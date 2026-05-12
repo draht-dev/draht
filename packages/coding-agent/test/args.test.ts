@@ -43,6 +43,21 @@ describe("parseArgs", () => {
 			const result = parseArgs(["-p"]);
 			expect(result.print).toBe(true);
 		});
+
+		test("parses prompt after -p even when it starts with YAML frontmatter", () => {
+			const prompt = "---\ntitle: hello\n---\nSay hi.";
+			const result = parseArgs(["-p", prompt]);
+			expect(result.print).toBe(true);
+			expect(result.messages).toEqual([prompt]);
+			expect(result.unknownFlags.size).toBe(0);
+		});
+
+		test("does not consume options after -p as prompts", () => {
+			const result = parseArgs(["-p", "--provider", "openai", "Say hi."]);
+			expect(result.print).toBe(true);
+			expect(result.provider).toBe("openai");
+			expect(result.messages).toEqual(["Say hi."]);
+		});
 	});
 
 	describe("--continue flag", () => {
@@ -92,7 +107,12 @@ describe("parseArgs", () => {
 
 		test("parses --append-system-prompt", () => {
 			const result = parseArgs(["--append-system-prompt", "Additional context"]);
-			expect(result.appendSystemPrompt).toBe("Additional context");
+			expect(result.appendSystemPrompt).toEqual(["Additional context"]);
+		});
+
+		test("parses multiple --append-system-prompt flags", () => {
+			const result = parseArgs(["--append-system-prompt", "Context A", "--append-system-prompt", "Context B"]);
+			expect(result.appendSystemPrompt).toEqual(["Context A", "Context B"]);
 		});
 
 		test("parses --mode", () => {
@@ -226,6 +246,18 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--no-context-files flag", () => {
+		test("parses --no-context-files flag", () => {
+			const result = parseArgs(["--no-context-files"]);
+			expect(result.noContextFiles).toBe(true);
+		});
+
+		test("parses -nc shorthand", () => {
+			const result = parseArgs(["-nc"]);
+			expect(result.noContextFiles).toBe(true);
+		});
+	});
+
 	describe("--verbose flag", () => {
 		test("parses --verbose flag", () => {
 			const result = parseArgs(["--verbose"]);
@@ -240,15 +272,46 @@ describe("parseArgs", () => {
 		});
 	});
 
-	describe("--no-tools flag", () => {
+	describe("tool flags", () => {
 		test("parses --no-tools flag", () => {
 			const result = parseArgs(["--no-tools"]);
 			expect(result.noTools).toBe(true);
 		});
 
+		test("parses -nt shorthand", () => {
+			const result = parseArgs(["-nt"]);
+			expect(result.noTools).toBe(true);
+		});
+
+		test("parses --no-builtin-tools flag", () => {
+			const result = parseArgs(["--no-builtin-tools"]);
+			expect(result.noBuiltinTools).toBe(true);
+		});
+
+		test("parses -nbt shorthand", () => {
+			const result = parseArgs(["-nbt"]);
+			expect(result.noBuiltinTools).toBe(true);
+		});
+
+		test("parses --tools flag", () => {
+			const result = parseArgs(["--tools", "read,bash"]);
+			expect(result.tools).toEqual(["read", "bash"]);
+		});
+
+		test("parses -t shorthand", () => {
+			const result = parseArgs(["-t", "read,bash"]);
+			expect(result.tools).toEqual(["read", "bash"]);
+		});
+
 		test("parses --no-tools with explicit --tools flags", () => {
 			const result = parseArgs(["--no-tools", "--tools", "read,bash"]);
 			expect(result.noTools).toBe(true);
+			expect(result.tools).toEqual(["read", "bash"]);
+		});
+
+		test("parses --no-builtin-tools with explicit --tools flags", () => {
+			const result = parseArgs(["--no-builtin-tools", "--tools", "read,bash"]);
+			expect(result.noBuiltinTools).toBe(true);
 			expect(result.tools).toEqual(["read", "bash"]);
 		});
 	});

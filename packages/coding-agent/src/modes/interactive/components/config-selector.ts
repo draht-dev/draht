@@ -2,7 +2,8 @@
  * TUI component for managing package resources (enable/disable)
  */
 
-import { basename, dirname, relative } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, relative } from "node:path";
 import {
 	type Component,
 	Container,
@@ -14,7 +15,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@draht/tui";
-import { getProjectConfigDir } from "../../../config.js";
+import { CONFIG_DIR_NAME } from "../../../config.js";
 import type { PathMetadata, ResolvedPaths, ResolvedResource } from "../../../core/package-manager.js";
 import type { PackageSource, SettingsManager } from "../../../core/settings-manager.js";
 import { theme } from "../theme/theme.js";
@@ -55,13 +56,35 @@ interface ResourceGroup {
 	subgroups: ResourceSubgroup[];
 }
 
+function formatBaseDir(baseDir: string): string {
+	const homeDir = homedir();
+	let displayPath: string;
+
+	if (baseDir === homeDir) {
+		displayPath = "~";
+	} else if (baseDir.startsWith(homeDir)) {
+		// Replace home prefix with ~, normalize separators for display
+		const rest = baseDir.slice(homeDir.length);
+		displayPath = `~${rest.replace(/\\/g, "/")}`;
+	} else {
+		displayPath = baseDir.replace(/\\/g, "/");
+	}
+
+	return displayPath.endsWith("/") ? displayPath : `${displayPath}/`;
+}
+
 function getGroupLabel(metadata: PathMetadata): string {
 	if (metadata.origin === "package") {
 		return `${metadata.source} (${metadata.scope})`;
 	}
 	// Top-level resources
 	if (metadata.source === "auto") {
-		return metadata.scope === "user" ? "User (~/.draht/agent/)" : "Project (.draht/)";
+		if (metadata.baseDir) {
+			return metadata.scope === "user"
+				? `User (${formatBaseDir(metadata.baseDir)})`
+				: `Project (${formatBaseDir(metadata.baseDir)})`;
+		}
+		return metadata.scope === "user" ? "User (~/.pi/agent/)" : "Project (.pi/)";
 	}
 	return metadata.scope === "user" ? "User settings" : "Project settings";
 }
@@ -72,7 +95,7 @@ function buildGroups(resolved: ResolvedPaths): ResourceGroup[] {
 	const addToGroup = (resources: ResolvedResource[], resourceType: ResourceType) => {
 		for (const res of resources) {
 			const { path, enabled, metadata } = res;
-			const groupKey = `${metadata.origin}:${metadata.scope}:${metadata.source}`;
+			const groupKey = `${metadata.origin}:${metadata.scope}:${metadata.source}:${metadata.baseDir ?? ""}`;
 
 			if (!groupMap.has(groupKey)) {
 				groupMap.set(groupKey, {
@@ -348,7 +371,10 @@ class ResourceList implements Component, Focusable {
 
 		// Scroll indicator
 		if (startIndex > 0 || endIndex < this.filteredItems.length) {
-			lines.push(theme.fg("dim", `  (${this.selectedIndex + 1}/${this.filteredItems.length})`));
+			const itemCount = this.filteredItems.filter((e) => e.type === "item").length;
+			const currentItemIndex =
+				this.filteredItems.slice(0, this.selectedIndex).filter((e) => e.type === "item").length + 1;
+			lines.push(theme.fg("dim", `  (${currentItemIndex}/${itemCount})`));
 		}
 
 		return lines;
@@ -527,7 +553,7 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private getTopLevelBaseDir(scope: "user" | "project"): string {
-		return scope === "project" ? getProjectConfigDir(this.cwd) : this.agentDir;
+		return scope === "project" ? join(this.cwd, CONFIG_DIR_NAME) : this.agentDir;
 	}
 
 	private getResourcePattern(item: ResourceItem): string {

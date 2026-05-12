@@ -5,7 +5,7 @@
  * and after compaction the session is reloaded.
  */
 
-import type { AgentMessage } from "@draht/agent-core";
+import type { AgentMessage, ThinkingLevel } from "@draht/agent-core";
 import type { AssistantMessage, Model, Usage } from "@draht/ai";
 import { completeSimple } from "@draht/ai";
 import {
@@ -536,8 +536,12 @@ export async function generateSummary(
 	signal?: AbortSignal,
 	customInstructions?: string,
 	previousSummary?: string,
+	thinkingLevel?: ThinkingLevel,
 ): Promise<string> {
-	const maxTokens = Math.floor(0.8 * reserveTokens);
+	const maxTokens = Math.min(
+		Math.floor(0.8 * reserveTokens),
+		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+	);
 
 	// Use update prompt if we have a previous summary, otherwise initial prompt
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
@@ -565,9 +569,10 @@ export async function generateSummary(
 		},
 	];
 
-	const completionOptions = model.reasoning
-		? { maxTokens, signal, apiKey, headers, reasoning: "high" as const }
-		: { maxTokens, signal, apiKey, headers };
+	const completionOptions =
+		model.reasoning && thinkingLevel && thinkingLevel !== "off"
+			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
+			: { maxTokens, signal, apiKey, headers };
 
 	const response = await completeSimple(
 		model,
@@ -719,6 +724,7 @@ export async function compact(
 	headers?: Record<string, string>,
 	customInstructions?: string,
 	signal?: AbortSignal,
+	thinkingLevel?: ThinkingLevel,
 ): Promise<CompactionResult> {
 	const {
 		firstKeptEntryId,
@@ -747,9 +753,18 @@ export async function compact(
 						signal,
 						customInstructions,
 						previousSummary,
+						thinkingLevel,
 					)
 				: Promise.resolve("No prior history."),
-			generateTurnPrefixSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, headers, signal),
+			generateTurnPrefixSummary(
+				turnPrefixMessages,
+				model,
+				settings.reserveTokens,
+				apiKey,
+				headers,
+				signal,
+				thinkingLevel,
+			),
 		]);
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
@@ -764,6 +779,7 @@ export async function compact(
 			signal,
 			customInstructions,
 			previousSummary,
+			thinkingLevel,
 		);
 	}
 
@@ -793,8 +809,12 @@ async function generateTurnPrefixSummary(
 	apiKey: string,
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
+	thinkingLevel?: ThinkingLevel,
 ): Promise<string> {
-	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
+	const maxTokens = Math.min(
+		Math.floor(0.5 * reserveTokens),
+		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+	); // Smaller budget for turn prefix
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
@@ -809,7 +829,9 @@ async function generateTurnPrefixSummary(
 	const response = await completeSimple(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ maxTokens, signal, apiKey, headers },
+		model.reasoning && thinkingLevel && thinkingLevel !== "off"
+			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
+			: { maxTokens, signal, apiKey, headers },
 	);
 
 	if (response.stopReason === "error") {

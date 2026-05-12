@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SettingsManager } from "../src/core/settings-manager.js";
@@ -14,7 +15,7 @@ describe("SettingsManager", () => {
 			rmSync(testDir, { recursive: true });
 		}
 		mkdirSync(agentDir, { recursive: true });
-		mkdirSync(join(projectDir, ".draht"), { recursive: true });
+		mkdirSync(join(projectDir, ".pi"), { recursive: true });
 	});
 
 	afterEach(() => {
@@ -199,7 +200,7 @@ describe("SettingsManager", () => {
 	describe("error tracking", () => {
 		it("should collect and clear load errors via drainErrors", () => {
 			const globalSettingsPath = join(agentDir, "settings.json");
-			const projectSettingsPath = join(projectDir, ".draht", "settings.json");
+			const projectSettingsPath = join(projectDir, ".pi", "settings.json");
 			writeFileSync(globalSettingsPath, "{ invalid global json");
 			writeFileSync(projectSettingsPath, "{ invalid project json");
 
@@ -213,46 +214,46 @@ describe("SettingsManager", () => {
 	});
 
 	describe("project settings directory creation", () => {
-		it("should not create .draht folder when only reading project settings", () => {
-			// Create agent dir with global settings, but NO .draht folder in project
+		it("should not create .pi folder when only reading project settings", () => {
+			// Create agent dir with global settings, but NO .pi folder in project
 			const settingsPath = join(agentDir, "settings.json");
 			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
 
-			// Delete the .draht folder that beforeEach created
-			rmSync(join(projectDir, ".draht"), { recursive: true });
+			// Delete the .pi folder that beforeEach created
+			rmSync(join(projectDir, ".pi"), { recursive: true });
 
 			// Create SettingsManager (reads both global and project settings)
 			const manager = SettingsManager.create(projectDir, agentDir);
 
-			// .draht folder should NOT have been created just from reading
-			expect(existsSync(join(projectDir, ".draht"))).toBe(false);
+			// .pi folder should NOT have been created just from reading
+			expect(existsSync(join(projectDir, ".pi"))).toBe(false);
 
 			// Settings should still be loaded from global
 			expect(manager.getTheme()).toBe("dark");
 		});
 
-		it("should create .draht folder when writing project settings", async () => {
-			// Create agent dir with global settings, but NO .draht folder in project
+		it("should create .pi folder when writing project settings", async () => {
+			// Create agent dir with global settings, but NO .pi folder in project
 			const settingsPath = join(agentDir, "settings.json");
 			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
 
-			// Delete the .draht folder that beforeEach created
-			rmSync(join(projectDir, ".draht"), { recursive: true });
+			// Delete the .pi folder that beforeEach created
+			rmSync(join(projectDir, ".pi"), { recursive: true });
 
 			const manager = SettingsManager.create(projectDir, agentDir);
 
-			// .draht folder should NOT exist yet
-			expect(existsSync(join(projectDir, ".draht"))).toBe(false);
+			// .pi folder should NOT exist yet
+			expect(existsSync(join(projectDir, ".pi"))).toBe(false);
 
 			// Write a project-specific setting
 			manager.setProjectPackages([{ source: "npm:test-pkg" }]);
 			await manager.flush();
 
-			// Now .draht folder should exist
-			expect(existsSync(join(projectDir, ".draht"))).toBe(true);
+			// Now .pi folder should exist
+			expect(existsSync(join(projectDir, ".pi"))).toBe(true);
 
 			// And settings file should be created
-			expect(existsSync(join(projectDir, ".draht", "settings.json"))).toBe(true);
+			expect(existsSync(join(projectDir, ".pi", "settings.json"))).toBe(true);
 		});
 	});
 
@@ -307,6 +308,12 @@ describe("SettingsManager", () => {
 			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ sessionDir: "./sessions" }));
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getSessionDir()).toBe("./sessions");
+		});
+
+		it("should expand ~ in sessionDir", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionDir: "~/sessions" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSessionDir()).toBe(join(homedir(), "sessions"));
 		});
 	});
 });

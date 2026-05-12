@@ -1,7 +1,7 @@
 import type { AgentTool } from "@draht/agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@draht/ai";
 import type { ExtensionAPI } from "@draht/coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, getAssistantTexts, getMessageText, getUserTexts, type Harness } from "./harness.js";
 

@@ -1,7 +1,9 @@
+import { join, resolve } from "node:path";
 import { Text, type TUI } from "@draht/tui";
-import { Type } from "@sinclair/typebox";
 import stripAnsi from "strip-ansi";
+import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
+import { getReadmePath } from "../src/config.js";
 import type { ToolDefinition } from "../src/core/extensions/types.js";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.js";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.js";
@@ -40,7 +42,15 @@ describe("ToolExecutionComponent parity", () => {
 			renderResult: () => new Text("custom result", 0, 0),
 		};
 
-		const component = new ToolExecutionComponent("custom_tool", "tool-1", {}, {}, toolDefinition, createFakeTui());
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-1",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
 		expect(stripAnsi(component.render(120).join("\n"))).toContain("custom call");
 
 		component.updateResult(
@@ -69,6 +79,7 @@ describe("ToolExecutionComponent parity", () => {
 			{},
 			overrideDefinition,
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult({ content: [], details: { diff: "+1 after", firstChangedLine: 1 }, isError: false });
 		const rendered = stripAnsi(component.render(120).join("\n"));
@@ -85,6 +96,7 @@ describe("ToolExecutionComponent parity", () => {
 			{},
 			undefined,
 			createFakeTui(),
+			process.cwd(),
 		);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("read");
@@ -119,6 +131,7 @@ describe("ToolExecutionComponent parity", () => {
 			{},
 			createReadToolDefinition(process.cwd()),
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
@@ -134,10 +147,11 @@ describe("ToolExecutionComponent parity", () => {
 		const component = new ToolExecutionComponent(
 			"read",
 			"tool-4b",
-			{ path: "README.md" },
+			{ path: "notes.txt" },
 			{},
 			overrideDefinition,
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
@@ -158,6 +172,7 @@ describe("ToolExecutionComponent parity", () => {
 			{},
 			overrideDefinition,
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
@@ -179,6 +194,7 @@ describe("ToolExecutionComponent parity", () => {
 				renderResult: () => new Text("override result", 0, 0),
 			},
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
@@ -201,6 +217,7 @@ describe("ToolExecutionComponent parity", () => {
 				renderResult: () => new Text("wrapped override result", 0, 0),
 			},
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
@@ -221,7 +238,15 @@ describe("ToolExecutionComponent parity", () => {
 			},
 		};
 
-		const component = new ToolExecutionComponent("custom_tool", "tool-5", {}, {}, toolDefinition, createFakeTui());
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-5",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom call shared-token");
@@ -243,6 +268,7 @@ describe("ToolExecutionComponent parity", () => {
 			{},
 			toolDefinition,
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
@@ -261,6 +287,7 @@ describe("ToolExecutionComponent parity", () => {
 			{},
 			toolDefinition,
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
@@ -276,6 +303,7 @@ describe("ToolExecutionComponent parity", () => {
 			{},
 			createWriteToolDefinition(process.cwd()),
 			createFakeTui(),
+			process.cwd(),
 		);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("one");
@@ -287,10 +315,11 @@ describe("ToolExecutionComponent parity", () => {
 		const component = new ToolExecutionComponent(
 			"read",
 			"tool-8",
-			{ path: "README.md" },
+			{ path: "notes.txt" },
 			{},
 			createReadToolDefinition(process.cwd()),
 			createFakeTui(),
+			process.cwd(),
 		);
 		component.updateResult(
 			{ content: [{ type: "text", text: "one\ntwo\n" }], details: undefined, isError: false },
@@ -301,4 +330,87 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("two");
 		expect(rendered).not.toContain("two\n\n");
 	});
+
+	for (const scenario of [
+		{
+			title: "SKILL.md",
+			path: join(process.cwd(), "attio", "SKILL.md"),
+			content: "---\nname: attio\ndescription: CRM helper\n---\n\n# Hidden skill instructions",
+			compact: "[skill] attio",
+			hidden: "Hidden skill instructions",
+			absent: "read skill attio",
+		},
+		{
+			title: "AGENTS.md",
+			path: join(process.cwd(), ".pi", "AGENTS.md"),
+			content: "Hidden resource instructions",
+			compact: "read resource .pi/AGENTS.md",
+			hidden: "Hidden resource instructions",
+			absent: undefined,
+		},
+		{
+			title: "outside AGENTS.md",
+			path: resolve(process.cwd(), "..", "AGENTS.md"),
+			content: "Hidden outside resource instructions",
+			compact: `read resource ${resolve(process.cwd(), "..", "AGENTS.md").replace(/\\/g, "/")}`,
+			hidden: "Hidden outside resource instructions",
+			absent: undefined,
+		},
+		{
+			title: "Pi documentation",
+			path: getReadmePath(),
+			content: "Hidden docs content",
+			compact: "read docs README.md",
+			hidden: "Hidden docs content",
+			absent: undefined,
+		},
+	] as const) {
+		test(`renders ${scenario.title} read results compactly until expanded`, () => {
+			const component = new ToolExecutionComponent(
+				"read",
+				`tool-compact-${scenario.title}`,
+				{ path: scenario.path },
+				{},
+				createReadToolDefinition(process.cwd()),
+				createFakeTui(),
+				process.cwd(),
+			);
+			component.updateResult(
+				{ content: [{ type: "text", text: scenario.content }], details: undefined, isError: false },
+				false,
+			);
+
+			const collapsed = stripAnsi(component.render(120).join("\n"));
+			expect(collapsed).toContain(scenario.compact);
+			expect(collapsed).not.toContain(scenario.hidden);
+			if (scenario.absent) {
+				expect(collapsed).not.toContain(scenario.absent);
+			}
+
+			component.setExpanded(true);
+			const expanded = stripAnsi(component.render(120).join("\n"));
+			expect(expanded).toContain(scenario.hidden);
+		});
+	}
+
+	for (const scenario of [
+		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "[skill] attio:120-329" },
+		{ title: "Pi documentation", path: getReadmePath(), compact: "read docs README.md:120-329" },
+	] as const) {
+		test(`shows the read line range in compact ${scenario.title} reads before the expand hint`, () => {
+			const component = new ToolExecutionComponent(
+				"read",
+				`tool-compact-range-${scenario.title}`,
+				{ path: scenario.path, offset: 120, limit: 210 },
+				{},
+				createReadToolDefinition(process.cwd()),
+				createFakeTui(),
+				process.cwd(),
+			);
+
+			const collapsed = stripAnsi(component.render(120).join("\n"));
+			expect(collapsed).toContain(scenario.compact);
+			expect(collapsed.indexOf(":120-329")).toBeLessThan(collapsed.indexOf("to expand"));
+		});
+	}
 });

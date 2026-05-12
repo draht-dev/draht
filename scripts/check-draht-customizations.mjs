@@ -401,6 +401,63 @@ for (const name of requiredGsdTests) {
 	);
 }
 
+// ── 13.5. Draht visual features (copper thinking, ASCII logo) ────
+
+console.log("\nDraht visual features (copper thinking, ASCII logo)");
+
+const darkTheme = readJson("packages/coding-agent/src/modes/interactive/theme/dark.json");
+const lightTheme = readJson("packages/coding-agent/src/modes/interactive/theme/light.json");
+
+// Copper colors must exist in both themes
+for (const [name, theme] of [["dark", darkTheme], ["light", lightTheme]]) {
+	check(
+		typeof theme.vars?.copper === "string",
+		`${name}.json vars.copper exists`,
+	);
+	check(
+		typeof theme.vars?.copperDim === "string",
+		`${name}.json vars.copperDim exists`,
+	);
+	check(
+		typeof theme.colors?.thinkingMax === "string",
+		`${name}.json colors.thinkingMax exists`,
+	);
+	check(
+		typeof theme.colors?.thinkingLow === "string" &&
+			(theme.colors.thinkingLow.includes("8a751a") || theme.colors.thinkingLow === "copperDim"),
+		`${name}.json colors.thinkingLow is copper tone`,
+	);
+	check(
+		typeof theme.colors?.thinkingHigh === "string" &&
+			(theme.colors.thinkingHigh.includes("copper") || theme.colors.thinkingHigh.includes("e8c828") || theme.colors.thinkingHigh.includes("8a5a14")),
+		`${name}.json colors.thinkingHigh is copper tone`,
+	);
+}
+
+// ASCII art logo must exist in interactive-mode
+const interactiveMode = readFileSync(
+	resolve(root, "packages/coding-agent/src/modes/interactive/interactive-mode.ts"),
+	"utf-8",
+);
+check(
+	interactiveMode.includes("╭─╮"),
+	"interactive-mode.ts has ASCII art logo",
+);
+check(
+	interactiveMode.includes("/dʁaːt/"),
+	"interactive-mode.ts has pronunciation",
+);
+
+// getThinkingBorderColor must have "max" case
+const themeTs = readFileSync(
+	resolve(root, "packages/coding-agent/src/modes/interactive/theme/theme.ts"),
+	"utf-8",
+);
+check(
+	/"max"/.test(themeTs.split("getThinkingBorderColor")[1]?.split("getBashModeBorderColor")[0] ?? ""),
+	"theme.ts getThinkingBorderColor has max case",
+);
+
 // ── 14. Package names use @draht/* or draht-* ──────────────────────
 
 console.log("\nPackage names (@draht/* not @mariozechner/pi*)");

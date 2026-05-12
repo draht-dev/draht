@@ -523,6 +523,46 @@ commands["read-plan"] = function (n, p) {
 };
 
 // --- validate-plans ---
+// Placeholder patterns that indicate a task isn't actually executable.
+// Borrowed from superpowers' writing-plans discipline: tasks with these aren't
+// usable input for an implementer subagent.
+const PLACEHOLDER_PATTERNS = [
+	{ pattern: /\[TBD\]/i, label: "[TBD]" },
+	{ pattern: /\[files?\]/i, label: "[file] or [files]" },
+	{ pattern: /\[description\]/i, label: "[description]" },
+	{ pattern: /\[task\s*name\]/i, label: "[task name]" },
+	{ pattern: /\bappropriate\s+error\s+handling\b/i, label: '"appropriate error handling"' },
+	{ pattern: /\bsimilar\s+to\s+task\s+[NX0-9]+\b/i, label: '"similar to Task N"' },
+	{ pattern: /\bsee\s+previous\s+task\b/i, label: '"see previous task"' },
+	{ pattern: /\bfill\s+in\s+later\b/i, label: '"fill in later"' },
+	{ pattern: /\bfigure\s+(?:this\s+)?out\s+later\b/i, label: '"figure out later"' },
+];
+
+function findPlaceholders(content) {
+	const hits = [];
+	for (const { pattern, label } of PLACEHOLDER_PATTERNS) {
+		if (pattern.test(content)) hits.push(label);
+	}
+	return hits;
+}
+
+function findEmptySections(content) {
+	// Detect <test>, <action>, <verify>, <done> blocks that are empty or contain only whitespace/placeholders
+	const sections = ["test", "action", "verify", "done", "files"];
+	const empty = [];
+	for (const tag of sections) {
+		const re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "g");
+		let match;
+		while ((match = re.exec(content)) !== null) {
+			const inner = match[1].trim();
+			if (inner.length === 0 || /^\.\.\.$/.test(inner) || /^\[.*\]$/.test(inner)) {
+				empty.push(`<${tag}>`);
+			}
+		}
+	}
+	return empty;
+}
+
 commands["validate-plans"] = function (n) {
 	const num = parseInt(n, 10);
 	if (!num) { console.error("Usage: draht-tools validate-plans N"); process.exit(1); }
@@ -547,6 +587,18 @@ commands["validate-plans"] = function (n) {
 		const taskCount = (content.match(/<task/g) || []).length;
 		if (taskCount > 5) issues.push(`${file}: ${taskCount} tasks (max recommended: 5)`);
 		if (taskCount === 0) issues.push(`${file}: No tasks defined`);
+
+		// Placeholder linter — flag tasks that aren't actually executable
+		const placeholders = findPlaceholders(content);
+		if (placeholders.length > 0) {
+			issues.push(`${file}: contains placeholder text → ${placeholders.join(", ")} (tasks must be concrete to dispatch to subagents)`);
+		}
+
+		// Empty section linter — <test>, <action>, <verify>, <done>, <files> must have real content
+		const emptySections = findEmptySections(content);
+		if (emptySections.length > 0) {
+			issues.push(`${file}: empty or placeholder-only sections → ${emptySections.join(", ")}`);
+		}
 	}
 
 	console.log(banner(`VALIDATE PHASE ${num}`));
@@ -556,6 +608,7 @@ commands["validate-plans"] = function (n) {
 	} else {
 		console.log(`\n⚠️  ${issues.length} issue(s):`);
 		for (const issue of issues) console.log(`  - ${issue}`);
+		process.exit(1);
 	}
 };
 

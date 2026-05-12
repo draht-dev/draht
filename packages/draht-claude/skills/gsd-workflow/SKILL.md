@@ -36,9 +36,9 @@ Draht's GSD workflow is a milestone → phase → plan → task hierarchy that l
 
 ### Per-phase cycle (fresh session between each step)
 1. **`/discuss-phase N`** — capture decisions, gray areas, domain terms
-2. **`/plan-phase N`** — create atomic execution plans (parallel via architect subagents)
-3. **`/execute-phase N`** — TDD red→green→refactor (parallel via implementer subagents)
-4. **`/verify-work N`** — parallel verifier + security-auditor + reviewer, produce UAT report
+2. **`/plan-phase N`** — create atomic execution plans (parallel via `architect` subagents). Architects emit `---END-PLAN---` to separate plan content from the `STATUS:` footer.
+3. **`/execute-phase N`** — per-task three-stage loop: `implementer → spec-reviewer → reviewer`. TDD red→green→refactor inside each implementer task. Tasks within a plan are sequential; independent plans parallelize.
+4. **`/verify-work N`** — parallel `verifier` + `security-auditor` + `reviewer` + `spec-reviewer` (phase-level compliance against the plan files), produce UAT report.
 
 Start a fresh session (`/clear`) between steps. Each command assumes a clean context.
 
@@ -51,10 +51,35 @@ Start a fresh session (`/clear`) between steps. Each command assumes a clean con
 - **`/progress`** — show current position in the roadmap
 
 ### Ad-hoc
-- **`/quick`** — small task with tracking but without full phase ceremony
-- **`/fix`** — bug fix with TDD discipline (reproducing test first)
-- **`/review`** — parallel code review + security audit
-- **`/atomic-commit`** — analyze diff, split into atomic conventional commits
+- **`/quick`** — small task with tracking. Implementer → spec-reviewer → (optional) reviewer.
+- **`/fix`** — bug fix with 4-phase systematic debugging (root cause → pattern → hypothesis → reproducing-test-first impl). Stops after 3 failed fix attempts.
+- **`/review`** — parallel `reviewer` + `security-auditor`, plus `spec-reviewer` when a plan is in scope.
+- **`/atomic-commit`** — analyze diff, split into atomic conventional commits (Red Flag block prevents mixed-concern commits).
+- **`/orchestrate`** — general-purpose specialist dispatch with parallel / chain / fan-out / two-stage modes.
+
+## Subagent Roster
+
+| Agent | Purpose |
+|---|---|
+| `architect` | Plan structure before coding |
+| `implementer` | Write or change code (inside TDD cycle) |
+| `spec-reviewer` | Verify diff covers exactly what the spec asked — no more, no less |
+| `reviewer` | Code-quality review (correctness, conventions, domain language) |
+| `debugger` | Root-cause diagnosis |
+| `verifier` | Run lint / typecheck / tests, report results |
+| `security-auditor` | Security audit (injection, secrets, unsafe patterns) |
+| `git-committer` | Create atomic conventional commits |
+
+## Subagent STATUS Protocol
+
+Every draht agent ends with one of four status lines. Orchestrating commands branch on it:
+
+- **`STATUS: DONE`** — proceed
+- **`STATUS: DONE_WITH_CONCERNS`** — proceed; log concerns. If correctness-related, address first.
+- **`STATUS: NEEDS_CONTEXT`** — provide missing info and re-dispatch the same agent
+- **`STATUS: BLOCKED`** — STOP. Do not retry the same agent on the same input. Adjust inputs or surface to user.
+
+For any spec-driven work, `spec-reviewer` runs **before** `reviewer`. Spec compliance prevents over/under-building; running quality review first lets spec gaps hide.
 
 ## Task Format (XML inside PLAN.md files)
 

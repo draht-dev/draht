@@ -29,7 +29,7 @@ const posts = (await getCollection("blog", ({ data }) => !data.draft))
 			{posts.map((post, i) => (
 				<li class="post-item">
 					<a href={`/blog/${post.id}`} class="post-link">
-						<span class="post-idx">N° {String(i + 1).padStart(3, "0")}</span>
+						<span class="post-idx">N° {String(posts.length - i).padStart(3, "0")}</span>
 						<div class="post-body">
 							<time class="post-date">{post.data.date}</time>
 							<h2 class="post-title-item">{post.data.title}</h2>

@@ -1,5 +1,5 @@
 ---
-description: "Execute a small ad-hoc task with tracking"
+description: "Execute a small ad-hoc task with tracking (implementer + TDD + optional spec-reviewer pass)"
 ---
 
 # /quick
@@ -34,8 +34,10 @@ Before executing, decompose this task into atomic reasoning units:
    echo 'plan content here' | draht-tools create-quick-plan NNN "$ARGUMENTS"
    ```
    The plan content must include: a `# Quick Task NNN: title` heading, a `## Tasks` section with one or more `<task>` XML blocks containing real file paths, real actions, and real verification steps — NOT placeholders like `[files]`.
-3. **Delegate execution to subagent**: Use the `subagent` tool in **single mode** with the `implementer` agent:
-   "Execute this task: $ARGUMENTS
+
+3. **Stage 1 — Implementer.** Use the `subagent` tool in **single mode** with the `implementer` agent:
+   ```
+   Execute this task: $ARGUMENTS
 
    Follow the TDD cycle:
    - RED — Write a failing test that describes the desired behaviour
@@ -44,7 +46,35 @@ Before executing, decompose this task into atomic reasoning units:
    Exception: skip the TDD cycle only for pure config or documentation-only tasks that have no testable behaviour.
 
    After completion, report: files changed, tests written, and verification results.
-   Do NOT run draht, draht-tools, draht help, or pi commands — use only standard tools."
 
-4. Write summary: `draht-tools write-quick-summary NNN`
-5. Update state: `draht-tools update-state`
+   End your response with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED` per the agent contract.
+
+   Do NOT run draht, draht-tools, draht help, or pi commands — use only standard tools.
+   ```
+
+   Read the final `STATUS:` line:
+   - `DONE` → go to Stage 2 (or skip Stage 2 for pure-config / pure-docs).
+   - `DONE_WITH_CONCERNS` → log; if correctness, re-dispatch; otherwise continue.
+   - `NEEDS_CONTEXT` → provide missing info and re-dispatch.
+   - `BLOCKED` → STOP, report.
+
+4. **Stage 2 — Spec-reviewer (skip for pure-config / pure-docs).** Use the `subagent` tool with the `spec-reviewer` agent. Prompt:
+   ```
+   Review the diff for quick task NNN against `.planning/quick/NNN-*-PLAN.md`. ONLY check spec compliance — does the diff implement exactly what the plan's <test>/<action>/<done> sections asked, no more, no less?
+
+   End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
+   ```
+   - `DONE` → go to Stage 3.
+   - `BLOCKED` → re-dispatch implementer with Required Fixes. Repeat until `DONE`.
+
+5. **Stage 3 — Reviewer (optional code-quality pass).** For non-trivial quick tasks (more than one file, or domain code), use the `subagent` tool with the `reviewer` agent. Otherwise skip.
+   - `DONE` → task complete.
+   - `BLOCKED` → re-dispatch implementer with Must-fix list.
+
+6. Write summary: `draht-tools write-quick-summary NNN`
+7. Update state: `draht-tools update-state`
+
+## When to skip Stage 3
+- Pure config (tsconfig, biome, formatter)
+- Docs-only edits
+- Single-line obvious changes (typo, version bump)

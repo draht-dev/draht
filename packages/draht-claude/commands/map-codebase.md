@@ -36,12 +36,16 @@ Before analyzing, decompose codebase understanding into atomic reasoning units:
    Dispatch these two subagents in parallel (single assistant turn, two Task tool calls):
 
    - **Task tool** with `subagent_type: "architect"` and prompt:
-     "Analyze the codebase at $1. Identify bounded contexts from directory structure — look for top-level src/ subdirectories, packages, or modules that encapsulate coherent domain concepts. Note any cross-directory coupling suggesting blurred context boundaries. Extract domain language: collect PascalCase class/interface/type names, key function names, database table/collection names. Look for repeated nouns representing core domain concepts. Output a structured list of: bounded contexts (name + description), domain terms (glossary), aggregates per context, and context relationships (upstream/downstream, shared kernel, ACL)."
+     "Analyze the codebase at $1. Identify bounded contexts from directory structure — look for top-level src/ subdirectories, packages, or modules that encapsulate coherent domain concepts. Note any cross-directory coupling suggesting blurred context boundaries. Extract domain language: collect PascalCase class/interface/type names, key function names, database table/collection names. Look for repeated nouns representing core domain concepts. Output a structured list of: bounded contexts (name + description), domain terms (glossary), aggregates per context, and context relationships (upstream/downstream, shared kernel, ACL).
+
+     End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`."
 
    - **Task tool** with `subagent_type: "verifier"` and prompt:
-     "Analyze the test infrastructure at $1. Discover: test framework(s) in use (check package.json, config files), test directory conventions (co-located, __tests__/, test/), existing coverage configuration and goals, which layers have tests (unit, integration, e2e), gaps and recommendations. Output a structured test strategy report."
+     "Analyze the test infrastructure at $1. Discover: test framework(s) in use (check package.json, config files), test directory conventions (co-located, __tests__/, test/), existing coverage configuration and goals, which layers have tests (unit, integration, e2e), gaps and recommendations. Output a structured test strategy report.
 
-4. Collect subagent results and merge with the draht-tools output
+     End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`."
+
+4. Read each subagent's `STATUS:` line. `BLOCKED` or `NEEDS_CONTEXT` from either means STOP — `map-codebase` produces foundational artifacts and partial output here causes downstream confusion. Collect subagent results and merge with the draht-tools output.
 5. Create `.planning/DOMAIN.md` (if it doesn't exist) with:
    - `## Bounded Contexts` — one entry per discovered context with a brief description
    - `## Ubiquitous Language` — glossary of extracted domain terms

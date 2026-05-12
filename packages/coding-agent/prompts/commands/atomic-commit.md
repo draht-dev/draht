@@ -4,6 +4,18 @@ description: "Analyze changes and create atomic commits"
 
 # Git Atomic Commit Analysis
 
+## Red Flags — STOP
+
+Do NOT proceed with a commit if **any** of these is true:
+
+- A single proposed commit mixes unrelated concerns (feature + unrelated refactor + config tweak)
+- The change set contains potential secrets (`.env`, credentials, API keys in source)
+- Staged content includes files unrelated to the user's stated intent
+- Pre-commit hooks fail — fix the cause, never use `--no-verify`
+- You cannot articulate the "why" of a commit in one sentence — split it
+
+Surface any of these to the user and split the change set before continuing.
+
 ## Atomic Reasoning
 
 Before creating commits, decompose changes into atomic reasoning units:

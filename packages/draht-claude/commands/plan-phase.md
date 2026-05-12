@@ -10,6 +10,19 @@ Create atomic execution plans for a roadmap phase, using subagents for parallel 
 
 Phase: $1
 
+## Red Flags — STOP
+
+A plan is only as good as the tasks inside it. STOP and revise instead of saving if **any** of these is true:
+
+- Any task contains placeholder text: `[TBD]`, `[files]`, `[description]`, "appropriate error handling", "similar to Task N", or `...` in code positions
+- A task's `<test>` section names no concrete test cases (e.g., "test the function" with no inputs/outputs)
+- A task's `<files>` section lists no concrete file paths
+- A task takes more than ~5 minutes of focused work — break it down further
+- The plan introduces new domain terms that are NOT in `.planning/DOMAIN.md` — update DOMAIN.md first
+- A plan touches more than one bounded context without explicit ACL — split per context
+
+Run `draht-tools validate-plans $1` after saving. If it reports issues, fix them before commit.
+
 > **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`. For subagents, use the **Task tool** with `subagent_type: "architect"`. Dispatch multiple parallel tasks in a single assistant turn by making multiple Task tool calls at once.
 
 ## Atomic Reasoning
@@ -46,15 +59,35 @@ Before creating plans, decompose this phase goal into atomic reasoning units:
      - The specific observable truths this plan must satisfy
      - The target files/artifacts
      - The XML task format specification (below)
-     - Instruction to output the plan as XML text, which the main assistant will save via `draht-tools create-plan`
+     - The instruction below about the **delimiter convention** for output
 
-6. Collect all plan outputs from subagents
-7. Save each plan by piping the subagent's output into `draht-tools create-plan`:
+   ### Architect Output Delimiter Convention
+
+   The architect agent appends a `STATUS:` footer per the standard agent contract. For `/plan-phase`, the orchestrator pipes the architect's output to `create-plan` as a file — we must NOT include the `STATUS:` line in the saved plan.
+
+   Include this instruction in every architect prompt:
+   ```
+   Output your plan as XML, followed by a line containing exactly `---END-PLAN---`, followed by your final `STATUS: ...` line.
+
+   The orchestrator will split your output on `---END-PLAN---` and save only the plan content. The STATUS line is read for control flow but not saved.
+   ```
+
+6. **Collect and split outputs.** For each architect's output:
+   - Split on the literal `---END-PLAN---` line
+   - Plan content = everything BEFORE the delimiter (trimmed)
+   - Status line = everything AFTER the delimiter (the `STATUS:` line)
+   - Read the status:
+     - `DONE` / `DONE_WITH_CONCERNS` → save the plan
+     - `NEEDS_CONTEXT` → provide missing info and re-dispatch this architect
+     - `BLOCKED` → STOP, report blocker; do not save a partial plan
+
+7. Save each plan by piping the split plan content into `draht-tools create-plan`:
    ```bash
-   echo 'plan content from subagent' | node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" create-plan $1 P [title]
+   printf '%s' "$plan_content" | node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" create-plan $1 P [title]
    ```
    The content must contain real task details (files, actions, tests) — NOT placeholder brackets. If `create-plan` is called without stdin, it writes a useless template.
-8. Validate: `draht-tools validate-plans $1`
+
+8. Validate: `draht-tools validate-plans $1` — if it exits non-zero, fix the offending plan before commit.
 9. Commit: `draht-tools commit-docs "create phase $1 plans"`
 
 ## Plan Format

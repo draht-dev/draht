@@ -7,6 +7,18 @@ allowed-tools: Bash, Read, Task
 
 Analyze changes and create atomic commits.
 
+## Red Flags — STOP
+
+Do NOT proceed with a commit if **any** of these is true:
+
+- A single proposed commit mixes unrelated concerns (e.g., a feature + an unrelated refactor + a config tweak)
+- The change set contains potential secrets (`.env`, credentials, API keys in source)
+- Staged content includes files unrelated to the user's stated intent (stale build artifacts, IDE configs, scratch files)
+- Pre-commit hooks fail — fix the cause, never use `--no-verify`
+- You cannot articulate the "why" of a commit in one sentence — that's a sign it contains more than one logical change
+
+If any of these triggers, surface the issue to the user and split the change set before continuing.
+
 ## Atomic Reasoning
 
 Before creating commits, decompose changes into atomic reasoning units:

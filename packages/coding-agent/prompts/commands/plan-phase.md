@@ -13,6 +13,19 @@ Create atomic execution plans for a roadmap phase, using subagents for parallel 
 
 Phase: $1
 
+## Red Flags — STOP
+
+A plan is only as good as the tasks inside it. STOP and revise instead of saving if **any** of these is true:
+
+- Any task contains placeholder text: `[TBD]`, `[files]`, `[description]`, "appropriate error handling", "similar to Task N", `...` in code positions
+- A task's `<test>` section names no concrete test cases (e.g., "test the function" with no inputs/outputs)
+- A task's `<files>` section lists no concrete file paths
+- A task takes more than ~5 minutes — break it down further
+- The plan introduces new domain terms that are NOT in `.planning/DOMAIN.md` — update DOMAIN.md first
+- A plan touches more than one bounded context without explicit ACL — split per context
+
+Run `draht-tools validate-plans $1` after saving. Fix any issues it reports before commit.
+
 ## Atomic Reasoning
 
 Before creating plans, decompose this phase goal into atomic reasoning units:
@@ -39,22 +52,42 @@ Before creating plans, decompose this phase goal into atomic reasoning units:
    e. Break into plan groups of 2-5 tasks each
 4. Identify which plans are independent (no shared files, no dependency edges)
 5. **Delegate plan creation to subagents:**
-   - For independent plans: use the `subagent` tool in **parallel mode** with `architect` agents, one per plan. Each task should include the phase context, the specific observable truths, target files, and the XML task format (below).
+   - For independent plans: use the `subagent` tool in **parallel mode** with `architect` agents, one per plan.
    - For dependent plans: create them sequentially, each via a **single** `subagent` call to `architect`, passing the outputs of predecessor plans as context.
    - Each subagent task must include:
      - The phase context summary (paste it — subagents cannot run draht-tools)
      - The specific observable truths this plan must satisfy
      - The target files/artifacts
      - The XML task format specification (below)
-     - Instruction to output the plan as XML (you will save it via `draht-tools create-plan`)
+     - The **delimiter convention** (below) so the orchestrator can split plan content from the `STATUS:` footer
 
-6. Collect all plan outputs from subagents
-7. Save each plan by piping the subagent's output into `draht-tools create-plan`:
+   ### Architect Output Delimiter Convention
+
+   The architect agent appends a `STATUS:` footer per the standard agent contract. For `/plan-phase`, we pipe the architect's plan output to `create-plan` as a file — we must NOT include the `STATUS:` line in the saved plan.
+
+   Include this in every architect prompt:
    ```
-   echo 'plan content from subagent' | draht-tools create-plan $1 P [title]
+   Output your plan as XML, followed by a line containing exactly `---END-PLAN---`, followed by your final `STATUS: ...` line.
+
+   The orchestrator splits your output on `---END-PLAN---` and saves only the plan content. The STATUS line is read for control flow but not saved.
+   ```
+
+6. **Collect and split outputs.** For each architect's output:
+   - Split on `---END-PLAN---`
+   - Plan content = everything BEFORE the delimiter (trimmed)
+   - Status line = everything AFTER (the `STATUS:` line)
+   - Branch on status:
+     - `DONE` / `DONE_WITH_CONCERNS` → save the plan
+     - `NEEDS_CONTEXT` → provide missing info and re-dispatch
+     - `BLOCKED` → STOP, report; do not save a partial plan
+
+7. Save each plan by piping the split plan content into `draht-tools create-plan`:
+   ```
+   printf '%s' "$plan_content" | draht-tools create-plan $1 P [title]
    ```
    The content must contain real task details (files, actions, tests) — NOT placeholder brackets. If `create-plan` is called without stdin, it writes a useless template.
-8. Validate: `draht-tools validate-plans $1`
+
+8. Validate: `draht-tools validate-plans $1` — if it exits non-zero, fix the offending plan before commit.
 9. Commit: `draht-tools commit-docs "create phase $1 plans"`
 
 ## Plan Format

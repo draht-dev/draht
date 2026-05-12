@@ -1,17 +1,28 @@
 ---
-description: Execute all plans in a phase with atomic commits (parallel implementer subagents + TDD cycle)
+description: Execute all plans in a phase with atomic commits (parallel implementer subagents + per-task two-stage review + TDD cycle)
 argument-hint: "<phase-number> [--gaps-only]"
 allowed-tools: Bash, Read, Write, Edit, Task
 ---
 
 # /execute-phase
 
-Execute all plans in a phase with atomic commits, parallelizing independent plans via subagents.
+Execute all plans in a phase with atomic commits, parallelizing independent plans via subagents. Each task is implemented, then **spec-reviewed**, then **quality-reviewed** before the next task begins.
 
 Phase: $1
 Arguments: $ARGUMENTS
 
-> **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`. For subagent delegation, use the **Task tool** with `subagent_type: "implementer"`. Dispatch multiple parallel tasks in a single assistant turn by making multiple Task tool calls at once.
+> **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`. For subagent delegation, use the **Task tool** with `subagent_type: "implementer" | "spec-reviewer" | "reviewer"`. Dispatch multiple parallel tasks in a single assistant turn by making multiple Task tool calls at once.
+
+## Red Flags — STOP
+
+STOP and report to the user instead of proceeding if **any** of these is true:
+
+- `gsd-pre-execute.cjs` exits non-zero (missing DOMAIN.md, missing plans, uncommitted changes blocking start)
+- Any plan file contains placeholder text: `[TBD]`, `[files]`, `[description]`, "appropriate error handling", "similar to Task N", "..." in code positions, or empty `<test>` / `<action>` / `<verify>` / `<done>` sections — these are not executable
+- A plan has zero `<task>` elements
+- `.planning/DOMAIN.md` is absent on a non-greenfield project — implementers will guess at naming
+- The working tree is dirty with changes unrelated to this phase
+- An implementer subagent returns `STATUS: BLOCKED` — never retry blindly; report what blocked it and ask the user
 
 ## Atomic Reasoning
 
@@ -28,6 +39,7 @@ Before executing, decompose this phase execution into atomic reasoning units:
 - Map each plan to a subagent task with clear success criteria
 
 ## Steps
+
 0. Run the pre-execute check:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gsd-pre-execute.cjs" $1
@@ -36,32 +48,66 @@ Before executing, decompose this phase execution into atomic reasoning units:
 
 1. Run `draht-tools discover-plans $1` to find and order plans
 2. Read each plan file yourself (from `.planning/phases/`) and analyze dependencies to identify which plans can run in parallel vs sequential
+3. **Validate plans before dispatching:**
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" validate-plans $1
+   ```
+   If any plan reports placeholders or missing sections, STOP and fix the plan (or have the user re-run `/plan-phase`) before dispatching.
 
-3. **Delegate execution to subagents via the Task tool:**
-   - For **independent plans** (no shared files, no dependency chain): dispatch multiple `Task` tool calls in parallel (single assistant turn), each with `subagent_type: "implementer"`, one per plan.
-   - For **dependent plans**: dispatch sequentially — one `Task` call at a time, waiting for the previous to complete before starting the next.
-   - Each implementer prompt must include:
-     - The full plan content (paste it inline — the subagent cannot run draht-tools)
-     - The TDD cycle instructions (see template below)
-     - Instructions to commit with `git add <files> && git commit -m "description"`
+4. **Per-plan execution loop.** For each plan (parallel where independent, sequential where dependent):
 
-4. After all subagents complete, collect results and check for failures
-5. For each completed task, run the post-task hook (record results + type check + test run):
+   For each `<task>` in the plan, run a **three-stage** dispatch — implementer → spec-reviewer → reviewer — before moving to the next task. Do not pause for user input between tasks; only stop when a stage returns `STATUS: BLOCKED` or `STATUS: NEEDS_CONTEXT`.
+
+   ### Stage 1 — Implementer
+   Dispatch a Task with `subagent_type: "implementer"` and the prompt from the template below. Read the final `STATUS:` line in the response.
+   - `STATUS: DONE` → go to Stage 2.
+   - `STATUS: DONE_WITH_CONCERNS` → note the concerns; if any are correctness issues, instruct the implementer to fix and re-dispatch; otherwise go to Stage 2.
+   - `STATUS: NEEDS_CONTEXT` → provide the missing context (paste the relevant file content or decision) and re-dispatch. Do not skip.
+   - `STATUS: BLOCKED` → STOP. Report the blocker to the user. Do not move on.
+
+   ### Stage 2 — Spec-reviewer
+   Once the implementer is DONE, dispatch a Task with `subagent_type: "spec-reviewer"` and a prompt of the form:
+   ```
+   Review the diff for task <task-name> in plan <plan-file> against the spec below. ONLY check spec compliance — does the diff implement exactly what the spec asked for, no more, no less?
+   
+   Task spec:
+   <paste the <task>...</task> XML>
+   
+   Diff to review:
+   <run `git diff <range>` and paste, or instruct the agent to run it>
+   ```
+   - `STATUS: DONE` → go to Stage 3.
+   - `STATUS: DONE_WITH_CONCERNS` → note, go to Stage 3.
+   - `STATUS: BLOCKED` → re-dispatch the implementer with the "Required Fixes" list to address the gaps. Repeat Stage 1+2 until `DONE`. **Never proceed to Stage 3 with a non-compliant diff.**
+
+   ### Stage 3 — Reviewer (code quality)
+   Once spec compliance is ✅, dispatch a Task with `subagent_type: "reviewer"` and a prompt of the form:
+   ```
+   Code-quality review of the diff for task <task-name>. Focus on correctness, type safety, conventions, maintainability, and domain language compliance. Spec compliance has already been confirmed — do NOT re-check spec.
+   
+   Diff to review:
+   <run `git diff <range>` and paste, or instruct the agent to run it>
+   ```
+   - `STATUS: DONE` → task is complete, run the post-task hook (below), then move to the next task.
+   - `STATUS: DONE_WITH_CONCERNS` → log the `Should fix` items; if any are correctness-critical, re-dispatch implementer; otherwise log and move on.
+   - `STATUS: BLOCKED` → `Must fix` issues exist; re-dispatch the implementer with the issue list. Repeat the three stages until `DONE`.
+
+   ### Post-task hook
+   After Stage 3 passes for a task, record the result:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gsd-post-task.cjs" <phase> <plan> <task-num> <status> <commit-hash>
    ```
-6. Run `draht-tools verify-phase $1` yourself (not the subagent)
-7. Run the post-phase hook to generate the phase report:
+
+5. After all plans complete, run `draht-tools verify-phase $1` yourself (not the subagent)
+6. Run the post-phase hook to generate the phase report:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gsd-post-phase.cjs" $1
    ```
-8. Run `draht-tools update-state` yourself
-9. Final commit: `draht-tools commit-docs "complete phase $1 execution"`
-10. Tell the user to start a fresh session (`/clear`) and run `/verify-work $1`
+7. Run `draht-tools update-state` yourself
+8. Final commit: `draht-tools commit-docs "complete phase $1 execution"`
+9. Tell the user to start a fresh session (`/clear`) and run `/verify-work $1`
 
-## Subagent Task Template
-
-Each implementer Task call receives a prompt like:
+## Subagent Task Template (Stage 1: implementer)
 
 ```
 Execute this plan. Here is the full plan content:
@@ -69,7 +115,7 @@ Execute this plan. Here is the full plan content:
 <paste full plan XML here>
 
 For each <task> in the plan, follow this TDD cycle:
-1. RED — Write failing tests from <test>. Run the test runner, confirm they FAIL. Commit with: git add <test-files> && git commit -m "red: <description>"
+1. RED — Write failing tests from <test>. Run the test runner, confirm they FAIL for the right reason. Commit with: git add <test-files> && git commit -m "red: <description>"
 2. GREEN — Write minimal implementation from <action> to make tests pass. Run tests, confirm PASS. Commit with: git add <files> && git commit -m "green: <task name>"
 3. REFACTOR — Apply <refactor> improvements if any. Tests must stay green after each change. Commit with: git add <files> && git commit -m "refactor: <description>"
 4. VERIFY — Run the <verify> step, confirm <done> criteria are met.
@@ -80,25 +126,38 @@ Checkpoint handling:
 - type="auto" → execute silently.
 - type="checkpoint:human-verify" → stop and report back what was built.
 - type="checkpoint:decision" → stop and report the options.
+
+End your response with `STATUS: DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED` per the agent contract.
 ```
 
+## Two-Stage Review Rationale
+
+- **Spec compliance prevents over/under-building.** Implementers can drift — adding "helpful" extras or skipping pieces they think are obvious. The spec-reviewer catches this with fresh eyes.
+- **Code quality runs only after spec ✅.** Mixing the two reviews lets quality concerns mask spec gaps. Keep them ordered.
+- **Never accept "close enough" on spec compliance.** A `BLOCKED` from spec-reviewer means re-dispatch implementer, not move on.
+
 ## Parallelization Rules
+
 - Plans sharing no files and having no dependency edges can run in parallel
 - If plan B depends on output of plan A, plan B must wait for A to complete
+- **Inside a plan, tasks run sequentially** — the three-stage review loop must complete before the next task starts (so each task gets clean review context)
 - If a parallel subagent fails, report which plan failed and continue with independent plans
 
 ## TDD Rules
+
 - Never write implementation before a failing test exists
 - If a test passes immediately after being written, it is not testing the right thing — fix it
 - Red → Green → Refactor is not optional; skipping steps invalidates the safety net
 - Each TDD phase gets its own commit so the history is auditable
 
 ## Domain Rules
+
 - All identifiers (class names, method names, variables) must use the ubiquitous language from `.planning/DOMAIN.md`
 - Do not import across bounded context boundaries directly — use domain events or ACL adapters
 - If implementation reveals a missing domain term, stop and update DOMAIN.md before continuing
 
 ## Workflow
+
 This is one step in the per-phase cycle:
 
 ```
@@ -108,4 +167,5 @@ This is one step in the per-phase cycle:
 After completing this command, tell the user to start a fresh session (`/clear`) and run `/verify-work $1`. Do NOT suggest `/next-milestone`.
 
 ## Flags
+
 - `--gaps-only` → only execute FIX-PLAN.md files from failed verification

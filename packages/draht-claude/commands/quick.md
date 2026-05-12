@@ -1,5 +1,5 @@
 ---
-description: Execute a small ad-hoc task with tracking (implementer subagent + TDD cycle)
+description: Execute a small ad-hoc task with tracking (implementer subagent + TDD cycle + optional spec-reviewer pass)
 argument-hint: "<description>"
 allowed-tools: Bash, Read, Write, Edit, Task
 ---
@@ -10,7 +10,7 @@ Execute a small ad-hoc task with tracking.
 
 Task: $ARGUMENTS
 
-> **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`. For subagents, use the **Task tool** with `subagent_type: "implementer"`.
+> **Tool note**: Invoke `draht-tools <subcommand>` as `node "${CLAUDE_PLUGIN_ROOT}/bin/draht-tools.cjs" <subcommand>`. For subagents, use the **Task tool** with `subagent_type: "implementer" | "spec-reviewer" | "reviewer"`.
 
 ## Atomic Reasoning
 
@@ -34,8 +34,9 @@ Before executing, decompose this task into atomic reasoning units:
    ```
    The plan content must include: a `# Quick Task NNN: title` heading, a `## Tasks` section with one or more `<task>` XML blocks containing real file paths, real actions, and real verification steps — NOT placeholders like `[files]`.
 
-3. **Delegate execution via the Task tool** with `subagent_type: "implementer"` and prompt:
-   "Execute this task: $ARGUMENTS
+3. **Stage 1 — Implementer.** Dispatch via the Task tool with `subagent_type: "implementer"` and prompt:
+   ```
+   Execute this task: $ARGUMENTS
 
    Follow the TDD cycle:
    - RED — Write a failing test that describes the desired behaviour
@@ -44,7 +45,51 @@ Before executing, decompose this task into atomic reasoning units:
 
    Exception: skip the TDD cycle only for pure config or documentation-only tasks that have no testable behaviour.
 
-   After completion, report: files changed, tests written, and verification results."
+   After completion, report: files changed, tests written, and verification results.
 
-4. Write summary: `draht-tools write-quick-summary NNN`
-5. Update state: `draht-tools update-state`
+   End your response with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED` per the agent contract.
+   ```
+
+   Read the final `STATUS:` line:
+   - `DONE` → go to Stage 2 (or skip Stage 2 for pure-config / pure-docs tasks).
+   - `DONE_WITH_CONCERNS` → log concerns; correctness issues → re-dispatch; otherwise continue.
+   - `NEEDS_CONTEXT` → provide missing info and re-dispatch.
+   - `BLOCKED` → STOP, report to user.
+
+4. **Stage 2 — Spec-reviewer (skip for pure-config / pure-docs).** Dispatch with `subagent_type: "spec-reviewer"` and prompt:
+   ```
+   Review the diff for this quick task against the plan written in `.planning/quick/NNN-*-PLAN.md`. ONLY check spec compliance — does the diff implement exactly what the plan's <test>/<action>/<done> sections asked, no more, no less?
+
+   Plan path: <plan file>
+   Diff: <run `git diff` on the commits since plan creation, or instruct the agent to>
+
+   End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
+   ```
+
+   - `DONE` → go to Stage 3.
+   - `BLOCKED` → re-dispatch implementer with the "Required Fixes" list. Repeat Stage 1+2 until `DONE`.
+
+5. **Stage 3 — Reviewer (optional code-quality pass).** For non-trivial quick tasks (touches more than one file or modifies domain code), dispatch with `subagent_type: "reviewer"`:
+   ```
+   Code-quality review of the diff for quick task NNN. Spec compliance already confirmed — focus on correctness, type safety, conventions, domain language. Report Must fix / Should fix / Consider.
+
+   End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
+   ```
+
+   - `DONE` → quick task complete.
+   - `BLOCKED` → re-dispatch implementer with the Must-fix list.
+
+6. Write summary: `draht-tools write-quick-summary NNN`
+7. Update state: `draht-tools update-state`
+
+## When to skip Stage 3
+
+Stage 3 (quality review) is optional for `/quick` since these are by definition small tasks. Run it when:
+- The diff touches more than one file
+- The diff modifies code in `.planning/DOMAIN.md`'s bounded contexts
+- The task is non-trivial behaviour, not pure mechanical change
+
+Skip it when:
+- Pure config (tsconfig, biome, formatter changes)
+- Docs-only edits
+- Single-line, obvious changes (typo fix, version bump)

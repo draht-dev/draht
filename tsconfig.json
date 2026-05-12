@@ -14,6 +14,7 @@
 			"@draht/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
 			"@draht/coding-agent/*": ["./packages/coding-agent/src/*"],
 			"@sinclair/typebox": ["./node_modules/@sinclair/typebox"],
+			"typebox": ["./node_modules/typebox"],
 			"@draht/mom": ["./packages/mom/src/index.ts"],
 			"@draht/mom/*": ["./packages/mom/src/*"],
 			"@draht/pods": ["./packages/pods/src/index.ts"],

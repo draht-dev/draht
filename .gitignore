@@ -16,6 +16,7 @@ packages/*/dist-firefox/
 .vscode/
 .zed/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -25,7 +26,6 @@ packages/*/dist-firefox/
 coverage/
 .nyc_output/
 .pi_config/
-.claude/
 tui-debug.log
 compaction-results/
 .opencode/
@@ -36,9 +36,6 @@ out.html
 packages/coding-agent/binaries/
 todo.md
 plans/
-.draht/hf-sessions/
-.draht/hf-sessions-backup/
+.pi/hf-sessions/
+.pi/hf-sessions-backup/
 collect.sh
-packages/landing/.astro
-packages/landing/.sst
-packages/landing/.playwright-mcp

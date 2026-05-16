@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "path";
-import { CONFIG_DIR_NAME } from "../config.js";
+import { CONFIG_DIR_NAME, getShippedPromptsDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
@@ -211,6 +211,32 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
 	const includeDefaults = options.includeDefaults;
 
 	const templates: PromptTemplate[] = [];
+
+	// 0. Always load shipped (built-in) templates — part of the package, not user config
+	const shippedPromptsDir = getShippedPromptsDir();
+	if (existsSync(shippedPromptsDir)) {
+		const builtinSourceInfo = createSyntheticSourceInfo(shippedPromptsDir, {
+			source: "builtin",
+			scope: "user",
+			baseDir: shippedPromptsDir,
+		});
+		const shippedGetSourceInfo = (filePath: string): SourceInfo => ({
+			...builtinSourceInfo,
+			path: filePath,
+		});
+		templates.push(...loadTemplatesFromDir(shippedPromptsDir, shippedGetSourceInfo));
+		// Also scan subdirectories (e.g., commands/, agents/)
+		try {
+			const subdirs = readdirSync(shippedPromptsDir, { withFileTypes: true });
+			for (const entry of subdirs) {
+				if (entry.isDirectory()) {
+					templates.push(...loadTemplatesFromDir(join(shippedPromptsDir, entry.name), shippedGetSourceInfo));
+				}
+			}
+		} catch {
+			// ignore
+		}
+	}
 
 	const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
 	const projectPromptsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "prompts");

@@ -508,6 +508,11 @@ export function getPromptsDir(): string {
 	return join(getAgentDir(), "prompts");
 }
 
+/** Get path to shipped prompts directory (bundled with the package). */
+export function getShippedPromptsDir(): string {
+	return join(getPackageDir(), "prompts");
+}
+
 /** Get path to sessions directory */
 export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");

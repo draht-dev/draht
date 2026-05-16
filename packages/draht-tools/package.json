@@ -1,0 +1,39 @@
+{
+	"name": "@draht/tools",
+	"version": "2026.5.12",
+	"description": "Draht Tools — Get Shit Done CLI (canonical source shared by draht-claude and @draht/coding-agent).",
+	"type": "commonjs",
+	"bin": {
+		"draht-tools": "./bin/draht-tools.cjs"
+	},
+	"main": "./bin/draht-tools.cjs",
+	"files": [
+		"bin",
+		"README.md",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"test": "node bin/draht-tools.cjs --help > /dev/null"
+	},
+	"keywords": [
+		"draht",
+		"gsd",
+		"planning",
+		"tdd",
+		"ddd",
+		"workflow"
+	],
+	"author": "Oskar Freye",
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/draht-dev/draht.git",
+		"directory": "packages/draht-tools"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	}
+}

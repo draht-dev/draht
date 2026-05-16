@@ -33,6 +33,8 @@
     "verify": "bash scripts/verify.sh",
     "verify:quick": "bash scripts/verify.sh --quick",
     "check:draht": "node scripts/check-draht-customizations.mjs",
+    "sync:draht-tools": "node scripts/sync-draht-tools.mjs",
+    "check:draht-tools": "node scripts/sync-draht-tools.mjs --check",
     "prepare": "husky"
   },
   "devDependencies": {

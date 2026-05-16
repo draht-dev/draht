@@ -90,6 +90,7 @@
       "dependencies": {
         "@draht/agent-core": "workspace:*",
         "@draht/ai": "workspace:*",
+        "@draht/tools": "workspace:*",
         "@draht/tui": "workspace:*",
         "@mariozechner/jiti": "^2.6.2",
         "@silvia-odwyer/photon-node": "^0.3.4",
@@ -172,6 +173,16 @@
       "version": "2026.5.12",
       "bin": {
         "draht-claude": "./cli.mjs",
+      },
+      "dependencies": {
+        "@draht/tools": "workspace:*",
+      },
+    },
+    "packages/draht-tools": {
+      "name": "@draht/tools",
+      "version": "2026.5.12",
+      "bin": {
+        "draht-tools": "./bin/draht-tools.cjs",
       },
     },
     "packages/gateway": {
@@ -518,6 +529,8 @@
     "@draht/router": ["@draht/router@workspace:packages/router"],
 
     "@draht/templates": ["@draht/templates@workspace:packages/templates"],
+
+    "@draht/tools": ["@draht/tools@workspace:packages/draht-tools"],
 
     "@draht/tui": ["@draht/tui@workspace:packages/tui"],
 

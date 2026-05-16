@@ -20,7 +20,12 @@
 		"CHANGELOG.md"
 	],
 	"scripts": {
-		"test": "node cli.mjs --help > /dev/null && node scripts/gsd-pre-execute.cjs --self-check 2>/dev/null || true"
+		"sync-tools": "node ../../scripts/sync-draht-tools.mjs",
+		"test": "node cli.mjs --help > /dev/null && node scripts/gsd-pre-execute.cjs --self-check 2>/dev/null || true",
+		"prepublishOnly": "node ../../scripts/sync-draht-tools.mjs"
+	},
+	"dependencies": {
+		"@draht/tools": "workspace:*"
 	},
 	"keywords": [
 		"claude-code",

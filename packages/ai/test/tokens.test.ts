@@ -133,7 +133,7 @@ describe("Token Statistics on Abort", () => {
 	});
 
 	describe.skipIf(!process.env.XAI_API_KEY)("xAI Provider", () => {
-		const llm = getModel("xai", "grok-3-fast");
+		const llm = getModel("xai", "grok-beta");
 
 		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
 			await testTokensOnAbort(llm);

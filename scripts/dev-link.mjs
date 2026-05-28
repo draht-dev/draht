@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Build coding-agent from local source and link it globally as "draht" with version "dev".
- * Also links draht-claude globally so `draht-claude install` uses the local plugin source.
+ * Also links draht-claude and draht-codex globally so their installers use local sources.
  * Run: bun run dev:link
  * Undo: bun run dev:unlink
  */
@@ -12,6 +12,7 @@ import { resolve } from "node:path";
 const ROOT = resolve(import.meta.dirname, "..");
 const CODING_AGENT = resolve(ROOT, "packages/coding-agent");
 const DRAHT_CLAUDE = resolve(ROOT, "packages/draht-claude");
+const DRAHT_CODEX = resolve(ROOT, "packages/draht-codex");
 
 const run = (cmd, cwd = ROOT) => {
 	console.log(`$ ${cmd}`);
@@ -30,11 +31,13 @@ writeFileSync(resolve(CODING_AGENT, ".dev"), "");
 // 3. Link draht globally
 run("bun link", CODING_AGENT);
 
-// 4. Link draht-claude globally — no build needed, cli.mjs runs from source
+// 4. Link plugin installers globally; no build needed, cli.mjs runs from source
 run("bun link", DRAHT_CLAUDE);
+run("bun link", DRAHT_CODEX);
 
 console.log("\ndraht is now linked globally with version 'dev'.");
-console.log("draht-claude is now linked globally (installs from local plugin source).");
+console.log("draht-claude and draht-codex are now linked globally (install from local plugin sources).");
 console.log("Run: draht --version");
 console.log("Run: draht-claude --help");
+console.log("Run: draht-codex --help");
 console.log("Undo: bun run dev:unlink");

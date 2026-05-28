@@ -5,7 +5,8 @@
  *
  * Source of truth: packages/draht-tools/bin/draht-tools.cjs
  * Consumers:
- *   - packages/draht-claude/bin/draht-tools.cjs  (plugin marketplace copy)
+ *   - packages/draht-claude/bin/draht-tools.cjs  (Claude Code plugin marketplace copy)
+ *   - packages/draht-codex/bin/draht-tools.cjs   (Codex plugin marketplace copy)
  *   - packages/coding-agent/bin/draht-tools.cjs  (npm bin entry)
  *
  * Usage:
@@ -22,6 +23,7 @@ const ROOT = resolve(__dirname, "..");
 const SRC = join(ROOT, "packages/draht-tools/bin/draht-tools.cjs");
 const TARGETS = [
 	join(ROOT, "packages/draht-claude/bin/draht-tools.cjs"),
+	join(ROOT, "packages/draht-codex/bin/draht-tools.cjs"),
 	join(ROOT, "packages/coding-agent/bin/draht-tools.cjs"),
 ];
 

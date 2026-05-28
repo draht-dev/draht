@@ -1,0 +1,55 @@
+{
+	"name": "draht-codex",
+	"version": "2026.5.12",
+	"description": "Draht GSD, multi-agent, TDD and DDD workflows as a Codex plugin. Install with `npx draht-codex install`.",
+	"type": "module",
+	"bin": {
+		"draht-codex": "./cli.mjs"
+	},
+	"files": [
+		".codex-plugin",
+		"bin",
+		"scripts",
+		"hooks",
+		"commands",
+		"agents",
+		"skills",
+		"cli.mjs",
+		"README.md",
+		"LICENSE",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"sync-tools": "node ../../scripts/sync-draht-tools.mjs",
+		"test": "node cli.mjs --help > /dev/null && node scripts/gsd-pre-execute.cjs --self-check 2>/dev/null || true",
+		"prepublishOnly": "node ../../scripts/sync-draht-tools.mjs"
+	},
+	"dependencies": {
+		"@draht/tools": "workspace:*"
+	},
+	"keywords": [
+		"codex",
+		"codex-plugin",
+		"draht",
+		"gsd",
+		"planning",
+		"tdd",
+		"ddd",
+		"multi-agent",
+		"workflow",
+		"installer"
+	],
+	"author": "Oskar Freye",
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/draht-dev/draht.git",
+		"directory": "packages/draht-codex"
+	},
+	"engines": {
+		"node": ">=20.6.0"
+	}
+}

@@ -1,0 +1,44 @@
+{
+  "name": "draht",
+  "version": "2026.5.12",
+  "description": "Draht GSD, multi-agent, TDD and DDD workflows as a Codex plugin.",
+  "author": {
+    "name": "Oskar Freye",
+    "url": "https://draht.dev"
+  },
+  "homepage": "https://draht.dev",
+  "repository": "https://github.com/draht-dev/draht",
+  "license": "MIT",
+  "keywords": [
+    "draht",
+    "gsd",
+    "planning",
+    "tdd",
+    "ddd",
+    "multi-agent",
+    "workflow"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Draht",
+    "shortDescription": "GSD, TDD, DDD, and multi-agent workflows for Codex",
+    "longDescription": "Use Draht inside Codex for structured project planning, roadmap phases, atomic execution plans, TDD implementation loops, verification gates, specialist agent prompts, and resumable GSD workflow state.",
+    "developerName": "Draht",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://draht.dev",
+    "privacyPolicyURL": "https://draht.dev",
+    "termsOfServiceURL": "https://draht.dev",
+    "defaultPrompt": [
+      "Start a Draht GSD project plan",
+      "Plan the next Draht roadmap phase",
+      "Run a Draht verification pass"
+    ],
+    "brandColor": "#111111",
+    "screenshots": []
+  }
+}

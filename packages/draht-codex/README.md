@@ -8,41 +8,45 @@ Install:
 npx draht-codex install
 ```
 
-This creates a local Codex marketplace at `~/.draht/codex-marketplace`, installs the `draht` plugin, and bundles prompt command templates, specialist agent prompts, skills, hooks, scripts, and `draht-tools`.
+This creates a local Codex marketplace at `~/.draht/codex-marketplace`, installs the `draht` plugin, and bundles Draht command prompt wrappers, reference prompt templates, specialist agent prompts, support skills, hooks, scripts, and `draht-tools`.
 
 ## What you get
 
-### Command templates
+### Reference prompt templates
+
+The plugin bundles Draht workflow prompt templates under `commands/`. Codex CLI currently does not expose plugin `commands/` files as TUI slash commands, so Claude Code-style syntax such as `/draht:new-project` or `/draht:orchestrate` will not work in Codex.
+
+For Codex, each command prompt is exposed through a thin skill wrapper named after the command. Use `$draht:<command>` or `/skills` and select the wrapper, for example `$draht:new-project`, `$draht:plan-phase`, or `$draht:orchestrate`. The wrapper reads the matching `commands/*.md` file and runs it as the active workflow.
 
 Project lifecycle:
 
-- `/draht:new-project` - greenfield questioning, domain model, requirements, roadmap
-- `/draht:init-project` - existing codebase mapping, domain extraction, roadmap
-- `/draht:map-codebase` - standalone codebase map
-- `/draht:next-milestone` - plan the next milestone after current phases are verified
+- `commands/new-project.md` - greenfield questioning, domain model, requirements, roadmap
+- `commands/init-project.md` - existing codebase mapping, domain extraction, roadmap
+- `commands/map-codebase.md` - standalone codebase map
+- `commands/next-milestone.md` - plan the next milestone after current phases are verified
 
 Per-phase cycle:
 
-- `/draht:discuss-phase N`
-- `/draht:plan-phase N`
-- `/draht:execute-phase N`
-- `/draht:verify-work N`
+- `commands/discuss-phase.md`
+- `commands/plan-phase.md`
+- `commands/execute-phase.md`
+- `commands/verify-work.md`
 
 Session continuity:
 
-- `/draht:pause-work`
-- `/draht:resume-work`
-- `/draht:progress`
+- `commands/pause-work.md`
+- `commands/resume-work.md`
+- `commands/progress.md`
 
 Ad-hoc:
 
-- `/draht:quick <task>`
-- `/draht:fix <bug>`
-- `/draht:review [scope]`
-- `/draht:atomic-commit`
-- `/draht:orchestrate <task>`
+- `commands/quick.md`
+- `commands/fix.md`
+- `commands/review.md`
+- `commands/atomic-commit.md`
+- `commands/orchestrate.md`
 
-Codex may display plugin slash commands with a namespace such as `/draht:<command>`.
+Use the wrappers for picker-driven invocation, and keep the `commands/*.md` files as the source prompt templates.
 
 ### Specialist agent prompts
 
@@ -59,9 +63,30 @@ The plugin ships reference prompts in `agents/`:
 
 Codex subagent availability depends on the active Codex feature/configuration. When named Draht agent roles are not registered directly, the command templates can still use generic Codex subagents by pasting the relevant Draht agent prompt into the delegated task.
 
-### Additional skills
+### Command prompt wrappers
 
-The GSD workflow itself is provided by the prompt commands above. The plugin also ships these supporting skills:
+The command prompt wrappers are:
+
+- `new-project`
+- `init-project`
+- `map-codebase`
+- `next-milestone`
+- `discuss-phase`
+- `plan-phase`
+- `execute-phase`
+- `verify-work`
+- `pause-work`
+- `resume-work`
+- `progress`
+- `quick`
+- `fix`
+- `review`
+- `atomic-commit`
+- `orchestrate`
+
+### Support skills
+
+The GSD workflow templates live in `commands/`. The plugin also ships these supporting skills:
 
 - `tdd-workflow`
 - `ddd-workflow`
@@ -116,7 +141,7 @@ The plugin bundles `draht-tools` at `bin/draht-tools.cjs`. You can also run it t
 npx draht-codex draht-tools help
 ```
 
-Command templates prefer the installed plugin path:
+Reference prompt templates prefer the installed plugin path:
 
 ```bash
 node "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}/bin/draht-tools.cjs" help

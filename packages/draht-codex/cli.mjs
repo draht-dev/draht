@@ -95,10 +95,11 @@ Options:
 What this installs:
   - Local Codex marketplace named "${MARKETPLACE_NAME}" at ~/.draht/codex-marketplace/
   - Plugin "${PLUGIN_NAME}" inside that marketplace
-  - Draht prompt command templates, specialist agent prompts, support skills, hooks, and scripts
+  - Draht command prompt wrappers, reference prompt templates, specialist agent prompts, support skills, hooks, and scripts
   - Self-contained draht-tools CLI
 
-After install, restart Codex. Commands appear under the draht plugin namespace.
+After install, restart Codex. Use $draht:<command> or /skills and select the command wrapper.
+Prompt templates remain installed under commands/; Codex CLI currently does not expose plugin commands as slash commands.
 
 Docs: https://draht.dev
 `);
@@ -254,9 +255,9 @@ function cmdInstall(flags) {
 	log(`installed ${pluginSpec} v${manifest.version}`);
 	log("");
 	log("Next steps:");
-	log("  1. Restart Codex so it picks up plugin commands and hooks");
+	log("  1. Restart Codex so it picks up plugin content and hooks");
 	log("  2. Run `codex plugin list` and confirm draht@draht is installed");
-	log("  3. Try a draht command from the slash picker");
+	log("  3. Use `$draht:<command>` or `/skills` and select the command wrapper");
 	log("");
 	log("Docs: https://draht.dev");
 }

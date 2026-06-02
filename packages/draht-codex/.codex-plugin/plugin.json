@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "Draht",
     "shortDescription": "GSD, TDD, DDD, and multi-agent workflows for Codex",
-    "longDescription": "Use Draht inside Codex for structured project planning, roadmap phases, atomic execution plans, TDD implementation loops, verification gates, specialist agent prompts, and resumable GSD workflow state.",
+    "longDescription": "Use Draht inside Codex for structured project planning, roadmap phases, atomic execution plans, TDD implementation loops, verification gates, specialist agent prompts, resumable GSD workflow state, and command prompt wrappers such as $draht:new-project, $draht:plan-phase, and $draht:orchestrate.",
     "developerName": "Draht",
     "category": "Coding",
     "capabilities": [
@@ -34,9 +34,9 @@
     "privacyPolicyURL": "https://draht.dev",
     "termsOfServiceURL": "https://draht.dev",
     "defaultPrompt": [
-      "Start a Draht GSD project plan",
-      "Plan the next Draht roadmap phase",
-      "Run a Draht verification pass"
+      "Use $draht:new-project",
+      "Use $draht:plan-phase",
+      "Use $draht:orchestrate"
     ],
     "brandColor": "#111111",
     "screenshots": []

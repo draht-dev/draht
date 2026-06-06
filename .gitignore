@@ -45,3 +45,4 @@ collect.sh
 # draht-tools living codebase map (regenerated on demand by `draht-tools map-graph` / `map-serve`)
 .planning/codebase/MAP.json
 .planning/codebase/MAP.html
+.planning/codebase/GRAPH_REPORT.md

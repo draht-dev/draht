@@ -238,7 +238,20 @@ commands["map-codebase"] = function (dir) {
 
 	writeMd(path.join(outDir, "DOMAIN-HINTS.md"), `# Domain Model Hints\n\nGenerated: ${timestamp()}\n\nExtracted from codebase to help identify domain model.\n\n${domainHints}\n## TODO\n- [ ] Identify entities vs value objects\n- [ ] Map bounded contexts from directory structure\n- [ ] Define ubiquitous language glossary\n`);
 
+	// Build the living knowledge graph (MAP.json + MAP.html + GRAPH_REPORT.md) alongside the docs,
+	// so `map-codebase` is a single command that produces both the prose docs and the graphify map.
+	let kg = null;
+	try {
+		kg = visWriteOutputs(cwd);
+	} catch (err) {
+		console.error(`\n⚠️  Knowledge graph build failed (run \`draht-tools map-graph\` to retry): ${err.message}`);
+	}
+
 	console.log(`\nCreated:\n  ${outDir}/STACK.md\n  ${outDir}/ARCHITECTURE.md\n  ${outDir}/CONVENTIONS.md\n  ${outDir}/CONCERNS.md\n  ${outDir}/DOMAIN-HINTS.md`);
+	if (kg) {
+		console.log(`  ${path.relative(cwd, kg.jsonPath)}\n  ${path.relative(cwd, kg.htmlPath)}\n  ${path.relative(cwd, kg.reportPath)}`);
+		console.log(`\nIndexed ${kg.map.stats.files} modules · ${kg.map.clusters.length} clusters · view it live: draht-tools map-serve`);
+	}
 	console.log("\n→ Review and fill in the TODOs, then run: draht-tools commit-docs \"map existing codebase\"");
 };
 
@@ -1107,7 +1120,7 @@ const PATH_GROUP_RULES = [
 	{ id: "group:workflows-infra", re: /(?:^|\/)(scripts?|tools?|infra|deploy|ops)\// },
 ];
 
-function deriveGroups(containers, pkgs) {
+function deriveGroups(containers, pkgs, root) {
 	const groups = DEFAULT_GROUPS.map((g) => Object.assign({}, g, { members: [], source: "auto", moduleCount: 0 }));
 	const otherGroup = { id: "group:other", name: "Other", color: "#8b949e",
 		description: "Packages not yet classified", members: [], source: "auto", moduleCount: 0 };
@@ -1146,7 +1159,7 @@ function deriveGroups(containers, pkgs) {
 		// Bin-presence cue → CLI & Runtime
 		if (pkg && pkg.path !== ".") {
 			try {
-				const pjPath = path.join(process.cwd(), pkg.path, "package.json");
+				const pjPath = path.join(root || process.cwd(), pkg.path, "package.json");
 				const pj = JSON.parse(fs.readFileSync(pjPath, "utf-8"));
 				if (pj.bin) {
 					const idx = DEFAULT_GROUPS.findIndex((g) => g.id === "group:cli-runtime");
@@ -1671,6 +1684,188 @@ function visReadPlanning(root) {
 	return out;
 }
 
+// ── Knowledge-graph enrichment (graphify-style: rationale, symbols, clusters, surprises) ──
+
+// Inline rationale markers — design intent captured in comments (graphify NOTE/WHY/HACK nodes).
+const RATIONALE_TAG_RE = /\b(SECURITY|BUG|FIXME|HACK|XXX|TODO|WARNING|GOTCHA|PERF|NOTE|WHY)\b\s*[:\-]?\s*(.+)/;
+const RATIONALE_SEVERITY = { SECURITY: 0, BUG: 1, FIXME: 2, HACK: 3, XXX: 4, WARNING: 5, GOTCHA: 6, PERF: 7, TODO: 8, NOTE: 9, WHY: 10 };
+const COMMENT_STYLE = {
+	typescript: { line: "//", block: ["/*", "*/"] }, javascript: { line: "//", block: ["/*", "*/"] },
+	go: { line: "//", block: ["/*", "*/"] }, rust: { line: "//", block: ["/*", "*/"] },
+	java: { line: "//", block: ["/*", "*/"] }, kotlin: { line: "//", block: ["/*", "*/"] },
+	swift: { line: "//", block: ["/*", "*/"] }, csharp: { line: "//", block: ["/*", "*/"] },
+	c: { line: "//", block: ["/*", "*/"] }, cpp: { line: "//", block: ["/*", "*/"] },
+	php: { line: "//", block: ["/*", "*/"] }, sql: { line: "--", block: ["/*", "*/"] },
+	python: { line: "#" }, shell: { line: "#" }, ruby: { line: "#" },
+	html: { block: ["<!--", "-->"] }, markdown: { block: ["<!--", "-->"] },
+};
+
+// Extract comment TEXT (inverse of the strip logic) so the tag regex never matches code/strings.
+function visExtractComments(content, language) {
+	const s = COMMENT_STYLE[language];
+	if (!s) return [];
+	const out = [];
+	const lines = content.split("\n");
+	let inBlock = false, close = null;
+	for (let i = 0; i < lines.length && out.length < 400; i++) {
+		let ln = lines[i];
+		if (inBlock) {
+			const ci = ln.indexOf(close);
+			if (ci < 0) { out.push({ line: i + 1, text: ln }); continue; }
+			out.push({ line: i + 1, text: ln.slice(0, ci) });
+			ln = ln.slice(ci + close.length); inBlock = false; close = null;
+		}
+		if (s.line) {
+			let idx = ln.indexOf(s.line);
+			while (idx > 0 && s.line === "//" && ln[idx - 1] === ":") idx = ln.indexOf(s.line, idx + 2); // skip http://
+			if (idx >= 0) { out.push({ line: i + 1, text: ln.slice(idx + s.line.length) }); ln = ln.slice(0, idx); }
+		}
+		if (s.block) {
+			const [open, cl] = s.block;
+			const oi = ln.indexOf(open);
+			if (oi >= 0) {
+				const ci = ln.indexOf(cl, oi + open.length);
+				if (ci >= 0) out.push({ line: i + 1, text: ln.slice(oi + open.length, ci) });
+				else { out.push({ line: i + 1, text: ln.slice(oi + open.length) }); inBlock = true; close = cl; }
+			}
+		}
+	}
+	return out;
+}
+
+function visExtractRationale(content, language, rel) {
+	const out = [];
+	for (const c of visExtractComments(content, language)) {
+		const m = RATIONALE_TAG_RE.exec(c.text);
+		if (m && m[2].trim()) { out.push({ file: rel, line: c.line, tag: m[1], text: m[2].trim().slice(0, 120) }); if (out.length >= 30) break; }
+	}
+	return out;
+}
+
+// Symbol-level nodes: exported symbols (already have line) + best-effort non-exported top-level decls.
+function visBuildSymbols(exportsArr, content, language) {
+	const syms = [];
+	const seen = new Set();
+	for (const e of exportsArr) {
+		if (seen.has(e.name)) continue;
+		seen.add(e.name);
+		syms.push({ name: e.name, kind: e.kind, line: e.line, exported: true });
+		if (syms.length >= 60) return syms;
+	}
+	const lines = content.split("\n");
+	const addDecl = (re, kindOf) => {
+		for (let i = 0; i < lines.length; i++) {
+			const m = re.exec(lines[i]);
+			if (m) { const name = m[1] || m[2]; if (name && !seen.has(name)) { seen.add(name); syms.push({ name, kind: kindOf(lines[i]), line: i + 1, exported: false }); if (syms.length >= 60) return true; } }
+		}
+		return false;
+	};
+	if (language === "typescript" || language === "javascript") {
+		addDecl(/^(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)|^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/, (l) => /^\s*(?:async\s+)?class\b/.test(l) ? "class" : /^\s*(?:async\s+)?function\b/.test(l) ? "function" : "const");
+	} else if (language === "python") {
+		addDecl(/^(?:class|def)\s+([A-Za-z_][\w]*)/, (l) => /^class\b/.test(l) ? "class" : "def");
+	} else if (language === "go") {
+		addDecl(/^func\s+(?:\([^)]*\)\s+)?([a-z][\w]*)|^type\s+([a-z][\w]*)/, (l) => /^func\b/.test(l) ? "func" : "type");
+	} else if (language === "rust") {
+		addDecl(/^\s*(?:fn|struct|enum|trait)\s+([A-Za-z_][\w]*)/, () => "rust-item");
+	}
+	return syms;
+}
+
+// Deterministic structural clusters via async label propagation over the undirected import graph.
+function visComputeClusters(modules, edges, moduleByRel, containerOf) {
+	const adj = new Map();
+	const link = (a, b) => { if (a === b) return; if (!adj.has(a)) adj.set(a, new Set()); adj.get(a).add(b); };
+	for (const e of edges) {
+		if (e.kind !== "import") continue;
+		if (!moduleByRel.has(e.from) || !moduleByRel.has(e.to)) continue;
+		link(e.from, e.to); link(e.to, e.from);
+	}
+	const ids = modules.map((m) => m.id).sort();
+	const label = new Map(ids.map((id) => [id, id]));
+	for (let pass = 0; pass < 10; pass++) {
+		let changed = false;
+		for (const id of ids) { // async: later nodes this pass see earlier updates
+			const nbrs = adj.get(id);
+			if (!nbrs || nbrs.size === 0) continue;
+			const freq = new Map();
+			for (const n of nbrs) { const l = label.get(n); freq.set(l, (freq.get(l) || 0) + 1); }
+			let best = label.get(id), bestC = -1;
+			for (const [l, c] of freq) { if (c > bestC || (c === bestC && l < best)) { best = l; bestC = c; } }
+			if (best !== label.get(id)) { label.set(id, best); changed = true; }
+		}
+		if (!changed) break;
+	}
+	const byLabel = new Map();
+	for (const id of ids) {
+		const m = moduleByRel.get(id);
+		const hasEdges = adj.has(id) && adj.get(id).size > 0;
+		const key = hasEdges ? label.get(id) : containerOf(m); // unlinked modules → package cluster
+		if (!byLabel.has(key)) byLabel.set(key, []);
+		byLabel.get(key).push(id);
+	}
+	// Monster-community guard: if one cluster swallows >50% of non-test modules, fall back to packages.
+	const nonTest = modules.filter((m) => !m.isTest).length || 1;
+	const maxSize = Math.max(0, ...[...byLabel.values()].map((v) => v.length));
+	let groupsMap = byLabel;
+	if (maxSize > nonTest * 0.5) {
+		groupsMap = new Map();
+		for (const m of modules) { const k = containerOf(m); if (!groupsMap.has(k)) groupsMap.set(k, []); groupsMap.get(k).push(m.id); }
+	}
+	const clusters = [];
+	const clusterOf = new Map();
+	for (const members of groupsMap.values()) {
+		const sorted = members.slice().sort();
+		const cid = "cluster:" + sorted[0];
+		const pkgCount = {}, layerCount = {};
+		for (const id of sorted) { const m = moduleByRel.get(id); const p = m.package || containerOf(m).replace(/^dir:/, ""); pkgCount[p] = (pkgCount[p] || 0) + 1; layerCount[m.layer] = (layerCount[m.layer] || 0) + 1; }
+		const dominantPackage = Object.keys(pkgCount).sort((a, b) => pkgCount[b] - pkgCount[a] || (a < b ? -1 : 1))[0] || null;
+		const dominantLayer = Object.keys(layerCount).sort((a, b) => layerCount[b] - layerCount[a] || (a < b ? -1 : 1))[0] || "support";
+		const packages = Object.keys(pkgCount).sort();
+		const clabel = packages.length === 1 ? String(dominantPackage).replace(/^@[^/]+\//, "") : (sorted[0].split("/")[0] + " · " + dominantLayer);
+		for (const id of sorted) clusterOf.set(id, cid);
+		clusters.push({ id: cid, label: clabel, size: sorted.length, members: sorted, dominantPackage, dominantLayer, packages });
+	}
+	clusters.sort((a, b) => b.size - a.size || (a.id < b.id ? -1 : 1));
+	return { clusters, clusterOf };
+}
+
+// Surprising connections: import edges that bridge distant clusters / violate layering / cross groups.
+const LAYER_RANK_INWARD = { presentation: 0, application: 1, domain: 2, infrastructure: 3 };
+function visComputeSurprising(edges, callEdges, moduleByRel, clusterOf, groupOfContainer, containerOf) {
+	const pairCount = new Map(); // O(E) cluster-pair index → O(1) bridge test
+	for (const e of edges) {
+		if (e.kind !== "import") continue;
+		const ca = clusterOf.get(e.from), cb = clusterOf.get(e.to);
+		if (!ca || !cb || ca === cb) continue;
+		const k = ca + "|" + cb; pairCount.set(k, (pairCount.get(k) || 0) + 1);
+	}
+	const callSym = new Map();
+	for (const ce of callEdges) { const k = ce.from + "|" + ce.to; if (!callSym.has(k)) callSym.set(k, []); if (callSym.get(k).length < 4 && !callSym.get(k).includes(ce.symbol)) callSym.get(k).push(ce.symbol); }
+	const out = [];
+	const seen = new Set();
+	for (const e of edges) {
+		if (e.kind !== "import") continue;
+		const a = moduleByRel.get(e.from), b = moduleByRel.get(e.to);
+		if (!a || !b) continue;
+		const ca = clusterOf.get(e.from), cb = clusterOf.get(e.to);
+		if (!ca || !cb || ca === cb) continue;
+		const pk = e.from + "→" + e.to;
+		if (seen.has(pk)) continue;
+		seen.add(pk);
+		let score = 0; const reasons = [];
+		const la = LAYER_RANK_INWARD[a.layer], lb = LAYER_RANK_INWARD[b.layer];
+		if (la != null && lb != null && la > lb) { score += 2; reasons.push(a.layer + "→" + b.layer + " (outward)"); }
+		if ((pairCount.get(ca + "|" + cb) || 0) <= 1) { score += 2; reasons.push("bridge"); }
+		const ga = groupOfContainer.get(containerOf(a)), gb = groupOfContainer.get(containerOf(b));
+		if (ga && gb && ga !== gb) { score += 1; reasons.push("cross-group"); }
+		if (score <= 0) continue;
+		out.push({ from: e.from, to: e.to, score, reason: reasons.join(", "), sampleSymbols: callSym.get(e.from + "|" + e.to) || [] });
+	}
+	out.sort((x, y) => y.score - x.score || (x.from < y.from ? -1 : x.from > y.from ? 1 : 0));
+	return out.slice(0, 20);
+}
+
 function visBuildMap(root) {
 	const startedAt = Date.now();
 	const files = visWalk(root);
@@ -1727,13 +1922,14 @@ function visBuildMap(root) {
 	const totalLoc = { value: 0 };
 	// Per-module rich data
 	const perFile = new Map();
+	const rationaleAll = []; // graphify-style inline rationale (NOTE/WHY/HACK/…) across all files
 
 	for (const abs of files) {
 		const rel = path.relative(root, abs).split(path.sep).join("/");
 		const lang = visLangFor(abs);
 		langCounts[lang] = (langCounts[lang] || 0) + 1;
 		let size = 0, loc = 0;
-		let parsedImports = [], exports = [], sinks = [], routes = [], sinkSites = [];
+		let parsedImports = [], exports = [], sinks = [], routes = [], sinkSites = [], symbols = [];
 		let content = "";
 		try {
 			const stat = fs.statSync(abs);
@@ -1752,7 +1948,10 @@ function visBuildMap(root) {
 					sinks = visDetectSinks(stripped);
 					sinkSites = visFindSinkSites(content, lang);
 					routes = visDetectRoutes(stripped);
+					symbols = visBuildSymbols(exports, content, lang); // symbol-level nodes (from untruncated exports + decls)
 				}
+				// Inline rationale works for any commented language (incl. markdown), not just code langs.
+				for (const r of visExtractRationale(content, lang, rel)) rationaleAll.push(r);
 			}
 		} catch { /* empty */ }
 
@@ -1770,6 +1969,7 @@ function visBuildMap(root) {
 			isTest,
 			package: pkg,
 			exports: exports.slice(0, 30),
+			symbols,
 			sinks,
 			sinkSites: sinkSites.slice(0, 10),
 			routes: routes.slice(0, 20),
@@ -1872,10 +2072,10 @@ function visBuildMap(root) {
 		for (const imp of file.parsedImports) {
 			const resolved = resolveSpec(fromDir, imp.specifier);
 			if (!resolved) {
-				edges.push({ from: m.id, to: imp.specifier, kind: "external" });
+				edges.push({ from: m.id, to: imp.specifier, kind: "external", confidence: "EXTRACTED", resolved: false });
 				continue;
 			}
-			edges.push({ from: m.id, to: resolved, kind: imp.reExport ? "re-export" : "import" });
+			edges.push({ from: m.id, to: resolved, kind: imp.reExport ? "re-export" : "import", confidence: "EXTRACTED" });
 			// Re-exports don't introduce local usage — they pass the symbol through to the
 			// importer of THIS module. We capture them separately for re-export traversal in flow BFS.
 			if (imp.reExport) continue;
@@ -1894,7 +2094,11 @@ function visBuildMap(root) {
 				let count = 0;
 				while (callRe.exec(text)) { count++; if (count > 100) break; }
 				if (count > 0) {
-					callEdges.push({ from: m.id, to: ref.resolved, symbol: ref.importedName, count });
+					// INFERRED: regex call-site heuristic. AMBIGUOUS when only ever member-called (x.y()) —
+					// the called member is not necessarily the imported symbol.
+					const directRe = new RegExp("\\b" + safe + "\\s*\\(", "g");
+					const confidence = directRe.test(text) ? "INFERRED" : "AMBIGUOUS";
+					callEdges.push({ from: m.id, to: ref.resolved, symbol: ref.importedName, count, confidence });
 				}
 			}
 		}
@@ -1934,7 +2138,7 @@ function visBuildMap(root) {
 	};
 
 	// Functional groups (CodeViz-style nested containers)
-	const groups = applyGroupsCuration(deriveGroups(containers, pkgs), root);
+	const groups = applyGroupsCuration(deriveGroups(containers, pkgs, root), root);
 
 	// In-degree / out-degree maps from import edges — used for "top files" ranking.
 	const inDeg = new Map();
@@ -1943,6 +2147,17 @@ function visBuildMap(root) {
 		if (e.kind !== "import") continue;
 		outDeg.set(e.from, (outDeg.get(e.from) || 0) + 1);
 		inDeg.set(e.to, (inDeg.get(e.to) || 0) + 1);
+	}
+	// Non-test degree (excludes test-originated edges) — for god-node / hotspot ranking, so test
+	// fixtures don't inflate "most depended-on".
+	const inDegNT = new Map();
+	const outDegNT = new Map();
+	for (const e of edges) {
+		if (e.kind !== "import") continue;
+		const fm = moduleByRel.get(e.from);
+		if (fm && fm.isTest) continue;
+		outDegNT.set(e.from, (outDegNT.get(e.from) || 0) + 1);
+		inDegNT.set(e.to, (inDegNT.get(e.to) || 0) + 1);
 	}
 
 	function computeTopFiles(container) {
@@ -1974,7 +2189,7 @@ function visBuildMap(root) {
 			else if ((m.loc || 0) > medianLoc * 1.5) reason = "largest";
 			return { path: m.path, reason, score: +score.toFixed(2), loc: m.loc || 0 };
 		});
-		scored.sort((a, b) => b.score - a.score);
+		scored.sort((a, b) => b.score - a.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 		const cap = mods.length < 6 ? 3 : 5;
 		return scored.slice(0, cap);
 	}
@@ -2422,7 +2637,7 @@ function visBuildMap(root) {
 	const symbolIndex = [];
 	for (const m of modules) {
 		for (const e of m.exports) {
-			symbolIndex.push({ name: e.name, kind: e.kind, file: m.path, package: m.package });
+			symbolIndex.push({ name: e.name, kind: e.kind, line: e.line, file: m.path, package: m.package, exported: true });
 			if (symbolIndex.length > 1500) break;
 		}
 		if (symbolIndex.length > 1500) break;
@@ -2433,8 +2648,35 @@ function visBuildMap(root) {
 		tests.byContainer[c.name] = modules.filter((m) => m.isTest && m.path.startsWith(c.path + "/")).length;
 	}
 
+	// ── Knowledge-graph rollups: hotspots (god-nodes), clusters, surprising connections, rationale ──
+	const rankHotspots = (metric, reason) => {
+		const arr = modules.filter((m) => !m.isTest).map((m) => {
+			const inD = inDegNT.get(m.id) || 0, outD = outDegNT.get(m.id) || 0, l = m.loc || 0;
+			return { id: m.id, path: m.path, package: m.package, inDegree: inD, outDegree: outD, loc: l, score: +metric(inD, outD, l).toFixed(2), reason: reason(inD, outD, l) };
+		});
+		arr.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+		return arr.slice(0, 15);
+	};
+	const hotspots = {
+		godNodes: rankHotspots((i, o, l) => i * 2 + o + Math.log2(1 + l), (i, o) => `${i} dependents · ${o} deps`),
+		mostDependedOn: rankHotspots((i) => i, (i) => `${i} dependents`),
+		orchestrators: rankHotspots((i, o) => o, (i, o) => `imports ${o} modules`),
+		largest: rankHotspots((i, o, l) => l, (i, o, l) => `${l} LOC`),
+	};
+
+	const { clusters, clusterOf } = visComputeClusters(modules, edges, moduleByRel, containerOf);
+	for (const m of modules) m.cluster = clusterOf.get(m.id) || null;
+
+	const groupOfContainer = new Map();
+	for (const g of groups) for (const mid of (g.members || [])) groupOfContainer.set(mid, g.id);
+	const surprisingConnections = visComputeSurprising(edges, callEdges, moduleByRel, clusterOf, groupOfContainer, containerOf);
+
+	const rationaleIndex = rationaleAll
+		.sort((a, b) => (RATIONALE_SEVERITY[a.tag] - RATIONALE_SEVERITY[b.tag]) || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0) || (a.line - b.line))
+		.slice(0, 600);
+
 	return {
-		schemaVersion: 3,
+		schemaVersion: 4,
 		generatedAt: new Date().toISOString(),
 		buildMs: Date.now() - startedAt,
 		root: path.basename(root),
@@ -2466,6 +2708,10 @@ function visBuildMap(root) {
 		lanes,
 		boxes,
 		symbolIndex,
+		hotspots,
+		clusters,
+		surprisingConnections,
+		rationaleIndex,
 		tests,
 		planning: {
 			hasProject: !!planning.project,
@@ -2487,6 +2733,13 @@ function visBuildMap(root) {
 				"`lanes` + `boxes` give you swim-lane layout coordinates: each box belongs to a lane (presentation / application / domain / infrastructure / sinks / actors).",
 				"To curate flows or groups: write `.planning/codebase/FLOWS.json` or `.planning/codebase/GROUPS.json` — entries with matching `id` override auto-generated ones; new ids are appended.",
 				"`modules[*].layer` classifies each file as presentation / application / domain / infrastructure / support.",
+				"`modules[*].symbols` are symbol-level nodes ({name,kind,line,exported}); `modules[*].cluster` is the structural neighborhood id.",
+				"`hotspots` ranks god-nodes / most-depended-on / orchestrators / largest (non-test import degree).",
+				"`clusters` are STRUCTURAL (import-topology) neighborhoods — not semantic bounded contexts; confirm with a human before equating a cluster with a context. Non-JS/TS packages degenerate to one cluster per package.",
+				"`surprisingConnections` flags import edges that bridge distant clusters, cross functional groups, or violate layer direction — review these.",
+				"`rationaleIndex` collects inline NOTE/WHY/HACK/TODO/FIXME/SECURITY notes ({file,line,tag,text}).",
+				"`edges[*].confidence` / `callEdges[*].confidence` ∈ EXTRACTED (literal in source) / INFERRED (regex call heuristic) / AMBIGUOUS (member-call, imported symbol uncertain).",
+				"Query the map with `draht-tools graph-context|graph-impact|graph-query|graph-callers|graph-callees|graph-path|graph-hotspots|graph-clusters` instead of reading this whole file or grepping.",
 			],
 		},
 	};
@@ -2661,6 +2914,7 @@ svg { display:block; user-select:none; }
     <button id="tab-architecture" class="active">Architecture</button>
     <button id="tab-modules">Modules</button>
     <button id="tab-flows">Flow Trace</button>
+    <button id="tab-insights">Insights</button>
   </div>
   <div class="live" id="live-indicator">● live</div>
 </header>
@@ -2773,7 +3027,7 @@ async function load(initial) {
 
 function setView(v) {
   state.view = v;
-  ["tab-architecture","tab-modules","tab-flows"].forEach(function (id) {
+  ["tab-architecture","tab-modules","tab-flows","tab-insights"].forEach(function (id) {
     $(id).classList.toggle("active", id === "tab-" + v);
   });
   // Sidebar layout: flows shows step detail, others show entry inspection
@@ -2805,7 +3059,7 @@ function selectFlow(flowId) {
   state.selectedFlow = flowId;
   state.selectedStep = null;
   state.view = "flows";
-  ["tab-architecture","tab-modules","tab-flows"].forEach(function (id) {
+  ["tab-architecture","tab-modules","tab-flows","tab-insights"].forEach(function (id) {
     $(id).classList.toggle("active", id === "tab-flows");
   });
   renderFlowList();
@@ -3151,6 +3405,7 @@ function render() {
   svg.appendChild(g);
   if (state.view === "architecture") renderArchitecture(g, W, H);
   else if (state.view === "modules") renderModules(g, W, H);
+  else if (state.view === "insights") renderInsights(g, W, H);
   else renderFlowsSwimlane(g, W, H);
   $("legend").innerHTML = legendHtml();
   $("hud").textContent = hudText();
@@ -3166,6 +3421,12 @@ function legendHtml() {
     state.map.lanes.forEach(function (l) {
       s += '<div class="row"><div class="dot" style="background:' + l.color + '"></div>' + l.name + '</div>';
     });
+  } else if (state.view === "insights") {
+    (state.map.clusters || []).slice(0, 8).forEach(function (c) {
+      s += '<div class="row"><div class="dot" style="background:' + clusterColor(c.id) + '"></div>' + escapeHtml(c.label) + ' (' + c.size + ')</div>';
+    });
+    s += '<div class="row"><div class="dot" style="background:#fff;border:1px solid #888"></div>god node (larger)</div>';
+    s += '<div class="row"><div class="dot" style="background:#ff5c5c"></div>surprising edge</div>';
   } else {
     LAYER_ORDER.forEach(function (l) {
       s += '<div class="row"><div class="dot" style="background:' + LAYER_COLOR[l] + '"></div>' + l + '</div>';
@@ -3187,6 +3448,10 @@ function hudText() {
       return f ? "FLOW: " + f.name + " — " + f.steps.length + " steps" : "";
     }
     return "Pick a flow on the right to highlight the path through the system";
+  }
+  if (state.view === "insights") {
+    var god = (state.map.hotspots && state.map.hotspots.godNodes) || [];
+    return "Insights · " + ((state.map.clusters || []).length) + " clusters · " + god.length + " god-nodes · " + ((state.map.surprisingConnections || []).length) + " surprising edges · hover a node for detail";
   }
   if (state.focus) return "focused on " + state.focus.kind + ":" + state.focus.id + " — " + state.focus.set.size + " module(s) (esc to clear)";
   return state.view + " view · scroll = zoom · drag = pan · click = focus";
@@ -3610,6 +3875,43 @@ function renderModules(g, W, H) {
   });
 }
 
+// ====================== Insights view (clusters · god-nodes · surprising connections) ======================
+function clusterColor(cid) {
+  if (!cid) return "#8b949e";
+  var h = 0; for (var i=0; i<cid.length; i++) h = (h * 31 + cid.charCodeAt(i)) % 360;
+  return "hsl(" + h + ",58%,62%)";
+}
+function renderInsights(g, W, H) {
+  var map = state.map;
+  var layout = layoutModules(map, W, H);
+  var god = (map.hotspots && map.hotspots.godNodes) || [];
+  var godIds = new Set(god.map(function (x) { return x.id; }));
+  var godBy = {}; god.forEach(function (x) { godBy[x.id] = x; });
+  layout.containerPos.forEach(function (p) {
+    g.appendChild(el("rect", { class: "container-rect", x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, ry: 8 }));
+    g.appendChild(el("text", { class: "container-label", x: p.x + 8, y: p.y + 14 }, p.container.name));
+  });
+  // Surprising connections as hot dashed edges (only these — keeps the view legible).
+  ((map.surprisingConnections) || []).forEach(function (x) {
+    var a = layout.modulePos.get(x.from), b = layout.modulePos.get(x.to);
+    if (!a || !b) return;
+    var p = arrow(a.x, a.y, b.x, b.y, { class: "edge", stroke: "#ff5c5c", "stroke-width": 1.6, "stroke-dasharray": "4 3", opacity: 0.85 });
+    p.appendChild(el("title", null, "surprising: " + x.reason + " (score " + x.score + ")"));
+    g.appendChild(p);
+  });
+  // Module nodes colored by cluster; god-nodes enlarged + outlined.
+  layout.modulePos.forEach(function (p, id) {
+    var m = p.m;
+    var isGod = godIds.has(id);
+    var r = isGod ? Math.max(6, Math.min(16, 5 + Math.sqrt((m.loc || 1) / 20))) : Math.max(2, Math.min(8, 1.5 + Math.sqrt(Math.max(1, (m.loc || 1) / 30))));
+    var node = el("g", { class: "module-node", transform: "translate(" + p.x + "," + p.y + ")" });
+    var c = el("circle", { r: r, fill: clusterColor(m.cluster), stroke: isGod ? "#ffffff" : "none", "stroke-width": isGod ? 1.5 : 0 });
+    node.appendChild(c);
+    node.appendChild(el("title", null, m.path + (isGod ? " — god node (in " + godBy[id].inDegree + " · out " + godBy[id].outDegree + ")" : (m.cluster ? " — cluster " + m.cluster : ""))));
+    g.appendChild(node);
+  });
+}
+
 // ====================== Sidebars ======================
 
 function renderSidebar() {
@@ -3799,11 +4101,13 @@ window.addEventListener("keydown", function (e) {
   if (e.key === "a") setView("architecture");
   if (e.key === "m") setView("modules");
   if (e.key === "F") setView("flows");
+  if (e.key === "i") setView("insights");
 });
 
 $("tab-architecture").onclick = function () { setView("architecture"); };
 $("tab-modules").onclick = function () { setView("modules"); };
 $("tab-flows").onclick = function () { setView("flows"); };
+$("tab-insights").onclick = function () { setView("insights"); };
 $("fit").onclick = fit;
 $("clear").onclick = function () { clearFlow(); state.collapsedGroups = {}; state.selected = null; render(); };
 $("reload").onclick = function () { load(false); };
@@ -3832,25 +4136,98 @@ load(true).then(connectLive);
 </html>`;
 }
 
-function visWriteOutputs(root) {
+// GRAPH_REPORT.md — graphify's signature skimmable narrative. Fully deterministic (no LLM, no Date).
+function visRenderReport(map) {
+	const L = [];
+	const s = map.stats || {};
+	const langs = Object.entries(s.languages || {}).filter(([k]) => k !== "other").sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 6).map(([k, v]) => `${k} ${v}`).join(", ");
+	L.push(`# ${map.root} — Codebase Graph Report`, "");
+	L.push("_Generated by `draht-tools map-graph`. Do not edit; regenerated each build._", "");
+	L.push("## Overview");
+	L.push(`${s.files} modules · ${(s.totalLoc || 0).toLocaleString()} LOC · ${s.packages} packages · ${s.edges} import edges · ${s.entryPoints} entry points · ${(map.clusters || []).length} clusters.`);
+	L.push(`Languages: ${langs || "n/a"}.`, "");
+	L.push("## Key concepts (structural neighborhoods)", "");
+	L.push("> Clusters are import-topology neighborhoods, not semantic bounded contexts — confirm before treating them as such.", "");
+	for (const c of (map.clusters || []).slice(0, 8)) {
+		const code = (c.members || []).filter((m) => /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|swift|kt|cs|c|cpp)$/.test(m));
+		const members = (code.length ? code : (c.members || [])).slice(0, 4).map((m) => "`" + m.split("/").slice(-2).join("/") + "`").join(", ");
+		L.push(`- **${c.label}** — ${c.size} modules · ${c.dominantLayer}${members ? " · e.g. " + members : ""}`);
+	}
+	L.push("", "## God nodes (most connected)", "");
+	L.push("| File | In | Out | Note |", "| --- | --- | --- | --- |");
+	for (const g of (map.hotspots && map.hotspots.godNodes || []).slice(0, 8)) L.push(`| \`${g.path}\` | ${g.inDegree} | ${g.outDegree} | ${g.reason} |`);
+	const sc = map.surprisingConnections || [];
+	if (sc.length) {
+		L.push("", "## Surprising connections", "");
+		for (const x of sc.slice(0, 10)) {
+			const syms = (x.sampleSymbols || []).slice(0, 3).join(", ");
+			L.push(`- \`${x.from}\` → \`${x.to}\` — ${x.reason} (score ${x.score})${syms ? " · " + syms : ""}`);
+		}
+	}
+	const rh = (map.rationaleIndex || []).filter((r) => ["SECURITY", "BUG", "FIXME", "HACK"].includes(r.tag)).slice(0, 12);
+	if (rh.length) {
+		L.push("", "## Rationale highlights (SECURITY / BUG / FIXME / HACK)", "");
+		for (const r of rh) L.push(`- **${r.tag}** \`${r.file}:${r.line}\` — ${r.text}`);
+	}
+	L.push("", "## Suggested questions", "");
+	const gq = [];
+	const top = (map.hotspots && map.hotspots.godNodes || [])[0];
+	if (top) gq.push(`Why does \`${top.path}\` have ${top.inDegree} dependents — is that coupling intended?`);
+	const br = sc.find((x) => /bridge/.test(x.reason));
+	if (br) gq.push(`Is the bridge \`${br.from}\` → \`${br.to}\` intended, or accidental coupling?`);
+	const hk = (map.rationaleIndex || []).find((r) => r.tag === "HACK" || r.tag === "FIXME");
+	if (hk) gq.push(`Should the ${hk.tag} at \`${hk.file}:${hk.line}\` be addressed? ("${hk.text}")`);
+	const big = (map.clusters || [])[0];
+	if (big) gq.push(`Cluster "${big.label}" holds ${big.size} modules — should it be split?`);
+	if (!gq.length) gq.push("Run `draht-tools graph-hotspots` and `graph-clusters --surprising` to explore.");
+	for (const q of gq) L.push(`- ${q}`);
+	L.push("", "---", "Query the graph: `draht-tools graph-context <file>` · `graph-impact <file>` · `graph-query \"<concept>\"` · `graph-hotspots` · `graph-clusters --surprising`.", "");
+	return L.join("\n");
+}
+
+function visWriteOutputs(root, opts = {}) {
 	const outDir = path.join(root, PLANNING_DIR, "codebase");
 	ensureDir(outDir);
 	const map = visBuildMap(root);
 	const jsonPath = path.join(outDir, "MAP.json");
 	const htmlPath = path.join(outDir, "MAP.html");
-	fs.writeFileSync(jsonPath, JSON.stringify(map, null, 2) + "\n", "utf-8");
-	fs.writeFileSync(htmlPath, visRenderHtml(jsonPath), "utf-8");
-	return { jsonPath, htmlPath, map };
+	const reportPath = path.join(outDir, "GRAPH_REPORT.md");
+	// Idempotent write: if the new map differs from the committed file ONLY in the volatile
+	// generatedAt/buildMs fields, leave every artifact untouched — so the post-commit hook /
+	// stale rebuild never produces spurious git churn. Graph data is deterministic (see verify gate).
+	let unchanged = false;
+	try {
+		const prev = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
+		unchanged = JSON.stringify(Object.assign({}, prev, { generatedAt: 0, buildMs: 0 }))
+			=== JSON.stringify(Object.assign({}, map, { generatedAt: 0, buildMs: 0 }));
+	} catch { /* no/invalid prior file → write fresh */ }
+	if (!unchanged) {
+		fs.writeFileSync(jsonPath, JSON.stringify(map, null, 2) + "\n", "utf-8");
+		fs.writeFileSync(reportPath, visRenderReport(map), "utf-8"); // a fresh human report is a parity feature
+		if (!opts.quiet) fs.writeFileSync(htmlPath, visRenderHtml(jsonPath), "utf-8");
+	} else if (!opts.quiet && !fs.existsSync(htmlPath)) {
+		fs.writeFileSync(htmlPath, visRenderHtml(jsonPath), "utf-8"); // backfill HTML if missing
+	}
+	return { jsonPath, htmlPath, reportPath, map, unchanged };
 }
 
 // --- map-graph ---
-commands["map-graph"] = function (dir) {
+commands["map-graph"] = function (...args) {
+	let dir = null, quiet = false;
+	for (const a of args) {
+		if (a === "--quiet" || a === "-q") quiet = true;
+		else if (!String(a).startsWith("-") && !dir) dir = a;
+	}
 	const cwd = dir ? path.resolve(dir) : process.cwd();
+	const { jsonPath, htmlPath, reportPath, map } = visWriteOutputs(cwd, { quiet });
+	if (quiet) { // fast refresh for hooks: MAP.json + GRAPH_REPORT.md, no HTML render
+		console.log(`map-graph: ${map.stats.files} modules · schemaVersion ${map.schemaVersion} · ${map.buildMs}ms → ${path.relative(cwd, jsonPath)}`);
+		return;
+	}
 	console.log(banner("MAP-GRAPH"));
-	const { jsonPath, htmlPath, map } = visWriteOutputs(cwd);
-	console.log(`\nWrote:\n  ${jsonPath}\n  ${htmlPath}`);
-	console.log(`\nIndexed ${map.stats.files} modules · ${map.stats.totalLoc.toLocaleString()} LOC · ${map.stats.edges} edges in ${map.buildMs}ms`);
-	console.log(`\nServe live: draht-tools map-serve`);
+	console.log(`\nWrote:\n  ${jsonPath}\n  ${htmlPath}\n  ${reportPath}`);
+	console.log(`\nIndexed ${map.stats.files} modules · ${map.stats.totalLoc.toLocaleString()} LOC · ${map.stats.edges} edges · ${map.clusters.length} clusters in ${map.buildMs}ms`);
+	console.log(`\nRead the report: ${path.relative(cwd, reportPath)}   ·   Serve live: draht-tools map-serve`);
 };
 
 // --- map-serve ---
@@ -3968,6 +4345,273 @@ commands["map-serve"] = function (...args) {
 };
 
 // ============================================================================
+// Knowledge-graph queries — answer from MAP.json instead of grepping (read-only)
+// ============================================================================
+
+function graphLoadMap() {
+	const jsonPath = path.join(process.cwd(), PLANNING_DIR, "codebase", "MAP.json");
+	try { return { map: JSON.parse(fs.readFileSync(jsonPath, "utf-8")), jsonPath }; }
+	catch { return { map: null, jsonPath }; }
+}
+function graphNoMap() { console.log("no map — run `draht-tools map-graph` first."); }
+
+// Split args into { files, flags }; value-flags (e.g. depth/limit) consume the next token.
+function graphParseArgs(args, valueFlags = []) {
+	const files = [], flags = {};
+	for (let i = 0; i < args.length; i++) {
+		const a = String(args[i]);
+		const key = a.replace(/^--?/, "");
+		if (!a.startsWith("-")) files.push(a);
+		else if (valueFlags.includes(key)) flags[key] = args[++i];
+		else flags[key] = true;
+	}
+	return { files, flags };
+}
+
+// Resolve a user path to a module id: exact, then unique suffix, then unique basename, then substring.
+function graphResolveFile(map, q) {
+	if (!q) return null;
+	const norm = String(q).replace(/^\.\//, "");
+	const mods = map.modules;
+	let m = mods.find((x) => x.id === norm);
+	if (m) return { id: m.id, exact: true };
+	const suffix = mods.filter((x) => x.id.endsWith("/" + norm));
+	if (suffix.length === 1) return { id: suffix[0].id, exact: false };
+	const base = norm.split("/").pop();
+	const byBase = mods.filter((x) => x.path.split("/").pop() === base);
+	if (byBase.length === 1) return { id: byBase[0].id, exact: false };
+	const contains = mods.filter((x) => x.id.includes(norm)).sort((a, b) => a.id.length - b.id.length);
+	if (contains.length) return { id: contains[0].id, exact: false };
+	return null;
+}
+
+function graphImportAdj(map) {
+	// import + re-export are both real structural dependency edges (barrels re-export their internals).
+	const fwd = new Map(), rev = new Map();
+	for (const e of map.edges) {
+		if (e.kind !== "import" && e.kind !== "re-export") continue;
+		if (!fwd.has(e.from)) fwd.set(e.from, []); if (!fwd.get(e.from).includes(e.to)) fwd.get(e.from).push(e.to);
+		if (!rev.has(e.to)) rev.set(e.to, []); if (!rev.get(e.to).includes(e.from)) rev.get(e.to).push(e.from);
+	}
+	return { fwd, rev };
+}
+const graphShort = (p) => String(p).split("/").slice(-2).join("/");
+
+// graph-context — "where am I": package, layer, cluster, importers/imports, exports, sinks, rationale.
+commands["graph-context"] = function (...args) {
+	const { map } = graphLoadMap();
+	if (!map) return graphNoMap();
+	const { files, flags } = graphParseArgs(args);
+	if (!files.length) { console.log("usage: graph-context <file...> [--json]"); return; }
+	const { fwd: imports, rev: importers } = graphImportAdj(map);
+	const clusterById = new Map((map.clusters || []).map((c) => [c.id, c]));
+	const modById = new Map(map.modules.map((m) => [m.id, m]));
+	const L = [], J = [];
+	for (const f of files) {
+		const r = graphResolveFile(map, f);
+		if (!r) { L.push(`${f}: not found in map`); continue; }
+		const m = modById.get(r.id);
+		if (!r.exact) L.push(`resolved '${f}' → ${m.id}`);
+		const cl = clusterById.get(m.cluster);
+		const exps = (m.symbols && m.symbols.length ? m.symbols.filter((s) => s.exported) : (m.exports || [])).map((s) => s.name);
+		const ins = importers.get(m.id) || [], outs = imports.get(m.id) || [];
+		const rat = (map.rationaleIndex || []).filter((x) => x.file === m.id).slice(0, 4).map((x) => `${x.tag}:${x.line} ${x.text.slice(0, 40)}`);
+		L.push(`${m.path}  ·  pkg:${m.package || "-"}  ·  layer:${m.layer}  ·  cluster:${cl ? cl.label : "-"}(${cl ? cl.size : 0})  ·  entry:${m.entryPoint ? m.entryPoint.kind : "no"}`);
+		L.push(`  exports(${exps.length}): ${exps.slice(0, 8).join(", ") || "-"}${exps.length > 8 ? " …" : ""}`);
+		L.push(`  importers(${ins.length}): ${ins.slice(0, 5).map(graphShort).join(", ") || "-"}${ins.length > 5 ? ` (+${ins.length - 5} more)` : ""}`);
+		L.push(`  imports(${outs.length}): ${outs.slice(0, 5).map(graphShort).join(", ") || "-"}${outs.length > 5 ? ` (+${outs.length - 5} more)` : ""}`);
+		if (m.sinks && m.sinks.length) L.push(`  sinks: ${m.sinks.join(", ")}`);
+		if (rat.length) L.push(`  rationale(${rat.length}): ${rat.join(" · ")}`);
+		J.push({ id: m.id, package: m.package, layer: m.layer, cluster: m.cluster, clusterLabel: cl ? cl.label : null, entryPoint: m.entryPoint, exports: exps, importers: ins, imports: outs, sinks: m.sinks, rationale: (map.rationaleIndex || []).filter((x) => x.file === m.id) });
+	}
+	console.log(flags.json ? JSON.stringify(J, null, 2) : L.join("\n"));
+};
+
+// graph-impact — blast radius: reverse-transitive importers, entry points reached, sinks, boundary warns.
+commands["graph-impact"] = function (...args) {
+	const { map } = graphLoadMap();
+	if (!map) return graphNoMap();
+	const { files, flags } = graphParseArgs(args);
+	if (!files.length) { console.log("usage: graph-impact <file...> [--json]"); return; }
+	const { rev } = graphImportAdj(map);
+	const modById = new Map(map.modules.map((m) => [m.id, m]));
+	const targets = [], notes = [];
+	for (const f of files) { const r = graphResolveFile(map, f); if (r) { if (!r.exact) notes.push(`resolved '${f}' → ${r.id}`); targets.push(r.id); } else notes.push(`${f}: not found`); }
+	if (!targets.length) { console.log(notes.join("\n") || "no targets resolved"); return; }
+	const seen = new Set(targets), queue = [...targets];
+	while (queue.length) { const id = queue.shift(); for (const dep of (rev.get(id) || [])) if (!seen.has(dep)) { seen.add(dep); queue.push(dep); } }
+	for (const t of targets) seen.delete(t);
+	const impacted = [...seen].map((id) => modById.get(id)).filter(Boolean);
+	const eps = (map.entryPoints || []).filter((ep) => seen.has(ep.id));
+	const byPkg = {}; for (const m of impacted) { const p = m.package || "(root)"; (byPkg[p] = byPkg[p] || []).push(m.path); }
+	const clusterLabel = new Map((map.clusters || []).map((c) => [c.id, c.label]));
+	const cls = [...new Set(impacted.map((m) => m.cluster).filter(Boolean))];
+	const sinkKinds = new Set(); for (const t of targets) for (const s of (modById.get(t).sinks || [])) sinkKinds.add(s);
+	const warns = (map.surprisingConnections || []).filter((x) => seen.has(x.from) || seen.has(x.to) || targets.includes(x.to)).slice(0, 5);
+	const epLabel = (e) => e.kind === "cli" ? "cli:" + (e.name || "") : e.kind === "http" ? "http:" + ((e.routes && e.routes[0] && (e.routes[0].method + " " + e.routes[0].path)) || "") : "lib:" + (e.name || e.path.split("/").pop());
+	const L = [];
+	if (notes.length) L.push(...notes);
+	L.push(`impact ${targets.map((t) => t.split("/").pop()).join(", ")} — ${impacted.length} modules · ${Object.keys(byPkg).length} packages · ${eps.length} entry points · sinks: ${[...sinkKinds].join(", ") || "none"}`);
+	if (eps.length) L.push(`entry points reaching it (${eps.length}): ${eps.slice(0, 8).map(epLabel).join(", ")}${eps.length > 8 ? " …" : ""}`);
+	const pkgs = Object.entries(byPkg).sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1));
+	if (pkgs.length) L.push("by package:");
+	for (const [p, arr] of pkgs.slice(0, 8)) L.push(`  ${p.replace(/^@[^/]+\//, "")}(${arr.length}): ${arr.slice(0, 5).map((x) => x.split("/").pop()).join(" ")}${arr.length > 5 ? ` (+${arr.length - 5})` : ""}`);
+	if (pkgs.length > 8) L.push(`  … +${pkgs.length - 8} more packages`);
+	if (cls.length) L.push(`clusters affected: ${cls.map((c) => clusterLabel.get(c) || c).slice(0, 8).join(", ")}`);
+	for (const w of warns) L.push(`⚠ ${w.reason}: ${graphShort(w.from)} → ${graphShort(w.to)}`);
+	console.log(flags.json ? JSON.stringify({ targets, impacted: impacted.map((m) => m.id), entryPoints: eps.map((e) => e.id), byPackage: byPkg, clusters: cls, sinks: [...sinkKinds], warnings: warns }, null, 2) : L.join("\n"));
+};
+
+// graph-callers / graph-callees — direct + N-hop neighbours via call + import edges, with symbols.
+function graphCallDir(args, direction) {
+	const { map } = graphLoadMap();
+	if (!map) return graphNoMap();
+	const { files, flags } = graphParseArgs(args, ["depth"]);
+	if (!files.length) { console.log(`usage: graph-${direction} <file> [--depth N] [--json]`); return; }
+	const depth = Math.max(1, parseInt(flags.depth, 10) || 1);
+	const r = graphResolveFile(map, files[0]);
+	if (!r) { console.log(`${files[0]}: not found in map`); return; }
+	const fwd = new Map(), rev = new Map();
+	const push = (mp, k, v) => { if (!mp.has(k)) mp.set(k, []); if (!mp.get(k).some((x) => x.to === v.to && x.symbol === v.symbol)) mp.get(k).push(v); };
+	for (const ce of map.callEdges) { push(fwd, ce.from, { to: ce.to, symbol: ce.symbol }); push(rev, ce.to, { to: ce.from, symbol: ce.symbol }); }
+	for (const e of map.edges) { if (e.kind !== "import") continue; push(fwd, e.from, { to: e.to, symbol: null }); push(rev, e.to, { to: e.from, symbol: null }); }
+	const adj = direction === "callers" ? rev : fwd;
+	const level = new Map([[r.id, 0]]); const q = [r.id]; const hops = [];
+	while (q.length) { const id = level.get(q[0]) < depth ? q.shift() : (q.shift(), null); if (id == null) continue; for (const nb of (adj.get(id) || [])) { if (!level.has(nb.to)) { level.set(nb.to, level.get(id) + 1); q.push(nb.to); } if (level.get(nb.to) === level.get(id) + 1) hops.push({ from: id, to: nb.to, symbol: nb.symbol, hop: level.get(id) + 1 }); } }
+	const byHop = {}; for (const h of hops) (byHop[h.hop] = byHop[h.hop] || []).push(h);
+	if (flags.json) { console.log(JSON.stringify({ target: r.id, direction, hops }, null, 2)); return; }
+	const total = level.size - 1;
+	console.log(`${direction} of ${r.id} — ${total} within ${depth} hop${depth > 1 ? "s" : ""}`);
+	for (let d = 1; d <= depth; d++) {
+		const arr = byHop[d] || []; if (!arr.length) continue;
+		console.log(`  hop ${d}:`);
+		const seen = new Set();
+		for (const h of arr) { const node = direction === "callers" ? h.to : h.to; if (seen.has(node)) continue; seen.add(node); const syms = arr.filter((x) => x.to === node && x.symbol).map((x) => x.symbol); console.log(`    ${node}${syms.length ? "  [" + [...new Set(syms)].slice(0, 4).join(", ") + "]" : ""}`); }
+	}
+};
+commands["graph-callers"] = function (...args) { return graphCallDir(args, "callers"); };
+commands["graph-callees"] = function (...args) { return graphCallDir(args, "callees"); };
+
+// graph-path — shortest import path between two files (forward, else reverse "reached-by").
+commands["graph-path"] = function (...args) {
+	const { map } = graphLoadMap();
+	if (!map) return graphNoMap();
+	const { files } = graphParseArgs(args);
+	const a = graphResolveFile(map, files[0]), b = graphResolveFile(map, files[1]);
+	if (!a || !b) { console.log("usage: graph-path <from> <to>  (both files must resolve)"); return; }
+	const { fwd } = graphImportAdj(map);
+	const sym = new Map(); for (const ce of map.callEdges) if (!sym.has(ce.from + "|" + ce.to)) sym.set(ce.from + "|" + ce.to, ce.symbol);
+	const bfs = (src, dst) => { const prev = new Map([[src, null]]); const q = [src]; while (q.length) { const id = q.shift(); if (id === dst) break; for (const n of (fwd.get(id) || [])) if (!prev.has(n)) { prev.set(n, id); q.push(n); } } if (!prev.has(dst)) return null; const c = []; let x = dst; while (x != null) { c.unshift(x); x = prev.get(x); } return c; };
+	let chain = bfs(a.id, b.id), reversed = false;
+	if (!chain) { chain = bfs(b.id, a.id); reversed = true; }
+	if (!chain) { console.log(`no import path between ${a.id} and ${b.id}`); return; }
+	console.log(reversed ? `(no forward path) reverse: ${b.id} is reached-by ${a.id} in ${chain.length - 1} hops` : `path ${a.id} → ${b.id}  (${chain.length - 1} hops)`);
+	const render = reversed ? chain.slice().reverse() : chain;
+	const line = render.map((c, i) => { const s = i < render.length - 1 ? sym.get(c + "|" + render[i + 1]) : null; return graphShort(c) + (i < render.length - 1 ? (s ? ` —${s}→ ` : " → ") : ""); }).join("");
+	console.log("  " + line);
+};
+
+// graph-query — ranked keyword + doc search over symbol nodes (no embeddings; deterministic).
+commands["graph-query"] = function (...args) {
+	const { map } = graphLoadMap();
+	if (!map) return graphNoMap();
+	const { files, flags } = graphParseArgs(args);
+	const terms = files.map((t) => t.toLowerCase()).filter((t) => t.length >= 3);
+	if (!terms.length) { console.log("usage: graph-query <term...> [--json]  (terms ≥3 chars)"); return; }
+	const stem = (s) => s.replace(/(ing|tion|ed|s)$/, "");
+	const clusterLabel = new Map((map.clusters || []).map((c) => [c.id, (c.label || "").toLowerCase()]));
+	const deg = new Map(); for (const e of map.edges) { if (e.kind !== "import") continue; deg.set(e.from, (deg.get(e.from) || 0) + 1); deg.set(e.to, (deg.get(e.to) || 0) + 1); }
+	const cands = [];
+	for (const m of map.modules) {
+		const expDoc = new Map((m.exports || []).map((e) => [e.name, e.doc || ""]));
+		const baseLow = m.path.split("/").pop().toLowerCase();
+		const clab = clusterLabel.get(m.cluster) || "";
+		for (const s of (m.symbols || [])) {
+			const nameLow = s.name.toLowerCase(), doc = expDoc.get(s.name) || "", docLow = doc.toLowerCase();
+			let total = 0, ok = true;
+			for (const t of terms) {
+				let sc = 0;
+				if (nameLow === t) sc = 400; else if (nameLow.startsWith(t)) sc = 200; else if (nameLow.includes(t)) sc = 100;
+				if (sc < 60 && baseLow.includes(t)) sc = 60;
+				if (sc < 40 && (docLow.includes(t) || docLow.includes(stem(t)))) sc = 40;
+				if (sc < 30 && clab.includes(t)) sc = 30;
+				if (sc === 0) { ok = false; break; }
+				total += sc;
+			}
+			if (!ok) continue;
+			let mult = 1; if (s.exported) mult *= 1.5; if (m.entryPoint) mult *= 1.3;
+			cands.push({ score: +(total * mult).toFixed(1), deg: deg.get(m.id) || 0, path: m.path, line: s.line, kind: s.kind, name: s.name, exported: !!s.exported, doc });
+		}
+	}
+	cands.sort((a, b) => b.score - a.score || b.deg - a.deg || a.path.length - b.path.length || (a.path < b.path ? -1 : 1));
+	const top = cands.slice(0, 15);
+	if (flags.json) { console.log(JSON.stringify(top, null, 2)); return; }
+	console.log(`query "${terms.join(" ")}" — ${top.length}/${cands.length} hits`);
+	for (const c of top) console.log(`${c.path}:${c.line}  ${c.kind} ${c.name}${c.doc ? "  — " + c.doc.slice(0, 60) : ""}${c.exported ? "  [exported]" : ""}`);
+	if (cands.length > 15) console.log(`(${cands.length - 15} more: --json for all)`);
+};
+
+// graph-hotspots — god-nodes / most-depended-on / orchestrators / largest.
+commands["graph-hotspots"] = function (...args) {
+	const { map } = graphLoadMap();
+	if (!map) return graphNoMap();
+	const { flags } = graphParseArgs(args, ["limit"]);
+	const lim = Math.max(1, parseInt(flags.limit, 10) || 10);
+	const h = map.hotspots || {};
+	if (flags.json) { console.log(JSON.stringify(h, null, 2)); return; }
+	const section = (title, arr) => { console.log(`\n${title}`); for (const g of (arr || []).slice(0, lim)) console.log(`  ${g.path}  [in ${g.inDegree} · out ${g.outDegree} · ${g.loc} LOC]  ${g.reason}`); };
+	section("God nodes (most connected):", h.godNodes);
+	section("Most depended-on:", h.mostDependedOn);
+	section("Orchestrators (most deps):", h.orchestrators);
+	section("Largest:", h.largest);
+};
+
+// graph-clusters — structural neighborhoods; --surprising appends bridge/boundary edges.
+commands["graph-clusters"] = function (...args) {
+	const { map } = graphLoadMap();
+	if (!map) return graphNoMap();
+	const { flags } = graphParseArgs(args);
+	if (flags.json) { console.log(JSON.stringify({ clusters: map.clusters, surprisingConnections: flags.surprising ? map.surprisingConnections : undefined }, null, 2)); return; }
+	console.log(`${(map.clusters || []).length} clusters (structural import-topology — not semantic bounded contexts):`);
+	for (const c of (map.clusters || [])) console.log(`  ${c.label}  ·  ${c.size} modules  ·  ${c.dominantLayer}  ·  ${(c.packages || []).slice(0, 3).join(", ")}`);
+	if (flags.surprising) {
+		console.log(`\nSurprising connections (${(map.surprisingConnections || []).length}):`);
+		for (const x of (map.surprisingConnections || [])) console.log(`  ${graphShort(x.from)} → ${graphShort(x.to)}  —  ${x.reason} (${x.score})${x.sampleSymbols && x.sampleSymbols.length ? " · " + x.sampleSymbols.slice(0, 3).join(", ") : ""}`);
+	}
+};
+
+// graph-hook — install/uninstall a git post-commit hook that refreshes MAP.json (graphify-style).
+commands["graph-hook"] = function (...args) {
+	const sub = args[0] || "status";
+	const gitDir = path.join(process.cwd(), ".git");
+	if (!fs.existsSync(gitDir)) { console.log("not a git repository (no .git)"); return; }
+	const hookPath = path.join(gitDir, "hooks", "post-commit");
+	const BEGIN = "# >>> draht map-graph >>>", END = "# <<< draht map-graph <<<";
+	const selfPath = __filename;
+	const block = `${BEGIN}\nnode "${selfPath}" map-graph --quiet 2>/dev/null || true\n${END}`;
+	const read = () => { try { return fs.readFileSync(hookPath, "utf-8"); } catch { return ""; } };
+	const stripBlock = (s) => s.replace(new RegExp("\\n*" + BEGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\s\\S]*?" + END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\n*", "g"), "\n").replace(/^\n+/, "");
+	if (sub === "install") {
+		let cur = read();
+		if (cur.includes(BEGIN)) cur = stripBlock(cur);
+		if (!cur.trim()) cur = "#!/bin/sh\n";
+		const next = cur.replace(/\n*$/, "\n") + "\n" + block + "\n";
+		ensureDir(path.dirname(hookPath));
+		fs.writeFileSync(hookPath, next, "utf-8");
+		try { fs.chmodSync(hookPath, 0o755); } catch { /* empty */ }
+		console.log(`installed post-commit hook → ${path.relative(process.cwd(), hookPath)}\n  refreshes .planning/codebase/MAP.json after each commit (lands in the next commit).`);
+	} else if (sub === "uninstall") {
+		const cur = read();
+		if (!cur.includes(BEGIN)) { console.log("draht hook not installed."); return; }
+		const next = stripBlock(cur);
+		if (next.trim() && next.trim() !== "#!/bin/sh") fs.writeFileSync(hookPath, next, "utf-8"); else { try { fs.unlinkSync(hookPath); } catch { /* empty */ } }
+		console.log("removed draht post-commit hook block.");
+	} else {
+		console.log(read().includes(BEGIN) ? "draht post-commit hook: INSTALLED" : "draht post-commit hook: not installed (run `draht-tools graph-hook install`)");
+	}
+};
+
+// ============================================================================
 // Help & Dispatch
 // ============================================================================
 
@@ -3980,10 +4624,23 @@ Usage: draht-tools <command> [args]
 Project Setup:
   init                          Check preconditions, create .planning/
   map-codebase [dir]            Analyze existing codebase (docs)
-  map-graph [dir]               Generate living codebase map (MAP.json + MAP.html)
+  map-graph [dir] [--quiet]     Generate living codebase map (MAP.json + MAP.html + GRAPH_REPORT.md)
+                                --quiet: refresh MAP.json + report only (no HTML); for hooks
                                 Override functional groups via .planning/codebase/GROUPS.json
                                 Override flows via .planning/codebase/FLOWS.json
   map-serve [port]              Serve MAP.html with live reload on file changes
+
+Knowledge Graph (query MAP.json instead of grepping — run map-graph first):
+  graph-context <file...>       Where a file sits: pkg, layer, cluster, importers/imports, sinks, rationale
+  graph-impact <file...>        Blast radius: reverse-dependents, entry points reached, sinks, boundary warns
+  graph-callers <file> [--depth N]   Modules that call/import the file (N hops)
+  graph-callees <file> [--depth N]   Modules the file calls/imports (N hops)
+  graph-path <from> <to>        Shortest import path between two files
+  graph-query <term...>         Ranked symbol + doc search (replaces grep for "find the X")
+  graph-hotspots [--limit N]    God-nodes / most-depended-on / orchestrators / largest
+  graph-clusters [--surprising] Structural neighborhoods (+ surprising/bridge connections)
+  graph-hook install|uninstall|status   Git post-commit hook that refreshes MAP.json
+  (all accept --json for machine output)
   create-project [name]         Create PROJECT.md
   create-requirements           Create REQUIREMENTS.md
   create-domain-model           Generate DOMAIN-MODEL.md from PROJECT.md

@@ -47,7 +47,7 @@ Before executing, decompose this phase execution into atomic reasoning units:
    If it exits non-zero, STOP and report errors to the user. Do not proceed.
 
 1. Run `draht-tools discover-plans $1` to find and order plans
-2. Read each plan file yourself (from `.planning/phases/`) and analyze dependencies to identify which plans can run in parallel vs sequential
+2. Read each plan file yourself (from `.planning/phases/`) and analyze dependencies to identify which plans can run in parallel vs sequential. **Graph-impact:** run `draht-tools graph-impact <each plan's files>` and parallelize ONLY plans whose blast-radius/sink sets are disjoint; serialize any plans with overlapping reverse-dependents.
 3. **Validate plans before dispatching:**
    ```bash
    node "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}/bin/draht-tools.cjs" validate-plans $1
@@ -113,6 +113,8 @@ Before executing, decompose this phase execution into atomic reasoning units:
 Execute this plan. Here is the full plan content:
 
 <paste full plan XML here>
+
+[Optional — orchestrator MAY paste a `draht-tools graph-context <task files>` slice here for orientation (pkg/layer/importers/imports/sinks). Codex subagents cannot run draht-tools.]
 
 For each <task> in the plan, follow this TDD cycle:
 1. RED — Write failing tests from <test>. Run the test runner, confirm they FAIL for the right reason. Commit with: git add <test-files> && git commit -m "red: <description>"

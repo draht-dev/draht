@@ -29,19 +29,20 @@ Before planning the next milestone, decompose progress into atomic reasoning uni
 2. If any phase is not complete, STOP and tell the user which phase needs attention
 3. Read all phase reports in `.planning/phase-N-report.md` to extract lessons learned
 4. Read the execution log `.planning/execution-log.jsonl` for failure patterns
-5. Review `.planning/DOMAIN.md` — is it still accurate? Any terms to add/revise?
-6. Review `.planning/TEST-STRATEGY.md` — any updates needed?
-7. Questioning phase (1-2 questions at a time):
+5. Refresh the living map if stale: `draht-tools map-graph --quiet` (guarded — skip if the post-phase hook already refreshed), then `draht-tools graph-clusters --surprising`. Compare clusters / bounded contexts / entry points against the milestone start to surface architectural drift before planning the next milestone
+6. Review `.planning/DOMAIN.md` — is it still accurate? Any terms to add/revise (esp. drift flagged in step 5)?
+7. Review `.planning/TEST-STRATEGY.md` — any updates needed?
+8. Questioning phase (1-2 questions at a time):
    - What is the next milestone's goal?
    - What user-visible outcomes must be true by the end?
    - What is in vs out of scope?
-8. Propose phases for the next milestone. Each phase must have:
+9. Propose phases for the next milestone. Each phase must have:
    - A clear goal (outcome, not activity)
    - Mapped requirements
    - Acceptance criteria
-9. Update `.planning/ROADMAP.md` with the new milestone header and phases (status: `pending`)
-10. Update `.planning/REQUIREMENTS.md` with any new requirements
-11. Commit: `draht-tools commit-docs "plan milestone <N>"`
+10. Update `.planning/ROADMAP.md` with the new milestone header and phases (status: `pending`)
+11. Update `.planning/REQUIREMENTS.md` with any new requirements
+12. Commit: `draht-tools commit-docs "plan milestone <N>"`
 
 ## Rules
 - Do not start planning phase details — that happens in `/discuss-phase` + `/plan-phase`

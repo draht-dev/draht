@@ -34,7 +34,7 @@ Before executing, decompose this task into atomic reasoning units:
    ```
    The plan content must include: a `# Quick Task NNN: title` heading, a `## Tasks` section with one or more `<task>` XML blocks containing real file paths, real actions, and real verification steps — NOT placeholders like `[files]`.
 
-3. **Stage 1 — Implementer.** Dispatch via the Task tool with `subagent_type: "implementer"` and prompt:
+3. **Stage 1 — Implementer.** _Optional scoping (multi-file tasks):_ run `draht-tools graph-context <files>` and paste the pkg/layer/importers summary into the implementer prompt. Then dispatch via the Task tool with `subagent_type: "implementer"` and prompt:
    ```
    Execute this task: $ARGUMENTS
 
@@ -69,7 +69,7 @@ Before executing, decompose this task into atomic reasoning units:
    - `DONE` → go to Stage 3.
    - `BLOCKED` → re-dispatch implementer with the "Required Fixes" list. Repeat Stage 1+2 until `DONE`.
 
-5. **Stage 3 — Reviewer (optional code-quality pass).** For non-trivial quick tasks (touches more than one file or modifies domain code), dispatch with `subagent_type: "reviewer"`:
+5. **Stage 3 — Reviewer (optional code-quality pass).** For non-trivial quick tasks (touches more than one file or modifies domain code), _optionally_ run `draht-tools graph-impact <changed files>` and paste its reverse-dependents + boundary warnings into the reviewer prompt. Then dispatch with `subagent_type: "reviewer"`:
    ```
    Code-quality review of the diff for quick task NNN. Spec compliance already confirmed — focus on correctness, type safety, conventions, domain language. Report Must fix / Should fix / Consider.
 

@@ -43,6 +43,8 @@ Before diagnosing, decompose this bug into atomic reasoning units:
 
 ### Phase 1 — Root Cause Investigation (before ANY fix)
 
+Once the affected/buggy file is identified, run `draht-tools graph-context <buggy-file>` and `draht-tools graph-callers <buggy-file>` to orient (package, layer, who calls it) — paste the summary into the Codex subagent prompt to support its "trace UPWARD" step.
+
 Dispatch the `debugger` subagent with this prompt:
 
 ```
@@ -66,7 +68,7 @@ If `BLOCKED` or `NEEDS_CONTEXT`: provide the missing info and re-dispatch. Do no
 
 Read the root cause from Phase 1. Then:
 
-1. Find working examples in the codebase that do the same kind of thing correctly
+1. Find working examples in the codebase that do the same kind of thing correctly — use `draht-tools graph-query "<concept>"` to locate reference implementations instead of grepping
 2. Read those reference implementations **completely** — not skimmed
 3. List every difference between the working code and the broken code, however small
 4. Note dependencies: what config, settings, environment, or call-order does the working version assume?

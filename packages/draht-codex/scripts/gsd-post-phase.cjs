@@ -121,6 +121,17 @@ if (fs.existsSync(roadmapPath)) {
 	console.log(`ROADMAP.md: Phase ${phaseNum} → ${newStatus}`);
 }
 
+// 4.5 Refresh the living codebase map (graph-first orientation). Single refresh owner for the
+// phase cycle — only if the project opted into mapping (MAP.json already exists). Best-effort:
+// never fail the hook on a map error. Regenerated MAP.json lands in the working tree for the next commit.
+try {
+	if (fs.existsSync(path.join(PLANNING, "codebase", "MAP.json"))) {
+		const { execFileSync } = require("node:child_process");
+		const toolPath = path.join(__dirname, "..", "bin", "draht-tools.cjs");
+		execFileSync(process.execPath, [toolPath, "map-graph", "--quiet"], { stdio: "inherit" });
+	}
+} catch { /* map refresh is best-effort */ }
+
 // 5. Summary
 console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 console.log(` Draht ► PHASE ${phaseNum} ${failed === 0 ? "COMPLETE ✅" : "NEEDS FIXES ❌"}`);

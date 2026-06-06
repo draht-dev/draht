@@ -36,9 +36,13 @@ Any time you encounter:
 
 If you cannot state the root cause clearly, you do not understand the bug yet. Do not proceed.
 
+## Phase 1.5 — Orient on the failing file
+
+Before walking the tree, orient via the living map. Run `draht-tools graph-context <failing-file>` for pkg/layer/cluster/importers/imports/sinks and `draht-tools graph-callers <failing-file>` to see who feeds bad values in (supports the "trace UPWARD" step above). If `.planning/codebase/MAP.json` is absent, run `draht-tools map-graph` first.
+
 ## Phase 2 — Pattern Analysis
 
-1. **Find working examples.** Other code in this repo that does the same kind of thing correctly.
+1. **Find working examples.** Use `draht-tools graph-query "<concept>"` instead of grep to locate reference implementations in this repo that do the same kind of thing correctly.
 2. **Read references completely.** Not skimmed — read every line of the working version.
 3. **List every difference** between working and broken, however small.
 4. **Note dependencies.** What config / env / call-order does the working version assume?
@@ -48,7 +52,7 @@ If Phase 2 contradicts Phase 1, go back to Phase 1. Don't paper over disagreemen
 ## Phase 3 — Single Hypothesis Test
 
 1. State ONE hypothesis: "I think X is the root cause because Y."
-2. Design the **smallest possible change** to test it — one variable, ideally one line.
+2. Design the **smallest possible change** to test it — one variable, ideally one line. Before applying, run `draht-tools graph-impact <file-to-change>` to scope the blast radius (reverse-dependents, affected entry points, crossed boundaries) and avoid regressions.
 3. Apply it. Did it fix the issue?
    - Yes → proceed to Phase 4.
    - No → form a NEW hypothesis. Revert. Do not pile changes on top.

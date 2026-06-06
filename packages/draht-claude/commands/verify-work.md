@@ -28,6 +28,7 @@ Before verifying, decompose phase acceptance into atomic reasoning units:
 - Plan fix strategies for potential failures
 
 ## Steps
+0. **Refresh the living map (guarded).** If `.planning/codebase/MAP.json` is older than HEAD, run `draht-tools map-graph --quiet` (skip if the post-phase hook already refreshed). This keeps the graph boundary check below accurate.
 1. Run `draht-tools extract-deliverables $1` to get testable items
 2. Discover the phase's plan files (`.planning/phases/<N>-*/<N>-NN-PLAN.md`). Each plan is the spec a spec-reviewer evaluates the diff against.
 
@@ -47,9 +48,11 @@ Before verifying, decompose phase acceptance into atomic reasoning units:
      End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
      ```
 
+     Before dispatching, the orchestrator runs `draht-tools graph-impact <changed-files>` and pastes the crossed-context / boundary-violation summary below as evidence for the DOMAIN.md boundary check.
+
    - **Task tool** with `subagent_type: "reviewer"` and prompt:
      ```
-     Review the recent code changes for this phase (use git log and git diff to find them). Check domain language compliance against `.planning/DOMAIN.md` if it exists — scan for identifiers not in the glossary and cross-context boundary violations. Report findings as Must fix / Should fix / Consider.
+     Review the recent code changes for this phase (use git log and git diff to find them). Check domain language compliance against `.planning/DOMAIN.md` if it exists — scan for identifiers not in the glossary and cross-context boundary violations. Use the pasted graph-impact summary (crossed bounded contexts, boundary violations) as evidence for that boundary check. Report findings as Must fix / Should fix / Consider.
 
      End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
      ```

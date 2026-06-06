@@ -27,6 +27,8 @@ Before asking anything, read what's already on disk:
 - `.planning/` if it exists — is there an active project?
 - `README.md`, `package.json`, any `*.md` in root — what does this codebase claim to do?
 
+If an existing codebase is in play (extending a real project), run `draht-tools map-codebase` + `draht-tools graph-hotspots` first to ground ideation in the real structure — so brainstormed ideas don't contradict existing architecture.
+
 Use this to ground questions in reality instead of asking things the user has already told you.
 
 ### 2. Ask Clarifying Questions — ONE at a time

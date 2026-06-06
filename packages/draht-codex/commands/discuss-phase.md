@@ -29,11 +29,12 @@ Before questioning, decompose this phase scope into atomic reasoning units:
 
 ## Steps
 1. Run `draht-tools phase-info $1` to load phase context
-2. Identify gray areas based on what's being built
-3. Present 1-2 questions at a time about preferences
-4. If `.planning/DOMAIN.md` exists, load it and validate discovered terms against the glossary. Add any new domain terms found during discussion.
-5. Record decisions with `draht-tools save-context $1`
-6. Commit: `draht-tools commit-docs "capture phase $1 context"`
+2. Ground the discussion in current structure: run `draht-tools graph-context <area>` and `draht-tools graph-clusters` on the area being discussed, and cross-check discovered domain terms with `draht-tools graph-query <term>`.
+3. Identify gray areas based on what's being built
+4. Present 1-2 questions at a time about preferences
+5. If `.planning/DOMAIN.md` exists, load it and validate discovered terms against the glossary. Add any new domain terms found during discussion.
+6. Record decisions with `draht-tools save-context $1`
+7. Commit: `draht-tools commit-docs "capture phase $1 context"`
 
 ## Workflow
 This is one step in the per-phase cycle. Use fresh sessions (`/clear`) between steps:

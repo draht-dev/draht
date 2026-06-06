@@ -77,12 +77,15 @@ The `gsd-post-phase.cjs` hook checks `DOMAIN.md` after each phase:
 
 The `gsd-quality-gate.cjs` script also runs a domain validator that compares identifiers in code against the glossary and flags unknown terms.
 
+Drift check: after each phase, run `draht-tools graph-clusters` and compare the map's clusters/contexts against `DOMAIN.md` — a new cluster or a cluster spanning two contexts means the code drifted from the model. Reconcile `DOMAIN.md` first, then the code.
+
 ## Extracting Domain from Existing Code
 
 When running `/init-project` or `/map-codebase` on a codebase that wasn't built with DDD:
 
+0. Surface CANDIDATE contexts from the map: `draht-tools graph-clusters` for code groupings + `draht-tools graph-context <dir>` to orient each. Clusters are STRUCTURAL (import topology), not semantic — confirm with a human before equating a cluster with a bounded context.
 1. List top-level `src/` subdirectories — candidates for bounded contexts
-2. Scan PascalCase class / interface / type names — candidates for entities and value objects
+2. Scan PascalCase class / interface / type names — seed from `modules[*].symbols` / GRAPH_REPORT.md instead of grepping — candidates for entities and value objects
 3. Scan repeated nouns in function names — candidates for domain concepts
 4. Look for cross-directory imports — candidates for context coupling to fix
 5. Write `DOMAIN.md` with what you found + what should exist

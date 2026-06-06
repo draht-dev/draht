@@ -32,6 +32,7 @@ Before you say *done*, *fixed*, *works*, *passes*, *ready*, *complete*, or any e
 | "Migration is safe" | Dry-run output OR equivalent staging verification |
 | "Deployment succeeded" | Deploy command output AND a live check (curl, health endpoint, etc.) |
 | "Refactor is non-breaking" | Full test suite green AND a behaviour-equivalence check |
+| "Architecture is sound" | `draht-tools map-graph` rebuilt, then `draht-tools graph-clusters --surprising` showing no new cross-context / layer-direction violations |
 
 ## Red Flag Phrases — STOP and Verify
 

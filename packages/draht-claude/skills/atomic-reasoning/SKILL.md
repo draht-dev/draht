@@ -43,6 +43,9 @@ For each observable user-visible outcome:
 2. Validate independence (which artifacts prove this? can it be built standalone?)
 3. Verify correctness (what scenarios prove it works?)
 
+### Validate a decomposition against the living map
+Run `draht-tools graph-context <file...>` on each unit's files: a unit whose files share one cluster/bounded context is atomic; a unit spanning multiple contexts should be split along the boundary.
+
 ### Before splitting a commit
 For each file in the diff:
 1. State the logical component (what does this change accomplish?)
@@ -66,6 +69,7 @@ A unit is atomic if:
 - ✅ It can be built or applied in 2–5 minutes of focused work
 - ✅ It can be verified by ONE test or check
 - ✅ It touches ONE concern in the codebase
+- ✅ All files in the atomic unit belong to one bounded context (or explicitly cross a documented boundary) — confirm with `draht-tools graph-context`
 - ✅ It produces ONE commit (or one TDD red→green→refactor trio)
 - ✅ Its `<files>` list contains specific paths, not "all relevant files"
 - ✅ Its outcome is a concrete state change, not "improve X"

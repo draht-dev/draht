@@ -33,7 +33,9 @@ Before reviewing, decompose code changes into atomic reasoning units:
 1. Identify the scope:
    - If argument given: use those files/directories/description as scope
    - If no argument: run `git diff --stat` and `git diff --cached --stat` to find changes
-2. Determine the list of changed files and produce a scope summary
+2. Determine the list of changed files and produce a scope summary.
+   - Before reviewing, run `draht-tools graph-context <changed-files>` and `draht-tools graph-impact <changed-files>` for affected contexts + boundary/layer violations (if `.planning/codebase/MAP.json` is absent, run `draht-tools map-graph` first).
+   - Subagents cannot run draht-tools: paste the affected-contexts / boundary-violation summary into the reviewer and security-auditor prompts below.
 
 3. **Detect spec context.** Look for a relevant plan in scope:
    - If `$ARGUMENTS` mentions a phase/task/plan number → load that PLAN.md

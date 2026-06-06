@@ -48,8 +48,10 @@ Before creating plans, decompose this phase goal into atomic reasoning units:
    b. Derive observable truths (3-7 from user perspective)
    c. From each observable truth, derive the test scenarios that would prove it (specific inputs → expected outputs or state changes)
    d. Map to required artifacts (files, endpoints, schemas)
+      - GRAPH-ORIENT: read `.planning/codebase/MAP.json` (regenerate with `draht-tools map-graph` if absent), then run `draht-tools graph-context <target-files>` for pkg/layer/importers and `draht-tools graph-query <term...>` to locate the code instead of grepping.
    e. Break into plan groups of 2-5 tasks each
 4. Identify which plans are independent (no shared files, no dependency edges)
+   - GRAPH-IMPACT: run `draht-tools graph-impact <plan-files>` per plan; plans with disjoint impact sets (reverse-dependents, entry points, sinks) are safe to parallelize — overlapping blast radius means a dependency edge.
 
 5. **Delegate plan creation to subagents via the Task tool:**
    - For **independent plans**: dispatch multiple `Task` tool calls in parallel (single assistant turn), each with `subagent_type: "architect"`, one per plan.
@@ -57,7 +59,7 @@ Before creating plans, decompose this phase goal into atomic reasoning units:
    - Each architect prompt must include:
      - The phase context summary (paste it inline — subagents cannot run draht-tools)
      - The specific observable truths this plan must satisfy
-     - The target files/artifacts
+     - The target files/artifacts — the orchestrator runs `draht-tools graph-context <plan-files>` and pastes the slice (pkg/layer/importers/imports) inline, since the architect subagent cannot run draht-tools
      - The XML task format specification (below)
      - The instruction below about the **delimiter convention** for output
 

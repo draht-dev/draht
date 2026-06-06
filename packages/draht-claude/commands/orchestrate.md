@@ -18,7 +18,7 @@ Before delegating, decompose the task into atomic work units:
 
 1. **State the logical components** — What sub-tasks make up this work? Which are independent?
 2. **Match agents to work** — Which specialist is right for each sub-task?
-3. **Determine order** — What can run in parallel vs what must be sequential?
+3. **Determine order** — What can run in parallel vs what must be sequential? For **code-touching** sub-tasks (skip for doc-only work), run `draht-tools graph-impact <files>` on each sub-task's targets: disjoint impact sets parallelize, overlapping ones sequence. The orchestrator runs it and pastes the summary into each Task subagent's prompt.
 4. **Define success** — What does "done" look like for each sub-task, and for the whole?
 
 ## Agent Selection Guide

@@ -113,3 +113,5 @@ When executing, the implementer subagent follows this order strictly. Commits ge
 ```
 
 The `gsd-quality-gate.cjs` script enforces this at verification time. Coverage is a floor, not a target — aim for the meaningful paths.
+
+Target coverage by layer, not by line count: run `draht-tools graph-hotspots` / `draht-tools graph-clusters` against `.planning/codebase/MAP.json` and cover the domain/application layers (and god nodes) first. A task's `<files>` should sit in one bounded context — confirm with `draht-tools graph-context <files>` before writing tests; files spanning contexts mean the task is too broad to test cleanly.

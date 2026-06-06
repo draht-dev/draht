@@ -32,8 +32,8 @@ Before initializing, decompose project understanding into atomic reasoning units
 
 ## Steps
 1. Run `draht-tools init` to check preconditions (git repo, etc.)
-2. Run `draht-tools map-codebase` to build a structural map of the existing code
-3. Analyze the codebase map to understand architecture, tech stack, and conventions
+2. Run `draht-tools map-codebase` to build a structural map of the existing code, then `draht-tools map-graph` to produce `.planning/codebase/MAP.json` + `GRAPH_REPORT.md` (map-codebase alone does NOT emit MAP.json)
+3. Analyze the codebase map to understand architecture, tech stack, and conventions: read `.planning/codebase/MAP.json` and run `draht-tools graph-hotspots` + `draht-tools graph-clusters` to surface high-traffic and cohesive modules
 4. Deep questioning phase (3-7 rounds, 1-2 questions at a time):
    - What is this project? Who uses it?
    - What are the current pain points or goals?
@@ -42,7 +42,8 @@ Before initializing, decompose project understanding into atomic reasoning units
 5. Run `draht-tools create-project` with gathered info
 6. Run `draht-tools create-domain-model` to define bounded contexts, entities, and ubiquitous language
 7. Create `.planning/DOMAIN.md` with the same sections as `/new-project`:
-   Bounded Contexts, Ubiquitous Language, Context Map, Aggregates, Domain Events
+   Bounded Contexts, Ubiquitous Language, Context Map, Aggregates, Domain Events.
+   Seed the Ubiquitous Language glossary from `GRAPH_REPORT.md` key concepts / `modules[*].symbols` (start from extracted terms, not zero)
 8. Create `.planning/TEST-STRATEGY.md` with: Test Framework, Directory Conventions, Coverage Goals, Testing Levels, Excluded
 9. Optional research phase via `draht-tools research`
 10. Run `draht-tools create-requirements` with v1/v2/out-of-scope (map requirements to bounded contexts)

@@ -128,7 +128,7 @@ describe("Context overflow error handling", () => {
 		it.skipIf(!githubCopilotToken)(
 			"gpt-4o - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("github-copilot", "gpt-4o");
+				const model = getModel("github-copilot", "gpt-4.1");
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 

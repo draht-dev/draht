@@ -32,6 +32,18 @@
 - Put issue-specific regressions under `packages/coding-agent/test/suite/regressions/` and name them `<issue-number>-<short-slug>.test.ts`.
 - NEVER commit unless user asks
 
+## Codebase knowledge graph (orient before you grep)
+
+This repo ships a living knowledge graph at `.planning/codebase/` (built by `draht-tools map-graph`). Before walking the tree, query it:
+
+- `draht-tools graph-context <file…>` — package, layer, cluster, importers/imports, sinks, rationale for a file.
+- `draht-tools graph-impact <file…>` — blast radius before a change: reverse-dependents, entry points reached, downstream sinks, boundary warnings.
+- `draht-tools graph-query <term…>` — ranked symbol + doc search (replaces `grep` for "where is the X").
+- `draht-tools graph-callers` / `graph-callees` / `graph-path` / `graph-hotspots` / `graph-clusters --surprising`.
+- `GRAPH_REPORT.md` is the one-page skimmable summary (key concepts, god-nodes, surprising connections). `MAP.json` (schemaVersion 4) is the machine-readable source; open `MAP.html` (Insights view) for the visual.
+
+All `graph-*` commands are read-only and print concise text (`--json` for full data). If the map is stale or missing, run `draht-tools map-graph` (or `graph-hook install` to refresh on every commit).
+
 ## Contribution Gate
 
 - New issues from new contributors are auto-closed by `.github/workflows/issue-gate.yml`

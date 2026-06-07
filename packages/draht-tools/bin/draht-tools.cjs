@@ -1977,7 +1977,7 @@ function visBuildMap(root) {
 		};
 		if (isBin) {
 			m.entryPoint = { kind: "cli", name: binFiles.get(rel) };
-		} else if (routes.length > 0) {
+		} else if (routes.length > 0 && !isTest) {
 			m.entryPoint = { kind: "http", routes: routes.slice(0, 8) };
 		}
 		// Mark package main exports as library entry points
@@ -2289,10 +2289,13 @@ function visBuildMap(root) {
 		.filter((m) => m.sinks && m.sinks.length > 0)
 		.map((m) => ({ id: m.id, path: m.path, package: m.package, sinks: m.sinks }));
 
-	// Compute depth from entry points (BFS over import edges)
+	// Compute depth from entry points (BFS over dependency edges).
+	// Re-export edges (`export { x } from "./x"`, common in package index.ts hubs) are real
+	// reachability edges — include them so index hubs connect to their implementations instead
+	// of registering as zero-out-degree dead-ends.
 	const adj = new Map();
 	for (const e of edges) {
-		if (e.kind !== "import") continue;
+		if (e.kind !== "import" && e.kind !== "re-export") continue;
 		if (!adj.has(e.from)) adj.set(e.from, []);
 		adj.get(e.from).push(e.to);
 	}
@@ -2419,6 +2422,10 @@ function visBuildMap(root) {
 		const visitedModules = new Set([ep.id]);
 		const visitedContainers = new Set([startContainer]);
 		const emittedHopKeys = new Set();
+		// enqueued = BFS queue dedup (traverse each module once); visitedModules = every module the
+		// flow touches (drives sink-step emission + the per-flow cap). Kept separate so re-export
+		// siblings can still emit their own intra-package call steps instead of being pre-consumed.
+		const enqueued = new Set([ep.id]);
 		const queue = [{ moduleId: ep.id, depth: 0 }];
 
 		while (queue.length && stepN <= maxStepsPerFlow && visitedModules.size < maxModulesPerFlow) {
@@ -2426,22 +2433,41 @@ function visBuildMap(root) {
 			if (cur.depth > 6) continue;
 			const fromMod = moduleByRel.get(cur.moduleId);
 			const fromContainer = containerOf2(fromMod);
-			const calls = (callOutByModule.get(cur.moduleId) || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0));
+			let calls = (callOutByModule.get(cur.moduleId) || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0));
 
-			// Dead-end re-export hub? Expand its re-export targets at the same depth (transparent hop).
+			// No resolved call edges out of this module. Symbol resolution is best-effort, but
+			// import edges are exact — so we still descend the dependency graph instead of
+			// dead-ending at the entry (the root cause of 2-step flows):
+			//   1. transparent re-export hub → expand its targets at the same depth;
+			//   2. otherwise → synthesize hops from this module's import edges, ranked so the
+			//      most informative neighbours (cross-package, sink-bearing, exported) come first.
 			if (calls.length === 0) {
-				const targets = (reExportTargetsByModule.get(cur.moduleId) || []).slice(0, maxReExportFanout);
-				for (const t of targets) {
-					if (visitedModules.has(t)) continue;
-					visitedModules.add(t);
-					queue.push({ moduleId: t, depth: cur.depth });
+				const reTargets = reExportTargetsByModule.get(cur.moduleId) || [];
+				if (reTargets.length > 0) {
+					for (const t of reTargets.slice(0, maxReExportFanout)) {
+						if (enqueued.has(t)) continue;
+						enqueued.add(t);
+						visitedModules.add(t);
+						queue.push({ moduleId: t, depth: cur.depth });
+					}
+					continue;
 				}
-				continue;
+				const importRank = (to) => {
+					const tm = moduleByRel.get(to);
+					if (!tm) return 0;
+					return (containerOf2(tm) !== fromContainer ? 3 : 0)
+						+ (tm.sinks && tm.sinks.length ? 2 : 0)
+						+ (tm.exports && tm.exports.length ? 1 : 0);
+				};
+				calls = (adj.get(cur.moduleId) || [])
+					.filter((to) => !enqueued.has(to))
+					.sort((a, b) => importRank(b) - importRank(a) || (a < b ? -1 : a > b ? 1 : 0))
+					.slice(0, 8)
+					.map((to) => ({ from: cur.moduleId, to, symbol: "(imports)", count: 0 }));
+				if (calls.length === 0) continue;
 			}
 
 			for (const ce of calls.slice(0, 8)) {
-				if (visitedModules.has(ce.to)) continue;
-				visitedModules.add(ce.to);
 				const toMod = moduleByRel.get(ce.to);
 				const toContainer = containerOf2(toMod);
 
@@ -2463,6 +2489,7 @@ function visBuildMap(root) {
 
 						const symbolPhrase = ce.symbol === "default" ? "the default export"
 							: ce.symbol === "*" ? "the namespace import"
+							: ce.symbol === "(imports)" ? "into its imports"
 							: "`" + ce.symbol + "()`";
 						const docPhrase = callDoc ? " — " + callDoc : (calleeHasSinks ? " (which performs " + toMod.sinks.slice(0,2).join(", ") + ")" : "");
 						const baseDesc = relShort(ce.from) + " calls " + symbolPhrase + " in " + relShort(ce.to) + docPhrase;
@@ -2482,7 +2509,11 @@ function visBuildMap(root) {
 					}
 				}
 
-				queue.push({ moduleId: ce.to, depth: cur.depth + 1 });
+				visitedModules.add(ce.to);
+				if (!enqueued.has(ce.to)) {
+					enqueued.add(ce.to);
+					queue.push({ moduleId: ce.to, depth: cur.depth + 1 });
+				}
 				if (stepN > maxStepsPerFlow) break;
 			}
 		}

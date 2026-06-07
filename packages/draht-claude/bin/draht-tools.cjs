@@ -2946,6 +2946,9 @@ svg { display:block; user-select:none; }
     <button id="tab-modules">Modules</button>
     <button id="tab-flows">Flow Trace</button>
     <button id="tab-insights">Insights</button>
+    <button id="tab-concepts">Concepts</button>
+    <button id="tab-graph">Knowledge Graph</button>
+    <button id="tab-calls">Calls</button>
   </div>
   <div class="live" id="live-indicator">● live</div>
 </header>
@@ -3058,7 +3061,7 @@ async function load(initial) {
 
 function setView(v) {
   state.view = v;
-  ["tab-architecture","tab-modules","tab-flows","tab-insights"].forEach(function (id) {
+  ["tab-architecture","tab-modules","tab-flows","tab-insights","tab-concepts","tab-graph","tab-calls"].forEach(function (id) {
     $(id).classList.toggle("active", id === "tab-" + v);
   });
   // Sidebar layout: flows shows step detail, others show entry inspection
@@ -3090,7 +3093,7 @@ function selectFlow(flowId) {
   state.selectedFlow = flowId;
   state.selectedStep = null;
   state.view = "flows";
-  ["tab-architecture","tab-modules","tab-flows","tab-insights"].forEach(function (id) {
+  ["tab-architecture","tab-modules","tab-flows","tab-insights","tab-concepts","tab-graph","tab-calls"].forEach(function (id) {
     $(id).classList.toggle("active", id === "tab-flows");
   });
   renderFlowList();
@@ -3437,6 +3440,9 @@ function render() {
   if (state.view === "architecture") renderArchitecture(g, W, H);
   else if (state.view === "modules") renderModules(g, W, H);
   else if (state.view === "insights") renderInsights(g, W, H);
+  else if (state.view === "concepts") renderConcepts(g, W, H);
+  else if (state.view === "graph") renderGraph(g, W, H);
+  else if (state.view === "calls") renderCalls(g, W, H);
   else renderFlowsSwimlane(g, W, H);
   $("legend").innerHTML = legendHtml();
   $("hud").textContent = hudText();
@@ -3483,6 +3489,17 @@ function hudText() {
   if (state.view === "insights") {
     var god = (state.map.hotspots && state.map.hotspots.godNodes) || [];
     return "Insights · " + ((state.map.clusters || []).length) + " clusters · " + god.length + " god-nodes · " + ((state.map.surprisingConnections || []).length) + " surprising edges · hover a node for detail";
+  }
+  if (state.view === "concepts") {
+    return "Concepts · " + ((state.map.clusters || []).length) + " clusters as nodes · edges = cross-cluster imports · hover for counts";
+  }
+  if (state.view === "graph") {
+    var total = (state.map.modules || []).length;
+    var shown = (state.map.modules || []).filter(function (m) { return !m.isTest; }).length;
+    return "Knowledge graph · " + shown + " of " + total + " modules (tests hidden) · grouped by cluster · edges = imports";
+  }
+  if (state.view === "calls") {
+    return "Calls · symbol-level call graph around one module (god-node by default) · callers ← center → callees · hover a node for its path";
   }
   if (state.focus) return "focused on " + state.focus.kind + ":" + state.focus.id + " — " + state.focus.set.size + " module(s) (esc to clear)";
   return state.view + " view · scroll = zoom · drag = pan · click = focus";
@@ -3943,6 +3960,124 @@ function renderInsights(g, W, H) {
   });
 }
 
+// ===================== Knowledge-graph family (Concepts / Graph / Calls) =====================
+// Deterministic radial placement of clusters around the canvas center (largest first).
+function clusterCentroids(map, W, H) {
+  var clusters = (map.clusters || []).slice().sort(function (a, b) { return b.size - a.size || (a.id < b.id ? -1 : 1); });
+  var cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.40;
+  var pos = new Map();
+  var n = clusters.length || 1;
+  clusters.forEach(function (c, i) {
+    var ang = (i / n) * Math.PI * 2 - Math.PI / 2;
+    var ring = R * (0.5 + 0.5 * ((i % 3) / 2));
+    pos.set(c.id, { x: cx + Math.cos(ang) * ring, y: cy + Math.sin(ang) * ring, c: c });
+  });
+  return { clusters: clusters, pos: pos, cx: cx, cy: cy };
+}
+// Cross-cluster import/re-export weights — the edges of the concept graph.
+function crossClusterEdges(map) {
+  var cl = {}; (map.modules || []).forEach(function (m) { cl[m.id] = m.cluster; });
+  var w = {};
+  (map.edges || []).forEach(function (e) {
+    if (e.kind !== "import" && e.kind !== "re-export") return;
+    var a = cl[e.from], b = cl[e.to];
+    if (!a || !b || a === b) return;
+    var key = a < b ? a + "\t" + b : b + "\t" + a;
+    w[key] = (w[key] || 0) + 1;
+  });
+  return Object.keys(w).sort().map(function (k) { var p = k.split("\t"); return { a: p[0], b: p[1], weight: w[k] }; });
+}
+
+// Concepts — cluster-level graph: nodes = clusters (sized by member count), edges = cross-cluster imports.
+function renderConcepts(g, W, H) {
+  var map = state.map;
+  var L = clusterCentroids(map, W, H);
+  var edges = crossClusterEdges(map);
+  var maxW = edges.reduce(function (mx, e) { return Math.max(mx, e.weight); }, 1);
+  edges.forEach(function (e) {
+    var a = L.pos.get(e.a), b = L.pos.get(e.b); if (!a || !b) return;
+    var ln = el("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: "#3a4658", "stroke-width": 0.6 + 3.6 * (e.weight / maxW), opacity: 0.5 });
+    ln.appendChild(el("title", null, e.a + " ↔ " + e.b + " — " + e.weight + " imports"));
+    g.appendChild(ln);
+  });
+  L.clusters.forEach(function (c) {
+    var p = L.pos.get(c.id); if (!p) return;
+    var r = Math.max(9, Math.min(48, 6 + Math.sqrt(c.size) * 3));
+    var node = el("g", { class: "module-node", transform: "translate(" + p.x + "," + p.y + ")" });
+    node.appendChild(el("circle", { r: r, fill: clusterColor(c.id), opacity: 0.85, stroke: "#0d1117", "stroke-width": 1.5 }));
+    node.appendChild(el("text", { "text-anchor": "middle", y: 4, fill: "#0d1117", "font-size": Math.max(9, Math.min(14, r / 2)), "font-weight": 700 }, String(c.size)));
+    node.appendChild(el("text", { "text-anchor": "middle", y: r + 13, fill: "#c9d1d9", "font-size": 11 }, (c.label || c.id).slice(0, 30)));
+    node.appendChild(el("title", null, (c.label || c.id) + " — " + c.size + " modules"));
+    g.appendChild(node);
+  });
+}
+
+// Graph — node-link of every (non-test) module, grouped around its cluster centroid, with import edges.
+function renderGraph(g, W, H) {
+  var map = state.map;
+  var L = clusterCentroids(map, W, H);
+  var fallback = (map.clusters && map.clusters[0] && map.clusters[0].id) || null;
+  var idx = {}, pos = new Map();
+  (map.modules || []).forEach(function (m) {
+    if (m.isTest) return;
+    var c = m.cluster || fallback;
+    var cen = L.pos.get(c) || { x: W / 2, y: H / 2 };
+    var k = idx[c] = (idx[c] || 0); idx[c] = k + 1;
+    var ang = k * 2.399963229; // golden angle — deterministic spiral, no RNG
+    var rad = 5 + Math.sqrt(k) * 7;
+    pos.set(m.id, { x: cen.x + Math.cos(ang) * rad, y: cen.y + Math.sin(ang) * rad, m: m });
+  });
+  (map.edges || []).forEach(function (e) {
+    if (e.kind !== "import" && e.kind !== "re-export") return;
+    var a = pos.get(e.from), b = pos.get(e.to); if (!a || !b) return;
+    g.appendChild(el("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: "#2a3340", "stroke-width": 0.4, opacity: 0.35 }));
+  });
+  pos.forEach(function (p) {
+    var m = p.m;
+    var r = Math.max(1.6, Math.min(7, 1.4 + Math.sqrt((m.loc || 1) / 40)));
+    var node = el("g", { class: "module-node", transform: "translate(" + p.x + "," + p.y + ")" });
+    node.appendChild(el("circle", { r: r, fill: clusterColor(m.cluster), opacity: 0.9 }));
+    node.appendChild(el("title", null, m.path + (m.cluster ? " — " + m.cluster : "")));
+    g.appendChild(node);
+  });
+}
+
+// Calls — egocentric symbol call graph: callers on the left, callees on the right, edges labelled by symbol.
+function renderCalls(g, W, H) {
+  var map = state.map;
+  var ces = map.callEdges || [];
+  var modById = {}; (map.modules || []).forEach(function (m) { modById[m.id] = m; });
+  var center = (state.selected && modById[state.selected]) ? state.selected : null;
+  if (!center) { var god = map.hotspots && map.hotspots.godNodes && map.hotspots.godNodes[0]; center = god ? god.id : (ces[0] && ces[0].from) || null; }
+  if (!center) { g.appendChild(el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", fill: "#8b949e" }, "No call edges — click a module in another view.")); return; }
+  var callees = ces.filter(function (e) { return e.from === center; }).slice(0, 24);
+  var callers = ces.filter(function (e) { return e.to === center; }).slice(0, 24);
+  var cx = W / 2, cy = H / 2;
+  function placeColumn(list, side) {
+    var x = cx + side * Math.min(W * 0.36, 360);
+    var n = list.length || 1;
+    list.forEach(function (e, i) {
+      var y = (H * (i + 1)) / (n + 1);
+      var other = side > 0 ? e.to : e.from;
+      g.appendChild(side > 0
+        ? arrow(cx + 9, cy, x - 6, y, { fill: "none", stroke: "#4f8cc9", "stroke-width": 1.1, opacity: 0.8 })
+        : arrow(x + 6, y, cx - 9, cy, { fill: "none", stroke: "#c98a4f", "stroke-width": 1.1, opacity: 0.8 }));
+      g.appendChild(el("text", { x: (x + cx) / 2, y: (y + cy) / 2 - 3, "text-anchor": "middle", fill: "#8b949e", "font-size": 9 }, e.symbol || ""));
+      var node = el("g", { class: "module-node", transform: "translate(" + x + "," + y + ")" });
+      node.appendChild(el("circle", { r: 5, fill: clusterColor((modById[other] || {}).cluster) }));
+      node.appendChild(el("text", { "text-anchor": side > 0 ? "start" : "end", x: side > 0 ? 9 : -9, y: 3, fill: "#c9d1d9", "font-size": 10 }, (other.split("/").pop())));
+      node.appendChild(el("title", null, other));
+      g.appendChild(node);
+    });
+  }
+  placeColumn(callers, -1);
+  placeColumn(callees, 1);
+  var cnode = el("g", { transform: "translate(" + cx + "," + cy + ")" });
+  cnode.appendChild(el("circle", { r: 9, fill: clusterColor((modById[center] || {}).cluster), stroke: "#fff", "stroke-width": 2 }));
+  cnode.appendChild(el("text", { "text-anchor": "middle", y: -14, fill: "#fff", "font-size": 11, "font-weight": 700 }, center.split("/").pop()));
+  g.appendChild(cnode);
+}
+
 // ====================== Sidebars ======================
 
 function renderSidebar() {
@@ -4133,12 +4268,18 @@ window.addEventListener("keydown", function (e) {
   if (e.key === "m") setView("modules");
   if (e.key === "F") setView("flows");
   if (e.key === "i") setView("insights");
+  if (e.key === "c") setView("concepts");
+  if (e.key === "g") setView("graph");
+  if (e.key === "C") setView("calls");
 });
 
 $("tab-architecture").onclick = function () { setView("architecture"); };
 $("tab-modules").onclick = function () { setView("modules"); };
 $("tab-flows").onclick = function () { setView("flows"); };
 $("tab-insights").onclick = function () { setView("insights"); };
+$("tab-concepts").onclick = function () { setView("concepts"); };
+$("tab-graph").onclick = function () { setView("graph"); };
+$("tab-calls").onclick = function () { setView("calls"); };
 $("fit").onclick = fit;
 $("clear").onclick = function () { clearFlow(); state.collapsedGroups = {}; state.selected = null; render(); };
 $("reload").onclick = function () { load(false); };
@@ -4235,10 +4376,12 @@ function visWriteOutputs(root, opts = {}) {
 	if (!unchanged) {
 		fs.writeFileSync(jsonPath, JSON.stringify(map, null, 2) + "\n", "utf-8");
 		fs.writeFileSync(reportPath, visRenderReport(map), "utf-8"); // a fresh human report is a parity feature
-		if (!opts.quiet) fs.writeFileSync(htmlPath, visRenderHtml(jsonPath), "utf-8");
-	} else if (!opts.quiet && !fs.existsSync(htmlPath)) {
-		fs.writeFileSync(htmlPath, visRenderHtml(jsonPath), "utf-8"); // backfill HTML if missing
 	}
+	// MAP.html is a derived view artifact (not the git-committed source of truth), so on any full
+	// (non-quiet) build we always refresh it — otherwise template/visualization changes never reach
+	// MAP.html when the underlying graph data is unchanged. The JSON/report stay gated above so the
+	// committed data never churns. The post-commit hook uses --quiet and skips the HTML entirely.
+	if (!opts.quiet) fs.writeFileSync(htmlPath, visRenderHtml(jsonPath), "utf-8");
 	return { jsonPath, htmlPath, reportPath, map, unchanged };
 }
 

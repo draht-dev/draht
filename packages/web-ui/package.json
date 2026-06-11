@@ -19,6 +19,7 @@
 	"dependencies": {
 		"@lmstudio/sdk": "^1.5.0",
 		"@sinclair/typebox": "^0.34.41",
+		"typebox": "^1.1.24",
 		"@draht/agent-core": "workspace:*",
 		"@draht/ai": "workspace:*",
 		"@draht/tui": "workspace:*",

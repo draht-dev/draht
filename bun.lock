@@ -24,7 +24,7 @@
     },
     "packages/agent": {
       "name": "@draht/agent-core",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "@draht/ai": "workspace:*",
         "ignore": "^7.0.5",
@@ -40,7 +40,7 @@
     },
     "packages/ai": {
       "name": "@draht/ai",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "bin": {
         "draht-ai": "./dist/cli.js",
       },
@@ -70,7 +70,7 @@
     },
     "packages/ci": {
       "name": "@draht/ci",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
         "@octokit/rest": "^21.1.0",
@@ -83,7 +83,7 @@
     },
     "packages/coding-agent": {
       "name": "@draht/coding-agent",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "bin": {
         "coding-agent": "dist/cli.js",
         "draht": "dist/cli.js",
@@ -159,14 +159,14 @@
     },
     "packages/compliance": {
       "name": "@draht/compliance",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
       },
     },
     "packages/deploy-guardian": {
       "name": "@draht/deploy-guardian",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
         "@types/node": "^22.10.5",
@@ -176,7 +176,7 @@
     },
     "packages/draht-claude": {
       "name": "draht-claude",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "bin": {
         "draht-claude": "./cli.mjs",
       },
@@ -186,7 +186,7 @@
     },
     "packages/draht-codex": {
       "name": "draht-codex",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "bin": {
         "draht-codex": "./cli.mjs",
       },
@@ -196,14 +196,14 @@
     },
     "packages/draht-tools": {
       "name": "@draht/tools",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "bin": {
         "draht-tools": "./bin/draht-tools.cjs",
       },
     },
     "packages/gateway": {
       "name": "@draht/gateway",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "bin": {
         "draht-gateway": "src/cli.ts",
       },
@@ -217,7 +217,7 @@
     },
     "packages/infra": {
       "name": "@draht/infra",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "sst": "^4.2.1",
       },
@@ -229,14 +229,14 @@
     },
     "packages/invoice": {
       "name": "@draht/invoice",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
       },
     },
     "packages/knowledge": {
       "name": "@draht/knowledge",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "better-sqlite3": "^11.7.0",
       },
@@ -250,7 +250,7 @@
     },
     "packages/landing": {
       "name": "@draht/landing",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "@astrojs/sitemap": "^3.7.0",
         "@resvg/resvg-js": "^2.6.2",
@@ -261,7 +261,7 @@
     },
     "packages/mom": {
       "name": "@draht/mom",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "bin": {
         "mom": "dist/main.js",
       },
@@ -285,7 +285,7 @@
     },
     "packages/orchestrator": {
       "name": "@draht/orchestrator",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
       },
@@ -298,7 +298,7 @@
     },
     "packages/pods": {
       "name": "@draht/pods",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "bin": {
         "draht-pods": "dist/cli.js",
       },
@@ -309,7 +309,7 @@
     },
     "packages/router": {
       "name": "@draht/router",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "@draht/ai": "workspace:*",
       },
@@ -319,11 +319,11 @@
     },
     "packages/templates": {
       "name": "@draht/templates",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
     },
     "packages/tui": {
       "name": "@draht/tui",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "@types/mime-types": "^2.1.4",
         "chalk": "^5.5.0",
@@ -341,7 +341,7 @@
     },
     "packages/web-ui": {
       "name": "@draht/web-ui",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
       "dependencies": {
         "@draht/agent-core": "workspace:*",
         "@draht/ai": "workspace:*",
@@ -354,6 +354,7 @@
         "lucide": "^0.544.0",
         "ollama": "^0.6.0",
         "pdfjs-dist": "5.4.394",
+        "typebox": "^1.1.24",
         "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
       },
       "devDependencies": {
@@ -386,7 +387,7 @@
     },
     "packages/workflows": {
       "name": "@draht/workflows",
-      "version": "2026.5.12",
+      "version": "2026.6.11",
     },
   },
   "overrides": {

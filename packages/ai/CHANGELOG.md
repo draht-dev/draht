@@ -1,10 +1,25 @@
 # Changelog
 
-## [Unreleased]
+## [2026.6.11] - 2026-06-11
+
+### Added
+
+- incorporate upstream ai package changes
+- incorporate upstream ai package changes
+
+### Changed
+
+- drop stale openrouter kimi-k2.6:free model ref
+- regenerate model definitions and fix stale model refs in tests
+- regenerate model definitions and fix stale model refs in tests
+- regenerate model definitions and fix stale model refs in tests
+- regenerate model definitions and fix stale xai model refs in tests
 
 ### Fixed
 
-- Add missing `@smithy/node-http-handler` dependency for Amazon Bedrock provider
+- add missing @smithy/node-http-handler dependency
+- fix piConfig/drahtConfig and PI_ env var leaks from upstream merge
+- restore supportsMax and max thinking level, harden branding guard
 
 ## [2026.5.12] - 2026-05-12
 

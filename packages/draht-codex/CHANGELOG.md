@@ -1,8 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [2026.6.11] - 2026-06-11
 
 ### Added
 
-- add draht-codex Codex plugin package
-- add Codex skill wrappers for Draht command prompt templates so `$draht:<command>` and `/skills` expose the command workflows
+- add Concepts, Knowledge Graph, and Calls views to MAP.html
+- wire knowledge-graph steps into GSD workflow commands and skills
+- add graphify-style knowledge graph engine and query CLI
+- expose command prompts as Codex skill wrappers
+- add Draht GSD workflows as a Codex plugin
+
+### Fixed
+
+- deepen flow extraction so entries stop dead-ending

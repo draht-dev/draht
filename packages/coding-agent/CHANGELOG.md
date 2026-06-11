@@ -1,6 +1,30 @@
 # Changelog
 
-## [Unreleased]
+## [2026.6.11] - 2026-06-11
+
+### Added
+
+- incorporate upstream coding-agent changes
+- add Concepts, Knowledge Graph, and Calls views to MAP.html
+- add graphify-style knowledge graph engine and query CLI
+- load shipped built-in prompt templates on startup
+- introduce @draht/tools package with map-graph and map-serve commands
+- incorporate upstream coding-agent changes
+
+### Changed
+
+- extend map-codebase prompt with map-graph and map-serve usage
+- update documentation from upstream
+
+### Fixed
+
+- declare highlight.js and typebox as direct deps
+- deepen flow extraction so entries stop dead-ending
+- when dev linked show vdev as version in coding-agent
+- bind assertActive and invalidate in extension runner bindCore
+- restore draht copper thinking colors, ASCII logo, and visual brand features
+- fix piConfig/drahtConfig and PI_ env var leaks from upstream merge
+- restore supportsMax and max thinking level, harden branding guard
 
 ## [2026.5.12] - 2026-05-12
 

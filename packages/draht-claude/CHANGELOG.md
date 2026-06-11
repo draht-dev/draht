@@ -1,6 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [2026.6.11] - 2026-06-11
+
+### Added
+
+- add Concepts, Knowledge Graph, and Calls views to MAP.html
+- wire knowledge-graph steps into GSD workflow commands and skills
+- add graphify-style knowledge graph engine and query CLI
+- introduce @draht/tools package with map-graph and map-serve commands
+
+### Changed
+
+- extend map-codebase prompt with map-graph and map-serve usage
+
+### Fixed
+
+- deepen flow extraction so entries stop dead-ending
 
 ## [2026.5.12] - 2026-05-12
 

@@ -1,6 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [2026.6.11] - 2026-06-11
+
+### Added
+
+- incorporate upstream agent package changes
+- incorporate upstream agent package changes
+
+### Changed
+
+- update documentation from upstream
+
+### Fixed
+
+- restore supportsMax and max thinking level, harden branding guard
 
 ## [2026.4.25] - 2026-04-25
 

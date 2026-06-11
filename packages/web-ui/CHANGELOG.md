@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2026.6.11] - 2026-06-11
+
+### Fixed
+
+- incorporate upstream web-ui changes
+- incorporate upstream web-ui changes
 
 ## [2026.4.25] - 2026-04-25
 

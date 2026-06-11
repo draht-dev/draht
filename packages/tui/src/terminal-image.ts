@@ -1,3 +1,5 @@
+import { execSync } from "node:child_process";
+
 export type ImageProtocol = "kitty" | "iterm2" | null;
 
 export interface TerminalCapabilities {
@@ -39,19 +41,43 @@ export function setCellDimensions(dims: CellDimensions): void {
 	cellDimensions = dims;
 }
 
-export function detectCapabilities(): TerminalCapabilities {
+/**
+ * Checks whether the attached tmux client forwards OSC 8 hyperlinks to the
+ * outer terminal. tmux only re-emits them when its `client_termfeatures` lists
+ * `hyperlinks`, and strips them otherwise. On any error fallbacks `false`.
+ */
+function probeTmuxHyperlinks(): boolean {
+	try {
+		const termfeatures = execSync("tmux display-message -p '#{client_termfeatures}'", {
+			encoding: "utf8",
+			timeout: 250,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		return termfeatures
+			.split(",")
+			.map((feature) => feature.trim())
+			.includes("hyperlinks");
+	} catch {
+		return false;
+	}
+}
+
+export function detectCapabilities(tmuxForwardsHyperlink: () => boolean = probeTmuxHyperlinks): TerminalCapabilities {
 	const termProgram = process.env.TERM_PROGRAM?.toLowerCase() || "";
+	const terminalEmulator = process.env.TERMINAL_EMULATOR?.toLowerCase() || "";
 	const term = process.env.TERM?.toLowerCase() || "";
 	const colorTerm = process.env.COLORTERM?.toLowerCase() || "";
+	const hasTrueColorHint = colorTerm === "truecolor" || colorTerm === "24bit";
 
-	// tmux and screen swallow OSC 8 by default (passthrough is opt-in and wraps
-	// sequences differently). Force hyperlinks off whenever we detect them, even
-	// when the outer terminal would otherwise support OSC 8. Image protocols are
-	// also unreliable under tmux/screen, so leave `images: null` for safety.
-	const inTmuxOrScreen = !!process.env.TMUX || term.startsWith("tmux") || term.startsWith("screen");
-	if (inTmuxOrScreen) {
-		const trueColor = colorTerm === "truecolor" || colorTerm === "24bit";
-		return { images: null, trueColor, hyperlinks: false };
+	// Emit OSC 8 hyperlinks only when tmux confirms it forwards.
+	// Image protocols are unreliable under tmux, so leave `images: null`.
+	if (process.env.TMUX || term.startsWith("tmux")) {
+		return { images: null, trueColor: hasTrueColorHint, hyperlinks: tmuxForwardsHyperlink() };
+	}
+
+	// screen does not forward OSC 8 hyperlinks, so keep them off there.
+	if (term.startsWith("screen")) {
+		return { images: null, trueColor: hasTrueColorHint, hyperlinks: false };
 	}
 
 	if (process.env.KITTY_WINDOW_ID || termProgram === "kitty") {
@@ -70,6 +96,10 @@ export function detectCapabilities(): TerminalCapabilities {
 		return { images: "iterm2", trueColor: true, hyperlinks: true };
 	}
 
+	if (process.env.WT_SESSION) {
+		return { images: null, trueColor: true, hyperlinks: true };
+	}
+
 	if (termProgram === "vscode") {
 		return { images: null, trueColor: true, hyperlinks: true };
 	}
@@ -78,12 +108,15 @@ export function detectCapabilities(): TerminalCapabilities {
 		return { images: null, trueColor: true, hyperlinks: true };
 	}
 
+	if (terminalEmulator === "jetbrains-jediterm") {
+		return { images: null, trueColor: true, hyperlinks: false };
+	}
+
 	// Unknown terminal: be conservative. OSC 8 is rendered invisibly as "just
 	// text" on terminals that swallow it, which means the URL disappears from
 	// the rendered output. Default to the legacy `text (url)` behavior unless we
 	// have positively identified a hyperlink-capable terminal above.
-	const trueColor = colorTerm === "truecolor" || colorTerm === "24bit";
-	return { images: null, trueColor, hyperlinks: false };
+	return { images: null, trueColor: hasTrueColorHint, hyperlinks: false };
 }
 
 export function getCapabilities(): TerminalCapabilities {
@@ -211,16 +244,43 @@ export function encodeITerm2(
 	return `\x1b]1337;File=${params.join(";")}:${base64Data}\x07`;
 }
 
+export interface ImageCellSize {
+	columns: number;
+	rows: number;
+}
+
+export function calculateImageCellSize(
+	imageDimensions: ImageDimensions,
+	maxWidthCells: number,
+	maxHeightCells?: number,
+	cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 },
+): ImageCellSize {
+	const maxWidth = Math.max(1, Math.floor(maxWidthCells));
+	const maxHeight = maxHeightCells === undefined ? undefined : Math.max(1, Math.floor(maxHeightCells));
+	const imageWidth = Math.max(1, imageDimensions.widthPx);
+	const imageHeight = Math.max(1, imageDimensions.heightPx);
+
+	const widthScale = (maxWidth * cellDimensions.widthPx) / imageWidth;
+	const heightScale = maxHeight === undefined ? widthScale : (maxHeight * cellDimensions.heightPx) / imageHeight;
+	const scale = Math.min(widthScale, heightScale);
+
+	const scaledWidthPx = imageWidth * scale;
+	const scaledHeightPx = imageHeight * scale;
+	const columns = Math.ceil(scaledWidthPx / cellDimensions.widthPx);
+	const rows = Math.ceil(scaledHeightPx / cellDimensions.heightPx);
+
+	return {
+		columns: Math.max(1, Math.min(maxWidth, columns)),
+		rows: Math.max(1, maxHeight === undefined ? rows : Math.min(maxHeight, rows)),
+	};
+}
+
 export function calculateImageRows(
 	imageDimensions: ImageDimensions,
 	targetWidthCells: number,
 	cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 },
 ): number {
-	const targetWidthPx = targetWidthCells * cellDimensions.widthPx;
-	const scale = targetWidthPx / imageDimensions.widthPx;
-	const scaledHeightPx = imageDimensions.heightPx * scale;
-	const rows = Math.ceil(scaledHeightPx / cellDimensions.heightPx);
-	return Math.max(1, rows);
+	return calculateImageCellSize(imageDimensions, targetWidthCells, undefined, cellDimensions).rows;
 }
 
 export function getPngDimensions(base64Data: string): ImageDimensions | null {
@@ -376,25 +436,25 @@ export function renderImage(
 	}
 
 	const maxWidth = options.maxWidthCells ?? 80;
-	const rows = calculateImageRows(imageDimensions, maxWidth, getCellDimensions());
+	const size = calculateImageCellSize(imageDimensions, maxWidth, options.maxHeightCells, getCellDimensions());
 
 	if (caps.images === "kitty") {
 		const sequence = encodeKitty(base64Data, {
-			columns: maxWidth,
-			rows,
+			columns: size.columns,
+			rows: size.rows,
 			imageId: options.imageId,
 			moveCursor: options.moveCursor,
 		});
-		return { sequence, rows, imageId: options.imageId };
+		return { sequence, rows: size.rows, imageId: options.imageId };
 	}
 
 	if (caps.images === "iterm2") {
 		const sequence = encodeITerm2(base64Data, {
-			width: maxWidth,
+			width: size.columns,
 			height: "auto",
 			preserveAspectRatio: options.preserveAspectRatio ?? true,
 		});
-		return { sequence, rows };
+		return { sequence, rows: size.rows };
 	}
 
 	return null;

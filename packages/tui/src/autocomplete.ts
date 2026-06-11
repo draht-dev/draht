@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
-import { fuzzyFilter } from "./fuzzy.js";
+import { fuzzyFilter } from "./fuzzy.ts";
 
 const PATH_DELIMITERS = new Set([" ", "\t", '"', "'", "="]);
 
@@ -239,6 +239,9 @@ export interface AutocompleteSuggestions {
 }
 
 export interface AutocompleteProvider {
+	/** Characters that should naturally trigger this provider at token boundaries. */
+	triggerCharacters?: string[];
+
 	// Get autocomplete suggestions for current text/cursor position
 	// Returns null if no suggestions available
 	getSuggestions(

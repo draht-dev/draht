@@ -2,11 +2,11 @@ import assert from "node:assert";
 import { afterEach, describe, it } from "node:test";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Chalk } from "chalk";
-import { Markdown } from "../src/components/markdown.js";
-import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.js";
-import { type Component, TUI } from "../src/tui.js";
-import { defaultMarkdownTheme } from "./test-themes.js";
-import { VirtualTerminal } from "./virtual-terminal.js";
+import { Markdown } from "../src/components/markdown.ts";
+import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.ts";
+import { type Component, TUI } from "../src/tui.ts";
+import { defaultMarkdownTheme } from "./test-themes.ts";
+import { VirtualTerminal } from "./virtual-terminal.ts";
 
 // Force full color in CI so ANSI assertions are deterministic
 const chalk = new Chalk({ level: 3 });
@@ -104,6 +104,31 @@ describe("Markdown component", () => {
 			assert.ok(plainLines.some((line) => line.includes("2. Second")));
 		});
 
+		it("should normalize ordered list markers by default", () => {
+			const markdown = new Markdown("1. alpha\n1. beta\n1. gamma", 0, 0, defaultMarkdownTheme);
+
+			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
+
+			assert.deepStrictEqual(lines, ["1. alpha", "2. beta", "3. gamma"]);
+		});
+
+		it("should preserve source ordered list markers when configured", () => {
+			const markdown = new Markdown(
+				"  4. forth\n  3. third\n\n10) ten\n7) seven",
+				0,
+				0,
+				defaultMarkdownTheme,
+				undefined,
+				{
+					preserveOrderedListMarkers: true,
+				},
+			);
+
+			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
+
+			assert.deepStrictEqual(lines, ["4. forth", "3. third", "", "10) ten", "7) seven"]);
+		});
+
 		it("should render mixed ordered and unordered nested lists", () => {
 			const markdown = new Markdown(
 				`1. Ordered item
@@ -122,6 +147,45 @@ describe("Markdown component", () => {
 			assert.ok(plainLines.some((line) => line.includes("1. Ordered item")));
 			assert.ok(plainLines.some((line) => line.includes("    - Unordered nested")));
 			assert.ok(plainLines.some((line) => line.includes("2. Second ordered")));
+		});
+
+		it("should render blank lines between loose list items", () => {
+			const markdown = new Markdown(
+				`1. Lorem ipsum dolor sit amet.
+
+   Ut enim ad minim veniam.
+
+2. Duis aute irure dolor.
+
+   Excepteur sint occaecat cupidatat.
+
+3. Beep boop`,
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
+
+			assert.deepStrictEqual(lines, [
+				"1. Lorem ipsum dolor sit amet.",
+				"",
+				"   Ut enim ad minim veniam.",
+				"",
+				"2. Duis aute irure dolor.",
+				"",
+				"   Excepteur sint occaecat cupidatat.",
+				"",
+				"3. Beep boop",
+			]);
+		});
+
+		it("should render task list markers", () => {
+			const markdown = new Markdown("- [ ] beep\n- [x] boop", 0, 0, defaultMarkdownTheme);
+
+			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
+
+			assert.deepStrictEqual(lines, ["- [ ] beep", "- [x] boop"]);
 		});
 
 		it("should maintain numbering when code blocks are not indented (LLM output)", () => {
@@ -637,8 +701,11 @@ describe("Markdown component", () => {
 		it("should not leak styles into following lines when rendered in TUI", async () => {
 			class MarkdownWithInput implements Component {
 				public markdownLineCount = 0;
+				private readonly markdown: Markdown;
 
-				constructor(private readonly markdown: Markdown) {}
+				constructor(markdown: Markdown) {
+					this.markdown = markdown;
+				}
 
 				render(width: number): string[] {
 					const lines = this.markdown.render(width);

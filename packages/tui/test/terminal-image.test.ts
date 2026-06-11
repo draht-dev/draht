@@ -4,7 +4,7 @@
 
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { Image } from "../src/components/image.js";
+import { Image } from "../src/components/image.ts";
 import {
 	deleteAllKittyImages,
 	deleteKittyImage,
@@ -16,17 +16,19 @@ import {
 	resetCapabilitiesCache,
 	setCapabilities,
 	setCellDimensions,
-} from "../src/terminal-image.js";
+} from "../src/terminal-image.ts";
 
 const ENV_KEYS = [
 	"TERM",
 	"TERM_PROGRAM",
+	"TERMINAL_EMULATOR",
 	"COLORTERM",
 	"TMUX",
 	"KITTY_WINDOW_ID",
 	"GHOSTTY_RESOURCES_DIR",
 	"WEZTERM_PANE",
 	"ITERM_SESSION_ID",
+	"WT_SESSION",
 	"CMUX_WORKSPACE_ID",
 ] as const;
 
@@ -205,19 +207,30 @@ describe("detectCapabilities", () => {
 		});
 	});
 
-	it("forces hyperlinks: false under tmux even if outer terminal supports OSC 8", () => {
+	it("enables hyperlinks under tmux when the client forwards them", () => {
 		withEnv({ TMUX: "/tmp/tmux-1000/default,1234,0", TERM_PROGRAM: "ghostty" }, () => {
-			const caps = detectCapabilities();
+			const caps = detectCapabilities(() => true);
+			assert.strictEqual(caps.hyperlinks, true);
+			assert.strictEqual(caps.images, null);
+		});
+	});
+
+	it("disables hyperlinks under tmux when the client does not forward them", () => {
+		withEnv({ TMUX: "/tmp/tmux-1000/default,1234,0", TERM_PROGRAM: "ghostty" }, () => {
+			const caps = detectCapabilities(() => false);
 			assert.strictEqual(caps.hyperlinks, false);
 			assert.strictEqual(caps.images, null);
 		});
 	});
 
-	it("forces hyperlinks: false when TERM starts with 'tmux'", () => {
+	it("checks tmux capability when TERM starts with 'tmux'", () => {
 		withEnv({ TERM: "tmux-256color", TERM_PROGRAM: "iterm.app" }, () => {
-			const caps = detectCapabilities();
-			assert.strictEqual(caps.hyperlinks, false);
+			const caps = detectCapabilities(() => true);
+			assert.strictEqual(caps.hyperlinks, true);
 			assert.strictEqual(caps.images, null);
+
+			const caps2 = detectCapabilities(() => false);
+			assert.strictEqual(caps2.hyperlinks, false);
 		});
 	});
 
@@ -271,6 +284,42 @@ describe("detectCapabilities", () => {
 			assert.strictEqual(caps.hyperlinks, true);
 		});
 	});
+
+	it("enables truecolor and hyperlinks for Windows Terminal outside multiplexers", () => {
+		withEnv({ WT_SESSION: "session", TERM: "xterm-256color" }, () => {
+			const caps = detectCapabilities();
+			assert.strictEqual(caps.trueColor, true);
+			assert.strictEqual(caps.hyperlinks, true);
+			assert.strictEqual(caps.images, null);
+		});
+	});
+
+	it("enables truecolor without hyperlinks for JetBrains terminal", () => {
+		withEnv({ TERMINAL_EMULATOR: "JetBrains-JediTerm", TERM: "xterm-256color" }, () => {
+			const caps = detectCapabilities();
+			assert.strictEqual(caps.trueColor, true);
+			assert.strictEqual(caps.hyperlinks, false);
+			assert.strictEqual(caps.images, null);
+		});
+	});
+
+	it("does not inherit Windows Terminal truecolor through tmux", () => {
+		withEnv({ WT_SESSION: "session", TMUX: "/tmp/tmux-1000/default,1234,0", TERM: "tmux-256color" }, () => {
+			const caps = detectCapabilities(() => false);
+			assert.strictEqual(caps.trueColor, false);
+			assert.strictEqual(caps.hyperlinks, false);
+			assert.strictEqual(caps.images, null);
+		});
+	});
+
+	it("trusts explicit truecolor hints through tmux", () => {
+		withEnv({ COLORTERM: "truecolor", TMUX: "/tmp/tmux-1000/default,1234,0", TERM: "tmux-256color" }, () => {
+			const caps = detectCapabilities(() => false);
+			assert.strictEqual(caps.trueColor, true);
+			assert.strictEqual(caps.hyperlinks, false);
+			assert.strictEqual(caps.images, null);
+		});
+	});
 });
 
 describe("Kitty image cursor movement", () => {
@@ -312,7 +361,41 @@ describe("Kitty image cursor movement", () => {
 		}
 	});
 
-	it("restores the cursor to the reserved image row after Kitty rendering", () => {
+	it("honors maxHeightCells by reducing rendered width", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		setCellDimensions({ widthPx: 10, heightPx: 10 });
+		try {
+			const result = renderImage("AAAA", { widthPx: 10, heightPx: 100 }, { maxWidthCells: 10, maxHeightCells: 5 });
+			assert.ok(result);
+			assert.strictEqual(result.rows, 5);
+			assert.ok(result.sequence.includes(",c=1,r=5"));
+		} finally {
+			resetCapabilitiesCache();
+			setCellDimensions({ widthPx: 9, heightPx: 18 });
+		}
+	});
+
+	it("caps Image component height to a square pixel box by default", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		setCellDimensions({ widthPx: 10, heightPx: 20 });
+		try {
+			const image = new Image(
+				"AAAA",
+				"image/png",
+				{ fallbackColor: (value) => value },
+				{ maxWidthCells: 10 },
+				{ widthPx: 10, heightPx: 100 },
+			);
+			const lines = image.render(12);
+			assert.strictEqual(lines.length, 5);
+			assert.ok(lines[0].includes(",c=1,r=5"));
+		} finally {
+			resetCapabilitiesCache();
+			setCellDimensions({ widthPx: 9, heightPx: 18 });
+		}
+	});
+
+	it("places image sequence on first line with empty padding rows", () => {
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		try {
@@ -326,11 +409,11 @@ describe("Kitty image cursor movement", () => {
 			const lines = image.render(4);
 			const imageId = image.getImageId();
 			assert.strictEqual(typeof imageId, "number");
-			assert.deepStrictEqual(lines.slice(0, -1), [""]);
-			assert.ok(lines[1].startsWith("\x1b[1A\x1b_G"));
-			assert.ok(lines[1].includes(",C=1,"));
-			assert.ok(lines[1].includes(`,i=${imageId}`));
-			assert.ok(lines[1].endsWith("\x1b[1B"));
+			assert.ok(lines[0].startsWith("\x1b_G"));
+			assert.ok(lines[0].includes(",C=1,"));
+			assert.ok(lines[0].includes(`,i=${imageId}`));
+			assert.ok(lines[0].endsWith("\x1b\\"));
+			assert.deepStrictEqual(lines.slice(1, lines.length), [""]);
 		} finally {
 			resetCapabilitiesCache();
 			setCellDimensions({ widthPx: 9, heightPx: 18 });

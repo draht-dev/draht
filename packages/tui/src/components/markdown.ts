@@ -1,7 +1,7 @@
 import { Marked, type Token, Tokenizer, type Tokens } from "marked";
-import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.js";
-import type { Component } from "../tui.js";
-import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
+import type { Component } from "../tui.ts";
+import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
@@ -70,6 +70,11 @@ export interface MarkdownTheme {
 	codeBlockIndent?: string;
 }
 
+export interface MarkdownOptions {
+	/** Preserve source ordered-list markers instead of normalizing them from the list start. */
+	preserveOrderedListMarkers?: boolean;
+}
+
 interface InlineStyleContext {
 	applyText: (text: string) => string;
 	stylePrefix: string;
@@ -81,6 +86,7 @@ export class Markdown implements Component {
 	private paddingY: number; // Top/bottom padding
 	private defaultTextStyle?: DefaultTextStyle;
 	private theme: MarkdownTheme;
+	private options: MarkdownOptions;
 	private defaultStylePrefix?: string;
 
 	// Cache for rendered output
@@ -94,12 +100,14 @@ export class Markdown implements Component {
 		paddingY: number,
 		theme: MarkdownTheme,
 		defaultTextStyle?: DefaultTextStyle,
+		options?: MarkdownOptions,
 	) {
 		this.text = text;
 		this.paddingX = paddingX;
 		this.paddingY = paddingY;
 		this.theme = theme;
 		this.defaultTextStyle = defaultTextStyle;
+		this.options = options ? { ...options } : {};
 	}
 
 	setText(text: string): void {
@@ -145,7 +153,9 @@ export class Markdown implements Component {
 			const token = tokens[i];
 			const nextToken = tokens[i + 1];
 			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
-			renderedLines.push(...tokenLines);
+			for (const tokenLine of tokenLines) {
+				renderedLines.push(tokenLine);
+			}
 		}
 
 		// Wrap lines (NO padding, NO background yet)
@@ -154,7 +164,9 @@ export class Markdown implements Component {
 			if (isImageLine(line)) {
 				wrappedLines.push(line);
 			} else {
-				wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
+				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
+					wrappedLines.push(wrappedLine);
+				}
 			}
 		}
 
@@ -191,7 +203,7 @@ export class Markdown implements Component {
 		}
 
 		// Combine top padding, content, and bottom padding
-		const result = [...emptyLines, ...contentLines, ...emptyLines];
+		const result = emptyLines.concat(contentLines, emptyLines);
 
 		// Update cache
 		this.cachedText = this.text;
@@ -544,6 +556,11 @@ export class Markdown implements Component {
 		return result;
 	}
 
+	private getOrderedListMarker(item: Tokens.ListItem): string | undefined {
+		const match = /^(?: {0,3})(\d{1,9}[.)])[ \t]+/.exec(item.raw);
+		return match ? `${match[1]} ` : undefined;
+	}
+
 	/**
 	 * Render a list with proper nesting support
 	 */
@@ -555,9 +572,16 @@ export class Markdown implements Component {
 
 		for (let i = 0; i < token.items.length; i++) {
 			const item = token.items[i];
-			const bullet = token.ordered ? `${startNumber + i}. ` : "- ";
-			const firstPrefix = indent + this.theme.listBullet(bullet);
-			const continuationPrefix = indent + " ".repeat(visibleWidth(bullet));
+			const isLastItem = i === token.items.length - 1;
+			const bullet = token.ordered
+				? this.options.preserveOrderedListMarkers
+					? (this.getOrderedListMarker(item) ?? `${startNumber + i}. `)
+					: `${startNumber + i}. `
+				: "- ";
+			const taskMarker = item.task ? `[${item.checked ? "x" : " "}] ` : "";
+			const marker = bullet + taskMarker;
+			const firstPrefix = indent + this.theme.listBullet(marker);
+			const continuationPrefix = indent + " ".repeat(visibleWidth(marker));
 			const itemWidth = Math.max(1, width - visibleWidth(firstPrefix));
 			let renderedAnyLine = false;
 
@@ -580,6 +604,10 @@ export class Markdown implements Component {
 
 			if (!renderedAnyLine) {
 				lines.push(firstPrefix);
+			}
+
+			if (token.loose && !isLastItem) {
+				lines.push("");
 			}
 		}
 

@@ -7,7 +7,7 @@
 
 import assert from "node:assert";
 import { beforeEach, describe, it } from "node:test";
-import { StdinBuffer } from "../src/stdin-buffer.js";
+import { StdinBuffer } from "../src/stdin-buffer.ts";
 
 describe("StdinBuffer", () => {
 	let buffer: StdinBuffer;
@@ -196,6 +196,26 @@ describe("StdinBuffer", () => {
 			// Delete key release
 			processInput("\x1b[3;1:3~");
 			assert.deepStrictEqual(emittedSequences, ["\x1b[3;1:3~"]);
+		});
+
+		it("should split ESC+ESC+CSI into standalone ESC and the CSI sequence (WezTerm Escape key regression)", () => {
+			// WezTerm with enable_kitty_keyboard sends Escape key press as raw \x1b
+			// and the release as a full Kitty CSI-u sequence, concatenated.
+			// The buffer must not treat \x1b\x1b as a complete meta-key when the
+			// following byte starts a new escape sequence.
+			processInput("\x1b\x1b[27;129:3u");
+			assert.deepStrictEqual(emittedSequences, ["\x1b", "\x1b[27;129:3u"]);
+		});
+
+		it("should split ESC+ESC+CSI with no modifier (no num_lock)", () => {
+			processInput("\x1b\x1b[27;1:3u");
+			assert.deepStrictEqual(emittedSequences, ["\x1b", "\x1b[27;1:3u"]);
+		});
+
+		it("should still emit ESC+ESC as a single sequence when not followed by a new escape", () => {
+			// \x1b\x1b alone (no following CSI) stays as-is — e.g. ctrl+alt+[
+			processInput("\x1b\x1b");
+			assert.deepStrictEqual(emittedSequences, ["\x1b\x1b"]);
 		});
 
 		it("should handle plain characters mixed with Kitty sequences", () => {

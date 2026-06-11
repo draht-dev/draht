@@ -1,13 +1,16 @@
 // Core Agent
-export * from "./agent.js";
+export * from "./agent.ts";
 // Loop functions
-export * from "./agent-loop.js";
-export * from "./harness/agent-harness.js";
+export * from "./agent-loop.ts";
+export * from "./harness/agent-harness.ts";
 export {
+	type BranchPreparation,
+	type BranchSummaryDetails,
+	type CollectEntriesResult,
 	collectEntriesForBranchSummary,
 	generateBranchSummary,
 	prepareBranchEntries,
-} from "./harness/compaction/branch-summarization.js";
+} from "./harness/compaction/branch-summarization.ts";
 export {
 	calculateContextTokens,
 	compact,
@@ -21,21 +24,21 @@ export {
 	prepareCompaction,
 	serializeConversation,
 	shouldCompact,
-} from "./harness/compaction/compaction.js";
-export * from "./harness/execution-env.js";
-export * from "./harness/messages.js";
-export * from "./harness/prompt-templates.js";
-export * from "./harness/session/repo/jsonl.js";
-export * from "./harness/session/repo/memory.js";
-export * from "./harness/session/repo/shared.js";
-export * from "./harness/session/session.js";
-export * from "./harness/skills.js";
-export * from "./harness/system-prompt.js";
+} from "./harness/compaction/compaction.ts";
+export * from "./harness/messages.ts";
+export * from "./harness/prompt-templates.ts";
+export * from "./harness/session/jsonl-repo.ts";
+export * from "./harness/session/memory-repo.ts";
+export * from "./harness/session/repo-utils.ts";
+export * from "./harness/session/session.ts";
+export { uuidv7 } from "./harness/session/uuid.ts";
+export * from "./harness/skills.ts";
+export * from "./harness/system-prompt.ts";
 // Harness
-export * from "./harness/types.js";
-export * from "./harness/utils/shell-output.js";
-export * from "./harness/utils/truncate.js";
+export * from "./harness/types.ts";
+export * from "./harness/utils/shell-output.ts";
+export * from "./harness/utils/truncate.ts";
 // Proxy utilities
-export * from "./proxy.js";
+export * from "./proxy.ts";
 // Types
-export * from "./types.js";
+export * from "./types.ts";

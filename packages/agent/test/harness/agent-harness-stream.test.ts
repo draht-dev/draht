@@ -1,10 +1,10 @@
 import { fauxAssistantMessage, fauxToolCall, registerFauxProvider, type StreamOptions } from "@draht/ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentHarness } from "../../src/harness/agent-harness.js";
-import { NodeExecutionEnv } from "../../src/harness/execution-env.js";
-import { Session } from "../../src/harness/session/session.js";
-import { InMemorySessionStorage } from "../../src/harness/session/storage/memory.js";
-import { calculateTool } from "../utils/calculate.js";
+import { AgentHarness } from "../../src/harness/agent-harness.ts";
+import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
+import { InMemorySessionStorage } from "../../src/harness/session/memory-storage.ts";
+import { Session } from "../../src/harness/session/session.ts";
+import { calculateTool } from "../utils/calculate.ts";
 
 const registrations: Array<{ unregister(): void }> = [];
 

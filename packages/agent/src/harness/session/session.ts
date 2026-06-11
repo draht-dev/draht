@@ -2,6 +2,7 @@ import type { ImageContent, TextContent } from "@draht/ai";
 import type { AgentMessage } from "../../types.js";
 import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage } from "../messages.js";
 import type {
+	ActiveToolsChangeEntry,
 	BranchSummaryEntry,
 	CompactionEntry,
 	CustomEntry,
@@ -15,11 +16,13 @@ import type {
 	SessionStorage,
 	SessionTreeEntry,
 	ThinkingLevelChangeEntry,
-} from "../types.js";
+} from "../types.ts";
+import { SessionError } from "../types.ts";
 
 export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionContext {
 	let thinkingLevel = "off";
 	let model: { provider: string; modelId: string } | null = null;
+	let activeToolNames: string[] | null = null;
 	let compaction: CompactionEntry | null = null;
 
 	for (const entry of pathEntries) {
@@ -29,6 +32,8 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
 			model = { provider: entry.provider, modelId: entry.modelId };
 		} else if (entry.type === "message" && entry.message.role === "assistant") {
 			model = { provider: entry.message.provider, modelId: entry.message.model };
+		} else if (entry.type === "active_tools_change") {
+			activeToolNames = [...entry.activeToolNames];
 		} else if (entry.type === "compaction") {
 			compaction = entry;
 		}
@@ -71,7 +76,7 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
 		}
 	}
 
-	return { messages, thinkingLevel, model };
+	return { messages, thinkingLevel, model, activeToolNames };
 }
 
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
@@ -155,6 +160,16 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		} satisfies ModelChangeEntry);
 	}
 
+	async appendActiveToolsChange(activeToolNames: string[]): Promise<string> {
+		return this.appendTypedEntry({
+			type: "active_tools_change",
+			id: await this.storage.createEntryId(),
+			parentId: await this.storage.getLeafId(),
+			timestamp: new Date().toISOString(),
+			activeToolNames: [...activeToolNames],
+		} satisfies ActiveToolsChangeEntry);
+	}
+
 	async appendCompaction<T = unknown>(
 		summary: string,
 		firstKeptEntryId: string,
@@ -206,7 +221,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 
 	async appendLabel(targetId: string, label: string | undefined): Promise<string> {
 		if (!(await this.storage.getEntry(targetId))) {
-			throw new Error(`Entry ${targetId} not found`);
+			throw new SessionError("not_found", `Entry ${targetId} not found`);
 		}
 		return this.appendTypedEntry({
 			type: "label",
@@ -233,7 +248,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		summary?: { summary: string; details?: unknown; fromHook?: boolean },
 	): Promise<string | undefined> {
 		if (entryId !== null && !(await this.storage.getEntry(entryId))) {
-			throw new Error(`Entry ${entryId} not found`);
+			throw new SessionError("not_found", `Entry ${entryId} not found`);
 		}
 		await this.storage.setLeafId(entryId);
 		if (!summary) return undefined;

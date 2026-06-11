@@ -1,33 +1,61 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { constants, createReadStream } from "node:fs";
+import {
+	access,
+	appendFile,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { type ExecutionEnv, FileError, type FileInfo, type FileKind } from "../types.js";
+import { createInterface } from "node:readline";
+import {
+	type ExecutionEnv,
+	ExecutionError,
+	err,
+	FileError,
+	type FileInfo,
+	type FileKind,
+	ok,
+	type Result,
+	toError,
+} from "../types.ts";
 
 function resolvePath(cwd: string, path: string): string {
 	return isAbsolute(path) ? path : resolve(cwd, path);
 }
 
-function fileKindFromStats(stats: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }): FileKind {
+function fileKindFromStats(stats: {
+	isFile(): boolean;
+	isDirectory(): boolean;
+	isSymbolicLink(): boolean;
+}): FileKind | undefined {
 	if (stats.isFile()) return "file";
 	if (stats.isDirectory()) return "directory";
 	if (stats.isSymbolicLink()) return "symlink";
-	throw new FileError("invalid", "Unsupported file type");
+	return undefined;
 }
 
 function fileInfoFromStats(
 	path: string,
 	stats: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number; mtimeMs: number },
-): FileInfo {
-	return {
+): Result<FileInfo, FileError> {
+	const kind = fileKindFromStats(stats);
+	if (!kind) return err(new FileError("invalid", "Unsupported file type", path));
+	return ok({
 		name: path.replace(/\/+$/, "").split("/").pop() ?? path,
 		path,
-		kind: fileKindFromStats(stats),
+		kind,
 		size: stats.size,
 		mtimeMs: stats.mtimeMs,
-	};
+	});
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
@@ -36,23 +64,30 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 function toFileError(error: unknown, path?: string): FileError {
 	if (error instanceof FileError) return error;
+	const cause = toError(error);
 	if (isNodeError(error)) {
 		const message = error.message;
 		switch (error.code) {
+			case "ABORT_ERR":
+				return new FileError("aborted", message, path, cause);
 			case "ENOENT":
-				return new FileError("not_found", message, path, { cause: error });
+				return new FileError("not_found", message, path, cause);
 			case "EACCES":
 			case "EPERM":
-				return new FileError("permission_denied", message, path, { cause: error });
+				return new FileError("permission_denied", message, path, cause);
 			case "ENOTDIR":
-				return new FileError("not_directory", message, path, { cause: error });
+				return new FileError("not_directory", message, path, cause);
 			case "EISDIR":
-				return new FileError("is_directory", message, path, { cause: error });
+				return new FileError("is_directory", message, path, cause);
 			case "EINVAL":
-				return new FileError("invalid", message, path, { cause: error });
+				return new FileError("invalid", message, path, cause);
 		}
 	}
-	return new FileError("unknown", error instanceof Error ? error.message : String(error), path, { cause: error });
+	return new FileError("unknown", cause.message, path, cause);
+}
+
+function abortResult<TValue>(signal: AbortSignal | undefined, path?: string): Result<TValue, FileError> | undefined {
+	return signal?.aborted ? err(new FileError("aborted", "aborted", path)) : undefined;
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -71,7 +106,16 @@ async function runCommand(
 ): Promise<{ stdout: string; status: number | null }> {
 	return await new Promise((resolve) => {
 		let stdout = "";
-		const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"] });
+		let child: ReturnType<typeof spawn>;
+		try {
+			child = spawn(command, args, {
+				stdio: ["ignore", "pipe", "ignore"],
+				windowsHide: true,
+			});
+		} catch {
+			resolve({ stdout: "", status: null });
+			return;
+		}
 		const timeout = setTimeout(() => {
 			if (child.pid) killProcessTree(child.pid);
 		}, timeoutMs);
@@ -100,12 +144,14 @@ async function findBashOnPath(): Promise<string | null> {
 	return firstMatch && (await pathExists(firstMatch)) ? firstMatch : null;
 }
 
-async function getShellConfig(customShellPath?: string): Promise<{ shell: string; args: string[] }> {
+async function getShellConfig(
+	customShellPath?: string,
+): Promise<Result<{ shell: string; args: string[] }, ExecutionError>> {
 	if (customShellPath) {
 		if (await pathExists(customShellPath)) {
-			return { shell: customShellPath, args: ["-c"] };
+			return ok({ shell: customShellPath, args: ["-c"] });
 		}
-		throw new Error(`Custom shell path not found: ${customShellPath}`);
+		return err(new ExecutionError("shell_unavailable", `Custom shell path not found: ${customShellPath}`));
 	}
 	if (process.platform === "win32") {
 		const candidates: string[] = [];
@@ -115,24 +161,24 @@ async function getShellConfig(customShellPath?: string): Promise<{ shell: string
 		if (programFilesX86) candidates.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
 		for (const candidate of candidates) {
 			if (await pathExists(candidate)) {
-				return { shell: candidate, args: ["-c"] };
+				return ok({ shell: candidate, args: ["-c"] });
 			}
 		}
 		const bashOnPath = await findBashOnPath();
 		if (bashOnPath) {
-			return { shell: bashOnPath, args: ["-c"] };
+			return ok({ shell: bashOnPath, args: ["-c"] });
 		}
-		throw new Error("No bash shell found");
+		return err(new ExecutionError("shell_unavailable", "No bash shell found"));
 	}
 
 	if (await pathExists("/bin/bash")) {
-		return { shell: "/bin/bash", args: ["-c"] };
+		return ok({ shell: "/bin/bash", args: ["-c"] });
 	}
 	const bashOnPath = await findBashOnPath();
 	if (bashOnPath) {
-		return { shell: bashOnPath, args: ["-c"] };
+		return ok({ shell: bashOnPath, args: ["-c"] });
 	}
-	return { shell: "sh", args: ["-c"] };
+	return ok({ shell: "sh", args: ["-c"] });
 }
 
 function getShellEnv(baseEnv?: NodeJS.ProcessEnv, extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
@@ -149,6 +195,7 @@ function killProcessTree(pid: number): void {
 			spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
 				stdio: "ignore",
 				detached: true,
+				windowsHide: true,
 			});
 		} catch {
 			// Ignore errors.
@@ -178,52 +225,83 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		this.shellEnv = options.shellEnv;
 	}
 
+	async absolutePath(path: string): Promise<Result<string, FileError>> {
+		return ok(resolvePath(this.cwd, path));
+	}
+
+	async joinPath(parts: string[]): Promise<Result<string, FileError>> {
+		return ok(join(...parts));
+	}
+
 	async exec(
 		command: string,
 		options?: {
 			cwd?: string;
 			env?: Record<string, string>;
 			timeout?: number;
-			signal?: AbortSignal;
+			abortSignal?: AbortSignal;
 			onStdout?: (chunk: string) => void;
 			onStderr?: (chunk: string) => void;
 		},
-	): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-		const cwd = options?.cwd ? resolvePath(this.cwd, options.cwd) : this.cwd;
-		const { shell, args } = await getShellConfig(this.shellPath);
+	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
+		if (options?.abortSignal?.aborted) return err(new ExecutionError("aborted", "aborted"));
 
-		return await new Promise((resolvePromise, reject) => {
+		const cwd = options?.cwd ? resolvePath(this.cwd, options.cwd) : this.cwd;
+		const shellConfig = await getShellConfig(this.shellPath);
+		if (!shellConfig.ok) return shellConfig;
+
+		return await new Promise((resolvePromise) => {
 			let stdout = "";
 			let stderr = "";
 			let settled = false;
 			let timedOut = false;
-			const child = spawn(shell, [...args, command], {
-				cwd,
-				detached: process.platform !== "win32",
-				env: getShellEnv(this.shellEnv, options?.env),
-				stdio: ["ignore", "pipe", "pipe"],
-			});
+			let callbackError: ExecutionError | undefined;
+			let child: ReturnType<typeof spawn> | undefined;
+			let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-			const timeoutId =
+			const onAbort = () => {
+				if (child?.pid) {
+					killProcessTree(child.pid);
+				}
+			};
+
+			const settle = (result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>) => {
+				if (timeoutId) clearTimeout(timeoutId);
+				if (options?.abortSignal) options.abortSignal.removeEventListener("abort", onAbort);
+				if (settled) return;
+				settled = true;
+				resolvePromise(result);
+			};
+
+			try {
+				child = spawn(shellConfig.value.shell, [...shellConfig.value.args, command], {
+					cwd,
+					detached: process.platform !== "win32",
+					env: getShellEnv(this.shellEnv, options?.env),
+					stdio: ["ignore", "pipe", "pipe"],
+					windowsHide: true,
+				});
+			} catch (error) {
+				const cause = toError(error);
+				settle(err(new ExecutionError("spawn_error", cause.message, cause)));
+				return;
+			}
+
+			timeoutId =
 				typeof options?.timeout === "number"
 					? setTimeout(() => {
 							timedOut = true;
-							if (child.pid) {
+							if (child?.pid) {
 								killProcessTree(child.pid);
 							}
 						}, options.timeout * 1000)
 					: undefined;
 
-			const onAbort = () => {
-				if (child.pid) {
-					killProcessTree(child.pid);
-				}
-			};
-			if (options?.signal) {
-				if (options.signal.aborted) {
+			if (options?.abortSignal) {
+				if (options.abortSignal.aborted) {
 					onAbort();
 				} else {
-					options.signal.addEventListener("abort", onAbort, { once: true });
+					options.abortSignal.addEventListener("abort", onAbort, { once: true });
 				}
 			}
 
@@ -231,137 +309,217 @@ export class NodeExecutionEnv implements ExecutionEnv {
 			child.stderr?.setEncoding("utf8");
 			child.stdout?.on("data", (chunk: string) => {
 				stdout += chunk;
-				options?.onStdout?.(chunk);
+				try {
+					options?.onStdout?.(chunk);
+				} catch (error) {
+					const cause = toError(error);
+					callbackError = new ExecutionError("callback_error", cause.message, cause);
+					onAbort();
+				}
 			});
 			child.stderr?.on("data", (chunk: string) => {
 				stderr += chunk;
-				options?.onStderr?.(chunk);
+				try {
+					options?.onStderr?.(chunk);
+				} catch (error) {
+					const cause = toError(error);
+					callbackError = new ExecutionError("callback_error", cause.message, cause);
+					onAbort();
+				}
 			});
 
 			child.on("error", (error) => {
-				if (timeoutId) clearTimeout(timeoutId);
-				if (options?.signal) options.signal.removeEventListener("abort", onAbort);
-				if (settled) return;
-				settled = true;
-				reject(error);
+				settle(err(new ExecutionError("spawn_error", error.message, error)));
 			});
 
 			child.on("close", (code) => {
-				if (timeoutId) clearTimeout(timeoutId);
-				if (options?.signal) options.signal.removeEventListener("abort", onAbort);
-				if (settled) return;
-				settled = true;
-				if (options?.signal?.aborted) {
-					reject(new Error("aborted"));
+				if (callbackError) {
+					settle(err(callbackError));
 					return;
 				}
 				if (timedOut) {
-					reject(new Error(`timeout:${options?.timeout}`));
+					settle(err(new ExecutionError("timeout", `timeout:${options?.timeout}`)));
 					return;
 				}
-				resolvePromise({ stdout, stderr, exitCode: code ?? 0 });
+				if (options?.abortSignal?.aborted) {
+					settle(err(new ExecutionError("aborted", "aborted")));
+					return;
+				}
+				settle(ok({ stdout, stderr, exitCode: code ?? 0 }));
 			});
 		});
 	}
 
-	async readTextFile(path: string): Promise<string> {
+	async readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<string>(abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
-			return await readFile(resolved, "utf8");
+			return ok(await readFile(resolved, { encoding: "utf8", signal: abortSignal }));
 		} catch (error) {
-			throw toFileError(error, resolved);
+			return err(toFileError(error, resolved));
 		}
 	}
 
-	async readBinaryFile(path: string): Promise<Uint8Array> {
+	async readTextLines(
+		path: string,
+		options?: { maxLines?: number; abortSignal?: AbortSignal },
+	): Promise<Result<string[], FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<string[]>(options?.abortSignal, resolved);
+		if (aborted) return aborted;
+		if (options?.maxLines !== undefined && options.maxLines <= 0) return ok([]);
+		let stream: ReturnType<typeof createReadStream> | undefined;
+		let lineReader: ReturnType<typeof createInterface> | undefined;
 		try {
-			return await readFile(resolved);
+			stream = createReadStream(resolved, { encoding: "utf8", signal: options?.abortSignal });
+			lineReader = createInterface({ input: stream, crlfDelay: Infinity });
+			const lines: string[] = [];
+			for await (const line of lineReader) {
+				const loopAbort = abortResult<string[]>(options?.abortSignal, resolved);
+				if (loopAbort) return loopAbort;
+				lines.push(line);
+				if (options?.maxLines !== undefined && lines.length >= options.maxLines) break;
+			}
+			const afterReadAbort = abortResult<string[]>(options?.abortSignal, resolved);
+			if (afterReadAbort) return afterReadAbort;
+			return ok(lines);
 		} catch (error) {
-			throw toFileError(error, resolved);
+			return err(toFileError(error, resolved));
+		} finally {
+			lineReader?.close();
+			stream?.destroy();
 		}
 	}
 
-	async writeFile(path: string, content: string | Uint8Array): Promise<void> {
+	async readBinaryFile(path: string, abortSignal?: AbortSignal): Promise<Result<Uint8Array, FileError>> {
+		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<Uint8Array>(abortSignal, resolved);
+		if (aborted) return aborted;
+		try {
+			return ok(await readFile(resolved, { signal: abortSignal }));
+		} catch (error) {
+			return err(toFileError(error, resolved));
+		}
+	}
+
+	async writeFile(
+		path: string,
+		content: string | Uint8Array,
+		abortSignal?: AbortSignal,
+	): Promise<Result<void, FileError>> {
+		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<void>(abortSignal, resolved);
+		if (aborted) return aborted;
+		try {
+			await mkdir(resolve(resolved, ".."), { recursive: true });
+			const afterMkdirAbort = abortResult<void>(abortSignal, resolved);
+			if (afterMkdirAbort) return afterMkdirAbort;
+			await writeFile(resolved, content, { signal: abortSignal });
+			return ok(undefined);
+		} catch (error) {
+			return err(toFileError(error, resolved));
+		}
+	}
+
+	async appendFile(path: string, content: string | Uint8Array): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
 		try {
 			await mkdir(resolve(resolved, ".."), { recursive: true });
-			await writeFile(resolved, content);
+			await appendFile(resolved, content);
+			return ok(undefined);
 		} catch (error) {
-			throw toFileError(error, resolved);
+			return err(toFileError(error, resolved));
 		}
 	}
 
-	async fileInfo(path: string): Promise<FileInfo> {
+	async fileInfo(path: string): Promise<Result<FileInfo, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
 		try {
 			return fileInfoFromStats(resolved, await lstat(resolved));
 		} catch (error) {
-			throw toFileError(error, resolved);
+			return err(toFileError(error, resolved));
 		}
 	}
 
-	async listDir(path: string): Promise<FileInfo[]> {
+	async listDir(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo[], FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<FileInfo[]>(abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
 			const entries = await readdir(resolved, { withFileTypes: true });
 			const infos: FileInfo[] = [];
 			for (const entry of entries) {
+				const loopAbort = abortResult<FileInfo[]>(abortSignal, resolved);
+				if (loopAbort) return loopAbort;
 				const entryPath = resolve(resolved, entry.name);
 				try {
-					infos.push(fileInfoFromStats(entryPath, await lstat(entryPath)));
+					const info = fileInfoFromStats(entryPath, await lstat(entryPath));
+					if (info.ok) infos.push(info.value);
 				} catch (error) {
-					if (error instanceof FileError && error.code === "invalid") continue;
-					throw error;
+					return err(toFileError(error, entryPath));
 				}
 			}
-			return infos;
+			return ok(infos);
 		} catch (error) {
-			throw toFileError(error, resolved);
+			return err(toFileError(error, resolved));
 		}
 	}
 
-	async realPath(path: string): Promise<string> {
+	async canonicalPath(path: string): Promise<Result<string, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
 		try {
-			return await realpath(resolved);
+			return ok(await realpath(resolved));
 		} catch (error) {
-			throw toFileError(error, resolved);
+			return err(toFileError(error, resolved));
 		}
 	}
 
-	async exists(path: string): Promise<boolean> {
+	async exists(path: string): Promise<Result<boolean, FileError>> {
+		const result = await this.fileInfo(path);
+		if (result.ok) return ok(true);
+		if (result.error.code === "not_found") return ok(false);
+		return err(result.error);
+	}
+
+	async createDir(path: string, options?: { recursive?: boolean }): Promise<Result<void, FileError>> {
+		const resolved = resolvePath(this.cwd, path);
 		try {
-			await this.fileInfo(path);
-			return true;
+			await mkdir(resolved, { recursive: options?.recursive ?? true });
+			return ok(undefined);
 		} catch (error) {
-			if (error instanceof FileError && error.code === "not_found") return false;
-			throw error;
+			return err(toFileError(error, resolved));
 		}
 	}
 
-	async createDir(path: string, options?: { recursive?: boolean }): Promise<void> {
-		await mkdir(resolvePath(this.cwd, path), { recursive: options?.recursive });
-	}
-
-	async remove(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
+	async remove(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
 		try {
 			await rm(resolved, { recursive: options?.recursive ?? false, force: options?.force ?? false });
+			return ok(undefined);
 		} catch (error) {
-			throw toFileError(error, resolved);
+			return err(toFileError(error, resolved));
 		}
 	}
 
-	async createTempDir(prefix: string = "tmp-"): Promise<string> {
-		return await mkdtemp(join(tmpdir(), prefix));
+	async createTempDir(prefix: string = "tmp-"): Promise<Result<string, FileError>> {
+		try {
+			return ok(await mkdtemp(join(tmpdir(), prefix)));
+		} catch (error) {
+			return err(toFileError(error));
+		}
 	}
 
-	async createTempFile(options?: { prefix?: string; suffix?: string }): Promise<string> {
+	async createTempFile(options?: { prefix?: string; suffix?: string }): Promise<Result<string, FileError>> {
 		const dir = await this.createTempDir("tmp-");
-		const filePath = join(dir, `${options?.prefix ?? ""}${randomUUID()}${options?.suffix ?? ""}`);
-		await writeFile(filePath, "");
-		return filePath;
+		if (!dir.ok) return dir;
+		const filePath = join(dir.value, `${options?.prefix ?? ""}${randomUUID()}${options?.suffix ?? ""}`);
+		try {
+			await writeFile(filePath, "");
+			return ok(filePath);
+		} catch (error) {
+			return err(toFileError(error, filePath));
+		}
 	}
 
 	async cleanup(): Promise<void> {

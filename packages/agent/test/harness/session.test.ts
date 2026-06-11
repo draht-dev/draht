@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Session } from "../../src/harness/session/session.js";
-import { JsonlSessionStorage } from "../../src/harness/session/storage/jsonl.js";
-import { InMemorySessionStorage } from "../../src/harness/session/storage/memory.js";
-import type { SessionStorage } from "../../src/harness/types.js";
-import { createAssistantMessage, createTempDir, createUserMessage, getLatestTempDir } from "./session-test-utils.js";
+import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
+import { JsonlSessionStorage } from "../../src/harness/session/jsonl-storage.ts";
+import { InMemorySessionStorage } from "../../src/harness/session/memory-storage.ts";
+import { Session } from "../../src/harness/session/session.ts";
+import type { SessionStorage } from "../../src/harness/types.ts";
+import { createAssistantMessage, createTempDir, createUserMessage, getLatestTempDir } from "./session-test-utils.ts";
 
 async function runSessionSuite(
 	name: string,
@@ -128,7 +129,8 @@ runSessionSuite(
 	"Session with JSONL storage",
 	async () => {
 		const dir = createTempDir();
-		return await JsonlSessionStorage.create(join(dir, "session.jsonl"), { cwd: dir, sessionId: "session-1" });
+		const env = new NodeExecutionEnv({ cwd: dir });
+		return await JsonlSessionStorage.create(env, join(dir, "session.jsonl"), { cwd: dir, sessionId: "session-1" });
 	},
 	() => {
 		const dir = getLatestTempDir();
@@ -138,10 +140,10 @@ runSessionSuite(
 		const header = JSON.parse(lines[0]!);
 		expect(header.type).toBe("session");
 		expect(header.version).toBe(3);
-		for (const line of lines.slice(1)) {
-			const entry = JSON.parse(line);
+		const entries = lines.slice(1).map((line) => JSON.parse(line));
+		expect(entries.some((entry) => entry.type === "leaf")).toBe(true);
+		for (const entry of entries) {
 			expect(entry.type).not.toBe("entry");
-			expect(entry.type).not.toBe("leaf");
 			expect(typeof entry.id).toBe("string");
 		}
 	},

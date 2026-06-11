@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { streamAnthropic } from "../src/providers/anthropic.js";
-import type { Context, Model, Tool } from "../src/types.js";
+import { streamAnthropic } from "../src/providers/anthropic.ts";
+import type { Context, Model, Tool } from "../src/types.ts";
 
 interface CapturedRequest {
 	headers: IncomingMessage["headers"];
@@ -12,8 +12,8 @@ interface CapturedRequest {
 
 function createModel(baseUrl: string, compat?: Model<"anthropic-messages">["compat"]): Model<"anthropic-messages"> {
 	return {
-		id: "claude-opus-4-7",
-		name: "Claude Opus 4.7",
+		id: "claude-opus-4-8",
+		name: "Claude Opus 4.8",
 		api: "anthropic-messages",
 		provider: "test-anthropic",
 		baseUrl,
@@ -22,7 +22,7 @@ function createModel(baseUrl: string, compat?: Model<"anthropic-messages">["comp
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200000,
 		maxTokens: 32000,
-		compat,
+		compat: { forceAdaptiveThinking: true, ...compat },
 	};
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage } from "../src/types.js";
-import { isContextOverflow } from "../src/utils/overflow.js";
+import type { AssistantMessage } from "../src/types.ts";
+import { isContextOverflow } from "../src/utils/overflow.ts";
 
 function createErrorMessage(errorMessage: string): AssistantMessage {
 	return {
@@ -40,6 +40,20 @@ describe("isContextOverflow", () => {
 			"400 The input (516368 tokens) is longer than the model's context length (262144 tokens).",
 		);
 		expect(isContextOverflow(message, 262144)).toBe(true);
+	});
+
+	it("detects LiteLLM-wrapped OpenAI maximum context length errors", () => {
+		const message = createErrorMessage(
+			"Error: 503 litellm.ServiceUnavailableError: litellm.MidStreamFallbackError: litellm.APIConnectionError: APIConnectionError: OpenAIException - Requested token count exceeds the model's maximum context length of 131072 tokens.",
+		);
+		expect(isContextOverflow(message, 131072)).toBe(true);
+	});
+
+	it("detects OpenRouter Poolside maximum allowed input length errors", () => {
+		const message = createErrorMessage(
+			"Provider returned error: Input length 131393 exceeds the maximum allowed input length of 131040 tokens.",
+		);
+		expect(isContextOverflow(message, 131072)).toBe(true);
 	});
 
 	it("does not treat generic non-overflow Ollama errors as overflow", () => {

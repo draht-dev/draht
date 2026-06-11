@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "../types.js";
+import type { AssistantMessage } from "../types.ts";
 
 /**
  * Regex patterns to detect context overflow errors from different providers.
@@ -11,10 +11,12 @@ import type { AssistantMessage } from "../types.js";
  * - Anthropic: "prompt is too long: 213462 tokens > 200000 maximum"
  * - Anthropic: "413 {\"error\":{\"type\":\"request_too_large\",\"message\":\"Request exceeds the maximum size\"}}"
  * - OpenAI: "Your input exceeds the context window of this model"
+ * - OpenAI/LiteLLM: "Requested token count exceeds the model's maximum context length of 131072 tokens"
  * - Google: "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)"
  * - xAI: "This model's maximum prompt length is 131072 but the request contains 537812 tokens"
  * - Groq: "Please reduce the length of the messages or completion"
  * - OpenRouter: "This endpoint's maximum context length is X tokens. However, you requested about Y tokens"
+ * - OpenRouter/Poolside: "Input length X exceeds the maximum allowed input length of Y tokens."
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
  * - llama.cpp: "the request exceeds the available context size, try increasing it"
  * - LM Studio: "tokens to keep from the initial prompt is greater than the context length"
@@ -34,10 +36,12 @@ const OVERFLOW_PATTERNS = [
 	/request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
 	/input is too long for requested model/i, // Amazon Bedrock
 	/exceeds the context window/i, // OpenAI (Completions & Responses API)
+	/exceeds (?:the )?(?:model'?s )?maximum context length of [\d,]+ tokens?/i, // OpenAI-compatible proxies (LiteLLM)
 	/input token count.*exceeds the maximum/i, // Google (Gemini)
 	/maximum prompt length is \d+/i, // xAI (Grok)
 	/reduce the length of the messages/i, // Groq
-	/maximum context length is \d+ tokens/i, // OpenRouter (all backends)
+	/maximum context length is \d+ tokens/i, // OpenRouter (most backends)
+	/exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?/i, // OpenRouter/Poolside
 	/input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
 	/exceeds the limit of \d+/i, // GitHub Copilot
 	/exceeds the available context size/i, // llama.cpp server
@@ -81,13 +85,14 @@ const NON_OVERFLOW_PATTERNS = [
  *
  * **Reliable detection (returns error with detectable message):**
  * - Anthropic: "prompt is too long: X tokens > Y maximum" or "request_too_large"
- * - OpenAI (Completions & Responses): "exceeds the context window"
+ * - OpenAI (Completions & Responses): "exceeds the context window" or "exceeds the model's maximum context length of X tokens"
  * - Google Gemini: "input token count exceeds the maximum"
  * - xAI (Grok): "maximum prompt length is X but request contains Y"
  * - Groq: "reduce the length of the messages"
  * - Cerebras: 400/413 status code (no body)
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
- * - OpenRouter (all backends): "maximum context length is X tokens"
+ * - OpenRouter (most backends): "maximum context length is X tokens"
+ * - OpenRouter/Poolside: "Input length X exceeds the maximum allowed input length of Y tokens."
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
  * - llama.cpp: "exceeds the available context size"
  * - LM Studio: "greater than the context length"

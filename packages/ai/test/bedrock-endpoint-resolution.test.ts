@@ -44,9 +44,9 @@ vi.mock("@aws-sdk/client-bedrock-runtime", () => {
 	};
 });
 
-import { getModel } from "../src/models.js";
-import { streamBedrock } from "../src/providers/amazon-bedrock.js";
-import type { Context, Model } from "../src/types.js";
+import { getModel } from "../src/models.ts";
+import { streamBedrock } from "../src/providers/amazon-bedrock.ts";
+import type { Context, Model } from "../src/types.ts";
 
 const context: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
@@ -98,7 +98,7 @@ describe("bedrock endpoint resolution", () => {
 
 	it("does not pin standard AWS endpoints when AWS_REGION is configured", async () => {
 		process.env.AWS_REGION = "us-east-2";
-		const model = getModel("amazon-bedrock", "us.anthropic.claude-opus-4-7");
+		const model = getModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
 
 		const config = await captureClientConfig(model);
 
@@ -117,7 +117,7 @@ describe("bedrock endpoint resolution", () => {
 
 	it("still passes custom Bedrock endpoints through to the SDK client", async () => {
 		process.env.AWS_REGION = "us-west-2";
-		const baseModel = getModel("amazon-bedrock", "us.anthropic.claude-opus-4-7");
+		const baseModel = getModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
 		const model: Model<"bedrock-converse-stream"> = {
 			...baseModel,
 			baseUrl: "https://bedrock-vpc.example.com",
@@ -127,5 +127,31 @@ describe("bedrock endpoint resolution", () => {
 
 		expect(config.endpoint).toBe("https://bedrock-vpc.example.com");
 		expect(config.region).toBe("us-west-2");
+	});
+
+	it("extracts region from inference profile ARN regardless of AWS_REGION", async () => {
+		process.env.AWS_REGION = "us-east-1";
+		const baseModel = getModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
+		const model: Model<"bedrock-converse-stream"> = {
+			...baseModel,
+			id: "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+		};
+
+		const config = await captureClientConfig(model);
+
+		expect(config.region).toBe("us-west-2");
+	});
+
+	it("extracts region from GovCloud inference profile ARN", async () => {
+		process.env.AWS_REGION = "us-east-1";
+		const baseModel = getModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
+		const model: Model<"bedrock-converse-stream"> = {
+			...baseModel,
+			id: "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/abc123",
+		};
+
+		const config = await captureClientConfig(model);
+
+		expect(config.region).toBe("us-gov-west-1");
 	});
 });

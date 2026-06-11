@@ -18,15 +18,18 @@ import {
 	type SystemContentBlock,
 	type ToolChoice,
 	type ToolConfiguration,
+	type ToolResultContentBlock,
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
-import type { DocumentType } from "@smithy/types";
-import { calculateCost } from "../models.js";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
+import type { BuildMiddleware, DocumentType, MetadataBearer } from "@smithy/types";
+import { calculateCost } from "../models.ts";
 import type {
 	Api,
 	AssistantMessage,
 	CacheRetention,
 	Context,
+	ImageContent,
 	Model,
 	SimpleStreamOptions,
 	StopReason,
@@ -39,12 +42,13 @@ import type {
 	Tool,
 	ToolCall,
 	ToolResultMessage,
-} from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
-import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.js";
-import { transformMessages } from "./transform-messages.js";
+} from "../types.ts";
+import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { parseStreamingJson } from "../utils/json-parse.ts";
+import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.ts";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.ts";
+import { transformMessages } from "./transform-messages.ts";
 
 export type BedrockThinkingDisplay = "summarized" | "omitted";
 
@@ -64,7 +68,7 @@ export interface BedrockOptions extends StreamOptions {
 	 * - "omitted": Thinking content is redacted but the signature still travels back
 	 *   for multi-turn continuity, reducing time-to-first-text-token.
 	 *
-	 * Note: Anthropic's API default for Claude Opus 4.7 and Mythos Preview is
+	 * Note: Anthropic's API default for Claude Opus 4.8 and Mythos Preview is
 	 * "omitted". We default to "summarized" here to keep behavior consistent with
 	 * older Claude 4 models. Only applies to Claude models on Bedrock.
 	 */
@@ -83,6 +87,8 @@ export interface BedrockOptions extends StreamOptions {
 }
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
+
+const EMPTY_TEXT_PLACEHOLDER = "<empty>";
 
 export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
 	model: Model<"bedrock-converse-stream">,
@@ -137,10 +143,13 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 
 		// in Node.js/Bun environment only
 		if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-			// Region resolution: explicit option > env vars > SDK default chain.
-			// When AWS_PROFILE is set, we leave region undefined so the SDK can
-			// resovle it from aws profile configs. Otherwise fall back to us-east-1.
-			if (configuredRegion) {
+			// Region resolution: ARN-embedded > explicit option > env vars > SDK default chain.
+			// When the model ID is an inference profile ARN, extract the region from it.
+			// This avoids conflicts with AWS_REGION set for other services.
+			const arnRegionMatch = model.id.match(/^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/);
+			if (arnRegionMatch) {
+				config.region = arnRegionMatch[1];
+			} else if (configuredRegion) {
 				config.region = configuredRegion;
 			} else if (endpointRegion && useExplicitEndpoint) {
 				config.region = endpointRegion;
@@ -156,30 +165,15 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				};
 			}
 
-			if (
-				process.env.HTTP_PROXY ||
-				process.env.HTTPS_PROXY ||
-				process.env.NO_PROXY ||
-				process.env.http_proxy ||
-				process.env.https_proxy ||
-				process.env.no_proxy
-			) {
-				const nodeHttpHandler = await import("@smithy/node-http-handler");
-				const proxyAgent = await import("proxy-agent");
-
-				const agent = new proxyAgent.ProxyAgent();
-
+			const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
+			if (proxyAgents) {
 				// Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
 				// on `http2` module and has no support for http agent.
-				// Use NodeHttpHandler to support http agent.
-				config.requestHandler = new nodeHttpHandler.NodeHttpHandler({
-					httpAgent: agent,
-					httpsAgent: agent,
-				});
+				// Use NodeHttpHandler to support HTTP(S) proxy agents.
+				config.requestHandler = new NodeHttpHandler(proxyAgents);
 			} else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
 				// Some custom endpoints require HTTP/1.1 instead of HTTP/2
-				const nodeHttpHandler = await import("@smithy/node-http-handler");
-				config.requestHandler = new nodeHttpHandler.NodeHttpHandler();
+				config.requestHandler = new NodeHttpHandler();
 			}
 		} else {
 			// Non-Node environment (browser): fall back to us-east-1 since
@@ -195,13 +189,17 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 
 		try {
 			const client = new BedrockRuntimeClient(config);
+			if (options.headers && Object.keys(options.headers).length > 0) {
+				addCustomHeadersMiddleware(client, options.headers);
+			}
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
+			const inferenceMaxTokens = options.maxTokens ?? (isAnthropicClaudeModel(model) ? model.maxTokens : undefined);
 			let commandInput = {
 				modelId: model.id,
 				messages: convertMessages(context, model, cacheRetention),
 				system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
 				inferenceConfig: {
-					...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+					...(inferenceMaxTokens !== undefined && { maxTokens: inferenceMaxTokens }),
 					...(options.temperature !== undefined && { temperature: options.temperature }),
 				},
 				toolConfig: convertToolConfig(context.tools, options.toolChoice),
@@ -293,6 +291,13 @@ const BEDROCK_ERROR_PREFIXES: Record<string, string> = {
 };
 
 /**
+ * Some models reject the account/profile's configured Bedrock data retention mode
+ * (e.g. "data retention mode 'default' is not available for this model"). Point
+ * users at the AWS docs explaining how to configure a supported mode.
+ */
+const BEDROCK_DATA_RETENTION_DOCS_URL = "https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html";
+
+/**
  * Format a Bedrock error with a human-readable prefix.
  * AWS SDK exceptions (both from `client.send()` and from stream event items)
  * extend BedrockRuntimeServiceException. We map the `.name` to a stable
@@ -301,11 +306,50 @@ const BEDROCK_ERROR_PREFIXES: Record<string, string> = {
  */
 function formatBedrockError(error: unknown): string {
 	const message = error instanceof Error ? error.message : JSON.stringify(error);
+	const dataRetentionHint = /data retention mode/i.test(message)
+		? ` See ${BEDROCK_DATA_RETENTION_DOCS_URL} for supported data retention modes.`
+		: "";
 	if (error instanceof BedrockRuntimeServiceException) {
 		const prefix = BEDROCK_ERROR_PREFIXES[error.name] ?? error.name;
-		return `${prefix}: ${message}`;
+		return `${prefix}: ${message}${dataRetentionHint}`;
 	}
-	return message;
+	return `${message}${dataRetentionHint}`;
+}
+
+/**
+ * Header keys that must never be overwritten by caller-supplied headers.
+ * `host` and `x-amz-*` participate in the SigV4 canonical request; `authorization`
+ * is owned by SigV4 or the bearer-token path (config.token + authSchemePreference).
+ * Compared case-insensitively (caller key is lower-cased before lookup).
+ */
+const RESERVED_HEADER_EXACT = new Set(["authorization", "host"]);
+
+function isReservedHeader(key: string): boolean {
+	const lower = key.toLowerCase();
+	return lower.startsWith("x-amz-") || RESERVED_HEADER_EXACT.has(lower);
+}
+
+/**
+ * Attach caller-supplied headers to the outgoing Bedrock request via a Smithy
+ * `build`-step middleware. The `build` step runs after request serialisation but
+ * before SigV4 signing, so injected headers are covered by the signature. Reserved
+ * SigV4 / auth headers (`x-amz-*`, `authorization`, `host`) are silently skipped;
+ * all other caller headers override any existing same-named header on the request.
+ */
+function addCustomHeadersMiddleware(client: BedrockRuntimeClient, headers: Record<string, string>): void {
+	const middleware: BuildMiddleware<object, MetadataBearer> = (next) => async (args) => {
+		const request = args.request;
+		if (request && typeof request === "object" && "headers" in request) {
+			const requestHeaders = (request as { headers: Record<string, string> }).headers;
+			for (const [key, value] of Object.entries(headers)) {
+				if (!isReservedHeader(key)) {
+					requestHeaders[key] = value;
+				}
+			}
+		}
+		return next(args);
+	};
+	client.middlewareStack.add(middleware, { step: "build", name: "pi-ai-custom-headers", priority: "low" });
 }
 
 export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
@@ -327,8 +371,10 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
 			} satisfies BedrockOptions);
 		}
 
+		// Undefined means the caller did not request an output cap; let the helper use the model cap.
+		// Do not coerce to 0 here, or the thinking budget would become the entire maxTokens value.
 		const adjusted = adjustMaxTokensForThinking(
-			base.maxTokens || 0,
+			base.maxTokens,
 			model.maxTokens,
 			options.reasoning,
 			options.thinkingBudgets,
@@ -491,12 +537,19 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
 
 function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
 	const candidates = getModelMatchCandidates(modelId, modelName);
-	return candidates.some((s) => s.includes("opus-4-6") || s.includes("opus-4-7") || s.includes("sonnet-4-6"));
+	return candidates.some(
+		(s) =>
+			s.includes("opus-4-6") ||
+			s.includes("opus-4-7") ||
+			s.includes("opus-4-8") ||
+			s.includes("sonnet-4-6") ||
+			s.includes("fable-5"),
+	);
 }
 
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
 	const candidates = getModelMatchCandidates(model.id, model.name);
-	return candidates.some((s) => s.includes("opus-4-7"));
+	return candidates.some((s) => s.includes("opus-4-7") || s.includes("opus-4-8") || s.includes("fable-5"));
 }
 
 function mapThinkingLevelToEffort(
@@ -619,6 +672,29 @@ function normalizeToolCallId(id: string): string {
 	return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
 }
 
+function createNonBlankTextBlock(text: string): ContentBlock.TextMember | undefined {
+	const sanitized = sanitizeSurrogates(text);
+	return sanitized.trim().length === 0 ? undefined : { text: sanitized };
+}
+
+function createRequiredTextBlock(text: string): ContentBlock.TextMember {
+	return createNonBlankTextBlock(text) ?? { text: EMPTY_TEXT_PLACEHOLDER };
+}
+
+function convertToolResultContent(content: (TextContent | ImageContent)[]): ToolResultContentBlock[] {
+	const result: ToolResultContentBlock[] = [];
+	for (const c of content) {
+		if (c.type === "image") {
+			result.push({ image: createImageBlock(c.mimeType, c.data) });
+		} else {
+			const textBlock = createNonBlankTextBlock(c.text);
+			if (textBlock) result.push(textBlock);
+		}
+	}
+	if (result.length === 0) result.push({ text: EMPTY_TEXT_PLACEHOLDER });
+	return result;
+}
+
 function convertMessages(
 	context: Context,
 	model: Model<"bedrock-converse-stream">,
@@ -631,24 +707,33 @@ function convertMessages(
 		const m = transformedMessages[i];
 
 		switch (m.role) {
-			case "user":
+			case "user": {
+				const content: ContentBlock[] = [];
+				if (typeof m.content === "string") {
+					content.push(createRequiredTextBlock(m.content));
+				} else {
+					for (const c of m.content) {
+						switch (c.type) {
+							case "text": {
+								const textBlock = createNonBlankTextBlock(c.text);
+								if (textBlock) content.push(textBlock);
+								break;
+							}
+							case "image":
+								content.push({ image: createImageBlock(c.mimeType, c.data) });
+								break;
+							default:
+								continue;
+						}
+					}
+					if (content.length === 0) content.push({ text: EMPTY_TEXT_PLACEHOLDER });
+				}
 				result.push({
 					role: ConversationRole.USER,
-					content:
-						typeof m.content === "string"
-							? [{ text: sanitizeSurrogates(m.content) }]
-							: m.content.map((c) => {
-									switch (c.type) {
-										case "text":
-											return { text: sanitizeSurrogates(c.text) };
-										case "image":
-											return { image: createImageBlock(c.mimeType, c.data) };
-										default:
-											throw new Error("Unknown user content type");
-									}
-								}),
+					content,
 				});
 				break;
+			}
 			case "assistant": {
 				// Skip assistant messages with empty content (e.g., from aborted requests)
 				// Bedrock rejects messages with empty content arrays
@@ -658,19 +743,22 @@ function convertMessages(
 				const contentBlocks: ContentBlock[] = [];
 				for (const c of m.content) {
 					switch (c.type) {
-						case "text":
+						case "text": {
 							// Skip empty text blocks
-							if (c.text.trim().length === 0) continue;
-							contentBlocks.push({ text: sanitizeSurrogates(c.text) });
+							const textBlock = createNonBlankTextBlock(c.text);
+							if (!textBlock) continue;
+							contentBlocks.push(textBlock);
 							break;
+						}
 						case "toolCall":
 							contentBlocks.push({
 								toolUse: { toolUseId: c.id, name: c.name, input: c.arguments },
 							});
 							break;
-						case "thinking":
+						case "thinking": {
 							// Skip empty thinking blocks
-							if (c.thinking.trim().length === 0) continue;
+							const thinking = sanitizeSurrogates(c.thinking);
+							if (thinking.trim().length === 0) continue;
 							// Only Anthropic models support the signature field in reasoningText.
 							// For other models, we omit the signature to avoid errors like:
 							// "This model doesn't support the reasoningContent.reasoningText.signature field"
@@ -679,12 +767,12 @@ function convertMessages(
 								// persisted message lacks a signature, Bedrock rejects the replayed
 								// reasoning block. Fall back to plain text, matching Anthropic.
 								if (!c.thinkingSignature || c.thinkingSignature.trim().length === 0) {
-									contentBlocks.push({ text: sanitizeSurrogates(c.thinking) });
+									contentBlocks.push({ text: thinking });
 								} else {
 									contentBlocks.push({
 										reasoningContent: {
 											reasoningText: {
-												text: sanitizeSurrogates(c.thinking),
+												text: thinking,
 												signature: c.thinkingSignature,
 											},
 										},
@@ -693,13 +781,14 @@ function convertMessages(
 							} else {
 								contentBlocks.push({
 									reasoningContent: {
-										reasoningText: { text: sanitizeSurrogates(c.thinking) },
+										reasoningText: { text: thinking },
 									},
 								});
 							}
 							break;
+						}
 						default:
-							throw new Error("Unknown assistant content type");
+							continue;
 					}
 				}
 				// Skip if all content blocks were filtered out
@@ -721,11 +810,7 @@ function convertMessages(
 				toolResults.push({
 					toolResult: {
 						toolUseId: m.toolCallId,
-						content: m.content.map((c) =>
-							c.type === "image"
-								? { image: createImageBlock(c.mimeType, c.data) }
-								: { text: sanitizeSurrogates(c.text) },
-						),
+						content: convertToolResultContent(m.content),
 						status: m.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
 					},
 				});
@@ -737,11 +822,7 @@ function convertMessages(
 					toolResults.push({
 						toolResult: {
 							toolUseId: nextMsg.toolCallId,
-							content: nextMsg.content.map((c) =>
-								c.type === "image"
-									? { image: createImageBlock(c.mimeType, c.data) }
-									: { text: sanitizeSurrogates(c.text) },
-							),
+							content: convertToolResultContent(nextMsg.content),
 							status: nextMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
 						},
 					});
@@ -758,7 +839,7 @@ function convertMessages(
 				break;
 			}
 			default:
-				throw new Error("Unknown message role");
+				continue;
 		}
 	}
 

@@ -8,7 +8,8 @@
  */
 
 // Anthropic
-export { anthropicOAuthProvider, loginAnthropic, refreshAnthropicToken } from "./anthropic.js";
+export { anthropicOAuthProvider, loginAnthropic, refreshAnthropicToken } from "./anthropic.ts";
+export * from "./device-code.ts";
 // GitHub Copilot
 export {
 	getGitHubCopilotBaseUrl,
@@ -16,23 +17,30 @@ export {
 	loginGitHubCopilot,
 	normalizeDomain,
 	refreshGitHubCopilotToken,
-} from "./github-copilot.js";
+} from "./github-copilot.ts";
 // OpenAI Codex (ChatGPT OAuth)
-export { loginOpenAICodex, openaiCodexOAuthProvider, refreshOpenAICodexToken } from "./openai-codex.js";
+export {
+	loginOpenAICodex,
+	loginOpenAICodexDeviceCode,
+	OPENAI_CODEX_BROWSER_LOGIN_METHOD,
+	OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD,
+	openaiCodexOAuthProvider,
+	refreshOpenAICodexToken,
+} from "./openai-codex.ts";
 // OpenCode Go (API key paste)
-export { loginOpenCodeGo, opencodeGoOAuthProvider, refreshOpenCodeGoToken } from "./opencode-go.js";
+export { loginOpenCodeGo, opencodeGoOAuthProvider, refreshOpenCodeGoToken } from "./opencode-go.ts";
 
-export * from "./types.js";
+export * from "./types.ts";
 
 // ============================================================================
 // Provider Registry
 // ============================================================================
 
-import { anthropicOAuthProvider } from "./anthropic.js";
-import { githubCopilotOAuthProvider } from "./github-copilot.js";
-import { openaiCodexOAuthProvider } from "./openai-codex.js";
-import { opencodeGoOAuthProvider } from "./opencode-go.js";
-import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.js";
+import { anthropicOAuthProvider } from "./anthropic.ts";
+import { githubCopilotOAuthProvider } from "./github-copilot.ts";
+import { openaiCodexOAuthProvider } from "./openai-codex.ts";
+import { opencodeGoOAuthProvider } from "./opencode-go.ts";
+import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.ts";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	anthropicOAuthProvider,

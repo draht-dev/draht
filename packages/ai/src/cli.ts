@@ -2,8 +2,8 @@
 
 import { createInterface } from "node:readline";
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { getOAuthProvider, getOAuthProviders } from "./utils/oauth/index.js";
-import type { OAuthCredentials, OAuthProviderId } from "./utils/oauth/types.js";
+import { getOAuthProvider, getOAuthProviders } from "./utils/oauth/index.ts";
+import type { OAuthCredentials, OAuthProviderId } from "./utils/oauth/types.ts";
 
 const AUTH_FILE = "auth.json";
 const PROVIDERS = getOAuthProviders();
@@ -42,8 +42,22 @@ async function login(providerId: OAuthProviderId): Promise<void> {
 				if (info.instructions) console.log(info.instructions);
 				console.log();
 			},
+			onDeviceCode: (info) => {
+				console.log(`\nOpen this URL in your browser:\n${info.verificationUri}`);
+				console.log(`Enter code: ${info.userCode}`);
+				console.log();
+			},
 			onPrompt: async (p) => {
 				return await promptFn(`${p.message}${p.placeholder ? ` (${p.placeholder})` : ""}:`);
+			},
+			onSelect: async (p) => {
+				console.log(`\n${p.message}`);
+				for (let i = 0; i < p.options.length; i++) {
+					console.log(`  ${i + 1}. ${p.options[i].label}`);
+				}
+				const choice = await promptFn(`Enter number (1-${p.options.length}):`);
+				const index = parseInt(choice, 10) - 1;
+				return p.options[index]?.id;
 			},
 			onProgress: (msg) => console.log(msg),
 		});

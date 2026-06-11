@@ -1,4 +1,4 @@
-// NEVER convert to top-level imports - breaks browser/Vite builds (web-ui)
+// NEVER convert to top-level imports - breaks browser/Vite builds
 let _existsSync: typeof import("node:fs").existsSync | null = null;
 let _homedir: typeof import("node:os").homedir | null = null;
 let _join: typeof import("node:path").join | null = null;
@@ -23,7 +23,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 	});
 }
 
-import type { KnownProvider } from "./types.js";
+import type { KnownProvider } from "./types.ts";
 
 let _procEnvCache: Map<string, string> | null = null;
 
@@ -90,7 +90,7 @@ function hasVertexAdcCredentials(): boolean {
 
 function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 	if (provider === "github-copilot") {
-		return ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+		return ["COPILOT_GITHUB_TOKEN"];
 	}
 
 	// ANTHROPIC_OAUTH_TOKEN takes precedence over ANTHROPIC_API_KEY
@@ -99,8 +99,10 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 	}
 
 	const envMap: Record<string, string> = {
+		"ant-ling": "ANT_LING_API_KEY",
 		openai: "OPENAI_API_KEY",
 		"azure-openai-responses": "AZURE_OPENAI_API_KEY",
+		nvidia: "NVIDIA_API_KEY",
 		deepseek: "DEEPSEEK_API_KEY",
 		google: "GEMINI_API_KEY",
 		"google-vertex": "GOOGLE_CLOUD_API_KEY",
@@ -110,6 +112,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 		openrouter: "OPENROUTER_API_KEY",
 		"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
 		zai: "ZAI_API_KEY",
+		"zai-coding-cn": "ZAI_CODING_CN_API_KEY",
 		mistral: "MISTRAL_API_KEY",
 		minimax: "MINIMAX_API_KEY",
 		"minimax-cn": "MINIMAX_CN_API_KEY",

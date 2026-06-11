@@ -12,7 +12,7 @@ import type {
 	ResponseReasoningItem,
 	ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import { calculateCost } from "../models.js";
+import { calculateCost } from "../models.ts";
 import type {
 	Api,
 	AssistantMessage,
@@ -26,12 +26,12 @@ import type {
 	Tool,
 	ToolCall,
 	Usage,
-} from "../types.js";
-import type { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { shortHash } from "../utils/hash.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
-import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { transformMessages } from "./transform-messages.js";
+} from "../types.ts";
+import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { shortHash } from "../utils/hash.ts";
+import { parseStreamingJson } from "../utils/json-parse.ts";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { transformMessages } from "./transform-messages.ts";
 
 // =============================================================================
 // Utilities
@@ -124,7 +124,8 @@ export function convertResponsesMessages<TApi extends Api>(
 
 	const includeSystemPrompt = options?.includeSystemPrompt ?? true;
 	if (includeSystemPrompt && context.systemPrompt) {
-		const role = model.reasoning ? "developer" : "system";
+		const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
+		const role = model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
 		messages.push({
 			role,
 			content: sanitizeSurrogates(context.systemPrompt),
@@ -166,6 +167,7 @@ export function convertResponsesMessages<TApi extends Api>(
 				assistantMsg.model !== model.id &&
 				assistantMsg.provider === model.provider &&
 				assistantMsg.api === model.api;
+			let textBlockIndex = 0;
 
 			for (const block of msg.content) {
 				if (block.type === "thinking") {
@@ -177,10 +179,13 @@ export function convertResponsesMessages<TApi extends Api>(
 				} else if (block.type === "text") {
 					const textBlock = block as TextContent;
 					const parsedSignature = parseTextSignature(textBlock.textSignature);
+					const fallbackMessageId =
+						textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
+					textBlockIndex++;
 					// OpenAI requires id to be max 64 characters
 					let msgId = parsedSignature?.id;
 					if (!msgId) {
-						msgId = `msg_${msgIndex}`;
+						msgId = fallbackMessageId;
 					} else if (msgId.length > 64) {
 						msgId = `msg_${shortHash(msgId)}`;
 					}

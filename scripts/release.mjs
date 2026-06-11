@@ -7,14 +7,13 @@
  *   node scripts/release.mjs <YYYY.M.D[-N]>  # explicit version
  *   node scripts/release.mjs <major|minor|patch>
  *
- * Steps:
+ * Steps (npm publish and git push are intentionally left manual):
  * 1. Check for uncommitted changes
- * 2. Bump version via npm run version:xxx or set an explicit version
+ * 2. Set the version across all workspace package.json files (pure JS), sync deps, bun install
  * 3. Update CHANGELOG.md files: [Unreleased] -> [version] - date
- * 4. Commit and tag
- * 5. Publish to npm
- * 6. Add new [Unreleased] section to changelogs
- * 7. Commit
+ * 4. Commit and tag (local)
+ * 5. Add a fresh [Unreleased] section and commit
+ *    -> then push and publish manually (the script prints the exact commands)
  */
 
 import { execSync } from "child_process";
@@ -94,6 +93,35 @@ function stageChangedFiles() {
 	run(`git add -- ${paths.map(shellQuote).join(" ")}`);
 }
 
+function findPackageJsons(dir, acc = []) {
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		if (entry.name === "node_modules" || entry.name === "dist") continue;
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			findPackageJsons(full, acc);
+		} else if (entry.name === "package.json") {
+			acc.push(full);
+		}
+	}
+	return acc;
+}
+
+// Set the version field across the root and every workspace package.json. Done in pure
+// JS because draht uses the workspace:* protocol, which npm (`npm version -ws`) rejects.
+function setWorkspaceVersions(version) {
+	const files = ["package.json", ...findPackageJsons("packages")];
+	let count = 0;
+	for (const file of files) {
+		const content = readFileSync(file, "utf-8");
+		const updated = content.replace(/("version"\s*:\s*")[^"]*(")/, `$1${version}$2`);
+		if (updated !== content) {
+			writeFileSync(file, updated);
+			count++;
+		}
+	}
+	console.log(`  Set version ${version} across ${count} package.json files`);
+}
+
 function bumpOrSetVersion(target) {
 	const currentVersion = getVersion();
 
@@ -112,9 +140,9 @@ function bumpOrSetVersion(target) {
 	}
 
 	console.log(`Setting version (${version})...`);
-	run(
-		`npm version ${version} -ws --no-git-tag-version && node scripts/sync-versions.js && bun install`,
-	);
+	setWorkspaceVersions(version);
+	run("node scripts/sync-versions.js");
+	run("bun install");
 	return getVersion();
 }
 
@@ -193,26 +221,21 @@ run(`git commit -m "Release v${version}"`);
 run(`git tag v${version}`);
 console.log();
 
-// 5. Publish
-console.log("Publishing to npm...");
-run("npm run publish");
-console.log();
-
-// 6. Add new [Unreleased] sections
+// 5. Add new [Unreleased] sections for next cycle
 console.log("Adding [Unreleased] sections for next cycle...");
 addUnreleasedSection();
 console.log();
 
-// 7. Commit
+// 6. Commit changelog updates
 console.log("Committing changelog updates...");
 stageChangedFiles();
 run(`git commit -m "Add [Unreleased] section for next cycle"`);
 console.log();
 
-// 8. Push
-console.log("Pushing to remote...");
-run("git push origin main");
-run(`git push origin v${version}`);
-console.log();
-
-console.log(`=== Released v${version} ===`);
+// 7. Publishing and pushing are intentionally manual.
+console.log(`=== Prepared release v${version} (local) ===\n`);
+console.log(`Created locally: "Release v${version}" commit, tag v${version}, and a follow-up [Unreleased] commit.`);
+console.log("Pushing and npm publish are left to you. To finish:\n");
+console.log(`  git push origin main && git push origin v${version}`);
+console.log("  # then publish the public @draht/* packages (publishConfig.access=public), e.g.:");
+console.log("  bun publish   # run inside each public package dir");

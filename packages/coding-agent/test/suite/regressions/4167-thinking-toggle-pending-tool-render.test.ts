@@ -1,13 +1,13 @@
 import type { AgentMessage } from "@draht/agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@draht/ai";
 import { Container, Text, type TUI } from "@draht/tui";
-import stripAnsi from "strip-ansi";
 import { beforeAll, describe, expect, test, vi } from "vitest";
-import type { AgentSessionEvent } from "../../../src/core/agent-session.js";
-import type { SessionContext } from "../../../src/core/session-manager.js";
-import type { ToolExecutionComponent } from "../../../src/modes/interactive/components/tool-execution.js";
-import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.js";
-import { initTheme } from "../../../src/modes/interactive/theme/theme.js";
+import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
+import type { SessionContext } from "../../../src/core/session-manager.ts";
+import type { ToolExecutionComponent } from "../../../src/modes/interactive/components/tool-execution.ts";
+import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
+import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../../../src/utils/ansi.ts";
 
 const TOOL_CALL_ID = "tool-4167";
 const TOOL_NAME = "slow_tool";

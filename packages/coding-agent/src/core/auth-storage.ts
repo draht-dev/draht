@@ -17,8 +17,9 @@ import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@draht/ai/o
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
-import { getAgentDir } from "../config.js";
-import { resolveConfigValue } from "./resolve-config-value.js";
+import { getAgentDir } from "../config.ts";
+import { normalizePath } from "../utils/paths.ts";
+import { resolveConfigValue } from "./resolve-config-value.ts";
 
 export type ApiKeyCredential = {
 	type: "api_key";
@@ -44,13 +45,19 @@ type LockResult<T> = {
 	next?: string;
 };
 
+const AUTH_FILE_WRITE_OPTIONS = { encoding: "utf-8", mode: 0o600 } as const;
+
 export interface AuthStorageBackend {
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
 	withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
 }
 
 export class FileAuthStorageBackend implements AuthStorageBackend {
-	constructor(private authPath: string = join(getAgentDir(), "auth.json")) {}
+	private authPath: string;
+
+	constructor(authPath: string = join(getAgentDir(), "auth.json")) {
+		this.authPath = normalizePath(authPath);
+	}
 
 	private ensureParentDir(): void {
 		const dir = dirname(this.authPath);
@@ -61,7 +68,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 
 	private ensureFileExists(): void {
 		if (!existsSync(this.authPath)) {
-			writeFileSync(this.authPath, "{}", "utf-8");
+			writeFileSync(this.authPath, "{}", AUTH_FILE_WRITE_OPTIONS);
 			chmodSync(this.authPath, 0o600);
 		}
 	}
@@ -103,7 +110,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
 			const { result, next } = fn(current);
 			if (next !== undefined) {
-				writeFileSync(this.authPath, next, "utf-8");
+				writeFileSync(this.authPath, next, AUTH_FILE_WRITE_OPTIONS);
 				chmodSync(this.authPath, 0o600);
 			}
 			return result;
@@ -148,7 +155,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			const { result, next } = await fn(current);
 			throwIfCompromised();
 			if (next !== undefined) {
-				writeFileSync(this.authPath, next, "utf-8");
+				writeFileSync(this.authPath, next, AUTH_FILE_WRITE_OPTIONS);
 				chmodSync(this.authPath, 0o600);
 			}
 			throwIfCompromised();
@@ -194,8 +201,10 @@ export class AuthStorage {
 	private fallbackResolver?: (provider: string) => string | undefined;
 	private loadError: Error | null = null;
 	private errors: Error[] = [];
+	private storage: AuthStorageBackend;
 
-	private constructor(private storage: AuthStorageBackend) {
+	private constructor(storage: AuthStorageBackend) {
+		this.storage = storage;
 		this.reload();
 	}
 

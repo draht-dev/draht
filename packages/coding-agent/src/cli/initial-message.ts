@@ -1,5 +1,5 @@
 import type { ImageContent } from "@draht/ai";
-import type { Args } from "./args.js";
+import type { Args } from "./args.ts";
 
 export interface InitialMessageInput {
 	parsed: Args;

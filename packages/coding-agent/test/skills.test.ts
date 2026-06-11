@@ -1,9 +1,9 @@
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { describe, expect, it } from "vitest";
-import type { ResourceDiagnostic } from "../src/core/diagnostics.js";
-import { formatSkillsForPrompt, loadSkills, loadSkillsFromDir, type Skill } from "../src/core/skills.js";
-import { createSyntheticSourceInfo } from "../src/core/source-info.js";
+import type { ResourceDiagnostic } from "../src/core/diagnostics.ts";
+import { formatSkillsForPrompt, loadSkills, loadSkillsFromDir, type Skill } from "../src/core/skills.ts";
+import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 
 const fixturesDir = resolve(__dirname, "fixtures/skills");
 const collisionFixturesDir = resolve(__dirname, "fixtures/skills-collision");
@@ -41,7 +41,7 @@ describe("skills", () => {
 			expect(diagnostics).toHaveLength(0);
 		});
 
-		it("should warn when name doesn't match parent directory", () => {
+		it("should allow names that don't match parent directory", () => {
 			const { skills, diagnostics } = loadSkillsFromDir({
 				dir: join(fixturesDir, "name-mismatch"),
 				source: "test",
@@ -51,7 +51,7 @@ describe("skills", () => {
 			expect(skills[0].name).toBe("different-name");
 			expect(
 				diagnostics.some((d: ResourceDiagnostic) => d.message.includes("does not match parent directory")),
-			).toBe(true);
+			).toBe(false);
 		});
 
 		it("should warn when name contains invalid characters", () => {

@@ -5,18 +5,16 @@
  *
  * Test with: npx tsx src/cli-new.ts [args...]
  */
-import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
-import { APP_NAME } from "./config.js";
-import { main } from "./main.js";
+import { APP_NAME } from "./config.ts";
+import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
+import { main } from "./main.ts";
 
 process.title = APP_NAME;
 process.env.DRAHT_CODING_AGENT = "true";
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 
-// bodyTimeout/headersTimeout default to 300s in undici; long local-LLM stalls
-// (e.g. vLLM buffering a large tool call) exceed that and abort the SSE stream
-// with UND_ERR_BODY_TIMEOUT. Disable both — provider SDKs enforce their own
-// AbortController-based deadlines via retry.provider.timeoutMs.
-setGlobalDispatcher(new EnvHttpProxyAgent({ bodyTimeout: 0, headersTimeout: 0 }));
+// Configure undici's global dispatcher before provider SDKs issue requests.
+// Runtime settings are applied once SettingsManager has loaded global/project settings.
+configureHttpDispatcher();
 
 main(process.argv.slice(2));

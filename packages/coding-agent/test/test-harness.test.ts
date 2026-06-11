@@ -7,7 +7,7 @@ import type { AgentTool } from "@draht/agent-core";
 import type { AssistantMessage } from "@draht/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { createHarness, createHarnessWithExtensions, type Harness } from "./test-harness.js";
+import { createHarness, createHarnessWithExtensions, type Harness } from "./test-harness.ts";
 
 describe("test harness", () => {
 	let harness: Harness;

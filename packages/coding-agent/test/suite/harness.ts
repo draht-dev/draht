@@ -9,20 +9,20 @@ import type { AgentMessage, AgentTool } from "@draht/agent-core";
 import { Agent } from "@draht/agent-core";
 import type { FauxModelDefinition, FauxProviderRegistration, FauxResponseStep, Model } from "@draht/ai";
 import { registerFauxProvider } from "@draht/ai";
-import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.js";
-import { AuthStorage } from "../../src/core/auth-storage.js";
-import type { ExtensionRunner } from "../../src/core/extensions/index.js";
-import { convertToLlm } from "../../src/core/messages.js";
-import { ModelRegistry } from "../../src/core/model-registry.js";
-import { SessionManager } from "../../src/core/session-manager.js";
-import type { Settings } from "../../src/core/settings-manager.js";
-import { SettingsManager } from "../../src/core/settings-manager.js";
-import type { ExtensionFactory, ResourceLoader } from "../../src/index.js";
+import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.ts";
+import { AuthStorage } from "../../src/core/auth-storage.ts";
+import type { ExtensionRunner } from "../../src/core/extensions/index.ts";
+import { convertToLlm } from "../../src/core/messages.ts";
+import { ModelRegistry } from "../../src/core/model-registry.ts";
+import { SessionManager } from "../../src/core/session-manager.ts";
+import type { Settings } from "../../src/core/settings-manager.ts";
+import { SettingsManager } from "../../src/core/settings-manager.ts";
+import type { ExtensionFactory, ResourceLoader } from "../../src/index.ts";
 import {
 	type CreateTestExtensionsResultInput,
 	createTestExtensionsResult,
 	createTestResourceLoader,
-} from "../utilities.js";
+} from "../utilities.ts";
 
 type MessageTextPart = { type: "text"; text: string };
 
@@ -60,6 +60,9 @@ export interface HarnessOptions {
 	settings?: Partial<Settings>;
 	systemPrompt?: string;
 	tools?: AgentTool[];
+	initialActiveToolNames?: string[];
+	allowedToolNames?: string[];
+	excludedToolNames?: string[];
 	resourceLoader?: ResourceLoader;
 	extensionFactories?: Array<ExtensionFactory | CreateTestExtensionsResultInput>;
 	withConfiguredAuth?: boolean;
@@ -173,6 +176,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		modelRegistry,
 		resourceLoader,
 		baseToolsOverride: toolMap,
+		initialActiveToolNames: options.initialActiveToolNames,
+		allowedToolNames: options.allowedToolNames,
+		excludedToolNames: options.excludedToolNames,
 		extensionRunnerRef,
 	});
 

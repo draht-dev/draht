@@ -1,6 +1,6 @@
-import { getOAuthProviders } from "@draht/ai/oauth";
+import { getOAuthProviders, type OAuthDeviceCodeInfo } from "@draht/ai/oauth";
 import { Container, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@draht/tui";
-import { exec } from "child_process";
+import { openBrowser } from "../../../utils/open-browser.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint } from "./keybinding-hints.js";
@@ -15,6 +15,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	private abortController = new AbortController();
 	private inputResolver?: (value: string) => void;
 	private inputRejecter?: (error: Error) => void;
+	private onComplete: (success: boolean, message?: string) => void;
 
 	// Focusable implementation - propagate to input for IME cursor positioning
 	private _focused = false;
@@ -29,12 +30,13 @@ export class LoginDialogComponent extends Container implements Focusable {
 	constructor(
 		tui: TUI,
 		providerId: string,
-		private onComplete: (success: boolean, message?: string) => void,
+		onComplete: (success: boolean, message?: string) => void,
 		providerNameOverride?: string,
 		titleOverride?: string,
 	) {
 		super();
 		this.tui = tui;
+		this.onComplete = onComplete;
 
 		const providerInfo = getOAuthProviders().find((p) => p.id === providerId);
 		const providerName = providerNameOverride || providerInfo?.name || providerId;
@@ -54,7 +56,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.input = new Input();
 		this.input.onSubmit = () => {
 			if (this.inputResolver) {
-				this.inputResolver(this.input.getValue());
+				const value = this.input.getValue();
+				this.replaceInputWithSubmittedText(value);
+				this.inputResolver(value);
 				this.inputResolver = undefined;
 				this.inputRejecter = undefined;
 			}
@@ -69,6 +73,12 @@ export class LoginDialogComponent extends Container implements Focusable {
 
 	get signal(): AbortSignal {
 		return this.abortController.signal;
+	}
+
+	private replaceInputWithSubmittedText(value: string): void {
+		this.contentContainer.children = this.contentContainer.children.map((child) =>
+			child === this.input ? new Text(`> ${value}`, 0, 0) : child,
+		);
 	}
 
 	private cancel(): void {
@@ -99,10 +109,26 @@ export class LoginDialogComponent extends Container implements Focusable {
 			this.contentContainer.addChild(new Text(theme.fg("warning", instructions), 1, 0));
 		}
 
-		// Try to open browser
-		const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-		exec(`${openCmd} "${url}"`);
+		openBrowser(url);
+		this.tui.requestRender();
+	}
 
+	/**
+	 * Called by onDeviceCode callback - show URL and user code.
+	 */
+	showDeviceCode(info: OAuthDeviceCodeInfo): void {
+		this.contentContainer.clear();
+		this.contentContainer.addChild(new Spacer(1));
+		const linkedUrl = `\x1b]8;;${info.verificationUri}\x07${info.verificationUri}\x1b]8;;\x07`;
+		this.contentContainer.addChild(new Text(theme.fg("accent", linkedUrl), 1, 0));
+
+		const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
+		const hyperlink = `\x1b]8;;${info.verificationUri}\x07${clickHint}\x1b]8;;\x07`;
+		this.contentContainer.addChild(new Text(theme.fg("dim", hyperlink), 1, 0));
+		this.contentContainer.addChild(new Spacer(1));
+		this.contentContainer.addChild(new Text(theme.fg("warning", `Enter code: ${info.userCode}`), 1, 0));
+
+		openBrowser(info.verificationUri);
 		this.tui.requestRender();
 	}
 
@@ -110,6 +136,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 * Show input for manual code/URL entry (for callback server providers)
 	 */
 	showManualInput(prompt: string): Promise<string> {
+		this.input.setValue("");
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("dim", prompt), 1, 0));
 		this.contentContainer.addChild(this.input);

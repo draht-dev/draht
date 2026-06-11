@@ -23,6 +23,7 @@ See these complete provider examples:
 - [Unregister Provider](#unregister-provider)
 - [OAuth Support](#oauth-support)
 - [Custom Streaming API](#custom-streaming-api)
+- [Context Overflow Errors](#context-overflow-errors)
 - [Testing Your Implementation](#testing-your-implementation)
 - [Config Reference](#config-reference)
 - [Model Definition Reference](#model-definition-reference)
@@ -30,7 +31,7 @@ See these complete provider examples:
 ## Quick Reference
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@draht/coding-agent";
 
 export default function (pi: ExtensionAPI) {
   // Override baseUrl for existing provider
@@ -42,7 +43,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerProvider("my-provider", {
     name: "My Provider",
     baseUrl: "https://api.example.com",
-    apiKey: "MY_API_KEY",
+    apiKey: "$MY_API_KEY",
     api: "openai-completions",
     models: [
       {
@@ -82,7 +83,7 @@ pi.registerProvider("openai", {
 pi.registerProvider("google", {
   baseUrl: "https://ai-gateway.corp.com/google",
   headers: {
-    "X-Corp-Auth": "CORP_AUTH_TOKEN"  // env var or literal
+    "X-Corp-Auth": "$CORP_AUTH_TOKEN"  // env var or literal
   }
 });
 ```
@@ -96,7 +97,7 @@ To add a completely new provider, specify `models` along with the required confi
 If the model list comes from a remote endpoint, use an async extension factory:
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@draht/coding-agent";
 
 export default async function (pi: ExtensionAPI) {
   const response = await fetch("http://localhost:1234/v1/models");
@@ -111,7 +112,7 @@ export default async function (pi: ExtensionAPI) {
 
   pi.registerProvider("local-openai", {
     baseUrl: "http://localhost:1234/v1",
-    apiKey: "LOCAL_OPENAI_API_KEY",
+    apiKey: "$LOCAL_OPENAI_API_KEY",
     api: "openai-completions",
     models: payload.data.map((model) => ({
       id: model.id,
@@ -131,7 +132,7 @@ This registers the fetched models before startup finishes.
 ```typescript
 pi.registerProvider("my-llm", {
   baseUrl: "https://api.my-llm.com/v1",
-  apiKey: "MY_LLM_API_KEY",  // env var name or literal value
+  apiKey: "$MY_LLM_API_KEY",  // env var reference
   api: "openai-completions",  // which streaming API to use
   models: [
     {
@@ -154,6 +155,8 @@ pi.registerProvider("my-llm", {
 
 When `models` is provided, it **replaces** all existing models for that provider.
 
+`apiKey` and custom header values use the same config value syntax as `models.json`: `!command` at the start executes a command for the whole value, `$ENV_VAR` and `${ENV_VAR}` interpolate environment variables, `$$` emits a literal `$`, and `$!` emits a literal `!`.
+
 ## Unregister Provider
 
 Use `pi.unregisterProvider(name)` to remove a provider that was previously registered via `pi.registerProvider(name, ...)`:
@@ -162,7 +165,7 @@ Use `pi.unregisterProvider(name)` to remove a provider that was previously regis
 // Register
 pi.registerProvider("my-llm", {
   baseUrl: "https://api.my-llm.com/v1",
-  apiKey: "MY_LLM_API_KEY",
+  apiKey: "$MY_LLM_API_KEY",
   api: "openai-completions",
   models: [
     {
@@ -229,6 +232,8 @@ models: [{
 Use `openrouter` for OpenRouter-style `reasoning: { effort }` controls. Use `together` for Together-style `reasoning: { enabled }` controls; with `supportsReasoningEffort`, it also sends `reasoning_effort`. Use `qwen-chat-template` instead for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
 Use `cacheControlFormat: "anthropic"` for OpenAI-compatible providers that expose Anthropic-style prompt caching via `cache_control` on the system prompt, last tool definition, and last user/assistant text content.
 
+For Anthropic-compatible providers using `api: "anthropic-messages"`, set `compat.forceAdaptiveThinking: true` on models or providers whose upstream model requires adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`). Built-in adaptive Claude models set this automatically. Set `compat.allowEmptySignature: true` only for providers that emit empty thinking signatures and expect `signature: ""` on replay.
+
 > Migration note: Mistral moved from `openai-completions` to `mistral-conversations`.
 > Use `mistral-conversations` for native Mistral models.
 > If you intentionally route Mistral-compatible/custom endpoints through `openai-completions`, set `compat` flags explicitly as needed.
@@ -240,7 +245,7 @@ If your provider expects `Authorization: Bearer <key>` but doesn't use a standar
 ```typescript
 pi.registerProvider("custom-api", {
   baseUrl: "https://api.example.com",
-  apiKey: "MY_API_KEY",
+  apiKey: "$MY_API_KEY",
   authHeader: true,  // adds Authorization: Bearer header
   api: "openai-completions",
   models: [...]
@@ -252,7 +257,7 @@ pi.registerProvider("custom-api", {
 Add OAuth/SSO authentication that integrates with `/login`:
 
 ```typescript
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@draht/ai";
 
 pi.registerProvider("corporate-ai", {
   baseUrl: "https://ai.corp.com/v1",
@@ -262,17 +267,28 @@ pi.registerProvider("corporate-ai", {
     name: "Corporate AI (SSO)",
 
     async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-      // Option 1: Browser-based OAuth
-      callbacks.onAuth({ url: "https://sso.corp.com/authorize?..." });
-
-      // Option 2: Device code flow
-      callbacks.onDeviceCode({
-        userCode: "ABCD-1234",
-        verificationUri: "https://sso.corp.com/device"
+      const method = await callbacks.onSelect({
+        message: "Select login method:",
+        options: [
+          { id: "browser", label: "Browser OAuth" },
+          { id: "device", label: "Device code" }
+        ]
       });
+      if (!method) throw new Error("Login cancelled");
 
-      // Option 3: Prompt for token/code
-      const code = await callbacks.onPrompt({ message: "Enter SSO code:" });
+      let code: string;
+      if (method === "device") {
+        callbacks.onDeviceCode({
+          userCode: "ABCD-1234",
+          verificationUri: "https://sso.corp.com/device",
+          intervalSeconds: 5,
+          expiresInSeconds: 900
+        });
+        code = await pollDeviceCodeUntilComplete();
+      } else {
+        callbacks.onAuth({ url: "https://sso.corp.com/authorize?..." });
+        code = await callbacks.onPrompt({ message: "Enter SSO code:" });
+      }
 
       // Exchange for tokens (your implementation)
       const tokens = await exchangeCodeForTokens(code);
@@ -321,10 +337,21 @@ interface OAuthLoginCallbacks {
   onAuth(params: { url: string }): void;
 
   // Show device code (for device authorization flow)
-  onDeviceCode(params: { userCode: string; verificationUri: string }): void;
+  onDeviceCode(params: {
+    userCode: string;
+    verificationUri: string;
+    intervalSeconds?: number;
+    expiresInSeconds?: number;
+  }): void;
 
   // Prompt user for input (for manual token entry)
   onPrompt(params: { message: string }): Promise<string>;
+
+  // Show an interactive selector, e.g. to choose browser OAuth vs device code
+  onSelect(params: {
+    message: string;
+    options: { id: string; label: string }[];
+  }): Promise<string | undefined>;
 }
 ```
 
@@ -365,7 +392,7 @@ import {
   type SimpleStreamOptions,
   calculateCost,
   createAssistantMessageEventStream,
-} from "@earendil-works/pi-ai";
+} from "@draht/ai";
 
 function streamMyProvider(
   model: Model<any>,
@@ -506,6 +533,60 @@ output.usage.totalTokens = output.usage.input + output.usage.output +
 calculateCost(model, output.usage);
 ```
 
+### Context Overflow Errors
+
+When a request exceeds the model's context window, pi can recover automatically by compacting the conversation and retrying. This recovery only kicks in if pi recognizes the failure as an overflow.
+
+Detection runs on the finalized assistant message:
+
+- `stopReason === "error"`
+- `errorMessage` matches one of pi's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/utils/overflow.ts))
+
+If your provider returns overflow errors with a message pi does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase pi recognizes. The generic fallback `context_length_exceeded` is the safest choice.
+
+```typescript
+const MY_PROVIDER_OVERFLOW_PATTERN = /your provider's overflow phrase/i;
+
+export default function (pi: ExtensionAPI) {
+  pi.registerProvider("my-provider", { /* ... */ });
+
+  pi.on("message_end", (event, ctx) => {
+    const message = event.message;
+    if (message.role !== "assistant") return;
+    if (message.stopReason !== "error") return;
+    if (
+      message.provider !== "my-provider" &&
+      ctx.model?.provider !== "my-provider"
+    )
+      return;
+
+    const errorMessage = message.errorMessage ?? "";
+    if (errorMessage.includes("context_length_exceeded")) return;
+    if (!MY_PROVIDER_OVERFLOW_PATTERN.test(errorMessage)) return;
+
+    return {
+      message: {
+        ...message,
+        errorMessage: `context_length_exceeded: ${errorMessage}`,
+      },
+    };
+  });
+}
+```
+
+`message_end` runs before pi tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what pi checks. With this in place, pi will:
+
+1. Detect the overflow from `errorMessage`.
+2. Drop the failed assistant message from live context.
+3. Run compaction.
+4. Retry the request once.
+
+Guard the rewrite carefully:
+
+- Scope it to your provider (`message.provider` and `ctx.model?.provider`) so unrelated errors from other providers are untouched.
+- Match a provider-specific pattern, not pi's generic overflow patterns. Rewriting rate-limit or throttling errors (`rate limit`, `too many requests`) would falsely trigger compaction instead of pi's normal retry-with-backoff path.
+- Skip when `errorMessage` already includes `context_length_exceeded` so the handler is idempotent.
+
 ### Registration
 
 Register your stream function:
@@ -513,7 +594,7 @@ Register your stream function:
 ```typescript
 pi.registerProvider("my-provider", {
   baseUrl: "https://api.example.com",
-  apiKey: "MY_API_KEY",
+  apiKey: "$MY_API_KEY",
   api: "my-custom-api",
   models: [...],
   streamSimple: streamMyProvider
@@ -550,7 +631,7 @@ interface ProviderConfig {
   /** API endpoint URL. Required when defining models. */
   baseUrl?: string;
 
-  /** API key or environment variable name. Required when defining models (unless oauth). */
+  /** API key literal, env interpolation ($ENV_VAR or ${ENV_VAR}), or !command. Required when defining models (unless oauth). */
   apiKey?: string;
 
   /** API type for streaming. Required at provider or model level when defining models. */
@@ -563,7 +644,7 @@ interface ProviderConfig {
     options?: SimpleStreamOptions
   ) => AssistantMessageEventStream;
 
-  /** Custom headers to include in requests. Values can be env var names. */
+  /** Custom headers to include in requests. Values use the same resolution syntax as apiKey. */
   headers?: Record<string, string>;
 
   /** If true, adds Authorization: Bearer header with the resolved API key. */
@@ -625,8 +706,9 @@ interface ProviderModelConfig {
   /** Custom headers for this specific model. */
   headers?: Record<string, string>;
 
-  /** OpenAI compatibility settings for openai-completions API. */
+  /** Compatibility settings for the selected API. */
   compat?: {
+    // openai-completions
     supportsStore?: boolean;
     supportsDeveloperRole?: boolean;
     supportsReasoningEffort?: boolean;
@@ -638,6 +720,14 @@ interface ProviderModelConfig {
     requiresReasoningContentOnAssistantMessages?: boolean;
     thinkingFormat?: "openai" | "openrouter" | "deepseek" | "together" | "zai" | "qwen" | "qwen-chat-template";
     cacheControlFormat?: "anthropic";
+
+    // anthropic-messages
+    supportsEagerToolInputStreaming?: boolean;
+    supportsLongCacheRetention?: boolean;
+    sendSessionAffinityHeaders?: boolean;
+    supportsCacheControlOnTools?: boolean;
+    forceAdaptiveThinking?: boolean;
+    allowEmptySignature?: boolean;
   };
 }
 ```

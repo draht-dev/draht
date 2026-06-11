@@ -6,7 +6,7 @@
 import * as Diff from "diff";
 import { constants } from "fs";
 import { access, readFile } from "fs/promises";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveToCwd } from "./path-utils.ts";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
 	const crlfIdx = content.indexOf("\r\n");
@@ -259,8 +259,16 @@ export function applyEditsToNormalizedContent(
 	return { baseContent, newContent };
 }
 
+/** Generate a standard unified patch. */
+export function generateUnifiedPatch(path: string, oldContent: string, newContent: string, contextLines = 4): string {
+	return Diff.createTwoFilesPatch(path, path, oldContent, newContent, undefined, undefined, {
+		context: contextLines,
+		headerOptions: Diff.FILE_HEADERS_ONLY,
+	});
+}
+
 /**
- * Generate a unified diff string with line numbers and context.
+ * Generate a display-oriented diff string with line numbers and context.
  * Returns both the diff string and the first changed line number (in the new file).
  */
 export function generateDiffString(

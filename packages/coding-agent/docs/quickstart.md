@@ -7,8 +7,30 @@ This page gets you from install to a useful first pi session.
 Pi is distributed as an npm package:
 
 ```bash
-npm install -g @earendil-works/pi-coding-agent
+npm install -g --ignore-scripts @draht/coding-agent
 ```
+
+`--ignore-scripts` disables dependency lifecycle scripts during install. Pi does not require install scripts for normal npm installs.
+
+### Uninstall
+
+Use the package manager that installed pi. The curl installer uses npm globally, so curl and npm installs are removed with npm:
+
+```bash
+# curl installer or npm install -g
+npm uninstall -g @draht/coding-agent
+
+# pnpm
+pnpm remove -g @draht/coding-agent
+
+# Yarn
+yarn global remove @draht/coding-agent
+
+# Bun
+bun uninstall -g @draht/coding-agent
+```
+
+Uninstalling pi leaves settings, credentials, sessions, and installed pi packages in `~/.pi/agent/`.
 
 Then start pi in the project directory you want it to work on:
 
@@ -114,6 +136,7 @@ Sessions are saved automatically:
 ```bash
 pi -c                  # Continue most recent session
 pi -r                  # Browse previous sessions
+pi --name "my task"    # Set session display name at startup
 pi --session <path|id> # Open a specific session
 ```
 

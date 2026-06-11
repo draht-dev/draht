@@ -6,9 +6,9 @@ import { access, readFile, stat } from "node:fs/promises";
 import type { ImageContent } from "@draht/ai";
 import chalk from "chalk";
 import { resolve } from "path";
-import { resolveReadPath } from "../core/tools/path-utils.js";
-import { formatDimensionNote, resizeImage } from "../utils/image-resize.js";
-import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.js";
+import { resolveReadPath } from "../core/tools/path-utils.ts";
+import { formatDimensionNote, resizeImage } from "../utils/image-resize.ts";
+import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 
 export interface ProcessedFiles {
 	text: string;
@@ -50,13 +50,12 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		if (mimeType) {
 			// Handle image file
 			const content = await readFile(absolutePath);
-			const base64Content = content.toString("base64");
 
 			let attachment: ImageContent;
 			let dimensionNote: string | undefined;
 
 			if (autoResizeImages) {
-				const resized = await resizeImage({ type: "image", data: base64Content, mimeType });
+				const resized = await resizeImage(content, mimeType);
 				if (!resized) {
 					text += `<file name="${absolutePath}">[Image omitted: could not be resized below the inline image size limit.]</file>\n`;
 					continue;
@@ -71,7 +70,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 				attachment = {
 					type: "image",
 					mimeType,
-					data: base64Content,
+					data: content.toString("base64"),
 				};
 			}
 

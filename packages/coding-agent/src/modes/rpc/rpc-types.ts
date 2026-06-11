@@ -7,10 +7,10 @@
 
 import type { AgentMessage, ThinkingLevel } from "@draht/agent-core";
 import type { ImageContent, Model } from "@draht/ai";
-import type { SessionStats } from "../../core/agent-session.js";
-import type { BashResult } from "../../core/bash-executor.js";
-import type { CompactionResult } from "../../core/compaction/index.js";
-import type { SourceInfo } from "../../core/source-info.js";
+import type { SessionStats } from "../../core/agent-session.ts";
+import type { BashResult } from "../../core/bash-executor.ts";
+import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { SourceInfo } from "../../core/source-info.ts";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -49,7 +49,7 @@ export type RpcCommand =
 	| { id?: string; type: "abort_retry" }
 
 	// Bash
-	| { id?: string; type: "bash"; command: string }
+	| { id?: string; type: "bash"; command: string; excludeFromContext?: boolean }
 	| { id?: string; type: "abort_bash" }
 
 	// Session

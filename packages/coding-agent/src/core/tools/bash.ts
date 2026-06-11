@@ -1,24 +1,25 @@
-import { existsSync } from "node:fs";
+import { constants } from "node:fs";
+import { access as fsAccess } from "node:fs/promises";
 import type { AgentTool } from "@draht/agent-core";
 import { Container, Text, truncateToWidth } from "@draht/tui";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
-import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
-import { theme } from "../../modes/interactive/theme/theme.js";
-import { waitForChildProcess } from "../../utils/child-process.js";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
+import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.ts";
+import { theme } from "../../modes/interactive/theme/theme.ts";
+import { waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getShellConfig,
 	getShellEnv,
 	killProcessTree,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
-} from "../../utils/shell.js";
-import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { OutputAccumulator } from "./output-accumulator.js";
-import { getTextOutput, invalidArgText, str } from "./render-utils.js";
-import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.js";
+} from "../../utils/shell.ts";
+import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { OutputAccumulator } from "./output-accumulator.ts";
+import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
+import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
 
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
@@ -64,22 +65,32 @@ export interface BashOperations {
  */
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
 	return {
-		exec: (command, cwd, { onData, signal, timeout, env }) => {
-			return new Promise((resolve, reject) => {
-				const { shell, args } = getShellConfig(options?.shellPath);
-				if (!existsSync(cwd)) {
-					reject(new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`));
-					return;
-				}
-				const child = spawn(shell, [...args, command], {
-					cwd,
-					detached: process.platform !== "win32",
-					env: env ?? getShellEnv(),
-					stdio: ["ignore", "pipe", "pipe"],
-				});
-				if (child.pid) trackDetachedChildPid(child.pid);
-				let timedOut = false;
-				let timeoutHandle: NodeJS.Timeout | undefined;
+		exec: async (command, cwd, { onData, signal, timeout, env }) => {
+			const { shell, args } = getShellConfig(options?.shellPath);
+			try {
+				await fsAccess(cwd, constants.F_OK);
+			} catch {
+				throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
+			}
+			if (signal?.aborted) {
+				throw new Error("aborted");
+			}
+
+			const child = spawn(shell, [...args, command], {
+				cwd,
+				detached: process.platform !== "win32",
+				env: env ?? getShellEnv(),
+				stdio: ["ignore", "pipe", "pipe"],
+				windowsHide: true,
+			});
+			if (child.pid) trackDetachedChildPid(child.pid);
+			let timedOut = false;
+			let timeoutHandle: NodeJS.Timeout | undefined;
+			const onAbort = () => {
+				if (child.pid) killProcessTree(child.pid);
+			};
+
+			try {
 				// Set timeout if provided.
 				if (timeout !== undefined && timeout > 0) {
 					timeoutHandle = setTimeout(() => {
@@ -91,37 +102,25 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				child.stdout?.on("data", onData);
 				child.stderr?.on("data", onData);
 				// Handle abort signal by killing the entire process tree.
-				const onAbort = () => {
-					if (child.pid) killProcessTree(child.pid);
-				};
 				if (signal) {
 					if (signal.aborted) onAbort();
 					else signal.addEventListener("abort", onAbort, { once: true });
 				}
 				// Handle shell spawn errors and wait for the process to terminate without hanging
 				// on inherited stdio handles held by detached descendants.
-				waitForChildProcess(child)
-					.then((code) => {
-						if (child.pid) untrackDetachedChildPid(child.pid);
-						if (timeoutHandle) clearTimeout(timeoutHandle);
-						if (signal) signal.removeEventListener("abort", onAbort);
-						if (signal?.aborted) {
-							reject(new Error("aborted"));
-							return;
-						}
-						if (timedOut) {
-							reject(new Error(`timeout:${timeout}`));
-							return;
-						}
-						resolve({ exitCode: code });
-					})
-					.catch((err) => {
-						if (child.pid) untrackDetachedChildPid(child.pid);
-						if (timeoutHandle) clearTimeout(timeoutHandle);
-						if (signal) signal.removeEventListener("abort", onAbort);
-						reject(err);
-					});
-			});
+				const exitCode = await waitForChildProcess(child);
+				if (signal?.aborted) {
+					throw new Error("aborted");
+				}
+				if (timedOut) {
+					throw new Error(`timeout:${timeout}`);
+				}
+				return { exitCode };
+			} finally {
+				if (child.pid) untrackDetachedChildPid(child.pid);
+				if (timeoutHandle) clearTimeout(timeoutHandle);
+				if (signal) signal.removeEventListener("abort", onAbort);
+			}
 		},
 	};
 }
@@ -199,7 +198,15 @@ function rebuildBashResultRenderComponent(
 	const state = component.state;
 	component.clear();
 
-	const output = getTextOutput(result as any, showImages).trim();
+	let output = getTextOutput(result as any, showImages).trim();
+	const truncation = result.details?.truncation;
+	const fullOutputPath = result.details?.fullOutputPath;
+	if (!options.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
+		const footerStart = output.lastIndexOf("\n\n[");
+		if (footerStart !== -1 && output.slice(footerStart).includes(fullOutputPath)) {
+			output = output.slice(0, footerStart).trimEnd();
+		}
+	}
 
 	if (output) {
 		const styledOutput = output
@@ -221,7 +228,7 @@ function rebuildBashResultRenderComponent(
 					if (state.cachedSkipped && state.cachedSkipped > 0) {
 						const hint =
 							theme.fg("muted", `... (${state.cachedSkipped} earlier lines,`) +
-							` ${keyHint("app.tools.expand", "to expand")})`;
+							` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 						return ["", truncateToWidth(hint, width, "..."), ...(state.cachedLines ?? [])];
 					}
 					return ["", ...(state.cachedLines ?? [])];
@@ -235,8 +242,6 @@ function rebuildBashResultRenderComponent(
 		}
 	}
 
-	const truncation = result.details?.truncation;
-	const fullOutputPath = result.details?.fullOutputPath;
 	if (truncation?.truncated || fullOutputPath) {
 		const warnings: string[] = [];
 		if (fullOutputPath) {

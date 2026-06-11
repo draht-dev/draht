@@ -1,9 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
-import triggerCompactExtension from "../examples/extensions/trigger-compact.js";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../src/core/extensions/index.js";
+import triggerCompactExtension from "../examples/extensions/trigger-compact.ts";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../src/core/extensions/index.ts";
 
 function createContext(tokens: number | null, compact = vi.fn()): ExtensionContext {
 	return {
+		mode: "print",
 		hasUI: false,
 		ui: {} as ExtensionContext["ui"],
 		cwd: process.cwd(),
@@ -11,6 +12,7 @@ function createContext(tokens: number | null, compact = vi.fn()): ExtensionConte
 		modelRegistry: {} as ExtensionContext["modelRegistry"],
 		model: undefined,
 		isIdle: () => true,
+		isProjectTrusted: () => true,
 		signal: undefined,
 		abort: vi.fn(),
 		hasPendingMessages: () => false,

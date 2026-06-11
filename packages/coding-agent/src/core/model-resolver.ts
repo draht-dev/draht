@@ -6,17 +6,19 @@ import type { ThinkingLevel } from "@draht/agent-core";
 import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@draht/ai";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
-import { isValidThinkingLevel } from "../cli/args.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
-import type { ModelRegistry } from "./model-registry.js";
+import { isValidThinkingLevel } from "../cli/args.ts";
+import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import type { ModelRegistry } from "./model-registry.ts";
 
 /** Default model IDs for each known provider */
 export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
-	anthropic: "claude-opus-4-7",
+	"ant-ling": "Ring-2.6-1T",
+	anthropic: "claude-opus-4-8",
 	openai: "gpt-5.4",
 	"azure-openai-responses": "gpt-5.4",
 	"openai-codex": "gpt-5.5",
+	nvidia: "nvidia/nemotron-3-super-120b-a12b",
 	deepseek: "deepseek-v4-pro",
 	google: "gemini-3.1-pro-preview",
 	"google-vertex": "gemini-3.1-pro-preview",
@@ -27,6 +29,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	groq: "openai/gpt-oss-120b",
 	cerebras: "zai-glm-4.7",
 	zai: "glm-5.1",
+	"zai-coding-cn": "glm-5.1",
 	mistral: "devstral-medium-latest",
 	minimax: "MiniMax-M2.7",
 	"minimax-cn": "MiniMax-M2.7",
@@ -337,9 +340,10 @@ export interface ResolveCliModelResult {
 export function resolveCliModel(options: {
 	cliProvider?: string;
 	cliModel?: string;
+	cliThinking?: string;
 	modelRegistry: ModelRegistry;
 }): ResolveCliModelResult {
-	const { cliProvider, cliModel, modelRegistry } = options;
+	const { cliProvider, cliModel, cliThinking, modelRegistry } = options;
 
 	if (!cliModel) {
 		return { model: undefined, warning: undefined, error: undefined };
@@ -448,12 +452,28 @@ export function resolveCliModel(options: {
 	}
 
 	if (provider) {
-		const fallbackModel = buildFallbackModel(provider, pattern, availableModels);
+		// Parse thinking level suffix from the pattern before building the fallback model,
+		// but only when --thinking is not explicitly provided.
+		// e.g. "zai-org/GLM-5.1-FP8:high" → modelId="zai-org/GLM-5.1-FP8", fallbackThinking="high"
+		let fallbackPattern = pattern;
+		let fallbackThinking: ThinkingLevel | undefined;
+		if (!cliThinking) {
+			const lastColon = pattern.lastIndexOf(":");
+			if (lastColon !== -1) {
+				const suffix = pattern.substring(lastColon + 1);
+				if (isValidThinkingLevel(suffix)) {
+					fallbackPattern = pattern.substring(0, lastColon);
+					fallbackThinking = suffix;
+				}
+			}
+		}
+
+		const fallbackModel = buildFallbackModel(provider, fallbackPattern, availableModels);
 		if (fallbackModel) {
 			const fallbackWarning = warning
-				? `${warning} Model "${pattern}" not found for provider "${provider}". Using custom model id.`
-				: `Model "${pattern}" not found for provider "${provider}". Using custom model id.`;
-			return { model: fallbackModel, thinkingLevel: undefined, warning: fallbackWarning, error: undefined };
+				? `${warning} Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`
+				: `Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`;
+			return { model: fallbackModel, thinkingLevel: fallbackThinking, warning: fallbackWarning, error: undefined };
 		}
 	}
 

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
 
 export interface OutputAccumulatorOptions {
 	maxLines?: number;
@@ -45,8 +45,10 @@ export class OutputAccumulator {
 	private tailStartsAtLineBoundary = true;
 	private totalRawBytes = 0;
 	private totalDecodedBytes = 0;
-	private totalLines = 1;
+	private completedLines = 0;
+	private totalLines = 0;
 	private currentLineBytes = 0;
+	private hasOpenLine = false;
 	private finished = false;
 
 	private tempFilePath: string | undefined;
@@ -164,10 +166,14 @@ export class OutputAccumulator {
 		}
 		if (newlines === 0) {
 			this.currentLineBytes += bytes;
+			this.hasOpenLine = true;
 		} else {
-			this.totalLines += newlines;
-			this.currentLineBytes = byteLength(text.slice(lastNewline + 1));
+			this.completedLines += newlines;
+			const tail = text.slice(lastNewline + 1);
+			this.currentLineBytes = byteLength(tail);
+			this.hasOpenLine = tail.length > 0;
 		}
+		this.totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
 	}
 
 	private trimTail(): void {

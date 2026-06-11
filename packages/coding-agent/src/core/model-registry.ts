@@ -24,15 +24,22 @@ import { join } from "path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
-import { getAgentDir } from "../config.js";
-import type { AuthStatus, AuthStorage } from "./auth-storage.js";
-import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
+import { getAgentDir } from "../config.ts";
+import { warnDeprecation } from "../utils/deprecation.ts";
+import { stripJsonComments } from "../utils/json.ts";
+import { normalizePath } from "../utils/paths.ts";
+import type { AuthStatus, AuthStorage } from "./auth-storage.ts";
+import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.ts";
 import {
 	clearConfigValueCache,
+	getConfigValueEnvVarNames,
+	isCommandConfigValue,
+	isConfigValueConfigured,
+	isLegacyEnvVarNameConfigValue,
 	resolveConfigValueOrThrow,
 	resolveConfigValueUncached,
 	resolveHeadersOrThrow,
-} from "./resolve-config-value.js";
+} from "./resolve-config-value.ts";
 
 // Schema for OpenRouter routing preferences
 const PercentileCutoffsSchema = Type.Object({
@@ -120,6 +127,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
 });
 
 const OpenAIResponsesCompatSchema = Type.Object({
+	supportsDeveloperRole: Type.Optional(Type.Boolean()),
 	sendSessionIdHeader: Type.Optional(Type.Boolean()),
 	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
@@ -127,6 +135,9 @@ const OpenAIResponsesCompatSchema = Type.Object({
 const AnthropicMessagesCompatSchema = Type.Object({
 	supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
 	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+	sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
+	supportsCacheControlOnTools: Type.Optional(Type.Boolean()),
+	forceAdaptiveThinking: Type.Optional(Type.Boolean()),
 });
 
 const ProviderCompatSchema = Type.Union([
@@ -214,13 +225,6 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 	return path || "root";
 }
 
-/** Strip `//` line comments and trailing commas from JSON, leaving string literals untouched. */
-function stripJsonComments(input: string): string {
-	return input
-		.replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => (m[0] === '"' ? m : ""))
-		.replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail) => tail ?? (m[0] === '"' ? m : ""));
-}
-
 /** Provider override config (baseUrl, compat) without request auth/headers */
 interface ProviderOverride {
 	baseUrl?: string;
@@ -231,6 +235,77 @@ interface ProviderRequestConfig {
 	apiKey?: string;
 	headers?: Record<string, string>;
 	authHeader?: boolean;
+}
+
+function migrateLegacyRegisterProviderConfigValue(providerName: string, field: string, value: string): string {
+	if (!isLegacyEnvVarNameConfigValue(value)) return value;
+	warnDeprecation(
+		`registerProvider("${providerName}") ${field} value "${value}" is treated as a legacy environment variable reference. This will no longer be detected as an environment variable reference in a future release. Pass "$${value}" instead.`,
+	);
+	return `$${value}`;
+}
+
+function migrateLegacyRegisterProviderHeaders(
+	providerName: string,
+	field: string,
+	headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+	if (!headers) return undefined;
+	let migratedHeaders: Record<string, string> | undefined;
+	for (const [key, value] of Object.entries(headers)) {
+		const migratedValue = migrateLegacyRegisterProviderConfigValue(providerName, `${field} header "${key}"`, value);
+		if (migratedValue === value) continue;
+		migratedHeaders ??= { ...headers };
+		migratedHeaders[key] = migratedValue;
+	}
+	return migratedHeaders ?? headers;
+}
+
+function migrateLegacyRegisterProviderConfigValues(
+	providerName: string,
+	config: ProviderConfigInput,
+): ProviderConfigInput {
+	let migratedConfig: ProviderConfigInput | undefined;
+
+	const setMigratedConfigValue = <TKey extends keyof ProviderConfigInput>(
+		key: TKey,
+		value: ProviderConfigInput[TKey],
+	) => {
+		migratedConfig ??= { ...config };
+		migratedConfig[key] = value;
+	};
+
+	if (config.apiKey) {
+		const apiKey = migrateLegacyRegisterProviderConfigValue(providerName, "apiKey", config.apiKey);
+		if (apiKey !== config.apiKey) {
+			setMigratedConfigValue("apiKey", apiKey);
+		}
+	}
+
+	const headers = migrateLegacyRegisterProviderHeaders(providerName, "headers", config.headers);
+	if (headers !== config.headers) {
+		setMigratedConfigValue("headers", headers);
+	}
+
+	if (config.models) {
+		let models: ProviderConfigInput["models"] | undefined;
+		for (let index = 0; index < config.models.length; index++) {
+			const model = config.models[index];
+			const modelHeaders = migrateLegacyRegisterProviderHeaders(
+				providerName,
+				`model "${model.id}" headers`,
+				model.headers,
+			);
+			if (modelHeaders === model.headers) continue;
+			models ??= [...config.models];
+			models[index] = { ...model, headers: modelHeaders };
+		}
+		if (models) {
+			setMigratedConfigValue("models", models);
+		}
+	}
+
+	return migratedConfig ?? config;
 }
 
 export type ResolvedRequestAuth =
@@ -334,11 +409,12 @@ export class ModelRegistry {
 	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
+	readonly authStorage: AuthStorage;
+	private modelsJsonPath: string | undefined;
 
-	private constructor(
-		readonly authStorage: AuthStorage,
-		private modelsJsonPath: string | undefined,
-	) {
+	private constructor(authStorage: AuthStorage, modelsJsonPath: string | undefined) {
+		this.authStorage = authStorage;
+		this.modelsJsonPath = modelsJsonPath ? normalizePath(modelsJsonPath) : undefined;
 		this.loadModels();
 	}
 
@@ -636,9 +712,10 @@ export class ModelRegistry {
 	 * Get API key for a model.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
+		const providerApiKey = this.providerRequestConfigs.get(model.provider)?.apiKey;
 		return (
 			this.authStorage.hasAuth(model.provider) ||
-			this.providerRequestConfigs.get(model.provider)?.apiKey !== undefined
+			(providerApiKey !== undefined && isConfigValueConfigured(providerApiKey))
 		);
 	}
 
@@ -733,12 +810,15 @@ export class ModelRegistry {
 			return authStatus;
 		}
 
-		if (providerApiKey.startsWith("!")) {
+		if (isCommandConfigValue(providerApiKey)) {
 			return { configured: true, source: "models_json_command" };
 		}
 
-		if (process.env[providerApiKey]) {
-			return { configured: true, source: "environment", label: providerApiKey };
+		const envVarNames = getConfigValueEnvVarNames(providerApiKey);
+		if (envVarNames.length > 0) {
+			return isConfigValueConfigured(providerApiKey)
+				? { configured: true, source: "environment", label: envVarNames.join(", ") }
+				: { configured: false };
 		}
 
 		return { configured: true, source: "models_json_key" };
@@ -789,9 +869,10 @@ export class ModelRegistry {
 	 * If provider has oauth: registers OAuth provider for /login support.
 	 */
 	registerProvider(providerName: string, config: ProviderConfigInput): void {
-		this.validateProviderConfig(providerName, config);
-		this.applyProviderConfig(providerName, config);
-		this.upsertRegisteredProvider(providerName, config);
+		const migratedConfig = migrateLegacyRegisterProviderConfigValues(providerName, config);
+		this.validateProviderConfig(providerName, migratedConfig);
+		this.applyProviderConfig(providerName, migratedConfig);
+		this.upsertRegisteredProvider(providerName, migratedConfig);
 	}
 
 	/**

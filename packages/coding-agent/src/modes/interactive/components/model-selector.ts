@@ -1,10 +1,10 @@
 import { type Model, modelsAreEqual } from "@draht/ai";
 import { Container, type Focusable, fuzzyFilter, getKeybindings, Input, Spacer, Text, type TUI } from "@draht/tui";
-import type { ModelRegistry } from "../../../core/model-registry.js";
-import type { SettingsManager } from "../../../core/settings-manager.js";
-import { theme } from "../theme/theme.js";
-import { DynamicBorder } from "./dynamic-border.js";
-import { keyHint } from "./keybinding-hints.js";
+import type { ModelRegistry } from "../../../core/model-registry.ts";
+import type { SettingsManager } from "../../../core/settings-manager.ts";
+import { theme } from "../theme/theme.ts";
+import { DynamicBorder } from "./dynamic-border.ts";
+import { keyHint } from "./keybinding-hints.ts";
 
 interface ModelItem {
 	provider: string;

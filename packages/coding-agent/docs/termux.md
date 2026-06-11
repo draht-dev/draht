@@ -17,7 +17,7 @@ pkg update && pkg upgrade
 pkg install nodejs termux-api git
 
 # Install pi
-npm install -g @earendil-works/pi-coding-agent
+npm install -g --ignore-scripts @draht/coding-agent
 
 # Create config directory
 mkdir -p ~/.pi/agent
@@ -36,7 +36,7 @@ Image clipboard is not supported on Termux (the `ctrl+v` image paste feature wil
 
 Create `~/.pi/agent/AGENTS.md` to help the agent understand the Termux environment:
 
-```markdown
+````markdown
 # Agent Environment: Termux on Android
 
 ## Location
@@ -91,7 +91,7 @@ termux-camera-photo out.jpg   # Take photo
 - Termux:API app must be installed for `termux-*` commands
 - Use `pkg install termux-api` for the command-line tools
 - Storage permission needed for `/storage/emulated/0` access
-```
+````
 
 ## Limitations
 

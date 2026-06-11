@@ -16,13 +16,13 @@ import {
 } from "@draht/ai";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AgentSession } from "../src/core/agent-session.js";
-import { AuthStorage } from "../src/core/auth-storage.js";
-import { ModelRegistry } from "../src/core/model-registry.js";
-import { SessionManager } from "../src/core/session-manager.js";
-import { SettingsManager } from "../src/core/settings-manager.js";
-import type { BuildSystemPromptOptions } from "../src/core/system-prompt.js";
-import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.js";
+import { AgentSession } from "../src/core/agent-session.ts";
+import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRegistry } from "../src/core/model-registry.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
+import type { BuildSystemPromptOptions } from "../src/core/system-prompt.ts";
+import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.ts";
 
 // Mock stream that mimics AssistantMessageEventStream
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -444,6 +444,7 @@ describe("AgentSession concurrent prompt guard", () => {
 					text: string,
 					images: unknown,
 					source: "interactive" | "rpc" | "extension",
+					streamingBehavior?: "steer" | "followUp",
 				) => Promise<{ action: "continue" }>;
 				emitBeforeAgentStart: (
 					prompt: string,
@@ -588,6 +589,7 @@ describe("AgentSession concurrent prompt guard", () => {
 					text: string,
 					images: unknown,
 					source: "interactive" | "rpc" | "extension",
+					streamingBehavior?: "steer" | "followUp",
 				) => Promise<{ action: "continue" }>;
 				emitBeforeAgentStart: (
 					prompt: string,

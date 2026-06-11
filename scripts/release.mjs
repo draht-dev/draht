@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Release script for pi-mono
+ * Release script for draht (date-based versioning: YYYY.M.D[-N])
  *
  * Usage:
+ *   node scripts/release.mjs                 # today's date version, auto intraday suffix (-1, -2, ...)
+ *   node scripts/release.mjs <YYYY.M.D[-N]>  # explicit version
  *   node scripts/release.mjs <major|minor|patch>
- *   node scripts/release.mjs <x.y.z>
  *
  * Steps:
  * 1. Check for uncommitted changes
@@ -22,10 +23,11 @@ import { join } from "path";
 
 const RELEASE_TARGET = process.argv[2];
 const BUMP_TYPES = new Set(["major", "minor", "patch"]);
-const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+const VERSION_RE = /^\d+\.\d+\.\d+(-\d+)?$/;
 
-if (!RELEASE_TARGET || (!BUMP_TYPES.has(RELEASE_TARGET) && !SEMVER_RE.test(RELEASE_TARGET))) {
-	console.error("Usage: node scripts/release.mjs <major|minor|patch|x.y.z>");
+if (RELEASE_TARGET && !BUMP_TYPES.has(RELEASE_TARGET) && !VERSION_RE.test(RELEASE_TARGET)) {
+	console.error("Usage: node scripts/release.mjs [major|minor|patch|YYYY.M.D[-N]]");
+	console.error("  (no argument = today's date-based version, auto-incrementing intraday suffix)");
 	process.exit(1);
 }
 
@@ -47,18 +49,35 @@ function getVersion() {
 	return pkg.version;
 }
 
+// draht date-based version: YYYY.M.D, with an intraday suffix (-1, -2, ...) when
+// today already has a release.
+function computeDateVersion() {
+	const now = new Date();
+	const base = `${now.getFullYear()}.${now.getMonth() + 1}.${now.getDate()}`;
+	const current = getVersion();
+	if (current.split("-")[0] === base) {
+		const match = current.match(/-(\d+)$/);
+		return `${base}-${match ? Number(match[1]) + 1 : 1}`;
+	}
+	return base;
+}
+
 function compareVersions(a, b) {
-	const aParts = a.split(".").map(Number);
-	const bParts = b.split(".").map(Number);
+	const parse = (v) => {
+		const [base, suffix] = v.split("-");
+		return { parts: base.split(".").map(Number), suffix: suffix ? Number(suffix) : 0 };
+	};
+	const pa = parse(a);
+	const pb = parse(b);
 
 	for (let i = 0; i < 3; i++) {
-		const diff = (aParts[i] || 0) - (bParts[i] || 0);
+		const diff = (pa.parts[i] || 0) - (pb.parts[i] || 0);
 		if (diff !== 0) {
 			return diff;
 		}
 	}
 
-	return 0;
+	return pa.suffix - pb.suffix;
 }
 
 function shellQuote(value) {
@@ -78,20 +97,23 @@ function stageChangedFiles() {
 function bumpOrSetVersion(target) {
 	const currentVersion = getVersion();
 
-	if (BUMP_TYPES.has(target)) {
+	if (target && BUMP_TYPES.has(target)) {
 		console.log(`Bumping version (${target})...`);
 		run(`npm run version:${target}`);
 		return getVersion();
 	}
 
-	if (compareVersions(target, currentVersion) <= 0) {
-		console.error(`Error: explicit version ${target} must be greater than current version ${currentVersion}.`);
+	// No target -> today's date-based version; explicit target -> use as given.
+	const version = target || computeDateVersion();
+
+	if (compareVersions(version, currentVersion) <= 0) {
+		console.error(`Error: version ${version} must be greater than current version ${currentVersion}.`);
 		process.exit(1);
 	}
 
-	console.log(`Setting explicit version (${target})...`);
+	console.log(`Setting version (${version})...`);
 	run(
-		`npm version ${target} -ws --no-git-tag-version && node scripts/sync-versions.js && npx shx rm -rf node_modules packages/*/node_modules package-lock.json && npm install`,
+		`npm version ${version} -ws --no-git-tag-version && node scripts/sync-versions.js && npx shx rm -rf node_modules packages/*/node_modules package-lock.json && npm install`,
 	);
 	return getVersion();
 }

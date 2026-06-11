@@ -113,7 +113,7 @@ function bumpOrSetVersion(target) {
 
 	console.log(`Setting version (${version})...`);
 	run(
-		`npm version ${version} -ws --no-git-tag-version && node scripts/sync-versions.js && npx shx rm -rf node_modules packages/*/node_modules package-lock.json && npm install`,
+		`npm version ${version} -ws --no-git-tag-version && node scripts/sync-versions.js && bun install`,
 	);
 	return getVersion();
 }

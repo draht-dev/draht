@@ -22,6 +22,31 @@ class StrictStrikethroughTokenizer extends Tokenizer {
 	}
 }
 
+function trimPartialClosingFences(tokens: readonly Token[]): void {
+	const token = tokens[tokens.length - 1];
+	if (token?.type === "list") {
+		trimPartialClosingFences(token.items[token.items.length - 1]?.tokens ?? []);
+		return;
+	}
+	if (token?.type === "blockquote") {
+		trimPartialClosingFences(token.tokens ?? []);
+		return;
+	}
+	if (token?.type !== "code") {
+		return;
+	}
+
+	// Trim streamed partial closing fences so code blocks do not shrink/flicker
+	// when the final fence character arrives. See https://github.com/earendil-works/pi/issues/5825.
+	const marker = /^(`{3,}|~{3,})/.exec(token.raw)?.[1];
+	const lastLine = token.raw.split("\n").pop();
+	if (!marker || !lastLine || lastLine.length >= marker.length || lastLine !== marker[0]?.repeat(lastLine.length)) {
+		return;
+	}
+
+	token.text = token.text.slice(0, -lastLine.length).replace(/\n$/, "");
+}
+
 const markdownParser = new Marked();
 markdownParser.setOptions({
 	tokenizer: new StrictStrikethroughTokenizer(),
@@ -71,7 +96,7 @@ export interface MarkdownTheme {
 }
 
 export interface MarkdownOptions {
-	/** Preserve source ordered-list markers instead of normalizing them from the list start. */
+	/** Preserve source list markers instead of normalizing them. */
 	preserveOrderedListMarkers?: boolean;
 }
 
@@ -145,6 +170,7 @@ export class Markdown implements Component {
 
 		// Parse markdown to HTML-like tokens
 		const tokens = markdownParser.lexer(normalizedText);
+		trimPartialClosingFences(tokens);
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];
@@ -561,6 +587,11 @@ export class Markdown implements Component {
 		return match ? `${match[1]} ` : undefined;
 	}
 
+	private getUnorderedListMarker(item: Tokens.ListItem): string | undefined {
+		const match = /^(?: {0,3})([-+*])(?:[ \t]+|(?=\r?\n|$))/.exec(item.raw);
+		return match ? `${match[1]} ` : undefined;
+	}
+
 	/**
 	 * Render a list with proper nesting support
 	 */
@@ -577,7 +608,9 @@ export class Markdown implements Component {
 				? this.options.preserveOrderedListMarkers
 					? (this.getOrderedListMarker(item) ?? `${startNumber + i}. `)
 					: `${startNumber + i}. `
-				: "- ";
+				: this.options.preserveOrderedListMarkers
+					? (this.getUnorderedListMarker(item) ?? "- ")
+					: "- ";
 			const taskMarker = item.task ? `[${item.checked ? "x" : " "}] ` : "";
 			const marker = bullet + taskMarker;
 			const firstPrefix = indent + this.theme.listBullet(marker);

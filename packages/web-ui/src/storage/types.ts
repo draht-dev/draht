@@ -1,5 +1,5 @@
 import type { AgentMessage, ThinkingLevel } from "@draht/agent-core";
-import type { Model } from "@draht/ai";
+import type { Model } from "@draht/ai/compat";
 
 /**
  * Transaction interface for atomic operations across stores.

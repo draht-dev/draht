@@ -1,5 +1,5 @@
 import { Agent, type AgentEvent } from "@draht/agent-core";
-import { getModel, type ImageContent } from "@draht/ai";
+import { getModel, type ImageContent } from "@draht/ai/compat";
 import {
 	AgentSession,
 	AuthStorage,

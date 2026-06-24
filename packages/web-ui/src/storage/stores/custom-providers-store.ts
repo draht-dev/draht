@@ -1,4 +1,4 @@
-import type { Model } from "@draht/ai";
+import type { Model } from "@draht/ai/compat";
 import { Store } from "../store.js";
 import type { StoreConfig } from "../types.js";
 

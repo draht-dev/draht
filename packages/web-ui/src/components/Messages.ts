@@ -5,7 +5,7 @@ import type {
 	ToolCall,
 	ToolResultMessage as ToolResultMessageType,
 	UserMessage as UserMessageType,
-} from "@draht/ai";
+} from "@draht/ai/compat";
 import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { renderTool } from "../tools/index.js";
@@ -297,7 +297,7 @@ export class AbortedMessage extends LitElement {
 // ============================================================================
 
 import type { AgentMessage } from "@draht/agent-core";
-import type { Message } from "@draht/ai";
+import type { Message } from "@draht/ai/compat";
 
 /**
  * Convert attachments to content blocks for LLM.

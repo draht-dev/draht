@@ -6,7 +6,7 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 	type StreamOptions,
-} from "@draht/ai";
+} from "@draht/ai/compat";
 import { loadConfig } from "./config.js";
 import { estimateCost, logCost } from "./cost.js";
 import type { CostEntry, ModelRef, RouterConfig, RouterRole } from "./types.js";

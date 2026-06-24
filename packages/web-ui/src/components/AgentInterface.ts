@@ -1,4 +1,4 @@
-import { streamSimple, type ToolResultMessage, type Usage } from "@draht/ai";
+import { streamSimple, type ToolResultMessage, type Usage } from "@draht/ai/compat";
 import { html, LitElement } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import { ModelSelector } from "../dialogs/ModelSelector.js";

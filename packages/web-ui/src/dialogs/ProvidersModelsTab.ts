@@ -1,4 +1,4 @@
-import { getProviders } from "@draht/ai";
+import { getProviders } from "@draht/ai/compat";
 import { i18n } from "@mariozechner/mini-lit";
 import { Select } from "@mariozechner/mini-lit/dist/Select.js";
 import { html, type TemplateResult } from "lit";

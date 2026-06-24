@@ -1,5 +1,5 @@
-import type { Api, Context, Model, SimpleStreamOptions } from "@draht/ai";
-import { streamSimple } from "@draht/ai";
+import type { Api, Context, Model, SimpleStreamOptions } from "@draht/ai/compat";
+import { streamSimple } from "@draht/ai/compat";
 
 /**
  * Centralized proxy decision logic.

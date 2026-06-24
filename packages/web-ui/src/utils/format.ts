@@ -1,4 +1,4 @@
-import type { Usage } from "@draht/ai";
+import type { Usage } from "@draht/ai/compat";
 import { i18n } from "@mariozechner/mini-lit";
 
 export function formatCost(cost: number): string {

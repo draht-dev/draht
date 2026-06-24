@@ -1,7 +1,7 @@
 import { icon } from "@mariozechner/mini-lit";
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import type { Agent, AgentMessage, AgentTool } from "@draht/agent-core";
-import { StringEnum, type ToolCall } from "@draht/ai";
+import { StringEnum, type ToolCall } from "@draht/ai/compat";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";

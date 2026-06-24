@@ -1,7 +1,7 @@
 // Main chat interface
 
 export type { Agent, AgentMessage, AgentState, ThinkingLevel } from "@draht/agent-core";
-export type { Model } from "@draht/ai";
+export type { Model } from "@draht/ai/compat";
 export { ChatPanel } from "./ChatPanel.js";
 // Components
 export { AgentInterface } from "./components/AgentInterface.js";

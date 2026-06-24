@@ -1,5 +1,5 @@
 import type { AgentTool } from "@draht/agent-core";
-import type { ToolResultMessage } from "@draht/ai";
+import type { ToolResultMessage } from "@draht/ai/compat";
 import { html } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { FileText } from "lucide";

@@ -1,4 +1,4 @@
-import type { Model } from "@draht/ai";
+import type { Model } from "@draht/ai/compat";
 import { LMStudioClient } from "@lmstudio/sdk";
 import { Ollama } from "ollama/browser";
 

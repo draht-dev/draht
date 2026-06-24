@@ -1,4 +1,4 @@
-import type { Message } from "@draht/ai";
+import type { Message } from "@draht/ai/compat";
 import type { AgentMessage, MessageRenderer } from "@draht/web-ui";
 import { defaultConvertToLlm, registerMessageRenderer } from "@draht/web-ui";
 import { Alert } from "@mariozechner/mini-lit/dist/Alert.js";

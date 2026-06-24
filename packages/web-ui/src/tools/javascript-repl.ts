@@ -1,5 +1,5 @@
 import type { AgentTool } from "@draht/agent-core";
-import type { ToolResultMessage } from "@draht/ai";
+import type { ToolResultMessage } from "@draht/ai/compat";
 import { i18n } from "@mariozechner/mini-lit";
 import { html } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";

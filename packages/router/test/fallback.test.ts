@@ -9,7 +9,7 @@ import {
 	type Model,
 	registerApiProvider,
 	type StreamOptions,
-} from "@draht/ai";
+} from "@draht/ai/compat";
 import { ModelRouter } from "../src/router.js";
 import type { ModelRef, RouterConfig } from "../src/types.js";
 

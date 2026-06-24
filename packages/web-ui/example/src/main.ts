@@ -1,6 +1,6 @@
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { Agent, type AgentMessage } from "@draht/agent-core";
-import { getModel, type TextContent } from "@draht/ai";
+import { getModel, type TextContent } from "@draht/ai/compat";
 import {
 	type AgentState,
 	ApiKeyPromptDialog,

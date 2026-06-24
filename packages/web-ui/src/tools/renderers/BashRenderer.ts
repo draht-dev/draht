@@ -1,4 +1,4 @@
-import type { ToolResultMessage } from "@draht/ai";
+import type { ToolResultMessage } from "@draht/ai/compat";
 import { html } from "lit";
 import { SquareTerminal } from "lucide";
 import { i18n } from "../../utils/i18n.js";

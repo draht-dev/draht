@@ -1,5 +1,5 @@
 import type { AgentMessage, AgentTool } from "@draht/agent-core";
-import type { ToolResultMessage } from "@draht/ai";
+import type { ToolResultMessage } from "@draht/ai/compat";
 import { html, LitElement } from "lit";
 import { property, state } from "lit/decorators.js";
 

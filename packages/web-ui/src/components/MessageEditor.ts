@@ -1,4 +1,4 @@
-import type { Model } from "@draht/ai";
+import type { Model } from "@draht/ai/compat";
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Select, type SelectOption } from "@mariozechner/mini-lit/dist/Select.js";

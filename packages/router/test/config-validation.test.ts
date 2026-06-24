@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getProviders } from "@draht/ai";
+import { getProviders } from "@draht/ai/compat";
 import { loadConfig, saveConfig, validateConfig } from "../src/config.js";
 import { DEFAULT_CONFIG, type RouterConfig } from "../src/types.js";
 

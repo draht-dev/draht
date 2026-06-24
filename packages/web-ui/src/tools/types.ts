@@ -1,4 +1,4 @@
-import type { ToolResultMessage } from "@draht/ai";
+import type { ToolResultMessage } from "@draht/ai/compat";
 import type { TemplateResult } from "lit";
 
 export interface ToolRenderResult {

@@ -1,4 +1,5 @@
-import { complete, createAssistantMessageEventStream, getModel, getProviders, Type } from "@draht/ai";
+import { createAssistantMessageEventStream, Type } from "@draht/ai";
+import { complete, getModel, getProviders } from "@draht/ai/compat";
 import {
 	Agent,
 	bashExecutionToText,

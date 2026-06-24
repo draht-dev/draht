@@ -48,7 +48,8 @@
         "@anthropic-ai/sdk": "^0.91.1",
         "@aws-sdk/client-bedrock-runtime": "^3.1030.0",
         "@google/genai": "^1.40.0",
-        "@mistralai/mistralai": "^2.2.0",
+        "@mistralai/mistralai": "^2.2.6",
+        "@opentelemetry/api": "^1.9.0",
         "@smithy/node-http-handler": "^4.4.12",
         "@smithy/types": "^4.0.0",
         "chalk": "^5.6.2",
@@ -111,6 +112,7 @@
         "marked": "^15.0.12",
         "minimatch": "^10.2.3",
         "proper-lockfile": "^4.1.2",
+        "semver": "^7.8.0",
         "strip-ansi": "^7.1.0",
         "typebox": "^1.1.24",
         "undici": "^7.19.1",
@@ -124,6 +126,7 @@
         "@types/ms": "^2.1.0",
         "@types/node": "^24.3.0",
         "@types/proper-lockfile": "^4.1.4",
+        "@types/semver": "^7.7.1",
         "shx": "^0.4.0",
         "typescript": "^6.0.0-beta",
         "vitest": "^3.2.4",
@@ -134,14 +137,14 @@
     },
     "packages/coding-agent/examples/extensions/custom-provider-anthropic": {
       "name": "pi-extension-custom-provider-anthropic",
-      "version": "0.79.1",
+      "version": "0.80.2",
       "dependencies": {
         "@anthropic-ai/sdk": "0.52.0",
       },
     },
     "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo": {
       "name": "pi-extension-custom-provider-gitlab-duo",
-      "version": "0.79.1",
+      "version": "0.80.2",
     },
     "packages/coding-agent/examples/extensions/custom-provider-qwen-cli": {
       "name": "pi-extension-custom-provider-qwen-cli",
@@ -149,7 +152,7 @@
     },
     "packages/coding-agent/examples/extensions/with-deps": {
       "name": "pi-extension-with-deps",
-      "version": "0.79.1",
+      "version": "0.80.2",
       "dependencies": {
         "ms": "2.1.3",
       },
@@ -705,7 +708,7 @@
 
     "@mariozechner/mini-lit": ["@mariozechner/mini-lit@0.2.1", "", { "dependencies": { "@preact/signals-core": "^1.12.1", "class-variance-authority": "^0.7.1", "diff": "^8.0.2", "highlight.js": "^11.11.1", "html-parse-string": "^0.0.9", "katex": "^0.16.22", "lucide": "^0.544.0", "marked": "^16.3.0", "tailwind-merge": "^3.3.1", "tailwind-variants": "^3.1.1", "uhtml": "^5.0.9" }, "peerDependencies": { "lit": "^3.3.1" } }, "sha512-u300euLgCsDDlb8o2Wbz+55eSJga5X2vB58s9XBuFIr2Bi3iI+GMR7t/NYo/O6Vr6obXShXgYjR3SRUJVgo+kQ=="],
 
-    "@mistralai/mistralai": ["@mistralai/mistralai@2.2.1", "", { "dependencies": { "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.25.0" } }, "sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ=="],
+    "@mistralai/mistralai": ["@mistralai/mistralai@2.3.0", "", { "dependencies": { "@opentelemetry/semantic-conventions": "^1.40.0", "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.25.0" }, "peerDependencies": { "@opentelemetry/api": "^1.9.0" }, "optionalPeers": ["@opentelemetry/api"] }, "sha512-afV0/UAdu5d3hdY6G6lNkKXFM3vpC8PaOimw1LSe/fWnFYWnz5TIZI10DDMHepiN4Mx2sq1ekrulhgT3pTbtLg=="],
 
     "@napi-rs/canvas": ["@napi-rs/canvas@0.1.95", "", { "optionalDependencies": { "@napi-rs/canvas-android-arm64": "0.1.95", "@napi-rs/canvas-darwin-arm64": "0.1.95", "@napi-rs/canvas-darwin-x64": "0.1.95", "@napi-rs/canvas-linux-arm-gnueabihf": "0.1.95", "@napi-rs/canvas-linux-arm64-gnu": "0.1.95", "@napi-rs/canvas-linux-arm64-musl": "0.1.95", "@napi-rs/canvas-linux-riscv64-gnu": "0.1.95", "@napi-rs/canvas-linux-x64-gnu": "0.1.95", "@napi-rs/canvas-linux-x64-musl": "0.1.95", "@napi-rs/canvas-win32-arm64-msvc": "0.1.95", "@napi-rs/canvas-win32-x64-msvc": "0.1.95" } }, "sha512-lkg23ge+rgyhgUwXmlbkPEhuhHq/hUi/gXKH+4I7vO+lJrbNfEYcQdJLIGjKyXLQzgFiiyDAwh5vAe/tITAE+w=="],
 
@@ -762,6 +765,10 @@
     "@octokit/rest": ["@octokit/rest@21.1.1", "", { "dependencies": { "@octokit/core": "^6.1.4", "@octokit/plugin-paginate-rest": "^11.4.2", "@octokit/plugin-request-log": "^5.3.1", "@octokit/plugin-rest-endpoint-methods": "^13.3.0" } }, "sha512-sTQV7va0IUVZcntzy1q3QqPm/r8rWtDCqpRAmb8eXXnKkjoQEtFe3Nt5GTVsHft+R6jJoHeSiVLcgcvhtue/rg=="],
 
     "@octokit/types": ["@octokit/types@14.1.0", "", { "dependencies": { "@octokit/openapi-types": "^25.1.0" } }, "sha512-1y6DgTy8Jomcpu33N+p5w58l6xyt55Ar2I91RPiIA0xCJBXyUAhXCcmZaDWSANiha7R9a6qJJ2CRomGPZ6f46g=="],
+
+    "@opentelemetry/api": ["@opentelemetry/api@1.9.1", "", {}, "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="],
+
+    "@opentelemetry/semantic-conventions": ["@opentelemetry/semantic-conventions@1.41.1", "", {}, "sha512-/UhIkaZgPutTFmQ7RnIJGgDXZmtEJ7Dvi86xNTFWcnRxVRNk/aotsqDJYeEvDP+FSMB2SdW+pQzNMcWP0rwuNA=="],
 
     "@oslojs/encoding": ["@oslojs/encoding@1.1.0", "", {}, "sha512-70wQhgYmndg4GCPxPPxPGevRKqTIJ2Nh4OkiMWmDAVYsTQ+Ta7Sq+rPevXyXGdzr30/qZBnyOalCszoMxlyldQ=="],
 
@@ -1094,6 +1101,8 @@
     "@types/retry": ["@types/retry@0.12.5", "", {}, "sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw=="],
 
     "@types/sax": ["@types/sax@1.2.7", "", { "dependencies": { "@types/node": "*" } }, "sha512-rO73L89PJxeYM3s3pPPjiPgVVcymqU490g0YO5n5By0k2Erzj6tay/4lr1CHAAU4JyOWd1rpQ8bCf6cZfHU96A=="],
+
+    "@types/semver": ["@types/semver@7.7.1", "", {}, "sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA=="],
 
     "@types/trusted-types": ["@types/trusted-types@2.0.7", "", {}, "sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw=="],
 
@@ -1999,7 +2008,7 @@
 
     "sax": ["sax@1.4.4", "", {}, "sha512-1n3r/tGXO6b6VXMdFT54SHzT9ytu9yr7TaELowdYpMqY/Ao7EnlQGmAQ1+RatX7Tkkdm6hONI2owqNx2aZj5Sw=="],
 
-    "semver": ["semver@7.7.4", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA=="],
+    "semver": ["semver@7.8.5", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA=="],
 
     "set-cookie-parser": ["set-cookie-parser@2.7.2", "", {}, "sha512-oeM1lpU/UvhTxw+g3cIfxXHyJRc/uidd3yK1P242gzHds0udQBYzs3y8j4gCCW+ZJ7ad0yctld8RYO+bdurlvw=="],
 
@@ -2373,6 +2382,8 @@
 
     "anymatch/picomatch": ["picomatch@2.3.1", "", {}, "sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA=="],
 
+    "astro/semver": ["semver@7.7.4", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA=="],
+
     "astro/tinyexec": ["tinyexec@1.0.2", "", {}, "sha512-W/KYk+NFhkmsYpuHq5JykngiOCnxeVL8v8dFnqxSD8qEEdRfXk1SDM6JzNqcERbcGYj9tMrDQBYV9cjgnunFIg=="],
 
     "astro/vite": ["vite@6.4.1", "", { "dependencies": { "esbuild": "^0.25.0", "fdir": "^6.4.4", "picomatch": "^4.0.2", "postcss": "^8.5.3", "rollup": "^4.34.9", "tinyglobby": "^0.2.13" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^18.0.0 || ^20.0.0 || >=22.0.0", "jiti": ">=1.21.0", "less": "*", "lightningcss": "^1.21.0", "sass": "*", "sass-embedded": "*", "stylus": "*", "sugarss": "*", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-+Oxm7q9hDoLMyJOYfUYBuHQo+dkAloi33apOPP56pzj+vsdJDzr+j1NISE5pyaAuKL4A3UD34qd0lx5+kfKp2g=="],
@@ -2427,6 +2438,8 @@
 
     "micromatch/picomatch": ["picomatch@2.3.1", "", {}, "sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA=="],
 
+    "node-abi/semver": ["semver@7.7.4", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA=="],
+
     "npm-run-path/path-key": ["path-key@2.0.1", "", {}, "sha512-fEHGKCSmUSDPv4uoj8AlD+joPlq3peND+HRYyxFz4KPw4z926S/b8rIuFs2FYJg3BwsxJf6A9/3eIdLaYC+9Dw=="],
 
     "openid-client/jose": ["jose@4.15.9", "", {}, "sha512-1vUQX+IdDMVPj4k8kOxgUqlcK518yluMuGZwqlr44FS1ppZB/5GWh4rZG89erpOBOJjU/OBsnCVFfapsRz6nEA=="],
@@ -2444,6 +2457,8 @@
     "pi-extension-custom-provider-anthropic/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.52.0", "", { "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-d4c+fg+xy9e46c8+YnrrgIQR45CZlAi7PwdzIfDXDM6ACxEZli1/fxhURsq30ZpMZy6LvSkr41jGq5aF5TD7rQ=="],
 
     "protobufjs/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
+
+    "sharp/semver": ["semver@7.7.4", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA=="],
 
     "sitemap/@types/node": ["@types/node@17.0.45", "", {}, "sha512-w+tIMs3rq2afQdsPJlODhoUEKzFP1ayaoyl1CcnwtIlsVe7K7bA1NGm4s3PraqTLlXnbIN84zuBlxBWo1u9BLw=="],
 

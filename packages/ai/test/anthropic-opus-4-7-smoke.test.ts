@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
-import { streamSimple } from "../src/stream.js";
+import { getModel, streamSimple } from "../src/compat.js";
 import type { Context } from "../src/types.js";
 
 interface AnthropicThinkingPayload {

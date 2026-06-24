@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { getModels, getProviders } from "../src/models.ts";
+import { getModels, getProviders } from "../src/compat.ts";
 import type { Api, Model } from "../src/types.ts";
 
 const EXPECTED_CURRENT_ADAPTIVE_THINKING_MODELS = [
 	"anthropic/claude-fable-5",
 	"anthropic/claude-opus-4-8",
-	"opencode/claude-fable-5",
+	"cloudflare-ai-gateway/claude-fable-5",
 	"opencode/claude-opus-4-8",
-	"vercel-ai-gateway/anthropic/claude-fable-5",
 	"vercel-ai-gateway/anthropic/claude-opus-4.8",
 ];
 

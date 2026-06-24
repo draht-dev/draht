@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convertMessages } from "../src/providers/openai-completions.js";
+import { convertMessages } from "../src/api/openai-completions.js";
 import type { AssistantMessage, Context, Model, OpenAICompletionsCompat, Usage } from "../src/types.js";
 
 const emptyUsage: Usage = {
@@ -31,6 +31,7 @@ const deepseekCompat: Required<OpenAICompletionsCompat> = {
 	cacheControlFormat: "anthropic",
 	sendSessionAffinityHeaders: false,
 	supportsLongCacheRetention: false,
+	chatTemplateKwargs: {},
 };
 
 function makeDeepSeekModel(): Model<"openai-completions"> {

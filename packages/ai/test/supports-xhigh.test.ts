@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel, getSupportedThinkingLevels } from "../src/models.ts";
+import { getModel, getSupportedThinkingLevels } from "../src/compat.ts";
 
 describe("getSupportedThinkingLevels", () => {
 	it("includes xhigh for Anthropic Opus 4.6 on anthropic-messages API", () => {
@@ -67,6 +67,15 @@ describe("getSupportedThinkingLevels", () => {
 		const model = getModel("opencode-go", "kimi-k2.6");
 		expect(model).toBeDefined();
 		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "high"]);
+	});
+
+	it("excludes thinking off for Moonshot Kimi K2.7 Code models", () => {
+		const cases = [getModel("moonshotai", "kimi-k2.7-code"), getModel("moonshotai-cn", "kimi-k2.7-code")];
+
+		for (const model of cases) {
+			expect(model).toBeDefined();
+			expect(getSupportedThinkingLevels(model!)).toEqual(["minimal", "low", "medium", "high"]);
+		}
 	});
 
 	it("includes only high for OpenCode Grok Build", () => {

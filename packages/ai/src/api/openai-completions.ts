@@ -930,42 +930,42 @@ export function convertMessages(
 				);
 			const assistantText = assistantTextParts.map((part) => part.text).join("");
 
-			const nonEmptyThinkingBlocks = msg.content
-				.filter(isThinkingContentBlock)
-				.filter((block) => block.thinking.trim().length > 0);
-			if (nonEmptyThinkingBlocks.length > 0) {
-				if (compat.requiresThinkingAsText) {
-					// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
-					const thinkingText = nonEmptyThinkingBlocks
-						.map((block) => sanitizeSurrogates(block.thinking))
-						.join("\n\n");
-					assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
-				} else {
-					// Always send assistant content as a plain string (OpenAI Chat Completions
-					// API standard format). Sending as an array of {type:"text", text:"..."}
-					// objects is non-standard and causes some models (e.g. DeepSeek V3.2 via
-					// NVIDIA NIM) to mirror the content-block structure literally in their
-					// output, producing recursive nesting like [{'type':'text','text':'[{...}]'}].
-					if (assistantText.length > 0) {
-						assistantMsg.content = assistantText;
-					}
-
-					// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
-					let signature = nonEmptyThinkingBlocks[0].thinkingSignature;
-					if (model.provider === "opencode-go" && signature === "reasoning") {
-						signature = "reasoning_content";
-					}
-					if (signature && signature.length > 0) {
-						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map((block) => block.thinking).join("\n");
-					}
-				}
-			} else if (assistantText.length > 0) {
+			const allThinkingBlocks = msg.content.filter(isThinkingContentBlock);
+			const nonEmptyThinkingBlocks = allThinkingBlocks.filter((block) => block.thinking.trim().length > 0);
+			if (nonEmptyThinkingBlocks.length > 0 && compat.requiresThinkingAsText) {
+				// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
+				const thinkingText = nonEmptyThinkingBlocks.map((block) => sanitizeSurrogates(block.thinking)).join("\n\n");
+				assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
+			} else {
 				// Always send assistant content as a plain string (OpenAI Chat Completions
 				// API standard format). Sending as an array of {type:"text", text:"..."}
 				// objects is non-standard and causes some models (e.g. DeepSeek V3.2 via
 				// NVIDIA NIM) to mirror the content-block structure literally in their
 				// output, producing recursive nesting like [{'type':'text','text':'[{...}]'}].
-				assistantMsg.content = assistantText;
+				if (assistantText.length > 0) {
+					assistantMsg.content = assistantText;
+				}
+
+				if (!compat.requiresThinkingAsText) {
+					// Replay the captured reasoning field (e.g. "reasoning_content" for llama.cpp
+					// server, gpt-oss, and DeepSeek reasoner) under its captured signature. DeepSeek
+					// requires this on every thinking-mode assistant turn — even when the captured
+					// reasoning text was empty (the channel was opened but produced no text before a
+					// tool call) — otherwise the next request fails with:
+					//   400: The `reasoning_content` in the thinking mode must be passed back to the API.
+					const signedThinkingBlocks = allThinkingBlocks.filter(
+						(block) => block.thinkingSignature && block.thinkingSignature.length > 0,
+					);
+					if (signedThinkingBlocks.length > 0) {
+						let signature = signedThinkingBlocks[0].thinkingSignature as string;
+						if (model.provider === "opencode-go" && signature === "reasoning") {
+							signature = "reasoning_content";
+						}
+						(assistantMsg as any)[signature] = signedThinkingBlocks
+							.map((block) => block.thinking || "")
+							.join("\n");
+					}
+				}
 			}
 
 			const toolCalls = msg.content.filter(isToolCallBlock);
@@ -1008,7 +1008,13 @@ export function convertMessages(
 				content !== null &&
 				content !== undefined &&
 				(typeof content === "string" ? content.length > 0 : content.length > 0);
-			if (!hasContent && !assistantMsg.tool_calls) {
+			// Keep messages that carry replayed reasoning (e.g. DeepSeek reasoning_content)
+			// even with no text content and no tool calls — dropping them makes the next
+			// request 400 with "reasoning_content ... must be passed back".
+			const hasReasoning = allThinkingBlocks.some(
+				(block) => block.thinkingSignature && block.thinkingSignature.length > 0,
+			);
+			if (!hasContent && !hasReasoning && !assistantMsg.tool_calls) {
 				continue;
 			}
 			params.push(assistantMsg);

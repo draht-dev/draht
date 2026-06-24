@@ -1,4 +1,4 @@
-import { complete, getModel } from "@draht/ai";
+import { complete, getModel } from "@draht/ai/compat";
 import type { ExtensionAPI, ExtensionCommandContext } from "@draht/coding-agent";
 import { DynamicBorder, getMarkdownTheme } from "@draht/coding-agent";
 import { Container, Markdown, matchesKey, Text } from "@draht/tui";

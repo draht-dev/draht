@@ -2,6 +2,7 @@ import { type Model, modelsAreEqual } from "@draht/ai";
 import { Container, type Focusable, fuzzyFilter, getKeybindings, Input, Spacer, Text, type TUI } from "@draht/tui";
 import type { ModelRegistry } from "../../../core/model-registry.ts";
 import type { SettingsManager } from "../../../core/settings-manager.ts";
+import { getModelSelectorSearchText } from "../model-search.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
@@ -208,10 +209,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	private filterModels(query: string): void {
 		this.filteredModels = query
-			? fuzzyFilter(
-					this.activeModels,
-					query,
-					({ id, provider }) => `${id} ${provider} ${provider}/${id} ${provider} ${id}`,
+			? fuzzyFilter(this.activeModels, query, ({ id, provider, model }) =>
+					getModelSelectorSearchText({ id, provider, name: model.name }),
 				)
 			: this.activeModels;
 		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));

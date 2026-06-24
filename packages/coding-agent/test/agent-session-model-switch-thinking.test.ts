@@ -1,5 +1,5 @@
 import { Agent, type ThinkingLevel } from "@draht/agent-core";
-import { getModel } from "@draht/ai";
+import { getModel } from "@draht/ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";

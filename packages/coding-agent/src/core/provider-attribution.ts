@@ -1,4 +1,4 @@
-import type { Api, Model } from "@draht/ai";
+import type { Api, Model, ProviderHeaders } from "@draht/ai";
 import type { SettingsManager } from "./settings-manager.ts";
 import { isInstallTelemetryEnabled } from "./telemetry.ts";
 
@@ -7,6 +7,7 @@ const NVIDIA_NIM_HOST = "integrate.api.nvidia.com";
 const CLOUDFLARE_API_HOST = "api.cloudflare.com";
 const CLOUDFLARE_AI_GATEWAY_HOST = "gateway.ai.cloudflare.com";
 const OPENCODE_HOST = "opencode.ai";
+const VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh";
 
 function matchesHost(baseUrl: string, expectedHost: string): boolean {
 	try {
@@ -31,6 +32,10 @@ function isCloudflareModel(model: Model<Api>): boolean {
 		matchesHost(model.baseUrl, CLOUDFLARE_API_HOST) ||
 		matchesHost(model.baseUrl, CLOUDFLARE_AI_GATEWAY_HOST)
 	);
+}
+
+function isVercelGatewayModel(model: Model<Api>): boolean {
+	return model.provider === "vercel-ai-gateway" || matchesHost(model.baseUrl, VERCEL_GATEWAY_HOST);
 }
 
 function getDefaultAttributionHeaders(
@@ -61,6 +66,13 @@ function getDefaultAttributionHeaders(
 		};
 	}
 
+	if (isVercelGatewayModel(model)) {
+		return {
+			"http-referer": "https://pi.dev",
+			"x-title": "pi",
+		};
+	}
+
 	return undefined;
 }
 
@@ -80,9 +92,9 @@ export function mergeProviderAttributionHeaders(
 	model: Model<Api>,
 	settingsManager: SettingsManager,
 	sessionId: string | undefined,
-	...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-	const merged = {
+	...headerSources: Array<ProviderHeaders | undefined>
+): ProviderHeaders | undefined {
+	const merged: ProviderHeaders = {
 		...getSessionHeaders(model, sessionId),
 		...getDefaultAttributionHeaders(model, settingsManager),
 	};

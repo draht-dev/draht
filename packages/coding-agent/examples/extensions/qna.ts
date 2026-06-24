@@ -7,7 +7,7 @@
  * 3. Loads the result into the editor for user to fill in answers
  */
 
-import { complete, type UserMessage } from "@draht/ai";
+import { complete, type UserMessage } from "@draht/ai/compat";
 import type { ExtensionAPI } from "@draht/coding-agent";
 import { BorderedLoader } from "@draht/coding-agent";
 

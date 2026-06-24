@@ -13,7 +13,7 @@
  */
 
 import type { AgentMessage } from "@draht/agent-core";
-import { complete, type Message } from "@draht/ai";
+import { complete, type Message } from "@draht/ai/compat";
 import type { ExtensionAPI, SessionEntry } from "@draht/coding-agent";
 import { BorderedLoader, convertToLlm, serializeConversation } from "@draht/coding-agent";
 

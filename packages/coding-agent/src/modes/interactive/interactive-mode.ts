@@ -16,7 +16,7 @@ import {
 	type Model,
 	type OAuthProviderId,
 	type OAuthSelectPrompt,
-} from "@draht/ai";
+} from "@draht/ai/compat";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -52,6 +52,7 @@ import { spawn, spawnSync } from "child_process";
 import {
 	APP_NAME,
 	APP_TITLE,
+	CONFIG_DIR_NAME,
 	DISPLAY_VERSION,
 	getAgentDir,
 	getAuthPath,
@@ -87,7 +88,7 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
-import { hasProjectConfigDir, hasProjectTrustInputs, ProjectTrustStore } from "../../core/trust-manager.ts";
+import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -126,22 +127,21 @@ import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { getModelSearchText } from "./model-search.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
 	getEditorTheme,
 	getMarkdownTheme,
 	getThemeByName,
-	initTheme,
 	onThemeChange,
 	setRegisteredThemes,
-	setTheme,
-	setThemeInstance,
 	stopThemeWatcher,
 	Theme,
 	type ThemeColor,
 	theme,
 } from "./theme/theme.ts";
+import { InteractiveThemeController } from "./theme/theme-controller.ts";
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -266,6 +266,7 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
+	private loadedResourcesContainer: Container;
 	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -372,6 +373,7 @@ export class InteractiveMode {
 
 	private options: InteractiveModeOptions;
 	private autoTrustOnReloadCwd: string | undefined;
+	private themeController: InteractiveThemeController;
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -395,12 +397,13 @@ export class InteractiveMode {
 			this.resetExtensionUI();
 		});
 		this.runtimeHost.setRebindSession(async () => {
-			await this.rebindCurrentSession();
+			await this.rebindCurrentSession({ renderBeforeBind: true });
 		});
 		this.version = VERSION;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
+		this.loadedResourcesContainer = new Container();
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
@@ -426,7 +429,12 @@ export class InteractiveMode {
 
 		// Register themes from resource loader and initialize
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
-		initTheme(this.settingsManager.getTheme(), true);
+		this.themeController = new InteractiveThemeController(
+			this.ui,
+			this.settingsManager,
+			(message) => this.showError(message),
+			() => this.updateEditorBorderColor(),
+		);
 	}
 
 	private getAutocompleteSourceTag(sourceInfo?: SourceInfo): string | undefined {
@@ -499,11 +507,12 @@ export class InteractiveMode {
 				const items = models.map((m) => ({
 					id: m.id,
 					provider: m.provider,
+					name: m.name,
 					label: `${m.provider}/${m.id}`,
 				}));
 
-				// Fuzzy filter by model ID + provider (allows "opus anthropic" to match)
-				const filtered = fuzzyFilter(items, prefix, (item) => `${item.id} ${item.provider}`);
+				// Fuzzy filter by model ID + provider in either order.
+				const filtered = fuzzyFilter(items, prefix, getModelSearchText);
 
 				if (filtered.length === 0) return null;
 
@@ -630,8 +639,29 @@ export class InteractiveMode {
 			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
 		}
 
-		// Add header container as first child
+		// Add header container as first child. Populate it after applying theme settings.
+		// Keep loaded resources before chat so restored session messages never precede them.
 		this.ui.addChild(this.headerContainer);
+		this.ui.addChild(this.loadedResourcesContainer);
+
+		this.ui.addChild(this.chatContainer);
+		this.ui.addChild(this.pendingMessagesContainer);
+		this.ui.addChild(this.statusContainer);
+		this.renderWidgets(); // Initialize with default spacer
+		this.ui.addChild(this.widgetContainerAbove);
+		this.ui.addChild(this.editorContainer);
+		this.ui.addChild(this.widgetContainerBelow);
+		this.ui.addChild(this.footer);
+		this.ui.setFocus(this.editor);
+
+		this.setupKeyHandlers();
+		this.setupEditorSubmitHandler();
+
+		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
+		this.ui.start();
+		this.isInitialized = true;
+
+		await this.themeController.applyFromSettings();
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
@@ -706,23 +736,7 @@ export class InteractiveMode {
 			this.builtInHeader = new Text("", 0, 0);
 			this.headerContainer.addChild(this.builtInHeader);
 		}
-
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
-		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
-		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.widgetContainerBelow);
-		this.ui.addChild(this.footer);
-		this.ui.setFocus(this.editor);
-
-		this.setupKeyHandlers();
-		this.setupEditorSubmitHandler();
-
-		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
-		this.ui.start();
-		this.isInitialized = true;
+		this.ui.requestRender();
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
@@ -1334,6 +1348,9 @@ export class InteractiveMode {
 		force?: boolean;
 		showDiagnosticsWhenQuiet?: boolean;
 	}): void {
+		// Resource rendering is idempotent; chat clears no longer clear this separate container.
+		this.loadedResourcesContainer.clear();
+
 		const showListing = options?.force || this.options.verbose || !this.settingsManager.getQuietStartup();
 		const showDiagnostics = showListing || options?.showDiagnosticsWhenQuiet === true;
 		if (!showListing && !showDiagnostics) {
@@ -1361,8 +1378,8 @@ export class InteractiveMode {
 				0,
 				0,
 			);
-			this.chatContainer.addChild(section);
-			this.chatContainer.addChild(new Spacer(1));
+			this.loadedResourcesContainer.addChild(section);
+			this.loadedResourcesContainer.addChild(new Spacer(1));
 		};
 
 		const skillsResult = this.session.resourceLoader.getSkills();
@@ -1399,7 +1416,7 @@ export class InteractiveMode {
 		if (showListing) {
 			const contextFiles = this.session.resourceLoader.getAgentsFiles().agentsFiles;
 			if (contextFiles.length > 0) {
-				this.chatContainer.addChild(new Spacer(1));
+				this.loadedResourcesContainer.addChild(new Spacer(1));
 				const contextList = contextFiles
 					.map((f) => theme.fg("dim", `  ${this.formatDisplayPath(f.path)}`))
 					.join("\n");
@@ -1482,17 +1499,19 @@ export class InteractiveMode {
 			const skillDiagnostics = skillsResult.diagnostics;
 			if (skillDiagnostics.length > 0) {
 				const warningLines = this.formatDiagnostics(skillDiagnostics, sourceInfos);
-				this.chatContainer.addChild(new Text(`${theme.fg("warning", "[Skill conflicts]")}\n${warningLines}`, 0, 0));
-				this.chatContainer.addChild(new Spacer(1));
+				this.loadedResourcesContainer.addChild(
+					new Text(`${theme.fg("warning", "[Skill conflicts]")}\n${warningLines}`, 0, 0),
+				);
+				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
 
 			const promptDiagnostics = promptsResult.diagnostics;
 			if (promptDiagnostics.length > 0) {
 				const warningLines = this.formatDiagnostics(promptDiagnostics, sourceInfos);
-				this.chatContainer.addChild(
+				this.loadedResourcesContainer.addChild(
 					new Text(`${theme.fg("warning", "[Prompt conflicts]")}\n${warningLines}`, 0, 0),
 				);
-				this.chatContainer.addChild(new Spacer(1));
+				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
 
 			const extensionDiagnostics: ResourceDiagnostic[] = [];
@@ -1512,17 +1531,19 @@ export class InteractiveMode {
 
 			if (extensionDiagnostics.length > 0) {
 				const warningLines = this.formatDiagnostics(extensionDiagnostics, sourceInfos);
-				this.chatContainer.addChild(
+				this.loadedResourcesContainer.addChild(
 					new Text(`${theme.fg("warning", "[Extension issues]")}\n${warningLines}`, 0, 0),
 				);
-				this.chatContainer.addChild(new Spacer(1));
+				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
 
 			const themeDiagnostics = themesResult.diagnostics;
 			if (themeDiagnostics.length > 0) {
 				const warningLines = this.formatDiagnostics(themeDiagnostics, sourceInfos);
-				this.chatContainer.addChild(new Text(`${theme.fg("warning", "[Theme conflicts]")}\n${warningLines}`, 0, 0));
-				this.chatContainer.addChild(new Spacer(1));
+				this.loadedResourcesContainer.addChild(
+					new Text(`${theme.fg("warning", "[Theme conflicts]")}\n${warningLines}`, 0, 0),
+				);
+				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
 		}
 	}
@@ -1547,12 +1568,7 @@ export class InteractiveMode {
 					}
 					this.statusContainer.clear();
 					try {
-						const result = await this.runtimeHost.newSession(options);
-						if (!result.cancelled) {
-							this.renderCurrentSessionState();
-							this.ui.requestRender();
-						}
-						return result;
+						return await this.runtimeHost.newSession(options);
 					} catch (error: unknown) {
 						return this.handleFatalRuntimeError("Failed to create session", error);
 					}
@@ -1561,7 +1577,6 @@ export class InteractiveMode {
 					try {
 						const result = await this.runtimeHost.fork(entryId, options);
 						if (!result.cancelled) {
-							this.renderCurrentSessionState();
 							this.editor.setText(result.selectedText ?? "");
 							this.showStatus("Forked to new session");
 						}
@@ -1635,12 +1650,18 @@ export class InteractiveMode {
 		}
 	}
 
-	private async rebindCurrentSession(): Promise<void> {
+	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
-		await this.bindCurrentSessionExtensions();
-		this.subscribeToAgent();
+		if (options.renderBeforeBind) {
+			this.renderCurrentSessionState();
+			this.subscribeToAgent();
+			await this.bindCurrentSessionExtensions();
+		} else {
+			await this.bindCurrentSessionExtensions();
+			this.subscribeToAgent();
+		}
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
 		this.updateTerminalTitle();
@@ -1655,6 +1676,7 @@ export class InteractiveMode {
 	}
 
 	private renderCurrentSessionState(): void {
+		this.loadedResourcesContainer.clear();
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
@@ -2068,16 +2090,13 @@ export class InteractiveMode {
 			getTheme: (name) => getThemeByName(name),
 			setTheme: (themeOrName) => {
 				if (themeOrName instanceof Theme) {
-					setThemeInstance(themeOrName);
-					this.ui.requestRender();
-					return { success: true };
+					return this.themeController.setThemeInstance(themeOrName);
 				}
-				const result = setTheme(themeOrName, true);
+				const result = this.themeController.setThemeName(themeOrName);
 				if (result.success) {
 					if (this.settingsManager.getTheme() !== themeOrName) {
 						this.settingsManager.setTheme(themeOrName);
 					}
-					this.ui.requestRender();
 				}
 				return result;
 			},
@@ -3285,7 +3304,7 @@ export class InteractiveMode {
 	}
 
 	private renderProjectTrustWarningIfNeeded(): void {
-		if (this.settingsManager.isProjectTrusted() || !hasProjectTrustInputs(this.sessionManager.getCwd())) {
+		if (this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(this.sessionManager.getCwd())) {
 			return;
 		}
 
@@ -3296,7 +3315,7 @@ export class InteractiveMode {
 			new Text(
 				theme.fg(
 					"warning",
-					"This project is not trusted. Project .pi resources and packages are ignored. Use /trust to save a trust decision, then restart pi.",
+					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
 				),
 				1,
 				0,
@@ -3353,7 +3372,9 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
-		this.unregisterSignalHandlers();
+		// Keep signal handlers registered until terminal cleanup has completed.
+		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
+		// dispatch and re-sends the signal if only its own listeners remain.
 
 		if (options?.fromSignal) {
 			// Signal-triggered shutdown (SIGTERM/SIGHUP). Emit extension cleanup
@@ -3364,6 +3385,7 @@ export class InteractiveMode {
 			// which the stdout/stderr error handler turns into emergencyTerminalExit;
 			// the render loop is already idle, so this cannot hot-spin (see #4144).
 			await this.runtimeHost.dispose();
+			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
 			this.stop();
 			process.exit(0);
@@ -3374,6 +3396,7 @@ export class InteractiveMode {
 		// the final frame while the process is exiting.
 		// Drain any in-flight Kitty key release events before stopping.
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
+		this.themeController.disableAutoSync();
 		await this.ui.terminal.drainInput(1000);
 
 		this.stop();
@@ -3609,9 +3632,11 @@ export class InteractiveMode {
 		if (isExpandable(activeHeader)) {
 			activeHeader.setExpanded(expanded);
 		}
-		for (const child of this.chatContainer.children) {
-			if (isExpandable(child)) {
-				child.setExpanded(expanded);
+		for (const container of [this.loadedResourcesContainer, this.chatContainer]) {
+			for (const child of container.children) {
+				if (isExpandable(child)) {
+					child.setExpanded(expanded);
+				}
 			}
 		}
 		this.ui.requestRender();
@@ -3703,7 +3728,6 @@ export class InteractiveMode {
 	showError(errorMessage: string): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
-		this.chatContainer.addChild(new Spacer(1));
 		this.ui.requestRender();
 	}
 
@@ -3718,7 +3742,7 @@ export class InteractiveMode {
 		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
 		const changelogUrl = "https://pi.dev/changelog";
 		const changelogLink = getCapabilities().hyperlinks
-			? hyperlink(theme.fg("accent", "open changelog"), changelogUrl)
+			? hyperlink(theme.fg("accent", changelogUrl), changelogUrl)
 			: theme.fg("accent", changelogUrl);
 		const changelogLine = theme.fg("muted", "Changelog: ") + changelogLink;
 		const note = release.note?.trim();
@@ -3743,7 +3767,7 @@ export class InteractiveMode {
 	}
 
 	showPackageUpdateNotification(packages: string[]): void {
-		const action = theme.fg("accent", `${APP_NAME} update`);
+		const action = theme.fg("accent", `${APP_NAME} update --extensions`);
 		const updateInstruction = theme.fg("muted", "Package updates are available. Run ") + action;
 		const packageLines = packages.map((pkg) => `- ${pkg}`).join("\n");
 
@@ -3977,7 +4001,8 @@ export class InteractiveMode {
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getTheme() || "dark",
+					currentTheme: this.settingsManager.getThemeSetting() || "dark",
+					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
@@ -4044,21 +4069,11 @@ export class InteractiveMode {
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 					},
-					onThemeChange: (themeName) => {
-						const result = setTheme(themeName, true);
-						this.settingsManager.setTheme(themeName);
-						this.ui.invalidate();
-						if (!result.success) {
-							this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to dark theme.`);
-						}
+					onThemeChange: (themeSetting) => {
+						this.settingsManager.setTheme(themeSetting);
+						void this.themeController.applyFromSettings();
 					},
-					onThemePreview: (themeName) => {
-						const result = setTheme(themeName, true);
-						if (result.success) {
-							this.ui.invalidate();
-							this.ui.requestRender();
-						}
-					},
+					onThemePreview: (themeName) => this.themeController.preview(themeName),
 					onHideThinkingBlockChange: (hidden) => {
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
@@ -4212,7 +4227,7 @@ export class InteractiveMode {
 		if (this.autoTrustOnReloadCwd !== cwd) {
 			return false;
 		}
-		if (!this.settingsManager.isProjectTrusted() || !hasProjectConfigDir(cwd)) {
+		if (!this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(cwd)) {
 			return false;
 		}
 
@@ -4389,7 +4404,6 @@ export class InteractiveMode {
 							return;
 						}
 
-						this.renderCurrentSessionState();
 						this.editor.setText(result.selectedText ?? "");
 						done();
 						this.showStatus("Forked to new session");
@@ -4422,7 +4436,6 @@ export class InteractiveMode {
 				return;
 			}
 
-			this.renderCurrentSessionState();
 			this.editor.setText("");
 			this.showStatus("Cloned to new session");
 		} catch (error: unknown) {
@@ -4614,7 +4627,6 @@ export class InteractiveMode {
 			if (result.cancelled) {
 				return result;
 			}
-			this.renderCurrentSessionState();
 			this.showStatus("Resumed session");
 			return result;
 		} catch (error: unknown) {
@@ -4632,7 +4644,6 @@ export class InteractiveMode {
 				if (result.cancelled) {
 					return result;
 				}
-				this.renderCurrentSessionState();
 				this.showStatus("Resumed session in current cwd");
 				return result;
 			}
@@ -5085,8 +5096,20 @@ export class InteractiveMode {
 			this.ui.requestRender();
 		};
 
+		let chatRestoredBeforeSessionStart = false;
+		let reloadBoxDismissed = false;
+		const restoreChatBeforeSessionStart = () => {
+			if (chatRestoredBeforeSessionStart) {
+				return;
+			}
+			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+			this.rebuildChatFromMessages();
+			chatRestoredBeforeSessionStart = true;
+		};
+
 		try {
-			await this.session.reload();
+			await this.session.reload({ beforeSessionStart: restoreChatBeforeSessionStart });
+			restoreChatBeforeSessionStart();
 			configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
 			this.keybindings.reload();
 			const activeHeader = this.customHeader ?? this.builtInHeader;
@@ -5094,12 +5117,7 @@ export class InteractiveMode {
 				activeHeader.setExpanded(this.toolOutputExpanded);
 			}
 			setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
-			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
-			const themeName = this.settingsManager.getTheme();
-			const themeResult = themeName ? setTheme(themeName, true) : { success: true };
-			if (!themeResult.success) {
-				this.showError(`Failed to load theme "${themeName}": ${themeResult.error}\nFell back to dark theme.`);
-			}
+			await this.themeController.applyFromSettings();
 			const editorPaddingX = this.settingsManager.getEditorPaddingX();
 			const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
 			this.defaultEditor.setPaddingX(editorPaddingX);
@@ -5113,8 +5131,6 @@ export class InteractiveMode {
 			this.setupAutocompleteProvider();
 			const runner = this.session.extensionRunner;
 			this.setupExtensionShortcuts(runner);
-			this.rebuildChatFromMessages();
-			dismissReloadBox(this.editor as Component);
 			this.showLoadedResources({
 				force: false,
 				showDiagnosticsWhenQuiet: true,
@@ -5129,8 +5145,12 @@ export class InteractiveMode {
 					? "Reloaded keybindings, extensions, skills, prompts, themes; saved project trust"
 					: "Reloaded keybindings, extensions, skills, prompts, themes",
 			);
+			dismissReloadBox(this.editor as Component);
+			reloadBoxDismissed = true;
 		} catch (error) {
-			dismissReloadBox(previousEditor as Component);
+			if (!reloadBoxDismissed) {
+				dismissReloadBox(previousEditor as Component);
+			}
 			this.showError(`Reload failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
@@ -5204,7 +5224,6 @@ export class InteractiveMode {
 				this.showStatus("Import cancelled");
 				return;
 			}
-			this.renderCurrentSessionState();
 			this.showStatus(`Session imported from: ${inputPath}`);
 		} catch (error: unknown) {
 			if (error instanceof MissingSessionCwdError) {
@@ -5218,7 +5237,6 @@ export class InteractiveMode {
 					this.showStatus("Import cancelled");
 					return;
 				}
-				this.renderCurrentSessionState();
 				this.showStatus(`Session imported from: ${inputPath}`);
 				return;
 			}
@@ -5354,8 +5372,12 @@ export class InteractiveMode {
 		}
 
 		this.session.setSessionName(name);
+		const sessionName = this.sessionManager.getSessionName();
+		if (sessionName !== name) {
+			this.showWarning(`Session name was normalized from ${JSON.stringify(name)} to ${JSON.stringify(sessionName)}`);
+		}
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
+		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
 		this.ui.requestRender();
 	}
 
@@ -5557,7 +5579,6 @@ export class InteractiveMode {
 			if (result.cancelled) {
 				return;
 			}
-			this.renderCurrentSessionState();
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
 			this.ui.requestRender();
@@ -5711,14 +5732,6 @@ export class InteractiveMode {
 	}
 
 	private async handleCompactCommand(customInstructions?: string): Promise<void> {
-		const entries = this.sessionManager.getEntries();
-		const messageCount = entries.filter((e) => e.type === "message").length;
-
-		if (messageCount < 2) {
-			this.showWarning("Nothing to compact (no messages yet)");
-			return;
-		}
-
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
@@ -5733,7 +5746,6 @@ export class InteractiveMode {
 	}
 
 	stop(): void {
-		this.unregisterSignalHandlers();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
 		}
@@ -5741,6 +5753,7 @@ export class InteractiveMode {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
 		}
+		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
@@ -5751,5 +5764,6 @@ export class InteractiveMode {
 			this.ui.stop();
 			this.isInitialized = false;
 		}
+		this.unregisterSignalHandlers();
 	}
 }

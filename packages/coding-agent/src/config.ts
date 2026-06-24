@@ -38,6 +38,18 @@ export interface SelfUpdateCommand extends SelfUpdateCommandStep {
 	steps?: SelfUpdateCommandStep[];
 }
 
+export type SelfUpdatePackageTarget = string | { packageName: string; installSpec?: string };
+
+function normalizeSelfUpdatePackageTarget(target: SelfUpdatePackageTarget): {
+	packageName: string;
+	installSpec: string;
+} {
+	if (typeof target === "string") {
+		return { packageName: target, installSpec: target };
+	}
+	return { packageName: target.packageName, installSpec: target.installSpec ?? target.packageName };
+}
+
 function makeSelfUpdateCommand(
 	installStep: SelfUpdateCommandStep,
 	uninstallStep?: SelfUpdateCommandStep,
@@ -103,29 +115,38 @@ function getInferredNpmInstall(): { root: string; prefix: string } | undefined {
 function getSelfUpdateCommandForMethod(
 	method: InstallMethod,
 	installedPackageName: string,
-	updatePackageName = installedPackageName,
+	updatePackageTarget: SelfUpdatePackageTarget = installedPackageName,
 	npmCommand?: string[],
 ): SelfUpdateCommand | undefined {
+	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
 	switch (method) {
 		case "bun-binary":
 			return undefined;
-		case "pnpm":
+		case "pnpm": {
+			const match = readCommandOutput("pnpm", ["root", "-g"])
+				? undefined
+				: /^(.*[\\/]global[\\/][^\\/]+)[\\/]\.pnpm[\\/]/.exec(getPackageDir());
+			const binDirArgs = match
+				? [`--config.global-bin-dir=${process.env.PNPM_HOME || dirname(dirname(match[1]))}`]
+				: [];
 			return makeSelfUpdateCommand(
 				makeSelfUpdateCommandStep("pnpm", [
 					"install",
 					"-g",
 					"--ignore-scripts",
 					"--config.minimumReleaseAge=0",
-					updatePackageName,
+					...binDirArgs,
+					target.installSpec,
 				]),
-				updatePackageName === installedPackageName
+				target.packageName === installedPackageName
 					? undefined
-					: makeSelfUpdateCommandStep("pnpm", ["remove", "-g", installedPackageName]),
+					: makeSelfUpdateCommandStep("pnpm", ["remove", "-g", ...binDirArgs, installedPackageName]),
 			);
+		}
 		case "yarn":
 			return makeSelfUpdateCommand(
-				makeSelfUpdateCommandStep("yarn", ["global", "add", "--ignore-scripts", updatePackageName]),
-				updatePackageName === installedPackageName
+				makeSelfUpdateCommandStep("yarn", ["global", "add", "--ignore-scripts", target.installSpec]),
+				target.packageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep("yarn", ["global", "remove", installedPackageName]),
 			);
@@ -136,9 +157,9 @@ function getSelfUpdateCommandForMethod(
 					"-g",
 					"--ignore-scripts",
 					"--minimum-release-age=0",
-					updatePackageName,
+					target.installSpec,
 				]),
-				updatePackageName === installedPackageName
+				target.packageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep("bun", ["uninstall", "-g", installedPackageName]),
 			);
@@ -152,10 +173,10 @@ function getSelfUpdateCommandForMethod(
 				"-g",
 				"--ignore-scripts",
 				"--min-release-age=0",
-				updatePackageName,
+				target.installSpec,
 			]);
 			const uninstallStep =
-				updatePackageName === installedPackageName
+				target.packageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep(command, [...prefixArgs, "uninstall", "-g", installedPackageName]);
 			return makeSelfUpdateCommand(installStep, uninstallStep);
@@ -205,7 +226,9 @@ function getGlobalPackageRoots(method: InstallMethod, _packageName: string, npmC
 		}
 		case "pnpm": {
 			const root = readCommandOutput("pnpm", ["root", "-g"]);
-			return root ? [root, dirname(root)] : [];
+			if (root) return [root, dirname(root)];
+			const match = /^(.*[\\/]global[\\/][^\\/]+)[\\/]\.pnpm[\\/]/.exec(getPackageDir());
+			return match ? [match[1]] : [];
 		}
 		case "yarn": {
 			const dir = readCommandOutput("yarn", ["global", "dir"]);
@@ -292,10 +315,10 @@ function isManagedByGlobalPackageManager(method: InstallMethod, packageName: str
 export function getSelfUpdateCommand(
 	packageName: string,
 	npmCommand?: string[],
-	updatePackageName = packageName,
+	updatePackageTarget: SelfUpdatePackageTarget = packageName,
 ): SelfUpdateCommand | undefined {
 	const method = detectInstallMethod();
-	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
+	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageTarget, npmCommand);
 	if (!command || !isManagedByGlobalPackageManager(method, packageName, npmCommand) || !isSelfUpdatePathWritable()) {
 		return undefined;
 	}
@@ -305,20 +328,21 @@ export function getSelfUpdateCommand(
 export function getSelfUpdateUnavailableInstruction(
 	packageName: string,
 	npmCommand?: string[],
-	updatePackageName = packageName,
+	updatePackageTarget: SelfUpdatePackageTarget = packageName,
 ): string {
 	const method = detectInstallMethod();
+	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
 	if (method === "bun-binary") {
 		return `Download from: https://github.com/earendil-works/pi-mono/releases/latest`;
 	}
-	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
+	const command = getSelfUpdateCommandForMethod(method, packageName, target, npmCommand);
 	if (command) {
 		if (isManagedByGlobalPackageManager(method, packageName, npmCommand) && !isSelfUpdatePathWritable()) {
 			return `This installation is managed by a global ${method} install, but the install path is not writable. Update it yourself with: ${command.display}`;
 		}
 		return `This installation is not managed by a global ${method} install. Update it with the package manager, wrapper, or source checkout that provides it.`;
 	}
-	return `Update ${updatePackageName} using the package manager, wrapper, or source checkout that provides this installation.`;
+	return `Update ${target.installSpec} using the package manager, wrapper, or source checkout that provides this installation.`;
 }
 
 export function getUpdateInstruction(packageName: string): string {

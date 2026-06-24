@@ -13,7 +13,7 @@
  *   pi --extension examples/extensions/custom-compaction.ts
  */
 
-import { complete } from "@draht/ai";
+import { complete } from "@draht/ai/compat";
 import type { ExtensionAPI } from "@draht/coding-agent";
 import { convertToLlm, serializeConversation } from "@draht/coding-agent";
 

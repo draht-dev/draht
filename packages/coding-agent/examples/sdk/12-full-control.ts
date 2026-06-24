@@ -4,7 +4,7 @@
  * Replace everything - no discovery, explicit configuration.
  */
 
-import { getModel } from "@draht/ai";
+import { getModel } from "@draht/ai/compat";
 import {
 	AuthStorage,
 	createAgentSession,

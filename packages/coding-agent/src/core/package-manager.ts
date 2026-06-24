@@ -27,6 +27,7 @@ import type { Readable } from "node:stream";
 import { globSync } from "glob";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
+import { maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
@@ -42,6 +43,14 @@ function isOfflineModeEnabled(): boolean {
 	const value = process.env.DRAHT_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+function isExactNpmVersion(version: string | undefined): boolean {
+	return valid(version ?? "") !== null;
+}
+
+function getNpmVersionRange(version: string | undefined): string | undefined {
+	return version ? (validRange(version) ?? undefined) : undefined;
 }
 
 export interface PathMetadata {
@@ -119,6 +128,8 @@ type NpmSource = {
 	type: "npm";
 	spec: string;
 	name: string;
+	version?: string;
+	range?: string;
 	pinned: boolean;
 };
 
@@ -1113,8 +1124,8 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		try {
-			const latestVersion = await this.getLatestNpmVersion(source.name);
-			return latestVersion !== installedVersion;
+			const targetVersion = await this.getLatestNpmVersion(source.version ? source.spec : source.name, source.range);
+			return targetVersion !== installedVersion;
 		} catch {
 			// Preserve existing update behavior when version lookup fails.
 			return true;
@@ -1128,7 +1139,7 @@ export class DefaultPackageManager implements PackageManager {
 
 		const sourceLabel = sources.length === 1 ? sources[0].source : `${scope} npm packages`;
 		const message = sources.length === 1 ? `Updating ${sources[0].source}...` : `Updating ${scope} npm packages...`;
-		const specs = sources.map((entry) => `${entry.parsed.name}@latest`);
+		const specs = sources.map((entry) => (entry.parsed.version ? entry.parsed.spec : `${entry.parsed.name}@latest`));
 
 		await this.withProgress("update", sourceLabel, message, async () => {
 			await this.installNpmBatch(specs, scope);
@@ -1241,8 +1252,7 @@ export class DefaultPackageManager implements PackageManager {
 			if (parsed.type === "npm") {
 				let installedPath = this.getNpmInstallPath(parsed, scope);
 				const needsInstall =
-					!existsSync(installedPath) ||
-					(parsed.pinned && !(await this.installedNpmMatchesPinnedVersion(parsed, installedPath)));
+					!existsSync(installedPath) || !(await this.installedNpmMatchesConfiguredVersion(parsed, installedPath));
 				if (needsInstall) {
 					const installed = await installMissing();
 					if (!installed) continue;
@@ -1394,7 +1404,9 @@ export class DefaultPackageManager implements PackageManager {
 				type: "npm",
 				spec,
 				name,
-				pinned: Boolean(version),
+				version,
+				range: getNpmVersionRange(version),
+				pinned: isExactNpmVersion(version),
 			};
 		}
 
@@ -1411,18 +1423,12 @@ export class DefaultPackageManager implements PackageManager {
 		return { type: "local", path: source };
 	}
 
-	private async installedNpmMatchesPinnedVersion(source: NpmSource, installedPath: string): Promise<boolean> {
+	private async installedNpmMatchesConfiguredVersion(source: NpmSource, installedPath: string): Promise<boolean> {
 		const installedVersion = this.getInstalledNpmVersion(installedPath);
 		if (!installedVersion) {
 			return false;
 		}
-
-		const { version: pinnedVersion } = this.parseNpmSpec(source.spec);
-		if (!pinnedVersion) {
-			return true;
-		}
-
-		return installedVersion === pinnedVersion;
+		return source.range ? satisfies(installedVersion, source.range) : true;
 	}
 
 	private async npmHasAvailableUpdate(source: NpmSource, installedPath: string): Promise<boolean> {
@@ -1436,8 +1442,8 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		try {
-			const latestVersion = await this.getLatestNpmVersion(source.name);
-			return latestVersion !== installedVersion;
+			const targetVersion = await this.getLatestNpmVersion(source.version ? source.spec : source.name, source.range);
+			return targetVersion !== installedVersion;
 		} catch {
 			return false;
 		}
@@ -1455,16 +1461,25 @@ export class DefaultPackageManager implements PackageManager {
 		}
 	}
 
-	private async getLatestNpmVersion(packageName: string): Promise<string> {
+	private async getLatestNpmVersion(packageSpec: string, range?: string): Promise<string> {
 		const npmCommand = this.getNpmCommand();
 		const stdout = await this.runCommandCapture(
 			npmCommand.command,
-			[...npmCommand.args, "view", packageName, "version", "--json"],
+			[...npmCommand.args, "view", packageSpec, "version", "--json"],
 			{ cwd: this.cwd, timeoutMs: NETWORK_TIMEOUT_MS },
 		);
 		const raw = stdout.trim();
 		if (!raw) throw new Error("Empty response from npm view");
-		return JSON.parse(raw);
+		const parsed = JSON.parse(raw) as unknown;
+		if (typeof parsed === "string") {
+			return parsed;
+		}
+		if (Array.isArray(parsed)) {
+			const versions = parsed.filter((value): value is string => typeof value === "string" && value.length > 0);
+			const latest = range ? maxSatisfying(versions, range) : [...versions].sort(rcompare)[0];
+			if (latest) return latest;
+		}
+		throw new Error("Unexpected response from npm view");
 	}
 
 	private async gitHasAvailableUpdate(installedPath: string): Promise<boolean> {

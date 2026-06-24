@@ -180,6 +180,29 @@ describe("detectInstallMethod", () => {
 		});
 	});
 
+	test("self-updates exact npm versions without uninstalling the current package", () => {
+		const { prefix } = createNpmPrefixInstall();
+
+		const command = getSelfUpdateCommand("@draht/coding-agent", undefined, {
+			packageName: "@draht/coding-agent",
+			installSpec: "@draht/coding-agent@1.2.3",
+		});
+
+		expect(command).toEqual({
+			command: "npm",
+			args: [
+				"--prefix",
+				prefix,
+				"install",
+				"-g",
+				"--ignore-scripts",
+				"--min-release-age=0",
+				"@draht/coding-agent@1.2.3",
+			],
+			display: `npm --prefix ${prefix} install -g --ignore-scripts --min-release-age=0 @draht/coding-agent@1.2.3`,
+		});
+	});
+
 	test("self-updates renamed packages from the current install prefix", () => {
 		const { prefix } = createNpmPrefixInstall();
 

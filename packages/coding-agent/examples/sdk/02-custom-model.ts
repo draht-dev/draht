@@ -4,7 +4,7 @@
  * Shows how to select a specific model and thinking level.
  */
 
-import { getModel } from "@draht/ai";
+import { getModel } from "@draht/ai/compat";
 import { AuthStorage, createAgentSession, ModelRegistry } from "@draht/coding-agent";
 
 // Set up auth storage and model registry

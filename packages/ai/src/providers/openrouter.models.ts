@@ -1815,7 +1815,7 @@ export const OPENROUTER_MODELS = {
 		cost: {
 			input: 0.6,
 			output: 2.5,
-			cacheRead: 0,
+			cacheRead: 0.6,
 			cacheWrite: 0,
 		},
 		contextWindow: 262144,
@@ -3811,11 +3811,11 @@ export const OPENROUTER_MODELS = {
 		cost: {
 			input: 0.14,
 			output: 1,
-			cacheRead: 0,
+			cacheRead: 0.05,
 			cacheWrite: 0,
 		},
 		contextWindow: 262144,
-		maxTokens: 262144,
+		maxTokens: 81920,
 	} satisfies Model<"openai-completions">,
 	"qwen/qwen3.5-397b-a17b": {
 		id: "qwen/qwen3.5-397b-a17b",
@@ -4459,11 +4459,11 @@ export const OPENROUTER_MODELS = {
 		cost: {
 			input: 0.98,
 			output: 3.08,
-			cacheRead: 0.49,
+			cacheRead: 0.182,
 			cacheWrite: 0,
 		},
 		contextWindow: 202752,
-		maxTokens: 65535,
+		maxTokens: 4096,
 	} satisfies Model<"openai-completions">,
 	"z-ai/glm-5.2": {
 		id: "z-ai/glm-5.2",

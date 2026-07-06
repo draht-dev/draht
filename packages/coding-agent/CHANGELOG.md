@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- add /brainstorm shipped prompt as the pre-planning design gate, ported from the draht-claude brainstorming skill
+
 ## [2026.6.11] - 2026-06-11
 
 ### Added

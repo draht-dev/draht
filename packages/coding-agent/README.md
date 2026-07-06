@@ -4,14 +4,11 @@
   </a>
 </p>
 <p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
   <a href="https://www.npmjs.com/package/@draht/coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@draht/coding-agent?style=flat-square" /></a>
   <a href="https://github.com/draht-dev/draht/actions/workflows/ci.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/draht-dev/draht/ci.yml?style=flat-square&branch=main" /></a>
 </p>
 <p align="center">
-  <a href="https://draht.dev">draht.dev</a> domain graciously donated by
-  <br /><br />
-  <a href="https://exe.dev"><img src="docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
+  <a href="https://draht.dev">draht.dev</a> domain via <a href="https://draht.dev/domain">Spaceship</a>
 </p>
 
 Draht is a minimal terminal coding harness. Adapt draht to your workflows, not the other way around, without having to fork and modify draht internals. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Put your extensions, skills, prompt templates, and themes in [Draht Packages](#draht-packages) and share them with others via npm or git.

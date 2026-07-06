@@ -5,7 +5,7 @@
   </a>
 </p>
 <p align="center">
-  <a href="https://draht.dev">draht.dev</a> domain graciously donated by
+  <a href="https://draht.dev">draht.dev</a> domain via <a href="https://draht.dev/domain">Spaceship</a>
 </p>
 
 # draht Monorepo

@@ -7,4 +7,7 @@ export default defineConfig({
 	outDir: "./dist",
 	adapter: aws(),
 	integrations: [sitemap()],
+	redirects: {
+		"/domain": "https://spaceship.sjv.io/c/7450244/1794549/21274",
+	},
 });

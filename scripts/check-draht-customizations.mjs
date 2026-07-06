@@ -25,6 +25,9 @@
  *  15. All package.json author fields are draht authors (not upstream)
  *  16. No @mariozechner/pi* import paths in source files
  *  17. No @mariozechner/pi* references in README.md files
+ *  18. No discord invite badge or stale "graciously donated by" domain credit
+ *      in README.md files (draht has no discord community; the domain credit
+ *      was replaced with a Spaceship referral link)
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -583,6 +586,36 @@ for (const readmePath of readmeFiles) {
 			if (contextMatch) {
 				fail(`${relPath}: contains pi-mono in install context`);
 			}
+		}
+	} catch {
+		// skip unreadable files
+	}
+}
+
+// ── 18. No discord badge / stale domain-donation credit in README.md files ──
+
+console.log(
+	"\nREADME branding (no discord badge, no stale domain-donation credit)",
+);
+
+const discordBadgePattern = /discord\.com\/invite/i;
+const staleDomainCreditPattern = /graciously donated by/i;
+
+for (const readmePath of readmeFiles) {
+	try {
+		const content = readFileSync(readmePath, "utf-8");
+		const relPath = relative(root, readmePath);
+
+		if (discordBadgePattern.test(content)) {
+			fail(`${relPath}: contains discord invite badge (no discord community exists)`);
+		} else {
+			pass(`${relPath}: no discord badge`);
+		}
+
+		if (staleDomainCreditPattern.test(content)) {
+			fail(`${relPath}: contains stale "graciously donated by" domain credit`);
+		} else {
+			pass(`${relPath}: no stale domain-donation credit`);
 		}
 	} catch {
 		// skip unreadable files

@@ -28,6 +28,9 @@
  *  18. No discord invite badge or stale "graciously donated by" domain credit
  *      in README.md files (draht has no discord community; the domain credit
  *      was replaced with a Spaceship referral link)
+ *  19. system-prompt.ts uses APP_NAME (not a hardcoded "pi" product name) —
+ *      upstream syncs tend to overwrite buildSystemPrompt() wholesale and
+ *      reintroduce "operating inside pi" / "Pi documentation" / "pi docs"
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -620,6 +623,58 @@ for (const readmePath of readmeFiles) {
 	} catch {
 		// skip unreadable files
 	}
+}
+
+// ── 19. system-prompt.ts uses APP_NAME (not hardcoded "pi") ─────────
+
+console.log('\nSystem prompt branding (uses APP_NAME, not hardcoded "pi")');
+
+const systemPromptRelPath = "packages/coding-agent/src/core/system-prompt.ts";
+const systemPromptAbsPath = resolve(root, systemPromptRelPath);
+
+if (existsSync(systemPromptAbsPath)) {
+	const systemPromptContent = readFileSync(systemPromptAbsPath, "utf-8");
+
+	check(
+		/import\s*\{[^}]*\bAPP_NAME\b[^}]*\}\s*from\s*["']\.\.\/config\.ts["']/.test(
+			systemPromptContent,
+		),
+		`${systemPromptRelPath}: imports APP_NAME from ../config.ts`,
+	);
+
+	check(
+		systemPromptContent.includes("${APP_NAME}"),
+		`${systemPromptRelPath}: default prompt interpolates \${APP_NAME} (not hardcoded)`,
+	);
+
+	// The default prompt text must never hardcode "pi" as the product name —
+	// upstream syncs tend to overwrite buildSystemPrompt() wholesale and
+	// reintroduce "operating inside pi" / "Pi documentation" / "pi docs".
+	const standalonePiPattern = /\bpi\b/gi;
+	const hardcodedPiHits = [];
+	const promptLines = systemPromptContent.split("\n");
+	for (let i = 0; i < promptLines.length; i++) {
+		const line = promptLines[i];
+		const trimmed = line.trim();
+		if (
+			trimmed.startsWith("//") ||
+			trimmed.startsWith("*") ||
+			trimmed.startsWith("/**") ||
+			trimmed.startsWith("import ")
+		)
+			continue;
+		standalonePiPattern.lastIndex = 0;
+		if (standalonePiPattern.test(line)) {
+			hardcodedPiHits.push(`${i + 1}: ${trimmed}`);
+		}
+	}
+	check(
+		hardcodedPiHits.length === 0,
+		`${systemPromptRelPath}: no hardcoded "pi" product references` +
+			(hardcodedPiHits.length ? ` (${hardcodedPiHits.join(" | ")})` : ""),
+	);
+} else {
+	fail(`${systemPromptRelPath}: file not found (path changed?)`);
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────

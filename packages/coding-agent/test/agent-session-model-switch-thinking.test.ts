@@ -1,4 +1,5 @@
 import { Agent, type ThinkingLevel } from "@draht/agent-core";
+import type { Model } from "@draht/ai/compat";
 import { getModel } from "@draht/ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
@@ -9,7 +10,18 @@ import { SettingsManager } from "../src/core/settings-manager.js";
 import { createTestResourceLoader } from "./utilities.js";
 
 const reasoningModel = getModel("anthropic", "claude-sonnet-4-5")!;
-const nonReasoningModel = getModel("anthropic", "claude-3-5-haiku-latest")!;
+const nonReasoningModel: Model<"anthropic-messages"> = {
+	id: "test-non-reasoning-model",
+	name: "Test Non-Reasoning Model",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+	reasoning: false,
+	input: ["text", "image"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 200000,
+	maxTokens: 8192,
+};
 
 function createSession({
 	thinkingLevel = "high",

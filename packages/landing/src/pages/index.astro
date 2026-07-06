@@ -2,8 +2,8 @@
 import Atelier from "../layouts/Atelier.astro";
 import Navbar from "../components/Navbar.astro";
 
-const title = "draht — a coding agent, handgefertigt";
-const description = "A GSD workflow engine for coding agents. Routes each task to the cheapest capable model, writes the test first, and logs every call. Install as a Claude Code plugin or run it standalone.";
+const title = "draht - coding agents that ship for less";
+const description = "Draht routes each coding task to the cheapest model that can do it. It writes tests first, checks the domain, and logs every call. Use it in Claude Code or run the CLI.";
 ---
 
 <Atelier title={title} description={description}>
@@ -37,19 +37,19 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 				</svg>
 			</div>
 
-			<div class="tag">Dynamic Routing for Agent &amp; Task Handling — handgefertigt in Dortmund</div>
+			<div class="tag">Dynamic routing for coding agents — handgefertigt in Dortmund</div>
 
 			<h1>draht<span class="ampersand">.</span></h1>
 
 			<p class="hero-subhead">
-				The right model for every task. Test before code,
-				<span class="hb">domain</span> before edits,
-				orchestration where it pays for itself.
+				Use the right model. Test before code.
+				Read the <span class="hb">domain</span>.
+				Orchestrate when it saves time.
 			</p>
 
 			<div class="hero-grid">
 				<div class="hero-lede">
-					<span class="drop">Draht</span> is German for <em class="wire">wire</em>. It&rsquo;s a GSD workflow engine for coding agents: picks the cheapest model that can actually do the step, writes the test before the code, checks your domain model before editing anything, and logs every call so you can hand an auditor a PDF.
+					<span class="drop">Draht</span> is German for <em class="wire">wire</em>. It routes coding-agent work. It picks the cheapest model for each step. It writes tests before code. It reads your domain model. It logs each call for audit or billing.
 				</div>
 
 				<div class="hero-cta">
@@ -72,7 +72,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<span class="ib-num">A.</span>
 						<div>
 							<div class="ib-title">Claude Code plugin</div>
-							<div class="ib-sub">You have a Claude Max or Pro subscription. Keep it.</div>
+							<div class="ib-sub">You have Claude Max or Pro. Keep it.</div>
 						</div>
 					</div>
 					<div class="install" style="max-width:none;">
@@ -80,7 +80,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<code>npx draht-claude install</code>
 						<button type="button" class="copy-btn" data-copy="npx draht-claude install">Copy</button>
 					</div>
-					<p class="install-note">Routing, TDD, orchestration, and audit logs slot into the Claude Code session you already use.</p>
+					<p class="install-note">Add routing, TDD, orchestration, and audit logs to Claude Code.</p>
 				</div>
 
 				<div class="install-col">
@@ -88,7 +88,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<span class="ib-num">B.</span>
 						<div>
 							<div class="ib-title">Standalone CLI</div>
-							<div class="ib-sub">Everyone else. API keys, OAuth, self-hosted — your call.</div>
+							<div class="ib-sub">Use API keys, OAuth, or your own models.</div>
 						</div>
 					</div>
 					<div class="install" style="max-width:none;">
@@ -96,7 +96,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<code>bun add -g @draht/coding-agent</code>
 						<button type="button" class="copy-btn" data-copy="bun add -g @draht/coding-agent">Copy</button>
 					</div>
-					<p class="install-note">Full agent, seventeen providers. Works with or without a Claude subscription.</p>
+					<p class="install-note">Run the full agent across 17 providers. Claude is not required.</p>
 				</div>
 			</div>
 		</section>
@@ -106,27 +106,27 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			<div class="section-head">
 				<div class="section-num">§ 01</div>
 				<div class="section-title">Wie es funktioniert <em>— how it works</em></div>
-				<div class="section-kicker">Three wires, one circuit</div>
+				<div class="section-kicker">Three wires. One circuit.</div>
 			</div>
 
 			<div class="wires">
 				<div class="card">
 					<div class="pin"></div>
 					<div class="label">I. Route</div>
-					<h3>The right model, every time.</h3>
-					<p>The Model Router grades each task on reasoning depth, context size, and latency budget, then hands it to the cheapest model that can actually do it. Haiku for scaffolds, Sonnet for refactors, Opus when the architecture is genuinely hard. You stop paying Opus prices for boilerplate.</p>
+					<h3>Use the right model.</h3>
+					<p>The router scores each task by reasoning, context, and latency. It sends simple work to cheap models. It saves Opus for hard architecture. You stop paying Opus rates for boilerplate.</p>
 				</div>
 				<div class="card">
 					<div class="pin"></div>
 					<div class="label">II. Test</div>
-					<h3>TDD-first, DDD-native.</h3>
-					<p>The agent writes a failing test before it writes any implementation. It reads your domain model first — bounded contexts, aggregates, the names you actually use — and edits through that vocabulary. It can't commit past a red bar.</p>
+					<h3>Test first. Use the domain.</h3>
+					<p>The agent writes a failing test before code. It reads bounded contexts, aggregates, and your team names. It edits in that language. Red tests block commits.</p>
 				</div>
 				<div class="card">
 					<div class="pin"></div>
 					<div class="label">III. Ship</div>
-					<h3>Parallel, observable, audit-ready.</h3>
-					<p>The Orchestrator runs independent work across sub-agents in parallel. The CI guardian blocks broken merges before they land. The compliance layer logs every model call with enough provenance to pass a GDPR audit or an invoice review — whichever comes first.</p>
+					<h3>Run, watch, prove.</h3>
+					<p>The orchestrator runs independent work in parallel. CI blocks broken merges. The log records every model call, cost, and source. Use it for GDPR audits or invoice review.</p>
 				</div>
 			</div>
 		</section>
@@ -136,7 +136,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			<div class="section-head">
 				<div class="section-num">§ 02</div>
 				<div class="section-title">Die Werkbank <em>— the workbench</em></div>
-				<div class="section-kicker">17 providers · 1 router · 0 lock-in</div>
+				<div class="section-kicker">17 providers · 1 router · no lock-in</div>
 			</div>
 
 			<div class="workbench">
@@ -153,28 +153,28 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<div class="fnum">F/01</div>
 						<div>
 							<h4>Routing you can <em>read.</em></h4>
-							<p>Policies are plain TypeScript. Match on file glob, task type, context size, or budget, then route to Haiku, Sonnet, Opus, GPT, Gemini, or something self-hosted. Override per repo, per branch, per session.</p>
+							<p>Policies are TypeScript. Match file glob, task type, context size, or budget. Route to Haiku, Sonnet, Opus, GPT, Gemini, or your own model. Override per repo, branch, or session.</p>
 						</div>
 					</div>
 					<div class="feat">
 						<div class="fnum">F/02</div>
 						<div>
 							<h4>Sessions that <em>branch.</em></h4>
-							<p>Every run is a tree in a single JSONL file. Jump back, fork a branch, swap the routing profile, come back. Nothing is thrown away, and every token you spent is still on disk if you need to prove it.</p>
+							<p>Every run writes a tree to one JSONL file. Jump back. Fork a branch. Swap the routing profile. Return later. Token costs stay on disk.</p>
 						</div>
 					</div>
 					<div class="feat">
 						<div class="fnum">F/03</div>
 						<div>
 							<h4>Sub-agents that <em>finish.</em></h4>
-							<p>Seven specialists — architect, implementer, reviewer, debugger, verifier, security-auditor, git-committer. Each runs on a model you configure. Parallel where the work allows, sequential where it doesn't. Commits land with red:/green:/refactor: discipline.</p>
+							<p>Seven specialists handle architecture, code, review, debug, verify, security, and git. You set the model for each one. Split work runs in parallel. Ordered work stays ordered. Commits use red:/green:/refactor: discipline.</p>
 						</div>
 					</div>
 					<div class="feat">
 						<div class="fnum">F/04</div>
 						<div>
-							<h4>Four modes of <em>operation.</em></h4>
-							<p>Interactive REPL, print mode, JSON event stream, or RPC over stdin/stdout. Drop draht into CI, a cron job, or a Slack bot. Embed the SDK if you'd rather wire it into your own app.</p>
+							<h4>Four ways to <em>run.</em></h4>
+							<p>Use the REPL, print mode, JSON events, or RPC over stdin/stdout. Run draht in CI, a cron job, or a Slack bot. Embed the SDK in your app.</p>
 						</div>
 					</div>
 				</div>
@@ -193,91 +193,91 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 01</span>
 					<div class="pkg-name">@draht/router <em>the dispatcher</em></div>
-					<div class="pkg-desc">Grades tasks by complexity and routes to the cheapest capable model. Haiku, Sonnet, Opus, GPT, Gemini — one policy, seventeen providers.</div>
+					<div class="pkg-desc">Scores tasks and routes them to the cheapest model that can do the work. One policy covers Haiku, Sonnet, Opus, GPT, Gemini, and 12 more providers.</div>
 					<div class="pkg-tag">CORE</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 02</span>
 					<div class="pkg-name">@draht/orchestrator <em>the conductor</em></div>
-					<div class="pkg-desc">Runs sub-agents in parallel across independent work. Merges their output, resolves conflicts, hands back a single diff.</div>
+					<div class="pkg-desc">Runs sub-agents in parallel for split work. Merges output, resolves conflicts, and returns one diff.</div>
 					<div class="pkg-tag">CORE</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 03</span>
 					<div class="pkg-name">@draht/knowledge <em>the domain</em></div>
-					<div class="pkg-desc">Living DDD model of your codebase — bounded contexts, aggregates, ubiquitous language. The agent reads it before it writes.</div>
+					<div class="pkg-desc">Keeps a DDD map of your codebase: contexts, aggregates, and team words. The agent reads it before it writes.</div>
 					<div class="pkg-tag">CORE</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 04</span>
 					<div class="pkg-name">@draht/tdd <em>the red bar</em></div>
-					<div class="pkg-desc">Enforces red-green-refactor. No implementation commits until a failing test exists. Works with vitest, bun test, jest, pytest.</div>
+					<div class="pkg-desc">Enforces red-green-refactor. Code cannot commit until a failing test exists. Works with vitest, bun test, jest, and pytest.</div>
 					<div class="pkg-tag">CORE</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 05</span>
 					<div class="pkg-name">@draht/ci <em>the gate</em></div>
-					<div class="pkg-desc">Runs the agent's changes through your real pipeline before they land. Fails loud, retries narrow, never waves things through.</div>
+					<div class="pkg-desc">Runs agent changes through your real pipeline before they land. Fails loud. Retries narrow. Never waves work through.</div>
 					<div class="pkg-tag">OPS</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 06</span>
 					<div class="pkg-name">@draht/deploy-guardian <em>the sentinel</em></div>
-					<div class="pkg-desc">Canary rollouts, SLO watching, one-click rollback. The agent can ship to prod; the guardian decides when to pull the cord.</div>
+					<div class="pkg-desc">Handles canary rollout, SLO checks, and rollback. The agent can ship to prod. The guardian can pull the cord.</div>
 					<div class="pkg-tag">OPS</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 07</span>
 					<div class="pkg-name">@draht/invoice <em>the ledger</em></div>
-					<div class="pkg-desc">Per-task, per-model cost tracking. Export freelancer-ready invoices with token breakdowns and time logs. VAT-aware.</div>
+					<div class="pkg-desc">Tracks cost by task and model. Exports invoices with token counts, time logs, and VAT fields.</div>
 					<div class="pkg-tag">BIZ</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 08</span>
 					<div class="pkg-name">@draht/compliance <em>the notary</em></div>
-					<div class="pkg-desc">GDPR-aware logging, data-residency routing, signed audit trail of every model call. For when your client's lawyer asks.</div>
+					<div class="pkg-desc">Logs for GDPR, routes by data region, and signs each model-call record. Ready when a client asks.</div>
 					<div class="pkg-tag">BIZ</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 09</span>
 					<div class="pkg-name">@draht/templates <em>the patterns</em></div>
-					<div class="pkg-desc">Opinionated starters — SaaS, API, CLI, freelance repo. Pre-wired with router policies, test harness, domain scaffolds.</div>
+					<div class="pkg-desc">Ships starters for SaaS, API, CLI, and freelance repos. Each includes router policy, tests, and domain scaffold.</div>
 					<div class="pkg-tag">LIBRARY</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 10</span>
 					<div class="pkg-name">draht-claude <em>the bridge</em></div>
-					<div class="pkg-desc">Installs draht as a Claude Code plugin — keep your subscription, gain routing, TDD, orchestration. Zero config.</div>
+					<div class="pkg-desc">Installs draht in Claude Code. Keep your subscription. Add routing, TDD, and orchestration with no config.</div>
 					<div class="pkg-tag">PLUGIN</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 11</span>
 					<div class="pkg-name">@draht/cli <em>the standalone</em></div>
-					<div class="pkg-desc">Terminal-native agent with everything wired in. API keys or OAuth; works without Claude Code.</div>
+					<div class="pkg-desc">Runs the full agent in your terminal. Use API keys or OAuth. Claude Code is not required.</div>
 					<div class="pkg-tag">CLI</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 12</span>
 					<div class="pkg-name">@draht/ai <em>the primitives</em></div>
-					<div class="pkg-desc">Unified API for OpenAI, Anthropic, Google &amp; fourteen others. Streaming, tools, thinking levels, cache control.</div>
+					<div class="pkg-desc">Unifies OpenAI, Anthropic, Google, and 14 other providers. Streams text, tools, thinking levels, and cache control.</div>
 					<div class="pkg-tag">LIBRARY</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 13</span>
 					<div class="pkg-name">@draht/extensions <em>the slots</em></div>
-					<div class="pkg-desc">Extension host — skills, prompt packs, custom tools, UI panels. Everything bendable is a TypeScript module.</div>
+					<div class="pkg-desc">Hosts skills, prompt packs, custom tools, and UI panels. Each extension is a TypeScript module.</div>
 					<div class="pkg-tag">LIBRARY</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 14</span>
 					<div class="pkg-name">@draht/tui <em>the loom</em></div>
-					<div class="pkg-desc">Terminal UI library with differential rendering. What the standalone CLI is woven from.</div>
+					<div class="pkg-desc">Renders the terminal UI with diff-based updates. The standalone CLI uses it.</div>
 					<div class="pkg-tag">LIBRARY</div>
 				</a>
 				<a class="pkg" href="https://github.com/draht-dev/draht">
 					<span class="pkg-idx">№ 15</span>
 					<div class="pkg-name">@draht/pods <em>the foundry</em></div>
-					<div class="pkg-desc">CLI for managing vLLM deployments on GPU pods. Spin up, rotate, retire self-hosted models from the command line.</div>
+					<div class="pkg-desc">Manages vLLM deployments on GPU pods. Start, rotate, and retire self-hosted models from the command line.</div>
 					<div class="pkg-tag">OPS</div>
 				</a>
 			</div>
@@ -288,45 +288,45 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			<div class="section-head">
 				<div class="section-num">§ 04</div>
 				<div class="section-title">Philosophie <em>— six principles, non-negotiable</em></div>
-				<div class="section-kicker">How draht decides, so you don't have to.</div>
+				<div class="section-kicker">How draht decides for you.</div>
 			</div>
 
 			<div class="manifest">
 				<div class="clause">
 					<div class="cnum">i.</div>
-					<div class="neg">— Cheapest capable model —</div>
+					<div class="neg">— Cheapest model that works —</div>
 					<h5>Route, don't default.</h5>
-					<p>No single model is right for every task. The router grades the work and assigns accordingly. You pay for Opus only when Opus is what the job requires.</p>
+					<p>No model fits every task. The router scores the work and picks the cheapest model that can do it. You pay for Opus when the job needs Opus.</p>
 				</div>
 				<div class="clause">
 					<div class="cnum">ii.</div>
 					<div class="neg">— Red before green —</div>
 					<h5>Test first, always.</h5>
-					<p>The failing test is the specification. The agent can't commit any implementation until a test exists, fails, and then passes. If you don't want TDD, draht is the wrong tool.</p>
+					<p>The failing test is the spec. The agent must create a test, watch it fail, and make it pass before it commits code. If you skip TDD, skip draht.</p>
 				</div>
 				<div class="clause">
 					<div class="cnum">iii.</div>
 					<div class="neg">— Language of the domain —</div>
 					<h5>DDD is not optional.</h5>
-					<p>Bounded contexts, aggregates, the words your team actually uses. The agent reads your domain model first and edits through that vocabulary. Otherwise it's guessing, and guessing gets expensive.</p>
+					<p>Bounded contexts, aggregates, and your team's words guide edits. The agent reads that model first. Guessing costs money.</p>
 				</div>
 				<div class="clause">
 					<div class="cnum">iv.</div>
 					<div class="neg">— Parallel by default —</div>
-					<h5>Orchestrate, don't serialise.</h5>
-					<p>Independent work runs in parallel sub-agents. The orchestrator merges results. One long task becomes three short ones.</p>
+					<h5>Split work. Don't queue it.</h5>
+					<p>Run independent work in parallel sub-agents. The orchestrator merges the output. One long task becomes three short tasks.</p>
 				</div>
 				<div class="clause">
 					<div class="cnum">v.</div>
 					<div class="neg">— Receipts for everything —</div>
 					<h5>Audit is a feature.</h5>
-					<p>Every model call is logged, costed, and invoiceable. Whether it's your client's auditor asking, the Finanzamt, or you trying to remember what happened last quarter, the receipt is on disk.</p>
+					<p>Log every model call, cost, and billable step. The receipt sits on disk for clients, auditors, tax, or your own memory.</p>
 				</div>
 				<div class="clause">
 					<div class="cnum">vi.</div>
 					<div class="neg">— Boring ships —</div>
 					<h5>No hidden magic.</h5>
-					<p>Policies are files. State lives on disk. The harness is TypeScript you can read through in an afternoon. If something surprises you, it's because you haven't opened the file yet.</p>
+					<p>Policies are files. State lives on disk. The harness is TypeScript. You can read it in an afternoon. If something surprises you, open the file.</p>
 				</div>
 			</div>
 		</section>
@@ -336,7 +336,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 			<div class="section-head">
 				<div class="section-num">§ 05</div>
 				<div class="section-title">Preise <em>— two ways to pay, one way to use</em></div>
-				<div class="section-kicker">Open source forever · paid setup optional</div>
+				<div class="section-kicker">Open source forever · paid setup if needed</div>
 			</div>
 
 			<div class="pricing">
@@ -351,7 +351,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<li>Router, orchestrator, TDD, DDD</li>
 						<li>Claude Code plugin &amp; standalone CLI</li>
 						<li>Community Discord, GitHub issues</li>
-						<li><em>You bring your own API keys</em></li>
+						<li><em>Bring your own API keys</em></li>
 					</ul>
 					<a class="tier-cta" href="https://github.com/draht-dev/draht">Clone the repo →</a>
 				</div>
@@ -363,10 +363,10 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 					<div class="tier-price">€499<em>one-time</em></div>
 					<div class="tier-unit">incl. 19% VAT · remote, in writing</div>
 					<ul>
-						<li>2-hour call, your codebase on screen</li>
-						<li>Router policy tuned to <em>your</em> workload</li>
-						<li>Domain model bootstrapped from your code</li>
-						<li>Invoicing &amp; compliance configured for DE/EU</li>
+						<li>2-hour call with your codebase on screen</li>
+						<li>Tune router policy to <em>your</em> workload</li>
+						<li>Bootstrap the domain model from your code</li>
+						<li>Configure invoicing &amp; compliance for DE/EU</li>
 						<li>30 days of Signal support</li>
 					</ul>
 					<a class="tier-cta" href="mailto:oskar@draht.dev">Book Oskar →</a>
@@ -382,7 +382,7 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 						<li>On-prem / air-gapped deployment</li>
 						<li>Custom router policies &amp; extensions</li>
 						<li>Compliance review: GDPR, AI Act, ISO</li>
-						<li>Training sessions for the whole team</li>
+						<li>Train the whole team</li>
 						<li>Dedicated Signal channel</li>
 					</ul>
 					<a class="tier-cta" href="mailto:oskar@draht.dev?subject=Draht%20team%20engagement">Write Oskar →</a>
@@ -458,9 +458,9 @@ const description = "A GSD workflow engine for coding agents. Routes each task t
 				{ t: "dim", v: "  ● " }, { t: "key", v: "bash  " }, { t: "dim", v: "bun test payments/  " }, { t: "ok", v: "142 pass ✓" },
 				{ t: "nl" },
 				{ t: "nl" },
-				{ t: "user", v: "  Done. Idempotency-Key header; 24h Redis TTL." },
+				{ t: "user", v: "  Done. Added Idempotency-Key. Redis TTL: 24h." },
 				{ t: "nl" },
-				{ t: "user", v: "  Replay detection covers concurrent writes." }
+				{ t: "user", v: "  Replay detection covers parallel writes." }
 			],
 			// Scene 2: GSD execute-phase — parallel subagents, TDD commits
 			[

@@ -16,7 +16,7 @@ async function fetchGitHubData(): Promise<GitHubData> {
 		stars: 0,
 		forks: 0,
 		openIssues: 0,
-		description: "AI Coding Agent for Freelancers",
+		description: "Coding agents that ship for less",
 	};
 
 	try {
@@ -207,7 +207,7 @@ export const GET: APIRoute = async () => {
 								fontFamily: "Mono",
 								marginBottom: "32px",
 							},
-							children: "Dynamic Routing for Agent & Task Handling",
+							children: "Dynamic routing for coding agents",
 						},
 					},
 					// Description
@@ -222,7 +222,7 @@ export const GET: APIRoute = async () => {
 								lineHeight: "1.5",
 								marginBottom: "40px",
 							},
-							children: "The AI coding agent built for freelancers. Multi-model. TDD-first. DDD-native.",
+							children: "Route each coding task to the right model. Test first. Log every call.",
 						},
 					},
 					// Stats row

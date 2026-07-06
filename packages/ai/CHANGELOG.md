@@ -1,6 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.7] - 2026-07-06
+
+### Added
+
+- incorporate upstream ai package changes
+- incorporate upstream ai package changes
+
+### Changed
+
+- sync model catalog from upstream
+
+### Fixed
+
+- restore DeepSeek reasoning_content replay dropped in upstream sync
 
 ## [2026.6.11] - 2026-06-11
 

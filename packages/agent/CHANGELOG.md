@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.7] - 2026-07-06
+
+### Added
+
+- incorporate upstream agent package changes
+- incorporate upstream agent package changes
 
 ## [2026.6.11] - 2026-06-11
 

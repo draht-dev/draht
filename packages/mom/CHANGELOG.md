@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.7] - 2026-07-06
+
+### Fixed
+
+- migrate to @draht/ai compat entrypoint
 
 ## [2026.4.25] - 2026-04-25
 

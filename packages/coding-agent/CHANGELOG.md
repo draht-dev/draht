@@ -1,10 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.7] - 2026-07-06
 
 ### Added
 
-- add /brainstorm shipped prompt as the pre-planning design gate, ported from the draht-claude brainstorming skill
+- incorporate upstream coding-agent changes
+- add /brainstorm pre-planning design gate
+- incorporate upstream coding-agent changes
+
+### Fixed
+
+- rebrand hardcoded "pi" refs in system prompt to draht
+- stop referencing removed claude-3-5-haiku-latest model in test
+- replace fake discord badge and domain credit with Spaceship referral
+- copy interactive assets to dist in copy-assets
 
 ## [2026.6.11] - 2026-06-11
 

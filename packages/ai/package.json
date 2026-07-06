@@ -1,6 +1,6 @@
 {
 	"name": "@draht/ai",
-	"version": "2026.6.11",
+	"version": "2026.7.7",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",

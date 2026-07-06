@@ -19,8 +19,8 @@
 	"dependencies": {
 		"@draht/ai": "workspace:*",
 		"ignore": "^7.0.5",
-		"typebox": "^1.1.24",
-		"yaml": "^2.8.2",
+		"typebox": "^1.1.38",
+		"yaml": "^2.9.0",
 		"uuid": "^14.0.0"
 	},
 	"keywords": [

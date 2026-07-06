@@ -106,6 +106,7 @@ cp permission-gate.ts ~/.draht/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `message-renderer.ts` | Custom message rendering with colors and expandable details via `registerMessageRenderer` |
+| `entry-renderer.ts` | TUI-only session entry rendering via `appendEntry` and `registerEntryRenderer` |
 | `event-bus.ts` | Inter-extension communication via `pi.events` |
 
 ### Session Metadata

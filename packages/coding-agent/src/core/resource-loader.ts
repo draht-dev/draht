@@ -15,7 +15,7 @@ import {
 	loadExtensionFromFactory,
 	loadExtensionsCached,
 } from "./extensions/loader.ts";
-import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.ts";
+import type { Extension, ExtensionRuntime, InlineExtension, LoadExtensionsResult } from "./extensions/types.ts";
 import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from "./package-manager.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
@@ -23,6 +23,7 @@ import { SettingsManager } from "./settings-manager.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
 import { createSourceInfo, type SourceInfo } from "./source-info.ts";
+import { resetTimings } from "./timings.ts";
 
 export interface ResourceExtensionPaths {
 	skillPaths?: Array<{ path: string; metadata: PathMetadata }>;
@@ -130,7 +131,7 @@ export interface DefaultResourceLoaderOptions {
 	additionalSkillPaths?: string[];
 	additionalPromptTemplatePaths?: string[];
 	additionalThemePaths?: string[];
-	extensionFactories?: ExtensionFactory[];
+	extensionFactories?: InlineExtension[];
 	noExtensions?: boolean;
 	noSkills?: boolean;
 	noPromptTemplates?: boolean;
@@ -168,7 +169,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private additionalSkillPaths: string[];
 	private additionalPromptTemplatePaths: string[];
 	private additionalThemePaths: string[];
-	private extensionFactories: ExtensionFactory[];
+	private extensionFactories: InlineExtension[];
 	private noExtensions: boolean;
 	private noSkills: boolean;
 	private noPromptTemplates: boolean;
@@ -338,6 +339,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
+		resetTimings("extensions");
+
 		if (this.loaded) {
 			clearExtensionCache();
 		}
@@ -893,8 +896,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const extensions: Extension[] = [];
 		const errors: Array<{ path: string; error: string }> = [];
 
-		for (const [index, factory] of this.extensionFactories.entries()) {
-			const extensionPath = `<inline:${index + 1}>`;
+		for (const [index, input] of this.extensionFactories.entries()) {
+			const isNamed = typeof input !== "function";
+			const factory = isNamed ? input.factory : input;
+			const extensionPath = `<inline:${isNamed ? input.name : index + 1}>`;
 			try {
 				const extension = await loadExtensionFromFactory(factory, this.cwd, this.eventBus, runtime, extensionPath);
 				extensions.push(extension);

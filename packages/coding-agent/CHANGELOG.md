@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.7-1] - 2026-07-07
+
+### Added
+
+- weave senior-operator reasoning discipline into prompts
 
 ## [2026.7.7] - 2026-07-06
 

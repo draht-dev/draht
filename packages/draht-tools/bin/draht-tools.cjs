@@ -290,7 +290,7 @@ commands["create-domain-model"] = function () {
 
 // --- init-state ---
 commands["init-state"] = function () {
-	const tmpl = `# State\n\n## Current Phase: 1\n## Status: initialized\n\n## Decisions\n(none yet)\n\n## Blockers\nNone.\n\n## Quick Tasks Completed\n(none)\n\n## Last Activity: ${timestamp()}\n`;
+	const tmpl = `# State\n\n## Current Phase: 1\n## Status: initialized\n\n## Decisions\n(none yet)\n\n## Lessons\n(none yet — one dated bullet per lesson: what was tried, why it failed or worked, what to do instead)\n\n## Blockers\nNone.\n\n## Quick Tasks Completed\n(none)\n\n## Last Activity: ${timestamp()}\n`;
 	writeMd(planningPath("STATE.md"), tmpl);
 	writeJson(planningPath("config.json"), getConfig());
 	console.log(`Created: ${PLANNING_DIR}/STATE.md`);

@@ -28,9 +28,10 @@ Before pausing, decompose session state into atomic reasoning units:
    - `## Decisions Made This Session` — any design decisions or context
    - `## Next Steps` — exact commands to run when resuming
    - `## Blockers` — anything waiting on external input or clarification
-4. Update `.planning/STATE.md` last activity timestamp via `draht-tools update-state`
-5. Commit: `draht-tools commit-docs "pause work — handoff"`
-6. Tell the user: "Resume with `/resume-work` in a fresh session."
+4. **Distill lessons before the context is lost**: for anything this session tried that failed, or an approach that worked against expectations, append one dated bullet to `.planning/STATE.md` under `## Lessons` (create the section before `## Blockers` if missing). Lessons name what to do differently — "runner hits TLS issue in PowerShell, use bash", not "had problems with tests".
+5. Update `.planning/STATE.md` last activity timestamp via `draht-tools update-state`
+6. Commit: `draht-tools commit-docs "pause work — handoff"`
+7. Tell the user: "Resume with `/resume-work` in a fresh session."
 
 ## Rules
 - Be specific — "fix bug in auth" is useless; "null check in src/auth/session.ts:42, test reproducing in test/auth-null.test.ts" is useful

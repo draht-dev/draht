@@ -132,6 +132,30 @@ try {
 	}
 } catch { /* map refresh is best-effort */ }
 
+// 4.6 Seed lessons: persist phase failure patterns into STATE.md ## Lessons so
+// they compound across sessions instead of living only in transient reports.
+try {
+	const statePath = path.join(PLANNING, "STATE.md");
+	if (fs.existsSync(statePath) && (failed > 0 || tddViolations > 0 || warnings > 0)) {
+		let state = fs.readFileSync(statePath, "utf-8");
+		const date = new Date().toISOString().slice(0, 10);
+		const lessonBits = [];
+		if (failed > 0) lessonBits.push(`${failed} task(s) failed`);
+		if (tddViolations > 0) lessonBits.push(`${tddViolations} TDD violation(s) (green: without red:)`);
+		if (warnings > 0) lessonBits.push(`${warnings} task(s) with warnings`);
+		const lesson = `- ${date}: Phase ${phaseNum}: ${lessonBits.join(", ")} — see phase-${phaseNum}-report.md; distill the root cause here before the next phase.`;
+		if (!state.includes(lesson)) {
+			if (/## Lessons\n/.test(state)) {
+				state = state.replace(/## Lessons\n(\(none yet[^\n]*\)\n)?/, (m) => `## Lessons\n${lesson}\n`);
+			} else {
+				state = state.replace(/## Blockers/, `## Lessons\n${lesson}\n\n## Blockers`);
+			}
+			fs.writeFileSync(statePath, state);
+			console.log(`STATE.md: lesson recorded for phase ${phaseNum}`);
+		}
+	}
+} catch { /* lessons are best-effort */ }
+
 // 5. Summary
 console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 console.log(` Draht ► PHASE ${phaseNum} ${failed === 0 ? "COMPLETE ✅" : "NEEDS FIXES ❌"}`);

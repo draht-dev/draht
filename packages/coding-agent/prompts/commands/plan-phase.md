@@ -48,6 +48,7 @@ Before creating plans, decompose this phase goal into atomic reasoning units:
 
 ## Steps
 1. Run `draht-tools load-phase-context $1` to gather all context
+1b. Read `.planning/STATE.md` `## Lessons` — every plan must respect the recorded lessons; a plan that repeats a documented failure is invalid. Feed relevant lessons into each architect prompt.
 2. Optional: `draht-tools research-phase $1` for domain research
 3. Goal-backward planning:
    a. State the goal (outcome, not activity)

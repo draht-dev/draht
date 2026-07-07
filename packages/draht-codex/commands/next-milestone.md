@@ -29,6 +29,7 @@ Before planning the next milestone, decompose progress into atomic reasoning uni
 2. If any phase is not complete, STOP and tell the user which phase needs attention
 3. Read all phase reports in `.planning/phase-N-report.md` to extract lessons learned
 4. Read the execution log `.planning/execution-log.jsonl` for failure patterns
+4b. **Write the distilled lessons back**: append each durable lesson from steps 3-4 as a dated bullet to `.planning/STATE.md` under `## Lessons` (create the section before `## Blockers` if missing). Extraction that only informs this planning session evaporates; the `## Lessons` section is what future sessions actually reread.
 5. Refresh the living map if stale: `draht-tools map-graph --quiet` (guarded — skip if the post-phase hook already refreshed), then `draht-tools graph-clusters --surprising`. Compare clusters / bounded contexts / entry points against the milestone start to surface architectural drift before planning the next milestone
 6. Review `.planning/DOMAIN.md` — is it still accurate? Any terms to add/revise (esp. drift flagged in step 5)?
 7. Review `.planning/TEST-STRATEGY.md` — any updates needed?

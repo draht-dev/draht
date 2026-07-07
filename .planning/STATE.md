@@ -36,6 +36,9 @@
 - Phase 17: Compliance Checker (2 commits)
 - Phase 18: draht.dev Website Content (2 commits)
 
+## Lessons
+- 2026-03-02: GSD tracking drifted silently — phase status and plan files went out of sync until a manual audit; keep STATE/ROADMAP updates in the same commit as the work they describe.
+
 ## Blockers
 None.
 

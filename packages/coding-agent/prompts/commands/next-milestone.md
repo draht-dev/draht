@@ -42,6 +42,7 @@ Before planning the next milestone, decompose progress into atomic reasoning uni
 2. Review completed work:
    - Scan `.planning/phases/` for all UAT reports (`*-UAT.md`) and summaries (`*-SUMMARY.md`)
    - Note what was built, what worked well, what had issues
+   - **Write the distilled lessons back**: append each durable lesson as a dated bullet to `.planning/STATE.md` under `## Lessons` (create the section before `## Blockers` if missing) — extraction that only informs this session evaporates; the `## Lessons` section is what future sessions reread
 3. Assess requirements:
    - Which v1 requirements are now satisfied?
    - Which v1 requirements remain?

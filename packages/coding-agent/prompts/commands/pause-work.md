@@ -26,4 +26,5 @@ Before pausing, decompose session state into atomic reasoning units:
 
 ## Steps
 1. Run `draht-tools pause` — creates CONTINUE-HERE.md
-2. Commit: `draht-tools commit-docs "pause work"`
+2. **Distill lessons before the context is lost**: for anything this session tried that failed, or an approach that worked against expectations, append one dated bullet to `.planning/STATE.md` under `## Lessons` (create the section before `## Blockers` if missing). Lessons name what to do differently — "runner hits TLS issue in PowerShell, use bash", not "had problems with tests".
+3. Commit: `draht-tools commit-docs "pause work"`

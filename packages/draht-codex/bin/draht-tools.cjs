@@ -8,7 +8,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { execSync } = require("node:child_process");
+const { execSync, execFileSync } = require("node:child_process");
 
 const PLANNING_DIR = ".planning";
 const BANNER_WIDTH = 55;
@@ -83,6 +83,31 @@ function hasGit() {
 	} catch {
 		return false;
 	}
+}
+
+// Whole-repo enforcement (WP6, defect 22): walk up from `startDir` to the nearest `.git`, then
+// (if none found) the nearest package.json declaring `workspaces` or a pnpm-workspace.yaml.
+// Falls back to startDir itself so single-package / non-git checkouts still work.
+function findRepoRoot(startDir) {
+	let dir = path.resolve(startDir);
+	while (true) {
+		if (fs.existsSync(path.join(dir, ".git"))) return dir;
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	dir = path.resolve(startDir);
+	while (true) {
+		if (fs.existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
+		try {
+			const pj = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf-8"));
+			if (pj && pj.workspaces) return dir;
+		} catch { /* empty */ }
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return path.resolve(startDir);
 }
 
 function gitCommit(message) {
@@ -186,11 +211,19 @@ commands.init = function () {
 
 // --- map-codebase ---
 commands["map-codebase"] = function (dir) {
-	const cwd = dir || process.cwd();
-	const outDir = planningPath("codebase");
+	// Whole-repo enforcement (WP6, defect 22): the graph output always lives at the repo root's
+	// .planning/codebase/ — previously this used planningPath() (= process.cwd()) while the
+	// narrative-doc scan below used `cwd` (= dir arg), so passing a `dir` silently wrote docs to
+	// the wrong .planning/ entirely. `dir` still scopes the narrative file-tree/domain-hint scan.
+	const repoRoot = findRepoRoot(process.cwd());
+	const cwd = dir ? path.resolve(dir) : process.cwd();
+	const outDir = path.join(repoRoot, PLANNING_DIR, "codebase");
 	ensureDir(outDir);
 
 	console.log(banner("MAPPING CODEBASE"));
+	if (dir && cwd !== repoRoot) {
+		console.log(`note: map-codebase always maps the whole repo graph (${repoRoot}); '${dir}' only scopes the narrative doc scan below.`);
+	}
 
 	// Gather file tree
 	let tree = "";
@@ -242,14 +275,14 @@ commands["map-codebase"] = function (dir) {
 	// so `map-codebase` is a single command that produces both the prose docs and the graphify map.
 	let kg = null;
 	try {
-		kg = visWriteOutputs(cwd);
+		kg = visWriteOutputs(repoRoot);
 	} catch (err) {
 		console.error(`\n⚠️  Knowledge graph build failed (run \`draht-tools map-graph\` to retry): ${err.message}`);
 	}
 
 	console.log(`\nCreated:\n  ${outDir}/STACK.md\n  ${outDir}/ARCHITECTURE.md\n  ${outDir}/CONVENTIONS.md\n  ${outDir}/CONCERNS.md\n  ${outDir}/DOMAIN-HINTS.md`);
 	if (kg) {
-		console.log(`  ${path.relative(cwd, kg.jsonPath)}\n  ${path.relative(cwd, kg.htmlPath)}\n  ${path.relative(cwd, kg.reportPath)}`);
+		console.log(`  ${kg.jsonPath}\n  ${kg.htmlPath}\n  ${kg.reportPath}`);
 		console.log(`\nIndexed ${kg.map.stats.files} modules · ${kg.map.clusters.length} clusters · view it live: draht-tools map-serve`);
 	}
 	console.log("\n→ Review and fill in the TODOs, then run: draht-tools commit-docs \"map existing codebase\"");
@@ -1225,28 +1258,55 @@ function visLangFor(file) {
 	return VIS_LANG_BY_EXT[ext] || "other";
 }
 
+// Dot-directories that are still worth walking despite the leading "." — extend deliberately.
+// Everything else starting with "." is skipped by default (defect 19: the previous check here was
+// dead code — `if (ignore.has(e.name)) continue` duplicated the line right above it — so arbitrary
+// hidden directories like `.dev`, `.github`, `.changeset` were silently walked into the map).
+const VIS_HIDDEN_DIR_ALLOWLIST = new Set([]);
+
+// Returns { files, truncated }. `files` is sorted for cross-machine determinism (defect 24).
 function visWalk(root, options = {}) {
 	const ignore = options.ignore || VIS_DEFAULT_IGNORES;
 	const maxFiles = options.maxFiles || 5000;
 	const files = [];
 	const stack = [root];
+	let truncated = false;
 	while (stack.length && files.length < maxFiles) {
 		const dir = stack.pop();
 		let entries;
-		try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-		catch { continue; }
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true })
+				.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+		} catch { continue; }
 		for (const e of entries) {
 			if (ignore.has(e.name)) continue;
-			if (e.name.startsWith(".") && !["..", "."].includes(e.name)) {
-				if (ignore.has(e.name)) continue;
-			}
+			if (e.isDirectory() && e.name.startsWith(".") && !VIS_HIDDEN_DIR_ALLOWLIST.has(e.name)) continue;
 			const full = path.join(dir, e.name);
 			if (e.isDirectory()) stack.push(full);
 			else if (e.isFile()) files.push(full);
-			if (files.length >= maxFiles) break;
+			if (files.length >= maxFiles) { truncated = true; break; }
 		}
 	}
-	return files;
+	if (truncated) {
+		console.error(`⚠️  codebase map hit the ${maxFiles}-file cap — output is truncated. Narrow the scan or extend VIS_DEFAULT_IGNORES.`);
+	}
+	files.sort();
+	return { files, truncated };
+}
+
+// Defect 20: respect .gitignore. When `root` is inside a git repo, the tracked + untracked-but-
+// not-ignored file list from `git ls-files` is ground truth for "should this file be in the map".
+// Returns null (silent fallback to the static ignore set) when git is unavailable or errors.
+function visGitFileFilter(root) {
+	try {
+		const out = execFileSync(
+			"git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+			{ cwd: root, encoding: "utf-8", maxBuffer: 1024 * 1024 * 64 }
+		);
+		return new Set(out.split("\0").filter(Boolean).map((p) => p.split(path.sep).join("/")));
+	} catch {
+		return null;
+	}
 }
 
 // Parse JS/TS imports into structured entries: { specifier, names: [{local, imported}], default, namespace }
@@ -1597,7 +1657,10 @@ function visExpandWorkspacePattern(root, pattern) {
 		const [next, ...rest] = remaining;
 		if (next === "*") {
 			let entries;
-			try { entries = fs.readdirSync(currentPath, { withFileTypes: true }); } catch { return; }
+			try {
+				entries = fs.readdirSync(currentPath, { withFileTypes: true })
+					.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)); // defect 24: deterministic order
+			} catch { return; }
 			for (const e of entries) {
 				if (!e.isDirectory()) continue;
 				if (VIS_DEFAULT_IGNORES.has(e.name)) continue;
@@ -1608,7 +1671,10 @@ function visExpandWorkspacePattern(root, pattern) {
 			// Match this depth too (zero or more directories)
 			visit(currentPath, rest);
 			let entries;
-			try { entries = fs.readdirSync(currentPath, { withFileTypes: true }); } catch { return; }
+			try {
+				entries = fs.readdirSync(currentPath, { withFileTypes: true })
+					.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)); // defect 24: deterministic order
+			} catch { return; }
 			for (const e of entries) {
 				if (!e.isDirectory()) continue;
 				if (VIS_DEFAULT_IGNORES.has(e.name)) continue;
@@ -1619,7 +1685,10 @@ function visExpandWorkspacePattern(root, pattern) {
 			// Partial-wildcard segment ("foo-*", "*.bar") — match by regex
 			const re = new RegExp("^" + next.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
 			let entries;
-			try { entries = fs.readdirSync(currentPath, { withFileTypes: true }); } catch { return; }
+			try {
+				entries = fs.readdirSync(currentPath, { withFileTypes: true })
+					.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)); // defect 24: deterministic order
+			} catch { return; }
 			for (const e of entries) {
 				if (!e.isDirectory()) continue;
 				if (VIS_DEFAULT_IGNORES.has(e.name)) continue;
@@ -1772,7 +1841,71 @@ function visBuildSymbols(exportsArr, content, language) {
 	return syms;
 }
 
-// Deterministic structural clusters via async label propagation over the undirected import graph.
+// WP3 — deterministic structural clusters via directory-seeded, hub-suppressed label propagation
+// over the undirected import graph (modules[] is code-only after WP2, so this only ever clusters
+// real code — no CHANGELOG/README/lockfile noise).
+//
+// Fixes defect 17 (monster-community guard fired at 53% and discarded 45 real communities in one
+// shot by falling back to one-cluster-per-package) and defect 18 (cluster ids were an arbitrary
+// member's file path, e.g. `cluster:packages/ai/CHANGELOG.md`).
+const CLUSTER_SEED_DEPTH = 4; // initial seed: first N dir segments of the module's directory
+const CLUSTER_MAX_SHARE = 0.25; // communities above this share of all modules get recursively split
+const CLUSTER_MAX_RECURSION = 5;
+const CLUSTER_BARREL_RE = /(^|\/)index\.(ts|tsx|js|mjs|cjs)$/;
+
+// Seed = first `depth` directory segments of the module's own directory (never the filename).
+// Deep files (e.g. packages/ai/src/providers/x.ts, depth 4) seed to their real subdirectory;
+// shallow files (e.g. packages/ai/index.ts) seed to the package dir itself.
+function visClusterSeed(id, depth) {
+	const dirname = id.includes("/") ? id.slice(0, id.lastIndexOf("/")) : "";
+	if (!dirname) return null; // root-level file — caller falls back to its package/dir container
+	return dirname.split("/").filter(Boolean).slice(0, depth).join("/");
+}
+
+function visLongestCommonDirPrefix(memberIds) {
+	let common = null;
+	for (const id of memberIds) {
+		const dirname = id.includes("/") ? id.slice(0, id.lastIndexOf("/")) : "";
+		const segs = dirname.split("/").filter(Boolean);
+		if (common === null) { common = segs; continue; }
+		let j = 0;
+		while (j < common.length && j < segs.length && common[j] === segs[j]) j++;
+		common = common.slice(0, j);
+		if (common.length === 0) break;
+	}
+	return (common || []).join("/");
+}
+
+// Sequential (not synchronous) label propagation: ids are visited in sorted order every pass, and
+// ties break lexicographically, so the result is 100% reproducible across machines/runs. `hubSet`
+// members still receive labels from their non-hub neighbours but never contribute their OWN label
+// as a vote to anyone — that's what stops a single god-file/barrel from label-flooding its entire
+// neighbourhood into one mega-cluster.
+function visPropagateLabels(ids, adj, hubSet, seedOf) {
+	const sortedIds = ids.slice().sort();
+	const label = new Map(sortedIds.map((id) => [id, seedOf(id)]));
+	for (let pass = 0; pass < 10; pass++) {
+		let changed = false;
+		for (const id of sortedIds) {
+			const nbrs = adj.get(id);
+			if (!nbrs || nbrs.size === 0) continue;
+			const freq = new Map();
+			for (const n of nbrs) {
+				if (!label.has(n)) continue; // neighbour outside this subgraph (recursive split)
+				if (hubSet.has(n)) continue; // hubs receive labels but never broadcast their own
+				const l = label.get(n);
+				freq.set(l, (freq.get(l) || 0) + 1);
+			}
+			if (freq.size === 0) continue;
+			let best = label.get(id), bestC = -1;
+			for (const [l, c] of freq) { if (c > bestC || (c === bestC && l < best)) { best = l; bestC = c; } }
+			if (best !== label.get(id)) { label.set(id, best); changed = true; }
+		}
+		if (!changed) break;
+	}
+	return label;
+}
+
 function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 	const adj = new Map();
 	const link = (a, b) => { if (a === b) return; if (!adj.has(a)) adj.set(a, new Set()); adj.get(a).add(b); };
@@ -1782,47 +1915,110 @@ function visComputeClusters(modules, edges, moduleByRel, containerOf) {
 		link(e.from, e.to); link(e.to, e.from);
 	}
 	const ids = modules.map((m) => m.id).sort();
-	const label = new Map(ids.map((id) => [id, id]));
-	for (let pass = 0; pass < 10; pass++) {
-		let changed = false;
-		for (const id of ids) { // async: later nodes this pass see earlier updates
-			const nbrs = adj.get(id);
-			if (!nbrs || nbrs.size === 0) continue;
-			const freq = new Map();
-			for (const n of nbrs) { const l = label.get(n); freq.set(l, (freq.get(l) || 0) + 1); }
-			let best = label.get(id), bestC = -1;
-			for (const [l, c] of freq) { if (c > bestC || (c === bestC && l < best)) { best = l; bestC = c; } }
-			if (best !== label.get(id)) { label.set(id, best); changed = true; }
-		}
-		if (!changed) break;
+	const total = ids.length || 1;
+
+	// Hub set: import degree (in the undirected adjacency above) strictly above the 95th
+	// percentile, plus barrel files — they still join a cluster, they just don't drag their whole
+	// neighbourhood into it.
+	const degrees = ids.map((id) => (adj.get(id) ? adj.get(id).size : 0)).sort((a, b) => a - b);
+	const pIdx = Math.min(degrees.length - 1, Math.floor(0.95 * degrees.length));
+	const hubThreshold = degrees.length ? degrees[pIdx] : 0;
+	const hubSet = new Set();
+	for (const id of ids) {
+		const deg = adj.has(id) ? adj.get(id).size : 0;
+		if (deg > hubThreshold || CLUSTER_BARREL_RE.test(id)) hubSet.add(id);
 	}
+
+	const seedAtDepth = (depth) => (id) => visClusterSeed(id, depth) || containerOf(moduleByRel.get(id));
+	const label = visPropagateLabels(ids, adj, hubSet, seedAtDepth(CLUSTER_SEED_DEPTH));
+
 	const byLabel = new Map();
 	for (const id of ids) {
 		const m = moduleByRel.get(id);
 		const hasEdges = adj.has(id) && adj.get(id).size > 0;
-		const key = hasEdges ? label.get(id) : containerOf(m); // unlinked modules → package cluster
+		const key = hasEdges ? label.get(id) : containerOf(m); // package fallback ONLY for edge-less modules
 		if (!byLabel.has(key)) byLabel.set(key, []);
 		byLabel.get(key).push(id);
 	}
-	// Monster-community guard: if one cluster swallows >50% of non-test modules, fall back to packages.
-	const nonTest = modules.filter((m) => !m.isTest).length || 1;
-	const maxSize = Math.max(0, ...[...byLabel.values()].map((v) => v.length));
-	let groupsMap = byLabel;
-	if (maxSize > nonTest * 0.5) {
-		groupsMap = new Map();
-		for (const m of modules) { const k = containerOf(m); if (!groupsMap.has(k)) groupsMap.set(k, []); groupsMap.get(k).push(m.id); }
+
+	// Recursively split any community that swallows more than CLUSTER_MAX_SHARE of all modules,
+	// re-seeding with a deeper directory prefix each level — NOT a wholesale fallback to packages
+	// (defect 17). Terminates because each recursion either shrinks the group or (if propagation
+	// truly makes no progress) forces a per-module split, which trivially satisfies the size cap.
+	function splitOversized(memberIds, depth, recursion) {
+		if (memberIds.length <= total * CLUSTER_MAX_SHARE || recursion >= CLUSTER_MAX_RECURSION) {
+			return [memberIds.slice().sort()];
+		}
+		const memberSet = new Set(memberIds);
+		const subAdj = new Map();
+		for (const id of memberIds) {
+			const nbrs = adj.get(id);
+			if (!nbrs) continue;
+			const filtered = new Set();
+			for (const n of nbrs) if (memberSet.has(n)) filtered.add(n);
+			if (filtered.size) subAdj.set(id, filtered);
+		}
+		const subLabel = visPropagateLabels(memberIds, subAdj, hubSet, seedAtDepth(depth));
+		let groups = new Map();
+		for (const id of memberIds) {
+			const l = subLabel.get(id);
+			if (!groups.has(l)) groups.set(l, []);
+			groups.get(l).push(id);
+		}
+		if (groups.size <= 1) {
+			// Deeper seeding made no progress (e.g. every member truly shares one directory) —
+			// force a per-module split so recursion is guaranteed to terminate below the cap.
+			groups = new Map(memberIds.map((id) => [id, [id]]));
+		}
+		const out = [];
+		for (const grp of groups.values()) out.push(...splitOversized(grp, depth + 2, recursion + 1));
+		return out;
 	}
+
+	const finalGroups = [];
+	for (const members of byLabel.values()) finalGroups.push(...splitOversized(members, CLUSTER_SEED_DEPTH + 2, 0));
+
+	// Cluster identity = longest common directory prefix of its members (never a filename —
+	// defect 18). When the prefix is empty/ambiguous (e.g. a forced per-module split shares no
+	// directory), fall back to the dominant package + an ordinal to keep ids unique.
+	const usedIds = new Set();
+	const fallbackOrdinal = new Map();
 	const clusters = [];
 	const clusterOf = new Map();
-	for (const members of groupsMap.values()) {
-		const sorted = members.slice().sort();
-		const cid = "cluster:" + sorted[0];
+	const sortedGroups = finalGroups
+		.map((members) => members.slice().sort())
+		.sort((a, b) => b.length - a.length || (a[0] < b[0] ? -1 : 1));
+	for (const sorted of sortedGroups) {
 		const pkgCount = {}, layerCount = {};
-		for (const id of sorted) { const m = moduleByRel.get(id); const p = m.package || containerOf(m).replace(/^dir:/, ""); pkgCount[p] = (pkgCount[p] || 0) + 1; layerCount[m.layer] = (layerCount[m.layer] || 0) + 1; }
+		for (const id of sorted) {
+			const m = moduleByRel.get(id);
+			const p = m.package || containerOf(m).replace(/^(pkg|dir):/, "");
+			pkgCount[p] = (pkgCount[p] || 0) + 1;
+			layerCount[m.layer] = (layerCount[m.layer] || 0) + 1;
+		}
 		const dominantPackage = Object.keys(pkgCount).sort((a, b) => pkgCount[b] - pkgCount[a] || (a < b ? -1 : 1))[0] || null;
 		const dominantLayer = Object.keys(layerCount).sort((a, b) => layerCount[b] - layerCount[a] || (a < b ? -1 : 1))[0] || "support";
 		const packages = Object.keys(pkgCount).sort();
-		const clabel = packages.length === 1 ? String(dominantPackage).replace(/^@[^/]+\//, "") : (sorted[0].split("/")[0] + " · " + dominantLayer);
+
+		const prefix = visLongestCommonDirPrefix(sorted);
+		let cid, clabel;
+		if (prefix) {
+			cid = "cluster:" + prefix;
+			clabel = prefix.split("/").slice(-2).join("/");
+		} else {
+			const base = "cluster:" + (dominantPackage || "root");
+			const n = (fallbackOrdinal.get(base) || 0) + 1;
+			fallbackOrdinal.set(base, n);
+			cid = n === 1 ? base : base + ":" + n;
+			clabel = (dominantPackage ? String(dominantPackage).replace(/^@[^/]+\//, "") : "root") + (packages.length > 1 ? " · " + dominantLayer : "");
+		}
+		if (usedIds.has(cid)) { // guarantee uniqueness even if two prefixes collide
+			let n = 2;
+			while (usedIds.has(cid + ":" + n)) n++;
+			cid = cid + ":" + n;
+		}
+		usedIds.add(cid);
+
 		for (const id of sorted) clusterOf.set(id, cid);
 		clusters.push({ id: cid, label: clabel, size: sorted.length, members: sorted, dominantPackage, dominantLayer, packages });
 	}
@@ -1868,7 +2064,14 @@ function visComputeSurprising(edges, callEdges, moduleByRel, clusterOf, groupOfC
 
 function visBuildMap(root) {
 	const startedAt = Date.now();
-	const files = visWalk(root);
+	const walked = visWalk(root);
+	// Defect 20: filter the walk down to git-tracked + untracked-not-ignored files when available,
+	// so .gitignore is respected everywhere the static VIS_DEFAULT_IGNORES set doesn't already cover.
+	const gitFiles = visGitFileFilter(root);
+	let files = gitFiles
+		? walked.files.filter((abs) => gitFiles.has(path.relative(root, abs).split(path.sep).join("/")))
+		: walked.files;
+	files = files.slice().sort();
 	const pkgs = visScanPackages(root);
 	const planning = visReadPlanning(root);
 
@@ -1937,8 +2140,8 @@ function visBuildMap(root) {
 			if (size < 1024 * 1024 && lang !== "other") {
 				content = fs.readFileSync(abs, "utf-8");
 				loc = content.split("\n").length;
-				totalLoc.value += loc;
 				if (VIS_CODE_LANGS.has(lang)) {
+					totalLoc.value += loc; // WP2: LOC rollup tracks code modules only, matching stats.files
 					// Use raw content for export/JSDoc extraction (need comments) and stripped for sink/import detection
 					const stripped = content
 						.replace(/\/\*[\s\S]*?\*\//g, "")
@@ -1950,10 +2153,18 @@ function visBuildMap(root) {
 					routes = visDetectRoutes(stripped);
 					symbols = visBuildSymbols(exports, content, lang); // symbol-level nodes (from untruncated exports + decls)
 				}
-				// Inline rationale works for any commented language (incl. markdown), not just code langs.
+				// Inline rationale works for any commented language (incl. markdown), not just code langs
+				// — kept for EVERY file (WP2 noise policy only excludes non-code files from `modules`,
+				// not from rationale scanning, so NOTE/WHY/HACK notes in docs still surface).
 				for (const r of visExtractRationale(content, lang, rel)) rationaleAll.push(r);
 			}
 		} catch { /* empty */ }
+
+		// WP2 noise policy (schema v5): only code-language files become graph modules. Markdown/
+		// JSON/YAML/etc. are still counted in `langCounts` (→ stats.languages) above and rolled up
+		// into `assets` below, but they'd otherwise dilute the import graph/clusters/hotspots with
+		// docs/config noise instead of real code structure.
+		if (!VIS_CODE_LANGS.has(lang)) continue;
 
 		const isTest = visIsTest(rel);
 		const pkg = pkgs.find((p) => p.path !== "." && rel.startsWith(p.path + "/"))?.name
@@ -1989,6 +2200,16 @@ function visBuildMap(root) {
 		modules.push(m);
 		moduleByRel.set(rel, m);
 		perFile.set(rel, { parsedImports, content, stripped: content });
+	}
+
+	// Assets rollup (WP2): files the scan saw but excluded from the module graph as noise (docs,
+	// config, lockfiles, images, …) — derived straight from langCounts so it never drifts from
+	// `stats.languages`.
+	const assets = { total: 0, byLanguage: {} };
+	for (const [lang, count] of Object.entries(langCounts)) {
+		if (VIS_CODE_LANGS.has(lang)) continue;
+		assets.byLanguage[lang] = count;
+		assets.total += count;
 	}
 
 	// Resolve local imports → edges with symbol-level dataflow
@@ -2664,14 +2885,22 @@ function visBuildMap(root) {
 	const layerCounts = {};
 	for (const m of modules) layerCounts[m.layer] = (layerCounts[m.layer] || 0) + 1;
 
-	// Symbol index for agents (the searchable identifier glossary)
+	// Symbol index for agents (the searchable identifier glossary). Defect 25: rank exporting
+	// modules by import in-degree (most-depended-on first) BEFORE cutting, so a hard cap doesn't
+	// arbitrarily amputate whichever modules happened to sort last by file-walk order.
+	const SYMBOL_INDEX_CAP = 5000;
+	let symbolIndexTruncated = false;
+	const exportingModulesRanked = modules
+		.filter((m) => m.exports && m.exports.length > 0)
+		.slice()
+		.sort((a, b) => (inDeg.get(b.id) || 0) - (inDeg.get(a.id) || 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 	const symbolIndex = [];
-	for (const m of modules) {
+	for (const m of exportingModulesRanked) {
+		if (symbolIndex.length >= SYMBOL_INDEX_CAP) { symbolIndexTruncated = true; break; }
 		for (const e of m.exports) {
+			if (symbolIndex.length >= SYMBOL_INDEX_CAP) { symbolIndexTruncated = true; break; }
 			symbolIndex.push({ name: e.name, kind: e.kind, line: e.line, file: m.path, package: m.package, exported: true });
-			if (symbolIndex.length > 1500) break;
 		}
-		if (symbolIndex.length > 1500) break;
 	}
 
 	const tests = { total: modules.filter((m) => m.isTest).length, byContainer: {} };
@@ -2707,11 +2936,13 @@ function visBuildMap(root) {
 		.slice(0, 600);
 
 	return {
-		schemaVersion: 4,
+		schemaVersion: 5,
 		generatedAt: new Date().toISOString(),
 		buildMs: Date.now() - startedAt,
 		root: path.basename(root),
 		stats: {
+			// files = code modules only (schema v5 noise policy, WP2). Non-code file counts live in
+			// `languages` (unchanged: every scanned file) and the `assets` rollup below.
 			files: modules.length,
 			totalLoc: totalLoc.value,
 			languages: langCounts,
@@ -2724,7 +2955,9 @@ function visBuildMap(root) {
 			entryPoints: entryPoints.length,
 			sinkModules: sinkNodes.length,
 			layers: layerCounts,
+			truncated: !!walked.truncated, // defect 23: maxFiles cap was hit during the walk
 		},
+		assets,
 		packages: pkgs,
 		groups,
 		containers,
@@ -2739,6 +2972,7 @@ function visBuildMap(root) {
 		lanes,
 		boxes,
 		symbolIndex,
+		symbolIndexTruncated,
 		hotspots,
 		clusters,
 		surprisingConnections,
@@ -2753,6 +2987,7 @@ function visBuildMap(root) {
 		agentHints: {
 			description: "Architecture map of this codebase. Read this BEFORE walking the file tree.",
 			howToUse: [
+				"Schema v5 noise policy: `modules`/`edges`/`clusters`/`hotspots` only cover CODE files (ts/js/py/go/rust/java/kotlin/swift/ruby/php/csharp/c/cpp/shell) — docs/config/lockfiles never become graph nodes. `stats.languages` still counts EVERY scanned file (incl. markdown/json/yaml), and `assets.byLanguage`/`assets.total` rolls up the excluded ones so you can see they were seen, just not graphed. `stats.files` = code module count.",
 				"`groups` partitions packages into functional containers (Frontend, CLI & Runtime, Core, Domain Services, Workflows & Infra). Each group's `members` array lists `pkg:NAME` ids. Overridable via `.planning/codebase/GROUPS.json`.",
 				"`containers[*].groupId` links a package to its functional group; `containers[*].topFiles` is the 3-5 most relevant source files in the package (with a `reason` tag like `CLI entry` / `most depended-on` / `HTTP handler`).",
 				"`containerEdges[*].label` is the relationship verb between two packages (Calls / Uses / Sends Events / Renders / Updates / Reads State / Configures / Analyzes / Executes Actions / Persists). `containerEdges[*].symbolSamples` shows the top imported symbol names.",
@@ -2770,20 +3005,29 @@ function visBuildMap(root) {
 				"`surprisingConnections` flags import edges that bridge distant clusters, cross functional groups, or violate layer direction — review these.",
 				"`rationaleIndex` collects inline NOTE/WHY/HACK/TODO/FIXME/SECURITY notes ({file,line,tag,text}).",
 				"`edges[*].confidence` / `callEdges[*].confidence` ∈ EXTRACTED (literal in source) / INFERRED (regex call heuristic) / AMBIGUOUS (member-call, imported symbol uncertain).",
+				"`stats.truncated` is true if the scan hit the file cap (rare, huge repos only). `symbolIndexTruncated` is true if `symbolIndex` was cut — when it is, the surviving entries are ranked by import in-degree so the most-depended-on modules' symbols are kept.",
 				"Query the map with `draht-tools graph-context|graph-impact|graph-query|graph-callers|graph-callees|graph-path|graph-hotspots|graph-clusters` instead of reading this whole file or grepping.",
 			],
 		},
 	};
 }
 
-function visRenderHtml(jsonPath) {
+function visRenderHtml(jsonPath, map) {
 	const jsonName = path.basename(jsonPath);
+	// The committed MAP.html must be byte-identical for the same graph data (determinism gate) —
+	// zero the volatile generatedAt/buildMs fields in the EMBEDDED copy so wall-clock never leaks
+	// into the artifact. The live map.generatedAt (for the on-disk MAP.json) is untouched.
+	const embedded = Object.assign({}, map, { generatedAt: "", buildMs: 0 });
+	// Escape '<' so a literal '</script>' inside any string value can't prematurely close the
+	// embedded JSON <script> tag.
+	const embeddedJson = JSON.stringify(embedded).replace(/</g, "\\u003c");
 	return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <title>Draht ▸ Architecture & Flows</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="icon" href="data:," />
 <style>
 :root {
   --bg:#0b0d10; --bg-soft:#11151a; --panel:#151b22; --text:#e6edf3;
@@ -2824,25 +3068,44 @@ aside.right { border-right:none; border-left:1px solid var(--border); }
 .dot { width:9px; height:9px; border-radius:50%; flex:0 0 9px; }
 
 #viz { position:relative; overflow:hidden; background:radial-gradient(circle at 30% 20%, #0f141a 0%, #0b0d10 70%); }
-svg { display:block; user-select:none; }
-.controls { position:absolute; top:10px; right:10px; display:flex; gap:6px; z-index: 2; }
+svg, canvas { display:block; user-select:none; position:absolute; inset:0; width:100%; height:100%; }
+#error-banner { display:none; position:absolute; top:0; left:0; right:0; z-index:50;
+  background:#3a1a1a; color:#ffb4b4; padding:8px 14px; font-size:12px; border-bottom:1px solid #6b2b2b; }
+.controls { position:absolute; top:10px; right:10px; display:flex; gap:6px; z-index: 2; flex-wrap:wrap; justify-content:flex-end; max-width:60%; }
 .controls button { background:var(--panel); color:var(--text); border:1px solid var(--border);
   border-radius:6px; padding:4px 10px; cursor:pointer; font-size:11px; }
 .controls button:hover { border-color:var(--pres); }
+/* B4 fix: graph-controls and the legend used to both be absolutely positioned at fixed
+   top offsets (10px / 56px), so once the checkbox/button row wrapped to 2+ lines the legend's
+   top rows sat underneath it. #overlay-left stacks them in normal flow instead, so the legend
+   always starts below however tall graph-controls actually renders (0, 1, or N wrapped rows). */
+#overlay-left { position:absolute; top:10px; left:12px; z-index:2; display:flex;
+  flex-direction:column; align-items:flex-start; gap:8px; max-width:70%; }
+#graph-controls { display:none; gap:10px; background:rgba(15,18,22,.85); border:1px solid var(--border);
+  border-radius:8px; padding:6px 10px; flex-wrap:wrap; }
 .hud { position:absolute; bottom:10px; left:12px; color:var(--muted); font-size:11px;
-  background:rgba(15,18,22,.6); padding:4px 8px; border-radius:6px; }
-.legend { position:absolute; top:10px; left:12px; background:rgba(15,18,22,.85);
-  border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:11px; z-index: 1; }
-.legend .row { display:flex; align-items:center; gap:6px; padding:1px 0; }
+  background:rgba(15,18,22,.6); padding:4px 8px; border-radius:6px; z-index:2; }
+.legend { background:rgba(15,18,22,.85);
+  border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:11px;
+  max-height:60vh; overflow:auto; max-width:260px; }
+.legend .row { display:flex; align-items:center; gap:6px; padding:2px 0; }
+.legend .row.legend-row { cursor:pointer; border-radius:4px; }
+.legend .row.legend-row:hover { background:#1c2530; }
+.legend .row.legend-row.active { background:#1f2a36; }
 
-.detail h3 { font-size:13px; margin:0 0 6px; word-break:break-all; font-weight:600; }
-.detail .pill { display:inline-block; padding:2px 8px; border:1px solid var(--border);
+.inspector h3 { font-size:13px; margin:0 0 6px; word-break:break-all; font-weight:600; }
+.inspector h4 { font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted);
+  margin:10px 0 4px; font-weight:700; }
+.inspector .pill { display:inline-block; padding:2px 8px; border:1px solid var(--border);
   border-radius:99px; font-size:11px; color:var(--muted); margin:2px 4px 2px 0; }
-.detail pre { background:var(--bg); border:1px solid var(--border); border-radius:6px;
+.inspector pre { background:var(--bg); border:1px solid var(--border); border-radius:6px;
   padding:8px; overflow:auto; font-size:11px; line-height:1.4; max-height:220px;
   margin:6px 0 0; white-space:pre-wrap; }
-.detail .kv { font-size:11.5px; color:var(--muted); margin:2px 0; }
-.detail .kv b { color:var(--text); }
+.inspector .kv { font-size:11.5px; color:var(--muted); margin:2px 0; }
+.inspector .kv b { color:var(--text); }
+.ins-link { color:var(--pres); cursor:pointer; font-family:ui-monospace,SF Mono,Menlo,monospace;
+  font-size:10.5px; }
+.ins-link:hover { text-decoration:underline; }
 
 .flow-list { max-height:280px; overflow-y:auto; }
 .flow-list .flow-item { padding:8px 14px; border-bottom:1px solid var(--border); cursor:pointer; }
@@ -2879,15 +3142,10 @@ svg { display:block; user-select:none; }
 .container-rect.hi { stroke:#79c0ff; stroke-width:2; }
 .container-label { fill:var(--text); font-size:11px; font-weight:600; pointer-events:none; }
 .module-node { cursor:pointer; }
-.module-node circle { stroke:#0b0d10; stroke-width:1.2; transition:r .15s, stroke .15s; }
-.module-node:hover circle { stroke:#fff; }
-.module-node.selected circle { stroke:#fff; stroke-width:2.4; }
 .edge { fill:none; stroke:#3a4858; stroke-width:0.8; opacity:.5; }
 .edge.cross { stroke:#7ee787; stroke-width:1.4; opacity:.65; }
 .edge.flow { stroke:#ffdf5d; stroke-width:1.5; opacity:.95; }
 .edge.flow.active { stroke-width:2.5; }
-.edge.hi { stroke:#ffdf5d; stroke-width:1.6; opacity:1; }
-.edge.dim { opacity:.05; }
 .layer-band { stroke:#1a2028; stroke-dasharray:2 4; fill:none; }
 .layer-label { fill:var(--muted); font-size:11px; font-weight:600; letter-spacing:1.5px; text-transform:uppercase; }
 .lane-divider { stroke:#1a2028; stroke-dasharray:2 4; }
@@ -2896,7 +3154,6 @@ svg { display:block; user-select:none; }
 .step-num { cursor:pointer; }
 .step-num.active circle { fill:#fff; }
 
-/* Architecture (CodeViz-style nested) view */
 .group-rect { fill:rgba(28,37,48,0.32); stroke-width:1.4; rx:12; cursor:default; }
 .group-rect:hover { filter:brightness(1.15); }
 .group-rect.focused { stroke-width:2.5; }
@@ -2942,21 +3199,17 @@ svg { display:block; user-select:none; }
   <div class="title">DRAHT ▸ <span id="root-name">codebase</span></div>
   <div class="meta" id="meta">loading…</div>
   <div class="tabs">
-    <button id="tab-architecture" class="active">Architecture</button>
-    <button id="tab-modules">Modules</button>
-    <button id="tab-flows">Flow Trace</button>
-    <button id="tab-insights">Insights</button>
-    <button id="tab-concepts">Concepts</button>
-    <button id="tab-graph">Knowledge Graph</button>
-    <button id="tab-calls">Calls</button>
+    <button id="tab-graph" class="active">Graph</button>
+    <button id="tab-architecture">Architecture</button>
+    <button id="tab-flows">Flows</button>
   </div>
-  <div class="live" id="live-indicator">● live</div>
+  <div class="live dead" id="live-indicator">● static snapshot</div>
 </header>
 <main>
   <aside id="left-aside">
     <div class="section">
       <h2>Search</h2>
-      <input id="q" placeholder="filter…" />
+      <input id="q" placeholder="filter modules & symbols…" />
     </div>
     <div class="section">
       <h2>Entry Points</h2>
@@ -2976,98 +3229,146 @@ svg { display:block; user-select:none; }
     </div>
   </aside>
   <div id="viz">
-    <svg id="svg" width="100%" height="100%"></svg>
-    <div class="legend" id="legend"></div>
+    <div id="error-banner"></div>
+    <svg id="svg" width="100%" height="100%" style="display:none"></svg>
+    <canvas id="canvas"></canvas>
+    <div id="overlay-left">
+      <div id="graph-controls">
+        <label class="ctrl-checkbox"><input type="checkbox" id="show-tests-cb"/> show tests</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="degree-cb"/> size by degree</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="surprising-cb"/> highlight surprising</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="conf-extracted" checked/> extracted</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="conf-inferred" checked/> inferred</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="conf-ambiguous" checked/> ambiguous</label>
+        <button id="expand-all">expand all</button>
+        <button id="collapse-all">collapse all</button>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
     <div class="controls">
       <label class="ctrl-checkbox"><input type="checkbox" id="overlay-flow-cb"/> overlay flow</label>
+      <button id="export-png">PNG</button>
+      <button id="export-svg">SVG</button>
       <button id="fit">fit</button>
       <button id="clear">clear</button>
       <button id="reload">reload</button>
     </div>
-    <div class="hud" id="hud">click a package · hover for details · double-click a group to focus</div>
+    <div class="hud" id="hud">loading…</div>
     <div id="tooltip"></div>
   </div>
   <aside class="right">
-    <div class="section">
-      <h2>Flows</h2>
-      <div class="flow-list" id="flow-list"></div>
-    </div>
-    <div class="section">
-      <h2>Steps</h2>
-      <div class="step-list" id="step-list">
-        <div style="color:var(--muted); padding:8px 0">Select a flow above to see numbered steps.</div>
+    <div id="flows-sidebar" style="display:none">
+      <div class="section">
+        <h2>Flows</h2>
+        <div class="flow-list" id="flow-list"></div>
+      </div>
+      <div class="section">
+        <h2>Steps</h2>
+        <div class="step-list" id="step-list">
+          <div style="color:var(--muted); padding:8px 0">Select a flow above to see numbered steps.</div>
+        </div>
       </div>
     </div>
-    <div class="section detail" id="detail" style="display:none">
-      <h3>Detail</h3>
+    <div class="section inspector" id="inspector-section">
+      <h2>Inspector</h2>
+      <div id="inspector"><div style="color:var(--muted)">Click a node, cluster, or package to inspect it.</div></div>
     </div>
   </aside>
 </main>
+<script id="map-data" type="application/json">${embeddedJson}</script>
 <script>
+var JSON_PATH = ${JSON.stringify("./" + jsonName)};
 "use strict";
-var JSON_PATH = ${JSON.stringify('./' + jsonName)};
 var LAYER_COLOR = { presentation:"#79c0ff", application:"#7ee787",
   domain:"#d2a8ff", infrastructure:"#f0883e", support:"#8b949e" };
 var LAYER_ORDER = ["presentation","application","domain","infrastructure","support"];
 var SVG_NS = "http://www.w3.org/2000/svg";
+var GOLD = 2.399963229; // golden angle (radians) — deterministic spiral, no RNG
 function $(id) { return document.getElementById(id); }
 var svg = $("svg");
+var canvas = $("canvas");
 
 var state = {
   map: null,
-  view: "architecture",
+  view: "graph",
+  // svg camera (Architecture / Flows)
   zoom: 1,
   pan: { x:0, y:0 },
   drag: null,
-  selected: null,
+  // canvas camera (Graph)
+  gcam: { zoom: 1, pan: { x:0, y:0 } },
+  gdrag: null,
+  selected: null, // { kind: "module"|"cluster"|"box", id }
+  hovered: null,
   selectedFlow: null,
   selectedStep: null,
   collapsedGroups: {},
   overlayFlow: false,
-  focus: null,
+  focus: null, // { kind, id, moduleSet, containerSet }
   filter: "",
+  searchMatches: null, // Set of module ids matching current filter
+  showTests: false,
+  highlightSurprising: false,
+  sizeByDegree: false,
+  confidence: { EXTRACTED: true, INFERRED: true, AMBIGUOUS: true },
 };
 
-function layerOf(m) { return m.layer || "support"; }
+// ====================== small utils ======================
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, function (c) {
     return ({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"})[c];
   });
 }
 function truncate(s, n) { if (!s) return ""; s = String(s); if (s.length <= n) return s; return s.slice(0, n - 1) + "…"; }
+function layerOf(m) { return (m && m.layer) || "support"; }
 function containerIdOf(m) {
   if (m.package) return "pkg:" + m.package;
   return "dir:" + m.path.split("/")[0];
 }
+function clusterColor(cid) {
+  if (!cid) return "#8b949e";
+  var h = 0; for (var i=0; i<cid.length; i++) h = (h * 31 + cid.charCodeAt(i)) % 360;
+  return "hsl(" + h + ",58%,58%)";
+}
+function el(tag, attrs, text) {
+  var e = document.createElementNS(SVG_NS, tag);
+  if (attrs) for (var k in attrs) {
+    if (attrs[k] == null) continue;
+    e.setAttribute(k, attrs[k]);
+  }
+  if (text != null) e.textContent = text;
+  return e;
+}
+function flowPath(x1, y1, x2, y2) {
+  var dx = x2 - x1, dy = y2 - y1;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    var c1x = x1 + dx * 0.5, c1y = y1;
+    var c2x = x2 - dx * 0.5, c2y = y2;
+    return "M " + x1 + " " + y1 + " C " + c1x + " " + c1y + ", " + c2x + " " + c2y + ", " + x2 + " " + y2;
+  } else {
+    var c1xv = x1, c1yv = y1 + dy * 0.5;
+    var c2xv = x2, c2yv = y2 - dy * 0.5;
+    return "M " + x1 + " " + y1 + " C " + c1xv + " " + c1yv + ", " + c2xv + " " + c2yv + ", " + x2 + " " + y2;
+  }
+}
 function tx(g) {
   g.setAttribute("transform", "translate(" + state.pan.x + "," + state.pan.y + ") scale(" + state.zoom + ")");
 }
-
-async function load(initial) {
-  var res = await fetch(JSON_PATH + "?t=" + Date.now());
-  var map = await res.json();
-  state.map = map;
-  $("root-name").textContent = map.root;
-  $("meta").textContent =
-    map.stats.files + " files · " + map.stats.totalLoc.toLocaleString() + " LOC · " +
-    map.stats.entryPoints + " entries · " + map.stats.sinkModules + " sinks · " +
-    map.stats.containerEdges + " cross-pkg edges · " +
-    new Date(map.generatedAt).toLocaleTimeString();
-  renderSidebar();
-  renderFlowList();
-  render();
-  if (initial) fit();
+function downloadBlob(blob, name) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
 }
-
-function setView(v) {
-  state.view = v;
-  ["tab-architecture","tab-modules","tab-flows","tab-insights","tab-concepts","tab-graph","tab-calls"].forEach(function (id) {
-    $(id).classList.toggle("active", id === "tab-" + v);
-  });
-  // Sidebar layout: flows shows step detail, others show entry inspection
-  render(); fit();
+function showError(msg) {
+  var b = $("error-banner");
+  b.textContent = "⚠ " + msg;
+  b.style.display = "block";
 }
+function hideError() { var b = $("error-banner"); if (b) b.style.display = "none"; }
 
+// ====================== data indices ======================
 function buildAdj(map) {
   var adj = new Map();
   for (var i=0; i<map.edges.length; i++) {
@@ -3088,364 +3389,110 @@ function buildReverseAdj(map) {
   }
   return adj;
 }
-
-function selectFlow(flowId) {
-  state.selectedFlow = flowId;
-  state.selectedStep = null;
-  state.view = "flows";
-  ["tab-architecture","tab-modules","tab-flows","tab-insights","tab-concepts","tab-graph","tab-calls"].forEach(function (id) {
-    $(id).classList.toggle("active", id === "tab-flows");
+function buildIndices(map) {
+  var modById = new Map(); (map.modules || []).forEach(function (m) { modById.set(m.id, m); });
+  var clusterById = new Map(); (map.clusters || []).forEach(function (c) { clusterById.set(c.id, c); });
+  var entryIds = new Set((map.entryPoints || []).map(function (e) { return e.id; }));
+  var sinkIds = new Set((map.sinks || []).map(function (s) { return s.id; }));
+  var callersOf = new Map(), calleesOf = new Map();
+  (map.callEdges || []).forEach(function (ce) {
+    if (!calleesOf.has(ce.from)) calleesOf.set(ce.from, []);
+    calleesOf.get(ce.from).push(ce);
+    if (!callersOf.has(ce.to)) callersOf.set(ce.to, []);
+    callersOf.get(ce.to).push(ce);
   });
+  return {
+    modById: modById, clusterById: clusterById, entryIds: entryIds, sinkIds: sinkIds,
+    adj: buildAdj(map), radj: buildReverseAdj(map),
+    callersOf: callersOf, calleesOf: calleesOf,
+  };
+}
+
+// ====================== load / apply ======================
+function isHttpProtocol() { return location.protocol === "http:" || location.protocol === "https:"; }
+
+function applyMap(map) {
+  state.map = map;
+  state.idx = buildIndices(map);
+  $("root-name").textContent = map.root || "codebase";
+  var when = map.generatedAt ? new Date(map.generatedAt).toLocaleTimeString() : "embedded snapshot";
+  $("meta").textContent =
+    map.stats.files + " files · " + map.stats.totalLoc.toLocaleString() + " LOC · " +
+    map.stats.entryPoints + " entries · " + map.stats.sinkModules + " sinks · " +
+    (map.clusters || []).length + " clusters · " + when;
+  state.graph = null; // force rebuild of graph model on next graph render
+  state.searchMatches = null;
+  renderSidebar();
   renderFlowList();
-  renderStepList();
-  render();
-}
-function selectStep(n) {
-  state.selectedStep = n;
-  renderStepList();
-  render();
-}
-function clearFlow() {
-  state.selectedFlow = null;
-  state.selectedStep = null;
-  state.focus = null;
-  state.selected = null;
-  renderFlowList();
-  renderStepList();
-  renderDetail();
   render();
 }
 
-function focusEntry(id) {
-  var adj = buildAdj(state.map);
-  var set = new Set([id]); var stack = [id];
-  while (stack.length) {
-    var x = stack.pop();
-    var ns = adj.get(x) || [];
-    for (var i=0; i<ns.length; i++) if (!set.has(ns[i])) { set.add(ns[i]); stack.push(ns[i]); }
+async function refreshFromServer() {
+  if (!isHttpProtocol()) return false;
+  try {
+    var res = await fetch(JSON_PATH);
+    if (!res.ok) throw new Error("http " + res.status);
+    var map = await res.json();
+    applyMap(map);
+    return true;
+  } catch (err) {
+    return false;
   }
-  state.focus = { kind: "entry", id: id, set: set };
+}
+
+function connectLive() {
+  if (!isHttpProtocol()) return;
+  try {
+    var es = new EventSource("/events");
+    es.onmessage = function (ev) { if (ev.data === "changed") refreshFromServer(); };
+    es.onerror = function () {
+      $("live-indicator").classList.add("dead");
+      $("live-indicator").textContent = "● offline";
+    };
+    es.onopen = function () {
+      $("live-indicator").classList.remove("dead");
+      $("live-indicator").textContent = "● live";
+    };
+  } catch (err) { /* EventSource unsupported (e.g. file://) — fine, static snapshot still works */ }
+}
+
+// ====================== view routing ======================
+function setView(v) {
+  state.view = v;
+  ["tab-graph","tab-architecture","tab-flows"].forEach(function (id) {
+    $(id).classList.toggle("active", id === "tab-" + v);
+  });
+  svg.style.display = (v === "architecture" || v === "flows") ? "block" : "none";
+  canvas.style.display = (v === "graph") ? "block" : "none";
+  $("graph-controls").style.display = (v === "graph") ? "flex" : "none";
+  $("flows-sidebar").style.display = (v === "flows") ? "block" : "none";
+  // B3: re-measure the canvas's backing-store size whenever it becomes visible. A resize while
+  // the Graph tab was hidden left canvas.width/height stale (clientWidth/height reflow correctly
+  // even for display:none, but resizeCanvas() only ran on the debounced window "resize" handler
+  // when the graph tab was already active) — a stale backing store distorts what's actually
+  // drawn relative to what CSS-pixel hit-testing assumes, so re-sync it on every switch in.
+  if (v === "graph") resizeCanvas();
   render();
-}
-function focusSink(kind) {
-  var map = state.map;
-  var radj = buildReverseAdj(map);
-  var seeds = map.sinks.filter(function (s) { return s.sinks.indexOf(kind) !== -1; }).map(function (s) { return s.id; });
-  var set = new Set(seeds); var stack = seeds.slice();
-  while (stack.length) {
-    var x = stack.pop();
-    var ns = radj.get(x) || [];
-    for (var i=0; i<ns.length; i++) if (!set.has(ns[i])) { set.add(ns[i]); stack.push(ns[i]); }
-  }
-  state.focus = { kind: "sink", id: kind, set: set };
-  render();
-}
-function focusPackage(pkgId) {
-  var set = new Set();
-  for (var i=0; i<state.map.modules.length; i++) {
-    var m = state.map.modules[i];
-    if (("pkg:" + (m.package || "")) === pkgId) set.add(m.id);
-  }
-  state.focus = { kind: "package", id: pkgId, set: set };
-  render();
-}
-
-// ====================== Swim-lane Flows view ======================
-
-function layoutSwimlanes(map, W, H) {
-  var lanes = map.lanes || [];
-  if (!lanes.length) return { lanePos: new Map(), boxPos: new Map() };
-  var laneW = W / lanes.length;
-  var lanePos = new Map();
-  lanes.forEach(function (lane, i) {
-    lanePos.set(lane.id, { x: laneW * i, w: laneW, lane: lane });
-  });
-  var boxesByLane = new Map();
-  lanes.forEach(function (l) { boxesByLane.set(l.id, []); });
-  (map.boxes || []).forEach(function (b) {
-    if (boxesByLane.has(b.lane)) boxesByLane.get(b.lane).push(b);
-  });
-  // Sort: entry first, then alphabetical
-  boxesByLane.forEach(function (arr) {
-    arr.sort(function (a,b) {
-      if ((a.hasEntry?1:0) !== (b.hasEntry?1:0)) return (b.hasEntry?1:0) - (a.hasEntry?1:0);
-      return a.title.localeCompare(b.title);
-    });
-  });
-  var headerH = 36;
-  var boxPos = new Map();
-  boxesByLane.forEach(function (arr, laneId) {
-    var lp = lanePos.get(laneId);
-    if (!arr.length) return;
-    var availH = H - headerH - 24;
-    var maxBoxH = Math.min(64, Math.max(46, availH / Math.max(1, arr.length) - 10));
-    var boxPad = 10;
-    var totalH = arr.length * (maxBoxH + boxPad);
-    var startY = headerH + Math.max(8, (availH - totalH) / 2);
-    arr.forEach(function (box, i) {
-      var w = Math.max(140, lp.w - 28);
-      var x = lp.x + (lp.w - w) / 2;
-      boxPos.set(box.id, { x: x, y: startY + i * (maxBoxH + boxPad), w: w, h: maxBoxH, box: box, laneId: laneId });
-    });
-  });
-  return { lanePos: lanePos, boxPos: boxPos };
-}
-
-function renderFlowsSwimlane(g, W, H) {
-  var map = state.map;
-  var layout = layoutSwimlanes(map, W, H);
-  // Lane headers + dividers
-  layout.lanePos.forEach(function (lp) {
-    g.appendChild(el("text", { class: "layer-label", x: lp.x + 14, y: 22 }, lp.lane.name));
-    g.appendChild(el("line", { class: "lane-divider", x1: lp.x + lp.w, y1: 0, x2: lp.x + lp.w, y2: H }));
-  });
-
-  var flow = state.selectedFlow ? map.flows.find(function (f) { return f.id === state.selectedFlow; }) : null;
-  var inFlow = new Set();
-  var selectedStepIds = new Set();
-  if (flow) {
-    for (var i=0; i<flow.steps.length; i++) {
-      inFlow.add(flow.steps[i].from); inFlow.add(flow.steps[i].to);
-      if (state.selectedStep && flow.steps[i].n === state.selectedStep) {
-        selectedStepIds.add(flow.steps[i].from); selectedStepIds.add(flow.steps[i].to);
-      }
-    }
-  }
-
-  // Boxes
-  layout.boxPos.forEach(function (p, id) {
-    var box = p.box;
-    var hi = flow && inFlow.has(id);
-    var dim = flow && !inFlow.has(id);
-    var isSelStep = selectedStepIds.has(id);
-    var node = el("g", { class: "flow-box", transform: "translate(" + p.x + "," + p.y + ")" });
-    var rect = el("rect", {
-      width: p.w, height: p.h, rx: 6, ry: 6,
-      fill: hi ? (isSelStep ? "#3a2c00" : "#1f1900") : "rgba(28,37,48,0.55)",
-      stroke: hi ? "#ffdf5d" : (box.color || "#3a4858"),
-      "stroke-width": hi ? (isSelStep ? 2 : 1.4) : 1,
-      opacity: dim ? 0.12 : 1,
-    });
-    node.appendChild(rect);
-    node.appendChild(el("text", { x: 12, y: 19, fill: hi ? "#ffdf5d" : "#e6edf3",
-      "font-size": 12, "font-weight": 600, opacity: dim ? 0.2 : 1 }, truncate(box.title, 28)));
-    if (box.sublabel) {
-      node.appendChild(el("text", { x: 12, y: 35, fill: "#8b949e", "font-size": 10,
-        opacity: dim ? 0.2 : 1 }, truncate(box.sublabel, 36)));
-    }
-    node.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      state.selected = { kind: "box", id: id };
-      renderDetail();
-      render();
-    });
-    g.appendChild(node);
-  });
-
-  // Flow arrows + numbered step circles
-  if (flow) {
-    var arrowDefs = el("defs");
-    arrowDefs.innerHTML = '<marker id="arrowhead-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ffdf5d"/></marker>';
-    g.appendChild(arrowDefs);
-
-    // Count intra-package step indices per box so we can stack inline chips
-    var intraStackByBox = new Map();
-
-    function chipAt(boxPos, idx, step, active) {
-      // Position chip inside box, stacked along the right edge near the bottom
-      var px = boxPos.x + boxPos.w - 18;
-      var py = boxPos.y + boxPos.h - 12 - idx * 20;
-      // Wrap if too tall: shift left and reset
-      if (py < boxPos.y + 36) { px = boxPos.x + boxPos.w - 18 - 22; py = boxPos.y + boxPos.h - 12; }
-      var chip = el("g", { class: "step-num" + (active ? " active" : ""), transform: "translate(" + px + "," + py + ")" });
-      chip.appendChild(el("circle", { r: 8, fill: active ? "#fff" : "#ffdf5d", stroke: "#0b0d10", "stroke-width": 1.5 }));
-      chip.appendChild(el("text", { y: 3, "text-anchor": "middle", "font-size": 9, "font-weight": 700, fill: "#0b0d10" }, String(step.n)));
-      chip.addEventListener("click", function (n) { return function (ev) { ev.stopPropagation(); selectStep(n); }; }(step.n));
-      g.appendChild(chip);
-    }
-
-    for (var si=0; si<flow.steps.length; si++) {
-      var step = flow.steps[si];
-      // Resolve box positions, falling back to boxFrom/boxTo for intra-package module-level steps
-      var fromKey = layout.boxPos.has(step.from) ? step.from : step.boxFrom;
-      var toKey = layout.boxPos.has(step.to) ? step.to : step.boxTo;
-      var from = layout.boxPos.get(fromKey);
-      var to = layout.boxPos.get(toKey);
-      if (!from || !to) continue;
-      var active = state.selectedStep === step.n;
-      var intra = fromKey === toKey;
-
-      if (intra) {
-        // Render an inline numbered chip inside the box (no arrow)
-        var idx = intraStackByBox.get(fromKey) || 0;
-        intraStackByBox.set(fromKey, idx + 1);
-        chipAt(from, idx, step, active);
-        continue;
-      }
-
-      var sameLane = from.laneId === to.laneId;
-      var x1, y1, x2, y2;
-      if (sameLane) {
-        if (to.y > from.y) {
-          x1 = from.x + from.w / 2; y1 = from.y + from.h;
-          x2 = to.x + to.w / 2; y2 = to.y;
-        } else {
-          x1 = from.x + from.w / 2; y1 = from.y;
-          x2 = to.x + to.w / 2; y2 = to.y + to.h;
-        }
-      } else if (to.x > from.x) {
-        x1 = from.x + from.w; y1 = from.y + from.h / 2;
-        x2 = to.x; y2 = to.y + to.h / 2;
-      } else {
-        x1 = from.x; y1 = from.y + from.h / 2;
-        x2 = to.x + to.w; y2 = to.y + to.h / 2;
-      }
-      var p = el("path", {
-        class: "edge flow" + (active ? " active" : ""),
-        d: flowPath(x1, y1, x2, y2),
-        "marker-end": "url(#arrowhead-flow)",
-        opacity: active || state.selectedStep == null ? 0.95 : 0.35,
-      });
-      g.appendChild(p);
-      var mx = (x1 + x2) / 2;
-      var my = (y1 + y2) / 2;
-      var circle = el("g", {
-        class: "step-num" + (active ? " active" : ""),
-        transform: "translate(" + mx + "," + my + ")"
-      });
-      circle.appendChild(el("circle", { r: 11, fill: active ? "#fff" : "#ffdf5d", stroke: "#0b0d10", "stroke-width": 2 }));
-      circle.appendChild(el("text", { y: 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#0b0d10" }, String(step.n)));
-      circle.addEventListener("click", function (n) {
-        return function (ev) { ev.stopPropagation(); selectStep(n); };
-      }(step.n));
-      g.appendChild(circle);
-    }
-  }
-}
-
-function flowPath(x1, y1, x2, y2) {
-  // S-curve for cleaner routing
-  var dx = x2 - x1, dy = y2 - y1;
-  if (Math.abs(dx) > Math.abs(dy)) {
-    var c1x = x1 + dx * 0.5, c1y = y1;
-    var c2x = x2 - dx * 0.5, c2y = y2;
-    return "M " + x1 + " " + y1 + " C " + c1x + " " + c1y + ", " + c2x + " " + c2y + ", " + x2 + " " + y2;
-  } else {
-    var c1xv = x1, c1yv = y1 + dy * 0.5;
-    var c2xv = x2, c2yv = y2 - dy * 0.5;
-    return "M " + x1 + " " + y1 + " C " + c1xv + " " + c1yv + ", " + c2xv + " " + c2yv + ", " + x2 + " " + y2;
-  }
-}
-
-function layoutSystem(map, W, H) {
-  var containers = map.containers.map(function (c) {
-    var mods = map.modules.filter(function (m) { return containerIdOf(m) === c.id; });
-    var counts = {};
-    for (var i=0; i<mods.length; i++) {
-      var l = layerOf(mods[i]); counts[l] = (counts[l] || 0) + 1;
-    }
-    var dominant = LAYER_ORDER.slice().sort(function (a,b) { return (counts[b]||0) - (counts[a]||0); })[0] || "support";
-    var sinks = new Set();
-    for (var j=0; j<mods.length; j++) (mods[j].sinks || []).forEach(function (s) { sinks.add(s); });
-    return Object.assign({}, c, { dominant: dominant, moduleCount: mods.length,
-      hasEntry: mods.some(function (m) { return !!m.entryPoint; }), sinks: Array.from(sinks) });
-  });
-  containers.sort(function (a,b) {
-    var d = LAYER_ORDER.indexOf(a.dominant) - LAYER_ORDER.indexOf(b.dominant);
-    return d !== 0 ? d : b.moduleCount - a.moduleCount;
-  });
-  var bandH = H / LAYER_ORDER.length;
-  var positions = new Map();
-  var perLayer = new Map();
-  containers.forEach(function (c) {
-    if (!perLayer.has(c.dominant)) perLayer.set(c.dominant, []);
-    perLayer.get(c.dominant).push(c);
-  });
-  perLayer.forEach(function (cs, layer) {
-    var idx = LAYER_ORDER.indexOf(layer);
-    var y = bandH * idx + bandH / 2;
-    var cols = Math.max(1, cs.length);
-    cs.forEach(function (c, i) {
-      var colW = W / cols;
-      var x = colW * i + colW / 2;
-      var w = Math.max(120, Math.min(colW * 0.85, 80 + Math.sqrt(c.moduleCount) * 26));
-      var h = Math.max(60, Math.min(bandH * 0.8, 50 + Math.sqrt(c.moduleCount) * 14));
-      positions.set(c.id, { x: x - w / 2, y: y - h / 2, w: w, h: h, container: c });
-    });
-  });
-  return { positions: positions, containers: containers };
-}
-
-function layoutModules(map, W, H) {
-  var containers = map.containers.slice().sort(function (a,b) { return b.moduleCount - a.moduleCount; });
-  var n = containers.length;
-  var cols = Math.ceil(Math.sqrt(n * (W / H)));
-  var rows = Math.ceil(n / cols);
-  var pad = 16;
-  var cellW = (W - pad) / cols;
-  var cellH = (H - pad) / rows;
-  var containerPos = new Map();
-  containers.forEach(function (c, i) {
-    var cx = i % cols, cy = Math.floor(i / cols);
-    containerPos.set(c.id, { x: pad + cx * cellW, y: pad + cy * cellH, w: cellW - pad, h: cellH - pad, container: c });
-  });
-  var modulePos = new Map();
-  containers.forEach(function (c) {
-    var slot = containerPos.get(c.id); if (!slot) return;
-    var mods = map.modules.filter(function (m) { return containerIdOf(m) === c.id; });
-    mods.sort(function (a,b) {
-      if ((a.entryPoint?1:0) !== (b.entryPoint?1:0)) return (b.entryPoint?1:0) - (a.entryPoint?1:0);
-      var la = LAYER_ORDER.indexOf(layerOf(a)), lb = LAYER_ORDER.indexOf(layerOf(b));
-      if (la !== lb) return la - lb;
-      return b.loc - a.loc;
-    });
-    if (mods.length === 0) return;
-    var innerW = slot.w - 16, innerH = slot.h - 28;
-    var mcols = Math.max(1, Math.ceil(Math.sqrt(mods.length * Math.max(0.001, innerW / Math.max(1, innerH)))));
-    var mw = innerW / mcols, mh = innerH / Math.max(1, Math.ceil(mods.length / mcols));
-    mods.forEach(function (m, i) {
-      var x = slot.x + 8 + (i % mcols) * mw + mw / 2;
-      var y = slot.y + 22 + Math.floor(i / mcols) * mh + mh / 2;
-      modulePos.set(m.id, { x: x, y: y, m: m });
-    });
-  });
-  return { containerPos: containerPos, modulePos: modulePos, containers: containers };
-}
-
-function el(tag, attrs, text) {
-  var e = document.createElementNS(SVG_NS, tag);
-  if (attrs) for (var k in attrs) {
-    if (attrs[k] == null) continue;
-    e.setAttribute(k, attrs[k]);
-  }
-  if (text != null) e.textContent = text;
-  return e;
-}
-function arrow(x1, y1, x2, y2, attrs) {
-  var dx = x2 - x1, dy = y2 - y1;
-  var c1x = x1 + dx * 0.25, c1y = y1 + dy * 0.5;
-  var c2x = x1 + dx * 0.75, c2y = y2 - dy * 0.1;
-  attrs = attrs || {};
-  var p = el("path", Object.assign({}, attrs, { d: "M" + x1 + " " + y1 + " C " + c1x + " " + c1y + ", " + c2x + " " + c2y + ", " + x2 + " " + y2 }));
-  return p;
+  fit();
 }
 
 function render() {
   var map = state.map; if (!map) return;
-  var W = svg.clientWidth, H = svg.clientHeight;
-  svg.innerHTML = "";
-  var g = el("g", { id: "world" });
-  tx(g);
-  svg.appendChild(g);
-  if (state.view === "architecture") renderArchitecture(g, W, H);
-  else if (state.view === "modules") renderModules(g, W, H);
-  else if (state.view === "insights") renderInsights(g, W, H);
-  else if (state.view === "concepts") renderConcepts(g, W, H);
-  else if (state.view === "graph") renderGraph(g, W, H);
-  else if (state.view === "calls") renderCalls(g, W, H);
-  else renderFlowsSwimlane(g, W, H);
+  if (state.view === "graph") {
+    ensureGraphModel();
+    requestDraw();
+  } else {
+    var W = svg.clientWidth, H = svg.clientHeight;
+    svg.innerHTML = "";
+    var g = el("g", { id: "world" });
+    tx(g);
+    svg.appendChild(g);
+    if (state.view === "architecture") renderArchitecture(g, W, H);
+    else renderFlowsSwimlane(g, W, H);
+  }
   $("legend").innerHTML = legendHtml();
   $("hud").textContent = hudText();
+  renderInspector();
 }
 
 function legendHtml() {
@@ -3458,12 +3505,25 @@ function legendHtml() {
     state.map.lanes.forEach(function (l) {
       s += '<div class="row"><div class="dot" style="background:' + l.color + '"></div>' + l.name + '</div>';
     });
-  } else if (state.view === "insights") {
-    (state.map.clusters || []).slice(0, 8).forEach(function (c) {
-      s += '<div class="row"><div class="dot" style="background:' + clusterColor(c.id) + '"></div>' + escapeHtml(c.label) + ' (' + c.size + ')</div>';
+  } else if (state.view === "graph") {
+    var clusters = (state.map.clusters || []).slice().sort(function (a,b) { return b.size - a.size; });
+    var top = clusters.slice(0, 10);
+    top.forEach(function (c) {
+      var isolated = state.focus && state.focus.kind === "cluster" && state.focus.id === c.id;
+      s += '<div class="row legend-row' + (isolated ? " active" : "") + '" data-cluster="' + escapeHtml(c.id) + '">' +
+        '<div class="dot" style="background:' + clusterColor(c.id) + '"></div>' +
+        '<div class="name">' + escapeHtml(c.label) + '</div><div class="count">' + c.size + '</div></div>';
     });
-    s += '<div class="row"><div class="dot" style="background:#fff;border:1px solid #888"></div>god node (larger)</div>';
-    s += '<div class="row"><div class="dot" style="background:#ff5c5c"></div>surprising edge</div>';
+    if (clusters.length > top.length) {
+      s += '<div class="row" style="color:var(--muted)">+' + (clusters.length - top.length) + ' more clusters…</div>';
+    }
+    s += '<div class="row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">' +
+      '<div class="dot" style="border:2px solid #ffdf5d;background:transparent"></div>entry point (ring)</div>';
+    s += '<div class="row"><div class="dot" style="background:#ff7b72;border-radius:2px;transform:rotate(45deg)"></div>sink (diamond)</div>';
+    s += '<div class="row" style="opacity:.5"><div class="dot" style="background:#8b949e"></div>test file (dimmed)</div>';
+    s += '<div class="row"><svg width="18" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke="#7ee787" stroke-width="1.6"/></svg>&nbsp;extracted</div>';
+    s += '<div class="row"><svg width="18" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke="#79c0ff" stroke-width="1.6" stroke-dasharray="4 3"/></svg>&nbsp;inferred</div>';
+    s += '<div class="row"><svg width="18" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke="#8b949e" stroke-width="1.6" stroke-dasharray="1 3"/></svg>&nbsp;ambiguous</div>';
   } else {
     LAYER_ORDER.forEach(function (l) {
       s += '<div class="row"><div class="dot" style="background:' + LAYER_COLOR[l] + '"></div>' + l + '</div>';
@@ -3477,7 +3537,7 @@ function hudText() {
   if (state.view === "architecture") {
     var c = (state.map.containers || []).length;
     var gN = (state.map.groups || []).length;
-    return "Architecture · " + gN + " groups, " + c + " packages · click a package · double-click a group to focus · ESC to clear";
+    return "Architecture · " + gN + " groups, " + c + " packages · click a package · double-click a group header to focus, click header to collapse · ESC to clear";
   }
   if (state.view === "flows") {
     if (state.selectedFlow) {
@@ -3486,28 +3546,75 @@ function hudText() {
     }
     return "Pick a flow on the right to highlight the path through the system";
   }
-  if (state.view === "insights") {
-    var god = (state.map.hotspots && state.map.hotspots.godNodes) || [];
-    return "Insights · " + ((state.map.clusters || []).length) + " clusters · " + god.length + " god-nodes · " + ((state.map.surprisingConnections || []).length) + " surprising edges · hover a node for detail";
-  }
-  if (state.view === "concepts") {
-    return "Concepts · " + ((state.map.clusters || []).length) + " clusters as nodes · edges = cross-cluster imports · hover for counts";
-  }
   if (state.view === "graph") {
-    var total = (state.map.modules || []).length;
-    var shown = (state.map.modules || []).filter(function (m) { return !m.isTest; }).length;
-    return "Knowledge graph · " + shown + " of " + total + " modules (tests hidden) · grouped by cluster · edges = imports";
+    var g = state.graph;
+    var shown = g ? g.nodes.length : 0;
+    var collapsed = g ? g.collapsedClusters.size : 0;
+    // B2: surface how many modules/symbols the current search matched — without this, a query
+    // that only matches modules inside a collapsed cluster gave no feedback that anything hit.
+    var matchHint = state.searchMatches
+      ? " · " + state.searchMatches.size + " match" + (state.searchMatches.size === 1 ? "" : "es")
+      : "";
+    return "Graph · " + shown + " nodes shown · " + collapsed + " clusters collapsed" + matchHint + " · double-click a cluster to expand/collapse · drag pins · scroll = zoom";
   }
-  if (state.view === "calls") {
-    return "Calls · symbol-level call graph around one module (god-node by default) · callers ← center → callees · hover a node for its path";
-  }
-  if (state.focus) return "focused on " + state.focus.kind + ":" + state.focus.id + " — " + state.focus.set.size + " module(s) (esc to clear)";
-  return state.view + " view · scroll = zoom · drag = pan · click = focus";
+  return state.view + " view";
 }
 
-// ====================== Architecture (nested-containers) view ======================
+// ====================== focus (sidebar filters) ======================
+function buildFocus(kind, id, moduleIds) {
+  var moduleSet = new Set(moduleIds);
+  var containerSet = new Set();
+  moduleSet.forEach(function (mid) {
+    var m = state.idx.modById.get(mid);
+    if (m) containerSet.add(containerIdOf(m));
+  });
+  state.focus = { kind: kind, id: id, moduleSet: moduleSet, containerSet: containerSet };
+}
+function focusEntry(id) {
+  var adj = state.idx.adj;
+  var set = new Set([id]); var stack = [id];
+  while (stack.length) {
+    var x = stack.pop();
+    var ns = adj.get(x) || [];
+    for (var i=0; i<ns.length; i++) if (!set.has(ns[i])) { set.add(ns[i]); stack.push(ns[i]); }
+  }
+  buildFocus("entry", id, set);
+  render();
+}
+function focusSink(kind) {
+  var map = state.map;
+  var radj = state.idx.radj;
+  var seeds = map.sinks.filter(function (s) { return s.sinks.indexOf(kind) !== -1; }).map(function (s) { return s.id; });
+  var set = new Set(seeds); var stack = seeds.slice();
+  while (stack.length) {
+    var x = stack.pop();
+    var ns = radj.get(x) || [];
+    for (var i=0; i<ns.length; i++) if (!set.has(ns[i])) { set.add(ns[i]); stack.push(ns[i]); }
+  }
+  buildFocus("sink", kind, set);
+  render();
+}
+function focusPackage(pkgId) {
+  var ids = state.map.modules.filter(function (m) { return ("pkg:" + (m.package || "")) === pkgId; }).map(function (m) { return m.id; });
+  buildFocus("package", pkgId, ids);
+  render();
+}
+function focusLayer(layer) {
+  var ids = state.map.modules.filter(function (m) { return layerOf(m) === layer; }).map(function (m) { return m.id; });
+  buildFocus("layer", layer, ids);
+  render();
+}
+function focusClusterToggle(clusterId) {
+  if (state.focus && state.focus.kind === "cluster" && state.focus.id === clusterId) {
+    state.focus = null; render(); return;
+  }
+  var c = state.idx.clusterById.get(clusterId);
+  buildFocus("cluster", clusterId, (c && c.members) || []);
+  render();
+}
+function clearFocus() { state.focus = null; render(); }
 
-// Slice-and-dice treemap: divides a rect into N sub-rects weighted by item.weight.
+// ====================== Architecture (nested-containers) view ======================
 function slice(rect, items, getWeight) {
   if (items.length === 0) return [];
   var total = 0;
@@ -3530,8 +3637,6 @@ function slice(rect, items, getWeight) {
   }
   return out;
 }
-
-// Grid layout that always fits N items into a rect, deterministic columns by aspect ratio.
 function gridLayout(rect, items) {
   if (items.length === 0) return [];
   var aspect = rect.w / Math.max(1, rect.h);
@@ -3546,14 +3651,12 @@ function gridLayout(rect, items) {
   }
   return out;
 }
-
 function layoutArchitecture(map, W, H) {
   var groups = (map.groups || []).slice();
   if (groups.length === 0) return { groupPos: new Map(), packagePos: new Map() };
   groups.sort(function (a, b) { return (b.moduleCount || 0) - (a.moduleCount || 0); });
   var pad = 18, gap = 12;
   var outerRect = { x: pad, y: pad, w: W - pad * 2, h: H - pad * 2 };
-  // Use slice-and-dice weighted by sqrt(moduleCount) so small groups stay readable.
   var groupSlots = slice(outerRect, groups, function (g) { return Math.sqrt(Math.max(1, g.moduleCount || 1)); });
   var groupPos = new Map();
   var packagePos = new Map();
@@ -3568,7 +3671,6 @@ function layoutArchitecture(map, W, H) {
     if (memberContainers.length === 0) continue;
     var headerH = 34;
     var pkgRect = { x: inset.x + 8, y: inset.y + headerH, w: Math.max(40, inset.w - 16), h: Math.max(40, inset.h - headerH - 8) };
-    // Grid layout — always fits everything inside the group
     var pkgSlots = gridLayout(pkgRect, memberContainers);
     for (var k=0; k<pkgSlots.length; k++) {
       var ps = pkgSlots[k];
@@ -3584,7 +3686,6 @@ function showTooltip(html, ev) {
   var tt = $("tooltip");
   tt.innerHTML = html;
   tt.style.display = "block";
-  // Position relative to viewport, clamped to viz
   var viz = $("viz").getBoundingClientRect();
   var x = (ev.clientX - viz.left) + 14;
   var y = (ev.clientY - viz.top) + 14;
@@ -3593,7 +3694,6 @@ function showTooltip(html, ev) {
   if (y + ttH > viz.height) y = viz.height - ttH - 6;
   tt.style.left = x + "px"; tt.style.top = y + "px";
 }
-
 function tooltipPackageHtml(container, groupName) {
   var top = (container.topFiles || []).slice(0, 5);
   var html = '<div class="tt-title">' + escapeHtml(container.name) + '</div>';
@@ -3610,7 +3710,6 @@ function tooltipPackageHtml(container, groupName) {
   }
   return html;
 }
-
 function tooltipEdgeHtml(edge) {
   var labels = (edge.labels || [edge.label]).join(", ");
   var samples = (edge.symbolSamples || []).slice(0, 5).map(function (s) { return '<code>' + escapeHtml(s) + '</code>'; }).join(", ");
@@ -3621,105 +3720,35 @@ function tooltipEdgeHtml(edge) {
   if (samples) html += '<div class="tt-section">Top symbols</div><div>' + samples + '</div>';
   return html;
 }
+function tooltipModuleHtml(m) {
+  var html = '<div class="tt-title">' + escapeHtml(m.path) + '</div>';
+  html += '<div class="tt-desc">' + escapeHtml(m.package || "-") + ' · ' + escapeHtml(m.layer || "-") + ' · ' + (m.loc||0) + ' loc' + (m.cluster ? ' · ' + escapeHtml(m.cluster) : '') + '</div>';
+  return html;
+}
+
+// Convert a mouse event's client coordinates into SVG world coordinates (accounts for
+// the current pan/zoom, unlike comparing screen px directly against world dimensions — defect 10).
+function svgToWorld(ev) {
+  var rect = svg.getBoundingClientRect();
+  var sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+  return { x: (sx - state.pan.x) / state.zoom, y: (sy - state.pan.y) / state.zoom };
+}
 
 function renderArchitecture(g, W, H) {
   var map = state.map;
   var layout = layoutArchitecture(map, W, H);
-  state.lastArchLayout = layout;
   var groups = map.groups || [];
   var groupById = {}; for (var ig=0; ig<groups.length; ig++) groupById[groups[ig].id] = groups[ig];
 
-  // 1) Group rectangles (containers)
-  layout.groupPos.forEach(function (gp, id) {
-    var grp = gp.group;
-    var color = grp.color || "#8b949e";
-    var focusedGroup = state.focus && state.focus.kind === "group" && state.focus.id === id;
-    var rect = el("rect", {
-      class: "group-rect" + (gp.collapsed ? " collapsed" : "") + (focusedGroup ? " focused" : ""),
-      x: gp.x, y: gp.y, width: gp.w, height: gp.h, rx: 12, ry: 12,
-      stroke: color, fill: "rgba(28,37,48,0.32)",
-    });
-    g.appendChild(rect);
-    // Header strip
-    g.appendChild(el("rect", { class: "group-header",
-      x: gp.x, y: gp.y, width: gp.w, height: 30, rx: 12, ry: 12 }));
-    g.appendChild(el("text", { class: "group-name", x: gp.x + 14, y: gp.y + 20, fill: color }, grp.name));
-    var sub = grp.members.length + " pkgs · " + (grp.moduleCount || 0) + " modules" + (grp.source === "curated" ? " · curated" : "");
-    g.appendChild(el("text", { class: "group-sub", x: gp.x + gp.w - 14, y: gp.y + 20, "text-anchor": "end" }, sub));
-    // Click on header area toggles collapse; double-click sets focus
-    rect.addEventListener("dblclick", function (ev) {
-      ev.stopPropagation();
-      var set = new Set();
-      for (var i=0; i<map.containers.length; i++) {
-        var c = map.containers[i];
-        if (c.groupId === id) {
-          set.add(c.id);
-          var mods = map.modules.filter(function (m) { return containerIdOf(m) === c.id; });
-          for (var k=0; k<mods.length; k++) set.add(mods[k].id);
-        }
-      }
-      state.focus = { kind: "group", id: id, set: set };
-      render();
-    });
-    // Click on header (top 30px) toggles collapse
-    rect.addEventListener("click", function (ev) {
-      var rectBox = rect.getBoundingClientRect();
-      if (ev.clientY - rectBox.top <= 30) {
-        ev.stopPropagation();
-        state.collapsedGroups[id] = !state.collapsedGroups[id];
-        render();
-      }
-    });
-  });
-
-  // 2) Package rectangles inside expanded groups
-  layout.packagePos.forEach(function (pp, id) {
-    var c = pp.container;
-    var grp = groupById[pp.groupId] || { color: "#3a4858" };
-    var sel = state.selected && state.selected.kind === "box" && state.selected.id === id;
-    var dim = state.focus && !state.focus.set.has(id);
-    var rect = el("rect", {
-      class: "pkg-rect" + (sel ? " selected" : "") + (dim ? " dim" : ""),
-      x: pp.x, y: pp.y, width: pp.w, height: pp.h, rx: 8, ry: 8,
-      stroke: grp.color || "#3a4858",
-    });
-    g.appendChild(rect);
-    g.appendChild(el("text", { class: "pkg-title", x: pp.x + 10, y: pp.y + 18 },
-      truncate(c.name, Math.max(8, Math.floor(pp.w / 7.5)))));
-    var entryCount = (c.topFiles || []).filter(function (t) { return /entry|HTTP/.test(t.reason); }).length;
-    var sub = (c.moduleCount || 0) + " modules" + (entryCount ? " · " + entryCount + " entry" : "");
-    g.appendChild(el("text", { class: "pkg-sub", x: pp.x + 10, y: pp.y + 32 }, sub));
-    // Show 1-3 top file paths inline if there's vertical space
-    if (pp.h >= 76) {
-      var top = (c.topFiles || []).slice(0, Math.min(3, Math.floor((pp.h - 40) / 14)));
-      for (var t=0; t<top.length; t++) {
-        var label = top[t].reason + ": " + top[t].path.split("/").slice(-2).join("/");
-        g.appendChild(el("text", { class: "pkg-topfiles", x: pp.x + 10, y: pp.y + 48 + t * 13 },
-          truncate(label, Math.max(10, Math.floor(pp.w / 6.5)))));
-      }
-    }
-    rect.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      state.selected = { kind: "box", id: id };
-      renderDetail();
-      render();
-    });
-    rect.addEventListener("mouseenter", function (ev) {
-      showTooltip(tooltipPackageHtml(c, grp.name), ev);
-    });
-    rect.addEventListener("mousemove", function (ev) {
-      showTooltip(tooltipPackageHtml(c, grp.name), ev);
-    });
-    rect.addEventListener("mouseleave", hideTooltip);
-  });
-
-  // 3) Build collapsed cross-group edges if any group is collapsed
+  // B5 fix: edges (and their wide invisible .edge-hit hover targets) used to be appended AFTER
+  // the group/package rects, which put them on top in paint order and let .edge-hit intercept
+  // clicks meant for the package underneath it. SVG stacks later-appended siblings above earlier
+  // ones, so we now append every edge/edge-hit FIRST — package/group rects then render on top and
+  // win pointer-events wherever they overlap an edge; edge hover still works on exposed segments.
   var collapsedSet = new Set(Object.keys(state.collapsedGroups).filter(function (k) { return state.collapsedGroups[k]; }));
-  // Build container → group lookup
   var groupOfContainer = {}; for (var ic=0; ic<map.containers.length; ic++) groupOfContainer[map.containers[ic].id] = map.containers[ic].groupId;
 
-  // 4) Cross-package + cross-group edges with labeled chips
-  var crossGroupAgg = new Map(); // "fromG→toG" -> agg
+  var crossGroupAgg = new Map();
   var edges = map.containerEdges || [];
   var defs = el("defs");
   defs.innerHTML = '<marker id="arrow-cross" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7ee787"/></marker>' +
@@ -3733,9 +3762,9 @@ function renderArchitecture(g, W, H) {
     var fromCollapsed = collapsedSet.has(fromG);
     var toCollapsed = collapsedSet.has(toG);
     if (fromCollapsed || toCollapsed) {
-      var k = fromG + "→" + toG;
-      if (!crossGroupAgg.has(k)) crossGroupAgg.set(k, { from: fromG, to: toG, count: 0, callCount: 0, labels: new Set() });
-      var ag = crossGroupAgg.get(k);
+      var k2 = fromG + "→" + toG;
+      if (!crossGroupAgg.has(k2)) crossGroupAgg.set(k2, { from: fromG, to: toG, count: 0, callCount: 0, labels: new Set() });
+      var ag = crossGroupAgg.get(k2);
       ag.count += edge.count;
       ag.callCount += (edge.callCount || 0);
       ag.labels.add(edge.label);
@@ -3745,11 +3774,9 @@ function renderArchitecture(g, W, H) {
     var toPos = layout.packagePos.get(edge.to);
     if (!fromPos || !toPos) continue;
     var x1, y1, x2, y2;
-    // Pick anchor points on box edges nearest to the other box
     var fcx = fromPos.x + fromPos.w/2, fcy = fromPos.y + fromPos.h/2;
     var tcx = toPos.x + toPos.w/2, tcy = toPos.y + toPos.h/2;
     if (Math.abs(tcx - fcx) >= Math.abs(tcy - fcy)) {
-      // Horizontal-dominant: use right/left edges
       x1 = tcx > fcx ? fromPos.x + fromPos.w : fromPos.x;
       y1 = fcy;
       x2 = tcx > fcx ? toPos.x : toPos.x + toPos.w;
@@ -3761,28 +3788,19 @@ function renderArchitecture(g, W, H) {
       y2 = tcy > fcy ? toPos.y : toPos.y + toPos.h;
     }
     var sw = Math.min(4, 0.8 + Math.log2(edge.count + 1));
-    var path = el("path", {
-      class: "edge cross",
-      d: flowPath(x1, y1, x2, y2),
-      "stroke-width": sw,
-      "marker-end": "url(#arrow-cross)",
-    });
+    var path = el("path", { class: "edge cross", d: flowPath(x1, y1, x2, y2), "stroke-width": sw, "marker-end": "url(#arrow-cross)" });
     g.appendChild(path);
-    // Wide invisible hit area for hover
-    var hit = el("path", {
-      class: "edge-hit", d: flowPath(x1, y1, x2, y2),
-    });
+    var hit = el("path", { class: "edge-hit", d: flowPath(x1, y1, x2, y2) });
     g.appendChild(hit);
     hit.addEventListener("mouseenter", function (e) { return function (ev) { showTooltip(tooltipEdgeHtml(e), ev); }; }(edge));
     hit.addEventListener("mousemove", function (e) { return function (ev) { showTooltip(tooltipEdgeHtml(e), ev); }; }(edge));
     hit.addEventListener("mouseleave", hideTooltip);
-    // Label chip at midpoint (skip when edge is too short)
     var dist = Math.hypot(x2 - x1, y2 - y1);
     if (dist >= 80 && edge.label) {
       var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
       var labelText = edge.label;
       var chipW = labelText.length * 6.2 + 12;
-      var labelClass = "edge-label-text " + labelText.toLowerCase().replace(/\s+/g, "-");
+      var labelClass = "edge-label-text " + labelText.toLowerCase().replace(/\\s+/g, "-");
       var chip = el("g", { transform: "translate(" + mx + "," + my + ")" });
       chip.appendChild(el("rect", { class: "edge-label-bg", x: -chipW/2, y: -9, width: chipW, height: 18, rx: 4, ry: 4 }));
       chip.appendChild(el("text", { class: labelClass, x: 0, y: 3, "text-anchor": "middle" }, labelText));
@@ -3790,7 +3808,6 @@ function renderArchitecture(g, W, H) {
     }
   }
 
-  // 5) Collapsed group → group aggregate edges
   crossGroupAgg.forEach(function (agg) {
     var fromGP = layout.groupPos.get(agg.from), toGP = layout.groupPos.get(agg.to);
     if (!fromGP || !toGP) return;
@@ -3805,8 +3822,7 @@ function renderArchitecture(g, W, H) {
       x2 = tcx; y2 = tcy > fcy ? toGP.y : toGP.y + toGP.h;
     }
     g.appendChild(el("path", { class: "edge cross", d: flowPath(x1, y1, x2, y2),
-      "stroke-width": Math.min(6, 1.5 + Math.log2(agg.count + 1)),
-      "marker-end": "url(#arrow-cross)" }));
+      "stroke-width": Math.min(6, 1.5 + Math.log2(agg.count + 1)), "marker-end": "url(#arrow-cross)" }));
     var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
     var labelText = (agg.from.replace(/^group:/, "") + " → " + agg.to.replace(/^group:/, "") + " · " + agg.count);
     var chipW = labelText.length * 6.2 + 12;
@@ -3816,10 +3832,83 @@ function renderArchitecture(g, W, H) {
     g.appendChild(chip);
   });
 
-  // 6) Optional yellow flow overlay
-  if (state.overlayFlow && state.selectedFlow) {
-    overlayFlowOnArchitecture(g, layout);
-  }
+  // Groups and packages render last (on top of all edges/edge-hit paths — see the B5 note above).
+  layout.groupPos.forEach(function (gp, id) {
+    var grp = gp.group;
+    var color = grp.color || "#8b949e";
+    var focusedGroup = state.focus && state.focus.kind === "group" && state.focus.id === id;
+    var rect = el("rect", {
+      class: "group-rect" + (gp.collapsed ? " collapsed" : "") + (focusedGroup ? " focused" : ""),
+      x: gp.x, y: gp.y, width: gp.w, height: gp.h, rx: 12, ry: 12,
+      stroke: color, fill: "rgba(28,37,48,0.32)",
+    });
+    g.appendChild(rect);
+    g.appendChild(el("rect", { class: "group-header",
+      x: gp.x, y: gp.y, width: gp.w, height: 30, rx: 12, ry: 12 }));
+    g.appendChild(el("text", { class: "group-name", x: gp.x + 14, y: gp.y + 20, fill: color }, grp.name));
+    var sub = grp.members.length + " pkgs · " + (grp.moduleCount || 0) + " modules" + (grp.source === "curated" ? " · curated" : "");
+    g.appendChild(el("text", { class: "group-sub", x: gp.x + gp.w - 14, y: gp.y + 20, "text-anchor": "end" }, sub));
+    rect.addEventListener("dblclick", function (gp2, id2) { return function (ev) {
+      ev.stopPropagation();
+      var set = new Set();
+      for (var i=0; i<map.containers.length; i++) {
+        var c = map.containers[i];
+        if (c.groupId === id2) {
+          var mods = map.modules.filter(function (m) { return containerIdOf(m) === c.id; });
+          for (var k=0; k<mods.length; k++) set.add(mods[k].id);
+        }
+      }
+      buildFocus("group", id2, set);
+      render();
+    }; }(gp, id));
+    // Header collapse hit-test: compare in WORLD coordinates (defect 10), not raw screen px,
+    // so it stays correct at any zoom level.
+    rect.addEventListener("click", function (gp2, id2) { return function (ev) {
+      var world = svgToWorld(ev);
+      if (world.y - gp2.y <= 30) {
+        ev.stopPropagation();
+        state.collapsedGroups[id2] = !state.collapsedGroups[id2];
+        render();
+      }
+    }; }(gp, id));
+  });
+
+  layout.packagePos.forEach(function (pp, id) {
+    var c = pp.container;
+    var grp = groupById[pp.groupId] || { color: "#3a4858" };
+    var sel = state.selected && state.selected.kind === "box" && state.selected.id === id;
+    // Fixed defect 6: dim by containerSet (packages), not a module-id set.
+    var dim = state.focus && !state.focus.containerSet.has(id);
+    var rect = el("rect", {
+      class: "pkg-rect" + (sel ? " selected" : "") + (dim ? " dim" : ""),
+      x: pp.x, y: pp.y, width: pp.w, height: pp.h, rx: 8, ry: 8,
+      stroke: grp.color || "#3a4858",
+    });
+    rect.appendChild(el("title", null, c.name + " — " + c.moduleCount + " modules"));
+    g.appendChild(rect);
+    g.appendChild(el("text", { class: "pkg-title", x: pp.x + 10, y: pp.y + 18 },
+      truncate(c.name, Math.max(8, Math.floor(pp.w / 7.5)))));
+    var entryCount = (c.topFiles || []).filter(function (t) { return /entry|HTTP/.test(t.reason); }).length;
+    var sub = (c.moduleCount || 0) + " modules" + (entryCount ? " · " + entryCount + " entry" : "");
+    g.appendChild(el("text", { class: "pkg-sub", x: pp.x + 10, y: pp.y + 32 }, sub));
+    if (pp.h >= 76) {
+      var top = (c.topFiles || []).slice(0, Math.min(3, Math.floor((pp.h - 40) / 14)));
+      for (var t=0; t<top.length; t++) {
+        var label = top[t].reason + ": " + top[t].path.split("/").slice(-2).join("/");
+        g.appendChild(el("text", { class: "pkg-topfiles", x: pp.x + 10, y: pp.y + 48 + t * 13 },
+          truncate(label, Math.max(10, Math.floor(pp.w / 6.5)))));
+      }
+    }
+    rect.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      selectNode("box", id);
+    });
+    rect.addEventListener("mouseenter", function (ev) { showTooltip(tooltipPackageHtml(c, grp.name), ev); });
+    rect.addEventListener("mousemove", function (ev) { showTooltip(tooltipPackageHtml(c, grp.name), ev); });
+    rect.addEventListener("mouseleave", hideTooltip);
+  });
+
+  if (state.overlayFlow && state.selectedFlow) overlayFlowOnArchitecture(g, layout);
 }
 
 function overlayFlowOnArchitecture(g, layout) {
@@ -3835,7 +3924,6 @@ function overlayFlowOnArchitecture(g, layout) {
     var to = layout.packagePos.get(toKey);
     if (!from || !to) continue;
     if (fromKey === toKey) {
-      // Intra-package chip
       var idx = intraStack.get(fromKey) || 0;
       intraStack.set(fromKey, idx + 1);
       var px = from.x + from.w - 16, py = from.y + from.h - 12 - idx * 18;
@@ -3848,8 +3936,7 @@ function overlayFlowOnArchitecture(g, layout) {
     }
     var x1 = from.x + from.w / 2, y1 = from.y + from.h / 2;
     var x2 = to.x + to.w / 2, y2 = to.y + to.h / 2;
-    g.appendChild(el("path", { class: "edge flow", d: flowPath(x1, y1, x2, y2),
-      "stroke-width": 2, "marker-end": "url(#arrow-flow)" }));
+    g.appendChild(el("path", { class: "edge flow", d: flowPath(x1, y1, x2, y2), "stroke-width": 2, "marker-end": "url(#arrow-flow)" }));
     var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
     var chip2 = el("g", { transform: "translate(" + mx + "," + my + ")" });
     chip2.appendChild(el("circle", { r: 10, fill: "#ffdf5d", stroke: "#0b0d10", "stroke-width": 2 }));
@@ -3858,228 +3945,721 @@ function overlayFlowOnArchitecture(g, layout) {
   }
 }
 
-function renderSystem(g, W, H) {
-  var map = state.map;
-  var layout = layoutSystem(map, W, H);
-  var bandH = H / LAYER_ORDER.length;
-  for (var i=0; i<LAYER_ORDER.length; i++) {
-    var l = LAYER_ORDER[i];
-    g.appendChild(el("text", { class:"layer-label", x: 10, y: bandH * i + 14 }, l));
-    g.appendChild(el("line", { class:"layer-band", x1: 0, x2: W, y1: bandH * (i+1), y2: bandH * (i+1) }));
-  }
-  for (var ei=0; ei<map.containerEdges.length; ei++) {
-    var ed = map.containerEdges[ei];
-    var a = layout.positions.get(ed.from), b = layout.positions.get(ed.to);
-    if (!a || !b) continue;
-    var ax = a.x + a.w / 2, ay = a.y + a.h / 2;
-    var bx = b.x + b.w / 2, by = b.y + b.h / 2;
-    var hi = state.focus && state.focus.kind === "package" && (state.focus.id === ed.from || state.focus.id === ed.to);
-    var sw = Math.min(6, 1 + Math.log2(ed.count + 1));
-    g.appendChild(arrow(ax, ay, bx, by, { class: "edge cross" + (hi ? " hi" : ""), "stroke-width": sw }));
-  }
-  layout.positions.forEach(function (p, id) {
-    var c = p.container;
-    var hi = (state.focus && state.focus.kind === "package" && state.focus.id === id);
-    var rect = el("rect", { class: "container-rect" + (hi ? " hi" : ""),
-      x: p.x, y: p.y, width: p.w, height: p.h, rx: 10, ry: 10 });
-    rect.style.cursor = "pointer";
-    rect.addEventListener("click", function (ev) { ev.stopPropagation(); focusPackage(id); });
-    g.appendChild(rect);
-    g.appendChild(el("text", { class: "container-label", x: p.x + 10, y: p.y + 16 }, c.name));
-    g.appendChild(el("text", { class: "container-label", x: p.x + 10, y: p.y + 32, fill: LAYER_COLOR[c.dominant] },
-      c.dominant + " · " + c.moduleCount + "m" + (c.hasEntry ? " · entry" : "") + (c.sinks.length ? " · " + c.sinks.length + " sinks" : "")));
+// ====================== Flows (swimlane) view ======================
+// Packs each lane into as many COLUMNS as needed to keep every box readable (defect 11: a single
+// column with 22 boxes overflowed the viewport with no way to reach the rest).
+function layoutSwimlanes(map, W, H) {
+  var lanes = map.lanes || [];
+  if (!lanes.length) return { lanePos: new Map(), boxPos: new Map() };
+  var laneW = W / lanes.length;
+  var lanePos = new Map();
+  lanes.forEach(function (lane, i) {
+    lanePos.set(lane.id, { x: laneW * i, w: laneW, lane: lane });
   });
+  var boxesByLane = new Map();
+  lanes.forEach(function (l) { boxesByLane.set(l.id, []); });
+  (map.boxes || []).forEach(function (b) {
+    if (boxesByLane.has(b.lane)) boxesByLane.get(b.lane).push(b);
+  });
+  boxesByLane.forEach(function (arr) {
+    arr.sort(function (a,b) {
+      if ((a.hasEntry?1:0) !== (b.hasEntry?1:0)) return (b.hasEntry?1:0) - (a.hasEntry?1:0);
+      return a.title.localeCompare(b.title);
+    });
+  });
+  var headerH = 36;
+  var boxPos = new Map();
+  boxesByLane.forEach(function (arr, laneId) {
+    var lp = lanePos.get(laneId);
+    if (!arr.length) return;
+    var availH = H - headerH - 24;
+    var minBoxH = 46, boxPad = 10;
+    var maxRows = Math.max(1, Math.floor(availH / (minBoxH + boxPad)));
+    var cols = Math.max(1, Math.ceil(arr.length / maxRows));
+    var rows = Math.ceil(arr.length / cols);
+    var colW = (lp.w - 16) / cols;
+    var boxH = Math.min(64, Math.max(minBoxH, availH / rows - boxPad));
+    var totalH = rows * (boxH + boxPad);
+    var startY = headerH + Math.max(8, (availH - totalH) / 2);
+    arr.forEach(function (box, i) {
+      var col = Math.floor(i / rows), row = i % rows;
+      // B6 fix: a hard 110px floor could exceed colW once many columns were needed, so a box's
+      // width could overrun into the next column (or, at the last lane column, the next lane) —
+      // clamp to colW so boxes/columns/lanes never overlap, degrading readability before geometry.
+      var w = Math.max(1, Math.min(110, colW - 14));
+      var x = lp.x + 8 + col * colW + (colW - w) / 2;
+      boxPos.set(box.id, { x: x, y: startY + row * (boxH + boxPad), w: w, h: boxH, box: box, laneId: laneId });
+    });
+  });
+  return { lanePos: lanePos, boxPos: boxPos };
 }
 
-function renderModules(g, W, H) {
+function renderFlowsSwimlane(g, W, H) {
   var map = state.map;
-  var layout = layoutModules(map, W, H);
-  layout.containerPos.forEach(function (p, cid) {
-    var hi = (state.focus && state.focus.kind === "package" && state.focus.id === cid);
-    var r = el("rect", { class: "container-rect" + (hi ? " hi" : ""),
-      x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, ry: 8 });
-    g.appendChild(r);
-    g.appendChild(el("text", { class: "container-label", x: p.x + 8, y: p.y + 14 }, p.container.name));
+  var layout = layoutSwimlanes(map, W, H);
+  layout.lanePos.forEach(function (lp) {
+    // B6 fix: lane names were drawn full-length with no width limit, so a wide name (e.g.
+    // "APPLICATION") ran straight into the next lane's label ("APPLICATIONDOMAIN"). Truncate to
+    // what actually fits the lane's own width (uppercase + 1.5px letter-spacing ~9px/char).
+    var maxChars = Math.max(3, Math.floor((lp.w - 20) / 9));
+    g.appendChild(el("text", { class: "layer-label", x: lp.x + 14, y: 22 }, truncate(lp.lane.name, maxChars)));
+    g.appendChild(el("line", { class: "lane-divider", x1: lp.x + lp.w, y1: 0, x2: lp.x + lp.w, y2: H }));
   });
-  for (var i=0; i<map.edges.length; i++) {
-    var e = map.edges[i]; if (e.kind !== "import") continue;
-    var a = layout.modulePos.get(e.from), b = layout.modulePos.get(e.to);
-    if (!a || !b) continue;
-    var focused = state.focus && state.focus.set.has(e.from) && state.focus.set.has(e.to);
-    var dim = state.focus && !focused;
-    var cross = containerIdOf(a.m) !== containerIdOf(b.m);
-    g.appendChild(arrow(a.x, a.y, b.x, b.y, { class: "edge" + (cross ? " cross" : "") + (dim ? " dim" : "") + (focused ? " hi" : ""), "stroke-width": cross ? 1.4 : 0.8 }));
+
+  var flow = state.selectedFlow ? map.flows.find(function (f) { return f.id === state.selectedFlow; }) : null;
+  var inFlow = new Set();
+  var selectedStepIds = new Set();
+  if (flow) {
+    for (var i=0; i<flow.steps.length; i++) {
+      inFlow.add(flow.steps[i].from); inFlow.add(flow.steps[i].to);
+      if (state.selectedStep && flow.steps[i].n === state.selectedStep) {
+        selectedStepIds.add(flow.steps[i].from); selectedStepIds.add(flow.steps[i].to);
+      }
+    }
   }
-  layout.modulePos.forEach(function (p, id) {
-    var m = p.m;
-    var dim = state.focus && !state.focus.set.has(id);
-    var color = m.entryPoint ? "#ffdf5d" : (m.sinks && m.sinks.length > 0 ? "#ff7b72" : LAYER_COLOR[layerOf(m)]);
-    var r = Math.max(2.5, Math.min(10, 2 + Math.sqrt(Math.max(1, m.loc / 25))));
-    var node = el("g", { class: "module-node", transform: "translate(" + p.x + "," + p.y + ")" });
-    if (dim) node.style.opacity = 0.15;
-    node.appendChild(el("circle", { r: r, fill: color }));
-    if (m.entryPoint) node.appendChild(el("circle", { r: r + 3, fill: "none", stroke: "#ffdf5d", "stroke-width": 1 }));
+
+  layout.boxPos.forEach(function (p, id) {
+    var box = p.box;
+    var hi = flow && inFlow.has(id);
+    var dim = flow && !inFlow.has(id);
+    var isSelStep = selectedStepIds.has(id);
+    var node = el("g", { class: "flow-box", transform: "translate(" + p.x + "," + p.y + ")" });
+    var rect = el("rect", {
+      width: p.w, height: p.h, rx: 6, ry: 6,
+      fill: hi ? (isSelStep ? "#3a2c00" : "#1f1900") : "rgba(28,37,48,0.55)",
+      stroke: hi ? "#ffdf5d" : (box.color || "#3a4858"),
+      "stroke-width": hi ? (isSelStep ? 2 : 1.4) : 1,
+      opacity: dim ? 0.12 : 1,
+    });
+    node.appendChild(rect);
+    node.appendChild(el("text", { x: 12, y: 19, fill: hi ? "#ffdf5d" : "#e6edf3",
+      "font-size": 12, "font-weight": 600, opacity: dim ? 0.2 : 1 }, truncate(box.title, 28)));
+    if (box.sublabel) {
+      node.appendChild(el("text", { x: 12, y: 35, fill: "#8b949e", "font-size": 10,
+        opacity: dim ? 0.2 : 1 }, truncate(box.sublabel, 36)));
+    }
+    node.addEventListener("click", function (ev) { ev.stopPropagation(); selectNode("box", id); });
     g.appendChild(node);
   });
+
+  if (flow) {
+    var arrowDefs = el("defs");
+    arrowDefs.innerHTML = '<marker id="arrowhead-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ffdf5d"/></marker>';
+    g.appendChild(arrowDefs);
+    var intraStackByBox = new Map();
+    function chipAt(boxPos, idx, step, active) {
+      var px = boxPos.x + boxPos.w - 18;
+      var py = boxPos.y + boxPos.h - 12 - idx * 20;
+      if (py < boxPos.y + 36) { px = boxPos.x + boxPos.w - 18 - 22; py = boxPos.y + boxPos.h - 12; }
+      var chip = el("g", { class: "step-num" + (active ? " active" : ""), transform: "translate(" + px + "," + py + ")" });
+      chip.appendChild(el("circle", { r: 8, fill: active ? "#fff" : "#ffdf5d", stroke: "#0b0d10", "stroke-width": 1.5 }));
+      chip.appendChild(el("text", { y: 3, "text-anchor": "middle", "font-size": 9, "font-weight": 700, fill: "#0b0d10" }, String(step.n)));
+      chip.addEventListener("click", function (n) { return function (ev) { ev.stopPropagation(); selectStep(n); }; }(step.n));
+      g.appendChild(chip);
+    }
+    for (var si=0; si<flow.steps.length; si++) {
+      var step = flow.steps[si];
+      var fromKey = layout.boxPos.has(step.from) ? step.from : step.boxFrom;
+      var toKey = layout.boxPos.has(step.to) ? step.to : step.boxTo;
+      var from = layout.boxPos.get(fromKey);
+      var to = layout.boxPos.get(toKey);
+      if (!from || !to) continue;
+      var active = state.selectedStep === step.n;
+      var intra = fromKey === toKey;
+      if (intra) {
+        var idx2 = intraStackByBox.get(fromKey) || 0;
+        intraStackByBox.set(fromKey, idx2 + 1);
+        chipAt(from, idx2, step, active);
+        continue;
+      }
+      var sameLane = from.laneId === to.laneId;
+      var x1, y1, x2, y2;
+      if (sameLane) {
+        if (to.y > from.y) { x1 = from.x + from.w / 2; y1 = from.y + from.h; x2 = to.x + to.w / 2; y2 = to.y; }
+        else { x1 = from.x + from.w / 2; y1 = from.y; x2 = to.x + to.w / 2; y2 = to.y + to.h; }
+      } else if (to.x > from.x) {
+        x1 = from.x + from.w; y1 = from.y + from.h / 2; x2 = to.x; y2 = to.y + to.h / 2;
+      } else {
+        x1 = from.x; y1 = from.y + from.h / 2; x2 = to.x + to.w; y2 = to.y + to.h / 2;
+      }
+      var p = el("path", { class: "edge flow" + (active ? " active" : ""), d: flowPath(x1, y1, x2, y2),
+        "marker-end": "url(#arrowhead-flow)", opacity: active || state.selectedStep == null ? 0.95 : 0.35 });
+      g.appendChild(p);
+      var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      var circle = el("g", { class: "step-num" + (active ? " active" : ""), transform: "translate(" + mx + "," + my + ")" });
+      circle.appendChild(el("circle", { r: 11, fill: active ? "#fff" : "#ffdf5d", stroke: "#0b0d10", "stroke-width": 2 }));
+      circle.appendChild(el("text", { y: 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#0b0d10" }, String(step.n)));
+      circle.addEventListener("click", function (n) { return function (ev) { ev.stopPropagation(); selectStep(n); }; }(step.n));
+      g.appendChild(circle);
+    }
+  }
 }
 
-// ====================== Insights view (clusters · god-nodes · surprising connections) ======================
-function clusterColor(cid) {
-  if (!cid) return "#8b949e";
-  var h = 0; for (var i=0; i<cid.length; i++) h = (h * 31 + cid.charCodeAt(i)) % 360;
-  return "hsl(" + h + ",58%,62%)";
+function selectFlow(flowId) {
+  state.selectedFlow = flowId;
+  state.selectedStep = null;
+  setView("flows");
+  renderFlowList();
+  renderStepList();
 }
-function renderInsights(g, W, H) {
+function selectStep(n) {
+  state.selectedStep = n;
+  renderStepList();
+  render();
+}
+function clearFlow() {
+  state.selectedFlow = null;
+  state.selectedStep = null;
+  state.selected = null;
+  clearFocus();
+  renderFlowList();
+  renderStepList();
+}
+
+// ====================== Graph view (canvas 2D, force-directed) ======================
+
+// Hand-written Barnes-Hut quadtree for O(n log n) repulsion between nodes.
+function Quad(x0, y0, x1, y1) {
+  this.x0 = x0; this.y0 = y0; this.x1 = x1; this.y1 = y1;
+  this.mass = 0; this.cx = 0; this.cy = 0;
+  this.node = null; this.children = null;
+}
+Quad.prototype._childFor = function (n) {
+  var mx = (this.x0 + this.x1) / 2, my = (this.y0 + this.y1) / 2;
+  var idx = (n.x < mx ? 0 : 1) + (n.y < my ? 0 : 2);
+  return this.children[idx];
+};
+Quad.prototype.insert = function (n, depth) {
+  depth = depth || 0;
+  if (this.node === null && this.children === null) { this.node = n; return; }
+  if (depth > 20) { // degenerate / coincident points — approximate rather than recurse forever
+    this.mass += 1; this.cx = (this.cx * (this.mass - 1) + n.x) / this.mass; this.cy = (this.cy * (this.mass - 1) + n.y) / this.mass;
+    return;
+  }
+  if (this.children === null) {
+    var mx = (this.x0 + this.x1) / 2, my = (this.y0 + this.y1) / 2;
+    this.children = [
+      new Quad(this.x0, this.y0, mx, my), new Quad(mx, this.y0, this.x1, my),
+      new Quad(this.x0, my, mx, this.y1), new Quad(mx, my, this.x1, this.y1),
+    ];
+    var old = this.node; this.node = null;
+    this._childFor(old).insert(old, depth + 1);
+  }
+  this._childFor(n).insert(n, depth + 1);
+};
+Quad.prototype.computeMass = function () {
+  if (this.node) { this.mass = 1; this.cx = this.node.x; this.cy = this.node.y; return; }
+  if (!this.children) return;
+  var m = 0, sx = 0, sy = 0;
+  for (var i=0; i<4; i++) {
+    var c = this.children[i]; c.computeMass();
+    m += c.mass; sx += c.cx * c.mass; sy += c.cy * c.mass;
+  }
+  if (m > 0) { this.mass = m; this.cx = sx / m; this.cy = sy / m; }
+};
+Quad.prototype.applyForce = function (n, theta, strength, out) {
+  if (this.mass === 0 || this.node === n) return;
+  var dx = this.cx - n.x, dy = this.cy - n.y;
+  var distSq = dx * dx + dy * dy;
+  if (distSq < 0.0001) distSq = 0.0001;
+  var size = this.x1 - this.x0;
+  if (this.node || (size * size) / distSq < theta * theta) {
+    var dist = Math.sqrt(distSq);
+    var f = strength * this.mass / distSq;
+    out.x -= (dx / dist) * f; out.y -= (dy / dist) * f;
+    return;
+  }
+  for (var i=0; i<4; i++) this.children[i].applyForce(n, theta, strength, out);
+};
+function buildQuadtree(nodes) {
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (var i=0; i<nodes.length; i++) {
+    var n = nodes[i];
+    if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+    if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+  }
+  if (!isFinite(minX)) { minX = -1; maxX = 1; minY = -1; maxY = 1; }
+  var pad = Math.max(1, Math.max(maxX - minX, maxY - minY)) * 0.1;
+  var root = new Quad(minX - pad, minY - pad, maxX + pad, maxY + pad);
+  for (var j=0; j<nodes.length; j++) root.insert(nodes[j], 0);
+  root.computeMass();
+  return root;
+}
+
+function resolveGraphEndpoint(mid) {
+  var m = state.idx.modById.get(mid);
+  var cid = m ? m.cluster : null;
+  if (cid && state.graph.collapsedClusters.has(cid)) return cid;
+  return mid;
+}
+
+function moduleRadius(m) {
+  if (state.sizeByDegree) {
+    var deg = (state.graph.degree.get(m.id) || 0);
+    return Math.max(2, Math.min(14, 2 + Math.sqrt(deg + 1) * 2.2));
+  }
+  return Math.max(2, Math.min(12, 1.6 + Math.sqrt((m.loc || 1) / 30)));
+}
+function clusterRadius(c) {
+  return Math.max(10, Math.min(46, 6 + Math.sqrt(c.size) * 3.4));
+}
+
+// Build the (mostly) static per-map graph model: cluster seed centroids, degree table, sink/entry
+// sets. Positions live in a durable Map so toggling expand/collapse doesn't jump nodes around.
+function ensureGraphModel() {
+  if (state.graph) return;
   var map = state.map;
-  var layout = layoutModules(map, W, H);
-  var god = (map.hotspots && map.hotspots.godNodes) || [];
-  var godIds = new Set(god.map(function (x) { return x.id; }));
-  var godBy = {}; god.forEach(function (x) { godBy[x.id] = x; });
-  layout.containerPos.forEach(function (p) {
-    g.appendChild(el("rect", { class: "container-rect", x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, ry: 8 }));
-    g.appendChild(el("text", { class: "container-label", x: p.x + 8, y: p.y + 14 }, p.container.name));
-  });
-  // Surprising connections as hot dashed edges (only these — keeps the view legible).
-  ((map.surprisingConnections) || []).forEach(function (x) {
-    var a = layout.modulePos.get(x.from), b = layout.modulePos.get(x.to);
-    if (!a || !b) return;
-    var p = arrow(a.x, a.y, b.x, b.y, { class: "edge", stroke: "#ff5c5c", "stroke-width": 1.6, "stroke-dasharray": "4 3", opacity: 0.85 });
-    p.appendChild(el("title", null, "surprising: " + x.reason + " (score " + x.score + ")"));
-    g.appendChild(p);
-  });
-  // Module nodes colored by cluster; god-nodes enlarged + outlined.
-  layout.modulePos.forEach(function (p, id) {
-    var m = p.m;
-    var isGod = godIds.has(id);
-    var r = isGod ? Math.max(6, Math.min(16, 5 + Math.sqrt((m.loc || 1) / 20))) : Math.max(2, Math.min(8, 1.5 + Math.sqrt(Math.max(1, (m.loc || 1) / 30))));
-    var node = el("g", { class: "module-node", transform: "translate(" + p.x + "," + p.y + ")" });
-    var c = el("circle", { r: r, fill: clusterColor(m.cluster), stroke: isGod ? "#ffffff" : "none", "stroke-width": isGod ? 1.5 : 0 });
-    node.appendChild(c);
-    node.appendChild(el("title", null, m.path + (isGod ? " — god node (in " + godBy[id].inDegree + " · out " + godBy[id].outDegree + ")" : (m.cluster ? " — cluster " + m.cluster : ""))));
-    g.appendChild(node);
-  });
-}
-
-// ===================== Knowledge-graph family (Concepts / Graph / Calls) =====================
-// Deterministic radial placement of clusters around the canvas center (largest first).
-function clusterCentroids(map, W, H) {
-  var clusters = (map.clusters || []).slice().sort(function (a, b) { return b.size - a.size || (a.id < b.id ? -1 : 1); });
-  var cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.40;
-  var pos = new Map();
-  var n = clusters.length || 1;
+  var clusters = (map.clusters || []).slice().sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+  var clusterPos = new Map();
   clusters.forEach(function (c, i) {
-    var ang = (i / n) * Math.PI * 2 - Math.PI / 2;
-    var ring = R * (0.5 + 0.5 * ((i % 3) / 2));
-    pos.set(c.id, { x: cx + Math.cos(ang) * ring, y: cy + Math.sin(ang) * ring, c: c });
+    var ang = i * GOLD;
+    var rad = 90 * Math.sqrt(i + 1);
+    clusterPos.set(c.id, { x: Math.cos(ang) * rad, y: Math.sin(ang) * rad });
   });
-  return { clusters: clusters, pos: pos, cx: cx, cy: cy };
-}
-// Cross-cluster import/re-export weights — the edges of the concept graph.
-function crossClusterEdges(map) {
-  var cl = {}; (map.modules || []).forEach(function (m) { cl[m.id] = m.cluster; });
-  var w = {};
+  var degree = new Map();
   (map.edges || []).forEach(function (e) {
     if (e.kind !== "import" && e.kind !== "re-export") return;
-    var a = cl[e.from], b = cl[e.to];
-    if (!a || !b || a === b) return;
-    var key = a < b ? a + "\t" + b : b + "\t" + a;
-    w[key] = (w[key] || 0) + 1;
+    degree.set(e.from, (degree.get(e.from) || 0) + 1);
+    degree.set(e.to, (degree.get(e.to) || 0) + 1);
   });
-  return Object.keys(w).sort().map(function (k) { var p = k.split("\t"); return { a: p[0], b: p[1], weight: w[k] }; });
+  state.graph = {
+    clusters: clusters,
+    clusterPos: clusterPos,
+    degree: degree,
+    collapsedClusters: new Set(clusters.map(function (c) { return c.id; })), // default: all collapsed
+    pos: new Map(), // node id -> {x,y,vx,vy}
+    pinned: new Set(),
+    nodes: [],
+    nodeIndex: new Map(),
+    edges: [],
+    running: false,
+    alpha: 1,
+    ticks: 0,
+    dragId: null,
+    // B3: the initial camera fit() runs once, right when clusters are still at their tight seed
+    // positions; repulsion then spreads the force layout out over the next ~300 ticks, so the
+    // camera can end up framing empty space by the time it settles. settleFitDone/userTouchedCamera
+    // let simTick re-fit exactly once when the sim first settles, but only if the user hasn't
+    // already taken control of the camera (panned/zoomed) in the meantime.
+    settleFitDone: false,
+    userTouchedCamera: false,
+  };
+  rebuildVisibleGraph();
 }
 
-// Concepts — cluster-level graph: nodes = clusters (sized by member count), edges = cross-cluster imports.
-function renderConcepts(g, W, H) {
-  var map = state.map;
-  var L = clusterCentroids(map, W, H);
-  var edges = crossClusterEdges(map);
-  var maxW = edges.reduce(function (mx, e) { return Math.max(mx, e.weight); }, 1);
-  edges.forEach(function (e) {
-    var a = L.pos.get(e.a), b = L.pos.get(e.b); if (!a || !b) return;
-    var ln = el("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: "#3a4658", "stroke-width": 0.6 + 3.6 * (e.weight / maxW), opacity: 0.5 });
-    ln.appendChild(el("title", null, e.a + " ↔ " + e.b + " — " + e.weight + " imports"));
-    g.appendChild(ln);
-  });
-  L.clusters.forEach(function (c) {
-    var p = L.pos.get(c.id); if (!p) return;
-    var r = Math.max(9, Math.min(48, 6 + Math.sqrt(c.size) * 3));
-    var node = el("g", { class: "module-node", transform: "translate(" + p.x + "," + p.y + ")" });
-    node.appendChild(el("circle", { r: r, fill: clusterColor(c.id), opacity: 0.85, stroke: "#0d1117", "stroke-width": 1.5 }));
-    node.appendChild(el("text", { "text-anchor": "middle", y: 4, fill: "#0d1117", "font-size": Math.max(9, Math.min(14, r / 2)), "font-weight": 700 }, String(c.size)));
-    node.appendChild(el("text", { "text-anchor": "middle", y: r + 13, fill: "#c9d1d9", "font-size": 11 }, (c.label || c.id).slice(0, 30)));
-    node.appendChild(el("title", null, (c.label || c.id) + " — " + c.size + " modules"));
-    g.appendChild(node);
-  });
+function graphSeedPos(id, seedFn) {
+  var pos = state.graph.pos;
+  if (!pos.has(id)) pos.set(id, Object.assign({ vx: 0, vy: 0 }, seedFn()));
+  return pos.get(id);
 }
 
-// Graph — node-link of every (non-test) module, grouped around its cluster centroid, with import edges.
-function renderGraph(g, W, H) {
-  var map = state.map;
-  var L = clusterCentroids(map, W, H);
-  var fallback = (map.clusters && map.clusters[0] && map.clusters[0].id) || null;
-  var idx = {}, pos = new Map();
-  (map.modules || []).forEach(function (m) {
-    if (m.isTest) return;
-    var c = m.cluster || fallback;
-    var cen = L.pos.get(c) || { x: W / 2, y: H / 2 };
-    var k = idx[c] = (idx[c] || 0); idx[c] = k + 1;
-    var ang = k * 2.399963229; // golden angle — deterministic spiral, no RNG
-    var rad = 5 + Math.sqrt(k) * 7;
-    pos.set(m.id, { x: cen.x + Math.cos(ang) * rad, y: cen.y + Math.sin(ang) * rad, m: m });
+function rebuildVisibleGraph() {
+  var g = state.graph, map = state.map;
+  var collapsed = g.collapsedClusters;
+  var nodes = [];
+  g.clusters.forEach(function (c) {
+    var centroid = g.clusterPos.get(c.id) || { x: 0, y: 0 };
+    if (collapsed.has(c.id)) {
+      var pos = graphSeedPos(c.id, function () { return { x: centroid.x, y: centroid.y }; });
+      nodes.push({ id: c.id, kind: "cluster", cluster: c.id, r: clusterRadius(c), pos: pos, isTest: false, isEntry: false, isSink: false, label: c.label, size: c.size });
+    } else {
+      var members = c.members.slice().sort();
+      members.forEach(function (mid, mi) {
+        var m = state.idx.modById.get(mid); if (!m) return;
+        var pos = graphSeedPos(mid, function () {
+          var ang = mi * GOLD, rad = 10 + Math.sqrt(mi) * 12;
+          return { x: centroid.x + Math.cos(ang) * rad, y: centroid.y + Math.sin(ang) * rad };
+        });
+        nodes.push({
+          id: mid, kind: "module", cluster: c.id, m: m, r: moduleRadius(m), pos: pos,
+          isTest: !!m.isTest, isEntry: state.idx.entryIds.has(mid), isSink: state.idx.sinkIds.has(mid),
+        });
+      });
+    }
   });
+  g.nodes = nodes;
+  g.nodeIndex = new Map(nodes.map(function (n) { return [n.id, n]; }));
+  g.nodeIdxOf = new Map(nodes.map(function (n, i) { return [n.id, i]; }));
+
+  var edgeAgg = new Map();
   (map.edges || []).forEach(function (e) {
     if (e.kind !== "import" && e.kind !== "re-export") return;
-    var a = pos.get(e.from), b = pos.get(e.to); if (!a || !b) return;
-    g.appendChild(el("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: "#2a3340", "stroke-width": 0.4, opacity: 0.35 }));
+    var a = resolveGraphEndpoint(e.from), b = resolveGraphEndpoint(e.to);
+    if (a === b || !g.nodeIndex.has(a) || !g.nodeIndex.has(b)) return;
+    var key = a + "→" + b;
+    var agg = edgeAgg.get(key);
+    if (!agg) { agg = { from: a, to: b, count: 0, conf: { EXTRACTED: 0, INFERRED: 0, AMBIGUOUS: 0 } }; edgeAgg.set(key, agg); }
+    agg.count++;
+    agg.conf[e.confidence] = (agg.conf[e.confidence] || 0) + 1;
   });
-  pos.forEach(function (p) {
-    var m = p.m;
-    var r = Math.max(1.6, Math.min(7, 1.4 + Math.sqrt((m.loc || 1) / 40)));
-    var node = el("g", { class: "module-node", transform: "translate(" + p.x + "," + p.y + ")" });
-    node.appendChild(el("circle", { r: r, fill: clusterColor(m.cluster), opacity: 0.9 }));
-    node.appendChild(el("title", null, m.path + (m.cluster ? " — " + m.cluster : "")));
-    g.appendChild(node);
+  g.edges = Array.from(edgeAgg.values()).map(function (a) {
+    var confidence = a.conf.EXTRACTED ? "EXTRACTED" : a.conf.INFERRED ? "INFERRED" : "AMBIGUOUS";
+    return { from: a.from, to: a.to, count: a.count, confidence: confidence };
   });
+  restartSim();
+  // The HUD line reports node/collapse counts, so every visible-graph rebuild must refresh it —
+  // expand/collapse arrives via requestDraw (canvas only), which never touches the DOM status bar.
+  if (state.view === "graph") { $("hud").textContent = hudText(); $("legend").innerHTML = legendHtml(); }
 }
 
-// Calls — egocentric symbol call graph: callers on the left, callees on the right, edges labelled by symbol.
-function renderCalls(g, W, H) {
-  var map = state.map;
-  var ces = map.callEdges || [];
-  var modById = {}; (map.modules || []).forEach(function (m) { modById[m.id] = m; });
-  var center = (state.selected && modById[state.selected]) ? state.selected : null;
-  if (!center) { var god = map.hotspots && map.hotspots.godNodes && map.hotspots.godNodes[0]; center = god ? god.id : (ces[0] && ces[0].from) || null; }
-  if (!center) { g.appendChild(el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", fill: "#8b949e" }, "No call edges — click a module in another view.")); return; }
-  var callees = ces.filter(function (e) { return e.from === center; }).slice(0, 24);
-  var callers = ces.filter(function (e) { return e.to === center; }).slice(0, 24);
-  var cx = W / 2, cy = H / 2;
-  function placeColumn(list, side) {
-    var x = cx + side * Math.min(W * 0.36, 360);
-    var n = list.length || 1;
-    list.forEach(function (e, i) {
-      var y = (H * (i + 1)) / (n + 1);
-      var other = side > 0 ? e.to : e.from;
-      g.appendChild(side > 0
-        ? arrow(cx + 9, cy, x - 6, y, { fill: "none", stroke: "#4f8cc9", "stroke-width": 1.1, opacity: 0.8 })
-        : arrow(x + 6, y, cx - 9, cy, { fill: "none", stroke: "#c98a4f", "stroke-width": 1.1, opacity: 0.8 }));
-      g.appendChild(el("text", { x: (x + cx) / 2, y: (y + cy) / 2 - 3, "text-anchor": "middle", fill: "#8b949e", "font-size": 9 }, e.symbol || ""));
-      var node = el("g", { class: "module-node", transform: "translate(" + x + "," + y + ")" });
-      node.appendChild(el("circle", { r: 5, fill: clusterColor((modById[other] || {}).cluster) }));
-      node.appendChild(el("text", { "text-anchor": side > 0 ? "start" : "end", x: side > 0 ? 9 : -9, y: 3, fill: "#c9d1d9", "font-size": 10 }, (other.split("/").pop())));
-      node.appendChild(el("title", null, other));
-      g.appendChild(node);
+function toggleCluster(clusterId) {
+  var g = state.graph;
+  if (g.collapsedClusters.has(clusterId)) g.collapsedClusters.delete(clusterId);
+  else g.collapsedClusters.add(clusterId);
+  rebuildVisibleGraph();
+  requestDraw();
+}
+// B1 fix: rebuild the Set wholesale rather than mutating collapsedClusters in place. A fresh
+// Set can never be left partially iterated/mutated (the class of bug that made "expand all"
+// expand exactly one cluster and then stall on every later click), and guards against
+// state.graph not existing yet (button clicked before the graph model has been built).
+function expandAllClusters() {
+  var g = state.graph; if (!g) return;
+  g.collapsedClusters = new Set();
+  rebuildVisibleGraph();
+  requestDraw();
+}
+function collapseAllClusters() {
+  var g = state.graph; if (!g) return;
+  g.collapsedClusters = new Set(g.clusters.map(function (c) { return c.id; }));
+  rebuildVisibleGraph();
+  requestDraw();
+}
+
+function restartSim() {
+  var g = state.graph;
+  g.alpha = 1; g.ticks = 0;
+  if (!g.running) { g.running = true; requestAnimationFrame(simTick); }
+}
+
+function simTick() {
+  var g = state.graph;
+  if (!g || !g.running) return;
+  var nodes = g.nodes;
+  if (nodes.length === 0) { g.running = false; return; }
+  var flat = nodes.map(function (n) { return { x: n.pos.x, y: n.pos.y }; });
+  var qt = buildQuadtree(flat);
+  var REPULSE = 600, THETA = 0.9;
+  var fx = new Float64Array(nodes.length), fy = new Float64Array(nodes.length);
+  for (var i=0; i<nodes.length; i++) {
+    var out = { x: 0, y: 0 };
+    qt.applyForce(flat[i], THETA, REPULSE, out);
+    fx[i] = out.x; fy[i] = out.y;
+  }
+  g.edges.forEach(function (e) {
+    var a = g.nodeIndex.get(e.from), b = g.nodeIndex.get(e.to);
+    if (!a || !b) return;
+    var ai = g.nodeIdxOf.get(e.from), bi = g.nodeIdxOf.get(e.to);
+    var dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+    var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    var L = 60 + a.r + b.r;
+    var k = 0.015;
+    var f = k * (dist - L);
+    var ux = dx / dist, uy = dy / dist;
+    fx[ai] += ux * f; fy[ai] += uy * f;
+    fx[bi] -= ux * f; fy[bi] -= uy * f;
+  });
+  var alpha = g.alpha;
+  for (var j=0; j<nodes.length; j++) {
+    var n = nodes[j];
+    fx[j] -= n.pos.x * 0.006; fy[j] -= n.pos.y * 0.006; // mild centering gravity
+    if (state.graph.pinned.has(n.id) || n.id === g.dragId) { n.pos.vx = 0; n.pos.vy = 0; continue; }
+    n.pos.vx = (n.pos.vx + fx[j] * alpha) * 0.80;
+    n.pos.vy = (n.pos.vy + fy[j] * alpha) * 0.80;
+    n.pos.x += n.pos.vx;
+    n.pos.y += n.pos.vy;
+  }
+  g.alpha *= 0.985;
+  g.ticks++;
+  if (g.alpha < 0.008 || g.ticks > 300) {
+    g.running = false;
+    // B3: keep the camera framing the layout it actually settled into (see settleFitDone note
+    // in ensureGraphModel) rather than whatever the pre-settle seed layout looked like.
+    if (!g.settleFitDone && !g.userTouchedCamera) {
+      g.settleFitDone = true;
+      fitGraph();
+    }
+  }
+  requestDraw();
+  if (g.running) requestAnimationFrame(simTick);
+}
+
+// ---- canvas drawing ----
+var drawPending = false;
+function requestDraw() {
+  if (drawPending) return;
+  drawPending = true;
+  requestAnimationFrame(function () { drawPending = false; if (state.view === "graph") drawGraph(); });
+}
+// B3: read devicePixelRatio once per resize and cache it on state.dpr, instead of every caller
+// re-reading window.devicePixelRatio independently. resizeCanvas() (which sizes the backing
+// store) and drawGraph() (which scales the 2D context to match) must always agree on exactly
+// the same ratio — caching removes any chance of them observing different values if the OS
+// reports a changed ratio (e.g. the window moves to a different-DPR display) between the two
+// calls. All layout/hit-test math (graphNodeAt, drawGraph's W/H) stays in CSS pixels regardless
+// (canvas.clientWidth/clientHeight, never canvas.width/height), so dpr only ever affects backing
+// store crispness, never coordinate math.
+function dpr() { return state.dpr || (state.dpr = window.devicePixelRatio || 1); }
+function resizeCanvas() {
+  var r = window.devicePixelRatio || 1;
+  state.dpr = r;
+  var w = canvas.clientWidth || 800, h = canvas.clientHeight || 600;
+  canvas.width = Math.max(1, Math.round(w * r));
+  canvas.height = Math.max(1, Math.round(h * r));
+}
+
+function nodeMatchesSearch(n) {
+  if (!state.searchMatches) return true;
+  if (n.kind === "module") return state.searchMatches.has(n.id);
+  var c = state.idx.clusterById.get(n.cluster || n.id);
+  return c && c.members.some(function (mid) { return state.searchMatches.has(mid); });
+}
+function nodeMatchesFocus(n) {
+  if (!state.focus) return true;
+  if (n.kind === "module") return state.focus.moduleSet.has(n.id);
+  var c = state.idx.clusterById.get(n.cluster || n.id);
+  return c && c.members.some(function (mid) { return state.focus.moduleSet.has(mid); });
+}
+function nodeOpacity(n) {
+  var o = 1;
+  if (n.kind === "module" && n.isTest && !state.showTests) o *= 0.28;
+  if (!nodeMatchesSearch(n)) o *= 0.15;
+  if (!nodeMatchesFocus(n)) o *= 0.15;
+  return o;
+}
+function confidenceVisible(conf) { return !!state.confidence[conf]; }
+function setLineDashFor(ctx, conf) {
+  if (conf === "INFERRED") ctx.setLineDash([6, 4]);
+  else if (conf === "AMBIGUOUS") ctx.setLineDash([1, 4]);
+  else ctx.setLineDash([]);
+}
+
+function drawGraph() {
+  if (!canvas || !state.graph) return;
+  var ctx = canvas.getContext("2d");
+  var r = dpr();
+  var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(W / 2 + state.gcam.pan.x, H / 2 + state.gcam.pan.y);
+  ctx.scale(state.gcam.zoom, state.gcam.zoom);
+
+  var g = state.graph;
+  // edges
+  g.edges.forEach(function (e) {
+    if (!confidenceVisible(e.confidence)) return;
+    var a = g.nodeIndex.get(e.from), b = g.nodeIndex.get(e.to);
+    if (!a || !b) return;
+    var op = Math.min(nodeOpacity(a), nodeOpacity(b));
+    ctx.globalAlpha = 0.55 * op;
+    ctx.strokeStyle = "#3a4858";
+    ctx.lineWidth = Math.min(3, 0.5 + Math.log2(e.count + 1) * 0.5) / state.gcam.zoom;
+    setLineDashFor(ctx, e.confidence);
+    ctx.beginPath();
+    ctx.moveTo(a.pos.x, a.pos.y);
+    ctx.lineTo(b.pos.x, b.pos.y);
+    ctx.stroke();
+    // arrowhead
+    var dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+    var dist = Math.sqrt(dx*dx+dy*dy) || 1;
+    var ux = dx/dist, uy = dy/dist;
+    var ex = b.pos.x - ux * (b.r + 2), ey = b.pos.y - uy * (b.r + 2);
+    var ah = 5 / state.gcam.zoom;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - ux*ah - uy*ah*0.6, ey - uy*ah + ux*ah*0.6);
+    ctx.lineTo(ex - ux*ah + uy*ah*0.6, ey - uy*ah - ux*ah*0.6);
+    ctx.closePath();
+    ctx.fillStyle = "#3a4858";
+    ctx.fill();
+  });
+  ctx.setLineDash([]);
+
+  if (state.highlightSurprising) {
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = "#ff5c5c";
+    ctx.lineWidth = 2 / state.gcam.zoom;
+    (state.map.surprisingConnections || []).forEach(function (sc) {
+      var a = g.nodeIndex.get(resolveGraphEndpoint(sc.from)), b = g.nodeIndex.get(resolveGraphEndpoint(sc.to));
+      if (!a || !b || a === b) return;
+      ctx.beginPath(); ctx.moveTo(a.pos.x, a.pos.y); ctx.lineTo(b.pos.x, b.pos.y); ctx.stroke();
     });
   }
-  placeColumn(callers, -1);
-  placeColumn(callees, 1);
-  var cnode = el("g", { transform: "translate(" + cx + "," + cy + ")" });
-  cnode.appendChild(el("circle", { r: 9, fill: clusterColor((modById[center] || {}).cluster), stroke: "#fff", "stroke-width": 2 }));
-  cnode.appendChild(el("text", { "text-anchor": "middle", y: -14, fill: "#fff", "font-size": 11, "font-weight": 700 }, center.split("/").pop()));
-  g.appendChild(cnode);
+
+  // nodes
+  g.nodes.forEach(function (n) {
+    var op = nodeOpacity(n);
+    ctx.globalAlpha = op;
+    var color = clusterColor(n.cluster || n.id);
+    var selected = state.selected && state.selected.kind !== "box" && state.selected.id === n.id;
+    var hovered = state.hovered === n.id;
+    if (n.isSink) {
+      var s = n.r * 0.9;
+      ctx.save(); ctx.translate(n.pos.x, n.pos.y); ctx.rotate(Math.PI/4);
+      ctx.fillStyle = color; ctx.fillRect(-s/2, -s/2, s, s);
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(n.pos.x, n.pos.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    if (n.isEntry) {
+      ctx.globalAlpha = op;
+      ctx.strokeStyle = "#ffdf5d";
+      ctx.lineWidth = 1.6 / state.gcam.zoom;
+      ctx.beginPath(); ctx.arc(n.pos.x, n.pos.y, n.r + 3, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (selected || hovered) {
+      ctx.strokeStyle = selected ? "#ffffff" : "#c9d1d9";
+      ctx.lineWidth = (selected ? 2.4 : 1.4) / state.gcam.zoom;
+      ctx.beginPath(); ctx.arc(n.pos.x, n.pos.y, n.r + 1.5, 0, Math.PI * 2); ctx.stroke();
+    }
+    var showLabel = n.kind === "cluster" || selected || hovered || state.gcam.zoom > 2.2;
+    if (showLabel && op > 0.4) {
+      ctx.globalAlpha = Math.min(1, op + 0.2);
+      ctx.fillStyle = "#e6edf3";
+      ctx.font = (n.kind === "cluster" ? "600 " : "") + Math.max(9, Math.min(12, n.r)) + "px -apple-system,sans-serif";
+      var label = n.kind === "cluster" ? (n.label + " (" + n.size + ")") : n.m.path.split("/").pop();
+      ctx.fillText(label, n.pos.x + n.r + 3, n.pos.y + 3);
+    }
+  });
+  ctx.restore();
+  ctx.globalAlpha = 1;
 }
 
-// ====================== Sidebars ======================
+function graphNodeAt(clientX, clientY) {
+  var rect = canvas.getBoundingClientRect();
+  var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+  var sx = clientX - rect.left, sy = clientY - rect.top;
+  var wx = (sx - (W / 2 + state.gcam.pan.x)) / state.gcam.zoom;
+  var wy = (sy - (H / 2 + state.gcam.pan.y)) / state.gcam.zoom;
+  var g = state.graph; if (!g) return null;
+  var best = null, bestD = Infinity;
+  for (var i=0; i<g.nodes.length; i++) {
+    var n = g.nodes[i];
+    var dx = n.pos.x - wx, dy = n.pos.y - wy;
+    var d = Math.sqrt(dx*dx+dy*dy);
+    if (d <= Math.max(4, n.r) + 2 && d < bestD) { best = n; bestD = d; }
+  }
+  return best;
+}
 
+function fitGraph() {
+  var g = state.graph; if (!g || g.nodes.length === 0) return;
+  var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  g.nodes.forEach(function (n) {
+    minX = Math.min(minX, n.pos.x - n.r); maxX = Math.max(maxX, n.pos.x + n.r);
+    minY = Math.min(minY, n.pos.y - n.r); maxY = Math.max(maxY, n.pos.y + n.r);
+  });
+  var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+  var bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+  var zoom = Math.max(0.05, Math.min(4, Math.min(W / bw, H / bh) * 0.9));
+  var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  state.gcam.zoom = zoom;
+  state.gcam.pan = { x: -cx * zoom, y: -cy * zoom };
+}
+
+// ====================== Inspector ======================
+function selectNode(kind, id) {
+  state.selected = { kind: kind, id: id };
+  if (kind === "module" && state.view === "graph" && state.graph) {
+    var m = state.idx.modById.get(id);
+    if (m && m.cluster && state.graph.collapsedClusters.has(m.cluster)) {
+      state.graph.collapsedClusters.delete(m.cluster);
+      rebuildVisibleGraph();
+    }
+  }
+  renderInspector();
+  if (state.view === "graph") requestDraw(); else render();
+}
+
+function linkBtn(label, kind, id) {
+  return '<span class="ins-link" data-kind="' + escapeHtml(kind) + '" data-id="' + escapeHtml(id) + '">' + escapeHtml(label) + '</span>';
+}
+
+function renderInspector() {
+  var box = $("inspector");
+  if (!state.selected) { box.innerHTML = '<div style="color:var(--muted)">Click a node, cluster, or package to inspect it.</div>'; return; }
+  var map = state.map;
+  if (state.selected.kind === "module") {
+    var m = state.idx.modById.get(state.selected.id);
+    if (!m) { box.innerHTML = '<div style="color:var(--muted)">Module not found.</div>'; return; }
+    var cl = state.idx.clusterById.get(m.cluster);
+    var importers = state.idx.radj.get(m.id) || [];
+    var imports = state.idx.adj.get(m.id) || [];
+    var callers = state.idx.callersOf.get(m.id) || [];
+    var callees = state.idx.calleesOf.get(m.id) || [];
+    var html = '<h3>' + escapeHtml(m.path) + '</h3>';
+    html += '<div class="pill">' + escapeHtml(m.package || "-") + '</div><div class="pill">' + escapeHtml(m.layer || "-") + '</div>' +
+      (cl ? '<div class="pill">' + escapeHtml(cl.label) + '</div>' : '') + (m.isTest ? '<div class="pill">test</div>' : '') +
+      (m.entryPoint ? '<div class="pill">entry: ' + escapeHtml(m.entryPoint.kind) + '</div>' : '');
+    html += '<div class="kv">' + (m.loc || 0) + ' loc · ' + (m.size || 0) + ' bytes</div>';
+    if (m.symbols && m.symbols.length) {
+      html += '<h4>Symbols (' + m.symbols.length + ')</h4><pre>' + m.symbols.slice(0, 40).map(function (s) {
+        return (s.exported ? "export " : "") + s.kind + " " + s.name + "  :" + s.line;
+      }).join("\\n") + '</pre>';
+    }
+    if (m.sinks && m.sinks.length) html += '<h4>Sinks</h4><div class="kv">' + m.sinks.map(escapeHtml).join(", ") + '</div>';
+    html += '<h4>Importers (' + importers.length + ')</h4><div class="kv">' + (importers.length ? importers.slice(0, 20).map(function (id) { return linkBtn(id, "module", id); }).join(" ") : "none") + '</div>';
+    html += '<h4>Imports (' + imports.length + ')</h4><div class="kv">' + (imports.length ? imports.slice(0, 20).map(function (id) { return linkBtn(id, "module", id); }).join(" ") : "none") + '</div>';
+    html += '<h4>Callers (' + callers.length + ')</h4><div class="kv">' + (callers.length ? callers.slice(0, 20).map(function (ce) { return linkBtn(ce.from + " ." + ce.symbol + "()", "module", ce.from); }).join(" ") : "none") + '</div>';
+    html += '<h4>Callees (' + callees.length + ')</h4><div class="kv">' + (callees.length ? callees.slice(0, 20).map(function (ce) { return linkBtn(ce.to + " ." + ce.symbol + "()", "module", ce.to); }).join(" ") : "none") + '</div>';
+    box.innerHTML = html;
+  } else if (state.selected.kind === "cluster") {
+    var c = state.idx.clusterById.get(state.selected.id);
+    if (!c) { box.innerHTML = '<div style="color:var(--muted)">Cluster not found.</div>'; return; }
+    var html2 = '<h3>' + escapeHtml(c.label) + '</h3>';
+    html2 += '<div class="pill">' + c.size + ' modules</div><div class="pill">' + escapeHtml(c.dominantPackage || "-") + '</div><div class="pill">' + escapeHtml(c.dominantLayer) + '</div>';
+    html2 += '<div class="kv"><b>Packages:</b> ' + (c.packages || []).map(escapeHtml).join(", ") + '</div>';
+    html2 += '<h4>Members</h4><div class="kv">' + c.members.slice(0, 60).map(function (id) { return linkBtn(id, "module", id); }).join(" ") + '</div>';
+    box.innerHTML = html2;
+  } else if (state.selected.kind === "box") {
+    var id2 = state.selected.id;
+    var flowBox = (map.boxes || []).find(function (x) { return x.id === id2; });
+    if (flowBox) {
+      var html3 = '<h3>' + escapeHtml(flowBox.title) + '</h3><div class="pill">' + escapeHtml(flowBox.lane) + '</div>' +
+        (flowBox.kind ? '<div class="pill">' + escapeHtml(flowBox.kind) + '</div>' : '') +
+        (flowBox.sublabel ? '<div class="kv">' + escapeHtml(flowBox.sublabel) + '</div>' : '');
+      if (flowBox.kind === "package") {
+        var inE = map.containerEdges.filter(function (e) { return e.to === id2; });
+        var outE = map.containerEdges.filter(function (e) { return e.from === id2; });
+        html3 += '<h4>Depends on</h4>' + (outE.length ? outE.map(function (e) { return '<div class="kv">→ ' + escapeHtml(e.to.replace(/^pkg:/, "")) + ' (' + e.count + ')</div>'; }).join("") : '<div class="kv">nothing</div>');
+        html3 += '<h4>Depended on by</h4>' + (inE.length ? inE.map(function (e) { return '<div class="kv">← ' + escapeHtml(e.from.replace(/^pkg:/, "")) + ' (' + e.count + ')</div>'; }).join("") : '<div class="kv">nothing</div>');
+      }
+      box.innerHTML = html3;
+      return;
+    }
+    var container = (map.containers || []).find(function (x) { return x.id === id2; });
+    if (container) {
+      var mods = map.modules.filter(function (m) { return containerIdOf(m) === id2; });
+      var inE2 = map.containerEdges.filter(function (e) { return e.to === id2; });
+      var outE2 = map.containerEdges.filter(function (e) { return e.from === id2; });
+      var html4 = '<h3>' + escapeHtml(container.name) + '</h3><div class="kv">' + mods.length + ' modules</div>';
+      html4 += '<h4>Depends on</h4>' + (outE2.length ? outE2.map(function (e) { return '<div class="kv">→ ' + escapeHtml(e.to.replace(/^pkg:/, "")) + ' <span style="color:var(--muted)">(' + e.count + ')</span></div>'; }).join("") : '<div class="kv">nothing</div>');
+      html4 += '<h4>Depended on by</h4>' + (inE2.length ? inE2.map(function (e) { return '<div class="kv">← ' + escapeHtml(e.from.replace(/^pkg:/, "")) + ' <span style="color:var(--muted)">(' + e.count + ')</span></div>'; }).join("") : '<div class="kv">nothing</div>');
+      var entryMods = mods.filter(function (m) { return !!m.entryPoint; });
+      if (entryMods.length) {
+        html4 += '<h4>Entry points</h4>';
+        entryMods.forEach(function (m) { html4 += '<div class="kv">' + linkBtn(m.entryPoint.name || m.path, "module", m.id) + ' <span style="color:var(--muted)">(' + m.entryPoint.kind + ')</span></div>'; });
+      }
+      box.innerHTML = html4;
+      return;
+    }
+    box.innerHTML = '<div style="color:var(--muted)">Nothing selected.</div>';
+  }
+}
+// Delegated click handling for inspector cross-links (module ids contain "/" so can't be inline onclick attrs safely).
+document.addEventListener("click", function (ev) {
+  var t = ev.target;
+  if (t && t.classList && t.classList.contains("ins-link")) {
+    selectNode(t.getAttribute("data-kind"), t.getAttribute("data-id"));
+  }
+});
+
+// ====================== Sidebars ======================
 function renderSidebar() {
   var map = state.map;
   var ents = $("entry-list"); ents.innerHTML = "";
@@ -4102,7 +4682,7 @@ function renderSidebar() {
       row.innerHTML = '<div class="dot" style="background:var(--entry)"></div>' +
         '<div class="name" title="' + escapeHtml(e.path) + '"><div>' + escapeHtml(label) + '</div>' +
         '<div style="color:var(--muted); font-size:10px">' + escapeHtml(sub) + '</div></div>';
-      row.onclick = function () { selectFlow("flow:" + e.id); };
+      row.onclick = function (eid) { return function () { selectFlow("flow:" + eid); }; }(e.id);
       ents.appendChild(row);
     });
   });
@@ -4116,7 +4696,7 @@ function renderSidebar() {
   Object.keys(sinkCounts).sort(function (a,b) { return sinkCounts[b] - sinkCounts[a]; }).forEach(function (k) {
     var row = document.createElement("div"); row.className = "row";
     row.innerHTML = '<div class="dot" style="background:var(--sink)"></div><div class="name">' + escapeHtml(k) + '</div><div class="count">' + sinkCounts[k] + '</div>';
-    row.onclick = function () { focusSink(k); };
+    row.onclick = function (kind) { return function () { focusSink(kind); }; }(k);
     sl.appendChild(row);
   });
 
@@ -4124,15 +4704,24 @@ function renderSidebar() {
   LAYER_ORDER.forEach(function (l) {
     var n = map.stats.layers[l] || 0; if (!n) return;
     var row = document.createElement("div"); row.className = "row";
+    var active = state.focus && state.focus.kind === "layer" && state.focus.id === l;
+    row.className += active ? " active" : "";
     row.innerHTML = '<div class="dot" style="background:' + LAYER_COLOR[l] + '"></div><div class="name">' + escapeHtml(l) + '</div><div class="count">' + n + '</div>';
+    row.onclick = function (layer) { return function () {
+      if (state.focus && state.focus.kind === "layer" && state.focus.id === layer) clearFocus(); else focusLayer(layer);
+    }; }(l);
     ll.appendChild(row);
   });
 
   var pl = $("pkg-list"); pl.innerHTML = "";
   map.containers.slice().sort(function (a,b) { return b.moduleCount - a.moduleCount; }).forEach(function (c) {
     var row = document.createElement("div"); row.className = "row";
+    var active = state.focus && state.focus.kind === "package" && state.focus.id === c.id;
+    row.className += active ? " active" : "";
     row.innerHTML = '<div class="dot" style="background:#3a4858"></div><div class="name">' + escapeHtml(c.name) + '</div><div class="count">' + c.moduleCount + '</div>';
-    row.onclick = function () { focusPackage(c.id); };
+    row.onclick = function (cid) { return function () {
+      if (state.focus && state.focus.kind === "package" && state.focus.id === cid) clearFocus(); else focusPackage(cid);
+    }; }(c.id);
     pl.appendChild(row);
   });
 }
@@ -4144,11 +4733,8 @@ function renderFlowList() {
     list.innerHTML = '<div style="color:var(--muted); padding:8px 0">No flows detected. Add entry points (bin / HTTP routes) or curate .planning/codebase/FLOWS.json.</div>';
     return;
   }
-  // Order: CLI first, then HTTP, then library
   var kindRank = { cli: 0, http: 1, library: 2 };
-  var sorted = map.flows.slice().sort(function (a,b) {
-    return (kindRank[a.entryKind]||3) - (kindRank[b.entryKind]||3);
-  });
+  var sorted = map.flows.slice().sort(function (a,b) { return (kindRank[a.entryKind]||3) - (kindRank[b.entryKind]||3); });
   sorted.forEach(function (f) {
     var item = document.createElement("div");
     item.className = "flow-item" + (state.selectedFlow === f.id ? " active" : "");
@@ -4172,13 +4758,12 @@ function renderStepList() {
     item.className = "step-item" + (state.selectedStep === step.n ? " active" : "");
     var fromLabel = step.from.replace(/^pkg:/, "").replace(/^sink:/, "").replace(/^actor:/, "");
     var toLabel = step.to.replace(/^pkg:/, "").replace(/^sink:/, "").replace(/^actor:/, "");
-    // Split off trailing code snippet if present
     var descHtml = "";
     if (step.description) {
       var snippet = null; var desc = step.description;
-      var sm = desc.match(/^(.*?)\\s*\\\`([^\\\`]+)\\\`\\s*$/);
+      var sm = desc.match(/^(.*?)\\s*\\x60([^\\x60]+)\\x60\\s*$/);
       if (sm && sm[2].length > 12 && /[(){};=]/.test(sm[2])) { desc = sm[1]; snippet = sm[2]; }
-      descHtml = '<div class="desc">' + escapeHtml(desc).replace(/\\\`([^\\\`]+)\\\`/g, function (_, t) { return '<code>' + t + '</code>'; }) + '</div>';
+      descHtml = '<div class="desc">' + escapeHtml(desc).replace(/\\x60([^\\x60]+)\\x60/g, function (_, t) { return '<code>' + t + '</code>'; }) + '</div>';
       if (snippet) descHtml += '<div class="snippet">' + escapeHtml(snippet) + '</div>';
     }
     var fileRef = "";
@@ -4200,43 +4785,64 @@ function renderStepList() {
   });
 }
 
-function renderDetail() {
-  var elD = $("detail");
-  if (!state.selected) { elD.style.display = "none"; return; }
-  var map = state.map;
-  elD.style.display = "block";
-  if (state.selected.kind === "box") {
-    var id = state.selected.id;
-    var box = (map.boxes || []).find(function (x) { return x.id === id; });
-    if (!box) { elD.style.display = "none"; return; }
-    var html = '<h3>' + escapeHtml(box.title) + '</h3>' +
-      '<div class="pill">' + escapeHtml(box.lane) + '</div>' +
-      (box.kind ? '<div class="pill">' + escapeHtml(box.kind) + '</div>' : '') +
-      (box.sublabel ? '<div class="kv">' + escapeHtml(box.sublabel) + '</div>' : '');
-    if (box.kind === "package") {
-      var c = map.containers.find(function (x) { return x.id === id; });
-      var mods = map.modules.filter(function (m) { return containerIdOf(m) === id; });
-      var inE = map.containerEdges.filter(function (e) { return e.to === id; });
-      var outE = map.containerEdges.filter(function (e) { return e.from === id; });
-      html += '<h4 style="margin:10px 0 4px;font-size:11px;color:var(--muted)">DEPENDS ON</h4>' +
-        (outE.length ? outE.map(function (e) { return '<div class="kv">→ ' + escapeHtml(e.to.replace(/^pkg:/,"")) + ' <span style="color:var(--muted)">(' + e.count + ')</span></div>'; }).join("") : '<div class="kv" style="color:var(--muted)">nothing</div>') +
-        '<h4 style="margin:10px 0 4px;font-size:11px;color:var(--muted)">DEPENDED ON BY</h4>' +
-        (inE.length ? inE.map(function (e) { return '<div class="kv">← ' + escapeHtml(e.from.replace(/^pkg:/,"")) + ' <span style="color:var(--muted)">(' + e.count + ')</span></div>'; }).join("") : '<div class="kv" style="color:var(--muted)">nothing</div>');
-      var entryMods = mods.filter(function (m) { return !!m.entryPoint; });
-      if (entryMods.length) {
-        html += '<h4 style="margin:10px 0 4px;font-size:11px;color:var(--muted)">ENTRY POINTS</h4>';
-        entryMods.forEach(function (m) {
-          html += '<div class="kv">' + escapeHtml(m.entryPoint.name || m.path) + ' <span style="color:var(--muted)">(' + m.entryPoint.kind + ')</span></div>';
-        });
-      }
+// ====================== Search (defect 1: #q was rendered but never wired up) ======================
+function applySearch(q) {
+  state.filter = q;
+  if (!q) { state.searchMatches = null; }
+  else {
+    var needle = q.toLowerCase();
+    var set = new Set();
+    (state.map.modules || []).forEach(function (m) {
+      if (m.path.toLowerCase().indexOf(needle) !== -1) set.add(m.id);
+    });
+    (state.map.symbolIndex || []).forEach(function (s) {
+      if (s.name.toLowerCase().indexOf(needle) !== -1) set.add(s.file);
+    });
+    state.searchMatches = set;
+    // B2 fix: a match hiding inside a still-collapsed cluster supernode was easy to miss (the
+    // supernode only changes shade, the matching module itself never appears) — auto-expand any
+    // collapsed cluster that contains a hit so the actual matching module node is visible.
+    if (state.graph && set.size) {
+      var g = state.graph, expandedAny = false;
+      set.forEach(function (mid) {
+        var m = state.idx.modById.get(mid);
+        if (m && m.cluster && g.collapsedClusters.has(m.cluster)) {
+          g.collapsedClusters.delete(m.cluster);
+          expandedAny = true;
+        }
+      });
+      if (expandedAny) rebuildVisibleGraph();
     }
-    elD.innerHTML = html;
-    return;
   }
+  // The match-count hint must refresh even when no cluster expanded (all matches already
+  // visible, zero matches, or query cleared) — rebuildVisibleGraph is not guaranteed to run.
+  if (state.view === "graph") { $("hud").textContent = hudText(); requestDraw(); }
+}
+function searchTopHit() {
+  if (!state.searchMatches || state.searchMatches.size === 0) return null;
+  return state.searchMatches.values().next().value;
 }
 
 // ====================== Camera ======================
-function fit() { state.zoom = 1; state.pan = { x: 0, y: 0 }; render(); }
+function fit() {
+  if (state.view === "graph") {
+    if (state.graph) fitGraph();
+    requestDraw();
+    return;
+  }
+  var world = svg.querySelector("#world");
+  if (!world) { state.zoom = 1; state.pan = { x: 0, y: 0 }; return; }
+  try {
+    var bbox = world.getBBox();
+    if (bbox.width > 0 && bbox.height > 0) {
+      var W = svg.clientWidth, H = svg.clientHeight;
+      var zoom = Math.max(0.1, Math.min(3, Math.min(W / bbox.width, H / bbox.height) * 0.94));
+      state.zoom = zoom;
+      state.pan = { x: -bbox.x * zoom + (W - bbox.width * zoom) / 2, y: -bbox.y * zoom + (H - bbox.height * zoom) / 2 };
+    } else { state.zoom = 1; state.pan = { x: 0, y: 0 }; }
+  } catch (err) { state.zoom = 1; state.pan = { x: 0, y: 0 }; }
+  tx(world);
+}
 
 svg.addEventListener("mousedown", function (e) {
   state.drag = { x: e.clientX, y: e.clientY, pan: { x: state.pan.x, y: state.pan.y } };
@@ -4260,52 +4866,181 @@ svg.addEventListener("wheel", function (e) {
   var g = svg.querySelector("#world"); if (g) tx(g);
 }, { passive: false });
 
+// Canvas (Graph) interactions
+canvas.addEventListener("mousedown", function (e) {
+  var hit = graphNodeAt(e.clientX, e.clientY);
+  if (hit) {
+    state.graph.dragId = hit.id;
+    state.graph.pinned.add(hit.id);
+    state.gdrag = null;
+  } else {
+    state.gdrag = { x: e.clientX, y: e.clientY, pan: { x: state.gcam.pan.x, y: state.gcam.pan.y } };
+    if (state.graph) state.graph.userTouchedCamera = true; // B3: don't auto re-fit once the user pans
+  }
+});
+window.addEventListener("mousemove", function (e) {
+  if (state.view !== "graph" || !state.graph) return;
+  if (state.graph.dragId) {
+    var rect = canvas.getBoundingClientRect();
+    var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+    var wx = (e.clientX - rect.left - (W / 2 + state.gcam.pan.x)) / state.gcam.zoom;
+    var wy = (e.clientY - rect.top - (H / 2 + state.gcam.pan.y)) / state.gcam.zoom;
+    var n = state.graph.nodeIndex.get(state.graph.dragId);
+    if (n) { n.pos.x = wx; n.pos.y = wy; n.pos.vx = 0; n.pos.vy = 0; }
+    state.graph.alpha = Math.max(state.graph.alpha, 0.3);
+    if (!state.graph.running) { state.graph.running = true; requestAnimationFrame(simTick); }
+    requestDraw();
+  } else if (state.gdrag) {
+    state.gcam.pan.x = state.gdrag.pan.x + (e.clientX - state.gdrag.x);
+    state.gcam.pan.y = state.gdrag.pan.y + (e.clientY - state.gdrag.y);
+    requestDraw();
+  } else {
+    var hit = graphNodeAt(e.clientX, e.clientY);
+    var newHover = hit ? hit.id : null;
+    if (newHover !== state.hovered) { state.hovered = newHover; requestDraw(); }
+    if (hit) showTooltip(hit.kind === "module" ? tooltipModuleHtml(hit.m) : ('<div class="tt-title">' + escapeHtml(hit.label) + '</div><div class="tt-desc">' + hit.size + ' modules</div>'), e);
+    else hideTooltip();
+  }
+});
+window.addEventListener("mouseup", function () {
+  if (state.graph) state.graph.dragId = null;
+  state.gdrag = null;
+});
+canvas.addEventListener("click", function (e) {
+  if (state.gdrag) return;
+  var hit = graphNodeAt(e.clientX, e.clientY);
+  if (hit) selectNode(hit.kind, hit.id);
+});
+canvas.addEventListener("dblclick", function (e) {
+  var hit = graphNodeAt(e.clientX, e.clientY);
+  if (hit && hit.kind === "cluster") { toggleCluster(hit.id); return; }
+  if (hit && hit.kind === "module" && hit.cluster) {
+    // Double-clicking an expanded member re-collapses its cluster back to a supernode.
+    toggleCluster(hit.cluster);
+    return;
+  }
+  if (hit) {
+    state.gcam.pan = { x: -hit.pos.x * state.gcam.zoom, y: -hit.pos.y * state.gcam.zoom };
+    if (state.graph) state.graph.userTouchedCamera = true;
+    requestDraw();
+  }
+});
+canvas.addEventListener("wheel", function (e) {
+  e.preventDefault();
+  var factor = Math.exp(-e.deltaY * 0.001);
+  var rect = canvas.getBoundingClientRect();
+  var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+  var cx = e.clientX - rect.left - W / 2, cy = e.clientY - rect.top - H / 2;
+  var newZoom = Math.max(0.05, Math.min(6, state.gcam.zoom * factor));
+  state.gcam.pan.x = cx - ((cx - state.gcam.pan.x) * (newZoom / state.gcam.zoom));
+  state.gcam.pan.y = cy - ((cy - state.gcam.pan.y) * (newZoom / state.gcam.zoom));
+  state.gcam.zoom = newZoom;
+  if (state.graph) state.graph.userTouchedCamera = true; // B3: don't auto re-fit once the user zooms
+  requestDraw();
+}, { passive: false });
+
 window.addEventListener("keydown", function (e) {
   if (e.target.tagName === "INPUT") return;
   if (e.key === "f") fit();
-  if (e.key === "Escape") clearFlow();
-  if (e.key === "a") setView("architecture");
-  if (e.key === "m") setView("modules");
-  if (e.key === "F") setView("flows");
-  if (e.key === "i") setView("insights");
-  if (e.key === "c") setView("concepts");
+  if (e.key === "Escape") { clearFlow(); render(); }
   if (e.key === "g") setView("graph");
-  if (e.key === "C") setView("calls");
+  if (e.key === "a") setView("architecture");
+  if (e.key === "F") setView("flows");
 });
 
-$("tab-architecture").onclick = function () { setView("architecture"); };
-$("tab-modules").onclick = function () { setView("modules"); };
-$("tab-flows").onclick = function () { setView("flows"); };
-$("tab-insights").onclick = function () { setView("insights"); };
-$("tab-concepts").onclick = function () { setView("concepts"); };
 $("tab-graph").onclick = function () { setView("graph"); };
-$("tab-calls").onclick = function () { setView("calls"); };
+$("tab-architecture").onclick = function () { setView("architecture"); };
+$("tab-flows").onclick = function () { setView("flows"); };
 $("fit").onclick = fit;
-$("clear").onclick = function () { clearFlow(); state.collapsedGroups = {}; state.selected = null; render(); };
-$("reload").onclick = function () { load(false); };
+$("clear").onclick = function () { clearFlow(); state.collapsedGroups = {}; render(); };
+$("reload").onclick = function () { refreshFromServer(); };
+$("export-png").onclick = function () {
+  if (state.view !== "graph") { showError("PNG export is only available on the Graph view."); return; }
+  canvas.toBlob(function (blob) { if (blob) downloadBlob(blob, "codebase-graph.png"); }, "image/png");
+};
+$("export-svg").onclick = function () {
+  if (state.view !== "graph" || !state.graph) { showError("SVG export is only available on the Graph view."); return; }
+  var g = state.graph;
+  var parts = ['<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="-800 -600 1600 1200">',
+    '<rect x="-800" y="-600" width="1600" height="1200" fill="#0b0d10"/>'];
+  g.edges.forEach(function (e) {
+    var a = g.nodeIndex.get(e.from), b = g.nodeIndex.get(e.to);
+    if (!a || !b) return;
+    parts.push('<line x1="' + a.pos.x.toFixed(1) + '" y1="' + a.pos.y.toFixed(1) + '" x2="' + b.pos.x.toFixed(1) + '" y2="' + b.pos.y.toFixed(1) + '" stroke="#3a4858" stroke-width="0.6" opacity="0.5"/>');
+  });
+  g.nodes.forEach(function (n) {
+    var color = clusterColor(n.cluster || n.id);
+    parts.push('<circle cx="' + n.pos.x.toFixed(1) + '" cy="' + n.pos.y.toFixed(1) + '" r="' + n.r.toFixed(1) + '" fill="' + color + '"/>');
+  });
+  parts.push('</svg>');
+  downloadBlob(new Blob([parts.join("\\n")], { type: "image/svg+xml" }), "codebase-graph.svg");
+};
+$("expand-all").onclick = expandAllClusters;
+$("collapse-all").onclick = collapseAllClusters;
 var overlayCb = $("overlay-flow-cb");
 if (overlayCb) overlayCb.addEventListener("change", function (ev) { state.overlayFlow = ev.target.checked; render(); });
+var testsCb = $("show-tests-cb");
+if (testsCb) testsCb.addEventListener("change", function (ev) { state.showTests = ev.target.checked; requestDraw(); });
+var surprisingCb = $("surprising-cb");
+if (surprisingCb) surprisingCb.addEventListener("change", function (ev) { state.highlightSurprising = ev.target.checked; requestDraw(); });
+var degreeCb = $("degree-cb");
+if (degreeCb) degreeCb.addEventListener("change", function (ev) {
+  state.sizeByDegree = ev.target.checked;
+  if (state.graph) { state.graph.nodes.forEach(function (n) { if (n.kind === "module") n.r = moduleRadius(n.m); }); }
+  requestDraw();
+});
+["EXTRACTED","INFERRED","AMBIGUOUS"].forEach(function (conf) {
+  var cb = $("conf-" + conf.toLowerCase());
+  if (cb) cb.addEventListener("change", function (ev) { state.confidence[conf] = ev.target.checked; requestDraw(); });
+});
+$("q").addEventListener("input", function (ev) { applySearch(ev.target.value); });
+$("q").addEventListener("keydown", function (ev) {
+  if (ev.key !== "Enter") return;
+  var hit = searchTopHit();
+  if (!hit) return;
+  selectNode("module", hit);
+  if (state.view === "graph" && state.graph) {
+    var n = state.graph.nodeIndex.get(hit);
+    if (n) { state.gcam.pan = { x: -n.pos.x * state.gcam.zoom, y: -n.pos.y * state.gcam.zoom }; requestDraw(); }
+  }
+});
+// Legend cluster-row filter clicks (delegated — legend HTML is rebuilt on every render()).
+$("legend").addEventListener("click", function (ev) {
+  var row = ev.target.closest ? ev.target.closest(".legend-row") : null;
+  if (row) focusClusterToggle(row.getAttribute("data-cluster"));
+});
 
-function connectLive() {
+// Debounced resize (defect 8: uncapped resize forced a full teardown+rebuild on every pixel).
+var resizeTimer = null;
+window.addEventListener("resize", function () {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(function () {
+    if (state.view === "graph") { resizeCanvas(); requestDraw(); }
+    else render();
+  }, 120);
+});
+
+function init() {
   try {
-    var es = new EventSource("/events");
-    es.onmessage = function (ev) { if (ev.data === "changed") load(false); };
-    es.onerror = function () {
-      $("live-indicator").classList.add("dead");
-      $("live-indicator").textContent = "● offline";
-    };
-    es.onopen = function () {
-      $("live-indicator").classList.remove("dead");
-      $("live-indicator").textContent = "● live";
-    };
-  } catch (err) {}
+    var raw = $("map-data").textContent;
+    var embeddedMap = JSON.parse(raw);
+    resizeCanvas();
+    applyMap(embeddedMap);
+    setView("graph");
+    hideError();
+  } catch (err) {
+    showError("Failed to initialize the map viewer: " + (err && err.message ? err.message : err));
+    return;
+  }
+  refreshFromServer().catch(function () {});
+  connectLive();
 }
+init();
 
-window.addEventListener("resize", function () { render(); });
-load(true).then(connectLive);
 </script>
 </body>
-</html>`;
+</html>
+`;
 }
 
 // GRAPH_REPORT.md — graphify's signature skimmable narrative. Fully deterministic (no LLM, no Date).
@@ -4316,7 +5051,10 @@ function visRenderReport(map) {
 	L.push(`# ${map.root} — Codebase Graph Report`, "");
 	L.push("_Generated by `draht-tools map-graph`. Do not edit; regenerated each build._", "");
 	L.push("## Overview");
-	L.push(`${s.files} modules · ${(s.totalLoc || 0).toLocaleString()} LOC · ${s.packages} packages · ${s.edges} import edges · ${s.entryPoints} entry points · ${(map.clusters || []).length} clusters.`);
+	// WP2 noise policy: `modules` is code-only; non-code files scanned but excluded from the
+	// graph are surfaced here so the count doesn't look like the repo was under-scanned.
+	const assetsTotal = (map.assets && map.assets.total) || 0;
+	L.push(`${s.files} code modules${assetsTotal ? ` (+${assetsTotal} non-code files)` : ""} · ${(s.totalLoc || 0).toLocaleString()} LOC · ${s.packages} packages · ${s.edges} import edges · ${s.entryPoints} entry points · ${(map.clusters || []).length} clusters.`);
 	L.push(`Languages: ${langs || "n/a"}.`, "");
 	L.push("## Key concepts (structural neighborhoods)", "");
 	L.push("> Clusters are import-topology neighborhoods, not semantic bounded contexts — confirm before treating them as such.", "");
@@ -4381,41 +5119,58 @@ function visWriteOutputs(root, opts = {}) {
 	// (non-quiet) build we always refresh it — otherwise template/visualization changes never reach
 	// MAP.html when the underlying graph data is unchanged. The JSON/report stay gated above so the
 	// committed data never churns. The post-commit hook uses --quiet and skips the HTML entirely.
-	if (!opts.quiet) fs.writeFileSync(htmlPath, visRenderHtml(jsonPath), "utf-8");
+	if (!opts.quiet) fs.writeFileSync(htmlPath, visRenderHtml(jsonPath, map), "utf-8");
 	return { jsonPath, htmlPath, reportPath, map, unchanged };
 }
 
 // --- map-graph ---
+// Whole-repo enforcement (WP6, defect 22): the graph ALWAYS maps the whole repo (from
+// findRepoRoot), regardless of cwd or a `dir` arg — a partial graph from a subdirectory silently
+// missing most of the codebase is worse than an argument being ignored with a clear note.
 commands["map-graph"] = function (...args) {
 	let dir = null, quiet = false;
 	for (const a of args) {
 		if (a === "--quiet" || a === "-q") quiet = true;
 		else if (!String(a).startsWith("-") && !dir) dir = a;
 	}
-	const cwd = dir ? path.resolve(dir) : process.cwd();
-	const { jsonPath, htmlPath, reportPath, map } = visWriteOutputs(cwd, { quiet });
+	const repoRoot = findRepoRoot(process.cwd());
+	if (dir && path.resolve(dir) !== repoRoot) {
+		console.log(`note: map-graph always maps the whole repo (${repoRoot}); '${dir}' ignored for the graph`);
+	}
+	const { jsonPath, htmlPath, reportPath, map } = visWriteOutputs(repoRoot, { quiet });
 	if (quiet) { // fast refresh for hooks: MAP.json + GRAPH_REPORT.md, no HTML render
-		console.log(`map-graph: ${map.stats.files} modules · schemaVersion ${map.schemaVersion} · ${map.buildMs}ms → ${path.relative(cwd, jsonPath)}`);
+		console.log(`map-graph: ${map.stats.files} modules · schemaVersion ${map.schemaVersion} · ${map.buildMs}ms → ${jsonPath}`);
 		return;
 	}
 	console.log(banner("MAP-GRAPH"));
 	console.log(`\nWrote:\n  ${jsonPath}\n  ${htmlPath}\n  ${reportPath}`);
 	console.log(`\nIndexed ${map.stats.files} modules · ${map.stats.totalLoc.toLocaleString()} LOC · ${map.stats.edges} edges · ${map.clusters.length} clusters in ${map.buildMs}ms`);
-	console.log(`\nRead the report: ${path.relative(cwd, reportPath)}   ·   Serve live: draht-tools map-serve`);
+	console.log(`\nRead the report: ${reportPath}   ·   Serve live: draht-tools map-serve`);
 };
 
 // --- map-serve ---
+// Extensions the map-serve watcher treats as "code" (schema-relevant) — anything else (docs,
+// images, lockfiles, …) never triggers a rebuild (defect 16). Derived from VIS_LANG_BY_EXT so it
+// never drifts from the languages the graph actually parses.
+const VIS_WATCH_EXTS = new Set(
+	Object.entries(VIS_LANG_BY_EXT).filter(([, lang]) => VIS_CODE_LANGS.has(lang)).map(([ext]) => ext),
+);
+// Workspace/package manifests: don't carry a "code" extension but change the dependency graph.
+const VIS_WATCH_MANIFESTS = new Set(["package.json", "pnpm-workspace.yaml", "turbo.json", "nx.json", "lerna.json"]);
+
 commands["map-serve"] = function (...args) {
 	const http = require("node:http");
-	const cwd = process.cwd();
+	const cwd = findRepoRoot(process.cwd()); // WP6: serving from a subdir still serves the repo map
 	let port = 4878;
-	let openBrowser = true;
+	let openBrowser = false; // defect 15: never auto-open unless the caller explicitly opts in
 	for (let i = 0; i < args.length; i++) {
 		const a = args[i];
 		if (a === "--port" || a === "-p") port = parseInt(args[++i], 10) || port;
-		else if (a === "--no-open") openBrowser = false;
+		else if (a === "--open") openBrowser = true;
+		else if (a === "--no-open") openBrowser = false; // accepted for back-compat; already the default
 		else if (/^\d+$/.test(a)) port = parseInt(a, 10);
 	}
+	const basePort = port;
 
 	const outDir = path.join(cwd, PLANNING_DIR, "codebase");
 	const jsonPath = path.join(outDir, "MAP.json");
@@ -4424,7 +5179,7 @@ commands["map-serve"] = function (...args) {
 	// Initial generation
 	let lastBuild = visWriteOutputs(cwd);
 	console.log(banner("MAP-SERVE"));
-	console.log(`\nServing ${path.relative(cwd, outDir)}/ on http://localhost:${port}`);
+	console.log(`\nServing ${path.relative(cwd, outDir)}/`);
 	console.log(`Indexed ${lastBuild.map.stats.files} modules in ${lastBuild.map.buildMs}ms`);
 
 	const clients = new Set();
@@ -4442,76 +5197,135 @@ commands["map-serve"] = function (...args) {
 			} catch (err) {
 				console.error("regen failed:", err.message);
 			}
-		}, 250);
+		}, 400); // defect 16: was 250ms — widened so a burst of saves (format-on-save, git checkout) coalesces
 	};
 
 	// File watcher (recursive — supported on darwin/win32; fallback walks top-level dirs on linux)
-	const watchTargets = [cwd];
 	const watchers = [];
-	const tryWatch = (target) => {
+	const tryWatch = (target, recursive) => {
 		try {
-			const w = fs.watch(target, { recursive: true }, (_evt, fname) => {
+			const w = fs.watch(target, { recursive: recursive }, (_evt, fname) => {
 				if (!fname) return;
-				const f = fname.toString();
-				if (VIS_DEFAULT_IGNORES.has(f.split(path.sep)[0])) return;
+				// Defect 16: normalize to posix separators BEFORE any segment/substring check — the
+				// previous checks below (`/node_modules/`, `/.git/`, …) silently never matched on win32,
+				// where fs.watch reports paths with backslashes.
+				const f = fname.toString().split(path.sep).join("/");
+				const firstSeg = f.split("/")[0];
+				if (VIS_DEFAULT_IGNORES.has(firstSeg)) return;
 				if (f.includes("/node_modules/") || f.includes("/.git/")) return;
-				if (f.includes("/.planning/")) return;
+				if (f === ".planning" || f.startsWith(".planning/") || f.includes("/.planning/")) return;
+				// Defect 16: only code-language files (+ workspace manifests) trigger a rebuild — a
+				// touched README or a stray editor swapfile used to rebuild the whole graph.
+				const base = f.split("/").pop() || "";
+				const dot = base.lastIndexOf(".");
+				const ext = dot >= 0 ? base.slice(dot).toLowerCase() : "";
+				if (!VIS_WATCH_MANIFESTS.has(base) && !VIS_WATCH_EXTS.has(ext)) return;
 				regen();
 			});
 			watchers.push(w);
 			return true;
 		} catch { return false; }
 	};
-	if (!tryWatch(cwd)) {
-		// Fallback: watch top-level dirs non-recursively
+	if (!tryWatch(cwd, true)) {
+		// Fallback: watch the root and each top-level dir non-recursively — recursive fs.watch
+		// threw once already, so retrying it per-directory would fail identically.
+		tryWatch(cwd, false);
 		for (const e of fs.readdirSync(cwd, { withFileTypes: true })) {
 			if (!e.isDirectory()) continue;
 			if (VIS_DEFAULT_IGNORES.has(e.name)) continue;
-			tryWatch(path.join(cwd, e.name));
+			tryWatch(path.join(cwd, e.name), false);
 		}
+		if (watchers.length === 0) console.error("map-serve: file watching unavailable — live reload disabled (use the reload button).");
 	}
 
-	const server = http.createServer((req, res) => {
+	const requestHandler = (req, res) => {
 		const url = req.url.split("?")[0];
-		if (url === "/" || url === "/index.html" || url === "/MAP.html") {
-			res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-			res.end(fs.readFileSync(htmlPath));
-		} else if (url === "/MAP.json") {
-			res.writeHead(200, { "content-type": "application/json; charset=utf-8",
-				"cache-control": "no-store" });
-			res.end(fs.readFileSync(jsonPath));
-		} else if (url === "/events") {
-			res.writeHead(200, {
-				"content-type": "text/event-stream",
-				"cache-control": "no-cache",
-				connection: "keep-alive",
-			});
-			res.write("retry: 2000\n\n");
-			clients.add(res);
-			req.on("close", () => clients.delete(res));
-		} else if (url === "/health") {
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify({ ok: true, stats: lastBuild.map.stats }));
-		} else {
-			res.writeHead(404); res.end("not found");
+		try {
+			if (url === "/" || url === "/index.html" || url === "/MAP.html") {
+				res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+				res.end(fs.readFileSync(htmlPath));
+			} else if (url === "/MAP.json") {
+				res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+				res.end(fs.readFileSync(jsonPath));
+			} else if (url === "/events") {
+				// Cap held-open SSE connections. Must be a non-200 BEFORE any event-stream bytes:
+				// a cleanly closed 200 stream makes EventSource reconnect on its retry interval forever
+				// (a self-inflicted request storm), while a 503 fails the connection permanently and
+				// flips the page's live indicator to offline — the honest signal.
+				if (clients.size >= 64) { res.writeHead(503, { "content-type": "text/plain" }); res.end("too many live viewers"); return; }
+				res.writeHead(200, {
+					"content-type": "text/event-stream",
+					"cache-control": "no-cache",
+					connection: "keep-alive",
+				});
+				res.write("retry: 2000\n\n");
+				clients.add(res);
+				req.on("close", () => clients.delete(res));
+			} else if (url === "/health") {
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(JSON.stringify({ ok: true, stats: lastBuild.map.stats }));
+			} else {
+				res.writeHead(404); res.end("not found");
+			}
+		} catch (err) {
+			// A regen was in flight and the file was mid-write, or something else went wrong reading
+			// disk — surface a clean 503 instead of an unhandled exception taking the server down.
+			console.error("map-serve: request failed:", err.message);
+			try { res.writeHead(503, { "content-type": "text/plain" }); res.end("map-serve: temporarily unavailable, retrying may help (map rebuild in flight)"); } catch { /* empty */ }
 		}
-	});
+	};
 
-	server.listen(port, () => {
-		const url = `http://localhost:${port}`;
-		console.log(`\n→ Open ${url}`);
-		console.log(`  Live updates via SSE; edits to source files regenerate the map.`);
-		console.log(`  Ctrl-C to stop.`);
-		if (openBrowser) {
-			const opener = process.platform === "darwin" ? "open"
-				: process.platform === "win32" ? "start" : "xdg-open";
-			try { execSync(`${opener} ${url}`, { stdio: "ignore" }); } catch { /* empty */ }
+	// Keep SSE connections alive through idle proxies/browsers with a periodic comment line —
+	// EventSource ignores lines starting with ":", so this never fires a message event.
+	const pingTimer = setInterval(() => {
+		for (const c of clients) {
+			try { c.write(": ping\n\n"); } catch { /* empty */ }
 		}
-	});
+	}, 25000);
+
+	// Defect 13: EADDRINUSE used to crash the process. Try the next few ports instead.
+	// Each attempt gets its OWN http.Server instance — reusing one instance across retries leaks a
+	// stale "listening" once-listener per failed attempt, and they all fire together (with their
+	// stale candidatePort closures) the moment a later attempt finally succeeds.
+	let server = null;
+	let boundPort = null;
+	const tryListen = (candidatePort, attemptsLeft) => {
+		const s = http.createServer(requestHandler);
+		s.once("error", (err) => {
+			try { s.close(); } catch { /* empty */ }
+			if (err.code === "EADDRINUSE" && attemptsLeft > 0) {
+				console.log(`port ${candidatePort} is in use, trying ${candidatePort + 1}…`);
+				tryListen(candidatePort + 1, attemptsLeft - 1);
+			} else if (err.code === "EADDRINUSE") {
+				console.error(`map-serve: ports ${basePort}-${basePort + 10} are all in use. Pass --port <n> to pick a free one.`);
+				process.exit(1);
+			} else {
+				console.error("map-serve: failed to start:", err.message);
+				process.exit(1);
+			}
+		});
+		// Loopback only: the map leaks repo structure and rationale comments — never expose it on the LAN.
+		s.listen(candidatePort, "127.0.0.1", () => {
+			server = s;
+			boundPort = candidatePort;
+			const url = `http://localhost:${boundPort}`;
+			if (boundPort !== basePort) console.log(`(port ${basePort} was busy — bound to ${boundPort} instead)`);
+			console.log(`\n→ Open ${url}`);
+			console.log(`  Live updates via SSE; edits to source files regenerate the map.`);
+			console.log(`  Ctrl-C to stop.`);
+			if (openBrowser) {
+				const opener = process.platform === "darwin" ? "open"
+					: process.platform === "win32" ? "start" : "xdg-open";
+				try { execSync(`${opener} ${url}`, { stdio: "ignore" }); } catch { /* empty */ }
+			}
+		});
+	};
+	tryListen(port, 10);
 
 	const shutdown = () => {
+		clearInterval(pingTimer);
 		for (const w of watchers) try { w.close(); } catch { /* empty */ }
-		try { server.close(); } catch { /* empty */ }
+		try { if (server) server.close(); } catch { /* empty */ }
 		process.exit(0);
 	};
 	process.on("SIGINT", shutdown);
@@ -4523,7 +5337,8 @@ commands["map-serve"] = function (...args) {
 // ============================================================================
 
 function graphLoadMap() {
-	const jsonPath = path.join(process.cwd(), PLANNING_DIR, "codebase", "MAP.json");
+	// WP6: resolve from the repo root, not process.cwd(), so graph-* commands work from any subdir.
+	const jsonPath = path.join(findRepoRoot(process.cwd()), PLANNING_DIR, "codebase", "MAP.json");
 	try { return { map: JSON.parse(fs.readFileSync(jsonPath, "utf-8")), jsonPath }; }
 	catch { return { map: null, jsonPath }; }
 }
@@ -4797,12 +5612,17 @@ Usage: draht-tools <command> [args]
 
 Project Setup:
   init                          Check preconditions, create .planning/
-  map-codebase [dir]            Analyze existing codebase (docs)
+  map-codebase [dir]            Analyze existing codebase (docs). [dir] only scopes the narrative
+                                doc scan — the codebase graph always covers the whole repo.
   map-graph [dir] [--quiet]     Generate living codebase map (MAP.json + MAP.html + GRAPH_REPORT.md)
+                                ALWAYS maps the whole repo (from the nearest .git/workspace root);
+                                [dir] is ignored for the graph itself (a note is printed).
                                 --quiet: refresh MAP.json + report only (no HTML); for hooks
                                 Override functional groups via .planning/codebase/GROUPS.json
                                 Override flows via .planning/codebase/FLOWS.json
-  map-serve [port]              Serve MAP.html with live reload on file changes
+  map-serve [port] [--open]     Serve MAP.html (whole repo) with live reload on file changes
+                                --port/-p <n>: listen port (default 4878; auto-bumps if busy)
+                                --open: open the browser automatically (off by default)
 
 Knowledge Graph (query MAP.json instead of grepping — run map-graph first):
   graph-context <file...>       Where a file sits: pkg, layer, cluster, importers/imports, sinks, rationale

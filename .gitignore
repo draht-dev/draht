@@ -18,7 +18,8 @@ packages/*/.sst/
 .vscode/
 .zed/
 .idea/
-.claude/
+.claude/*
+!.claude/settings.json
 *.swp
 *.swo
 *~

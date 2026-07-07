@@ -54,7 +54,7 @@ Before analyzing, decompose codebase understanding into atomic reasoning units:
      End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`."
 
 4. Read each subagent's `STATUS:` line. `BLOCKED` or `NEEDS_CONTEXT` from either means STOP — `map-codebase` produces foundational artifacts and partial output here causes downstream confusion. Collect subagent results and merge with the draht-tools output.
-5. Create `.planning/DOMAIN.md` (if it doesn't exist) with:
+5. Create `.planning/DOMAIN.md` (if it doesn't exist). Everything in it is **inferred from code, not confirmed by the user** — mark uncertain context boundaries and ambiguous terms as `(inferred)` so later commands know to confirm rather than build on them. With:
    - `## Bounded Contexts` — one entry per discovered context with a brief description
    - `## Ubiquitous Language` — glossary of extracted domain terms
    - `## Context Map` — how bounded contexts relate (upstream/downstream, shared kernel, ACL)

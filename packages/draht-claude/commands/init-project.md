@@ -62,5 +62,6 @@ After project initialization, phases are executed one at a time in fresh session
 
 ## Rules
 - Ask 1-2 questions at a time, never dump 10 at once
+- When the focus names a solution ("migrate to X"), ask what problem it solves — the existing code may admit a smaller answer
 - Respect what already exists — do not propose rewriting working code
 - Stop when you have: current state, goals, MVP scope, constraints, success criteria

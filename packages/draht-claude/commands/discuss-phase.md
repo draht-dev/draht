@@ -33,7 +33,7 @@ Before questioning, decompose this phase scope into atomic reasoning units:
 3. Identify gray areas based on what's being built
 4. Present 1-2 questions at a time about preferences
 5. If `.planning/DOMAIN.md` exists, load it and validate discovered terms against the glossary. Add any new domain terms found during discussion.
-6. Record decisions with `draht-tools save-context $1`
+6. Record decisions with `draht-tools save-context $1` — label each entry **decided** (the user explicitly chose) or **assumed** (you inferred from context). Assumed entries are flagged for confirmation; a plan built on an unlabeled assumption fails silently later.
 7. Commit: `draht-tools commit-docs "capture phase $1 context"`
 
 ## Workflow

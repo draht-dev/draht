@@ -19,6 +19,16 @@ Before you say *done*, *fixed*, *works*, *passes*, *ready*, *complete*, or any e
 4. **VERIFY** the output actually supports the claim (not just "no error visible")
 5. **ONLY THEN** state the result, with the evidence inline
 
+## Label What You Know
+
+Evidence isn't binary — statements sit on a ladder, and mislabeling one rung as another is how false confidence spreads. Tag each claim:
+
+- **observed** — you ran it and saw the output this session
+- **derived** — follows necessarily from something observed (not "probably", *necessarily*)
+- **assumed** — believed but unchecked; name what would check it
+
+A conclusion inherits the weakest label it rests on. "Tests pass (observed), so the feature works (assumed — no end-to-end run)" is an *assumed* verdict wearing an observed one's confidence. Say "the feature works" only when you've observed the feature, not just the tests around it.
+
 ## What Requires Empirical Verification
 
 | Claim | Required Evidence |

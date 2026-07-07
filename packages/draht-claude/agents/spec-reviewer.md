@@ -63,3 +63,4 @@ End your output with exactly one of these lines:
 - Do not propose refactorings — only flag omissions and over-builds
 - If a `checkpoint:human-verify` task was auto-completed without surfacing for human review, that is an omission
 - "Close enough" is not compliant — return BLOCKED and list the specific gaps
+- Read the actual diff, never the implementer's summary of it. "The implementer says it handles the empty case" is not evidence the diff does — find the hunk or call it an omission. A `<test>` case counts as satisfied only when a real test file in the diff asserts it, not when the implementation merely looks like it would pass.

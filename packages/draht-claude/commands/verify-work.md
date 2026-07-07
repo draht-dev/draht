@@ -74,29 +74,31 @@ Before verifying, decompose phase acceptance into atomic reasoning units:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gsd-quality-gate.cjs"
    ```
 
-5. **Read each subagent's `STATUS:` line and the quality gate exit code.** Treat the phase as failed if **any** of these is true:
+5. **Spot-check before aggregating.** Subagent claims are inputs, not verdicts. Before accepting the verifier's `DONE`, re-run the test suite headline yourself and read the counts. Before accepting the spec-reviewer's compliance verdict, read one plan's diff yourself. A pass you only heard about is an "assumed pass" — and an assumed pass is not a pass. This costs two commands and catches the most expensive failure mode this command has: trust laundered into evidence.
+
+6. **Read each subagent's `STATUS:` line and the quality gate exit code.** Treat the phase as failed if **any** of these is true:
    - `verifier` returns `STATUS: BLOCKED` (tests / lint / typecheck failed)
    - `security-auditor` returns `STATUS: BLOCKED` (Critical or High findings)
    - `spec-reviewer` returns `STATUS: BLOCKED` (any plan is non-compliant)
    - `reviewer` returns `STATUS: BLOCKED` (Must-fix correctness issues)
    - Quality gate exits non-zero
 
-6. Walk the user through each deliverable one at a time, incorporating findings from all four subagents.
+7. Walk the user through each deliverable one at a time, incorporating findings from all four subagents.
 
-7. Record results (pass/fail/partially/skip).
+8. Record results (pass/fail/partially/skip). Label each: **observed** (you or a subagent ran it and quoted output), **derived** (follows necessarily from something observed), or **assumed** (unchecked). Verdicts inherit the weakest label they rest on.
 
-8. For failures: diagnose and create fix plans via `draht-tools create-fix-plan $1 P`
+9. For failures: diagnose and create fix plans via `draht-tools create-fix-plan $1 P`
    - Fix plans MUST include a reproducing test that demonstrates the failure before any implementation
    - Spec-reviewer omissions become explicit fix-plan tasks (one task per omission)
 
-9. Write UAT report: `draht-tools write-uat $1`
-   - Report must include: test health summary (pass/fail/coverage), security audit results, **spec compliance summary per plan**, domain model status (any glossary violations), deliverable results
+10. Write UAT report: `draht-tools write-uat $1`
+    - Order: **verdict first** (phase pass/fail, X/Y deliverables, in the first line), **evidence second** (test health summary with pass/fail/coverage, security audit results, spec compliance summary per plan, domain model status, deliverable results with labels), **risk last** (what was NOT tested and how it could bite). Never bury a failure under passes.
 
-10. If all passed: mark phase complete.
+11. If all passed: mark phase complete.
     - If more phases remain in the milestone: tell the user to start a fresh session and run `/discuss-phase N+1`.
     - If ALL phases in the milestone are complete: tell the user to start a fresh session and run `/next-milestone`.
 
-11. If failures: route to `/execute-phase $1 --gaps-only`
+12. If failures: route to `/execute-phase $1 --gaps-only`
 
 ## Why a phase-level spec-reviewer
 

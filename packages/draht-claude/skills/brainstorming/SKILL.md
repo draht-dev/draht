@@ -7,6 +7,16 @@ description: Socratic ideation gate before any project work begins. Use when the
 
 The pre-planning gate. Before draht's GSD cycle runs, before code is scaffolded, before /new-project or /init-project, the idea has to be converged on. This skill enforces design-first discipline through dialogue.
 
+## Hear the Problem Beneath the Ask
+
+The user's words describe an artifact; the design must serve a need. They are rarely the same thing.
+
+1. Separate the stated artifact ("a dashboard") from the underlying need — what decision, pain, or moment does it serve?
+2. When the user names a solution, ask what it solves before refining it. Solutions stay candidates until the need is confirmed.
+3. State the need back in one sentence ("so the real problem is X — right?") and get an explicit yes before proposing any approach.
+
+*Example:* "I want an admin dashboard" → questioning reveals they check one number, once a week → a scheduled email beats the dashboard by a month of build time. *Prevents:* a polished spec for the wrong artifact.
+
 ## The Hard Gate
 
 > Do NOT invoke any planning skill, write any code, scaffold any project, or take any implementation action until you have:
@@ -82,13 +92,14 @@ The file should include:
 
 ### 6. Self-Review the Written Spec
 
-Before handing off, re-read the spec yourself looking for:
+Before handing off, attack the spec as if you were paid to kill it:
 - Contradictions between sections (the goal says X, the architecture implies not-X)
 - Gaps (a user story with no architectural support)
 - Premature commitments (specific tech choices made before they were needed)
 - Domain language drift (different names for the same thing)
+- The strongest case the whole design is wrong — wrong scope, wrong user, or already solved by a simpler existing tool. Write that case and why the design survives it into the spec's Open Questions.
 
-Report any findings to the user and update before proceeding.
+Report any findings to the user and update before proceeding. A spec that was never attacked has never been tested.
 
 ### 7. Hand Off
 

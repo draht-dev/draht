@@ -121,7 +121,7 @@ Task types: `auto`, `checkpoint:human-verify`, `checkpoint:decision`.
 
 ## Hooks
 
-The plugin ships workflow hooks under `${CLAUDE_PLUGIN_ROOT}/scripts/`:
+The plugin ships workflow hooks under `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/`:
 
 - `gsd-pre-execute.cjs <phase>` — preconditions before execution (DOMAIN.md, plans, uncommitted changes)
 - `gsd-post-task.cjs <phase> <plan> <task> <status> [commit]` — record result + type check + tests + TDD cycle check

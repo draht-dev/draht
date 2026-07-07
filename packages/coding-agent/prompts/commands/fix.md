@@ -37,7 +37,7 @@ Stop immediately if you catch yourself:
 - Making "one more fix attempt" after already trying 2+
 - Watching each fix reveal new problems elsewhere
 
-After **3 failed fix attempts**, STOP. This is an architectural problem, not a hypothesis problem. Report back to the user — do not try a 4th fix.
+After **3 failed fix attempts**, STOP. This is a **hard cap**, not advice — an architectural problem, not a hypothesis problem. Report back to the user — do not try a 4th fix. Before reporting, append one dated line to `.planning/STATE.md` under `## Lessons`: what was tried and why it failed, so the next session doesn't repeat the same three attempts.
 
 ## Atomic Reasoning
 

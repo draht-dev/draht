@@ -34,7 +34,9 @@ function detectToolchain(cwd) {
 }
 
 function readHookConfig(cwd) {
-	const defaults = { coverageThreshold: 80, tddMode: "advisory", qualityGateStrict: false };
+	// Strict by default: failing tests/types/lint fail the gate (exit 1).
+	// Opt out per-project with hooks.qualityGateStrict: false in .planning/config.json.
+	const defaults = { coverageThreshold: 80, tddMode: "advisory", qualityGateStrict: true };
 	const configPath = path.join(cwd, ".planning", "config.json");
 	if (!fs.existsSync(configPath)) return defaults;
 	try {
@@ -145,9 +147,13 @@ if (status === "pass") {
 		.map((l) => JSON.parse(l))
 		.filter((e) => e.phase === parseInt(phaseNum, 10) && e.plan === parseInt(planNum, 10) && e.task === parseInt(taskNum, 10) && e.status === "fail");
 
+	// Hard stop: 3 recorded failures for the same task ends the retry loop.
+	// The orchestrator must escalate to the user or a fix plan — never a 4th blind attempt.
 	if (taskFailures.length >= 3) {
-		console.log(`\n⚠️  Task has failed 3+ times. Consider creating a fix plan:`);
-		console.log(`   draht create-fix-plan ${phaseNum} ${planNum} "Task ${taskNum} failed repeatedly"`);
+		console.error(`\n❌ HARD STOP: task ${phaseNum}-${planNum}-${taskNum} has failed ${taskFailures.length} times.`);
+		console.error(`   Do NOT re-dispatch the implementer. Escalate: report to the user or create a fix plan:`);
+		console.error(`   draht create-fix-plan ${phaseNum} ${planNum} "Task ${taskNum} failed repeatedly"`);
+		process.exit(1);
 	}
 } else {
 	console.log(`⏭️  Task ${phaseNum}-${planNum}-${taskNum}: skipped`);

@@ -18,10 +18,12 @@ export interface HookConfig {
 	qualityGateStrict: boolean;
 }
 
+// Strict by default: failing tests/types/lint fail the gate (exit 1).
+// Opt out per-project with hooks.qualityGateStrict: false in .planning/config.json.
 const DEFAULT_HOOK_CONFIG: HookConfig = {
 	coverageThreshold: 80,
 	tddMode: "advisory",
-	qualityGateStrict: false,
+	qualityGateStrict: true,
 };
 
 /**

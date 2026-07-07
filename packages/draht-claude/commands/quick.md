@@ -71,7 +71,7 @@ Before executing, decompose this task into atomic reasoning units:
    ```
 
    - `DONE` → go to Stage 3.
-   - `BLOCKED` → re-dispatch implementer with the "Required Fixes" list. Repeat Stage 1+2 until `DONE`.
+   - `BLOCKED` → re-dispatch implementer with the "Required Fixes" list. Repeat Stage 1+2 until `DONE`. **Hard cap: 3 implementer re-dispatches total (across Stage 2 and Stage 3).** At the cap, STOP and report the disagreement to the user.
 
 5. **Stage 3 — Reviewer (optional code-quality pass).** For non-trivial quick tasks (touches more than one file or modifies domain code), _optionally_ run `draht-tools graph-impact <changed files>` and paste its reverse-dependents + boundary warnings into the reviewer prompt. Then dispatch with `subagent_type: "reviewer"`:
    ```
@@ -81,7 +81,7 @@ Before executing, decompose this task into atomic reasoning units:
    ```
 
    - `DONE` → quick task complete.
-   - `BLOCKED` → re-dispatch implementer with the Must-fix list.
+   - `BLOCKED` → re-dispatch implementer with the Must-fix list — subject to the same **hard cap of 3 re-dispatches**; at the cap, STOP and report.
 
 6. Write summary: `draht-tools write-quick-summary NNN`
 7. Update state: `draht-tools update-state`

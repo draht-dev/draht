@@ -37,7 +37,7 @@ Stop immediately if you catch yourself:
 - Watching each fix reveal new problems elsewhere
 - Implementing before a failing test exists for the bug
 
-When you've tried **3 fix attempts and still failing**, STOP. This is an architectural problem, not a hypothesis problem. Report back to the user — do not try a 4th fix.
+When you've tried **3 fix attempts and still failing**, STOP. This is a **hard cap**, not advice — an architectural problem, not a hypothesis problem. Report back to the user — do not try a 4th fix. Before reporting, append one line to `.planning/STATE.md` under `## Lessons`: what was tried, why it failed, dated — so the next session doesn't repeat the same three attempts.
 
 ## Atomic Reasoning
 

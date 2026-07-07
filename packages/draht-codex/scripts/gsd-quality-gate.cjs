@@ -6,7 +6,9 @@
  * Runs after task completion to enforce quality standards.
  * Called by the build agent after each verify step.
  *
- * Usage: node gsd-quality-gate.js [--strict]
+ * Usage: node gsd-quality-gate.js [--strict] [--no-tests]
+ * --no-tests skips the test-suite run (used by the Stop hook, where the
+ * post-task hook and /verify-work own test execution).
  * Exit 0 = quality OK, Exit 1 = quality issues
  */
 
@@ -29,7 +31,9 @@ function detectToolchain(cwd) {
 }
 
 function readHookConfig(cwd) {
-	const defaults = { coverageThreshold: 80, tddMode: "advisory", qualityGateStrict: false };
+	// Strict by default: failing tests/types/lint fail the gate (exit 1).
+	// Opt out per-project with hooks.qualityGateStrict: false in .planning/config.json.
+	const defaults = { coverageThreshold: 80, tddMode: "advisory", qualityGateStrict: true };
 	const configPath = path.join(cwd, ".planning", "config.json");
 	if (!fs.existsSync(configPath)) return defaults;
 	try {
@@ -67,6 +71,7 @@ const cwd = process.cwd();
 const toolchain = detectToolchain(cwd);
 const hookConfig = readHookConfig(cwd);
 const strict = process.argv.includes("--strict") || hookConfig.qualityGateStrict;
+const skipTests = process.argv.includes("--no-tests");
 const issues = [];
 
 // 1. TypeScript check
@@ -92,7 +97,7 @@ if (fs.existsSync(path.join(cwd, "biome.json"))) {
 }
 
 // 3. Run tests
-try {
+if (!skipTests) try {
 	const testOutput = execSync(`${toolchain.testCmd} 2>&1`, { timeout: 120000, encoding: "utf-8", cwd });
 	const failMatch = testOutput.match(/(\d+) fail/);
 	if (failMatch && parseInt(failMatch[1], 10) > 0) {

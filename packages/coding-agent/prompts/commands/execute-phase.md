@@ -56,13 +56,13 @@ Before executing, decompose this phase execution into atomic reasoning units:
    Use the `subagent` tool with the `spec-reviewer` agent. ONLY checks "does the diff cover exactly what the spec asked for". Prompt includes the task XML and the diff range.
    - `DONE` → go to Stage 3.
    - `DONE_WITH_CONCERNS` → note and proceed.
-   - `BLOCKED` → re-dispatch implementer with the "Required Fixes" list; repeat Stage 1+2 until `DONE`. Never proceed to Stage 3 with a non-compliant diff.
+   - `BLOCKED` → re-dispatch implementer with the "Required Fixes" list; repeat Stage 1+2 until `DONE`. Never proceed to Stage 3 with a non-compliant diff. **Hard cap: 3 implementer re-dispatches per task (across Stage 2 and Stage 3 combined)** — at the cap, record the task as failed and STOP; report the disagreement to the user.
 
    ### Stage 3 — Reviewer (code quality)
    Use the `subagent` tool with the `reviewer` agent for code-quality review. Spec compliance is already ✅.
    - `DONE` → task complete; move to next task.
    - `DONE_WITH_CONCERNS` → log `Should fix` items; if any are correctness-critical, re-dispatch implementer.
-   - `BLOCKED` → `Must fix` issues exist; re-dispatch implementer with the issue list. Repeat until `DONE`.
+   - `BLOCKED` → `Must fix` issues exist; re-dispatch implementer with the issue list. Repeat until `DONE` — subject to the same **hard cap of 3 re-dispatches per task**; at the cap, record the task as failed and STOP.
 
 5. After all plans complete, run `draht-tools verify-phase $1` yourself (not the subagent)
 6. Run `draht-tools update-state` yourself

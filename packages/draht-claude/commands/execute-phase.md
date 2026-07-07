@@ -79,7 +79,7 @@ Before executing, decompose this phase execution into atomic reasoning units:
    ```
    - `STATUS: DONE` → go to Stage 3.
    - `STATUS: DONE_WITH_CONCERNS` → note, go to Stage 3.
-   - `STATUS: BLOCKED` → re-dispatch the implementer with the "Required Fixes" list to address the gaps. Repeat Stage 1+2 until `DONE`. **Never proceed to Stage 3 with a non-compliant diff.**
+   - `STATUS: BLOCKED` → re-dispatch the implementer with the "Required Fixes" list to address the gaps. Repeat Stage 1+2 until `DONE`. **Never proceed to Stage 3 with a non-compliant diff.** **Hard cap: 3 implementer re-dispatches per task (across Stage 2 and Stage 3 combined).** On the 3rd failed re-dispatch, record the task as failed via the post-task hook and STOP — report the disagreement to the user. Never negotiate past the cap.
 
    ### Stage 3 — Reviewer (code quality)
    Once spec compliance is ✅, dispatch a Task with `subagent_type: "reviewer"` and a prompt of the form:
@@ -91,13 +91,14 @@ Before executing, decompose this phase execution into atomic reasoning units:
    ```
    - `STATUS: DONE` → task is complete, run the post-task hook (below), then move to the next task.
    - `STATUS: DONE_WITH_CONCERNS` → log the `Should fix` items; if any are correctness-critical, re-dispatch implementer; otherwise log and move on.
-   - `STATUS: BLOCKED` → `Must fix` issues exist; re-dispatch the implementer with the issue list. Repeat the three stages until `DONE`.
+   - `STATUS: BLOCKED` → `Must fix` issues exist; re-dispatch the implementer with the issue list. Repeat the three stages until `DONE` — subject to the same **hard cap of 3 implementer re-dispatches per task**; at the cap, record the task as failed and STOP.
 
    ### Post-task hook
-   After Stage 3 passes for a task, record the result:
+   After Stage 3 passes for a task — or when a task hits the re-dispatch cap — record the result:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gsd-post-task.cjs" <phase> <plan> <task-num> <status> <commit-hash>
    ```
+   If the hook exits non-zero (3+ recorded failures for the task), that is a **harness-enforced hard stop**: do not dispatch any further implementer runs for this task; report to the user or create a fix plan.
 
 5. After all plans complete, run `draht-tools verify-phase $1` yourself (not the subagent)
 6. Run the post-phase hook to generate the phase report:

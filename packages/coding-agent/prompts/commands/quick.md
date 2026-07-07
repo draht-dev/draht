@@ -69,11 +69,11 @@ Before executing, decompose this task into atomic reasoning units:
    End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
    ```
    - `DONE` → go to Stage 3.
-   - `BLOCKED` → re-dispatch implementer with Required Fixes. Repeat until `DONE`.
+   - `BLOCKED` → re-dispatch implementer with Required Fixes. Repeat until `DONE`. **Hard cap: 3 re-dispatches total** — at the cap, STOP and report the disagreement to the user.
 
 5. **Stage 3 — Reviewer (optional code-quality pass).** For non-trivial quick tasks (more than one file, or domain code), use the `subagent` tool with the `reviewer` agent. Otherwise skip.
    - `DONE` → task complete.
-   - `BLOCKED` → re-dispatch implementer with Must-fix list.
+   - `BLOCKED` → re-dispatch implementer with Must-fix list — same **hard cap of 3 re-dispatches**; at the cap, STOP and report.
 
 6. Write summary: `draht-tools write-quick-summary NNN`
 7. Update state: `draht-tools update-state`

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- GSD quality gate is strict by default (`qualityGateStrict: true` in `DEFAULT_HOOK_CONFIG`); opt out per-project in `.planning/config.json`
+- GSD command prompts: `/execute-phase` and `/quick` review loops carry a hard cap of 3 implementer re-dispatches per task; `/fix`'s 3-attempt stop is a hard cap and records a lesson to `.planning/STATE.md ## Lessons`; `/plan-phase` reads lessons before planning; `/pause-work` and `/next-milestone` write lessons back
+
 ## [2026.7.7-1] - 2026-07-07
 
 ### Added

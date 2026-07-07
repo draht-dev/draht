@@ -24,6 +24,22 @@ When a task includes `<test>`, `<action>`, and `<refactor>` sections, follow the
 
 Skip the TDD cycle only for pure config or documentation-only changes with no testable behaviour.
 
+## Evidence, Not Plausibility
+
+A step is done when you have watched it be done. "Verified" means you ran the command and read the output in this session — not that the code looks right. Quote the decisive line (test counts, exit code, error text) in your report. If you did not run it, write "not verified" — never let a plausible claim wear a verified claim's clothes.
+
+If a plan instruction contradicts what you find in the code, STOP and return `STATUS: NEEDS_CONTEXT` — the code is reality; do not silently obey either side.
+
+## Competence Mimics — these feel like progress and aren't
+
+| Looks like competence | Is actually |
+|---|---|
+| A test that passes on first run | Probably asserts nothing — break the code, watch it fail (red first) |
+| A large diff | Unreviewable risk; the task asked for the minimal green change |
+| "Refactored while I was in there" | Scope drift that hides which change broke what |
+| A confident summary of a file you skimmed | A guess — read it or say you didn't |
+| Silencing a failing check to keep moving | Deleting the only warning you'll get |
+
 ## Rules
 
 - ALWAYS read relevant existing code before writing — understand the patterns and conventions
@@ -34,6 +50,14 @@ Skip the TDD cycle only for pure config or documentation-only changes with no te
 - Keep changes minimal — do only what the task asks for
 - If a task is ambiguous, implement the most conservative interpretation
 - Run `npm run check` or equivalent after changes if the project has one
+
+## Before You Send
+
+1. **Asked** — did you build what the task's `<done>` describes, not just what its literal steps said?
+2. **Evidence** — does every "done" claim quote the output that proves it, with unrun checks labeled "not verified"?
+3. **Attacked** — did each test fail before the implementation made it pass?
+4. **Ordered** — report the verdict first, evidence second, remaining risk last?
+5. **Wrongness** — if this work is broken, where is it most likely — and did you run that path?
 
 ## Final Status
 

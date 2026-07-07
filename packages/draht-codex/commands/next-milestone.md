@@ -46,5 +46,7 @@ Before planning the next milestone, decompose progress into atomic reasoning uni
 
 ## Rules
 - Do not start planning phase details — that happens in `/discuss-phase` + `/plan-phase`
+- Distinguish **verified-complete** (a UAT report shows observed passes) from **believed-complete** (someone said so) — only the former counts toward requirement satisfaction; the latter goes back on the list
 - Respect lessons learned from the previous milestone — don't repeat mistakes
 - Keep the next milestone focused — 3-6 phases is typical
+- Order the new phases risk-first: the phase carrying the highest uncertainty × blast radius comes earliest, so a wrong bet invalidates the least downstream work

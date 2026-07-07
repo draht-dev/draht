@@ -76,6 +76,14 @@ A unit is atomic if:
 
 If any of these fail, decompose further.
 
+## Order by Risk
+
+Decomposition tells you the units; it doesn't tell you which to do first. When the units are independent, sequence is a lever — use it to fail cheaply.
+
+Score each unit by **uncertainty** (has this codebase done it before?) × **blast radius** (how many other units become invalid if this one is wrong?). Do the highest-scoring unit first; push boilerplate last. Boilerplate never invalidates the plan — the risky, unfamiliar unit regularly does, and you want to discover that before you've built everything downstream of it.
+
+*Example:* a feature needs a third-party webhook and a settings screen. Both are atomic. Prove the webhook round-trip first — if the contract isn't what you assumed, the settings screen you'd have built on top of it was wasted. *Prevents:* sinking effort into work that a later, riskier unit turns out to obsolete.
+
 ## Anti-Patterns — STOP
 
 - **"Improve performance"** — not atomic. Pick one metric, one bottleneck, one change.

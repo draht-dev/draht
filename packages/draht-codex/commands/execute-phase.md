@@ -36,6 +36,7 @@ Before executing, decompose this phase execution into atomic reasoning units:
 **Synthesize execution strategy:**
 - Identify parallel execution groups (plans with no shared files/dependencies)
 - Order dependent plans (plan B depends on plan A's outputs)
+- Within each group, dispatch the riskiest plan first (highest uncertainty × blast radius) — its failure invalidates the rest of the phase most cheaply, before effort has been sunk into work it would obsolete
 - Map each plan to a subagent task with clear success criteria
 
 ## Steps
@@ -60,7 +61,7 @@ Before executing, decompose this phase execution into atomic reasoning units:
 
    ### Stage 1 — Implementer
    Dispatch a Codex subagent using the `implementer` agent prompt and the prompt from the template below. Read the final `STATUS:` line in the response.
-   - `STATUS: DONE` → go to Stage 2.
+   - `STATUS: DONE` → **re-derive before trusting**: a `DONE` that does not quote its verification output (test counts, command output) is treated as `DONE_WITH_CONCERNS` — run the task's `<verify>` step yourself and read the result before Stage 2. Subagent claims are inputs, not verdicts.
    - `STATUS: DONE_WITH_CONCERNS` → note the concerns; if any are correctness issues, instruct the implementer to fix and re-dispatch; otherwise go to Stage 2.
    - `STATUS: NEEDS_CONTEXT` → provide the missing context (paste the relevant file content or decision) and re-dispatch. Do not skip.
    - `STATUS: BLOCKED` → STOP. Report the blocker to the user. Do not move on.
@@ -128,6 +129,8 @@ Checkpoint handling:
 - type="auto" → execute silently.
 - type="checkpoint:human-verify" → stop and report back what was built.
 - type="checkpoint:decision" → stop and report the options.
+
+Evidence rule: quote the decisive output of every test run and <verify> step in your report (pass/fail counts, exit codes, error text). Unquoted claims will be re-run by the orchestrator. If a plan instruction contradicts what you find in the code, stop and report NEEDS_CONTEXT — do not silently obey either side.
 
 End your response with `STATUS: DONE` / `DONE_WITH_CONCERNS` / `NEEDS_CONTEXT` / `BLOCKED` per the agent contract.
 ```

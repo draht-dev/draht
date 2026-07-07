@@ -13,6 +13,12 @@ Random fixes create new bugs. This skill enforces the four-phase systematic debu
 
 A symptom fix is a failure. If you patch the visible error without understanding why it occurred, you've created the next bug.
 
+## The Report Is a Symptom, Not a Diagnosis
+
+Restate the failure as observable behaviour — "X happens when Y; expected Z" — before touching anything. If the reporter names a cause ("the cache is stale"), treat it as Hypothesis #0: it earns a test in Phase 3 like any other and does not skip Phase 1. The person who saw the bug saw the symptom; their diagnosis is a lead, not a finding.
+
+*Example:* "fix the stale cache bug" — Phase 1 traces the data flow and finds the cache is fine; the query behind it silently drops a filter. The fix lands in the query. *Prevents:* shipping a correct fix to the wrong component.
+
 ## When to Apply
 
 Any time you encounter:
@@ -33,6 +39,7 @@ Any time you encounter:
 3. **Check recent changes.** `git log --oneline -20`, `git diff HEAD~N` on the affected paths. What was the last thing that touched this?
 4. **Trace data flow.** Where does the bad value originate? What called the function with that value? Keep tracing **upward** until you find the source. Fix at source, not at the symptom site.
 5. **State the root cause in one sentence:** "X happens because Y at <file:line>."
+6. **Label each step** observed (you ran it and saw it), derived (follows necessarily from evidence), or assumed (unchecked — name what would check it). A root cause resting on an assumption is a hypothesis, not a diagnosis.
 
 If you cannot state the root cause clearly, you do not understand the bug yet. Do not proceed.
 
@@ -91,6 +98,8 @@ Stop immediately if you catch yourself:
 | "Let me try a few things" | Can't isolate what worked. Creates new bugs. |
 | "I already manually tested it" | A reproducing test is the only durable proof. |
 | "I can see what's wrong, I don't need Phase 1" | "See" is not "understand". Trace it. |
+| "The user already told me the cause" | The reporter saw the symptom. Their diagnosis is Hypothesis #0, not a finding. |
+| "The fix passed, so my diagnosis was right" | Fixes can mask. Verify the causal chain, not just the symptom's absence. |
 
 ## Relationship to /fix
 

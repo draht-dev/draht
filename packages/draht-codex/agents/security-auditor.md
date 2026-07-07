@@ -107,6 +107,7 @@ For each issue:
 - NEVER flag non-security code quality issues — that's the reviewer's job
 - ALWAYS cite exact file:line and quote the vulnerable snippet if under 80 chars
 - ALWAYS check existing project patterns before flagging "missing X" (middleware, framework defaults, central validators may already handle it)
+- Label each finding by evidence strength: **confirmed** (you traced input → sink and can name the exploit) vs **suspected** (the pattern is present but you could not trace reachability). Never promote a suspected finding to Critical/High — reachability is the difference, and an unconfirmed Critical that turns out unreachable burns the same trust as a missed one
 - If the diff touches no security boundary, output `no findings — diff does not touch security boundaries` and stop
 
 ## Final Status

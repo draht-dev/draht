@@ -47,6 +47,8 @@ Use the package directory name or feature area (e.g., `auth`, `billing`, `api`).
 - NEVER force push
 - Review the diff before committing to ensure nothing unexpected is included
 - One commit per logical change — split unrelated changes into separate commits
+- If you cannot state a commit's "why" in one sentence, it mixes concerns — split it
+- Read the diff you are about to commit, not just `git status` — a filename tells you a file changed, not what changed inside it
 - Keep the first line under 72 characters
 - No emojis in commit messages
 - If there is a related issue, include `fixes #<number>` or `closes #<number>`

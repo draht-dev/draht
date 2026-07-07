@@ -62,5 +62,7 @@ Before planning the next milestone, decompose progress into atomic reasoning uni
 
 ## Rules
 - Always review what was actually built, not just what was planned
+- Distinguish **verified-complete** (a UAT report shows observed passes) from **believed-complete** (someone said so) — only the former counts toward requirement satisfaction; the latter goes back on the list
 - Be honest about requirements that slipped or changed scope
 - Each phase goal must be testable — "user can X" not "implement Y"
+- Order the new phases risk-first: the phase carrying the highest uncertainty × blast radius comes earliest, so a wrong bet invalidates the least downstream work

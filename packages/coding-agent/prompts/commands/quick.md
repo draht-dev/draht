@@ -13,6 +13,10 @@ Execute a small ad-hoc task with tracking.
 
 Task: $ARGUMENTS
 
+## "Small" Is a Claim, Not a Fact
+
+Before planning, verify the task is actually quick: grep the blast radius (callers, imports, tests touching the target). If the change reaches further than the description implies, say so and recommend `/plan-phase`-level treatment instead of forcing it through. And if the description names a solution ("add a flag"), confirm the problem it solves — a smaller fix may exist. A "quick task" that silently grows is how untracked complexity enters a codebase.
+
 ## Atomic Reasoning
 
 Before executing, decompose this task into atomic reasoning units:

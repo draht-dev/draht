@@ -38,23 +38,25 @@ Before verifying, decompose phase acceptance into atomic reasoning units:
    - `reviewer` agent: "Review the recent code changes for this phase. Check domain language compliance against `.planning/DOMAIN.md` if it exists — scan for identifiers not in the glossary and cross-context boundary violations. Report Must fix / Should fix / Consider. End with `STATUS: ...`. Do NOT run draht, draht-tools, or pi commands."
    - `spec-reviewer` agent: "Phase-level spec compliance check for phase $1. The phase has these plan files (each is a spec): <list of .planning/phases/<N>-*/<N>-NN-PLAN.md paths>. For each plan, evaluate whether the phase's commits implement exactly what the plan's <task> elements asked — no missing tasks, no over-builds. Use git log and git diff against the phase commit range. Output a per-plan compliance verdict with omissions and over-builds. End with `STATUS: ...`."
 
-4. **Read each subagent's `STATUS:` line.** Treat the phase as failed if any of these is `BLOCKED`:
+4. **Spot-check before aggregating.** Subagent claims are inputs, not verdicts. Before accepting the verifier's `DONE`, re-run the test suite headline yourself and read the counts. Before accepting the spec-reviewer's compliance verdict, read one plan's diff yourself. A pass you only heard about is an "assumed pass" — and an assumed pass is not a pass. This costs two commands and catches the most expensive failure mode this command has: trust laundered into evidence.
+
+5. **Read each subagent's `STATUS:` line.** Treat the phase as failed if any of these is `BLOCKED`:
    - `verifier` (tests / lint / typecheck failed)
    - `security-auditor` (Critical or High findings)
    - `spec-reviewer` (any plan non-compliant)
    - `reviewer` (Must-fix correctness issues)
 
-5. Collect results and walk user through each deliverable, incorporating findings.
-6. Record results (pass/fail/partially/skip).
-7. For failures: diagnose and create fix plans via `draht-tools create-fix-plan $1 P`
+6. Collect results and walk user through each deliverable, incorporating findings.
+7. Record results (pass/fail/partially/skip). Label each: **observed** (you or a subagent ran it and quoted output), **derived** (follows necessarily from something observed), or **assumed** (unchecked). Verdicts inherit the weakest label they rest on.
+8. For failures: diagnose and create fix plans via `draht-tools create-fix-plan $1 P`
    - Fix plans MUST include a reproducing test that demonstrates the failure before any implementation
    - Spec-reviewer omissions become explicit fix-plan tasks (one task per omission)
-8. Write UAT report: `draht-tools write-uat $1`
-   - Report must include: test health summary (pass/fail/coverage), security audit results, **spec compliance summary per plan**, domain model status (any glossary violations), deliverable results
-9. If all passed: mark phase complete.
+9. Write UAT report: `draht-tools write-uat $1`
+   - Order: **verdict first** (phase pass/fail, X/Y deliverables, in the first line), **evidence second** (test health summary with pass/fail/coverage, security audit results, spec compliance summary per plan, domain model status, deliverable results with labels), **risk last** (what was NOT tested and how it could bite). Never bury a failure under passes.
+10. If all passed: mark phase complete.
    - If more phases remain in the milestone: tell the user to start a new session and run `/discuss-phase N+1`.
    - If ALL phases in the milestone are complete: tell the user to start a new session and run `/next-milestone`.
-10. If failures: route to `execute-phase $1 --gaps-only`
+11. If failures: route to `execute-phase $1 --gaps-only`
 
 ## Why a phase-level spec-reviewer
 

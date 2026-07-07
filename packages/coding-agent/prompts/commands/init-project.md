@@ -78,6 +78,7 @@ Each step runs in its own session (`/new` between steps). Do NOT suggest `/next-
 - Follow threads based on answers
 - Use examples ("Like Stripe Checkout, or custom?")
 - Confirm, don't assume
+- When the focus names a solution ("migrate to X"), ask what problem it solves — the existing code may admit a smaller answer
 - 3-7 follow-up rounds typical
 - Respect what already exists — do not propose rewriting working code
 - Stop when you have: current state, goals, MVP scope, constraints, success criteria

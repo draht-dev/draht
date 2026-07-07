@@ -70,5 +70,6 @@ Each step runs in its own session (`/new` between steps). Do NOT suggest `/next-
 - Follow threads based on answers
 - Use examples ("Like Stripe Checkout, or custom?")
 - Confirm, don't assume
+- When the description names a solution ("an app with X"), ask what problem it solves — requirements record problems and outcomes; mechanisms stay candidates
 - 3-7 follow-up rounds typical
 - Stop when you have: problem, audience, MVP scope, constraints, success criteria

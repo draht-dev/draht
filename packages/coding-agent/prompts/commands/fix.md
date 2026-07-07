@@ -19,6 +19,14 @@ Issue: $ARGUMENTS
 
 Symptom fixes are failure. If you find yourself proposing a "quick fix for now, investigate later", STOP and return to Phase 1.
 
+## The Report Is a Symptom, Not a Diagnosis
+
+**Procedure:** Restate the failure as observable behavior — "X happens when Y; expected Z" — before touching anything. If the user names a cause ("the cache is stale"), treat it as Hypothesis #0: it enters Phase 3 like any other hypothesis and does not skip Phase 1.
+
+**Example:** "fix the stale cache bug" — Phase 1 traces the data flow and finds the cache is fine; the query behind it silently drops a filter. The fix lands in the query.
+
+**Prevents:** shipping a correct fix to the wrong component.
+
 ## Red Flags — STOP
 
 Stop immediately if you catch yourself:
@@ -54,6 +62,7 @@ Walk through these steps and report on each:
 3. Check recent changes — `git log --oneline -20` and `git diff HEAD~5` against affected files.
 4. Trace data flow upward until you find the source. Fix at source, not at symptom.
 5. State the root cause as one sentence: "X happens because Y at <file:line>."
+6. Label every statement in your report: observed (you ran it and saw it), derived (follows necessarily from evidence), or assumed (unchecked — say what would check it). A root cause resting on an assumption is a hypothesis, not a diagnosis.
 
 End your response with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
 Do NOT run draht, draht-tools, or pi commands.
@@ -105,6 +114,8 @@ If Phase 2 reveals a different root cause, go back to Phase 1.
 | "I'll write the test after I confirm the fix" | Untested fixes don't stick. |
 | "I'll just try things and see what works" | Can't isolate what worked. Creates new bugs. |
 | "I already manually tested it" | A reproducing test is the only durable proof. |
+| "The user already told me the cause" | The reporter saw the symptom. Their diagnosis is Hypothesis #0, not a finding. |
+| "The fix passed, so my diagnosis was right" | Fixes can mask. Verify the causal chain, not just the symptom's absence. |
 
 ## Rules
 - Always reproduce before fixing
@@ -112,3 +123,4 @@ If Phase 2 reveals a different root cause, go back to Phase 1.
 - Fix at source, not symptom
 - 3 failed attempts ⇒ architecture problem, stop and discuss
 - If the root cause spans multiple files, explain the chain in the commit message
+- Final report order: verdict first (fixed / not fixed, root cause in one sentence), then evidence (reproducing test red→green, suite results), then risk (what the fix could regress, what stays assumed)

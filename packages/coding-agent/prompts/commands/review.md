@@ -47,10 +47,13 @@ Before reviewing, decompose code changes into atomic reasoning units:
 
 5. Read each subagent's final `STATUS:` line.
 6. Collect and merge results.
-7. Produce a unified, prioritized findings report:
+7. **Refute before reporting.** For each Critical or Important finding, attempt to kill it yourself before it reaches the report: read the code path that would make it a false positive — an upstream guard clause, a type constraint, an existing test that covers the case. A finding that survives an honest refutation attempt is **confirmed** (you traced the failing path); one you couldn't confirm is downgraded and labeled **suspected**. Reporting unattacked findings trains readers to ignore the report.
+8. Produce a unified, prioritized findings report. Verdict first: one line — mergeable or not, and why. Then findings:
    - **Critical** — must fix before merge (security `BLOCKED`, spec gaps for required deliverables, correctness issues that cause data loss / crashes)
    - **Important** — should fix (bugs, type issues, spec over-builds, missing error handling)
    - **Minor** — style, naming, optional improvements
+
+   Each finding carries its label (confirmed/suspected). End with residual risk: what the review did NOT cover (files skipped, paths not traced) — a review that claims total coverage it doesn't have is worse than a scoped one.
 
 ## Reading STATUS
 - Any `STATUS: BLOCKED` → its findings escalate to Critical in the merged report

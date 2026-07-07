@@ -45,7 +45,7 @@ Before analyzing, decompose codebase understanding into atomic reasoning units:
    - `verifier` agent: "Analyze the test infrastructure at $1. Discover: test framework(s) in use, test directory conventions, existing coverage configuration and goals, which layers have tests (unit, integration, e2e), gaps and recommendations. Output a structured test strategy report. End with `STATUS: ...`. Do NOT run draht, draht-tools, or pi commands."
 
 4. Read each subagent's `STATUS:` line. `BLOCKED` or `NEEDS_CONTEXT` from either means STOP — partial output here corrupts downstream phases. Collect subagent results and merge with the draht-tools output.
-5. Create `.planning/DOMAIN.md` (if it doesn't exist) with:
+5. Create `.planning/DOMAIN.md` (if it doesn't exist). Everything in it is **inferred from code, not confirmed by the user** — mark uncertain context boundaries and ambiguous terms as `(inferred)` so later commands know to confirm rather than build on them. With:
    - `## Bounded Contexts` — one entry per discovered context with a brief description
    - `## Ubiquitous Language` — glossary of extracted domain terms
    - `## Context Map` — how bounded contexts relate (upstream/downstream, shared kernel, ACL)

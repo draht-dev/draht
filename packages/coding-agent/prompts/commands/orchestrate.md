@@ -15,9 +15,9 @@ Task: $ARGUMENTS
 
 Before delegating, decompose the task into atomic work units:
 
-1. **State the logical components** — What sub-tasks make up this work? Which are independent?
+1. **State the logical components** — What sub-tasks make up this work? Which are independent? A sub-task is well-cut only if its success can be checked without reference to the others.
 2. **Match agents to work** — Which specialist is right for each sub-task?
-3. **Determine order** — What can run in parallel vs what must be sequential?
+3. **Determine order** — What can run in parallel vs what must be sequential? Among independent sub-tasks, dispatch the riskiest first (highest uncertainty × blast radius): its failure invalidates the rest of the graph most cheaply, before effort is sunk into work it would obsolete.
 4. **Define success** — What does "done" look like for each sub-task, and for the whole?
 
 ## Agent Selection Guide
@@ -61,7 +61,7 @@ Never run quality review on a spec-non-compliant diff. This is the per-task loop
 
 Every draht agent ends its response with one of four status lines. Branch on it:
 
-- `STATUS: DONE` — proceed to the next step in the chain.
+- `STATUS: DONE` — check the evidence before proceeding: a `DONE` that quotes no verification output (test counts, command results) is treated as `DONE_WITH_CONCERNS` — re-run the decisive check yourself. Subagent claims are inputs, not verdicts.
 - `STATUS: DONE_WITH_CONCERNS` — note the concerns. If correctness-related, address before moving on; otherwise log and continue.
 - `STATUS: NEEDS_CONTEXT` — provide the missing info and re-dispatch the same agent. Do NOT skip ahead with a guess.
 - `STATUS: BLOCKED` — STOP. Report the blocker. Do not retry the same agent on the same input — adjust inputs (more context, decompose further, different agent) or surface to the user.
@@ -72,7 +72,7 @@ Every draht agent ends its response with one of four status lines. Branch on it:
 3. Decide parallel vs chain vs fan-out vs two-stage based on dependencies
 4. Dispatch via the `subagent` tool accordingly
 5. Read each subagent's final `STATUS:` line and branch per the protocol above
-6. Collect results, handle failures, report the final outcome to the user
+6. Collect results, handle failures, report to the user — outcome first (what happened, in one line), evidence second (what each agent verified, quoted), risk last (what remains unverified or assumed)
 
 ## Rules
 - Prefer parallel dispatch when possible — it's faster and each subagent has its own context

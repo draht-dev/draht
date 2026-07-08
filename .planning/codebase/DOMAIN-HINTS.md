@@ -1,242 +1,89 @@
 # Domain Model Hints
 
-Generated: 2026-07-08 11:19:57
+Generated: 2026-07-08 · Filtered during `/map-codebase` review.
 
-Extracted from codebase to help identify domain model.
+Extracted from `packages/*/src` (excludes `node_modules`, `dist`, and vendored third-party code under `packages/landing/.sst/**` and `packages/landing/.astro/**`, which polluted the first auto-generated pass with framework internals like `DnsRecord`/`Binding`/`Component`). This raw sweep feeds `.planning/DOMAIN.md`, which is the canonical, synthesized domain model — read that first.
 
-## Types/Interfaces (potential entities)
-```
-./packages/landing/.astro/content.d.ts:2:	export interface RenderResult {
-./packages/landing/.astro/content.d.ts:11:	export interface RenderedContent {
-./packages/landing/.astro/content.d.ts:23:	export type CollectionKey = keyof AnyEntryMap;
-./packages/landing/.astro/content.d.ts:24:	export type CollectionEntry<C extends CollectionKey> = Flatten<AnyEntryMap[C]>;
-./packages/landing/.astro/content.d.ts:26:	export type ContentCollectionKey = keyof ContentEntryMap;
-./packages/landing/.astro/content.d.ts:27:	export type DataCollectionKey = keyof DataEntryMap;
-./packages/landing/.astro/content.d.ts:34:	export type ReferenceDataEntry<
-./packages/landing/.astro/content.d.ts:41:	export type ReferenceContentEntry<
-./packages/landing/.astro/content.d.ts:48:	export type ReferenceLiveEntry<C extends keyof LiveContentConfig['collections']> = {
-./packages/landing/.astro/content.d.ts:205:	export type ContentConfig = typeof import("../src/content.config.js");
-./packages/landing/.astro/content.d.ts:206:	export type LiveContentConfig = never;
-./packages/landing/sst-env.d.ts:8:  export interface Resource {
-./packages/landing/.sst/platform/functions/cf-ssr-site-router-worker/index.ts:5:export interface Env {
-./packages/landing/.sst/platform/functions/cf-static-site-router-worker-experimental/index.ts:3:export interface Env {
-./packages/landing/.sst/platform/functions/cf-static-site-router-worker/index.ts:5:export interface Env {
-./packages/landing/.sst/platform/functions/vector-handler/index.ts:7:export type PutEvent = {
-./packages/landing/.sst/platform/functions/vector-handler/index.ts:12:export type QueryEvent = {
-./packages/landing/.sst/platform/functions/vector-handler/index.ts:20:export type RemoveEvent = {
-./packages/landing/.sst/platform/src/util/semaphore.ts:1:export class Semaphore {
-./packages/landing/.sst/platform/src/runtime/worker/unenv.d.ts:1:export interface CloudflareUnenvInput {
-./packages/landing/.sst/platform/src/runtime/worker/unenv.d.ts:6:export interface CloudflareUnenvConfig {
-./packages/landing/.sst/platform/src/components/experimental/dev-command.ts:6:export interface DevCommandArgs {
-./packages/landing/.sst/platform/src/components/experimental/dev-command.ts:99:export class DevCommand extends Component {
-./packages/landing/.sst/platform/src/components/component.ts:26:export type Prettify<T> = {
-./packages/landing/.sst/platform/src/components/component.ts:30:export type Transform<T> =
-./packages/landing/.sst/platform/src/components/component.ts:51:export class Component extends ComponentResource {
-./packages/landing/.sst/platform/src/components/component.ts:514:export class Version extends ComponentResource {
-./packages/landing/.sst/platform/src/components/component.ts:521:export type ComponentVersion = { major: number; minor: number };
-./packages/landing/.sst/platform/src/components/vercel/providers/dns-record.ts:4:export interface DnsRecordInputs {
-./packages/landing/.sst/platform/src/components/vercel/providers/dns-record.ts:12:export interface DnsRecord {
-./packages/landing/.sst/platform/src/components/vercel/providers/dns-record.ts:16:export class DnsRecord extends dynamic.Resource {
-./packages/landing/.sst/platform/src/components/vercel/dns.ts:48:export interface DnsArgs {
-./packages/landing/.sst/platform/src/components/input.ts:2:export type Input<T> = PulumiInput<T>;
-./packages/landing/.sst/platform/src/components/cloudflare/experimental/solid-start.ts:8:export interface SolidStartArgs extends SsrSiteArgs {
-./packages/landing/.sst/platform/src/components/cloudflare/experimental/solid-start.ts:214:export class SolidStart extends SsrSite {
-./packages/landing/.sst/platform/src/components/cloudflare/experimental/static-site.ts:4:export type { StaticSiteV2Args as StaticSiteArgs } from "../static-site-v2.js";
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:21:export interface AiBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:26:export interface KvBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:32:export interface SecretTextBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:38:export interface ServiceBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:44:export interface PlainTextBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:50:export interface QueueBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:56:export interface R2BucketBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:63:export interface D1DatabaseBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:70:export interface HyperdriveBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:77:export interface DurableObjectNamespaceBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:86:export interface VersionMetadataBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:91:export interface WorkflowBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:100:export interface RateLimitBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:111:export type Binding =
-```
+## Types/Interfaces (potential entities), first 220 real matches
 
-## Directory Structure (potential bounded contexts)
 ```
-.
-./.claude
-./.draht
-./.draht/agents
-./.draht/extensions
-./.draht/git
-./.draht/npm
-./.draht/prompts
-./.git
-./.github
-./.github/ISSUE_TEMPLATE
-./.github/workflows
-./.husky
-./.husky/_
-./.pi
-./.pi/extensions
-./.pi/git
-./.pi/npm
-./.pi/prompts
-./.planning
-./.planning/codebase
-./.planning/kg-integration
-./.planning/phases
-./.planning/phases/01-rebrand
-./.planning/phases/02-sst-infra
-./.planning/phases/03-sst-extension
-./.planning/phases/04-agents-templates
-./.planning/phases/05-client-knowledge-base
-./.planning/phases/06-ci-review-pipeline
-./.planning/phases/07-multi-agent-orchestration
-./.planning/phases/08-n8n-workflows
-./.planning/phases/09-deploy-guardian
-./.planning/phases/10-phase-10
-./.planning/phases/11-phase-11
-./.planning/phases/12-phase-12
-./.planning/phases/13-phase-13
-./.planning/phases/14-phase-14
-./.planning/phases/15-phase-15
-./.planning/phases/16-phase-16
-./.planning/phases/17-phase-17
-./.planning/phases/18-phase-18
-./.planning/phases/19-gsd-cli-integration
-./.planning/phases/20-tdd-ddd-hook-hardening
-./.planning/phases/21-phase-21
-./.planning/phases/22-phase-22
-./.planning/phases/23-multi-agent-layer
-./.planning/quick
-./.planning/quick/001-fix-quality-gate-failures
-./.planning/quick/003-cmux-notification-system-is-not-working-
-./.planning/specs
-./docs
-./node_modules
-./packages
-./packages/agent
-./packages/agent/dist
-./packages/agent/docs
-./packages/agent/node_modules
-./packages/agent/src
-./packages/agent/test
-./packages/ai
-./packages/ai/dist
-./packages/ai/node_modules
-./packages/ai/scripts
-./packages/ai/src
-./packages/ai/test
-./packages/ci
-./packages/ci/node_modules
-./packages/ci/src
-./packages/ci/test
-./packages/coding-agent
-./packages/coding-agent/agents
-./packages/coding-agent/bin
-./packages/coding-agent/binaries
-./packages/coding-agent/dist
-./packages/coding-agent/docs
-./packages/coding-agent/examples
-./packages/coding-agent/hooks
-./packages/coding-agent/node_modules
-./packages/coding-agent/prompts
-./packages/coding-agent/scripts
-./packages/coding-agent/src
-./packages/coding-agent/test
-./packages/compliance
-./packages/compliance/node_modules
-./packages/compliance/src
-./packages/compliance/templates
-./packages/compliance/test
-./packages/deploy-guardian
-./packages/deploy-guardian/node_modules
-./packages/deploy-guardian/src
-./packages/deploy-guardian/test
-./packages/draht-claude
-./packages/draht-claude/.claude-plugin
-./packages/draht-claude/agents
-./packages/draht-claude/bin
-./packages/draht-claude/commands
-./packages/draht-claude/hooks
-./packages/draht-claude/node_modules
-./packages/draht-claude/scripts
-./packages/draht-claude/skills
-./packages/draht-codex
-./packages/draht-codex/.codex-plugin
-./packages/draht-codex/agents
-./packages/draht-codex/bin
-./packages/draht-codex/commands
-./packages/draht-codex/hooks
-./packages/draht-codex/node_modules
-./packages/draht-codex/scripts
-./packages/draht-codex/skills
-./packages/draht-tools
-./packages/draht-tools/bin
-./packages/gateway
-./packages/gateway/.planning
-./packages/gateway/node_modules
-./packages/gateway/src
-./packages/infra
-./packages/infra/node_modules
-./packages/infra/src
-./packages/invoice
-./packages/invoice/node_modules
-./packages/invoice/src
-./packages/invoice/test
-./packages/knowledge
-./packages/knowledge/node_modules
-./packages/knowledge/src
-./packages/knowledge/test
-./packages/landing
-./packages/landing/.astro
-./packages/landing/.sst
-./packages/landing/dist
-./packages/landing/drafts
-./packages/landing/node_modules
-./packages/landing/public
-./packages/landing/src
-./packages/mom
-./packages/mom/dist
-./packages/mom/docs
-./packages/mom/node_modules
-./packages/mom/scripts
-./packages/mom/src
-./packages/orchestrator
-./packages/orchestrator/node_modules
-./packages/orchestrator/src
-./packages/orchestrator/test
-./packages/pods
-./packages/pods/dist
-./packages/pods/docs
-./packages/pods/node_modules
-./packages/pods/scripts
-./packages/pods/src
-./packages/router
-./packages/router/node_modules
-./packages/router/src
-./packages/router/test
-./packages/templates
-./packages/templates/src
-./packages/tui
-./packages/tui/dist
-./packages/tui/native
-./packages/tui/node_modules
-./packages/tui/src
-./packages/tui/test
-./packages/web-ui
-./packages/web-ui/dist
-./packages/web-ui/example
-./packages/web-ui/node_modules
-./packages/web-ui/scripts
-./packages/web-ui/src
-./packages/workflows
-./packages/workflows/src
-./scripts
-./templates
-./templates/project
-./templates/project/.draht
+./packages/agent/src/agent.ts:97:export interface AgentOptions {
+./packages/agent/src/agent.ts:171:export class Agent {
+./packages/agent/src/types.ts:41:export type ToolExecutionMode = "sequential" | "parallel";
+./packages/agent/src/types.ts:49:export type QueueMode = "all" | "one-at-a-time";
+./packages/agent/src/types.ts:129:export interface AgentLoopTurnUpdate {
+./packages/agent/src/types.ts:140:export interface AgentLoopConfig extends SimpleStreamOptions {
+./packages/agent/src/types.ts:289:export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+./packages/agent/src/types.ts:322:export interface AgentState {
+./packages/agent/src/types.ts:350:export interface AgentToolResult<T> {
+./packages/agent/src/types.ts:371:export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> extends Tool<TParameters> {
+./packages/agent/src/types.ts:397:export interface AgentContext {
+./packages/agent/src/types.ts:413:export type AgentEvent =
+./packages/agent/src/harness/messages.ts:19:export interface BashExecutionMessage {
+./packages/agent/src/harness/messages.ts:40:export interface BranchSummaryMessage {
+./packages/agent/src/harness/messages.ts:47:export interface CompactionSummaryMessage {
+./packages/agent/src/harness/compaction/compaction.ts:21:export interface CompactionDetails {
+./packages/agent/src/harness/compaction/compaction.ts:89:export interface CompactionResult<T = unknown> {
+./packages/agent/src/harness/compaction/compaction.ts:101:export interface CompactionSettings {
+./packages/agent/src/harness/compaction/compaction.ts:149:export interface ContextUsageEstimate {
+./packages/agent/src/harness/compaction/branch-summarization.ts:23:export interface BranchSummaryDetails {
+./packages/agent/src/harness/types.ts:46:export interface Skill {
+./packages/agent/src/harness/types.ts:60:export interface PromptTemplate {
+./packages/agent/src/harness/types.ts:122:export class FileError extends Error {
+./packages/agent/src/harness/types.ts:146:export class ExecutionError extends Error {
+./packages/agent/src/harness/types.ts:161:export class CompactionError extends Error {
+./packages/agent/src/harness/types.ts:176:export class BranchSummaryError extends Error {
+./packages/agent/src/harness/types.ts:196:export class SessionError extends Error {
+./packages/agent/src/harness/types.ts:219:export class AgentHarnessError extends Error {
+./packages/agent/src/harness/types.ts:334:export interface SessionTreeEntryBase {
+./packages/agent/src/harness/types.ts:409:export type SessionTreeEntry =
+./packages/agent/src/harness/types.ts:422:export interface SessionContext {
+./packages/agent/src/harness/types.ts:429:export interface SessionMetadata {
+./packages/agent/src/harness/types.ts:440:export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
+./packages/agent/src/harness/types.ts:456:export type { Session } from "./session/session.ts";
+./packages/agent/src/harness/types.ts:468:export interface SessionRepo<
+./packages/agent/src/harness/types.ts:492:export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
+./packages/agent/src/harness/agent-harness.ts:157:export class AgentHarness<
+./packages/agent/src/harness/session/session.ts:82:export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
+./packages/agent/src/harness/session/jsonl-repo.ts:38:export class JsonlSessionRepo implements JsonlSessionRepoApi {
+./packages/agent/src/harness/session/memory-repo.ts:5:export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: string }, void> {
+./packages/ai/src/images-models.ts:12:export interface ImagesProvider {
+./packages/ai/src/images-models.ts:49:export interface ImagesModels {
+./packages/ai/src/auth/credential-store.ts:8:export class InMemoryCredentialStore implements CredentialStore {
+./packages/ai/src/auth/types.ts:8:export interface ModelAuth {
+./packages/ai/src/auth/types.ts:18:export interface ApiKeyCredential {
+./packages/ai/src/auth/types.ts:25:export interface OAuthCredential extends OAuthCredentials {
+./packages/ai/src/auth/types.ts:30:export type Credential = ApiKeyCredential | OAuthCredential;
+./packages/ai/src/auth/types.ts:47:export interface CredentialStore {
+./packages/ai/src/auth/types.ts:79:export interface AuthResult {
+./packages/ai/src/auth/types.ts:179:export interface ProviderAuth {
+./packages/ai/src/auth/resolve.ts:21:export class ModelsError extends Error {
+./packages/ai/src/providers/faux.ts:37:export interface FauxModelDefinition {
+./packages/ai/src/utils/event-stream.ts:4:export class EventStream<T, R = T> implements AsyncIterable<T> {
+./packages/ai/src/types.ts:15:export type KnownApi =
+./packages/ai/src/types.ts:26:export type Api = KnownApi | (string & {});
+./packages/ai/src/types.ts:32:export type KnownProvider =
+./packages/ai/src/types.ts:68:export type ProviderId = KnownProvider | string;
+./packages/ai/src/types.ts:74:export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+./packages/ai/src/types.ts:88:export interface ThinkingBudgets {
+./packages/ai/src/types.ts:96:export type CacheRetention = "none" | "short" | "long";
 ```
 
-## TODO
-- [ ] Identify entities vs value objects
-- [ ] Map bounded contexts from directory structure
-- [ ] Define ubiquitous language glossary
+_(Full 220-line sweep available by re-running `draht-tools map-codebase`; truncated here for readability — the deduplicated entity list is already captured in `.planning/DOMAIN.md`.)_
+
+## Directory Structure (bounded contexts)
+
+See `.planning/DOMAIN.md` § Bounded Contexts for the synthesized tier breakdown (Platform Kernel / GSD / Business Capability / Delivery-Edge / Distribution). Raw `packages/*` listing:
+
+```
+packages/agent packages/ai packages/ci packages/coding-agent packages/compliance
+packages/deploy-guardian packages/draht-claude packages/draht-codex packages/draht-tools
+packages/gateway packages/infra packages/invoice packages/knowledge packages/landing
+packages/mom packages/orchestrator packages/pods packages/router packages/templates
+packages/tui packages/web-ui packages/workflows
+```
+
+## Notes
+
+- `ThinkingLevel` appears with two different unions in `agent/src/types.ts` (includes `"off"`) and `ai/src/types.ts` (does not) — flagged as a vocabulary conflict in `.planning/DOMAIN.md` Concerns.
+- `Session` / `SessionStorage` / `SessionRepo` are defined in `agent/src/harness/` and redefined independently in `coding-agent` and `gateway` — same name, not the same shared type.

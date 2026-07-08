@@ -1,6 +1,6 @@
 # Domain Model Hints
 
-Generated: 2026-06-06 21:29:13
+Generated: 2026-07-08 11:19:57
 
 Extracted from codebase to help identify domain model.
 
@@ -32,11 +32,11 @@ Extracted from codebase to help identify domain model.
 ./packages/landing/.sst/platform/src/components/component.ts:26:export type Prettify<T> = {
 ./packages/landing/.sst/platform/src/components/component.ts:30:export type Transform<T> =
 ./packages/landing/.sst/platform/src/components/component.ts:51:export class Component extends ComponentResource {
-./packages/landing/.sst/platform/src/components/component.ts:513:export class Version extends ComponentResource {
-./packages/landing/.sst/platform/src/components/component.ts:520:export type ComponentVersion = { major: number; minor: number };
+./packages/landing/.sst/platform/src/components/component.ts:514:export class Version extends ComponentResource {
+./packages/landing/.sst/platform/src/components/component.ts:521:export type ComponentVersion = { major: number; minor: number };
 ./packages/landing/.sst/platform/src/components/vercel/providers/dns-record.ts:4:export interface DnsRecordInputs {
-./packages/landing/.sst/platform/src/components/vercel/providers/dns-record.ts:11:export interface DnsRecord {
-./packages/landing/.sst/platform/src/components/vercel/providers/dns-record.ts:15:export class DnsRecord extends dynamic.Resource {
+./packages/landing/.sst/platform/src/components/vercel/providers/dns-record.ts:12:export interface DnsRecord {
+./packages/landing/.sst/platform/src/components/vercel/providers/dns-record.ts:16:export class DnsRecord extends dynamic.Resource {
 ./packages/landing/.sst/platform/src/components/vercel/dns.ts:48:export interface DnsArgs {
 ./packages/landing/.sst/platform/src/components/input.ts:2:export type Input<T> = PulumiInput<T>;
 ./packages/landing/.sst/platform/src/components/cloudflare/experimental/solid-start.ts:8:export interface SolidStartArgs extends SsrSiteArgs {
@@ -51,11 +51,11 @@ Extracted from codebase to help identify domain model.
 ./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:56:export interface R2BucketBinding {
 ./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:63:export interface D1DatabaseBinding {
 ./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:70:export interface HyperdriveBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:77:export interface VersionMetadataBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:82:export interface WorkflowBinding {
-./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:91:export type Binding =
-./packages/landing/.sst/platform/src/components/cloudflare/workflow.ts:10:export interface WorkflowArgs {
-./packages/landing/.sst/platform/src/components/cloudflare/workflow.ts:43:   * export class OrderProcessor extends WorkflowEntrypoint<Env, Params> {
+./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:77:export interface DurableObjectNamespaceBinding {
+./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:86:export interface VersionMetadataBinding {
+./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:91:export interface WorkflowBinding {
+./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:100:export interface RateLimitBinding {
+./packages/landing/.sst/platform/src/components/cloudflare/binding.ts:111:export type Binding =
 ```
 
 ## Directory Structure (potential bounded contexts)
@@ -109,6 +109,8 @@ Extracted from codebase to help identify domain model.
 ./.planning/quick
 ./.planning/quick/001-fix-quality-gate-failures
 ./.planning/quick/003-cmux-notification-system-is-not-working-
+./.planning/specs
+./docs
 ./node_modules
 ./packages
 ./packages/agent
@@ -188,6 +190,7 @@ Extracted from codebase to help identify domain model.
 ./packages/landing/.astro
 ./packages/landing/.sst
 ./packages/landing/dist
+./packages/landing/drafts
 ./packages/landing/node_modules
 ./packages/landing/public
 ./packages/landing/src
@@ -215,6 +218,7 @@ Extracted from codebase to help identify domain model.
 ./packages/templates/src
 ./packages/tui
 ./packages/tui/dist
+./packages/tui/native
 ./packages/tui/node_modules
 ./packages/tui/src
 ./packages/tui/test

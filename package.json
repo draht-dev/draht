@@ -43,11 +43,11 @@
   "devDependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.26",
     "@biomejs/biome": "2.3.5",
-    "@types/node": "^22.19.19",
+    "@types/node": "^22.20.0",
     "@typescript/native-preview": "7.0.0-dev.20260120.1",
-    "concurrently": "^9.2.1",
+    "concurrently": "^9.2.3",
     "husky": "^9.1.7",
-    "tsx": "^4.22.1",
+    "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "shx": "^0.4.0",
     "esbuild": "^0.28.1"
@@ -59,8 +59,8 @@
   "dependencies": {
     "@mariozechner/jiti": "^2.6.5",
     "@draht/coding-agent": "workspace:*",
-    "get-east-asian-width": "^1.4.0",
-    "koffi": "^2.15.1"
+    "get-east-asian-width": "^1.6.0",
+    "koffi": "^2.16.2"
   },
   "overrides": {
     "rimraf": "6.1.2",

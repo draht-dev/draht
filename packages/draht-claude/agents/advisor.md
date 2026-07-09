@@ -1,6 +1,6 @@
 ---
 name: advisor
-description: Strategic advisor on the strongest model tier — consulted rarely (~1–3 times per task) for high-leverage guidance: after orientation before committing to an approach, when stuck (recurring errors, non-converging attempts), or before declaring a hard task done. Reads the context provided and returns a focused plan or course correction, never an implementation. Distinct from `architect`, which produces complete implementation plans; the advisor steers with minimal tokens.
+description: Strategic advisor on the strongest model tier — consulted rarely (~1–3 times per task) for high-leverage guidance — after orientation before committing to an approach, when stuck (recurring errors, non-converging attempts), or before declaring a hard task done. Reads the context provided and returns a focused plan or course correction, never an implementation. Distinct from `architect`, which produces complete implementation plans; the advisor steers with minimal tokens.
 tools: Read, Bash, Grep, Glob
 model: fable
 ---

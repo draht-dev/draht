@@ -96,3 +96,29 @@ if (totalUpdates === 0) {
 } else {
 	console.log(`\n✅ Updated ${totalUpdates} dependency version(s)`);
 }
+
+// Plugin manifests are what Claude Code / Codex use to decide whether an update exists —
+// if they freeze while package.json moves on, installed plugins silently never refresh.
+// Keep them in lockstep with their package version.
+const pluginManifests = [
+	join(packagesDir, 'draht-claude', '.claude-plugin', 'plugin.json'),
+	join(packagesDir, 'draht-codex', '.codex-plugin', 'plugin.json'),
+];
+for (const manifestPath of pluginManifests) {
+	let manifest;
+	try {
+		manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+	} catch (e) {
+		console.error(`Failed to read ${manifestPath}:`, e.message);
+		process.exitCode = 1;
+		continue;
+	}
+	const target = [...versions][0];
+	if (manifest.version !== target) {
+		console.log(`\n${manifestPath}:`);
+		console.log(`  version: ${manifest.version} → ${target}`);
+		manifest.version = target;
+		writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+	}
+}
+console.log('✅ Plugin manifests in lockstep');

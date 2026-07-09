@@ -10,7 +10,7 @@ Decompose a task and dispatch the right mix of specialist subagents.
 
 Task: $ARGUMENTS
 
-> **Tool note**: Spawn Codex subagents using the matching Draht `architect` agent prompt, `implementer`, `spec-reviewer`, `reviewer`, `debugger`, `verifier`, `git-committer`, `security-auditor`. Dispatch multiple tasks in the same assistant turn for parallel execution.
+> **Tool note**: Spawn Codex subagents using the matching Draht `architect` agent prompt, `implementer`, `spec-reviewer`, `reviewer`, `debugger`, `verifier`, `git-committer`, `security-auditor`, `advisor`. Dispatch multiple tasks in the same assistant turn for parallel execution.
 
 ## Atomic Reasoning
 
@@ -33,8 +33,27 @@ Before delegating, decompose the task into atomic work units:
 | Audit for security issues | `security-auditor` |
 | Run lint / typecheck / tests | `verifier` |
 | Create atomic commits | `git-committer` |
+| Strategic steer at a decision point — rare, high-leverage | `advisor` |
 
 `spec-reviewer` and `reviewer` are distinct on purpose. Spec-reviewer ONLY checks "did the diff implement what the spec asked, no more no less". Reviewer evaluates quality (naming, structure, type safety). For any task with a written spec, run spec-reviewer **before** reviewer — accepting "close enough" on spec is a known failure mode.
+
+## Effort Scaling
+
+Match orchestration weight to the task — over-orchestration burns tokens without adding verification value:
+
+| Task shape | Dispatch |
+|---|---|
+| Single question or trivial fix | One agent, or handle it directly — no orchestration |
+| One change set to evaluate | 2–4 parallel evaluators (reviewer, security-auditor, verifier) |
+| Multi-part feature with known decomposition | Fan-out / fan-in |
+| Goal needing iteration until a measurable criterion holds | `/orchestrate-loop` |
+
+## Model Tiering
+
+Bill volume tokens at the cheaper rate — see the `model-tiering` skill:
+
+- **Orchestrator pattern** — run this command on the strongest tier (e.g. Claude Fable 5) and let workers execute on the executor tier (e.g. Claude Sonnet 5): planning quality where it matters, volume tokens at worker rates.
+- **Advisor pattern** — when the session runs on the executor tier, dispatch `advisor` sparingly: once after orientation before committing to an approach, again when stuck or before declaring a hard task done. ~1–3 consults per task; treat its guidance with serious weight.
 
 ## Orchestration Modes
 
@@ -58,6 +77,9 @@ implementer → spec-reviewer → reviewer
 
 Never run quality review on a spec-non-compliant diff. This is the standard pattern inside `/execute-phase`'s per-task loop.
 
+### Loop (iterate until a check passes)
+When the work cannot land in one dispatch but success is provable by a deterministic check, do not improvise retries here — hand off to `/orchestrate-loop`. It runs fresh worker iterations gated by an independent re-run of the check, with max-iteration and stall bounds. See the `loop-workflow` skill for the discipline.
+
 ## Reading Subagent Status
 
 Every draht agent ends its response with one of four status lines. Branch on it:
@@ -77,7 +99,8 @@ Every draht agent ends its response with one of four status lines. Branch on it:
 
 ## Rules
 - Prefer parallel dispatch when possible — it's faster and each subagent has its own context
-- Pass complete context to subagents — they cannot see the main conversation
+- Every dispatch is a complete brief: objective, expected output format, tool guidance, and task boundaries — subagents cannot see the main conversation
 - Do not nest delegations deeply — one level is usually enough
 - Never retry the same agent on the same input after `BLOCKED` — change something
 - For any spec-driven work, spec-reviewer runs before quality reviewer
+- The agent that produced work never evaluates it — completion verdicts come from a fresh-context evaluator plus your own re-run of the decisive check

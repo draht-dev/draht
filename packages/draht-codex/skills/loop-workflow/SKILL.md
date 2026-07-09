@@ -37,7 +37,7 @@ Pick the smallest loop that fits: a failing test needs the TDD loop, not a goal 
 | One-shotting too much per cycle | One increment, one commit per iteration |
 | State lost at context death | Commit every iteration + append-only progress log |
 | Weakening tests or the check to pass | Tests and check are immutable inside a loop; violation means revert + hard stop |
-| Spinning on the same failure | Stall detection — two identical failure signatures in a row means change the inputs or stop |
+| Spinning on the same failure | Stall detection — two identical failure signatures in a row means change the inputs, consult `advisor`, or stop |
 | Time blindness (hours burned re-running slow checks) | Keep checks fast and their output terse: failures only |
 
 ## Interaction With Other Disciplines
@@ -45,6 +45,7 @@ Pick the smallest loop that fits: a failing test needs the TDD loop, not a goal 
 - `verification-gate` supplies the evidence rules for reading loop results: label them observed / derived / assumed
 - `tdd-workflow` is the innermost loop; `/orchestrate-loop` wraps the same shape at goal level
 - `atomic-reasoning` cuts the increments: an increment is well-cut only if its check can fail while all others pass
+- `model-tiering` sets the economics: loops are volume work, so workers run on the executor tier while steering (the orchestrating context, `advisor`, `spec-reviewer`) stays on the strongest tier — most loop tokens bill at the worker rate
 
 ## Scope
 

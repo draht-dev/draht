@@ -246,6 +246,10 @@ function cmdInstall(flags) {
 	fs.mkdirSync(pluginDir, { recursive: true });
 	copyRecursive(PACKAGE_ROOT, pluginDir);
 
+	// Drop the legacy plugin dir from the pre-rename layout ("draht-claude" → "draht") — it
+	// lingers with an ancient draht-tools copy and confuses debugging.
+	removeRecursive(path.join(marketplaceDir, "plugins", "draht-claude"));
+
 	// Write marketplace manifest
 	log("Writing marketplace.json...");
 	writeMarketplaceManifest(marketplaceDir, manifest);
@@ -262,8 +266,15 @@ function cmdInstall(flags) {
 	runClaude(["plugin", "marketplace", "update", MARKETPLACE_NAME], { allowFail: true });
 
 	// Install the plugin
-	log("Installing plugin...");
 	const pluginSpec = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+	if (flags.force) {
+		// `claude plugin install` is a no-op when the same plugin version is already installed —
+		// it never re-copies from the marketplace. Uninstall first so --force actually refreshes
+		// the runtime copy (same pattern as draht-codex, where updates propagate correctly).
+		log("Removing previously installed plugin so Claude Code re-copies fresh files...");
+		runClaude(["plugin", "uninstall", pluginSpec], { allowFail: true });
+	}
+	log("Installing plugin...");
 	runClaude(["plugin", "install", pluginSpec, "--scope", "user"]);
 
 	// Enable explicitly — install usually enables automatically, but be safe

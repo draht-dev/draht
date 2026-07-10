@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { describe, it, mock } from "node:test";
+import { describe, it } from "node:test";
 import { setKittyProtocolActive } from "../src/keys.ts";
 import { normalizeAppleTerminalInput, ProcessTerminal } from "../src/terminal.ts";
 
@@ -30,6 +30,10 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 		getInput(): string | undefined;
 		cleanup(): void;
 	};
+
+	function wait(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
 
 	function setupNegotiation(): NegotiationHarness {
 		const terminal = new ProcessTerminal();
@@ -152,12 +156,11 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 		}
 	});
 
-	it("tracks split Kitty confirmation", () => {
-		mock.timers.enable({ apis: ["setTimeout"] });
+	it("tracks split Kitty confirmation", async () => {
 		const harness = setupNegotiation();
 		try {
 			harness.send("\x1b[?7");
-			mock.timers.tick(10);
+			await wait(15);
 
 			assert.equal(harness.getInput(), undefined);
 
@@ -167,25 +170,22 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 			assert.equal(harness.writes.includes("\x1b[>4;2m"), false);
 		} finally {
 			harness.cleanup();
-			mock.timers.reset();
 		}
 	});
 
-	it("replays buffered CSI-prefix input when it is not a Kitty response", () => {
-		mock.timers.enable({ apis: ["setTimeout"] });
+	it("replays buffered CSI-prefix input when it is not a Kitty response", async () => {
 		const harness = setupNegotiation();
 		try {
 			harness.send("\x1b[");
-			mock.timers.tick(10);
+			await wait(15);
 
 			assert.equal(harness.getInput(), undefined);
 
-			mock.timers.tick(150);
+			await wait(160);
 
 			assert.equal(harness.getInput(), "\x1b[");
 		} finally {
 			harness.cleanup();
-			mock.timers.reset();
 		}
 	});
 });

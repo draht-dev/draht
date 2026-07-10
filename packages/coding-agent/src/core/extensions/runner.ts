@@ -114,25 +114,6 @@ interface BeforeAgentStartCombinedResult {
 	systemPrompt?: string;
 }
 
-async function callContextHandlerAbortable<T>(fn: () => Promise<T> | T, signal: AbortSignal): Promise<T> {
-	if (signal.aborted) {
-		throw new Error("Agent run aborted");
-	}
-
-	let cleanup = () => {};
-	const abortPromise = new Promise<never>((_resolve, reject) => {
-		const onAbort = () => reject(new Error("Agent run aborted"));
-		signal.addEventListener("abort", onAbort, { once: true });
-		cleanup = () => signal.removeEventListener("abort", onAbort);
-	});
-
-	try {
-		return await Promise.race([Promise.resolve().then(fn), abortPromise]);
-	} finally {
-		cleanup();
-	}
-}
-
 /**
  * Events handled by the generic emit() method.
  * Events with dedicated emitXxx() methods are excluded for stronger type safety.
@@ -951,7 +932,6 @@ export class ExtensionRunner {
 
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
 		const ctx = this.createContext();
-		const signal = ctx.signal;
 		let currentMessages = structuredClone(messages);
 
 		for (const ext of this.extensions) {
@@ -961,17 +941,12 @@ export class ExtensionRunner {
 			for (const handler of handlers) {
 				try {
 					const event: ContextEvent = { type: "context", messages: currentMessages };
-					const handlerResult = signal
-						? await callContextHandlerAbortable(() => handler(event, ctx), signal)
-						: await handler(event, ctx);
+					const handlerResult = await handler(event, ctx);
 
 					if (handlerResult && (handlerResult as ContextEventResult).messages) {
 						currentMessages = (handlerResult as ContextEventResult).messages!;
 					}
 				} catch (err) {
-					if (signal?.aborted) {
-						throw err;
-					}
 					const message = err instanceof Error ? err.message : String(err);
 					const stack = err instanceof Error ? err.stack : undefined;
 					this.emitError({

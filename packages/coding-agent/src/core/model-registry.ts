@@ -94,6 +94,7 @@ const ThinkingLevelMapSchema = Type.Object({
 	medium: Type.Optional(ThinkingLevelMapValueSchema),
 	high: Type.Optional(ThinkingLevelMapValueSchema),
 	xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+	max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
 const ChatTemplateKwargScalarSchema = Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]);
@@ -155,6 +156,21 @@ const ProviderCompatSchema = Type.Union([
 	AnthropicMessagesCompatSchema,
 ]);
 
+const ModelCostRatesSchema = {
+	input: Type.Number(),
+	output: Type.Number(),
+	cacheRead: Type.Number(),
+	cacheWrite: Type.Number(),
+};
+const ModelCostTierSchema = Type.Object({
+	inputTokensAbove: Type.Number(),
+	...ModelCostRatesSchema,
+});
+const ModelCostSchema = Type.Object({
+	...ModelCostRatesSchema,
+	tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
+});
+
 // Schema for custom model definition
 // Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
 const ModelDefinitionSchema = Type.Object({
@@ -165,14 +181,7 @@ const ModelDefinitionSchema = Type.Object({
 	reasoning: Type.Optional(Type.Boolean()),
 	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
 	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
-	cost: Type.Optional(
-		Type.Object({
-			input: Type.Number(),
-			output: Type.Number(),
-			cacheRead: Type.Number(),
-			cacheWrite: Type.Number(),
-		}),
-	),
+	cost: Type.Optional(ModelCostSchema),
 	contextWindow: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -191,6 +200,7 @@ const ModelOverrideSchema = Type.Object({
 			output: Type.Optional(Type.Number()),
 			cacheRead: Type.Optional(Type.Number()),
 			cacheWrite: Type.Optional(Type.Number()),
+			tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
 		}),
 	),
 	contextWindow: Type.Optional(Type.Number()),
@@ -334,6 +344,7 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 			output: override.cost.output ?? model.cost.output,
 			cacheRead: override.cost.cacheRead ?? model.cost.cacheRead,
 			cacheWrite: override.cost.cacheWrite ?? model.cost.cacheWrite,
+			tiers: override.cost.tiers ?? model.cost.tiers,
 		};
 	}
 
@@ -353,6 +364,7 @@ export class ModelRegistry {
 	private models: Model<Api>[] = [];
 	private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
 	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
+	private configModelOverrides: Map<string, Map<string, ModelOverride>> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
 	readonly authStorage: AuthStorage;
@@ -406,6 +418,7 @@ export class ModelRegistry {
 			modelOverrides,
 			error,
 		} = this.modelsJsonPath ? this.loadCustomModels(this.modelsJsonPath) : emptyCustomModelsResult();
+		this.configModelOverrides = modelOverrides;
 
 		if (error) {
 			this.loadError = error;
@@ -457,6 +470,15 @@ export class ModelRegistry {
 				return model;
 			});
 		});
+	}
+
+	private getConfiguredModelOverride(providerName: string, modelId: string): ModelOverride | undefined {
+		return this.configModelOverrides.get(providerName)?.get(modelId);
+	}
+
+	private applyConfiguredModelOverride(providerName: string, model: Model<Api>): Model<Api> {
+		const modelOverride = this.getConfiguredModelOverride(providerName, model.id);
+		return modelOverride ? applyModelOverride(model, modelOverride) : model;
 	}
 
 	/** Merge custom models into built-in list by provider+id (custom wins on conflicts). */
@@ -921,9 +943,14 @@ export class ModelRegistry {
 			// Parse and add new models
 			for (const modelDef of config.models) {
 				const api = modelDef.api || config.api;
-				this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
+				const modelOverride = this.getConfiguredModelOverride(providerName, modelDef.id);
+				const headers =
+					modelDef.headers || modelOverride?.headers
+						? { ...modelDef.headers, ...modelOverride?.headers }
+						: undefined;
+				this.storeModelHeaders(providerName, modelDef.id, headers);
 
-				this.models.push({
+				const model = this.applyConfiguredModelOverride(providerName, {
 					id: modelDef.id,
 					name: modelDef.name,
 					api: api as Api,
@@ -938,6 +965,7 @@ export class ModelRegistry {
 					headers: undefined,
 					compat: modelDef.compat,
 				} as Model<Api>);
+				this.models.push(model);
 			}
 
 			// Apply OAuth modifyModels if credentials exist (e.g., to update baseUrl)
@@ -981,7 +1009,7 @@ export interface ProviderConfigInput {
 		reasoning: boolean;
 		thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
 		input: ("text" | "image")[];
-		cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+		cost: Model<Api>["cost"];
 		contextWindow: number;
 		maxTokens: number;
 		headers?: Record<string, string>;

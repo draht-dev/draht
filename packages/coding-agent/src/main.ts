@@ -344,6 +344,11 @@ async function createSessionManager(
 		if (existingSession) {
 			return SessionManager.open(existingSession.path, sessionDir);
 		}
+		console.error(
+			chalk.yellow(
+				`Warning: No project session found with id '${parsed.sessionId}'; creating a new session with that id.`,
+			),
+		);
 	}
 
 	return SessionManager.create(cwd, sessionDir, { id: parsed.sessionId });

@@ -113,7 +113,7 @@ export const ZAI_CODING_CN_MODELS = {
 			zaiToolStream: true,
 		},
 		reasoning: true,
-		thinkingLevelMap: { minimal: null, low: "high", medium: "high", high: "high", xhigh: "max" },
+		thinkingLevelMap: { minimal: null, low: "high", medium: "high", high: "high", max: "max" },
 		input: ["text"],
 		cost: {
 			input: 0,

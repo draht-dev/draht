@@ -18,7 +18,7 @@ export const OPENCODE_GO_MODELS = {
 			thinkingFormat: "deepseek",
 		},
 		reasoning: true,
-		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", max: "max" },
 		input: ["text"],
 		cost: {
 			input: 0.14,
@@ -43,7 +43,7 @@ export const OPENCODE_GO_MODELS = {
 			thinkingFormat: "deepseek",
 		},
 		reasoning: true,
-		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", max: "max" },
 		input: ["text"],
 		cost: {
 			input: 1.74,
@@ -80,7 +80,7 @@ export const OPENCODE_GO_MODELS = {
 		baseUrl: "https://opencode.ai/zen/go/v1",
 		compat: { supportsStore: false, supportsDeveloperRole: false, maxTokensField: "max_tokens" },
 		reasoning: true,
-		thinkingLevelMap: { off: null, minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		thinkingLevelMap: { off: null, minimal: null, low: null, medium: null, high: "high", max: "max" },
 		input: ["text"],
 		cost: {
 			input: 1.4,

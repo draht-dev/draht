@@ -30,7 +30,7 @@ export const OPENCODE_MODELS = {
 		baseUrl: "https://opencode.ai/zen",
 		compat: { forceAdaptiveThinking: true },
 		reasoning: true,
-		thinkingLevelMap: { off: null, xhigh: "xhigh" },
+		thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
 		input: ["text", "image"],
 		cost: {
 			input: 10,
@@ -100,7 +100,7 @@ export const OPENCODE_MODELS = {
 		baseUrl: "https://opencode.ai/zen",
 		compat: { forceAdaptiveThinking: true },
 		reasoning: true,
-		thinkingLevelMap: { xhigh: "max" },
+		thinkingLevelMap: { max: "max" },
 		input: ["text", "image"],
 		cost: {
 			input: 5,
@@ -119,7 +119,7 @@ export const OPENCODE_MODELS = {
 		baseUrl: "https://opencode.ai/zen",
 		compat: { forceAdaptiveThinking: true, supportsTemperature: false },
 		reasoning: true,
-		thinkingLevelMap: { xhigh: "xhigh" },
+		thinkingLevelMap: { xhigh: "xhigh", max: "max" },
 		input: ["text", "image"],
 		cost: {
 			input: 5,
@@ -138,7 +138,7 @@ export const OPENCODE_MODELS = {
 		baseUrl: "https://opencode.ai/zen",
 		compat: { forceAdaptiveThinking: true, supportsTemperature: false },
 		reasoning: true,
-		thinkingLevelMap: { xhigh: "xhigh" },
+		thinkingLevelMap: { xhigh: "xhigh", max: "max" },
 		input: ["text", "image"],
 		cost: {
 			input: 5,
@@ -191,6 +191,7 @@ export const OPENCODE_MODELS = {
 		baseUrl: "https://opencode.ai/zen",
 		compat: { forceAdaptiveThinking: true },
 		reasoning: true,
+		thinkingLevelMap: { max: "max" },
 		input: ["text", "image"],
 		cost: {
 			input: 3,
@@ -209,6 +210,7 @@ export const OPENCODE_MODELS = {
 		baseUrl: "https://opencode.ai/zen",
 		compat: { forceAdaptiveThinking: true },
 		reasoning: true,
+		thinkingLevelMap: { xhigh: "xhigh", max: "max" },
 		input: ["text", "image"],
 		cost: {
 			input: 2,
@@ -233,7 +235,7 @@ export const OPENCODE_MODELS = {
 			requiresReasoningContentOnAssistantMessages: true,
 		},
 		reasoning: true,
-		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", max: "max" },
 		input: ["text"],
 		cost: {
 			input: 0.14,
@@ -257,7 +259,7 @@ export const OPENCODE_MODELS = {
 			requiresReasoningContentOnAssistantMessages: true,
 		},
 		reasoning: true,
-		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", max: "max" },
 		input: ["text"],
 		cost: {
 			input: 0,
@@ -282,7 +284,7 @@ export const OPENCODE_MODELS = {
 			requiresReasoningContentOnAssistantMessages: true,
 		},
 		reasoning: true,
-		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", max: "max" },
 		input: ["text"],
 		cost: {
 			input: 1.74,

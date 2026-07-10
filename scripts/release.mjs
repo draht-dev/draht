@@ -384,6 +384,10 @@ if (!DRY_RUN) {
 }
 console.log();
 
+console.log("Running tests...");
+run("./test.sh");
+console.log();
+
 // 6. Commit and tag
 console.log("Committing and tagging...");
 run("git add .");

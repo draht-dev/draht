@@ -133,12 +133,51 @@ for platform in "${PLATFORMS[@]}"; do
     cp -r docs binaries/$platform/
     cp -r examples binaries/$platform/
 
-    # Copy koffi native module for Windows (needed for VT input support)
-    if [[ "$platform" == "windows-x64" ]]; then
-        mkdir -p binaries/$platform/node_modules/koffi/build/koffi/win32_x64
-        cp ../../node_modules/koffi/index.js binaries/$platform/node_modules/koffi/
-        cp ../../node_modules/koffi/package.json binaries/$platform/node_modules/koffi/
-        cp ../../node_modules/koffi/build/koffi/win32_x64/koffi.node binaries/$platform/node_modules/koffi/build/koffi/win32_x64/
+    case "$platform" in
+        darwin-arm64)
+            clipboard_native_package="clipboard-darwin-arm64"
+            clipboard_native_file="clipboard.darwin-arm64.node"
+            ;;
+        darwin-x64)
+            clipboard_native_package="clipboard-darwin-x64"
+            clipboard_native_file="clipboard.darwin-x64.node"
+            ;;
+        linux-x64)
+            clipboard_native_package="clipboard-linux-x64-gnu"
+            clipboard_native_file="clipboard.linux-x64-gnu.node"
+            ;;
+        linux-arm64)
+            clipboard_native_package="clipboard-linux-arm64-gnu"
+            clipboard_native_file="clipboard.linux-arm64-gnu.node"
+            ;;
+        windows-x64)
+            clipboard_native_package="clipboard-win32-x64-msvc"
+            clipboard_native_file="clipboard.win32-x64-msvc.node"
+            ;;
+        windows-arm64)
+            clipboard_native_package="clipboard-win32-arm64-msvc"
+            clipboard_native_file="clipboard.win32-arm64-msvc.node"
+            ;;
+    esac
+    mkdir -p "binaries/$platform/node_modules/@mariozechner"
+    cp -r ../../node_modules/@mariozechner/clipboard "binaries/$platform/node_modules/@mariozechner/"
+    cp -r ../../node_modules/@mariozechner/$clipboard_native_package "binaries/$platform/node_modules/@mariozechner/"
+    cp "../../node_modules/@mariozechner/$clipboard_native_package/$clipboard_native_file" \
+        "binaries/$platform/node_modules/@mariozechner/clipboard/"
+
+    # Copy terminal input native helpers next to compiled binaries.
+    if [[ "$platform" == darwin-* ]]; then
+        mkdir -p "binaries/$platform/native/darwin/prebuilds/$platform"
+        cp ../tui/native/darwin/prebuilds/$platform/darwin-modifiers.node "binaries/$platform/native/darwin/prebuilds/$platform/"
+    fi
+    if [[ "$platform" == windows-* ]]; then
+        if [[ "$platform" == "windows-arm64" ]]; then
+            win32_arch_dir="win32-arm64"
+        else
+            win32_arch_dir="win32-x64"
+        fi
+        mkdir -p "binaries/$platform/native/win32/prebuilds/$win32_arch_dir"
+        cp ../tui/native/win32/prebuilds/$win32_arch_dir/win32-console-mode.node "binaries/$platform/native/win32/prebuilds/$win32_arch_dir/"
     fi
 done
 

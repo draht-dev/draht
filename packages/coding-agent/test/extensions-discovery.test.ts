@@ -12,7 +12,7 @@ describe("extensions discovery", () => {
 	let extensionsDir: string;
 
 	beforeEach(() => {
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-ext-test-"));
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "draht-ext-test-"));
 		extensionsDir = path.join(tempDir, "extensions");
 		fs.mkdirSync(extensionsDir);
 	});
@@ -99,7 +99,7 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].path).toContain("index.ts");
 	});
 
-	it("discovers subdirectory with package.json pi field", async () => {
+	it("discovers subdirectory with package.json draht field", async () => {
 		const subdir = path.join(extensionsDir, "my-package");
 		const srcDir = path.join(subdir, "src");
 		fs.mkdirSync(subdir);
@@ -123,7 +123,7 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].path).toContain("main.ts");
 	});
 
-	it("keeps package.json pi extension entries with leading tilde package-relative", async () => {
+	it("keeps package.json draht extension entries with leading tilde package-relative", async () => {
 		const subdir = path.join(extensionsDir, "tilde-package");
 		const directExtensionPath = path.join(subdir, "~entry.ts");
 		const slashExtensionPath = path.join(subdir, "~", "entry.ts");
@@ -134,7 +134,7 @@ describe("extensions discovery", () => {
 			path.join(subdir, "package.json"),
 			JSON.stringify({
 				name: "tilde-package",
-				pi: {
+				draht: {
 					extensions: ["~entry.ts", "~/entry.ts"],
 				},
 			}),
@@ -169,7 +169,7 @@ describe("extensions discovery", () => {
 		expect(result.extensions).toHaveLength(2);
 	});
 
-	it("package.json with pi field takes precedence over index.ts", async () => {
+	it("package.json with draht field takes precedence over index.ts", async () => {
 		const subdir = path.join(extensionsDir, "my-package");
 		fs.mkdirSync(subdir);
 		fs.writeFileSync(path.join(subdir, "index.ts"), extensionCodeWithTool("from-index"));
@@ -194,7 +194,7 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].tools.has("from-index")).toBe(false);
 	});
 
-	it("ignores package.json without pi field, falls back to index.ts", async () => {
+	it("ignores package.json without draht field, falls back to index.ts", async () => {
 		const subdir = path.join(extensionsDir, "my-package");
 		fs.mkdirSync(subdir);
 		fs.writeFileSync(path.join(subdir, "index.ts"), extensionCode);

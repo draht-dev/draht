@@ -31,6 +31,8 @@ export {
 export { loginOpenCodeGo, opencodeGoOAuthProvider, refreshOpenCodeGoToken } from "./opencode-go.ts";
 
 export * from "./types.ts";
+// xAI (Grok)
+export { loginXai, refreshXaiToken, XAI_OAUTH_BASE_URL, xaiOAuthProvider } from "./xai.ts";
 
 // ============================================================================
 // Provider Registry
@@ -41,12 +43,14 @@ import { githubCopilotOAuthProvider } from "./github-copilot.ts";
 import { openaiCodexOAuthProvider } from "./openai-codex.ts";
 import { opencodeGoOAuthProvider } from "./opencode-go.ts";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.ts";
+import { xaiOAuthProvider } from "./xai.ts";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	anthropicOAuthProvider,
 	githubCopilotOAuthProvider,
 	openaiCodexOAuthProvider,
 	opencodeGoOAuthProvider,
+	xaiOAuthProvider,
 ];
 
 const oauthProviderRegistry = new Map<string, OAuthProviderInterface>(

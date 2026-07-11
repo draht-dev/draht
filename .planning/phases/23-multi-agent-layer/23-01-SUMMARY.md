@@ -38,3 +38,31 @@
 
 ---
 Completed: 2026-07-11 21:18:04
+
+## Addendum: builtin was never actually loaded (found and fixed post-verification)
+
+The verification pass above was accurate about the code itself but didn't check
+whether `core/builtins/subagent.ts` — and therefore the new permission-gate
+`tool_call` hook — was reachable from a real session. It wasn't: nothing in
+`main.ts`, `agent-session.ts`, `sdk.ts`, or the package-manager's
+settings-driven extension resolution ever referenced `core/builtins/`. The
+module (the `subagent` tool, FSM/mailbox/task-board/worktree, and the
+permission gate) was dead code from the running CLI's point of view.
+
+Fixed in a follow-up commit (`433e6afbe`): `core/builtins/index.ts` now
+exports `CORE_BUILTIN_EXTENSIONS`, always included in `extensionFactories` by
+both `createAgentSessionServices` (main.ts's path) and `createAgentSession`
+(the single-call SDK path) — the two places that construct a
+`DefaultResourceLoader`. Verified empirically: a from-scratch session with no
+extra configuration now blocks a real `.draht/permissions.yml` deny rule via
+`session.agent.beforeToolCall`, including the sudo/chaining/command-substitution
+bypass patterns the adversarial security review above caught. 9 new tests
+across 2 files, all passing; full package suite (182 files / 1702 tests) and
+repo-wide typecheck stayed green.
+
+This is unrelated to Phase 7 (`packages/orchestrator`) — checked, and that
+package is a normal opt-in extension (install via `draht install
+@draht/orchestrator`), working as designed. `core/builtins/` predates this
+project's phase system (likely inherited from the upstream Pi Agent fork) and
+was simply never given a loading mechanism at all, unlike every other
+extension in this codebase.

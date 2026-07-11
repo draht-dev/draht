@@ -1,0 +1,25 @@
+{
+	"name": "@draht/geist-protocol",
+	"version": "2026.7.11",
+	"private": true,
+	"description": "Shared wire types and config contracts for geist — zero @draht/* dependencies",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"build": "tsgo --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"zod": "^3.25.0"
+	},
+	"devDependencies": {
+		"yaml": "^2.9.0"
+	}
+}

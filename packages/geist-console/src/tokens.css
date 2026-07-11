@@ -1,0 +1,28 @@
+/**
+ * geist glass — design tokens (spec §13, locked r7).
+ * Shared verbatim by geist-console and the geist-picker overlay.
+ *
+ * Accent (`--spectra-*`) is a dichroic gradient, not a flat brand color:
+ * reserved for the target ring, PTT states, and approve confirmation only.
+ * Status hues are always glassed (rendered on room-glass/content-glass, never flat).
+ */
+
+:root {
+	/* room-glass / content-glass base */
+	--smoke-900: #0b0d10;
+	--smoke-700: #14171c;
+
+	/* text */
+	--ink: #f2f4f8;
+	--ink-dim: #9aa3af;
+
+	/* accent — dichroic gradient, target ring / PTT / approve only */
+	--spectra-a: #6ee7f0;
+	--spectra-b: #a78bfa;
+	--spectra-gradient: linear-gradient(135deg, var(--spectra-a), var(--spectra-b));
+
+	/* status hues — always glassed */
+	--status-ok: #7bd88f;
+	--status-warn: #f5c066;
+	--status-danger: #f07178;
+}

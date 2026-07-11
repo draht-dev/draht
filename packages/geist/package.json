@@ -1,0 +1,37 @@
+{
+	"name": "@draht/geist",
+	"version": "2026.7.11",
+	"private": true,
+	"description": "geist CLI + composition root — wires geist-core, geist-acp and geist-console together",
+	"type": "module",
+	"bin": {
+		"geist": "dist/cli.js"
+	},
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"keywords": [
+		"geist",
+		"acp",
+		"quest",
+		"mixed-reality",
+		"cli"
+	],
+	"author": "Oskar Freye",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/draht-dev/draht.git",
+		"directory": "packages/geist"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"dependencies": {
+		"@draht/geist-core": "workspace:*",
+		"@draht/geist-protocol": "workspace:*"
+	},
+	"devDependencies": {}
+}

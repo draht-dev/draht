@@ -1,0 +1,7 @@
+harness:
+  default: draht
+  agents:            # ACP launch specs; exact cmds/args pinned at M3 from the registry
+    draht:  { cmd: draht-acp }
+    claude: { cmd: claude-agent-acp }
+    codex:  { cmd: codex-acp }
+    gemini: { cmd: gemini, args: [--experimental-acp] }

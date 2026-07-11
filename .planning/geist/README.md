@@ -27,3 +27,7 @@ exactly the privileges of any other harness (spec §17.1).
 - Full locked spec (rev 7): `.planning/specs/geist-spec.md` (public-facing copy: `docs/geist/spec.md`)
 - Phase breakdown & acceptance criteria: `.planning/ROADMAP.md` — "Phase 31: Geist Foundation & Repo Scaffold" through "Phase 40: M8 — Spatial Dividends"
 - Numbered requirements: `.planning/REQUIREMENTS.md` — "Milestone 4 — geist"
+
+## Evidence debt
+
+- H0 — hover-coords evidence, requires Oskar's physical Quest 3 running this build; not achievable in the sandboxed dev environment.

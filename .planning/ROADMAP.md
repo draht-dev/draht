@@ -119,7 +119,7 @@
 **Requirements:** R23-MA.1 (FSM protocol), R23-MA.2 (teammate mailboxes), R23-MA.3 (autonomous task board), R23-MA.4 (worktree isolator), R23-MA.5 (permission gate), R23-MA.6 (integration with subagent builtin)
 **Acceptance:** FSM state transitions validated; mailbox pub/sub delivers messages between agents; task board supports self-assign with atomic locking; worktree isolator creates/merges git worktrees with conflict detection; permission gate evaluates YAML rules with deny/allow/approve tiers; all primitives integrated into subagent.ts.
 
-## Phase 24: Invoice/Compliance Tests — `pending`
+## Phase 24: Invoice/Compliance Tests — `complete`
 **Goal:** Invoice and compliance modules are verified against realistic test data.
 **Requirements:** R24-API.1, R24-API.2, R24-API.3, R24-API.4
 **Acceptance:** Lexoffice mock integration tests cover CRUD operations; Toggl mock tests cover time entry import; PII scanner achieves target accuracy on German corpus; EU AI Act template validation passes against sample documentation.

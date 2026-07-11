@@ -9,7 +9,7 @@ import { SessionManager } from "../session/session-manager";
  *  1. No auth header → rejected before upgrade (non-101)
  *  2. Wrong token    → rejected before upgrade (non-101)
  *  3. Valid auth + non-existent session → 101 upgrade then close 4404
- *  4. Valid auth + stopped session     → 101 upgrade then close 4403
+ *  4. Valid auth + stopped session     → 101 upgrade then close 1000/1001
  *  5. Valid auth + running session     → 101 upgrade, socket stays OPEN
  */
 describe("WebSocket auth", () => {
@@ -117,7 +117,7 @@ describe("WebSocket auth", () => {
 		expect(result.closeCode).toBe(4404);
 	});
 
-	test("case 4: correct token, stopped session → upgrade succeeds, stays open (new behavior)", async () => {
+	test("case 4: correct token, stopped session → upgrade succeeds then closes for exited process", async () => {
 		const manager = new SessionManager(new EventBus());
 		const { url } = startServer(manager);
 
@@ -131,8 +131,9 @@ describe("WebSocket auth", () => {
 		const result = await wsConnect(`${url}/sessions/${session.id}/ws`, {
 			Authorization: `Bearer ${AUTH_TOKEN}`,
 		});
-		// Connection succeeds and closes normally (no process to stream from)
-		expect(result.closeCode).toBe(1000);
+		// Bun may expose the server's 1001 close code or normalize it to 1000.
+		expect(result.opened).toBe(true);
+		expect([1000, 1001]).toContain(result.closeCode);
 	});
 
 	test("case 5: correct token, running session → WebSocket stays OPEN", async () => {

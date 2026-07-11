@@ -114,7 +114,7 @@
 **Requirements:** R22-RTR.1, R22-RTR.2, R22-RTR.3
 **Acceptance:** Fallback chain integration tests pass with simulated provider failures; cost tracking matches expected values within 1% tolerance; config validation rejects invalid schemas with clear errors.
 
-## Phase 23: Multi-Agent Layer — `pending`
+## Phase 23: Multi-Agent Layer — `complete`
 **Goal:** Full multi-agent orchestration layer: FSM protocol, mailbox messaging, task board, worktree isolation, permission gate.
 **Requirements:** R23-MA.1 (FSM protocol), R23-MA.2 (teammate mailboxes), R23-MA.3 (autonomous task board), R23-MA.4 (worktree isolator), R23-MA.5 (permission gate), R23-MA.6 (integration with subagent builtin)
 **Acceptance:** FSM state transitions validated; mailbox pub/sub delivers messages between agents; task board supports self-assign with atomic locking; worktree isolator creates/merges git worktrees with conflict detection; permission gate evaluates YAML rules with deny/allow/approve tiers; all primitives integrated into subagent.ts.

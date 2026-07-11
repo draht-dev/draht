@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
+const tsxPath = createRequire(__filename).resolve("tsx");
 
 const tempDirs: string[] = [];
 
@@ -25,7 +27,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	const tempRoot = createTempDir();
 	const agentDir = join(tempRoot, "agent");
 	const projectDir = join(tempRoot, "project");
-	const projectConfigDir = join(projectDir, ".pi");
+	const projectConfigDir = join(projectDir, ".draht");
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(projectConfigDir, { recursive: true });
 
@@ -54,7 +56,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	);
 
 	return await new Promise((resolvePromise, reject) => {
-		const child = spawn(process.execPath, [cliPath, ...args], {
+		const child = spawn(process.execPath, ["--import", tsxPath, cliPath, ...args], {
 			cwd: projectDir,
 			env: {
 				...process.env,
@@ -84,7 +86,7 @@ describe("stdout cleanliness in non-interactive modes", () => {
 		const result = await runCli(["--version"]);
 
 		expect(result.code).toBe(0);
-		expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+		expect(result.stdout.trim()).toMatch(/^(?:dev|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/);
 		expect(result.stderr).toBe("");
 	});
 

@@ -188,7 +188,7 @@
 **Requirements:** R33-M1.1, R33-M1.2, R33-M1.3, R33-M1.4
 **Acceptance:** WS pairing handshake (LAN, token) connects bridge and headset and survives a reconnect; `geist-console` renders exclusively from `tokens.css` (no unstyled/restyle-later state); whisper.cpp turbo/small transcribes DE/EN test fixtures; H1 (9/10 live transcripts, pairing survives restart) is logged as evidence debt.
 
-## Phase 34: M2 — Context Pack — `pending`
+## Phase 34: M2 — Context Pack — `complete`
 **Goal:** Element pointing composes an `ElementContext` situation prompt with capability-gated image delivery and an always-present crop path reference.
 **Requirements:** R34-M2.1, R34-M2.2, R34-M2.3
 **Acceptance:** `ElementContext` composition (spec §9.3, unchanged from r2) is implemented in `geist-core`; an image content block is attached only when the session's capability handshake advertises image support, while the crop is always written to `<wt>/.geist/task-<id>/target.webp` and path-referenced in the prompt; H2 (chip + crop demo) is logged as evidence debt.

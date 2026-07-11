@@ -1,6 +1,6 @@
 # State
 
-## Current Phase: Phase 33: M1 — Pairing + Voice Wire
+## Current Phase: Phase 34: M2 — Context Pack
 ## Status: complete
 
 ## Decisions
@@ -15,6 +15,7 @@
 - Milestone 4 approved: geist, Phases 31-40 — a harness-agnostic ACP-client spatial ADE for Quest 3, spec locked at `.planning/specs/geist-spec.md` (rev 7). Phase 31 is foundation/scaffold work the spec doesn't name; Phases 32-40 map 1:1 to the spec's M0-M8. Phases 22-25 and 26-30 remain pending backlog, not a blocker (same precedent as Milestone 3). Every phase's H-gate (hardware/voice demo on Oskar's physical Quest 3) is recorded as evidence debt, never auto-certified by this loop — this sandbox has no Quest headset, no gradle/kotlinc on PATH, and no Meta Spatial SDK Maven access, so `quest/` (Kotlin) work is scaffolded structurally, not build-verified, until Oskar runs it on his machine. (autonomous /loop session, 2026-07-11, per Oskar's directive to complete the spec via ultracode multi-agent orchestration — fable-5 advisor consult, sonnet/opus workers)
 
 ## Completed Phases
+- Phase 34: M2 — Context Pack (commit ac3eabe9d; H2 chip+crop demo is evidence debt, R34-M2.3)
 - Phase 33: M1 — Pairing + Voice Wire (commit 60a3339cb; H1 evidence logged as debt, requires Oskar's Quest 3 + a real DE/turbo whisper model)
 - Phase 32: M0 — Spike: Panel + Ray (commit 2cc48c9d8; H0 hover-coords evidence logged as debt, requires Oskar's Quest 3)
 - Phase 31: Geist Foundation & Repo Scaffold (commit 62b5945a2)
@@ -62,5 +63,6 @@ None.
 
 - 2026-07-11: Phase 32 (M0) executed via a 2-agent ultracode Workflow (sonnet implementer, opus reviewer). Panel scaffold + real ray-plane intersection math + both panel-alpha code paths landed as commit 2cc48c9d8; reviewer traced the ray-plane derivation by hand and confirmed no fabricated Spatial SDK API. H0 recorded as evidence debt (needs Oskar's Quest 3) rather than blocking phase completion.
 - 2026-07-11: Phase 33 (M1) executed via two ultracode Workflow passes (3 parallel sonnet implementers + opus verify/review, then an opus fix-and-reverify pass). First pass found the same tsconfig-exclude gap as Phase 31 (recurring pattern — new packages need explicit root `tsconfig.json` exclude entries; established convention is a per-package `test/` dir, not co-located `*.test.ts`) plus a real bug in the pairing state machine (`disconnect()` could silently reset the 60s grace clock on a stray reconnect attempt, letting a session stay "paired" indefinitely). Fix pass resolved both with red/green proof of the bug fix; independent re-verify confirmed all 9 checks green before commit 60a3339cb. H1 recorded as evidence debt.
+- 2026-07-11: Phase 34 (M2) executed via a 3-agent ultracode Workflow (sonnet implementer, opus verify, opus review) — clean on the first pass, no fixes needed. ElementContext/situation-prompt composition landed as commit ac3eabe9d; spec §9.3's r2 text wasn't available in this document so the implementer grounded the shape in already-established sources (picker descriptor, HarnessSession id, crop-path convention) instead of guessing — reviewer confirmed this was reasonable, not scope creep.
 
 ## Last Activity: 2026-07-11

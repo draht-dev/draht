@@ -75,8 +75,11 @@ function getAliases(): Record<string, string> {
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
 	const packageIndex = path.resolve(__dirname, "../..", "index.js");
 
-	const typeboxEntry = require.resolve("@sinclair/typebox");
-	const typeboxRoot = typeboxEntry.replace(/[\\/]build[\\/]cjs[\\/]index\.js$/, "");
+	const legacyTypeboxEntry = require.resolve("@sinclair/typebox");
+	const legacyTypeboxRoot = legacyTypeboxEntry.replace(/[\\/]build[\\/]cjs[\\/]index\.js$/, "");
+	const typeboxEntry = require.resolve("typebox");
+	const typeboxCompileEntry = require.resolve("typebox/compile");
+	const typeboxValueEntry = require.resolve("typebox/value");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
 	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
@@ -103,7 +106,10 @@ function getAliases(): Record<string, string> {
 		"@draht/ai": piAiCompatEntry,
 		"@draht/ai/compat": piAiCompatEntry,
 		"@draht/ai/oauth": piAiOauthEntry,
-		"@sinclair/typebox": typeboxRoot,
+		"typebox/compile": typeboxCompileEntry,
+		"typebox/value": typeboxValueEntry,
+		typebox: typeboxEntry,
+		"@sinclair/typebox": legacyTypeboxRoot,
 	};
 
 	return _aliases;
@@ -237,7 +243,6 @@ function createExtensionAPI(
 		},
 
 		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {
-			runtime.assertActive();
 			extension.entryRenderers ??= new Map();
 			extension.entryRenderers.set(customType, renderer as EntryRenderer);
 		},
@@ -250,58 +255,72 @@ function createExtensionAPI(
 
 		// Action methods - delegate to shared runtime
 		sendMessage(message, options): void {
+			runtime.assertActive();
 			runtime.sendMessage(message, options);
 		},
 
 		sendUserMessage(content, options): void {
+			runtime.assertActive();
 			runtime.sendUserMessage(content, options);
 		},
 
 		appendEntry(customType: string, data?: unknown): void {
+			runtime.assertActive();
 			runtime.appendEntry(customType, data);
 		},
 
 		setSessionName(name: string): void {
+			runtime.assertActive();
 			runtime.setSessionName(name);
 		},
 
 		getSessionName(): string | undefined {
+			runtime.assertActive();
 			return runtime.getSessionName();
 		},
 
 		setLabel(entryId: string, label: string | undefined): void {
+			runtime.assertActive();
 			runtime.setLabel(entryId, label);
 		},
 
 		exec(command: string, args: string[], options?: ExecOptions) {
+			runtime.assertActive();
 			return execCommand(command, args, options?.cwd ?? cwd, options);
 		},
 
 		getActiveTools(): string[] {
+			runtime.assertActive();
 			return runtime.getActiveTools();
 		},
 
 		getAllTools() {
+			runtime.assertActive();
 			return runtime.getAllTools();
 		},
 
 		setActiveTools(toolNames: string[]): void {
+			runtime.assertActive();
 			runtime.setActiveTools(toolNames);
 		},
 
 		getCommands() {
+			runtime.assertActive();
 			return runtime.getCommands();
 		},
 
 		setModel(model) {
+			runtime.assertActive();
 			return runtime.setModel(model);
 		},
 
 		getThinkingLevel() {
+			runtime.assertActive();
 			return runtime.getThinkingLevel();
 		},
 
 		setThinkingLevel(level) {
+			runtime.assertActive();
 			runtime.setThinkingLevel(level);
 		},
 

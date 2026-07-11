@@ -183,7 +183,7 @@
 **Requirements:** R32-M0.1, R32-M0.2, R32-M0.3, R32-M0.4
 **Acceptance:** `quest/` renders a passthrough panel via Meta Spatial SDK and resolves ray→plane addressee hits (structural scaffold — build/run verification deferred, no Quest hardware or Meta SDK Maven access in this sandbox); the panel-alpha probe (room-glass vs opaque-smoke fallback, spec §13/§17.6) is implemented with both code paths present; H0 (hover-coords evidence) is logged as evidence debt in `.planning/geist/`, pending Oskar's hardware.
 
-## Phase 33: M1 — Pairing + Voice Wire — `pending`
+## Phase 33: M1 — Pairing + Voice Wire — `complete`
 **Goal:** Bridge↔headset pairing and the whisper.cpp DE/EN voice pipeline are wired; the console ships on geist-glass tokens from its first pixel.
 **Requirements:** R33-M1.1, R33-M1.2, R33-M1.3, R33-M1.4
 **Acceptance:** WS pairing handshake (LAN, token) connects bridge and headset and survives a reconnect; `geist-console` renders exclusively from `tokens.css` (no unstyled/restyle-later state); whisper.cpp turbo/small transcribes DE/EN test fixtures; H1 (9/10 live transcripts, pairing survives restart) is logged as evidence debt.

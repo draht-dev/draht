@@ -1,0 +1,59 @@
+# Dogfoods packages/ci's own composite action (built in Phase 6) on this repo's
+# own pull requests: Claude reviews the diff against AGENTS.md and posts findings.
+#
+# This requires an `ANTHROPIC_API_KEY` repository secret that is NOT configured
+# yet (verified via `gh secret list` — no secrets exist on this repo as of
+# 2026-07-11). Until Oskar adds that secret in repo settings, the `review` job
+# below no-ops (shows as skipped, not failed) on every PR. No action is
+# required to keep CI green.
+#
+# Note on the guard: GitHub Actions does not allow the `secrets` context inside
+# a job-level `if:` (only `github`, `needs`, `vars`, `inputs` are valid there —
+# see https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability).
+# A bare `if: ${{ secrets.ANTHROPIC_API_KEY != '' }}` on the `review` job would
+# fail to evaluate. So a tiny `check-secret` gate job reads the secret inside a
+# step (where `secrets` *is* allowed) and publishes a boolean output; the
+# `review` job's job-level `if` then gates on that via `needs`, giving the same
+# graceful skip-until-configured behavior.
+name: AI Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: ai-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-secret:
+    runs-on: ubuntu-latest
+    outputs:
+      has-key: ${{ steps.check.outputs.has-key }}
+    steps:
+      - name: Check whether ANTHROPIC_API_KEY is configured
+        id: check
+        run: |
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "has-key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-key=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  review:
+    needs: check-secret
+    if: ${{ needs.check-secret.outputs.has-key == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Draht AI Review
+        uses: ./packages/ci
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          agents-md-path: AGENTS.md

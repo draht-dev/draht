@@ -1,6 +1,6 @@
 # State
 
-## Current Phase: Phase 21: GSD Integration Tests
+## Current Phase: Phase 22: Router Hardening
 ## Status: complete
 
 ## Decisions
@@ -14,6 +14,7 @@
 - Milestone 3 approved: Recursive Language Models, Phases 26-30 — inference-time scaffold per Zhang/Kraska/Khattab 2026 (arXiv:2512.24601). Phases 22-25 remain pending backlog, not a blocker. (Oskar, 2026-04-24)
 
 ## Completed Phases
+- Phase 22: Router Hardening (3 plans, verified 2026-03-16)
 - Phase 21: GSD Integration Tests (complete)
 - Phase 20: TDD/DDD Hook Hardening (complete)
 - Phase 19: GSD CLI Integration (complete)
@@ -43,6 +44,7 @@
 None.
 
 ## Audit Log
+- 2026-07-11: GSD tracking drift found again (same class of bug as 2026-03-02 lesson): Phase 22 was fully planned, executed, and verified on 2026-03-16 (3 plans, real commits, 71/71 tests passing) but ROADMAP.md still listed it `pending`. Corrected ROADMAP.md and STATE.md to `complete`. Beginning autonomous sweep of Phases 22-30 (Oskar approved full autonomy, direct-to-main, 2026-07-11).
 - 2026-03-02: GSD tracking audit performed. All 18 phases verified as code-complete (quality gate passes). Fixed:
   - ROADMAP Phase 13 status corrected from `in-progress` to `complete`
   - Phase 3: Added missing 03-01-PLAN.md and 03-01-SUMMARY.md

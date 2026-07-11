@@ -109,7 +109,7 @@
 **Requirements:** R21-INT.1, R21-INT.2, R21-INT.3, R21-INT.4
 **Acceptance:** Full lifecycle test passes (create-project → commit-task → verify-phase); map-codebase test produces valid domain extraction; quality gate pass/fail tests cover both outcomes; gsd-commands extension loading test confirms registration.
 
-## Phase 22: Router Hardening — `pending`
+## Phase 22: Router Hardening — `complete`
 **Goal:** Model router is reliable under failure conditions with accurate cost tracking.
 **Requirements:** R22-RTR.1, R22-RTR.2, R22-RTR.3
 **Acceptance:** Fallback chain integration tests pass with simulated provider failures; cost tracking matches expected values within 1% tolerance; config validation rejects invalid schemas with clear errors.

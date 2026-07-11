@@ -144,7 +144,7 @@
 **Requirements:** R26-RLM.1, R26-RLM.2, R26-RLM.3, R26-RLM.4, R26-RLM.5, R26-RLM.6, R26-RLM.7
 **Acceptance:** Unit tests prove: a seeded needle-in-haystack prompt completes via a mocked root LLM that writes Python; REPL persists variables across steps; `context` variable holds the full prompt; `llm_query` stub returns a canned response; `FINAL("x")` and `FINAL_VAR("ans")` both terminate the loop and return the correct value.
 
-## Phase 27: Sub-LLM Integration & System Prompts — `pending`
+## Phase 27: Sub-LLM Integration & System Prompts — `complete`
 **Goal:** RLM sessions route root and sub-LLM calls through `@draht/router` with model-tiered system prompts (frontier / coder-mid / small-context) and cost accounting per trajectory.
 **Requirements:** R27-SLM.1, R27-SLM.2, R27-SLM.3, R27-SLM.4, R27-SLM.5
 **Acceptance:** Router has new roles `rlm-root` and `rlm-sub` with configurable fallback chains; three system-prompt templates in `packages/rlm/prompts/` select automatically from resolved model context window; prompt template substitutes `context_type`, `context_total_length`, `chunk_lengths`, `max_sub_call_budget`; every RLM session appends per-call cost entries to `.draht/cost-log.jsonl` tagged with trajectory id.

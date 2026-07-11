@@ -1,6 +1,6 @@
 # State
 
-## Current Phase: Phase 26: RLM Core Primitives
+## Current Phase: Phase 27: Sub-LLM Integration & System Prompts
 ## Status: complete
 
 ## Decisions
@@ -14,6 +14,7 @@
 - Milestone 3 approved: Recursive Language Models, Phases 26-30 — inference-time scaffold per Zhang/Kraska/Khattab 2026 (arXiv:2512.24601). Phases 22-25 remain pending backlog, not a blocker. (Oskar, 2026-04-24)
 
 ## Completed Phases
+- Phase 27: Sub-LLM Integration & System Prompts (1 plan, verified 2026-07-12)
 - Phase 26: RLM Core Primitives (1 plan, verified 2026-07-11)
 - Phase 25: CI & Artifact Cleanup (1 plan, verified 2026-07-11)
 - Phase 24: Invoice/Compliance Tests (1 plan, verified 2026-07-11)
@@ -48,6 +49,7 @@
 None.
 
 ## Audit Log
+- 2026-07-12: Phase 27 (Sub-LLM Integration & System Prompts) completed and verified: `RlmSession` is now wired to real models through `@draht/router` without touching `session.ts`'s core loop. Added `rlm-root` (primary `anthropic/claude-opus-4-6`, fallback `google/gemini-2.5-pro`) and `rlm-sub` (primary `google/gemini-2.5-flash`, fallback `openrouter/deepseek-v3.2`) router roles with independent fallback chains, and an additive `CostEntry.trajectoryId` field. Wrote three tuned system-prompt templates (`frontier`/`coder-mid`/`small-context`) with `{{token}}` substitution for all 5 required vars and a shared batching advisory (avoid one-item-per-call, batch ~10-15k chars); `selectTier` auto-picks from the resolved root model's context window at `>=500_000` / `>=128_000` / else thresholds, both boundaries tested directly. New `createRouterBackedSession` factory builds the `rootLlm`/`llmQuery` callbacks over `router.streamSimple`, and logs a `CostEntry` (via existing `estimateCost`/`logCost`) for every root and sub call, tagged with one `trajectoryId` per session. Closes R27-SLM.1 through R27-SLM.5. `packages/rlm` vitest: 4 files, 30/30 passing; `packages/router`'s vitest run couldn't execute (package uses `bun:test`, not vitest — not installed/hoisted), so its actual `bun test` runner was used instead as real signal: 80/80 passing; full monorepo `tsgo --noEmit` clean. ROADMAP.md and STATE.md updated to `complete`.
 - 2026-07-11: Phase 26 (RLM Core Primitives) completed and verified: `@draht/rlm` package scaffolded with a working `RlmSession` root loop (root-LLM-produces-code → REPL-executes → truncated-stdout → history-append → FINAL-check), a stdlib-only Python REPL driver with a persistent `exec()` globals dict and newline-delimited JSON wire protocol, `FINAL`/`FINAL_VAR` implemented as real function calls raising a caught driver-internal exception (not text-pattern matching, closing R26-RLM.6's brittleness safeguard), and an injectable `llm_query`/`rootLlm` (real `@draht/router` wiring deferred to Phase 27 as planned). `packages/rlm` vitest suite: 2 files, 15/15 tests passing; full monorepo typecheck clean. Closes R26-RLM.1 through R26-RLM.7. ROADMAP.md and STATE.md updated to `complete`.
 - 2026-07-11: Phase 25 (CI & Artifact Cleanup) completed and verified: confirmed R25-CI.1 (`.github/workflows/ci.yml`) was already satisfied; added `.github/workflows/ai-review.yml` dogfooding `packages/ci`'s composite action on this repo's own PRs (R25-CI.2); backfilled all 11 placeholder Phase 14-18 summary files with real git-history-backed content, explicitly noting the two Phase 14 tasks with no in-repo commit evidence rather than fabricating them (R25-DOC.1); consolidated `hooks.json` to a single generated source of truth via `scripts/generate-hooks-json.mjs` plus a new `check:hooks` step in `npm run check` (R25-DOC.2). **R25-CI.2's `ai-review.yml` workflow is inert until Oskar adds the `ANTHROPIC_API_KEY` repository secret** — `gh secret list` showed none configured, so the `review` job is job-level-gated to skip (not fail) until then. Full `npm run check` passes; ROADMAP.md and STATE.md updated to `complete`.
 - 2026-07-11: Phase 24 (Invoice/Compliance Tests) completed and verified: added Lexoffice mock integration tests, Toggl mock integration tests, a realistic German-corpus PII scanner accuracy test, and an EU AI Act documentation-validator test — closing R24-API.1 through R24-API.4. `packages/invoice` 16/16 tests passing across 3 files; `packages/compliance` 18/18 tests passing across 3 files; full monorepo `tsgo --noEmit` clean. No source changes needed (test-coverage phase only). ROADMAP.md and STATE.md updated to `complete`.

@@ -17,6 +17,10 @@
 		"test": "vitest run",
 		"clean": "rm -rf dist"
 	},
+	"dependencies": {
+		"@draht/ai": "workspace:*",
+		"@draht/router": "workspace:*"
+	},
 	"devDependencies": {
 		"vitest": "^3.2.4",
 		"@types/node": "^22.10.5",

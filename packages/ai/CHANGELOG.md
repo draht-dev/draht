@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve model-supported `max` reasoning across OpenAI-family simple streaming adapters
+- Forward configured transports through simple streaming adapters, including Codex WebSocket transport
+
 ## [2026.7.7] - 2026-07-06
 
 ### Added

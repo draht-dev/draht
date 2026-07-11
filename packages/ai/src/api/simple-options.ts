@@ -29,6 +29,7 @@ export function buildBaseOptions(
 		maxTokens: clampMaxTokensToContext(model, context, options?.maxTokens ?? model.maxTokens),
 		signal: options?.signal,
 		apiKey: apiKey || options?.apiKey,
+		transport: options?.transport,
 		cacheRetention: options?.cacheRetention,
 		sessionId: options?.sessionId,
 		headers: options?.headers,
@@ -46,14 +47,6 @@ export function buildBaseOptions(
 export function clampReasoning(effort: ThinkingLevel | undefined): Exclude<ThinkingLevel, "xhigh" | "max"> | undefined {
 	if (effort === "xhigh" || effort === "max") return "high";
 	return effort;
-}
-
-/**
- * Clamp `max` down to `xhigh` while leaving everything else untouched.
- * Used by providers (e.g. OpenAI families) that support up to xhigh but not max.
- */
-export function clampToXhigh(effort: ThinkingLevel | undefined): Exclude<ThinkingLevel, "max"> | undefined {
-	return effort === "max" ? "xhigh" : effort;
 }
 
 export function adjustMaxTokensForThinking(

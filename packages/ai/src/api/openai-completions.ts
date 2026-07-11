@@ -40,7 +40,7 @@ import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { buildBaseOptions, clampToXhigh } from "./simple-options.ts";
+import { buildBaseOptions } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 /**
@@ -489,8 +489,7 @@ export const streamSimple: StreamFunction<"openai-completions", SimpleStreamOpti
 	getClientApiKey(model.provider, options?.apiKey, options?.headers);
 
 	const base = buildBaseOptions(model, context, options, options?.apiKey);
-	const rawLevel = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-	const clampedReasoning = rawLevel === "off" ? rawLevel : clampToXhigh(rawLevel);
+	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 	const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
 	const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 

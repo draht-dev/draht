@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { streamSimple as streamSimpleAzureOpenAIResponses } from "../src/api/azure-openai-responses.ts";
 import { streamSimple as streamSimpleOpenAICodexResponses } from "../src/api/openai-codex-responses.ts";
+import { streamSimple as streamSimpleOpenAIResponses } from "../src/api/openai-responses.ts";
 import { clampThinkingLevel, getModel, getSupportedThinkingLevels } from "../src/compat.ts";
 import type { Context, Model } from "../src/types.ts";
 
@@ -77,6 +79,47 @@ describe("max thinking level", () => {
 
 		await streamSimpleOpenAICodexResponses(model, context, {
 			apiKey: mockToken(),
+			reasoning: "max",
+			onPayload: (request) => {
+				payload = request;
+				throw new Error("payload captured");
+			},
+		}).result();
+
+		expect(payload).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
+	});
+
+	it("sends max to the OpenAI Responses API", async () => {
+		const model = getModel("openai", "gpt-5.6-sol")!;
+		const context: Context = {
+			messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
+		};
+		let payload: unknown;
+
+		await streamSimpleOpenAIResponses(model, context, {
+			apiKey: "test",
+			reasoning: "max",
+			onPayload: (request) => {
+				payload = request;
+				throw new Error("payload captured");
+			},
+		}).result();
+
+		expect(payload).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
+	});
+
+	it("sends max to the Azure OpenAI Responses API", async () => {
+		const model = {
+			...getModel("azure-openai-responses", "gpt-5.6-sol")!,
+			baseUrl: "https://example.openai.azure.com/openai/v1",
+		};
+		const context: Context = {
+			messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
+		};
+		let payload: unknown;
+
+		await streamSimpleAzureOpenAIResponses(model, context, {
+			apiKey: "test",
 			reasoning: "max",
 			onPayload: (request) => {
 				payload = request;

@@ -47,7 +47,7 @@ import { headersToRecord } from "../utils/headers.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
-import { buildBaseOptions, clampToXhigh } from "./simple-options.ts";
+import { buildBaseOptions } from "./simple-options.ts";
 
 // ============================================================================
 // Configuration
@@ -467,8 +467,7 @@ export const streamSimple: StreamFunction<"openai-codex-responses", SimpleStream
 	}
 
 	const base = buildBaseOptions(model, context, options, apiKey);
-	const rawLevel = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-	const clampedReasoning = rawLevel === "off" ? rawLevel : clampToXhigh(rawLevel);
+	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 	const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
 
 	return stream(model, context, {

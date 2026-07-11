@@ -5,9 +5,9 @@ import {
 	type AssistantMessageEvent,
 	AssistantMessageEventStream,
 	type Context,
-	clearApiProviders,
 	type Model,
 	registerApiProvider,
+	resetApiProviders,
 	type StreamOptions,
 } from "@draht/ai/compat";
 import { ModelRouter } from "../src/router.js";
@@ -192,7 +192,7 @@ describe("ModelRouter Fallback Chain", () => {
 	};
 
 	beforeEach(() => {
-		clearApiProviders();
+		resetApiProviders();
 
 		// Reset configs - use retryable error (429) for fallback to trigger
 		primaryConfig = {
@@ -228,7 +228,7 @@ describe("ModelRouter Fallback Chain", () => {
 	});
 
 	afterEach(() => {
-		clearApiProviders();
+		resetApiProviders();
 	});
 
 	describe("immediate fallback", () => {

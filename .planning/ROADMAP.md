@@ -124,7 +124,7 @@
 **Requirements:** R24-API.1, R24-API.2, R24-API.3, R24-API.4
 **Acceptance:** Lexoffice mock integration tests cover CRUD operations; Toggl mock tests cover time entry import; PII scanner achieves target accuracy on German corpus; EU AI Act template validation passes against sample documentation.
 
-## Phase 25: CI & Artifact Cleanup — `pending`
+## Phase 25: CI & Artifact Cleanup — `complete`
 **Goal:** CI pipeline runs on PRs and all planning artifacts are accurate and consolidated.
 **Requirements:** R25-CI.1, R25-CI.2, R25-DOC.1, R25-DOC.2
 **Acceptance:** GitHub Actions PR check workflow runs lint + test on push; AI review dogfooding enabled on draht-mono PRs; Phase 14-18 summaries contain real data (not placeholders); hook files consolidated to single source of truth with no duplication.

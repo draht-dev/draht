@@ -112,15 +112,23 @@
 - R22-RTR.2: Cost tracking accuracy test (within 1% tolerance)
 - R22-RTR.3: Config validation rejects invalid schemas with clear errors
 
-### R23-API: Invoice/Compliance Tests
-- R23-API.1: Lexoffice mock integration test (CRUD operations)
-- R23-API.2: Toggl mock integration test (time entry import)
-- R23-API.3: PII scanner accuracy test with German corpus
-- R23-API.4: EU AI Act template validation against sample documentation
+### R23-MA: Multi-Agent Layer
+- R23-MA.1: FSM protocol for agent lifecycle coordination (IDLE, REQUEST, WORKING, WAIT, RESPOND)
+- R23-MA.2: Teammate mailbox system — pub/sub inter-agent messaging, typed messages (TaskRequest, TaskResult, DataExchange, Abort)
+- R23-MA.3: Autonomous task board with self-assign and atomic locking
+- R23-MA.4: Worktree isolator — git worktree per task, merge-back with conflict detection
+- R23-MA.5: Permission gate — YAML-rule-based deny/allow/approve tiers for tool execution
+- R23-MA.6: Integration — wire FSM/mailbox/task-board/worktree/permission-gate into subagent.ts builtin
 
-### R24-CI: CI Pipeline
-- R24-CI.1: GitHub Actions PR check workflow (lint + test on push)
-- R24-CI.2: AI review dogfooding on draht-mono PRs
+### R24-API: Invoice/Compliance Tests
+- R24-API.1: Lexoffice mock integration test (CRUD operations)
+- R24-API.2: Toggl mock integration test (time entry import)
+- R24-API.3: PII scanner accuracy test with German corpus
+- R24-API.4: EU AI Act template validation against sample documentation
+
+### R25-CI: CI Pipeline
+- R25-CI.1: GitHub Actions PR check workflow (lint + test on push)
+- R25-CI.2: AI review dogfooding on draht-mono PRs
 
 ### R25-DOC: Artifact Cleanup
 - R25-DOC.1: Backfill empty Phase 14-18 summaries with real data

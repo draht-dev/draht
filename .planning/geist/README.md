@@ -31,3 +31,4 @@ exactly the privileges of any other harness (spec §17.1).
 ## Evidence debt
 
 - H0 — hover-coords evidence, requires Oskar's physical Quest 3 running this build; not achievable in the sandboxed dev environment.
+- H1 — 9/10 live transcripts + pairing survives restart, requires Oskar's physical Quest 3 running this build with the real DE/turbo whisper model; not achievable in the sandboxed dev environment (only ggml-base.en.bin is installed here).

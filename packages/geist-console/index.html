@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>geist</title>
+		<!--
+			tokens.css is linked here directly, in <head>, so geist-glass's CSS
+			custom properties (spec §13) are available before React ever boots —
+			the literal mechanism for M1's "no restyle-later debt" requirement
+			(spec §16). Nothing in src/ imports tokens.css a second time.
+		-->
+		<link rel="stylesheet" href="/src/tokens.css" />
+		<style>
+			html,
+			body,
+			#root {
+				height: 100%;
+				margin: 0;
+			}
+
+			body {
+				/* on-brand even before React mounts — never a flash of default white */
+				background: var(--smoke-900);
+			}
+		</style>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="/src/main.tsx"></script>
+	</body>
+</html>

@@ -14,11 +14,20 @@
 		"./tokens.css": "./src/tokens.css"
 	},
 	"scripts": {
-		"build": "tsgo --noEmit",
+		"dev": "vite",
+		"build": "vite build",
+		"check": "tsgo --noEmit",
 		"test": "bun test"
 	},
 	"dependencies": {
 		"@draht/geist-protocol": "workspace:*"
 	},
-	"devDependencies": {}
+	"devDependencies": {
+		"@types/react": "^19.2.17",
+		"@types/react-dom": "^19.2.3",
+		"@vitejs/plugin-react": "^5.2.0",
+		"react": "^19.2.7",
+		"react-dom": "^19.2.7",
+		"vite": "^7.1.6"
+	}
 }

@@ -46,6 +46,9 @@
 		"packages/invoice/test/**/*",
 		"packages/compliance/test/**/*",
 		"packages/geist-protocol/test/**/*",
+		"packages/geist-core/test/**/*",
+		"packages/geist/**/*",
+		"packages/geist-console/**/*",
 		"packages/gateway/**/*",
 		"packages/landing/**/*"
 	]

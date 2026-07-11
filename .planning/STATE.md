@@ -12,6 +12,7 @@
 - Phases 5-9: Zvec-based knowledge, GitHub Action CI, Anthropic SDK orchestration, n8n JSON templates, git-based rollback
 - Milestone 2 approved: Integration hardening, Phases 19-24 (Oskar, 2026-03-03)
 - Milestone 3 approved: Recursive Language Models, Phases 26-30 — inference-time scaffold per Zhang/Kraska/Khattab 2026 (arXiv:2512.24601). Phases 22-25 remain pending backlog, not a blocker. (Oskar, 2026-04-24)
+- Milestone 4 approved: geist, Phases 31-40 — a harness-agnostic ACP-client spatial ADE for Quest 3, spec locked at `.planning/specs/geist-spec.md` (rev 7). Phase 31 is foundation/scaffold work the spec doesn't name; Phases 32-40 map 1:1 to the spec's M0-M8. Phases 22-25 and 26-30 remain pending backlog, not a blocker (same precedent as Milestone 3). Every phase's H-gate (hardware/voice demo on Oskar's physical Quest 3) is recorded as evidence debt, never auto-certified by this loop — this sandbox has no Quest headset, no gradle/kotlinc on PATH, and no Meta Spatial SDK Maven access, so `quest/` (Kotlin) work is scaffolded structurally, not build-verified, until Oskar runs it on his machine. (autonomous /loop session, 2026-07-11, per Oskar's directive to complete the spec via ultracode multi-agent orchestration — fable-5 advisor consult, sonnet/opus workers)
 
 ## Completed Phases
 - Phase 21: GSD Integration Tests (complete)
@@ -53,5 +54,6 @@ None.
 - 2026-03-03: Milestone 2 approved. Phases 19-24 added to ROADMAP. Carried forward incomplete requirements from R14-TDD and R15-DDD.
 - 2026-03-16: Phase 21 verification completed. All 31 deliverables passed UAT. 22/22 tests passed. No fix plans required.
 - 2026-04-24: Milestone 3 (RLM) planned. Added Phases 26-30 to ROADMAP and R26-R30 requirement blocks. Milestone 2 phases 22-25 deferred to backlog.
+- 2026-07-11: Milestone 4 (geist) planned from the locked spec. Added Phases 31-40 to ROADMAP, R31-FOUND through R40-M8 requirement blocks to REQUIREMENTS.md, and a geist bounded context (Tier F) to DOMAIN.md. Advisor (fable-5) sanity-checked the phase mapping and confirmed draht-tools has no sequential phase-completion gating, so a hardware-blocked phase (32/M0) cannot stall 33+.
 
 ## Last Activity: 2026-07-10 23:20:38

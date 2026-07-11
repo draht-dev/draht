@@ -42,6 +42,19 @@ Each imports `@draht/coding-agent`'s Extension API and registers tools/hooks. No
 
 `@draht/tools` (canonical GSD CLI source), `draht-claude` & `draht-codex` (plugin wrappers mirroring tools/agents/skills), `@draht/templates` (AGENTS.md library), `@draht/workflows` (n8n templates). Packaging/distribution shells, not domain logic.
 
+### Tier F — geist (spatial ADE, harness-independent)
+
+A deliberately separate product living in this monorepo (Milestone 4; source: `.planning/specs/geist-spec.md`). Point a Quest 3 ray at a running app or an ACP coding-agent session and talk to it. Boundary-enforced: only `draht-acp` may import `@draht/*` — everything else in this tier is harness-agnostic by construction.
+
+- **geist** (`packages/geist/`) — CLI + composition root; wires `geist-core` + `geist-acp` + `geist-console` together.
+- **geist-core** (`packages/geist-core/`) — harness-free product logic: sessions, project registry, worktree/port manager, sha ledger, variants, composer, git ops, the `HarnessSession` port interface. Imports no `@draht/*`.
+- **geist-acp** (`packages/geist-acp/`) — the only code that knows ACP wire shapes: JSON-RPC 2.0 client, subprocess lifecycle per session, capability handshake, event/permission/cancel normalization into the `HarnessSession` port.
+- **draht-acp** (`packages/draht-acp/`) — thin ACP shim wrapping `@draht/coding-agent`; the single permitted door from the geist tier into `@draht/*`. Also usable standalone by Zed/JetBrains.
+- **geist-protocol** (`packages/geist-protocol/`) — shared wire types (WS protocol, `geist.yaml` config schema) consumed by bridge and headset alike.
+- **geist-picker** (`packages/geist-picker/`) — IIFE injected into target pages for element hover/highlight/crop.
+- **geist-console** (`packages/geist-console/`) — React `/ui`, styled from `tokens.css` (geist glass design tokens).
+- **quest/** — Kotlin, Meta Spatial SDK headset app. Not an npm workspace; talks to the bridge over WS only. Never composes prompts or speaks ACP directly.
+
 ## Context Map
 
 - **Shared Kernel**: `@draht/ai` (types/vocabulary) and `@draht/tui` (rendering) — depended on across kernel and business tiers without translation.
@@ -51,6 +64,10 @@ Each imports `@draht/coding-agent`'s Extension API and registers tools/hooks. No
 - **GSD → Coding Agent**: GSD commands are registered in the coding agent extension system. GSD state lives in `.planning/`.
 - **GSD → Git**: GSD commit operations call git directly (execSync). No abstraction layer.
 - **Distribution mirrors** (not runtime coupling): `draht-claude`/`draht-codex` mirror `@draht/tools` content; enforced by `scripts/check-plugin-mirrors.mjs`.
+- **Separate Ways, by design**: the geist tier and the draht kernel/business tiers share no code and no vocabulary except through `draht-acp`. `scripts/check-geist-boundary.mjs` (the geist analogue of `check-plugin-mirrors.mjs`) fails root `check` if that rule is violated.
+- **Anti-Corruption Layer**: `draht-acp` translates `@draht/coding-agent`'s Session/Turn/Tool vocabulary into ACP wire shapes — geist-core never sees a draht type.
+- **Open-Host Service**: `geist-acp`'s `HarnessSession` port is upstream to any ACP-speaking launch spec (`draht-acp`, `claude-agent-acp`, `codex-acp`, native-ACP `gemini`, …) — all are conformist adapters behind one port.
+- **geist-core ⇄ quest/**: WS only, LAN, token-paired. Kotlin never composes prompts; the bridge never renders or speaks ACP directly — three strict responsibilities per spec §7.
 
 ## Entities
 
@@ -68,6 +85,12 @@ Each imports `@draht/coding-agent`'s Extension API and registers tools/hooks. No
 - **Client / VectorStore / Chunk** — Knowledge context aggregates.
 - **Invoice / LineItem / TimeEntry** — Invoicing aggregates.
 - **ComplianceReport / ComplianceFinding / PiiPattern** — Compliance aggregates.
+- **HarnessSession** — geist-acp/geist-core root: one ACP subprocess session, its capability set, and its running/awaiting_review/stopped status.
+- **Project / FleetRegistry** — geist-core: the registry of known projects (yaml ∪ workspaceRoots discovery ∪ recents) and the ≤4-session fleet spanning them.
+- **Variant** — geist-core: one sibling worktree in a `variants n` comparison; carries its own harness, its own sha ledger entry, winner/pruned status.
+- **ShaLedger entry** — geist-core: `{baseSha, lastApprovedSha}` per session; the substrate for approve/undo (`reset --hard <ref>`).
+- **PermissionRequest / PermissionOption** — geist-acp: an ACP permission ask, rendered as chips, resolved by `allow`/`deny` (voice or tap).
+- **ElementContext** — geist-core: the composed situation prompt for one element-pointed dispatch (spec §9.3).
 
 ## Value Objects
 
@@ -95,12 +118,17 @@ Each imports `@draht/coding-agent`'s Extension API and registers tools/hooks. No
 - **ComplianceReport (root, Compliance)** — owns ComplianceFinding; PiiPattern/AiDocRequirement as policy value objects.
 - **ChannelStore (root, Mom)** — owns Channel → PendingMessage → SessionProcess.
 - **GatewayLifecycle (root, Gateway)** — owns Session → ServerHandle.
+- **FleetRegistry (root, geist-core)** — owns Project → HarnessSession → Variant; enforces the ≤4-session cap.
+- **HarnessSession (root, geist-acp)** — owns the ACP subprocess, its capability handshake result, its ToolCallUpdate/PlanUpdate stream, and pending PermissionRequests.
 
 ## Domain Events
 
 - **TaskExecuted** — a task was run (pass/fail/skip). Logged to execution-log.jsonl.
 - **TDDViolation** — a "green:" commit was made without a preceding "red:" commit for the same task.
 - **PhaseComplete** — all plans in a phase have summaries and verification passes.
+- **TurnEnded** — an ACP session's turn completed; combined with a dirty/ahead git status this triggers `awaiting_review` (git is the truth, never the agent's own claim).
+- **PermissionRequested / PermissionAnswered** — a `HarnessSession` asked for tool permission; resolved by allow/deny.
+- **VariantWinnerPicked** — a `variants n` comparison closed; the winning Variant's sha becomes the session's, siblings reset to `baseSha` and are pruned.
 
 ## Persistence Note
 
@@ -143,6 +171,15 @@ There are no SQL tables anywhere in the monorepo (inferred). State lives as: (a)
 | ComplianceFinding / PiiPattern / AiDocRequirement / Severity | Compliance | GDPR + EU AI Act scanning terms. |
 | Channel / PendingMessage / SandboxConfig | Mom | Slack delegation terms. |
 | Pod / GPU | Pods | vLLM deployment targets. |
+| ACP | geist | Agent Client Protocol — the LSP-for-agents standard (JSON-RPC 2.0 over stdio) that every geist harness speaks. |
+| HarnessSession | geist | One ACP subprocess session and its capability set; the single port `geist-core` codes against. |
+| Capability handshake | geist | Per-session ACP negotiation of `{images, commands, modes, resume}`; geist degrades per capability, never per harness name. |
+| Addressee | geist | What a voice utterance targets: an element, an agent/session, or the fleet board — pointing is addressing. |
+| Sha ledger | geist | Per-session `{baseSha, lastApprovedSha}`; approve/undo = `reset --hard <ref>`. |
+| awaiting_review | geist | Session status once a turn ends AND git is dirty/ahead — git is the truth, not the agent's claim. |
+| Variant | geist | One sibling worktree in a `variants n` comparison; may carry its own harness. |
+| room-glass / content-glass | geist | The two-material design system (spec §13): opaque/alpha-smoke panel chrome vs. full blur+refraction inside panels — split because Quest cannot sample passthrough. |
+| Target ring | geist | The signature UI element: the picker's element highlight, refracting the app's own pixels, condensing into the frozen-target crop chip on PTT press. |
 
 ## Concerns (inferred, for later confirmation)
 

@@ -170,3 +170,67 @@
 - R30-EVAL.3: Cost-comparison harness: RLM vs `router` baseline (truncate + single call) on the same task, written to eval report
 - R30-EVAL.4: `draht rlm replay <session-id>` reconstructs final answer from the trajectory log without re-invoking any LLM
 - R30-EVAL.5: README + AGENTS.md sections — when to prefer RLM, cost envelope, worked example end-to-end
+
+---
+
+## Milestone 4 — geist
+
+> Source: `.planning/specs/geist-spec.md` (rev 7, locked). Harness-agnostic spatial ADE for Quest 3, built as an ACP client — see spec for full rationale, rejected alternatives, and locked decisions (§5, §17).
+> Every phase from R32-M0 on distinguishes automated ✅ e2e requirements (CI-checkable against a mock ACP agent) from H-gate requirements (human/hardware evidence on Oskar's Quest 3 — never auto-certifiable by a GSD loop).
+
+### R31-FOUND: Geist Foundation & Repo Scaffold
+- R31-FOUND.1: Repo layout — `packages/geist/`, `geist-core/`, `geist-acp/`, `draht-acp/`, `geist-protocol/`, `geist-picker/`, `geist-console/` created as npm workspaces (spec §8)
+- R31-FOUND.2: `quest/` Kotlin project skeleton created and explicitly excluded from npm workspaces (spec §8)
+- R31-FOUND.3: `geist.yaml` config contract (spec §9.1: `harness.default`, `harness.agents` launch specs) implemented as a zod schema in `geist-protocol`, with a passing `geist.yaml.example`
+- R31-FOUND.4: Import boundary enforced — `scripts/check-geist-boundary.mjs` fails root `check` if `geist-core`/`geist-acp`/`geist-console`/`quest` import `@draht/*` (only `draht-acp` may); this is the code-level enforcement of spec §17.1
+- R31-FOUND.5: `scripts/check-geist-mirrors.mjs` scaffolded per spec §6's tooling row, wired into root `check`
+- R31-FOUND.6: `docs/geist/spec.md` and `.planning/geist/README.md` created per the locked repo layout (spec §8)
+
+### R32-M0: Spike — Panel + Ray
+- R32-M0.1: Kotlin Spatial SDK panel scaffold in `quest/` renders a passthrough panel (structural; build/run verification deferred — no Quest hardware/Meta SDK Maven access in this sandbox)
+- R32-M0.2: Ray-cast addressee resolution stubbed (ray→plane fallback) per spec §7 quest/ responsibilities
+- R32-M0.3: Panel-alpha probe implemented — both room-glass and opaque-smoke-fallback code paths present (spec §13, §17.6)
+- R32-M0.4: H0 (hover-coords evidence) recorded as evidence debt pending physical Quest 3 access
+
+### R33-M1: Pairing + Voice Wire
+- R33-M1.1: WS pairing handshake (LAN, token) between bridge and headset, survives reconnect (spec §6 "Sessions & worktrees" row is unrelated — this is the M1 pairing wire specifically)
+- R33-M1.2: `geist-console` ships from `tokens.css` (geist-glass) at first pixel — no unstyled/restyle-later state
+- R33-M1.3: whisper.cpp turbo/small wired for DE/EN transcription
+- R33-M1.4: H1 (9/10 live transcripts; pairing survives restart) recorded as evidence debt
+
+### R34-M2: Context Pack
+- R34-M2.1: `ElementContext` composition (spec §9.3, unchanged from r2) implemented in `geist-core`
+- R34-M2.2: Image content block attached only when capability-advertised; crop path-reference (`<wt>/.geist/task-<id>/target.webp`) always written and referenced
+- R34-M2.3: H2 (chip + crop demo) recorded as evidence debt
+
+### R35-M3: ACP Loop Closes
+- R35-M3.1: `geist-acp` `HarnessSession` port + ACP client (JSON-RPC 2.0, stdio subprocess per session, capability handshake)
+- R35-M3.2: In-repo deterministic mock ACP agent for e2e tests
+- R35-M3.3: `draht-acp` shim implementing ACP over draht, with a keyless faux provider for CI
+- R35-M3.4: `claude-agent-acp` launch spec pinned from the ACP registry; `smoke:harness -- claude` test (network, non-CI)
+- R35-M3.5: Permission requests — `permission_request`/`permission_answer` WS messages, chip rendering, voice allow/deny mapped to the closest offered option
+- R35-M3.6: Sha ledger — `baseSha`/`lastApprovedSha`, approve/undo = `reset --hard <ref>`
+- R35-M3.7: H3 (fr3n button change end-to-end on both harnesses; one permission answered by voice) recorded as evidence debt
+
+### R36-M4: Commands, Addressing, Project & Harness Grammar
+- R36-M4.1: ACP-advertised commands/modes surfaced as palette + voice options; verbatim `/…` pass-through always available
+- R36-M4.2: Harness qualifier grammar (closed vocab = configured agents) per spec §9.5 resolution order
+- R36-M4.3: Project qualifier resolution (registry = yaml ∪ workspaceRoots ∪ recents)
+- R36-M4.4: H4 (voice-spawn two harnesses in two projects; disambiguation chips by re-say) recorded as evidence debt
+
+### R37-M5: Fleet Across Projects & Harnesses
+- R37-M5.1: Mixed-harness fleet cards with capability badges
+- R37-M5.2: ≤4 sessions across projects and harnesses, scoped approve/undo/stop
+- R37-M5.3: H5 (two harnesses simultaneous, point-routed, 72 Hz with 3 panels + tier-1 glass) recorded as evidence debt
+
+### R38-M6: Variants, Optionally Mixed
+- R38-M6.1: `variants_new` WS message supports optional `harnesses: [name]` round-robin across configured agents
+- R38-M6.2: H6 (3-way shoot-out, winner by pointing) recorded as evidence debt
+
+### R39-M7: Run Rendering
+- R39-M7.1: Generic ACP tool-call/plan-update → live lanes for every harness
+- R39-M7.2: `subagent-recognizer.ts` — data-driven, golden-tested typed-lane upgrade for draht/Claude-Task-style calls
+- R39-M7.3: H7 (real draht `/orchestrate` lanes; untyped Claude lanes) recorded as evidence debt
+
+### R40-M8: Spatial Dividends (v1.5)
+- R40-M8.1: H8 (two-viewport fix; workspace pose restores after restart) recorded as evidence debt — entirely hardware-gated, no automated ✅ criterion

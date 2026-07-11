@@ -173,7 +173,7 @@
 > **Sandbox constraint:** the environment executing this milestone's early phases has no Quest headset, no `gradle`/`kotlinc` on PATH, and no Meta Spatial SDK Maven credentials. `quest/` (Kotlin) work is scaffolded structurally but not build-verified here; H-gates require Oskar's machine.
 > **Milestone 2/3 carry-forward:** Phases 22–25 and 26–30 remain pending backlog and are not a prerequisite for Milestone 4 (same precedent as Milestone 3's carry-forward above).
 
-## Phase 31: Geist Foundation & Repo Scaffold — `pending`
+## Phase 31: Geist Foundation & Repo Scaffold — `complete`
 **Goal:** The repo layout, workspace wiring, and cross-cutting contracts every geist milestone depends on exist and are boundary-checked.
 **Requirements:** R31-FOUND.1, R31-FOUND.2, R31-FOUND.3, R31-FOUND.4, R31-FOUND.5, R31-FOUND.6
 **Acceptance:** `packages/geist/`, `packages/geist-core/`, `packages/geist-acp/`, `packages/draht-acp/`, `packages/geist-protocol/`, `packages/geist-picker/`, `packages/geist-console/` exist as npm workspaces (package.json + tsconfig, wired into root tsconfig `paths`); `quest/` exists as a Kotlin project skeleton and is explicitly NOT an npm workspace; a zod schema in `geist-protocol` validates the `geist.yaml` harness config contract (spec §9.1) and `geist.yaml.example` passes it; `scripts/check-geist-boundary.mjs` fails root `check` if `geist-core`/`geist-acp`/`geist-console`/`quest` import `@draht/*` (only `draht-acp` may) and is wired into root `npm run check`; `scripts/check-geist-mirrors.mjs` exists per spec §6's tooling row; `docs/geist/spec.md` and `.planning/geist/README.md` exist per the locked repo layout (§8).

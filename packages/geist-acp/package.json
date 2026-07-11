@@ -17,6 +17,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@agentclientprotocol/sdk": "1.2.1",
 		"@draht/geist-core": "workspace:*",
 		"@draht/geist-protocol": "workspace:*"
 	}

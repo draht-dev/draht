@@ -1,3 +1,5 @@
+import type { SituationPrompt } from "./composer/situation-prompt.js";
+
 /**
  * The `HarnessSession` port (spec §5, §7): the one interface geist-core uses
  * to talk to a running agent, whatever the harness. `geist-core` owns this
@@ -40,7 +42,7 @@ export interface HarnessSession {
 	readonly status: HarnessSessionStatus;
 
 	/** Sends a composed situation prompt (spec §9.4) to the agent's current turn. */
-	dispatch(prompt: string): Promise<void>;
+	dispatch(prompt: SituationPrompt): Promise<void>;
 
 	/** Cancels the in-flight turn. Steer fallback = cancel + re-prompt where mid-turn steer isn't offered. */
 	cancel(): Promise<void>;

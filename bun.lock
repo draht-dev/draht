@@ -258,6 +258,7 @@
       "name": "@draht/geist-acp",
       "version": "2026.7.11",
       "dependencies": {
+        "@agentclientprotocol/sdk": "1.2.1",
         "@draht/geist-core": "workspace:*",
         "@draht/geist-protocol": "workspace:*",
       },
@@ -478,6 +479,8 @@
     "rimraf": "6.1.2",
   },
   "packages": {
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.2.1", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-jwYUdOQR7tc+Zfch53VL4JJyUNK/46q03uUTYb+PjECsmnNl94XFXOfYLJ8RBpMNidXd1rpOAVgb0vqD98xImA=="],
+
     "@anthropic-ai/sandbox-runtime": ["@anthropic-ai/sandbox-runtime@0.0.26", "", { "dependencies": { "@pondwader/socks5-server": "^1.0.10", "@types/lodash-es": "^4.17.12", "commander": "^12.1.0", "lodash-es": "^4.17.21", "shell-quote": "^1.8.3", "zod": "^3.24.1" }, "bin": { "srt": "dist/cli.js" } }, "sha512-DYV5LSsVMnzq0lbfaYMSpxZPUMAx4+hy343dRss+pVCLIfF62qOhxpYfZ5TmOk1GTDQm5f9wPprMNSStmnsV4w=="],
 
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.91.1", "", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-LAmu761tSN9r66ixvmciswUj/ZC+1Q4iAfpedTfSVLeswRwnY3n2Nb6Tsk+cLPP28aLOPWeMgIuTuCcMC6W/iw=="],

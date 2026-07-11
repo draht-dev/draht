@@ -7,5 +7,9 @@
 // LLM, sandboxing, and CLI integration land in later phases (27-29); see
 // .planning/phases/26-rlm-core-primitives/26-01-PLAN.md.
 
+export type { PromptTier, PromptVars } from "./prompts.js";
+export { renderPrompt, selectTier } from "./prompts.js";
+export type { CreateRouterBackedSessionOptions } from "./router-session.js";
+export { createRouterBackedSession } from "./router-session.js";
 export { extractPythonCode, pythonReprToValue, RlmSession, truncateStdout } from "./session.js";
 export type { RlmHistoryEntry, RlmResult, RlmResultKind, RlmSessionOptions } from "./types.js";

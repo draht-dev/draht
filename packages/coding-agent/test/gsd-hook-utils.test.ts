@@ -89,7 +89,7 @@ describe("readHookConfig", () => {
 		const result = readHookConfig(tmpDir);
 		expect(result.coverageThreshold).toBe(80);
 		expect(result.tddMode).toBe("advisory");
-		expect(result.qualityGateStrict).toBe(false);
+		expect(result.qualityGateStrict).toBe(true);
 	});
 
 	it("reads hooks section from config.json", () => {
@@ -116,7 +116,7 @@ describe("readHookConfig", () => {
 		const result = readHookConfig(tmpDir);
 		expect(result.coverageThreshold).toBe(80);
 		expect(result.tddMode).toBe("advisory");
-		expect(result.qualityGateStrict).toBe(false);
+		expect(result.qualityGateStrict).toBe(true);
 	});
 
 	it("returns HookConfig shape", () => {

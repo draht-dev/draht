@@ -1,6 +1,6 @@
 # State
 
-## Current Phase: Phase 25: CI & Artifact Cleanup
+## Current Phase: Phase 26: RLM Core Primitives
 ## Status: complete
 
 ## Decisions
@@ -14,6 +14,7 @@
 - Milestone 3 approved: Recursive Language Models, Phases 26-30 — inference-time scaffold per Zhang/Kraska/Khattab 2026 (arXiv:2512.24601). Phases 22-25 remain pending backlog, not a blocker. (Oskar, 2026-04-24)
 
 ## Completed Phases
+- Phase 26: RLM Core Primitives (1 plan, verified 2026-07-11)
 - Phase 25: CI & Artifact Cleanup (1 plan, verified 2026-07-11)
 - Phase 24: Invoice/Compliance Tests (1 plan, verified 2026-07-11)
 - Phase 23: Multi-Agent Layer (1 plan, verified 2026-07-11)
@@ -47,6 +48,7 @@
 None.
 
 ## Audit Log
+- 2026-07-11: Phase 26 (RLM Core Primitives) completed and verified: `@draht/rlm` package scaffolded with a working `RlmSession` root loop (root-LLM-produces-code → REPL-executes → truncated-stdout → history-append → FINAL-check), a stdlib-only Python REPL driver with a persistent `exec()` globals dict and newline-delimited JSON wire protocol, `FINAL`/`FINAL_VAR` implemented as real function calls raising a caught driver-internal exception (not text-pattern matching, closing R26-RLM.6's brittleness safeguard), and an injectable `llm_query`/`rootLlm` (real `@draht/router` wiring deferred to Phase 27 as planned). `packages/rlm` vitest suite: 2 files, 15/15 tests passing; full monorepo typecheck clean. Closes R26-RLM.1 through R26-RLM.7. ROADMAP.md and STATE.md updated to `complete`.
 - 2026-07-11: Phase 25 (CI & Artifact Cleanup) completed and verified: confirmed R25-CI.1 (`.github/workflows/ci.yml`) was already satisfied; added `.github/workflows/ai-review.yml` dogfooding `packages/ci`'s composite action on this repo's own PRs (R25-CI.2); backfilled all 11 placeholder Phase 14-18 summary files with real git-history-backed content, explicitly noting the two Phase 14 tasks with no in-repo commit evidence rather than fabricating them (R25-DOC.1); consolidated `hooks.json` to a single generated source of truth via `scripts/generate-hooks-json.mjs` plus a new `check:hooks` step in `npm run check` (R25-DOC.2). **R25-CI.2's `ai-review.yml` workflow is inert until Oskar adds the `ANTHROPIC_API_KEY` repository secret** — `gh secret list` showed none configured, so the `review` job is job-level-gated to skip (not fail) until then. Full `npm run check` passes; ROADMAP.md and STATE.md updated to `complete`.
 - 2026-07-11: Phase 24 (Invoice/Compliance Tests) completed and verified: added Lexoffice mock integration tests, Toggl mock integration tests, a realistic German-corpus PII scanner accuracy test, and an EU AI Act documentation-validator test — closing R24-API.1 through R24-API.4. `packages/invoice` 16/16 tests passing across 3 files; `packages/compliance` 18/18 tests passing across 3 files; full monorepo `tsgo --noEmit` clean. No source changes needed (test-coverage phase only). ROADMAP.md and STATE.md updated to `complete`.
 - 2026-07-11: Post-verification check on Phase 23 found `core/builtins/subagent.ts` (the module the permission gate was wired into) was never actually loaded by any real session — `discoverAndLoadExtensions` is unused in production and the real settings-driven extension resolution never referenced `core/builtins/`. Traced every call site (cli.ts, main.ts, agent-session.ts, sdk.ts, package-manager.ts) to confirm. Fixed in commit `433e6afbe`: `core/builtins/index.ts` exports `CORE_BUILTIN_EXTENSIONS`, now always included by both `createAgentSessionServices` and `createAgentSession`. Verified empirically via `session.agent.beforeToolCall` on a from-scratch session — a real `.draht/permissions.yml` deny rule now blocks sudo/chaining/command-substitution bypass attempts. Checked Phase 7 (`packages/orchestrator`) for the same class of bug: it's unaffected — that package is a normal opt-in extension (install via `draht install @draht/orchestrator`) working as designed; `core/builtins/` is unrelated, pre-dates the phase system, and just never had a loading mechanism at all.

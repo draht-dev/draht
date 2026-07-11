@@ -805,12 +805,12 @@ export const OPENROUTER_MODELS = {
 		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", max: null, xhigh: "xhigh" },
 		input: ["text"],
 		cost: {
-			input: 0.348,
-			output: 0.696,
-			cacheRead: 0.029,
+			input: 0.435,
+			output: 0.87,
+			cacheRead: 0.003625,
 			cacheWrite: 0,
 		},
-		contextWindow: 1024000,
+		contextWindow: 1048576,
 		maxTokens: 384000,
 	} satisfies Model<"openai-completions">,
 	"google/gemini-2.5-flash": {

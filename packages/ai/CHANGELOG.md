@@ -1,11 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.11] - 2026-07-11
+
+### Added
+
+- incorporate upstream ai package changes
+
+### Changed
+
+- refresh model catalog data
+- refresh model catalog data
+- refresh openrouter and fireworks model catalog data
 
 ### Fixed
 
-- Preserve model-supported `max` reasoning across OpenAI-family simple streaming adapters
-- Forward configured transports through simple streaming adapters, including Codex WebSocket transport
+- preserve max reasoning level and forward transport in OpenAI-family adapters
 
 ## [2026.7.7] - 2026-07-06
 

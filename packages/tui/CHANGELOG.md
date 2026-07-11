@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.11] - 2026-07-11
+
+### Fixed
+
+- make terminal timer tests Bun-compatible
+- incorporate upstream tui changes
 
 ## [2026.7.7] - 2026-07-06
 

@@ -1,21 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.11] - 2026-07-11
 
 ### Added
 
-- `PostToolUse` lifecycle hook (`post-edit-check.cjs`): file-scoped Biome lint feedback on every Edit/Write, enforced by the harness instead of command prose
-- `Stop` lifecycle hook (`stop-quality-gate.cjs`): runs the quality gate (types + lint, `--no-tests`) when a turn ends with uncommitted source changes in a `.planning` project; opt out via `hooks.stopGate: false`
-- `--no-tests` flag for `gsd-quality-gate.cjs`
-- Session-start hook now injects a standing-spec digest (Vision + Constraints from `.planning/PROJECT.md`) and the most recent `## Lessons` entries every session
-- Lessons-learned accumulation: `## Lessons` section in STATE.md, seeded by the post-phase hook on failures/violations, written by `/pause-work`, `/fix`, and `/next-milestone`, read by `/plan-phase`
+- add advisor agent, loop mode, and model-tiering guidance
+- overhaul map-graph clustering, MAP.html viewer, map-serve
+- pin reviewer and spec-reviewer to opus
+- lessons accumulation and standing-spec digest per session
+- enforce quality gates in the harness, not prose
 
 ### Changed
 
-- Quality gate is strict by default (`qualityGateStrict: true`): failing tests/types/lint exit 1; opt out per-project in `.planning/config.json`
-- `gsd-post-task.cjs` hard stop: 3 recorded failures for the same task exit non-zero — the orchestrator must escalate instead of re-dispatching
-- `/execute-phase` and `/quick` review loops carry a hard cap of 3 implementer re-dispatches per task; `/fix`'s 3-attempt stop is a hard cap and records a lesson
-- `reviewer` and `spec-reviewer` agents pinned to `model: opus` so maker (sonnet implementer) and checkers run on different models
+- reference advisor and model-tiering in stall guidance
+
+### Fixed
+
+- fix YAML parse error in advisor agent frontmatter
+- force-refresh plugin copy on reinstall
+- keep plugin manifests in lockstep with package version
 
 ## [2026.7.7-1] - 2026-07-07
 

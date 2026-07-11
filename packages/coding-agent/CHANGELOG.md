@@ -1,16 +1,25 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.11] - 2026-07-11
+
+### Added
+
+- incorporate upstream coding-agent changes
+- add advisor agent, loop mode, and model-tiering guidance
+- overhaul map-graph clustering, MAP.html viewer, map-serve
+- lessons accumulation and standing-spec digest per session
+- enforce quality gates in the harness, not prose
 
 ### Changed
 
-- GSD quality gate is strict by default (`qualityGateStrict: true` in `DEFAULT_HOOK_CONFIG`); opt out per-project in `.planning/config.json`
-- GSD command prompts: `/execute-phase` and `/quick` review loops carry a hard cap of 3 implementer re-dispatches per task; `/fix`'s 3-attempt stop is a hard cap and records a lesson to `.planning/STATE.md ## Lessons`; `/plan-phase` reads lessons before planning; `/pause-work` and `/next-milestone` write lessons back
+- fix assertions left out of sync with current source behavior
+- update stale PI_* and .pi references to DRAHT_* and .draht
 
 ### Fixed
 
-- Resolve TypeBox imports in TypeScript extensions and allow entry renderers to register during extension initialization
-- Reject actions through stale extension APIs after their session context is replaced
+- spawn CLI integration tests through the tsx import hook
+- resolve typebox subpath imports and guard stale extension API calls
+- map-codebase always maps the whole repo
 
 ## [2026.7.7-1] - 2026-07-07
 

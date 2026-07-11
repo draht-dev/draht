@@ -47,6 +47,7 @@
 		"packages/compliance/test/**/*",
 		"packages/geist-protocol/test/**/*",
 		"packages/geist-core/test/**/*",
+		"packages/geist-acp/test/**/*",
 		"packages/geist/**/*",
 		"packages/geist-console/**/*",
 		"packages/gateway/**/*",

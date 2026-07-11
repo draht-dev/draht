@@ -18,6 +18,13 @@ export { composeSituationPrompt } from "./composer/situation-prompt.js";
 export { FleetCapacityError, FleetRegistry, MAX_FLEET_SESSIONS } from "./fleet-registry.js";
 export type { HarnessCapabilities, HarnessSession, HarnessSessionStatus } from "./harness-session.js";
 export type {
+	ShaLedgerApproveResult,
+	ShaLedgerEntry,
+	ShaLedgerRecordResult,
+	ShaLedgerUndoResult,
+} from "./ledger/sha-ledger.js";
+export { isDirtyOrAhead, ShaLedger, ShaLedgerError } from "./ledger/sha-ledger.js";
+export type {
 	PairingAttemptResult,
 	PairingStateOptions,
 	PairingStatus,

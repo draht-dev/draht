@@ -4,6 +4,7 @@ import type { Model } from "@draht/ai";
 import { getAgentDir } from "../config.js";
 import { resolvePath } from "../utils/paths.js";
 import { AuthStorage } from "./auth-storage.js";
+import { CORE_BUILTIN_EXTENSIONS } from "./builtins/index.js";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.js";
 import { ModelRegistry } from "./model-registry.js";
 import {
@@ -147,6 +148,7 @@ export async function createAgentSessionServices(
 		cwd,
 		agentDir,
 		settingsManager,
+		extensionFactories: [...CORE_BUILTIN_EXTENSIONS, ...(options.resourceLoaderOptions?.extensionFactories ?? [])],
 	});
 	await resourceLoader.reload(options.resourceLoaderReloadOptions);
 

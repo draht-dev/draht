@@ -25,7 +25,7 @@
     },
     "packages/agent": {
       "name": "@draht/agent-core",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "@draht/ai": "workspace:*",
         "ignore": "^7.0.5",
@@ -41,7 +41,7 @@
     },
     "packages/ai": {
       "name": "@draht/ai",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "bin": {
         "draht-ai": "./dist/cli.js",
       },
@@ -72,7 +72,7 @@
     },
     "packages/ci": {
       "name": "@draht/ci",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
         "@octokit/rest": "^21.1.0",
@@ -85,7 +85,7 @@
     },
     "packages/coding-agent": {
       "name": "@draht/coding-agent",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "bin": {
         "coding-agent": "dist/cli.js",
         "draht": "dist/cli.js",
@@ -175,14 +175,14 @@
     },
     "packages/compliance": {
       "name": "@draht/compliance",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
       },
     },
     "packages/deploy-guardian": {
       "name": "@draht/deploy-guardian",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
         "@types/node": "^22.10.5",
@@ -192,7 +192,7 @@
     },
     "packages/draht-claude": {
       "name": "draht-claude",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "bin": {
         "draht-claude": "./cli.mjs",
       },
@@ -202,7 +202,7 @@
     },
     "packages/draht-codex": {
       "name": "draht-codex",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "bin": {
         "draht-codex": "./cli.mjs",
       },
@@ -212,14 +212,14 @@
     },
     "packages/draht-tools": {
       "name": "@draht/tools",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "bin": {
         "draht-tools": "./bin/draht-tools.cjs",
       },
     },
     "packages/gateway": {
       "name": "@draht/gateway",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "bin": {
         "draht-gateway": "src/cli.ts",
       },
@@ -233,7 +233,7 @@
     },
     "packages/infra": {
       "name": "@draht/infra",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "sst": "^4.2.1",
       },
@@ -245,14 +245,14 @@
     },
     "packages/invoice": {
       "name": "@draht/invoice",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
       },
     },
     "packages/knowledge": {
       "name": "@draht/knowledge",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "better-sqlite3": "^11.7.0",
       },
@@ -266,7 +266,7 @@
     },
     "packages/landing": {
       "name": "@draht/landing",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "@astrojs/sitemap": "^3.7.0",
         "@resvg/resvg-js": "^2.6.2",
@@ -277,7 +277,7 @@
     },
     "packages/mom": {
       "name": "@draht/mom",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "bin": {
         "mom": "dist/main.js",
       },
@@ -301,7 +301,7 @@
     },
     "packages/orchestrator": {
       "name": "@draht/orchestrator",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
       },
@@ -314,7 +314,7 @@
     },
     "packages/pods": {
       "name": "@draht/pods",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "bin": {
         "draht-pods": "dist/cli.js",
       },
@@ -323,9 +323,18 @@
         "chalk": "^5.5.0",
       },
     },
+    "packages/rlm": {
+      "name": "@draht/rlm",
+      "version": "2026.7.11",
+      "devDependencies": {
+        "@types/node": "^22.10.5",
+        "typescript": "^6.0.0-beta",
+        "vitest": "^3.2.4",
+      },
+    },
     "packages/router": {
       "name": "@draht/router",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "@draht/ai": "workspace:*",
       },
@@ -335,11 +344,11 @@
     },
     "packages/templates": {
       "name": "@draht/templates",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
     },
     "packages/tui": {
       "name": "@draht/tui",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "@types/mime-types": "^2.1.4",
         "chalk": "^5.5.0",
@@ -357,7 +366,7 @@
     },
     "packages/web-ui": {
       "name": "@draht/web-ui",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
       "dependencies": {
         "@draht/agent-core": "workspace:*",
         "@draht/ai": "workspace:*",
@@ -403,7 +412,7 @@
     },
     "packages/workflows": {
       "name": "@draht/workflows",
-      "version": "2026.7.7-1",
+      "version": "2026.7.11",
     },
   },
   "overrides": {
@@ -560,6 +569,8 @@
     "@draht/orchestrator": ["@draht/orchestrator@workspace:packages/orchestrator"],
 
     "@draht/pods": ["@draht/pods@workspace:packages/pods"],
+
+    "@draht/rlm": ["@draht/rlm@workspace:packages/rlm"],
 
     "@draht/router": ["@draht/router@workspace:packages/router"],
 
@@ -2324,6 +2335,8 @@
     "@draht/orchestrator/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.39.0", "", { "dependencies": { "@types/node": "^18.11.18", "@types/node-fetch": "^2.6.4", "abort-controller": "^3.0.0", "agentkeepalive": "^4.2.1", "form-data-encoder": "1.7.2", "formdata-node": "^4.3.2", "node-fetch": "^2.6.7" } }, "sha512-eMyDIPRZbt1CCLErRCi3exlAvNkBtRe+kW5vvJyef93PmNr/clstYgHhtvmkxN82nlKgzyGPCyGxrm0JQ1ZIdg=="],
 
     "@draht/orchestrator/typescript": ["typescript@6.0.0-dev.20260228", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-/0AUvkZnuaw1mXTRZf4n0Z1Rg8NdcJwZNMTz1tYLRkauarE6TvfprFKCVAC2dPnv1HC3A/0lI7z+9qdtn/TTfg=="],
+
+    "@draht/rlm/typescript": ["typescript@6.0.0-dev.20260228", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-/0AUvkZnuaw1mXTRZf4n0Z1Rg8NdcJwZNMTz1tYLRkauarE6TvfprFKCVAC2dPnv1HC3A/0lI7z+9qdtn/TTfg=="],
 
     "@draht/web-ui/highlight.js": ["highlight.js@11.11.1", "", {}, "sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w=="],
 

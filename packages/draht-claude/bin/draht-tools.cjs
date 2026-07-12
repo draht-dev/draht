@@ -6218,6 +6218,21 @@ commands["graph-clusters"] = function (...args) {
 };
 
 // graph-hook — install/uninstall a git post-commit hook that refreshes MAP.json (graphify-style).
+// --- kg — graphify-parity symbol-level knowledge graph (second engine, draht-kg.cjs) ---
+// Nodes are symbols (files/classes/functions/methods/types) with graphify's relation set
+// and confidence rubric; graph.json is node-link format loadable by graphify's own tools.
+commands.kg = function (...args) {
+	let kg;
+	try {
+		kg = require(path.join(__dirname, "draht-kg.cjs"));
+	} catch (err) {
+		console.error(`kg engine not found next to draht-tools.cjs (${err.message}) — reinstall the package.`);
+		process.exit(1);
+	}
+	const code = kg.kgMain(args);
+	if (code) process.exitCode = code;
+};
+
 commands["graph-hook"] = function (...args) {
 	const sub = args[0] || "status";
 	const gitDir = path.join(process.cwd(), ".git");
@@ -6293,6 +6308,16 @@ Knowledge Graph (query MAP.json instead of grepping — run map-graph first):
   passed through, not an error) when the JS engine handles it instead — so a
   script using them works either way. Install the binary with
   \`npx draht-claude install-graph-engine\` (or draht-codex).
+
+Symbol-level knowledge graph (graphify-parity engine; nodes = functions/classes/types):
+  kg build [--quiet]            Deterministic symbol graph → .planning/codebase/graph.json + KG_REPORT.md
+  kg query "<question>"         BFS/DFS subgraph traversal from scored seeds (NODE/EDGE output)
+                                [--dfs] [--depth N] [--budget N] [--context call|import]
+  kg explain "<node>"           Node dump: id, source, community, degree, top connections
+  kg path "<a>" "<b>"           Shortest path with directed relation arrows + confidence
+  kg affected "<node>"          Reverse blast-radius over calls/imports/inherits/… [--depth N]
+  kg stats | report             Counts / regenerate KG_REPORT.md
+  kg export tree|wiki|graphml   GRAPH_TREE.html / kg-wiki/ articles / graph.graphml
   create-project [name]         Create PROJECT.md
   create-requirements           Create REQUIREMENTS.md
   create-domain-model           Generate DOMAIN-MODEL.md from PROJECT.md

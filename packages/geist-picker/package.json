@@ -1,6 +1,6 @@
 {
 	"name": "@draht/geist-picker",
-	"version": "2026.7.12",
+	"version": "2026.7.12-1",
 	"private": true,
 	"description": "geist's in-page element picker — IIFE injected into target pages for element hover/highlight/crop (spec §10)",
 	"type": "module",

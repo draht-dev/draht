@@ -312,6 +312,47 @@ export function resolveSandboxedCommand(opts: SandboxSpawnOptions): SandboxedCom
 }
 
 /**
+ * Environment variables the sandboxed interpreter is allowed to see, by
+ * allowlist rather than denylist. The OS sandbox itself denies network
+ * access outright, so this isn't the primary defense against exfiltrating
+ * anything read from here -- but the same object-graph escapes that defeat
+ * in-process Python restriction (see this module's doc comment) can still
+ * reach `os.environ` and write it into the session workdir even with
+ * network denied, so the child process should never see more of the parent
+ * Node process's environment (API keys, tokens, credentials, ...) than it
+ * actually needs to boot a working interpreter.
+ */
+const SAFE_ENV_ALLOWLIST = [
+	"PATH",
+	"HOME",
+	"LANG",
+	"LANGUAGE",
+	"LC_ALL",
+	"LC_CTYPE",
+	"TMPDIR",
+	"TZ",
+	"PYTHONHASHSEED",
+	"PYTHONIOENCODING",
+	"PYTHONUTF8",
+] as const;
+
+/**
+ * Builds a scrubbed environment for the sandboxed child process from
+ * `SAFE_ENV_ALLOWLIST` -- deliberately NOT `{ ...process.env }` (see
+ * `SAFE_ENV_ALLOWLIST`'s doc comment for why the full parent environment,
+ * secrets included, must not be handed to a process running LLM-authored
+ * code).
+ */
+function buildScrubbedEnv(): NodeJS.ProcessEnv {
+	const scrubbed: NodeJS.ProcessEnv = {};
+	for (const key of SAFE_ENV_ALLOWLIST) {
+		const value = process.env[key];
+		if (value !== undefined) scrubbed[key] = value;
+	}
+	return scrubbed;
+}
+
+/**
  * Spawns `repl_driver.py` wrapped in the platform's OS-level sandbox.
  * Throws `SandboxUnavailableError` synchronously (before any process is
  * created) if the sandbox can't be established -- there is no unwrapped
@@ -319,5 +360,5 @@ export function resolveSandboxedCommand(opts: SandboxSpawnOptions): SandboxedCom
  */
 export function spawnSandboxed(opts: SandboxSpawnOptions): ChildProcess {
 	const { command, args } = resolveSandboxedCommand(opts);
-	return spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+	return spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: buildScrubbedEnv() });
 }

@@ -9,8 +9,9 @@
  * section 2-3 of the plan).
  */
 
-import type { ChildProcess } from "node:child_process";
+import { type ChildProcess, execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,85 @@ const DRIVER_PATH = join(__dirname, "..", "python", "repl_driver.py");
 
 const DEFAULT_MAX_ITERATIONS = 24;
 const DEFAULT_STDOUT_TRUNCATE_CHARS = 2000;
+
+// Resource-limit defaults (Phase 28, Architecture section 3). These are the
+// REAL enforcement mechanisms -- Node-side wall-clock + RSS polling, not any
+// Python-level RLIMIT/timer (see repl_driver.py's Linux-only RLIMIT_AS,
+// which is explicitly a backstop, not the primary mechanism, and isn't used
+// on macOS at all per the plan).
+const DEFAULT_STEP_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_RSS_BYTES = 256 * 1024 * 1024;
+const DEFAULT_RSS_POLL_INTERVAL_MS = 250;
+
+/**
+ * Thrown internally when a step's Node-side wall-clock timeout fires and the
+ * driver subprocess is hard-killed. Caught in `run()` and mapped to
+ * `RlmResult.kind === "timeout"` -- never surfaced to callers directly.
+ */
+class RlmStepTimeoutError extends Error {}
+
+/**
+ * Thrown internally when a `maxSubCalls`/`maxTotalCostUsd` pre-check fails
+ * and the driver subprocess is hard-killed as a result. Caught in `run()`
+ * and mapped to `RlmResult.kind === "budget_exhausted"` -- never surfaced to
+ * callers directly.
+ */
+class RlmBudgetExhaustedError extends Error {}
+
+/**
+ * Thrown internally when the OS-level sandbox's runtime startup self-test
+ * (Phase 28 Architecture section 1) doesn't confirm the sandbox is actually
+ * enforcing for this process -- either the driver never answered, answered
+ * with something other than a well-formed `self_test_result`, or reported
+ * that a network connect or an out-of-workdir file read *succeeded*. Caught
+ * in `run()` and mapped to `RlmResult.kind === "sandbox_violation"`. This is
+ * distinct from the synchronous `SandboxUnavailableError` thrown by
+ * `spawnSandboxed` itself (missing wrapper binary/profile/interpreter) --
+ * that one fails closed before any process exists; this one fails closed
+ * after a process exists but before it's ever trusted with real
+ * root-LLM-authored code.
+ */
+class RlmSandboxViolationError extends Error {}
+
+/**
+ * Reads the driver subprocess's current resident-set size in bytes, or
+ * `null` if it can't be determined right now (process already exited,
+ * `ps`/`/proc` unavailable, a transient read race, etc.). `null` always
+ * means "skip this poll" -- never treated as "assume 0 bytes" or "assume
+ * over the limit", since either guess could produce a wrong kill/no-kill
+ * decision.
+ *
+ * Linux: reads `/proc/<pid>/status`'s `VmRSS` line directly (no subprocess
+ * spawn needed). Every other platform (macOS in practice): shells out to
+ * `ps -o rss= -p <pid>` (BSD `ps` reports RSS in KiB) since there's no
+ * `/proc` to read. See Phase 28 Architecture section 3.
+ */
+function readRssBytes(pid: number): Promise<number | null> {
+	if (process.platform === "linux") {
+		return readFile(`/proc/${pid}/status`, "utf8").then(
+			(status) => {
+				const match = /^VmRSS:\s*(\d+)\s*kB$/m.exec(status);
+				return match ? Number(match[1]) * 1024 : null;
+			},
+			() => null,
+		);
+	}
+	return new Promise((resolve) => {
+		execFile("ps", ["-o", "rss=", "-p", String(pid)], { encoding: "utf8" }, (err, stdout) => {
+			if (err) {
+				resolve(null);
+				return;
+			}
+			const trimmed = stdout.trim().split("\n")[0]?.trim();
+			if (!trimmed) {
+				resolve(null);
+				return;
+			}
+			const kb = Number(trimmed);
+			resolve(Number.isFinite(kb) ? kb * 1024 : null);
+		});
+	});
+}
 
 /** One newline-delimited-JSON message in either direction of the wire protocol. */
 interface DriverMessage {
@@ -310,6 +390,12 @@ export class RlmSession {
 	private readonly workdir: string;
 	private readonly stdoutTruncateChars: number;
 	private readonly maxIterations: number;
+	private readonly stepTimeoutMs: number;
+	private readonly maxRssBytes: number;
+	private readonly rssPollIntervalMs: number;
+	private readonly maxSubCalls: number | undefined;
+	private readonly maxTotalCostUsd: number | undefined;
+	private readonly getAccumulatedCostUsd: (() => number) | undefined;
 	private readonly history: RlmHistoryEntry[] = [];
 	private readonly ready: Promise<void>;
 
@@ -319,10 +405,19 @@ export class RlmSession {
 	private terminated = false;
 	private terminationError: Error | null = null;
 	private lastFinal: DriverFinalPayload | null = null;
+	private subCallCount = 0;
+	private rssPollTimer: NodeJS.Timeout | undefined;
+	private rssPollInFlight = false;
 
 	constructor(private readonly opts: RlmSessionOptions) {
 		this.stdoutTruncateChars = opts.stdoutTruncateChars ?? DEFAULT_STDOUT_TRUNCATE_CHARS;
 		this.maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+		this.stepTimeoutMs = opts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;
+		this.maxRssBytes = opts.maxRssBytes ?? DEFAULT_MAX_RSS_BYTES;
+		this.rssPollIntervalMs = opts.rssPollIntervalMs ?? DEFAULT_RSS_POLL_INTERVAL_MS;
+		this.maxSubCalls = opts.maxSubCalls;
+		this.maxTotalCostUsd = opts.maxTotalCostUsd;
+		this.getAccumulatedCostUsd = opts.getAccumulatedCostUsd;
 
 		// The session's scratch workdir -- the only place the OS-sandboxed
 		// driver process may read *and* write freely (see sandbox.ts /
@@ -361,7 +456,32 @@ export class RlmSession {
 			this.markTerminated(new Error(`RlmSession: failed to spawn python3 driver: ${err.message}`));
 		});
 
-		this.ready = this.seedContext();
+		// Node-side RSS polling (Phase 28 Architecture section 3) -- the real
+		// memory enforcement mechanism, running for the whole lifetime of the
+		// child process, independent of any single step's wall-clock timeout.
+		this.startRssPolling();
+
+		// Tell the driver how aggressively to cap captured stdout *before* any
+		// real step runs (see repl_driver.py's `configure` handling / Phase 28
+		// Architecture section 5) -- fire-and-forget: writes to child.stdin are
+		// delivered strictly in order, so this is guaranteed to be processed
+		// before the `self_test`/`exec` messages sent next.
+		this.send({ type: "configure", stdoutTruncateChars: this.stdoutTruncateChars });
+
+		// Runtime startup self-test (Phase 28 Architecture section 1) -- runs
+		// before `context` is even seeded, let alone before any root-LLM-
+		// authored `exec`. If the OS sandbox isn't actually enforcing for this
+		// process, `runSelfTest()` throws and `seedContext()` never runs, so no
+		// step ever executes against an unconfined driver. See
+		// `RlmSandboxViolationError`'s doc comment for how this differs from
+		// `spawnSandboxed`'s synchronous fail-closed throw.
+		this.ready = this.runSelfTest().then(() => this.seedContext());
+		// Attach a no-op rejection handler so Node doesn't report this as an
+		// unhandled rejection when the failure path is exercised without every
+		// caller immediately awaiting `run()`/`step()` -- `await this.ready`
+		// elsewhere still observes the same rejection (a promise notifies every
+		// attached reaction, not just the first).
+		this.ready.catch(() => {});
 	}
 
 	private onStdoutChunk(chunk: string): void {
@@ -389,9 +509,139 @@ export class RlmSession {
 		if (this.terminated) return;
 		this.terminated = true;
 		this.terminationError = error;
+		if (this.rssPollTimer) {
+			clearInterval(this.rssPollTimer);
+			this.rssPollTimer = undefined;
+		}
 		const waiters = this.waiters;
 		this.waiters = [];
 		for (const waiter of waiters) waiter.reject(error);
+	}
+
+	/**
+	 * Hard-kills the driver subprocess and marks the session terminated with
+	 * `error` in one step. Used by every resource-limit enforcement path (RSS
+	 * ceiling, wall-clock timeout, budget exhaustion) -- these are Node-side
+	 * hard kills, not attempts at graceful in-process recovery (Phase 28
+	 * Architecture sections 3 and 6). `markTerminated`'s first-write-wins
+	 * guard means whichever of these fires first supplies the message callers
+	 * actually see, even though the child's own `exit` handler will also fire
+	 * shortly after and try to (harmlessly, redundantly) mark terminated too.
+	 */
+	private killAndTerminate(error: Error): void {
+		this.markTerminated(error);
+		this.child.kill("SIGKILL");
+	}
+
+	/**
+	 * Starts the Node-side RSS poll loop (Phase 28 Architecture section 3) --
+	 * the real memory enforcement mechanism, not any Python-level
+	 * `RLIMIT_AS`. Runs for the child process's whole lifetime; `unref()`d so
+	 * it never by itself keeps the host Node process alive past everything
+	 * else finishing. A `maxRssBytes <= 0` disables polling entirely.
+	 */
+	private startRssPolling(): void {
+		if (!(this.maxRssBytes > 0)) return;
+		const timer = setInterval(() => {
+			void this.pollRss();
+		}, this.rssPollIntervalMs);
+		timer.unref();
+		this.rssPollTimer = timer;
+	}
+
+	private async pollRss(): Promise<void> {
+		if (this.terminated || this.rssPollInFlight) return;
+		const pid = this.child.pid;
+		if (!pid) return;
+		this.rssPollInFlight = true;
+		try {
+			const rssBytes = await readRssBytes(pid);
+			if (rssBytes === null || rssBytes <= this.maxRssBytes) return;
+			this.killAndTerminate(
+				new Error(
+					`RlmSession: python3 driver exceeded the configured RSS ceiling of ${this.maxRssBytes} bytes ` +
+						`(observed ${rssBytes} bytes) -- killed. This is a resource-limit kill (Phase 28 Architecture ` +
+						"section 3), not the OS sandbox itself failing.",
+				),
+			);
+		} finally {
+			this.rssPollInFlight = false;
+		}
+	}
+
+	/**
+	 * Pre-dispatch sub-call budget check (Phase 28 Architecture section 6,
+	 * R28-SBX.5): called *before* an `llm_query_request` is ever forwarded to
+	 * `opts.llmQuery`, so the (budget+1)th attempted sub-call never actually
+	 * dispatches -- the session is killed right here instead. Deliberately
+	 * NOT also checked before dispatching a whole step: a step that never
+	 * attempts another sub-call can still legitimately finish (e.g. call
+	 * FINAL immediately) even after the budget is otherwise exhausted, and
+	 * pre-emptively killing such a step here would be wrong.
+	 */
+	private checkSubCallBudget(): void {
+		if (this.maxSubCalls === undefined) return;
+		if (this.subCallCount < this.maxSubCalls) return;
+		const error = new RlmBudgetExhaustedError(
+			`RlmSession: llm_query sub-call budget exhausted (maxSubCalls=${this.maxSubCalls}) -- refusing to ` +
+				`dispatch sub-call #${this.subCallCount + 1} and killing the driver subprocess.`,
+		);
+		this.killAndTerminate(error);
+		throw error;
+	}
+
+	/**
+	 * Pre-dispatch cost budget check (Phase 28 Architecture section 6,
+	 * R28-SBX.5): called before dispatching a step's `rootLlm` turn and
+	 * before forwarding a sub-call to `opts.llmQuery`. No-ops unless both
+	 * `maxTotalCostUsd` and `getAccumulatedCostUsd` are supplied -- see
+	 * `RlmSessionOptions.maxTotalCostUsd`'s doc comment for why an unpaired
+	 * option is a no-op rather than a guess.
+	 */
+	private checkCostBudget(): void {
+		if (this.maxTotalCostUsd === undefined || !this.getAccumulatedCostUsd) return;
+		const accumulated = this.getAccumulatedCostUsd();
+		if (accumulated < this.maxTotalCostUsd) return;
+		const error = new RlmBudgetExhaustedError(
+			`RlmSession: cost budget exhausted (maxTotalCostUsd=$${this.maxTotalCostUsd}, accumulated=$${accumulated}) ` +
+				"-- killing the driver subprocess.",
+		);
+		this.killAndTerminate(error);
+		throw error;
+	}
+
+	/**
+	 * Races `promise` against the configured wall-clock step timeout
+	 * (Phase 28 Architecture section 3, R28-SBX.3) -- the real timeout
+	 * enforcement mechanism. On expiry, hard-kills the driver subprocess and
+	 * rejects with `RlmStepTimeoutError`, even if `promise` itself is stuck
+	 * awaiting something that `markTerminated`'s waiter-rejection can't reach
+	 * (e.g. a slow/hung `opts.llmQuery` callback, as opposed to a pending
+	 * `nextMessage()` wait) -- the explicit `reject` here is what actually
+	 * unblocks the caller in that case, not just a formality.
+	 */
+	private withStepTimeout<T>(promise: Promise<T>): Promise<T> {
+		if (!(this.stepTimeoutMs > 0)) return promise;
+		return new Promise<T>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				const error = new RlmStepTimeoutError(
+					`RlmSession: step exceeded the configured wall-clock timeout of ${this.stepTimeoutMs}ms -- killed.`,
+				);
+				this.killAndTerminate(error);
+				reject(error);
+			}, this.stepTimeoutMs);
+			timer.unref();
+			promise.then(
+				(value) => {
+					clearTimeout(timer);
+					resolve(value);
+				},
+				(err) => {
+					clearTimeout(timer);
+					reject(err);
+				},
+			);
+		});
 	}
 
 	private nextMessage(): Promise<DriverMessage> {
@@ -412,9 +662,18 @@ export class RlmSession {
 		this.child.stdin?.write(`${JSON.stringify(message)}\n`);
 	}
 
-	/** Sends one `exec` message and handles any `llm_query_request` round-trips until the matching `exec_result`. */
+	/**
+	 * Sends one `exec` message and handles any `llm_query_request` round-trips
+	 * until the matching `exec_result`, all under the wall-clock step timeout
+	 * (`withStepTimeout`, Phase 28 Architecture section 3).
+	 */
 	private async runExec(code: string): Promise<DriverExecResult> {
 		this.send({ type: "exec", code });
+		return this.withStepTimeout(this.collectExecResult());
+	}
+
+	/** The message loop `runExec` races against the step timeout -- split out so `withStepTimeout` can wrap just this. */
+	private async collectExecResult(): Promise<DriverExecResult> {
 		while (true) {
 			const message = await this.nextMessage();
 			if (message.type === "llm_query_request") {
@@ -424,6 +683,13 @@ export class RlmSession {
 						"RlmSession: REPL code called llm_query(...) but no `llmQuery` callback was provided in RlmSessionOptions.",
 					);
 				}
+				// Budget pre-checks (Phase 28 Architecture section 6, R28-SBX.5) --
+				// before this sub-call is dispatched, not after: either check can
+				// throw (and kill the driver), in which case opts.llmQuery is never
+				// called for this attempt at all.
+				this.checkSubCallBudget();
+				this.checkCostBudget();
+				this.subCallCount++;
 				const text = await this.opts.llmQuery(message.prompt as string);
 				this.send({ type: "llm_query_response", id, text });
 				continue;
@@ -442,6 +708,53 @@ export class RlmSession {
 		await this.runExec(`context = ${JSON.stringify(this.opts.prompt)}`);
 	}
 
+	/**
+	 * Runtime proof the OS-level sandbox is actually enforcing for *this*
+	 * process (Phase 28 Architecture section 1) -- sends `{"type":
+	 * "self_test"}` and requires the driver's `self_test_result` response to
+	 * report both a network connect attempt and an out-of-workdir file read
+	 * failing. Throws `RlmSandboxViolationError` (fail-closed, refusing to run
+	 * at all) if:
+	 *   - the driver never responds (crash/hang -- guarded by the same
+	 *     wall-clock timeout as a normal step, via `withStepTimeout`),
+	 *   - the response isn't a well-formed `self_test_result`, or
+	 *   - either check reports the sandbox did NOT block the attempt.
+	 *
+	 * Deliberately does not go through `runExec`/the guarded `exec()` wire
+	 * message: `repl_driver.py`'s `_run_self_test` handles `self_test`
+	 * on a route that bypasses its own Python-level guardrails (restricted
+	 * builtins, import allowlist, AST screen) entirely, because a self-test
+	 * *routed through* those guardrails would be a false positive -- e.g.
+	 * `import socket` failing on the guardrail import allowlist looks
+	 * identical to `import socket` failing because the OS sandbox denied the
+	 * connection, even with the OS sandbox completely disabled. See
+	 * `_run_self_test`'s docstring in repl_driver.py for the full reasoning.
+	 */
+	private async runSelfTest(): Promise<void> {
+		this.send({ type: "self_test" });
+		let message: DriverMessage;
+		try {
+			message = await this.withStepTimeout(this.nextMessage());
+		} catch (err) {
+			throw new RlmSandboxViolationError(
+				"RlmSession: OS-level sandbox startup self-test did not complete " +
+					`(refusing to run -- fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+		const networkBlocked = message.type === "self_test_result" && message.networkBlocked === true;
+		const fileReadBlocked = message.type === "self_test_result" && message.fileReadBlocked === true;
+		if (!networkBlocked || !fileReadBlocked) {
+			const error = new RlmSandboxViolationError(
+				"RlmSession: OS-level sandbox startup self-test failed -- the sandbox is not confining this " +
+					`process (networkBlocked=${networkBlocked}, fileReadBlocked=${fileReadBlocked}, ` +
+					`response=${JSON.stringify(message)}). Refusing to run rather than executing unconfined ` +
+					"root-LLM-authored code (fail-closed).",
+			);
+			this.killAndTerminate(error);
+			throw error;
+		}
+	}
+
 	private resolveFinal(final: DriverFinalPayload): unknown {
 		if (final.kind === "value") {
 			// FINAL(answer) already sent `str(answer)` -- use as-is.
@@ -456,13 +769,23 @@ export class RlmSession {
 	/** One root-LLM turn: get code, exec it, append history, may resolve a final. */
 	async step(): Promise<RlmHistoryEntry> {
 		await this.ready;
+		// Pre-dispatch cost budget check (Phase 28 Architecture section 6,
+		// R28-SBX.5) -- before the root LLM is even asked for this step's code,
+		// not just before a sub-call within it.
+		this.checkCostBudget();
 		const response = await this.opts.rootLlm(this.history.slice());
 		const code = extractPythonCode(response);
 		const result = await this.runExec(code);
 		const entry: RlmHistoryEntry = {
 			step: this.history.length + 1,
 			code,
-			truncatedStdout: truncateStdout(result.stdout, this.stdoutTruncateChars),
+			// Already capped+marked incrementally by the driver's
+			// `_TruncatingStdout` (Phase 28 Architecture section 5) -- no
+			// second Node-side truncation pass here (Phase 26's original
+			// post-hoc `truncateStdout` call is exactly the OOM-via-print gap
+			// this phase closes; re-applying it here on top of the driver's
+			// own `[truncated N chars]` marker would risk mangling it).
+			truncatedStdout: result.stdout,
 			error: result.error ?? null,
 			timestamp: new Date().toISOString(),
 		};
@@ -488,6 +811,35 @@ export class RlmSession {
 			}
 			return { kind: "max_iterations", steps: this.history.length, history: this.history.slice() };
 		} catch (err) {
+			// Typed stop reasons (Phase 28 Architecture section 6, R28-SBX.6):
+			// a hard-killed step surfaces here as one of these internal error
+			// classes; anything else (a genuine driver crash, a step
+			// referencing llm_query with no callback configured, etc.) falls
+			// through to the generic "error" kind, same as Phase 26.
+			if (err instanceof RlmStepTimeoutError) {
+				return {
+					kind: "timeout",
+					value: err.message,
+					steps: this.history.length,
+					history: this.history.slice(),
+				};
+			}
+			if (err instanceof RlmBudgetExhaustedError) {
+				return {
+					kind: "budget_exhausted",
+					value: err.message,
+					steps: this.history.length,
+					history: this.history.slice(),
+				};
+			}
+			if (err instanceof RlmSandboxViolationError) {
+				return {
+					kind: "sandbox_violation",
+					value: err.message,
+					steps: this.history.length,
+					history: this.history.slice(),
+				};
+			}
 			return {
 				kind: "error",
 				value: err instanceof Error ? err.message : String(err),

@@ -178,3 +178,38 @@
 - R30-EVAL.3: Cost-comparison harness: RLM vs `router` baseline (truncate + single call) on the same task, written to eval report
 - R30-EVAL.4: `draht rlm replay <session-id>` reconstructs final answer from the trajectory log without re-invoking any LLM
 - R30-EVAL.5: README + AGENTS.md sections — when to prefer RLM, cost envelope, worked example end-to-end
+
+---
+
+## Milestone 4 — Rewind & Checkpoints
+
+> Design spec: `.planning/specs/2026-07-12-rewind-checkpoint-design.md`.
+> Scope: first-class in `packages/coding-agent` (core + interactive mode + `core/builtins/`); no new package. Supersedes the example extension `examples/extensions/git-checkpoint.ts`.
+
+### R41-CKP: Checkpoint Capture & Storage
+- R41-CKP.1: `CheckpointManager` in `packages/coding-agent/src/core/checkpoints/` — capture, lookup, prune; snapshots built via temporary index (`GIT_INDEX_FILE`) + `write-tree` + `commit-tree`; never touches the user's index, `HEAD`, stash, or reflog; no `git stash` anywhere
+- R41-CKP.2: Snapshots include untracked-but-not-ignored files; `.gitignore`d files are never captured
+- R41-CKP.3: Snapshot commits anchored at `refs/draht/checkpoints/<session-id>/<entry-id>` (GC-proof, namespaced per session)
+- R41-CKP.4: Capture at `turn_start`, keyed to the session leaf entry id at that moment; skipped when the tree hash equals the previous checkpoint's (dedup)
+- R41-CKP.5: Metadata sidecar `<session-file>.checkpoints.jsonl` (entryId, ref, treeHash, timestamp, dirty-file count); records for preserved entry ids copied on `/fork` and `/clone`
+- R41-CKP.6: Non-git cwd: capture disabled with a one-time notice, no errors; session continues normally
+- R41-CKP.7: Wired as an always-loaded core builtin (`core/builtins/`), with real-session loading proof; `draht checkpoint prune` CLI + age/count retention policy via settings (default 30 days)
+
+### R42-RWD: Rewind Command & Restore
+- R42-RWD.1: `/rewind` command + `app.session.rewind` keybinding action; selector reuses the tree-selector filtered to checkpointed user messages, annotated with checkpoint timestamp and dirty-file count
+- R42-RWD.2: Restore scope menu: conversation + files (default) / conversation only / files only
+- R42-RWD.3: Pre-rewind safety snapshot always captured and anchored before any file mutation; any restore failure rolls the tree back to it
+- R42-RWD.4: File restore is diff-driven between safety snapshot and target snapshot: only differing paths are checked out, paths absent in the target are deleted, ignored files are never touched (no `stash apply`, no blanket `checkout -- .`)
+- R42-RWD.5: Atomic ordering: safety snapshot → file restore → `navigateTree()`; the conversation leaf moves only after file restore succeeds
+- R42-RWD.6: Redo/rewind-forward: abandoned branches keep their checkpoints; rewinding to an entry on an abandoned branch restores that state
+- R42-RWD.7: `/tree` navigation and `/fork` offer file restore when the target entry has a checkpoint (integrated via the `session_before_tree` / `session_before_fork` seams), and honor decline
+- R42-RWD.8: Extension surface: `pi.checkpoints` (list/get/restore) on `ExtensionAPI`; events `checkpoint_created` and cancelable `session_before_rewind`
+
+### R43-SFT: Rewind Safety, Fallbacks, Tests & Docs
+- R43-SFT.1: Failure-injection tests — process killed or git failing mid-restore leaves the working tree equal to the target or the safety snapshot; if rollback also fails, both anchored refs are reported (nothing unrecoverable)
+- R43-SFT.2: Filesystem semantics test matrix — untracked files, files created after the checkpoint (removed on rewind), ignored files (never touched), staged/unstaged split (documented: worktree content wins, user index untouched), symlinks, file-mode changes
+- R43-SFT.3: Concurrency test — two sessions in the same repo cannot corrupt each other (per-session ref namespaces, per-operation temp index)
+- R43-SFT.4: Non-interactive/RPC mode never restores files without an explicit option; conversation-only fallback covered by tests
+- R43-SFT.5: Settings — enable/disable capture, retention policy, per-file size guard for large untracked files (warn + skip above configurable threshold)
+- R43-SFT.6: Docs — `session-format.md` sidecar section, `extensions.md` new events, `quickstart.md` rollback note replaced with `/rewind`, `examples/extensions/git-checkpoint.ts` marked superseded with pointer to the built-in
+- R43-SFT.7: Performance budget enforced by test on the medium fixture repo — capture p95 < 200 ms warm, dedup fast-path < 50 ms

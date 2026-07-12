@@ -163,3 +163,28 @@
 **Goal:** RLM trajectories are measurable, replayable, and documented so developers can trust and tune them.
 **Requirements:** R30-EVAL.1, R30-EVAL.2, R30-EVAL.3, R30-EVAL.4, R30-EVAL.5
 **Acceptance:** Every RLM session emits a trajectory JSONL (step, code, truncated-stdout, sub-calls, cost, final); synthetic S-NIAH regression test passes on input 10× the root model's window; cost comparison harness records RLM vs base-LLM-with-truncation on the same task; `draht rlm replay <trajectory-id>` reconstructs the final answer from the log alone; README + AGENTS.md sections document when to use RLM, how to bound costs, and a worked end-to-end example.
+
+---
+
+## Milestone 5: Rewind & Checkpoints
+
+> **Feature:** first-class `/rewind` — jump a session back to an earlier point, restoring conversation state and working-tree state together, atomically, never destructively. Parity with Claude Code `/rewind` and Codex checkpoint/rewind.
+>
+> **Starting point:** conversation-side branching is already built into `packages/coding-agent` (session JSONL tree, `SessionManager.branch`/`branchWithSummary`/`createBranchedSession`/`forkFrom`, `AgentSession.navigateTree` with `session_before_tree`/`session_tree` hooks, `/tree`/`/fork`/`/clone` UI, labels). File/working-tree restore does **not** exist — only the unaudited example `examples/extensions/git-checkpoint.ts` (stash-based: misses untracked files, GC-able dangling commits, in-memory only, merges instead of restoring).
+>
+> **Design spec:** `.planning/specs/2026-07-12-rewind-checkpoint-design.md`. All work in `packages/coding-agent`; no new package.
+
+## Phase 41: Checkpoint Capture & Storage — `pending`
+**Goal:** A `CheckpointManager` in `packages/coding-agent/src/core/checkpoints/` captures a git snapshot of the working tree at every `turn_start`, keyed to the initiating session entry id, GC-proof and invisible to the user's git workflow, with sidecar metadata that survives fork/clone and a prune policy.
+**Requirements:** R41-CKP.1, R41-CKP.2, R41-CKP.3, R41-CKP.4, R41-CKP.5, R41-CKP.6, R41-CKP.7
+**Acceptance:** Integration tests on fixture repos prove: a turn in a dirty repo (tracked edits + untracked file) yields a commit reachable from `refs/draht/checkpoints/<session-id>/<entry-id>` containing both; `git stash list`, the user's index, `HEAD`, and reflog are byte-identical before/after capture; a read-only turn creates no new ref (tree-hash dedup); ignored files are absent from snapshots; sidecar records for preserved entry ids are copied on `/fork` and `/clone`; non-git cwd disables capture with a one-time notice and no errors; `draht checkpoint prune` removes refs per the retention policy; the manager is wired via `core/builtins/` and loads in a real from-scratch session (same empirical-loading proof class as Phases 23/29).
+
+## Phase 42: Rewind Command & Restore UX — `pending`
+**Goal:** `/rewind` restores conversation and files together: selector over checkpointed user messages, scope choice (conversation + files / conversation only / files only), a mandatory pre-rewind safety snapshot, diff-driven file restore, and leaf navigation via the existing `navigateTree` path — with `/tree` and `/fork` gaining the same file-restore offer.
+**Requirements:** R42-RWD.1, R42-RWD.2, R42-RWD.3, R42-RWD.4, R42-RWD.5, R42-RWD.6, R42-RWD.7, R42-RWD.8
+**Acceptance:** End-to-end tests prove: after the agent edits a tracked file, creates a new file, and deletes another, `/rewind` to the prior user message makes the working tree byte-identical to the checkpoint (created file gone, deleted file back); the pre-rewind state is itself recoverable by rewinding forward to the abandoned leaf (redo); a failure injected mid-restore rolls the tree back to the safety snapshot; conversation leaf only moves after file restore succeeds; "conversation only" and "files only" scopes each touch exactly their half; `/tree` navigation and `/fork` to a checkpointed entry offer file restore and honor decline; `pi.checkpoints` (list/get/restore) works from a test extension and `session_before_rewind` can cancel.
+
+## Phase 43: Rewind Safety Hardening, Fallbacks & Docs — `pending`
+**Goal:** Rewind is trustworthy at the edges — failure injection, filesystem semantics matrix, concurrency, non-interactive behavior, settings (enable/retention/size guard), performance budget, and documentation replacing the "use git for rollback" guidance.
+**Requirements:** R43-SFT.1, R43-SFT.2, R43-SFT.3, R43-SFT.4, R43-SFT.5, R43-SFT.6, R43-SFT.7
+**Acceptance:** Failure-injection suite passes (mid-restore kill leaves tree equal to target or safety snapshot, both refs anchored; double-failure path prints both refs); semantics matrix covered by tests (untracked files, files created after checkpoint, ignored files never touched, staged/unstaged split documented as worktree-wins, symlinks, file-mode changes); two concurrent sessions in one repo cannot corrupt each other's refs or indexes; RPC/non-interactive mode never restores files without an explicit option; settings toggle capture, retention, and large-file size guard (warn + skip above threshold); capture p95 < 200 ms and dedup fast-path < 50 ms on the medium fixture repo; docs updated (`session-format.md` sidecar section, `extensions.md` new events, `quickstart.md` rollback note replaced, `examples/extensions/git-checkpoint.ts` marked superseded with a pointer to the built-in).

@@ -414,6 +414,16 @@ function extractSubstitutions(text: string): string[] {
 	return results;
 }
 
+/**
+ * Returns the literal output of a simple `echo ...` command. This covers a
+ * substitution used as a command position, such as `$(echo rm -rf /)`, where
+ * the output is subsequently executed by the outer shell.
+ */
+function extractSimpleEchoOutput(text: string): string | undefined {
+	const match = text.match(/^\s*echo\s+([^$`]+?)\s*$/i);
+	return match?.[1];
+}
+
 const MAX_DENY_CANDIDATES = 50;
 const MAX_DENY_DEPTH = 4;
 
@@ -465,7 +475,11 @@ function collectDenyCandidates(command: string): string[] {
 			const evalArg = extractEvalArg(working) ?? extractEvalArg(basenameResolved);
 			if (evalArg !== undefined) enqueue(evalArg);
 
-			for (const sub of extractSubstitutions(piece)) enqueue(sub);
+			for (const sub of extractSubstitutions(piece)) {
+				enqueue(sub);
+				const echoOutput = extractSimpleEchoOutput(sub);
+				if (echoOutput !== undefined) enqueue(echoOutput);
+			}
 		}
 	}
 

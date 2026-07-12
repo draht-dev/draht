@@ -149,7 +149,7 @@
 **Requirements:** R27-SLM.1, R27-SLM.2, R27-SLM.3, R27-SLM.4, R27-SLM.5
 **Acceptance:** Router has new roles `rlm-root` and `rlm-sub` with configurable fallback chains; three system-prompt templates in `packages/rlm/prompts/` select automatically from resolved model context window; prompt template substitutes `context_type`, `context_total_length`, `chunk_lengths`, `max_sub_call_budget`; every RLM session appends per-call cost entries to `.draht/cost-log.jsonl` tagged with trajectory id.
 
-## Phase 28: REPL Sandbox & Safety — `pending`
+## Phase 28: REPL Sandbox & Safety — `complete`
 **Goal:** REPL execution is sandboxed with hard resource limits, stdout caps, and session-wide sub-LLM budgets so RLM cannot exfiltrate or runaway.
 **Requirements:** R28-SBX.1, R28-SBX.2, R28-SBX.3, R28-SBX.4, R28-SBX.5, R28-SBX.6
 **Acceptance:** Python REPL runs as a sandboxed child process with no network, no filesystem outside an explicit session workdir, and seccomp/ulimit-style CPU + memory ceilings; per-step timeout default 30s, max-iterations default 24, max-sub-calls and max-session-cost enforced; stdout truncated to configurable cap (default 2 KB) with explicit `[truncated N chars]` marker; security test suite proves `import os; os.system("...")`, `open("/etc/passwd")`, and `urllib.request.urlopen(...)` all fail; budget-exhausted stop returns a typed error the agent can handle.

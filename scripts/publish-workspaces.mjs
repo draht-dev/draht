@@ -25,13 +25,38 @@ const dirs = readdirSync(packagesDir, { withFileTypes: true })
 	.filter((d) => d.isDirectory())
 	.map((d) => d.name);
 
-// Build a map of workspace package name -> version
+// Build maps of workspace package metadata.
+const workspacePackages = new Map();
 const versionMap = {};
 for (const dir of dirs) {
 	const pkgPath = join(packagesDir, dir, "package.json");
 	if (!existsSync(pkgPath)) continue;
 	const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+	workspacePackages.set(pkg.name, { dir, pkg });
 	versionMap[pkg.name] = pkg.version;
+}
+
+// A published package cannot depend on a private workspace package: the
+// dependency will be written to npm but consumers will be unable to resolve it.
+const invalidPrivateDependencies = [];
+for (const { pkg } of workspacePackages.values()) {
+	if (pkg.private) continue;
+	for (const depType of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+		for (const dependencyName of Object.keys(pkg[depType] ?? {})) {
+			const dependency = workspacePackages.get(dependencyName);
+			if (dependency?.pkg.private) {
+				invalidPrivateDependencies.push(`${pkg.name} (${depType}) -> ${dependencyName}`);
+			}
+		}
+	}
+}
+
+if (invalidPrivateDependencies.length > 0) {
+	console.error("Cannot publish packages with private workspace dependencies:");
+	for (const dependency of invalidPrivateDependencies) {
+		console.error(`  ${dependency}`);
+	}
+	process.exit(1);
 }
 
 // Collect original package.json contents so we can restore after publishing

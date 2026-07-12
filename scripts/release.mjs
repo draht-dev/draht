@@ -397,7 +397,7 @@ console.log();
 
 // 7. Build and publish
 console.log("Building and publishing...");
-run("cd packages/tui && bun run build && cd ../ai && bun run build && cd ../agent && bun run build && cd ../coding-agent && bun run build && cd ../mom && bun run build && cd ../web-ui && bun run build && cd ../pods && bun run build");
+run("bun run build");
 // Daily version suffixes like 2026.3.2-4 are NOT prereleases — they're the Nth release of the day.
 // Only versions with non-numeric suffixes (e.g., -beta, -rc.1, -alpha) are prereleases.
 const isPrerelease = /-[a-zA-Z]/.test(version);

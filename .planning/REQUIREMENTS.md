@@ -277,3 +277,33 @@
 - R43-SFT.5: Settings — enable/disable capture, retention policy, per-file size guard for large untracked files (warn + skip above configurable threshold)
 - R43-SFT.6: Docs — `session-format.md` sidecar section, `extensions.md` new events, `quickstart.md` rollback note replaced with `/rewind`, `examples/extensions/git-checkpoint.ts` marked superseded with pointer to the built-in
 - R43-SFT.7: Performance budget enforced by test on the medium fixture repo — capture p95 < 200 ms warm, dedup fast-path < 50 ms
+
+---
+
+## Milestone 6 — Bash Sandbox Confinement
+
+> Design spec: `.planning/specs/2026-07-12-bash-sandbox-confinement.md`.
+> Scope: `packages/coding-agent` (core + interactive mode + `core/builtins/`); no new package. Generalizes Phase 28's OS-boundary pattern (`packages/rlm/src/sandbox.ts`) from the RLM REPL to the agent's bash tool, composing with (not replacing) the permission gate and its default/auto/yolo modes.
+
+### R44-SBX: Sandbox Executor Core
+- R44-SBX.1: `SandboxExecutor` interface in `packages/coding-agent/src/core/sandbox/` with per-platform backends — macOS Seatbelt (`sandbox-exec -f` + SBPL profile generated from policy), Linux Landlock (kernel ≥ 5.13) with `unshare`/bwrap namespace fallback; unsupported platforms report `unavailable`
+- R44-SBX.2: `SandboxPolicy` v1 — filesystem write allowlist (project cwd, session scratch, OS temp, configurable `extraWritePaths` incl. curated default cache roots), read allow-all, single network on/off toggle (default on), no privilege escalation possible inside the sandbox
+- R44-SBX.3: Policy paths real-path resolved before profile generation — a symlink inside the project pointing outside must not widen the writable set
+- R44-SBX.4: Startup self-test (Phase 28 pattern): probe write outside the allowlist (and loopback connect when network-off) inside a throwaway sandbox; only a passing self-test lets the backend report `available`; a broken profile degrades to `unavailable`, never to unconfined execution
+- R44-SBX.5: Environment hygiene — the sandboxed child receives a constructed env, not the full parent env
+- R44-SBX.6: Delivered as a `BashOperations` implementation wrapping the existing local backend (`src/core/tools/bash.ts` seam); existing bash tool behavior byte-identical when sandboxing is off
+
+### R45-SBM: Permission Integration & Escalation UX
+- R45-SBM.1: Session sandbox state (`on`/`off`) alongside `PermissionMode` — `/sandbox` command, settings key + `DRAHT_SANDBOX` env seeding, status-bar indicator
+- R45-SBM.2: Sandbox-on auto-mode semantics — unmatched bash auto-allowed because confined; inline-interpreter-eval danger patterns stop prompting; outward-facing patterns (`git push*`, publish) keep prompting; `permissions.yml` `deny` rules still hard-block in every combination
+- R45-SBM.3: Denial escalation — platform denial signature detected from the failed run produces exactly one "rerun unsandboxed?" approval via the existing confirm path; approve reruns through the unsandboxed backend and logs it; decline leaves the denial as the tool result
+- R45-SBM.4: Non-interactive/RPC mode never escalates and never silently reruns unsandboxed — the denial is the result
+- R45-SBM.5: Sandbox-unavailable falls back to current permission-gate behavior with a one-time notice; the gate's text heuristics are the floor, never regressed
+- R45-SBM.6: Wired via `core/builtins/` with real-session loading proof (Phases 23/29 proof class)
+
+### R46-SBH: Sandbox Hardening, Performance & Docs
+- R46-SBH.1: Adversarial escape suite — symlink pivots created mid-command, `/tmp`-relocation tricks, interpreter matrix (python/node/ruby/perl × inline-eval/script-file), git-hook-triggered writes from an in-sandbox `git commit`, env probe proving no secret-bearing parent vars leak
+- R46-SBH.2: Linux CI covers Landlock and the namespace fallback as separate matrix jobs (Phase 28's Linux path shipped unverified on the macOS dev machine — not repeating that)
+- R46-SBH.3: Spawn-overhead budget enforced by test — added p95 < 50 ms per invocation
+- R46-SBH.4: Dogfood proof — full `npm run check` + build of this monorepo completes inside the sandbox on the curated default allowlist alone
+- R46-SBH.5: Docs — `extensions.md`, `quickstart.md` security section, permission-gate module doc updated to point at the sandbox as the hard boundary (text gate = heuristic UX in front of it)

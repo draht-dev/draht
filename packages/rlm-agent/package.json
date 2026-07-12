@@ -20,7 +20,7 @@
 		"extensions": ["./src/extension.ts"]
 	},
 	"scripts": {
-		"build": "tsgo --noEmit",
+		"build": "tsc --noEmit",
 		"test": "vitest run",
 		"clean": "rm -rf dist"
 	},
@@ -33,7 +33,7 @@
 		"@draht/ai": "workspace:*",
 		"@draht/coding-agent": "workspace:*",
 		"@types/node": "^22.10.5",
-		"typescript": "^6.0.0-beta",
+		"typescript": "7.0.2",
 		"vitest": "^3.2.4"
 	}
 }

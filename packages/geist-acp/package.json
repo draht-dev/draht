@@ -13,7 +13,7 @@
 		}
 	},
 	"scripts": {
-		"build": "tsgo --noEmit",
+		"build": "tsc --noEmit",
 		"test": "bun test",
 		"smoke:harness": "bun test test/smoke/"
 	},

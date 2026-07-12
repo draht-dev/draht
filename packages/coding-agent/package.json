@@ -35,8 +35,8 @@
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
-		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
-		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js dist/rpc-entry.js && bun run copy-assets",
+		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+		"build": "tsc -p tsconfig.build.json && shx chmod +x dist/cli.js dist/rpc-entry.js && bun run copy-assets",
 		"build:binary": "bun run build && bun build --compile ./dist/cli.js ./src/utils/image-resize-worker.ts --outfile dist/draht && bun run copy-binary-assets",
 		"copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/ && shx rm -rf dist/prompts dist/hooks dist/agents && shx cp -r prompts dist/prompts && shx cp -r hooks dist/hooks && shx cp -r agents dist/agents",
 		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/theme && shx cp src/modes/interactive/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp src/modes/interactive/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && shx cp -r prompts dist/ && shx cp -r hooks dist/ && shx cp -r agents dist/ && shx cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/",
@@ -91,7 +91,7 @@
 		"@types/proper-lockfile": "^4.1.4",
 		"@types/semver": "^7.7.1",
 		"shx": "^0.4.0",
-		"typescript": "^6.0.0-beta",
+		"typescript": "7.0.2",
 		"vitest": "^3.2.4"
 	},
 	"keywords": [

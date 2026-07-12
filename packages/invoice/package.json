@@ -17,7 +17,7 @@
 		}
 	},
 	"scripts": {
-		"build": "tsgo --noEmit",
+		"build": "tsc --noEmit",
 		"test": "bun test"
 	},
 	"dependencies": {},

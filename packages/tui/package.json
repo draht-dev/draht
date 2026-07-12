@@ -6,8 +6,8 @@
 	"main": "dist/index.js",
 	"scripts": {
 		"clean": "shx rm -rf dist",
-		"build": "tsgo -p tsconfig.build.json",
-		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"build": "tsc -p tsconfig.build.json",
+		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "bun test test/*.test.ts",
 		"prepublishOnly": "bun run clean && bun run build"
 	},

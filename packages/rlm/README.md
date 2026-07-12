@@ -135,7 +135,7 @@ direction.
 ```bash
 npm install          # from repo root, resolves this workspace package
 cd packages/rlm
-npx tsgo --noEmit    # typecheck
+npx tsc --noEmit     # typecheck
 npm test             # vitest
 ```
 

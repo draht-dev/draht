@@ -19,7 +19,7 @@
 	},
 	"scripts": {
 		"clean": "rm -rf dist",
-		"build": "tsgo -p tsconfig.build.json",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "bun test"
 	},
 	"dependencies": {

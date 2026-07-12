@@ -14,8 +14,8 @@
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
-		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/main.js",
-		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"build": "tsc -p tsconfig.build.json && shx chmod +x dist/main.js",
+		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"prepublishOnly": "bun run clean && bun run build"
 	},
 	"dependencies": {
@@ -33,7 +33,7 @@
 	"devDependencies": {
 		"@types/diff": "^7.0.2",
 		"@types/node": "^24.3.0",
-		"typescript": "^6.0.0-beta"
+		"typescript": "7.0.2"
 	},
 	"keywords": [
 		"slack",

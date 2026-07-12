@@ -1,6 +1,32 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.12] - 2026-07-12
+
+### Added
+
+- allow safe multi-agent read-only operations
+- flag inline interpreter eval and unwrap xargs in the danger filter
+- session permission modes — /yolo and auto-approve with danger filter
+- add draht rlm replay CLI mode
+- add draht rlm CLI subcommand
+- wire FSM/mailbox/task-board/worktree/permission-gate into subagent builtin
+- add YAML-rule-based permission gate (deny/allow/approve)
+- add git worktree isolator for per-task isolation
+- add autonomous task board with atomic self-assign
+- add teammate mailbox pub/sub messaging system
+- add FSM protocol for agent lifecycle coordination
+
+### Changed
+
+- migrate workspace checks to TypeScript 7
+- commit companion package.json/index.ts changes from Phase 29
+- route rlm:true GSD plans through rlm_query in execute-phase
+
+### Fixed
+
+- send terminal-ready notifications reliably
+- give @draht/router, @draht/knowledge, @draht/rlm real dist builds
+- actually load core/builtins/subagent.ts into real sessions
 
 ## [2026.7.11] - 2026-07-11
 

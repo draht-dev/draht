@@ -57,3 +57,11 @@ export {
 	touchRecents,
 } from "./registry/recents-store.js";
 export { discoverWorkspaceProjects, slugify } from "./registry/workspace-discovery.js";
+export type { Variant, VariantStatus } from "./variants/index.js";
+export {
+	assignHarnessesRoundRobin,
+	EmptyVariantSetError,
+	NotAVariantError,
+	VariantSet,
+	VariantSetResolvedError,
+} from "./variants/index.js";

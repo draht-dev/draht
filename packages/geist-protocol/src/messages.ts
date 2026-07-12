@@ -129,3 +129,33 @@ export const FleetStateMessageSchema = z.object({
 	}),
 });
 export type FleetStateMessage = z.infer<typeof FleetStateMessageSchema>;
+
+/**
+ * `variants_new` — headset → bridge (spec §9.2, §9.5). The board grammar
+ * `variants <n> [with <harness>[, <harness>…]] [in <project>]: <text>` already
+ * parses to this shape via `resolveUtterance`'s `board-variants` result in
+ * `geist-core` (`count`/`harnesses`/`project`/`text` — see
+ * `grammar/resolve-utterance.ts`); this schema mirrors those fields for the
+ * wire, with one deliberate difference: `resolveUtterance` represents an
+ * omitted `with …` clause as an empty array (there's always a list to iterate
+ * downstream in that module), while this wire message represents "omitted" as
+ * `undefined`, per spec §9.2's own phrasing — "`harnesses?: [name]`
+ * (round-robins across members when set)". An omitted list isn't "round-robin
+ * across zero harnesses", it's "every member uses the default harness", the
+ * same fallback a plain `session_new` gets when no harness qualifier is given
+ * (spec §4's 4a, §9.2's `session_new` row). Translating between the two
+ * representations is composition-root work for a later phase, not this
+ * schema's job. `project` is required (unlike `session_new`/`FleetSession`'s
+ * optional `projectSlug`): variants fan out sibling worktrees from a single
+ * project, so there is no session-less default to fall back to (spec §12).
+ */
+export const VariantsNewMessageSchema = z.object({
+	type: z.literal("variants_new"),
+	payload: z.object({
+		count: z.number().int().positive(),
+		project: z.string().min(1),
+		harnesses: z.array(z.string()).min(1).optional(),
+		text: z.string().min(1),
+	}),
+});
+export type VariantsNewMessage = z.infer<typeof VariantsNewMessageSchema>;

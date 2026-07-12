@@ -22,5 +22,7 @@ export {
 	PermissionOptionSchema,
 	type PermissionRequestMessage,
 	PermissionRequestMessageSchema,
+	type VariantsNewMessage,
+	VariantsNewMessageSchema,
 	type WsMessage,
 } from "./messages.js";

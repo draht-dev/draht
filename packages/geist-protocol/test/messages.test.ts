@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FleetStateMessageSchema } from "../src/messages.js";
+import { FleetStateMessageSchema, VariantsNewMessageSchema } from "../src/messages.js";
 
 describe("FleetStateMessageSchema", () => {
 	test("an empty fleet (no sessions, no configured agents) is schema-valid", () => {
@@ -96,6 +96,96 @@ describe("FleetStateMessageSchema", () => {
 			FleetStateMessageSchema.parse({
 				type: "not_fleet_state",
 				payload: { sessions: [], agents: [] },
+			}),
+		).toThrow();
+	});
+});
+
+describe("VariantsNewMessageSchema", () => {
+	test("accepts a mixed-harness variants request (spec §16 M6: 'variants 3 with claude, codex and draht: …')", () => {
+		const message = {
+			type: "variants_new",
+			payload: {
+				count: 3,
+				project: "fr3n",
+				harnesses: ["claude", "codex", "draht"],
+				text: "tighten the hero animation",
+			},
+		};
+
+		expect(VariantsNewMessageSchema.parse(message)).toEqual(message);
+	});
+
+	test("accepts a request with harnesses omitted (every member falls back to the default harness)", () => {
+		const message = {
+			type: "variants_new",
+			payload: {
+				count: 3,
+				project: "fr3n",
+				text: "tighten the hero animation",
+			},
+		};
+
+		const parsed = VariantsNewMessageSchema.parse(message);
+		expect(parsed.payload.harnesses).toBeUndefined();
+	});
+
+	test("rejects count = 0 (spec §17.7 locked default of 3 applies upstream, but 0 is never valid on the wire)", () => {
+		expect(() =>
+			VariantsNewMessageSchema.parse({
+				type: "variants_new",
+				payload: { count: 0, project: "fr3n", text: "x" },
+			}),
+		).toThrow();
+	});
+
+	test("rejects a negative count", () => {
+		expect(() =>
+			VariantsNewMessageSchema.parse({
+				type: "variants_new",
+				payload: { count: -1, project: "fr3n", text: "x" },
+			}),
+		).toThrow();
+	});
+
+	test("rejects a non-integer count", () => {
+		expect(() =>
+			VariantsNewMessageSchema.parse({
+				type: "variants_new",
+				payload: { count: 1.5, project: "fr3n", text: "x" },
+			}),
+		).toThrow();
+	});
+
+	// Deliberate choice: an omitted `harnesses` field means "round-robin isn't
+	// in play, every member uses the default harness" (undefined, valid — see
+	// above); an explicit but EMPTY `harnesses: []` is a different, invalid
+	// claim — "round-robin across a with-list" with nothing in it — so the two
+	// are NOT treated as equivalent. `.min(1)` on the array (rather than a bare
+	// `.optional()`) is what enforces the distinction.
+	test("rejects an explicit empty harnesses array (distinct from omitting the field)", () => {
+		expect(() =>
+			VariantsNewMessageSchema.parse({
+				type: "variants_new",
+				payload: { count: 3, project: "fr3n", harnesses: [], text: "x" },
+			}),
+		).toThrow();
+	});
+
+	test("rejects a missing project (variants fan out from a single project, spec §12)", () => {
+		expect(() =>
+			VariantsNewMessageSchema.parse({
+				type: "variants_new",
+				payload: { count: 3, text: "x" },
+			}),
+		).toThrow();
+	});
+
+	test("rejects a wrong message type literal", () => {
+		expect(() =>
+			VariantsNewMessageSchema.parse({
+				type: "variants",
+				payload: { count: 3, project: "fr3n", text: "x" },
 			}),
 		).toThrow();
 	});

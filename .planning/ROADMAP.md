@@ -137,7 +137,7 @@
 >
 > **Scope for v1:** inference-time scaffold only (no RLM-native training). Use existing frontier models via `@draht/router`. Python-subprocess REPL for model-prompt parity with the paper; Node `vm` considered as a v2 fallback.
 >
-> **Milestone 2 carry-forward:** Phases 22–25 remain pending backlog and are not a prerequisite for Milestone 3.
+> **Milestone 2 carry-forward:** Phases 22–25 were not a prerequisite for Milestone 3 and were completed in parallel with it (2026-07-11/12).
 
 ## Phase 26: RLM Core Primitives — `complete`
 **Goal:** `@draht/rlm` package exposes an `RlmSession` that runs the root loop: root-LLM-produces-code → REPL-executes → truncated-stdout → history-append → FINAL-check, with a working `llm_query` and `FINAL`/`FINAL_VAR` sentinels.

@@ -24,10 +24,13 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult
 import {
 	AgentFSM,
 	type AgentFSMTransitionEvent,
+	isPermissionMode,
 	loadRules,
 	type Message as MailboxMessage,
 	MailboxSystem,
+	PERMISSION_MODES,
 	PermissionGate,
+	type PermissionMode,
 	TaskBoard,
 	WorktreeIsolator,
 } from "../multi-agent/index.ts";
@@ -805,9 +808,63 @@ export default function (pi: ExtensionAPI) {
 	// call in this process is offered to the gate before it runs. Rules are
 	// (re)loaded per call so project-local `.draht/permissions.yml` edits and
 	// per-session cwd changes take effect without an extension reload.
+	//
+	// The session permission mode (default/auto/yolo) is session-scoped state,
+	// settable via /permissions and /yolo below and seeded from
+	// DRAHT_PERMISSION_MODE. It relaxes prompting, never `deny` rules.
+	let permissionMode: PermissionMode = isPermissionMode(process.env.DRAHT_PERMISSION_MODE)
+		? process.env.DRAHT_PERMISSION_MODE
+		: "default";
+
+	function updatePermissionStatus(ctx: { ui: { setStatus: (key: string, text: string | undefined) => void } }) {
+		ctx.ui.setStatus("permissions", permissionMode === "default" ? undefined : `perms: ${permissionMode}`);
+	}
+
+	const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
+		default: "rules as authored; unmatched bash commands require approval",
+		auto: "auto-approve bash unless the command looks dangerous (deny rules still block)",
+		yolo: "no approval prompts this session (deny rules still block)",
+	};
+
 	pi.on("tool_call", (event, ctx) =>
-		createPermissionGateToolCallHandler(new PermissionGate(loadRules(ctx.cwd)))(event, ctx),
+		createPermissionGateToolCallHandler(
+			new PermissionGate(loadRules(ctx.cwd), { cwd: ctx.cwd, mode: permissionMode }),
+		)(event, ctx),
 	);
+
+	// /permissions command — show or set the session permission mode
+	pi.registerCommand("permissions", {
+		description: `Show or set the session permission mode. Usage: /permissions [${PERMISSION_MODES.join("|")}]`,
+		handler: async (args, ctx) => {
+			const requested = args.trim();
+			if (!requested) {
+				ctx.ui.notify(`Permission mode: ${permissionMode} — ${MODE_DESCRIPTIONS[permissionMode]}`, "info");
+				return;
+			}
+			if (!isPermissionMode(requested)) {
+				ctx.ui.notify(`Unknown mode "${requested}". Available: ${PERMISSION_MODES.join(", ")}`, "warning");
+				return;
+			}
+			permissionMode = requested;
+			updatePermissionStatus(ctx);
+			ctx.ui.notify(`Permission mode: ${permissionMode} — ${MODE_DESCRIPTIONS[permissionMode]}`, "info");
+		},
+	});
+
+	// /yolo command — toggle yolo mode for this session
+	pi.registerCommand("yolo", {
+		description: "Toggle yolo permission mode for this session (skip approval prompts; deny rules still block)",
+		handler: async (_args, ctx) => {
+			permissionMode = permissionMode === "yolo" ? "default" : "yolo";
+			updatePermissionStatus(ctx);
+			ctx.ui.notify(
+				permissionMode === "yolo"
+					? "yolo mode ON — no approval prompts this session (deny rules still block)"
+					: "yolo mode OFF — back to default permissions",
+				"info",
+			);
+		},
+	});
 
 	// ── Agent selection for user prompts ─────────────────────────────────────
 

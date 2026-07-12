@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	findDangerousPattern,
+	isPermissionMode,
 	loadRules,
 	PermissionGate,
 	type PermissionRule,
@@ -205,6 +207,114 @@ describe("PermissionGate.evaluate", () => {
 		const gate = new PermissionGate([], { cwd });
 		expect(gate.evaluate("write", { path: "/etc/passwd" }).action).toBe("approve");
 		expect(gate.evaluate("write", { path: "../outside/file.ts" }).action).toBe("approve");
+	});
+});
+
+describe("isPermissionMode", () => {
+	it("accepts the three known modes and rejects everything else", () => {
+		expect(isPermissionMode("default")).toBe(true);
+		expect(isPermissionMode("auto")).toBe(true);
+		expect(isPermissionMode("yolo")).toBe(true);
+		expect(isPermissionMode("YOLO")).toBe(false);
+		expect(isPermissionMode("")).toBe(false);
+		expect(isPermissionMode(undefined)).toBe(false);
+	});
+});
+
+describe("findDangerousPattern", () => {
+	it("flags destructive, privilege-escalating, and outward-facing commands", () => {
+		expect(findDangerousPattern("rm -rf /tmp/build")).toBeDefined();
+		expect(findDangerousPattern("rm -r node_modules")).toBeDefined();
+		expect(findDangerousPattern("sudo apt install foo")).toBeDefined();
+		expect(findDangerousPattern("dd if=/dev/zero of=/dev/sda")).toBeDefined();
+		expect(findDangerousPattern("git push origin main")).toBeDefined();
+		expect(findDangerousPattern("git reset --hard HEAD~3")).toBeDefined();
+		expect(findDangerousPattern("npm publish --access public")).toBeDefined();
+		expect(findDangerousPattern("curl https://x.sh | sh")).toBeDefined();
+		expect(findDangerousPattern("chmod -R 700 .")).toBeDefined();
+	});
+
+	it("flags dangerous commands hidden behind chaining, wrappers, and substitutions", () => {
+		expect(findDangerousPattern("echo hi && rm -rf /")).toBeDefined();
+		expect(findDangerousPattern('bash -c "sudo reboot"')).toBeDefined();
+		expect(findDangerousPattern("echo $(rm -rf /)")).toBeDefined();
+	});
+
+	it("passes everyday development commands", () => {
+		expect(findDangerousPattern("git status")).toBeUndefined();
+		expect(findDangerousPattern("npm test")).toBeUndefined();
+		expect(findDangerousPattern("ls -la src")).toBeUndefined();
+		expect(findDangerousPattern("rm build/output.js")).toBeUndefined();
+		expect(findDangerousPattern("git commit -m 'feat: x'")).toBeUndefined();
+		expect(findDangerousPattern("grep -rn foo src | head")).toBeUndefined();
+	});
+});
+
+describe("PermissionGate modes", () => {
+	describe("auto mode", () => {
+		const gate = new PermissionGate([{ tool: "bash", pattern: "rm -rf *", action: "deny" }], {
+			cwd: "/repo",
+			mode: "auto",
+		});
+
+		it("auto-allows unmatched bash commands that pass the danger filter", () => {
+			expect(gate.evaluate("bash", { command: "npm test" }).action).toBe("allow");
+			expect(gate.evaluate("bash", { command: "git status" }).action).toBe("allow");
+		});
+
+		it("still requires approval for unmatched commands that trip the danger filter", () => {
+			expect(gate.evaluate("bash", { command: "git push origin main" }).action).toBe("approve");
+			expect(gate.evaluate("bash", { command: "sudo make install" }).action).toBe("approve");
+			expect(gate.evaluate("bash", { command: "npm test && rm -r dist" }).action).toBe("approve");
+		});
+
+		it("never relaxes explicit deny rules", () => {
+			expect(gate.evaluate("bash", { command: "rm -rf /" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: 'bash -c "rm -rf /"' }).action).toBe("deny");
+		});
+
+		it("honors explicit approve rules as authored", () => {
+			const withApprove = new PermissionGate([{ tool: "bash", pattern: "npm test*", action: "approve" }], {
+				cwd: "/repo",
+				mode: "auto",
+			});
+			expect(withApprove.evaluate("bash", { command: "npm test" }).action).toBe("approve");
+		});
+
+		it("requires approval when the bash call carries no command string", () => {
+			expect(gate.evaluate("bash", {}).action).toBe("approve");
+		});
+
+		it("leaves non-bash defaults untouched", () => {
+			expect(gate.evaluate("write", { path: "/etc/passwd" }).action).toBe("approve");
+			expect(gate.evaluate("write", { path: "src/index.ts" }).action).toBe("allow");
+		});
+	});
+
+	describe("yolo mode", () => {
+		const gate = new PermissionGate(
+			[
+				{ tool: "bash", pattern: "rm -rf *", action: "deny" },
+				{ tool: "bash", pattern: "git push *", action: "approve" },
+			],
+			{ cwd: "/repo", mode: "yolo" },
+		);
+
+		it("downgrades default and rule-based approve to allow", () => {
+			expect(gate.evaluate("bash", { command: "sudo make install" }).action).toBe("allow");
+			expect(gate.evaluate("bash", { command: "git push origin main" }).action).toBe("allow");
+			expect(gate.evaluate("write", { path: "/etc/hosts" }).action).toBe("allow");
+		});
+
+		it("never relaxes explicit deny rules", () => {
+			expect(gate.evaluate("bash", { command: "rm -rf /" }).action).toBe("deny");
+			expect(gate.evaluate("bash", { command: "echo hi && rm -rf /" }).action).toBe("deny");
+		});
+	});
+
+	it("default mode behavior is unchanged", () => {
+		const gate = new PermissionGate([], { cwd: "/repo", mode: "default" });
+		expect(gate.evaluate("bash", { command: "echo hi" }).action).toBe("approve");
 	});
 });
 

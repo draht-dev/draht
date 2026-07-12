@@ -29,6 +29,10 @@
  *
  * Rules are evaluated top-to-bottom; the first matching rule wins.
  *
+ * On top of the rules sits a session-level `PermissionMode` (`default` /
+ * `auto` / `yolo`, see the type doc) that relaxes how unmatched calls and
+ * `approve` outcomes are handled — `deny` rules are never relaxed.
+ *
  * `pattern` matching against bash commands is textual (no real shell
  * parser), so `deny` and `allow`/`approve` patterns are matched with
  * deliberately asymmetric strategies to stay fail-safe: `deny` scans every
@@ -50,6 +54,26 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
 
 /** The three permission tiers a rule (or default) can resolve to. */
 export type PermissionAction = "deny" | "allow" | "approve";
+
+/**
+ * Session-level permission mode. Modes only relax the gate's *default*
+ * decisions — explicit rules from `permissions.yml` always win first:
+ *
+ * - `default`: rules as authored; unmatched bash requires approval.
+ * - `auto`: unmatched bash is auto-allowed unless it trips the built-in
+ *   danger filter (`DANGEROUS_COMMAND_PATTERNS`), in which case it still
+ *   requires approval. Explicit `deny`/`approve` rules behave as authored.
+ * - `yolo`: every `approve` (rule-based or default) is downgraded to
+ *   `allow`. Explicit `deny` rules still block — yolo is "stop asking",
+ *   not "disable the gate".
+ */
+export type PermissionMode = "default" | "auto" | "yolo";
+
+export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "auto", "yolo"];
+
+export function isPermissionMode(value: unknown): value is PermissionMode {
+	return typeof value === "string" && (PERMISSION_MODES as readonly string[]).includes(value);
+}
 
 /** A single permission rule as authored in `permissions.yml`. */
 export interface PermissionRule {
@@ -468,6 +492,59 @@ function matchCommandPattern(command: string, pattern: string, action: Permissio
 	return action === "deny" ? matchDenyPattern(command, pattern) : matchAllowPattern(command, pattern);
 }
 
+/**
+ * Built-in danger filter backing `auto` mode. These are matched with the
+ * same paranoid strategy as `deny` rules (chain splitting, wrapper
+ * unwrapping, substitution extraction), so `echo hi && rm -rf /` or
+ * `bash -c "sudo dd ..."` still trip the filter.
+ *
+ * This is a *prompt* heuristic, not a security boundary: it decides which
+ * unmatched commands fall back to approval instead of auto-allow. It can
+ * never enumerate every destructive command — anything that must be hard
+ * blocked belongs in a `deny` rule in `permissions.yml`.
+ */
+export const DANGEROUS_COMMAND_PATTERNS: readonly string[] = [
+	// recursive/forced deletion (flag clusters normalize to sorted letters,
+	// so `-rf`/`-fr` become `-fr` and are caught by the `-f*` prefix; bare
+	// `-r`/`-R` by the `-r*` prefix via case-insensitive matching)
+	"rm -r*",
+	"rm -f*",
+	// privilege escalation
+	"sudo *",
+	"doas *",
+	"su *",
+	// raw disk / filesystem surgery
+	"dd *",
+	"mkfs*",
+	// system state
+	"shutdown*",
+	"reboot*",
+	"halt*",
+	"poweroff*",
+	// blanket permission changes
+	"chmod 777 *",
+	"chmod -R *",
+	"chown -R *",
+	// outward-facing / history-rewriting git and publishing
+	"git push*",
+	"git reset --hard*",
+	"git clean*",
+	"npm publish*",
+	"yarn publish*",
+	"pnpm publish*",
+	// pipe-to-shell installers
+	"curl * | *",
+	"wget * | *",
+];
+
+/**
+ * Returns the first built-in dangerous pattern the command matches, or
+ * `undefined` if the command passes the filter.
+ */
+export function findDangerousPattern(command: string): string | undefined {
+	return DANGEROUS_COMMAND_PATTERNS.find((pattern) => matchDenyPattern(command, pattern));
+}
+
 /** Normalize a (possibly relative or absolute) path into a forward-slash path relative to `cwd`, for glob matching. */
 function toMatchablePath(filePath: string, cwd: string): string {
 	const resolved = isAbsolute(filePath) ? filePath : resolve(cwd, filePath);
@@ -530,6 +607,8 @@ function ruleMatches(rule: PermissionRule, toolName: string, args: Record<string
 export interface PermissionGateOptions {
 	/** Project root used to determine whether a path is "within the project" for default decisions. Defaults to `process.cwd()`. */
 	cwd?: string;
+	/** Session permission mode; see `PermissionMode`. Defaults to `"default"`. */
+	mode?: PermissionMode;
 }
 
 /**
@@ -539,10 +618,12 @@ export interface PermissionGateOptions {
 export class PermissionGate {
 	private readonly rules: PermissionRule[];
 	private readonly cwd: string;
+	private readonly mode: PermissionMode;
 
 	constructor(rules: PermissionRule[] = [], options: PermissionGateOptions = {}) {
 		this.rules = rules;
 		this.cwd = options.cwd ?? process.cwd();
+		this.mode = options.mode ?? "default";
 	}
 
 	/** Evaluate a tool call. `args` should carry `command` for bash, or `path`/`file_path` for read/write/edit. */
@@ -551,15 +632,40 @@ export class PermissionGate {
 
 		for (const rule of this.rules) {
 			if (ruleMatches(rule, normalizedTool, args, this.cwd)) {
-				return { action: rule.action, reason: describeMatch(rule) };
+				return this.applyMode({ action: rule.action, reason: describeMatch(rule) });
 			}
 		}
 
-		return this.defaultDecision(normalizedTool, args);
+		return this.applyMode(this.defaultDecision(normalizedTool, args));
+	}
+
+	/**
+	 * Applies the session mode to a decision. `deny` is never relaxed by any
+	 * mode; `yolo` downgrades every `approve` to `allow`.
+	 */
+	private applyMode(decision: PermissionDecision): PermissionDecision {
+		if (this.mode === "yolo" && decision.action === "approve") {
+			return { action: "allow", reason: `yolo mode: auto-allowed (${decision.reason})` };
+		}
+		return decision;
 	}
 
 	private defaultDecision(toolName: string, args: Record<string, unknown>): PermissionDecision {
 		if (toolName === "bash") {
+			if (this.mode === "auto") {
+				const command = getCommandArg(args);
+				if (command === undefined) {
+					return { action: "approve", reason: "auto mode: bash call without a command string requires approval" };
+				}
+				const dangerous = findDangerousPattern(command);
+				if (dangerous !== undefined) {
+					return {
+						action: "approve",
+						reason: `auto mode: command matched dangerous pattern ${JSON.stringify(dangerous)}, requires approval`,
+					};
+				}
+				return { action: "allow", reason: "auto mode: no rule matched and command passed the danger filter" };
+			}
 			return { action: "approve", reason: "no rule matched; bash commands require approval by default" };
 		}
 

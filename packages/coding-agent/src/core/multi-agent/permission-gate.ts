@@ -96,6 +96,15 @@ export interface PermissionDecision {
 const VALID_ACTIONS: readonly PermissionAction[] = ["deny", "allow", "approve"];
 const RULES_FILE_NAME = "permissions.yml";
 const PATH_SCOPED_TOOLS = new Set(["read", "write", "edit"]);
+/** Read-only tools whose optional `path` arg defaults to the cwd when omitted. */
+const READ_ONLY_PATH_TOOLS = new Set(["grep", "find", "ls"]);
+/**
+ * Tools that are safe to run without confirmation because the call itself
+ * touches nothing: `subagent` only delegates — the spawned child process runs
+ * this same gate over every tool call it actually makes. Explicit rules can
+ * still `deny`/`approve` these.
+ */
+const DEFAULT_ALLOWED_TOOLS = new Set(["subagent"]);
 
 function isPermissionAction(value: unknown): value is PermissionAction {
 	return typeof value === "string" && (VALID_ACTIONS as readonly string[]).includes(value);
@@ -682,6 +691,10 @@ export class PermissionGate {
 	}
 
 	private defaultDecision(toolName: string, args: Record<string, unknown>): PermissionDecision {
+		if (DEFAULT_ALLOWED_TOOLS.has(toolName)) {
+			return { action: "allow", reason: `no rule matched; "${toolName}" is allowed by default` };
+		}
+
 		if (toolName === "bash") {
 			if (this.mode === "auto") {
 				const command = getCommandArg(args);
@@ -708,6 +721,19 @@ export class PermissionGate {
 			return {
 				action: "approve",
 				reason: "no rule matched; path is outside the project (or missing), requires approval",
+			};
+		}
+
+		if (READ_ONLY_PATH_TOOLS.has(toolName)) {
+			// Unlike read/write/edit, these tools treat a missing `path` as the
+			// cwd, so an absent path arg is within the project by definition.
+			const filePath = getPathArg(args) ?? ".";
+			if (isWithinProject(filePath, this.cwd)) {
+				return { action: "allow", reason: "no rule matched; read-only tool allowed by default within the project" };
+			}
+			return {
+				action: "approve",
+				reason: "no rule matched; path is outside the project, requires approval",
 			};
 		}
 

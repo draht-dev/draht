@@ -208,6 +208,40 @@ describe("PermissionGate.evaluate", () => {
 		expect(gate.evaluate("write", { path: "/etc/passwd" }).action).toBe("approve");
 		expect(gate.evaluate("write", { path: "../outside/file.ts" }).action).toBe("approve");
 	});
+
+	it("defaults subagent to allow — delegation itself is safe, the child process runs its own gate", () => {
+		const gate = new PermissionGate([]);
+		expect(gate.evaluate("subagent", { agent: "reviewer", task: "review the diff" }).action).toBe("allow");
+	});
+
+	it("still lets explicit rules deny or approve subagent calls", () => {
+		const denyGate = new PermissionGate([{ tool: "subagent", action: "deny" }]);
+		expect(denyGate.evaluate("subagent", { agent: "reviewer", task: "x" }).action).toBe("deny");
+		const approveGate = new PermissionGate([{ tool: "subagent", action: "approve" }]);
+		expect(approveGate.evaluate("subagent", { agent: "reviewer", task: "x" }).action).toBe("approve");
+	});
+
+	it("defaults grep/find/ls to allow within the project, treating a missing path as the cwd", () => {
+		const cwd = "/repo";
+		const gate = new PermissionGate([], { cwd });
+		expect(gate.evaluate("grep", { pattern: "foo" }).action).toBe("allow");
+		expect(gate.evaluate("grep", { pattern: "foo", path: "src" }).action).toBe("allow");
+		expect(gate.evaluate("find", { pattern: "*.ts" }).action).toBe("allow");
+		expect(gate.evaluate("ls", {}).action).toBe("allow");
+	});
+
+	it("defaults grep/find/ls to approve for paths outside the project", () => {
+		const cwd = "/repo";
+		const gate = new PermissionGate([], { cwd });
+		expect(gate.evaluate("grep", { pattern: "foo", path: "/etc" }).action).toBe("approve");
+		expect(gate.evaluate("find", { pattern: "*", path: "../outside" }).action).toBe("approve");
+		expect(gate.evaluate("ls", { path: "/tmp" }).action).toBe("approve");
+	});
+
+	it("still defaults unknown tools to approve", () => {
+		const gate = new PermissionGate([]);
+		expect(gate.evaluate("frobnicate", {}).action).toBe("approve");
+	});
 });
 
 describe("isPermissionMode", () => {

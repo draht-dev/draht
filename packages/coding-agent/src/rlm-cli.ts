@@ -1,6 +1,6 @@
 /**
- * `draht rlm --input <path|glob|url> --query "..." [--max-cost <n>]` CLI
- * subcommand.
+ * `draht rlm --input <path|glob|url> --query "..." [--max-cost <n>]` and
+ * `draht rlm replay <trajectory-id> [--verbose]` CLI subcommand.
  *
  * Follows the same "check args, return true/false" dispatch convention as
  * `handlePackageCommand`/`handleConfigCommand` in `package-manager-cli.ts`:
@@ -30,9 +30,21 @@
  * that the router-backed factory doesn't yet wire up), so it isn't enforced
  * against the run yet -- flagged as a follow-up rather than widening this
  * plan's scope into `router-session.ts`.
+ *
+ * `draht rlm replay <trajectory-id>` (Phase 30, see
+ * .planning/phases/30-eval-observability-docs/30-01-PLAN.md, Architecture
+ * section 4) is a second mode of this same subcommand, dispatched on
+ * `args[0] === "replay"` before any of the `--input`/`--query` parsing
+ * above. It reads `.draht/rlm/<trajectory-id>.jsonl` via `@draht/rlm`'s
+ * `readTrajectory` and prints the recorded final answer straight from that
+ * log -- it never imports/constructs a `ModelRouter`, never calls
+ * `createRouterBackedSession`, and is not reachable through any code path
+ * that touches `RlmCliRuntimeOptions.router`. That's deliberate: replay
+ * must make zero network/LLM calls, and the strongest proof of that is
+ * that the router dependency simply isn't in this branch at all.
  */
 
-import { createRouterBackedSession, loadInput, parseInputArg, type RlmSession } from "@draht/rlm";
+import { createRouterBackedSession, loadInput, parseInputArg, type RlmSession, readTrajectory } from "@draht/rlm";
 import { ModelRouter } from "@draht/router";
 import chalk from "chalk";
 import { APP_NAME } from "./config.ts";
@@ -49,9 +61,15 @@ export interface RlmCliRuntimeOptions {
 }
 
 export interface ParsedRlmArgs {
+	/** Which of the subcommand's two modes these args parsed into. */
+	mode: "query" | "replay";
 	input?: string;
 	query?: string;
 	maxCost?: number;
+	/** Replay mode only: the `<trajectory-id>` positional argument. */
+	trajectoryId?: string;
+	/** Replay mode only: print each step's code/stdout/cost, not just the final answer. */
+	verbose?: boolean;
 	help: boolean;
 	invalidOption?: string;
 	invalidArgument?: string;
@@ -60,10 +78,12 @@ export interface ParsedRlmArgs {
 }
 
 const RLM_COMMAND_USAGE = `${APP_NAME} rlm --input <path|glob|url> --query "..." [--max-cost <n>]`;
+const RLM_REPLAY_USAGE = `${APP_NAME} rlm replay <trajectory-id> [--verbose]`;
 
 function printRlmCommandHelp(): void {
 	console.log(`${chalk.bold("Usage:")}
   ${RLM_COMMAND_USAGE}
+  ${RLM_REPLAY_USAGE}
 
 Run a Recursive Language Model (RLM) query against a large input without
 loading it into this session's own context. The root model writes Python
@@ -81,7 +101,66 @@ Examples:
   ${APP_NAME} rlm --input ./big-log.txt --query "What caused the outage?"
   ${APP_NAME} rlm --input "src/**/*.ts" --query "Where is auth handled?"
   ${APP_NAME} rlm --input knowledge:acme-corp --query "What's our deploy process?"
+
+Run "${APP_NAME} rlm replay --help" for how to reconstruct a past session's
+answer from its trajectory log alone, with zero LLM calls.
 `);
+}
+
+function printRlmReplayHelp(): void {
+	console.log(`${chalk.bold("Usage:")}
+  ${RLM_REPLAY_USAGE}
+
+Reconstruct a completed RLM session's final answer from its trajectory
+JSONL log alone (.draht/rlm/<trajectory-id>.jsonl, written by a prior
+"${APP_NAME} rlm" run) -- makes zero network/LLM calls.
+
+Options:
+  --verbose, -v   Also print each recorded step's code, stdout, error, and
+                   cost, not just the final answer.
+  -h, --help      Show this help.
+
+Example:
+  ${APP_NAME} rlm replay 3f9e2b7a-1c4d-4e9a-9b2f-7a6d1e0c5f8b
+`);
+}
+
+/**
+ * Parses the `rlm replay` subcommand's arguments (everything after the
+ * leading `"replay"` token). Same "collect the first problem" style as
+ * `parseRlmArgs`.
+ */
+function parseRlmReplayArgs(args: string[]): ParsedRlmArgs {
+	let help = false;
+	let verbose = false;
+	let trajectoryId: string | undefined;
+	let invalidOption: string | undefined;
+	let invalidArgument: string | undefined;
+
+	for (const arg of args) {
+		if (arg === "-h" || arg === "--help") {
+			help = true;
+			continue;
+		}
+
+		if (arg === "-v" || arg === "--verbose") {
+			verbose = true;
+			continue;
+		}
+
+		if (arg.startsWith("-")) {
+			invalidOption = invalidOption ?? arg;
+			continue;
+		}
+
+		if (trajectoryId === undefined) {
+			trajectoryId = arg;
+		} else {
+			invalidArgument = invalidArgument ?? arg;
+		}
+	}
+
+	return { mode: "replay", help, verbose, trajectoryId, invalidOption, invalidArgument };
 }
 
 /**
@@ -89,8 +168,17 @@ Examples:
  * `"rlm"` token). Mirrors `parsePackageCommand`'s style in
  * `package-manager-cli.ts`: collects the first problem of each kind rather
  * than throwing, so `handleRlmCommand` can report one clear error.
+ *
+ * Dispatches to `parseRlmReplayArgs` when the first token is literally
+ * `"replay"`, before any of the `--input`/`--query` parsing below runs --
+ * see the module docstring's note on why replay's zero-LLM-calls guarantee
+ * depends on this branch happening first.
  */
 export function parseRlmArgs(args: string[]): ParsedRlmArgs {
+	if (args[0] === "replay") {
+		return parseRlmReplayArgs(args.slice(1));
+	}
+
 	let input: string | undefined;
 	let query: string | undefined;
 	let maxCost: number | undefined;
@@ -154,7 +242,17 @@ export function parseRlmArgs(args: string[]): ParsedRlmArgs {
 		invalidArgument = invalidArgument ?? arg;
 	}
 
-	return { input, query, maxCost, help, invalidOption, invalidArgument, missingOptionValue, invalidMaxCost };
+	return {
+		mode: "query",
+		input,
+		query,
+		maxCost,
+		help,
+		invalidOption,
+		invalidArgument,
+		missingOptionValue,
+		invalidMaxCost,
+	};
 }
 
 /**
@@ -164,6 +262,83 @@ export function parseRlmArgs(args: string[]): ParsedRlmArgs {
  */
 function buildRlmPrompt(query: string, content: string): string {
 	return `Question: ${query}\n\n---\n\n${content}`;
+}
+
+/**
+ * Handles `draht rlm replay <trajectory-id> [--verbose]`. Reads the
+ * trajectory's JSONL log via `@draht/rlm`'s `readTrajectory` and prints its
+ * recorded final answer -- see the module docstring for why this function
+ * never touches `ModelRouter`/`createRouterBackedSession`/
+ * `RlmCliRuntimeOptions.router` at all: that omission is the zero-LLM-calls
+ * guarantee, not an incidental side effect of this trajectory happening not
+ * to need one.
+ */
+function handleRlmReplayCommand(parsed: ParsedRlmArgs): boolean {
+	if (parsed.help) {
+		printRlmReplayHelp();
+		return true;
+	}
+
+	if (parsed.invalidOption) {
+		console.error(chalk.red(`Unknown option ${parsed.invalidOption} for "rlm replay".`));
+		console.error(chalk.dim(`Usage: ${RLM_REPLAY_USAGE}`));
+		process.exitCode = 1;
+		return true;
+	}
+
+	if (!parsed.trajectoryId) {
+		console.error(chalk.red('Missing <trajectory-id>. Use "rlm replay --help" for usage.'));
+		console.error(chalk.dim(`Usage: ${RLM_REPLAY_USAGE}`));
+		process.exitCode = 1;
+		return true;
+	}
+
+	if (parsed.invalidArgument) {
+		console.error(chalk.red(`Unexpected argument ${parsed.invalidArgument}.`));
+		console.error(chalk.dim(`Usage: ${RLM_REPLAY_USAGE}`));
+		process.exitCode = 1;
+		return true;
+	}
+
+	const trajectoryId = parsed.trajectoryId;
+
+	try {
+		const trajectory = readTrajectory(trajectoryId);
+
+		if (parsed.verbose) {
+			for (const step of trajectory.steps) {
+				console.log(chalk.dim(`--- step ${step.step} (cost $${step.costUsd.toFixed(6)}) ---`));
+				console.log(step.code);
+				if (step.truncatedStdout) console.log(`stdout: ${step.truncatedStdout}`);
+				if (step.error) console.log(chalk.red(`error: ${step.error}`));
+			}
+		}
+
+		if (!trajectory.final) {
+			console.error(
+				chalk.red(`rlm replay: trajectory "${trajectoryId}" has no final entry (the session never completed).`),
+			);
+			process.exitCode = 1;
+			return true;
+		}
+
+		const { kind, value } = trajectory.final;
+		if (kind === "final" || kind === "final_var") {
+			console.log(typeof value === "string" ? value : JSON.stringify(value));
+			process.exitCode = 0;
+			return true;
+		}
+
+		const detail = value !== undefined ? `: ${String(value)}` : "";
+		console.error(chalk.red(`rlm replay: trajectory ended without a final answer (${kind})${detail}.`));
+		process.exitCode = 1;
+		return true;
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(chalk.red(`Error: ${message}`));
+		process.exitCode = 1;
+		return true;
+	}
 }
 
 /**
@@ -179,6 +354,10 @@ export async function handleRlmCommand(args: string[], runtimeOptions: RlmCliRun
 	}
 
 	const parsed = parseRlmArgs(rest);
+
+	if (parsed.mode === "replay") {
+		return handleRlmReplayCommand(parsed);
+	}
 
 	if (parsed.help) {
 		printRlmCommandHelp();

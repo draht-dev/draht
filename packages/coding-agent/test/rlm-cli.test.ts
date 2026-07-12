@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@draht/ai/compat";
+import { appendTrajectoryEntry } from "@draht/rlm";
 import type { ModelRef, ModelRouter } from "@draht/router";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { handleRlmCommand, parseRlmArgs } from "../src/rlm-cli.ts";
@@ -159,6 +160,29 @@ describe("parseRlmArgs", () => {
 		const parsed = parseRlmArgs(["--input", "./big.txt", "--query", "q", "--bogus"]);
 		expect(parsed.invalidOption).toBe("--bogus");
 	});
+
+	test("parses replay mode with a trajectory id and --verbose", () => {
+		const parsed = parseRlmArgs(["replay", "some-trajectory-id", "--verbose"]);
+		expect(parsed).toMatchObject({
+			mode: "replay",
+			trajectoryId: "some-trajectory-id",
+			verbose: true,
+			help: false,
+		});
+		expect(parsed.invalidOption).toBeUndefined();
+		expect(parsed.invalidArgument).toBeUndefined();
+	});
+
+	test("replay mode with no trajectory id leaves trajectoryId undefined", () => {
+		const parsed = parseRlmArgs(["replay"]);
+		expect(parsed.mode).toBe("replay");
+		expect(parsed.trajectoryId).toBeUndefined();
+	});
+
+	test("replay mode flags an unknown option", () => {
+		const parsed = parseRlmArgs(["replay", "some-id", "--bogus"]);
+		expect(parsed.invalidOption).toBe("--bogus");
+	});
 });
 
 describe("handleRlmCommand", () => {
@@ -233,5 +257,134 @@ describe("handleRlmCommand", () => {
 		expect(process.exitCode).toBe(0);
 		const printed = logSpy.mock.calls.flat().join("\n");
 		expect(printed).toContain(needle);
+	});
+});
+
+// `draht rlm replay <trajectory-id>` (Phase 30) -- see
+// .planning/phases/30-eval-observability-docs/30-01-PLAN.md, Architecture
+// section 4, task 4. Reads a pre-written trajectory JSONL fixture (written
+// directly via `@draht/rlm`'s `appendTrajectoryEntry`, not by running a real
+// session) and reconstructs the final answer with zero LLM calls.
+describe("handleRlmCommand replay mode", () => {
+	let tmpDir: string | undefined;
+	let originalCwd: string;
+	let logSpy: ReturnType<typeof vi.spyOn>;
+	let errorSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		originalCwd = process.cwd();
+		logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+		errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+	});
+
+	afterEach(() => {
+		process.chdir(originalCwd);
+		process.exitCode = undefined;
+		vi.restoreAllMocks();
+		if (tmpDir) {
+			rmSync(tmpDir, { recursive: true, force: true });
+			tmpDir = undefined;
+		}
+	});
+
+	/** Writes a minimal 1-step trajectory fixture under the current cwd's default `.draht/rlm/` dir. */
+	function writeFixtureTrajectory(trajectoryId: string, finalValue: string): void {
+		const timestamp = new Date(0).toISOString();
+		appendTrajectoryEntry(trajectoryId, {
+			type: "step",
+			trajectoryId,
+			step: 1,
+			code: `FINAL(${JSON.stringify(finalValue)})`,
+			truncatedStdout: "",
+			error: null,
+			subCalls: [],
+			costUsd: 0.001,
+			timestamp,
+		});
+		appendTrajectoryEntry(trajectoryId, {
+			type: "final",
+			trajectoryId,
+			kind: "final",
+			value: finalValue,
+			totalCostUsd: 0.001,
+			totalSteps: 1,
+			timestamp,
+		});
+	}
+
+	test("4a. replays a pre-written trajectory fixture and prints its final answer", async () => {
+		tmpDir = mkdtempSync(join(tmpdir(), "rlm-cli-replay-test-"));
+		process.chdir(tmpDir);
+
+		const trajectoryId = "fixture-trajectory-1";
+		writeFixtureTrajectory(trajectoryId, "the recovered answer");
+
+		const handled = await handleRlmCommand(["rlm", "replay", trajectoryId]);
+
+		expect(handled).toBe(true);
+		expect(errorSpy).not.toHaveBeenCalled();
+		expect(process.exitCode).toBe(0);
+		const printed = logSpy.mock.calls.flat().join("\n");
+		expect(printed).toContain("the recovered answer");
+	});
+
+	test("4b. replay makes zero network/router/model calls -- works with no router wiring supplied at all", async () => {
+		tmpDir = mkdtempSync(join(tmpdir(), "rlm-cli-replay-test-"));
+		process.chdir(tmpDir);
+
+		const trajectoryId = "fixture-trajectory-2";
+		writeFixtureTrajectory(trajectoryId, "no-llm-needed");
+
+		// No `runtimeOptions` (and thus no `router`) is passed at all -- the
+		// replay code path never reaches the `runtimeOptions.router ?? new
+		// ModelRouter()` line in query mode, so there's no router to inject in
+		// the first place. Succeeding here without any router wiring is the
+		// strongest possible proof this path can't be making an LLM call.
+		const handled = await handleRlmCommand(["rlm", "replay", trajectoryId]);
+
+		expect(handled).toBe(true);
+		expect(errorSpy).not.toHaveBeenCalled();
+		expect(process.exitCode).toBe(0);
+		const printed = logSpy.mock.calls.flat().join("\n");
+		expect(printed).toContain("no-llm-needed");
+	});
+
+	test("4c. a nonexistent trajectory id produces a clear error, not a crash", async () => {
+		tmpDir = mkdtempSync(join(tmpdir(), "rlm-cli-replay-test-"));
+		process.chdir(tmpDir);
+
+		const handled = await handleRlmCommand(["rlm", "replay", "does-not-exist"]);
+
+		expect(handled).toBe(true);
+		expect(process.exitCode).toBe(1);
+		expect(errorSpy).toHaveBeenCalled();
+		const printed = errorSpy.mock.calls.flat().join("\n");
+		expect(printed).toMatch(/does-not-exist/);
+	});
+
+	test("missing <trajectory-id> produces a clear usage error, not a crash", async () => {
+		const handled = await handleRlmCommand(["rlm", "replay"]);
+
+		expect(handled).toBe(true);
+		expect(process.exitCode).toBe(1);
+		expect(errorSpy).toHaveBeenCalled();
+		const printed = errorSpy.mock.calls.flat().join("\n");
+		expect(printed).toMatch(/trajectory-id/);
+	});
+
+	test("--verbose also prints the step-by-step trace ahead of the final answer", async () => {
+		tmpDir = mkdtempSync(join(tmpdir(), "rlm-cli-replay-test-"));
+		process.chdir(tmpDir);
+
+		const trajectoryId = "fixture-trajectory-verbose";
+		writeFixtureTrajectory(trajectoryId, "verbose-answer");
+
+		const handled = await handleRlmCommand(["rlm", "replay", trajectoryId, "--verbose"]);
+
+		expect(handled).toBe(true);
+		expect(process.exitCode).toBe(0);
+		const printed = logSpy.mock.calls.flat().join("\n");
+		expect(printed).toContain("FINAL(");
+		expect(printed).toContain("verbose-answer");
 	});
 });

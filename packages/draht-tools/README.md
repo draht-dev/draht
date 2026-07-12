@@ -24,6 +24,10 @@ Run `draht-tools help` for the full list. Highlights:
 | `graph-path <from> <to>` | Shortest import path between two files |
 | `graph-hotspots` / `graph-clusters [--surprising]` | God-nodes / structural neighborhoods + surprising connections |
 | `graph-hook install\|uninstall\|status` | Git post-commit hook that refreshes the map |
+| `kg build` | **Symbol-level** knowledge graph (graphify-parity engine) → `graph.json` + `KG_REPORT.md` |
+| `kg query "<question>"` | BFS/DFS subgraph traversal from scored seeds — graphify's `NODE`/`EDGE` output |
+| `kg explain` / `kg path` / `kg affected` | Node dump · shortest path with relation arrows · reverse blast-radius |
+| `kg export tree\|wiki\|graphml` | Collapsible module tree HTML / wiki articles / GraphML |
 | `init` / `create-project` / `create-roadmap` / … | Planning scaffolding (see `help`) |
 
 All `graph-*` commands are **read-only** (never mutate `MAP.json`), print concise text by default (`--json` for machine output), and degrade gracefully when no map exists (`run map-graph first`).
@@ -43,6 +47,21 @@ All `graph-*` commands are **read-only** (never mutate `MAP.json`), print concis
   `MAP.html` embeds the map data inline, so it works fully offline via `file://` — no server needed. Run `draht-tools map-serve` instead for a live-reloading dev view that pushes updates over SSE as you edit.
 
 `map-graph` and `map-codebase` always map the **whole repository** from the git root, regardless of any `[dir]` argument — a directory argument only scopes the narrative analysis (`map-codebase`'s STACK/ARCHITECTURE/CONVENTIONS/CONCERNS docs), never the graph itself. The map regenerates on every code-file save (docs/asset saves are ignored by design) in `map-serve` mode (`fs.watch` + Server-Sent Events), and on every commit if you `graph-hook install`. The build is **deterministic** (git-committable) and writes are idempotent — a no-op rebuild produces zero diff. No need to write architecture docs by hand — the map is always current.
+
+## Two engines, both deterministic (no LLM anywhere in indexing)
+
+| | `map-graph` (living map) | `kg` (graphify-parity engine, `bin/draht-kg.cjs`) |
+|---|---|---|
+| Nodes | modules (files) with symbols as attributes | **symbols**: files, classes, `functions()`, `methods()`, types |
+| Edges | import / re-export / external + call heuristics | graphify's relation set: `imports`, `imports_from`, `re_exports`, `dynamic_import`, `contains`, `defines`, `method`, `calls`, `indirect_call`, `inherits`, `implements`, `extends`, `instantiates` |
+| Confidence | per-edge tag | tag **+ `confidence_score`** (EXTRACTED 1.0 · INFERRED 0.8 calls · AMBIGUOUS 0.2), graphify's rubric |
+| IDs | file paths | graphify `ids.py` canonicalization (NFKC → `_` → casefold), e.g. `packages_router_src_router_modelrouter` |
+| Query | ranked search (`graph-query`) | **subgraph traversal** (`kg query`): scored seeds → BFS/DFS with p99-degree hub guard → `NODE`/`EDGE` lines under a token budget |
+| Output | MAP.json (schema v6) + MAP.html + GRAPH_REPORT.md | `graph.json` (node-link, loadable by graphify's own tooling) + KG_REPORT.md + GRAPH_TREE.html/wiki/GraphML |
+
+Both engines are pure deterministic JS — the LLM is only involved in the *narrative* docs
+(`map-codebase`'s STACK/ARCHITECTURE/…), never in indexing. Rebuilds are byte-identical
+(regression-tested), so both graphs are safe to commit or regenerate from hooks.
 
 ## Querying the graph (instead of grepping)
 

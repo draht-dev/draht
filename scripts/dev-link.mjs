@@ -23,6 +23,9 @@ const run = (cmd, cwd = ROOT) => {
 run("cd packages/tui && bun run build");
 run("cd packages/ai && bun run build");
 run("cd packages/agent && bun run build");
+run("cd packages/router && bun run build");
+run("cd packages/knowledge && bun run build");
+run("cd packages/rlm && bun run build");
 run("cd packages/coding-agent && bun run build");
 
 // 2. Drop .dev marker (makes VERSION resolve to "dev" at runtime)

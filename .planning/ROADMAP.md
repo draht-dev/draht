@@ -198,7 +198,7 @@
 **Requirements:** R35-M3.1, R35-M3.2, R35-M3.3, R35-M3.4, R35-M3.5, R35-M3.6, R35-M3.7
 **Acceptance:** ✅ e2e vs the mock ACP agent: dispatch → tool-call events → edit → turn end + dirty git → `awaiting_review` → approve/undo/stop, full permission round-trip; ✅ the same fake-headset script passes against `draht-acp` in CI, keyless via draht's faux provider inside the shim's own tests; ✅ `smoke:harness -- claude` passes (network, non-CI, `claude-agent-acp`); sha ledger (`baseSha`/`lastApprovedSha`, undo = `reset --hard <ref>`) is implemented; H3 (fr3n button change end-to-end on both harnesses; one permission answered by voice) is logged as evidence debt.
 
-## Phase 36: M4 — Commands, Addressing, Project & Harness Grammar — `pending`
+## Phase 36: M4 — Commands, Addressing, Project & Harness Grammar — `complete`
 **Goal:** ACP-advertised commands/modes surface as palette + voice options (verbatim `/…` pass-through always available); harness and project qualifiers resolve per the locked grammar order.
 **Requirements:** R36-M4.1, R36-M4.2, R36-M4.3, R36-M4.4
 **Acceptance:** ✅ advertised-command golden test per mock capability profile; ✅ *"new claude session in \<fixture\>: x"* spawns the right harness in the right project path; ✅ resolution-order test proves qualifiers (reserved verbs → command → harness → project → text) can never shadow an earlier stage; H4 (voice-spawn a draht `/plan` and a Claude session in two projects, disambiguate by re-say) is logged as evidence debt.

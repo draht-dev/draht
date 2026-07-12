@@ -13,7 +13,7 @@
 		"CHANGELOG.md"
 	],
 	"scripts": {
-		"test": "node bin/draht-tools.cjs --help > /dev/null"
+		"test": "node bin/draht-tools.cjs --help > /dev/null && node --test test/*.test.mjs"
 	},
 	"keywords": [
 		"draht",

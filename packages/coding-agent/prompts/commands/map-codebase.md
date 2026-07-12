@@ -34,10 +34,11 @@ Before analyzing, decompose codebase understanding into atomic reasoning units:
 2. Tool generates: STACK.md, ARCHITECTURE.md, CONVENTIONS.md, CONCERNS.md
 2a. Run `draht-tools map-graph` to produce the **living architecture map**. The graph always maps the whole repository from the git root, regardless of any directory argument — the tool enforces this deterministically; a directory argument only scopes the narrative analysis in step 3, not the graph itself.
    - `.planning/codebase/MAP.json` — machine-readable map with **entry points** (CLI bins, HTTP routes, library main exports), **sinks** (FS / net / DB / stdout / exec calls), **bounded contexts** (packages), **cross-package dataflow edges**, **symbol-resolved call edges**, **flows** (which sinks each entry point reaches and through which intermediate module), per-module **layer** (presentation / application / domain / infrastructure / support), and exports/imports per file. Agents starting a new task should read MAP.json first instead of re-scanning the tree.
-   - `.planning/codebase/MAP.html` — interactive visualization with three tabs:
+   - `.planning/codebase/MAP.html` — interactive visualization with four tabs:
      - **Graph** — the primary interactive force-directed knowledge graph: nodes colored by cluster and sized by degree; click a node for an inspector (file, symbols, importers, callers); search plus filters for layer / cluster / edge-confidence (EXTRACTED/INFERRED/AMBIGUOUS); legend; PNG/SVG export; double-click a cluster to expand/collapse it.
      - **Architecture** — package containers in layer bands with cross-package dataflow arrows.
      - **Flows** — entry points on top, sinks on bottom, intermediate modules ranked by depth from entry. Click an entry point to trace which sinks it reaches.
+     - **Insights** — the graphify-style "read this first" panel: clusters table, god nodes / most-depended-on / orchestrators, surprising connections, and SECURITY/BUG/FIXME/HACK rationale highlights — every row click-through to the inspector.
      Open `MAP.html` directly via `file://` — the data is embedded inline so it works fully offline — or run `draht-tools map-serve` for a live-reloading dev view (regenerates on every code-file save (docs/asset saves are ignored by design), via SSE).
 3. **Run parallel deep analysis via subagents:**
    Use the `subagent` tool in **parallel mode** with these tasks:

@@ -159,7 +159,7 @@
 **Requirements:** R29-INT.1, R29-INT.2, R29-INT.3, R29-INT.4, R29-INT.5
 **Acceptance:** `packages/rlm-agent/` extension registers `/rlm <input> <query>` in coding-agent; `draht rlm --input <path|glob|url> --query "..."` CLI returns an answer on a 500 KB+ fixture; `rlm_query` tool usable inside normal agent flow to defer long reads; `@draht/knowledge` loader pulls client AGENTS.md + decisions into RLM context; a GSD plan can declare `rlm: true` and `/execute-phase` routes oversize inputs through RLM automatically.
 
-## Phase 30: Evaluation, Observability & Docs — `pending`
+## Phase 30: Evaluation, Observability & Docs — `complete`
 **Goal:** RLM trajectories are measurable, replayable, and documented so developers can trust and tune them.
 **Requirements:** R30-EVAL.1, R30-EVAL.2, R30-EVAL.3, R30-EVAL.4, R30-EVAL.5
 **Acceptance:** Every RLM session emits a trajectory JSONL (step, code, truncated-stdout, sub-calls, cost, final); synthetic S-NIAH regression test passes on input 10× the root model's window; cost comparison harness records RLM vs base-LLM-with-truncation on the same task; `draht rlm replay <trajectory-id>` reconstructs the final answer from the log alone; README + AGENTS.md sections document when to use RLM, how to bound costs, and a worked end-to-end example.

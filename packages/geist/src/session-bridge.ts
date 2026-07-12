@@ -1,3 +1,4 @@
+import type { AcpHarnessSession } from "@draht/geist-acp";
 import type { HarnessSession } from "@draht/geist-core";
 import type { PermissionOption, PermissionRequestMessage } from "@draht/geist-protocol";
 
@@ -12,6 +13,15 @@ import type { PermissionOption, PermissionRequestMessage } from "@draht/geist-pr
  * mapping (ASR-pipeline work, later milestone). Those consume this module's
  * output; they don't live here.
  */
+
+/** ACP `PermissionOption`'s `optionId`/`name` shape → the wire `PermissionOption`'s `id`/`label` shape. */
+function toWirePermissionOption(option: {
+	readonly optionId: string;
+	readonly name: string;
+	readonly kind: string;
+}): PermissionOption {
+	return { id: option.optionId, label: option.name, kind: option.kind };
+}
 
 /** One pending permission request, already normalized to the wire shape (spec §9.2's `permission_request` payload, minus `sessionId` — the bridge adds that from the registration key). */
 export interface PermissionRequestEvent {
@@ -34,11 +44,38 @@ export interface PermissionRequestEvent {
  * `ToolCallUpdate`) where this wire shape expects a plain `title`, and its
  * `options` are ACP-shaped `{ optionId, name, kind }` where this shape expects
  * `{ id, label, kind }`. Translating that ACP-flavored event into this
- * wire-flavored one is composition-root wiring for a later task, not this
- * relay.
+ * wire-flavored one is {@link adaptAcpHarnessSessionForRelay}, below — the one
+ * piece of composition-root wiring this module does allow itself, since it's
+ * the sole reason this module needs to know `@draht/geist-acp` exists at all.
  */
 export interface PermissionRelaySession extends Pick<HarnessSession, "id" | "answerPermission"> {
 	onPermissionRequest(listener: (event: PermissionRequestEvent) => void): () => void;
+}
+
+/**
+ * Adapts a real `@draht/geist-acp` {@link AcpHarnessSession} into the
+ * {@link PermissionRelaySession} shape this relay expects, translating its
+ * ACP-flavored `PermissionRequestEvent` (`{requestId, toolCall, options:
+ * {optionId, name, kind}[]}`) into the wire-flavored one above
+ * (`{requestId, title, options: {id, label, kind}[]}`, spec §9.2). `title`
+ * comes from the tool call's own `title` when the agent sent one; ACP marks
+ * it optional, so a fallback keyed off the tool call id keeps the wire
+ * `title` field (always required, spec §9.2) populated either way.
+ */
+export function adaptAcpHarnessSessionForRelay(session: AcpHarnessSession): PermissionRelaySession {
+	return {
+		id: session.id,
+		answerPermission: (requestId, optionId) => session.answerPermission(requestId, optionId),
+		onPermissionRequest(listener) {
+			return session.onPermissionRequest((event) => {
+				listener({
+					requestId: event.requestId,
+					title: event.toolCall.title ?? `Permission requested for tool call "${event.toolCall.toolCallId}"`,
+					options: event.options.map(toWirePermissionOption),
+				});
+			});
+		},
+	};
 }
 
 export type PermissionRequestListener = (message: PermissionRequestMessage) => void;

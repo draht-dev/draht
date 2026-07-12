@@ -14,11 +14,15 @@
 	},
 	"scripts": {
 		"build": "tsgo --noEmit",
-		"test": "bun test"
+		"test": "bun test",
+		"smoke:harness": "bun test test/smoke/"
 	},
 	"dependencies": {
 		"@agentclientprotocol/sdk": "1.2.1",
 		"@draht/geist-core": "workspace:*",
 		"@draht/geist-protocol": "workspace:*"
+	},
+	"devDependencies": {
+		"@agentclientprotocol/claude-agent-acp": "^0.58.1"
 	}
 }

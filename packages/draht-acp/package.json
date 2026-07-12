@@ -2,10 +2,13 @@
 	"name": "@draht/draht-acp",
 	"version": "2026.7.11",
 	"private": true,
-	"description": "Thin ACP shim wrapping @draht/coding-agent — draht's door into geist and any other ACP client (geist spec §6, §17.1)",
+	"description": "Thin ACP agent-side shim wrapping @draht/coding-agent — draht's door into geist and any other ACP client (geist spec §6, §17.1)",
 	"type": "module",
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
+	"bin": {
+		"draht-acp": "./src/main.ts"
+	},
 	"exports": {
 		".": {
 			"types": "./src/index.ts",
@@ -17,7 +20,13 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@draht/coding-agent": "workspace:*",
-		"@draht/geist-core": "workspace:*"
+		"@agentclientprotocol/sdk": "1.2.1",
+		"@draht/coding-agent": "workspace:*"
+	},
+	"devDependencies": {
+		"@draht/ai": "workspace:*",
+		"@draht/geist-acp": "workspace:*",
+		"@draht/geist-core": "workspace:*",
+		"@draht/geist-protocol": "workspace:*"
 	}
 }

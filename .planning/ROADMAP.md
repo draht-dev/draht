@@ -218,7 +218,7 @@
 **Requirements:** R39-M7.1, R39-M7.2, R39-M7.3
 **Acceptance:** ✅ scripted mock tool-call sequences produce golden lane output for both generic and draht-typed cases (data-driven, golden-tested recognizer); ✅ a stop command cancels an in-flight run cleanly; H7 (real draht `/orchestrate` lanes live; a Claude session's tool activity renders as untyped generic lanes) is logged as evidence debt.
 
-## Phase 40: M8 — Spatial Dividends (v1.5) — `pending`
+## Phase 40: M8 — Spatial Dividends (v1.5) — `complete`
 **Goal:** Multi-viewport, pins, history, and pose persistence land as the v1.5 spatial-organization dividend.
 **Requirements:** R40-M8.1
 **Acceptance:** H8 (two-viewport layout fix demoed; workspace pose restores after a headset restart) is logged as evidence debt — this phase is entirely hardware-gated per spec §2/§16 and has no automated ✅ criterion of its own.

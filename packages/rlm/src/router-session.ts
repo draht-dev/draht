@@ -18,6 +18,7 @@ import { estimateCost, logCost } from "@draht/router";
 import type { PromptVars } from "./prompts.js";
 import { renderPrompt, selectTier } from "./prompts.js";
 import { RlmSession } from "./session.js";
+import { appendTrajectoryEntry } from "./trajectory.js";
 import type { RlmHistoryEntry } from "./types.js";
 
 /** RLM-specific router roles (see `@draht/router`'s `DEFAULT_CONFIG`). */
@@ -43,6 +44,12 @@ export interface CreateRouterBackedSessionOptions {
 	costLogPath?: string;
 	/** `CostEntry.sessionId` for every cost entry this session logs. Defaults to the generated `trajectoryId`. */
 	sessionId?: string;
+	/**
+	 * Directory the trajectory JSONL log (`.draht/rlm/<trajectoryId>.jsonl`)
+	 * is written under (Phase 30, `trajectory.ts`). Passed straight through to
+	 * `appendTrajectoryEntry`'s `logDir` param; defaults to `.draht/rlm/`.
+	 */
+	trajectoryLogDir?: string;
 }
 
 const DEFAULT_CONTEXT_TYPE = "text";
@@ -135,14 +142,14 @@ function messageText(message: AssistantMessage): string {
 	return text;
 }
 
-/** Computes and appends one `CostEntry` for a completed router call. */
+/** Computes and appends one `CostEntry` for a completed router call, returning its `estimatedCostUsd`. */
 function logRouterCall(
 	role: RlmRole,
 	message: AssistantMessage,
 	trajectoryId: string,
 	sessionId: string,
 	costLogPath: string | undefined,
-): void {
+): number {
 	const reasoningTokens = message.usage.reasoning ?? 0;
 	const estimatedCostUsd = estimateCost(
 		message.provider,
@@ -166,6 +173,13 @@ function logRouterCall(
 		},
 		costLogPath,
 	);
+	return estimatedCostUsd;
+}
+
+/** A trajectory step's cost tally, accumulated between one `rootLlm` call and the next. */
+interface StepCostAccumulator {
+	rootCostUsd: number;
+	subCalls: Array<{ costUsd: number; provider: string; model: string }>;
 }
 
 /**
@@ -182,6 +196,52 @@ export function createRouterBackedSession(opts: CreateRouterBackedSessionOptions
 	const maxSubCallBudget = opts.maxSubCallBudget ?? DEFAULT_MAX_SUB_CALL_BUDGET;
 	const subCallCharBudget = opts.subCallCharBudget ?? DEFAULT_SUB_CALL_CHAR_BUDGET;
 	const costLogPath = opts.costLogPath;
+	const trajectoryLogDir = opts.trajectoryLogDir;
+
+	// Trajectory JSONL logging (Phase 30, trajectory.ts): `rootLlm` is called
+	// once per step, always *before* that step's own `llm_query` sub-calls
+	// happen (they occur later, inside the driver's `runExec`, which
+	// `session.ts` only invokes after `rootLlm` resolves -- see session.ts's
+	// `step()`). So a step's sub-calls always land between one `rootLlm` call
+	// and the next, and the simplest correct way to correlate them without
+	// touching session.ts's core loop is: accumulate sub-call costs into
+	// `pendingStep` as they happen, and finalize+append the *previous* step's
+	// `TrajectoryStepEntry` the moment the *next* `rootLlm` call (or the final
+	// `run()` resolution, for the very last step) tells us -- via the
+	// `history` array it's handed -- that the previous step actually
+	// completed.
+	let pendingStep: StepCostAccumulator | null = null;
+	let finalizedThroughStep = 0;
+	let totalCostUsd = 0;
+
+	function finalizeStepIfPending(history: RlmHistoryEntry[]): void {
+		if (!pendingStep) return;
+		const entry = history[history.length - 1];
+		// No new completed entry since the last finalize (e.g. the step that
+		// started this accumulator never finished -- a hard-killed/errored
+		// step never gets pushed to `history`): nothing to log, and don't
+		// double-log the previous step either.
+		if (!entry || entry.step <= finalizedThroughStep) return;
+		const stepCostUsd = pendingStep.rootCostUsd + pendingStep.subCalls.reduce((sum, sub) => sum + sub.costUsd, 0);
+		totalCostUsd += stepCostUsd;
+		appendTrajectoryEntry(
+			trajectoryId,
+			{
+				type: "step",
+				trajectoryId,
+				step: entry.step,
+				code: entry.code,
+				truncatedStdout: entry.truncatedStdout,
+				error: entry.error,
+				subCalls: pendingStep.subCalls,
+				costUsd: stepCostUsd,
+				timestamp: entry.timestamp,
+			},
+			trajectoryLogDir,
+		);
+		finalizedThroughStep = entry.step;
+		pendingStep = null;
+	}
 
 	const rootRef = opts.router.resolve("rlm-root");
 	const rootModel = opts.router.resolveModel(rootRef);
@@ -201,6 +261,12 @@ export function createRouterBackedSession(opts: CreateRouterBackedSessionOptions
 	const systemPrompt = renderPrompt(tier, vars);
 
 	const rootLlm = async (history: RlmHistoryEntry[]): Promise<string> => {
+		// `history` reflects every step completed *before* this one -- so if a
+		// previous step's accumulator is still pending, this call is exactly
+		// the signal that it (and only it) has now fully completed (its own
+		// root call plus every sub-call it triggered).
+		finalizeStepIfPending(history);
+		pendingStep = { rootCostUsd: 0, subCalls: [] };
 		const context: Context = {
 			systemPrompt,
 			messages: [
@@ -212,7 +278,8 @@ export function createRouterBackedSession(opts: CreateRouterBackedSessionOptions
 			],
 		};
 		const message = await collectAssistantMessage(opts.router.streamSimple("rlm-root", context));
-		logRouterCall("rlm-root", message, trajectoryId, sessionId, costLogPath);
+		const costUsd = logRouterCall("rlm-root", message, trajectoryId, sessionId, costLogPath);
+		pendingStep.rootCostUsd = costUsd;
 		return messageText(message);
 	};
 
@@ -221,9 +288,44 @@ export function createRouterBackedSession(opts: CreateRouterBackedSessionOptions
 			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 		};
 		const message = await collectAssistantMessage(opts.router.streamSimple("rlm-sub", context));
-		logRouterCall("rlm-sub", message, trajectoryId, sessionId, costLogPath);
+		const costUsd = logRouterCall("rlm-sub", message, trajectoryId, sessionId, costLogPath);
+		// A sub-call always happens after `rootLlm` resolved for the step that
+		// triggered it (and before the next `rootLlm` call) -- see session.ts's
+		// `step()`/`runExec` -- so `pendingStep` is always the right step to
+		// attribute this cost to. `pendingStep` is only ever null before the
+		// very first `rootLlm` call, at which point no `llm_query` could have
+		// been dispatched yet either.
+		pendingStep?.subCalls.push({ costUsd, provider: message.provider, model: message.model });
 		return messageText(message);
 	};
 
-	return new RlmSession({ prompt: opts.prompt, rootLlm, llmQuery });
+	const session = new RlmSession({ prompt: opts.prompt, rootLlm, llmQuery });
+
+	// Wrap (not replace the class's core loop -- session.ts is untouched)
+	// `run()` so the trajectory's last step and its terminal
+	// `TrajectoryFinalEntry` get logged once the whole session resolves.
+	// There's no other hook to observe "the session is done" from outside
+	// session.ts: `rootLlm` is never called again after the last step, so
+	// nothing else would ever finalize that step's accumulator.
+	const originalRun = session.run.bind(session);
+	session.run = async () => {
+		const result = await originalRun();
+		finalizeStepIfPending(result.history);
+		appendTrajectoryEntry(
+			trajectoryId,
+			{
+				type: "final",
+				trajectoryId,
+				kind: result.kind,
+				value: result.value,
+				totalCostUsd,
+				totalSteps: result.steps,
+				timestamp: new Date().toISOString(),
+			},
+			trajectoryLogDir,
+		);
+		return result;
+	};
+
+	return session;
 }

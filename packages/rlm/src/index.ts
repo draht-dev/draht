@@ -20,4 +20,11 @@ export { renderPrompt, selectTier } from "./prompts.js";
 export type { CreateRouterBackedSessionOptions } from "./router-session.js";
 export { createRouterBackedSession } from "./router-session.js";
 export { extractPythonCode, pythonReprToValue, RlmSession, truncateStdout } from "./session.js";
+// Trajectory JSONL logging/replay (Phase 30) -- see
+// .planning/phases/30-eval-observability-docs/30-01-PLAN.md, Architecture
+// section 1. Re-exported from the package root so consumers outside this
+// package (e.g. `draht rlm replay`) can import via the public `@draht/rlm`
+// entry point instead of reaching into `src/`.
+export type { TrajectoryFinalEntry, TrajectoryStepEntry } from "./trajectory.js";
+export { appendTrajectoryEntry, readTrajectory } from "./trajectory.js";
 export type { RlmHistoryEntry, RlmResult, RlmResultKind, RlmSessionOptions } from "./types.js";

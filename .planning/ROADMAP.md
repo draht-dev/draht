@@ -203,7 +203,7 @@
 **Requirements:** R36-M4.1, R36-M4.2, R36-M4.3, R36-M4.4
 **Acceptance:** ✅ advertised-command golden test per mock capability profile; ✅ *"new claude session in \<fixture\>: x"* spawns the right harness in the right project path; ✅ resolution-order test proves qualifiers (reserved verbs → command → harness → project → text) can never shadow an earlier stage; H4 (voice-spawn a draht `/plan` and a Claude session in two projects, disambiguate by re-say) is logged as evidence debt.
 
-## Phase 37: M5 — Fleet Across Projects & Harnesses — `pending`
+## Phase 37: M5 — Fleet Across Projects & Harnesses — `complete`
 **Goal:** The fleet board supports ≤4 sessions spanning multiple projects and mixed harnesses, with capability badges and scoped approve/undo/stop.
 **Requirements:** R37-M5.1, R37-M5.2, R37-M5.3
 **Acceptance:** ✅ 3 mock sessions across 2 capability profiles and 2 fixture repos prove isolation via `fleet_state` goldens; ✅ scoped undo test confirms undo on one session never touches another's worktree; H5 (fr3n on draht + kintura on claude simultaneously, point-routed, 72 Hz with 3 live panels and tier-1 glass on — OVR evidence) is logged as evidence debt.

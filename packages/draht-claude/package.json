@@ -1,6 +1,6 @@
 {
 	"name": "draht-claude",
-	"version": "2026.7.12-1",
+	"version": "2026.7.13",
 	"description": "Draht GSD, multi-agent, TDD and DDD workflows as a Claude Code plugin. Install with `npx draht-claude install`.",
 	"type": "module",
 	"bin": {

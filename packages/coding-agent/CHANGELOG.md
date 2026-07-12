@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.13] - 2026-07-12
+
+### Changed
+
+- trigger reftable refresh deterministically
 
 ## [2026.7.12] - 2026-07-12
 

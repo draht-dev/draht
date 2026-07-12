@@ -208,7 +208,7 @@
 **Requirements:** R37-M5.1, R37-M5.2, R37-M5.3
 **Acceptance:** ✅ 3 mock sessions across 2 capability profiles and 2 fixture repos prove isolation via `fleet_state` goldens; ✅ scoped undo test confirms undo on one session never touches another's worktree; H5 (fr3n on draht + kintura on claude simultaneously, point-routed, 72 Hz with 3 live panels and tier-1 glass on — OVR evidence) is logged as evidence debt.
 
-## Phase 38: M6 — Variants, Optionally Mixed — `pending`
+## Phase 38: M6 — Variants, Optionally Mixed — `complete`
 **Goal:** `variants_new` supports an optional per-member harness list that round-robins across configured agents; winner-by-pointing keeps the winner and resets/prunes siblings.
 **Requirements:** R38-M6.1, R38-M6.2
 **Acceptance:** ✅ e2e against mixed mock capability profiles: winner session is kept, sibling worktrees are reset and pruned; H6 (3-way shoot-out across harnesses, winner picked by pointing) is logged as evidence debt.

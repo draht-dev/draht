@@ -193,7 +193,7 @@
 **Requirements:** R34-M2.1, R34-M2.2, R34-M2.3
 **Acceptance:** `ElementContext` composition (spec §9.3, unchanged from r2) is implemented in `geist-core`; an image content block is attached only when the session's capability handshake advertises image support, while the crop is always written to `<wt>/.geist/task-<id>/target.webp` and path-referenced in the prompt; H2 (chip + crop demo) is logged as evidence debt.
 
-## Phase 35: M3 — ACP Loop Closes — `pending`
+## Phase 35: M3 — ACP Loop Closes — `complete`
 **Goal:** `geist-acp`'s `HarnessSession` port drives a real ACP client against a deterministic in-repo mock agent and against draht (via a new `draht-acp` shim) and Claude Code (`claude-agent-acp`), with permission rendering and a sha ledger.
 **Requirements:** R35-M3.1, R35-M3.2, R35-M3.3, R35-M3.4, R35-M3.5, R35-M3.6, R35-M3.7
 **Acceptance:** ✅ e2e vs the mock ACP agent: dispatch → tool-call events → edit → turn end + dirty git → `awaiting_review` → approve/undo/stop, full permission round-trip; ✅ the same fake-headset script passes against `draht-acp` in CI, keyless via draht's faux provider inside the shim's own tests; ✅ `smoke:harness -- claude` passes (network, non-CI, `claude-agent-acp`); sha ledger (`baseSha`/`lastApprovedSha`, undo = `reset --hard <ref>`) is implemented; H3 (fr3n button change end-to-end on both harnesses; one permission answered by voice) is logged as evidence debt.

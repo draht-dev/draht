@@ -213,7 +213,7 @@
 **Requirements:** R38-M6.1, R38-M6.2
 **Acceptance:** ✅ e2e against mixed mock capability profiles: winner session is kept, sibling worktrees are reset and pruned; H6 (3-way shoot-out across harnesses, winner picked by pointing) is logged as evidence debt.
 
-## Phase 39: M7 — Run Rendering — `pending`
+## Phase 39: M7 — Run Rendering — `complete`
 **Goal:** Generic ACP tool-call/plan-update lanes render for every harness; `subagent-recognizer.ts` upgrades draht/Claude-Task-style calls to typed lanes; `LOOP.md` surfaces when present.
 **Requirements:** R39-M7.1, R39-M7.2, R39-M7.3
 **Acceptance:** ✅ scripted mock tool-call sequences produce golden lane output for both generic and draht-typed cases (data-driven, golden-tested recognizer); ✅ a stop command cancels an in-flight run cleanly; H7 (real draht `/orchestrate` lanes live; a Claude session's tool activity renders as untyped generic lanes) is logged as evidence debt.

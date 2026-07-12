@@ -49,6 +49,7 @@
 		"packages/geist-core/test/**/*",
 		"packages/geist-acp/test/**/*",
 		"packages/draht-acp/test/**/*",
+		"packages/geist-picker/test/**/*",
 		"packages/geist/**/*",
 		"packages/geist-console/**/*",
 		"packages/gateway/**/*",

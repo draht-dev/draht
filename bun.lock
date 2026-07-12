@@ -94,6 +94,8 @@
       "dependencies": {
         "@draht/agent-core": "workspace:*",
         "@draht/ai": "workspace:*",
+        "@draht/rlm": "workspace:*",
+        "@draht/router": "workspace:*",
         "@draht/tools": "workspace:*",
         "@draht/tui": "workspace:*",
         "@mariozechner/jiti": "^2.6.2",
@@ -404,6 +406,36 @@
         "chalk": "^5.5.0",
       },
     },
+    "packages/rlm": {
+      "name": "@draht/rlm",
+      "version": "2026.7.11",
+      "dependencies": {
+        "@draht/ai": "workspace:*",
+        "@draht/knowledge": "workspace:*",
+        "@draht/router": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.5",
+        "typescript": "^6.0.0-beta",
+        "vitest": "^3.2.4",
+      },
+    },
+    "packages/rlm-agent": {
+      "name": "@draht/rlm-agent",
+      "version": "2026.7.11",
+      "dependencies": {
+        "@draht/rlm": "workspace:*",
+        "@draht/router": "workspace:*",
+        "typebox": "^1.1.24",
+      },
+      "devDependencies": {
+        "@draht/ai": "workspace:*",
+        "@draht/coding-agent": "workspace:*",
+        "@types/node": "^22.10.5",
+        "typescript": "^6.0.0-beta",
+        "vitest": "^3.2.4",
+      },
+    },
     "packages/router": {
       "name": "@draht/router",
       "version": "2026.7.11",
@@ -707,6 +739,10 @@
     "@draht/orchestrator": ["@draht/orchestrator@workspace:packages/orchestrator"],
 
     "@draht/pods": ["@draht/pods@workspace:packages/pods"],
+
+    "@draht/rlm": ["@draht/rlm@workspace:packages/rlm"],
+
+    "@draht/rlm-agent": ["@draht/rlm-agent@workspace:packages/rlm-agent"],
 
     "@draht/router": ["@draht/router@workspace:packages/router"],
 
@@ -2641,6 +2677,10 @@
     "@draht/orchestrator/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.39.0", "", { "dependencies": { "@types/node": "^18.11.18", "@types/node-fetch": "^2.6.4", "abort-controller": "^3.0.0", "agentkeepalive": "^4.2.1", "form-data-encoder": "1.7.2", "formdata-node": "^4.3.2", "node-fetch": "^2.6.7" } }, "sha512-eMyDIPRZbt1CCLErRCi3exlAvNkBtRe+kW5vvJyef93PmNr/clstYgHhtvmkxN82nlKgzyGPCyGxrm0JQ1ZIdg=="],
 
     "@draht/orchestrator/typescript": ["typescript@6.0.0-dev.20260228", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-/0AUvkZnuaw1mXTRZf4n0Z1Rg8NdcJwZNMTz1tYLRkauarE6TvfprFKCVAC2dPnv1HC3A/0lI7z+9qdtn/TTfg=="],
+
+    "@draht/rlm/typescript": ["typescript@6.0.0-dev.20260228", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-/0AUvkZnuaw1mXTRZf4n0Z1Rg8NdcJwZNMTz1tYLRkauarE6TvfprFKCVAC2dPnv1HC3A/0lI7z+9qdtn/TTfg=="],
+
+    "@draht/rlm-agent/typescript": ["typescript@6.0.0-dev.20260228", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-/0AUvkZnuaw1mXTRZf4n0Z1Rg8NdcJwZNMTz1tYLRkauarE6TvfprFKCVAC2dPnv1HC3A/0lI7z+9qdtn/TTfg=="],
 
     "@draht/web-ui/highlight.js": ["highlight.js@11.11.1", "", {}, "sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w=="],
 

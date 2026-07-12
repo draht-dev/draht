@@ -11,6 +11,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -19,10 +20,50 @@ import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import { getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
 import { parseFrontmatter } from "../../utils/frontmatter.js";
-import type { ExtensionAPI } from "../extensions/types.js";
+import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult } from "../extensions/types.js";
+import {
+	AgentFSM,
+	type AgentFSMTransitionEvent,
+	loadRules,
+	type Message as MailboxMessage,
+	MailboxSystem,
+	PermissionGate,
+	TaskBoard,
+	WorktreeIsolator,
+} from "../multi-agent/index.ts";
 
 const MAX_PARALLEL = 8;
 const MAX_CONCURRENCY = 4;
+
+// ─── Multi-agent coordination primitives ───────────────────────────────────
+//
+// Shared, module-scoped instances backing every subagent run in this process:
+// each run (single task, one parallel item, one chain step) gets its own
+// AgentFSM + mailbox for the duration of the run, task board entries track
+// parallel-mode assignments, and worktree isolation is opt-in per call.
+
+/** Mailbox address subagent runs deliver their `TaskResult`/`Abort` message to by default. */
+export const SUBAGENT_RESULT_MAILBOX = "subagent-results";
+
+const mailboxSystem = new MailboxSystem();
+const taskBoard = new TaskBoard();
+const worktreeIsolator = new WorktreeIsolator();
+mailboxSystem.register(SUBAGENT_RESULT_MAILBOX);
+
+const fsmTransitionListeners = new Set<(event: AgentFSMTransitionEvent) => void>();
+
+/** Observe FSM transitions across every subagent run in this process. Returns an unsubscribe function. */
+export function onAgentFsmTransition(listener: (event: AgentFSMTransitionEvent) => void): () => void {
+	fsmTransitionListeners.add(listener);
+	return () => fsmTransitionListeners.delete(listener);
+}
+
+/** Test/orchestrator-facing handles onto the shared multi-agent primitives backing this module. */
+export const multiAgentState = {
+	mailbox: mailboxSystem,
+	board: taskBoard,
+	worktree: worktreeIsolator,
+};
 
 // Build the command to spawn a subagent process.
 // Compiled Bun binary: process.execPath IS the CLI binary, args go directly.
@@ -32,7 +73,7 @@ const DRAHT_ARGS_PREFIX: string[] = isBunBinary ? [] : [process.argv[1]];
 
 // ─── Agent discovery ────────────────────────────────────────────────────────
 
-interface AgentConfig {
+export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
@@ -108,7 +149,7 @@ function discoverAgents(cwd: string, scope: AgentScope): AgentConfig[] {
 
 // ─── Runner ─────────────────────────────────────────────────────────────────
 
-interface RunResult {
+export interface RunResult {
 	agent: string;
 	task: string;
 	exitCode: number;
@@ -263,6 +304,259 @@ async function runParallel<T>(
 	return results;
 }
 
+// ─── Multi-agent orchestration ─────────────────────────────────────────────
+//
+// Wraps `runAgent` (the raw spawn-a-subprocess primitive above) with the
+// multi-agent coordination primitives: an AgentFSM tracks each run's
+// IDLE→REQUEST→WORKING→RESPOND→IDLE lifecycle, a mailbox delivers the run's
+// TaskResult (or Abort on failure) to an interested recipient, and worktree
+// isolation is applied opt-in per run. Parallel mode additionally posts each
+// task to the shared TaskBoard so agents "self-assign" work; chain mode
+// relays `{previous}` between steps via a per-chain mailbox instead of a bare
+// local variable.
+
+/** Pluggable process runner, so orchestration can be exercised without spawning a real subprocess. */
+export type AgentRunner = (
+	cwd: string,
+	agent: AgentConfig,
+	task: string,
+	signal?: AbortSignal,
+	step?: number,
+	onProgress?: ProgressFn,
+) => Promise<RunResult>;
+
+interface LifecycleOptions {
+	signal?: AbortSignal;
+	step?: number;
+	onProgress?: ProgressFn;
+	/** Stable id for this run's FSM + mailbox. */
+	agentId: string;
+	/** Mailbox address the completion message is delivered to. Defaults to `SUBAGENT_RESULT_MAILBOX`. */
+	resultMailbox?: string;
+	/** Opt-in git worktree isolation for this run. */
+	worktree?: boolean;
+	/** Task id used for worktree keying. Defaults to `agentId`. */
+	taskId?: string;
+	/** Process runner to use. Defaults to the real spawn-based `runAgent`. */
+	runner?: AgentRunner;
+}
+
+/**
+ * Runs one agent task through the full multi-agent lifecycle: FSM
+ * transitions around the run, opt-in worktree isolation, and a mailbox
+ * message on completion. This is the single point every orchestration mode
+ * (single/parallel/chain) below funnels through.
+ */
+async function runAgentWithLifecycle(
+	cwd: string,
+	agent: AgentConfig,
+	task: string,
+	opts: LifecycleOptions,
+): Promise<RunResult> {
+	const { agentId, resultMailbox = SUBAGENT_RESULT_MAILBOX, worktree, taskId = agentId, runner = runAgent } = opts;
+
+	const fsm = new AgentFSM(agentId);
+	const forward = (event: AgentFSMTransitionEvent) => {
+		for (const listener of fsmTransitionListeners) listener(event);
+	};
+	fsm.onTransition(forward);
+	mailboxSystem.register(agentId);
+
+	fsm.transition("REQUEST");
+	fsm.transition("WORKING");
+
+	const effectiveCwd = worktree ? worktreeIsolator.create(cwd, taskId) : cwd;
+
+	const result = await runner(effectiveCwd, agent, task, opts.signal, opts.step, opts.onProgress);
+
+	if (worktree) {
+		if (result.exitCode === 0) worktreeIsolator.merge(taskId);
+		worktreeIsolator.cleanup(taskId);
+	}
+
+	fsm.transition("RESPOND");
+	mailboxSystem.send<RunResult>(agentId, resultMailbox, {
+		type: result.exitCode === 0 ? "TaskResult" : "Abort",
+		payload: result,
+	});
+	fsm.transition("IDLE");
+
+	if (agentId !== resultMailbox) {
+		mailboxSystem.deregister(agentId);
+	}
+
+	return result;
+}
+
+export interface RunSingleTaskOptions {
+	signal?: AbortSignal;
+	onProgress?: ProgressFn;
+	worktree?: boolean;
+	runner?: AgentRunner;
+	agentId?: string;
+	resultMailbox?: string;
+}
+
+/** Single-mode orchestration: one agent, one task, one FSM/mailbox lifecycle. */
+export async function runSingleTask(
+	cwd: string,
+	agent: AgentConfig,
+	task: string,
+	opts: RunSingleTaskOptions = {},
+): Promise<RunResult> {
+	const agentId = opts.agentId ?? `single-${randomUUID()}`;
+	return runAgentWithLifecycle(cwd, agent, task, {
+		signal: opts.signal,
+		onProgress: opts.onProgress,
+		worktree: opts.worktree,
+		runner: opts.runner,
+		resultMailbox: opts.resultMailbox,
+		agentId,
+		taskId: agentId,
+	});
+}
+
+export interface RunParallelTasksOptions {
+	signal?: AbortSignal;
+	makeOnProgress?: (agentName: string) => ProgressFn;
+	worktree?: boolean;
+	runner?: AgentRunner;
+	resultMailbox?: string;
+}
+
+/**
+ * Parallel-mode orchestration: every task is posted to the shared TaskBoard
+ * up front (with `{ agentType: agent.name }` requirements), then each worker
+ * self-assigns (claims) its task before running — atomically, via the board —
+ * so the board tracks every assignment made this call.
+ */
+export async function runParallelTasks(
+	cwd: string,
+	items: Array<{ agent: AgentConfig; task: string }>,
+	opts: RunParallelTasksOptions = {},
+): Promise<RunResult[]> {
+	const postedIds = items.map((item) =>
+		taskBoard.post({ requirements: { agentType: item.agent.name }, description: item.task }),
+	);
+
+	return runParallel(items, MAX_CONCURRENCY, async (item, i) => {
+		const workerId = `parallel-${i}-${randomUUID()}`;
+		const claimed = taskBoard.claim(workerId, { agentType: item.agent.name });
+		const taskId = claimed?.id ?? postedIds[i];
+
+		const result = await runAgentWithLifecycle(cwd, item.agent, item.task, {
+			signal: opts.signal,
+			onProgress: opts.makeOnProgress?.(item.agent.name),
+			worktree: opts.worktree,
+			runner: opts.runner,
+			resultMailbox: opts.resultMailbox,
+			agentId: workerId,
+			taskId,
+		});
+
+		if (result.exitCode === 0) taskBoard.complete(taskId, result.output);
+		else taskBoard.fail(taskId, result.stderr || result.output || "subagent task failed");
+
+		return result;
+	});
+}
+
+export interface RunChainTasksOptions {
+	signal?: AbortSignal;
+	makeOnProgress?: (agentName: string) => ProgressFn;
+	worktree?: boolean;
+	runner?: AgentRunner;
+	/** Called before each step starts, e.g. to report "step i/total" progress. */
+	onBeforeStep?: (index: number, total: number, agentName: string) => void;
+}
+
+/**
+ * Chain-mode orchestration: steps run sequentially, each with its own FSM.
+ * `{previous}` is resolved from a per-chain relay mailbox that each step's
+ * TaskResult is delivered to — not a bare local variable — so downstream
+ * steps consume the prior step's output the same way any other mailbox
+ * message-passing consumer would. Stops (without throwing) at the first
+ * failed step; the failed result is still included as the last entry.
+ */
+export async function runChainTasks(
+	cwd: string,
+	steps: Array<{ agent: AgentConfig; task: string }>,
+	opts: RunChainTasksOptions = {},
+): Promise<RunResult[]> {
+	const chainMailbox = `chain-relay-${randomUUID()}`;
+	mailboxSystem.register(chainMailbox);
+
+	const results: RunResult[] = [];
+	let previous = "";
+
+	try {
+		for (let i = 0; i < steps.length; i++) {
+			const step = steps[i];
+			opts.onBeforeStep?.(i, steps.length, step.agent.name);
+
+			const stepAgentId = `chain-${i}-${randomUUID()}`;
+			const task = step.task.replace(/\{previous\}/g, previous);
+
+			const result = await runAgentWithLifecycle(cwd, step.agent, task, {
+				signal: opts.signal,
+				step: i + 1,
+				onProgress: opts.makeOnProgress?.(step.agent.name),
+				worktree: opts.worktree,
+				runner: opts.runner,
+				resultMailbox: chainMailbox,
+				agentId: stepAgentId,
+				taskId: stepAgentId,
+			});
+
+			results.push(result);
+			if (result.exitCode !== 0) break;
+
+			const delivered = mailboxSystem.drain(chainMailbox);
+			const taskResult = [...delivered].reverse().find((m) => m.type === "TaskResult" && m.from === stepAgentId) as
+				| MailboxMessage<RunResult>
+				| undefined;
+			previous = taskResult?.payload?.output ?? result.output;
+		}
+	} finally {
+		mailboxSystem.deregister(chainMailbox);
+	}
+
+	return results;
+}
+
+/**
+ * Permission-gate hook point: builds a `tool_call` handler that consults a
+ * `PermissionGate` before a tool executes. `deny` blocks the call outright;
+ * `approve` requires interactive confirmation (blocking when no UI is
+ * available, fail-safe); `allow` lets the call proceed unmodified. Ready to
+ * `pi.on("tool_call", ...)` — this prepares the wiring point without forcing
+ * every tool call in the process through it by default.
+ */
+export function createPermissionGateToolCallHandler(
+	gate: PermissionGate,
+): (event: ToolCallEvent, ctx: ExtensionContext) => Promise<ToolCallEventResult | undefined> {
+	return async (event, ctx) => {
+		const decision = gate.evaluate(event.toolName, event.input as Record<string, unknown>);
+
+		if (decision.action === "deny") {
+			return { block: true, reason: decision.reason };
+		}
+
+		if (decision.action === "approve") {
+			if (!ctx.hasUI) {
+				return { block: true, reason: `${decision.reason} (no UI available to request approval)` };
+			}
+			const approved = await ctx.ui.confirm("Approve tool call?", `${event.toolName}: ${decision.reason}`);
+			if (!approved) {
+				return { block: true, reason: "User denied approval" };
+			}
+			return undefined;
+		}
+
+		return undefined;
+	};
+}
+
 // ─── Extension ──────────────────────────────────────────────────────────────
 
 const TaskItem = Type.Object({
@@ -282,6 +576,9 @@ const Params = Type.Object({
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Chained tasks" })),
 	agentScope: Type.Optional(
 		Type.Union([Type.Literal("user"), Type.Literal("project"), Type.Literal("both")], { default: "both" }),
+	),
+	worktree: Type.Optional(
+		Type.Boolean({ description: "Opt-in: run each task in an isolated git worktree, merged back on success" }),
 	),
 });
 
@@ -401,35 +698,43 @@ export default function (pi: ExtensionAPI) {
 					emitProgress(agentName, activity);
 				};
 
+			const worktree = Boolean(params.worktree);
+
 			// ── Chain mode ──
 			if (params.chain?.length) {
-				let previous = "";
-				const results: RunResult[] = [];
-				for (let i = 0; i < params.chain.length; i++) {
-					const step = params.chain[i];
+				const steps: Array<{ agent: AgentConfig; task: string }> = [];
+				for (const step of params.chain) {
 					const agent = find(step.agent);
 					if (!agent) return notFound(step.agent);
-					activityLines.length = 0;
-					emitProgress(step.agent, `step ${i + 1}/${params.chain.length}`);
-					const task = step.task.replace(/\{previous\}/g, previous);
-					const result = await runAgent(ctx.cwd, agent, task, signal, i + 1, makeProgressFn(step.agent));
-					results.push(result);
-					if (result.exitCode !== 0) {
-						return {
-							content: [
-								{
-									type: "text" as const,
-									text: `Chain failed at step ${i + 1} (${step.agent}):\n${result.output || result.stderr}`,
-								},
-							],
-							isError: true,
-							details: {},
-						};
-					}
-					previous = result.output;
+					steps.push({ agent, task: step.task });
+				}
+
+				const results = await runChainTasks(ctx.cwd, steps, {
+					signal,
+					worktree,
+					makeOnProgress: (agentName) => makeProgressFn(agentName),
+					onBeforeStep: (i, total, agentName) => {
+						activityLines.length = 0;
+						emitProgress(agentName, `step ${i + 1}/${total}`);
+					},
+				});
+
+				const last = results[results.length - 1];
+				if (last.exitCode !== 0) {
+					const failedIndex = results.length - 1;
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Chain failed at step ${failedIndex + 1} (${params.chain[failedIndex].agent}):\n${last.output || last.stderr}`,
+							},
+						],
+						isError: true,
+						details: {},
+					};
 				}
 				return {
-					content: [{ type: "text" as const, text: results[results.length - 1].output || "(no output)" }],
+					content: [{ type: "text" as const, text: last.output || "(no output)" }],
 					details: {},
 				};
 			}
@@ -443,15 +748,20 @@ export default function (pi: ExtensionAPI) {
 						details: {},
 					};
 				}
+				const items: Array<{ agent: AgentConfig; task: string }> = [];
 				for (const t of params.tasks) {
-					if (!find(t.agent)) return notFound(t.agent);
+					const agent = find(t.agent);
+					if (!agent) return notFound(t.agent);
+					items.push({ agent, task: t.task });
 				}
 
 				const agentNames = params.tasks.map((t: { agent: string }) => t.agent).join(", ");
 				emitProgress(agentNames);
 
-				const results = await runParallel(params.tasks, MAX_CONCURRENCY, async (t, _i) => {
-					return runAgent(ctx.cwd, find(t.agent)!, t.task, signal, undefined, makeProgressFn(t.agent));
+				const results = await runParallelTasks(ctx.cwd, items, {
+					signal,
+					worktree,
+					makeOnProgress: (agentName) => makeProgressFn(agentName),
 				});
 
 				const ok = results.filter((r) => r.exitCode === 0).length;
@@ -469,7 +779,11 @@ export default function (pi: ExtensionAPI) {
 				const agent = find(params.agent);
 				if (!agent) return notFound(params.agent);
 				emitProgress(params.agent);
-				const result = await runAgent(ctx.cwd, agent, params.task, signal, undefined, makeProgressFn(params.agent));
+				const result = await runSingleTask(ctx.cwd, agent, params.task, {
+					signal,
+					worktree,
+					onProgress: makeProgressFn(params.agent),
+				});
 				const isError = result.exitCode !== 0;
 				return {
 					content: [{ type: "text" as const, text: result.output || result.stderr || "(no output)" }],
@@ -485,6 +799,15 @@ export default function (pi: ExtensionAPI) {
 			};
 		},
 	});
+
+	// ── Permission gate hook point ────────────────────────────────────────────
+	// Prepares the wiring point for the multi-agent permission gate: every tool
+	// call in this process is offered to the gate before it runs. Rules are
+	// (re)loaded per call so project-local `.draht/permissions.yml` edits and
+	// per-session cwd changes take effect without an extension reload.
+	pi.on("tool_call", (event, ctx) =>
+		createPermissionGateToolCallHandler(new PermissionGate(loadRules(ctx.cwd)))(event, ctx),
+	);
 
 	// ── Agent selection for user prompts ─────────────────────────────────────
 

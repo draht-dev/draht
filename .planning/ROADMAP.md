@@ -109,22 +109,22 @@
 **Requirements:** R21-INT.1, R21-INT.2, R21-INT.3, R21-INT.4
 **Acceptance:** Full lifecycle test passes (create-project → commit-task → verify-phase); map-codebase test produces valid domain extraction; quality gate pass/fail tests cover both outcomes; gsd-commands extension loading test confirms registration.
 
-## Phase 22: Router Hardening — `pending`
+## Phase 22: Router Hardening — `complete`
 **Goal:** Model router is reliable under failure conditions with accurate cost tracking.
 **Requirements:** R22-RTR.1, R22-RTR.2, R22-RTR.3
 **Acceptance:** Fallback chain integration tests pass with simulated provider failures; cost tracking matches expected values within 1% tolerance; config validation rejects invalid schemas with clear errors.
 
-## Phase 23: Multi-Agent Layer — `pending`
+## Phase 23: Multi-Agent Layer — `complete`
 **Goal:** Full multi-agent orchestration layer: FSM protocol, mailbox messaging, task board, worktree isolation, permission gate.
 **Requirements:** R23-MA.1 (FSM protocol), R23-MA.2 (teammate mailboxes), R23-MA.3 (autonomous task board), R23-MA.4 (worktree isolator), R23-MA.5 (permission gate), R23-MA.6 (integration with subagent builtin)
 **Acceptance:** FSM state transitions validated; mailbox pub/sub delivers messages between agents; task board supports self-assign with atomic locking; worktree isolator creates/merges git worktrees with conflict detection; permission gate evaluates YAML rules with deny/allow/approve tiers; all primitives integrated into subagent.ts.
 
-## Phase 24: Invoice/Compliance Tests — `pending`
+## Phase 24: Invoice/Compliance Tests — `complete`
 **Goal:** Invoice and compliance modules are verified against realistic test data.
 **Requirements:** R24-API.1, R24-API.2, R24-API.3, R24-API.4
 **Acceptance:** Lexoffice mock integration tests cover CRUD operations; Toggl mock tests cover time entry import; PII scanner achieves target accuracy on German corpus; EU AI Act template validation passes against sample documentation.
 
-## Phase 25: CI & Artifact Cleanup — `pending`
+## Phase 25: CI & Artifact Cleanup — `complete`
 **Goal:** CI pipeline runs on PRs and all planning artifacts are accurate and consolidated.
 **Requirements:** R25-CI.1, R25-CI.2, R25-DOC.1, R25-DOC.2
 **Acceptance:** GitHub Actions PR check workflow runs lint + test on push; AI review dogfooding enabled on draht-mono PRs; Phase 14-18 summaries contain real data (not placeholders); hook files consolidated to single source of truth with no duplication.
@@ -137,29 +137,29 @@
 >
 > **Scope for v1:** inference-time scaffold only (no RLM-native training). Use existing frontier models via `@draht/router`. Python-subprocess REPL for model-prompt parity with the paper; Node `vm` considered as a v2 fallback.
 >
-> **Milestone 2 carry-forward:** Phases 22–25 remain pending backlog and are not a prerequisite for Milestone 3.
+> **Milestone 2 carry-forward:** Phases 22–25 were not a prerequisite for Milestone 3 and were completed in parallel with it (2026-07-11/12).
 
-## Phase 26: RLM Core Primitives — `pending`
+## Phase 26: RLM Core Primitives — `complete`
 **Goal:** `@draht/rlm` package exposes an `RlmSession` that runs the root loop: root-LLM-produces-code → REPL-executes → truncated-stdout → history-append → FINAL-check, with a working `llm_query` and `FINAL`/`FINAL_VAR` sentinels.
 **Requirements:** R26-RLM.1, R26-RLM.2, R26-RLM.3, R26-RLM.4, R26-RLM.5, R26-RLM.6, R26-RLM.7
 **Acceptance:** Unit tests prove: a seeded needle-in-haystack prompt completes via a mocked root LLM that writes Python; REPL persists variables across steps; `context` variable holds the full prompt; `llm_query` stub returns a canned response; `FINAL("x")` and `FINAL_VAR("ans")` both terminate the loop and return the correct value.
 
-## Phase 27: Sub-LLM Integration & System Prompts — `pending`
+## Phase 27: Sub-LLM Integration & System Prompts — `complete`
 **Goal:** RLM sessions route root and sub-LLM calls through `@draht/router` with model-tiered system prompts (frontier / coder-mid / small-context) and cost accounting per trajectory.
 **Requirements:** R27-SLM.1, R27-SLM.2, R27-SLM.3, R27-SLM.4, R27-SLM.5
 **Acceptance:** Router has new roles `rlm-root` and `rlm-sub` with configurable fallback chains; three system-prompt templates in `packages/rlm/prompts/` select automatically from resolved model context window; prompt template substitutes `context_type`, `context_total_length`, `chunk_lengths`, `max_sub_call_budget`; every RLM session appends per-call cost entries to `.draht/cost-log.jsonl` tagged with trajectory id.
 
-## Phase 28: REPL Sandbox & Safety — `pending`
+## Phase 28: REPL Sandbox & Safety — `complete`
 **Goal:** REPL execution is sandboxed with hard resource limits, stdout caps, and session-wide sub-LLM budgets so RLM cannot exfiltrate or runaway.
 **Requirements:** R28-SBX.1, R28-SBX.2, R28-SBX.3, R28-SBX.4, R28-SBX.5, R28-SBX.6
 **Acceptance:** Python REPL runs as a sandboxed child process with no network, no filesystem outside an explicit session workdir, and seccomp/ulimit-style CPU + memory ceilings; per-step timeout default 30s, max-iterations default 24, max-sub-calls and max-session-cost enforced; stdout truncated to configurable cap (default 2 KB) with explicit `[truncated N chars]` marker; security test suite proves `import os; os.system("...")`, `open("/etc/passwd")`, and `urllib.request.urlopen(...)` all fail; budget-exhausted stop returns a typed error the agent can handle.
 
-## Phase 29: Draht Agent & CLI Integration — `pending`
+## Phase 29: Draht Agent & CLI Integration — `complete`
 **Goal:** RLM is invokable from the coding-agent (`/rlm`), the `draht` CLI, and from inside other agent tools (`rlm_query` tool), with input loaders for files, directories, URLs, and the client knowledge base.
 **Requirements:** R29-INT.1, R29-INT.2, R29-INT.3, R29-INT.4, R29-INT.5
 **Acceptance:** `packages/rlm-agent/` extension registers `/rlm <input> <query>` in coding-agent; `draht rlm --input <path|glob|url> --query "..."` CLI returns an answer on a 500 KB+ fixture; `rlm_query` tool usable inside normal agent flow to defer long reads; `@draht/knowledge` loader pulls client AGENTS.md + decisions into RLM context; a GSD plan can declare `rlm: true` and `/execute-phase` routes oversize inputs through RLM automatically.
 
-## Phase 30: Evaluation, Observability & Docs — `pending`
+## Phase 30: Evaluation, Observability & Docs — `complete`
 **Goal:** RLM trajectories are measurable, replayable, and documented so developers can trust and tune them.
 **Requirements:** R30-EVAL.1, R30-EVAL.2, R30-EVAL.3, R30-EVAL.4, R30-EVAL.5
 **Acceptance:** Every RLM session emits a trajectory JSONL (step, code, truncated-stdout, sub-calls, cost, final); synthetic S-NIAH regression test passes on input 10× the root model's window; cost comparison harness records RLM vs base-LLM-with-truncation on the same task; `draht rlm replay <trajectory-id>` reconstructs the final answer from the log alone; README + AGENTS.md sections document when to use RLM, how to bound costs, and a worked end-to-end example.
@@ -222,3 +222,28 @@
 **Goal:** Multi-viewport, pins, history, and pose persistence land as the v1.5 spatial-organization dividend.
 **Requirements:** R40-M8.1
 **Acceptance:** H8 (two-viewport layout fix demoed; workspace pose restores after a headset restart) is logged as evidence debt — this phase is entirely hardware-gated per spec §2/§16 and has no automated ✅ criterion of its own.
+
+---
+
+## Milestone 5: Rewind & Checkpoints
+
+> **Feature:** first-class `/rewind` — jump a session back to an earlier point, restoring conversation state and working-tree state together, atomically, never destructively. Parity with Claude Code `/rewind` and Codex checkpoint/rewind.
+>
+> **Starting point:** conversation-side branching is already built into `packages/coding-agent` (session JSONL tree, `SessionManager.branch`/`branchWithSummary`/`createBranchedSession`/`forkFrom`, `AgentSession.navigateTree` with `session_before_tree`/`session_tree` hooks, `/tree`/`/fork`/`/clone` UI, labels). File/working-tree restore does **not** exist — only the unaudited example `examples/extensions/git-checkpoint.ts` (stash-based: misses untracked files, GC-able dangling commits, in-memory only, merges instead of restoring).
+>
+> **Design spec:** `.planning/specs/2026-07-12-rewind-checkpoint-design.md`. All work in `packages/coding-agent`; no new package.
+
+## Phase 41: Checkpoint Capture & Storage — `pending`
+**Goal:** A `CheckpointManager` in `packages/coding-agent/src/core/checkpoints/` captures a git snapshot of the working tree at every `turn_start`, keyed to the initiating session entry id, GC-proof and invisible to the user's git workflow, with sidecar metadata that survives fork/clone and a prune policy.
+**Requirements:** R41-CKP.1, R41-CKP.2, R41-CKP.3, R41-CKP.4, R41-CKP.5, R41-CKP.6, R41-CKP.7
+**Acceptance:** Integration tests on fixture repos prove: a turn in a dirty repo (tracked edits + untracked file) yields a commit reachable from `refs/draht/checkpoints/<session-id>/<entry-id>` containing both; `git stash list`, the user's index, `HEAD`, and reflog are byte-identical before/after capture; a read-only turn creates no new ref (tree-hash dedup); ignored files are absent from snapshots; sidecar records for preserved entry ids are copied on `/fork` and `/clone`; non-git cwd disables capture with a one-time notice and no errors; `draht checkpoint prune` removes refs per the retention policy; the manager is wired via `core/builtins/` and loads in a real from-scratch session (same empirical-loading proof class as Phases 23/29).
+
+## Phase 42: Rewind Command & Restore UX — `pending`
+**Goal:** `/rewind` restores conversation and files together: selector over checkpointed user messages, scope choice (conversation + files / conversation only / files only), a mandatory pre-rewind safety snapshot, diff-driven file restore, and leaf navigation via the existing `navigateTree` path — with `/tree` and `/fork` gaining the same file-restore offer.
+**Requirements:** R42-RWD.1, R42-RWD.2, R42-RWD.3, R42-RWD.4, R42-RWD.5, R42-RWD.6, R42-RWD.7, R42-RWD.8
+**Acceptance:** End-to-end tests prove: after the agent edits a tracked file, creates a new file, and deletes another, `/rewind` to the prior user message makes the working tree byte-identical to the checkpoint (created file gone, deleted file back); the pre-rewind state is itself recoverable by rewinding forward to the abandoned leaf (redo); a failure injected mid-restore rolls the tree back to the safety snapshot; conversation leaf only moves after file restore succeeds; "conversation only" and "files only" scopes each touch exactly their half; `/tree` navigation and `/fork` to a checkpointed entry offer file restore and honor decline; `pi.checkpoints` (list/get/restore) works from a test extension and `session_before_rewind` can cancel.
+
+## Phase 43: Rewind Safety Hardening, Fallbacks & Docs — `pending`
+**Goal:** Rewind is trustworthy at the edges — failure injection, filesystem semantics matrix, concurrency, non-interactive behavior, settings (enable/retention/size guard), performance budget, and documentation replacing the "use git for rollback" guidance.
+**Requirements:** R43-SFT.1, R43-SFT.2, R43-SFT.3, R43-SFT.4, R43-SFT.5, R43-SFT.6, R43-SFT.7
+**Acceptance:** Failure-injection suite passes (mid-restore kill leaves tree equal to target or safety snapshot, both refs anchored; double-failure path prints both refs); semantics matrix covered by tests (untracked files, files created after checkpoint, ignored files never touched, staged/unstaged split documented as worktree-wins, symlinks, file-mode changes); two concurrent sessions in one repo cannot corrupt each other's refs or indexes; RPC/non-interactive mode never restores files without an explicit option; settings toggle capture, retention, and large-file size guard (warn + skip above threshold); capture p95 < 200 ms and dedup fast-path < 50 ms on the medium fixture repo; docs updated (`session-format.md` sidecar section, `extensions.md` new events, `quickstart.md` rollback note replaced, `examples/extensions/git-checkpoint.ts` marked superseded with a pointer to the built-in).

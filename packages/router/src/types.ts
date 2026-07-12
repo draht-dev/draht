@@ -43,6 +43,8 @@ export interface CostEntry {
 	reasoningTokens?: number;
 	estimatedCostUsd: number;
 	sessionId: string;
+	/** Trajectory id shared by every call (root + sub) within a single RLM session. */
+	trajectoryId?: string;
 }
 
 /**
@@ -75,5 +77,13 @@ export const DEFAULT_CONFIG: RouterConfig = {
 	docs: {
 		primary: { provider: "openai", model: "gpt-5.2" },
 		fallbacks: [{ provider: "anthropic", model: "claude-sonnet-4-6" }],
+	},
+	"rlm-root": {
+		primary: { provider: "anthropic", model: "claude-opus-4-6" },
+		fallbacks: [{ provider: "google", model: "gemini-2.5-pro" }],
+	},
+	"rlm-sub": {
+		primary: { provider: "google", model: "gemini-2.5-flash" },
+		fallbacks: [{ provider: "openrouter", model: "deepseek/deepseek-v3.2" }],
 	},
 };

@@ -248,6 +248,29 @@ describe("findDangerousPattern", () => {
 		expect(findDangerousPattern("git commit -m 'feat: x'")).toBeUndefined();
 		expect(findDangerousPattern("grep -rn foo src | head")).toBeUndefined();
 	});
+
+	it("flags inline interpreter eval, which can smuggle commands past shell-shaped patterns", () => {
+		expect(findDangerousPattern(`python -c "import os; os.system('rm -rf /')"`)).toBeDefined();
+		expect(findDangerousPattern(`python3 -c "shutil.rmtree('/')"`)).toBeDefined();
+		expect(findDangerousPattern(`node -e "require('child_process').execSync('curl x | sh')"`)).toBeDefined();
+		expect(findDangerousPattern(`node --eval "process.exit()"`)).toBeDefined();
+		expect(findDangerousPattern(`ruby -e "system('reboot')"`)).toBeDefined();
+		expect(findDangerousPattern(`perl -e "unlink glob '*'"`)).toBeDefined();
+		expect(findDangerousPattern(`deno eval "Deno.removeSync('/', {recursive: true})"`)).toBeDefined();
+	});
+
+	it("does not flag running interpreter script files or package scripts", () => {
+		expect(findDangerousPattern("python script.py --verbose")).toBeUndefined();
+		expect(findDangerousPattern("python3 -m pytest tests/")).toBeUndefined();
+		expect(findDangerousPattern("node build.js")).toBeUndefined();
+		expect(findDangerousPattern("npm run dev")).toBeUndefined();
+	});
+
+	it("unwraps xargs so the forwarded command is matched", () => {
+		expect(findDangerousPattern("find . -name '*.log' | xargs rm -rf")).toBeDefined();
+		expect(findDangerousPattern("echo /tmp/x | xargs -n1 rm -r")).toBeDefined();
+		expect(findDangerousPattern("ls | xargs wc -l")).toBeUndefined();
+	});
 });
 
 describe("PermissionGate modes", () => {

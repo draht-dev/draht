@@ -214,6 +214,20 @@ export function loadRules(projectDir?: string, globalDir?: string): PermissionRu
  *    the pattern, so the rule simply doesn't match (falling through to the
  *    default decision) instead of silently allowing it.
  *
+ * KNOWN LIMITATION (not fixable with text matching alone): interpreter
+ * escape hatches. Once a command hands control to a language runtime, the
+ * payload is no longer shell and no shell-shaped pattern — `deny` rules
+ * included — can see into it: `python -c "os.system('rm -rf /')"` never
+ * surfaces `rm -rf /` as a match candidate, `python script.py` hides the
+ * danger in file contents the gate never reads, and
+ * `python -c "shutil.rmtree('/')"` involves no shell command at all. The
+ * built-in danger filter flags *inline eval* invocations (`python -c`,
+ * `node -e`, ...) so auto mode prompts on them, but script files and
+ * in-language equivalents are out of reach by construction. The gate is a
+ * guard against a confused agent, not a confinement boundary for a
+ * malicious one — a hard boundary needs OS-level sandboxing of the bash
+ * tool itself (Seatbelt/Landlock-style), not better string matching.
+ *
  * KNOWN LIMITATION (not fixable with text matching alone): `pattern` cannot
  * enforce real directory containment. A rule like
  * `{ pattern: "cat /safe/dir/*", action: "allow" }` will still match
@@ -239,6 +253,7 @@ const PASSTHROUGH_PREFIXES = new Set([
 	"ionice",
 	"chrt",
 	"setsid",
+	"xargs",
 ]);
 
 /** Shells whose `-c <command>` argument is itself a full command line to unwrap and re-check. */
@@ -535,6 +550,22 @@ export const DANGEROUS_COMMAND_PATTERNS: readonly string[] = [
 	// pipe-to-shell installers
 	"curl * | *",
 	"wget * | *",
+	// inline interpreter eval — the code payload is another language the gate
+	// cannot parse, so `python -c "os.system('rm -rf /')"` would otherwise
+	// sail through as "not shell-dangerous". Running a script *file*
+	// (`python script.py`) is deliberately NOT flagged: it is everyday dev
+	// work, and the gate cannot see file contents anyway (see the module doc
+	// on interpreter escape hatches).
+	"python* -c*",
+	"node -e*",
+	"node --eval*",
+	"node -p*",
+	"bun -e*",
+	"bun --eval*",
+	"deno eval*",
+	"ruby -e*",
+	"perl -e*",
+	"php -r*",
 ];
 
 /**

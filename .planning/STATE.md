@@ -49,7 +49,7 @@
 - 2026-03-02: GSD tracking drifted silently — phase status and plan files went out of sync until a manual audit; keep STATE/ROADMAP updates in the same commit as the work they describe.
 
 ## Blockers
-None.
+- 2026-07-12: Phase 39 (M7) workflow hit an account-level Claude session usage limit mid-run (resets 6:20am Europe/Berlin) — 3 of 4 dispatched agents failed outright. Only the isolated, fully-verified LOOP.md-surfacing piece landed (commit c034033c6); a partial, unverified `packages/geist-core/src/lanes/lane.ts` from the failed lanes-recognizer agent is sitting uncommitted in the worktree — evaluate it (or discard and restart clean) once the limit resets before resuming Phase 39's remaining scope: generic lanes, the data-driven subagent-recognizer with golden tests, and the stop-cancels-cleanly test.
 
 ## Audit Log
 - 2026-03-02: GSD tracking audit performed. All 18 phases verified as code-complete (quality gate passes). Fixed:

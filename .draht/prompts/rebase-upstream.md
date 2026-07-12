@@ -126,6 +126,15 @@ What it verifies:
 - Built-in agents in `packages/coding-agent/agents/`
 - `draht-tools` binary at `packages/coding-agent/bin/draht-tools.cjs`
 - GSD test suite in `packages/coding-agent/test/`
+- Multi-agent core builtin is actually **wired**, not just present on disk:
+  `core/multi-agent/index.ts` primitives (`AgentFSM`, `MailboxSystem`,
+  `PermissionGate`, `TaskBoard`, `WorktreeIsolator`) are imported by
+  `core/builtins/subagent.ts`, registered in `CORE_BUILTIN_EXTENSIONS`
+  (`core/builtins/index.ts`), and that array is spread into
+  `extensionFactories` in `agent-session-services.ts`. File existence and
+  passing unit tests do not prove this — the whole multi-agent layer was
+  dead code for a full phase because nothing asserted the import chain
+  actually reached the running CLI. See `check-draht-customizations.mjs`.
 
 If any checks fail, fix the issues before proceeding. Common problems:
 
@@ -139,6 +148,11 @@ If any checks fail, fix the issues before proceeding. Common problems:
 - Any GSD/subagent/prompt/agent/hook file missing → restore with
   `git checkout main -- <path>` (upstream cannot remove them; a missing file means
   a merge/cherry-pick accidentally dropped it)
+- `CORE_BUILTIN_EXTENSIONS` no longer registered, or `agent-session-services.ts`
+  no longer spreads it into `extensionFactories` → upstream changes to
+  extension/service wiring silently unwire the multi-agent layer back to dead
+  code. Restore the import and the `...CORE_BUILTIN_EXTENSIONS` spread — do not
+  just restore the files and assume presence means wired.
 
 ### 6. Verify (subagent: verifier)
 

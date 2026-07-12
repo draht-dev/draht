@@ -11,6 +11,7 @@ packages/*/dist-chrome/
 packages/*/dist-firefox/
 packages/*/.astro/
 packages/*/.sst/
+packages/*/.draht/
 *.cpuprofile
 
 # Environment

@@ -1,0 +1,89 @@
+;; macOS `sandbox-exec` (Seatbelt/SBPL) profile for the RLM Python REPL driver.
+;;
+;; This is the REAL security boundary described in
+;; .planning/phases/28-repl-sandbox-safety/28-01-PLAN.md, Architecture
+;; section 1 -- NOT the Python-level guardrails in repl_driver.py (those are
+;; defense-in-depth for a confused/prompt-injected LLM, not the thing that
+;; stops a deliberately adversarial payload; see the plan's "IMPORTANT"
+;; section for why in-process restriction of arbitrary Python cannot work).
+;;
+;; Deny-by-default: no network, no spawning other processes (which alone
+;; defeats os.system/subprocess -- they fork+exec a shell -- independent of
+;; any Python-level import block), and file access scoped to exactly the
+;; Python installation needed to boot the interpreter plus the caller's
+;; session workdir.
+;;
+;; Machine-specific paths (where python3 actually lives, and the session's
+;; workdir) are NOT hardcoded here -- they're discovered at spawn time by
+;; ../src/sandbox.ts and injected as `-D NAME=value` sandbox-exec params,
+;; read back here via `(param "NAME")`. This file only encodes the *policy*.
+;;
+;; Params (all supplied by sandbox.ts, see buildMacosSandboxArgs):
+;;   PYTHON_REAL_BIN   - realpath of the python3 interpreter binary to run.
+;;   PYTHON_REEXEC_BIN - a second binary some Python builds (notably macOS
+;;                       framework builds, e.g. Homebrew's --with-framework)
+;;                       internally posix_spawn() themselves into at startup
+;;                       (to run as a proper .app bundle, e.g. for Tk/Cocoa
+;;                       access) before ever reaching user code. When a
+;;                       build doesn't do this, sandbox.ts passes the same
+;;                       value as PYTHON_REAL_BIN here (a harmless no-op
+;;                       duplicate rule).
+;;   PYTHON_PREFIX     - realpath of sys.prefix -- the stdlib/interpreter
+;;                       installation root that must be readable to boot.
+;;   DRIVER_PATH       - absolute path to repl_driver.py.
+;;   WORKDIR           - the session's scratch directory; the only place
+;;                       Python-executed code may read *and* write freely.
+
+(version 1)
+
+(debug deny)
+
+(deny default)
+
+;; Baseline rules every process needs from dyld to even get past process
+;; startup (shared-cache mapping, cryptex graft points, etc.) -- see
+;; /System/Library/Sandbox/Profiles/dyld-support.sb. Without this, dyld
+;; itself aborts (SIGABRT) before main() ever runs, regardless of any file
+;; rule below -- confirmed empirically while scoping this profile.
+(import "dyld-support.sb")
+
+;; No network access whatsoever -- covers `urllib.request.urlopen(...)`,
+;; raw sockets, DNS resolution, everything.
+(deny network*)
+
+;; No spawning of other processes. This is what actually defeats
+;; `os.system(...)`/`subprocess.*` (they fork+exec a shell) -- independent
+;; of whatever `repl_driver.py`'s Python-level import allowlist does or
+;; doesn't block.
+(deny process-exec*)
+
+;; The one process-exec sandbox-exec itself needs to perform: launching the
+;; Python interpreter (and, on framework builds, its internal re-exec hop).
+(allow process-exec (literal (param "PYTHON_REAL_BIN")))
+(allow process-exec (literal (param "PYTHON_REEXEC_BIN")))
+
+;; Allow traversing symlinks / stat'ing paths in general -- matches the
+;; stock bsd.sb baseline and is required for ordinary interpreter startup
+;; (module path resolution, etc.); it does not grant reading file *content*.
+(allow file-read-metadata)
+
+;; Read access to the Python installation itself (stdlib .py/.so files,
+;; encodings data, etc.) and the handful of standard OS library locations
+;; every macOS process needs to link against libSystem/Foundation/etc.
+;; These OS paths are fixed (present identically on every Mac) -- only the
+;; Python installation's own location is machine-specific and therefore
+;; passed in as a param rather than guessed.
+(allow file-read* (subpath (param "PYTHON_PREFIX")))
+(allow file-read* (subpath "/usr/lib"))
+(allow file-read* (subpath "/usr/share"))
+(allow file-read* (subpath "/System/Library"))
+(allow file-read* (literal "/dev/null"))
+(allow file-read* (literal "/dev/urandom"))
+
+;; The driver script itself (it lives in this repo, not the Python install).
+(allow file-read* (literal (param "DRIVER_PATH")))
+
+;; The session workdir: the only place executed code may read *and* write
+;; freely. Nothing outside of this, the Python installation above, and the
+;; driver script is readable, and nothing outside this is writable at all.
+(allow file-read* file-write* (subpath (param "WORKDIR")))

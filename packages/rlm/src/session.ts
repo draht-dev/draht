@@ -9,9 +9,12 @@
  * section 2-3 of the plan).
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSandboxed } from "./sandbox.js";
 import type { RlmHistoryEntry, RlmResult, RlmSessionOptions } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -304,6 +307,7 @@ interface PendingWaiter {
 
 export class RlmSession {
 	private readonly child: ChildProcess;
+	private readonly workdir: string;
 	private readonly stdoutTruncateChars: number;
 	private readonly maxIterations: number;
 	private readonly history: RlmHistoryEntry[] = [];
@@ -320,7 +324,24 @@ export class RlmSession {
 		this.stdoutTruncateChars = opts.stdoutTruncateChars ?? DEFAULT_STDOUT_TRUNCATE_CHARS;
 		this.maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 
-		this.child = spawn("python3", [DRIVER_PATH], { stdio: ["pipe", "pipe", "pipe"] });
+		// The session's scratch workdir -- the only place the OS-sandboxed
+		// driver process may read *and* write freely (see sandbox.ts /
+		// ../sandbox/macos.sb). Created fresh per session and cleaned up in
+		// dispose(). Not caller-configurable (yet): Phase 28 scopes the
+		// sandbox to this session-owned directory, not an arbitrary
+		// caller-supplied path.
+		this.workdir = mkdtempSync(join(tmpdir(), "rlm-session-"));
+
+		// spawnSandboxed wraps python3/repl_driver.py in the platform's
+		// OS-level sandbox (sandbox-exec on macOS, unshare/bwrap on Linux) --
+		// see sandbox.ts's module docstring for why this, and not
+		// repl_driver.py's Python-level guardrails, is the real security
+		// boundary. It throws SandboxUnavailableError synchronously (never
+		// returns a fallback unwrapped command) if the sandbox can't be
+		// established, which is exactly what should happen here: this
+		// constructor must fail closed, not silently spawn the driver
+		// unsandboxed.
+		this.child = spawnSandboxed({ driverPath: DRIVER_PATH, workdir: this.workdir });
 
 		this.child.stdout?.setEncoding("utf8");
 		this.child.stdout?.on("data", (chunk: string) => this.onStdoutChunk(chunk));
@@ -476,10 +497,16 @@ export class RlmSession {
 		}
 	}
 
-	/** Kills the underlying python3 subprocess. Safe to call more than once. */
+	/** Kills the underlying python3 subprocess and removes its scratch workdir. Safe to call more than once. */
 	dispose(): void {
 		this.markTerminated(new Error("RlmSession: disposed"));
 		this.child.stdin?.end();
 		this.child.kill();
+		try {
+			rmSync(this.workdir, { recursive: true, force: true });
+		} catch {
+			// Best-effort cleanup only -- a leftover empty-ish tmp dir isn't
+			// worth failing dispose() over.
+		}
 	}
 }

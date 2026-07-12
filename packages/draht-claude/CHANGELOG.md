@@ -14,6 +14,12 @@
 - graph-clusters labels are unique and descriptive (dominant layer / ordinal suffixes instead of six identical `packages/ai` rows)
 - MAP.html search covers `modules[*].symbols` (non-exported declarations and barrel APIs), not just the exported-only symbolIndex
 
+## [2026.7.12] - 2026-07-12
+
+### Changed
+
+- migrate workspace checks to TypeScript 7
+
 ## [2026.7.11] - 2026-07-11
 
 ### Added

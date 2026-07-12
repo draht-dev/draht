@@ -31,6 +31,13 @@
  *  19. system-prompt.ts uses APP_NAME (not a hardcoded "pi" product name) —
  *      upstream syncs tend to overwrite buildSystemPrompt() wholesale and
  *      reintroduce "operating inside pi" / "Pi documentation" / "pi docs"
+ *  20. Multi-agent core builtin is actually wired (not just present on disk) —
+ *      core/multi-agent primitives are imported by the subagent builtin, the
+ *      subagent builtin is registered in CORE_BUILTIN_EXTENSIONS, and
+ *      agent-session-services.ts still spreads CORE_BUILTIN_EXTENSIONS into
+ *      extensionFactories. Files existing with passing unit tests is not
+ *      sufficient — this was dead code for a full phase because nothing
+ *      asserted the import chain reached the running CLI.
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -675,6 +682,66 @@ if (existsSync(systemPromptAbsPath)) {
 	);
 } else {
 	fail(`${systemPromptRelPath}: file not found (path changed?)`);
+}
+
+// ── 20. Multi-agent core builtin is actually wired ──────────────────
+//
+// discovery bugs hide here: a file existing with passing unit tests proves
+// nothing about whether the running CLI ever reaches it. Verify the whole
+// import chain — multi-agent primitives -> subagent builtin -> core builtin
+// registry -> agent-session-services.ts -- rather than just presence on disk.
+
+console.log("\nMulti-agent core builtin wiring (not dead code)");
+
+const multiAgentIndexRelPath = "packages/coding-agent/src/core/multi-agent/index.ts";
+const subagentRelPath = "packages/coding-agent/src/core/builtins/subagent.ts";
+const builtinsIndexRelPath = "packages/coding-agent/src/core/builtins/index.ts";
+const agentSessionServicesRelPath = "packages/coding-agent/src/core/agent-session-services.ts";
+
+check(existsSync(resolve(root, multiAgentIndexRelPath)), `${multiAgentIndexRelPath} exists`);
+check(existsSync(resolve(root, subagentRelPath)), `${subagentRelPath} exists`);
+check(existsSync(resolve(root, builtinsIndexRelPath)), `${builtinsIndexRelPath} exists`);
+check(existsSync(resolve(root, agentSessionServicesRelPath)), `${agentSessionServicesRelPath} exists`);
+
+if (existsSync(resolve(root, subagentRelPath))) {
+	const subagentContent = readFileSync(resolve(root, subagentRelPath), "utf-8");
+	const requiredMultiAgentImports = [
+		"AgentFSM",
+		"MailboxSystem",
+		"PermissionGate",
+		"TaskBoard",
+		"WorktreeIsolator",
+	];
+	for (const name of requiredMultiAgentImports) {
+		check(
+			new RegExp(`\\b${name}\\b`).test(subagentContent) &&
+				/from\s+["']\.\.\/multi-agent\/index\.ts["']/.test(subagentContent),
+			`${subagentRelPath}: imports ${name} from ../multi-agent/index.ts`,
+		);
+	}
+}
+
+if (existsSync(resolve(root, builtinsIndexRelPath))) {
+	const builtinsIndexContent = readFileSync(resolve(root, builtinsIndexRelPath), "utf-8");
+	check(
+		/CORE_BUILTIN_EXTENSIONS/.test(builtinsIndexContent) &&
+			/name:\s*["']multi-agent["']/.test(builtinsIndexContent),
+		`${builtinsIndexRelPath}: CORE_BUILTIN_EXTENSIONS registers the "multi-agent" builtin`,
+	);
+}
+
+if (existsSync(resolve(root, agentSessionServicesRelPath))) {
+	const servicesContent = readFileSync(resolve(root, agentSessionServicesRelPath), "utf-8");
+	check(
+		/import\s*\{[^}]*\bCORE_BUILTIN_EXTENSIONS\b[^}]*\}\s*from\s*["']\.\/builtins\/index\.(js|ts)["']/.test(
+			servicesContent,
+		),
+		`${agentSessionServicesRelPath}: imports CORE_BUILTIN_EXTENSIONS from ./builtins/index`,
+	);
+	check(
+		/extensionFactories:\s*\[\s*\.\.\.CORE_BUILTIN_EXTENSIONS/.test(servicesContent),
+		`${agentSessionServicesRelPath}: extensionFactories spreads ...CORE_BUILTIN_EXTENSIONS (actually reachable, not just imported)`,
+	);
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────

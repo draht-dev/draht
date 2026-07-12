@@ -1,6 +1,6 @@
 {
 	"name": "@draht/compliance",
-	"version": "2026.7.11",
+	"version": "2026.7.12",
 	"private": true,
 	"description": "GDPR and EU AI Act compliance checker with German legal templates",
 	"type": "module",
@@ -17,7 +17,7 @@
 		}
 	},
 	"scripts": {
-		"build": "tsgo --noEmit",
+		"build": "tsc --noEmit",
 		"test": "bun test"
 	},
 	"dependencies": {},

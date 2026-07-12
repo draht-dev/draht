@@ -105,7 +105,7 @@ fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
 if (status === "pass") {
 	// Type check
 	try {
-		const tsCmd = toolchain.pm === "bun" ? "bun run tsgo --noEmit 2>&1" : "npx tsc --noEmit 2>&1";
+		const tsCmd = toolchain.pm === "bun" ? "bun run tsc --noEmit 2>&1" : "npx tsc --noEmit 2>&1";
 		execSync(tsCmd, { timeout: 30000, encoding: "utf-8", cwd });
 		// Run tests
 		try {

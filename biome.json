@@ -35,6 +35,7 @@
 			"!**/models.generated.ts",
 			"!packages/web-ui/src/app.css",
 			"!packages/mom/data/**/*",
+			"!.claude",
 			"!!**/node_modules"
 		]
 	}

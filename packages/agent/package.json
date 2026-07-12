@@ -1,6 +1,6 @@
 {
 	"name": "@draht/agent-core",
-	"version": "2026.7.11",
+	"version": "2026.7.12",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -11,8 +11,8 @@
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
-		"build": "tsgo -p tsconfig.build.json",
-		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"build": "tsc -p tsconfig.build.json",
+		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",
 		"prepublishOnly": "bun run clean && bun run build"
 	},
@@ -45,7 +45,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^24.3.0",
-		"typescript": "^6.0.0-beta",
+		"typescript": "7.0.2",
 		"vitest": "^3.2.4"
 	}
 }

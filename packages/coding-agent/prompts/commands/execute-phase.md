@@ -24,6 +24,15 @@ STOP and report to the user instead of proceeding if **any** of these is true:
 - The working tree is dirty with changes unrelated to this phase
 - A subagent returns `STATUS: BLOCKED` — never retry blindly; report and ask the user
 
+## RLM Routing for Oversize Inputs (`rlm: true`)
+
+A plan's YAML frontmatter may declare `rlm: true` (alongside `phase`, `plan`, `depends_on`, `must_haves`). This flags that one or more of the plan's tasks reference input files that can be large enough to be worth deferring instead of reading directly.
+
+- **Threshold: 200KB.** When a plan has `rlm: true` and a task's `<action>`/`<test>` references an input file at or above ~200KB on disk, the executing agent (implementer subagent) should call the `rlm_query` tool — `{ input: "<path|glob|http(s) URL|knowledge:<client-slug>>", query: "..." }` — instead of reading the file directly with the read tool. 200KB is roughly 50k tokens of plain text, a large enough bite out of the subagent's context budget to justify offloading it to a Recursive Language Model sub-session rather than reading it inline; files below the threshold should still be read directly as normal — don't reach for `rlm_query` on ordinary source files.
+- This only applies to reading large *input* files referenced by the plan (fixtures, datasets, logs, generated artifacts, client knowledge bases). It never applies to the plan file itself, to code files being edited, or to test output — those are always read directly.
+- If `rlm_query` is unavailable in the session (the `@draht/rlm-agent` extension isn't installed for this project), fall back to reading the file directly and note this in the task's `STATUS` report rather than failing the task.
+- When dispatching Stage 1 (Implementer) below for a plan with `rlm: true`, carry this instruction into the subagent's prompt so it actually reaches the agent doing the reading — the orchestrator itself does not read task input files.
+
 ## Atomic Reasoning
 
 Before executing, decompose this phase execution into atomic reasoning units:
@@ -86,6 +95,7 @@ For each <task> in the plan, follow this TDD cycle:
 
 Domain rules: Use ubiquitous language from .planning/DOMAIN.md (read it). Do not import across bounded context boundaries.
 Checkpoint handling: type="auto" → execute silently. type="checkpoint:human-verify" → stop and report back what was built. type="checkpoint:decision" → stop and report the options.
+RLM routing: if this plan's frontmatter has `rlm: true`, use the `rlm_query` tool instead of reading directly any task input file at or above ~200KB (see "RLM Routing for Oversize Inputs" above for the full rule and fallback behavior).
 
 Evidence rule: quote the decisive output of every test run and <verify> step in your report (pass/fail counts, exit codes, error text). Unquoted claims will be re-run by the orchestrator. If a plan instruction contradicts what you find in the code, stop and report NEEDS_CONTEXT — do not silently obey either side.
 

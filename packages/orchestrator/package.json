@@ -1,6 +1,6 @@
 {
 	"name": "@draht/orchestrator",
-	"version": "2026.7.11",
+	"version": "2026.7.12",
 	"private": true,
 	"description": "Multi-agent orchestration — GSD Controller pattern for task decomposition and coordination",
 	"type": "module",
@@ -17,7 +17,7 @@
 		}
 	},
 	"scripts": {
-		"build": "tsgo --noEmit",
+		"build": "tsc --noEmit",
 		"test": "vitest run",
 		"clean": "rm -rf dist"
 	},
@@ -28,6 +28,6 @@
 		"vitest": "^3.2.4",
 		"@draht/coding-agent": "workspace:*",
 		"@types/node": "^22.10.5",
-		"typescript": "^6.0.0-beta"
+		"typescript": "7.0.2"
 	}
 }

@@ -1,0 +1,6 @@
+[
+	{ "toolCallId": "tc-1", "title": "Read src/app.tsx", "kind": "read", "status": "in_progress", "isUpdate": false },
+	{ "toolCallId": "tc-1", "title": "Read src/app.tsx", "kind": "read", "status": "completed", "isUpdate": true },
+	{ "toolCallId": "tc-2", "title": "Run pnpm test", "kind": "execute", "status": "in_progress", "isUpdate": false },
+	{ "toolCallId": "tc-2", "title": "Run pnpm test", "kind": "execute", "status": "completed", "isUpdate": true }
+]

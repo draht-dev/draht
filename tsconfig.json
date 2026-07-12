@@ -24,7 +24,17 @@
 			"@draht/web-ui": ["./packages/web-ui/src/index.ts"],
 			"@draht/web-ui/*": ["./packages/web-ui/src/*"],
 			"@draht/agent-old": ["./packages/agent-old/src/index.ts"],
-			"@draht/agent-old/*": ["./packages/agent-old/src/*"]
+			"@draht/agent-old/*": ["./packages/agent-old/src/*"],
+			"@draht/geist": ["./packages/geist/src/index.ts"],
+			"@draht/geist-core": ["./packages/geist-core/src/index.ts"],
+			"@draht/geist-core/*": ["./packages/geist-core/src/*"],
+			"@draht/geist-acp": ["./packages/geist-acp/src/index.ts"],
+			"@draht/geist-acp/*": ["./packages/geist-acp/src/*"],
+			"@draht/geist-protocol": ["./packages/geist-protocol/src/index.ts"],
+			"@draht/geist-protocol/*": ["./packages/geist-protocol/src/*"],
+			"@draht/geist-picker": ["./packages/geist-picker/src/index.ts"],
+			"@draht/geist-console": ["./packages/geist-console/src/index.ts"],
+			"@draht/draht-acp": ["./packages/draht-acp/src/index.ts"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
@@ -35,6 +45,13 @@
 		"packages/router/test/**/*",
 		"packages/invoice/test/**/*",
 		"packages/compliance/test/**/*",
+		"packages/geist-protocol/test/**/*",
+		"packages/geist-core/test/**/*",
+		"packages/geist-acp/test/**/*",
+		"packages/draht-acp/test/**/*",
+		"packages/geist-picker/test/**/*",
+		"packages/geist/**/*",
+		"packages/geist-console/**/*",
 		"packages/gateway/**/*",
 		"packages/landing/**/*"
 	]

@@ -1,0 +1,6 @@
+[
+	{ "kind": "subagent", "toolCallId": "sa-1", "isUpdate": false, "title": "subagent parallel", "toolKind": "other", "status": "in_progress", "recognizedBy": "draht", "subagentType": "parallel" },
+	{ "kind": "subagent", "toolCallId": "sa-1", "isUpdate": true, "title": "subagent parallel", "toolKind": "other", "status": "completed", "recognizedBy": "draht", "subagentType": "parallel" },
+	{ "kind": "subagent", "toolCallId": "sa-2", "isUpdate": false, "title": "subagent chain", "toolKind": "other", "status": "in_progress", "recognizedBy": "draht", "subagentType": "chain" },
+	{ "kind": "subagent", "toolCallId": "sa-3", "isUpdate": false, "title": "Subagent", "toolKind": "other", "status": "in_progress", "recognizedBy": "draht" }
+]

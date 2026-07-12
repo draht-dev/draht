@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getProviders } from "@draht/ai/compat";
 import { loadConfig, saveConfig, validateConfig } from "../src/config.js";
-import { DEFAULT_CONFIG, type RouterConfig } from "../src/types.js";
+import { logCost, readCostLog } from "../src/cost.js";
+import { type CostEntry, DEFAULT_CONFIG, type RouterConfig } from "../src/types.js";
 
 // Get a valid provider for testing
 const validProviders = getProviders();
@@ -331,6 +335,162 @@ describe("config validation", () => {
 			};
 
 			expect(() => validateConfig(config)).not.toThrow();
+		});
+	});
+
+	describe("rlm-root/rlm-sub roles", () => {
+		test("DEFAULT_CONFIG includes rlm-root passing config validation", () => {
+			expect(DEFAULT_CONFIG["rlm-root"]).toBeDefined();
+			expect(() => validateConfig(DEFAULT_CONFIG)).not.toThrow();
+		});
+
+		test("DEFAULT_CONFIG includes rlm-sub passing config validation", () => {
+			expect(DEFAULT_CONFIG["rlm-sub"]).toBeDefined();
+			expect(() => validateConfig(DEFAULT_CONFIG)).not.toThrow();
+		});
+
+		test("rlm-root has a registry-valid primary and fallback chain", () => {
+			const role = DEFAULT_CONFIG["rlm-root"];
+			expect(role.primary.provider).toBeTruthy();
+			expect(role.primary.model).toBeTruthy();
+			expect(Array.isArray(role.fallbacks)).toBe(true);
+			expect(role.fallbacks.length).toBeGreaterThan(0);
+		});
+
+		test("rlm-sub has a registry-valid primary and fallback chain", () => {
+			const role = DEFAULT_CONFIG["rlm-sub"];
+			expect(role.primary.provider).toBeTruthy();
+			expect(role.primary.model).toBeTruthy();
+			expect(Array.isArray(role.fallbacks)).toBe(true);
+			expect(role.fallbacks.length).toBeGreaterThan(0);
+		});
+
+		test("rlm-root and rlm-sub fallback chains are independent array references", () => {
+			const root = DEFAULT_CONFIG["rlm-root"];
+			const sub = DEFAULT_CONFIG["rlm-sub"];
+
+			expect(root.fallbacks).not.toBe(sub.fallbacks);
+
+			const rootFallbacksBefore = [...root.fallbacks];
+			const subFallbacksBefore = [...sub.fallbacks];
+
+			// Mutate rlm-root's fallback chain and verify rlm-sub is unaffected.
+			root.fallbacks.push({ provider: "openai", model: "gpt-5.2" });
+			expect(sub.fallbacks).toEqual(subFallbacksBefore);
+			expect(root.fallbacks).not.toEqual(rootFallbacksBefore);
+
+			// Restore so other tests in this file aren't affected by shared DEFAULT_CONFIG mutation.
+			root.fallbacks.pop();
+		});
+
+		test("removing a config entirely still leaves DEFAULT_CONFIG's rlm roles independently valid", () => {
+			const config: RouterConfig = {
+				...DEFAULT_CONFIG,
+			};
+			expect(() => validateConfig(config)).not.toThrow();
+			expect(config["rlm-root"].fallbacks).not.toBe(config["rlm-sub"].fallbacks);
+		});
+	});
+
+	describe("CostEntry trajectoryId", () => {
+		let testDir: string;
+		let logPath: string;
+
+		function makeTestDir() {
+			testDir = mkdtempSync(join(tmpdir(), "router-cost-test-"));
+			logPath = join(testDir, "cost-log.jsonl");
+		}
+
+		function cleanupTestDir() {
+			rmSync(testDir, { recursive: true, force: true });
+		}
+
+		test("CostEntry with trajectoryId round-trips through logCost/readCostLog", () => {
+			makeTestDir();
+			try {
+				const entry: CostEntry = {
+					timestamp: new Date().toISOString(),
+					role: "rlm-root",
+					provider: "anthropic",
+					model: "claude-opus-4-6",
+					inputTokens: 100,
+					outputTokens: 50,
+					estimatedCostUsd: 0.01,
+					sessionId: "session-rlm-1",
+					trajectoryId: "trajectory-abc-123",
+				};
+
+				logCost(entry, logPath);
+				const entries = readCostLog(logPath);
+
+				expect(entries).toHaveLength(1);
+				expect(entries[0].trajectoryId).toBe("trajectory-abc-123");
+				expect(entries[0]).toEqual(entry);
+			} finally {
+				cleanupTestDir();
+			}
+		});
+
+		test("CostEntry without trajectoryId (existing non-RLM callers) still works unchanged", () => {
+			makeTestDir();
+			try {
+				const entry: CostEntry = {
+					timestamp: new Date().toISOString(),
+					role: "architect",
+					provider: "anthropic",
+					model: "claude-opus-4-6",
+					inputTokens: 200,
+					outputTokens: 75,
+					estimatedCostUsd: 0.02,
+					sessionId: "session-non-rlm-1",
+				};
+
+				logCost(entry, logPath);
+				const entries = readCostLog(logPath);
+
+				expect(entries).toHaveLength(1);
+				expect(entries[0].trajectoryId).toBeUndefined();
+				expect(entries[0]).toEqual(entry);
+			} finally {
+				cleanupTestDir();
+			}
+		});
+
+		test("mixed log with and without trajectoryId both parse correctly", () => {
+			makeTestDir();
+			try {
+				const withTrajectory: CostEntry = {
+					timestamp: new Date().toISOString(),
+					role: "rlm-sub",
+					provider: "google",
+					model: "gemini-2.5-flash",
+					inputTokens: 10,
+					outputTokens: 5,
+					estimatedCostUsd: 0.001,
+					sessionId: "session-rlm-2",
+					trajectoryId: "trajectory-xyz",
+				};
+				const withoutTrajectory: CostEntry = {
+					timestamp: new Date().toISOString(),
+					role: "quick",
+					provider: "google",
+					model: "gemini-2.5-flash",
+					inputTokens: 10,
+					outputTokens: 5,
+					estimatedCostUsd: 0.001,
+					sessionId: "session-non-rlm-2",
+				};
+
+				logCost(withTrajectory, logPath);
+				logCost(withoutTrajectory, logPath);
+
+				const entries = readCostLog(logPath);
+				expect(entries).toHaveLength(2);
+				expect(entries[0].trajectoryId).toBe("trajectory-xyz");
+				expect(entries[1].trajectoryId).toBeUndefined();
+			} finally {
+				cleanupTestDir();
+			}
 		});
 	});
 

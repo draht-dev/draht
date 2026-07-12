@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2026.7.12] - 2026-07-12
+
+### Changed
+
+- migrate workspace checks to TypeScript 7
+
 ## [2026.7.11] - 2026-07-11
 
 ### Added

@@ -112,15 +112,23 @@
 - R22-RTR.2: Cost tracking accuracy test (within 1% tolerance)
 - R22-RTR.3: Config validation rejects invalid schemas with clear errors
 
-### R23-API: Invoice/Compliance Tests
-- R23-API.1: Lexoffice mock integration test (CRUD operations)
-- R23-API.2: Toggl mock integration test (time entry import)
-- R23-API.3: PII scanner accuracy test with German corpus
-- R23-API.4: EU AI Act template validation against sample documentation
+### R23-MA: Multi-Agent Layer
+- R23-MA.1: FSM protocol for agent lifecycle coordination (IDLE, REQUEST, WORKING, WAIT, RESPOND)
+- R23-MA.2: Teammate mailbox system — pub/sub inter-agent messaging, typed messages (TaskRequest, TaskResult, DataExchange, Abort)
+- R23-MA.3: Autonomous task board with self-assign and atomic locking
+- R23-MA.4: Worktree isolator — git worktree per task, merge-back with conflict detection
+- R23-MA.5: Permission gate — YAML-rule-based deny/allow/approve tiers for tool execution
+- R23-MA.6: Integration — wire FSM/mailbox/task-board/worktree/permission-gate into subagent.ts builtin
 
-### R24-CI: CI Pipeline
-- R24-CI.1: GitHub Actions PR check workflow (lint + test on push)
-- R24-CI.2: AI review dogfooding on draht-mono PRs
+### R24-API: Invoice/Compliance Tests
+- R24-API.1: Lexoffice mock integration test (CRUD operations)
+- R24-API.2: Toggl mock integration test (time entry import)
+- R24-API.3: PII scanner accuracy test with German corpus
+- R24-API.4: EU AI Act template validation against sample documentation
+
+### R25-CI: CI Pipeline
+- R25-CI.1: GitHub Actions PR check workflow (lint + test on push)
+- R25-CI.2: AI review dogfooding on draht-mono PRs
 
 ### R25-DOC: Artifact Cleanup
 - R25-DOC.1: Backfill empty Phase 14-18 summaries with real data
@@ -170,3 +178,132 @@
 - R30-EVAL.3: Cost-comparison harness: RLM vs `router` baseline (truncate + single call) on the same task, written to eval report
 - R30-EVAL.4: `draht rlm replay <session-id>` reconstructs final answer from the trajectory log without re-invoking any LLM
 - R30-EVAL.5: README + AGENTS.md sections — when to prefer RLM, cost envelope, worked example end-to-end
+
+---
+
+## Milestone 4 — geist
+
+> Source: `.planning/specs/geist-spec.md` (rev 7, locked). Harness-agnostic spatial ADE for Quest 3, built as an ACP client — see spec for full rationale, rejected alternatives, and locked decisions (§5, §17).
+> Every phase from R32-M0 on distinguishes automated ✅ e2e requirements (CI-checkable against a mock ACP agent) from H-gate requirements (human/hardware evidence on Oskar's Quest 3 — never auto-certifiable by a GSD loop).
+
+### R31-FOUND: Geist Foundation & Repo Scaffold
+- R31-FOUND.1: Repo layout — `packages/geist/`, `geist-core/`, `geist-acp/`, `draht-acp/`, `geist-protocol/`, `geist-picker/`, `geist-console/` created as npm workspaces (spec §8)
+- R31-FOUND.2: `quest/` Kotlin project skeleton created and explicitly excluded from npm workspaces (spec §8)
+- R31-FOUND.3: `geist.yaml` config contract (spec §9.1: `harness.default`, `harness.agents` launch specs) implemented as a zod schema in `geist-protocol`, with a passing `geist.yaml.example`
+- R31-FOUND.4: Import boundary enforced — `scripts/check-geist-boundary.mjs` fails root `check` if `geist-core`/`geist-acp`/`geist-console`/`quest` import `@draht/*` (only `draht-acp` may); this is the code-level enforcement of spec §17.1
+- R31-FOUND.5: `scripts/check-geist-mirrors.mjs` scaffolded per spec §6's tooling row, wired into root `check`
+- R31-FOUND.6: `docs/geist/spec.md` and `.planning/geist/README.md` created per the locked repo layout (spec §8)
+
+### R32-M0: Spike — Panel + Ray
+- R32-M0.1: Kotlin Spatial SDK panel scaffold in `quest/` renders a passthrough panel (structural; build/run verification deferred — no Quest hardware/Meta SDK Maven access in this sandbox)
+- R32-M0.2: Ray-cast addressee resolution stubbed (ray→plane fallback) per spec §7 quest/ responsibilities
+- R32-M0.3: Panel-alpha probe implemented — both room-glass and opaque-smoke-fallback code paths present (spec §13, §17.6)
+- R32-M0.4: H0 (hover-coords evidence) recorded as evidence debt pending physical Quest 3 access
+
+### R33-M1: Pairing + Voice Wire
+- R33-M1.1: WS pairing handshake (LAN, token) between bridge and headset, survives reconnect (spec §6 "Sessions & worktrees" row is unrelated — this is the M1 pairing wire specifically)
+- R33-M1.2: `geist-console` ships from `tokens.css` (geist-glass) at first pixel — no unstyled/restyle-later state
+- R33-M1.3: whisper.cpp turbo/small wired for DE/EN transcription
+- R33-M1.4: H1 (9/10 live transcripts; pairing survives restart) recorded as evidence debt
+
+### R34-M2: Context Pack
+- R34-M2.1: `ElementContext` composition (spec §9.3, unchanged from r2) implemented in `geist-core`
+- R34-M2.2: Image content block attached only when capability-advertised; crop path-reference (`<wt>/.geist/task-<id>/target.webp`) always written and referenced
+- R34-M2.3: H2 (chip + crop demo) recorded as evidence debt
+
+### R35-M3: ACP Loop Closes
+- R35-M3.1: `geist-acp` `HarnessSession` port + ACP client (JSON-RPC 2.0, stdio subprocess per session, capability handshake)
+- R35-M3.2: In-repo deterministic mock ACP agent for e2e tests
+- R35-M3.3: `draht-acp` shim implementing ACP over draht, with a keyless faux provider for CI
+- R35-M3.4: `claude-agent-acp` launch spec pinned from the ACP registry; `smoke:harness -- claude` test (network, non-CI)
+- R35-M3.5: Permission requests — `permission_request`/`permission_answer` WS messages, chip rendering, voice allow/deny mapped to the closest offered option
+- R35-M3.6: Sha ledger — `baseSha`/`lastApprovedSha`, approve/undo = `reset --hard <ref>`
+- R35-M3.7: H3 (fr3n button change end-to-end on both harnesses; one permission answered by voice) recorded as evidence debt
+
+### R36-M4: Commands, Addressing, Project & Harness Grammar
+- R36-M4.1: ACP-advertised commands/modes surfaced as palette + voice options; verbatim `/…` pass-through always available
+- R36-M4.2: Harness qualifier grammar (closed vocab = configured agents) per spec §9.5 resolution order
+- R36-M4.3: Project qualifier resolution (registry = yaml ∪ workspaceRoots ∪ recents)
+- R36-M4.4: H4 (voice-spawn two harnesses in two projects; disambiguation chips by re-say) recorded as evidence debt
+
+### R37-M5: Fleet Across Projects & Harnesses
+- R37-M5.1: Mixed-harness fleet cards with capability badges
+- R37-M5.2: ≤4 sessions across projects and harnesses, scoped approve/undo/stop
+- R37-M5.3: H5 (two harnesses simultaneous, point-routed, 72 Hz with 3 panels + tier-1 glass) recorded as evidence debt
+
+### R38-M6: Variants, Optionally Mixed
+- R38-M6.1: `variants_new` WS message supports optional `harnesses: [name]` round-robin across configured agents
+- R38-M6.2: H6 (3-way shoot-out, winner by pointing) recorded as evidence debt
+
+### R39-M7: Run Rendering
+- R39-M7.1: Generic ACP tool-call/plan-update → live lanes for every harness
+- R39-M7.2: `subagent-recognizer.ts` — data-driven, golden-tested typed-lane upgrade for draht/Claude-Task-style calls
+- R39-M7.3: H7 (real draht `/orchestrate` lanes; untyped Claude lanes) recorded as evidence debt
+
+### R40-M8: Spatial Dividends (v1.5)
+- R40-M8.1: H8 (two-viewport fix; workspace pose restores after restart) recorded as evidence debt — entirely hardware-gated, no automated ✅ criterion
+
+---
+
+## Milestone 5 — Rewind & Checkpoints
+
+> Design spec: `.planning/specs/2026-07-12-rewind-checkpoint-design.md`.
+> Scope: first-class in `packages/coding-agent` (core + interactive mode + `core/builtins/`); no new package. Supersedes the example extension `examples/extensions/git-checkpoint.ts`.
+
+### R41-CKP: Checkpoint Capture & Storage
+- R41-CKP.1: `CheckpointManager` in `packages/coding-agent/src/core/checkpoints/` — capture, lookup, prune; snapshots built via temporary index (`GIT_INDEX_FILE`) + `write-tree` + `commit-tree`; never touches the user's index, `HEAD`, stash, or reflog; no `git stash` anywhere
+- R41-CKP.2: Snapshots include untracked-but-not-ignored files; `.gitignore`d files are never captured
+- R41-CKP.3: Snapshot commits anchored at `refs/draht/checkpoints/<session-id>/<entry-id>` (GC-proof, namespaced per session)
+- R41-CKP.4: Capture at `turn_start`, keyed to the session leaf entry id at that moment; skipped when the tree hash equals the previous checkpoint's (dedup)
+- R41-CKP.5: Metadata sidecar `<session-file>.checkpoints.jsonl` (entryId, ref, treeHash, timestamp, dirty-file count); records for preserved entry ids copied on `/fork` and `/clone`
+- R41-CKP.6: Non-git cwd: capture disabled with a one-time notice, no errors; session continues normally
+- R41-CKP.7: Wired as an always-loaded core builtin (`core/builtins/`), with real-session loading proof; `draht checkpoint prune` CLI + age/count retention policy via settings (default 30 days)
+
+### R42-RWD: Rewind Command & Restore
+- R42-RWD.1: `/rewind` command + `app.session.rewind` keybinding action; selector reuses the tree-selector filtered to checkpointed user messages, annotated with checkpoint timestamp and dirty-file count
+- R42-RWD.2: Restore scope menu: conversation + files (default) / conversation only / files only
+- R42-RWD.3: Pre-rewind safety snapshot always captured and anchored before any file mutation; any restore failure rolls the tree back to it
+- R42-RWD.4: File restore is diff-driven between safety snapshot and target snapshot: only differing paths are checked out, paths absent in the target are deleted, ignored files are never touched (no `stash apply`, no blanket `checkout -- .`)
+- R42-RWD.5: Atomic ordering: safety snapshot → file restore → `navigateTree()`; the conversation leaf moves only after file restore succeeds
+- R42-RWD.6: Redo/rewind-forward: abandoned branches keep their checkpoints; rewinding to an entry on an abandoned branch restores that state
+- R42-RWD.7: `/tree` navigation and `/fork` offer file restore when the target entry has a checkpoint (integrated via the `session_before_tree` / `session_before_fork` seams), and honor decline
+- R42-RWD.8: Extension surface: `pi.checkpoints` (list/get/restore) on `ExtensionAPI`; events `checkpoint_created` and cancelable `session_before_rewind`
+
+### R43-SFT: Rewind Safety, Fallbacks, Tests & Docs
+- R43-SFT.1: Failure-injection tests — process killed or git failing mid-restore leaves the working tree equal to the target or the safety snapshot; if rollback also fails, both anchored refs are reported (nothing unrecoverable)
+- R43-SFT.2: Filesystem semantics test matrix — untracked files, files created after the checkpoint (removed on rewind), ignored files (never touched), staged/unstaged split (documented: worktree content wins, user index untouched), symlinks, file-mode changes
+- R43-SFT.3: Concurrency test — two sessions in the same repo cannot corrupt each other (per-session ref namespaces, per-operation temp index)
+- R43-SFT.4: Non-interactive/RPC mode never restores files without an explicit option; conversation-only fallback covered by tests
+- R43-SFT.5: Settings — enable/disable capture, retention policy, per-file size guard for large untracked files (warn + skip above configurable threshold)
+- R43-SFT.6: Docs — `session-format.md` sidecar section, `extensions.md` new events, `quickstart.md` rollback note replaced with `/rewind`, `examples/extensions/git-checkpoint.ts` marked superseded with pointer to the built-in
+- R43-SFT.7: Performance budget enforced by test on the medium fixture repo — capture p95 < 200 ms warm, dedup fast-path < 50 ms
+
+---
+
+## Milestone 6 — Bash Sandbox Confinement
+
+> Design spec: `.planning/specs/2026-07-12-bash-sandbox-confinement.md`.
+> Scope: `packages/coding-agent` (core + interactive mode + `core/builtins/`); no new package. Generalizes Phase 28's OS-boundary pattern (`packages/rlm/src/sandbox.ts`) from the RLM REPL to the agent's bash tool, composing with (not replacing) the permission gate and its default/auto/yolo modes.
+
+### R44-SBX: Sandbox Executor Core
+- R44-SBX.1: `SandboxExecutor` interface in `packages/coding-agent/src/core/sandbox/` with per-platform backends — macOS Seatbelt (`sandbox-exec -f` + SBPL profile generated from policy), Linux Landlock (kernel ≥ 5.13) with `unshare`/bwrap namespace fallback; unsupported platforms report `unavailable`
+- R44-SBX.2: `SandboxPolicy` v1 — filesystem write allowlist (project cwd, session scratch, OS temp, configurable `extraWritePaths` incl. curated default cache roots), read allow-all, single network on/off toggle (default on), no privilege escalation possible inside the sandbox
+- R44-SBX.3: Policy paths real-path resolved before profile generation — a symlink inside the project pointing outside must not widen the writable set
+- R44-SBX.4: Startup self-test (Phase 28 pattern): probe write outside the allowlist (and loopback connect when network-off) inside a throwaway sandbox; only a passing self-test lets the backend report `available`; a broken profile degrades to `unavailable`, never to unconfined execution
+- R44-SBX.5: Environment hygiene — the sandboxed child receives a constructed env, not the full parent env
+- R44-SBX.6: Delivered as a `BashOperations` implementation wrapping the existing local backend (`src/core/tools/bash.ts` seam); existing bash tool behavior byte-identical when sandboxing is off
+
+### R45-SBM: Permission Integration & Escalation UX
+- R45-SBM.1: Session sandbox state (`on`/`off`) alongside `PermissionMode` — `/sandbox` command, settings key + `DRAHT_SANDBOX` env seeding, status-bar indicator
+- R45-SBM.2: Sandbox-on auto-mode semantics — unmatched bash auto-allowed because confined; inline-interpreter-eval danger patterns stop prompting; outward-facing patterns (`git push*`, publish) keep prompting; `permissions.yml` `deny` rules still hard-block in every combination
+- R45-SBM.3: Denial escalation — platform denial signature detected from the failed run produces exactly one "rerun unsandboxed?" approval via the existing confirm path; approve reruns through the unsandboxed backend and logs it; decline leaves the denial as the tool result
+- R45-SBM.4: Non-interactive/RPC mode never escalates and never silently reruns unsandboxed — the denial is the result
+- R45-SBM.5: Sandbox-unavailable falls back to current permission-gate behavior with a one-time notice; the gate's text heuristics are the floor, never regressed
+- R45-SBM.6: Wired via `core/builtins/` with real-session loading proof (Phases 23/29 proof class)
+
+### R46-SBH: Sandbox Hardening, Performance & Docs
+- R46-SBH.1: Adversarial escape suite — symlink pivots created mid-command, `/tmp`-relocation tricks, interpreter matrix (python/node/ruby/perl × inline-eval/script-file), git-hook-triggered writes from an in-sandbox `git commit`, env probe proving no secret-bearing parent vars leak
+- R46-SBH.2: Linux CI covers Landlock and the namespace fallback as separate matrix jobs (Phase 28's Linux path shipped unverified on the macOS dev machine — not repeating that)
+- R46-SBH.3: Spawn-overhead budget enforced by test — added p95 < 50 ms per invocation
+- R46-SBH.4: Dogfood proof — full `npm run check` + build of this monorepo completes inside the sandbox on the curated default allowlist alone
+- R46-SBH.5: Docs — `extensions.md`, `quickstart.md` security section, permission-gate module doc updated to point at the sandbox as the hard boundary (text gate = heuristic UX in front of it)

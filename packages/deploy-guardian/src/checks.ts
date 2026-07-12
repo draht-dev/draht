@@ -59,7 +59,7 @@ function checkBuildArtifacts(cwd: string): CheckResult {
 
 function checkTypeErrors(cwd: string): CheckResult {
 	try {
-		execSync("bun run tsgo --noEmit 2>&1", { cwd, encoding: "utf-8", timeout: 30000 });
+		execSync("bun run tsc --noEmit 2>&1", { cwd, encoding: "utf-8", timeout: 30000 });
 		return { name: "Type Check", severity: "pass", message: "No type errors" };
 	} catch (error) {
 		const output = error instanceof Error && "stdout" in error ? String((error as any).stdout) : "";

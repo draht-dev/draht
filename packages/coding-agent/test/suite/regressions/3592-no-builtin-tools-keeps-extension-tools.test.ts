@@ -111,9 +111,12 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 			noTools: "builtin",
 		});
 
-		expect(session.getActiveToolNames()).toEqual([]);
-		expect(session.systemPrompt).toContain("Available tools:\n(none)");
+		// "subagent" is a core builtin (always loaded by createAgentSessionServices,
+		// see core/builtins/index.ts), so it's an extension tool from noTools's
+		// point of view and survives noTools: "builtin" like any other.
+		expect(session.getActiveToolNames()).toEqual(["subagent"]);
 		expect(session.systemPrompt).not.toContain("- read:");
+		expect(session.systemPrompt).not.toContain("- bash:");
 		session.dispose();
 	});
 });

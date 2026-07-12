@@ -1,0 +1,4 @@
+{
+	"extends": "../../tsconfig.json",
+	"include": ["src/**/*", "../coding-agent/src/utils/highlight-js-lib-index.d.ts"]
+}

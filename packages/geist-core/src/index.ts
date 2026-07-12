@@ -30,6 +30,8 @@ export type {
 } from "./grammar/resolve-utterance.js";
 export { resolveUtterance } from "./grammar/resolve-utterance.js";
 export type { HarnessCapabilities, HarnessSession, HarnessSessionStatus } from "./harness-session.js";
+export type { LoopContext } from "./lanes/loop-context.js";
+export { readLoopContext } from "./lanes/loop-context.js";
 export type {
 	ShaLedgerApproveResult,
 	ShaLedgerEntry,

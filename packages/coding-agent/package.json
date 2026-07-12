@@ -48,6 +48,8 @@
 		"@mariozechner/jiti": "^2.6.2",
 		"@draht/agent-core": "workspace:*",
 		"@draht/ai": "workspace:*",
+		"@draht/rlm": "workspace:*",
+		"@draht/router": "workspace:*",
 		"@draht/tools": "workspace:*",
 		"@draht/tui": "workspace:*",
 		"@silvia-odwyer/photon-node": "^0.3.4",

@@ -19,6 +19,7 @@
 	},
 	"dependencies": {
 		"@draht/ai": "workspace:*",
+		"@draht/knowledge": "workspace:*",
 		"@draht/router": "workspace:*"
 	},
 	"devDependencies": {

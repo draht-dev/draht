@@ -7,6 +7,14 @@
 // LLM, sandboxing, and CLI integration land in later phases (27-29); see
 // .planning/phases/26-rlm-core-primitives/26-01-PLAN.md.
 
+// Input loaders -- turn a raw `--input`/`/rlm <input>` argument (file, glob,
+// URL, or `knowledge:<client-slug>`) into loaded prompt content. See
+// .planning/phases/29-agent-cli-integration/29-01-PLAN.md, Architecture
+// section 1. Re-exported from the package root so consumers outside this
+// package (e.g. `@draht/rlm-agent`, the `draht rlm` CLI) can import them via
+// the public `@draht/rlm` entry point instead of reaching into `src/`.
+export type { InputSource, LoadedInput } from "./loaders.js";
+export { loadInput, parseInputArg } from "./loaders.js";
 export type { PromptTier, PromptVars } from "./prompts.js";
 export { renderPrompt, selectTier } from "./prompts.js";
 export type { CreateRouterBackedSessionOptions } from "./router-session.js";

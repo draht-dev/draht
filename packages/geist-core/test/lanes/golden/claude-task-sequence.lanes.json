@@ -1,0 +1,5 @@
+[
+	{ "kind": "subagent", "toolCallId": "ct-1", "isUpdate": false, "title": "Task(code-reviewer)", "toolKind": "other", "status": "in_progress", "recognizedBy": "claude-task", "subagentType": "code-reviewer" },
+	{ "kind": "subagent", "toolCallId": "ct-1", "isUpdate": true, "title": "Task(code-reviewer)", "toolKind": "other", "status": "completed", "recognizedBy": "claude-task", "subagentType": "code-reviewer" },
+	{ "kind": "subagent", "toolCallId": "ct-2", "isUpdate": false, "title": "Task", "toolKind": "other", "status": "in_progress", "recognizedBy": "claude-task" }
+]

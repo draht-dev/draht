@@ -1,0 +1,6 @@
+[
+	{ "toolCallId": "sa-1", "title": "subagent parallel", "kind": "other", "status": "in_progress", "isUpdate": false },
+	{ "toolCallId": "sa-1", "title": "subagent parallel", "kind": "other", "status": "completed", "isUpdate": true },
+	{ "toolCallId": "sa-2", "title": "subagent chain", "kind": "other", "status": "in_progress", "isUpdate": false },
+	{ "toolCallId": "sa-3", "title": "Subagent", "kind": "other", "status": "in_progress", "isUpdate": false }
+]

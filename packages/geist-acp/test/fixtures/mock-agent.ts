@@ -29,7 +29,14 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 
-import { type AgentApp, agent, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import {
+	type AgentApp,
+	agent,
+	type ContentBlock,
+	methods,
+	ndJsonStream,
+	PROTOCOL_VERSION,
+} from "@agentclientprotocol/sdk";
 
 /** File the mock writes into the session cwd — the test asserts it lands. */
 export const MOCK_EDIT_FILENAME = "mock-agent-edit.txt";
@@ -40,9 +47,27 @@ export const MOCK_TOOL_CALL_ID = "mock-tool-1";
 /** Commands the mock advertises — the test asserts `capabilities.commands`. */
 export const MOCK_COMMANDS = ["plan", "review"] as const;
 
+/**
+ * When a prompt's text contains this sentinel the mock enters LONG-RUNNING
+ * mode: it emits a single in-progress tool call and then blocks the turn
+ * indefinitely, only ending it if the client sends `session/cancel` (spec §16
+ * M7 "stop cancels cleanly"). This is the fixture variant the stop/cancel e2e
+ * needs — a turn that is genuinely still in flight when the client stops it.
+ */
+export const MOCK_LONG_RUNNING_SENTINEL = "geist-long-running";
+/** Tool-call id the long-running mode reports before it blocks. */
+export const MOCK_LONG_RUNNING_TOOL_CALL_ID = "mock-long-tool-1";
+
+/** Concatenates the text blocks of a prompt (mock only inspects text). */
+function promptText(blocks: readonly ContentBlock[]): string {
+	return blocks.map((block) => (block.type === "text" ? block.text : "")).join(" ");
+}
+
 /** Builds the mock `AgentApp` without connecting it to any transport. */
 export function buildMockAgent(): AgentApp {
 	const cwdBySession = new Map<string, string>();
+	// Per-session resolvers for LONG-RUNNING turns, fired by `session/cancel`.
+	const cancelWaiters = new Map<string, () => void>();
 
 	return agent({ name: "geist-mock-agent" })
 		.onRequest(methods.agent.initialize, () => ({
@@ -72,6 +97,26 @@ export function buildMockAgent(): AgentApp {
 			const cwd = cwdBySession.get(params.sessionId);
 			if (cwd === undefined) throw new Error(`unknown session ${params.sessionId}`);
 			const editPath = join(cwd, MOCK_EDIT_FILENAME);
+
+			// LONG-RUNNING mode: emit one in-flight tool call, then block the turn
+			// until the client cancels (or force-stops the subprocess). This is the
+			// "turn genuinely in flight" the stop/cancel e2e needs — nothing after
+			// the tool call is emitted, so any later listener firing is a bug.
+			if (promptText(params.prompt).includes(MOCK_LONG_RUNNING_SENTINEL)) {
+				await client.notify(methods.client.session.update, {
+					sessionId: params.sessionId,
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: MOCK_LONG_RUNNING_TOOL_CALL_ID,
+						title: "Long-running mock work",
+						kind: "other",
+						status: "in_progress",
+					},
+				});
+				await new Promise<void>((resolve) => cancelWaiters.set(params.sessionId, resolve));
+				cancelWaiters.delete(params.sessionId);
+				return { stopReason: "cancelled" };
+			}
 
 			// (b) a tool call the client can surface
 			await client.notify(methods.client.session.update, {
@@ -128,8 +173,10 @@ export function buildMockAgent(): AgentApp {
 			// (f) a real stop reason ends the turn
 			return { stopReason: "end_turn" };
 		})
-		.onNotification(methods.agent.session.cancel, () => {
-			// Deterministic mock has no long-running work to abort.
+		.onNotification(methods.agent.session.cancel, ({ params }) => {
+			// End an in-flight LONG-RUNNING turn gracefully; a no-op otherwise
+			// (the deterministic turn has no long-running work to abort).
+			cancelWaiters.get(params.sessionId)?.();
 		});
 }
 

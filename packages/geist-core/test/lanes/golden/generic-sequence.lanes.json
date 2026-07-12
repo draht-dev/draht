@@ -1,0 +1,6 @@
+[
+	{ "kind": "generic", "toolCallId": "tc-1", "isUpdate": false, "title": "Read src/app.tsx", "toolKind": "read", "status": "in_progress" },
+	{ "kind": "generic", "toolCallId": "tc-1", "isUpdate": true, "title": "Read src/app.tsx", "toolKind": "read", "status": "completed" },
+	{ "kind": "generic", "toolCallId": "tc-2", "isUpdate": false, "title": "Run pnpm test", "toolKind": "execute", "status": "in_progress" },
+	{ "kind": "generic", "toolCallId": "tc-2", "isUpdate": true, "title": "Run pnpm test", "toolKind": "execute", "status": "completed" }
+]

@@ -30,8 +30,21 @@ export type {
 } from "./grammar/resolve-utterance.js";
 export { resolveUtterance } from "./grammar/resolve-utterance.js";
 export type { HarnessCapabilities, HarnessSession, HarnessSessionStatus } from "./harness-session.js";
+export type {
+	GenericPlanEntry,
+	GenericPlanUpdateEvent,
+	GenericToolCallEvent,
+	GenericToolLane,
+	Lane,
+	PlanLane,
+	SubagentLane,
+	ToolLaneBase,
+} from "./lanes/lane.js";
+export { toLane, toPlanLane, toToolLaneBase } from "./lanes/lane.js";
 export type { LoopContext } from "./lanes/loop-context.js";
 export { readLoopContext } from "./lanes/loop-context.js";
+export type { SubagentRecognizer } from "./lanes/subagent-recognizer.js";
+export { recognizeSubagentLane, SUBAGENT_RECOGNIZERS } from "./lanes/subagent-recognizer.js";
 export type {
 	ShaLedgerApproveResult,
 	ShaLedgerEntry,

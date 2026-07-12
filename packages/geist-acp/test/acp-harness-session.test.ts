@@ -80,6 +80,10 @@ test("full ACP turn: tool events, permission round-trip, dirty git → awaiting_
 	expect(session.capabilities.resume).toBe(true);
 	expect(session.capabilities.modes).toBe(true);
 	expect(session.capabilities.commands).toBe(false);
+	// No `available_commands_update` has arrived yet — the queryable list
+	// starts empty, matching the still-`false` `capabilities.commands` flag
+	// (R36-M4.1).
+	expect(session.availableCommands).toEqual([]);
 	expect(session.status).toBe("running");
 	const pid = session.pid;
 	expect(typeof pid).toBe("number");
@@ -112,8 +116,11 @@ test("full ACP turn: tool events, permission round-trip, dirty git → awaiting_
 	expect(permissions[0].options.map((option) => option.optionId)).toEqual(["allow", "reject"]);
 	expect(permissions[0].toolCall.toolCallId).toBe(MOCK_TOOL_CALL_ID);
 
-	// Commands were advertised during the turn and are now reflected live.
+	// Commands were advertised during the turn and are now reflected live —
+	// both as the boolean capability flag and as the queryable list, which
+	// reflects exactly what the mock advertised (name + description).
 	expect(session.capabilities.commands).toBe(true);
+	expect(session.availableCommands).toEqual(MOCK_COMMANDS.map((name) => ({ name, description: `Mock ${name}` })));
 
 	// The mock's edit actually landed on disk with the exact expected bytes.
 	const editPath = join(cwd, MOCK_EDIT_FILENAME);

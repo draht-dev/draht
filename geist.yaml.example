@@ -5,3 +5,10 @@ harness:
     claude: { cmd: claude-agent-acp }
     codex:  { cmd: codex-acp }
     gemini: { cmd: gemini, args: [--experimental-acp] }
+
+projects:            # explicitly declared projects (spec §3 "yaml" source of the registry), keyed by slug
+  fr3n:    { root: /Users/you/dev/fr3n }
+  kintura: { root: /Users/you/dev/kintura, name: Kintura }
+
+workspaceRoots:       # dirs scanned for git-repo subdirectories (spec §3 "workspaceRoots discovery" source)
+  - /Users/you/dev

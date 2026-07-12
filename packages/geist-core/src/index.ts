@@ -16,6 +16,18 @@ export type {
 } from "./composer/situation-prompt.js";
 export { composeSituationPrompt } from "./composer/situation-prompt.js";
 export { FleetCapacityError, FleetRegistry, MAX_FLEET_SESSIONS } from "./fleet-registry.js";
+export type {
+	AdvertisedCommand,
+	ReservedVerb,
+	ResolutionContext,
+	ResolvedBoardNew,
+	ResolvedBoardVariants,
+	ResolvedCommand,
+	ResolvedMessage,
+	ResolvedPermission,
+	ResolvedUtterance,
+} from "./grammar/resolve-utterance.js";
+export { resolveUtterance } from "./grammar/resolve-utterance.js";
 export type { HarnessCapabilities, HarnessSession, HarnessSessionStatus } from "./harness-session.js";
 export type {
 	ShaLedgerApproveResult,
@@ -32,3 +44,14 @@ export type {
 } from "./pairing/pairing-state.js";
 export { DEFAULT_RECONNECT_GRACE_MS, generatePairingToken, PairingState } from "./pairing/pairing-state.js";
 export type { Project } from "./project.js";
+export type { ProjectRegistryConfig, ProjectRegistryOptions } from "./registry/project-registry.js";
+export { ProjectRegistry } from "./registry/project-registry.js";
+export type { RecentsStore } from "./registry/recents-store.js";
+export {
+	DEFAULT_RECENTS_PATH,
+	FileRecentsStore,
+	InMemoryRecentsStore,
+	RECENTS_CAP,
+	touchRecents,
+} from "./registry/recents-store.js";
+export { discoverWorkspaceProjects, slugify } from "./registry/workspace-discovery.js";

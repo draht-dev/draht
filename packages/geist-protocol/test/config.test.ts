@@ -19,6 +19,37 @@ describe("parseGeistConfig", () => {
 		expect(config.harness.agents.claude).toEqual({ cmd: "claude-agent-acp" });
 		expect(config.harness.agents.codex).toEqual({ cmd: "codex-acp" });
 		expect(config.harness.agents.gemini).toEqual({ cmd: "gemini", args: ["--experimental-acp"] });
+
+		expect(config.projects?.fr3n).toEqual({ root: "/Users/you/dev/fr3n" });
+		expect(config.projects?.kintura).toEqual({ root: "/Users/you/dev/kintura", name: "Kintura" });
+		expect(config.workspaceRoots).toEqual(["/Users/you/dev"]);
+	});
+
+	test("projects and workspaceRoots are optional (a harness-only config still validates)", () => {
+		const config = parseGeistConfig({
+			harness: { default: "draht", agents: { draht: { cmd: "draht-acp" } } },
+		});
+
+		expect(config.projects).toBeUndefined();
+		expect(config.workspaceRoots).toBeUndefined();
+	});
+
+	test("rejects a projects entry missing root", () => {
+		expect(() =>
+			parseGeistConfig({
+				harness: { default: "draht", agents: { draht: { cmd: "draht-acp" } } },
+				projects: { fr3n: { name: "fr3n" } },
+			}),
+		).toThrow(/Invalid geist config/);
+	});
+
+	test("rejects a non-array workspaceRoots", () => {
+		expect(() =>
+			parseGeistConfig({
+				harness: { default: "draht", agents: { draht: { cmd: "draht-acp" } } },
+				workspaceRoots: "/Users/you/dev",
+			}),
+		).toThrow(/Invalid geist config/);
 	});
 
 	test("rejects a config missing harness.default", () => {

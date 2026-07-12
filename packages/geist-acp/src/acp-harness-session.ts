@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import {
 	type ActiveSession,
+	type AvailableCommand,
 	type ClientConnection,
 	type ClientContext,
 	type ContentBlock,
@@ -55,6 +56,28 @@ export interface PlanUpdateEvent {
 }
 
 /**
+ * One command the agent advertised over ACP's `available_commands_update`
+ * (spec §6 Commands row: "palette + voice set fed by whatever the agent
+ * advertises over ACP"), flattened to the two fields the palette/voice-grammar
+ * layer needs. `description` is optional here even though ACP's own
+ * `AvailableCommand.description` is a required string, so this shape stays the
+ * generic `{name, description?}` contract other callers (e.g. the grammar
+ * resolver's `ctx.availableCommands`) can build against without depending on
+ * ACP wire types.
+ *
+ * IMPORTANT — this list is advisory, not a gate: verbatim `/…` text ALWAYS
+ * passes through to the agent regardless of whether it appears here (spec §6,
+ * §9.4: "`/…` passes through verbatim — each harness owns its command
+ * semantics"). Matching typed/spoken input against this list to build a
+ * palette or resolve a voice command name is the grammar resolver's job, not
+ * this module's; `geist-acp` only surfaces what the agent advertised, live.
+ */
+export interface AvailableCommandInfo {
+	readonly name: string;
+	readonly description?: string;
+}
+
+/**
  * A pending ACP `session/request_permission` surfaced to the caller (spec §9.2
  * `permission_request`). The caller learns the `requestId` and offered
  * `options` here, then resolves it via {@link HarnessSession.answerPermission}.
@@ -76,6 +99,18 @@ export interface PermissionRequestEvent {
 export interface AcpHarnessSession extends HarnessSession {
 	/** PID of the underlying ACP subprocess, or `undefined` once it has exited. */
 	readonly pid: number | undefined;
+	/**
+	 * The command set most recently advertised by the agent over
+	 * `available_commands_update`. Empty until the agent has sent at least one
+	 * such notification (`capabilities.commands` tracks the same event as a
+	 * boolean; this is the queryable list version — spec §6, R36-M4.1). Updated
+	 * live, in place, as further `available_commands_update` notifications
+	 * arrive over the life of the session.
+	 *
+	 * Not a gate: see {@link AvailableCommandInfo} for why verbatim `/…` input
+	 * is never restricted to this list.
+	 */
+	readonly availableCommands: readonly AvailableCommandInfo[];
 	onToolCall(listener: (event: ToolCallEvent) => void): () => void;
 	onPlanUpdate(listener: (event: PlanUpdateEvent) => void): () => void;
 	onPermissionRequest(listener: (event: PermissionRequestEvent) => void): () => void;
@@ -91,6 +126,16 @@ const IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
 
 function imageMimeType(path: string): string {
 	return IMAGE_MIME_BY_EXT[extname(path).toLowerCase()] ?? "application/octet-stream";
+}
+
+/**
+ * Flattens ACP's `AvailableCommand` (whose `description` is a required
+ * string) to `AvailableCommandInfo`'s generic `{name, description?}` shape.
+ * An empty-string description is treated as "none" so consumers can rely on
+ * truthiness rather than distinguishing `""` from `undefined`.
+ */
+function toAvailableCommandInfo(command: AvailableCommand): AvailableCommandInfo {
+	return command.description ? { name: command.name, description: command.description } : { name: command.name };
 }
 
 /** Runs `git <args>` in `cwd`, returning trimmed stdout or `null` on any failure. */
@@ -203,6 +248,7 @@ class AcpHarnessSessionImpl implements AcpHarnessSession {
 
 	private _status: HarnessSessionStatus = "running";
 	private _capabilities: HarnessCapabilities;
+	private _availableCommands: readonly AvailableCommandInfo[] = [];
 
 	constructor(init: AcpHarnessSessionInit) {
 		this.id = init.id;
@@ -228,6 +274,10 @@ class AcpHarnessSessionImpl implements AcpHarnessSession {
 
 	get capabilities(): HarnessCapabilities {
 		return this._capabilities;
+	}
+
+	get availableCommands(): readonly AvailableCommandInfo[] {
+		return this._availableCommands;
 	}
 
 	get pid(): number | undefined {
@@ -324,6 +374,7 @@ class AcpHarnessSessionImpl implements AcpHarnessSession {
 				break;
 			case "available_commands_update":
 				this._capabilities = { ...this._capabilities, commands: update.availableCommands.length > 0 };
+				this._availableCommands = update.availableCommands.map(toAvailableCommandInfo);
 				break;
 			default:
 				break;

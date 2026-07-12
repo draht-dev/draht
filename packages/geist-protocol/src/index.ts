@@ -3,6 +3,8 @@ export {
 	AgentLaunchSpecSchema,
 	type GeistConfig,
 	GeistConfigSchema,
+	type ProjectConfig,
+	ProjectConfigSchema,
 	parseGeistConfig,
 } from "./config.js";
 export {

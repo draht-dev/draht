@@ -9,6 +9,7 @@
 
 export {
 	type AcpHarnessSession,
+	type AvailableCommandInfo,
 	createAcpHarnessSession,
 	type PermissionRequestEvent,
 	type PlanUpdateEvent,

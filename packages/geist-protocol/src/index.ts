@@ -8,6 +8,14 @@ export {
 	parseGeistConfig,
 } from "./config.js";
 export {
+	type FleetAgent,
+	FleetAgentSchema,
+	type FleetSession,
+	type FleetSessionCapabilities,
+	FleetSessionCapabilitiesSchema,
+	FleetSessionSchema,
+	type FleetStateMessage,
+	FleetStateMessageSchema,
 	type PermissionAnswerMessage,
 	PermissionAnswerMessageSchema,
 	type PermissionOption,

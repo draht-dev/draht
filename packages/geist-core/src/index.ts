@@ -15,7 +15,8 @@ export type {
 	SituationPromptTextBlock,
 } from "./composer/situation-prompt.js";
 export { composeSituationPrompt } from "./composer/situation-prompt.js";
-export { FleetCapacityError, FleetRegistry, MAX_FLEET_SESSIONS } from "./fleet-registry.js";
+export type { FleetEntry } from "./fleet-registry.js";
+export { FleetCapacityError, FleetRegistry, MAX_FLEET_SESSIONS, UnknownSessionError } from "./fleet-registry.js";
 export type {
 	AdvertisedCommand,
 	ReservedVerb,
@@ -44,6 +45,7 @@ export type {
 } from "./pairing/pairing-state.js";
 export { DEFAULT_RECONNECT_GRACE_MS, generatePairingToken, PairingState } from "./pairing/pairing-state.js";
 export type { Project } from "./project.js";
+export { buildFleetState } from "./registry/fleet-state-view.js";
 export type { ProjectRegistryConfig, ProjectRegistryOptions } from "./registry/project-registry.js";
 export { ProjectRegistry } from "./registry/project-registry.js";
 export type { RecentsStore } from "./registry/recents-store.js";

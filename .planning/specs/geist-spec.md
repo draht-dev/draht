@@ -4,7 +4,9 @@
 > A harness-agnostic ADE in the spirit of [Orca](https://github.com/stablyai/orca) and [t3code](https://github.com/pingdotgg/t3code), rebuilt for mixed reality: your coding agents — **any ACP agent: Claude Code, Codex, Gemini CLI, OpenCode, draht, ~50 in the registry** — live as panels in passthrough on Quest 3. Point at your running app and talk to change it; point at an agent and talk to steer it; point at the board and spawn sessions in any project on the dev machine.
 
 **Home:** [`draht-dev/draht`](https://github.com/draht-dev/draht) monorepo — with a hard import boundary (§17.1): geist core knows only ACP; draht holds zero code-level privileges.
-**Status:** rev 7 · no open decisions. Flip-cheap locks flagged in §17.
+**Status:** rev 7 frozen product/design baseline; implementation acceptance and security decisions reopened by the 2026-07-13 audit.
+> **Audit amendment notice:** `.planning/geist/AUDIT-2026-07-13.md` is the current implementation-status source and `.planning/geist/SECURITY-2026-07-13.md` is a normative release gate. In particular, GSEC-05 blocks §6/§12/§17.7's `reset --hard` undo rule until a canonical full-state managed-worktree amendment is approved and mirrored to `docs/geist/spec.md`.
+
 **Rev history:** r2 coupled to draht · r3 fleet/modes/orchestrate · r4 orchestration corrected to agent-side · r5 project registry + spatial workspace · **r6 decouples from draht: geist is an ACP client** (Agent Client Protocol, the LSP-for-agents standard — Zed/JetBrains/MS Terminal clients; Claude Code & Codex via maintained adapters; Gemini/OpenCode native); draht participates through a thin `draht-acp` shim with exactly the privileges of any other agent · **r7 design language: geist glass** — Apple-Liquid-Glass-derived, adapted to Quest's real constraints (no passthrough sampling → a two-material system, §13).
 
 ---
@@ -51,7 +53,7 @@ The harness is a *qualifier*, like the project: *"new **claude** session **in ki
 
 ## 4. The core loop (UX contract) — as r5, two additions
 
-…3a. The agent wants to run `pnpm test` — a chip appears on its card; you glance over: *"allow."* 
+…3a. The agent wants to run `pnpm test` — a chip appears on its card; you glance over: *"allow."*
 …4a. *"new codex session in kintura: tighten the hero animation"* — harness word optional; default harness applies when omitted. Everything else unchanged (element loop, `/review` on a card, orchestrate-by-command where the harness has it, variants winner by pointing).
 
 ## 5. Platform & architecture decisions (locked) & rejected alternatives

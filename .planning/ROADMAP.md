@@ -168,60 +168,59 @@
 
 ## Milestone 4: geist
 
-> **Source spec:** `.planning/specs/geist-spec.md` (rev 7, locked — no open decisions). Harness-agnostic spatial ADE for Quest 3: point at a running app or an ACP coding-agent session, talk to change or steer it — any ACP agent (Claude Code, Codex, Gemini CLI, draht, ~50 in the registry). Home: this monorepo, with a hard import boundary — `geist-core`/`geist-acp`/`geist-console`/`quest/` import zero `@draht/*`; only `packages/draht-acp` may (spec §17.1, R31-FOUND.4).
-> **Phase mapping:** Phase 31 is foundation/scaffold work the spec's own milestone list (§16) doesn't name explicitly; Phases 32–40 map 1:1 to the spec's M0–M8. Every phase from 32 on carries two kinds of acceptance: an automated ✅ e2e criterion (mock-ACP-agent-based, CI-checkable) and, where the spec defines one, an H-gate — a human/hardware demo on Oskar's physical Quest 3 that this GSD loop can never self-certify. H-gates are recorded as evidence debt on the phase, not a blocker to closing its automated acceptance.
-> **Sandbox constraint:** the environment executing this milestone's early phases has no Quest headset, no `gradle`/`kotlinc` on PATH, and no Meta Spatial SDK Maven credentials. `quest/` (Kotlin) work is scaffolded structurally but not build-verified here; H-gates require Oskar's machine.
-> **Milestone 2/3 carry-forward:** Phases 22–25 and 26–30 remain pending backlog and are not a prerequisite for Milestone 4 (same precedent as Milestone 3's carry-forward above).
+> **Source spec:** `.planning/specs/geist-spec.md` (rev 7, locked), subject to the explicit amendments required by `.planning/geist/SECURITY-2026-07-13.md`. Harness-agnostic spatial ADE for Quest 3: point at a running app or an ACP coding-agent session, talk to change or steer it. Every non-shim Geist package (`geist`, `geist-core`, `geist-acp`, `geist-protocol`, `geist-picker`, `geist-console`) is protected; only `packages/draht-acp` may import the Draht kernel.
+> **Evidence model:** host behavior uses emitted-binary/public-protocol tests against real mock subprocesses; UI uses browser automation; Quest behavior uses Android unit/instrumentation/build evidence; H0–H8 require archived physical Quest 3 evidence. Recording evidence debt satisfies nothing. Numbered REQUIREMENTS are canonical; acceptance/H-gate text here is a summary.
+> **2026-07-13 audit correction:** Phases 31–39 are reopened as `pending`; Phase 40 is `pending` and not started. The prior completion decision accepted isolated primitives and package-level tests as product e2e while the production CLI, Quest client, UI composition, and part of the claimed boundary enforcement remained incomplete. See `.planning/geist/AUDIT-2026-07-13.md`. The acceptance statements below are target gates, not claims about current behavior.
 
-## Phase 31: Geist Foundation & Repo Scaffold — `complete`
+## Phase 31: Geist Foundation & Repo Scaffold — `pending`
 **Goal:** The repo layout, workspace wiring, and cross-cutting contracts every geist milestone depends on exist and are boundary-checked.
-**Requirements:** R31-FOUND.1, R31-FOUND.2, R31-FOUND.3, R31-FOUND.4, R31-FOUND.5, R31-FOUND.6
-**Acceptance:** `packages/geist/`, `packages/geist-core/`, `packages/geist-acp/`, `packages/draht-acp/`, `packages/geist-protocol/`, `packages/geist-picker/`, `packages/geist-console/` exist as npm workspaces (package.json + tsconfig, wired into root tsconfig `paths`); `quest/` exists as a Kotlin project skeleton and is explicitly NOT an npm workspace; a zod schema in `geist-protocol` validates the `geist.yaml` harness config contract (spec §9.1) and `geist.yaml.example` passes it; `scripts/check-geist-boundary.mjs` fails root `check` if `geist-core`/`geist-acp`/`geist-console`/`quest` import `@draht/*` (only `draht-acp` may) and is wired into root `npm run check`; `scripts/check-geist-mirrors.mjs` exists per spec §6's tooling row; `docs/geist/spec.md` and `.planning/geist/README.md` exist per the locked repo layout (§8).
+**Requirements:** R31-FOUND.1, R31-FOUND.2, R31-FOUND.3, R31-FOUND.4, R31-FOUND.5, R31-FOUND.6, R31-FOUND.7
+**Acceptance:** The existing layout/config/docs scaffolds remain; `scripts/check-geist-boundary.mjs` rejects both direct Draht-kernel imports and `@draht/draht-acp` imports from each of `packages/geist`, `geist-core`, `geist-acp`, `geist-protocol`, `geist-picker`, and `geist-console`, with a separate zero-`@draht/*` Quest mutation; only the shim may import the Draht kernel. Kotlin field/type mirror enforcement is completed with M1 when the headset protocol lands.
 
-## Phase 32: M0 — Spike: Panel + Ray — `complete`
-**Goal:** Kotlin/Spatial-SDK panel-and-ray-cast spike exists structurally; the panel-alpha probe decision point is implemented.
+## Phase 32: M0 — Spike: Panel + Ray — `pending`
+**Goal:** A real Kotlin/Spatial-SDK panel-and-ray-cast spike runs on Quest 3 and produces the panel-alpha/hover evidence needed to continue.
 **Requirements:** R32-M0.1, R32-M0.2, R32-M0.3, R32-M0.4
-**Acceptance:** `quest/` renders a passthrough panel via Meta Spatial SDK and resolves ray→plane addressee hits (structural scaffold — build/run verification deferred, no Quest hardware or Meta SDK Maven access in this sandbox); the panel-alpha probe (room-glass vs opaque-smoke fallback, spec §13/§17.6) is implemented with both code paths present; H0 (hover-coords evidence) is logged as evidence debt in `.planning/geist/`, pending Oskar's hardware.
+**Acceptance:** A pinned current Meta Spatial SDK build launches on Quest 3, renders a real URL panel, and feeds controller/hand input into tested nearest-panel ray resolution at PTT press; both alpha materials are SDK-bound and selectable; H0 archives hover-coordinate and panel-alpha evidence with commit/APK/headset/SDK identifiers.
 
-## Phase 33: M1 — Pairing + Voice Wire — `complete`
+## Phase 33: M1 — Pairing + Voice Wire — `pending`
 **Goal:** Bridge↔headset pairing and the whisper.cpp DE/EN voice pipeline are wired; the console ships on geist-glass tokens from its first pixel.
-**Requirements:** R33-M1.1, R33-M1.2, R33-M1.3, R33-M1.4
-**Acceptance:** WS pairing handshake (LAN, token) connects bridge and headset and survives a reconnect; `geist-console` renders exclusively from `tokens.css` (no unstyled/restyle-later state); whisper.cpp turbo/small transcribes DE/EN test fixtures; H1 (9/10 live transcripts, pairing survives restart) is logged as evidence debt.
+**Requirements:** R33-M1.1, R33-M1.2, R33-M1.3, R33-M1.4, R33-M1.5, R33-M1.6, R33-M1.7
+**Acceptance:** The emitted `geist` binary loads safe config, owns the bridge, serves `/ui`, launches one named mock session/dispatch, and pairs with the real Kotlin client; pairing survives Quest app recreation and resynchronizes state; PTT `AudioRecord` reaches whisper.cpp with fixed DE/EN fixtures; all headset-visible protocol fields/types are mirror-checked; GSEC-04, GSEC-08, and GSEC-12 are closed; H1 archives at least 9/10 normalized live transcripts plus restart/reconnect evidence.
 
-## Phase 34: M2 — Context Pack — `complete`
+## Phase 34: M2 — Context Pack — `pending`
 **Goal:** Element pointing composes an `ElementContext` situation prompt with capability-gated image delivery and an always-present crop path reference.
 **Requirements:** R34-M2.1, R34-M2.2, R34-M2.3
-**Acceptance:** `ElementContext` composition (spec §9.3, unchanged from r2) is implemented in `geist-core`; an image content block is attached only when the session's capability handshake advertises image support, while the crop is always written to `<wt>/.geist/task-<id>/target.webp` and path-referenced in the prompt; H2 (chip + crop demo) is logged as evidence debt.
+**Acceptance:** A real injected picker freezes the pointed element, writes a decodable WebP to `<wt>/.geist/task-<id>/target.webp`, and shows the crop chip; one public-protocol e2e proves image-capable and path-only ACP profiles receive the correct context; H2 archives the physical chip + crop demo.
 
-## Phase 35: M3 — ACP Loop Closes — `complete`
+## Phase 35: M3 — ACP Loop Closes — `pending`
 **Goal:** `geist-acp`'s `HarnessSession` port drives a real ACP client against a deterministic in-repo mock agent and against draht (via a new `draht-acp` shim) and Claude Code (`claude-agent-acp`), with permission rendering and a sha ledger.
-**Requirements:** R35-M3.1, R35-M3.2, R35-M3.3, R35-M3.4, R35-M3.5, R35-M3.6, R35-M3.7
-**Acceptance:** ✅ e2e vs the mock ACP agent: dispatch → tool-call events → edit → turn end + dirty git → `awaiting_review` → approve/undo/stop, full permission round-trip; ✅ the same fake-headset script passes against `draht-acp` in CI, keyless via draht's faux provider inside the shim's own tests; ✅ `smoke:harness -- claude` passes (network, non-CI, `claude-agent-acp`); sha ledger (`baseSha`/`lastApprovedSha`, undo = `reset --hard <ref>`) is implemented; H3 (fr3n button change end-to-end on both harnesses; one permission answered by voice) is logged as evidence debt.
+**Requirements:** R35-M3.1, R35-M3.2, R35-M3.3, R35-M3.4, R35-M3.5, R35-M3.6, R35-M3.7, R35-M3.8, R35-M3.9
+**Acceptance:** One test launches the emitted `geist` binary and drives only its public headset protocol through named harness/worktree spawn → dispatch → tools/plans → deny/allow → edit → blocking review → durable approve → second tracked/untracked edit → transactional restore under the GSEC-05 amendment → stop/cleanup; the same script passes against deterministic mock ACP and keyless `draht-acp`; explicitly invoked Claude smoke fails rather than skips when prerequisites are missing; GSEC-01, GSEC-02, GSEC-03, GSEC-05, GSEC-06, GSEC-07, GSEC-09, GSEC-10, GSEC-11, and GSEC-13 are closed; H3 archives the two-real-harness button change and one voice permission answer.
 
-## Phase 36: M4 — Commands, Addressing, Project & Harness Grammar — `complete`
+## Phase 36: M4 — Commands, Addressing, Project & Harness Grammar — `pending`
 **Goal:** ACP-advertised commands/modes surface as palette + voice options (verbatim `/…` pass-through always available); harness and project qualifiers resolve per the locked grammar order.
-**Requirements:** R36-M4.1, R36-M4.2, R36-M4.3, R36-M4.4
-**Acceptance:** ✅ advertised-command golden test per mock capability profile; ✅ *"new claude session in \<fixture\>: x"* spawns the right harness in the right project path; ✅ resolution-order test proves qualifiers (reserved verbs → command → harness → project → text) can never shadow an earlier stage; H4 (voice-spawn a draht `/plan` and a Claude session in two projects, disambiguate by re-say) is logged as evidence debt.
+**Requirements:** R36-M4.1, R36-M4.2, R36-M4.3, R36-M4.4, R36-M4.5
+**Acceptance:** Live ACP command/mode updates cross the protocol and render in the palette; raw slash commands pass through; public typed/transcribed input *"new claude session in \<fixture\>: x"* launches the configured `claude` command in the exact fixture worktree and dispatches `x`; precedence/collision tests and visible disambiguation pass; H4 archives the two-project voice-spawn/re-say demo.
 
-## Phase 37: M5 — Fleet Across Projects & Harnesses — `complete`
+## Phase 37: M5 — Fleet Across Projects & Harnesses — `pending`
 **Goal:** The fleet board supports ≤4 sessions spanning multiple projects and mixed harnesses, with capability badges and scoped approve/undo/stop.
-**Requirements:** R37-M5.1, R37-M5.2, R37-M5.3
-**Acceptance:** ✅ 3 mock sessions across 2 capability profiles and 2 fixture repos prove isolation via `fleet_state` goldens; ✅ scoped undo test confirms undo on one session never touches another's worktree; H5 (fr3n on draht + kintura on claude simultaneously, point-routed, 72 Hz with 3 live panels and tier-1 glass on — OVR evidence) is logged as evidence debt.
+**Requirements:** R37-M5.1, R37-M5.2, R37-M5.3, R37-M5.4
+**Acceptance:** Three real spawned mock ACP sessions across two capability profiles and three distinct linked managed worktrees from two fixture repos emit `fleet_state` through the public WS and render three cards/badges in browser automation; approve/undo/stop and capacity rejection are visibly scoped and byte/process isolated; H5 archives the mixed real-harness, point-routing, three-panel, tier-1-glass 72 Hz OVR run.
 
-## Phase 38: M6 — Variants, Optionally Mixed — `complete`
+## Phase 38: M6 — Variants, Optionally Mixed — `pending`
 **Goal:** `variants_new` supports an optional per-member harness list that round-robins across configured agents; winner-by-pointing keeps the winner and resets/prunes siblings.
-**Requirements:** R38-M6.1, R38-M6.2
-**Acceptance:** ✅ e2e against mixed mock capability profiles: winner session is kept, sibling worktrees are reset and pruned; H6 (3-way shoot-out across harnesses, winner picked by pointing) is logged as evidence debt.
+**Requirements:** R38-M6.1, R38-M6.2, R38-M6.3
+**Acceptance:** A public `variants_new` request creates sibling Git worktrees and real mock ACP processes with round-robin profiles, dispatches one prompt, and renders a compare row; winner selection through the public target protocol keeps the winner and atomically stops/removes sibling processes and worktrees, including tracked/untracked output; H6 archives the physical three-way pointing shoot-out.
 
-## Phase 39: M7 — Run Rendering — `complete`
+## Phase 39: M7 — Run Rendering — `pending`
 **Goal:** Generic ACP tool-call/plan-update lanes render for every harness; `subagent-recognizer.ts` upgrades draht/Claude-Task-style calls to typed lanes; `LOOP.md` surfaces when present.
-**Requirements:** R39-M7.1, R39-M7.2, R39-M7.3
-**Acceptance:** ✅ scripted mock tool-call sequences produce golden lane output for both generic and draht-typed cases (data-driven, golden-tested recognizer); ✅ a stop command cancels an in-flight run cleanly; H7 (real draht `/orchestrate` lanes live; a Claude session's tool activity renders as untyped generic lanes) is logged as evidence debt.
+**Requirements:** R39-M7.1, R39-M7.2, R39-M7.3, R39-M7.4
+**Acceptance:** Real mock ACP tool/plan updates flow through the production adapter and WS into browser-rendered generic/typed/plan lanes with golden DOM snapshots; LOOP.md appears and refreshes; a public scoped stop command cancels an in-flight turn with no late events; H7 archives live typed draht `/orchestrate` lanes and untyped Claude lanes.
 
-## Phase 40: M8 — Spatial Dividends (v1.5) — `complete`
+## Phase 40: M8 — Spatial Dividends (v1.5) — `pending`
 **Goal:** Multi-viewport, pins, history, and pose persistence land as the v1.5 spatial-organization dividend.
-**Requirements:** R40-M8.1
-**Acceptance:** H8 (two-viewport layout fix demoed; workspace pose restores after a headset restart) is logged as evidence debt — this phase is entirely hardware-gated per spec §2/§16 and has no automated ✅ criterion of its own.
+**Requirements:** R40-M8.1, R40-M8.2
+**Acceptance:** Multi-viewport state, pins/history, anchors, and pose serialization/restoration are implemented with recreation/migration tests; H8 archives before/after pose data plus the physical two-viewport and headset-restart restoration demo.
 
 ---
 

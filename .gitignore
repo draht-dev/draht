@@ -50,3 +50,5 @@ collect.sh
 .planning/codebase/MAP.json
 .planning/codebase/MAP.html
 .planning/codebase/GRAPH_REPORT.md
+quest/.gradle
+quest/app/build/*

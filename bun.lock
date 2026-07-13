@@ -24,7 +24,7 @@
     },
     "packages/agent": {
       "name": "@draht/agent-core",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@draht/ai": "workspace:*",
         "ignore": "^7.0.5",
@@ -40,7 +40,7 @@
     },
     "packages/ai": {
       "name": "@draht/ai",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "draht-ai": "./dist/cli.js",
       },
@@ -71,7 +71,7 @@
     },
     "packages/ci": {
       "name": "@draht/ci",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
         "@octokit/rest": "^21.1.0",
@@ -84,7 +84,7 @@
     },
     "packages/coding-agent": {
       "name": "@draht/coding-agent",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "coding-agent": "dist/cli.js",
         "draht": "dist/cli.js",
@@ -176,14 +176,14 @@
     },
     "packages/compliance": {
       "name": "@draht/compliance",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
       },
     },
     "packages/deploy-guardian": {
       "name": "@draht/deploy-guardian",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
         "@types/node": "^22.10.5",
@@ -193,7 +193,7 @@
     },
     "packages/draht-acp": {
       "name": "@draht/draht-acp",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "draht-acp": "./src/main.ts",
       },
@@ -210,7 +210,7 @@
     },
     "packages/draht-claude": {
       "name": "draht-claude",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "draht-claude": "./cli.mjs",
       },
@@ -220,7 +220,7 @@
     },
     "packages/draht-codex": {
       "name": "draht-codex",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "draht-codex": "./cli.mjs",
       },
@@ -230,14 +230,14 @@
     },
     "packages/draht-tools": {
       "name": "@draht/tools",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "draht-tools": "./bin/draht-tools.cjs",
       },
     },
     "packages/gateway": {
       "name": "@draht/gateway",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "draht-gateway": "src/cli.ts",
       },
@@ -251,7 +251,7 @@
     },
     "packages/geist": {
       "name": "@draht/geist",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "geist": "dist/cli.js",
       },
@@ -267,7 +267,7 @@
     },
     "packages/geist-acp": {
       "name": "@draht/geist-acp",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@agentclientprotocol/sdk": "1.2.1",
         "@draht/geist-core": "workspace:*",
@@ -279,7 +279,7 @@
     },
     "packages/geist-console": {
       "name": "@draht/geist-console",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@draht/geist-protocol": "workspace:*",
       },
@@ -294,18 +294,18 @@
     },
     "packages/geist-core": {
       "name": "@draht/geist-core",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@draht/geist-protocol": "workspace:*",
       },
     },
     "packages/geist-picker": {
       "name": "@draht/geist-picker",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
     },
     "packages/geist-protocol": {
       "name": "@draht/geist-protocol",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "zod": "^3.25.0",
       },
@@ -315,7 +315,7 @@
     },
     "packages/infra": {
       "name": "@draht/infra",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "sst": "^4.2.1",
       },
@@ -327,16 +327,16 @@
     },
     "packages/invoice": {
       "name": "@draht/invoice",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
       },
     },
     "packages/knowledge": {
       "name": "@draht/knowledge",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
-        "better-sqlite3": "^11.7.0",
+        "better-sqlite3": "^12.11.1",
       },
       "devDependencies": {
         "@draht/coding-agent": "workspace:*",
@@ -348,7 +348,7 @@
     },
     "packages/landing": {
       "name": "@draht/landing",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@astrojs/sitemap": "^3.7.0",
         "@resvg/resvg-js": "^2.6.2",
@@ -359,7 +359,7 @@
     },
     "packages/mom": {
       "name": "@draht/mom",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "mom": "dist/main.js",
       },
@@ -383,7 +383,7 @@
     },
     "packages/orchestrator": {
       "name": "@draht/orchestrator",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
       },
@@ -396,7 +396,7 @@
     },
     "packages/pods": {
       "name": "@draht/pods",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "bin": {
         "draht-pods": "dist/cli.js",
       },
@@ -407,7 +407,7 @@
     },
     "packages/rlm": {
       "name": "@draht/rlm",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@draht/ai": "workspace:*",
         "@draht/knowledge": "workspace:*",
@@ -421,7 +421,7 @@
     },
     "packages/rlm-agent": {
       "name": "@draht/rlm-agent",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@draht/rlm": "workspace:*",
         "@draht/router": "workspace:*",
@@ -437,7 +437,7 @@
     },
     "packages/router": {
       "name": "@draht/router",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@draht/ai": "workspace:*",
       },
@@ -447,11 +447,11 @@
     },
     "packages/templates": {
       "name": "@draht/templates",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
     },
     "packages/tui": {
       "name": "@draht/tui",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@types/mime-types": "^2.1.4",
         "chalk": "^5.5.0",
@@ -469,7 +469,7 @@
     },
     "packages/web-ui": {
       "name": "@draht/web-ui",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
       "dependencies": {
         "@draht/agent-core": "workspace:*",
         "@draht/ai": "workspace:*",
@@ -515,7 +515,7 @@
     },
     "packages/workflows": {
       "name": "@draht/workflows",
-      "version": "2026.7.11",
+      "version": "2026.7.13",
     },
   },
   "overrides": {
@@ -1451,7 +1451,7 @@
 
     "before-after-hook": ["before-after-hook@3.0.2", "", {}, "sha512-Nik3Sc0ncrMK4UUdXQmAnRtzmNQTAAXmXIopizwZ1W1t8QmfJj+zL4OA2I7XPTPW5z5TDqv4hRo/JzouDJnX3A=="],
 
-    "better-sqlite3": ["better-sqlite3@11.10.0", "", { "dependencies": { "bindings": "^1.5.0", "prebuild-install": "^7.1.1" } }, "sha512-EwhOpyXiOEL/lKzHz9AW1msWFNzGc/z+LzeB3/jnFJpxu+th2yqvzsSWas1v9jgs9+xiXJcD5A8CJxAG2TaghQ=="],
+    "better-sqlite3": ["better-sqlite3@12.11.1", "", { "dependencies": { "bindings": "^1.5.0", "prebuild-install": "^7.1.1" } }, "sha512-dq9AtApgg5PGFtBzPFSBl3HZQjHok5gaQCM6zh2Yk0aSmDCs1CbnVI8/HgASQkNKsWFpseIO9beg5xxpYhbIfA=="],
 
     "bignumber.js": ["bignumber.js@9.3.1", "", {}, "sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ=="],
 
@@ -2671,11 +2671,15 @@
 
     "@babel/helper-compilation-targets/semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
 
+    "@draht/agent-core/@draht/ai": ["@draht/ai@file:packages/ai", { "dependencies": { "@anthropic-ai/sdk": "^0.91.1", "@aws-sdk/client-bedrock-runtime": "^3.1030.0", "@google/genai": "^1.40.0", "@mistralai/mistralai": "^2.2.6", "@opentelemetry/api": "^1.9.0", "@smithy/node-http-handler": "^4.4.12", "@smithy/types": "^4.0.0", "chalk": "^5.6.2", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "^0.1.7", "proxy-agent": "^6.5.0", "proxy-from-env": "^1.1.0", "typebox": "^1.1.24", "undici": "^7.19.1", "zod-to-json-schema": "^3.24.6" }, "devDependencies": { "@types/node": "^24.3.0", "canvas": "^3.2.0", "vitest": "^3.2.4" }, "bin": { "draht-ai": "./dist/cli.js" } }],
+
     "@draht/agent-core/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
 
     "@draht/ai/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
 
     "@draht/ci/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.39.0", "", { "dependencies": { "@types/node": "^18.11.18", "@types/node-fetch": "^2.6.4", "abort-controller": "^3.0.0", "agentkeepalive": "^4.2.1", "form-data-encoder": "1.7.2", "formdata-node": "^4.3.2", "node-fetch": "^2.6.7" } }, "sha512-eMyDIPRZbt1CCLErRCi3exlAvNkBtRe+kW5vvJyef93PmNr/clstYgHhtvmkxN82nlKgzyGPCyGxrm0JQ1ZIdg=="],
+
+    "@draht/coding-agent/@draht/ai": ["@draht/ai@file:packages/ai", { "dependencies": { "@anthropic-ai/sdk": "^0.91.1", "@aws-sdk/client-bedrock-runtime": "^3.1030.0", "@google/genai": "^1.40.0", "@mistralai/mistralai": "^2.2.6", "@opentelemetry/api": "^1.9.0", "@smithy/node-http-handler": "^4.4.12", "@smithy/types": "^4.0.0", "chalk": "^5.6.2", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "^0.1.7", "proxy-agent": "^6.5.0", "proxy-from-env": "^1.1.0", "typebox": "^1.1.24", "undici": "^7.19.1", "zod-to-json-schema": "^3.24.6" }, "devDependencies": { "@types/node": "^24.3.0", "canvas": "^3.2.0", "vitest": "^3.2.4" }, "bin": { "draht-ai": "./dist/cli.js" } }],
 
     "@draht/coding-agent/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
 
@@ -2684,6 +2688,10 @@
     "@draht/mom/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
 
     "@draht/orchestrator/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.39.0", "", { "dependencies": { "@types/node": "^18.11.18", "@types/node-fetch": "^2.6.4", "abort-controller": "^3.0.0", "agentkeepalive": "^4.2.1", "form-data-encoder": "1.7.2", "formdata-node": "^4.3.2", "node-fetch": "^2.6.7" } }, "sha512-eMyDIPRZbt1CCLErRCi3exlAvNkBtRe+kW5vvJyef93PmNr/clstYgHhtvmkxN82nlKgzyGPCyGxrm0JQ1ZIdg=="],
+
+    "@draht/rlm/@draht/ai": ["@draht/ai@file:packages/ai", { "dependencies": { "@anthropic-ai/sdk": "^0.91.1", "@aws-sdk/client-bedrock-runtime": "^3.1030.0", "@google/genai": "^1.40.0", "@mistralai/mistralai": "^2.2.6", "@opentelemetry/api": "^1.9.0", "@smithy/node-http-handler": "^4.4.12", "@smithy/types": "^4.0.0", "chalk": "^5.6.2", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "^0.1.7", "proxy-agent": "^6.5.0", "proxy-from-env": "^1.1.0", "typebox": "^1.1.24", "undici": "^7.19.1", "zod-to-json-schema": "^3.24.6" }, "devDependencies": { "@types/node": "^24.3.0", "canvas": "^3.2.0", "vitest": "^3.2.4" }, "bin": { "draht-ai": "./dist/cli.js" } }],
+
+    "@draht/router/@draht/ai": ["@draht/ai@file:packages/ai", { "dependencies": { "@anthropic-ai/sdk": "^0.91.1", "@aws-sdk/client-bedrock-runtime": "^3.1030.0", "@google/genai": "^1.40.0", "@mistralai/mistralai": "^2.2.6", "@opentelemetry/api": "^1.9.0", "@smithy/node-http-handler": "^4.4.12", "@smithy/types": "^4.0.0", "chalk": "^5.6.2", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "^0.1.7", "proxy-agent": "^6.5.0", "proxy-from-env": "^1.1.0", "typebox": "^1.1.24", "undici": "^7.19.1", "zod-to-json-schema": "^3.24.6" }, "devDependencies": { "@types/node": "^24.3.0", "canvas": "^3.2.0", "vitest": "^3.2.4" }, "bin": { "draht-ai": "./dist/cli.js" } }],
 
     "@draht/web-ui/highlight.js": ["highlight.js@11.11.1", "", {}, "sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w=="],
 
@@ -2768,6 +2776,10 @@
     "csso/css-tree": ["css-tree@2.2.1", "", { "dependencies": { "mdn-data": "2.0.28", "source-map-js": "^1.0.1" } }, "sha512-OA0mILzGc1kCOCSJerOeqDxDQ4HOh+G8NbOJFOTgOCzpw7fCBubk0fEyxp8AgOL/jvLgYA/uV0cMbe43ElF1JA=="],
 
     "dom-serializer/entities": ["entities@4.5.0", "", {}, "sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw=="],
+
+    "draht-web-ui-example/@draht/ai": ["@draht/ai@file:packages/ai", { "dependencies": { "@anthropic-ai/sdk": "^0.91.1", "@aws-sdk/client-bedrock-runtime": "^3.1030.0", "@google/genai": "^1.40.0", "@mistralai/mistralai": "^2.2.6", "@opentelemetry/api": "^1.9.0", "@smithy/node-http-handler": "^4.4.12", "@smithy/types": "^4.0.0", "chalk": "^5.6.2", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "^0.1.7", "proxy-agent": "^6.5.0", "proxy-from-env": "^1.1.0", "typebox": "^1.1.24", "undici": "^7.19.1", "zod-to-json-schema": "^3.24.6" }, "devDependencies": { "@types/node": "^24.3.0", "canvas": "^3.2.0", "vitest": "^3.2.4" }, "bin": { "draht-ai": "./dist/cli.js" } }],
+
+    "draht-web-ui-example/@draht/web-ui": ["@draht/web-ui@file:packages/web-ui", { "dependencies": { "@draht/agent-core": "workspace:*", "@draht/ai": "workspace:*", "@draht/tui": "workspace:*", "@lmstudio/sdk": "^1.5.0", "@sinclair/typebox": "^0.34.41", "docx-preview": "^0.3.7", "highlight.js": "^11.11.1", "jszip": "^3.10.1", "lucide": "^0.544.0", "ollama": "^0.6.0", "pdfjs-dist": "5.4.394", "typebox": "^1.1.24", "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz" }, "devDependencies": { "@mariozechner/mini-lit": "^0.2.0", "@tailwindcss/cli": "^4.0.0-beta.14", "concurrently": "^9.2.1", "tailwindcss": "^4.2.1", "typescript": "7.0.2" }, "peerDependencies": { "@mariozechner/mini-lit": "^0.2.0", "lit": "^3.3.1" } }],
 
     "execa/cross-spawn": ["cross-spawn@6.0.6", "", { "dependencies": { "nice-try": "^1.0.4", "path-key": "^2.0.1", "semver": "^5.5.0", "shebang-command": "^1.2.0", "which": "^1.2.9" } }, "sha512-VqCUuhcd1iB+dsv8gxPttb5iZh/D0iubSP21g36KXdEuf6I5JiioesUVjpCdHV9MZRUfVFlvwtIUyPfxo5trtw=="],
 
@@ -2863,6 +2875,10 @@
 
     "@draht/orchestrator/@anthropic-ai/sdk/@types/node": ["@types/node@18.19.130", "", { "dependencies": { "undici-types": "~5.26.4" } }, "sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg=="],
 
+    "@draht/rlm/@draht/ai/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
+
+    "@draht/router/@draht/ai/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
+
     "@lmstudio/sdk/chalk/supports-color": ["supports-color@7.2.0", "", { "dependencies": { "has-flag": "^4.0.0" } }, "sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw=="],
 
     "@octokit/plugin-paginate-rest/@octokit/types/@octokit/openapi-types": ["@octokit/openapi-types@24.2.0", "", {}, "sha512-9sIH3nSUttelJSXUrmGzl7QUBFul0/mB8HRYl3fOlgHbIWG+WnYDXU3v/2zMtAvuzZ/ed00Ei6on975FhBfzrg=="],
@@ -2957,6 +2973,12 @@
 
     "csso/css-tree/mdn-data": ["mdn-data@2.0.28", "", {}, "sha512-aylIc7Z9y4yzHYAJNuESG3hfhC+0Ibp/MAMiaOZgNv4pmEdFyfZhhhny4MNiAfWdBQ1RQ2mfDWmM1x8SvGyp8g=="],
 
+    "draht-web-ui-example/@draht/ai/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
+
+    "draht-web-ui-example/@draht/web-ui/@draht/ai": ["@draht/ai@file:packages/ai", { "dependencies": { "@anthropic-ai/sdk": "^0.91.1", "@aws-sdk/client-bedrock-runtime": "^3.1030.0", "@google/genai": "^1.40.0", "@mistralai/mistralai": "^2.2.6", "@opentelemetry/api": "^1.9.0", "@smithy/node-http-handler": "^4.4.12", "@smithy/types": "^4.0.0", "chalk": "^5.6.2", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "^0.1.7", "proxy-agent": "^6.5.0", "proxy-from-env": "^1.1.0", "typebox": "^1.1.24", "undici": "^7.19.1", "zod-to-json-schema": "^3.24.6" }, "devDependencies": { "@types/node": "^24.3.0", "canvas": "^3.2.0", "vitest": "^3.2.4" }, "bin": { "draht-ai": "./dist/cli.js" } }],
+
+    "draht-web-ui-example/@draht/web-ui/highlight.js": ["highlight.js@11.11.1", "", {}, "sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w=="],
+
     "execa/cross-spawn/path-key": ["path-key@2.0.1", "", {}, "sha512-fEHGKCSmUSDPv4uoj8AlD+joPlq3peND+HRYyxFz4KPw4z926S/b8rIuFs2FYJg3BwsxJf6A9/3eIdLaYC+9Dw=="],
 
     "execa/cross-spawn/semver": ["semver@5.7.2", "", { "bin": { "semver": "bin/semver" } }, "sha512-cBznnQ9KjJqU67B52RMC65CMarK2600WFnbkcaiwWq3xy/5haFJlshgnpjovMVJ+Hff49d8GEn0b87C5pDQ10g=="],
@@ -3041,6 +3063,10 @@
 
     "@draht/orchestrator/@anthropic-ai/sdk/@types/node/undici-types": ["undici-types@5.26.5", "", {}, "sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA=="],
 
+    "@draht/rlm/@draht/ai/@types/node/undici-types": ["undici-types@7.16.0", "", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
+
+    "@draht/router/@draht/ai/@types/node/undici-types": ["undici-types@7.16.0", "", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
+
     "astro/vite/esbuild/@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.25.12", "", { "os": "aix", "cpu": "ppc64" }, "sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA=="],
 
     "astro/vite/esbuild/@esbuild/android-arm": ["@esbuild/android-arm@0.25.12", "", { "os": "android", "cpu": "arm" }, "sha512-VJ+sKvNA/GE7Ccacc9Cha7bpS8nyzVv0jdVgwNDaR4gDMC/2TTRc33Ip8qrNYUcpkOHUT5OZ0bUcNNVZQ9RLlg=="],
@@ -3093,6 +3119,12 @@
 
     "astro/vite/esbuild/@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
+    "draht-web-ui-example/@draht/ai/@types/node/undici-types": ["undici-types@7.16.0", "", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
+
+    "draht-web-ui-example/@draht/web-ui/@draht/ai/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
+
     "execa/cross-spawn/shebang-command/shebang-regex": ["shebang-regex@1.0.0", "", {}, "sha512-wpoSFAxys6b2a2wHZ1XpDSgD7N9iVjg29Ph9uV/uaP9Ex/KXlkTZTeddxDPSYQpgvzKLGJke2UU0AzoGCjNIvQ=="],
+
+    "draht-web-ui-example/@draht/web-ui/@draht/ai/@types/node/undici-types": ["undici-types@7.16.0", "", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
   }
 }

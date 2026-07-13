@@ -1,5 +1,9 @@
 import assert from "node:assert";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "vitest";
+import { VectorStore } from "../src/vector-store.js";
 
 // We test pure functions extracted from vector-store (no API calls needed).
 
@@ -10,6 +14,18 @@ import { describe, it } from "vitest";
 // 4. cosine similarity math
 
 describe("VectorStore internals", () => {
+	it("opens a SQLite knowledge database and executes a query", async () => {
+		const directory = await mkdtemp(path.join(os.tmpdir(), "draht-knowledge-"));
+		const store = new VectorStore(path.join(directory, "knowledge.db"), "test-key");
+
+		try {
+			assert.deepStrictEqual(store.getStats(), { totalChunks: 0, sources: [] });
+		} finally {
+			store.close();
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	describe("cosineSimilarity", () => {
 		// Import via a trick — these are module-private, so we re-implement to test
 		function cosineSimilarity(a: number[], b: number[]): number {

@@ -14,7 +14,7 @@ Two audiences arrive at this page:
 
 ## Product Purpose
 
-draht is a GSD workflow engine for coding agents. It routes each task to the cheapest capable model, writes the failing test before any implementation, reads your domain model before touching code, and logs every model call with enough provenance to pass an audit or produce a freelancer invoice. Available as a Claude Code plugin or standalone CLI. MIT-licensed, no telemetry, self-serve or with a one-time setup from Oskar.
+draht is a GSD workflow engine for coding agents. It routes each task to the cheapest capable model, writes the failing test before any implementation, reads your domain model before touching code, and logs every model call with enough provenance to pass an audit or produce a freelancer invoice. Available as a Claude Code plugin or standalone CLI. MIT-licensed, no telemetry, and available self-serve, as a fixed-scope setup sprint, or as a team rollout led by Oskar.
 
 ## Brand Personality
 

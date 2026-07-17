@@ -7,7 +7,7 @@ import {
 	createExtensionRuntime,
 	formatSkillsForPrompt,
 	loadSkillsFromDir,
-	ModelRegistry,
+	ModelRuntime,
 	type ResourceLoader,
 	SessionManager,
 	type Skill,
@@ -42,8 +42,8 @@ export interface AgentRunner {
 	abort(): void;
 }
 
-async function getAnthropicApiKey(authStorage: AuthStorage): Promise<string> {
-	const key = await authStorage.getApiKey("anthropic");
+async function getAnthropicApiKey(modelRuntime: ModelRuntime): Promise<string> {
+	const key = (await modelRuntime.getAuth("anthropic"))?.auth.apiKey;
 	if (!key) {
 		throw new Error(
 			"No API key found for anthropic.\n\n" +
@@ -389,17 +389,26 @@ function formatToolArgsForSlack(_toolName: string, args: Record<string, unknown>
 }
 
 // Cache runners per channel
-const channelRunners = new Map<string, AgentRunner>();
+// Holds the in-flight promise so concurrent callers share one runner per channel.
+const channelRunners = new Map<string, Promise<AgentRunner>>();
 
 /**
  * Get or create an AgentRunner for a channel.
  * Runners are cached - one per channel, persistent across messages.
  */
-export function getOrCreateRunner(sandboxConfig: SandboxConfig, channelId: string, channelDir: string): AgentRunner {
+export function getOrCreateRunner(
+	sandboxConfig: SandboxConfig,
+	channelId: string,
+	channelDir: string,
+): Promise<AgentRunner> {
 	const existing = channelRunners.get(channelId);
 	if (existing) return existing;
 
-	const runner = createRunner(sandboxConfig, channelId, channelDir);
+	// Drop failed creations from the cache so a later message can retry.
+	const runner = createRunner(sandboxConfig, channelId, channelDir).catch((error) => {
+		channelRunners.delete(channelId);
+		throw error;
+	});
 	channelRunners.set(channelId, runner);
 	return runner;
 }
@@ -408,7 +417,7 @@ export function getOrCreateRunner(sandboxConfig: SandboxConfig, channelId: strin
  * Create a new AgentRunner for a channel.
  * Sets up the session and subscribes to events once.
  */
-function createRunner(sandboxConfig: SandboxConfig, channelId: string, channelDir: string): AgentRunner {
+async function createRunner(sandboxConfig: SandboxConfig, channelId: string, channelDir: string): Promise<AgentRunner> {
 	const executor = createExecutor(sandboxConfig);
 	const workspacePath = executor.getWorkspacePath(channelDir.replace(`/${channelId}`, ""));
 
@@ -426,10 +435,10 @@ function createRunner(sandboxConfig: SandboxConfig, channelId: string, channelDi
 	const sessionManager = SessionManager.open(contextFile, channelDir);
 	const settingsManager = createMomSettingsManager(join(channelDir, ".."));
 
-	// Create AuthStorage and ModelRegistry
+	// Create AuthStorage and ModelRuntime
 	// Auth stored outside workspace so agent can't access it
 	const authStorage = AuthStorage.create(join(homedir(), ".pi", "mom", "auth.json"));
-	const modelRegistry = ModelRegistry.create(authStorage);
+	const modelRuntime = await ModelRuntime.create({ credentials: authStorage });
 
 	// Create agent
 	const agent = new Agent({
@@ -440,7 +449,7 @@ function createRunner(sandboxConfig: SandboxConfig, channelId: string, channelDi
 			tools,
 		},
 		convertToLlm,
-		getApiKey: async () => getAnthropicApiKey(authStorage),
+		getApiKey: async () => getAnthropicApiKey(modelRuntime),
 	});
 
 	// Load existing messages
@@ -470,7 +479,7 @@ function createRunner(sandboxConfig: SandboxConfig, channelId: string, channelDi
 		sessionManager,
 		settingsManager,
 		cwd: process.cwd(),
-		modelRegistry,
+		modelRuntime,
 		resourceLoader,
 		baseToolsOverride,
 	});

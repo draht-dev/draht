@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { getModels, getProviders, type KnownProvider } from "@draht/ai/compat";
+import { type BuiltinProvider, getModels, getProviders } from "@draht/ai/compat";
 import { BUILT_IN_ROLES, DEFAULT_CONFIG, type ModelRef, type RoleConfig, type RouterConfig } from "./types.js";
 
 export { BUILT_IN_ROLES };
@@ -183,7 +183,7 @@ function validateModelRefAgainstRegistry(
 	}
 
 	// Check model exists for this provider
-	const models = getModels(ref.provider as KnownProvider);
+	const models = getModels(ref.provider as BuiltinProvider);
 	const modelExists = models.some((m) => m.id === ref.model);
 	if (!modelExists) {
 		errors.push(`Invalid model '${ref.model}' for provider '${ref.provider}' in role ${role} (${position})`);

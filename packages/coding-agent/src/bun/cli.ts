@@ -1,8 +1,11 @@
 #!/usr/bin/env node
+import { registerBunOAuthFlows } from "@draht/ai/bun-oauth";
 import { APP_NAME } from "../config.ts";
 
 process.title = APP_NAME;
 process.emitWarning = (() => {}) as typeof process.emitWarning;
+
+registerBunOAuthFlows();
 
 import { restoreSandboxEnv } from "./restore-sandbox-env.ts";
 

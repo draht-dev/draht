@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import * as _bundledPiAgentCore from "@draht/agent-core";
 import * as _bundledPiAiCompat from "@draht/ai/compat";
 import * as _bundledPiAiOauth from "@draht/ai/oauth";
+import * as _bundledPiAiProviders from "@draht/ai/providers/all";
 import type { KeyId } from "@draht/tui";
 import * as _bundledPiTui from "@draht/tui";
 import { createJiti } from "@mariozechner/jiti";
@@ -59,6 +60,7 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@draht/ai": _bundledPiAiCompat,
 	"@draht/ai/compat": _bundledPiAiCompat,
 	"@draht/ai/oauth": _bundledPiAiOauth,
+	"@draht/ai/providers/all": _bundledPiAiProviders,
 	"@draht/coding-agent": _bundledPiCodingAgent,
 };
 
@@ -98,14 +100,16 @@ function getAliases(): Record<string, string> {
 	// global API keep working at runtime until compat is removed.
 	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@draht/ai/compat");
 	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@draht/ai/oauth");
+	const piAiProvidersEntry = resolveWorkspaceOrImport("ai/dist/providers/all.js", "@draht/ai/providers/all");
 
 	_aliases = {
 		"@draht/coding-agent": piCodingAgentEntry,
 		"@draht/agent-core": piAgentCoreEntry,
 		"@draht/tui": piTuiEntry,
-		"@draht/ai": piAiCompatEntry,
+		"@draht/ai/providers/all": piAiProvidersEntry,
 		"@draht/ai/compat": piAiCompatEntry,
 		"@draht/ai/oauth": piAiOauthEntry,
+		"@draht/ai": piAiCompatEntry,
 		"typebox/compile": typeboxCompileEntry,
 		"typebox/value": typeboxValueEntry,
 		typebox: typeboxEntry,

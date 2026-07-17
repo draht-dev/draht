@@ -90,6 +90,7 @@
 		"@types/node": "^24.3.0",
 		"@types/proper-lockfile": "^4.1.4",
 		"@types/semver": "^7.7.1",
+		"openai": "6.26.0",
 		"shx": "^0.4.0",
 		"typescript": "7.0.2",
 		"vitest": "^3.2.4"

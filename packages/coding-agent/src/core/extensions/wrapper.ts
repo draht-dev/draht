@@ -6,7 +6,7 @@
  */
 
 import type { AgentTool } from "@draht/agent-core";
-import { wrapToolDefinition, wrapToolDefinitions } from "../tools/tool-definition-wrapper.js";
+import { wrapToolDefinition } from "../tools/tool-definition-wrapper.js";
 import type { ExtensionRunner } from "./runner.js";
 import type { RegisteredTool } from "./types.js";
 
@@ -15,7 +15,25 @@ import type { RegisteredTool } from "./types.js";
  * Uses the runner's createContext() for consistent context across tools and event handlers.
  */
 export function wrapRegisteredTool(registeredTool: RegisteredTool, runner: ExtensionRunner): AgentTool {
-	return wrapToolDefinition(registeredTool.definition, () => runner.createContext());
+	const tool = wrapToolDefinition(registeredTool.definition, () => runner.createContext());
+	const execute = tool.execute;
+	return {
+		...tool,
+		execute: async (toolCallId, params, signal, onUpdate) => {
+			const activeBefore = runner.getActiveTools();
+			const result = await execute(toolCallId, params, signal, onUpdate);
+			const activeAfter = runner.getActiveTools();
+			if (!activeBefore.every((name) => activeAfter.includes(name))) return result;
+
+			const beforeNames = new Set(activeBefore);
+			const addedToolNames = activeAfter.filter((name) => !beforeNames.has(name));
+			if (addedToolNames.length === 0) return result;
+			return {
+				...result,
+				addedToolNames: [...new Set([...(result.addedToolNames ?? []), ...addedToolNames])],
+			};
+		},
+	};
 }
 
 /**
@@ -23,8 +41,5 @@ export function wrapRegisteredTool(registeredTool: RegisteredTool, runner: Exten
  * Uses the runner's createContext() for consistent context across tools and event handlers.
  */
 export function wrapRegisteredTools(registeredTools: RegisteredTool[], runner: ExtensionRunner): AgentTool[] {
-	return wrapToolDefinitions(
-		registeredTools.map((registeredTool) => registeredTool.definition),
-		() => runner.createContext(),
-	);
+	return registeredTools.map((tool) => wrapRegisteredTool(tool, runner));
 }

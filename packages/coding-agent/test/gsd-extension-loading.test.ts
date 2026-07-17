@@ -8,6 +8,7 @@ import { loadExtensions } from "../src/core/extensions/loader.js";
 import { ExtensionRunner } from "../src/core/extensions/runner.js";
 import type { ExtensionUIContext } from "../src/core/extensions/types.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
+import { ModelRuntime } from "../src/core/model-runtime.js";
 import { SessionManager } from "../src/core/session-manager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -57,7 +58,12 @@ describe("gsd extension runtime loading", () => {
 	async function loadGsdRunner() {
 		const result = await loadExtensions([GSD_COMMANDS_PATH], tempDir);
 		const sessionManager = SessionManager.inMemory();
-		const modelRegistry = ModelRegistry.create(AuthStorage.create(path.join(tempDir, "auth.json")));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: AuthStorage.create(path.join(tempDir, "auth.json")),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		const modelRegistry = new ModelRegistry(modelRuntime);
 		const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
 
 		return { result, runner };

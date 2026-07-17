@@ -4,7 +4,7 @@ import { getModel } from "@draht/ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
-import { ModelRegistry } from "../src/core/model-registry.js";
+import { ModelRuntime } from "../src/core/model-runtime.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { createTestResourceLoader } from "./utilities.js";
@@ -23,7 +23,7 @@ const nonReasoningModel: Model<"anthropic-messages"> = {
 	maxTokens: 8192,
 };
 
-function createSession({
+async function createSession({
 	thinkingLevel = "high",
 	defaultThinkingLevel = thinkingLevel,
 	scopedModels,
@@ -34,8 +34,12 @@ function createSession({
 } = {}) {
 	const settingsManager = SettingsManager.inMemory({ defaultThinkingLevel });
 	const sessionManager = SessionManager.inMemory();
-	const authStorage = AuthStorage.inMemory();
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	const modelRuntime = await ModelRuntime.create({
+		credentials: AuthStorage.inMemory(),
+		modelsPath: null,
+		allowModelNetwork: false,
+	});
+	await modelRuntime.setRuntimeApiKey("anthropic", "test-key");
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
@@ -49,7 +53,7 @@ function createSession({
 		sessionManager,
 		settingsManager,
 		cwd: process.cwd(),
-		modelRegistry: ModelRegistry.inMemory(authStorage),
+		modelRuntime,
 		resourceLoader: createTestResourceLoader(),
 		scopedModels,
 	});
@@ -59,7 +63,7 @@ function createSession({
 
 describe("AgentSession model switching", () => {
 	it("preserves the saved thinking preference through non-reasoning models", async () => {
-		const { session, sessionManager, settingsManager } = createSession({
+		const { session, sessionManager, settingsManager } = await createSession({
 			scopedModels: [{ model: reasoningModel }, { model: nonReasoningModel }],
 		});
 

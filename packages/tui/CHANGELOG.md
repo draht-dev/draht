@@ -1,6 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [0.80.10] - 2026-07-16
+
+## [0.80.9] - 2026-07-16
+
+## [0.80.8] - 2026-07-16
+
+### Fixed
+
+- Fixed terminal output to normalize tab characters consistently ([#6697](https://github.com/earendil-works/pi-mono/pull/6697) by [@xz-dev](https://github.com/xz-dev)).
+
+## [0.80.7] - 2026-07-14
+
+### Fixed
+
+- Fixed legacy terminal decoding for Alt+symbol key combinations such as `Alt+,` and `Alt+.` ([#6523](https://github.com/earendil-works/pi-mono/pull/6523) by [@ribelo](https://github.com/ribelo)).
 
 ## [2026.7.12] - 2026-07-12
 

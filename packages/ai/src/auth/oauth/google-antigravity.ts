@@ -7,13 +7,9 @@
  */
 
 import type { Server } from "node:http";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
-import { generatePKCE } from "./pkce.js";
-import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
-
-type AntigravityCredentials = OAuthCredentials & {
-	projectId: string;
-};
+import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
+import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
+import { generatePKCE } from "./pkce.ts";
 
 let _createServer: typeof import("node:http").createServer | null = null;
 let _httpImportPromise: Promise<void> | null = null;
@@ -231,7 +227,7 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
 /**
  * Refresh Antigravity token
  */
-export async function refreshAntigravityToken(refreshToken: string, projectId: string): Promise<OAuthCredentials> {
+export async function refreshAntigravityToken(refreshToken: string, projectId: string): Promise<OAuthCredential> {
 	const response = await fetch(TOKEN_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -255,6 +251,7 @@ export async function refreshAntigravityToken(refreshToken: string, projectId: s
 	};
 
 	return {
+		type: "oauth",
 		refresh: data.refresh_token || refreshToken,
 		access: data.access_token,
 		expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
@@ -263,23 +260,21 @@ export async function refreshAntigravityToken(refreshToken: string, projectId: s
 }
 
 /**
- * Login with Antigravity OAuth
+ * Login with Antigravity OAuth.
  *
- * @param onAuth - Callback with URL and optional instructions
- * @param onProgress - Optional progress callback
- * @param onManualCodeInput - Optional promise that resolves with user-pasted redirect URL.
- *                            Races with browser callback - whichever completes first wins.
+ * The pasted-redirect-URL prompt races the local browser callback — whichever
+ * completes first wins.
  */
-export async function loginAntigravity(
-	onAuth: (info: { url: string; instructions?: string }) => void,
-	onProgress?: (message: string) => void,
-	onManualCodeInput?: () => Promise<string>,
-): Promise<OAuthCredentials> {
+export async function loginAntigravity(interaction: AuthInteraction): Promise<OAuthCredential> {
+	const onProgress = (message: string) => interaction.notify({ type: "progress", message });
 	const { verifier, challenge } = await generatePKCE();
 
 	// Start local server for callback
-	onProgress?.("Starting local server for OAuth callback...");
+	onProgress("Starting local server for OAuth callback...");
 	const server = await startCallbackServer();
+	// The manual_code prompt races the callback server; abort it once the flow
+	// settles so the UI can dismiss the pending input.
+	const manualAbort = new AbortController();
 
 	let code: string | undefined;
 
@@ -300,72 +295,68 @@ export async function loginAntigravity(
 		const authUrl = `${AUTH_URL}?${authParams.toString()}`;
 
 		// Notify caller with URL to open
-		onAuth({
+		interaction.notify({
+			type: "auth_url",
 			url: authUrl,
-			instructions: "Complete the sign-in in your browser.",
+			instructions:
+				"Complete the sign-in in your browser. If the browser is on another machine, paste the final redirect URL here.",
 		});
 
-		// Wait for the callback, racing with manual input if provided
-		onProgress?.("Waiting for OAuth callback...");
+		// Wait for the callback, racing with manual input
+		onProgress("Waiting for OAuth callback...");
 
-		if (onManualCodeInput) {
-			// Race between browser callback and manual input
-			let manualInput: string | undefined;
-			let manualError: Error | undefined;
-			const manualPromise = onManualCodeInput()
-				.then((input) => {
-					manualInput = input;
-					server.cancelWait();
-				})
-				.catch((err) => {
-					manualError = err instanceof Error ? err : new Error(String(err));
-					server.cancelWait();
-				});
+		let manualInput: string | undefined;
+		let manualError: Error | undefined;
+		const manualPromise = interaction
+			.prompt({
+				type: "manual_code",
+				message: "Complete login in your browser, or paste the redirect URL here:",
+				placeholder: REDIRECT_URI,
+				signal: manualAbort.signal,
+			})
+			.then((input) => {
+				manualInput = input;
+				server.cancelWait();
+			})
+			.catch((err) => {
+				manualError = err instanceof Error ? err : new Error(String(err));
+				server.cancelWait();
+			});
 
-			const result = await server.waitForCode();
+		const result = await server.waitForCode();
 
-			// If manual input was cancelled, throw that error
+		// If manual input was cancelled, throw that error
+		if (manualError) {
+			throw manualError;
+		}
+
+		if (result?.code) {
+			// Browser callback won - verify state
+			if (result.state !== verifier) {
+				throw new Error("OAuth state mismatch - possible CSRF attack");
+			}
+			code = result.code;
+		} else if (manualInput) {
+			// Manual input won
+			const parsed = parseRedirectUrl(manualInput);
+			if (parsed.state && parsed.state !== verifier) {
+				throw new Error("OAuth state mismatch - possible CSRF attack");
+			}
+			code = parsed.code;
+		}
+
+		// If still no code, wait for manual promise and try that
+		if (!code) {
+			await manualPromise;
 			if (manualError) {
 				throw manualError;
 			}
-
-			if (result?.code) {
-				// Browser callback won - verify state
-				if (result.state !== verifier) {
-					throw new Error("OAuth state mismatch - possible CSRF attack");
-				}
-				code = result.code;
-			} else if (manualInput) {
-				// Manual input won
+			if (manualInput) {
 				const parsed = parseRedirectUrl(manualInput);
 				if (parsed.state && parsed.state !== verifier) {
 					throw new Error("OAuth state mismatch - possible CSRF attack");
 				}
 				code = parsed.code;
-			}
-
-			// If still no code, wait for manual promise and try that
-			if (!code) {
-				await manualPromise;
-				if (manualError) {
-					throw manualError;
-				}
-				if (manualInput) {
-					const parsed = parseRedirectUrl(manualInput);
-					if (parsed.state && parsed.state !== verifier) {
-						throw new Error("OAuth state mismatch - possible CSRF attack");
-					}
-					code = parsed.code;
-				}
-			}
-		} else {
-			// Original flow: just wait for callback
-			const result = await server.waitForCode();
-			if (result?.code) {
-				if (result.state !== verifier) {
-					throw new Error("OAuth state mismatch - possible CSRF attack");
-				}
-				code = result.code;
 			}
 		}
 
@@ -374,7 +365,7 @@ export async function loginAntigravity(
 		}
 
 		// Exchange code for tokens
-		onProgress?.("Exchanging authorization code for tokens...");
+		onProgress("Exchanging authorization code for tokens...");
 		const tokenResponse = await fetch(TOKEN_URL, {
 			method: "POST",
 			headers: {
@@ -406,7 +397,7 @@ export async function loginAntigravity(
 		}
 
 		// Get user email
-		onProgress?.("Getting user info...");
+		onProgress("Getting user info...");
 		const email = await getUserEmail(tokenData.access_token);
 
 		// Discover project
@@ -415,7 +406,8 @@ export async function loginAntigravity(
 		// Calculate expiry time (current time + expires_in seconds - 5 min buffer)
 		const expiresAt = Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000;
 
-		const credentials: OAuthCredentials = {
+		const credential: OAuthCredential = {
+			type: "oauth",
 			refresh: tokenData.refresh_token,
 			access: tokenData.access_token,
 			expires: expiresAt,
@@ -423,31 +415,32 @@ export async function loginAntigravity(
 			email,
 		};
 
-		return credentials;
+		return credential;
 	} finally {
+		manualAbort.abort();
 		server.server.close();
 	}
 }
 
-export const antigravityOAuthProvider: OAuthProviderInterface = {
-	id: "google-antigravity",
+function antigravityProjectId(credential: OAuthCredential): string {
+	const projectId = credential.projectId;
+	if (typeof projectId !== "string" || !projectId) {
+		throw new Error("Antigravity credentials missing projectId");
+	}
+	return projectId;
+}
+
+export const antigravityOAuth: OAuthAuth = {
 	name: "Antigravity (Gemini 3, Claude, GPT-OSS)",
-	usesCallbackServer: true,
+	loginLabel: "Sign in with Google (Antigravity)",
+	login: loginAntigravity,
+	refresh: (credential) => refreshAntigravityToken(credential.refresh, antigravityProjectId(credential)),
 
-	async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-		return loginAntigravity(callbacks.onAuth, callbacks.onProgress, callbacks.onManualCodeInput);
-	},
-
-	async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-		const creds = credentials as AntigravityCredentials;
-		if (!creds.projectId) {
-			throw new Error("Antigravity credentials missing projectId");
-		}
-		return refreshAntigravityToken(creds.refresh, creds.projectId);
-	},
-
-	getApiKey(credentials: OAuthCredentials): string {
-		const creds = credentials as AntigravityCredentials;
-		return JSON.stringify({ token: creds.access, projectId: creds.projectId });
+	/**
+	 * Antigravity requests need both the access token and the discovered project
+	 * id, so the credential is handed to callers as a JSON blob in `apiKey`.
+	 */
+	async toAuth(credential) {
+		return { apiKey: JSON.stringify({ token: credential.access, projectId: antigravityProjectId(credential) }) };
 	},
 };

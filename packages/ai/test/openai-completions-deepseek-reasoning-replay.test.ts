@@ -13,7 +13,9 @@ const emptyUsage: Usage = {
 
 // Compat shape that detectCompat() returns for deepseek.com baseUrls today.
 // Used for tests that exercise convertMessages directly.
-const deepseekCompat: Required<OpenAICompletionsCompat> = {
+const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode"> & {
+	deferredToolsMode?: OpenAICompletionsCompat["deferredToolsMode"];
+} = {
 	supportsStore: false,
 	supportsDeveloperRole: false,
 	supportsReasoningEffort: true,
@@ -32,6 +34,7 @@ const deepseekCompat: Required<OpenAICompletionsCompat> = {
 	sendSessionAffinityHeaders: false,
 	supportsLongCacheRetention: false,
 	chatTemplateKwargs: {},
+	sessionAffinityFormat: "openai",
 };
 
 function makeDeepSeekModel(): Model<"openai-completions"> {

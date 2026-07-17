@@ -1,41 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { loginOpenCodeGo, opencodeGoOAuthProvider, refreshOpenCodeGoToken } from "../src/utils/oauth/opencode-go.js";
+import { loginOpenCodeGo, opencodeGoOAuth, refreshOpenCodeGoToken } from "../src/auth/oauth/opencode-go.js";
+import type { AuthEvent, AuthInteraction } from "../src/auth/types.ts";
+
+function interaction(answer: string): AuthInteraction & { events: AuthEvent[] } {
+	const events: AuthEvent[] = [];
+	return {
+		events,
+		notify: (event) => events.push(event),
+		prompt: async () => answer,
+	};
+}
 
 describe("OpenCode Go login", () => {
 	it("opens the OpenCode Zen dashboard and stores the pasted key as access", async () => {
-		let authUrl = "";
-		const credentials = await loginOpenCodeGo({
-			onAuth: (info) => {
-				authUrl = info.url;
-			},
-			onPrompt: async () => "  sk-opencode-test  ",
-		});
+		const ctx = interaction("  sk-opencode-test  ");
+		const credential = await loginOpenCodeGo(ctx);
 
-		expect(authUrl).toBe("https://opencode.ai/zen");
-		expect(credentials.access).toBe("sk-opencode-test");
-		expect(credentials.refresh).toBe("sk-opencode-test");
-		expect(credentials.expires).toBe(Number.MAX_SAFE_INTEGER);
+		const authEvent = ctx.events.find((event) => event.type === "auth_url");
+		expect(authEvent).toMatchObject({ url: "https://opencode.ai/zen" });
+		expect(credential.type).toBe("oauth");
+		expect(credential.access).toBe("sk-opencode-test");
+		expect(credential.refresh).toBe("sk-opencode-test");
+		expect(credential.expires).toBe(Number.MAX_SAFE_INTEGER);
 	});
 
 	it("rejects an empty paste", async () => {
-		await expect(
-			loginOpenCodeGo({
-				onAuth: () => {},
-				onPrompt: async () => "   ",
-			}),
-		).rejects.toThrow(/missing opencode api key/i);
+		await expect(loginOpenCodeGo(interaction("   "))).rejects.toThrow(/missing opencode api key/i);
 	});
 
 	it("refresh is a no-op (API keys do not expire)", async () => {
-		const original = { access: "key", refresh: "key", expires: 0 };
+		const original = { type: "oauth", access: "key", refresh: "key", expires: 0 } as const;
 		const refreshed = await refreshOpenCodeGoToken(original);
 		expect(refreshed.access).toBe("key");
 		expect(refreshed.expires).toBe(Number.MAX_SAFE_INTEGER);
 	});
 
-	it("provider exposes id, name, and getApiKey", () => {
-		expect(opencodeGoOAuthProvider.id).toBe("opencode-go");
-		expect(opencodeGoOAuthProvider.name).toBe("OpenCode Go");
-		expect(opencodeGoOAuthProvider.getApiKey({ access: "k", refresh: "k", expires: 0 })).toBe("k");
+	it("exposes an OAuthAuth whose toAuth returns the key as apiKey", async () => {
+		expect(opencodeGoOAuth.name).toBe("OpenCode Go");
+		await expect(opencodeGoOAuth.toAuth({ type: "oauth", access: "k", refresh: "k", expires: 0 })).resolves.toEqual({
+			apiKey: "k",
+		});
 	});
 });

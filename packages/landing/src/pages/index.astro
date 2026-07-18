@@ -506,6 +506,16 @@ const description = "Draht routes each coding task to the cheapest model that ca
 
 		const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+	// Pause the demo while the terminal is off-screen or the tab is hidden.
+	let termInView = true;
+	if (term && "IntersectionObserver" in window) {
+		new IntersectionObserver((entries) => { termInView = entries[0].isIntersecting; }).observe(term);
+	}
+	const termActive = () => termInView && !document.hidden;
+	async function waitTermActive() {
+		while (!termActive()) await wait(400);
+	}
+
 		async function typeScene(scene) {
 			if (!term) return;
 			term.innerHTML = "";
@@ -518,6 +528,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 					line.className = "line";
 					term.appendChild(line);
 					await wait(60);
+					await waitTermActive();
 					continue;
 				}
 				const span = document.createElement("span");
@@ -538,6 +549,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		(async function loop() {
 			let i = 0;
 			while (true) {
+				await waitTermActive();
 				await typeScene(scenes[i % scenes.length]);
 				await wait(3800);
 				i++;
@@ -955,6 +967,11 @@ const description = "Draht routes each coding task to the cheapest model that ca
 
 		* { box-sizing: border-box; }
 		html, body { margin: 0; padding: 0; }
+		@media (prefers-reduced-motion: no-preference) {
+			html { scroll-behavior: smooth; }
+		}
+		::selection { background: var(--copper); color: var(--ink); }
+		:focus-visible { outline: 1px solid var(--copper); outline-offset: 3px; }
 		body {
 			background: var(--ink);
 			color: var(--paper);
@@ -1003,7 +1020,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		/* ---------- Hero ---------- */
 		.hero {
 			position: relative;
-			padding: clamp(64px, 10vw, 140px) 0 clamp(80px, 12vw, 180px);
+			padding: clamp(64px, 10vw, 140px) 0 clamp(48px, 6vw, 96px);
 		}
 
 		.tag {
@@ -1059,7 +1076,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 
 		.hero-grid {
 			display: grid;
-			grid-template-columns: 1.1fr 1fr;
+			grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
 			gap: clamp(40px, 6vw, 96px);
 			align-items: end;
 		}
@@ -1400,7 +1417,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		/* ---------- How it works ---------- */
 		.wires {
 			display: grid;
-			grid-template-columns: repeat(3, 1fr);
+			grid-template-columns: repeat(3, minmax(0, 1fr));
 			gap: clamp(20px, 3vw, 48px);
 			position: relative;
 		}
@@ -1408,6 +1425,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		.card {
 			position: relative;
 			padding-top: 64px;
+			min-width: 0;
 		}
 		.card .pin {
 			position: absolute;
@@ -1459,11 +1477,12 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		/* ---------- Terminal + features side by side ---------- */
 		.workbench {
 			display: grid;
-			grid-template-columns: 1.2fr 1fr;
+			grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
 			gap: clamp(32px, 5vw, 72px);
 			align-items: start;
 		}
 		.terminal {
+			min-width: 0;
 			background: var(--ink-2);
 			border: 1px solid var(--rule-strong);
 			font-family: var(--f-mono);
@@ -1521,6 +1540,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		.feat-list {
 			display: grid;
 			gap: 22px;
+			min-width: 0;
 		}
 		.feat {
 			display: grid;
@@ -1560,7 +1580,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		/* ---------- Philosophy ---------- */
 		.manifest {
 			display: grid;
-			grid-template-columns: repeat(2, 1fr);
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 2px;
 			background: var(--rule);
 			border: 1px solid var(--rule);
@@ -1569,6 +1589,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 			background: var(--ink);
 			padding: clamp(24px, 3vw, 40px);
 			position: relative;
+			min-width: 0;
 		}
 		.clause .cnum {
 			font-family: var(--f-display);
@@ -1608,7 +1629,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		/* ---------- Install split ---------- */
 		.install-split {
 			display: grid;
-			grid-template-columns: 1fr 1fr;
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 			gap: 2px;
 			background: var(--rule);
 			border: 1px solid var(--rule);
@@ -1616,6 +1637,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		.install-col {
 			background: var(--ink);
 			padding: clamp(28px, 3vw, 44px);
+			min-width: 0;
 		}
 		.install-badge {
 			display: flex;
@@ -1658,7 +1680,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		/* ---------- Pricing ---------- */
 		.pricing {
 			display: grid;
-			grid-template-columns: 1fr 1fr 1fr;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
 			gap: 2px;
 			background: var(--rule);
 			border: 1px solid var(--rule);
@@ -1669,6 +1691,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 			display: flex;
 			flex-direction: column;
 			position: relative;
+			min-width: 0;
 		}
 		.tier.featured {
 			background:
@@ -1801,7 +1824,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 		}
 		.pkg {
 			display: grid;
-			grid-template-columns: 60px 1.5fr 2fr 100px;
+			grid-template-columns: 60px minmax(0, 1.5fr) minmax(0, 2fr) 100px;
 			gap: 24px;
 			align-items: baseline;
 			padding: 24px 4px;
@@ -1823,6 +1846,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 			font-weight: 400;
 			letter-spacing: -0.01em;
 			transition: color 0.25s;
+			min-width: 0;
 		}
 		.pkg-name em {
 			font-style: italic;
@@ -1834,6 +1858,7 @@ const description = "Draht routes each coding task to the cheapest model that ca
 			color: var(--paper-dim);
 			font-size: 14px;
 			line-height: 1.5;
+			min-width: 0;
 		}
 		.pkg-tag {
 			font-family: var(--f-mono);
@@ -1949,17 +1974,19 @@ const description = "Draht routes each coding task to the cheapest model that ca
 
 		/* ---------- Responsive ---------- */
 		@media (max-width: 900px) {
-			.hero-grid { grid-template-columns: 1fr; }
+			.hero-grid { grid-template-columns: minmax(0, 1fr); }
 			.hero-specs { grid-template-columns: repeat(2, 1fr); }
 			.hero-specs > div:nth-child(2) { border-right: none; }
 			.hero-specs > div:nth-child(1),
 			.hero-specs > div:nth-child(2) { border-bottom: 1px dashed rgba(239, 231, 216, 0.10); }
-			.wires { grid-template-columns: 1fr; gap: 36px; }
-			.workbench { grid-template-columns: 1fr; }
-			.manifest { grid-template-columns: 1fr; }
-			.install-split { grid-template-columns: 1fr; }
-			.pricing { grid-template-columns: 1fr; }
-			.pkg { grid-template-columns: 30px 1fr; }
+			.wires { grid-template-columns: minmax(0, 1fr); gap: 36px; }
+			.card { padding-top: 0; }
+			.workbench { grid-template-columns: minmax(0, 1fr); }
+			.manifest { grid-template-columns: minmax(0, 1fr); }
+			.install-split { grid-template-columns: minmax(0, 1fr); }
+			.pricing { grid-template-columns: minmax(0, 1fr); }
+			.pkg { grid-template-columns: 30px minmax(0, 1fr); }
+			.pkg-name em { display: block; margin-left: 0; margin-top: 2px; font-size: 0.55em; }
 			.pkg-desc, .pkg-tag { grid-column: 2; text-align: left; }
 			.foot { grid-template-columns: 1fr; }
 			.foot-col.right { text-align: left; }

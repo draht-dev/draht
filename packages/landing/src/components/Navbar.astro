@@ -473,6 +473,10 @@ const starsLabel = initialStars === null ? "—" : initialStars.toLocaleString("
 	@media (max-width: 900px) {
 		.meta-strip { flex-direction: column; align-items: flex-start; gap: 4px; }
 	}
+	@media (max-width: 640px) {
+		.meta-strip > span:nth-child(2),
+		.meta-strip > span:nth-child(3) { display: none; }
+	}
 </style>
 
 <script>
@@ -615,6 +619,13 @@ const starsLabel = initialStars === null ? "—" : initialStars.toLocaleString("
 					burger.setAttribute("aria-expanded", "false");
 					topnav.classList.remove("open");
 				});
+			});
+			document.addEventListener("keydown", (e) => {
+				if (e.key === "Escape" && topnav.classList.contains("open")) {
+					topnav.classList.remove("open");
+					burger.setAttribute("aria-expanded", "false");
+					burger.focus();
+				}
 			});
 		}
 

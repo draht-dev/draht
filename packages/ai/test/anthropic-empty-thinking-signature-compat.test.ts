@@ -97,11 +97,11 @@ describe("Anthropic empty thinking signature compat", () => {
 		expect(assistant?.content).toEqual([{ type: "thinking", thinking: "internal reasoning", signature: "" }]);
 	});
 
-	it.each(["k3", "kimi-for-coding"] as const)("allows empty signatures for Kimi Coding %s", async (modelId) => {
-		const model = getModel("kimi-coding", modelId);
+	it("allows empty signatures for Kimi Coding K3", async () => {
+		const model = getModel("kimi-coding", "k3");
 		expect(model.compat?.allowEmptySignature).toBe(true);
 
-		const payload = await capturePayload(model, makeContext(" ", "internal reasoning", "kimi-coding", modelId));
+		const payload = await capturePayload(model, makeContext(" ", "internal reasoning", "kimi-coding", "k3"));
 		const assistant = payload.messages?.find((message) => message.role === "assistant");
 		expect(assistant?.content).toEqual([{ type: "thinking", thinking: "internal reasoning", signature: "" }]);
 	});

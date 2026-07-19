@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a configurable context-window cycling action for OpenAI API and Codex models with standard and extended context profiles.
+
 ## [2026.7.13] - 2026-07-12
 
 ### Changed

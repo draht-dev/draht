@@ -357,6 +357,10 @@ Direct OpenAI GPT-5.6 Sol, Terra, and Luna default to a `272000` context window 
 
 The override preserves the built-in pricing metadata. Requests with more than 272K total input tokens use GPT-5.6's long-context rates for the entire request. Apply the same override to `gpt-5.6-terra` or `gpt-5.6-luna` when needed.
 
+In interactive mode, direct OpenAI GPT-5.4, GPT-5.5, and GPT-5.6 Sol/Terra/Luna can switch between their 272K standard and 1.05M extended windows without editing `models.json`. OpenAI Codex GPT-5.6 Sol/Terra/Luna can switch between the 372K catalog default and 1.05M. Press Ctrl+Shift+L by default, or customize the `app.context.cycle` action in `~/.draht/agent/keybindings.json`.
+
+The selected window is stored in the session. Switching to a smaller window prompts for compaction when the current context would not fit. Long-context pricing metadata remains active, and the interactive status message shows the input threshold where higher pricing begins.
+
 Behavior notes:
 - `modelOverrides` are applied to built-in provider models and matching extension-registered provider models.
 - Unknown model IDs are ignored.

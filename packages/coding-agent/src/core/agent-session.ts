@@ -60,6 +60,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { applyContextWindow, getAvailableContextWindows } from "./context-windows.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -150,6 +151,7 @@ export type AgentSessionEvent =
 	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
+	| { type: "context_window_changed"; contextWindow: number; previousContextWindow: number }
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
@@ -1571,7 +1573,7 @@ export class AgentSession {
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.state.model = model;
-		this.sessionManager.appendModelChange(model.provider, model.id);
+		this.sessionManager.appendModelChange(model.provider, model.id, model.contextWindow);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
 
 		// Re-clamp thinking level for new model's capabilities
@@ -1614,7 +1616,7 @@ export class AgentSession {
 
 		// Apply model
 		this.agent.state.model = next.model;
-		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
+		this.sessionManager.appendModelChange(next.model.provider, next.model.id, next.model.contextWindow);
 		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
 
 		// Apply thinking level.
@@ -1642,7 +1644,7 @@ export class AgentSession {
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.state.model = nextModel;
-		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
+		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id, nextModel.contextWindow);
 		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
 
 		// Re-clamp thinking level for new model's capabilities
@@ -1651,6 +1653,52 @@ export class AgentSession {
 		await this._emitModelSelect(nextModel, currentModel, "cycle");
 
 		return { model: nextModel, thinkingLevel: this.thinkingLevel, isScoped: false };
+	}
+
+	// =========================================================================
+	// Context Window Management
+	// =========================================================================
+
+	/** Get the selectable context windows for the current model. */
+	getAvailableContextWindows(): number[] {
+		return this.model ? getAvailableContextWindows(this.model) : [];
+	}
+
+	/** Get the context window that would be selected by the next cycle. */
+	getNextContextWindow(): number | undefined {
+		const model = this.model;
+		if (!model) return undefined;
+		const windows = getAvailableContextWindows(model);
+		if (windows.length <= 1) return undefined;
+		const currentIndex = windows.indexOf(model.contextWindow);
+		return windows[(currentIndex + 1) % windows.length];
+	}
+
+	/** Set the active context window for the current session and persist it on the session branch. */
+	setContextWindow(contextWindow: number): void {
+		const model = this.model;
+		if (!model) throw new Error(formatNoModelSelectedMessage());
+		if (!this.isIdle || this.isCompacting) {
+			throw new Error("Wait for the current response or compaction to finish before changing the context window");
+		}
+		if (!getAvailableContextWindows(model).includes(contextWindow)) {
+			throw new Error(`${model.provider}/${model.id} does not support a ${contextWindow}-token context window`);
+		}
+
+		const previousContextWindow = model.contextWindow;
+		if (contextWindow === previousContextWindow) return;
+
+		this.agent.state.model = { ...model, contextWindow };
+		this.sessionManager.appendModelChange(model.provider, model.id, contextWindow);
+		this._emit({ type: "context_window_changed", contextWindow, previousContextWindow });
+	}
+
+	/** Cycle to the next context window, or return undefined when the model has only one. */
+	cycleContextWindow(): number | undefined {
+		const nextContextWindow = this.getNextContextWindow();
+		if (nextContextWindow === undefined) return undefined;
+		this.setContextWindow(nextContextWindow);
+		return nextContextWindow;
 	}
 
 	// =========================================================================
@@ -2305,7 +2353,7 @@ export class AgentSession {
 			return;
 		}
 
-		this.agent.state.model = refreshedModel;
+		this.agent.state.model = applyContextWindow(refreshedModel, currentModel.contextWindow);
 	}
 
 	private _bindExtensionCore(runner: ExtensionRunner): void {

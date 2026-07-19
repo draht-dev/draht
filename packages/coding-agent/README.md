@@ -171,6 +171,7 @@ See `/hotkeys` for the full list. Customize via `~/.draht/agent/keybindings.json
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
 | Shift+Tab | Cycle thinking level |
+| Ctrl+Shift+L | Cycle supported context windows |
 | Ctrl+O | Collapse/expand tool output |
 | Ctrl+T | Collapse/expand thinking blocks |
 

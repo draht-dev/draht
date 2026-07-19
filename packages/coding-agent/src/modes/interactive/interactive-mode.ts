@@ -61,6 +61,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { formatContextWindow } from "../../core/context-windows.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -751,6 +752,9 @@ export class InteractiveMode {
 				hint("app.suspend", "to suspend"),
 				keyHint("tui.editor.deleteToLineEnd", "to delete to end"),
 				hint("app.thinking.cycle", "to cycle thinking level"),
+				...(this.keybindings.getKeys("app.context.cycle").length > 0
+					? [hint("app.context.cycle", "to cycle context window")]
+					: []),
 				rawKeyHint(`${keyText("app.model.cycleForward")}/${keyText("app.model.cycleBackward")}`, "to cycle models"),
 				hint("app.model.select", "to select model"),
 				hint("app.tools.expand", "to expand tools"),
@@ -2573,6 +2577,7 @@ export class InteractiveMode {
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
+		this.defaultEditor.onAction("app.context.cycle", () => void this.cycleContextWindow());
 		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
 		this.defaultEditor.onAction("app.model.cycleBackward", () => this.cycleModel("backward"));
 
@@ -2879,6 +2884,11 @@ export class InteractiveMode {
 			case "thinking_level_changed":
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
+				break;
+
+			case "context_window_changed":
+				this.footer.invalidate();
+				this.ui.requestRender();
 				break;
 
 			case "message_start":
@@ -3729,6 +3739,66 @@ export class InteractiveMode {
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
 			this.showStatus(`Thinking level: ${newLevel}`);
+		}
+	}
+
+	private async cycleContextWindow(): Promise<void> {
+		const model = this.session.model;
+		const nextContextWindow = this.session.getNextContextWindow();
+		if (!model || nextContextWindow === undefined) {
+			this.showStatus("Current model has only one context window");
+			return;
+		}
+		if (this.session.isStreaming || this.session.isCompacting) {
+			this.showWarning("Wait for the current response or compaction to finish before changing the context window.");
+			return;
+		}
+
+		const reserveTokens = this.settingsManager.getCompactionSettings().reserveTokens;
+		const usableContextWindow = nextContextWindow - reserveTokens;
+		const contextUsage = this.session.getContextUsage();
+		if (
+			nextContextWindow < model.contextWindow &&
+			contextUsage?.tokens !== null &&
+			contextUsage?.tokens !== undefined &&
+			contextUsage.tokens > usableContextWindow
+		) {
+			const confirmed = await this.showExtensionConfirm(
+				"Compact context?",
+				`The current context (${formatContextWindow(contextUsage.tokens)}) does not fit the ${formatContextWindow(nextContextWindow)} window with ${formatContextWindow(reserveTokens)} reserved for the response. Compact before switching?`,
+			);
+			if (!confirmed) {
+				this.showStatus("Context window unchanged");
+				return;
+			}
+
+			try {
+				const result = await this.session.compact();
+				if (result.estimatedTokensAfter !== undefined && result.estimatedTokensAfter > usableContextWindow) {
+					this.showWarning(
+						`Compacted context is still too large for the ${formatContextWindow(nextContextWindow)} window.`,
+					);
+					return;
+				}
+			} catch {
+				return;
+			}
+		}
+
+		try {
+			const previousContextWindow = model.contextWindow;
+			this.session.setContextWindow(nextContextWindow);
+			const pricingThreshold = model.cost.tiers
+				?.map((tier) => tier.inputTokensAbove)
+				.filter((threshold) => threshold >= previousContextWindow && threshold < nextContextWindow)
+				.sort((a, b) => a - b)[0];
+			const pricingNotice =
+				pricingThreshold === undefined
+					? ""
+					: `; higher pricing above ${formatContextWindow(pricingThreshold)} input`;
+			this.showStatus(`Context window: ${formatContextWindow(nextContextWindow)}${pricingNotice}`);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
 		}
 	}
 
@@ -5746,6 +5816,7 @@ export class InteractiveMode {
 		const exit = this.getAppKeyDisplay("app.exit");
 		const suspend = this.getAppKeyDisplay("app.suspend");
 		const cycleThinkingLevel = this.getAppKeyDisplay("app.thinking.cycle");
+		const cycleContextWindow = this.getAppKeyDisplay("app.context.cycle");
 		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
 		const selectModel = this.getAppKeyDisplay("app.model.select");
 		const expandTools = this.getAppKeyDisplay("app.tools.expand");
@@ -5791,7 +5862,7 @@ export class InteractiveMode {
 | \`${exit}\` | Exit (when editor is empty) |
 | \`${suspend}\` | Suspend to background |
 | \`${cycleThinkingLevel}\` | Cycle thinking level |
-| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
+${cycleContextWindow ? `| \`${cycleContextWindow}\` | Cycle context window |\n` : ""}| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |
 | \`${toggleThinking}\` | Toggle thinking block visibility |

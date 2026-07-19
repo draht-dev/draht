@@ -112,6 +112,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `app.model.cycleForward` | `ctrl+p` | Cycle to next model |
 | `app.model.cycleBackward` | `shift+ctrl+p` | Cycle to previous model |
 | `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
+| `app.context.cycle` | `ctrl+shift+l` | Cycle supported context-window sizes for the current model |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
 
 ### Display and Message Queue

@@ -6,6 +6,7 @@ import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { CORE_BUILTIN_EXTENSIONS } from "./builtins/index.ts";
+import { applyContextWindow } from "./context-windows.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { convertToLlm } from "./messages.ts";
@@ -197,7 +198,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (!model && hasExistingSession && existingSession.model) {
 		const restoredModel = modelRuntime.getModel(existingSession.model.provider, existingSession.model.modelId);
 		if (restoredModel && modelRuntime.hasConfiguredAuth(restoredModel.provider)) {
-			model = restoredModel;
+			model = applyContextWindow(restoredModel, existingSession.model.contextWindow);
 		}
 		if (!model) {
 			modelFallbackMessage = `Could not restore model ${existingSession.model.provider}/${existingSession.model.modelId}`;
@@ -369,7 +370,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	} else {
 		// Save initial model and thinking level for new sessions so they can be restored on resume
 		if (model) {
-			sessionManager.appendModelChange(model.provider, model.id);
+			sessionManager.appendModelChange(model.provider, model.id, model.contextWindow);
 		}
 		sessionManager.appendThinkingLevelChange(thinkingLevel);
 	}

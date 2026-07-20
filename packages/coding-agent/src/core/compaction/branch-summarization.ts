@@ -7,7 +7,7 @@
 
 import type { AgentMessage, StreamFn } from "@draht/agent-core";
 import { contentText } from "@draht/ai";
-import type { Model, SimpleStreamOptions } from "@draht/ai/compat";
+import type { Model, SimpleStreamOptions, Usage } from "@draht/ai/compat";
 import { completeSimple } from "@draht/ai/compat";
 import {
 	convertToLlm,
@@ -33,6 +33,7 @@ import {
 
 export interface BranchSummaryResult {
 	summary?: string;
+	usage?: Usage;
 	readFiles?: string[];
 	modifiedFiles?: string[];
 	aborted?: boolean;
@@ -363,6 +364,7 @@ export async function generateBranchSummary(
 
 	return {
 		summary: summary || "No summary generated",
+		usage: response.usage,
 		readFiles,
 		modifiedFiles,
 	};

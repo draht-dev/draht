@@ -313,6 +313,26 @@ Response:
 }
 ```
 
+#### get_available_thinking_levels
+
+List the thinking levels supported by the current model. Returns `["off"]` for a model without reasoning support.
+
+```json
+{"type": "get_available_thinking_levels"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_available_thinking_levels",
+  "success": true,
+  "data": {
+    "levels": ["off", "minimal", "low", "medium", "high"]
+  }
+}
+```
+
 ### Queue Modes
 
 #### set_steering_mode

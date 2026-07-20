@@ -471,8 +471,8 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 
 	describe.skipIf(!process.env.KIMI_API_KEY)("Kimi For Coding", () => {
-		it("k2p7 - should detect overflow via isContextOverflow", async () => {
-			const model = getModel("kimi-coding", "k2p7");
+		it("kimi-for-coding - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("kimi-coding", "kimi-for-coding");
 			const result = await testContextOverflow(model, process.env.KIMI_API_KEY!);
 			logResult(result);
 

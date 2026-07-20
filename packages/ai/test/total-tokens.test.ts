@@ -567,18 +567,22 @@ describe("totalTokens field", () => {
 	// =========================================================================
 
 	describe.skipIf(!process.env.KIMI_API_KEY)("Kimi For Coding", () => {
-		it("k2p7 - should return totalTokens equal to sum of components", { retry: 3, timeout: 60000 }, async () => {
-			const llm = getModel("kimi-coding", "k2p7");
+		it(
+			"kimi-for-coding - should return totalTokens equal to sum of components",
+			{ retry: 3, timeout: 60000 },
+			async () => {
+				const llm = getModel("kimi-coding", "kimi-for-coding");
 
-			console.log(`\nKimi For Coding / ${llm.id}:`);
-			const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.KIMI_API_KEY });
+				console.log(`\nKimi For Coding / ${llm.id}:`);
+				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.KIMI_API_KEY });
 
-			logUsage("First request", first);
-			logUsage("Second request", second);
+				logUsage("First request", first);
+				logUsage("Second request", second);
 
-			assertTotalTokensEqualsComponents(first);
-			assertTotalTokensEqualsComponents(second);
-		});
+				assertTotalTokensEqualsComponents(first);
+				assertTotalTokensEqualsComponents(second);
+			},
+		);
 	});
 
 	// =========================================================================

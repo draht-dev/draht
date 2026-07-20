@@ -285,6 +285,10 @@ export const OPENROUTER_MODELS = values as {
 		id: "kwaipilot/kat-coder-pro-v2.5";
 		provider: "openrouter";
 	};
+	"meituan/longcat-2.0": Model<"openai-completions"> & {
+		id: "meituan/longcat-2.0";
+		provider: "openrouter";
+	};
 	"meta-llama/llama-3.1-70b-instruct": Model<"openai-completions"> & {
 		id: "meta-llama/llama-3.1-70b-instruct";
 		provider: "openrouter";

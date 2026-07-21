@@ -3138,7 +3138,7 @@ export class InteractiveMode {
 				break;
 			}
 
-			case "summarization_retry_start": {
+			case "summarization_retry_scheduled": {
 				this.showError(event.errorMessage);
 				this.showStatusIndicator(
 					new RetryStatusIndicator(this.ui, event.attempt, event.maxAttempts, event.delayMs),
@@ -3158,7 +3158,7 @@ export class InteractiveMode {
 				break;
 			}
 
-			case "summarization_retry_end": {
+			case "summarization_retry_finished": {
 				this.clearStatusIndicator("retry");
 				this.ui.requestRender();
 				break;

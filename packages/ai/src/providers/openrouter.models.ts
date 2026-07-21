@@ -953,10 +953,6 @@ export const OPENROUTER_MODELS = values as {
 		id: "tencent/hy3-preview";
 		provider: "openrouter";
 	};
-	"tencent/hy3:free": Model<"openai-completions"> & {
-		id: "tencent/hy3:free";
-		provider: "openrouter";
-	};
 	"thedrummer/unslopnemo-12b": Model<"openai-completions"> & {
 		id: "thedrummer/unslopnemo-12b";
 		provider: "openrouter";

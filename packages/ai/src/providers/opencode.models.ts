@@ -173,10 +173,6 @@ export const OPENCODE_MODELS = values as {
 		id: "grok-build-0.1";
 		provider: "opencode";
 	};
-	"hy3-free": Model<"openai-completions"> & {
-		id: "hy3-free";
-		provider: "opencode";
-	};
 	"kimi-k2.5": Model<"openai-completions"> & {
 		id: "kimi-k2.5";
 		provider: "opencode";

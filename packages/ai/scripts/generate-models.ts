@@ -2508,6 +2508,8 @@ async function generateModels() {
 		}
 	}
 
+	const generatedAt = new Date().toISOString();
+
 	if (!generatorOptions.jsonOnly) {
 		// Stage and validate all provider values before replacing the current generated data.
 		const providersDir = join(packageRoot, "src/providers");
@@ -2527,7 +2529,7 @@ async function generateModels() {
 			}
 			writeJson(
 				join(stagedDataDir, MODEL_DATA_MANIFEST_FILE),
-				createModelDataManifest(modelDataStructure, fileContents),
+				createModelDataManifest(modelDataStructure, fileContents, generatedAt),
 			);
 			validateModelDataDirectory(modelDataStructure, stagedDataDir);
 

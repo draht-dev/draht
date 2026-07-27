@@ -7,7 +7,7 @@ import {
 	type SessionSearchOptions,
 } from "../types.ts";
 import { InMemorySessionStorage } from "./memory-storage.ts";
-import { createSessionId, createTimestamp, getEntriesToFork, toSession } from "./repo-utils.ts";
+import { createSessionId, createTimestamp, getEntriesToFork } from "./repo-utils.ts";
 import { createSessionSearch, type SessionSearch } from "./search-backend.ts";
 
 export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: string }, void> {
@@ -27,7 +27,7 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 			createdAt: createTimestamp(),
 		};
 		const storage = new InMemorySessionStorage({ metadata });
-		const session = toSession(await this.sessionSearch.wrapStorage(storage));
+		const session = this.sessionSearch.createSession(storage);
 		this.sessions.set(metadata.id, session);
 		return session;
 	}
@@ -62,7 +62,7 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 			createdAt: createTimestamp(),
 		};
 		const storage = new InMemorySessionStorage({ metadata, entries: forkedEntries });
-		const session = toSession(await this.sessionSearch.wrapStorage(storage));
+		const session = this.sessionSearch.createSession(storage);
 		this.sessions.set(metadata.id, session);
 		await this.sessionSearch.indexSession(session);
 		return session;

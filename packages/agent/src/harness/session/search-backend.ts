@@ -12,7 +12,7 @@ import type {
 	SessionStorage,
 	SessionTreeEntry,
 } from "../types.ts";
-import { findSessionEntryMatches } from "./repo-utils.ts";
+import { findSessionEntryMatches, toSession } from "./repo-utils.ts";
 
 export function toSessionSearchRecord<TMetadata extends SessionMetadata>(
 	metadata: TMetadata,
@@ -29,11 +29,11 @@ type SessionSearchSource<TMetadata extends SessionMetadata> = {
 /** A session storage sink that writes canonically, then mirrors records to search. */
 class SearchWritingSessionStorage<TMetadata extends SessionMetadata> implements SessionStorage<TMetadata> {
 	private readonly storage: SessionStorage<TMetadata>;
-	private readonly searchBackend: SessionSearchBackend<TMetadata>;
+	private readonly getBackend: () => Promise<SessionSearchBackend<TMetadata>>;
 
-	constructor(storage: SessionStorage<TMetadata>, searchBackend: SessionSearchBackend<TMetadata>) {
+	constructor(storage: SessionStorage<TMetadata>, getBackend: () => Promise<SessionSearchBackend<TMetadata>>) {
 		this.storage = storage;
-		this.searchBackend = searchBackend;
+		this.getBackend = getBackend;
 	}
 
 	getMetadata(): Promise<TMetadata> {
@@ -46,7 +46,7 @@ class SearchWritingSessionStorage<TMetadata extends SessionMetadata> implements 
 
 	async setLeafId(leafId: string | null): Promise<LeafEntry> {
 		const entry = await this.storage.setLeafId(leafId);
-		await this.searchBackend.upsert(toSessionSearchRecord(await this.storage.getMetadata(), entry));
+		await (await this.getBackend()).upsert(toSessionSearchRecord(await this.storage.getMetadata(), entry));
 		return entry;
 	}
 
@@ -56,7 +56,7 @@ class SearchWritingSessionStorage<TMetadata extends SessionMetadata> implements 
 
 	async appendEntry(entry: SessionTreeEntry): Promise<void> {
 		await this.storage.appendEntry(entry);
-		await this.searchBackend.upsert(toSessionSearchRecord(await this.storage.getMetadata(), entry));
+		await (await this.getBackend()).upsert(toSessionSearchRecord(await this.storage.getMetadata(), entry));
 	}
 
 	getEntry(id: string): Promise<SessionTreeEntry | undefined> {
@@ -96,7 +96,7 @@ class SearchWritingSessionStorage<TMetadata extends SessionMetadata> implements 
 }
 
 export interface SessionSearch<TMetadata extends SessionMetadata> {
-	wrapStorage(storage: SessionStorage<TMetadata>): Promise<SessionStorage<TMetadata>>;
+	createSession(storage: SessionStorage<TMetadata>): Session<TMetadata>;
 	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
 	removeSession(metadata: TMetadata): Promise<void>;
 	indexSession(session: Session<TMetadata>): Promise<void>;
@@ -119,7 +119,7 @@ export function createSessionSearch<TMetadata extends SessionMetadata>(
 	}
 
 	return {
-		wrapStorage: async (storage) => new SearchWritingSessionStorage(storage, await getBackend()),
+		createSession: (storage) => toSession(new SearchWritingSessionStorage(storage, getBackend)),
 		search: async (options) => (await getBackend()).search(options),
 		removeSession: async (metadata) => {
 			await (await getBackend()).removeSession(metadata);

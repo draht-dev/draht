@@ -14,14 +14,12 @@ import type {
 	SessionEntryCursorOptions,
 	SessionInfoEntry,
 	SessionMetadata,
-	SessionSearchWriter,
 	SessionStats,
 	SessionStorage,
 	SessionTreeEntry,
 	ThinkingLevelChangeEntry,
 } from "../types.ts";
 import { SessionError } from "../types.ts";
-import { toSessionSearchRecord } from "./search-backend.ts";
 
 export type ContextEntryTransform = (entries: readonly SessionTreeEntry[]) => readonly SessionTreeEntry[];
 
@@ -152,16 +150,10 @@ export function buildSessionContext(
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	private storage: SessionStorage<TMetadata>;
 	private contextBuildOptions: SessionContextBuildOptions;
-	private searchWriter: SessionSearchWriter<TMetadata> | undefined;
 
-	constructor(
-		storage: SessionStorage<TMetadata>,
-		contextBuildOptions: SessionContextBuildOptions = {},
-		searchWriter?: SessionSearchWriter<TMetadata>,
-	) {
+	constructor(storage: SessionStorage<TMetadata>, contextBuildOptions: SessionContextBuildOptions = {}) {
 		this.storage = storage;
 		this.contextBuildOptions = contextBuildOptions;
-		this.searchWriter = searchWriter;
 	}
 
 	getMetadata(): Promise<TMetadata> {
@@ -219,15 +211,8 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.storage.getSessionName();
 	}
 
-	private async upsertSearchRecord(entry: SessionTreeEntry): Promise<void> {
-		if (this.searchWriter) {
-			await this.searchWriter.upsert(toSessionSearchRecord(await this.storage.getMetadata(), entry));
-		}
-	}
-
 	private async appendTypedEntry<TEntry extends SessionTreeEntry>(entry: TEntry): Promise<string> {
 		await this.storage.appendEntry(entry);
-		await this.upsertSearchRecord(entry);
 		return entry.id;
 	}
 
@@ -357,8 +342,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		if (entryId !== null && !(await this.storage.getEntry(entryId))) {
 			throw new SessionError("not_found", `Entry ${entryId} not found`);
 		}
-		const leafEntry = await this.storage.setLeafId(entryId);
-		await this.upsertSearchRecord(leafEntry);
+		await this.storage.setLeafId(entryId);
 		if (!summary) return undefined;
 		return this.appendTypedEntry({
 			type: "branch_summary",

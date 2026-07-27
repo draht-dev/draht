@@ -3,20 +3,23 @@ import {
 	SessionError,
 	type SessionMetadata,
 	type SessionRepo,
-	type SessionSearchHit,
+	type SessionSearchBackendFactory,
 	type SessionSearchOptions,
 } from "../types.ts";
 import { InMemorySessionStorage } from "./memory-storage.ts";
-import {
-	createSessionId,
-	createTimestamp,
-	findSessionEntryMatches,
-	getEntriesToFork,
-	toSession,
-} from "./repo-utils.ts";
+import { createSessionId, createTimestamp, getEntriesToFork, toSession } from "./repo-utils.ts";
+import { createSessionSearch, type SessionSearch } from "./search-backend.ts";
 
 export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: string }, void> {
 	private sessions = new Map<string, Session<SessionMetadata>>();
+	private readonly sessionSearch: SessionSearch<SessionMetadata>;
+
+	constructor(options: { searchBackendFactory?: SessionSearchBackendFactory<SessionMetadata> } = {}) {
+		this.sessionSearch = createSessionSearch(options.searchBackendFactory, {
+			open: (metadata) => this.open(metadata),
+			list: () => this.list(),
+		});
+	}
 
 	async create(options: { id?: string } = {}): Promise<Session<SessionMetadata>> {
 		const metadata: SessionMetadata = {
@@ -24,16 +27,14 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 			createdAt: createTimestamp(),
 		};
 		const storage = new InMemorySessionStorage({ metadata });
-		const session = toSession(storage);
+		const session = toSession(await this.sessionSearch.wrapStorage(storage));
 		this.sessions.set(metadata.id, session);
 		return session;
 	}
 
 	async open(metadata: SessionMetadata): Promise<Session<SessionMetadata>> {
 		const session = this.sessions.get(metadata.id);
-		if (!session) {
-			throw new SessionError("not_found", `Session not found: ${metadata.id}`);
-		}
+		if (!session) throw new SessionError("not_found", `Session not found: ${metadata.id}`);
 		return session;
 	}
 
@@ -41,16 +42,12 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 		return Promise.all([...this.sessions.values()].map((session) => session.getMetadata()));
 	}
 
-	async search(options: SessionSearchOptions): Promise<SessionSearchHit<SessionMetadata>[]> {
-		const hits: SessionSearchHit<SessionMetadata>[] = [];
-		for (const session of this.sessions.values()) {
-			const metadata = await session.getMetadata();
-			hits.push(...findSessionEntryMatches(metadata, await session.getEntries(), options.text));
-		}
-		return hits;
+	async search(options: SessionSearchOptions) {
+		return await this.sessionSearch.search(options);
 	}
 
 	async delete(metadata: SessionMetadata): Promise<void> {
+		await this.sessionSearch.removeSession(metadata);
 		this.sessions.delete(metadata.id);
 	}
 
@@ -65,8 +62,9 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 			createdAt: createTimestamp(),
 		};
 		const storage = new InMemorySessionStorage({ metadata, entries: forkedEntries });
-		const session = toSession(storage);
+		const session = toSession(await this.sessionSearch.wrapStorage(storage));
 		this.sessions.set(metadata.id, session);
+		await this.sessionSearch.indexSession(session);
 		return session;
 	}
 }

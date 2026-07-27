@@ -5,7 +5,6 @@ import {
 	SessionError,
 	type SessionMetadata,
 	type SessionSearchHit,
-	type SessionSearchWriter,
 	type SessionStorage,
 	type SessionTreeEntry,
 } from "../types.ts";
@@ -19,11 +18,8 @@ export function createTimestamp(): string {
 	return new Date().toISOString();
 }
 
-export function toSession<TMetadata extends SessionMetadata>(
-	storage: SessionStorage<TMetadata>,
-	searchWriter?: SessionSearchWriter<TMetadata>,
-): Session<TMetadata> {
-	return new Session(storage, {}, searchWriter);
+export function toSession<TMetadata extends SessionMetadata>(storage: SessionStorage<TMetadata>): Session<TMetadata> {
+	return new Session(storage);
 }
 
 export function findSessionEntryMatches<TMetadata extends SessionMetadata>(

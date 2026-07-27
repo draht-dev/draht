@@ -538,16 +538,16 @@ export interface SessionSearchRecord<TMetadata extends SessionMetadata = Session
 	entry: SessionTreeEntry;
 }
 
-/** Receives persisted-entry lifecycle events for a search backend. */
-export interface SessionSearchWriter<TMetadata extends SessionMetadata = SessionMetadata> {
+/** Search implementation used by a session repository. */
+export interface SessionSearchBackend<TMetadata extends SessionMetadata = SessionMetadata> {
 	upsert(record: SessionSearchRecord<TMetadata>): Promise<void>;
-	remove(record: SessionSearchRecord<TMetadata>): Promise<void>;
+	removeSession(metadata: TMetadata): Promise<void>;
+	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
 }
 
-/** A search backend that can receive session entries and query them. */
-export interface SessionSearchBackend<TMetadata extends SessionMetadata = SessionMetadata>
-	extends SessionSearchWriter<TMetadata> {
-	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
+/** Creates a storage-independent search backend for a session repository. */
+export interface SessionSearchBackendFactory<TMetadata extends SessionMetadata = SessionMetadata> {
+	create(): SessionSearchBackend<TMetadata> | undefined | Promise<SessionSearchBackend<TMetadata> | undefined>;
 }
 
 export interface SessionForkOptions {

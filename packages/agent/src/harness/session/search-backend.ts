@@ -1,14 +1,11 @@
 import type {
-	LeafEntry,
 	Session,
-	SessionEntryCursorOptions,
 	SessionMetadata,
 	SessionSearchBackend,
 	SessionSearchBackendFactory,
 	SessionSearchHit,
 	SessionSearchOptions,
 	SessionSearchRecord,
-	SessionStats,
 	SessionStorage,
 	SessionTreeEntry,
 } from "../types.ts";
@@ -26,73 +23,31 @@ type SessionSearchSource<TMetadata extends SessionMetadata> = {
 	list(): Promise<TMetadata[]>;
 };
 
-/** A session storage sink that writes canonically, then mirrors records to search. */
-class SearchWritingSessionStorage<TMetadata extends SessionMetadata> implements SessionStorage<TMetadata> {
-	private readonly storage: SessionStorage<TMetadata>;
-	private readonly getBackend: () => Promise<SessionSearchBackend<TMetadata>>;
+/** Patches a canonical session storage so writes are mirrored into the configured search backend. */
+function attachSearchBackend<TMetadata extends SessionMetadata>(
+	storage: SessionStorage<TMetadata>,
+	getBackend: () => Promise<SessionSearchBackend<TMetadata> | undefined>,
+): SessionStorage<TMetadata> {
+	const appendEntry = storage.appendEntry.bind(storage);
+	storage.appendEntry = async (entry: SessionTreeEntry): Promise<void> => {
+		await appendEntry(entry);
+		const backend = await getBackend();
+		if (backend) {
+			await backend.upsert(toSessionSearchRecord(await storage.getMetadata(), entry));
+		}
+	};
 
-	constructor(storage: SessionStorage<TMetadata>, getBackend: () => Promise<SessionSearchBackend<TMetadata>>) {
-		this.storage = storage;
-		this.getBackend = getBackend;
-	}
-
-	getMetadata(): Promise<TMetadata> {
-		return this.storage.getMetadata();
-	}
-
-	getLeafId(): Promise<string | null> {
-		return this.storage.getLeafId();
-	}
-
-	async setLeafId(leafId: string | null): Promise<LeafEntry> {
-		const entry = await this.storage.setLeafId(leafId);
-		await (await this.getBackend()).upsert(toSessionSearchRecord(await this.storage.getMetadata(), entry));
+	const setLeafId = storage.setLeafId.bind(storage);
+	storage.setLeafId = async (leafId: string | null) => {
+		const entry = await setLeafId(leafId);
+		const backend = await getBackend();
+		if (backend) {
+			await backend.upsert(toSessionSearchRecord(await storage.getMetadata(), entry));
+		}
 		return entry;
-	}
+	};
 
-	createEntryId(): Promise<string> {
-		return this.storage.createEntryId();
-	}
-
-	async appendEntry(entry: SessionTreeEntry): Promise<void> {
-		await this.storage.appendEntry(entry);
-		await (await this.getBackend()).upsert(toSessionSearchRecord(await this.storage.getMetadata(), entry));
-	}
-
-	getEntry(id: string): Promise<SessionTreeEntry | undefined> {
-		return this.storage.getEntry(id);
-	}
-
-	findEntries<TType extends SessionTreeEntry["type"]>(
-		type: TType,
-	): Promise<Array<Extract<SessionTreeEntry, { type: TType }>>> {
-		return this.storage.findEntries(type);
-	}
-
-	getLabel(id: string): Promise<string | undefined> {
-		return this.storage.getLabel(id);
-	}
-
-	getSessionName(): Promise<string | undefined> {
-		return this.storage.getSessionName();
-	}
-
-	getSessionStats(): Promise<SessionStats> {
-		return this.storage.getSessionStats();
-	}
-
-	getPathToRootOrCompaction(leafId: string | null): Promise<SessionTreeEntry[]> {
-		return this.storage.getPathToRootOrCompaction(leafId);
-	}
-
-	getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]> {
-		return this.storage.getEntries(options);
-	}
-
-	async cleanup(): Promise<void> {
-		const storage = this.storage as SessionStorage<TMetadata> & { cleanup?: () => Promise<void> };
-		if (typeof storage.cleanup === "function") await storage.cleanup();
-	}
+	return storage;
 }
 
 export interface SessionSearch<TMetadata extends SessionMetadata> {
@@ -102,65 +57,56 @@ export interface SessionSearch<TMetadata extends SessionMetadata> {
 	indexSession(session: Session<TMetadata>): Promise<void>;
 }
 
+async function scanSessions<TMetadata extends SessionMetadata>(
+	source: SessionSearchSource<TMetadata>,
+	options: SessionSearchOptions,
+): Promise<SessionSearchHit<TMetadata>[]> {
+	const hits: SessionSearchHit<TMetadata>[] = [];
+	for (const metadata of await source.list()) {
+		const cwd = (metadata as { cwd?: unknown }).cwd;
+		if (options.cwd !== undefined && cwd !== options.cwd) continue;
+		const session = await source.open(metadata);
+		try {
+			hits.push(...findSessionEntryMatches(metadata, await session.getEntries(), options.text));
+		} finally {
+			const storage = session.getStorage() as { cleanup?: () => Promise<void> };
+			if (typeof storage.cleanup === "function") await storage.cleanup();
+		}
+	}
+	return hits;
+}
+
 /** Repository-owned search operations, shared by concrete repositories without a base class. */
 export function createSessionSearch<TMetadata extends SessionMetadata>(
 	factory: SessionSearchBackendFactory<TMetadata> | undefined,
 	source: SessionSearchSource<TMetadata>,
 ): SessionSearch<TMetadata> {
-	let backendPromise: Promise<SessionSearchBackend<TMetadata>> | undefined;
+	let backendPromise: Promise<SessionSearchBackend<TMetadata> | undefined> | undefined;
 
-	function getBackend(): Promise<SessionSearchBackend<TMetadata>> {
+	function getBackend(): Promise<SessionSearchBackend<TMetadata> | undefined> {
 		if (!backendPromise) {
-			backendPromise = factory
-				? Promise.resolve(factory.create()).then((backend) => backend ?? new ScanningSessionSearchBackend(source))
-				: Promise.resolve(new ScanningSessionSearchBackend(source));
+			backendPromise = factory ? Promise.resolve(factory.create()) : Promise.resolve(undefined);
 		}
 		return backendPromise;
 	}
 
 	return {
-		createSession: (storage) => toSession(new SearchWritingSessionStorage(storage, getBackend)),
-		search: async (options) => (await getBackend()).search(options),
+		createSession: (storage) => toSession(factory ? attachSearchBackend(storage, getBackend) : storage),
+		search: async (options) => {
+			const backend = await getBackend();
+			return backend ? backend.search(options) : scanSessions(source, options);
+		},
 		removeSession: async (metadata) => {
-			await (await getBackend()).removeSession(metadata);
+			const backend = await getBackend();
+			if (backend) await backend.removeSession(metadata);
 		},
 		indexSession: async (session) => {
-			const metadata = await session.getMetadata();
 			const backend = await getBackend();
+			if (!backend) return;
+			const metadata = await session.getMetadata();
 			for (const entry of await session.getEntries()) {
 				await backend.upsert(toSessionSearchRecord(metadata, entry));
 			}
 		},
 	};
-}
-
-/** Generic fallback that searches canonical sessions directly. */
-export class ScanningSessionSearchBackend<TMetadata extends SessionMetadata>
-	implements SessionSearchBackend<TMetadata>
-{
-	private readonly source: SessionSearchSource<TMetadata>;
-
-	constructor(source: SessionSearchSource<TMetadata>) {
-		this.source = source;
-	}
-
-	async upsert(_record: SessionSearchRecord<TMetadata>): Promise<void> {}
-
-	async removeSession(_metadata: TMetadata): Promise<void> {}
-
-	async search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]> {
-		const hits: SessionSearchHit<TMetadata>[] = [];
-		for (const metadata of await this.source.list()) {
-			const cwd = (metadata as { cwd?: unknown }).cwd;
-			if (options.cwd !== undefined && cwd !== options.cwd) continue;
-			const session = await this.source.open(metadata);
-			try {
-				hits.push(...findSessionEntryMatches(metadata, await session.getEntries(), options.text));
-			} finally {
-				const storage = session.getStorage() as { cleanup?: () => Promise<void> };
-				if (typeof storage.cleanup === "function") await storage.cleanup();
-			}
-		}
-		return hits;
-	}
 }

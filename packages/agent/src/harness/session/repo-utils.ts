@@ -4,6 +4,8 @@ import {
 	type Result,
 	SessionError,
 	type SessionMetadata,
+	type SessionSearchHit,
+	type SessionSearchIndexSink,
 	type SessionStorage,
 	type SessionTreeEntry,
 } from "../types.ts";
@@ -17,8 +19,25 @@ export function createTimestamp(): string {
 	return new Date().toISOString();
 }
 
-export function toSession<TMetadata extends SessionMetadata>(storage: SessionStorage<TMetadata>): Session<TMetadata> {
-	return new Session(storage);
+export function toSession<TMetadata extends SessionMetadata>(
+	storage: SessionStorage<TMetadata>,
+	searchIndexSink?: SessionSearchIndexSink,
+): Session<TMetadata> {
+	return new Session(storage, {}, searchIndexSink);
+}
+
+export function findSessionEntryMatches<TMetadata extends SessionMetadata>(
+	metadata: TMetadata,
+	entries: SessionTreeEntry[],
+	text: string,
+): SessionSearchHit<TMetadata>[] {
+	const normalizedText = text.trim().toLowerCase();
+	if (!normalizedText) return [];
+	return entries.flatMap((entry) => {
+		const payload = JSON.stringify(entry);
+		if (!payload.toLowerCase().includes(normalizedText)) return [];
+		return [{ metadata, entryId: entry.id, timestamp: entry.timestamp, snippet: payload }];
+	});
 }
 
 export function getFileSystemResultOrThrow<TValue>(result: Result<TValue, FileError>, message: string): TValue {

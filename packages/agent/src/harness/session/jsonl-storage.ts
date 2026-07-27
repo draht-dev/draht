@@ -251,7 +251,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		return this.currentLeafId;
 	}
 
-	async setLeafId(leafId: string | null): Promise<void> {
+	async setLeafId(leafId: string | null): Promise<LeafEntry> {
 		if (leafId !== null && !this.byId.has(leafId)) {
 			throw new SessionError("not_found", `Entry ${leafId} not found`);
 		}
@@ -269,6 +269,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		this.entries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.currentLeafId = leafId;
+		return entry;
 	}
 
 	async createEntryId(): Promise<string> {

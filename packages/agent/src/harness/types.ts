@@ -499,7 +499,7 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 	getMetadata(): Promise<TMetadata>;
 	getLeafId(): Promise<string | null>;
 	/** Persist a leaf entry that records the active session-tree leaf. */
-	setLeafId(leafId: string | null): Promise<void>;
+	setLeafId(leafId: string | null): Promise<LeafEntry>;
 	createEntryId(): Promise<string>;
 	appendEntry(entry: SessionTreeEntry): Promise<void>;
 	getEntry(id: string): Promise<SessionTreeEntry | undefined>;
@@ -519,6 +519,30 @@ export interface SessionCreateOptions {
 	id?: string;
 }
 
+export interface SessionSearchOptions {
+	text: string;
+	cwd?: string;
+}
+
+export interface SessionSearchHit<TMetadata extends SessionMetadata = SessionMetadata> {
+	metadata: TMetadata;
+	entryId: string;
+	timestamp: string;
+	snippet?: string;
+	score?: number;
+}
+
+/** A persisted session entry delivered to a search index. */
+export interface SessionSearchIndexRecord<TMetadata extends SessionMetadata = SessionMetadata> {
+	metadata: TMetadata;
+	entry: SessionTreeEntry;
+}
+
+/** Receives entries after their session storage has persisted them for search indexing. */
+export interface SessionSearchIndexSink {
+	write(record: SessionSearchIndexRecord): Promise<void>;
+}
+
 export interface SessionForkOptions {
 	entryId?: string;
 	position?: "before" | "at";
@@ -533,6 +557,7 @@ export interface SessionRepo<
 	create(options: TCreateOptions): Promise<Session<TMetadata>>;
 	open(metadata: TMetadata): Promise<Session<TMetadata>>;
 	list(options?: TListOptions): Promise<TMetadata[]>;
+	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
 	delete(metadata: TMetadata): Promise<void>;
 	fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<Session<TMetadata>>;
 }

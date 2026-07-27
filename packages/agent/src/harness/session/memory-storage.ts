@@ -72,7 +72,7 @@ export class InMemorySessionStorage<TMetadata extends SessionMetadata = SessionM
 		return this.leafId;
 	}
 
-	async setLeafId(leafId: string | null): Promise<void> {
+	async setLeafId(leafId: string | null): Promise<LeafEntry> {
 		if (leafId !== null && !this.byId.has(leafId)) {
 			throw new SessionError("not_found", `Entry ${leafId} not found`);
 		}
@@ -86,6 +86,7 @@ export class InMemorySessionStorage<TMetadata extends SessionMetadata = SessionM
 		this.entries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = leafId;
+		return entry;
 	}
 
 	async createEntryId(): Promise<string> {

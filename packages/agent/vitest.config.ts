@@ -21,10 +21,10 @@ export default defineConfig({
 		// tests mutate via `createModels()` / `models.setProvider()` would not be the one the
 		// agent runtime reads. See packages/coding-agent/vitest.config.ts for the same fix.
 		alias: [
+			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
 			{ find: /^@draht\/ai$/, replacement: aiSrcIndex },
 			{ find: /^@draht\/ai\/compat$/, replacement: aiSrcCompat },
 			{ find: /^@draht\/ai\/providers\/(.+)$/, replacement: `${aiSrcProviders}/$1.ts` },
-			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
 		],
 	},
 });

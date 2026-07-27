@@ -1,6 +1,19 @@
-import { type Session, SessionError, type SessionMetadata, type SessionRepo } from "../types.ts";
+import {
+	type Session,
+	SessionError,
+	type SessionMetadata,
+	type SessionRepo,
+	type SessionSearchHit,
+	type SessionSearchOptions,
+} from "../types.ts";
 import { InMemorySessionStorage } from "./memory-storage.ts";
-import { createSessionId, createTimestamp, getEntriesToFork, toSession } from "./repo-utils.ts";
+import {
+	createSessionId,
+	createTimestamp,
+	findSessionEntryMatches,
+	getEntriesToFork,
+	toSession,
+} from "./repo-utils.ts";
 
 export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: string }, void> {
 	private sessions = new Map<string, Session<SessionMetadata>>();
@@ -26,6 +39,15 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 
 	async list(): Promise<SessionMetadata[]> {
 		return Promise.all([...this.sessions.values()].map((session) => session.getMetadata()));
+	}
+
+	async search(options: SessionSearchOptions): Promise<SessionSearchHit<SessionMetadata>[]> {
+		const hits: SessionSearchHit<SessionMetadata>[] = [];
+		for (const session of this.sessions.values()) {
+			const metadata = await session.getMetadata();
+			hits.push(...findSessionEntryMatches(metadata, await session.getEntries(), options.text));
+		}
+		return hits;
 	}
 
 	async delete(metadata: SessionMetadata): Promise<void> {

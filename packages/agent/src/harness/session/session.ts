@@ -14,12 +14,14 @@ import type {
 	SessionEntryCursorOptions,
 	SessionInfoEntry,
 	SessionMetadata,
+	SessionSearchIndexSink,
 	SessionStats,
 	SessionStorage,
 	SessionTreeEntry,
 	ThinkingLevelChangeEntry,
 } from "../types.ts";
 import { SessionError } from "../types.ts";
+import { toSessionSearchIndexRecord } from "./search-index-sink.ts";
 
 export type ContextEntryTransform = (entries: readonly SessionTreeEntry[]) => readonly SessionTreeEntry[];
 
@@ -150,10 +152,16 @@ export function buildSessionContext(
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	private storage: SessionStorage<TMetadata>;
 	private contextBuildOptions: SessionContextBuildOptions;
+	private searchIndexSink: SessionSearchIndexSink | undefined;
 
-	constructor(storage: SessionStorage<TMetadata>, contextBuildOptions: SessionContextBuildOptions = {}) {
+	constructor(
+		storage: SessionStorage<TMetadata>,
+		contextBuildOptions: SessionContextBuildOptions = {},
+		searchIndexSink?: SessionSearchIndexSink,
+	) {
 		this.storage = storage;
 		this.contextBuildOptions = contextBuildOptions;
+		this.searchIndexSink = searchIndexSink;
 	}
 
 	getMetadata(): Promise<TMetadata> {
@@ -211,8 +219,15 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.storage.getSessionName();
 	}
 
+	private async writeSearchIndexRecord(entry: SessionTreeEntry): Promise<void> {
+		if (this.searchIndexSink) {
+			await this.searchIndexSink.write(toSessionSearchIndexRecord(await this.storage.getMetadata(), entry));
+		}
+	}
+
 	private async appendTypedEntry<TEntry extends SessionTreeEntry>(entry: TEntry): Promise<string> {
 		await this.storage.appendEntry(entry);
+		await this.writeSearchIndexRecord(entry);
 		return entry.id;
 	}
 
@@ -342,7 +357,8 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		if (entryId !== null && !(await this.storage.getEntry(entryId))) {
 			throw new SessionError("not_found", `Entry ${entryId} not found`);
 		}
-		await this.storage.setLeafId(entryId);
+		const leafEntry = await this.storage.setLeafId(entryId);
+		await this.writeSearchIndexRecord(leafEntry);
 		if (!summary) return undefined;
 		return this.appendTypedEntry({
 			type: "branch_summary",

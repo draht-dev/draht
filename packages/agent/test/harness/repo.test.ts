@@ -22,6 +22,16 @@ describe("InMemorySessionRepo", () => {
 		await repo.delete(metadata);
 		await expect(repo.open(metadata)).rejects.toThrow("Session not found: session-1");
 	});
+
+	it("searches canonical entry JSON", async () => {
+		const repo = new InMemorySessionRepo();
+		const session = await repo.create({ id: "session-1" });
+		const entryId = await session.appendMessage(createUserMessage("Find the auth defect"));
+
+		await expect(repo.search({ text: "AUTH" })).resolves.toEqual([
+			expect.objectContaining({ entryId, metadata: expect.objectContaining({ id: "session-1" }) }),
+		]);
+	});
 });
 
 describe("JsonlSessionRepo", () => {
@@ -42,6 +52,20 @@ describe("JsonlSessionRepo", () => {
 		expect((await repo.list()).map((sessionMetadata) => sessionMetadata.id).sort()).toEqual(
 			[metadata.id, otherMetadata.id].sort(),
 		);
+	});
+
+	it("searches session entries and filters by cwd", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const repo = new JsonlSessionRepo({ fs: env, sessionsRoot: root });
+		const included = await repo.create({ cwd: "/tmp/included", id: "included" });
+		const excluded = await repo.create({ cwd: "/tmp/excluded", id: "excluded" });
+		const entryId = await included.appendMessage(createUserMessage("Find the auth defect"));
+		await excluded.appendMessage(createUserMessage("Find the auth defect"));
+
+		await expect(repo.search({ text: "AUTH", cwd: "/tmp/included" })).resolves.toEqual([
+			expect.objectContaining({ entryId, metadata: expect.objectContaining({ id: "included" }) }),
+		]);
 	});
 
 	it("opens, deletes, and forks by metadata", async () => {

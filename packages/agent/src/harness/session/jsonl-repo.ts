@@ -5,12 +5,15 @@ import type {
 	JsonlSessionMetadata,
 	JsonlSessionRepoApi,
 	Session,
+	SessionSearchHit,
+	SessionSearchOptions,
 } from "../types.ts";
 import { SessionError, toError } from "../types.ts";
 import { JsonlSessionStorage, loadJsonlSessionMetadata } from "./jsonl-storage.ts";
 import {
 	createSessionId,
 	createTimestamp,
+	findSessionEntryMatches,
 	getEntriesToFork,
 	getFileSystemResultOrThrow,
 	toSession,
@@ -122,6 +125,15 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
 		}
 		sessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 		return sessions;
+	}
+
+	async search(options: SessionSearchOptions): Promise<SessionSearchHit<JsonlSessionMetadata>[]> {
+		const hits: SessionSearchHit<JsonlSessionMetadata>[] = [];
+		for (const metadata of await this.list({ cwd: options.cwd })) {
+			const session = await this.open(metadata);
+			hits.push(...findSessionEntryMatches(metadata, await session.getEntries(), options.text));
+		}
+		return hits;
 	}
 
 	async delete(metadata: JsonlSessionMetadata): Promise<void> {

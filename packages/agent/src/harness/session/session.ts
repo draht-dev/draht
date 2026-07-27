@@ -14,14 +14,14 @@ import type {
 	SessionEntryCursorOptions,
 	SessionInfoEntry,
 	SessionMetadata,
-	SessionSearchIndexSink,
+	SessionSearchIndexWriter,
 	SessionStats,
 	SessionStorage,
 	SessionTreeEntry,
 	ThinkingLevelChangeEntry,
 } from "../types.ts";
 import { SessionError } from "../types.ts";
-import { toSessionSearchIndexRecord } from "./search-index-sink.ts";
+import { toSessionSearchIndexRecord } from "./search-index.ts";
 
 export type ContextEntryTransform = (entries: readonly SessionTreeEntry[]) => readonly SessionTreeEntry[];
 
@@ -152,16 +152,16 @@ export function buildSessionContext(
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	private storage: SessionStorage<TMetadata>;
 	private contextBuildOptions: SessionContextBuildOptions;
-	private searchIndexSink: SessionSearchIndexSink | undefined;
+	private searchIndexWriter: SessionSearchIndexWriter<TMetadata> | undefined;
 
 	constructor(
 		storage: SessionStorage<TMetadata>,
 		contextBuildOptions: SessionContextBuildOptions = {},
-		searchIndexSink?: SessionSearchIndexSink,
+		searchIndexWriter?: SessionSearchIndexWriter<TMetadata>,
 	) {
 		this.storage = storage;
 		this.contextBuildOptions = contextBuildOptions;
-		this.searchIndexSink = searchIndexSink;
+		this.searchIndexWriter = searchIndexWriter;
 	}
 
 	getMetadata(): Promise<TMetadata> {
@@ -220,8 +220,8 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	}
 
 	private async writeSearchIndexRecord(entry: SessionTreeEntry): Promise<void> {
-		if (this.searchIndexSink) {
-			await this.searchIndexSink.write(toSessionSearchIndexRecord(await this.storage.getMetadata(), entry));
+		if (this.searchIndexWriter) {
+			await this.searchIndexWriter.write(toSessionSearchIndexRecord(await this.storage.getMetadata(), entry));
 		}
 	}
 

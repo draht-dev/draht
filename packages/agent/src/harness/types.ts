@@ -538,9 +538,16 @@ export interface SessionSearchIndexRecord<TMetadata extends SessionMetadata = Se
 	entry: SessionTreeEntry;
 }
 
-/** Receives entries after their session storage has persisted them for search indexing. */
-export interface SessionSearchIndexSink {
-	write(record: SessionSearchIndexRecord): Promise<void>;
+/** Receives persisted-entry lifecycle events for search indexing. */
+export interface SessionSearchIndexWriter<TMetadata extends SessionMetadata = SessionMetadata> {
+	write(record: SessionSearchIndexRecord<TMetadata>): Promise<void>;
+	remove(record: SessionSearchIndexRecord<TMetadata>): Promise<void>;
+}
+
+/** A search index that can both receive session entries and query them. */
+export interface SessionSearchIndex<TMetadata extends SessionMetadata = SessionMetadata>
+	extends SessionSearchIndexWriter<TMetadata> {
+	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
 }
 
 export interface SessionForkOptions {

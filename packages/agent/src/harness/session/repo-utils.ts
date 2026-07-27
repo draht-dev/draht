@@ -5,7 +5,7 @@ import {
 	SessionError,
 	type SessionMetadata,
 	type SessionSearchHit,
-	type SessionSearchIndexSink,
+	type SessionSearchIndexWriter,
 	type SessionStorage,
 	type SessionTreeEntry,
 } from "../types.ts";
@@ -21,9 +21,9 @@ export function createTimestamp(): string {
 
 export function toSession<TMetadata extends SessionMetadata>(
 	storage: SessionStorage<TMetadata>,
-	searchIndexSink?: SessionSearchIndexSink,
+	searchIndexWriter?: SessionSearchIndexWriter<TMetadata>,
 ): Session<TMetadata> {
-	return new Session(storage, {}, searchIndexSink);
+	return new Session(storage, {}, searchIndexWriter);
 }
 
 export function findSessionEntryMatches<TMetadata extends SessionMetadata>(

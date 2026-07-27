@@ -532,21 +532,21 @@ export interface SessionSearchHit<TMetadata extends SessionMetadata = SessionMet
 	score?: number;
 }
 
-/** A persisted session entry delivered to a search index. */
-export interface SessionSearchIndexRecord<TMetadata extends SessionMetadata = SessionMetadata> {
+/** A persisted session entry delivered to a search backend. */
+export interface SessionSearchRecord<TMetadata extends SessionMetadata = SessionMetadata> {
 	metadata: TMetadata;
 	entry: SessionTreeEntry;
 }
 
-/** Receives persisted-entry lifecycle events for search indexing. */
-export interface SessionSearchIndexWriter<TMetadata extends SessionMetadata = SessionMetadata> {
-	write(record: SessionSearchIndexRecord<TMetadata>): Promise<void>;
-	remove(record: SessionSearchIndexRecord<TMetadata>): Promise<void>;
+/** Receives persisted-entry lifecycle events for a search backend. */
+export interface SessionSearchWriter<TMetadata extends SessionMetadata = SessionMetadata> {
+	upsert(record: SessionSearchRecord<TMetadata>): Promise<void>;
+	remove(record: SessionSearchRecord<TMetadata>): Promise<void>;
 }
 
-/** A search index that can both receive session entries and query them. */
-export interface SessionSearchIndex<TMetadata extends SessionMetadata = SessionMetadata>
-	extends SessionSearchIndexWriter<TMetadata> {
+/** A search backend that can receive session entries and query them. */
+export interface SessionSearchBackend<TMetadata extends SessionMetadata = SessionMetadata>
+	extends SessionSearchWriter<TMetadata> {
 	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
 }
 

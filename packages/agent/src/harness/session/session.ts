@@ -14,14 +14,14 @@ import type {
 	SessionEntryCursorOptions,
 	SessionInfoEntry,
 	SessionMetadata,
-	SessionSearchIndexWriter,
+	SessionSearchWriter,
 	SessionStats,
 	SessionStorage,
 	SessionTreeEntry,
 	ThinkingLevelChangeEntry,
 } from "../types.ts";
 import { SessionError } from "../types.ts";
-import { toSessionSearchIndexRecord } from "./search-index.ts";
+import { toSessionSearchRecord } from "./search-backend.ts";
 
 export type ContextEntryTransform = (entries: readonly SessionTreeEntry[]) => readonly SessionTreeEntry[];
 
@@ -152,16 +152,16 @@ export function buildSessionContext(
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	private storage: SessionStorage<TMetadata>;
 	private contextBuildOptions: SessionContextBuildOptions;
-	private searchIndexWriter: SessionSearchIndexWriter<TMetadata> | undefined;
+	private searchWriter: SessionSearchWriter<TMetadata> | undefined;
 
 	constructor(
 		storage: SessionStorage<TMetadata>,
 		contextBuildOptions: SessionContextBuildOptions = {},
-		searchIndexWriter?: SessionSearchIndexWriter<TMetadata>,
+		searchWriter?: SessionSearchWriter<TMetadata>,
 	) {
 		this.storage = storage;
 		this.contextBuildOptions = contextBuildOptions;
-		this.searchIndexWriter = searchIndexWriter;
+		this.searchWriter = searchWriter;
 	}
 
 	getMetadata(): Promise<TMetadata> {
@@ -219,15 +219,15 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.storage.getSessionName();
 	}
 
-	private async writeSearchIndexRecord(entry: SessionTreeEntry): Promise<void> {
-		if (this.searchIndexWriter) {
-			await this.searchIndexWriter.write(toSessionSearchIndexRecord(await this.storage.getMetadata(), entry));
+	private async upsertSearchRecord(entry: SessionTreeEntry): Promise<void> {
+		if (this.searchWriter) {
+			await this.searchWriter.upsert(toSessionSearchRecord(await this.storage.getMetadata(), entry));
 		}
 	}
 
 	private async appendTypedEntry<TEntry extends SessionTreeEntry>(entry: TEntry): Promise<string> {
 		await this.storage.appendEntry(entry);
-		await this.writeSearchIndexRecord(entry);
+		await this.upsertSearchRecord(entry);
 		return entry.id;
 	}
 
@@ -358,7 +358,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 			throw new SessionError("not_found", `Entry ${entryId} not found`);
 		}
 		const leafEntry = await this.storage.setLeafId(entryId);
-		await this.writeSearchIndexRecord(leafEntry);
+		await this.upsertSearchRecord(leafEntry);
 		if (!summary) return undefined;
 		return this.appendTypedEntry({
 			type: "branch_summary",

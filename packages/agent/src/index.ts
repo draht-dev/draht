@@ -34,7 +34,7 @@ export * from "./harness/session/jsonl-storage.ts";
 export * from "./harness/session/memory-repo.ts";
 export * from "./harness/session/memory-storage.ts";
 export * from "./harness/session/repo-utils.ts";
-export * from "./harness/session/search-index.ts";
+export * from "./harness/session/search-backend.ts";
 export * from "./harness/session/session.ts";
 export * from "./harness/skills.ts";
 export * from "./harness/system-prompt.ts";

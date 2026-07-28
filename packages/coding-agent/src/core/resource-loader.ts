@@ -207,6 +207,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private extensionSkillSourceInfos: Map<string, SourceInfo>;
 	private extensionPromptSourceInfos: Map<string, SourceInfo>;
 	private extensionThemeSourceInfos: Map<string, SourceInfo>;
+	private resourceMetadataByPath: Map<string, PathMetadata>;
 	private lastPromptPaths: string[];
 	private lastThemePaths: string[];
 	private loaded: boolean;
@@ -254,6 +255,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.extensionSkillSourceInfos = new Map();
 		this.extensionPromptSourceInfos = new Map();
 		this.extensionThemeSourceInfos = new Map();
+		this.resourceMetadataByPath = new Map();
 		this.lastPromptPaths = [];
 		this.lastThemePaths = [];
 		this.loaded = false;
@@ -307,7 +309,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				this.lastSkillPaths,
 				skillPaths.map((entry) => entry.path),
 			);
-			this.updateSkillsFromPaths(this.lastSkillPaths);
+			this.updateSkillsFromPaths(this.lastSkillPaths, this.resourceMetadataByPath);
 		}
 
 		if (promptPaths.length > 0) {
@@ -315,7 +317,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				this.lastPromptPaths,
 				promptPaths.map((entry) => entry.path),
 			);
-			this.updatePromptsFromPaths(this.lastPromptPaths);
+			this.updatePromptsFromPaths(this.lastPromptPaths, this.resourceMetadataByPath);
 		}
 
 		if (themePaths.length > 0) {
@@ -323,7 +325,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				this.lastThemePaths,
 				themePaths.map((entry) => entry.path),
 			);
-			this.updateThemesFromPaths(this.lastThemePaths);
+			this.updateThemesFromPaths(this.lastThemePaths, this.resourceMetadataByPath);
 		}
 	}
 
@@ -355,7 +357,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});
-		const metadataByPath = new Map<string, PathMetadata>();
+		// Kept on the instance so post-reload passes (extendResources) can still resolve package metadata.
+		this.resourceMetadataByPath = new Map();
+		const metadataByPath = this.resourceMetadataByPath;
 
 		this.extensionSkillSourceInfos = new Map();
 		this.extensionPromptSourceInfos = new Map();

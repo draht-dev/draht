@@ -23,6 +23,7 @@
     "check:geist-mirrors": "node scripts/check-geist-mirrors.mjs",
     "check:browser-smoke": "node scripts/check-browser-smoke.mjs",
     "check:hooks": "node scripts/generate-hooks-json.mjs --check",
+    "generate:models": "npm --prefix packages/ai run generate-models && npm --prefix packages/ai run generate-image-models",
     "profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",
     "profile:rpc": "node scripts/profile-coding-agent-node.mjs --mode rpc",
     "test": "npm run test --workspaces --if-present",

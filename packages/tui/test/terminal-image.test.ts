@@ -474,7 +474,7 @@ describe("Kitty image cursor movement", () => {
 			const longPath = join(
 				homedir(),
 				"images",
-				"generated-image-with-a-very-long-absolute-path".repeat(4) + ".png",
+				`${"generated-image-with-a-very-long-absolute-path".repeat(4)}.png`,
 			);
 			const width = 40;
 			const image = new Image(

@@ -43,7 +43,7 @@ async function createSession({
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
-			streamFunction: streamSimple,
+			streamFn: streamSimple,
 			initialState: {
 				model: reasoningModel,
 				systemPrompt: "You are a helpful assistant.",

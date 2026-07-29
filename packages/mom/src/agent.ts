@@ -449,7 +449,7 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 			tools,
 		},
 		convertToLlm,
-		streamFunction: streamSimple,
+		streamFn: streamSimple,
 		getApiKey: async () => getAnthropicApiKey(modelRuntime),
 	});
 

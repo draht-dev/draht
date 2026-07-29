@@ -28,7 +28,7 @@ async function createDirectSession(): Promise<{ session: AgentSession; sessionMa
 	const sessionManager = SessionManager.inMemory();
 	const session = new AgentSession({
 		agent: new Agent({
-			streamFunction: streamSimple,
+			streamFn: streamSimple,
 			initialState: {
 				model: directModel,
 				systemPrompt: "Test",

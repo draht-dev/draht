@@ -971,7 +971,7 @@ function mapStopReason(reason: string | undefined): { stopReason: StopReason; er
 			return { stopReason: "toolUse" };
 		default:
 			return reason
-				? { stopReason: "error", errorMessage: `Bedrock stopped with: ${reason}` }
+				? { stopReason: "error", errorMessage: `Provider stopped with: ${reason}` }
 				: { stopReason: "error" };
 	}
 }

@@ -1343,7 +1343,7 @@ function mapStopReason(
 		case "stop_sequence":
 			return { stopReason: "stop" }; // We don't supply stop sequences, so this should never happen
 		case "sensitive": // Content flagged by safety filters (not yet in SDK types)
-			return { stopReason: "error", errorMessage: "Anthropic stop_reason: sensitive" };
+			return { stopReason: "error", errorMessage: "Provider stopped with: sensitive" };
 		default:
 			// Handle unknown stop reasons gracefully (API may add new values)
 			throw new Error(`Unhandled stop reason: ${reason}`);

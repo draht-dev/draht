@@ -77,6 +77,6 @@ describe("Bedrock raw stop reasons", () => {
 
 		expect(message.stopReason).toBe("error");
 		expect(message.rawStopReason).toBe("guardrail_intervened");
-		expect(message.errorMessage).toBe("Bedrock stopped with: guardrail_intervened");
+		expect(message.errorMessage).toBe("Provider stopped with: guardrail_intervened");
 	});
 });

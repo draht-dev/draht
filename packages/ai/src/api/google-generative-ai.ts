@@ -268,7 +268,7 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 			}
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
 				const errorMessage = output.rawStopReason
-					? `Gemini stopped with ${output.rawStopReason}`
+					? `Provider stopped with: ${output.rawStopReason}`
 					: "An unknown error occurred";
 				throw new Error(errorMessage);
 			}

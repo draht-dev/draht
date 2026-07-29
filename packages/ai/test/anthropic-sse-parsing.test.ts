@@ -272,7 +272,7 @@ describe("Anthropic raw SSE parsing", () => {
 
 		expect(result.stopReason).toBe("error");
 		expect(result.rawStopReason).toBe("sensitive");
-		expect(result.errorMessage).toBe("Anthropic stop_reason: sensitive");
+		expect(result.errorMessage).toBe("Provider stopped with: sensitive");
 	});
 
 	it("treats message_delta without usage as a no-op for usage accumulation", async () => {

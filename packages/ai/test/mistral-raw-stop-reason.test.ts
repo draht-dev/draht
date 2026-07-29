@@ -62,7 +62,7 @@ describe("Mistral raw stop reasons", () => {
 
 		expect(message.stopReason).toBe("error");
 		expect(message.rawStopReason).toBe("error");
-		expect(message.errorMessage).toBe("Mistral stopped with: error");
+		expect(message.errorMessage).toBe("Provider stopped with: error");
 	});
 
 	it("treats unknown Mistral finish reasons as provider error stops", async () => {
@@ -72,6 +72,6 @@ describe("Mistral raw stop reasons", () => {
 
 		expect(message.stopReason).toBe("error");
 		expect(message.rawStopReason).toBe("unmapped_error");
-		expect(message.errorMessage).toBe("Mistral stopped with: unmapped_error");
+		expect(message.errorMessage).toBe("Provider stopped with: unmapped_error");
 	});
 });

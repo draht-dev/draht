@@ -670,8 +670,8 @@ function mapChatStopReason(reason: string | null): { stopReason: StopReason; err
 		case "tool_calls":
 			return { stopReason: "toolUse" };
 		case "error":
-			return { stopReason: "error", errorMessage: "Mistral stopped with: error" };
+			return { stopReason: "error", errorMessage: "Provider stopped with: error" };
 		default:
-			return { stopReason: "error", errorMessage: `Mistral stopped with: ${reason}` };
+			return { stopReason: "error", errorMessage: `Provider stopped with: ${reason}` };
 	}
 }

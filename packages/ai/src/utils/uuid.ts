@@ -12,6 +12,7 @@ function fillRandomBytes(bytes: Uint8Array<ArrayBuffer>): void {
 	}
 }
 
+/** Generate a time-ordered UUIDv7. */
 export function uuidv7(): string {
 	const random = new Uint8Array(16);
 	fillRandomBytes(random);
@@ -22,9 +23,7 @@ export function uuidv7(): string {
 		lastTimestamp = timestamp;
 	} else {
 		sequence = (sequence + 1) >>> 0;
-		if (sequence === 0) {
-			lastTimestamp++;
-		}
+		if (sequence === 0) lastTimestamp++;
 	}
 
 	const bytes = new Uint8Array(16);
@@ -45,10 +44,6 @@ export function uuidv7(): string {
 	bytes[14] = random[14];
 	bytes[15] = random[15];
 
-	return formatUuid(bytes);
-}
-
-function formatUuid(bytes: Uint8Array): string {
 	const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
 	return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }

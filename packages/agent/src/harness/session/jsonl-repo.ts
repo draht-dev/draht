@@ -5,13 +5,19 @@ import type {
 	JsonlSessionMetadata,
 	JsonlSessionRepoApi,
 	Session,
-	SessionSearchBackendFactory,
+	SessionSearch,
 	SessionSearchOptions,
 } from "../types.ts";
 import { SessionError, toError } from "../types.ts";
 import { JsonlSessionStorage, loadJsonlSessionMetadata } from "./jsonl-storage.ts";
-import { createSessionId, createTimestamp, getEntriesToFork, getFileSystemResultOrThrow } from "./repo-utils.ts";
-import { createSessionSearch, type SessionSearch } from "./search-backend.ts";
+import {
+	createSessionId,
+	createTimestamp,
+	getEntriesToFork,
+	getFileSystemResultOrThrow,
+	toRepoSession,
+} from "./repo-utils.ts";
+import { ScanningSessionSearch } from "./search-backend.ts";
 
 type JsonlSessionRepoFileSystem = Pick<
 	FileSystem,
@@ -41,14 +47,16 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
 	constructor(options: {
 		fs: JsonlSessionRepoFileSystem;
 		sessionsRoot: string;
-		searchBackendFactory?: SessionSearchBackendFactory<JsonlSessionMetadata>;
+		search?: SessionSearch<JsonlSessionMetadata>;
 	}) {
 		this.fs = options.fs;
 		this.sessionsRootInput = options.sessionsRoot;
-		this.sessionSearch = createSessionSearch(options.searchBackendFactory, {
-			open: (metadata) => this.open(metadata),
-			list: () => this.list(),
-		});
+		this.sessionSearch =
+			options.search ??
+			new ScanningSessionSearch({
+				open: (metadata) => this.open(metadata),
+				list: () => this.list(),
+			});
 	}
 
 	private async getSessionsRoot(): Promise<string> {
@@ -93,7 +101,7 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
 			parentSessionPath: options.parentSessionPath,
 			metadata: options.metadata,
 		});
-		return this.sessionSearch.createSession(storage);
+		return await toRepoSession(storage, this.sessionSearch);
 	}
 
 	async open(metadata: JsonlSessionMetadata): Promise<Session<JsonlSessionMetadata>> {
@@ -103,7 +111,7 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
 			throw new SessionError("not_found", `Session not found: ${metadata.path}`);
 		}
 		const storage = await JsonlSessionStorage.open(this.fs, metadata.path);
-		return this.sessionSearch.createSession(storage);
+		return await toRepoSession(storage, this.sessionSearch);
 	}
 
 	async list(options: JsonlSessionListOptions = {}): Promise<JsonlSessionMetadata[]> {
@@ -168,9 +176,8 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
 		for (const entry of forkedEntries) {
 			await storage.appendEntry(entry);
 		}
-		const session = this.sessionSearch.createSession(storage);
-		await this.sessionSearch.indexSession(session);
-		return session;
+		await this.sessionSearch.indexSession(await storage.getMetadata(), forkedEntries);
+		return await toRepoSession(storage, this.sessionSearch);
 	}
 
 	private async listSessionDirs(): Promise<string[]> {

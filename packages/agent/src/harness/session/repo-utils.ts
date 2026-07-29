@@ -4,9 +4,11 @@ import {
 	type Result,
 	SessionError,
 	type SessionMetadata,
+	type SessionSearch,
 	type SessionSearchHit,
 	type SessionStorage,
 	type SessionTreeEntry,
+	type SessionWriter,
 } from "../types.ts";
 import { Session } from "./session.ts";
 
@@ -18,8 +20,43 @@ export function createTimestamp(): string {
 	return new Date().toISOString();
 }
 
-export function toSession<TMetadata extends SessionMetadata>(storage: SessionStorage<TMetadata>): Session<TMetadata> {
-	return new Session(storage);
+export function toSession<TMetadata extends SessionMetadata>(
+	storage: SessionStorage<TMetadata>,
+	writer?: SessionWriter,
+): Session<TMetadata> {
+	return new Session(storage, {}, writer);
+}
+
+/** Repository-owned coordination between canonical storage writes and independent search indexing. */
+class SessionRepoWriter<TMetadata extends SessionMetadata> implements SessionWriter {
+	private readonly storage: SessionStorage<TMetadata>;
+	private readonly metadata: TMetadata;
+	private readonly search: SessionSearch<TMetadata>;
+
+	constructor(storage: SessionStorage<TMetadata>, metadata: TMetadata, search: SessionSearch<TMetadata>) {
+		this.storage = storage;
+		this.metadata = metadata;
+		this.search = search;
+	}
+
+	async appendEntry(entry: SessionTreeEntry): Promise<void> {
+		await this.storage.appendEntry(entry);
+		await this.search.upsert({ metadata: this.metadata, entry });
+	}
+
+	async setLeafId(leafId: string | null) {
+		const entry = await this.storage.setLeafId(leafId);
+		await this.search.upsert({ metadata: this.metadata, entry });
+		return entry;
+	}
+}
+
+export async function toRepoSession<TMetadata extends SessionMetadata>(
+	storage: SessionStorage<TMetadata>,
+	search: SessionSearch<TMetadata>,
+): Promise<Session<TMetadata>> {
+	const metadata = await storage.getMetadata();
+	return toSession(storage, new SessionRepoWriter(storage, metadata, search));
 }
 
 export function findSessionEntryMatches<TMetadata extends SessionMetadata>(

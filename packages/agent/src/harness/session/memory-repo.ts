@@ -3,22 +3,24 @@ import {
 	SessionError,
 	type SessionMetadata,
 	type SessionRepo,
-	type SessionSearchBackendFactory,
+	type SessionSearch,
 	type SessionSearchOptions,
 } from "../types.ts";
 import { InMemorySessionStorage } from "./memory-storage.ts";
-import { createSessionId, createTimestamp, getEntriesToFork } from "./repo-utils.ts";
-import { createSessionSearch, type SessionSearch } from "./search-backend.ts";
+import { createSessionId, createTimestamp, getEntriesToFork, toRepoSession } from "./repo-utils.ts";
+import { ScanningSessionSearch } from "./search-backend.ts";
 
 export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: string }, void> {
 	private sessions = new Map<string, Session<SessionMetadata>>();
 	private readonly sessionSearch: SessionSearch<SessionMetadata>;
 
-	constructor(options: { searchBackendFactory?: SessionSearchBackendFactory<SessionMetadata> } = {}) {
-		this.sessionSearch = createSessionSearch(options.searchBackendFactory, {
-			open: (metadata) => this.open(metadata),
-			list: () => this.list(),
-		});
+	constructor(options: { search?: SessionSearch<SessionMetadata> } = {}) {
+		this.sessionSearch =
+			options.search ??
+			new ScanningSessionSearch({
+				open: (metadata) => this.open(metadata),
+				list: () => this.list(),
+			});
 	}
 
 	async create(options: { id?: string } = {}): Promise<Session<SessionMetadata>> {
@@ -27,7 +29,7 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 			createdAt: createTimestamp(),
 		};
 		const storage = new InMemorySessionStorage({ metadata });
-		const session = this.sessionSearch.createSession(storage);
+		const session = await toRepoSession(storage, this.sessionSearch);
 		this.sessions.set(metadata.id, session);
 		return session;
 	}
@@ -62,9 +64,9 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 			createdAt: createTimestamp(),
 		};
 		const storage = new InMemorySessionStorage({ metadata, entries: forkedEntries });
-		const session = this.sessionSearch.createSession(storage);
+		await this.sessionSearch.indexSession(metadata, forkedEntries);
+		const session = await toRepoSession(storage, this.sessionSearch);
 		this.sessions.set(metadata.id, session);
-		await this.sessionSearch.indexSession(session);
 		return session;
 	}
 }

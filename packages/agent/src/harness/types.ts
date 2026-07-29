@@ -513,6 +513,9 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 	getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]>;
 }
 
+/** The canonical mutation subset that a Session writes through. */
+export type SessionWriter = Pick<SessionStorage, "appendEntry" | "setLeafId">;
+
 export type { Session } from "./session/session.ts";
 
 export interface SessionCreateOptions {
@@ -532,22 +535,18 @@ export interface SessionSearchHit<TMetadata extends SessionMetadata = SessionMet
 	score?: number;
 }
 
-/** A persisted session entry delivered to a search backend. */
+/** A persisted session entry delivered to a search implementation. */
 export interface SessionSearchRecord<TMetadata extends SessionMetadata = SessionMetadata> {
 	metadata: TMetadata;
 	entry: SessionTreeEntry;
 }
 
-/** Search implementation used by a session repository. */
-export interface SessionSearchBackend<TMetadata extends SessionMetadata = SessionMetadata> {
-	upsert(record: SessionSearchRecord<TMetadata>): Promise<void>;
-	removeSession(metadata: TMetadata): Promise<void>;
+/** Owns all search-specific querying and index maintenance for a session repository. */
+export interface SessionSearch<TMetadata extends SessionMetadata = SessionMetadata> {
 	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
-}
-
-/** Creates a storage-independent search backend for a session repository. */
-export interface SessionSearchBackendFactory<TMetadata extends SessionMetadata = SessionMetadata> {
-	create(): SessionSearchBackend<TMetadata> | undefined | Promise<SessionSearchBackend<TMetadata> | undefined>;
+	upsert(record: SessionSearchRecord<TMetadata>): Promise<void>;
+	indexSession(metadata: TMetadata, entries: readonly SessionTreeEntry[]): Promise<void>;
+	removeSession(metadata: TMetadata): Promise<void>;
 }
 
 export interface SessionForkOptions {

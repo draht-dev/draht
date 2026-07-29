@@ -17,6 +17,7 @@ import type {
 	SessionStats,
 	SessionStorage,
 	SessionTreeEntry,
+	SessionWriter,
 	ThinkingLevelChangeEntry,
 } from "../types.ts";
 import { SessionError } from "../types.ts";
@@ -147,12 +148,35 @@ export function buildSessionContext(
 	return { ...state, messages };
 }
 
-export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
-	private storage: SessionStorage<TMetadata>;
-	private contextBuildOptions: SessionContextBuildOptions;
+function bindSessionWriter<TMetadata extends SessionMetadata>(
+	storage: SessionStorage<TMetadata>,
+	writer: SessionWriter,
+): SessionStorage<TMetadata> {
+	if (writer === storage) return storage;
+	return new Proxy(storage, {
+		get(target, property) {
+			if (property === "appendEntry") return writer.appendEntry.bind(writer);
+			if (property === "setLeafId") return writer.setLeafId.bind(writer);
+			const value = Reflect.get(target, property, target) as unknown;
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
+}
 
-	constructor(storage: SessionStorage<TMetadata>, contextBuildOptions: SessionContextBuildOptions = {}) {
+export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
+	private readonly storage: SessionStorage<TMetadata>;
+	private readonly exposedStorage: SessionStorage<TMetadata>;
+	private readonly writer: SessionWriter;
+	private readonly contextBuildOptions: SessionContextBuildOptions;
+
+	constructor(
+		storage: SessionStorage<TMetadata>,
+		contextBuildOptions: SessionContextBuildOptions = {},
+		writer: SessionWriter = storage,
+	) {
 		this.storage = storage;
+		this.exposedStorage = bindSessionWriter(storage, writer);
+		this.writer = writer;
 		this.contextBuildOptions = contextBuildOptions;
 	}
 
@@ -161,7 +185,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	}
 
 	getStorage(): SessionStorage<TMetadata> {
-		return this.storage;
+		return this.exposedStorage;
 	}
 
 	getLeafId(): Promise<string | null> {
@@ -212,7 +236,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	}
 
 	private async appendTypedEntry<TEntry extends SessionTreeEntry>(entry: TEntry): Promise<string> {
-		await this.storage.appendEntry(entry);
+		await this.writer.appendEntry(entry);
 		return entry.id;
 	}
 
@@ -342,7 +366,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		if (entryId !== null && !(await this.storage.getEntry(entryId))) {
 			throw new SessionError("not_found", `Entry ${entryId} not found`);
 		}
-		await this.storage.setLeafId(entryId);
+		await this.writer.setLeafId(entryId);
 		if (!summary) return undefined;
 		return this.appendTypedEntry({
 			type: "branch_summary",

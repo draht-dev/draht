@@ -715,7 +715,7 @@ export async function main(args: string[], options?: MainOptions) {
 					message: "--api-key requires a model to be specified via --model, --provider/--model, or --models",
 				});
 			} else {
-				await modelRuntime.setRuntimeApiKey(sessionOptions.model.provider, parsed.apiKey);
+				await modelRuntime.setRuntimeApiKey(sessionOptions.model.provider, parsed.apiKey, { allowNetwork: false });
 				await services.modelRuntime.getAvailable();
 			}
 		}
@@ -822,6 +822,10 @@ export async function main(args: string[], options?: MainOptions) {
 	if (startupBenchmark && appMode !== "interactive") {
 		console.error(chalk.red("Error: DRAHT_STARTUP_BENCHMARK only supports interactive mode"));
 		process.exit(1);
+	}
+
+	if (!offlineMode && (appMode === "interactive" || appMode === "rpc")) {
+		void modelRuntime.refresh().catch(() => {});
 	}
 
 	if (appMode === "rpc") {

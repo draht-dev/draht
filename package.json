@@ -69,6 +69,7 @@
     "koffi": "^2.16.2"
   },
   "overrides": {
+    "protobufjs": "7.6.5",
     "rimraf": "6.1.2",
     "fast-xml-parser": "5.3.8",
     "gaxios": {

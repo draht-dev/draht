@@ -75,6 +75,9 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 		};
 
 		try {
+			if (options?.fetch && options.fetch !== globalThis.fetch) {
+				throw new Error("Custom fetch is not supported by the Google Generative AI adapter");
+			}
 			const apiKey = options?.apiKey;
 			if (!apiKey) {
 				throw new Error(`No API key for provider: ${model.provider}`);

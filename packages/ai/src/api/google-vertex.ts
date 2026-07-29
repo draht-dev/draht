@@ -93,6 +93,9 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 		};
 
 		try {
+			if (options?.fetch && options.fetch !== globalThis.fetch) {
+				throw new Error("Custom fetch is not supported by the Google Vertex adapter");
+			}
 			const apiKey = resolveApiKey(options);
 			// Create the client using either a Vertex API key, if provided, or ADC with project and location
 			const client = apiKey

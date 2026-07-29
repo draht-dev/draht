@@ -379,7 +379,7 @@ export const stream: StreamFunction<"pi-messages", PiMessagesOptions> = (
 				payload = nextPayload;
 			}
 
-			const response = await fetch(url, {
+			const response = await (options?.fetch ?? globalThis.fetch)(url, {
 				method: "POST",
 				headers: {
 					authorization: `Bearer ${apiKey}`,

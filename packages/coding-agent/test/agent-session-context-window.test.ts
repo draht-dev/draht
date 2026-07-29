@@ -52,7 +52,9 @@ describe("context-window profiles", () => {
 
 	it("offers provider-specific standard and extended windows for supported OpenAI models", () => {
 		expect(getAvailableContextWindows(directModel)).toEqual([272000, 1050000]);
-		expect(getAvailableContextWindows(codexModel)).toEqual([372000, 1050000]);
+		// The codex catalog entry reports 272000, so the union with draht's codex
+		// profile offers it alongside the 372000 standard and 1.05M extended windows.
+		expect(getAvailableContextWindows(codexModel)).toEqual([272000, 372000, 1050000]);
 		expect(formatContextWindow(1050000)).toBe("1.05M");
 	});
 

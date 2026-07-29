@@ -8,6 +8,8 @@ import {
 	ChatPanel,
 	CustomProvidersStore,
 	createJavaScriptReplTool,
+	createStreamFn,
+	getAppStorage,
 	IndexedDBStorageBackend,
 	// PersistentStorageDialog, // TODO: Fix - currently broken
 	ProviderKeysStore,
@@ -176,6 +178,11 @@ Feel free to use these tools when needed to provide accurate and helpful respons
 		},
 		// Custom transformer: convert custom messages to LLM-compatible format
 		convertToLlm: customConvertToLlm,
+		// Agent no longer defaults streamFn itself, so pass the proxy-aware one explicitly.
+		streamFn: createStreamFn(async () => {
+			const enabled = await getAppStorage().settings.get<boolean>("proxy.enabled");
+			return enabled ? (await getAppStorage().settings.get<string>("proxy.url")) || undefined : undefined;
+		}),
 	});
 
 	agentUnsubscribe = agent.subscribe((event: any) => {

@@ -1,4 +1,4 @@
-import { streamSimple, type ToolResultMessage, type Usage } from "@draht/ai/compat";
+import type { ToolResultMessage, Usage } from "@draht/ai/compat";
 import { html, LitElement } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import { ModelSelector } from "../dialogs/ModelSelector.js";
@@ -8,13 +8,16 @@ import "./MessageList.js";
 import "./Messages.js"; // Import for side effects to register the custom elements
 import { getAppStorage } from "../storage/app-storage.js";
 import "./StreamingMessageContainer.js";
-import type { Agent, AgentEvent } from "@draht/agent-core";
+import { type Agent, type AgentEvent, setDefaultStreamFn } from "@draht/agent-core";
 import type { Attachment } from "../utils/attachment-utils.js";
 import { formatUsage } from "../utils/format.js";
 import { i18n } from "../utils/i18n.js";
 import { createStreamFn } from "../utils/proxy-utils.js";
 import type { UserMessageWithAttachments } from "./Messages.js";
 import type { StreamingMessageContainer } from "./StreamingMessageContainer.js";
+
+// agent-core's default stream function is module-global; install ours only once.
+let proxyStreamFnInstalled = false;
 
 @customElement("agent-interface")
 export class AgentInterface extends LitElement {
@@ -134,12 +137,18 @@ export class AgentInterface extends LitElement {
 		}
 		if (!this.session) return;
 
-		// Set default streamFn with proxy support if not already set
-		if (this.session.streamFn === streamSimple) {
-			this.session.streamFn = createStreamFn(async () => {
-				const enabled = await getAppStorage().settings.get<boolean>("proxy.enabled");
-				return enabled ? (await getAppStorage().settings.get<string>("proxy.url")) || undefined : undefined;
-			});
+		// Install the proxy-aware stream function as the agent-core default, once.
+		// Agent no longer exposes a mutable streamFn — it falls back to this default only when
+		// the caller omits streamFn, so this preserves the old behaviour of replacing the
+		// default without ever clobbering a caller-supplied stream function.
+		if (!proxyStreamFnInstalled) {
+			proxyStreamFnInstalled = true;
+			setDefaultStreamFn(
+				createStreamFn(async () => {
+					const enabled = await getAppStorage().settings.get<boolean>("proxy.enabled");
+					return enabled ? (await getAppStorage().settings.get<string>("proxy.url")) || undefined : undefined;
+				}),
+			);
 		}
 
 		// Set default getApiKey if not already set

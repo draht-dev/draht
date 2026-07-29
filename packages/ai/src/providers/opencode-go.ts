@@ -1,12 +1,13 @@
 import { anthropicMessagesApi } from "../api/anthropic-messages.lazy.ts";
 import { openAICompletionsApi } from "../api/openai-completions.lazy.ts";
+import { openAIResponsesApi } from "../api/openai-responses.lazy.ts";
 import { envApiKeyAuth, lazyOAuth } from "../auth/helpers.ts";
 import { loadOpenCodeGoOAuth } from "../auth/oauth/load.ts";
 import { createProvider, type Provider } from "../models.ts";
 import { OPENCODE_GO_MODELS } from "./opencode-go.models.ts";
 
-export function opencodeGoProvider(): Provider<"anthropic-messages" | "openai-completions"> {
-	return createProvider({
+export function opencodeGoProvider(): Provider<"anthropic-messages" | "openai-completions" | "openai-responses"> {
+	return createProvider<"anthropic-messages" | "openai-completions" | "openai-responses">({
 		id: "opencode-go",
 		name: "OpenCode Zen Go",
 		auth: {
@@ -23,6 +24,7 @@ export function opencodeGoProvider(): Provider<"anthropic-messages" | "openai-co
 		api: {
 			"anthropic-messages": anthropicMessagesApi(),
 			"openai-completions": openAICompletionsApi(),
+			"openai-responses": openAIResponsesApi(),
 		},
 	});
 }

@@ -36,7 +36,7 @@
 		}
 	},
 	"bin": {
-		"draht-ai": "./dist/cli.js"
+		"draht-ai": "dist/cli.js"
 	},
 	"files": [
 		"dist",

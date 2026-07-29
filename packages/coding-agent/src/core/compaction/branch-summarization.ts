@@ -6,6 +6,7 @@
  */
 
 import type { AgentMessage, StreamFn } from "@draht/agent-core";
+import { contentText } from "@draht/ai";
 import type { Model, SimpleStreamOptions } from "@draht/ai/compat";
 import { completeSimple } from "@draht/ai/compat";
 import {
@@ -351,10 +352,7 @@ export async function generateBranchSummary(
 		return { error: response.errorMessage || "Summarization failed" };
 	}
 
-	let summary = response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map((c) => c.text)
-		.join("\n");
+	let summary = contentText(response.content);
 
 	// Prepend preamble to provide context about the branch summary
 	summary = BRANCH_SUMMARY_PREAMBLE + summary;

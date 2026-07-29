@@ -24,15 +24,8 @@ import type {
 	PrepareNextTurnContext,
 	ThinkingLevel,
 } from "@draht/agent-core";
-import type {
-	AssistantMessage,
-	AuthResult,
-	ImageContent,
-	Message,
-	Model,
-	ProviderHeaders,
-	TextContent,
-} from "@draht/ai/compat";
+import { contentText } from "@draht/ai";
+import type { AssistantMessage, AuthResult, ImageContent, Model, ProviderHeaders, TextContent } from "@draht/ai/compat";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -578,7 +571,7 @@ export class AgentSession {
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
-			const messageText = this._getUserMessageText(event.message);
+			const messageText = contentText(event.message.content, "");
 			if (messageText) {
 				// Check steering queue first
 				const steeringIndex = this._steeringMessages.indexOf(messageText);
@@ -659,15 +652,6 @@ export class AgentSession {
 			}
 		}
 		return false;
-	}
-
-	/** Extract text content from a message */
-	private _getUserMessageText(message: Message): string {
-		if (message.role !== "user") return "";
-		const content = message.content;
-		if (typeof content === "string") return content;
-		const textBlocks = content.filter((c) => c.type === "text");
-		return textBlocks.map((c) => (c as TextContent).text).join("");
 	}
 
 	/** Find the last assistant message in agent state (including aborted ones) */
@@ -3002,17 +2986,11 @@ export class AgentSession {
 			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
 				// User message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
-				editorText = this._extractUserMessageText(targetEntry.message.content);
+				editorText = contentText(targetEntry.message.content, "");
 			} else if (targetEntry.type === "custom_message") {
 				// Custom message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
-				editorText =
-					typeof targetEntry.content === "string"
-						? targetEntry.content
-						: targetEntry.content
-								.filter((c): c is { type: "text"; text: string } => c.type === "text")
-								.map((c) => c.text)
-								.join("");
+				editorText = contentText(targetEntry.content, "");
 			} else {
 				// Non-user message: leaf = selected node
 				newLeafId = targetId;
@@ -3080,24 +3058,13 @@ export class AgentSession {
 			if (entry.type !== "message") continue;
 			if (entry.message.role !== "user") continue;
 
-			const text = this._extractUserMessageText(entry.message.content);
+			const text = contentText(entry.message.content, "");
 			if (text) {
 				result.push({ entryId: entry.id, text });
 			}
 		}
 
 		return result;
-	}
-
-	private _extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
-		if (typeof content === "string") return content;
-		if (Array.isArray(content)) {
-			return content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("");
-		}
-		return "";
 	}
 
 	/**

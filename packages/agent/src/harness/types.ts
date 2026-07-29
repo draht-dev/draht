@@ -8,7 +8,16 @@ import type {
 	Transport,
 	Usage,
 } from "@draht/ai";
-import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.ts";
+import type { Static, TSchema } from "typebox";
+import type {
+	AgentEvent,
+	AgentMessage,
+	AgentTool,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	QueueMode,
+	ThinkingLevel,
+} from "../index.ts";
 import type { Session } from "./session/session.ts";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
@@ -85,6 +94,27 @@ export interface AgentHarnessResources<
 	/** Skills available to the model and explicit skill invocation. */
 	skills?: TSkill[];
 }
+
+/** Tool definition executed by an {@link AgentHarness} with an application-defined context. */
+export type AgentHarnessTool<
+	TContext extends object | undefined,
+	TParameters extends TSchema = TSchema,
+	TDetails = unknown,
+> = Omit<AgentTool<TParameters, TDetails>, "execute"> & {
+	/** Execute the tool call with the context resolved for the current turn snapshot. */
+	execute(
+		toolCallId: string,
+		params: Static<TParameters>,
+		signal: AbortSignal | undefined,
+		onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
+		context: TContext,
+	): Promise<AgentToolResult<TDetails>>;
+};
+
+/** Static tool context or zero-argument provider resolved for each turn snapshot. */
+export type AgentHarnessToolContextSource<TContext extends object | undefined> =
+	| TContext
+	| (() => TContext | Promise<TContext>);
 
 /** Curated provider request options owned by the harness and snapshotted per turn. */
 export interface AgentHarnessStreamOptions {
@@ -862,11 +892,11 @@ export interface BranchSummaryResult {
 }
 
 export interface AgentHarnessOptions<
+	TContext extends object | undefined = undefined,
 	TSkill extends Skill = Skill,
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
-	TTool extends AgentTool = AgentTool,
+	TTool extends AgentHarnessTool<TContext> = AgentHarnessTool<TContext>,
 > {
-	env: ExecutionEnv;
 	session: Session;
 	/**
 	 * Provider collection used for all model requests (turn streaming,
@@ -875,6 +905,8 @@ export interface AgentHarnessOptions<
 	 */
 	models: Models;
 	tools?: TTool[];
+	/** Static context or zero-argument context provider resolved for each turn snapshot. */
+	toolContext?: AgentHarnessToolContextSource<TContext>;
 	/**
 	 * Concrete resources available to explicit invocation methods and system-prompt callbacks.
 	 * Applications own loading/reloading resources and should call `setResources()` with new values.
@@ -883,7 +915,6 @@ export interface AgentHarnessOptions<
 	systemPrompt?:
 		| string
 		| ((context: {
-				env: ExecutionEnv;
 				session: Session;
 				model: Model<any>;
 				thinkingLevel: ThinkingLevel;

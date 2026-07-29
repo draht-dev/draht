@@ -7,6 +7,10 @@ import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { InMemorySessionStorage } from "../../src/harness/session/memory-storage.ts";
 import {
 	AgentHarness,
+	createBashTool,
+	createEditTool,
+	createReadTool,
+	createWriteTool,
 	formatSkillsForSystemPrompt,
 	loadSourcedPromptTemplates,
 	loadSourcedSkills,
@@ -49,12 +53,13 @@ if (!model) {
 
 const session = new Session(new InMemorySessionStorage());
 const agent = new AgentHarness({
-	env,
 	session,
 	models,
 	model,
 	thinkingLevel: "low",
-	systemPrompt: ({ env, resources }) =>
+	tools: [createReadTool(), createWriteTool(), createEditTool(), createBashTool()],
+	toolContext: async () => ({ env, sessionId: (await session.getMetadata()).id }),
+	systemPrompt: ({ resources }) =>
 		[
 			"You are a helpful assistant.",
 			formatSkillsForSystemPrompt(resources.skills ?? []),

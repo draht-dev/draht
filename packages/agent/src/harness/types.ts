@@ -344,8 +344,10 @@ export interface FileSystem {
 export interface ShellExecOptions {
 	/** Working directory for the command. Relative paths are resolved against {@link ExecutionEnv.cwd}. Defaults to {@link ExecutionEnv.cwd}. */
 	cwd?: string;
-	/** Additional environment variables for the command. Values override the environment defaults. Defaults to no overrides. */
+	/** Environment variables for the command. Values override inherited defaults when `inheritEnv` is true. */
 	env?: Record<string, string>;
+	/** Whether to inherit the execution environment's default variables. Defaults to true. */
+	inheritEnv?: boolean;
 	/** Timeout in seconds. Implementations should return a timeout error when the command exceeds this duration. Defaults to no timeout. */
 	timeout?: number;
 	/** Abort signal used to terminate the command. Defaults to no abort signal. */
@@ -891,11 +893,26 @@ export interface BranchSummaryResult {
 	modifiedFiles: string[];
 }
 
-export interface AgentHarnessOptions<
+export type AgentHarnessSystemPrompt<
 	TContext extends object | undefined = undefined,
 	TSkill extends Skill = Skill,
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
 	TTool extends AgentHarnessTool<TContext> = AgentHarnessTool<TContext>,
+> =
+	| string
+	| ((context: {
+			session: Session;
+			model: Model<any>;
+			thinkingLevel: ThinkingLevel;
+			activeTools: TTool[];
+			resources: AgentHarnessResources<TSkill, TPromptTemplate>;
+	  }) => string | Promise<string>);
+
+interface AgentHarnessOptionsBase<
+	TContext extends object | undefined,
+	TSkill extends Skill,
+	TPromptTemplate extends PromptTemplate,
+	TTool extends AgentHarnessTool<TContext>,
 > {
 	session: Session;
 	/**
@@ -905,22 +922,12 @@ export interface AgentHarnessOptions<
 	 */
 	models: Models;
 	tools?: TTool[];
-	/** Static context or zero-argument context provider resolved for each turn snapshot. */
-	toolContext?: AgentHarnessToolContextSource<TContext>;
 	/**
 	 * Concrete resources available to explicit invocation methods and system-prompt callbacks.
 	 * Applications own loading/reloading resources and should call `setResources()` with new values.
 	 */
 	resources?: AgentHarnessResources<TSkill, TPromptTemplate>;
-	systemPrompt?:
-		| string
-		| ((context: {
-				session: Session;
-				model: Model<any>;
-				thinkingLevel: ThinkingLevel;
-				activeTools: TTool[];
-				resources: AgentHarnessResources<TSkill, TPromptTemplate>;
-		  }) => string | Promise<string>);
+	systemPrompt?: AgentHarnessSystemPrompt<TContext, TSkill, TPromptTemplate, TTool>;
 	/** Curated stream/provider request options. Snapshotted at turn start. */
 	streamOptions?: AgentHarnessStreamOptions;
 	/** Optional retry policy for generated compaction and branch-summary requests. */
@@ -931,5 +938,21 @@ export interface AgentHarnessOptions<
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 }
+
+export type AgentHarnessOptions<
+	TContext extends object | undefined = undefined,
+	TSkill extends Skill = Skill,
+	TPromptTemplate extends PromptTemplate = PromptTemplate,
+	TTool extends AgentHarnessTool<TContext> = AgentHarnessTool<TContext>,
+> = AgentHarnessOptionsBase<TContext, TSkill, TPromptTemplate, TTool> &
+	([TContext] extends [undefined]
+		? {
+				/** Context-free harnesses do not need a tool context. */
+				toolContext?: undefined;
+			}
+		: {
+				/** Static context or zero-argument context provider resolved for each turn snapshot. */
+				toolContext: AgentHarnessToolContextSource<TContext>;
+			});
 
 export type { AgentHarness } from "./agent-harness.ts";

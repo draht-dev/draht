@@ -58,7 +58,7 @@ const agent = new AgentHarness({
 	model,
 	thinkingLevel: "low",
 	tools: [createReadTool(), createWriteTool(), createEditTool(), createBashTool()],
-	toolContext: async () => ({ env, sessionId: (await session.getMetadata()).id }),
+	toolContext: { env },
 	systemPrompt: ({ resources }) =>
 		[
 			"You are a helpful assistant.",
@@ -73,5 +73,7 @@ const agent = new AgentHarness({
 	},
 });
 
-const response = await agent.prompt("What skills do you have? Any duplicates?");
+const response = await agent.prompt(
+	"What skills do you have? Any duplicates? Also use bash to get the current date and time, then read README.md and tell me what this project is about.",
+);
 console.log(response);

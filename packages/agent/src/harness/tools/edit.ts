@@ -1,5 +1,5 @@
 import { type Static, Type } from "typebox";
-import type { AgentHarnessTool, ExecutionEnv, FileError } from "../types.ts";
+import type { AgentHarnessTool, FileError } from "../types.ts";
 import {
 	applyEditsToNormalizedContent,
 	detectLineEnding,
@@ -12,6 +12,7 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToolPath } from "./path-utils.ts";
+import type { ExecutionToolContext } from "./tool-context.ts";
 
 const replaceEditSchema = Type.Object(
 	{
@@ -37,11 +38,6 @@ const editSchema = Type.Object(
 
 export type EditToolInput = Static<typeof editSchema>;
 type LegacyEditToolInput = EditToolInput & { oldText?: unknown; newText?: unknown };
-
-export interface EditToolContext {
-	env: ExecutionEnv;
-	sessionId: string;
-}
 
 export interface EditToolDetails {
 	diff: string;
@@ -78,7 +74,7 @@ function editAccessError(path: string, error: FileError): Error {
 	return new Error(`Could not edit file: ${path}. Error code: ${error.code}.`, { cause: error });
 }
 
-export function createEditTool<TContext extends EditToolContext = EditToolContext>(): AgentHarnessTool<
+export function createEditTool<TContext extends ExecutionToolContext = ExecutionToolContext>(): AgentHarnessTool<
 	TContext,
 	typeof editSchema,
 	EditToolDetails | undefined
@@ -97,7 +93,9 @@ export function createEditTool<TContext extends EditToolContext = EditToolContex
 				if (signal?.aborted) throw new Error("Operation aborted");
 				const info = await env.fileInfo(absolutePath, signal);
 				if (!info.ok) throw editAccessError(path, info.error);
-				if (info.value.kind !== "file") throw new Error(`Could not edit file: ${path}. Path is not a file.`);
+				if (info.value.kind !== "file" && info.value.kind !== "symlink") {
+					throw new Error(`Could not edit file: ${path}. Path is not a file.`);
+				}
 
 				const readResult = await env.readTextFile(absolutePath, signal);
 				if (!readResult.ok) throw editAccessError(path, readResult.error);

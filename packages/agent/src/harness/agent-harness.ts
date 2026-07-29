@@ -34,6 +34,7 @@ import type {
 	AgentHarnessResources,
 	AgentHarnessStreamOptions,
 	AgentHarnessStreamOptionsPatch,
+	AgentHarnessSystemPrompt,
 	AgentHarnessTool,
 	AgentHarnessToolContextSource,
 	CompactResult,
@@ -181,7 +182,7 @@ export class AgentHarness<
 	private pendingSessionWrites: PendingSessionWrite[] = [];
 	private model: Model<any>;
 	private thinkingLevel: ThinkingLevel;
-	private systemPrompt: AgentHarnessOptions<TContext, TSkill, TPromptTemplate, TTool>["systemPrompt"];
+	private systemPrompt: AgentHarnessSystemPrompt<TContext, TSkill, TPromptTemplate, TTool> | undefined;
 	private toolContext: AgentHarnessToolContextSource<TContext> | undefined;
 	private streamOptions: AgentHarnessStreamOptions;
 	private retry: RetryPolicy | undefined;

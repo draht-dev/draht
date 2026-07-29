@@ -499,7 +499,7 @@ describe("AgentHarness", () => {
 				}),
 		]);
 		const env = new NodeExecutionEnv({ cwd: process.cwd() });
-		const toolContext = { env, sessionId: "session-1" };
+		const toolContext = { env };
 		let receivedContext: typeof toolContext | undefined;
 		const contextTool: AgentHarnessTool<typeof toolContext, typeof calculateTool.parameters, undefined> = {
 			...calculateTool,

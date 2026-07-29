@@ -1,14 +1,9 @@
 import { type Static, Type } from "typebox";
-import type { AgentHarnessTool, ExecutionEnv } from "../types.ts";
+import type { AgentHarnessTool } from "../types.ts";
 import { getOrThrow } from "../types.ts";
-import { executeShellWithCapture } from "../utils/shell-output.ts";
-import {
-	DEFAULT_MAX_BYTES,
-	DEFAULT_MAX_LINES,
-	formatSize,
-	type TruncationResult,
-	truncateTail,
-} from "../utils/truncate.ts";
+import { executeShellWithCapture, type ShellCaptureProgress } from "../utils/shell-output.ts";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "../utils/truncate.ts";
+import type { ExecutionToolContext } from "./tool-context.ts";
 
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000;
 const BASH_UPDATE_THROTTLE_MS = 100;
@@ -20,27 +15,27 @@ const bashSchema = Type.Object({
 
 export type BashToolInput = Static<typeof bashSchema>;
 
-export interface BashToolContext {
-	env: ExecutionEnv;
-	sessionId: string;
-}
-
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
 }
 
-export interface BashSpawnContext {
+export interface BashExecution {
 	command: string;
 	cwd: string;
-	env?: Record<string, string>;
+	env: Record<string, string>;
+	inheritEnv: boolean;
 }
 
-export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
+export type BashPrepare<TContext extends ExecutionToolContext = ExecutionToolContext> = (
+	execution: BashExecution,
+	context: TContext,
+	signal?: AbortSignal,
+) => void | Promise<void>;
 
-export interface BashToolOptions {
+export interface BashToolOptions<TContext extends ExecutionToolContext = ExecutionToolContext> {
 	commandPrefix?: string;
-	spawnHook?: BashSpawnHook;
+	prepare?: BashPrepare<TContext>;
 }
 
 function validateTimeout(timeout: number | undefined): void {
@@ -53,34 +48,40 @@ function validateTimeout(timeout: number | undefined): void {
 	}
 }
 
-export function createBashTool<TContext extends BashToolContext = BashToolContext>(
-	options?: BashToolOptions,
+export function createBashTool<TContext extends ExecutionToolContext = ExecutionToolContext>(
+	options?: BashToolOptions<TContext>,
 ): AgentHarnessTool<TContext, typeof bashSchema, BashToolDetails | undefined> {
 	return {
 		name: "bash",
 		label: "bash",
 		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
 		parameters: bashSchema,
-		async execute(_toolCallId, { command, timeout }, signal, onUpdate, { env }) {
+		async execute(_toolCallId, { command, timeout }, signal, onUpdate, context) {
 			validateTimeout(timeout);
-			const resolvedCommand = options?.commandPrefix ? `${options.commandPrefix}\n${command}` : command;
-			const spawnContext = options?.spawnHook?.({ command: resolvedCommand, cwd: env.cwd }) ?? {
-				command: resolvedCommand,
+			const { env } = context;
+			const execution: BashExecution = {
+				command: options?.commandPrefix ? `${options.commandPrefix}\n${command}` : command,
 				cwd: env.cwd,
+				env: {},
+				inheritEnv: true,
 			};
-			let partialOutput = "";
+			await options?.prepare?.(execution, context, signal);
+			let getLatestProgress: (() => ShellCaptureProgress) | undefined;
 			let updateTimer: ReturnType<typeof setTimeout> | undefined;
 			let updateDirty = false;
 			let lastUpdateAt = 0;
 
 			const emitOutputUpdate = (): void => {
-				if (!onUpdate || !updateDirty) return;
+				if (!onUpdate || !updateDirty || !getLatestProgress) return;
 				updateDirty = false;
 				lastUpdateAt = Date.now();
-				const truncation = truncateTail(partialOutput);
+				const progress = getLatestProgress();
 				onUpdate({
-					content: [{ type: "text", text: truncation.content }],
-					details: { truncation: truncation.truncated ? truncation : undefined },
+					content: [{ type: "text", text: progress.output }],
+					details: {
+						truncation: progress.truncation.truncated ? progress.truncation : undefined,
+						fullOutputPath: progress.fullOutputPath,
+					},
 				});
 			};
 			const clearUpdateTimer = (): void => {
@@ -106,22 +107,22 @@ export function createBashTool<TContext extends BashToolContext = BashToolContex
 			onUpdate?.({ content: [], details: undefined });
 			try {
 				const capture = getOrThrow(
-					await executeShellWithCapture(env, spawnContext.command, {
-						cwd: spawnContext.cwd,
-						env: spawnContext.env,
+					await executeShellWithCapture(env, execution.command, {
+						cwd: execution.cwd,
+						env: execution.env,
+						inheritEnv: execution.inheritEnv,
 						timeout,
 						abortSignal: signal,
 						returnExecutionErrors: true,
-						onChunk: (chunk) => {
-							partialOutput += chunk;
-							if (partialOutput.length > DEFAULT_MAX_BYTES * 4) {
-								partialOutput = partialOutput.slice(-DEFAULT_MAX_BYTES * 2);
-							}
+						onChunk: (_chunk, getProgress) => {
+							getLatestProgress = getProgress;
 							scheduleOutputUpdate();
 						},
 					}),
 				);
 				clearUpdateTimer();
+				getLatestProgress = () => capture;
+				updateDirty = true;
 				emitOutputUpdate();
 
 				let outputText = capture.output;
@@ -131,7 +132,8 @@ export function createBashTool<TContext extends BashToolContext = BashToolContex
 					const startLine = capture.truncation.totalLines - capture.truncation.outputLines + 1;
 					const endLine = capture.truncation.totalLines;
 					if (capture.truncation.lastLinePartial) {
-						outputText += `\n\n[Showing last ${formatSize(capture.truncation.outputBytes)} of line ${endLine}. Full output: ${capture.fullOutputPath}]`;
+						const lastLineSize = formatSize(capture.lastLineBytes);
+						outputText += `\n\n[Showing last ${formatSize(capture.truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${capture.fullOutputPath}]`;
 					} else if (capture.truncation.truncatedBy === "lines") {
 						outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${capture.truncation.totalLines}. Full output: ${capture.fullOutputPath}]`;
 					} else {

@@ -1,6 +1,6 @@
 import type { ImageContent, TextContent } from "@draht/ai";
 import { type Static, Type } from "typebox";
-import type { AgentHarnessTool, ExecutionEnv } from "../types.ts";
+import type { AgentHarnessTool } from "../types.ts";
 import { getOrThrow } from "../types.ts";
 import {
 	DEFAULT_MAX_BYTES,
@@ -11,6 +11,7 @@ import {
 } from "../utils/truncate.ts";
 import { detectSupportedImageMimeType, encodeBase64 } from "./image.ts";
 import { resolveReadToolPath } from "./path-utils.ts";
+import type { ExecutionToolContext } from "./tool-context.ts";
 
 const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
@@ -19,11 +20,6 @@ const readSchema = Type.Object({
 });
 
 export type ReadToolInput = Static<typeof readSchema>;
-
-export interface ReadToolContext {
-	env: ExecutionEnv;
-	sessionId: string;
-}
 
 export interface ReadToolDetails {
 	truncation?: TruncationResult;
@@ -46,7 +42,7 @@ export interface ReadToolOptions {
 	imageProcessor?: ReadImageProcessor;
 }
 
-export function createReadTool<TContext extends ReadToolContext = ReadToolContext>(
+export function createReadTool<TContext extends ExecutionToolContext = ExecutionToolContext>(
 	options?: ReadToolOptions,
 ): AgentHarnessTool<TContext, typeof readSchema, ReadToolDetails | undefined> {
 	return {

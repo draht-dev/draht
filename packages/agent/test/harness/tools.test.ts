@@ -1,11 +1,19 @@
+import { symlink } from "node:fs/promises";
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { createBashTool } from "../../src/harness/tools/bash.ts";
+import { type BashToolDetails, createBashTool } from "../../src/harness/tools/bash.ts";
 import { createEditTool } from "../../src/harness/tools/edit.ts";
 import { createReadTool } from "../../src/harness/tools/read.ts";
 import { createWriteTool } from "../../src/harness/tools/write.ts";
-import { getOrThrow } from "../../src/harness/types.ts";
+import {
+	type ExecutionError,
+	type FileError,
+	getOrThrow,
+	ok,
+	type Result,
+	type ShellExecOptions,
+} from "../../src/harness/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
 function textOutput(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -14,7 +22,82 @@ function textOutput(result: { content: Array<{ type: string; text?: string }> })
 
 function createContext() {
 	const env = new NodeExecutionEnv({ cwd: createTempDir() });
-	return { env, sessionId: "session-1" };
+	return { env };
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+	let resolve = () => {};
+	const promise = new Promise<void>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+class SlowReadExecutionEnv extends NodeExecutionEnv {
+	override async readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
+		await delay(20);
+		return super.readTextFile(path, abortSignal);
+	}
+}
+
+class BlockingWriteExecutionEnv extends NodeExecutionEnv {
+	readonly firstWriteStarted = deferred();
+	readonly finishFirstWrite = deferred();
+	secondWriteStarted = false;
+
+	override async writeFile(
+		path: string,
+		content: string | Uint8Array,
+		abortSignal?: AbortSignal,
+	): Promise<Result<void, FileError>> {
+		if (content === "first\n") {
+			this.firstWriteStarted.resolve();
+			await this.finishFirstWrite.promise;
+		} else if (content === "second\n") {
+			this.secondWriteStarted = true;
+		}
+		return super.writeFile(path, content, abortSignal);
+	}
+}
+
+class BlockingEditExecutionEnv extends NodeExecutionEnv {
+	readonly firstEditWriteStarted = deferred();
+	readonly finishFirstEditWrite = deferred();
+	firstEditWriteSettled = false;
+	secondEditWriteStarted = false;
+
+	override async writeFile(
+		path: string,
+		content: string | Uint8Array,
+		abortSignal?: AbortSignal,
+	): Promise<Result<void, FileError>> {
+		if (content === "ALPHA\nbeta\n") {
+			this.firstEditWriteStarted.resolve();
+			await this.finishFirstEditWrite.promise;
+			const result = await super.writeFile(path, content);
+			this.firstEditWriteSettled = true;
+			return result;
+		}
+		if (content === "ALPHA\nBETA\n" || content === "alpha\nBETA\n") {
+			this.secondEditWriteStarted = true;
+		}
+		return super.writeFile(path, content, abortSignal);
+	}
+}
+
+class LateOutputExecutionEnv extends NodeExecutionEnv {
+	override async exec(
+		_command: string,
+		options?: ShellExecOptions,
+	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
+		options?.onStdout?.("before\n");
+		setTimeout(() => options?.onStdout?.("late\n"), 0);
+		return ok({ stdout: "before\n", stderr: "", exitCode: 0 });
+	}
 }
 
 function createTinyBmp(): Uint8Array {
@@ -78,6 +161,24 @@ describe("AgentHarness tools", () => {
 				totalLines: 2500,
 				outputLines: 2000,
 			});
+		});
+
+		it("does not count a trailing newline as an extra line at the truncation limit", async () => {
+			const context = createContext();
+			getOrThrow(
+				await context.env.writeFile("exact.txt", `${Array.from({ length: 2000 }, () => "x").join("\n")}\n`),
+			);
+
+			const result = await createReadTool().execute(
+				"read-exact",
+				{ path: "exact.txt" },
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect(result.details).toBeUndefined();
+			expect(textOutput(result)).not.toContain("Use offset=");
 		});
 
 		it("rejects offsets beyond the file", async () => {
@@ -149,6 +250,37 @@ describe("AgentHarness tools", () => {
 
 			expect(textOutput(result)).toBe("Successfully wrote 5 bytes to nested/dir/file.txt");
 			expect(getOrThrow(await context.env.readTextFile("nested/dir/file.txt"))).toBe("hello");
+		});
+
+		it("keeps the mutation queue locked until an aborted write settles", async () => {
+			const env = new BlockingWriteExecutionEnv({ cwd: createTempDir() });
+			const tool = createWriteTool();
+			const controller = new AbortController();
+			const firstWrite = tool.execute(
+				"write-first",
+				{ path: "file.txt", content: "first\n" },
+				controller.signal,
+				undefined,
+				{
+					env,
+				},
+			);
+			await env.firstWriteStarted.promise;
+			controller.abort();
+			const secondWrite = tool.execute(
+				"write-second",
+				{ path: "file.txt", content: "second\n" },
+				undefined,
+				undefined,
+				{ env },
+			);
+
+			await delay(20);
+			expect(env.secondWriteStarted).toBe(false);
+			env.finishFirstWrite.resolve();
+			await expect(firstWrite).rejects.toThrow();
+			await secondWrite;
+			expect(getOrThrow(await env.readTextFile("file.txt"))).toBe("second\n");
 		});
 	});
 
@@ -226,6 +358,79 @@ describe("AgentHarness tools", () => {
 			).rejects.toThrow(/Found 3 occurrences/);
 		});
 
+		it("keeps the mutation queue locked until an aborted edit write settles", async () => {
+			const env = new BlockingEditExecutionEnv({ cwd: createTempDir() });
+			getOrThrow(await env.writeFile("file.txt", "alpha\nbeta\n"));
+			const tool = createEditTool();
+			const controller = new AbortController();
+			const firstEdit = tool.execute(
+				"edit-first",
+				{ path: "file.txt", edits: [{ oldText: "alpha", newText: "ALPHA" }] },
+				controller.signal,
+				undefined,
+				{ env },
+			);
+			await env.firstEditWriteStarted.promise;
+			controller.abort();
+			const secondEdit = tool.execute(
+				"edit-second",
+				{ path: "file.txt", edits: [{ oldText: "beta", newText: "BETA" }] },
+				undefined,
+				undefined,
+				{ env },
+			);
+
+			await delay(20);
+			expect(env.secondEditWriteStarted).toBe(false);
+			env.finishFirstEditWrite.resolve();
+			await expect(firstEdit).rejects.toThrow("Operation aborted");
+			await secondEdit;
+			expect(env.firstEditWriteSettled).toBe(true);
+			expect(getOrThrow(await env.readTextFile("file.txt"))).toBe("ALPHA\nBETA\n");
+		});
+
+		it("serializes concurrent edits through canonical and symlink paths", async () => {
+			const env = new SlowReadExecutionEnv({ cwd: createTempDir() });
+			getOrThrow(await env.writeFile("target.txt", "alpha\nbeta\ngamma\n"));
+			await symlink("target.txt", `${env.cwd}/link.txt`);
+			const tool = createEditTool();
+
+			await Promise.all([
+				tool.execute(
+					"edit-target",
+					{ path: "target.txt", edits: [{ oldText: "alpha", newText: "ALPHA" }] },
+					undefined,
+					undefined,
+					{ env },
+				),
+				tool.execute(
+					"edit-link",
+					{ path: "link.txt", edits: [{ oldText: "beta", newText: "BETA" }] },
+					undefined,
+					undefined,
+					{ env },
+				),
+			]);
+
+			expect(getOrThrow(await env.readTextFile("target.txt"))).toBe("ALPHA\nBETA\ngamma\n");
+		});
+
+		it("edits regular files through symlinks", async () => {
+			const context = createContext();
+			getOrThrow(await context.env.writeFile("target.txt", "before\n"));
+			await symlink("target.txt", `${context.env.cwd}/link.txt`);
+
+			await createEditTool().execute(
+				"edit-symlink",
+				{ path: "link.txt", edits: [{ oldText: "before", newText: "after" }] },
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect(getOrThrow(await context.env.readTextFile("target.txt"))).toBe("after\n");
+		});
+
 		it("preserves BOM and CRLF line endings", async () => {
 			const context = createContext();
 			getOrThrow(await context.env.writeFile("edit.txt", "\uFEFFone\r\ntwo\r\n"));
@@ -297,6 +502,64 @@ describe("AgentHarness tools", () => {
 			expect(fullOutput).toContain("line-2999\nline-3000");
 		});
 
+		it("ignores output callbacks after execution settles", async () => {
+			const env = new LateOutputExecutionEnv({ cwd: createTempDir() });
+			const updates: string[] = [];
+			const result = await createBashTool().execute(
+				"bash-late",
+				{ command: "late" },
+				undefined,
+				(update) => updates.push(textOutput(update)),
+				{ env },
+			);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			expect(textOutput(result)).toBe("before\n");
+			expect(updates.some((update) => update.includes("late"))).toBe(false);
+		});
+
+		it("reports the total size of an oversized final line", async () => {
+			const context = createContext();
+			const result = await createBashTool().execute(
+				"bash-long-line",
+				{ command: "printf '%060000d' 0" },
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect(textOutput(result)).toMatch(/Showing last 50\.0KB of line 1 \(line is 58\.6KB\)\. Full output:/);
+		});
+
+		it("prepares command, cwd, and an explicit environment with the turn context", async () => {
+			const env = new NodeExecutionEnv({
+				cwd: createTempDir(),
+				shellEnv: { DRAHT_BASH_PREPARE_INHERITED: "inherited" },
+			});
+			getOrThrow(await env.createDir("workspace"));
+			const context = { env, workspace: `${env.cwd}/workspace` };
+			const controller = new AbortController();
+			let receivedContext: typeof context | undefined;
+			let receivedSignal: AbortSignal | undefined;
+			const tool = createBashTool<typeof context>({
+				commandPrefix: "prefix=ready",
+				prepare: async (execution, turnContext, signal) => {
+					receivedContext = turnContext;
+					receivedSignal = signal;
+					execution.cwd = turnContext.workspace;
+					execution.env = { DRAHT_BASH_PREPARE_EXPLICIT: "explicit" };
+					execution.inheritEnv = false;
+					execution.command += `\nprintf '%s:%s:%s:%s' "$prefix" "\${DRAHT_BASH_PREPARE_INHERITED-}" "$DRAHT_BASH_PREPARE_EXPLICIT" "$PWD"`;
+				},
+			});
+
+			const result = await tool.execute("bash-prepare", { command: ":" }, controller.signal, undefined, context);
+
+			expect(receivedContext).toBe(context);
+			expect(receivedSignal).toBe(controller.signal);
+			expect(textOutput(result)).toBe(`ready::explicit:${getOrThrow(await env.canonicalPath(context.workspace))}`);
+		});
+
 		it("supports command prefixes", async () => {
 			const context = createContext();
 			const result = await createBashTool({ commandPrefix: "value=hello" }).execute(
@@ -312,12 +575,15 @@ describe("AgentHarness tools", () => {
 
 		it("coalesces updates and persists truncated full output", async () => {
 			const context = createContext();
-			const updates: string[] = [];
+			const updates: Array<{
+				content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+				details?: BashToolDetails;
+			}> = [];
 			const result = await createBashTool().execute(
 				"bash-5",
 				{ command: "i=1; while [ $i -le 3000 ]; do echo line-$i; i=$((i + 1)); done" },
 				undefined,
-				(update) => updates.push(textOutput(update)),
+				(update) => updates.push(update),
 				context,
 			);
 
@@ -330,6 +596,12 @@ describe("AgentHarness tools", () => {
 			});
 			expect(textOutput(result)).toContain("line-3000");
 			expect(result.details?.fullOutputPath).toBeDefined();
+			const finalUpdate = updates.at(-1);
+			expect(finalUpdate ? textOutput(finalUpdate) : "").toContain("line-3000");
+			expect(finalUpdate?.details).toMatchObject({
+				truncation: { totalLines: 3000, totalBytes: expect.any(Number) },
+				fullOutputPath: result.details?.fullOutputPath,
+			});
 			const fullOutput = getOrThrow(await context.env.readTextFile(result.details!.fullOutputPath!));
 			expect(fullOutput).toContain("line-1\nline-2");
 			expect(fullOutput).toContain("line-2999\nline-3000");

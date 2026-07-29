@@ -1,7 +1,6 @@
 export {
-	type BashSpawnContext,
-	type BashSpawnHook,
-	type BashToolContext,
+	type BashExecution,
+	type BashPrepare,
 	type BashToolDetails,
 	type BashToolInput,
 	type BashToolOptions,
@@ -9,7 +8,6 @@ export {
 } from "./bash.ts";
 export {
 	createEditTool,
-	type EditToolContext,
 	type EditToolDetails,
 	type EditToolInput,
 } from "./edit.ts";
@@ -17,9 +15,9 @@ export {
 	createReadTool,
 	type ReadImageProcessor,
 	type ReadImageProcessorResult,
-	type ReadToolContext,
 	type ReadToolDetails,
 	type ReadToolInput,
 	type ReadToolOptions,
 } from "./read.ts";
-export { createWriteTool, type WriteToolContext, type WriteToolInput } from "./write.ts";
+export type { ExecutionToolContext } from "./tool-context.ts";
+export { createWriteTool, type WriteToolInput } from "./write.ts";

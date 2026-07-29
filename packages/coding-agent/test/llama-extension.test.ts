@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createEventBus } from "../src/core/event-bus.ts";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../src/core/extensions/loader.ts";
 import { LlamaClient, type LlamaProgress, normalizeLlamaServerUrl } from "../src/extensions/llama/client.ts";
+import { findHuggingFaceToken, HuggingFaceClient } from "../src/extensions/llama/huggingface.ts";
 import llamaExtension from "../src/extensions/llama/index.ts";
 import { createLlamaProvider, LLAMA_PROVIDER_ID } from "../src/extensions/llama/provider.ts";
 
@@ -114,6 +115,46 @@ describe("llama.cpp extension", () => {
 			env: { LLAMA_BASE_URL: url },
 			source: "stored credential",
 		});
+	});
+
+	it("searches Hugging Face and reads quantizations plus access requirements", async () => {
+		const { url } = await listen((request, response) => {
+			expect(request.headers.authorization).toBe("Bearer hf-secret");
+			if (request.url?.startsWith("/api/models?")) {
+				const requestUrl = new URL(request.url, "http://localhost");
+				expect(requestUrl.searchParams.get("search")).toBe("qwen coder");
+				expect(requestUrl.searchParams.get("filter")).toBe("gguf");
+				expect(requestUrl.searchParams.get("sort")).toBe("downloads");
+				json(response, [{ id: "owner/model-GGUF", downloads: 1200 }]);
+				return;
+			}
+			if (request.url === "/api/models/owner/model-GGUF?blobs=true") {
+				json(response, {
+					id: "owner/model-GGUF",
+					gated: "manual",
+					siblings: [
+						{ rfilename: "model-Q5_K_M.gguf", size: 6000 },
+						{ rfilename: "model-Q4_K_M-00001-of-00002.gguf", size: 2000 },
+						{ rfilename: "model-Q4_K_M-00002-of-00002.gguf", size: 3000 },
+						{ rfilename: "mmproj-F16.gguf", size: 1000 },
+					],
+				});
+				return;
+			}
+			response.writeHead(404).end();
+		});
+		const client = new HuggingFaceClient("hf-secret", url);
+
+		expect(await client.search("qwen coder")).toEqual([{ id: "owner/model-GGUF", downloads: 1200 }]);
+		expect(await client.details("owner/model-GGUF")).toEqual({
+			id: "owner/model-GGUF",
+			gated: "manual",
+			quantizations: [
+				{ name: "Q4_K_M", size: 5000 },
+				{ name: "Q5_K_M", size: 6000 },
+			],
+		});
+		expect(await findHuggingFaceToken({ HF_TOKEN: " hf-secret " })).toBe("hf-secret");
 	});
 
 	it("loads with SSE progress and waits for the loaded catalog state", async () => {

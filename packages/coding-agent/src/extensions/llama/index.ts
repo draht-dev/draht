@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
-import { LlamaClient, type LlamaModelInfo, normalizeLlamaServerUrl } from "./client.ts";
+import { formatBytes, LlamaClient, type LlamaModelInfo, normalizeLlamaServerUrl } from "./client.ts";
+import { findHuggingFaceToken, HuggingFaceClient } from "./huggingface.ts";
 import { createLlamaProvider, LLAMA_PROVIDER_ID } from "./provider.ts";
 import { type LlamaUi, runWithProgress, showLlamaUi } from "./ui.ts";
 
@@ -16,6 +17,13 @@ function isConnectionError(error: unknown): boolean {
 function connectionErrorMessage(error: unknown): string {
 	if (isConnectionError(error)) return "Could not connect to the server.";
 	return error instanceof Error ? error.message : String(error);
+}
+
+function parseHuggingFaceModel(value: string): { repository: string; quantization?: string } {
+	const colon = value.indexOf(":", value.indexOf("/") + 1);
+	return colon < 0
+		? { repository: value }
+		: { repository: value.slice(0, colon), quantization: value.slice(colon + 1) };
 }
 
 async function configuredClient(ctx: ExtensionCommandContext): Promise<LlamaClient | undefined> {
@@ -118,12 +126,37 @@ export default function llamaExtension(pi: ExtensionAPI): void {
 	};
 
 	const downloadModel = async (ctx: ExtensionCommandContext, ui: LlamaUi, client: LlamaClient): Promise<void> => {
-		const model = (await ui.input("Download llama.cpp model", "owner/repository[:quant]"))?.trim();
-		if (!model) return;
-		if (/\s/u.test(model) || !model.includes("/")) {
-			ctx.ui.notify("Use owner/repository[:quant]", "error");
-			return;
+		const huggingFace = new HuggingFaceClient(await findHuggingFaceToken());
+		const selected = await ui.searchModels((query, signal) => huggingFace.search(query, signal));
+		if (!selected) return;
+		const parsed = parseHuggingFaceModel(selected);
+		ui.showStatus("Loading model details", parsed.repository);
+		const details = await huggingFace.details(parsed.repository);
+		if (details.gated) {
+			const approval = details.gated === "manual" ? "Manual approval is required" : "Accept the access terms";
+			const choice = await ui.select(
+				`Hugging Face access required\n${details.id}\n\n${approval} at:\nhttps://huggingface.co/${details.id}\n\nThe llama.cpp server needs HF_TOKEN with access.`,
+				["Continue", "Back"],
+			);
+			if (choice !== "Continue") return;
 		}
+		let quantization = parsed.quantization;
+		if (!quantization && details.quantizations.length > 0) {
+			const options = details.quantizations.map((entry) => {
+				const detail = [
+					entry.size === undefined ? undefined : formatBytes(entry.size),
+					entry.name === "Q4_K_M" ? "recommended" : undefined,
+				]
+					.filter((value): value is string => Boolean(value))
+					.join(" · ");
+				return detail ? `${entry.name} · ${detail}` : entry.name;
+			});
+			const choice = await ui.select(`Select quantization\n${details.id}`, options);
+			if (!choice) return;
+			quantization = details.quantizations[options.indexOf(choice)]?.name;
+			if (!quantization) return;
+		}
+		const model = quantization ? `${details.id}:${quantization}` : details.id;
 		const result = await runWithProgress(ui, {
 			title: "Downloading model",
 			model,

@@ -3910,7 +3910,7 @@ export class InteractiveMode {
 				}
 			}
 		}
-		this.ui.requestRender();
+		this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
 	}
 
 	private toggleThinkingBlockVisibility(): void {

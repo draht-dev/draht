@@ -3270,7 +3270,12 @@ export class InteractiveMode {
 			case "custom": {
 				if (message.display) {
 					const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
-					const component = new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings());
+					const component = new CustomMessageComponent(
+						message,
+						renderer,
+						this.getMarkdownThemeWithSettings(),
+						this.outputPad,
+					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
 				}
@@ -4345,7 +4350,11 @@ export class InteractiveMode {
 						this.outputPad = padding;
 						if (this.streamingComponent || this.session.isStreaming) {
 							for (const child of this.chatContainer.children) {
-								if (child instanceof AssistantMessageComponent || child instanceof UserMessageComponent) {
+								if (
+									child instanceof AssistantMessageComponent ||
+									child instanceof CustomMessageComponent ||
+									child instanceof UserMessageComponent
+								) {
 									child.setOutputPad(padding);
 								}
 							}

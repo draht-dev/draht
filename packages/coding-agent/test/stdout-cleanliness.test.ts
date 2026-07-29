@@ -3,13 +3,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
+import { allowNetwork } from "./test-network-env.ts";
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
 const tsxPath = createRequire(__filename).resolve("tsx");
 
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+	allowNetwork();
+});
 
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	checkForNewPiVersion,
 	comparePackageVersions,
@@ -6,9 +6,13 @@ import {
 	getLatestPiVersion,
 	isNewerPackageVersion,
 } from "../src/utils/version-check.ts";
+import { allowNetwork } from "./test-network-env.ts";
 
 const originalSkipVersionCheck = process.env.DRAHT_SKIP_VERSION_CHECK;
-const originalOffline = process.env.DRAHT_OFFLINE;
+
+beforeEach(() => {
+	allowNetwork();
+});
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -17,11 +21,8 @@ afterEach(() => {
 	} else {
 		process.env.DRAHT_SKIP_VERSION_CHECK = originalSkipVersionCheck;
 	}
-	if (originalOffline === undefined) {
-		delete process.env.DRAHT_OFFLINE;
-	} else {
-		process.env.DRAHT_OFFLINE = originalOffline;
-	}
+	// DRAHT_OFFLINE no longer needs manual save/restore: vitest sets it per-run via
+	// test.env and unstubEnvs:true reverts whatever allowNetwork() stubbed.
 });
 
 describe("version checks", () => {

@@ -7,7 +7,7 @@
 - **Harness API.** Passive events to observe execution; awaited hooks to transform harness behavior (context, requests, tools, run boundaries). Extensions build on these.
 - **Observability.** Everything is instrumentable — down to provider request/response internals — for logging and tracing (e.g. OTel), without going through the hook system.
 - **UI model.** Atomic snapshot plus live event stream. No event replay; reconnect means new snapshot.
-- **Single writer.** Exactly one harness writes a session at a time, enforced by the serving layer. Restore treats impossible states from interleaved writers as corruption.
+- **Single writer, parallel refs.** Exactly one harness writes a session at a time, enforced by the serving layer; restore treats impossible states from interleaved writers as corruption. Within that one writer, a session hosts one or more **refs** — named movable leaf pointers, each running at most one operation at a time, in parallel with its siblings (section 6). Interactive use never sees more than the default ref.
 - **Old sessions load.** Existing session files open unchanged and restore as idle. Session entry types and tree semantics are unchanged.
 
 ## Non-goals
@@ -23,27 +23,28 @@ The onion, outside in:
 - **Session** — the durable state: an ordered, append-only log of entries. Two views over the same log: the tree (session entries, conversational state) and orchestration history (harness entries).
 - **Session entry** — an entry in the session tree (`message`, `compaction`, `leaf`, ...). Defines conversational ancestry via `parentId`; visible in transcripts and model context.
 - **Harness entry** — a private orchestration fact (operation started, tool started, ...) used to resume a run after abnormal termination. Lives in the same log, never in the tree: no parent, never the leaf, never in model context, never emitted publicly.
+- **Ref** — a named, movable pointer to a leaf of the tree plus the work serialized on it: one active operation, its own queues, its persisted config derived from the path behind its leaf. Every session has the default ref `main`; embedders may create more (section 6).
 
 Execution:
 
-- **Operation** — a run, a manual compaction, or a tree navigation. At most one operation is active in a session at any time; restore treats a log with two unmatched operation starts as corruption.
+- **Operation** — a run, a manual compaction, or a tree navigation, executed on one ref. At most one operation is active per ref at any time; restore treats a log with two unmatched operation starts on the same ref as corruption.
 - **Run** — one accepted prompt through all automatic continuations (tool calls, steering, follow-ups, auto-compaction) until the harness is idle again. Durable; may span process restarts.
 - **Step** — one generation (plus retries), the resulting assistant response, and the complete tool batch it requested. A run is a sequence of steps.
 - **Generation** — one billable cycle of producing a result (assistant response, compaction or branch summary); may span several physical provider requests. A step contains one or more generations (retries).
 - **Checkpoint** — the safe point between steps where queued messages are consumed, deferred writes flush, and compaction is considered.
-- **Deferred write** — a session write requested while a step is in flight: hooks or the application appending a custom message, or changing model/thinking level/active tools. Applying it immediately could split an assistant tool-call message from its tool results, so it is accepted durably on request and applied at the next checkpoint. While idle, the same writes apply immediately.
+- **Deferred write** — a session write requested while a ref has a step in flight: hooks or the application appending a custom message, or changing model/thinking level/active tools. Applying it immediately would insert content before the in-flight request's tail — splitting an assistant tool-call message from its tool results, and violating the append-only context invariant (section 5) that keeps provider KV caches valid. So it is accepted durably on request and applied at the next checkpoint of that ref. While the ref is idle, the same writes apply immediately.
 - **Resume** — continuing an unfinished run in a new process, possibly mid-step.
 
 API:
 
 - **Event** — a passive public observation. Cannot alter execution; not persisted or replayed.
 - **Hook** — an awaited public interception point. Can transform or block execution.
-- **Snapshot** — an atomic capture of current harness state, delivered race-free with every event after it (section 7).
+- **Snapshot** — an atomic capture of current harness state, delivered race-free with every event after it (section 8).
 - **Config** — model, thinking level, system prompt, active tools, resources. Getters return the latest accepted value. Setters while a step is in flight become deferred writes; the in-flight request and tool batch are not affected.
 
 Central invariant:
 
-> Session entries define what the conversation is. Harness entries define what the harness did, in what order. Log order determines orchestration history; `parentId` and leaf entries determine branches; harness entries never alter tree topology.
+> Session entries define what the conversation is. Harness entries define what the harness did, in what order. Log order determines orchestration history; `parentId` and per-ref leaf pointers determine branches; harness entries never alter tree topology.
 
 ## 3. Architecture
 
@@ -70,6 +71,8 @@ The public surface is harness methods, events, hooks, snapshots, config, session
 ## 4. Run and step lifecycle
 
 ### Run states
+
+States are per ref: each ref is independently Idle, Running, Cancelling, or Suspended. Faulted is the exception — an append failure faults the whole harness, every ref included, because none of them can record what it does.
 
 ```mermaid
 stateDiagram-v2
@@ -162,14 +165,27 @@ Rounded records are harness entries: no `parentId`, never the leaf, never in mod
 Consequences:
 
 - Harness entries can be appended mid-step (steering, deferred-write acceptance) without touching tree ordering.
-- Navigation, compaction, and forks (section 12) operate on the tree; orchestration facts are never hidden by a compaction barrier or copied into a fork.
+- Navigation, compaction, and forks (section 13) operate on the tree; orchestration facts are never hidden by a compaction barrier or copied into a fork.
 - Old files contain no harness entries and restore idle.
 
 ### Durability rule
 
 > Before an effect: append an intent entry naming what will happen and the ids it will produce. After the effect: append the result as a session entry with those ids.
 
-No multi-record atomicity. Any log prefix is a valid state: an intent without its result means in flight or interrupted; recovery (section 11) decides completion per intent type.
+No multi-record atomicity. Any log prefix is a valid state: an intent without its result means in flight or interrupted; recovery (section 12) decides completion per intent type.
+
+### Append-only context
+
+> Across the requests of a branch, provider context only ever grows at the tail. Inserting content before the previous request's tail invalidates the provider's KV cache from the insertion point onward — silently multiplying token cost.
+
+This invariant, not just tool-call adjacency, is why mid-step writes defer to checkpoints: checkpoint application and queue consumption append at the tail, so the cached prefix survives every request. Compaction is the one deliberate exception — it trades a full cache invalidation for a smaller context, knowingly.
+
+Two mechanisms carry mid-run content, with deliberately different contracts:
+
+- **Queues** carry conversational intent: steer/followUp die on abort (payloads returned so a client can requeue), nextRun survives. The session entry lands at the consumption point — the position the model actually first saw it.
+- **Deferred writes** carry facts: they survive abort and are applied even during cancellation reconciliation. Both are durable at acceptance.
+
+Custom entries enter provider context only through registered projectors (`entryProjectors`: custom entry → context messages, evaluated at context build); without one they project to nothing and cannot affect the cache. Corollaries: projector output must be stable across context builds for entries already in context, and registering a projector later re-animates existing entries at their historical positions — a one-time cache break, the application's responsibility.
 
 ### Provisioned ids
 
@@ -189,8 +205,16 @@ type ProvisionedMessage = ProvisionedEntry<MessageEntry>;
 interface HarnessEntryBase {
   id: string;
   seq: number;            // position in the chronological log
+  ref: string;            // the ref this record belongs to ("main" in a single-ref session)
   timestamp: string;
 }
+// Session entries carry no ref — the tree is shared between refs (common
+// prefixes), so a ref field would fake ownership that does not exist. Which
+// ref appended a session entry is derivable: a ref's operation appends a
+// chain from its anchor, so membership is parentId linkage into that chain —
+// one pass over the bounded tail, in seq order. Leaf records are the
+// exception: they carry ref explicitly, they ARE the per-ref pointer.
+// Old files: everything reads as "main".
 // Entries that belong to an operation carry runId: the id of that operation's
 // operation_started entry. Not on the base: queue_enqueued(nextRun) belongs to
 // no operation — it targets the next run, and can be accepted while idle.
@@ -200,7 +224,7 @@ interface HarnessEntryBase {
 // consumption, provisioned ids for structural results.
 interface OperationStartedEntry extends HarnessEntryBase {
   type: "operation_started";
-  sourceLeafId: string | null;      // branch anchor at acceptance
+  sourceLeafId: string | null;      // the ref's leaf at acceptance
   intent:
     | {
         kind: "run";
@@ -263,7 +287,10 @@ interface OperationFinishedEntry extends HarnessEntryBase {
 // session entry committing closes the cycle. Validation: attempt numbers are
 // consecutive within each gap between session entries (a gap is always
 // single-purpose — compaction either commits its entry, closing the gap,
-// or fails the run).
+// or fails the run). All positional rules are per ref: "newest session
+// entry" means the newest session entry chained by this ref's operation
+// (parentId membership, see above) — the per-ref partition is what makes
+// positional reduction safe under interleaved refs.
 interface GenerationStartedEntry extends HarnessEntryBase {
   type: "generation_started";
   runId: string;
@@ -289,10 +316,11 @@ interface ToolStartedEntry extends HarnessEntryBase {
 // steer()/followUp()/nextRun() acceptance. The message payload (any
 // AgentMessage that converts to a user LLM message) travels here; the session
 // entry appears at the consumption point. Steer/follow-up items resolve within
-// their run. Next-run items are consumed by the next run-kind operation,
-// embedded in its operation_started initialMessages; compaction and navigation
-// pass through without consuming. Pending items therefore always sit after the
-// last run-kind operation_started — recovery never scans further back.
+// their run. Next-run items are consumed by the next run-kind operation on the
+// same ref, embedded in its operation_started initialMessages; compaction and
+// navigation pass through without consuming. Pending items therefore always
+// sit after the ref's last run-kind operation_started — recovery never scans
+// further back.
 interface QueueEnqueuedEntry extends HarnessEntryBase {
   type: "queue_enqueued";
   queue: "steer" | "followUp" | "nextRun";
@@ -320,16 +348,16 @@ Blocked, invalid, or truncation-failed tool calls append no `tool_started` — n
 
 Restore rejects a log violating any of these as corrupt:
 
-- at most one unmatched `operation_started`
-- operation events reference an existing operation; finish/cancel never precede start
-- attempt numbers are consecutive from 1 within each gap between session entries
+- at most one unmatched `operation_started` per ref
+- operation events reference an existing operation of the same ref; finish/cancel never precede start
+- attempt numbers are consecutive from 1 within each gap between session entries of the same ref
 - tool invocation identities are unique; their assistant entries exist
 - provisioned ids never collide with differing content
-- an active run's cursor moves only through its own appends
+- a ref's active run cursor moves only through that run's appends
 
 ### SessionTree
 
-`SessionTree` is new: the tree-facing contract over the log. `Session` implements it plus the log side below. `harness.session` (section 6) is the harness-owned `SessionTree` that defers writes while a step is in flight — an immediate append would land between the assistant's tool-call message and its tool results, an ordering providers reject and branches must never contain. Standalone `Session` writes apply immediately.
+`SessionTree` is new: the tree-facing contract over the log. `Session` implements it plus the log side below. Each ref exposes its own harness-owned `SessionTree` view (`ref.session`; `harness.session` is main's): branch-scoped reads default to that ref's leaf, appends chain to it, and writes defer while that ref has a step in flight — an immediate append would land before the in-flight request's tail, breaking tool-call adjacency and the append-only context invariant. Writes through one ref's view never defer because another ref is busy. Standalone `Session` writes apply immediately.
 
 ```ts
 /** Filters and paging. Omit type to match every entry. */
@@ -343,7 +371,7 @@ interface EntryQuery {
 
 /** Where a branch scan starts and stops. Defaults: the whole path, leaf to root. */
 interface BranchBounds {
-  /** Leaf end of the path. Default: active leaf. Needed to query another branch or an old compaction tail. */
+  /** Leaf end of the path. Default: the view's ref leaf. Needed to query another branch or an old compaction tail. */
   start?: string;
   /** Scan ends after the first matching entry, inclusive. */
   stopAtType?: SessionTreeEntry["type"];
@@ -357,8 +385,13 @@ interface SessionTree<TMetadata extends SessionMetadata = SessionMetadata> {
   getEntry(id: string): Promise<SessionTreeEntry | undefined>;
   getLeafId(): Promise<string | null>;
   getStats(): Promise<SessionStats>;
+
+  // Global facts — latest-wins records outside the tree, not branch-scoped.
+  // Setter naming is deliberate: "append" is reserved for tree writes.
   getName(): Promise<string | undefined>;
+  setName(name: string): Promise<string>;
   getLabel(id: string): Promise<string | undefined>;
+  setLabel(targetId: string, label: string | undefined): Promise<string>;
 
   /** Session-wide: all branches, log order. */
   findEntries(query?: EntryQuery): Promise<SessionTreeEntry[]>;
@@ -378,8 +411,6 @@ interface SessionTree<TMetadata extends SessionMetadata = SessionMetadata> {
   // event handlers at any point.
   appendMessage(message: AgentMessage): Promise<string>;   // includes custom app message types
   appendCustomEntry(customType: string, data?: unknown): Promise<string>;
-  appendLabel(targetId: string, label: string | undefined): Promise<string>;
-  appendSessionName(name: string): Promise<string>;
 
   /** Writes accepted but not yet applied, in acceptance order. Empty on standalone Session. */
   getPendingWrites(): { id: string; entry: SessionTreeEntry }[];
@@ -409,46 +440,68 @@ class Session<TMetadata> implements SessionTree<TMetadata> {
 
   /** Typed harness-entry queries, same shape as the tree finders. SQLite
       serves them from an indexed harness-entry table. */
-  findHarnessEntries(query?: { type?: HarnessEntry["type"]; runId?: string; afterSeq?: number; order?: "newestFirst" | "oldestFirst"; limit?: number }): Promise<HarnessEntry[]>;
+  findHarnessEntries(query?: { type?: HarnessEntry["type"]; ref?: string; runId?: string; afterSeq?: number; order?: "newestFirst" | "oldestFirst"; limit?: number }): Promise<HarnessEntry[]>;
   findHarnessEntry(query?): Promise<HarnessEntry | undefined>;   // limit 1
 }
 ```
 
-Restore reads are bounded regardless of session length: the latest `operation_started`/`operation_finished` (index seek) locates the active operation, and everything else recovery needs — attempt counts, tool starts, pending queue items, deferred writes — lives at `seq` greater than that operation's start (range scan). Pending next-run items cannot sit further back than the last run-kind `operation_started` because run acceptance consumes them (see `QueueEnqueuedEntry`); SQLite stores the operation kind as a column, so locating it is an index seek.
+Restore reads are bounded regardless of session length, per ref: the ref's latest `operation_started`/`operation_finished` (index seek) locates its active operation, and everything else recovery needs — attempt counts, tool starts, pending queue items, deferred writes — lives at `seq` greater than that operation's start, filtered by ref (range scan). Pending next-run items cannot sit further back than the ref's last run-kind `operation_started` because run acceptance consumes them (see `QueueEnqueuedEntry`); SQLite stores ref and operation kind as columns, so locating them is an index seek.
 
 Changes to the existing contract:
 
 - `getPathToRootOrCompaction()` and `getBranch()` are removed — subsumed by `findEntriesOnBranch`. The duplicated walk logic in the JSONL and SQLite backends is deleted.
 - `buildContext()` is reimplemented on the finders: one branch scan with `stopAtType: "compaction"`, plus the old-style tail scan (`start: compaction.parentId, stopAtId: firstKeptEntryId`) when the compaction entry predates embedded tails.
-- Config derivation leaves `buildContext()`: model/thinking/active tools are point queries (`findEntryOnBranch`), correct across compaction barriers.
+- Config derivation leaves `buildContext()`: model/thinking/active tools are point queries (`findEntryOnBranch`), correct across compaction barriers — and per ref, since each ref queries from its own leaf.
+- Labels and session name are **de-treed**: `LabelEntry` and `SessionInfoEntry` records lose `parentId` and live outside the tree as global latest-wins facts (single writer makes log order a valid last-writer-wins order). They no longer appear in branch queries; old tree-entry forms convert on read. Fork handling: section 13.
+- Leaf records gain `ref`; a session keeps one leaf pointer per ref (absent = `main`, which is how old files read).
 - `custom_message` entries convert to custom agent messages on read; the entry type is retired from the write path.
 - `getStorage()` is gone: raw storage is unreachable, all writes flow through `Session`, and `Session` is the single writer the log format assumes.
 - JSONL becomes format v4: same file, same one-JSON-object-per-line, harness entries interleaved. v3 files load unchanged (zero harness entries, restore idle).
 
-Storage backends implement append + read + the finder queries; they know nothing about operations, queues, or recovery (section 13).
+Storage backends implement append + read + the finder queries; they know nothing about operations, queues, or recovery (section 14).
 
-## 6. Public API
+## 6. Refs
+
+A **ref** is a named, movable pointer to a leaf of the tree, plus the work serialized on it. It is what a git branch is — a name attached to a position, advanced by new work, movable to any point without rewriting history — fused with its worktree: at most one operation runs on a ref at a time, exactly as git refuses to check the same branch out into two worktrees. One intuition git users must extend: navigation can move a ref to *any* entry (like `git reset`), not only forward.
+
+```text
+tree (shared, append-only)              refs
+a ── b ── c ── d                        main → d
+      └── e ── f                        slack:1719432.0021 → f
+```
+
+- Every session has the default ref **`main`**. `AgentHarness` implements the ref surface directly (section 7): `harness.prompt(...)` *is* main's prompt. Interactive pi never creates a second ref — one active branch, resume-where-you-left-off, `/tree` — nothing about that model changes.
+- Embedders create refs keyed by external identities: Slack channel = session + `main`, each thread = a ref anchored at the pinged entry; each email thread = a ref. The platform's UI is the ref picker; no client browses refs abstractly, and end users never see the word.
+- Each ref owns: its leaf; one active operation; its steer/followUp/nextRun queues; its pending deferred writes; and its persisted config view — model, thinking level, and active tools are point queries on the path behind its leaf, so two refs run different models without knowing of each other. Harness-global stay: tool implementations, resources, stream options, retry policy — registries and runtime capabilities are shared, activation is per-ref and branch-anchored.
+- Refs are pointers, not containers. Deleting one removes the name, never entries. Two refs at the same entry diverge on their next append. `navigateTree` moves one ref.
+- Refs run in parallel under one harness: one writer, one log, interleaved records partitioned by `ref`. Cross-process concurrency stays out of scope — all traffic for a session routes to the process holding its harness.
+- After a crash, every ref with an unfinished operation restores suspended, independently; `create()` returns them all (section 7).
+
+**Why refs are not trees.** Harness entries carry `ref` but no parent pointers, deliberately. Within one ref, operations are serialized and there is one writer — so for records filtered by ref, log order *is* causal order. A parent pointer would repeat what `ref` + append order already say, and add validation surface (parent exists, chain does not fork, chain belongs to the operation) with no consumer. Parenting earns its keep only when order stops being reliable: concurrent writers to the *same* ref (excluded by design) or replication without a total order (section 17).
+
+## 7. Public API
 
 ```ts
 const { harness, suspended } = await AgentHarness.create({ session, models, model, ... });
 
-if (suspended) {
-  await harness.resume();   // or harness.abort()
+for (const s of suspended) {
+  await harness.ref(s.ref)!.resume();   // or .abort(); interactive pi: 0 or 1, always "main"
 }
 await harness.prompt("...");
 ```
 
-The existing surface stays. New: `create()` replaces the constructor, `resume()` continues a suspended operation, `watch()` provides snapshots (section 7), and `hooks`/`events` replace `on()`/`subscribe()` (sections 8, 9).
+The existing surface stays. New: `create()` replaces the constructor, `resume()` continues a suspended operation, `watch()` provides snapshots (section 8), `hooks`/`events` replace `on()`/`subscribe()` (sections 9, 10) — and the operation surface is factored into `AgentRef`, which `AgentHarness` implements for `main`. There is one operation surface, defined once.
 
 ```ts
 interface AgentHarnessOptions {
   session: Session;
   /** Provider collection for all requests: steps, compaction, branch summaries. */
   models: Models;
-  /** model, thinkingLevel, activeToolNames: initial values only. If the session's active
-      branch has persisted config entries, the session wins; these apply to fresh sessions
-      or branches without config history. An unresolvable persisted model surfaces in
-      suspended.missing / falls back with a warning, mirroring the old coding agent. */
+  /** model, thinkingLevel, activeToolNames: initial values only. If a ref's
+      branch has persisted config entries, the session wins; these apply to fresh
+      sessions and refs without config history. An unresolvable persisted model
+      surfaces in suspended[].missing / falls back with a warning, mirroring the
+      old coding agent. */
   model: Model<any>;
   thinkingLevel?: ThinkingLevel;
   tools?: TTool[];
@@ -473,17 +526,17 @@ interface AgentHarnessOptions {
   convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 }
 
-class AgentHarness {
-  /** Opens the session log, restores state, starts no effects. Replaces the constructor. */
-  static create(options: AgentHarnessOptions): Promise<{
-    harness: AgentHarness;
-    suspended: SuspendedOperation | null;
-  }>;
+/** The operation surface of one ref. AgentHarness implements it for main;
+    harness.ref(name) returns the same surface for any other ref. */
+interface AgentRef {
+  readonly name: string;              // "main" on the harness itself
+  getLeafId(): Promise<string | null>;
 
   // Operations. Never throw — they resolve with a result value in every case
   // (see "Results, not exceptions" below). Message forms mirror Agent: any
   // AgentMessage accepted here (and by the queues) must convert to a user LLM
-  // message via convertToLlm; validated at acceptance.
+  // message via convertToLlm; validated at acceptance. At most one operation
+  // is active per ref; operations on different refs run concurrently.
   prompt(text: string, images?: ImageContent[]): Promise<RunResult>;
   prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;   // e.g. sendMessage triggerTurn
   skill(name: string, additionalInstructions?: string): Promise<RunResult>;
@@ -491,16 +544,17 @@ class AgentHarness {
   compact(options?: { customInstructions?: string; settings?: Partial<CompactionSettings> }): Promise<CompactionRunResult>;
   navigateTree(targetId: string, options?: NavigateTreeOptions): Promise<NavigationRunResult>;
 
-  /** New. Continue the suspended operation to its durable end. */
+  /** New. Continue this ref's suspended operation to its durable end. */
   resume(): Promise<ResumeResult>;
 
-  /** Existing. Now durable: cancellation is recorded before effects are signalled; returns without waiting for reconciliation. No-op while idle. */
+  /** Existing. Now durable: cancellation is recorded before effects are signalled; returns without waiting for reconciliation. No-op while this ref is idle. */
   abort(): Promise<AbortResult>;
 
-  // Queues (existing) — now durable on resolve. Payloads are AgentMessage:
-  // user messages and custom extension messages (sendMessage deliverAs).
-  // As with prompt(), every AgentMessage must convert to a user LLM message
-  // via convertToLlm; validated at acceptance.
+  // Queues (existing) — now durable on resolve, and per ref (nextRun included:
+  // consumed by this ref's next run). Payloads are AgentMessage: user messages
+  // and custom extension messages (sendMessage deliverAs). As with prompt(),
+  // every AgentMessage must convert to a user LLM message via convertToLlm;
+  // validated at acceptance.
   steer(text: string, images?: ImageContent[]): Promise<QueueResult>;     // requires active run
   steer(message: AgentMessage): Promise<QueueResult>;
   followUp(text: string, images?: ImageContent[]): Promise<QueueResult>;  // requires active run
@@ -508,19 +562,46 @@ class AgentHarness {
   nextRun(text: string, images?: ImageContent[]): Promise<QueueResult>;   // any time; was nextTurn()
   nextRun(message: AgentMessage): Promise<QueueResult>;
 
-  // Idle coordination
+  // Idle coordination — this ref's idleness.
   waitForIdle(): Promise<void>;              // existing
   runWhenIdle(callback): Promise<void>;      // new; runtime-only, not durable
 
-  // Config — getters return latest accepted value; setters mid-step become deferred writes.
-  // Persisted + branch-anchored: model, thinkingLevel, activeTools (they are session entries;
-  // create() and navigateTree() restore them). Everything else is runtime-only, owned by the
-  // app, reconstructed at create().
-  getModel() / setModel(model)                    // persisted
-  getThinkingLevel() / setThinkingLevel(level)    // persisted
-  getTools() / setTools(tools, activeToolNames?)  // implementations runtime-only; the new active
-                                                  // set (all tools unless names given) is persisted
-  getActiveTools() / setActiveTools(toolNames)    // persisted; unknown names reject
+  // Persisted, branch-anchored config — per ref by construction: session
+  // entries on the path behind this ref's leaf, restored by point queries.
+  // Setters mid-step become deferred writes on this ref.
+  getModel() / setModel(model)
+  getThinkingLevel() / setThinkingLevel(level)
+  getActiveTools() / setActiveTools(toolNames)    // unknown names reject
+
+  /** This ref's SessionTree view (section 5): branch reads default to this
+      ref's leaf, appends chain to it, writes defer while this ref runs.
+      Replaces appendMessage(). */
+  session: SessionTree;
+
+  /** Scoped: this ref's transcript, run state, queues, and events (section 8). */
+  watch(): Promise<{ snapshot: RefSnapshot, start, unsubscribe }>;
+}
+
+class AgentHarness implements AgentRef {
+  /** Opens the session log, restores state, starts no effects. Replaces the
+      constructor. One suspended entry per ref with an unfinished operation. */
+  static create(options: AgentHarnessOptions): Promise<{
+    harness: AgentHarness;
+    suspended: SuspendedOperation[];
+  }>;
+
+  // Ref management. Names are app-chosen keys ("slack:1719432.0021").
+  ref(name: string): AgentRef | undefined;             // lookup, never creates
+  createRef(name: string, at: string | null): Promise<RefResult>;   // anchor at an entry or root
+  deleteRef(name: string): Promise<RefResult>;         // pointer only; rejected while its
+                                                       // operation is active or suspended;
+                                                       // "main" cannot be deleted
+  refs(): RefInfo[];
+
+  // Harness-global config — registries and runtime capabilities, shared by
+  // all refs. Tool implementations are code and cannot persist; the active
+  // set (names) is what persists, per ref.
+  getTools() / setTools(tools, activeToolNames?)  // registry; active set applies to main
   getResources() / setResources(resources)
   getStreamOptions() / setStreamOptions(streamOptions)
   getRetryPolicy() / setRetryPolicy(policy)            // new
@@ -528,19 +609,29 @@ class AgentHarness {
   getSteeringMode() / setSteeringMode(mode)
   getFollowUpMode() / setFollowUpMode(mode)
 
-  /** New. The harness-owned SessionTree (section 5): reads pass through; writes defer while running. Replaces appendMessage(). */
-  session: SessionTree;
+  /** Session-wide observer: refs inventory snapshot plus the unfiltered event
+      stream (section 9). No transcripts — compose with ref.watch() per ref. */
+  watchSession(): Promise<{ snapshot: SessionSnapshot, start, unsubscribe }>;
 
-  /** New. Detach cleanly — see semantics below. Does not abort the operation; it stays resumable. */
-  close(): Promise<void>;
-
-  // New — sections 7, 8, 9. Replace subscribe() and on().
-  watch(): Promise<{ snapshot, start, unsubscribe }>;
+  // Harness-global; every hook/event payload carries ref (sections 9, 10).
   hooks: ...;
   events: ...;
+
+  /** New. Detach cleanly — see semantics below. Does not abort operations; they stay resumable. */
+  close(): Promise<void>;
 }
 
+interface RefInfo {
+  name: string;
+  leafId: string | null;
+  run: null | { id: string; kind: "run" | "compaction" | "navigation";
+                status: "running" | "suspended" | "cancelling" };
+}
+
+type RefResult = { ok: true; ref: AgentRef } | { ok: false; outcome: "rejected"; error: ErrorInfo };
+
 interface SuspendedOperation {
+  ref: string;
   kind: "run" | "compaction" | "navigation";
   id: string;
   startedAt: string;
@@ -618,29 +709,29 @@ if (!result.ok) {
 render(result.finalMessage);
 ```
 
-Rejection reasons (`error.code`): `busy`, `suspended_pending`, `no_active_run` (steer/follow-up while idle), `nothing_to_resume`, `missing_identities` (resume with `suspended.missing`), `invalid_message` (does not convert to a user message), `unknown_skill`, `unknown_template`, `unknown_target`, `nothing_to_compact`, `closed`, `faulted` (harness already faulted when called).
+Rejection reasons (`error.code`): `busy` (this ref), `suspended_pending`, `no_active_run` (steer/follow-up while the ref is idle), `nothing_to_resume`, `missing_identities` (resume with `missing`), `invalid_message` (does not convert to a user message), `unknown_skill`, `unknown_template`, `unknown_target`, `unknown_ref`, `ref_exists`, `invalid_ref` (createRef with unknown anchor or reserved name), `nothing_to_compact`, `closed`, `faulted` (harness already faulted when called).
 
 Why rejections are not `outcome: "failed"`: `failed` is a durable fact — the run happened, may have cost money, and its end is recorded. A rejection is the absence of any fact: no runId that appears anywhere, no events, nothing to resume. Callers also handle them differently — rejected means fix the call or wait; failed means the run is over, show the error. Faults are neither: the operation may still be resumable after the underlying cause is fixed, so claiming a terminal outcome would lie about the log.
 
 Semantics not visible in the signatures:
 
-- `prompt()`/`skill()`/`promptFromTemplate()` resolve when the run reaches its durable end; `finalMessage` carries the answer when one exists. A failed auto-compaction or exhausted retries resolve `outcome: "failed"` — no assistant message is fabricated for the return value (the transcript still gets an error assistant message where one naturally belongs, i.e. failed provider steps and aborts). Operations resolve `rejected` while another operation is active or suspended — a suspended operation must be resumed or aborted first, explicitly.
-- `steer()`/`followUp()`/`nextRun()` resolve when the message is durably accepted, not when consumed. Consumption rules live with `QueueEnqueuedEntry` (section 5): steer/follow-up resolve within their run; next-run items are consumed by the next run, prepended to its initial messages. Once a run start exists, its initial messages are guaranteed to be appended — by recovery if necessary, even if the run is then cancelled — so accepted content is never silently dropped. A client that prefers to hold material itself can compose `prompt(messages[])` instead.
+- `prompt()`/`skill()`/`promptFromTemplate()` resolve when the run reaches its durable end; `finalMessage` carries the answer when one exists. A failed auto-compaction or exhausted retries resolve `outcome: "failed"` — no assistant message is fabricated for the return value (the transcript still gets an error assistant message where one naturally belongs, i.e. failed provider steps and aborts). Operations resolve `rejected` while the same ref has an operation active or suspended — a suspended operation must be resumed or aborted first, explicitly. Other refs are unaffected.
+- `steer()`/`followUp()`/`nextRun()` resolve when the message is durably accepted, not when consumed. Consumption rules live with `QueueEnqueuedEntry` (section 5): steer/follow-up resolve within their run; next-run items are consumed by the same ref's next run, prepended to its initial messages. Once a run start exists, its initial messages are guaranteed to be appended — by recovery if necessary, even if the run is then cancelled — so accepted content is never silently dropped. A client that prefers to hold material itself can compose `prompt(messages[])` instead.
 - Bash executions are not queue items: `!cmd` and `!!cmd` results are transcript appends via `session.appendMessage()` — immediate while idle, deferred writes mid-run. Both are persisted and displayed; `!!` sets `excludeFromContext`, and the default `convertToLlm` drops it from provider context.
 - Persisted config (model, thinking level, active tools) is restored via branch point queries — `findEntryOnBranch("model_change")` etc. Compaction truncates message context, not config history: config entries behind a compaction barrier still count. (Today's `buildContext` loses them on reload; the old coding-agent got this right via full-path replay.)
 - `abort()` on a suspended operation records the cancellation and reconciles without executing further provider or tool work.
 - Retry lives in two layers: `streamOptions.maxRetries` covers provider-internal transport retries inside one request; `retry: RetryPolicy` is the harness policy across failed requests, with durable attempt counts.
-- Deferred writes through `harness.session` apply in acceptance order at the next checkpoint. Both moments are observable and correlated by the provisioned entry id: acceptance fires a pending-write event (config getters also update immediately) and pending writes appear in the snapshot; application fires the normal entry events at the checkpoint with the same id (section 8). The raw storage is not reachable from the harness; writing to it directly while a harness is live is a contract violation.
+- Deferred writes through `harness.session` apply in acceptance order at the next checkpoint. Both moments are observable and correlated by the provisioned entry id: acceptance fires a pending-write event (config getters also update immediately) and pending writes appear in the snapshot; application fires the normal entry events at the checkpoint with the same id (section 9). The raw storage is not reachable from the harness; writing to it directly while a harness is live is a contract violation.
 - All calls on an already-faulted harness resolve `{ ok: false, outcome: "rejected", error: { code: "faulted" } }` — rejected, not faulted: the call itself never started anything.
 - `close()`: rejects all further calls, signals in-flight provider/tool effects (no durable cancellation is recorded), waits for the append in progress to settle, discards late effect results, and releases the writer claim. An active run restores as suspended, same as after a crash; the log needs no shutdown record.
 - One live `AgentHarness` per session; `create()` on a session with a live harness is a serving-layer error (SQLite rejects it, JSONL cannot detect it).
 
-## 7. Snapshots and subscription
+## 8. Snapshots and subscription
 
 A UI needs current state plus every change after it, gap-free. That includes the transport gap: a server proxying a harness must get the snapshot to its client before any event reaches the wire. `watch()` buffers until the consumer arms delivery:
 
 ```ts
-const { snapshot, start, unsubscribe } = await harness.watch();
+const { snapshot, start, unsubscribe } = await ref.watch();   // harness.watch() = main's
 
 await send(client, { kind: "snapshot", snapshot });      // snapshot is on the wire
 start((event) => send(client, event));                   // flush buffer in order, then go live
@@ -648,9 +739,12 @@ start((event) => send(client, event));                   // flush buffer in orde
 
 `watch()` captures the snapshot and starts buffering atomically. `start(listener)` flushes the buffered events in order and switches to live delivery. Each event is delivered exactly once, in order — no sequence numbers, no registration race. `unsubscribe()` (before or after `start()`) drops the subscription and any buffer.
 
+`watch()` is **ref-scoped**: this ref's transcript, run state, queues, pending writes, and only this ref's events. A Slack-thread renderer sees its thread and nothing else; sibling refs are invisible (no refs inventory in a `RefSnapshot`). The session-wide observer is `harness.watchSession()`: its snapshot is the refs inventory — `RefInfo` per ref plus suspended details — with no transcripts, and its stream is the unfiltered firehose. A dashboard composes: `watchSession()` for the overview, `ref.watch()` per opened thread.
+
 ```ts
-interface AgentHarnessSnapshot {
-  // Transcript: the active branch, oldest first (the context window plus
+interface RefSnapshot {
+  ref: string;
+  // Transcript: this ref's branch, oldest first (the context window plus
   // its compaction entry; UIs page further history via session queries)
   transcript: SessionTreeEntry[];
   leafId: string | null;
@@ -684,35 +778,42 @@ interface AgentHarnessSnapshot {
   queues: { steer: AgentMessage[]; followUp: AgentMessage[]; nextRun: AgentMessage[] };
   pendingWrites: { id: string; entry: SessionTreeEntry }[];
 
+  faulted: boolean;   // harness-wide; mirrored into every ref snapshot
+}
+
+interface SessionSnapshot {
+  refs: (RefInfo & {
+    suspended?: SuspendedOperation;   // resume/abort offer data, per ref
+  })[];
   faulted: boolean;
 }
 ```
 
-- Config (model, thinking level, active tools, resources, stream options) is not in the snapshot — getters are always current, and config events (section 8) tell the UI when to re-read. One source of truth.
+- Config (model, thinking level, active tools, resources, stream options) is not in the snapshot — getters are always current, and config events (section 9) tell the UI when to re-read. One source of truth.
 - `streamingMessage` and `runningTools` let a UI attaching mid-step render immediately: the partial assistant message and each running tool's latest partial result, the state it would have accumulated from `message_update`/`tool_update` events.
 - A `suspended` run in the snapshot is the UI's cue to offer resume/abort.
 - Reconnect means calling `watch()` again. Against a living harness the new snapshot includes current live progress. Only process death loses it: a restored harness has no partial streams or running tools to report, and the snapshot shows the suspended run instead; the durable transcript is complete regardless. Surviving transport drops is the serving layer's job.
-- The listener receives the full event vocabulary of section 8, identical to `harness.events`. `harness.events.on(type, ...)` is the per-type subscription to the same events: live-only, no snapshot, no buffering.
+- A ref watcher receives the full event vocabulary of section 9, filtered to its ref; `watchSession()` and `harness.events.on(type, ...)` receive everything, unfiltered. `events.on` is live-only: no snapshot, no buffering.
 - Watchers are independent, each with its own buffer and `start()` gate.
 - A watcher that never calls `start()` buffers unboundedly; call `unsubscribe()` when abandoning one.
 
-## 8. Events
+## 9. Events
 
 One flat stream, shared by `harness.events.on(type, listener)` and `watch()`.
 
 Guarantees:
 
-- Passive: events cannot alter execution. A thrown listener exception (`watch()` or `events.on`) is caught and reported as a `handler_error` event plus telemetry — same channel as hook handler errors (section 9), never stdio. A listener that throws while handling a `handler_error` event is reported to telemetry only; the event is not re-emitted.
+- Passive: events cannot alter execution. A thrown listener exception (`watch()` or `events.on`) is caught and reported as a `handler_error` event plus telemetry — same channel as hook handler errors (section 10), never stdio. A listener that throws while handling a `handler_error` event is reported to telemetry only; the event is not re-emitted.
 - Ordered: delivery follows process order, identically for streams and push listeners.
 - Not persisted, not replayed; reconnect means a new `watch()`.
 - Events reporting durable facts (`message_end`, `entry_added`, `run_end`, ...) fire only after the fact is committed; what an event announces is already queryable.
 - Events report final effective values, after hook transformation.
 - Event payloads are JSON-serializable and secret-free, so a server can proxy them to clients verbatim. Live objects (models, tools, resources, stream options) are referenced by name/id, never embedded.
-- Every operational event carries `runId`; step-scoped events carry `stepId`; recovered work carries `recovery: true`.
+- Every event carries `ref: string` — bluntly, all of them; omitted from the catalog listings for brevity. Every operational event additionally carries `runId`; step-scoped events carry `stepId`; recovered work carries `recovery: true`.
 
 ### Catalog
 
-Derived from the existing `AgentEvent`, `AgentHarnessOwnEvent`, and coding-agent `AgentSessionEvent` vocabularies. Mutation hooks (`before_agent_start`, `context`, `tool_call`, ...) are not events anymore — they move to section 9. Fields shown without comment keep their existing meaning.
+Derived from the existing `AgentEvent`, `AgentHarnessOwnEvent`, and coding-agent `AgentSessionEvent` vocabularies. Mutation hooks (`before_agent_start`, `context`, `tool_call`, ...) are not events anymore — they move to section 10. Fields shown without comment keep their existing meaning.
 
 ```ts
 // Run lifecycle -----------------------------------------------------------
@@ -751,7 +852,7 @@ interface FaultEvent {
 }
 
 // was: coding-agent ExtensionError via onError. One channel for all
-// extension-code failures — hook handlers and event listeners (section 9).
+// extension-code failures — hook handlers and event listeners (section 10).
 type HandlerErrorEvent = {
   type: "handler_error";
   runId?: string;
@@ -874,8 +975,8 @@ interface WritePendingEvent {
 }
 
 interface QueueUpdateEvent {
-  type: "queue_update";         // unchanged
-  steer: AgentMessage[];
+  type: "queue_update";         // per ref — like every event it carries ref;
+  steer: AgentMessage[];        // these are that ref's queues
   followUp: AgentMessage[];
   nextRun: AgentMessage[];
 }
@@ -987,7 +1088,7 @@ All events additionally carry `recovery?: true` when emitted for recovered work.
 | `save_point` | dropped — internal; deferred-write application is visible via `entry_added`/`message_end` |
 | `message_start` / `message_update` / `message_end` | same names and payloads; `message_end` gains `entryId` |
 | `tool_execution_start` / `_update` / `_end` | `tool_start` / `tool_update` / `tool_end` |
-| `after_provider_response` | dropped as event — `after_response` hook (section 9) and observability |
+| `after_provider_response` | dropped as event — `after_response` hook (section 10) and observability |
 | `retry_scheduled`, `retry_attempt_start`, `retry_finished` (+ coding-agent `auto_retry_*`, `summarization_retry_*`) | `retry_scheduled` / `retry_start` / `retry_end`, unified via `purpose` |
 | `queue_update` | `queue_update` (`nextTurn` field renamed `nextRun`) |
 | `model_update`, `thinking_level_update`, `tools_update`, `resources_update` | `config_update` (discriminated union, all config properties) |
@@ -998,9 +1099,9 @@ All events additionally carry `recovery?: true` when emitted for recovered work.
 | coding-agent `session_info_changed`, `thinking_level_changed` | `entry_added` / `config_update` |
 | coding-agent `ExtensionError` via `onError` | `handler_error` |
 | — | `run_resume`, `fault` (new) |
-| `before_agent_start`, `context`, `before_provider_request`, `before_provider_payload`, `tool_call`, `tool_result`, `session_before_compact`, `session_before_tree` | not events — hooks (section 9) |
+| `before_agent_start`, `context`, `before_provider_request`, `before_provider_payload`, `tool_call`, `tool_result`, `session_before_compact`, `session_before_tree` | not events — hooks (section 10) |
 
-## 9. Hooks
+## 10. Hooks
 
 Hooks are awaited control points: they can transform or block what the harness does next. Registration mirrors events:
 
@@ -1012,6 +1113,7 @@ const off = harness.hooks.on("before_tool", async (event) => {
 
 Semantics, uniform across all hooks:
 
+- Registration is harness-global; every hook event carries `ref` (omitted from the shapes below), so a handler can scope itself. Whether per-ref registration is also wanted is an open question (section 17).
 - Handlers run sequentially in registration order; each transformation handler sees the output of the previous one (same reduction rules as today's `emitHook` pipelines).
 - A thrown hook handler exception does not fail the run. Following the old coding-agent's extension runner: the exception is caught per handler, reported, and the handler is treated as having returned nothing — remaining handlers still run. The exception: `before_tool` fails closed (see below). Already-committed mutations are never rolled back.
 - Hook results that feed durable state are persisted before execution proceeds: `before_run` output lands in the operation-start harness entry, `before_tool` effective arguments in the `tool_started` harness entry.
@@ -1185,7 +1287,7 @@ The new harness keeps that model:
 - Default, all hooks: the throwing handler is skipped, a `handler_error` event is emitted, execution continues with the remaining handlers and the last effective value.
 - `before_tool` fails closed: a throwing handler blocks the tool; an error tool result is committed and the run continues. Skipping a broken policy handler must not allow a tool it might have blocked.
 
-Reporting: the `handler_error` event (section 8) plus telemetry, one channel for hook handlers and event listeners alike. Recursion guard: a listener throwing while handling `handler_error` goes to telemetry only.
+Reporting: the `handler_error` event (section 9) plus telemetry, one channel for hook handlers and event listeners alike. Recursion guard: a listener throwing while handling `handler_error` goes to telemetry only.
 
 ### Replay across retry and resume
 
@@ -1221,7 +1323,7 @@ Hooks re-run only where the work itself re-runs; persisted effective outputs are
 | `agent_end` / `settled` handlers that queue work | `before_run_end` |
 | — | `before_resume` (new) |
 
-## 10. Traces
+## 11. Traces
 
 How hooks, events, and durable appends interleave. Legend:
 
@@ -1232,6 +1334,8 @@ CS  durable append: session entry (tree)
 CH  durable append: harness entry (orchestration, schemas: section 5)
 X   process dies
 ```
+
+All traces except the last show a single-ref session; `ref: "main"` is omitted from records and events.
 
 ### Simple run, one tool call
 
@@ -1388,42 +1492,73 @@ CH operation_finished → E navigation_end   old/new leaf, summary
 
 Crash before the leaf entry: old branch still active; resume completes the navigation. Crash after: destination active; resume appends only what is missing (summary, finish). Every prefix is a valid tree.
 
-## 11. Recovery
+### Deferred projecting write mid-request (append-only context)
+
+```text
+CH generation_started                      request in flight; context tip is user U1
+   handler calls session.appendMessage(M)  a custom message that projects into context
+CH write_deferred → E write_pending        durable acceptance; M is not in the tree yet
+CS message assistant A1 → E message_end    provider cached prefix [.., U1, A1]
+E  step_end
+   checkpoint applies deferred writes
+CS message M → E message_start, message_end   tail append, after A1
+E  step_start                              next context [.., U1, A1, M, ...] — prefix intact
+```
+
+Appending M immediately would have produced [.., U1, M, A1] — a provider-valid sequence that silently invalidates the KV cache from M onward, and a transcript claiming A1 saw M when it did not. The checkpoint prevents both (append-only context, section 5). A custom *entry* without a projector needs none of this — it projects to nothing and could not affect the provider view either way; it still defers, uniformly.
+
+### Two refs, interleaved log
+
+```text
+   main: prompt("fix the bug")     slack:t1: prompt("summarize this thread")
+CH operation_started   ref=main
+CH operation_started   ref=slack:t1
+CH generation_started  ref=main       attempt 1 for main's cycle
+CH generation_started  ref=slack:t1   attempt 1 for t1's cycle — no interference
+CS message assistant                  chained on main's branch (no ref field —
+CS message assistant                  chained on t1's branch    membership by parentId)
+CH operation_finished  ref=slack:t1 → E run_end (ref slack:t1)
+CH operation_finished  ref=main     → E run_end (ref main)
+```
+
+Records interleave freely in the log; every reduction filters by ref first, and within one ref the single-writer positional rules of section 5 hold unchanged. The two runs share nothing but the writer and the tree prefix behind their anchors.
+
+## 12. Recovery
 
 ### Restore
 
-`AgentHarness.create()` reduces the log to harness state. It performs no provider or tool effects and appends nothing.
+`AgentHarness.create()` reduces the log to harness state. It performs no provider or tool effects and appends nothing. The reduction runs once per ref — refs restore independently; the flow below is per ref, with all reads filtered by ref:
 
 ```mermaid
 flowchart TD
-    O[open session] --> A{unmatched<br/>operation_started?}
-    A -->|no| I[Idle]
-    I --> NR[collect pending next-run items]
-    A -->|yes| T[read tail: seq > opStart]
+    O[open session, enumerate refs] --> A{ref has unmatched<br/>operation_started?}
+    A -->|no| I[ref Idle]
+    I --> NR[collect ref's pending next-run items]
+    A -->|yes| T[read ref's tail: seq > opStart]
     T --> V{tail valid?}
     V -->|no| X[corruption error]
     V -->|yes| M[resolve model/tool identities]
-    M --> S[Suspended]
+    M --> S[ref Suspended]
 ```
 
 Restore never reads the full log. The invariants of section 5 are enforced in two places: at append time by storage constraints (id uniqueness, seq monotonicity — violations cannot enter the log), and at restore time only over what restore reads. JSONL reads the whole file at open anyway and validates everything as a side effect; SQLite does not have to.
 
 Precisely:
 
-1. **Single-operation check.** `count(operation_started) − count(operation_finished) ≤ 1` — two indexed aggregates. More than one unmatched operation: corruption error, no automatic repair.
-2. **Locate the active operation.** Latest `operation_started` without matching `operation_finished` (index seek).
-3. **Idle path.** No active operation: state is idle. Pending next-run items = `queue_enqueued(nextRun)` entries after the last run-kind `operation_started` whose target id has no entry (point lookups). `suspended = null`. Done.
-4. **Suspended path.** Read the tail (`seq > opStart.seq`, range scan) and reduce:
+1. **Single-operation check.** Per ref: `count(operation_started) − count(operation_finished) ≤ 1` — indexed aggregates grouped by ref. More than one unmatched operation on one ref: corruption error, no automatic repair.
+2. **Locate the active operation.** The ref's latest `operation_started` without matching `operation_finished` (index seek).
+3. **Idle path.** No active operation: the ref is idle. Pending next-run items = the ref's `queue_enqueued(nextRun)` entries after its last run-kind `operation_started` whose target id has no entry (point lookups). Done.
+4. **Suspended path.** Read the ref's tail (`seq > opStart.seq`, filtered by ref, range scan) and reduce:
    - cancellation: is `operation_cancelled` present
-   - attempts: count of tail attempts after the newest session entry (the current request cycle)
+   - attempts: count of tail attempts after the newest session entry of this ref's chain (parentId membership; the current request cycle)
    - tools: `tool_started` entries and, per entry, whether `resultEntryId` exists
    - queues: `queue_enqueued` items whose target id has no entry; steer/follow-up dead if cancelled
    - deferred writes: `write_deferred` entries whose target id has no entry, in acceptance order
    - initial messages: which provisioned ids from the operation start exist
 
    Tail-scoped validation happens here: attempt numbers consecutive, tool identities unique, referenced assistant entries present, provisioned targets consistent. A violation is a corruption error.
-5. **Resolve identities.** Persisted model refs and tool names from the operation start and tail against current config → `suspended.missing`.
-6. Return `{ harness, suspended }`. Nothing has executed.
+5. **Resolve identities.** Persisted model references and tool names from the operation start and tail against current config → that entry's `missing`.
+6. Return `{ harness, suspended }` — one `SuspendedOperation` per ref that has one. Nothing has executed.
 
 Old sessions have no harness entries and restore idle, even when the transcript ends in a state that looks continuable.
 
@@ -1431,10 +1566,17 @@ Old sessions have no harness entries and restore idle, even when the transcript 
 
 One in-memory record is the harness's working state, live and restored alike. The invariant: **`state` always equals the reduction of the log.** During normal execution the harness never queries the log — every accepted append updates `state` in the same serialized section that performed the append. Restore recomputes the identical record from the log; that is all restore is.
 
-Update rules per append: `generation_started` → increment `requestAttempts`; any session entry → reset `requestAttempts` to 0; assistant message → set `toolBatch` (or clear it when call-free); tool result → mark its call resolved; `queue_enqueued` → push to the matching pending list; a queue target or deferred-write target landing → remove the pending item; `write_deferred` → push to `pendingWrites`; `operation_cancelled` → set `cancelled`; `operation_started`/`operation_finished` → set/clear `operation`.
+Update rules per append, applied to the appending ref (known directly while live; recovered via chain membership during restore): `generation_started` → increment `requestAttempts`; any session entry → reset that ref's `requestAttempts` to 0; assistant message → set `toolBatch` (or clear it when call-free); tool result → mark its call resolved; `queue_enqueued` → push to the matching pending list; a queue target or deferred-write target landing → remove the pending item; `write_deferred` → push to `pendingWrites`; `operation_cancelled` → set `cancelled`; `operation_started`/`operation_finished` → set/clear the ref's `operation`.
 
 ```ts
 interface HarnessState {
+  /** One slot per ref; the structure below is per ref. */
+  refs: Map<string, RefState>;
+}
+
+interface RefState {
+  leafId: string | null;
+
   operation: null | {
     id: string;
     kind: "run" | "compaction" | "navigation";
@@ -1473,17 +1615,17 @@ interface HarnessState {
     targets: { result?: boolean; leaf?: boolean; summary?: boolean; label?: boolean };
   };
 
-  /** queue_enqueued(nextRun) after the last run-kind operation start, targets absent. */
+  /** This ref's queue_enqueued(nextRun) after its last run-kind operation start, targets absent. */
   pendingNextRun: ProvisionedMessage[];
 }
 ```
 
 ### Resume: dispatch
 
-The code below is the specification. `state` is the `HarnessState` above; `op` its operation. Two error classes carry control flow: `RunFailed` (orderly durable failure — converted to `operation_finished(failed)`) and `AppendFailed` (storage broke — converted to the faulted state; no finish entry is possible). Neither escapes to the API caller.
+The code below is the specification. It runs in the context of one ref: `resume()` is an `AgentRef` method, `state` is that ref's `RefState`, `op` its operation; different refs' procedures run concurrently, serialized only through the log append path. Two error classes carry control flow: `RunFailed` (orderly durable failure — converted to `operation_finished(failed)`) and `AppendFailed` (storage broke — converted to the faulted state; no finish entry is possible). Neither escapes to the API caller.
 
 ```ts
-async function resume(): Promise<ResumeResult> {
+async function resume(): Promise<ResumeResult> {   // per ref
   if (suspended.missing.tools.length || suspended.missing.models.length) {
     return { ok: false, outcome: "rejected", error: { code: "missing_identities", message: ... } };
   }
@@ -1518,7 +1660,7 @@ Watchers across resume — snapshot on attach, then events, all with `recovery: 
 
 Resumed structural operations re-emit their start event (`recovery: true`) so a UI attaching mid-resume always sees balanced start/end pairs.
 
-Every append recovery makes is an ordinary append: it emits the ordinary events (section 8 rules — messages get message events, other entries get `entry_added`, finishes get `run_end`/`compaction_end`/`navigation_end`), each with `recovery: true`.
+Every append recovery makes is an ordinary append: it emits the ordinary events (section 9 rules — messages get message events, other entries get `entry_added`, finishes get `run_end`/`compaction_end`/`navigation_end`), each with `recovery: true`.
 
 ### Run procedure
 
@@ -1813,10 +1955,10 @@ The transient state — destination active without its summary (crash between th
 
 - **Idempotent.** A crash during recovery leaves a longer valid prefix; the next restore continues from it. Every recovery append is an entry normal execution would have written — there is no recovery-only entry type — and every append skips targets that already exist.
 - **Effect-safe.** Recovery never repeats an effect whose outcome is unknown: unsafe tools get synthetic results, lost provider responses get new attempts under the durable count (possibly double-billed — the count still bounds spend).
-- **Hook-honest.** Hooks re-run only where the work itself re-runs (section 9 replay table). Interrupted handlers are not replayed; their accepted durable outputs are already in the log.
+- **Hook-honest.** Hooks re-run only where the work itself re-runs (section 10 replay table). Interrupted handlers are not replayed; their accepted durable outputs are already in the log.
 - **Observable.** Ordinary events with `recovery: true`; `run_resume` fires once per `resume()`; the first snapshot after restore shows the suspended operation.
 
-## 12. Forks
+## 13. Forks
 
 One copy primitive; the scope option decides how much comes along:
 
@@ -1830,7 +1972,7 @@ interface SessionCreateOptions {
 
 type SessionForkOptions =
   /** Existing behavior: the selected branch only — root to the fork point.
-      Sibling branches are not copied. Default: the active branch. */
+      Sibling branches are not copied. Default: the source main's branch. */
   | { scope?: "branch"; entryId?: string; position?: "before" | "at" }
   /** New: the entire tree — all session entries, every branch, leaf preserved. */
   | { scope: "tree" };
@@ -1844,18 +1986,20 @@ interface SessionRepo {
 
 Rules, both scopes:
 
-- **Session entries only, zero harness entries.** Orchestration history describes the source's execution. A fork starts idle: no operation, no queues, no pending writes, `suspended: null`.
-- **The source is untouched.** Copying while the source has an active run reads the committed prefix; the run stays active in the source and is never inherited. Forking a running session is safe in both scopes: branch-scope fork points are user messages by validation, and a tree-scope copy whose tip sits mid-tool-batch is still promptable — pi-ai's `transformMessages` inserts synthetic empty results for orphaned tool calls at request build time, so no acceptance check or history rewriting is needed.
+- **Session entries only, zero harness entries.** Orchestration history describes the source's execution. A fork starts idle: no operation, no queues, no pending writes, `suspended: []`.
+- **Refs:** `scope: "branch"` → the new session has only `main`, at the fork point. `scope: "tree"` → **TBD**: current proposal copies all refs as-is; alternatives (only `main`, positioned at the source's `main`) unresolved. Labels and the session name (global records, section 5) copy with `scope: "tree"`; with `scope: "branch"`, labels copy iff their target entry was copied, the name always.
+- **The source is untouched.** Copying while the source has an active run reads the committed prefix; the run stays active in the source and is never inherited. Forking a running session is safe in both scopes: a fork point may be **any message entry** (relaxed from the old user-message-only validation — platform threads root at arbitrary messages), and a copy whose tip sits mid-tool-batch is still promptable — pi-ai's `transformMessages` inserts synthetic empty results for orphaned tool calls at request build time, so no acceptance check or history rewriting is needed.
 - **Linkage** via metadata (`parentSessionPath` in JSONL, the equivalent in SQLite), set automatically by `fork()` and explicitly by `create({ parentSessionId })` — the basis for session-group operations like export bundles and subagent parent/child tracking. A subagent tool creates its child session this way and returns the child's id in its tool result. Durability needs no schema support: the tool can derive the child id deterministically from its invocation (`execute(toolCallId, ...)` — e.g. `f(parentSessionId, toolCallId)`), so a `replay: "safe"` re-execution derives the same id and reattaches instead of spawning a twin; and because the child records `parentSessionId` at creation, children remain discoverable from the parent even when a crash swallowed the tool result.
-- Persisted config derives from the copied tree via the usual branch point queries; the leaf is the fork point (`scope: "branch"`) or the source's leaf (`scope: "tree"`).
+- Persisted config derives from the copied tree via the usual branch point queries; `main` sits at the fork point (`scope: "branch"`) or the source's `main` leaf (`scope: "tree"`).
+- **Threads are refs first.** A platform thread sharing one source of truth with its channel is a ref in the same session (section 6), not a fork. Fork when a *separate* session is wanted: subagents, exports, clones. Whether a thread becomes a ref, a fork, or a fresh session with platform backlog as prompt-time context is application policy; all three are supported.
 
-## 13. Storage backends
+## 14. Storage backends
 
 Backends implement append + read + the finder queries for one session. They know nothing about operations, queues, or recovery — the harness entry payloads are opaque to them apart from the columns they index.
 
 Contract, all backends:
 
-- One total append order (`seq`) across session and harness entries.
+- One total append order (`seq`) across session and harness entries. Harness entries and leaf records carry `ref`; session entries do not (membership derives from parent linkage).
 - An append is durable when its promise resolves; events fire after.
 - Entry ids are unique per session, enforced at append.
 - Reads return immutable snapshots; callers cannot mutate stored state.
@@ -1865,7 +2009,7 @@ Contract, all backends:
 
 One file: metadata header line, then one JSON object per line in append order. Format v4 adds harness entries, interleaved exactly as appended.
 
-- Open reads the whole file into memory; all queries (finders, chain walks, log reads, restore validation) run against that in-memory state. Appends serialize through the instance and write one line each.
+- Open reads the whole file into memory; all queries (finders, chain walks, log reads, restore validation) run against that in-memory state. Appends serialize through the instance and write one line each. v4: harness entries and leaf records carry `ref`; label/name records are global (no `parentId`); absent fields in v3 files read as `main`.
 - **Torn tail:** a malformed *final* line is a crash artifact — the append that died mid-write. Open truncates it and continues; the entry it would have contained was never acknowledged, so nothing is lost. A malformed line anywhere else is corruption: open rejects.
 - **Uncertain acknowledgement** (process died between write and ack): the caller that died never observed the resolve. On reopen the line either parses (committed) or is the torn tail (not). No ambiguity survives.
 - **v3 files** load unchanged: zero harness entries, restore idle. `custom_message` entries convert to custom messages on read. The format version lives in the header line, so a v3 file cannot simply receive v4 appends: before the first append, the file is rewritten once with a v4 header (write temp, rename — atomic on the same filesystem), entries byte-identical. Read-only opens never rewrite.
@@ -1885,6 +2029,7 @@ CREATE TABLE harness_entries (
   seq        INTEGER NOT NULL,      -- shared sequence with session_entries
   id         TEXT NOT NULL,
   type       TEXT NOT NULL,         -- operation_started, generation_started, ...
+  ref        TEXT NOT NULL,         -- partition key for per-ref reduction
   run_id     TEXT NOT NULL,
   op_kind    TEXT,                  -- operation_started only: run | compaction | navigation
   timestamp  TEXT NOT NULL,
@@ -1892,14 +2037,16 @@ CREATE TABLE harness_entries (
   PRIMARY KEY (session_id, seq)
 );
 CREATE UNIQUE INDEX idx_harness_session_id ON harness_entries(session_id, id);
-CREATE INDEX idx_harness_type_seq ON harness_entries(session_id, type, seq);
-CREATE INDEX idx_harness_kind_seq ON harness_entries(session_id, type, op_kind, seq);
+CREATE INDEX idx_harness_ref_type_seq ON harness_entries(session_id, ref, type, seq);
+CREATE INDEX idx_harness_ref_kind_seq ON harness_entries(session_id, ref, type, op_kind, seq);
 ```
 
-- `seq` comes from the existing per-session sequence, allocated across both tables, so `getLog()` is a merge of two range scans by `seq`.
-- Restore's queries are all index seeks + bounded scans: latest `operation_started`/`operation_finished` via `idx_harness_type_seq`, last run-kind start via `idx_harness_kind_seq`, the tail via the primary key.
-- **`branch_entries`** is materialized to root — no longer truncated at the newest compaction — and gains denormalized `entry_type` / `custom_type` columns with an index on `(session_id, branch_id, entry_type, entry_seq)`. Every branch finder is an index seek plus a range scan in either direction; compaction is a query-time `stopAtType`, not a materialization boundary. Cost moves to the rare branch-switch rebuild (full path instead of post-compaction slice), optimizable later by diffing against the previous branch.
-- **Each append is one transaction:** allocate seq → insert → update projections (leaf, `branch_entries`, materialized stats/labels for session entries; nothing for harness entries) → commit → then events. In-memory caches roll back with the transaction.
+- `seq` comes from the existing per-session sequence, allocated across both tables, so `getLog()` is a merge of two range scans by `seq`. `session_entries` is unchanged — no ref column; the tail reduction resolves chain membership in memory.
+- Restore's queries are all index seeks + bounded scans, per ref: the ref's latest `operation_started`/`operation_finished` via `idx_harness_ref_type_seq`, its last run-kind start via `idx_harness_ref_kind_seq`, the tail via the primary key filtered by ref.
+- **Per-ref leaf state:** the single active-leaf projection becomes a refs table — `(session_id, ref, leaf_id)` — updated by leaf records. Old databases migrate to a single `main` row.
+- **`branch_entries`** is materialized to root — no longer truncated at the newest compaction — keyed **per ref** (each ref's queries walk its own path: extended incrementally by that ref's appends, rebuilt only when that ref navigates), and gains denormalized `entry_type` / `custom_type` columns with an index on `(session_id, ref, entry_type, entry_seq)`. Every branch finder is an index seek plus a range scan in either direction; compaction is a query-time `stopAtType`, not a materialization boundary. Refs whose paths share a prefix duplicate those rows — bounded cache cost, not log cost. Branch-switch rebuild stays the rare expensive case, optimizable later by diffing against the previous path.
+- **Each append is one transaction:** allocate seq → insert → update projections (the ref's leaf, its `branch_entries`, materialized stats/labels for session entries; nothing for harness entries) → commit → then events. In-memory caches roll back with the transaction.
+- Labels and session name live in their existing projection tables; their records are no longer tree entries (section 5), which changes nothing about how they are stored, only that they never enter `branch_entries`.
 - **Writer claim:** a lease row per session (owner id + heartbeat). `create()` on a session with a live claim fails; a stale claim (crashed owner) is taken over. This is the "SQLite rejects concurrent harnesses" enforcement from section 1.
 - **Fork** copies session entries only — the selected branch (`scope: "branch"`) or all (`scope: "tree"`) — and never touches `harness_entries`.
 - Malformed rows are never silently skipped: a row that fails decoding in any durable read path is a corruption error. (The current implementation drops such rows in `findEntries`; that behavior is a bug under this design.)
@@ -1909,7 +2056,7 @@ CREATE INDEX idx_harness_kind_seq ON harness_entries(session_id, type, op_kind, 
 
 Any backend append failure faults the harness (section 4): the instance stops, in-flight calls resolve `faulted`, and the log remains a valid prefix. For SQLite, a failed transaction rolls back cleanly; for JSONL, a partial line becomes the torn tail the next open repairs.
 
-## 14. Telemetry
+## 15. Telemetry
 
 The third channel, next to events (observe from outside) and hooks (control): in-process diagnostics for logging and tracing. Vendor-neutral — pi emits stable, structured span events; external subscribers convert them to OTel spans, Sentry spans, logs, or metrics. Core packages never import OTel, Sentry, or Node-only APIs. (Origin: `packages/agent/docs/observability.md`; this section supersedes its event names with the new vocabulary.)
 
@@ -1980,7 +2127,7 @@ pi.session.append         entry type, seq — storage-level timing
 
 Instrumentation points: the operation methods (`prompt`/`skill`/`promptFromTemplate`/`compact`/`navigateTree`/`resume`), the driver loop's step/generation/tool boundaries, hook dispatch, `Session` appends, and `streamSimple()`/`completeSimple()` in `packages/ai`. End payloads for provider requests carry safe metadata: stop reason, status code, retry count, token counts, cost, aborted/timeout flags.
 
-Correlation attributes are the same ids the public events carry (`runId`, `stepId`, `toolCallId`), so a trace, the event stream, and the log line up without translation. `handler_error` and `fault` are mirrored here, as specced in sections 8/9.
+Correlation attributes are the same ids the public events carry (`ref`, `runId`, `stepId`, `toolCallId`), so a trace, the event stream, and the log line up without translation. Concurrent refs produce concurrent `pi.harness.run` traces, distinguished by `ref`. `handler_error` and `fault` are mirrored here, as specced in sections 9/10.
 
 ### Safety and redaction
 
@@ -2004,7 +2151,7 @@ Content capture (the "down to provider internals" of section 1) is opt-in via ex
 
 ### Integration examples
 
-Harness — spans wrap the section 11 procedures; ALS context propagation makes the nesting automatic (no ids passed by hand):
+Harness — spans wrap the section 12 procedures; ALS context propagation makes the nesting automatic (no ids passed by hand):
 
 ```ts
 // prompt() and resume() both land here
@@ -2080,15 +2227,55 @@ subscribePiObservability((e) => {
 });
 ```
 
-## 15. Testing strategy
+## 16. API examples
+
+```ts
+// Interactive pi: single ref, nothing changes. AgentHarness implements
+// AgentRef for main; suspended has 0 or 1 entries, always "main".
+const { harness, suspended } = await AgentHarness.create({ session, models, model });
+for (const s of suspended) await harness.ref(s.ref)!.resume();   // or offer resume/abort in UI
+await harness.prompt("fix the bug");
+await harness.steer("focus on the tests");
+harness.setModel(opus);                     // main's branch-anchored config
+
+// Slack bot: channel = session + main, each thread = a ref keyed by thread_ts.
+const key = `slack:${threadTs}`;
+const t = harness.ref(key) ?? (await harness.createRef(key, pingedEntryId)).ref;
+await t.prompt("summarize this thread");    // parallel with main and other threads
+await t.steer("shorter");
+t.setModel(haiku);                          // this thread only
+await t.navigateTree(earlierId);            // moves this thread's leaf only
+await t.session.appendMessage(msg);         // appends to this thread's branch
+await t.nextRun("also check the links");    // consumed by this thread's next run
+
+// Thread renderer: scoped snapshot + only this thread's events.
+const { snapshot, start, unsubscribe } = await t.watch();
+render(snapshot.transcript);
+start((event) => update(event));
+
+// Dashboard / server: inventory + firehose, no transcripts.
+const sess = await harness.watchSession();
+for (const r of sess.snapshot.refs) {
+  if (r.run?.status === "suspended") await harness.ref(r.name)!.resume();
+}
+```
+
+## 17. Open questions
+
+For review (Armin):
+
+1. **Hook/event scoping.** Registration is harness-global; every payload carries `ref`, so handlers can scope themselves. Is that enough for API users, or do we want per-ref registration (`ref.hooks.on(...)`, `ref.events.on(...)`) with scoped delivery — e.g. a `before_tool` policy that applies to one Slack thread only? Global-with-ref is strictly more general but pushes filtering boilerplate onto every scoped consumer.
+2. **Refs and replication.** Refs are stored as flat per-ref sequences without parenting, because single-writer serialization makes log order causal order within a ref (section 6). Replication/split-brain reconciliation would need explicit causality — parent pointers or equivalent — to merge two divergent copies of the same ref. Is that the substance of the harness-entries-as-trees proposal, and do we accept designing it out for now? Everything else in that proposal (partition-safe reduction, one-table storage) is covered by the `ref` field.
+
+## 18. Testing strategy
 
 TODO — after the document has been reviewed end to end.
 
-## 16. Implementation sequence
+## 19. Implementation sequence
 
 TODO — after the document has been reviewed end to end.
 
-## 17. Required reading
+## 20. Required reading
 
 For a fresh implementation session. Read in full, in this order. This document is the authoritative design; where older docs conflict, this one wins.
 
@@ -2109,6 +2296,7 @@ Current implementation (what is being replaced or wrapped):
 10. `packages/agent/src/harness/session/jsonl-storage.ts` — JSONL v3 format and reload.
 11. `packages/agent/src/harness/session/memory-storage.ts` — in-memory parity.
 12. `packages/agent/src/harness/messages.ts` — defaultConvertToLlm and message helpers.
+12a. `packages/ai/src/utils/transform-messages.ts` — orphaned-tool-call healing; the adjacency backstop referenced in sections 5 and 13.
 13. `packages/agent/src/harness/compaction/compaction.ts` — preparation, split-turn generation, retry.
 14. `packages/coding-agent/src/core/agent-session.ts` — old behavior to preserve in spirit: queues, bash, extensions, retry, compaction flows.
 15. `packages/coding-agent/src/core/extensions/runner.ts` — old extension semantics (error isolation, before_agent_start reduction).

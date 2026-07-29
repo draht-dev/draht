@@ -13,6 +13,7 @@
  *   pi --extension examples/extensions/custom-compaction.ts
  */
 
+import { uuidv7 } from "@draht/ai";
 import { complete } from "@draht/ai/compat";
 import type { ExtensionAPI } from "@draht/coding-agent";
 import { convertToLlm, serializeConversation } from "@draht/coding-agent";
@@ -96,6 +97,8 @@ ${conversationText}
 					env: auth.env,
 					maxTokens: 8192,
 					signal,
+					cacheRetention: "none",
+					sessionId: uuidv7(),
 				},
 			);
 

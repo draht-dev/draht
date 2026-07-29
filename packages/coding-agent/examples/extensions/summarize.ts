@@ -1,3 +1,4 @@
+import { uuidv7 } from "@draht/ai";
 import { complete, getModel } from "@draht/ai/compat";
 import type { ExtensionAPI, ExtensionCommandContext } from "@draht/coding-agent";
 import { DynamicBorder, getMarkdownTheme } from "@draht/coding-agent";
@@ -193,6 +194,8 @@ export default function (pi: ExtensionAPI) {
 					headers: auth.headers,
 					env: auth.env,
 					reasoningEffort: "high",
+					cacheRetention: "none",
+					sessionId: uuidv7(),
 				},
 			);
 

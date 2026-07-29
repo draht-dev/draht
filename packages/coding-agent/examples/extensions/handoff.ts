@@ -13,6 +13,7 @@
  */
 
 import type { AgentMessage } from "@draht/agent-core";
+import { uuidv7 } from "@draht/ai";
 import { complete, type Message } from "@draht/ai/compat";
 import type { ExtensionAPI, SessionEntry } from "@draht/coding-agent";
 import { BorderedLoader, convertToLlm, serializeConversation } from "@draht/coding-agent";
@@ -136,7 +137,14 @@ export default function (pi: ExtensionAPI) {
 					const response = await complete(
 						ctx.model!,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-						{ apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: loader.signal },
+						{
+							apiKey: auth.apiKey,
+							headers: auth.headers,
+							env: auth.env,
+							signal: loader.signal,
+							cacheRetention: "none",
+							sessionId: uuidv7(),
+						},
 					);
 
 					if (response.stopReason === "aborted") {

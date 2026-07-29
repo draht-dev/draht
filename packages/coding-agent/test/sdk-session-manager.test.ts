@@ -92,4 +92,40 @@ describe("createAgentSession session manager defaults", () => {
 
 		session.dispose();
 	});
+
+	it("exposes current session state to the built-in bash tool", async () => {
+		const model = getModel("anthropic", "claude-sonnet-4-5");
+		expect(model).toBeTruthy();
+
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model: model!,
+			thinkingLevel: "high",
+		});
+		expect(session.sessionFile).toBeTruthy();
+		expect(session.systemPrompt).toContain(
+			"Inspect DRAHT_* environment variables for current model and session details.",
+		);
+
+		const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash");
+		expect(bashTool).toBeTruthy();
+		const result = await bashTool!.execute("test", {
+			command: `printf '%s\\n' "$DRAHT_SESSION_ID" "$DRAHT_SESSION_FILE" "$DRAHT_PROVIDER" "$DRAHT_MODEL" "$DRAHT_REASONING_LEVEL"`,
+		});
+		const output = result.content
+			.filter((item): item is { type: "text"; text: string } => item.type === "text")
+			.map((item) => item.text)
+			.join("");
+
+		expect(output.trim().split("\n")).toEqual([
+			session.sessionId,
+			session.sessionFile,
+			model!.provider,
+			model!.id,
+			session.thinkingLevel,
+		]);
+
+		session.dispose();
+	});
 });

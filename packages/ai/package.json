@@ -44,13 +44,15 @@
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
-		"generate-models": "npx tsx scripts/generate-models.ts",
+		"generate-models": "npx tsx scripts/generate-models.ts --strict",
+		"hydrate-model-data": "npx tsx scripts/generate-models.ts --strict --data-only",
+		"check:model-data": "npx tsx scripts/check-model-data.ts",
 		"build": "tsc -p tsconfig.build.json && shx rm -rf dist/providers/data && shx cp -r src/providers/data dist/providers/data",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"dev:tsc": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",
 		"prepublishOnly": "npm run clean && npm run build",
-		"generate-image-models": "npx tsx scripts/generate-image-models.ts"
+		"generate-image-models": "npx tsx scripts/generate-image-models.ts --strict"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.91.1",

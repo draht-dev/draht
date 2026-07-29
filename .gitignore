@@ -13,6 +13,7 @@ packages/*/dist-firefox/
 packages/*/.astro/
 packages/*/.sst/
 packages/*/.draht/
+packages/ai/src/providers/.model-generation-*/
 *.cpuprofile
 
 # Environment

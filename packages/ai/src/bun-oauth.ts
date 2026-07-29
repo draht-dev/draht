@@ -2,6 +2,7 @@ import { anthropicOAuth } from "./auth/oauth/anthropic.ts";
 import { githubCopilotOAuth } from "./auth/oauth/github-copilot.ts";
 import { antigravityOAuth } from "./auth/oauth/google-antigravity.ts";
 import { geminiCliOAuth } from "./auth/oauth/google-gemini-cli.ts";
+import { kimiCodingOAuth } from "./auth/oauth/kimi-coding.ts";
 import { registerBundledOAuthFlowLoaders } from "./auth/oauth/load.ts";
 import { openaiCodexOAuth } from "./auth/oauth/openai-codex.ts";
 import { opencodeGoOAuth } from "./auth/oauth/opencode-go.ts";
@@ -14,6 +15,7 @@ export function registerBunOAuthFlows(): void {
 		anthropic: () => anthropicOAuth,
 		openaiCodex: () => openaiCodexOAuth,
 		githubCopilot: () => githubCopilotOAuth,
+		kimiCoding: () => kimiCodingOAuth,
 		xai: () => xaiOAuth,
 		radius: createRadiusOAuth,
 		opencodeGo: () => opencodeGoOAuth,

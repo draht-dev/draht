@@ -581,6 +581,37 @@ export async function generateSummary(
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
 	env?: Record<string, string>,
+): Promise<string> {
+	return (
+		await generateSummaryWithUsage(
+			currentMessages,
+			model,
+			reserveTokens,
+			apiKey,
+			headers,
+			signal,
+			customInstructions,
+			previousSummary,
+			thinkingLevel,
+			streamFn,
+			env,
+		)
+	).text;
+}
+
+/** Generate or update a conversation summary and return its provider usage. */
+export async function generateSummaryWithUsage(
+	currentMessages: AgentMessage[],
+	model: Model<any>,
+	reserveTokens: number,
+	apiKey: string | undefined,
+	headers?: Record<string, string>,
+	signal?: AbortSignal,
+	customInstructions?: string,
+	previousSummary?: string,
+	thinkingLevel?: ThinkingLevel,
+	streamFn?: StreamFn,
+	env?: Record<string, string>,
 ): Promise<{ text: string; usage: Usage }> {
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
@@ -790,7 +821,7 @@ export async function compact(
 		let historyText = "No prior history.";
 		let historyUsage: Usage | undefined;
 		if (messagesToSummarize.length > 0) {
-			const historyResult = await generateSummary(
+			const historyResult = await generateSummaryWithUsage(
 				messagesToSummarize,
 				model,
 				settings.reserveTokens,
@@ -822,7 +853,7 @@ export async function compact(
 		summaryUsage = historyUsage ? combineUsage(historyUsage, turnPrefixResult.usage) : turnPrefixResult.usage;
 	} else {
 		// Just generate history summary
-		const result = await generateSummary(
+		const result = await generateSummaryWithUsage(
 			messagesToSummarize,
 			model,
 			settings.reserveTokens,

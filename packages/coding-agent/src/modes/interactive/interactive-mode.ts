@@ -88,6 +88,7 @@ import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
+import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -5684,22 +5685,9 @@ export class InteractiveMode {
 		const cacheWaste = computeCacheWaste(entries, this.session.modelRuntime);
 
 		// Cost/token totals per provider/model actually used (e.g. OpenRouter `auto`
-		// resolves to a concrete responseModel), sorted by cost descending.
-		const perModelMap = new Map<string, { key: string; cost: number; tokens: number }>();
-		for (const entry of entries) {
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			const message = entry.message;
-			const usage = message.usage;
-			const key = `${message.provider}/${message.responseModel ?? message.model}`;
-			let bucket = perModelMap.get(key);
-			if (!bucket) {
-				bucket = { key, cost: 0, tokens: 0 };
-				perModelMap.set(key, bucket);
-			}
-			bucket.cost += usage.cost.total;
-			bucket.tokens += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-		}
-		const perModel = Array.from(perModelMap.values()).sort((a, b) => b.cost - a.cost);
+		// resolves to a concrete responseModel). Usage without model attribution is
+		// grouped separately so the breakdown reconciles with the session total.
+		const usageBreakdown = getUsageCostBreakdown(entries);
 
 		let info = `${theme.bold("Session Info")}\n\n`;
 		if (sessionName) {
@@ -5733,8 +5721,8 @@ export class InteractiveMode {
 		if (stats.cost > 0 || cacheWaste.missedTokens > 0) {
 			info += `\n${theme.bold("Cost")}\n`;
 			info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(3)}`;
-			if (perModel.length > 1) {
-				for (const entry of perModel) {
+			if (usageBreakdown.length > 1) {
+				for (const entry of usageBreakdown) {
 					info += `\n  ${theme.fg("dim", `${entry.key}:`)} $${entry.cost.toFixed(3)} ${theme.fg("dim", `(${formatTokens(entry.tokens)} tokens)`)}`;
 				}
 			}

@@ -499,6 +499,30 @@ export async function generateSummary(
 	customInstructions?: string,
 	previousSummary?: string,
 	thinkingLevel?: ThinkingLevel,
+): Promise<Result<string, CompactionError>> {
+	const result = await generateSummaryWithUsage(
+		currentMessages,
+		models,
+		model,
+		reserveTokens,
+		signal,
+		customInstructions,
+		previousSummary,
+		thinkingLevel,
+	);
+	return result.ok ? ok(result.value.text) : err(result.error);
+}
+
+/** Generate or update a conversation summary and return its provider usage. */
+export async function generateSummaryWithUsage(
+	currentMessages: AgentMessage[],
+	models: Models,
+	model: Model<any>,
+	reserveTokens: number,
+	signal?: AbortSignal,
+	customInstructions?: string,
+	previousSummary?: string,
+	thinkingLevel?: ThinkingLevel,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
@@ -689,7 +713,7 @@ export async function compact(
 		let historyText = "No prior history.";
 		let historyUsage: Usage | undefined;
 		if (messagesToSummarize.length > 0) {
-			const historyResult = await generateSummary(
+			const historyResult = await generateSummaryWithUsage(
 				messagesToSummarize,
 				models,
 				model,
@@ -717,7 +741,7 @@ export async function compact(
 			? combineUsage(historyUsage, turnPrefixResult.value.usage)
 			: turnPrefixResult.value.usage;
 	} else {
-		const summaryResult = await generateSummary(
+		const summaryResult = await generateSummaryWithUsage(
 			messagesToSummarize,
 			models,
 			model,

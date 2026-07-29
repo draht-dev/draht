@@ -20,6 +20,7 @@ export {
 	findCutPoint,
 	findTurnStartIndex,
 	generateSummary,
+	generateSummaryWithUsage,
 	getLastAssistantUsage,
 	prepareCompaction,
 	serializeConversation,

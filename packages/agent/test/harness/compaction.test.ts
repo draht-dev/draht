@@ -20,6 +20,7 @@ import {
 	findCutPoint,
 	findTurnStartIndex,
 	generateSummary,
+	generateSummaryWithUsage,
 	getLastAssistantUsage,
 	prepareCompaction,
 	serializeConversation,
@@ -510,7 +511,7 @@ describe("harness compaction", () => {
 		]);
 
 		const summary = getOrThrow(
-			await generateSummary(messages, models, model, 2000, undefined, "focus", "old summary"),
+			await generateSummaryWithUsage(messages, models, model, 2000, undefined, "focus", "old summary"),
 		);
 
 		expect(summary.text).toContain("Test summary");
@@ -521,6 +522,14 @@ describe("harness compaction", () => {
 		);
 		expect(promptText).toContain("<previous-summary>\nold summary\n</previous-summary>");
 		expect(promptText).toContain("Additional focus: focus");
+	});
+
+	it("preserves the string result from generateSummary", async () => {
+		const messages: AgentMessage[] = [createUserMessage("Summarize this.")];
+		const { faux, model } = createFauxModel(false);
+		faux.setResponses([fauxAssistantMessage("## Goal\nTest summary")]);
+
+		expect(getOrThrow(await generateSummary(messages, models, model, 2000))).toBe("## Goal\nTest summary");
 	});
 
 	it("returns error results for failed or aborted summary generations", async () => {

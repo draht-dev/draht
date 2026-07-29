@@ -1,7 +1,12 @@
 import type { AgentMessage } from "@draht/agent-core";
 import type { AssistantMessage, Model } from "@draht/ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type CompactionPreparation, compact, generateSummary } from "../src/core/compaction/index.ts";
+import {
+	type CompactionPreparation,
+	compact,
+	generateSummary,
+	generateSummaryWithUsage,
+} from "../src/core/compaction/index.ts";
 
 const { completeSimpleMock } = vi.hoisted(() => ({
 	completeSimpleMock: vi.fn(),
@@ -57,7 +62,7 @@ describe("generateSummary reasoning options", () => {
 	});
 
 	it("uses the provided thinking level for reasoning-capable models", async () => {
-		const result = await generateSummary(
+		const result = await generateSummaryWithUsage(
 			messages,
 			createModel(true),
 			2000,
@@ -77,6 +82,12 @@ describe("generateSummary reasoning options", () => {
 			reasoning: "medium",
 			apiKey: "test-key",
 		});
+	});
+
+	it("preserves the string result from generateSummary", async () => {
+		await expect(generateSummary(messages, createModel(false), 2000, "test-key")).resolves.toBe(
+			"## Goal\nTest summary",
+		);
 	});
 
 	it("does not set reasoning when thinking is off", async () => {

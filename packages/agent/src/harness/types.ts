@@ -541,12 +541,16 @@ export interface SessionSearchRecord<TMetadata extends SessionMetadata = Session
 	entry: SessionTreeEntry;
 }
 
-/** Owns all search-specific querying and index maintenance for a session repository. */
+export interface SessionSearchIndex<TMetadata extends SessionMetadata = SessionMetadata> {
+	upsert(record: SessionSearchRecord<TMetadata>): Promise<void>;
+	replaceSession(metadata: TMetadata, entries: readonly SessionTreeEntry[]): Promise<void>;
+	removeSession(metadata: TMetadata): Promise<void>;
+}
+
+/** Owns session search queries and optionally exposes index maintenance. */
 export interface SessionSearch<TMetadata extends SessionMetadata = SessionMetadata> {
 	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
-	upsert(record: SessionSearchRecord<TMetadata>): Promise<void>;
-	indexSession(metadata: TMetadata, entries: readonly SessionTreeEntry[]): Promise<void>;
-	removeSession(metadata: TMetadata): Promise<void>;
+	index?: SessionSearchIndex<TMetadata>;
 }
 
 export interface SessionForkOptions {

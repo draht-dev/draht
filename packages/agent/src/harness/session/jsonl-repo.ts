@@ -143,7 +143,7 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
 	}
 
 	async delete(metadata: JsonlSessionMetadata): Promise<void> {
-		await this.sessionSearch.removeSession(metadata);
+		await this.sessionSearch.index?.removeSession(metadata);
 		getFileSystemResultOrThrow(
 			await this.fs.remove(metadata.path, { force: true }),
 			`Failed to delete session ${metadata.path}`,
@@ -176,7 +176,7 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
 		for (const entry of forkedEntries) {
 			await storage.appendEntry(entry);
 		}
-		await this.sessionSearch.indexSession(await storage.getMetadata(), forkedEntries);
+		await this.sessionSearch.index?.replaceSession(await storage.getMetadata(), forkedEntries);
 		return await toRepoSession(storage, this.sessionSearch);
 	}
 

@@ -3,6 +3,7 @@ import type {
 	SessionMetadata,
 	SessionSearch,
 	SessionSearchHit,
+	SessionSearchIndex,
 	SessionSearchOptions,
 	SessionSearchRecord,
 	SessionTreeEntry,
@@ -39,42 +40,45 @@ export class ScanningSessionSearch<TMetadata extends SessionMetadata = SessionMe
 		}
 		return hits;
 	}
+}
 
-	async upsert(_record: SessionSearchRecord<TMetadata>): Promise<void> {}
+class FanoutSessionSearchIndex<TMetadata extends SessionMetadata> implements SessionSearchIndex<TMetadata> {
+	private readonly indexes: readonly SessionSearchIndex<TMetadata>[];
 
-	async indexSession(_metadata: TMetadata, _entries: readonly SessionTreeEntry[]): Promise<void> {}
+	constructor(indexes: readonly SessionSearchIndex<TMetadata>[]) {
+		this.indexes = indexes;
+	}
 
-	async removeSession(_metadata: TMetadata): Promise<void> {}
+	async upsert(record: SessionSearchRecord<TMetadata>): Promise<void> {
+		for (const index of this.indexes) await index.upsert(record);
+	}
+
+	async replaceSession(metadata: TMetadata, entries: readonly SessionTreeEntry[]): Promise<void> {
+		for (const index of this.indexes) await index.replaceSession(metadata, entries);
+	}
+
+	async removeSession(metadata: TMetadata): Promise<void> {
+		for (const index of this.indexes) await index.removeSession(metadata);
+	}
 }
 
 /** Delegates queries to one search and fans index mutations out sequentially, like io.MultiWriter. */
-export class MultiSessionSearch<TMetadata extends SessionMetadata = SessionMetadata>
+export class FanoutSessionSearch<TMetadata extends SessionMetadata = SessionMetadata>
 	implements SessionSearch<TMetadata>
 {
 	private readonly reader: SessionSearch<TMetadata>;
-	private readonly writers: readonly SessionSearch<TMetadata>[];
+	readonly index?: SessionSearchIndex<TMetadata>;
 
 	constructor(options: {
 		reader: SessionSearch<TMetadata>;
 		writers: readonly SessionSearch<TMetadata>[];
 	}) {
 		this.reader = options.reader;
-		this.writers = options.writers;
+		const indexes = options.writers.flatMap((search) => (search.index ? [search.index] : []));
+		this.index = indexes.length > 0 ? new FanoutSessionSearchIndex(indexes) : undefined;
 	}
 
 	async search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]> {
 		return await this.reader.search(options);
-	}
-
-	async upsert(record: SessionSearchRecord<TMetadata>): Promise<void> {
-		for (const writer of this.writers) await writer.upsert(record);
-	}
-
-	async indexSession(metadata: TMetadata, entries: readonly SessionTreeEntry[]): Promise<void> {
-		for (const writer of this.writers) await writer.indexSession(metadata, entries);
-	}
-
-	async removeSession(metadata: TMetadata): Promise<void> {
-		for (const writer of this.writers) await writer.removeSession(metadata);
 	}
 }

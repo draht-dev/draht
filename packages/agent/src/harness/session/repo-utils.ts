@@ -6,6 +6,7 @@ import {
 	type SessionMetadata,
 	type SessionSearch,
 	type SessionSearchHit,
+	type SessionSearchIndex,
 	type SessionStorage,
 	type SessionTreeEntry,
 	type SessionWriter,
@@ -31,22 +32,22 @@ export function toSession<TMetadata extends SessionMetadata>(
 class SessionRepoWriter<TMetadata extends SessionMetadata> implements SessionWriter {
 	private readonly storage: SessionStorage<TMetadata>;
 	private readonly metadata: TMetadata;
-	private readonly search: SessionSearch<TMetadata>;
+	private readonly index: SessionSearchIndex<TMetadata>;
 
-	constructor(storage: SessionStorage<TMetadata>, metadata: TMetadata, search: SessionSearch<TMetadata>) {
+	constructor(storage: SessionStorage<TMetadata>, metadata: TMetadata, index: SessionSearchIndex<TMetadata>) {
 		this.storage = storage;
 		this.metadata = metadata;
-		this.search = search;
+		this.index = index;
 	}
 
 	async appendEntry(entry: SessionTreeEntry): Promise<void> {
 		await this.storage.appendEntry(entry);
-		await this.search.upsert({ metadata: this.metadata, entry });
+		await this.index.upsert({ metadata: this.metadata, entry });
 	}
 
 	async setLeafId(leafId: string | null) {
 		const entry = await this.storage.setLeafId(leafId);
-		await this.search.upsert({ metadata: this.metadata, entry });
+		await this.index.upsert({ metadata: this.metadata, entry });
 		return entry;
 	}
 }
@@ -55,8 +56,9 @@ export async function toRepoSession<TMetadata extends SessionMetadata>(
 	storage: SessionStorage<TMetadata>,
 	search: SessionSearch<TMetadata>,
 ): Promise<Session<TMetadata>> {
+	if (!search.index) return toSession(storage);
 	const metadata = await storage.getMetadata();
-	return toSession(storage, new SessionRepoWriter(storage, metadata, search));
+	return toSession(storage, new SessionRepoWriter(storage, metadata, search.index));
 }
 
 export function findSessionEntryMatches<TMetadata extends SessionMetadata>(

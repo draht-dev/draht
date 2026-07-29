@@ -49,7 +49,7 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 	}
 
 	async delete(metadata: SessionMetadata): Promise<void> {
-		await this.sessionSearch.removeSession(metadata);
+		await this.sessionSearch.index?.removeSession(metadata);
 		this.sessions.delete(metadata.id);
 	}
 
@@ -64,7 +64,7 @@ export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: 
 			createdAt: createTimestamp(),
 		};
 		const storage = new InMemorySessionStorage({ metadata, entries: forkedEntries });
-		await this.sessionSearch.indexSession(metadata, forkedEntries);
+		await this.sessionSearch.index?.replaceSession(metadata, forkedEntries);
 		const session = await toRepoSession(storage, this.sessionSearch);
 		this.sessions.set(metadata.id, session);
 		return session;

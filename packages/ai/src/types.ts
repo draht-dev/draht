@@ -408,6 +408,7 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	rawStopReason?: string;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 

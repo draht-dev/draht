@@ -1,4 +1,5 @@
 // Core Agent
+export { uuidv7 } from "@draht/ai";
 export * from "./agent.ts";
 // Loop functions
 export * from "./agent-loop.ts";

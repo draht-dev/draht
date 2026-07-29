@@ -119,7 +119,8 @@ describe("OAuth through Models.getAuth (lazy load chain)", () => {
 			type: "oauth",
 			access: "oauth-access-token",
 			refresh: "r",
-			expires: Date.now() + 60_000,
+			// Keep this beyond getAuth()'s refresh window.
+			expires: Date.now() + 10 * 60_000,
 		}));
 		const models = createModels({ credentials });
 		models.setProvider(anthropicProvider());
@@ -137,7 +138,8 @@ describe("OAuth through Models.getAuth (lazy load chain)", () => {
 			type: "oauth",
 			access,
 			refresh: "r",
-			expires: Date.now() + 60_000,
+			// Keep this beyond getAuth()'s refresh window.
+			expires: Date.now() + 10 * 60_000,
 		}));
 		const models = createModels({ credentials });
 		models.setProvider(githubCopilotProvider());

@@ -14,6 +14,7 @@ import type {
 	Api,
 	KnownProvider,
 	Model,
+	ModelCost,
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
 } from "../src/types.ts";
@@ -26,10 +27,12 @@ function readGeneratorOptions(args: string[]): {
 	strict: boolean;
 	jsonOnly: boolean;
 	jsonOutputDir: string | undefined;
+	pretty: boolean;
 } {
 	let strict = false;
 	let jsonOnly = false;
 	let jsonOutputDir: string | undefined;
+	let pretty = false;
 
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
@@ -39,6 +42,10 @@ function readGeneratorOptions(args: string[]): {
 		}
 		if (arg === "--json-only") {
 			jsonOnly = true;
+			continue;
+		}
+		if (arg === "--pretty") {
+			pretty = true;
 			continue;
 		}
 		if (arg === "--json-output") {
@@ -51,7 +58,7 @@ function readGeneratorOptions(args: string[]): {
 	}
 
 	if (jsonOnly && !jsonOutputDir) throw new Error("--json-only requires --json-output");
-	return { strict, jsonOnly, jsonOutputDir };
+	return { strict, jsonOnly, jsonOutputDir, pretty };
 }
 
 const generatorOptions = readGeneratorOptions(process.argv.slice(2));
@@ -70,6 +77,16 @@ interface ModelsDevModel {
 		output?: number;
 		cache_read?: number;
 		cache_write?: number;
+		tiers?: {
+			input?: number;
+			output?: number;
+			cache_read?: number;
+			cache_write?: number;
+			tier?: {
+				type?: string;
+				size?: number;
+			};
+		}[];
 	};
 	modalities?: {
 		input?: string[];
@@ -751,6 +768,30 @@ function normalizeNvidiaModelId(modelId: string): string {
 
 function roundCost(value: number): number {
 	return Number(value.toFixed(6));
+}
+
+function getModelsDevCost(cost: ModelsDevModel["cost"]): ModelCost {
+	const tiers = cost?.tiers?.flatMap((tier) => {
+		const context = tier.tier;
+		if (context?.type !== "context" || context.size === undefined) return [];
+		return [
+			{
+				inputTokensAbove: context.size,
+				input: tier.input || 0,
+				output: tier.output || 0,
+				cacheRead: tier.cache_read || 0,
+				cacheWrite: tier.cache_write || 0,
+			},
+		];
+	});
+
+	return {
+		input: cost?.input || 0,
+		output: cost?.output || 0,
+		cacheRead: cost?.cache_read || 0,
+		cacheWrite: cost?.cache_write || 0,
+		...(tiers && tiers.length > 0 ? { tiers } : {}),
+	};
 }
 
 async function fetchNvidiaNimModelIds(): Promise<Map<string, string>> {
@@ -1575,12 +1616,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.individual.githubcopilot.com",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					cost: getModelsDevCost(m.cost),
 					contextWindow: m.limit?.context || 128000,
 					maxTokens: m.limit?.output || 8192,
 					headers: { ...COPILOT_STATIC_HEADERS },
@@ -2294,7 +2330,8 @@ async function generateModels() {
 			jsonProviders[providerId][modelId] = providers[providerId][modelId];
 		}
 	}
-	const writeJson = (path: string, value: unknown) => writeFileSync(path, `${JSON.stringify(value)}\n`);
+	const writeJson = (path: string, value: unknown) =>
+		writeFileSync(path, `${JSON.stringify(value, null, generatorOptions.pretty ? 2 : undefined)}\n`);
 
 	if (!generatorOptions.jsonOnly) {
 		// Generate TypeScript structural catalogs and adjacent JSON values.

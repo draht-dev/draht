@@ -559,17 +559,17 @@ export interface SessionForkOptions {
 	id?: string;
 }
 
-export interface SessionRepo<
+export interface SessionStore<
 	TMetadata extends SessionMetadata = SessionMetadata,
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
 > {
-	create(options: TCreateOptions): Promise<Session<TMetadata>>;
-	open(metadata: TMetadata): Promise<Session<TMetadata>>;
+	readonly defaultSearch?: SessionSearch<TMetadata>;
+	create(options: TCreateOptions): Promise<SessionStorage<TMetadata>>;
+	open(metadata: TMetadata): Promise<SessionStorage<TMetadata>>;
 	list(options?: TListOptions): Promise<TMetadata[]>;
-	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
 	delete(metadata: TMetadata): Promise<void>;
-	fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<Session<TMetadata>>;
+	fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<SessionStorage<TMetadata>>;
 }
 
 export interface JsonlSessionCreateOptions extends SessionCreateOptions {
@@ -582,8 +582,8 @@ export interface JsonlSessionListOptions {
 	cwd?: string;
 }
 
-export interface JsonlSessionRepoApi
-	extends SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {}
+export interface JsonlSessionStoreApi
+	extends SessionStore<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {}
 
 export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
 

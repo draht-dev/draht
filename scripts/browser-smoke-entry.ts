@@ -10,9 +10,10 @@ import {
 	formatSkillInvocation,
 	formatSkillsForSystemPrompt,
 	getOrThrow,
-	InMemorySessionRepo,
+	MemorySessionStore,
 	ok,
 	parseCommandArgs,
+	SessionRepo,
 	streamProxy,
 	toError,
 	truncateHead,
@@ -26,7 +27,7 @@ const stream = createAssistantMessageEventStream();
 
 const agent = new Agent({ initialState: { model }, streamFn: streamSimple });
 agent.steer({ role: "user", content: [{ type: "text", text: "queued" }], timestamp: 0 });
-const repo = new InMemorySessionRepo();
+const repo = new SessionRepo({ storage: new MemorySessionStore() });
 const result = getOrThrow(ok({ value: 1 }));
 const customMessage = createCustomMessage("note", "hello", true, undefined, "2026-01-01T00:00:00.000Z");
 const llmMessages = convertToLlm([customMessage]);
@@ -39,7 +40,7 @@ console.log(
 	schema.type,
 	typeof stream.push,
 	agent.hasQueuedMessages(),
-	typeof repo.create,
+	typeof repo.storage.create,
 	result.value,
 	llmMessages.length,
 	bashExecutionToText({

@@ -2,12 +2,15 @@ import { uuidv7 } from "@draht/ai";
 import {
 	type FileError,
 	type Result,
+	type SessionCreateOptions,
 	SessionError,
+	type SessionForkOptions,
 	type SessionMetadata,
 	type SessionSearch,
 	type SessionSearchHit,
 	type SessionSearchIndex,
 	type SessionStorage,
+	type SessionStore,
 	type SessionTreeEntry,
 	type SessionWriter,
 } from "../types.ts";
@@ -59,6 +62,70 @@ export async function toRepoSession<TMetadata extends SessionMetadata>(
 	if (!search.index) return toSession(storage);
 	const metadata = await storage.getMetadata();
 	return toSession(storage, new SessionRepoWriter(storage, metadata, search.index));
+}
+
+type BoundSessionStore<
+	TMetadata extends SessionMetadata,
+	TCreateOptions extends SessionCreateOptions,
+	TListOptions,
+> = Omit<SessionStore<TMetadata, TCreateOptions, TListOptions>, "defaultSearch" | "create" | "open" | "fork"> & {
+	create(options: TCreateOptions): Promise<Session<TMetadata>>;
+	open(metadata: TMetadata): Promise<Session<TMetadata>>;
+	fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<Session<TMetadata>>;
+};
+
+function bindSessionStore<TMetadata extends SessionMetadata, TCreateOptions extends SessionCreateOptions, TListOptions>(
+	storage: SessionStore<TMetadata, TCreateOptions, TListOptions>,
+	search: SessionSearch<TMetadata> | null,
+): BoundSessionStore<TMetadata, TCreateOptions, TListOptions> {
+	const wrap = async (sessionStorage: SessionStorage<TMetadata>): Promise<Session<TMetadata>> =>
+		search ? await toRepoSession(sessionStorage, search) : toSession(sessionStorage);
+	return new Proxy(storage, {
+		get(target, property) {
+			if (property === "create") {
+				return async (options: TCreateOptions) => await wrap(await target.create(options));
+			}
+			if (property === "open") {
+				return async (metadata: TMetadata) => await wrap(await target.open(metadata));
+			}
+			if (property === "fork") {
+				return async (source: TMetadata, options: SessionForkOptions & TCreateOptions) => {
+					const sessionStorage = await target.fork(source, options);
+					await search?.index?.replaceSession(
+						await sessionStorage.getMetadata(),
+						await sessionStorage.getEntries(),
+					);
+					return await wrap(sessionStorage);
+				};
+			}
+			if (property === "delete") {
+				return async (metadata: TMetadata) => {
+					await search?.index?.removeSession(metadata);
+					await target.delete(metadata);
+				};
+			}
+			const value = Reflect.get(target, property, target) as unknown;
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	}) as unknown as BoundSessionStore<TMetadata, TCreateOptions, TListOptions>;
+}
+
+/** Composes canonical storage and optional search as independently accessible capabilities. */
+export class SessionRepo<
+	TMetadata extends SessionMetadata = SessionMetadata,
+	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
+	TListOptions = void,
+> {
+	readonly storage: BoundSessionStore<TMetadata, TCreateOptions, TListOptions>;
+	readonly search: SessionSearch<TMetadata> | null;
+
+	constructor(options: {
+		storage: SessionStore<TMetadata, TCreateOptions, TListOptions>;
+		search?: SessionSearch<TMetadata> | null;
+	}) {
+		this.search = options.search === undefined ? (options.storage.defaultSearch ?? null) : options.search;
+		this.storage = bindSessionStore(options.storage, this.search);
+	}
 }
 
 export function findSessionEntryMatches<TMetadata extends SessionMetadata>(

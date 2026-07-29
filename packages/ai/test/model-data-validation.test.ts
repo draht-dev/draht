@@ -30,14 +30,18 @@ function createFixture(): {
 	mkdirSync(dataDir, { recursive: true });
 	writeFileSync(
 		join(packageRoot, "src", "models.generated.ts"),
-		'import { TEST_PROVIDER_MODELS } from "./providers/test-provider.models.ts";\n\nexport const MODELS = {\n\t"test-provider": TEST_PROVIDER_MODELS,\n} as const;\n',
+		'import { TEST_PROVIDER_MODELS } from "./providers/test-provider.models.ts";\n',
 	);
 	writeFileSync(
 		join(providersDir, "test-provider.models.ts"),
-		'// generated\n\nimport values from "./data/test-provider.json" with { type: "json" };\nimport type { Model } from "../types.ts";\n\nexport const TEST_PROVIDER_MODELS = values as {\n\t"model-a": Model<"openai-completions"> & {\n\t\tid: "model-a";\n\t\tprovider: "test-provider";\n\t};\n};\n',
+		'import values from "./data/test-provider.json" with { type: "json" };\nimport { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";\n\nexport const TEST_PROVIDER_MODELS: ModelCatalog<typeof values, "test-provider"> =\n\tflattenModelCatalog("test-provider", values);\n',
 	);
 
-	const structure = readModelDataStructure(packageRoot);
+	const structure: ModelDataStructure = {
+		"test-provider": {
+			"model-a": "openai-completions",
+		},
+	};
 	const values: Record<string, unknown> = {
 		"model-a": {
 			id: "model-a",
@@ -61,9 +65,10 @@ function writeFixtureData(
 	structure: ModelDataStructure,
 	values: Record<string, unknown>,
 	manifestSchemaVersion = MODEL_DATA_SCHEMA_VERSION,
+	apiGroup = "openai-completions",
 ): void {
 	const filename = "test-provider.json";
-	const content = `${JSON.stringify(values)}\n`;
+	const content = `${JSON.stringify({ [apiGroup]: values })}\n`;
 	writeFileSync(join(dataDir, filename), content);
 	const manifest = createModelDataManifest(structure, { [filename]: content });
 	manifest.schemaVersion = manifestSchemaVersion;
@@ -71,8 +76,9 @@ function writeFixtureData(
 }
 
 describe("generated model data validation", () => {
-	it("validates complete data against generated structural catalogs", () => {
-		const { dataDir, structure } = createFixture();
+	it("reads and validates API-grouped model data", () => {
+		const { dataDir, packageRoot, structure } = createFixture();
+		expect(readModelDataStructure(packageRoot)).toEqual(structure);
 		expect(() => validateModelDataDirectory(structure, dataDir)).not.toThrow();
 	});
 
@@ -94,6 +100,31 @@ describe("generated model data validation", () => {
 		expect(() => validateModelDataDirectory(fixture.structure, fixture.dataDir)).toThrow(expectedMessage);
 	});
 
+	it("rejects a model in the wrong API group", () => {
+		const fixture = createFixture();
+		writeFixtureData(
+			fixture.dataDir,
+			fixture.structure,
+			fixture.values,
+			MODEL_DATA_SCHEMA_VERSION,
+			"anthropic-messages",
+		);
+		expect(() => validateModelDataDirectory(fixture.structure, fixture.dataDir)).toThrow("grouped under API");
+	});
+
+	it("rejects duplicate model IDs across API groups", () => {
+		const fixture = createFixture();
+		const filename = "test-provider.json";
+		const content = `${JSON.stringify({
+			"openai-completions": fixture.values,
+			"anthropic-messages": fixture.values,
+		})}\n`;
+		writeFileSync(join(fixture.dataDir, filename), content);
+		const manifest = createModelDataManifest(fixture.structure, { [filename]: content });
+		writeFileSync(join(fixture.dataDir, MODEL_DATA_MANIFEST_FILE), `${JSON.stringify(manifest)}\n`);
+		expect(() => validateModelDataDirectory(fixture.structure, fixture.dataDir)).toThrow("more than one API group");
+	});
+
 	it("rejects missing model IDs and stale file hashes", () => {
 		const fixture = createFixture();
 		writeFileSync(join(fixture.dataDir, "test-provider.json"), "{}\n");
@@ -112,7 +143,7 @@ describe("generated model data validation", () => {
 		expect(() => validateModelDataDirectory(fixture.structure, fixture.dataDir)).toThrow("generation stamp");
 	});
 
-	it("rejects missing provider shards referenced by the aggregator", () => {
+	it("rejects missing provider shards imported by the aggregator", () => {
 		const { packageRoot } = createFixture();
 		writeFileSync(
 			join(packageRoot, "src", "models.generated.ts"),

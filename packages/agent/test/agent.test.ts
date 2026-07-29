@@ -1,7 +1,7 @@
 import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@draht/ai/compat";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { Agent, type AgentEvent, type AgentTool, type AgentToolUpdateCallback } from "../src/index.ts";
+import { Agent, type AgentEvent, type AgentTool, type AgentToolUpdateCallback, type StreamFn } from "../src/index.ts";
 
 // Mock stream that mimics AssistantMessageEventStream
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -59,6 +59,10 @@ function createAssistantToolUseMessage(content: ToolCallContent[]): AssistantMes
 	};
 }
 
+const unusedStreamFunction: StreamFn = () => {
+	throw new Error("Unexpected stream call");
+};
+
 function createDeferred(): {
 	promise: Promise<void>;
 	resolve: () => void;
@@ -72,7 +76,7 @@ function createDeferred(): {
 
 describe("Agent", () => {
 	it("should create an agent instance with default state", () => {
-		const agent = new Agent();
+		const agent = new Agent({ streamFunction: unusedStreamFunction });
 
 		expect(agent.state).toBeDefined();
 		expect(agent.state.systemPrompt).toBe("");
@@ -89,6 +93,7 @@ describe("Agent", () => {
 	it("should create an agent instance with custom initial state", () => {
 		const customModel = getModel("openai", "gpt-4o-mini");
 		const agent = new Agent({
+			streamFunction: unusedStreamFunction,
 			initialState: {
 				systemPrompt: "You are a helpful assistant.",
 				model: customModel,
@@ -102,7 +107,7 @@ describe("Agent", () => {
 	});
 
 	it("should subscribe to events", () => {
-		const agent = new Agent();
+		const agent = new Agent({ streamFunction: unusedStreamFunction });
 
 		let eventCount = 0;
 		const unsubscribe = agent.subscribe((_event) => {
@@ -125,7 +130,7 @@ describe("Agent", () => {
 
 	it("emits full lifecycle events for thrown run failures", async () => {
 		const agent = new Agent({
-			streamFn: () => {
+			streamFunction: () => {
 				throw new Error("provider exploded");
 			},
 		});
@@ -157,7 +162,7 @@ describe("Agent", () => {
 	it("should await async subscribers before prompt resolves", async () => {
 		const barrier = createDeferred();
 		const agent = new Agent({
-			streamFn: () => {
+			streamFunction: () => {
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") });
@@ -195,7 +200,7 @@ describe("Agent", () => {
 	it("waitForIdle should wait for async subscribers", async () => {
 		const barrier = createDeferred();
 		const agent = new Agent({
-			streamFn: () => {
+			streamFunction: () => {
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") });
@@ -230,7 +235,7 @@ describe("Agent", () => {
 	it("should pass the active abort signal to subscribers", async () => {
 		let receivedSignal: AbortSignal | undefined;
 		const agent = new Agent({
-			streamFn: (_model, _context, options) => {
+			streamFunction: (_model, _context, options) => {
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: createAssistantMessage("") });
@@ -293,7 +298,7 @@ describe("Agent", () => {
 		};
 		const agent = new Agent({
 			initialState: { tools: [tool] },
-			streamFn: () => {
+			streamFunction: () => {
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					stream.push({
@@ -368,7 +373,7 @@ describe("Agent", () => {
 		};
 		const agent = new Agent({
 			initialState: { tools: [settledTool, slowTool] },
-			streamFn: () => {
+			streamFunction: () => {
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					stream.push({
@@ -407,7 +412,7 @@ describe("Agent", () => {
 	});
 
 	it("should update state with mutators", () => {
-		const agent = new Agent();
+		const agent = new Agent({ streamFunction: unusedStreamFunction });
 
 		// Test setSystemPrompt
 		agent.state.systemPrompt = "Custom prompt";
@@ -446,7 +451,7 @@ describe("Agent", () => {
 	});
 
 	it("should support steering message queue", async () => {
-		const agent = new Agent();
+		const agent = new Agent({ streamFunction: unusedStreamFunction });
 
 		const message = { role: "user" as const, content: "Steering message", timestamp: Date.now() };
 		agent.steer(message);
@@ -456,7 +461,7 @@ describe("Agent", () => {
 	});
 
 	it("should support follow-up message queue", async () => {
-		const agent = new Agent();
+		const agent = new Agent({ streamFunction: unusedStreamFunction });
 
 		const message = { role: "user" as const, content: "Follow-up message", timestamp: Date.now() };
 		agent.followUp(message);
@@ -466,7 +471,7 @@ describe("Agent", () => {
 	});
 
 	it("should handle abort controller", () => {
-		const agent = new Agent();
+		const agent = new Agent({ streamFunction: unusedStreamFunction });
 
 		// Should not throw even if nothing is running
 		expect(() => agent.abort()).not.toThrow();
@@ -476,7 +481,7 @@ describe("Agent", () => {
 		let abortSignal: AbortSignal | undefined;
 		const agent = new Agent({
 			// Use a stream function that responds to abort
-			streamFn: (_model, _context, options) => {
+			streamFunction: (_model, _context, options) => {
 				abortSignal = options?.signal;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
@@ -515,7 +520,7 @@ describe("Agent", () => {
 	it("should throw when continue() called while streaming", async () => {
 		let abortSignal: AbortSignal | undefined;
 		const agent = new Agent({
-			streamFn: (_model, _context, options) => {
+			streamFunction: (_model, _context, options) => {
 				abortSignal = options?.signal;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
@@ -550,7 +555,7 @@ describe("Agent", () => {
 
 	it("continue() should process queued follow-up messages after an assistant turn", async () => {
 		const agent = new Agent({
-			streamFn: () => {
+			streamFunction: () => {
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Processed") });
@@ -589,7 +594,7 @@ describe("Agent", () => {
 	it("continue() should keep one-at-a-time steering semantics from assistant tail", async () => {
 		let responseCount = 0;
 		const agent = new Agent({
-			streamFn: () => {
+			streamFunction: () => {
 				const stream = new MockAssistantStream();
 				responseCount++;
 				queueMicrotask(() => {
@@ -647,7 +652,7 @@ describe("Agent", () => {
 				sawAbortSignal = signal instanceof AbortSignal;
 				return undefined;
 			},
-			streamFn: () => {
+			streamFunction: () => {
 				requestCount++;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
@@ -671,11 +676,11 @@ describe("Agent", () => {
 		expect(sawAbortSignal).toBe(true);
 	});
 
-	it("forwards sessionId to streamFn options", async () => {
+	it("forwards sessionId to streamFunction options", async () => {
 		let receivedSessionId: string | undefined;
 		const agent = new Agent({
 			sessionId: "session-abc",
-			streamFn: (_model, _context, options) => {
+			streamFunction: (_model, _context, options) => {
 				receivedSessionId = options?.sessionId;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {

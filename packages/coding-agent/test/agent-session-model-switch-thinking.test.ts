@@ -1,6 +1,6 @@
 import { Agent, type ThinkingLevel } from "@draht/agent-core";
 import type { Model } from "@draht/ai/compat";
-import { getModel } from "@draht/ai/compat";
+import { getModel, streamSimple } from "@draht/ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -43,6 +43,7 @@ async function createSession({
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
+			streamFunction: streamSimple,
 			initialState: {
 				model: reasoningModel,
 				systemPrompt: "You are a helpful assistant.",

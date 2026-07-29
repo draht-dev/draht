@@ -1,5 +1,5 @@
 import { Agent } from "@draht/agent-core";
-import { getModel } from "@draht/ai/compat";
+import { getModel, streamSimple } from "@draht/ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentSession, type AgentSessionEvent } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -28,6 +28,7 @@ async function createDirectSession(): Promise<{ session: AgentSession; sessionMa
 	const sessionManager = SessionManager.inMemory();
 	const session = new AgentSession({
 		agent: new Agent({
+			streamFunction: streamSimple,
 			initialState: {
 				model: directModel,
 				systemPrompt: "Test",

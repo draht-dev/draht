@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { AgentMessage, AgentTool } from "@draht/agent-core";
 import { Agent } from "@draht/agent-core";
 import type { FauxModelDefinition, FauxProviderRegistration, FauxResponseStep, Model } from "@draht/ai/compat";
-import { registerFauxProvider } from "@draht/ai/compat";
+import { registerFauxProvider, streamSimple } from "@draht/ai/compat";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import type { ExtensionRunner } from "../../src/core/extensions/index.ts";
@@ -132,6 +132,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
 	const agent = new Agent({
 		getApiKey: () => (withConfiguredAuth ? "faux-key" : undefined),
+		streamFunction: streamSimple,
 		initialState: {
 			model,
 			systemPrompt: options.systemPrompt ?? "You are a test assistant.",

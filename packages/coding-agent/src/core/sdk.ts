@@ -301,7 +301,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: [],
 		},
 		convertToLlm: convertToLlmWithBlockImages,
-		streamFn: async (model, context, options) => {
+		streamFunction: async (model, context, options) => {
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
 			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".

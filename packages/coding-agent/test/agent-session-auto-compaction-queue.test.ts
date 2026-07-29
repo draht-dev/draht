@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@draht/agent-core";
 import { type AssistantMessage, createAssistantMessageEventStream, fauxAssistantMessage } from "@draht/ai";
-import { getModel } from "@draht/ai/compat";
+import { getModel, streamSimple } from "@draht/ai/compat";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -21,10 +21,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 	beforeEach(async () => {
 		tempDir = join(tmpdir(), `pi-auto-compaction-queue-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
-		vi.useFakeTimers();
 
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
 		const agent = new Agent({
+			streamFunction: streamSimple,
 			initialState: {
 				model,
 				systemPrompt: "Test",
@@ -50,7 +50,6 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 	afterEach(() => {
 		session.dispose();
-		vi.useRealTimers();
 		vi.restoreAllMocks();
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true });
@@ -84,9 +83,9 @@ describe("AgentSession auto-compaction queue resume", () => {
 			timestamp: now - 500,
 		});
 		session.agent.state.messages = sessionManager.buildSessionContext().messages;
-		session.agent.streamFn = (summaryModel) => {
+		session.agent.streamFunction = (summaryModel) => {
 			const stream = createAssistantMessageEventStream();
-			queueMicrotask(() => {
+			void Promise.resolve().then(() => {
 				stream.push({
 					type: "done",
 					reason: "stop",

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@draht/agent-core";
-import { fauxAssistantMessage, registerFauxProvider } from "@draht/ai/compat";
+import { fauxAssistantMessage, registerFauxProvider, streamSimple } from "@draht/ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../../../src/core/agent-session.ts";
 import { AuthStorage } from "../../../src/core/auth-storage.ts";
@@ -61,6 +61,7 @@ describe("regression #5596: missing configured theme export", () => {
 				tools: [],
 			},
 			convertToLlm,
+			streamFunction: streamSimple,
 		});
 		const session = new AgentSession({
 			agent,

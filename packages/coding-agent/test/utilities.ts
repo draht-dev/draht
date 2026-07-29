@@ -8,7 +8,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Agent } from "@draht/agent-core";
 import type { OAuthCredentials } from "@draht/ai";
-import { getModel } from "@draht/ai/compat";
+import { getModel, streamSimple } from "@draht/ai/compat";
 import { builtinProviders } from "@draht/ai/providers/all";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -246,6 +246,7 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 			systemPrompt: options.systemPrompt ?? "You are a helpful assistant. Be extremely concise.",
 			tools: createCodingTools(process.cwd()),
 		},
+		streamFunction: streamSimple,
 	});
 
 	const sessionManager = options.inMemory ? SessionManager.inMemory() : SessionManager.create(tempDir);

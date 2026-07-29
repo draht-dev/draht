@@ -1,5 +1,5 @@
 import { Agent, type AgentEvent } from "@draht/agent-core";
-import { getModel, type ImageContent } from "@draht/ai/compat";
+import { getModel, type ImageContent, streamSimple } from "@draht/ai/compat";
 import {
 	AgentSession,
 	AuthStorage,
@@ -449,6 +449,7 @@ async function createRunner(sandboxConfig: SandboxConfig, channelId: string, cha
 			tools,
 		},
 		convertToLlm,
+		streamFunction: streamSimple,
 		getApiKey: async () => getAnthropicApiKey(modelRuntime),
 	});
 

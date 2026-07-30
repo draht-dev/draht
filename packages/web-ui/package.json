@@ -9,6 +9,11 @@
 		".": "./dist/index.js",
 		"./app.css": "./dist/app.css"
 	},
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md"
+	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"build": "tsc -p tsconfig.build.json && tailwindcss -i ./src/app.css -o ./dist/app.css --minify",

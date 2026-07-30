@@ -3,12 +3,12 @@ import type {
 	SessionSearch,
 	SessionSearchHit,
 	SessionSearchOptions,
-	SessionStorage,
+	SessionSnapshot,
 } from "../types.ts";
 import { findSessionEntryMatches } from "./repo-utils.ts";
 
 type SessionSearchSource<TMetadata extends SessionMetadata> = {
-	open(metadata: TMetadata): Promise<SessionStorage<TMetadata>>;
+	load(metadata: TMetadata): Promise<SessionSnapshot<TMetadata>>;
 	list(): Promise<TMetadata[]>;
 };
 
@@ -27,13 +27,8 @@ export class ScanningSessionSearch<TMetadata extends SessionMetadata = SessionMe
 		for (const metadata of await this.source.list()) {
 			const cwd = (metadata as { cwd?: unknown }).cwd;
 			if (options.cwd !== undefined && cwd !== options.cwd) continue;
-			const storage = await this.source.open(metadata);
-			try {
-				hits.push(...findSessionEntryMatches(metadata, await storage.getEntries(), options.text));
-			} finally {
-				const maybeClosable = storage as { cleanup?: () => Promise<void> };
-				if (typeof maybeClosable.cleanup === "function") await maybeClosable.cleanup();
-			}
+			const state = await this.source.load(metadata);
+			hits.push(...findSessionEntryMatches(metadata, state.entries, options.text));
 		}
 		return hits;
 	}

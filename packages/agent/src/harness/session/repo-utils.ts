@@ -12,7 +12,7 @@ import {
 	type SessionStore,
 	type SessionTreeEntry,
 } from "../types.ts";
-import { Session } from "./session.ts";
+import { Session, type SessionDependencies } from "./session.ts";
 
 export function createSessionId(): string {
 	return uuidv7();
@@ -24,6 +24,21 @@ export function createTimestamp(): string {
 
 export function toSession<TMetadata extends SessionMetadata>(storage: SessionStorage<TMetadata>): Session<TMetadata> {
 	return new Session(storage);
+}
+
+export function toStoreSession<TMetadata extends SessionMetadata>(
+	store: Pick<SessionStore<TMetadata>, "load" | "getEntries" | "createEntryId" | "appendEntry" | "setLeafId">,
+	metadata: TMetadata,
+): Session<TMetadata> {
+	const dependencies: SessionDependencies<TMetadata> = {
+		metadata,
+		load: () => store.load(metadata),
+		getEntries: (options) => store.getEntries(metadata, options),
+		createEntryId: () => store.createEntryId(metadata),
+		appendEntry: (entry) => store.appendEntry(metadata, entry),
+		setLeafId: (leafId) => store.setLeafId(metadata, leafId),
+	};
+	return new Session(dependencies);
 }
 
 export function after<TArgs extends unknown[], TResult>(
@@ -50,15 +65,16 @@ export class SessionRepository<
 		search?: SessionSearch<TMetadata> | null;
 	}) {
 		this.store = options.store;
-		this.searchBackend = options.search === undefined ? (options.store.defaultSearch ?? null) : options.search;
+		this.searchBackend = options.search ?? null;
 	}
 
 	async create(options: TCreateOptions): Promise<Session<TMetadata>> {
-		return toSession(await this.store.create(options));
+		return toStoreSession(this.store, await this.store.create(options));
 	}
 
 	async open(metadata: TMetadata): Promise<Session<TMetadata>> {
-		return toSession(await this.store.open(metadata));
+		await this.store.load(metadata);
+		return toStoreSession(this.store, metadata);
 	}
 
 	list(options?: TListOptions): Promise<TMetadata[]> {
@@ -70,7 +86,7 @@ export class SessionRepository<
 	}
 
 	async fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<Session<TMetadata>> {
-		return toSession(await this.store.fork(source, options));
+		return toStoreSession(this.store, await this.store.fork(source, options));
 	}
 
 	async search(options: Parameters<SessionSearch<TMetadata>["search"]>[0]): Promise<SessionSearchHit<TMetadata>[]> {

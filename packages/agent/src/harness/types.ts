@@ -495,6 +495,12 @@ export interface SessionEntryCursorOptions {
 	limit?: number;
 }
 
+export interface SessionSnapshot<TMetadata extends SessionMetadata = SessionMetadata> {
+	metadata: TMetadata;
+	leafId: string | null;
+	entries: SessionTreeEntry[];
+}
+
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
 	getMetadata(): Promise<TMetadata>;
 	getLeafId(): Promise<string | null>;
@@ -555,12 +561,15 @@ export interface SessionStore<
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
 > {
-	readonly defaultSearch?: SessionSearch<TMetadata>;
-	create(options: TCreateOptions): Promise<SessionStorage<TMetadata>>;
-	open(metadata: TMetadata): Promise<SessionStorage<TMetadata>>;
+	create(options: TCreateOptions): Promise<TMetadata>;
+	load(metadata: TMetadata): Promise<SessionSnapshot<TMetadata>>;
 	list(options?: TListOptions): Promise<TMetadata[]>;
+	getEntries(metadata: TMetadata, options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]>;
+	createEntryId(metadata: TMetadata): Promise<string>;
+	appendEntry(metadata: TMetadata, entry: SessionTreeEntry): Promise<void>;
+	setLeafId(metadata: TMetadata, leafId: string | null): Promise<LeafEntry>;
 	delete(metadata: TMetadata): Promise<void>;
-	fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<SessionStorage<TMetadata>>;
+	fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<TMetadata>;
 }
 
 export interface JsonlSessionCreateOptions extends SessionCreateOptions {

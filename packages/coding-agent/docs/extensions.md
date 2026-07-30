@@ -2299,7 +2299,7 @@ For the best cache behavior, keep the loader tool active for the whole session a
 The following extension registers two searchable tools, removes them from the initial active set, and keeps only `search_tools` as their loader. The example uses simple keyword matching, but the search implementation could use BM25, embeddings, a remote catalog, or project-specific routing.
 
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@draht/coding-agent";
 import { Type } from "typebox";
 
 const SEARCHABLE_TOOL_NAMES = new Set(["lookup_weather", "search_issues"]);

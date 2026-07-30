@@ -451,6 +451,87 @@ Project skill content`,
 		});
 	});
 
+	describe("system prompt sources", () => {
+		it("exposes discovered project SYSTEM.md as the system prompt source", async () => {
+			const drahtDir = join(cwd, ".draht");
+			const systemPromptPath = join(drahtDir, "SYSTEM.md");
+			mkdirSync(drahtDir, { recursive: true });
+			writeFileSync(systemPromptPath, "Project system prompt.");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBe("Project system prompt.");
+			expect(loader.getSystemPromptSource()).toEqual({ path: systemPromptPath });
+		});
+
+		it("exposes discovered global SYSTEM.md as the system prompt source", async () => {
+			const systemPromptPath = join(agentDir, "SYSTEM.md");
+			writeFileSync(systemPromptPath, "Global system prompt.");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBe("Global system prompt.");
+			expect(loader.getSystemPromptSource()).toEqual({ path: systemPromptPath });
+		});
+
+		it("does not expose literal system prompt text as a source", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir, systemPrompt: "Literal system prompt." });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBe("Literal system prompt.");
+			expect(loader.getSystemPromptSource()).toBeUndefined();
+		});
+
+		it("exposes file-backed system prompt options as a source", async () => {
+			const systemPromptPath = join(tempDir, "custom-system.md");
+			writeFileSync(systemPromptPath, "Custom system prompt.");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, systemPrompt: systemPromptPath });
+			await loader.reload();
+
+			expect(loader.getSystemPrompt()).toBe("Custom system prompt.");
+			expect(loader.getSystemPromptSource()).toEqual({ path: systemPromptPath });
+		});
+
+		it("exposes discovered APPEND_SYSTEM.md as an append system prompt source", async () => {
+			const drahtDir = join(cwd, ".draht");
+			const appendSystemPromptPath = join(drahtDir, "APPEND_SYSTEM.md");
+			mkdirSync(drahtDir, { recursive: true });
+			writeFileSync(appendSystemPromptPath, "Project append prompt.");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			expect(loader.getAppendSystemPrompt()).toEqual(["Project append prompt."]);
+			expect(loader.getAppendSystemPromptSources()).toEqual([{ path: appendSystemPromptPath }]);
+		});
+
+		it("does not expose literal append system prompt text as a source", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir, appendSystemPrompt: ["Literal append prompt."] });
+			await loader.reload();
+
+			expect(loader.getAppendSystemPrompt()).toEqual(["Literal append prompt."]);
+			expect(loader.getAppendSystemPromptSources()).toEqual([]);
+		});
+
+		it("only exposes file-backed append system prompt options as sources", async () => {
+			const appendSystemPromptPath = join(tempDir, "custom-append.md");
+			writeFileSync(appendSystemPromptPath, "Custom append prompt.");
+
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				appendSystemPrompt: [appendSystemPromptPath, "Literal append prompt."],
+			});
+			await loader.reload();
+
+			expect(loader.getAppendSystemPrompt()).toEqual(["Custom append prompt.", "Literal append prompt."]);
+			expect(loader.getAppendSystemPromptSources()).toEqual([{ path: appendSystemPromptPath }]);
+		});
+	});
+
 	describe("extendResources", () => {
 		it("should load skills and prompts with extension metadata", async () => {
 			const extraSkillDir = join(tempDir, "extra-skills", "extra-skill");

@@ -1511,7 +1511,12 @@ export class InteractiveMode {
 		}
 
 		if (showListing) {
-			const contextFiles = this.session.resourceLoader.getAgentsFiles().agentsFiles;
+			const systemPromptSource = this.session.resourceLoader.getSystemPromptSource();
+			const contextFiles = [
+				...(systemPromptSource ? [systemPromptSource] : []),
+				...this.session.resourceLoader.getAppendSystemPromptSources(),
+				...this.session.resourceLoader.getAgentsFiles().agentsFiles,
+			];
 			if (contextFiles.length > 0) {
 				this.loadedResourcesContainer.addChild(new Spacer(1));
 				const contextList = contextFiles

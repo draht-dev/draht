@@ -43,7 +43,9 @@ export interface ResourceLoader {
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
 	getSystemPrompt(): string | undefined;
+	getSystemPromptSource(): { path: string } | undefined;
 	getAppendSystemPrompt(): string[];
+	getAppendSystemPromptSources(): Array<{ path: string }>;
 	extendResources(paths: ResourceExtensionPaths): void;
 	reload(options?: ResourceLoaderReloadOptions): Promise<void>;
 }
@@ -236,7 +238,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private themeDiagnostics: ResourceDiagnostic[];
 	private agentsFiles: Array<{ path: string; content: string }>;
 	private systemPrompt?: string;
+	private systemPromptSourcePath?: string;
 	private appendSystemPrompt: string[];
+	private appendSystemPromptSourcePaths: string[];
 	private lastSkillPaths: string[];
 	private extensionSkillSourceInfos: Map<string, SourceInfo>;
 	private extensionPromptSourceInfos: Map<string, SourceInfo>;
@@ -285,6 +289,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.themeDiagnostics = [];
 		this.agentsFiles = [];
 		this.appendSystemPrompt = [];
+		this.appendSystemPromptSourcePaths = [];
 		this.lastSkillPaths = [];
 		this.extensionSkillSourceInfos = new Map();
 		this.extensionPromptSourceInfos = new Map();
@@ -319,8 +324,16 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return this.systemPrompt;
 	}
 
+	getSystemPromptSource(): { path: string } | undefined {
+		return this.systemPromptSourcePath ? { path: this.systemPromptSourcePath } : undefined;
+	}
+
 	getAppendSystemPrompt(): string[] {
 		return this.appendSystemPrompt;
+	}
+
+	getAppendSystemPromptSources(): Array<{ path: string }> {
+		return this.appendSystemPromptSourcePaths.map((path) => ({ path }));
 	}
 
 	extendResources(paths: ResourceExtensionPaths): void {
@@ -509,21 +522,26 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
 
-		const baseSystemPrompt = resolvePromptInput(
-			this.systemPromptSource ?? this.discoverSystemPromptFile(),
-			"system prompt",
-		);
+		const systemPromptSource = this.systemPromptSource ?? this.discoverSystemPromptFile();
+		const baseSystemPrompt = resolvePromptInput(systemPromptSource, "system prompt");
 		this.systemPrompt = this.systemPromptOverride ? this.systemPromptOverride(baseSystemPrompt) : baseSystemPrompt;
+		this.systemPromptSourcePath =
+			systemPromptSource && existsSync(systemPromptSource) ? resolvePath(systemPromptSource) : undefined;
 
-		const appendSources =
-			this.appendSystemPromptSource ??
-			(this.discoverAppendSystemPromptFile() ? [this.discoverAppendSystemPromptFile()!] : []);
+		let appendSources = this.appendSystemPromptSource;
+		if (!appendSources) {
+			const discoveredAppendSystemPromptFile = this.discoverAppendSystemPromptFile();
+			appendSources = discoveredAppendSystemPromptFile ? [discoveredAppendSystemPromptFile] : [];
+		}
 		const baseAppend = appendSources
 			.map((s) => resolvePromptInput(s, "append system prompt"))
 			.filter((s): s is string => s !== undefined);
 		this.appendSystemPrompt = this.appendSystemPromptOverride
 			? this.appendSystemPromptOverride(baseAppend)
 			: baseAppend;
+		this.appendSystemPromptSourcePaths = appendSources
+			.filter((source) => existsSync(source))
+			.map((source) => resolvePath(source));
 		this.loaded = true;
 	}
 

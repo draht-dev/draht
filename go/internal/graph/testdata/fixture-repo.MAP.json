@@ -1,0 +1,515 @@
+{
+  "schemaVersion": 5,
+  "generatedAt": "",
+  "buildMs": 0,
+  "root": "001",
+  "stats": {
+    "files": 11,
+    "totalLoc": 95,
+    "languages": {
+      "markdown": 1,
+      "go": 1,
+      "json": 3,
+      "typescript": 7,
+      "javascript": 1,
+      "python": 1,
+      "rust": 1
+    },
+    "packages": 3,
+    "containers": 0,
+    "groups": 0,
+    "edges": 8,
+    "callEdges": 0,
+    "containerEdges": 0,
+    "entryPoints": 0,
+    "sinkModules": 0,
+    "layers": {
+      "support": 5,
+      "application": 5,
+      "presentation": 1
+    },
+    "truncated": false
+  },
+  "assets": {
+    "total": 4,
+    "byLanguage": {
+      "markdown": 1,
+      "json": 3
+    }
+  },
+  "packages": [
+    {
+      "name": "fixture-monorepo",
+      "version": "0.0.0",
+      "path": ".",
+      "description": null,
+      "dependencies": [],
+      "devDependencies": [],
+      "peerDependencies": [],
+      "workspaceDeps": [],
+      "workspacePatterns": [
+        "packages/*"
+      ]
+    },
+    {
+      "name": "@fixture/app",
+      "version": "1.0.0",
+      "path": "packages/app",
+      "description": null,
+      "dependencies": [
+        "@fixture/core"
+      ],
+      "devDependencies": [],
+      "peerDependencies": [],
+      "workspaceDeps": [
+        "@fixture/core"
+      ]
+    },
+    {
+      "name": "@fixture/core",
+      "version": "1.0.0",
+      "path": "packages/core",
+      "description": null,
+      "dependencies": [],
+      "devDependencies": [],
+      "peerDependencies": [],
+      "workspaceDeps": []
+    }
+  ],
+  "groups": [],
+  "containers": [],
+  "boundedContexts": [],
+  "modules": [
+    {
+      "id": "cmd/tool/main.go",
+      "path": "cmd/tool/main.go",
+      "language": "go",
+      "size": 190,
+      "loc": 13,
+      "isTest": false,
+      "package": "fixture-monorepo",
+      "exports": [],
+      "symbols": [
+        {
+          "name": "main",
+          "kind": "func",
+          "line": 10,
+          "exported": false
+        }
+      ],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "support",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "packages/app/src/Widget.tsx",
+      "path": "packages/app/src/Widget.tsx",
+      "language": "typescript",
+      "size": 213,
+      "loc": 8,
+      "isTest": false,
+      "package": "@fixture/app",
+      "exports": [
+        {
+          "name": "Widget",
+          "kind": "function",
+          "line": 5,
+          "doc": null
+        }
+      ],
+      "symbols": [
+        {
+          "name": "Widget",
+          "kind": "function",
+          "line": 5,
+          "exported": true
+        }
+      ],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "application",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "packages/app/src/huge.ts",
+      "path": "packages/app/src/huge.ts",
+      "language": "typescript",
+      "size": 1048718,
+      "loc": 0,
+      "isTest": false,
+      "package": "@fixture/app",
+      "exports": [],
+      "symbols": [],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "support",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "packages/app/src/lazy.ts",
+      "path": "packages/app/src/lazy.ts",
+      "language": "typescript",
+      "size": 106,
+      "loc": 5,
+      "isTest": false,
+      "package": "@fixture/app",
+      "exports": [
+        {
+          "name": "lazyValue",
+          "kind": "function",
+          "line": 2,
+          "doc": "The target of main.ts's dynamic import(\"./lazy\")."
+        }
+      ],
+      "symbols": [
+        {
+          "name": "lazyValue",
+          "kind": "function",
+          "line": 2,
+          "exported": true
+        }
+      ],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "application",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "packages/app/src/legacy.js",
+      "path": "packages/app/src/legacy.js",
+      "language": "javascript",
+      "size": 189,
+      "loc": 6,
+      "isTest": false,
+      "package": "@fixture/app",
+      "exports": [],
+      "symbols": [],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "support",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "packages/app/src/main.test.ts",
+      "path": "packages/app/src/main.test.ts",
+      "language": "typescript",
+      "size": 212,
+      "loc": 9,
+      "isTest": true,
+      "package": "@fixture/app",
+      "exports": [],
+      "symbols": [],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "support",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "packages/app/src/main.ts",
+      "path": "packages/app/src/main.ts",
+      "language": "typescript",
+      "size": 725,
+      "loc": 21,
+      "isTest": false,
+      "package": "@fixture/app",
+      "exports": [
+        {
+          "name": "run",
+          "kind": "function",
+          "line": 10,
+          "doc": null
+        }
+      ],
+      "symbols": [
+        {
+          "name": "run",
+          "kind": "function",
+          "line": 10,
+          "exported": true
+        }
+      ],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": {
+        "kind": "library",
+        "name": "@fixture/app"
+      },
+      "layer": "presentation",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "packages/core/src/index.ts",
+      "path": "packages/core/src/index.ts",
+      "language": "typescript",
+      "size": 162,
+      "loc": 4,
+      "isTest": false,
+      "package": "@fixture/core",
+      "exports": [],
+      "symbols": [],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": {
+        "kind": "library",
+        "name": "@fixture/core"
+      },
+      "layer": "support",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "packages/core/src/utils.ts",
+      "path": "packages/core/src/utils.ts",
+      "language": "typescript",
+      "size": 112,
+      "loc": 5,
+      "isTest": false,
+      "package": "@fixture/core",
+      "exports": [
+        {
+          "name": "helper",
+          "kind": "function",
+          "line": 2,
+          "doc": "helper is the one thing @fixture/core exports for real use."
+        }
+      ],
+      "symbols": [
+        {
+          "name": "helper",
+          "kind": "function",
+          "line": 2,
+          "exported": true
+        }
+      ],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "application",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "scripts/build.py",
+      "path": "scripts/build.py",
+      "language": "python",
+      "size": 443,
+      "loc": 17,
+      "isTest": false,
+      "package": "fixture-monorepo",
+      "exports": [
+        {
+          "name": "main",
+          "kind": "def",
+          "line": 11,
+          "doc": null
+        }
+      ],
+      "symbols": [
+        {
+          "name": "main",
+          "kind": "def",
+          "line": 11,
+          "exported": true
+        }
+      ],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "application",
+      "depth": null,
+      "cluster": null
+    },
+    {
+      "id": "src/lib.rs",
+      "path": "src/lib.rs",
+      "language": "rust",
+      "size": 158,
+      "loc": 7,
+      "isTest": false,
+      "package": "fixture-monorepo",
+      "exports": [
+        {
+          "name": "count",
+          "kind": "rust-pub",
+          "line": 4,
+          "doc": null
+        }
+      ],
+      "symbols": [
+        {
+          "name": "count",
+          "kind": "rust-pub",
+          "line": 4,
+          "exported": true
+        }
+      ],
+      "sinks": [],
+      "sinkSites": [],
+      "routes": [],
+      "entryPoint": null,
+      "layer": "application",
+      "depth": null,
+      "cluster": null
+    }
+  ],
+  "edges": [
+    {
+      "from": "packages/app/src/Widget.tsx",
+      "to": "packages/app/src/lazy.ts",
+      "kind": "import",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "packages/app/src/main.test.ts",
+      "to": "packages/core/src/index.ts",
+      "kind": "import",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "packages/core/src/index.ts",
+      "kind": "import",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "node:fs",
+      "kind": "external",
+      "confidence": "EXTRACTED",
+      "resolved": false
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "packages/app/src/lazy.ts",
+      "kind": "import",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "packages/app/src/legacy.js",
+      "kind": "import",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "./missing",
+      "kind": "external",
+      "confidence": "EXTRACTED",
+      "resolved": false
+    },
+    {
+      "from": "packages/core/src/index.ts",
+      "to": "packages/core/src/utils.ts",
+      "kind": "re-export",
+      "confidence": "EXTRACTED"
+    }
+  ],
+  "callEdges": [],
+  "containerEdges": [],
+  "entryPoints": [],
+  "sinks": [],
+  "flows": [],
+  "lanes": [
+    {
+      "id": "actor",
+      "name": "Actors",
+      "color": "#ff9bd4"
+    },
+    {
+      "id": "presentation",
+      "name": "Presentation",
+      "color": "#79c0ff"
+    },
+    {
+      "id": "application",
+      "name": "Application",
+      "color": "#7ee787"
+    },
+    {
+      "id": "domain",
+      "name": "Domain",
+      "color": "#d2a8ff"
+    },
+    {
+      "id": "infrastructure",
+      "name": "Infrastructure",
+      "color": "#f0883e"
+    },
+    {
+      "id": "sinks",
+      "name": "Sinks",
+      "color": "#ff7b72"
+    }
+  ],
+  "boxes": [],
+  "symbolIndex": [],
+  "symbolIndexTruncated": false,
+  "hotspots": {
+    "godNodes": null,
+    "mostDependedOn": null,
+    "orchestrators": null,
+    "largest": null
+  },
+  "clusters": [],
+  "surprisingConnections": [],
+  "rationaleIndex": [],
+  "tests": {
+    "total": 0,
+    "byContainer": {}
+  },
+  "planning": {
+    "hasProject": false,
+    "hasRoadmap": false,
+    "hasDomain": false,
+    "currentState": ""
+  },
+  "agentHints": {
+    "description": "Architecture map of this codebase. Read this BEFORE walking the file tree.",
+    "howToUse": [
+      "Schema v5 noise policy: `modules`/`edges`/`clusters`/`hotspots` only cover CODE files (ts/js/py/go/rust/java/kotlin/swift/ruby/php/csharp/c/cpp/shell) — docs/config/lockfiles never become graph nodes. `stats.languages` still counts EVERY scanned file (incl. markdown/json/yaml), and `assets.byLanguage`/`assets.total` rolls up the excluded ones so you can see they were seen, just not graphed. `stats.files` = code module count.",
+      "`groups` partitions packages into functional containers (Frontend, CLI & Runtime, Core, Domain Services, Workflows & Infra). Each group's `members` array lists `pkg:NAME` ids. Overridable via `.planning/codebase/GROUPS.json`.",
+      "`containers[*].groupId` links a package to its functional group; `containers[*].topFiles` is the 3-5 most relevant source files in the package (with a `reason` tag like `CLI entry` / `most depended-on` / `HTTP handler`).",
+      "`containerEdges[*].label` is the relationship verb between two packages (Calls / Uses / Sends Events / Renders / Updates / Reads State / Configures / Analyzes / Executes Actions / Persists). `containerEdges[*].symbolSamples` shows the top imported symbol names.",
+      "`entryPoints` lists every CLI command, HTTP route, and library main — these are where data flows in.",
+      "`sinks` lists modules that hit FS, network, DB, stdout, or run subprocesses — where data flows out.",
+      "`containers` describes packages/bounded contexts. `containerEdges` shows cross-package dataflow.",
+      "`callEdges` is symbol-level: each entry means caller-file uses callee-file's <symbol>.",
+      "`flows` is a list of named scenarios (CLI invocation, HTTP request, library call). Each flow has numbered `steps` going from `from` box → `to` box with a `description`. Boxes are packages (`pkg:NAME`), sinks (`sink:KIND`), or `actor:user`.",
+      "`lanes` + `boxes` give you swim-lane layout coordinates: each box belongs to a lane (presentation / application / domain / infrastructure / sinks / actors).",
+      "To curate flows or groups: write `.planning/codebase/FLOWS.json` or `.planning/codebase/GROUPS.json` — entries with matching `id` override auto-generated ones; new ids are appended.",
+      "`modules[*].layer` classifies each file as presentation / application / domain / infrastructure / support.",
+      "`modules[*].symbols` are symbol-level nodes ({name,kind,line,exported}); `modules[*].cluster` is the structural neighborhood id.",
+      "`hotspots` ranks god-nodes / most-depended-on / orchestrators / largest (non-test import degree).",
+      "`clusters` are STRUCTURAL (import-topology) neighborhoods — not semantic bounded contexts; confirm with a human before equating a cluster with a context. Non-JS/TS packages degenerate to one cluster per package.",
+      "`surprisingConnections` flags import edges that bridge distant clusters, cross functional groups, or violate layer direction — review these.",
+      "`rationaleIndex` collects inline NOTE/WHY/HACK/TODO/FIXME/SECURITY notes ({file,line,tag,text}).",
+      "`edges[*].confidence` / `callEdges[*].confidence` ∈ EXTRACTED (literal in source) / INFERRED (regex call heuristic) / AMBIGUOUS (member-call, imported symbol uncertain).",
+      "`stats.truncated` is true if the scan hit the file cap (rare, huge repos only). `symbolIndexTruncated` is true if `symbolIndex` was cut — when it is, the surviving entries are ranked by import in-degree so the most-depended-on modules' symbols are kept.",
+      "Query the map with `draht-tools graph-context|graph-impact|graph-query|graph-callers|graph-callees|graph-path|graph-hotspots|graph-clusters` instead of reading this whole file or grepping."
+    ]
+  }
+}

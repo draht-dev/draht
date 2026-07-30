@@ -54,3 +54,9 @@ collect.sh
 .planning/codebase/GRAPH_REPORT.md
 quest/.gradle
 quest/app/build/*
+
+# go/ knowledge-graph engine incremental extraction cache (content-hash
+# keyed, safe to delete; NOT covered by the .planning/codebase/* rules
+# above since it lives in its own .cache/ subdirectory). Go build artifacts
+# (go/bin/) are already covered by go/.gitignore.
+.planning/codebase/.cache/

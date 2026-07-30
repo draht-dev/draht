@@ -1,6 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.30] - 2026-07-30
+
+### Changed
+
+- use draht config dir in image fallback fixtures
+- fix(tui): truncate narrow editor scroll indicators (#7015)
+- write tui debug/crash logs into the configured agent dir (#6958)
+- fix(tui): keep paste registry in sync when deleting paste markers
+
+### Fixed
+
+- format image fallback changes
+- shorten image fallback paths and clamp width (#7262)
+- clear inverted cursor on exit to avoid dual cursor appearance (#6790)
+- handle CRLF and CR line endings (#6764)
+- post-sync review fixes for pi v0.80.10 incorporation
+- incorporate upstream tui changes
 
 ## [2026.7.12] - 2026-07-12
 

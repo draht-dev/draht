@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.30] - 2026-07-30
+
+### Changed
+
+- fix(coding-agent): show system prompt files in startup context (#7266)
+- fix(agent): restore streamFn extension compatibility
+- fix(agent): decouple agent streams from compat
+
+### Fixed
+
+- migrate draht packages to upstream model runtime API
 
 ## [2026.7.12] - 2026-07-12
 

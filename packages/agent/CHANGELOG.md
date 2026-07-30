@@ -1,6 +1,33 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.30] - 2026-07-30
+
+### Added
+
+- incorporate upstream agent package changes
+
+### Changed
+
+- docs(agent): harness design v2 (harness-v2.md)
+- fix(ai): update TypeBox nullable array validation (#7243)
+- rebrand pi references in newly synced docs
+- add refs to harness design
+- durable AgentHarness design (harness.md)
+- feat(ai): expose pending stop reason while streaming (#7151)
+- fix(agent,ai): don't cache write compaction or branch summaries (#6618)
+- feat(agent): align harness execution tools
+- fix(agent): restore streamFn extension compatibility
+- feat(agent): add AgentHarness execution tools
+- feat: sqlite session storage (#6594)
+- drop orphaned duplicate session storage/repo tree
+- fix(agent): decouple agent streams from compat
+- fix: complete extension usage accounting
+- feat(ai): add shared contentText utility (#6840)
+- fix(ai,agent,coding-agent): share UUIDv7 and use for Codex (#6834)
+
+### Fixed
+
+- post-sync review fixes for pi v0.80.10 incorporation
 
 ## [2026.7.12] - 2026-07-12
 

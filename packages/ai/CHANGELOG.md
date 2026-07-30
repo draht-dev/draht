@@ -1,6 +1,75 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.30] - 2026-07-30
+
+### Added
+
+- auth print (#7168)
+- add manual redirect URL fallback to OpenRouter OAuth login (#7114)
+- update generated image models
+- add new Gemini generated models
+- update generated image models
+- regenerate models
+- synchronize provider model catalogs
+- incorporate upstream ai package changes
+
+### Changed
+
+- regenerate model catalog after Qwen token-plan generator update
+- fix(ai): correct OpenCode Go provider display name from 'OpenCode Zen Go' to 'OpenCode Go'
+- fix(ai): update TypeBox nullable array validation (#7243)
+- regenerate model catalog after generator updates landed
+- feat(ai): add per-request fetch injection
+- feat(ai): expose pending stop reason while streaming (#7151)
+- feat(ai): add GitHub Copilot Claude Opus 5 support (#7158)
+- fix(ai): keep the underlying cause in ModelsError messages
+- feat(coding-agent): revalidate remote model catalogs with ETag
+- refresh generated model catalog data
+- feat(ai): support Claude Opus 5 on Bedrock (#7081)
+- fix(ai): route Radius OAuth through gateway
+- fix(ai): support Anthropic bearer token env (#6148)
+- feat(ai): support constrained sampling (#6341)
+- fix(agent,ai): don't cache write compaction or branch summaries (#6618)
+- fix(ai): make provider retries abortable (#6980)
+- feat(ai): add OpenRouter OAuth support (#6927)
+- feat(ai): derive generated model types from JSON
+- fix(ai): enable cache control for OpenRouter aliases
+- feat(ai): add Kimi Code subscription OAuth login (#6935)
+- fix(ai): validate generated model data before builds
+- feat(ai): add Qwen Token Plan as built-in provider (#6858)
+- fix: gpt 5.6 context window (#6853)
+- add low,high to k3 and remove k2p7 references
+- fix(pi-ai): normalize bin path to avoid consumer lockfile churn (#6812)
+- feat(ai): add shared contentText utility (#6840)
+- fix(ai): support responses API for OpenCode Go
+- fix(ai,agent,coding-agent): share UUIDv7 and use for Codex (#6834)
+- fix(ai): replace generic record checks
+- fix(ai): preserve GitHub Copilot long-context pricing tiers, closes #6668
+- feat(ai): separate generated model data (#6765)
+- fix(coding-agent): retry OpenAI Responses early EOF
+- fix(ai): show implied Kimi Coding subscription costs
+- feat(ai): make model generation explicit (#6742)
+
+### Fixed
+
+- preserve function arguments with empty custom payloads
+- use Qwen thinking controls for token plan reasoning models
+- preserve raw Mistral stop reasons
+- preserve raw OpenAI response statuses
+- preserve raw OpenAI completion stop reasons
+- preserve raw Bedrock stop reasons
+- preserve raw Anthropic stop reasons
+- preserve google providers raw stop reason
+- prefer configured Bedrock profile over ambient AWS keys (#7176)
+- declare supportsOpenAIGrammarTools in deepseek compat fixture
+- send max_tokens for Z.AI providers (#7174)
+- cache OpenRouter tool results
+- retry DNS transport failures (#6946)
+- drop openrouter declaration absent from generated catalog data
+- env section ignored (#6864)
+- normalize Kimi K2.7 to the canonical coding model
+- tool_call_id error when switching (#6854)
+- restore opencode-go OAuth provider wiring
 
 ## [2026.7.12] - 2026-07-12
 

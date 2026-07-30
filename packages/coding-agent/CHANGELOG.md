@@ -1,10 +1,91 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.30] - 2026-07-30
 
 ### Added
 
-- Added a configurable context-window cycling action for OpenAI API and Codex models with standard and extended context profiles.
+- auth print (#7168)
+- expose ctx.scopedModels to extensions (#7191)
+- emit bash_execution_update events (#6971)
+- get_available_thinking_levels rpc (#6865)
+- add configurable context window cycling
+- incorporate upstream coding-agent changes
+
+### Changed
+
+- skip the rlm e2e test when python3 is unavailable
+- resolve a POSIX shell instead of hardcoding /bin/bash
+- strip ANSI before asserting on edit-tool renders
+- rebrand stale upstream package import in extensions docs
+- fix(coding-agent): show system prompt files in startup context (#7266)
+- fix(ai): update TypeBox nullable array validation (#7243)
+- accept the codex catalog's own context window
+- rebrand pi references in newly synced docs
+- fix(coding-agent): show tool expansion status
+- feat(ai): expose pending stop reason while streaming (#7151)
+- feat(coding-agent): revalidate remote model catalogs with ETag
+- feat(coding-agent): expose output padding to custom renderers (#7045)
+- fix(coding-agent): expose unavailable scoped models (#7032)
+- fix(ai): support Anthropic bearer token env (#6148)
+- feat(ai): support constrained sampling (#6341)
+- fix(coding-agent): require protobufjs 7.6.5, closes #7005
+- fix(agent,ai): don't cache write compaction or branch summaries (#6618)
+- fix(ai): make provider retries abortable (#6980)
+- fix(coding-agent): isolate summarization requests
+- fix(coding-agent): let manual updates bypass skip check
+- feat(coding-agent): expose session metadata to bash tools (#6967)
+- fix(coding-agent): speed up external editor launch (#6903)
+- feat(ai): add OpenRouter OAuth support (#6927)
+- write tui debug/crash logs into the configured agent dir (#6958)
+- fix(ai): enable cache control for OpenRouter aliases
+- fix(agent): restore streamFn extension compatibility
+- fix(coding-agent): defer catalog refresh until after TUI startup
+- fix(coding-agent): show llama download progress
+- feat: sqlite session storage (#6594)
+- fix(agent): decouple agent streams from compat
+- fix(coding-agent): defer startup model catalog refresh
+- fix: complete extension usage accounting
+- feat(ai): add Qwen Token Plan as built-in provider (#6858)
+- feat(ai): add shared contentText utility (#6840)
+- fix(ai,agent,coding-agent): share UUIDv7 and use for Codex (#6834)
+- fix(coding-agent): avoid duplicate session reads
+- feat(coding-agent): add Hugging Face llama search
+- feat(coding-agent): add llama.cpp router integration
+- fix(coding-agent): support all-argument prompt defaults closes #6695
+- feat(coding-agent): accept native extension providers
+- fix(ai): show implied Kimi Coding subscription costs
+- docs(coding-agent): fix obsolete extension UI examples closes #6735
+
+### Fixed
+
+- read the draht extension manifest key, not just pi
+- rename pi-extension-* packages to draht-extension-*
+- stop loading AGENTS.md twice in nested git worktrees (#7221)
+- enable streaming usage for llama.cpp provider (#7258)
+- drop upstream's PoC teardown abort, keep the navigation guard
+- guard tree navigation during responses (#7022)
+- isolate autoload-disabled package test from real home directory (#7167)
+- support concurrent user bash cancellation (#7103)
+- prevent duplicate messages on startup session switch (#7110)
+- run coding-agent tests offline by default (#7031)
+- exclude directories from resource loader (#7106)
+- clean up failed git installs (#7210)
+- reset model selector selection to top row when filtering (#7211)
+- rpc bash no longer bypass user_bash (#7214)
+- preserve resource metadata after extension resource reloads (#7218)
+- include scoped models in TUI extension context (#7215)
+- cache llama.cpp model catalog (#7072)
+- reload model config in picker (#7036)
+- await wl-copy exit code and fall through to xclip on failure (#7009)
+- use llama context for output limit (#7034)
+- resolve bracketed scoped model ids as literals
+- display path of sibling dependent extensions (#6964)
+- flaky test (#6905)
+- prefer newer generated model catalogs
+- preserve compaction queue behavior (#6730)
+- do not highlight read errors (#6731)
+- restore BeforeProviderHeadersEvent public export
+- post-sync review fixes for pi v0.80.10 incorporation
 
 ## [2026.7.13] - 2026-07-12
 

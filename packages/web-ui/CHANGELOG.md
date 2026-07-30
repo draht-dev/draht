@@ -1,6 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [2026.7.30] - 2026-07-30
+
+### Changed
+
+- fix(ai): update TypeBox nullable array validation (#7243)
+
+### Fixed
+
+- restrict the published tarball to dist
+- declare the example's @draht/agent-core dependency
+- use workspace:* for example sibling deps
+- adopt agent-core default stream function API
 
 ## [2026.7.12] - 2026-07-12
 

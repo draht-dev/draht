@@ -1,6 +1,6 @@
 {
 	"name": "@draht/geist-console",
-	"version": "2026.7.13-1",
+	"version": "2026.7.30",
 	"private": true,
 	"description": "geist's React /ui console — ships on geist-glass design tokens from its first pixel (spec §13)",
 	"type": "module",

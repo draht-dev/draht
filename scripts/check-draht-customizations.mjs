@@ -738,19 +738,21 @@ check(
 console.log("\nPackage names (@draht/* not @mariozechner/pi*)");
 
 const allPkgJsons = findPackageJsons(root);
-const upstreamPrefixes = ["@mariozechner/pi-", "@mariozechner/pi"];
+// Scoped upstream names, plus the unscoped "pi-*" shape upstream uses for its
+// example extension packages (pi-extension-sandbox, pi-extension-with-deps, ...).
+// Private packages are NOT exempt here: they are never published, but their
+// names surface in bun.lock, `bun pm ls`, workspace tooling and in the examples
+// users copy — and skipping them is exactly why six pi-extension-* packages sat
+// in packages/coding-agent/examples/extensions for the whole life of the fork.
+const upstreamPrefixes = ["@mariozechner/pi-", "@mariozechner/pi", "@earendil-works/pi", "pi-"];
 
 for (const pkgPath of allPkgJsons) {
 	const pkg = readJson(pkgPath);
-	// Skip root private package (it's draht-monorepo, not @draht/*)
-	if (pkg.private && pkgPath === "package.json") {
-		check(
-			pkg.name !== "pi-monorepo",
-			`${pkgPath}: name is "${pkg.name}" (not pi-monorepo)`,
-		);
+	// The monorepo root is draht-monorepo, not @draht/*
+	if (pkgPath === "package.json") {
+		check(pkg.name !== "pi-monorepo", `${pkgPath}: name is "${pkg.name}" (not pi-monorepo)`);
 		continue;
 	}
-	if (pkg.private) continue;
 	for (const prefix of upstreamPrefixes) {
 		check(
 			!pkg.name?.startsWith(prefix),

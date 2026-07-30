@@ -1,5 +1,5 @@
 {
-  "name": "pi-extension-custom-provider-gitlab-duo",
+  "name": "draht-extension-custom-provider-gitlab-duo",
   "private": true,
   "version": "0.80.6",
   "type": "module",

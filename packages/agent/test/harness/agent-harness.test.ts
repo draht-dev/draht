@@ -89,6 +89,25 @@ function createAssistantMessage(text: string): AgentMessage {
 	};
 }
 
+class BlockingSessionStorage extends InMemorySessionStorage {
+	readonly allWritesStarted = deferred();
+	readonly releaseWrites = deferred();
+	private readonly expectedWrites: number;
+	private writesStarted = 0;
+
+	constructor(expectedWrites: number) {
+		super();
+		this.expectedWrites = expectedWrites;
+	}
+
+	override async appendEntry(entry: Parameters<InMemorySessionStorage["appendEntry"]>[0]): Promise<void> {
+		this.writesStarted++;
+		if (this.writesStarted === this.expectedWrites) this.allWritesStarted.resolve();
+		await this.releaseWrites.promise;
+		await super.appendEntry(entry);
+	}
+}
+
 describe("AgentHarness", () => {
 	it("constructs directly and exposes queue modes", () => {
 		const session = new Session(new InMemorySessionStorage());
@@ -263,6 +282,33 @@ describe("AgentHarness", () => {
 		await expect(navigation).resolves.toEqual({ cancelled: true });
 		await shutdown;
 		expect(await session.getLeafId()).toBe(originalLeafId);
+	});
+
+	it("awaits concurrent idle session mutations before shutdown resolves", async () => {
+		const storage = new BlockingSessionStorage(3);
+		const harness = new AgentHarness({
+			models,
+			session: new Session(storage),
+			model: getModel("anthropic", "claude-sonnet-4-5"),
+		});
+		const nextModel = getModel("anthropic", "claude-haiku-4-5");
+		const mutations = [
+			harness.appendMessage(createUserMessage("concurrent")),
+			harness.setModel(nextModel),
+			harness.setThinkingLevel("high"),
+		];
+		await storage.allWritesStarted.promise;
+
+		const shutdown = harness.shutdown();
+		const firstSettlement = await Promise.race([
+			shutdown.then(() => "shutdown" as const),
+			new Promise<"writes-pending">((resolve) => setImmediate(() => resolve("writes-pending"))),
+		]);
+
+		expect(firstSettlement).toBe("writes-pending");
+		storage.releaseWrites.resolve();
+		await Promise.all([...mutations, shutdown]);
+		expect(await storage.getEntries()).toHaveLength(3);
 	});
 
 	it("shuts down an idle harness without modifying its durable session", async () => {

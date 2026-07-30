@@ -179,6 +179,7 @@ export class AgentHarness<
 	private phase: AgentHarnessPhase = "idle";
 	private activeAbortController?: AbortController;
 	private activeOperationPromise?: Promise<void>;
+	private readonly activeMutationPromises = new Set<Promise<void>>();
 	private shutdownPromise?: Promise<void>;
 	private isShutdown = false;
 	private pendingSessionWrites: PendingSessionWrite[] = [];
@@ -347,6 +348,30 @@ export class AgentHarness<
 				finish();
 			},
 		};
+	}
+
+	private trackMutation(operation: () => Promise<void>): Promise<void> {
+		const promise = operation();
+		this.activeMutationPromises.add(promise);
+		void promise.then(
+			() => this.activeMutationPromises.delete(promise),
+			() => this.activeMutationPromises.delete(promise),
+		);
+		return promise;
+	}
+
+	private async waitForMutations(): Promise<void> {
+		while (this.activeMutationPromises.size > 0) {
+			const mutations = [...this.activeMutationPromises];
+			await Promise.all(
+				mutations.map((mutation) =>
+					mutation.then(
+						() => undefined,
+						() => undefined,
+					),
+				),
+			);
+		}
 	}
 
 	private async resolveToolContext(): Promise<TContext> {
@@ -738,15 +763,17 @@ export class AgentHarness<
 
 	async appendMessage(message: AgentMessage): Promise<void> {
 		this.assertNotShutDown();
-		try {
-			if (this.phase === "idle") {
-				await this.session.appendMessage(message);
-			} else {
-				this.pendingSessionWrites.push({ type: "message", message });
+		return this.trackMutation(async () => {
+			try {
+				if (this.phase === "idle") {
+					await this.session.appendMessage(message);
+				} else {
+					this.pendingSessionWrites.push({ type: "message", message });
+				}
+			} catch (error) {
+				throw normalizeHarnessError(error, "session");
 			}
-		} catch (error) {
-			throw normalizeHarnessError(error, "session");
-		}
+		});
 	}
 
 	async compact(customInstructions?: string): Promise<CompactResult> {
@@ -914,18 +941,20 @@ export class AgentHarness<
 
 	async setModel(model: Model<any>): Promise<void> {
 		this.assertNotShutDown();
-		try {
-			const previousModel = this.model;
-			if (this.phase === "idle") {
-				await this.session.appendModelChange(model.provider, model.id);
-			} else {
-				this.pendingSessionWrites.push({ type: "model_change", provider: model.provider, modelId: model.id });
+		return this.trackMutation(async () => {
+			try {
+				const previousModel = this.model;
+				if (this.phase === "idle") {
+					await this.session.appendModelChange(model.provider, model.id);
+				} else {
+					this.pendingSessionWrites.push({ type: "model_change", provider: model.provider, modelId: model.id });
+				}
+				this.model = model;
+				await this.emitOwn({ type: "model_update", model, previousModel, source: "set" });
+			} catch (error) {
+				throw normalizeHarnessError(error, "session");
 			}
-			this.model = model;
-			await this.emitOwn({ type: "model_update", model, previousModel, source: "set" });
-		} catch (error) {
-			throw normalizeHarnessError(error, "session");
-		}
+		});
 	}
 
 	getThinkingLevel(): ThinkingLevel {
@@ -934,18 +963,20 @@ export class AgentHarness<
 
 	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
 		this.assertNotShutDown();
-		try {
-			const previousLevel = this.thinkingLevel;
-			if (this.phase === "idle") {
-				await this.session.appendThinkingLevelChange(level);
-			} else {
-				this.pendingSessionWrites.push({ type: "thinking_level_change", thinkingLevel: level });
+		return this.trackMutation(async () => {
+			try {
+				const previousLevel = this.thinkingLevel;
+				if (this.phase === "idle") {
+					await this.session.appendThinkingLevelChange(level);
+				} else {
+					this.pendingSessionWrites.push({ type: "thinking_level_change", thinkingLevel: level });
+				}
+				this.thinkingLevel = level;
+				await this.emitOwn({ type: "thinking_level_update", level, previousLevel });
+			} catch (error) {
+				throw normalizeHarnessError(error, "session");
 			}
-			this.thinkingLevel = level;
-			await this.emitOwn({ type: "thinking_level_update", level, previousLevel });
-		} catch (error) {
-			throw normalizeHarnessError(error, "session");
-		}
+		});
 	}
 
 	getTools(): TTool[] {
@@ -954,6 +985,10 @@ export class AgentHarness<
 
 	async setTools(tools: TTool[], activeToolNames?: string[]): Promise<void> {
 		this.assertNotShutDown();
+		return this.trackMutation(() => this.applyTools(tools, activeToolNames));
+	}
+
+	private async applyTools(tools: TTool[], activeToolNames?: string[]): Promise<void> {
 		try {
 			this.validateUniqueNames(
 				tools.map((tool) => tool.name),
@@ -990,6 +1025,10 @@ export class AgentHarness<
 
 	async setActiveTools(toolNames: string[]): Promise<void> {
 		this.assertNotShutDown();
+		return this.trackMutation(() => this.applyActiveTools(toolNames));
+	}
+
+	private async applyActiveTools(toolNames: string[]): Promise<void> {
 		try {
 			this.validateToolNames(toolNames);
 			const previousToolNames = [...this.tools.keys()];
@@ -1069,7 +1108,10 @@ export class AgentHarness<
 		this.followUpQueue = [];
 		this.nextTurnQueue = [];
 		this.activeAbortController?.abort();
-		this.shutdownPromise = this.waitForIdle();
+		this.shutdownPromise = (async () => {
+			await this.waitForIdle();
+			await this.waitForMutations();
+		})();
 		return this.shutdownPromise;
 	}
 

@@ -5,6 +5,7 @@
 	"bin": {
 		"draht-gateway": "src/cli.ts"
 	},
+	"files": ["src", "!src/__tests__", "README.md"],
 	"scripts": {
 		"start": "bun src/cli.ts",
 		"test": "bun test",

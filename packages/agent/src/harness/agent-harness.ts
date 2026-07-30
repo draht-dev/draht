@@ -1114,7 +1114,10 @@ export class AgentHarness<
 
 	/** Waits for work active when shutdown was requested to settle. */
 	waitForShutdown(): Promise<void> {
-		return this.shutdownPromise ?? Promise.resolve();
+		if (!this.shutdownPromise) {
+			return Promise.reject(new AgentHarnessError("invalid_state", "Shutdown has not been requested"));
+		}
+		return this.shutdownPromise;
 	}
 
 	async abort(): Promise<AbortResult> {

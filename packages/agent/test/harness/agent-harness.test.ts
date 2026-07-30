@@ -131,6 +131,19 @@ describe("AgentHarness", () => {
 		expect(harness.getFollowUpMode()).toBe("one-at-a-time");
 	});
 
+	it("rejects waiting before shutdown is requested", async () => {
+		const harness = new AgentHarness({
+			models,
+			session: new Session(new InMemorySessionStorage()),
+			model: getModel("anthropic", "claude-sonnet-4-5"),
+		});
+
+		await expect(harness.waitForShutdown()).rejects.toMatchObject({
+			code: "invalid_state",
+			message: "Shutdown has not been requested",
+		});
+	});
+
 	it("shuts down active work permanently and idempotently", async () => {
 		const registration = newFaux();
 		const entered = deferred();

@@ -39,6 +39,15 @@ function couldBeEmoji(segment: string): boolean {
 // Regexes for character classification (same as string-width library, without ES2024 /v flags)
 const zeroWidthRegex = /^(?:\p{Default_Ignorable_Code_Point}|\p{Control}|\p{Mark}|\p{Surrogate})+$/u;
 const leadingNonPrintingRegex = /^[\p{Default_Ignorable_Code_Point}\p{Control}\p{Format}\p{Mark}\p{Surrogate}]+/u;
+const nonPrintingCharRegex = /^(?:\p{Default_Ignorable_Code_Point}|\p{Control}|\p{Format}|\p{Mark}|\p{Surrogate})$/u;
+const markCharRegex = /^\p{Mark}$/u;
+// Marks that terminals allocate cells for when attached to a base character. This includes
+// Unicode spacing marks (excluding \u1734, \u302E, \u302F via lookahead, since /u regexes can't
+// express set subtraction inside a character class the way /v's `--` operator does) and
+// non-spacing exceptions in legacy wcwidth tables.
+const terminalSpacingMarkRegex =
+	/^(?:(?:(?!\u1734|\u302E|\u302F)\p{Spacing_Mark})|[\u065F\u0F7F\u102B\u102C\u1031\u1033-\u1035\u1038\u103A-\u103E])+$/u;
+
 const extendedPictographicRegex = /\p{Extended_Pictographic}/u;
 const emojiJoinerRegex = /^(?:\p{Emoji_Modifier}|\p{Mark}|\u200D|\uFE0F|\u20E3)$/u;
 
@@ -202,6 +211,11 @@ function graphemeWidth(segment: string): number {
 		return 3;
 	}
 
+	// Some marks occupy cells even without a base character.
+	if (terminalSpacingMarkRegex.test(segment)) {
+		return [...segment].length;
+	}
+
 	// Zero-width clusters
 	if (zeroWidthRegex.test(segment)) {
 		return 0;
@@ -228,15 +242,27 @@ function graphemeWidth(segment: string): number {
 
 	let width = eastAsianWidth(cp);
 
-	// Trailing halfwidth/fullwidth forms and AM vowels that segment with a base.
-	if (segment.length > 1) {
-		for (const char of segment.slice(1)) {
+	// Intl.Segmenter can group multiple terminal-spacing code points into one
+	// grapheme. Count trailing visible code points that terminals may allocate
+	// cells for: Indic consonants after marks, halfwidth/fullwidth forms, and
+	// Thai/Lao AM vowels.
+	let followsMark = false;
+	const chars = [...base];
+	for (const char of chars.slice(1)) {
+		if (terminalSpacingMarkRegex.test(char)) {
+			width += 1;
+			followsMark = false;
+		} else if (markCharRegex.test(char)) {
+			followsMark = true;
+		} else if (!nonPrintingCharRegex.test(char)) {
 			const c = char.codePointAt(0)!;
-			if (c >= 0xff00 && c <= 0xffef) {
+			if (followsMark || (c >= 0xff00 && c <= 0xffef)) {
+				// halfwidth + fullwidth forms
 				width += eastAsianWidth(c);
 			} else if (c === 0x0e33 || c === 0x0eb3) {
 				width += 1;
 			}
+			followsMark = false;
 		}
 	}
 

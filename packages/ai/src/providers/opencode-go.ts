@@ -9,7 +9,7 @@ import { OPENCODE_GO_MODELS } from "./opencode-go.models.ts";
 export function opencodeGoProvider(): Provider<"anthropic-messages" | "openai-completions" | "openai-responses"> {
 	return createProvider<"anthropic-messages" | "openai-completions" | "openai-responses">({
 		id: "opencode-go",
-		name: "OpenCode Zen Go",
+		name: "OpenCode Go",
 		auth: {
 			apiKey: envApiKeyAuth("OpenCode API key", ["OPENCODE_API_KEY"]),
 			// draht-only OAuth flow. Upstream deleted the runtime registry that used to make

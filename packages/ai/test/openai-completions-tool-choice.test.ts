@@ -653,6 +653,33 @@ describe("openai-completions tool_choice", () => {
 		expect(response.errorMessage).toBe("Stream ended without finish_reason");
 	});
 
+	it("accepts streams without finish_reason when compat disables it", async () => {
+		mockState.chunks = [
+			{
+				id: "chatcmpl-no-finish-reason",
+				choices: [{ delta: { content: "complete answer" }, finish_reason: null }],
+			},
+		];
+
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const model = {
+			...baseModel,
+			api: "openai-completions",
+			compat: { supportsFinishReason: false },
+		} as const;
+		const response = await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Reply with a complete answer", timestamp: Date.now() }],
+			},
+			{ apiKey: "test" },
+		).result();
+
+		expect(response.stopReason).toBe("stop");
+		expect(response.errorMessage).toBeUndefined();
+		expect(response.content).toEqual([{ type: "text", text: "complete answer" }]);
+	});
+
 	it("ignores empty custom objects on function tool call deltas", async () => {
 		mockState.chunks = [
 			{
@@ -1296,6 +1323,7 @@ describe("openai-completions tool_choice", () => {
 				supportsDeveloperRole: false,
 				supportsReasoningEffort: true,
 				supportsUsageInStreaming: true,
+				supportsFinishReason: true,
 				maxTokensField: "max_completion_tokens",
 				requiresToolResultName: false,
 				requiresAssistantAfterToolResult: false,

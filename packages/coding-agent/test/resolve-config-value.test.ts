@@ -105,8 +105,13 @@ describe("resolveConfigValue", () => {
 	test("uses stdin when the configured Windows shell requires it", () => {
 		if (process.platform === "win32") return;
 		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		// What this test actually exercises is commandTransport: "stdin" — the shell
+		// binary is incidental, it only has to be a POSIX shell supporting -s. Hardcoding
+		// /bin/bash makes the test fail on distributions that do not ship one (NixOS
+		// provides /bin/sh only), so resolve the first candidate that exists.
+		const posixShell = ["/bin/bash", "/usr/bin/bash", "/bin/sh"].find((path) => existsSync(path)) ?? "/bin/sh";
 		vi.spyOn(shellModule, "getShellConfig").mockReturnValue({
-			shell: "/bin/bash",
+			shell: posixShell,
 			args: ["-s"],
 			commandTransport: "stdin",
 		});

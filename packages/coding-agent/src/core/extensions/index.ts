@@ -98,6 +98,8 @@ export type {
 	LoadExtensionsResult,
 	LsToolCallEvent,
 	LsToolResultEvent,
+	MarkdownTransformContext,
+	MarkdownTransformer,
 	// Events - Message
 	MessageEndEvent,
 	MessageRenderer,

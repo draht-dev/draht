@@ -34,6 +34,7 @@ import { spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
 import { isLocalPath, markPathIgnoredByCloudSync, resolvePath } from "../utils/paths.ts";
 import { isStdoutTakenOver } from "./output-guard.ts";
+import { type PiManifest, readPiManifest } from "./pi-manifest.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
 
 const NETWORK_TIMEOUT_MS = 10000;
@@ -160,13 +161,6 @@ interface NpmUpdateTarget extends ConfiguredUpdateSource {
 
 interface GitUpdateTarget extends ConfiguredUpdateSource {
 	parsed: GitSource;
-}
-
-interface PiManifest {
-	extensions?: string[];
-	skills?: string[];
-	prompts?: string[];
-	themes?: string[];
 }
 
 interface ResourceAccumulator {
@@ -542,29 +536,10 @@ function collectAutoThemeEntries(dir: string): string[] {
 	return entries;
 }
 
-/**
- * A package declares its extensions/skills/prompts/themes under a top-level
- * manifest key. draht reads `draht` first and falls back to upstream's `pi`,
- * mirroring CONFIG_DIR_NAME / LEGACY_CONFIG_DIR_NAME: packages authored for
- * upstream (or copied from its docs) keep working unchanged.
- */
-function readManifest(pkg: { draht?: PiManifest; pi?: PiManifest }): PiManifest | null {
-	return pkg.draht ?? pkg.pi ?? null;
-}
-
-function readPiManifestFile(packageJsonPath: string): PiManifest | null {
-	try {
-		const content = readFileSync(packageJsonPath, "utf-8");
-		return readManifest(JSON.parse(content) as { draht?: PiManifest; pi?: PiManifest });
-	} catch {
-		return null;
-	}
-}
-
 function resolveExtensionEntries(dir: string): string[] | null {
 	const packageJsonPath = join(dir, "package.json");
 	if (existsSync(packageJsonPath)) {
-		const manifest = readPiManifestFile(packageJsonPath);
+		const manifest = readPiManifest(packageJsonPath);
 		if (manifest?.extensions?.length) {
 			const entries: string[] = [];
 			for (const extPath of manifest.extensions) {
@@ -2128,7 +2103,7 @@ export class DefaultPackageManager implements PackageManager {
 			return true;
 		}
 
-		const manifest = this.readPiManifest(packageRoot);
+		const manifest = readPiManifest(join(packageRoot, "package.json"));
 		if (manifest) {
 			for (const resourceType of RESOURCE_TYPES) {
 				const entries = manifest[resourceType as keyof PiManifest];
@@ -2164,7 +2139,7 @@ export class DefaultPackageManager implements PackageManager {
 		target: Map<string, { metadata: PathMetadata; enabled: boolean }>,
 		metadata: PathMetadata,
 	): void {
-		const manifest = this.readPiManifest(packageRoot);
+		const manifest = readPiManifest(join(packageRoot, "package.json"));
 		const entries = manifest?.[resourceType as keyof PiManifest];
 		if (entries) {
 			this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
@@ -2233,7 +2208,7 @@ export class DefaultPackageManager implements PackageManager {
 		packageRoot: string,
 		resourceType: ResourceType,
 	): { allFiles: string[]; enabledByManifest: Set<string> } {
-		const manifest = this.readPiManifest(packageRoot);
+		const manifest = readPiManifest(join(packageRoot, "package.json"));
 		const entries = manifest?.[resourceType as keyof PiManifest];
 		if (entries && entries.length > 0) {
 			const allFiles = this.collectFilesFromManifestEntries(entries, packageRoot, resourceType);
@@ -2249,20 +2224,6 @@ export class DefaultPackageManager implements PackageManager {
 		}
 		const allFiles = collectResourceFiles(conventionDir, resourceType);
 		return { allFiles, enabledByManifest: new Set(allFiles) };
-	}
-
-	private readPiManifest(packageRoot: string): PiManifest | null {
-		const packageJsonPath = join(packageRoot, "package.json");
-		if (!existsSync(packageJsonPath)) {
-			return null;
-		}
-
-		try {
-			const content = readFileSync(packageJsonPath, "utf-8");
-			return readManifest(JSON.parse(content) as { draht?: PiManifest; pi?: PiManifest });
-		} catch {
-			return null;
-		}
 	}
 
 	private addManifestEntries(

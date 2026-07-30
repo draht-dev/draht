@@ -32,6 +32,7 @@ import type { CheckpointRestoreOptions } from "../checkpoints/checkpoint-manager
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
+import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
 import { time } from "../timings.ts";
 import type {
@@ -562,26 +563,6 @@ export async function loadExtensionsCached(
 	runtime?: ExtensionRuntime,
 ): Promise<LoadExtensionsResult> {
 	return loadExtensionsInternal(paths, cwd, eventBus, runtime, true);
-}
-
-interface PiManifest {
-	extensions?: string[];
-	themes?: string[];
-	skills?: string[];
-	prompts?: string[];
-}
-
-function readPiManifest(packageJsonPath: string): PiManifest | null {
-	try {
-		const content = fs.readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content);
-		if (pkg.draht && typeof pkg.draht === "object") {
-			return pkg.draht as PiManifest;
-		}
-		return null;
-	} catch {
-		return null;
-	}
 }
 
 function isExtensionFile(name: string): boolean {

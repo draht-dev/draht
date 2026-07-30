@@ -503,8 +503,9 @@
       "name": "draht-web-ui-example",
       "version": "1.44.0",
       "dependencies": {
-        "@draht/ai": "file:../../ai",
-        "@draht/web-ui": "file:../",
+        "@draht/agent-core": "workspace:*",
+        "@draht/ai": "workspace:*",
+        "@draht/web-ui": "workspace:*",
         "@mariozechner/mini-lit": "^0.2.0",
         "@tailwindcss/vite": "^4.1.17",
         "lit": "^3.3.1",

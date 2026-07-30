@@ -12,6 +12,7 @@
 // (finding the needle, calling FINAL) still runs for real through
 // `@draht/rlm`'s sandboxed driver -- only the LLM call is faked.
 
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -185,6 +186,15 @@ describe("parseRlmArgs", () => {
 	});
 });
 
+/**
+ * The end-to-end test runs @draht/rlm's real sandboxed driver, which execs a
+ * python3 REPL under `unshare` and is fail-closed: without python3 it aborts with
+ * "OS-level sandbox startup self-test did not complete". python3 is a genuine
+ * runtime prerequisite of the RLM feature, not something the test can stub, so
+ * skip explicitly rather than fail opaquely on machines that lack it.
+ */
+const HAS_PYTHON3 = spawnSync("python3", ["--version"], { stdio: "ignore" }).status === 0;
+
 describe("handleRlmCommand", () => {
 	let tmpDir: string | undefined;
 	let originalCwd: string;
@@ -233,31 +243,34 @@ describe("handleRlmCommand", () => {
 		expect(printed).toMatch(/--input/);
 	});
 
-	test("2. end-to-end on a 500KB+ fixture with a fake router finds the needle and exits 0", async () => {
-		tmpDir = mkdtempSync(join(tmpdir(), "rlm-cli-test-"));
-		// Sandbox any `.draht/cost-log.jsonl` writes (createRouterBackedSession's
-		// default costLogPath is resolved against process.cwd()) into the temp
-		// dir instead of the real repo working directory.
-		process.chdir(tmpDir);
+	test.skipIf(!HAS_PYTHON3)(
+		"2. end-to-end on a 500KB+ fixture with a fake router finds the needle and exits 0",
+		async () => {
+			tmpDir = mkdtempSync(join(tmpdir(), "rlm-cli-test-"));
+			// Sandbox any `.draht/cost-log.jsonl` writes (createRouterBackedSession's
+			// default costLogPath is resolved against process.cwd()) into the temp
+			// dir instead of the real repo working directory.
+			process.chdir(tmpDir);
 
-		const { text, needle } = generateLargeFixture();
-		expect(text.length).toBeGreaterThanOrEqual(500_000);
-		const filePath = join(tmpDir, "large-fixture.txt");
-		writeFileSync(filePath, text, "utf-8");
+			const { text, needle } = generateLargeFixture();
+			expect(text.length).toBeGreaterThanOrEqual(500_000);
+			const filePath = join(tmpDir, "large-fixture.txt");
+			writeFileSync(filePath, text, "utf-8");
 
-		const fakeRouter = new FakeModelRouter() as unknown as ModelRouter;
+			const fakeRouter = new FakeModelRouter() as unknown as ModelRouter;
 
-		const handled = await handleRlmCommand(
-			["rlm", "--input", filePath, "--query", "Find the planted needle sentence."],
-			{ router: fakeRouter },
-		);
+			const handled = await handleRlmCommand(
+				["rlm", "--input", filePath, "--query", "Find the planted needle sentence."],
+				{ router: fakeRouter },
+			);
 
-		expect(handled).toBe(true);
-		expect(errorSpy).not.toHaveBeenCalled();
-		expect(process.exitCode).toBe(0);
-		const printed = logSpy.mock.calls.flat().join("\n");
-		expect(printed).toContain(needle);
-	});
+			expect(handled).toBe(true);
+			expect(errorSpy).not.toHaveBeenCalled();
+			expect(process.exitCode).toBe(0);
+			const printed = logSpy.mock.calls.flat().join("\n");
+			expect(printed).toContain(needle);
+		},
+	);
 });
 
 // `draht rlm replay <trajectory-id>` (Phase 30) -- see

@@ -178,8 +178,7 @@ export class AgentHarness<
 	readonly models: Models;
 	private phase: AgentHarnessPhase = "idle";
 	private activeAbortController?: AbortController;
-	private activeOperationPromise?: Promise<void>;
-	private readonly activeMutationPromises = new Set<Promise<void>>();
+	private readonly activeTasks = new Set<Promise<void>>();
 	private shutdownPromise?: Promise<void>;
 	private isShutdown = false;
 	private pendingSessionWrites: PendingSessionWrite[] = [];
@@ -337,40 +336,35 @@ export class AgentHarness<
 		const abortController = new AbortController();
 		let finish = () => {};
 		this.activeAbortController = abortController;
-		this.activeOperationPromise = new Promise<void>((resolve) => {
-			finish = resolve;
-		});
+		this.track(
+			() =>
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+		);
 		return {
 			signal: abortController.signal,
 			finish: () => {
 				this.activeAbortController = undefined;
-				this.activeOperationPromise = undefined;
 				finish();
 			},
 		};
 	}
 
-	private trackMutation(operation: () => Promise<void>): Promise<void> {
-		const promise = operation();
-		this.activeMutationPromises.add(promise);
-		void promise.then(
-			() => this.activeMutationPromises.delete(promise),
-			() => this.activeMutationPromises.delete(promise),
+	private track<T>(operation: () => Promise<T>): Promise<T> {
+		const task = operation();
+		const settled = task.then(
+			() => undefined,
+			() => undefined,
 		);
-		return promise;
+		this.activeTasks.add(settled);
+		void settled.then(() => this.activeTasks.delete(settled));
+		return task;
 	}
 
-	private async waitForMutations(): Promise<void> {
-		while (this.activeMutationPromises.size > 0) {
-			const mutations = [...this.activeMutationPromises];
-			await Promise.all(
-				mutations.map((mutation) =>
-					mutation.then(
-						() => undefined,
-						() => undefined,
-					),
-				),
-			);
+	private async waitForTasks(): Promise<void> {
+		while (this.activeTasks.size > 0) {
+			await Promise.all(this.activeTasks);
 		}
 	}
 
@@ -763,7 +757,7 @@ export class AgentHarness<
 
 	async appendMessage(message: AgentMessage): Promise<void> {
 		this.assertNotShutDown();
-		return this.trackMutation(async () => {
+		return this.track(async () => {
 			try {
 				if (this.phase === "idle") {
 					await this.session.appendMessage(message);
@@ -941,7 +935,7 @@ export class AgentHarness<
 
 	async setModel(model: Model<any>): Promise<void> {
 		this.assertNotShutDown();
-		return this.trackMutation(async () => {
+		return this.track(async () => {
 			try {
 				const previousModel = this.model;
 				if (this.phase === "idle") {
@@ -963,7 +957,7 @@ export class AgentHarness<
 
 	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
 		this.assertNotShutDown();
-		return this.trackMutation(async () => {
+		return this.track(async () => {
 			try {
 				const previousLevel = this.thinkingLevel;
 				if (this.phase === "idle") {
@@ -985,7 +979,7 @@ export class AgentHarness<
 
 	async setTools(tools: TTool[], activeToolNames?: string[]): Promise<void> {
 		this.assertNotShutDown();
-		return this.trackMutation(() => this.applyTools(tools, activeToolNames));
+		return this.track(() => this.applyTools(tools, activeToolNames));
 	}
 
 	private async applyTools(tools: TTool[], activeToolNames?: string[]): Promise<void> {
@@ -1025,7 +1019,7 @@ export class AgentHarness<
 
 	async setActiveTools(toolNames: string[]): Promise<void> {
 		this.assertNotShutDown();
-		return this.trackMutation(() => this.applyActiveTools(toolNames));
+		return this.track(() => this.applyActiveTools(toolNames));
 	}
 
 	private async applyActiveTools(toolNames: string[]): Promise<void> {
@@ -1108,10 +1102,7 @@ export class AgentHarness<
 		this.followUpQueue = [];
 		this.nextTurnQueue = [];
 		this.activeAbortController?.abort();
-		this.shutdownPromise = (async () => {
-			await this.waitForIdle();
-			await this.waitForMutations();
-		})();
+		this.shutdownPromise = this.waitForIdle();
 		return this.shutdownPromise;
 	}
 
@@ -1146,7 +1137,7 @@ export class AgentHarness<
 	}
 
 	async waitForIdle(): Promise<void> {
-		await this.activeOperationPromise;
+		await this.waitForTasks();
 	}
 
 	subscribe(

@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@mariozechner/mini-lit": "^0.2.0",
-    "@draht/ai": "file:../../ai",
-    "@draht/web-ui": "file:../",
+    "@draht/ai": "workspace:*",
+    "@draht/web-ui": "workspace:*",
     "@tailwindcss/vite": "^4.1.17",
     "lit": "^3.3.1",
     "lucide": "^0.544.0"

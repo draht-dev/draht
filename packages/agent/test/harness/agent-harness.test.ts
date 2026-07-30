@@ -284,6 +284,26 @@ describe("AgentHarness", () => {
 		expect(await session.getLeafId()).toBe(originalLeafId);
 	});
 
+	it("does not treat concurrent mutations as active operations", async () => {
+		const storage = new BlockingSessionStorage(1);
+		const harness = new AgentHarness({
+			models,
+			session: new Session(storage),
+			model: getModel("anthropic", "claude-sonnet-4-5"),
+		});
+		const mutation = harness.appendMessage(createUserMessage("concurrent"));
+		await storage.allWritesStarted.promise;
+
+		const firstSettlement = await Promise.race([
+			harness.waitForIdle().then(() => "idle" as const),
+			new Promise<"mutation-pending">((resolve) => setImmediate(() => resolve("mutation-pending"))),
+		]);
+
+		expect(firstSettlement).toBe("idle");
+		storage.releaseWrites.resolve();
+		await mutation;
+	});
+
 	it("awaits concurrent idle session mutations before shutdown resolves", async () => {
 		const storage = new BlockingSessionStorage(3);
 		const harness = new AgentHarness({

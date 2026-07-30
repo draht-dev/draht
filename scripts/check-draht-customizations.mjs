@@ -11,10 +11,12 @@
  *   2. coding-agent package.json: drahtConfig, bin entries, files, workspace deps,
  *      build scripts, publishConfig, typescript version
  *   3. Every workspace package (discovered from the root "workspaces" globs)
- *      uses workspace:* for its @draht/* deps, declares no file:/link:
- *      specifier at all, and bun.lock carries no file:packages resolution
- *      entries — a file: sibling dep duplicates the package physically,
- *      breaks tsc, and makes the lockfile unreproducible
+ *      uses workspace:* for its @draht/* deps and declares no file:/link:
+ *      specifier in any dependency field or in overrides/resolutions; and
+ *      bun.lock carries no file:/link: text at all *and* its workspace
+ *      manifest snapshot matches every package.json byte for byte — a file:
+ *      sibling dep duplicates the package physically, breaks tsc, and makes
+ *      the lockfile unreproducible
  *   4. Draht-only scripts exist on disk
  *   5. verify.sh branding check targets @mariozechner/pi-* (not @draht/*)
  *   6. .planning/ files are not modified vs main (branding guard must not touch them)
@@ -54,6 +56,13 @@ const root = resolve(__dirname, "..");
 
 let failures = 0;
 let passes = 0;
+
+// Workspace glob shapes discoverWorkspacePackageJsons() cannot expand
+// correctly. Anything landing here means the guard is silently checking a
+// subset of the tree, so section 3 turns it into a hard failure rather than
+// mis-resolving quietly. Declared here (not next to the function) because
+// section 3 reads it before the helper block is evaluated.
+const unsupportedWorkspacePatterns = [];
 
 function pass(msg) {
 	passes++;
@@ -206,9 +215,53 @@ const DEP_FIELDS = [
 const workspacePkgPaths = discoverWorkspacePackageJsons();
 
 check(
-	workspacePkgPaths.length > 1,
-	`discovered ${workspacePkgPaths.length} workspace package.json files from root "workspaces"`,
+	unsupportedWorkspacePatterns.length === 0,
+	`root "workspaces" uses only expandable glob shapes` +
+		(unsupportedWorkspacePatterns.length
+			? ` — cannot expand ${unsupportedWorkspacePatterns.join(", ")};` +
+				` discoverWorkspacePackageJsons() only handles a trailing "<base>/*"`
+			: ""),
 );
+
+// "length > 1" was too weak to detect a discovery regression: the root
+// "workspaces" array carries several literal (non-glob) nested entries, so if
+// the "packages/*" expansion ever silently broke, discovery would still return
+// those literals and the meta-check would stay green while checking a fraction
+// of the tree. Pin the floor to something the literals alone cannot satisfy by
+// independently reading packages/ and set-diffing.
+const packagesDirAbs = resolve(root, "packages");
+const directPackageDirs = existsSync(packagesDirAbs)
+	? readdirSync(packagesDirAbs, { withFileTypes: true })
+			.filter(
+				(entry) =>
+					entry.isDirectory() &&
+					entry.name !== "node_modules" &&
+					!entry.name.startsWith(".") &&
+					existsSync(resolve(packagesDirAbs, entry.name, "package.json")),
+			)
+			.map((entry) => `packages/${entry.name}/package.json`)
+	: [];
+const missingFromDiscovery = directPackageDirs.filter(
+	(p) => !workspacePkgPaths.includes(p),
+);
+check(
+	directPackageDirs.length > 0 && missingFromDiscovery.length === 0,
+	`discovered ${workspacePkgPaths.length} workspace package.json files from root "workspaces"` +
+		(missingFromDiscovery.length
+			? ` — misses ${missingFromDiscovery.length} of ${directPackageDirs.length} packages/* members:` +
+				` ${missingFromDiscovery.join(", ")}`
+			: ` (covers all ${directPackageDirs.length} packages/* members)`),
+);
+// Note for whoever rediscovers this: packages/web-ui/example is a nested
+// workspace member whose sibling @draht/web-ui is its own ancestor directory,
+// so `workspace:*` makes bun link
+// example/node_modules/@draht/web-ui -> packages/web-ui, an intentionally
+// infinite symlink chain. That is the normal cost of a nested member depending
+// on its parent, and every tool here excludes node_modules (biome ignores
+// **/node_modules/**, the example tsconfig includes only src/**, and web-ui now
+// ships a "files" allowlist so npm pack never walks it). Do not "fix" it by
+// reintroducing a file: specifier — that is the duplicate-copy bug this whole
+// section guards against.
 check(
 	workspacePkgPaths.includes("packages/web-ui/example/package.json"),
 	`discovery reaches nested workspace members (packages/web-ui/example)`,
@@ -264,6 +317,17 @@ for (const pkgPath of workspacePkgPaths) {
 			}
 		}
 	}
+	// overrides/resolutions are not dependency fields, but a file:/link: value
+	// placed there materialises the very same duplicate physical copy this
+	// section exists to prevent. Values may nest (the root has
+	// overrides.gaxios.rimraf), so walk them recursively.
+	for (const field of ["overrides", "resolutions"]) {
+		walkOverrides(pkg[field], field, (dottedPath, version) => {
+			if (localSpecifierPattern.test(version)) {
+				offenders.push(`${dottedPath} → "${version}"`);
+			}
+		});
+	}
 	check(
 		offenders.length === 0,
 		`${pkgPath}: no file:/link: dependency specifiers` +
@@ -276,20 +340,34 @@ for (const pkgPath of workspacePkgPaths) {
 	);
 }
 
-// ── 3c. bun.lock has no file:packages resolution entries ────────────
+// ── 3c. bun.lock carries no file:/link: and matches the manifests ───
 //
-// The direct assertion of the invariant: catches the case where someone
-// regenerates the lockfile from a package.json that still has a file: dep.
+// Three layers, because each catches a different failure mode:
+//   (i)   no "file:packages" resolution entries — someone regenerated the
+//         lockfile from a package.json that still had a file: dep;
+//   (ii)  no "file:" / "link:" specifier anywhere — the same leak in bun's
+//         workspace-manifest snapshot, whose specifiers are written verbatim
+//         from package.json ("file:../../ai") and never contain "packages";
+//   (iii) the snapshot's dependency maps equal the real package.json maps —
+//         the case (i) and (ii) are both blind to: a lockfile that was never
+//         regenerated *after* the manifests were fixed. That is exactly the
+//         invariant `bun install --frozen-lockfile` enforces, asserted here so
+//         it fails in `bun run check` instead of only in CI.
 
 console.log("\nbun.lock reproducibility");
 
 const lockAbsPath = resolve(root, "bun.lock");
 if (existsSync(lockAbsPath)) {
-	const lockLines = readFileSync(lockAbsPath, "utf-8").split("\n");
+	const lockRaw = readFileSync(lockAbsPath, "utf-8");
+	const lockLines = lockRaw.split("\n");
 	const lockHits = [];
+	const localSpecHits = [];
 	for (let i = 0; i < lockLines.length; i++) {
 		if (lockLines[i].includes("file:packages")) {
 			lockHits.push(`${i + 1}: ${lockLines[i].trim()}`);
+		}
+		if (/"(file|link):/.test(lockLines[i])) {
+			localSpecHits.push(`${i + 1}: ${lockLines[i].trim()}`);
 		}
 	}
 	check(
@@ -302,6 +380,60 @@ if (existsSync(lockAbsPath)) {
 					` hand-strip these lines, that is what made the lockfile unreproducible)`
 				: ""),
 	);
+	check(
+		localSpecHits.length === 0,
+		`bun.lock: no file:/link: specifiers anywhere` +
+			(localSpecHits.length ? ` — ${localSpecHits.join(" | ")}` : ""),
+	);
+
+	// bun.lock is JSONC (trailing commas). Strip them, then compare every
+	// workspaces[<dir>] dependency map against the manifest on disk.
+	let lockJson = null;
+	try {
+		lockJson = JSON.parse(lockRaw.replace(/,(\s*[}\]])/g, "$1"));
+	} catch (err) {
+		fail(`bun.lock: could not be parsed as JSONC — ${err.message}`);
+	}
+	if (lockJson) {
+		const lockWorkspaces = lockJson.workspaces ?? {};
+		const mismatches = [];
+		let comparedSpecifiers = 0;
+		for (const pkgPath of workspacePkgPaths) {
+			const dir = pkgPath === "package.json" ? "" : dirname(pkgPath);
+			const lockEntry = lockWorkspaces[dir];
+			if (!lockEntry) {
+				mismatches.push(`${pkgPath}: no workspaces["${dir}"] entry in bun.lock`);
+				continue;
+			}
+			const pkg = readJson(pkgPath);
+			for (const field of DEP_FIELDS) {
+				const fromPkg = pkg[field] ?? {};
+				const fromLock = lockEntry[field] ?? {};
+				const names = new Set([
+					...Object.keys(fromPkg),
+					...Object.keys(fromLock),
+				]);
+				for (const name of names) {
+					comparedSpecifiers++;
+					if (fromPkg[name] !== fromLock[name]) {
+						mismatches.push(
+							`${pkgPath} ${field}.${name}: bun.lock=${JSON.stringify(fromLock[name])} package.json=${JSON.stringify(fromPkg[name])}`,
+						);
+					}
+				}
+			}
+		}
+		check(
+			mismatches.length === 0,
+			`bun.lock: workspace manifest snapshot matches package.json` +
+				` (${comparedSpecifiers} specifiers across ${workspacePkgPaths.length} workspaces)` +
+				(mismatches.length
+					? ` — ${mismatches.join(" | ")}` +
+						` (the lockfile was not regenerated after the manifests changed;` +
+						` run \`bun install\` and commit bun.lock)`
+					: ""),
+		);
+	}
 } else {
 	fail(`bun.lock: file not found at repo root`);
 }
@@ -852,6 +984,18 @@ if (existsSync(resolve(root, agentSessionServicesRelPath))) {
  * declares @draht/* deps). Deliberately not a hardcoded list — the hardcoded
  * list is what let packages/web-ui/example keep its file: specifiers.
  */
+// Walk an overrides/resolutions block, which may nest arbitrarily
+// (e.g. overrides.gaxios.rimraf), invoking visit(dottedPath, stringValue) for
+// every leaf specifier.
+function walkOverrides(node, path, visit) {
+	if (!node || typeof node !== "object") return;
+	for (const [key, value] of Object.entries(node)) {
+		const childPath = `${path}.${key}`;
+		if (typeof value === "string") visit(childPath, value);
+		else walkOverrides(value, childPath, visit);
+	}
+}
+
 function discoverWorkspacePackageJsons() {
 	const patterns = Array.isArray(rootPkg.workspaces)
 		? rootPkg.workspaces
@@ -863,7 +1007,13 @@ function discoverWorkspacePackageJsons() {
 			dirs.add(pattern.replace(/\/+$/, ""));
 			continue;
 		}
-		// Only trailing "<base>/*" globs are used by bun workspaces here.
+		// Only trailing "<base>/*" globs are supported. A "*" anywhere else
+		// (e.g. "apps/*/pkg") would compute a wrong base and silently produce
+		// bogus paths, so record it instead of guessing.
+		if (pattern.slice(starIndex) !== "*") {
+			unsupportedWorkspacePatterns.push(pattern);
+			continue;
+		}
 		const base = pattern.slice(0, starIndex).replace(/\/+$/, "");
 		const absBase = resolve(root, base);
 		if (!existsSync(absBase)) continue;

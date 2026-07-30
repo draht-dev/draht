@@ -1,0 +1,1 @@
+usage: graph-path <from> <to>  (both files must resolve)

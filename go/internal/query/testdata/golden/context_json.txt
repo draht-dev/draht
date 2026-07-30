@@ -1,0 +1,34 @@
+[
+  {
+    "id": "packages/agent/src/harness/env/nodejs.ts",
+    "package": "@draht/agent-core",
+    "layer": "infrastructure",
+    "cluster": "cluster:packages/agent:2",
+    "clusterLabel": "packages/agent",
+    "entryPoint": null,
+    "exports": [
+      "NodeExecutionEnv"
+    ],
+    "importers": [
+      "packages/agent/src/harness/execution-env.ts",
+      "packages/agent/src/node.ts",
+      "packages/agent/test/harness/agent-harness.test.ts",
+      "packages/agent/test/harness/nodejs-env.test.ts",
+      "packages/agent/test/harness/prompt-templates.test.ts",
+      "packages/agent/test/harness/repo.test.ts",
+      "packages/agent/test/harness/session.test.ts",
+      "packages/agent/test/harness/skills.test.ts",
+      "packages/agent/test/harness/storage.test.ts",
+      "packages/agent/test/harness/tools.test.ts",
+      "packages/agent/test/scratch/simple.ts"
+    ],
+    "imports": [
+      "packages/agent/src/harness/types.ts"
+    ],
+    "sinks": [
+      "process:exec",
+      "env:read"
+    ],
+    "rationale": []
+  }
+]

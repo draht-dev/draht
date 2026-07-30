@@ -1,0 +1,11 @@
+callers of packages/agent/src/harness/env/nodejs.ts — 9 within 1 hop
+  hop 1:
+    packages/agent/test/harness/agent-harness.test.ts  [NodeExecutionEnv]
+    packages/agent/test/harness/nodejs-env.test.ts  [NodeExecutionEnv]
+    packages/agent/test/harness/prompt-templates.test.ts  [NodeExecutionEnv]
+    packages/agent/test/harness/repo.test.ts  [NodeExecutionEnv]
+    packages/agent/test/harness/session.test.ts  [NodeExecutionEnv]
+    packages/agent/test/harness/skills.test.ts  [NodeExecutionEnv]
+    packages/agent/test/harness/storage.test.ts  [NodeExecutionEnv]
+    packages/agent/test/harness/tools.test.ts  [NodeExecutionEnv]
+    packages/agent/test/scratch/simple.ts  [NodeExecutionEnv]

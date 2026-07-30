@@ -1,0 +1,2 @@
+path packages/coding-agent/src/core/sdk.ts → packages/ai/src/types.ts  (2 hops)
+  core/sdk.ts —clampThinkingLevel→ src/index.ts → src/types.ts

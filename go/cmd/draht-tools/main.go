@@ -35,6 +35,13 @@ func main() {
 	switch os.Args[1] {
 	case "map-graph":
 		os.Exit(runMapGraph(os.Args[2:]))
+	case "map-serve":
+		os.Exit(runMapServe(os.Args[2:]))
+	case "graph-context", "graph-impact", "graph-callers", "graph-callees",
+		"graph-path", "graph-query", "graph-hotspots", "graph-clusters":
+		os.Exit(runGraphQuery(os.Args[1], os.Args[2:]))
+	case "graph-hook":
+		os.Exit(runGraphHook(os.Args[2:]))
 	case "--version":
 		// The gotreesitter version is printed here (not just buried in the
 		// cache key) so a `go get -u` bump is visible without reading

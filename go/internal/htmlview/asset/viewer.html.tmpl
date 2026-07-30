@@ -1,0 +1,2019 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Draht ▸ Architecture & Flows</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="icon" href="data:," />
+<style>
+:root {
+  --bg:#0b0d10; --bg-soft:#11151a; --panel:#151b22; --text:#e6edf3;
+  --muted:#8b949e; --border:#262d36;
+  --pres:#79c0ff; --app:#7ee787; --dom:#d2a8ff; --infra:#f0883e; --supp:#8b949e;
+  --sink:#ff7b72; --entry:#ffdf5d; --actor:#ff9bd4;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+  font:13px/1.45 -apple-system,"SF Pro Text",Segoe UI,system-ui,sans-serif; }
+
+header { display:flex; align-items:center; gap:14px; padding:10px 16px;
+  border-bottom:1px solid var(--border); background:var(--bg-soft); }
+header .title { font-weight:700; letter-spacing:.4px; }
+header .meta { color:var(--muted); font-size:12px; }
+header .tabs { display:flex; gap:2px; margin-left:8px; }
+header .tabs button { background:transparent; color:var(--muted); border:1px solid var(--border);
+  padding:4px 10px; cursor:pointer; font-size:12px; border-radius:6px; }
+header .tabs button.active { color:var(--text); background:#1c2530; border-color:#3a4858; }
+header .live { margin-left:auto; padding:2px 8px; border-radius:99px;
+  background:#143; color:var(--app); font-size:11px; }
+header .live.dead { background:#3a1a1a; color:#ff7b72; }
+
+main { display:grid; grid-template-columns:280px 1fr 380px; height:calc(100vh - 49px); }
+aside { overflow:auto; background:var(--panel); border-right:1px solid var(--border); }
+aside.right { border-right:none; border-left:1px solid var(--border); }
+.section { padding:10px 14px; border-bottom:1px solid var(--border); }
+.section h2 { margin:0 0 6px; font-size:10.5px; text-transform:uppercase;
+  letter-spacing:1.2px; color:var(--muted); font-weight:700; }
+.section input { width:100%; background:var(--bg); color:var(--text);
+  border:1px solid var(--border); border-radius:6px; padding:6px 8px; outline:none; font-size:12px; }
+.list { display:flex; flex-direction:column; }
+.list .row { display:flex; align-items:center; gap:8px; padding:5px 14px; cursor:pointer; font-size:12px; }
+.list .row:hover { background:#1c2530; }
+.list .row.active { background:#1f2a36; border-left:2px solid var(--entry); }
+.list .row .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.list .row .count { color:var(--muted); font-size:11px; }
+.dot { width:9px; height:9px; border-radius:50%; flex:0 0 9px; }
+
+#viz { position:relative; overflow:hidden; background:radial-gradient(circle at 30% 20%, #0f141a 0%, #0b0d10 70%); }
+svg, canvas { display:block; user-select:none; position:absolute; inset:0; width:100%; height:100%; }
+#error-banner { display:none; position:absolute; top:0; left:0; right:0; z-index:50;
+  background:#3a1a1a; color:#ffb4b4; padding:8px 14px; font-size:12px; border-bottom:1px solid #6b2b2b; }
+.controls { position:absolute; top:10px; right:10px; display:flex; gap:6px; z-index: 2; flex-wrap:wrap; justify-content:flex-end; max-width:60%; }
+.controls button { background:var(--panel); color:var(--text); border:1px solid var(--border);
+  border-radius:6px; padding:4px 10px; cursor:pointer; font-size:11px; }
+.controls button:hover { border-color:var(--pres); }
+/* B4 fix: graph-controls and the legend used to both be absolutely positioned at fixed
+   top offsets (10px / 56px), so once the checkbox/button row wrapped to 2+ lines the legend's
+   top rows sat underneath it. #overlay-left stacks them in normal flow instead, so the legend
+   always starts below however tall graph-controls actually renders (0, 1, or N wrapped rows). */
+#overlay-left { position:absolute; top:10px; left:12px; z-index:2; display:flex;
+  flex-direction:column; align-items:flex-start; gap:8px; max-width:70%; }
+#graph-controls { display:none; gap:10px; background:rgba(15,18,22,.85); border:1px solid var(--border);
+  border-radius:8px; padding:6px 10px; flex-wrap:wrap; }
+.hud { position:absolute; bottom:10px; left:12px; color:var(--muted); font-size:11px;
+  background:rgba(15,18,22,.6); padding:4px 8px; border-radius:6px; z-index:2; }
+.legend { background:rgba(15,18,22,.85);
+  border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:11px;
+  max-height:60vh; overflow:auto; max-width:260px; }
+.legend .row { display:flex; align-items:center; gap:6px; padding:2px 0; }
+.legend .row.legend-row { cursor:pointer; border-radius:4px; }
+.legend .row.legend-row:hover { background:#1c2530; }
+.legend .row.legend-row.active { background:#1f2a36; }
+
+.inspector h3 { font-size:13px; margin:0 0 6px; word-break:break-all; font-weight:600; }
+.inspector h4 { font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted);
+  margin:10px 0 4px; font-weight:700; }
+.inspector .pill { display:inline-block; padding:2px 8px; border:1px solid var(--border);
+  border-radius:99px; font-size:11px; color:var(--muted); margin:2px 4px 2px 0; }
+.inspector pre { background:var(--bg); border:1px solid var(--border); border-radius:6px;
+  padding:8px; overflow:auto; font-size:11px; line-height:1.4; max-height:220px;
+  margin:6px 0 0; white-space:pre-wrap; }
+.inspector .kv { font-size:11.5px; color:var(--muted); margin:2px 0; }
+.inspector .kv b { color:var(--text); }
+.ins-link { color:var(--pres); cursor:pointer; font-family:ui-monospace,SF Mono,Menlo,monospace;
+  font-size:10.5px; }
+.ins-link:hover { text-decoration:underline; }
+
+.flow-list { max-height:280px; overflow-y:auto; }
+.flow-list .flow-item { padding:8px 14px; border-bottom:1px solid var(--border); cursor:pointer; }
+.flow-list .flow-item:hover { background:#1c2530; }
+.flow-list .flow-item.active { background:#1f2a36; border-left:3px solid var(--entry); padding-left:11px; }
+.flow-list .flow-item .name { font-size:12.5px; font-weight:600; }
+.flow-list .flow-item .desc { font-size:11px; color:var(--muted); margin-top:2px; }
+.step-list { max-height:calc(100vh - 460px); overflow-y:auto; }
+
+.step-list .step-item { padding:10px 14px; border-bottom:1px solid var(--border); display:flex; gap:10px;
+  cursor:pointer; align-items:flex-start; }
+.step-list .step-item:hover { background:#1c2530; }
+.step-list .step-item.active { background:#1f2a36; }
+.step-list .step-item .num {
+  flex:0 0 22px; height:22px; border-radius:50%;
+  background:var(--entry); color:#0b0d10; font-weight:700; font-size:12px;
+  display:flex; align-items:center; justify-content:center;
+}
+.step-list .step-item .body { flex:1; min-width:0; font-size:11.5px; }
+.step-list .step-item .title { font-weight:600; color:var(--text); }
+.step-list .step-item .from-to { color:var(--muted); font-size:10.5px; margin-top:3px; }
+.step-list .step-item .desc { color:#c9d1d9; font-size:11.5px; margin-top:5px; line-height:1.55; }
+.step-list .step-item .desc code { background:rgba(28,37,48,0.8); border:1px solid var(--border);
+  border-radius:4px; padding:1px 5px; font-family:ui-monospace,SF Mono,Menlo,monospace; font-size:10.5px; color:#7ee787; }
+.step-list .step-item .snippet { background:rgba(11,13,16,0.85); border-left:2px solid var(--entry);
+  padding:4px 8px; margin-top:5px; font-family:ui-monospace,SF Mono,Menlo,monospace;
+  font-size:10.5px; color:#c9d1d9; border-radius:0 4px 4px 0; white-space:pre-wrap; word-break:break-word; }
+.step-list .step-item .file-ref { font-family:ui-monospace,SF Mono,Menlo,monospace; font-size:10px;
+  color:var(--pres); margin-top:2px; word-break:break-all; }
+.kbd { background:var(--bg); border:1px solid var(--border); padding:1px 5px;
+  border-radius:4px; font-family:ui-monospace,monospace; font-size:10px; }
+
+.container-rect { fill:rgba(28,37,48,0.55); stroke:#2a3540; stroke-width:1; }
+.container-rect.hi { stroke:#79c0ff; stroke-width:2; }
+.container-label { fill:var(--text); font-size:11px; font-weight:600; pointer-events:none; }
+.module-node { cursor:pointer; }
+.edge { fill:none; stroke:#3a4858; stroke-width:0.8; opacity:.5; }
+.edge.cross { stroke:#7ee787; stroke-width:1.4; opacity:.65; }
+.edge.flow { stroke:#ffdf5d; stroke-width:1.5; opacity:.95; }
+.edge.flow.active { stroke-width:2.5; }
+.layer-band { stroke:#1a2028; stroke-dasharray:2 4; fill:none; }
+.layer-label { fill:var(--muted); font-size:11px; font-weight:600; letter-spacing:1.5px; text-transform:uppercase; }
+.lane-divider { stroke:#1a2028; stroke-dasharray:2 4; }
+.flow-box { cursor:pointer; }
+.flow-box:hover rect { stroke-width:1.6; }
+.step-num { cursor:pointer; }
+.step-num.active circle { fill:#fff; }
+
+.group-rect { fill:rgba(28,37,48,0.32); stroke-width:1.4; rx:12; cursor:default; }
+.group-rect:hover { filter:brightness(1.15); }
+.group-rect.focused { stroke-width:2.5; }
+.group-rect.collapsed { fill:rgba(28,37,48,0.6); }
+.group-header { fill:rgba(11,13,16,0.65); pointer-events:none; }
+.group-name { font-size:13px; font-weight:700; letter-spacing:.3px; pointer-events:none; }
+.group-sub { fill:var(--muted); font-size:10px; pointer-events:none; }
+.pkg-rect { fill:rgba(15,18,22,0.78); stroke-width:1.2; cursor:pointer;
+  transition:filter .12s, stroke-width .12s; }
+.pkg-rect:hover { filter:brightness(1.25); stroke-width:1.8; }
+.pkg-rect.selected { stroke:#fff !important; stroke-width:2.4; }
+.pkg-rect.dim { opacity:.18; }
+.pkg-title { fill:var(--text); font-size:12px; font-weight:600; pointer-events:none; }
+.pkg-sub { fill:var(--muted); font-size:10px; pointer-events:none; }
+.pkg-topfiles { fill:#8fb8ff; font-size:9.5px; pointer-events:none; font-family:ui-monospace,monospace; }
+.edge.intra { stroke:#3a4858; stroke-width:0.6; opacity:0.32; }
+.edge-label-bg { fill:#11151a; stroke:#262d36; stroke-width:1; rx:4; ry:4; }
+.edge-label-text { fill:#c9d1d9; font-size:10px; font-weight:500; pointer-events:none; }
+.edge-label-text.persists { fill:#ff7b72; }
+.edge-label-text.sends-events { fill:#ffdf5d; }
+.edge-label-text.renders { fill:#79c0ff; }
+.edge-label-text.configures { fill:#d2a8ff; }
+.edge-hit { stroke:transparent; stroke-width:14; fill:none; cursor:pointer; }
+#tooltip { position:absolute; display:none; background:#11151a; color:var(--text);
+  border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:11px;
+  max-width:340px; pointer-events:none; z-index:100; box-shadow:0 4px 24px rgba(0,0,0,0.5); }
+#tooltip .tt-title { font-weight:700; font-size:12px; margin-bottom:2px; }
+#tooltip .tt-desc { color:var(--muted); font-size:10.5px; margin-bottom:6px; line-height:1.4; }
+#tooltip .tt-section { color:var(--muted); font-size:9.5px; text-transform:uppercase; letter-spacing:1px;
+  margin:5px 0 2px; }
+#tooltip ul { margin:0; padding-left:0; list-style:none; }
+#tooltip ul li { display:flex; gap:6px; font-family:ui-monospace,monospace; font-size:10px; padding:1px 0; }
+#tooltip .tt-reason { color:var(--entry); flex:0 0 84px; }
+#tooltip .tt-loc { color:var(--muted); margin-left:auto; }
+#tooltip code { color:#7ee787; font-family:ui-monospace,monospace; font-size:10px; }
+.ctrl-checkbox { display:inline-flex; align-items:center; gap:5px; color:var(--muted);
+  font-size:11px; cursor:pointer; padding:4px 8px; border:1px solid var(--border); border-radius:6px; background:var(--panel); }
+.ctrl-checkbox input { margin:0; cursor:pointer; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title">DRAHT ▸ <span id="root-name">codebase</span></div>
+  <div class="meta" id="meta">loading…</div>
+  <div class="tabs">
+    <button id="tab-graph" class="active">Graph</button>
+    <button id="tab-architecture">Architecture</button>
+    <button id="tab-flows">Flows</button>
+  </div>
+  <div class="live dead" id="live-indicator">● static snapshot</div>
+</header>
+<main>
+  <aside id="left-aside">
+    <div class="section">
+      <h2>Search</h2>
+      <input id="q" placeholder="filter modules & symbols…" />
+    </div>
+    <div class="section">
+      <h2>Entry Points</h2>
+      <div class="list" id="entry-list"></div>
+    </div>
+    <div class="section">
+      <h2>Sinks</h2>
+      <div class="list" id="sink-list"></div>
+    </div>
+    <div class="section">
+      <h2>Layers</h2>
+      <div class="list" id="layer-list"></div>
+    </div>
+    <div class="section">
+      <h2>Packages</h2>
+      <div class="list" id="pkg-list"></div>
+    </div>
+  </aside>
+  <div id="viz">
+    <div id="error-banner"></div>
+    <svg id="svg" width="100%" height="100%" style="display:none"></svg>
+    <canvas id="canvas"></canvas>
+    <div id="overlay-left">
+      <div id="graph-controls">
+        <label class="ctrl-checkbox"><input type="checkbox" id="show-tests-cb"/> show tests</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="degree-cb"/> size by degree</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="surprising-cb"/> highlight surprising</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="conf-extracted" checked/> extracted</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="conf-inferred" checked/> inferred</label>
+        <label class="ctrl-checkbox"><input type="checkbox" id="conf-ambiguous" checked/> ambiguous</label>
+        <button id="expand-all">expand all</button>
+        <button id="collapse-all">collapse all</button>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="controls">
+      <label class="ctrl-checkbox"><input type="checkbox" id="overlay-flow-cb"/> overlay flow</label>
+      <button id="export-png">PNG</button>
+      <button id="export-svg">SVG</button>
+      <button id="fit">fit</button>
+      <button id="clear">clear</button>
+      <button id="reload">reload</button>
+    </div>
+    <div class="hud" id="hud">loading…</div>
+    <div id="tooltip"></div>
+  </div>
+  <aside class="right">
+    <div id="flows-sidebar" style="display:none">
+      <div class="section">
+        <h2>Flows</h2>
+        <div class="flow-list" id="flow-list"></div>
+      </div>
+      <div class="section">
+        <h2>Steps</h2>
+        <div class="step-list" id="step-list">
+          <div style="color:var(--muted); padding:8px 0">Select a flow above to see numbered steps.</div>
+        </div>
+      </div>
+    </div>
+    <div class="section inspector" id="inspector-section">
+      <h2>Inspector</h2>
+      <div id="inspector"><div style="color:var(--muted)">Click a node, cluster, or package to inspect it.</div></div>
+    </div>
+  </aside>
+</main>
+<script id="map-data" type="application/json">@@DRAHT_EMBEDDED_MAP_JSON@@</script>
+<script>
+var JSON_PATH = "@@DRAHT_JSON_PATH@@";
+"use strict";
+var LAYER_COLOR = { presentation:"#79c0ff", application:"#7ee787",
+  domain:"#d2a8ff", infrastructure:"#f0883e", support:"#8b949e" };
+var LAYER_ORDER = ["presentation","application","domain","infrastructure","support"];
+var SVG_NS = "http://www.w3.org/2000/svg";
+var GOLD = 2.399963229; // golden angle (radians) — deterministic spiral, no RNG
+function $(id) { return document.getElementById(id); }
+var svg = $("svg");
+var canvas = $("canvas");
+
+var state = {
+  map: null,
+  view: "graph",
+  // svg camera (Architecture / Flows)
+  zoom: 1,
+  pan: { x:0, y:0 },
+  drag: null,
+  // canvas camera (Graph)
+  gcam: { zoom: 1, pan: { x:0, y:0 } },
+  gdrag: null,
+  selected: null, // { kind: "module"|"cluster"|"box", id }
+  hovered: null,
+  selectedFlow: null,
+  selectedStep: null,
+  collapsedGroups: {},
+  overlayFlow: false,
+  focus: null, // { kind, id, moduleSet, containerSet }
+  filter: "",
+  searchMatches: null, // Set of module ids matching current filter
+  showTests: false,
+  highlightSurprising: false,
+  sizeByDegree: false,
+  confidence: { EXTRACTED: true, INFERRED: true, AMBIGUOUS: true },
+};
+
+// ====================== small utils ======================
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[c];
+  });
+}
+function truncate(s, n) { if (!s) return ""; s = String(s); if (s.length <= n) return s; return s.slice(0, n - 1) + "…"; }
+function layerOf(m) { return (m && m.layer) || "support"; }
+function containerIdOf(m) {
+  if (m.package) return "pkg:" + m.package;
+  return "dir:" + m.path.split("/")[0];
+}
+function clusterColor(cid) {
+  if (!cid) return "#8b949e";
+  var h = 0; for (var i=0; i<cid.length; i++) h = (h * 31 + cid.charCodeAt(i)) % 360;
+  return "hsl(" + h + ",58%,58%)";
+}
+function el(tag, attrs, text) {
+  var e = document.createElementNS(SVG_NS, tag);
+  if (attrs) for (var k in attrs) {
+    if (attrs[k] == null) continue;
+    e.setAttribute(k, attrs[k]);
+  }
+  if (text != null) e.textContent = text;
+  return e;
+}
+function flowPath(x1, y1, x2, y2) {
+  var dx = x2 - x1, dy = y2 - y1;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    var c1x = x1 + dx * 0.5, c1y = y1;
+    var c2x = x2 - dx * 0.5, c2y = y2;
+    return "M " + x1 + " " + y1 + " C " + c1x + " " + c1y + ", " + c2x + " " + c2y + ", " + x2 + " " + y2;
+  } else {
+    var c1xv = x1, c1yv = y1 + dy * 0.5;
+    var c2xv = x2, c2yv = y2 - dy * 0.5;
+    return "M " + x1 + " " + y1 + " C " + c1xv + " " + c1yv + ", " + c2xv + " " + c2yv + ", " + x2 + " " + y2;
+  }
+}
+function tx(g) {
+  g.setAttribute("transform", "translate(" + state.pan.x + "," + state.pan.y + ") scale(" + state.zoom + ")");
+}
+function downloadBlob(blob, name) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+}
+function showError(msg) {
+  var b = $("error-banner");
+  b.textContent = "⚠ " + msg;
+  b.style.display = "block";
+}
+function hideError() { var b = $("error-banner"); if (b) b.style.display = "none"; }
+
+// ====================== data indices ======================
+function buildAdj(map) {
+  var adj = new Map();
+  for (var i=0; i<map.edges.length; i++) {
+    var e = map.edges[i];
+    if (e.kind !== "import") continue;
+    if (!adj.has(e.from)) adj.set(e.from, []);
+    adj.get(e.from).push(e.to);
+  }
+  return adj;
+}
+function buildReverseAdj(map) {
+  var adj = new Map();
+  for (var i=0; i<map.edges.length; i++) {
+    var e = map.edges[i];
+    if (e.kind !== "import") continue;
+    if (!adj.has(e.to)) adj.set(e.to, []);
+    adj.get(e.to).push(e.from);
+  }
+  return adj;
+}
+function buildIndices(map) {
+  var modById = new Map(); (map.modules || []).forEach(function (m) { modById.set(m.id, m); });
+  var clusterById = new Map(); (map.clusters || []).forEach(function (c) { clusterById.set(c.id, c); });
+  var entryIds = new Set((map.entryPoints || []).map(function (e) { return e.id; }));
+  var sinkIds = new Set((map.sinks || []).map(function (s) { return s.id; }));
+  var callersOf = new Map(), calleesOf = new Map();
+  (map.callEdges || []).forEach(function (ce) {
+    if (!calleesOf.has(ce.from)) calleesOf.set(ce.from, []);
+    calleesOf.get(ce.from).push(ce);
+    if (!callersOf.has(ce.to)) callersOf.set(ce.to, []);
+    callersOf.get(ce.to).push(ce);
+  });
+  return {
+    modById: modById, clusterById: clusterById, entryIds: entryIds, sinkIds: sinkIds,
+    adj: buildAdj(map), radj: buildReverseAdj(map),
+    callersOf: callersOf, calleesOf: calleesOf,
+  };
+}
+
+// ====================== load / apply ======================
+function isHttpProtocol() { return location.protocol === "http:" || location.protocol === "https:"; }
+
+function applyMap(map) {
+  state.map = map;
+  state.idx = buildIndices(map);
+  $("root-name").textContent = map.root || "codebase";
+  var when = map.generatedAt ? new Date(map.generatedAt).toLocaleTimeString() : "embedded snapshot";
+  $("meta").textContent =
+    map.stats.files + " files · " + map.stats.totalLoc.toLocaleString() + " LOC · " +
+    map.stats.entryPoints + " entries · " + map.stats.sinkModules + " sinks · " +
+    (map.clusters || []).length + " clusters · " + when;
+  state.graph = null; // force rebuild of graph model on next graph render
+  state.searchMatches = null;
+  renderSidebar();
+  renderFlowList();
+  render();
+}
+
+async function refreshFromServer() {
+  if (!isHttpProtocol()) return false;
+  try {
+    var res = await fetch(JSON_PATH);
+    if (!res.ok) throw new Error("http " + res.status);
+    var map = await res.json();
+    applyMap(map);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function connectLive() {
+  if (!isHttpProtocol()) return;
+  try {
+    var es = new EventSource("/events");
+    es.onmessage = function (ev) { if (ev.data === "changed") refreshFromServer(); };
+    es.onerror = function () {
+      $("live-indicator").classList.add("dead");
+      $("live-indicator").textContent = "● offline";
+    };
+    es.onopen = function () {
+      $("live-indicator").classList.remove("dead");
+      $("live-indicator").textContent = "● live";
+    };
+  } catch (err) { /* EventSource unsupported (e.g. file://) — fine, static snapshot still works */ }
+}
+
+// ====================== view routing ======================
+function setView(v) {
+  state.view = v;
+  ["tab-graph","tab-architecture","tab-flows"].forEach(function (id) {
+    $(id).classList.toggle("active", id === "tab-" + v);
+  });
+  svg.style.display = (v === "architecture" || v === "flows") ? "block" : "none";
+  canvas.style.display = (v === "graph") ? "block" : "none";
+  $("graph-controls").style.display = (v === "graph") ? "flex" : "none";
+  $("flows-sidebar").style.display = (v === "flows") ? "block" : "none";
+  // B3: re-measure the canvas's backing-store size whenever it becomes visible. A resize while
+  // the Graph tab was hidden left canvas.width/height stale (clientWidth/height reflow correctly
+  // even for display:none, but resizeCanvas() only ran on the debounced window "resize" handler
+  // when the graph tab was already active) — a stale backing store distorts what's actually
+  // drawn relative to what CSS-pixel hit-testing assumes, so re-sync it on every switch in.
+  if (v === "graph") resizeCanvas();
+  render();
+  fit();
+}
+
+function render() {
+  var map = state.map; if (!map) return;
+  if (state.view === "graph") {
+    ensureGraphModel();
+    requestDraw();
+  } else {
+    var W = svg.clientWidth, H = svg.clientHeight;
+    svg.innerHTML = "";
+    var g = el("g", { id: "world" });
+    tx(g);
+    svg.appendChild(g);
+    if (state.view === "architecture") renderArchitecture(g, W, H);
+    else renderFlowsSwimlane(g, W, H);
+  }
+  $("legend").innerHTML = legendHtml();
+  $("hud").textContent = hudText();
+  renderInspector();
+}
+
+function legendHtml() {
+  var s = "";
+  if (state.view === "architecture" && state.map.groups) {
+    state.map.groups.forEach(function (gr) {
+      s += '<div class="row"><div class="dot" style="background:' + gr.color + '"></div>' + escapeHtml(gr.name) + '</div>';
+    });
+  } else if (state.view === "flows" && state.map.lanes) {
+    state.map.lanes.forEach(function (l) {
+      s += '<div class="row"><div class="dot" style="background:' + l.color + '"></div>' + l.name + '</div>';
+    });
+  } else if (state.view === "graph") {
+    var clusters = (state.map.clusters || []).slice().sort(function (a,b) { return b.size - a.size; });
+    var top = clusters.slice(0, 10);
+    top.forEach(function (c) {
+      var isolated = state.focus && state.focus.kind === "cluster" && state.focus.id === c.id;
+      s += '<div class="row legend-row' + (isolated ? " active" : "") + '" data-cluster="' + escapeHtml(c.id) + '">' +
+        '<div class="dot" style="background:' + clusterColor(c.id) + '"></div>' +
+        '<div class="name">' + escapeHtml(c.label) + '</div><div class="count">' + c.size + '</div></div>';
+    });
+    if (clusters.length > top.length) {
+      s += '<div class="row" style="color:var(--muted)">+' + (clusters.length - top.length) + ' more clusters…</div>';
+    }
+    s += '<div class="row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">' +
+      '<div class="dot" style="border:2px solid #ffdf5d;background:transparent"></div>entry point (ring)</div>';
+    s += '<div class="row"><div class="dot" style="background:#ff7b72;border-radius:2px;transform:rotate(45deg)"></div>sink (diamond)</div>';
+    s += '<div class="row" style="opacity:.5"><div class="dot" style="background:#8b949e"></div>test file (dimmed)</div>';
+    s += '<div class="row"><svg width="18" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke="#7ee787" stroke-width="1.6"/></svg>&nbsp;extracted</div>';
+    s += '<div class="row"><svg width="18" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke="#79c0ff" stroke-width="1.6" stroke-dasharray="4 3"/></svg>&nbsp;inferred</div>';
+    s += '<div class="row"><svg width="18" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke="#8b949e" stroke-width="1.6" stroke-dasharray="1 3"/></svg>&nbsp;ambiguous</div>';
+  } else {
+    LAYER_ORDER.forEach(function (l) {
+      s += '<div class="row"><div class="dot" style="background:' + LAYER_COLOR[l] + '"></div>' + l + '</div>';
+    });
+    s += '<div class="row"><div class="dot" style="background:#ffdf5d"></div>entry point</div>';
+    s += '<div class="row"><div class="dot" style="background:#ff7b72"></div>sink</div>';
+  }
+  return s;
+}
+function hudText() {
+  if (state.view === "architecture") {
+    var c = (state.map.containers || []).length;
+    var gN = (state.map.groups || []).length;
+    return "Architecture · " + gN + " groups, " + c + " packages · click a package · double-click a group header to focus, click header to collapse · ESC to clear";
+  }
+  if (state.view === "flows") {
+    if (state.selectedFlow) {
+      var f = state.map.flows.find(function (x) { return x.id === state.selectedFlow; });
+      return f ? "FLOW: " + f.name + " — " + f.steps.length + " steps" : "";
+    }
+    return "Pick a flow on the right to highlight the path through the system";
+  }
+  if (state.view === "graph") {
+    var g = state.graph;
+    var shown = g ? g.nodes.length : 0;
+    var collapsed = g ? g.collapsedClusters.size : 0;
+    // B2: surface how many modules/symbols the current search matched — without this, a query
+    // that only matches modules inside a collapsed cluster gave no feedback that anything hit.
+    var matchHint = state.searchMatches
+      ? " · " + state.searchMatches.size + " match" + (state.searchMatches.size === 1 ? "" : "es")
+      : "";
+    return "Graph · " + shown + " nodes shown · " + collapsed + " clusters collapsed" + matchHint + " · double-click a cluster to expand/collapse · drag pins · scroll = zoom";
+  }
+  return state.view + " view";
+}
+
+// ====================== focus (sidebar filters) ======================
+function buildFocus(kind, id, moduleIds) {
+  var moduleSet = new Set(moduleIds);
+  var containerSet = new Set();
+  moduleSet.forEach(function (mid) {
+    var m = state.idx.modById.get(mid);
+    if (m) containerSet.add(containerIdOf(m));
+  });
+  state.focus = { kind: kind, id: id, moduleSet: moduleSet, containerSet: containerSet };
+}
+function focusEntry(id) {
+  var adj = state.idx.adj;
+  var set = new Set([id]); var stack = [id];
+  while (stack.length) {
+    var x = stack.pop();
+    var ns = adj.get(x) || [];
+    for (var i=0; i<ns.length; i++) if (!set.has(ns[i])) { set.add(ns[i]); stack.push(ns[i]); }
+  }
+  buildFocus("entry", id, set);
+  render();
+}
+function focusSink(kind) {
+  var map = state.map;
+  var radj = state.idx.radj;
+  var seeds = map.sinks.filter(function (s) { return s.sinks.indexOf(kind) !== -1; }).map(function (s) { return s.id; });
+  var set = new Set(seeds); var stack = seeds.slice();
+  while (stack.length) {
+    var x = stack.pop();
+    var ns = radj.get(x) || [];
+    for (var i=0; i<ns.length; i++) if (!set.has(ns[i])) { set.add(ns[i]); stack.push(ns[i]); }
+  }
+  buildFocus("sink", kind, set);
+  render();
+}
+function focusPackage(pkgId) {
+  var ids = state.map.modules.filter(function (m) { return ("pkg:" + (m.package || "")) === pkgId; }).map(function (m) { return m.id; });
+  buildFocus("package", pkgId, ids);
+  render();
+}
+function focusLayer(layer) {
+  var ids = state.map.modules.filter(function (m) { return layerOf(m) === layer; }).map(function (m) { return m.id; });
+  buildFocus("layer", layer, ids);
+  render();
+}
+function focusClusterToggle(clusterId) {
+  if (state.focus && state.focus.kind === "cluster" && state.focus.id === clusterId) {
+    state.focus = null; render(); return;
+  }
+  var c = state.idx.clusterById.get(clusterId);
+  buildFocus("cluster", clusterId, (c && c.members) || []);
+  render();
+}
+function clearFocus() { state.focus = null; render(); }
+
+// ====================== Architecture (nested-containers) view ======================
+function slice(rect, items, getWeight) {
+  if (items.length === 0) return [];
+  var total = 0;
+  for (var i=0; i<items.length; i++) total += Math.max(1, getWeight(items[i]));
+  var out = [];
+  var horizontal = rect.w >= rect.h;
+  var cx = rect.x, cy = rect.y;
+  for (var j=0; j<items.length; j++) {
+    var w = Math.max(1, getWeight(items[j]));
+    var frac = w / total;
+    if (horizontal) {
+      var subW = Math.max(1, rect.w * frac);
+      out.push({ x: cx, y: rect.y, w: subW, h: rect.h, item: items[j] });
+      cx += subW;
+    } else {
+      var subH = Math.max(1, rect.h * frac);
+      out.push({ x: rect.x, y: cy, w: rect.w, h: subH, item: items[j] });
+      cy += subH;
+    }
+  }
+  return out;
+}
+function gridLayout(rect, items) {
+  if (items.length === 0) return [];
+  var aspect = rect.w / Math.max(1, rect.h);
+  var cols = Math.max(1, Math.round(Math.sqrt(items.length * aspect)));
+  cols = Math.min(cols, items.length);
+  var rows = Math.ceil(items.length / cols);
+  var cw = rect.w / cols, rh = rect.h / rows;
+  var out = [];
+  for (var i=0; i<items.length; i++) {
+    var col = i % cols, row = Math.floor(i / cols);
+    out.push({ x: rect.x + col * cw, y: rect.y + row * rh, w: cw, h: rh, item: items[i] });
+  }
+  return out;
+}
+function layoutArchitecture(map, W, H) {
+  var groups = (map.groups || []).slice();
+  if (groups.length === 0) return { groupPos: new Map(), packagePos: new Map() };
+  groups.sort(function (a, b) { return (b.moduleCount || 0) - (a.moduleCount || 0); });
+  var pad = 18, gap = 12;
+  var outerRect = { x: pad, y: pad, w: W - pad * 2, h: H - pad * 2 };
+  var groupSlots = slice(outerRect, groups, function (g) { return Math.sqrt(Math.max(1, g.moduleCount || 1)); });
+  var groupPos = new Map();
+  var packagePos = new Map();
+  for (var i=0; i<groupSlots.length; i++) {
+    var slot = groupSlots[i];
+    var grp = slot.item;
+    var inset = { x: slot.x + gap/2, y: slot.y + gap/2, w: slot.w - gap, h: slot.h - gap };
+    var collapsed = !!state.collapsedGroups[grp.id];
+    groupPos.set(grp.id, { x: inset.x, y: inset.y, w: inset.w, h: inset.h, group: grp, collapsed: collapsed });
+    if (collapsed) continue;
+    var memberContainers = grp.members.map(function (id) { return map.containers.find(function (c) { return c.id === id; }); }).filter(Boolean);
+    if (memberContainers.length === 0) continue;
+    var headerH = 34;
+    var pkgRect = { x: inset.x + 8, y: inset.y + headerH, w: Math.max(40, inset.w - 16), h: Math.max(40, inset.h - headerH - 8) };
+    var pkgSlots = gridLayout(pkgRect, memberContainers);
+    for (var k=0; k<pkgSlots.length; k++) {
+      var ps = pkgSlots[k];
+      var ix = ps.x + 3, iy = ps.y + 3, iw = Math.max(40, ps.w - 6), ih = Math.max(34, ps.h - 6);
+      packagePos.set(ps.item.id, { x: ix, y: iy, w: iw, h: ih, container: ps.item, groupId: grp.id });
+    }
+  }
+  return { groupPos: groupPos, packagePos: packagePos };
+}
+
+function hideTooltip() { $("tooltip").style.display = "none"; }
+function showTooltip(html, ev) {
+  var tt = $("tooltip");
+  tt.innerHTML = html;
+  tt.style.display = "block";
+  var viz = $("viz").getBoundingClientRect();
+  var x = (ev.clientX - viz.left) + 14;
+  var y = (ev.clientY - viz.top) + 14;
+  var ttW = tt.offsetWidth, ttH = tt.offsetHeight;
+  if (x + ttW > viz.width) x = viz.width - ttW - 6;
+  if (y + ttH > viz.height) y = viz.height - ttH - 6;
+  tt.style.left = x + "px"; tt.style.top = y + "px";
+}
+function tooltipPackageHtml(container, groupName) {
+  var top = (container.topFiles || []).slice(0, 5);
+  var html = '<div class="tt-title">' + escapeHtml(container.name) + '</div>';
+  if (container.description) html += '<div class="tt-desc">' + escapeHtml(container.description) + '</div>';
+  html += '<div class="tt-section">Group</div><div>' + escapeHtml(groupName || "—") + '</div>';
+  if (top.length) {
+    html += '<div class="tt-section">Top Files (' + top.length + ')</div><ul>';
+    for (var i=0; i<top.length; i++) {
+      html += '<li><span class="tt-reason">' + escapeHtml(top[i].reason) + '</span>' +
+        '<span>' + escapeHtml(top[i].path.split("/").slice(-2).join("/")) + '</span>' +
+        '<span class="tt-loc">' + top[i].loc + '</span></li>';
+    }
+    html += '</ul>';
+  }
+  return html;
+}
+function tooltipEdgeHtml(edge) {
+  var labels = (edge.labels || [edge.label]).join(", ");
+  var samples = (edge.symbolSamples || []).slice(0, 5).map(function (s) { return '<code>' + escapeHtml(s) + '</code>'; }).join(", ");
+  var html = '<div class="tt-title">' + escapeHtml(edge.from.replace(/^pkg:/, "")) +
+    ' <span style="color:var(--muted)">→</span> ' + escapeHtml(edge.to.replace(/^pkg:/, "")) + '</div>';
+  html += '<div class="tt-desc"><b>' + escapeHtml(labels) + '</b> · ' +
+    edge.count + ' imports · ' + (edge.callCount || 0) + ' calls</div>';
+  if (samples) html += '<div class="tt-section">Top symbols</div><div>' + samples + '</div>';
+  return html;
+}
+function tooltipModuleHtml(m) {
+  var html = '<div class="tt-title">' + escapeHtml(m.path) + '</div>';
+  html += '<div class="tt-desc">' + escapeHtml(m.package || "-") + ' · ' + escapeHtml(m.layer || "-") + ' · ' + (m.loc||0) + ' loc' + (m.cluster ? ' · ' + escapeHtml(m.cluster) : '') + '</div>';
+  return html;
+}
+
+// Convert a mouse event's client coordinates into SVG world coordinates (accounts for
+// the current pan/zoom, unlike comparing screen px directly against world dimensions — defect 10).
+function svgToWorld(ev) {
+  var rect = svg.getBoundingClientRect();
+  var sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+  return { x: (sx - state.pan.x) / state.zoom, y: (sy - state.pan.y) / state.zoom };
+}
+
+function renderArchitecture(g, W, H) {
+  var map = state.map;
+  var layout = layoutArchitecture(map, W, H);
+  var groups = map.groups || [];
+  var groupById = {}; for (var ig=0; ig<groups.length; ig++) groupById[groups[ig].id] = groups[ig];
+
+  // B5 fix: edges (and their wide invisible .edge-hit hover targets) used to be appended AFTER
+  // the group/package rects, which put them on top in paint order and let .edge-hit intercept
+  // clicks meant for the package underneath it. SVG stacks later-appended siblings above earlier
+  // ones, so we now append every edge/edge-hit FIRST — package/group rects then render on top and
+  // win pointer-events wherever they overlap an edge; edge hover still works on exposed segments.
+  var collapsedSet = new Set(Object.keys(state.collapsedGroups).filter(function (k) { return state.collapsedGroups[k]; }));
+  var groupOfContainer = {}; for (var ic=0; ic<map.containers.length; ic++) groupOfContainer[map.containers[ic].id] = map.containers[ic].groupId;
+
+  var crossGroupAgg = new Map();
+  var edges = map.containerEdges || [];
+  var defs = el("defs");
+  defs.innerHTML = '<marker id="arrow-cross" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7ee787"/></marker>' +
+    '<marker id="arrow-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ffdf5d"/></marker>';
+  g.appendChild(defs);
+
+  for (var ei=0; ei<edges.length; ei++) {
+    var edge = edges[ei];
+    var fromG = groupOfContainer[edge.from];
+    var toG = groupOfContainer[edge.to];
+    var fromCollapsed = collapsedSet.has(fromG);
+    var toCollapsed = collapsedSet.has(toG);
+    if (fromCollapsed || toCollapsed) {
+      var k2 = fromG + "→" + toG;
+      if (!crossGroupAgg.has(k2)) crossGroupAgg.set(k2, { from: fromG, to: toG, count: 0, callCount: 0, labels: new Set() });
+      var ag = crossGroupAgg.get(k2);
+      ag.count += edge.count;
+      ag.callCount += (edge.callCount || 0);
+      ag.labels.add(edge.label);
+      continue;
+    }
+    var fromPos = layout.packagePos.get(edge.from);
+    var toPos = layout.packagePos.get(edge.to);
+    if (!fromPos || !toPos) continue;
+    var x1, y1, x2, y2;
+    var fcx = fromPos.x + fromPos.w/2, fcy = fromPos.y + fromPos.h/2;
+    var tcx = toPos.x + toPos.w/2, tcy = toPos.y + toPos.h/2;
+    if (Math.abs(tcx - fcx) >= Math.abs(tcy - fcy)) {
+      x1 = tcx > fcx ? fromPos.x + fromPos.w : fromPos.x;
+      y1 = fcy;
+      x2 = tcx > fcx ? toPos.x : toPos.x + toPos.w;
+      y2 = tcy;
+    } else {
+      x1 = fcx;
+      y1 = tcy > fcy ? fromPos.y + fromPos.h : fromPos.y;
+      x2 = tcx;
+      y2 = tcy > fcy ? toPos.y : toPos.y + toPos.h;
+    }
+    var sw = Math.min(4, 0.8 + Math.log2(edge.count + 1));
+    var path = el("path", { class: "edge cross", d: flowPath(x1, y1, x2, y2), "stroke-width": sw, "marker-end": "url(#arrow-cross)" });
+    g.appendChild(path);
+    var hit = el("path", { class: "edge-hit", d: flowPath(x1, y1, x2, y2) });
+    g.appendChild(hit);
+    hit.addEventListener("mouseenter", function (e) { return function (ev) { showTooltip(tooltipEdgeHtml(e), ev); }; }(edge));
+    hit.addEventListener("mousemove", function (e) { return function (ev) { showTooltip(tooltipEdgeHtml(e), ev); }; }(edge));
+    hit.addEventListener("mouseleave", hideTooltip);
+    var dist = Math.hypot(x2 - x1, y2 - y1);
+    if (dist >= 80 && edge.label) {
+      var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      var labelText = edge.label;
+      var chipW = labelText.length * 6.2 + 12;
+      var labelClass = "edge-label-text " + labelText.toLowerCase().replace(/\s+/g, "-");
+      var chip = el("g", { transform: "translate(" + mx + "," + my + ")" });
+      chip.appendChild(el("rect", { class: "edge-label-bg", x: -chipW/2, y: -9, width: chipW, height: 18, rx: 4, ry: 4 }));
+      chip.appendChild(el("text", { class: labelClass, x: 0, y: 3, "text-anchor": "middle" }, labelText));
+      g.appendChild(chip);
+    }
+  }
+
+  crossGroupAgg.forEach(function (agg) {
+    var fromGP = layout.groupPos.get(agg.from), toGP = layout.groupPos.get(agg.to);
+    if (!fromGP || !toGP) return;
+    var fcx = fromGP.x + fromGP.w/2, fcy = fromGP.y + fromGP.h/2;
+    var tcx = toGP.x + toGP.w/2, tcy = toGP.y + toGP.h/2;
+    var x1, y1, x2, y2;
+    if (Math.abs(tcx - fcx) >= Math.abs(tcy - fcy)) {
+      x1 = tcx > fcx ? fromGP.x + fromGP.w : fromGP.x; y1 = fcy;
+      x2 = tcx > fcx ? toGP.x : toGP.x + toGP.w; y2 = tcy;
+    } else {
+      x1 = fcx; y1 = tcy > fcy ? fromGP.y + fromGP.h : fromGP.y;
+      x2 = tcx; y2 = tcy > fcy ? toGP.y : toGP.y + toGP.h;
+    }
+    g.appendChild(el("path", { class: "edge cross", d: flowPath(x1, y1, x2, y2),
+      "stroke-width": Math.min(6, 1.5 + Math.log2(agg.count + 1)), "marker-end": "url(#arrow-cross)" }));
+    var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    var labelText = (agg.from.replace(/^group:/, "") + " → " + agg.to.replace(/^group:/, "") + " · " + agg.count);
+    var chipW = labelText.length * 6.2 + 12;
+    var chip = el("g", { transform: "translate(" + mx + "," + my + ")" });
+    chip.appendChild(el("rect", { class: "edge-label-bg", x: -chipW/2, y: -9, width: chipW, height: 18, rx: 4, ry: 4 }));
+    chip.appendChild(el("text", { class: "edge-label-text", x: 0, y: 3, "text-anchor": "middle" }, labelText));
+    g.appendChild(chip);
+  });
+
+  // Groups and packages render last (on top of all edges/edge-hit paths — see the B5 note above).
+  layout.groupPos.forEach(function (gp, id) {
+    var grp = gp.group;
+    var color = grp.color || "#8b949e";
+    var focusedGroup = state.focus && state.focus.kind === "group" && state.focus.id === id;
+    var rect = el("rect", {
+      class: "group-rect" + (gp.collapsed ? " collapsed" : "") + (focusedGroup ? " focused" : ""),
+      x: gp.x, y: gp.y, width: gp.w, height: gp.h, rx: 12, ry: 12,
+      stroke: color, fill: "rgba(28,37,48,0.32)",
+    });
+    g.appendChild(rect);
+    g.appendChild(el("rect", { class: "group-header",
+      x: gp.x, y: gp.y, width: gp.w, height: 30, rx: 12, ry: 12 }));
+    g.appendChild(el("text", { class: "group-name", x: gp.x + 14, y: gp.y + 20, fill: color }, grp.name));
+    var sub = grp.members.length + " pkgs · " + (grp.moduleCount || 0) + " modules" + (grp.source === "curated" ? " · curated" : "");
+    g.appendChild(el("text", { class: "group-sub", x: gp.x + gp.w - 14, y: gp.y + 20, "text-anchor": "end" }, sub));
+    rect.addEventListener("dblclick", function (gp2, id2) { return function (ev) {
+      ev.stopPropagation();
+      var set = new Set();
+      for (var i=0; i<map.containers.length; i++) {
+        var c = map.containers[i];
+        if (c.groupId === id2) {
+          var mods = map.modules.filter(function (m) { return containerIdOf(m) === c.id; });
+          for (var k=0; k<mods.length; k++) set.add(mods[k].id);
+        }
+      }
+      buildFocus("group", id2, set);
+      render();
+    }; }(gp, id));
+    // Header collapse hit-test: compare in WORLD coordinates (defect 10), not raw screen px,
+    // so it stays correct at any zoom level.
+    rect.addEventListener("click", function (gp2, id2) { return function (ev) {
+      var world = svgToWorld(ev);
+      if (world.y - gp2.y <= 30) {
+        ev.stopPropagation();
+        state.collapsedGroups[id2] = !state.collapsedGroups[id2];
+        render();
+      }
+    }; }(gp, id));
+  });
+
+  layout.packagePos.forEach(function (pp, id) {
+    var c = pp.container;
+    var grp = groupById[pp.groupId] || { color: "#3a4858" };
+    var sel = state.selected && state.selected.kind === "box" && state.selected.id === id;
+    // Fixed defect 6: dim by containerSet (packages), not a module-id set.
+    var dim = state.focus && !state.focus.containerSet.has(id);
+    var rect = el("rect", {
+      class: "pkg-rect" + (sel ? " selected" : "") + (dim ? " dim" : ""),
+      x: pp.x, y: pp.y, width: pp.w, height: pp.h, rx: 8, ry: 8,
+      stroke: grp.color || "#3a4858",
+    });
+    rect.appendChild(el("title", null, c.name + " — " + c.moduleCount + " modules"));
+    g.appendChild(rect);
+    g.appendChild(el("text", { class: "pkg-title", x: pp.x + 10, y: pp.y + 18 },
+      truncate(c.name, Math.max(8, Math.floor(pp.w / 7.5)))));
+    var entryCount = (c.topFiles || []).filter(function (t) { return /entry|HTTP/.test(t.reason); }).length;
+    var sub = (c.moduleCount || 0) + " modules" + (entryCount ? " · " + entryCount + " entry" : "");
+    g.appendChild(el("text", { class: "pkg-sub", x: pp.x + 10, y: pp.y + 32 }, sub));
+    if (pp.h >= 76) {
+      var top = (c.topFiles || []).slice(0, Math.min(3, Math.floor((pp.h - 40) / 14)));
+      for (var t=0; t<top.length; t++) {
+        var label = top[t].reason + ": " + top[t].path.split("/").slice(-2).join("/");
+        g.appendChild(el("text", { class: "pkg-topfiles", x: pp.x + 10, y: pp.y + 48 + t * 13 },
+          truncate(label, Math.max(10, Math.floor(pp.w / 6.5)))));
+      }
+    }
+    rect.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      selectNode("box", id);
+    });
+    rect.addEventListener("mouseenter", function (ev) { showTooltip(tooltipPackageHtml(c, grp.name), ev); });
+    rect.addEventListener("mousemove", function (ev) { showTooltip(tooltipPackageHtml(c, grp.name), ev); });
+    rect.addEventListener("mouseleave", hideTooltip);
+  });
+
+  if (state.overlayFlow && state.selectedFlow) overlayFlowOnArchitecture(g, layout);
+}
+
+function overlayFlowOnArchitecture(g, layout) {
+  var map = state.map;
+  var flow = map.flows.find(function (f) { return f.id === state.selectedFlow; });
+  if (!flow) return;
+  var intraStack = new Map();
+  for (var si=0; si<flow.steps.length; si++) {
+    var step = flow.steps[si];
+    var fromKey = layout.packagePos.has(step.from) ? step.from : step.boxFrom;
+    var toKey = layout.packagePos.has(step.to) ? step.to : step.boxTo;
+    var from = layout.packagePos.get(fromKey);
+    var to = layout.packagePos.get(toKey);
+    if (!from || !to) continue;
+    if (fromKey === toKey) {
+      var idx = intraStack.get(fromKey) || 0;
+      intraStack.set(fromKey, idx + 1);
+      var px = from.x + from.w - 16, py = from.y + from.h - 12 - idx * 18;
+      if (py < from.y + 36) { px = from.x + from.w - 16 - 20; py = from.y + from.h - 12; }
+      var chip = el("g", { transform: "translate(" + px + "," + py + ")" });
+      chip.appendChild(el("circle", { r: 7, fill: "#ffdf5d", stroke: "#0b0d10", "stroke-width": 1.5 }));
+      chip.appendChild(el("text", { y: 3, "text-anchor": "middle", "font-size": 9, "font-weight": 700, fill: "#0b0d10" }, String(step.n)));
+      g.appendChild(chip);
+      continue;
+    }
+    var x1 = from.x + from.w / 2, y1 = from.y + from.h / 2;
+    var x2 = to.x + to.w / 2, y2 = to.y + to.h / 2;
+    g.appendChild(el("path", { class: "edge flow", d: flowPath(x1, y1, x2, y2), "stroke-width": 2, "marker-end": "url(#arrow-flow)" }));
+    var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    var chip2 = el("g", { transform: "translate(" + mx + "," + my + ")" });
+    chip2.appendChild(el("circle", { r: 10, fill: "#ffdf5d", stroke: "#0b0d10", "stroke-width": 2 }));
+    chip2.appendChild(el("text", { y: 4, "text-anchor": "middle", "font-size": 10, "font-weight": 700, fill: "#0b0d10" }, String(step.n)));
+    g.appendChild(chip2);
+  }
+}
+
+// ====================== Flows (swimlane) view ======================
+// Packs each lane into as many COLUMNS as needed to keep every box readable (defect 11: a single
+// column with 22 boxes overflowed the viewport with no way to reach the rest).
+function layoutSwimlanes(map, W, H) {
+  var lanes = map.lanes || [];
+  if (!lanes.length) return { lanePos: new Map(), boxPos: new Map() };
+  var laneW = W / lanes.length;
+  var lanePos = new Map();
+  lanes.forEach(function (lane, i) {
+    lanePos.set(lane.id, { x: laneW * i, w: laneW, lane: lane });
+  });
+  var boxesByLane = new Map();
+  lanes.forEach(function (l) { boxesByLane.set(l.id, []); });
+  (map.boxes || []).forEach(function (b) {
+    if (boxesByLane.has(b.lane)) boxesByLane.get(b.lane).push(b);
+  });
+  boxesByLane.forEach(function (arr) {
+    arr.sort(function (a,b) {
+      if ((a.hasEntry?1:0) !== (b.hasEntry?1:0)) return (b.hasEntry?1:0) - (a.hasEntry?1:0);
+      return a.title.localeCompare(b.title);
+    });
+  });
+  var headerH = 36;
+  var boxPos = new Map();
+  boxesByLane.forEach(function (arr, laneId) {
+    var lp = lanePos.get(laneId);
+    if (!arr.length) return;
+    var availH = H - headerH - 24;
+    var minBoxH = 46, boxPad = 10;
+    var maxRows = Math.max(1, Math.floor(availH / (minBoxH + boxPad)));
+    var cols = Math.max(1, Math.ceil(arr.length / maxRows));
+    var rows = Math.ceil(arr.length / cols);
+    var colW = (lp.w - 16) / cols;
+    var boxH = Math.min(64, Math.max(minBoxH, availH / rows - boxPad));
+    var totalH = rows * (boxH + boxPad);
+    var startY = headerH + Math.max(8, (availH - totalH) / 2);
+    arr.forEach(function (box, i) {
+      var col = Math.floor(i / rows), row = i % rows;
+      // B6 fix: a hard 110px floor could exceed colW once many columns were needed, so a box's
+      // width could overrun into the next column (or, at the last lane column, the next lane) —
+      // clamp to colW so boxes/columns/lanes never overlap, degrading readability before geometry.
+      var w = Math.max(1, Math.min(110, colW - 14));
+      var x = lp.x + 8 + col * colW + (colW - w) / 2;
+      boxPos.set(box.id, { x: x, y: startY + row * (boxH + boxPad), w: w, h: boxH, box: box, laneId: laneId });
+    });
+  });
+  return { lanePos: lanePos, boxPos: boxPos };
+}
+
+function renderFlowsSwimlane(g, W, H) {
+  var map = state.map;
+  var layout = layoutSwimlanes(map, W, H);
+  layout.lanePos.forEach(function (lp) {
+    // B6 fix: lane names were drawn full-length with no width limit, so a wide name (e.g.
+    // "APPLICATION") ran straight into the next lane's label ("APPLICATIONDOMAIN"). Truncate to
+    // what actually fits the lane's own width (uppercase + 1.5px letter-spacing ~9px/char).
+    var maxChars = Math.max(3, Math.floor((lp.w - 20) / 9));
+    g.appendChild(el("text", { class: "layer-label", x: lp.x + 14, y: 22 }, truncate(lp.lane.name, maxChars)));
+    g.appendChild(el("line", { class: "lane-divider", x1: lp.x + lp.w, y1: 0, x2: lp.x + lp.w, y2: H }));
+  });
+
+  var flow = state.selectedFlow ? map.flows.find(function (f) { return f.id === state.selectedFlow; }) : null;
+  var inFlow = new Set();
+  var selectedStepIds = new Set();
+  if (flow) {
+    for (var i=0; i<flow.steps.length; i++) {
+      inFlow.add(flow.steps[i].from); inFlow.add(flow.steps[i].to);
+      if (state.selectedStep && flow.steps[i].n === state.selectedStep) {
+        selectedStepIds.add(flow.steps[i].from); selectedStepIds.add(flow.steps[i].to);
+      }
+    }
+  }
+
+  layout.boxPos.forEach(function (p, id) {
+    var box = p.box;
+    var hi = flow && inFlow.has(id);
+    var dim = flow && !inFlow.has(id);
+    var isSelStep = selectedStepIds.has(id);
+    var node = el("g", { class: "flow-box", transform: "translate(" + p.x + "," + p.y + ")" });
+    var rect = el("rect", {
+      width: p.w, height: p.h, rx: 6, ry: 6,
+      fill: hi ? (isSelStep ? "#3a2c00" : "#1f1900") : "rgba(28,37,48,0.55)",
+      stroke: hi ? "#ffdf5d" : (box.color || "#3a4858"),
+      "stroke-width": hi ? (isSelStep ? 2 : 1.4) : 1,
+      opacity: dim ? 0.12 : 1,
+    });
+    node.appendChild(rect);
+    node.appendChild(el("text", { x: 12, y: 19, fill: hi ? "#ffdf5d" : "#e6edf3",
+      "font-size": 12, "font-weight": 600, opacity: dim ? 0.2 : 1 }, truncate(box.title, 28)));
+    if (box.sublabel) {
+      node.appendChild(el("text", { x: 12, y: 35, fill: "#8b949e", "font-size": 10,
+        opacity: dim ? 0.2 : 1 }, truncate(box.sublabel, 36)));
+    }
+    node.addEventListener("click", function (ev) { ev.stopPropagation(); selectNode("box", id); });
+    g.appendChild(node);
+  });
+
+  if (flow) {
+    var arrowDefs = el("defs");
+    arrowDefs.innerHTML = '<marker id="arrowhead-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ffdf5d"/></marker>';
+    g.appendChild(arrowDefs);
+    var intraStackByBox = new Map();
+    function chipAt(boxPos, idx, step, active) {
+      var px = boxPos.x + boxPos.w - 18;
+      var py = boxPos.y + boxPos.h - 12 - idx * 20;
+      if (py < boxPos.y + 36) { px = boxPos.x + boxPos.w - 18 - 22; py = boxPos.y + boxPos.h - 12; }
+      var chip = el("g", { class: "step-num" + (active ? " active" : ""), transform: "translate(" + px + "," + py + ")" });
+      chip.appendChild(el("circle", { r: 8, fill: active ? "#fff" : "#ffdf5d", stroke: "#0b0d10", "stroke-width": 1.5 }));
+      chip.appendChild(el("text", { y: 3, "text-anchor": "middle", "font-size": 9, "font-weight": 700, fill: "#0b0d10" }, String(step.n)));
+      chip.addEventListener("click", function (n) { return function (ev) { ev.stopPropagation(); selectStep(n); }; }(step.n));
+      g.appendChild(chip);
+    }
+    for (var si=0; si<flow.steps.length; si++) {
+      var step = flow.steps[si];
+      var fromKey = layout.boxPos.has(step.from) ? step.from : step.boxFrom;
+      var toKey = layout.boxPos.has(step.to) ? step.to : step.boxTo;
+      var from = layout.boxPos.get(fromKey);
+      var to = layout.boxPos.get(toKey);
+      if (!from || !to) continue;
+      var active = state.selectedStep === step.n;
+      var intra = fromKey === toKey;
+      if (intra) {
+        var idx2 = intraStackByBox.get(fromKey) || 0;
+        intraStackByBox.set(fromKey, idx2 + 1);
+        chipAt(from, idx2, step, active);
+        continue;
+      }
+      var sameLane = from.laneId === to.laneId;
+      var x1, y1, x2, y2;
+      if (sameLane) {
+        if (to.y > from.y) { x1 = from.x + from.w / 2; y1 = from.y + from.h; x2 = to.x + to.w / 2; y2 = to.y; }
+        else { x1 = from.x + from.w / 2; y1 = from.y; x2 = to.x + to.w / 2; y2 = to.y + to.h; }
+      } else if (to.x > from.x) {
+        x1 = from.x + from.w; y1 = from.y + from.h / 2; x2 = to.x; y2 = to.y + to.h / 2;
+      } else {
+        x1 = from.x; y1 = from.y + from.h / 2; x2 = to.x + to.w; y2 = to.y + to.h / 2;
+      }
+      var p = el("path", { class: "edge flow" + (active ? " active" : ""), d: flowPath(x1, y1, x2, y2),
+        "marker-end": "url(#arrowhead-flow)", opacity: active || state.selectedStep == null ? 0.95 : 0.35 });
+      g.appendChild(p);
+      var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      var circle = el("g", { class: "step-num" + (active ? " active" : ""), transform: "translate(" + mx + "," + my + ")" });
+      circle.appendChild(el("circle", { r: 11, fill: active ? "#fff" : "#ffdf5d", stroke: "#0b0d10", "stroke-width": 2 }));
+      circle.appendChild(el("text", { y: 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#0b0d10" }, String(step.n)));
+      circle.addEventListener("click", function (n) { return function (ev) { ev.stopPropagation(); selectStep(n); }; }(step.n));
+      g.appendChild(circle);
+    }
+  }
+}
+
+function selectFlow(flowId) {
+  state.selectedFlow = flowId;
+  state.selectedStep = null;
+  setView("flows");
+  renderFlowList();
+  renderStepList();
+}
+function selectStep(n) {
+  state.selectedStep = n;
+  renderStepList();
+  render();
+}
+function clearFlow() {
+  state.selectedFlow = null;
+  state.selectedStep = null;
+  state.selected = null;
+  clearFocus();
+  renderFlowList();
+  renderStepList();
+}
+
+// ====================== Graph view (canvas 2D, force-directed) ======================
+
+// Hand-written Barnes-Hut quadtree for O(n log n) repulsion between nodes.
+function Quad(x0, y0, x1, y1) {
+  this.x0 = x0; this.y0 = y0; this.x1 = x1; this.y1 = y1;
+  this.mass = 0; this.cx = 0; this.cy = 0;
+  this.node = null; this.children = null;
+}
+Quad.prototype._childFor = function (n) {
+  var mx = (this.x0 + this.x1) / 2, my = (this.y0 + this.y1) / 2;
+  var idx = (n.x < mx ? 0 : 1) + (n.y < my ? 0 : 2);
+  return this.children[idx];
+};
+Quad.prototype.insert = function (n, depth) {
+  depth = depth || 0;
+  if (this.node === null && this.children === null) { this.node = n; return; }
+  if (depth > 20) { // degenerate / coincident points — approximate rather than recurse forever
+    this.mass += 1; this.cx = (this.cx * (this.mass - 1) + n.x) / this.mass; this.cy = (this.cy * (this.mass - 1) + n.y) / this.mass;
+    return;
+  }
+  if (this.children === null) {
+    var mx = (this.x0 + this.x1) / 2, my = (this.y0 + this.y1) / 2;
+    this.children = [
+      new Quad(this.x0, this.y0, mx, my), new Quad(mx, this.y0, this.x1, my),
+      new Quad(this.x0, my, mx, this.y1), new Quad(mx, my, this.x1, this.y1),
+    ];
+    var old = this.node; this.node = null;
+    this._childFor(old).insert(old, depth + 1);
+  }
+  this._childFor(n).insert(n, depth + 1);
+};
+Quad.prototype.computeMass = function () {
+  if (this.node) { this.mass = 1; this.cx = this.node.x; this.cy = this.node.y; return; }
+  if (!this.children) return;
+  var m = 0, sx = 0, sy = 0;
+  for (var i=0; i<4; i++) {
+    var c = this.children[i]; c.computeMass();
+    m += c.mass; sx += c.cx * c.mass; sy += c.cy * c.mass;
+  }
+  if (m > 0) { this.mass = m; this.cx = sx / m; this.cy = sy / m; }
+};
+Quad.prototype.applyForce = function (n, theta, strength, out) {
+  if (this.mass === 0 || this.node === n) return;
+  var dx = this.cx - n.x, dy = this.cy - n.y;
+  var distSq = dx * dx + dy * dy;
+  if (distSq < 0.0001) distSq = 0.0001;
+  var size = this.x1 - this.x0;
+  if (this.node || (size * size) / distSq < theta * theta) {
+    var dist = Math.sqrt(distSq);
+    var f = strength * this.mass / distSq;
+    out.x -= (dx / dist) * f; out.y -= (dy / dist) * f;
+    return;
+  }
+  for (var i=0; i<4; i++) this.children[i].applyForce(n, theta, strength, out);
+};
+function buildQuadtree(nodes) {
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (var i=0; i<nodes.length; i++) {
+    var n = nodes[i];
+    if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+    if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+  }
+  if (!isFinite(minX)) { minX = -1; maxX = 1; minY = -1; maxY = 1; }
+  var pad = Math.max(1, Math.max(maxX - minX, maxY - minY)) * 0.1;
+  var root = new Quad(minX - pad, minY - pad, maxX + pad, maxY + pad);
+  for (var j=0; j<nodes.length; j++) root.insert(nodes[j], 0);
+  root.computeMass();
+  return root;
+}
+
+function resolveGraphEndpoint(mid) {
+  var m = state.idx.modById.get(mid);
+  var cid = m ? m.cluster : null;
+  if (cid && state.graph.collapsedClusters.has(cid)) return cid;
+  return mid;
+}
+
+function moduleRadius(m) {
+  if (state.sizeByDegree) {
+    var deg = (state.graph.degree.get(m.id) || 0);
+    return Math.max(2, Math.min(14, 2 + Math.sqrt(deg + 1) * 2.2));
+  }
+  return Math.max(2, Math.min(12, 1.6 + Math.sqrt((m.loc || 1) / 30)));
+}
+function clusterRadius(c) {
+  return Math.max(10, Math.min(46, 6 + Math.sqrt(c.size) * 3.4));
+}
+
+// Build the (mostly) static per-map graph model: cluster seed centroids, degree table, sink/entry
+// sets. Positions live in a durable Map so toggling expand/collapse doesn't jump nodes around.
+function ensureGraphModel() {
+  if (state.graph) return;
+  var map = state.map;
+  var clusters = (map.clusters || []).slice().sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+  var clusterPos = new Map();
+  clusters.forEach(function (c, i) {
+    var ang = i * GOLD;
+    var rad = 90 * Math.sqrt(i + 1);
+    clusterPos.set(c.id, { x: Math.cos(ang) * rad, y: Math.sin(ang) * rad });
+  });
+  var degree = new Map();
+  (map.edges || []).forEach(function (e) {
+    if (e.kind !== "import" && e.kind !== "re-export") return;
+    degree.set(e.from, (degree.get(e.from) || 0) + 1);
+    degree.set(e.to, (degree.get(e.to) || 0) + 1);
+  });
+  state.graph = {
+    clusters: clusters,
+    clusterPos: clusterPos,
+    degree: degree,
+    collapsedClusters: new Set(clusters.map(function (c) { return c.id; })), // default: all collapsed
+    pos: new Map(), // node id -> {x,y,vx,vy}
+    pinned: new Set(),
+    nodes: [],
+    nodeIndex: new Map(),
+    edges: [],
+    running: false,
+    alpha: 1,
+    ticks: 0,
+    dragId: null,
+    // B3: the initial camera fit() runs once, right when clusters are still at their tight seed
+    // positions; repulsion then spreads the force layout out over the next ~300 ticks, so the
+    // camera can end up framing empty space by the time it settles. settleFitDone/userTouchedCamera
+    // let simTick re-fit exactly once when the sim first settles, but only if the user hasn't
+    // already taken control of the camera (panned/zoomed) in the meantime.
+    settleFitDone: false,
+    userTouchedCamera: false,
+  };
+  rebuildVisibleGraph();
+}
+
+function graphSeedPos(id, seedFn) {
+  var pos = state.graph.pos;
+  if (!pos.has(id)) pos.set(id, Object.assign({ vx: 0, vy: 0 }, seedFn()));
+  return pos.get(id);
+}
+
+function rebuildVisibleGraph() {
+  var g = state.graph, map = state.map;
+  var collapsed = g.collapsedClusters;
+  var nodes = [];
+  g.clusters.forEach(function (c) {
+    var centroid = g.clusterPos.get(c.id) || { x: 0, y: 0 };
+    if (collapsed.has(c.id)) {
+      var pos = graphSeedPos(c.id, function () { return { x: centroid.x, y: centroid.y }; });
+      nodes.push({ id: c.id, kind: "cluster", cluster: c.id, r: clusterRadius(c), pos: pos, isTest: false, isEntry: false, isSink: false, label: c.label, size: c.size });
+    } else {
+      var members = c.members.slice().sort();
+      members.forEach(function (mid, mi) {
+        var m = state.idx.modById.get(mid); if (!m) return;
+        var pos = graphSeedPos(mid, function () {
+          var ang = mi * GOLD, rad = 10 + Math.sqrt(mi) * 12;
+          return { x: centroid.x + Math.cos(ang) * rad, y: centroid.y + Math.sin(ang) * rad };
+        });
+        nodes.push({
+          id: mid, kind: "module", cluster: c.id, m: m, r: moduleRadius(m), pos: pos,
+          isTest: !!m.isTest, isEntry: state.idx.entryIds.has(mid), isSink: state.idx.sinkIds.has(mid),
+        });
+      });
+    }
+  });
+  g.nodes = nodes;
+  g.nodeIndex = new Map(nodes.map(function (n) { return [n.id, n]; }));
+  g.nodeIdxOf = new Map(nodes.map(function (n, i) { return [n.id, i]; }));
+
+  var edgeAgg = new Map();
+  (map.edges || []).forEach(function (e) {
+    if (e.kind !== "import" && e.kind !== "re-export") return;
+    var a = resolveGraphEndpoint(e.from), b = resolveGraphEndpoint(e.to);
+    if (a === b || !g.nodeIndex.has(a) || !g.nodeIndex.has(b)) return;
+    var key = a + "→" + b;
+    var agg = edgeAgg.get(key);
+    if (!agg) { agg = { from: a, to: b, count: 0, conf: { EXTRACTED: 0, INFERRED: 0, AMBIGUOUS: 0 } }; edgeAgg.set(key, agg); }
+    agg.count++;
+    agg.conf[e.confidence] = (agg.conf[e.confidence] || 0) + 1;
+  });
+  g.edges = Array.from(edgeAgg.values()).map(function (a) {
+    var confidence = a.conf.EXTRACTED ? "EXTRACTED" : a.conf.INFERRED ? "INFERRED" : "AMBIGUOUS";
+    return { from: a.from, to: a.to, count: a.count, confidence: confidence };
+  });
+  restartSim();
+  // The HUD line reports node/collapse counts, so every visible-graph rebuild must refresh it —
+  // expand/collapse arrives via requestDraw (canvas only), which never touches the DOM status bar.
+  if (state.view === "graph") { $("hud").textContent = hudText(); $("legend").innerHTML = legendHtml(); }
+}
+
+function toggleCluster(clusterId) {
+  var g = state.graph;
+  if (g.collapsedClusters.has(clusterId)) g.collapsedClusters.delete(clusterId);
+  else g.collapsedClusters.add(clusterId);
+  rebuildVisibleGraph();
+  requestDraw();
+}
+// B1 fix: rebuild the Set wholesale rather than mutating collapsedClusters in place. A fresh
+// Set can never be left partially iterated/mutated (the class of bug that made "expand all"
+// expand exactly one cluster and then stall on every later click), and guards against
+// state.graph not existing yet (button clicked before the graph model has been built).
+function expandAllClusters() {
+  var g = state.graph; if (!g) return;
+  g.collapsedClusters = new Set();
+  rebuildVisibleGraph();
+  requestDraw();
+}
+function collapseAllClusters() {
+  var g = state.graph; if (!g) return;
+  g.collapsedClusters = new Set(g.clusters.map(function (c) { return c.id; }));
+  rebuildVisibleGraph();
+  requestDraw();
+}
+
+function restartSim() {
+  var g = state.graph;
+  g.alpha = 1; g.ticks = 0;
+  if (!g.running) { g.running = true; requestAnimationFrame(simTick); }
+}
+
+function simTick() {
+  var g = state.graph;
+  if (!g || !g.running) return;
+  var nodes = g.nodes;
+  if (nodes.length === 0) { g.running = false; return; }
+  var flat = nodes.map(function (n) { return { x: n.pos.x, y: n.pos.y }; });
+  var qt = buildQuadtree(flat);
+  var REPULSE = 600, THETA = 0.9;
+  var fx = new Float64Array(nodes.length), fy = new Float64Array(nodes.length);
+  for (var i=0; i<nodes.length; i++) {
+    var out = { x: 0, y: 0 };
+    qt.applyForce(flat[i], THETA, REPULSE, out);
+    fx[i] = out.x; fy[i] = out.y;
+  }
+  g.edges.forEach(function (e) {
+    var a = g.nodeIndex.get(e.from), b = g.nodeIndex.get(e.to);
+    if (!a || !b) return;
+    var ai = g.nodeIdxOf.get(e.from), bi = g.nodeIdxOf.get(e.to);
+    var dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+    var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    var L = 60 + a.r + b.r;
+    var k = 0.015;
+    var f = k * (dist - L);
+    var ux = dx / dist, uy = dy / dist;
+    fx[ai] += ux * f; fy[ai] += uy * f;
+    fx[bi] -= ux * f; fy[bi] -= uy * f;
+  });
+  var alpha = g.alpha;
+  for (var j=0; j<nodes.length; j++) {
+    var n = nodes[j];
+    fx[j] -= n.pos.x * 0.006; fy[j] -= n.pos.y * 0.006; // mild centering gravity
+    if (state.graph.pinned.has(n.id) || n.id === g.dragId) { n.pos.vx = 0; n.pos.vy = 0; continue; }
+    n.pos.vx = (n.pos.vx + fx[j] * alpha) * 0.80;
+    n.pos.vy = (n.pos.vy + fy[j] * alpha) * 0.80;
+    n.pos.x += n.pos.vx;
+    n.pos.y += n.pos.vy;
+  }
+  g.alpha *= 0.985;
+  g.ticks++;
+  if (g.alpha < 0.008 || g.ticks > 300) {
+    g.running = false;
+    // B3: keep the camera framing the layout it actually settled into (see settleFitDone note
+    // in ensureGraphModel) rather than whatever the pre-settle seed layout looked like.
+    if (!g.settleFitDone && !g.userTouchedCamera) {
+      g.settleFitDone = true;
+      fitGraph();
+    }
+  }
+  requestDraw();
+  if (g.running) requestAnimationFrame(simTick);
+}
+
+// ---- canvas drawing ----
+var drawPending = false;
+function requestDraw() {
+  if (drawPending) return;
+  drawPending = true;
+  requestAnimationFrame(function () { drawPending = false; if (state.view === "graph") drawGraph(); });
+}
+// B3: read devicePixelRatio once per resize and cache it on state.dpr, instead of every caller
+// re-reading window.devicePixelRatio independently. resizeCanvas() (which sizes the backing
+// store) and drawGraph() (which scales the 2D context to match) must always agree on exactly
+// the same ratio — caching removes any chance of them observing different values if the OS
+// reports a changed ratio (e.g. the window moves to a different-DPR display) between the two
+// calls. All layout/hit-test math (graphNodeAt, drawGraph's W/H) stays in CSS pixels regardless
+// (canvas.clientWidth/clientHeight, never canvas.width/height), so dpr only ever affects backing
+// store crispness, never coordinate math.
+function dpr() { return state.dpr || (state.dpr = window.devicePixelRatio || 1); }
+function resizeCanvas() {
+  var r = window.devicePixelRatio || 1;
+  state.dpr = r;
+  var w = canvas.clientWidth || 800, h = canvas.clientHeight || 600;
+  canvas.width = Math.max(1, Math.round(w * r));
+  canvas.height = Math.max(1, Math.round(h * r));
+}
+
+function nodeMatchesSearch(n) {
+  if (!state.searchMatches) return true;
+  if (n.kind === "module") return state.searchMatches.has(n.id);
+  var c = state.idx.clusterById.get(n.cluster || n.id);
+  return c && c.members.some(function (mid) { return state.searchMatches.has(mid); });
+}
+function nodeMatchesFocus(n) {
+  if (!state.focus) return true;
+  if (n.kind === "module") return state.focus.moduleSet.has(n.id);
+  var c = state.idx.clusterById.get(n.cluster || n.id);
+  return c && c.members.some(function (mid) { return state.focus.moduleSet.has(mid); });
+}
+function nodeOpacity(n) {
+  var o = 1;
+  if (n.kind === "module" && n.isTest && !state.showTests) o *= 0.28;
+  if (!nodeMatchesSearch(n)) o *= 0.15;
+  if (!nodeMatchesFocus(n)) o *= 0.15;
+  return o;
+}
+function confidenceVisible(conf) { return !!state.confidence[conf]; }
+function setLineDashFor(ctx, conf) {
+  if (conf === "INFERRED") ctx.setLineDash([6, 4]);
+  else if (conf === "AMBIGUOUS") ctx.setLineDash([1, 4]);
+  else ctx.setLineDash([]);
+}
+
+function drawGraph() {
+  if (!canvas || !state.graph) return;
+  var ctx = canvas.getContext("2d");
+  var r = dpr();
+  var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(W / 2 + state.gcam.pan.x, H / 2 + state.gcam.pan.y);
+  ctx.scale(state.gcam.zoom, state.gcam.zoom);
+
+  var g = state.graph;
+  // edges
+  g.edges.forEach(function (e) {
+    if (!confidenceVisible(e.confidence)) return;
+    var a = g.nodeIndex.get(e.from), b = g.nodeIndex.get(e.to);
+    if (!a || !b) return;
+    var op = Math.min(nodeOpacity(a), nodeOpacity(b));
+    ctx.globalAlpha = 0.55 * op;
+    ctx.strokeStyle = "#3a4858";
+    ctx.lineWidth = Math.min(3, 0.5 + Math.log2(e.count + 1) * 0.5) / state.gcam.zoom;
+    setLineDashFor(ctx, e.confidence);
+    ctx.beginPath();
+    ctx.moveTo(a.pos.x, a.pos.y);
+    ctx.lineTo(b.pos.x, b.pos.y);
+    ctx.stroke();
+    // arrowhead
+    var dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+    var dist = Math.sqrt(dx*dx+dy*dy) || 1;
+    var ux = dx/dist, uy = dy/dist;
+    var ex = b.pos.x - ux * (b.r + 2), ey = b.pos.y - uy * (b.r + 2);
+    var ah = 5 / state.gcam.zoom;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - ux*ah - uy*ah*0.6, ey - uy*ah + ux*ah*0.6);
+    ctx.lineTo(ex - ux*ah + uy*ah*0.6, ey - uy*ah - ux*ah*0.6);
+    ctx.closePath();
+    ctx.fillStyle = "#3a4858";
+    ctx.fill();
+  });
+  ctx.setLineDash([]);
+
+  if (state.highlightSurprising) {
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = "#ff5c5c";
+    ctx.lineWidth = 2 / state.gcam.zoom;
+    (state.map.surprisingConnections || []).forEach(function (sc) {
+      var a = g.nodeIndex.get(resolveGraphEndpoint(sc.from)), b = g.nodeIndex.get(resolveGraphEndpoint(sc.to));
+      if (!a || !b || a === b) return;
+      ctx.beginPath(); ctx.moveTo(a.pos.x, a.pos.y); ctx.lineTo(b.pos.x, b.pos.y); ctx.stroke();
+    });
+  }
+
+  // nodes
+  g.nodes.forEach(function (n) {
+    var op = nodeOpacity(n);
+    ctx.globalAlpha = op;
+    var color = clusterColor(n.cluster || n.id);
+    var selected = state.selected && state.selected.kind !== "box" && state.selected.id === n.id;
+    var hovered = state.hovered === n.id;
+    if (n.isSink) {
+      var s = n.r * 0.9;
+      ctx.save(); ctx.translate(n.pos.x, n.pos.y); ctx.rotate(Math.PI/4);
+      ctx.fillStyle = color; ctx.fillRect(-s/2, -s/2, s, s);
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(n.pos.x, n.pos.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    if (n.isEntry) {
+      ctx.globalAlpha = op;
+      ctx.strokeStyle = "#ffdf5d";
+      ctx.lineWidth = 1.6 / state.gcam.zoom;
+      ctx.beginPath(); ctx.arc(n.pos.x, n.pos.y, n.r + 3, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (selected || hovered) {
+      ctx.strokeStyle = selected ? "#ffffff" : "#c9d1d9";
+      ctx.lineWidth = (selected ? 2.4 : 1.4) / state.gcam.zoom;
+      ctx.beginPath(); ctx.arc(n.pos.x, n.pos.y, n.r + 1.5, 0, Math.PI * 2); ctx.stroke();
+    }
+    var showLabel = n.kind === "cluster" || selected || hovered || state.gcam.zoom > 2.2;
+    if (showLabel && op > 0.4) {
+      ctx.globalAlpha = Math.min(1, op + 0.2);
+      ctx.fillStyle = "#e6edf3";
+      ctx.font = (n.kind === "cluster" ? "600 " : "") + Math.max(9, Math.min(12, n.r)) + "px -apple-system,sans-serif";
+      var label = n.kind === "cluster" ? (n.label + " (" + n.size + ")") : n.m.path.split("/").pop();
+      ctx.fillText(label, n.pos.x + n.r + 3, n.pos.y + 3);
+    }
+  });
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function graphNodeAt(clientX, clientY) {
+  var rect = canvas.getBoundingClientRect();
+  var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+  var sx = clientX - rect.left, sy = clientY - rect.top;
+  var wx = (sx - (W / 2 + state.gcam.pan.x)) / state.gcam.zoom;
+  var wy = (sy - (H / 2 + state.gcam.pan.y)) / state.gcam.zoom;
+  var g = state.graph; if (!g) return null;
+  var best = null, bestD = Infinity;
+  for (var i=0; i<g.nodes.length; i++) {
+    var n = g.nodes[i];
+    var dx = n.pos.x - wx, dy = n.pos.y - wy;
+    var d = Math.sqrt(dx*dx+dy*dy);
+    if (d <= Math.max(4, n.r) + 2 && d < bestD) { best = n; bestD = d; }
+  }
+  return best;
+}
+
+function fitGraph() {
+  var g = state.graph; if (!g || g.nodes.length === 0) return;
+  var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  g.nodes.forEach(function (n) {
+    minX = Math.min(minX, n.pos.x - n.r); maxX = Math.max(maxX, n.pos.x + n.r);
+    minY = Math.min(minY, n.pos.y - n.r); maxY = Math.max(maxY, n.pos.y + n.r);
+  });
+  var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+  var bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+  var zoom = Math.max(0.05, Math.min(4, Math.min(W / bw, H / bh) * 0.9));
+  var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  state.gcam.zoom = zoom;
+  state.gcam.pan = { x: -cx * zoom, y: -cy * zoom };
+}
+
+// ====================== Inspector ======================
+function selectNode(kind, id) {
+  state.selected = { kind: kind, id: id };
+  if (kind === "module" && state.view === "graph" && state.graph) {
+    var m = state.idx.modById.get(id);
+    if (m && m.cluster && state.graph.collapsedClusters.has(m.cluster)) {
+      state.graph.collapsedClusters.delete(m.cluster);
+      rebuildVisibleGraph();
+    }
+  }
+  renderInspector();
+  if (state.view === "graph") requestDraw(); else render();
+}
+
+function linkBtn(label, kind, id) {
+  return '<span class="ins-link" data-kind="' + escapeHtml(kind) + '" data-id="' + escapeHtml(id) + '">' + escapeHtml(label) + '</span>';
+}
+
+function renderInspector() {
+  var box = $("inspector");
+  if (!state.selected) { box.innerHTML = '<div style="color:var(--muted)">Click a node, cluster, or package to inspect it.</div>'; return; }
+  var map = state.map;
+  if (state.selected.kind === "module") {
+    var m = state.idx.modById.get(state.selected.id);
+    if (!m) { box.innerHTML = '<div style="color:var(--muted)">Module not found.</div>'; return; }
+    var cl = state.idx.clusterById.get(m.cluster);
+    var importers = state.idx.radj.get(m.id) || [];
+    var imports = state.idx.adj.get(m.id) || [];
+    var callers = state.idx.callersOf.get(m.id) || [];
+    var callees = state.idx.calleesOf.get(m.id) || [];
+    var html = '<h3>' + escapeHtml(m.path) + '</h3>';
+    html += '<div class="pill">' + escapeHtml(m.package || "-") + '</div><div class="pill">' + escapeHtml(m.layer || "-") + '</div>' +
+      (cl ? '<div class="pill">' + escapeHtml(cl.label) + '</div>' : '') + (m.isTest ? '<div class="pill">test</div>' : '') +
+      (m.entryPoint ? '<div class="pill">entry: ' + escapeHtml(m.entryPoint.kind) + '</div>' : '');
+    html += '<div class="kv">' + (m.loc || 0) + ' loc · ' + (m.size || 0) + ' bytes</div>';
+    if (m.symbols && m.symbols.length) {
+      html += '<h4>Symbols (' + m.symbols.length + ')</h4><pre>' + m.symbols.slice(0, 40).map(function (s) {
+        return (s.exported ? "export " : "") + s.kind + " " + s.name + "  :" + s.line;
+      }).join("\n") + '</pre>';
+    }
+    if (m.sinks && m.sinks.length) html += '<h4>Sinks</h4><div class="kv">' + m.sinks.map(escapeHtml).join(", ") + '</div>';
+    html += '<h4>Importers (' + importers.length + ')</h4><div class="kv">' + (importers.length ? importers.slice(0, 20).map(function (id) { return linkBtn(id, "module", id); }).join(" ") : "none") + '</div>';
+    html += '<h4>Imports (' + imports.length + ')</h4><div class="kv">' + (imports.length ? imports.slice(0, 20).map(function (id) { return linkBtn(id, "module", id); }).join(" ") : "none") + '</div>';
+    html += '<h4>Callers (' + callers.length + ')</h4><div class="kv">' + (callers.length ? callers.slice(0, 20).map(function (ce) { return linkBtn(ce.from + " ." + ce.symbol + "()", "module", ce.from); }).join(" ") : "none") + '</div>';
+    html += '<h4>Callees (' + callees.length + ')</h4><div class="kv">' + (callees.length ? callees.slice(0, 20).map(function (ce) { return linkBtn(ce.to + " ." + ce.symbol + "()", "module", ce.to); }).join(" ") : "none") + '</div>';
+    box.innerHTML = html;
+  } else if (state.selected.kind === "cluster") {
+    var c = state.idx.clusterById.get(state.selected.id);
+    if (!c) { box.innerHTML = '<div style="color:var(--muted)">Cluster not found.</div>'; return; }
+    var html2 = '<h3>' + escapeHtml(c.label) + '</h3>';
+    html2 += '<div class="pill">' + c.size + ' modules</div><div class="pill">' + escapeHtml(c.dominantPackage || "-") + '</div><div class="pill">' + escapeHtml(c.dominantLayer) + '</div>';
+    html2 += '<div class="kv"><b>Packages:</b> ' + (c.packages || []).map(escapeHtml).join(", ") + '</div>';
+    html2 += '<h4>Members</h4><div class="kv">' + c.members.slice(0, 60).map(function (id) { return linkBtn(id, "module", id); }).join(" ") + '</div>';
+    box.innerHTML = html2;
+  } else if (state.selected.kind === "box") {
+    var id2 = state.selected.id;
+    var flowBox = (map.boxes || []).find(function (x) { return x.id === id2; });
+    if (flowBox) {
+      var html3 = '<h3>' + escapeHtml(flowBox.title) + '</h3><div class="pill">' + escapeHtml(flowBox.lane) + '</div>' +
+        (flowBox.kind ? '<div class="pill">' + escapeHtml(flowBox.kind) + '</div>' : '') +
+        (flowBox.sublabel ? '<div class="kv">' + escapeHtml(flowBox.sublabel) + '</div>' : '');
+      if (flowBox.kind === "package") {
+        var inE = map.containerEdges.filter(function (e) { return e.to === id2; });
+        var outE = map.containerEdges.filter(function (e) { return e.from === id2; });
+        html3 += '<h4>Depends on</h4>' + (outE.length ? outE.map(function (e) { return '<div class="kv">→ ' + escapeHtml(e.to.replace(/^pkg:/, "")) + ' (' + e.count + ')</div>'; }).join("") : '<div class="kv">nothing</div>');
+        html3 += '<h4>Depended on by</h4>' + (inE.length ? inE.map(function (e) { return '<div class="kv">← ' + escapeHtml(e.from.replace(/^pkg:/, "")) + ' (' + e.count + ')</div>'; }).join("") : '<div class="kv">nothing</div>');
+      }
+      box.innerHTML = html3;
+      return;
+    }
+    var container = (map.containers || []).find(function (x) { return x.id === id2; });
+    if (container) {
+      var mods = map.modules.filter(function (m) { return containerIdOf(m) === id2; });
+      var inE2 = map.containerEdges.filter(function (e) { return e.to === id2; });
+      var outE2 = map.containerEdges.filter(function (e) { return e.from === id2; });
+      var html4 = '<h3>' + escapeHtml(container.name) + '</h3><div class="kv">' + mods.length + ' modules</div>';
+      html4 += '<h4>Depends on</h4>' + (outE2.length ? outE2.map(function (e) { return '<div class="kv">→ ' + escapeHtml(e.to.replace(/^pkg:/, "")) + ' <span style="color:var(--muted)">(' + e.count + ')</span></div>'; }).join("") : '<div class="kv">nothing</div>');
+      html4 += '<h4>Depended on by</h4>' + (inE2.length ? inE2.map(function (e) { return '<div class="kv">← ' + escapeHtml(e.from.replace(/^pkg:/, "")) + ' <span style="color:var(--muted)">(' + e.count + ')</span></div>'; }).join("") : '<div class="kv">nothing</div>');
+      var entryMods = mods.filter(function (m) { return !!m.entryPoint; });
+      if (entryMods.length) {
+        html4 += '<h4>Entry points</h4>';
+        entryMods.forEach(function (m) { html4 += '<div class="kv">' + linkBtn(m.entryPoint.name || m.path, "module", m.id) + ' <span style="color:var(--muted)">(' + m.entryPoint.kind + ')</span></div>'; });
+      }
+      box.innerHTML = html4;
+      return;
+    }
+    box.innerHTML = '<div style="color:var(--muted)">Nothing selected.</div>';
+  }
+}
+// Delegated click handling for inspector cross-links (module ids contain "/" so can't be inline onclick attrs safely).
+document.addEventListener("click", function (ev) {
+  var t = ev.target;
+  if (t && t.classList && t.classList.contains("ins-link")) {
+    selectNode(t.getAttribute("data-kind"), t.getAttribute("data-id"));
+  }
+});
+
+// ====================== Sidebars ======================
+function renderSidebar() {
+  var map = state.map;
+  var ents = $("entry-list"); ents.innerHTML = "";
+  var groups = { cli:[], http:[], library:[] };
+  for (var i=0; i<map.entryPoints.length; i++) {
+    var e = map.entryPoints[i];
+    (groups[e.kind] = groups[e.kind] || []).push(e);
+  }
+  ["cli","http","library"].forEach(function (kind) {
+    if (!groups[kind] || groups[kind].length === 0) return;
+    var head = document.createElement("div");
+    head.style.padding = "4px 14px"; head.style.color = "var(--muted)";
+    head.style.fontSize = "10px"; head.style.textTransform = "uppercase"; head.style.letterSpacing = "1.2px";
+    head.textContent = kind + " (" + groups[kind].length + ")";
+    ents.appendChild(head);
+    groups[kind].forEach(function (e) {
+      var row = document.createElement("div"); row.className = "row";
+      var label = e.name || e.path.split("/").pop();
+      var sub = e.routes ? e.routes.slice(0,2).map(function (r) { return r.method + " " + r.path; }).join(", ") : (e.package || "");
+      row.innerHTML = '<div class="dot" style="background:var(--entry)"></div>' +
+        '<div class="name" title="' + escapeHtml(e.path) + '"><div>' + escapeHtml(label) + '</div>' +
+        '<div style="color:var(--muted); font-size:10px">' + escapeHtml(sub) + '</div></div>';
+      row.onclick = function (eid) { return function () { selectFlow("flow:" + eid); }; }(e.id);
+      ents.appendChild(row);
+    });
+  });
+
+  var sinkCounts = {};
+  for (var si=0; si<map.sinks.length; si++) {
+    var s = map.sinks[si];
+    for (var sk=0; sk<s.sinks.length; sk++) sinkCounts[s.sinks[sk]] = (sinkCounts[s.sinks[sk]] || 0) + 1;
+  }
+  var sl = $("sink-list"); sl.innerHTML = "";
+  Object.keys(sinkCounts).sort(function (a,b) { return sinkCounts[b] - sinkCounts[a]; }).forEach(function (k) {
+    var row = document.createElement("div"); row.className = "row";
+    row.innerHTML = '<div class="dot" style="background:var(--sink)"></div><div class="name">' + escapeHtml(k) + '</div><div class="count">' + sinkCounts[k] + '</div>';
+    row.onclick = function (kind) { return function () { focusSink(kind); }; }(k);
+    sl.appendChild(row);
+  });
+
+  var ll = $("layer-list"); ll.innerHTML = "";
+  LAYER_ORDER.forEach(function (l) {
+    var n = map.stats.layers[l] || 0; if (!n) return;
+    var row = document.createElement("div"); row.className = "row";
+    var active = state.focus && state.focus.kind === "layer" && state.focus.id === l;
+    row.className += active ? " active" : "";
+    row.innerHTML = '<div class="dot" style="background:' + LAYER_COLOR[l] + '"></div><div class="name">' + escapeHtml(l) + '</div><div class="count">' + n + '</div>';
+    row.onclick = function (layer) { return function () {
+      if (state.focus && state.focus.kind === "layer" && state.focus.id === layer) clearFocus(); else focusLayer(layer);
+    }; }(l);
+    ll.appendChild(row);
+  });
+
+  var pl = $("pkg-list"); pl.innerHTML = "";
+  map.containers.slice().sort(function (a,b) { return b.moduleCount - a.moduleCount; }).forEach(function (c) {
+    var row = document.createElement("div"); row.className = "row";
+    var active = state.focus && state.focus.kind === "package" && state.focus.id === c.id;
+    row.className += active ? " active" : "";
+    row.innerHTML = '<div class="dot" style="background:#3a4858"></div><div class="name">' + escapeHtml(c.name) + '</div><div class="count">' + c.moduleCount + '</div>';
+    row.onclick = function (cid) { return function () {
+      if (state.focus && state.focus.kind === "package" && state.focus.id === cid) clearFocus(); else focusPackage(cid);
+    }; }(c.id);
+    pl.appendChild(row);
+  });
+}
+
+function renderFlowList() {
+  var map = state.map;
+  var list = $("flow-list"); list.innerHTML = "";
+  if (!map.flows || !map.flows.length) {
+    list.innerHTML = '<div style="color:var(--muted); padding:8px 0">No flows detected. Add entry points (bin / HTTP routes) or curate .planning/codebase/FLOWS.json.</div>';
+    return;
+  }
+  var kindRank = { cli: 0, http: 1, library: 2 };
+  var sorted = map.flows.slice().sort(function (a,b) { return (kindRank[a.entryKind]||3) - (kindRank[b.entryKind]||3); });
+  sorted.forEach(function (f) {
+    var item = document.createElement("div");
+    item.className = "flow-item" + (state.selectedFlow === f.id ? " active" : "");
+    item.innerHTML = '<div class="name">' + escapeHtml(f.name) + '</div>' +
+      '<div class="desc">' + escapeHtml(f.description || "") + (f.curated ? ' <span style="color:var(--entry)">· curated</span>' : '') + '</div>';
+    item.onclick = function () { selectFlow(f.id); };
+    list.appendChild(item);
+  });
+}
+
+function renderStepList() {
+  var map = state.map;
+  var list = $("step-list"); list.innerHTML = "";
+  var f = state.selectedFlow ? map.flows.find(function (x) { return x.id === state.selectedFlow; }) : null;
+  if (!f) {
+    list.innerHTML = '<div style="color:var(--muted); padding:8px 0">Select a flow above to see numbered steps.</div>';
+    return;
+  }
+  f.steps.forEach(function (step) {
+    var item = document.createElement("div");
+    item.className = "step-item" + (state.selectedStep === step.n ? " active" : "");
+    var fromLabel = step.from.replace(/^pkg:/, "").replace(/^sink:/, "").replace(/^actor:/, "");
+    var toLabel = step.to.replace(/^pkg:/, "").replace(/^sink:/, "").replace(/^actor:/, "");
+    var descHtml = "";
+    if (step.description) {
+      var snippet = null; var desc = step.description;
+      var sm = desc.match(/^(.*?)\s*\x60([^\x60]+)\x60\s*$/);
+      if (sm && sm[2].length > 12 && /[(){};=]/.test(sm[2])) { desc = sm[1]; snippet = sm[2]; }
+      descHtml = '<div class="desc">' + escapeHtml(desc).replace(/\x60([^\x60]+)\x60/g, function (_, t) { return '<code>' + t + '</code>'; }) + '</div>';
+      if (snippet) descHtml += '<div class="snippet">' + escapeHtml(snippet) + '</div>';
+    }
+    var fileRef = "";
+    if (step.fromFile && step.toFile) {
+      fileRef = '<div class="file-ref">' + escapeHtml(step.fromFile.split("/").slice(-2).join("/")) + ' → ' + escapeHtml(step.toFile.split("/").slice(-2).join("/")) + '</div>';
+    } else if (step.sinkSite) {
+      fileRef = '<div class="file-ref">' + escapeHtml(step.sinkSite.file) + ':' + step.sinkSite.line + '</div>';
+    } else if (step.toFile) {
+      fileRef = '<div class="file-ref">' + escapeHtml(step.toFile) + '</div>';
+    }
+    item.innerHTML = '<div class="num">' + step.n + '</div>' +
+      '<div class="body">' +
+      '<div class="title">' + escapeHtml(step.title || (fromLabel + " → " + toLabel)) + '</div>' +
+      '<div class="from-to">' + escapeHtml(fromLabel) + ' <span style="color:var(--entry)">→</span> ' + escapeHtml(toLabel) + '</div>' +
+      fileRef + descHtml +
+      '</div>';
+    item.onclick = function () { selectStep(step.n); };
+    list.appendChild(item);
+  });
+}
+
+// ====================== Search (defect 1: #q was rendered but never wired up) ======================
+function applySearch(q) {
+  state.filter = q;
+  if (!q) { state.searchMatches = null; }
+  else {
+    var needle = q.toLowerCase();
+    var set = new Set();
+    (state.map.modules || []).forEach(function (m) {
+      if (m.path.toLowerCase().indexOf(needle) !== -1) set.add(m.id);
+    });
+    (state.map.symbolIndex || []).forEach(function (s) {
+      if (s.name.toLowerCase().indexOf(needle) !== -1) set.add(s.file);
+    });
+    state.searchMatches = set;
+    // B2 fix: a match hiding inside a still-collapsed cluster supernode was easy to miss (the
+    // supernode only changes shade, the matching module itself never appears) — auto-expand any
+    // collapsed cluster that contains a hit so the actual matching module node is visible.
+    if (state.graph && set.size) {
+      var g = state.graph, expandedAny = false;
+      set.forEach(function (mid) {
+        var m = state.idx.modById.get(mid);
+        if (m && m.cluster && g.collapsedClusters.has(m.cluster)) {
+          g.collapsedClusters.delete(m.cluster);
+          expandedAny = true;
+        }
+      });
+      if (expandedAny) rebuildVisibleGraph();
+    }
+  }
+  // The match-count hint must refresh even when no cluster expanded (all matches already
+  // visible, zero matches, or query cleared) — rebuildVisibleGraph is not guaranteed to run.
+  if (state.view === "graph") { $("hud").textContent = hudText(); requestDraw(); }
+}
+function searchTopHit() {
+  if (!state.searchMatches || state.searchMatches.size === 0) return null;
+  return state.searchMatches.values().next().value;
+}
+
+// ====================== Camera ======================
+function fit() {
+  if (state.view === "graph") {
+    if (state.graph) fitGraph();
+    requestDraw();
+    return;
+  }
+  var world = svg.querySelector("#world");
+  if (!world) { state.zoom = 1; state.pan = { x: 0, y: 0 }; return; }
+  try {
+    var bbox = world.getBBox();
+    if (bbox.width > 0 && bbox.height > 0) {
+      var W = svg.clientWidth, H = svg.clientHeight;
+      var zoom = Math.max(0.1, Math.min(3, Math.min(W / bbox.width, H / bbox.height) * 0.94));
+      state.zoom = zoom;
+      state.pan = { x: -bbox.x * zoom + (W - bbox.width * zoom) / 2, y: -bbox.y * zoom + (H - bbox.height * zoom) / 2 };
+    } else { state.zoom = 1; state.pan = { x: 0, y: 0 }; }
+  } catch (err) { state.zoom = 1; state.pan = { x: 0, y: 0 }; }
+  tx(world);
+}
+
+svg.addEventListener("mousedown", function (e) {
+  state.drag = { x: e.clientX, y: e.clientY, pan: { x: state.pan.x, y: state.pan.y } };
+});
+window.addEventListener("mousemove", function (e) {
+  if (!state.drag) return;
+  state.pan.x = state.drag.pan.x + (e.clientX - state.drag.x);
+  state.pan.y = state.drag.pan.y + (e.clientY - state.drag.y);
+  var g = svg.querySelector("#world"); if (g) tx(g);
+});
+window.addEventListener("mouseup", function () { state.drag = null; });
+svg.addEventListener("wheel", function (e) {
+  e.preventDefault();
+  var factor = Math.exp(-e.deltaY * 0.001);
+  var rect = svg.getBoundingClientRect();
+  var cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+  var newZoom = Math.max(0.15, Math.min(5, state.zoom * factor));
+  state.pan.x = cx - ((cx - state.pan.x) * (newZoom / state.zoom));
+  state.pan.y = cy - ((cy - state.pan.y) * (newZoom / state.zoom));
+  state.zoom = newZoom;
+  var g = svg.querySelector("#world"); if (g) tx(g);
+}, { passive: false });
+
+// Canvas (Graph) interactions
+canvas.addEventListener("mousedown", function (e) {
+  var hit = graphNodeAt(e.clientX, e.clientY);
+  if (hit) {
+    state.graph.dragId = hit.id;
+    state.graph.pinned.add(hit.id);
+    state.gdrag = null;
+  } else {
+    state.gdrag = { x: e.clientX, y: e.clientY, pan: { x: state.gcam.pan.x, y: state.gcam.pan.y } };
+    if (state.graph) state.graph.userTouchedCamera = true; // B3: don't auto re-fit once the user pans
+  }
+});
+window.addEventListener("mousemove", function (e) {
+  if (state.view !== "graph" || !state.graph) return;
+  if (state.graph.dragId) {
+    var rect = canvas.getBoundingClientRect();
+    var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+    var wx = (e.clientX - rect.left - (W / 2 + state.gcam.pan.x)) / state.gcam.zoom;
+    var wy = (e.clientY - rect.top - (H / 2 + state.gcam.pan.y)) / state.gcam.zoom;
+    var n = state.graph.nodeIndex.get(state.graph.dragId);
+    if (n) { n.pos.x = wx; n.pos.y = wy; n.pos.vx = 0; n.pos.vy = 0; }
+    state.graph.alpha = Math.max(state.graph.alpha, 0.3);
+    if (!state.graph.running) { state.graph.running = true; requestAnimationFrame(simTick); }
+    requestDraw();
+  } else if (state.gdrag) {
+    state.gcam.pan.x = state.gdrag.pan.x + (e.clientX - state.gdrag.x);
+    state.gcam.pan.y = state.gdrag.pan.y + (e.clientY - state.gdrag.y);
+    requestDraw();
+  } else {
+    var hit = graphNodeAt(e.clientX, e.clientY);
+    var newHover = hit ? hit.id : null;
+    if (newHover !== state.hovered) { state.hovered = newHover; requestDraw(); }
+    if (hit) showTooltip(hit.kind === "module" ? tooltipModuleHtml(hit.m) : ('<div class="tt-title">' + escapeHtml(hit.label) + '</div><div class="tt-desc">' + hit.size + ' modules</div>'), e);
+    else hideTooltip();
+  }
+});
+window.addEventListener("mouseup", function () {
+  if (state.graph) state.graph.dragId = null;
+  state.gdrag = null;
+});
+canvas.addEventListener("click", function (e) {
+  if (state.gdrag) return;
+  var hit = graphNodeAt(e.clientX, e.clientY);
+  if (hit) selectNode(hit.kind, hit.id);
+});
+canvas.addEventListener("dblclick", function (e) {
+  var hit = graphNodeAt(e.clientX, e.clientY);
+  if (hit && hit.kind === "cluster") { toggleCluster(hit.id); return; }
+  if (hit && hit.kind === "module" && hit.cluster) {
+    // Double-clicking an expanded member re-collapses its cluster back to a supernode.
+    toggleCluster(hit.cluster);
+    return;
+  }
+  if (hit) {
+    state.gcam.pan = { x: -hit.pos.x * state.gcam.zoom, y: -hit.pos.y * state.gcam.zoom };
+    if (state.graph) state.graph.userTouchedCamera = true;
+    requestDraw();
+  }
+});
+canvas.addEventListener("wheel", function (e) {
+  e.preventDefault();
+  var factor = Math.exp(-e.deltaY * 0.001);
+  var rect = canvas.getBoundingClientRect();
+  var W = canvas.clientWidth || 800, H = canvas.clientHeight || 600;
+  var cx = e.clientX - rect.left - W / 2, cy = e.clientY - rect.top - H / 2;
+  var newZoom = Math.max(0.05, Math.min(6, state.gcam.zoom * factor));
+  state.gcam.pan.x = cx - ((cx - state.gcam.pan.x) * (newZoom / state.gcam.zoom));
+  state.gcam.pan.y = cy - ((cy - state.gcam.pan.y) * (newZoom / state.gcam.zoom));
+  state.gcam.zoom = newZoom;
+  if (state.graph) state.graph.userTouchedCamera = true; // B3: don't auto re-fit once the user zooms
+  requestDraw();
+}, { passive: false });
+
+window.addEventListener("keydown", function (e) {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "f") fit();
+  if (e.key === "Escape") { clearFlow(); render(); }
+  if (e.key === "g") setView("graph");
+  if (e.key === "a") setView("architecture");
+  if (e.key === "F") setView("flows");
+});
+
+$("tab-graph").onclick = function () { setView("graph"); };
+$("tab-architecture").onclick = function () { setView("architecture"); };
+$("tab-flows").onclick = function () { setView("flows"); };
+$("fit").onclick = fit;
+$("clear").onclick = function () { clearFlow(); state.collapsedGroups = {}; render(); };
+$("reload").onclick = function () { refreshFromServer(); };
+$("export-png").onclick = function () {
+  if (state.view !== "graph") { showError("PNG export is only available on the Graph view."); return; }
+  canvas.toBlob(function (blob) { if (blob) downloadBlob(blob, "codebase-graph.png"); }, "image/png");
+};
+$("export-svg").onclick = function () {
+  if (state.view !== "graph" || !state.graph) { showError("SVG export is only available on the Graph view."); return; }
+  var g = state.graph;
+  var parts = ['<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="-800 -600 1600 1200">',
+    '<rect x="-800" y="-600" width="1600" height="1200" fill="#0b0d10"/>'];
+  g.edges.forEach(function (e) {
+    var a = g.nodeIndex.get(e.from), b = g.nodeIndex.get(e.to);
+    if (!a || !b) return;
+    parts.push('<line x1="' + a.pos.x.toFixed(1) + '" y1="' + a.pos.y.toFixed(1) + '" x2="' + b.pos.x.toFixed(1) + '" y2="' + b.pos.y.toFixed(1) + '" stroke="#3a4858" stroke-width="0.6" opacity="0.5"/>');
+  });
+  g.nodes.forEach(function (n) {
+    var color = clusterColor(n.cluster || n.id);
+    parts.push('<circle cx="' + n.pos.x.toFixed(1) + '" cy="' + n.pos.y.toFixed(1) + '" r="' + n.r.toFixed(1) + '" fill="' + color + '"/>');
+  });
+  parts.push('</svg>');
+  downloadBlob(new Blob([parts.join("\n")], { type: "image/svg+xml" }), "codebase-graph.svg");
+};
+$("expand-all").onclick = expandAllClusters;
+$("collapse-all").onclick = collapseAllClusters;
+var overlayCb = $("overlay-flow-cb");
+if (overlayCb) overlayCb.addEventListener("change", function (ev) { state.overlayFlow = ev.target.checked; render(); });
+var testsCb = $("show-tests-cb");
+if (testsCb) testsCb.addEventListener("change", function (ev) { state.showTests = ev.target.checked; requestDraw(); });
+var surprisingCb = $("surprising-cb");
+if (surprisingCb) surprisingCb.addEventListener("change", function (ev) { state.highlightSurprising = ev.target.checked; requestDraw(); });
+var degreeCb = $("degree-cb");
+if (degreeCb) degreeCb.addEventListener("change", function (ev) {
+  state.sizeByDegree = ev.target.checked;
+  if (state.graph) { state.graph.nodes.forEach(function (n) { if (n.kind === "module") n.r = moduleRadius(n.m); }); }
+  requestDraw();
+});
+["EXTRACTED","INFERRED","AMBIGUOUS"].forEach(function (conf) {
+  var cb = $("conf-" + conf.toLowerCase());
+  if (cb) cb.addEventListener("change", function (ev) { state.confidence[conf] = ev.target.checked; requestDraw(); });
+});
+$("q").addEventListener("input", function (ev) { applySearch(ev.target.value); });
+$("q").addEventListener("keydown", function (ev) {
+  if (ev.key !== "Enter") return;
+  var hit = searchTopHit();
+  if (!hit) return;
+  selectNode("module", hit);
+  if (state.view === "graph" && state.graph) {
+    var n = state.graph.nodeIndex.get(hit);
+    if (n) { state.gcam.pan = { x: -n.pos.x * state.gcam.zoom, y: -n.pos.y * state.gcam.zoom }; requestDraw(); }
+  }
+});
+// Legend cluster-row filter clicks (delegated — legend HTML is rebuilt on every render()).
+$("legend").addEventListener("click", function (ev) {
+  var row = ev.target.closest ? ev.target.closest(".legend-row") : null;
+  if (row) focusClusterToggle(row.getAttribute("data-cluster"));
+});
+
+// Debounced resize (defect 8: uncapped resize forced a full teardown+rebuild on every pixel).
+var resizeTimer = null;
+window.addEventListener("resize", function () {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(function () {
+    if (state.view === "graph") { resizeCanvas(); requestDraw(); }
+    else render();
+  }, 120);
+});
+
+function init() {
+  try {
+    var raw = $("map-data").textContent;
+    var embeddedMap = JSON.parse(raw);
+    resizeCanvas();
+    applyMap(embeddedMap);
+    setView("graph");
+    hideError();
+  } catch (err) {
+    showError("Failed to initialize the map viewer: " + (err && err.message ? err.message : err));
+    return;
+  }
+  refreshFromServer().catch(function () {});
+  connectLive();
+}
+init();
+
+</script>
+</body>
+</html>

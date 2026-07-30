@@ -1,0 +1,18 @@
+impact types.ts — 812 modules · 13 packages · 14 entry points · sinks: none
+entry points reaching it (14): lib:@draht/agent-core, cli:draht-ai, lib:@draht/ai, cli:coding-agent, lib:@draht/coding-agent, lib:@draht/deploy-guardian, lib:@draht/draht-acp, cli:draht-acp …
+by package:
+  coding-agent(390): sdk-codex-cache-probe-tool-loop.ts antigravity-image-gen.ts custom-compaction.ts custom-footer.ts index.ts (+385)
+  ai(276): generate-image-models.ts generate-models.ts models-dev-reasoning-options.ts anthropic-messages.lazy.ts anthropic-messages.ts (+271)
+  agent-core(53): agent-loop.ts agent.ts agent-harness.ts branch-summarization.ts compaction.ts (+48)
+  web-ui(43): custom-messages.ts main.ts AgentInterface.ts MessageEditor.ts MessageList.ts (+38)
+  rlm(11): router-session.ts cost-comparison.test.ts router-session.test.ts trajectory.test.ts index.ts (+6)
+  router(10): config.ts router.ts config-validation.test.ts fallback.test.ts cli.ts (+5)
+  mom(9): agent.ts context.ts read.ts attach.ts bash.ts (+4)
+  draht-acp(5): faux-agent-entry.ts draht-acp-agent.test.ts draht-acp-agent.ts index.ts main.ts
+  … +5 more packages
+clusters affected: packages/ai, packages/ai, packages/ai, packages/ai, packages/ai, packages/ai, packages, src/utils
+⚠ infrastructure→application (outward), bridge: extensions/types.ts → core/event-bus.ts
+⚠ infrastructure→application (outward), cross-group: test/rlm-cli.test.ts → src/extension.ts
+⚠ bridge, cross-group: test/sdk-codex-cache-probe-tool-loop.ts → api/openai-codex-responses.ts
+⚠ bridge, cross-group: src/extension.ts → src/index.ts
+⚠ bridge, cross-group: test/draht-acp-agent.test.ts → src/index.ts

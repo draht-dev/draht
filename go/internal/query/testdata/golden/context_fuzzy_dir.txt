@@ -1,0 +1,6 @@
+resolved 'packages/ai' → packages/ai/src/cli.ts
+packages/ai/src/cli.ts  ·  pkg:@draht/ai  ·  layer:presentation  ·  cluster:packages/ai(15)  ·  entry:cli
+  exports(0): -
+  importers(0): -
+  imports(2): src/index.ts, providers/all.ts
+  sinks: cli:io, process:exit

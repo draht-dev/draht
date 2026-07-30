@@ -1,0 +1,9 @@
+query "session token" — 8/8 hits
+packages/coding-agent/src/core/agent-session.ts:286  function estimateMessagesTokens
+packages/gateway/src/__tests__/session-stream.test.ts:10  const AUTH_TOKEN
+packages/gateway/src/__tests__/sessions-input.test.ts:10  const AUTH_TOKEN
+scripts/session-context-stats.mjs:156  function contextTokens
+packages/coding-agent/src/core/compaction/compaction.ts:403  function findCutPoint  — Find the cut point in session entries that keeps approximate  [exported]
+packages/coding-agent/src/modes/interactive/components/footer.ts:50  class FooterComponent  — Footer component that shows pwd, token stats, and context us  [exported]
+packages/coding-agent/src/core/footer-data-provider.ts:99  class FooterDataProvider  — Provides git branch and extension statuses - data not otherw  [exported]
+packages/coding-agent/src/core/cache-stats.ts:138  function computeCacheWaste  — Cumulative cache waste across a session: prompt tokens that   [exported]

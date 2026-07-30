@@ -1,0 +1,16 @@
+
+God nodes (most connected):
+  packages/ai/src/index.ts  [in 144 · out 0 · 48 LOC]  144 dependents · 0 deps
+  packages/coding-agent/src/index.ts  [in 117 · out 0 · 408 LOC]  117 dependents · 0 deps
+
+Most depended-on:
+  packages/ai/src/index.ts  [in 144 · out 0 · 48 LOC]  144 dependents
+  packages/coding-agent/src/index.ts  [in 117 · out 0 · 408 LOC]  117 dependents
+
+Orchestrators (most deps):
+  packages/coding-agent/src/modes/interactive/interactive-mode.ts  [in 0 · out 70 · 6147 LOC]  imports 70 modules
+  packages/ai/src/providers/all.ts  [in 2 · out 43 · 152 LOC]  imports 43 modules
+
+Largest:
+  packages/coding-agent/src/modes/interactive/interactive-mode.ts  [in 0 · out 70 · 6147 LOC]  6147 LOC
+  packages/coding-agent/bin/draht-tools.cjs  [in 0 · out 0 · 5696 LOC]  5696 LOC

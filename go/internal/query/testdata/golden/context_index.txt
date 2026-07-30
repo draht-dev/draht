@@ -1,0 +1,4 @@
+packages/ai/src/index.ts  ·  pkg:@draht/ai  ·  layer:support  ·  cluster:packages(168)  ·  entry:library
+  exports(0): -
+  importers(210): src/agent-loop.ts, src/agent.ts, harness/agent-harness.ts, compaction/branch-summarization.ts, compaction/compaction.ts (+205 more)
+  imports(20): utils/text.ts, utils/uuid.ts, api/lazy.ts, auth/context.ts, auth/credential-store.ts (+15 more)

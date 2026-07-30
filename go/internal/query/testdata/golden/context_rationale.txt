@@ -1,0 +1,5 @@
+go/internal/graph/rationale.go  ·  pkg:draht-monorepo  ·  layer:support  ·  cluster:draht-monorepo(164)  ·  entry:no
+  exports(0): -
+  importers(0): -
+  imports(0): -
+  rationale(1): SECURITY:14 /BUG/.../WHY markers, in a

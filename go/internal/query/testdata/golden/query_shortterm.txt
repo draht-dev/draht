@@ -1,0 +1,1 @@
+usage: graph-query <term...> [--json]  (terms ≥3 chars)

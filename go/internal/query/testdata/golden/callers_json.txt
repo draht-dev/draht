@@ -1,0 +1,942 @@
+{
+  "target": "packages/ai/src/types.ts",
+  "direction": "callers",
+  "hops": [
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/google-shared.ts",
+      "symbol": "StopReason",
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/scripts/generate-image-models.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/scripts/generate-models.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/scripts/models-dev-reasoning-options.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/anthropic-messages.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/anthropic-messages.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/azure-openai-responses.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/azure-openai-responses.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/bedrock-converse-stream.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/bedrock-converse-stream.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/constrained-sampling.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/github-copilot-headers.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/google-generative-ai.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/google-generative-ai.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/google-shared.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/google-vertex.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/google-vertex.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/mistral-conversations.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/mistral-conversations.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openai-codex-responses.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openai-codex-responses.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openai-completions.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openai-completions.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openai-responses-shared.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openai-responses.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openai-responses.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openrouter-images.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/openrouter-images.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/pi-messages.lazy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/pi-messages.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/simple-options.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/api/transform-messages.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/auth/resolve.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/auth/types.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/compat.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/env-api-keys.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/image-models.generated.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/image-models.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/images-api-registry.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/images-models.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/images.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/legacy-api-aliases.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/model-catalog.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/models-store.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/models.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/providers/all.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/providers/cloudflare-auth.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/providers/cloudflare-stream.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/providers/faux.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/providers/images/register-builtins.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/providers/radius-config.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/deferred-tools.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/estimate.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/event-stream.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/headers.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/node-http-proxy.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/overflow.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/provider-env.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/retry.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/text.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/src/utils/validation.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/abort.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-adaptive-thinking-models.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-auth-token.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-cache-write-1h-cost.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-eager-tool-input-compat.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-eager-tool-input-e2e.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-empty-thinking-signature-compat.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-force-adaptive-thinking.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-long-cache-retention-e2e.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-opus-4-7-smoke.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-opus-4-8-smoke.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-sse-parsing.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-temperature-compat.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-thinking-disable.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/anthropic-tool-name-normalization.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/azure-openai-base-url.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/azure-openai-responses-reasoning-replay.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/bedrock-convert-messages.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/bedrock-credentials.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/bedrock-custom-headers.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/bedrock-endpoint-resolution.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/bedrock-models.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/bedrock-raw-stop-reason.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/bedrock-thinking-payload.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/cache-retention.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/cloudflare-stream.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/codex-websocket-cached-probe.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/compat-env.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/constrained-sampling.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/context-estimate.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/context-overflow.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/cross-provider-handoff.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/deferred-tools.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/empty.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/faux-provider.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/fetch-option.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/fireworks-models.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/github-copilot-anthropic.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/google-raw-stop-reason.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/google-shared-convert-tools.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/google-shared-gemini3-unsigned-tool-call.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/google-shared-image-tool-result-routing.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/google-thinking-disable.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/google-vertex-api-key-resolution.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/image-tool-result.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/images-models.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/images.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/interleaved-thinking.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/lax-message-content.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/max-thinking.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/mistral-raw-stop-reason.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/mistral-reasoning-mode.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/mistral-tool-schema.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/models-runtime.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-codex-cache-affinity-e2e.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-codex-stream.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-cache-control-format.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-deepseek-reasoning-replay.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-prompt-cache.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-raw-stop-reason.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-reasoning-details.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-response-model.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-retry.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-thinking-as-text.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-tool-choice.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-completions-tool-result-images.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-responses-cache-affinity-e2e.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-responses-compat.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-responses-empty-tool-result.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-responses-foreign-toolcall-id.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-responses-message-id.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-responses-partial-json-cleanup.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-responses-reasoning-replay-e2e.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openai-responses-terminal-event.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/openrouter-images.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/overflow.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/pi-messages.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/provider-error-body-passthrough.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/provider-error-body-regression.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/providers.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/responseid.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/scratch.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/stream.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/tokens.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/tool-call-id-normalization.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/tool-call-without-result.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/total-tokens.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/transform-messages-copilot-openai-to-anthropic.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/unicode-surrogate.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/validation.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/xai-responses.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/xhigh.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/xiaomi-token-plan-ams-anthropic-empty-signature-smoke.test.ts",
+      "symbol": null,
+      "hop": 1
+    },
+    {
+      "from": "packages/ai/src/types.ts",
+      "to": "packages/ai/test/zen.test.ts",
+      "symbol": null,
+      "hop": 1
+    }
+  ]
+}

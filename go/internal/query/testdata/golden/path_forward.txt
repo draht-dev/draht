@@ -1,0 +1,2 @@
+path packages/coding-agent/src/index.ts → packages/ai/src/types.ts  (3 hops)
+  src/index.ts → core/agent-session.ts —contentText→ src/index.ts → src/types.ts

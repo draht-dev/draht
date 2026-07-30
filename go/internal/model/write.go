@@ -80,6 +80,15 @@ func WriteIfChanged(path string, m *Map) (changed bool, err error) {
 	if err := tmp.Close(); err != nil {
 		return false, err
 	}
+	// os.CreateTemp always creates its file with mode 0600, regardless of
+	// umask; fs.writeFileSync's default (0666 & ~umask, i.e. 0644 under the
+	// conventional 0022 umask) is what the CJS engine produces. Chmod
+	// explicitly so MAP.json lands 0644 like every other artifact this
+	// package writes, instead of silently landing 0600 and being unreadable
+	// by another user on a shared/CI checkout.
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return false, err
+	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return false, err
 	}

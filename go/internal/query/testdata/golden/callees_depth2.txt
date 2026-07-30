@@ -1,0 +1,62 @@
+callees of packages/coding-agent/src/core/sdk.ts — 59 within 2 hops
+  hop 1:
+    packages/agent/src/index.ts  [Agent, setDefaultStreamFn]
+    packages/ai/src/index.ts  [clampThinkingLevel, streamSimple]
+    packages/coding-agent/src/config.ts  [getAgentDir]
+    packages/coding-agent/src/utils/paths.ts  [resolvePath]
+    packages/coding-agent/src/core/agent-session.ts  [AgentSession]
+    packages/coding-agent/src/core/auth-guidance.ts  [formatNoModelsAvailableMessage]
+    packages/coding-agent/src/core/context-windows.ts  [applyContextWindow]
+    packages/coding-agent/src/core/messages.ts  [convertToLlm]
+    packages/coding-agent/src/core/model-resolver.ts  [findInitialModel]
+    packages/coding-agent/src/core/model-runtime.ts  [ModelRuntime]
+    packages/coding-agent/src/core/provider-attribution.ts  [mergeProviderAttributionHeaders]
+    packages/coding-agent/src/core/resource-loader.ts  [DefaultResourceLoader]
+    packages/coding-agent/src/core/session-manager.ts  [getDefaultSessionDir, SessionManager]
+    packages/coding-agent/src/core/settings-manager.ts  [SettingsManager]
+    packages/coding-agent/src/core/timings.ts  [time]
+    packages/coding-agent/src/core/builtins/index.ts
+    packages/coding-agent/src/core/defaults.ts
+    packages/coding-agent/src/core/extensions/index.ts
+    packages/coding-agent/src/core/tools/index.ts
+  hop 2:
+    packages/coding-agent/src/utils/child-process.ts  [spawnProcessSync]
+    packages/coding-agent/src/modes/interactive/theme/theme.ts  [getThemeByName, loadThemeFromPath]
+    packages/coding-agent/src/utils/frontmatter.ts  [stripFrontmatter]
+    packages/coding-agent/src/utils/sleep.ts  [sleep]
+    packages/coding-agent/src/core/bash-executor.ts  [executeBashWithOperations]
+    packages/coding-agent/src/core/compaction/index.ts  [calculateContextTokens, collectEntriesForBranchSummary, compact, estimateContextTokens]
+    packages/coding-agent/src/core/export-html/index.ts  [exportSessionToHtml]
+    packages/coding-agent/src/core/export-html/tool-renderer.ts  [createToolHtmlRenderer]
+    packages/coding-agent/src/core/extensions/runner.ts  [emitSessionShutdownEvent]
+    packages/coding-agent/src/core/model-registry.ts  [ModelRegistry]
+    packages/coding-agent/src/core/prompt-templates.ts  [expandPromptTemplate, loadPromptTemplates]
+    packages/coding-agent/src/core/source-info.ts  [createSyntheticSourceInfo, createSourceInfo]
+    packages/coding-agent/src/core/system-prompt.ts  [buildSystemPrompt]
+    packages/coding-agent/src/core/tools/bash.ts  [createLocalBashOperations, createBashTool, createBashToolDefinition]
+    packages/coding-agent/src/core/tools/tool-definition-wrapper.ts  [createToolDefinitionFromAgentTool]
+    packages/coding-agent/src/core/usage-totals.ts  [addUsageToTotals, createUsageTotals]
+    packages/coding-agent/src/core/slash-commands.ts
+    packages/coding-agent/src/cli/args.ts  [isValidThinkingLevel]
+    packages/coding-agent/src/core/auth-storage.ts  [AuthStorage]
+    packages/coding-agent/src/core/model-config.ts  [ModelConfig]
+    packages/coding-agent/src/core/models-store.ts  [FileModelsStore, InMemoryCodingAgentModelsStore]
+    packages/coding-agent/src/core/provider-composer.ts  [composeModelProvider, configuredRequestAuthStatus, resolveCompatibilityRequestConfig, resolveConfiguredModelHeaders]
+    packages/coding-agent/src/core/remote-catalog-provider.ts  [withRemoteCatalog]
+    packages/coding-agent/src/core/runtime-credentials.ts  [RuntimeCredentials]
+    packages/coding-agent/src/core/telemetry.ts  [isInstallTelemetryEnabled]
+    packages/coding-agent/src/core/event-bus.ts  [createEventBus]
+    packages/coding-agent/src/core/extensions/loader.ts  [clearExtensionCache, createExtensionRuntime, loadExtensionFromFactory, loadExtensionsCached]
+    packages/coding-agent/src/core/footer-data-provider.ts  [findGitPaths]
+    packages/coding-agent/src/core/package-manager.ts  [DefaultPackageManager]
+    packages/coding-agent/src/core/skills.ts  [loadSkills]
+    packages/coding-agent/src/core/diagnostics.ts
+    packages/coding-agent/src/core/extensions/types.ts
+    packages/coding-agent/src/core/http-dispatcher.ts  [parseHttpIdleTimeoutMs]
+    packages/coding-agent/src/core/builtins/subagent.ts
+    packages/coding-agent/src/core/tools/edit.ts  [createEditTool, createEditToolDefinition]
+    packages/coding-agent/src/core/tools/find.ts  [createFindTool, createFindToolDefinition]
+    packages/coding-agent/src/core/tools/grep.ts  [createGrepTool, createGrepToolDefinition]
+    packages/coding-agent/src/core/tools/ls.ts  [createLsTool, createLsToolDefinition]
+    packages/coding-agent/src/core/tools/read.ts  [createReadTool, createReadToolDefinition]
+    packages/coding-agent/src/core/tools/write.ts  [createWriteTool, createWriteToolDefinition]

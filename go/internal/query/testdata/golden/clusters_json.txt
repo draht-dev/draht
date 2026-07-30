@@ -1,0 +1,2643 @@
+{
+  "clusters": [
+    {
+      "id": "cluster:packages",
+      "label": "packages",
+      "size": 168,
+      "members": [
+        "packages/agent/src/index.ts",
+        "packages/ai/src/index.ts",
+        "packages/coding-agent/examples/extensions/git-merge-and-resolve.ts",
+        "packages/coding-agent/examples/extensions/input-transform-streaming.ts",
+        "packages/coding-agent/examples/extensions/plan-mode/index.ts",
+        "packages/coding-agent/examples/extensions/plan-mode/utils.ts",
+        "packages/coding-agent/examples/extensions/trigger-compact.ts",
+        "packages/coding-agent/src/cli/args.ts",
+        "packages/coding-agent/src/cli/credential-print.ts",
+        "packages/coding-agent/src/cli/initial-message.ts",
+        "packages/coding-agent/src/config.ts",
+        "packages/coding-agent/src/core/agent-session-runtime.ts",
+        "packages/coding-agent/src/core/agent-session.ts",
+        "packages/coding-agent/src/core/auth-storage.ts",
+        "packages/coding-agent/src/core/cache-stats.ts",
+        "packages/coding-agent/src/core/compaction/index.ts",
+        "packages/coding-agent/src/core/context-windows.ts",
+        "packages/coding-agent/src/core/defaults.ts",
+        "packages/coding-agent/src/core/extensions/index.ts",
+        "packages/coding-agent/src/core/extensions/loader.ts",
+        "packages/coding-agent/src/core/extensions/runner.ts",
+        "packages/coding-agent/src/core/http-dispatcher.ts",
+        "packages/coding-agent/src/core/keybindings.ts",
+        "packages/coding-agent/src/core/model-registry.ts",
+        "packages/coding-agent/src/core/model-resolver.ts",
+        "packages/coding-agent/src/core/model-runtime.ts",
+        "packages/coding-agent/src/core/models-store.ts",
+        "packages/coding-agent/src/core/package-manager.ts",
+        "packages/coding-agent/src/core/radius.ts",
+        "packages/coding-agent/src/core/runtime-credentials.ts",
+        "packages/coding-agent/src/core/sdk.ts",
+        "packages/coding-agent/src/core/session-cwd.ts",
+        "packages/coding-agent/src/core/session-manager.ts",
+        "packages/coding-agent/src/core/settings-manager.ts",
+        "packages/coding-agent/src/core/system-prompt.ts",
+        "packages/coding-agent/src/core/trust-manager.ts",
+        "packages/coding-agent/src/gsd/domain-validator.ts",
+        "packages/coding-agent/src/gsd/domain.ts",
+        "packages/coding-agent/src/gsd/git.ts",
+        "packages/coding-agent/src/gsd/hook-utils.ts",
+        "packages/coding-agent/src/gsd/index.ts",
+        "packages/coding-agent/src/gsd/planning.ts",
+        "packages/coding-agent/src/main.ts",
+        "packages/coding-agent/src/migrations.ts",
+        "packages/coding-agent/src/modes/interactive/components/assistant-message.ts",
+        "packages/coding-agent/src/modes/interactive/components/custom-message.ts",
+        "packages/coding-agent/src/modes/interactive/components/oauth-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/settings-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/tree-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/trust-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/user-message.ts",
+        "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+        "packages/coding-agent/src/modes/rpc/rpc-client.ts",
+        "packages/coding-agent/src/rlm-cli.ts",
+        "packages/coding-agent/src/rpc-entry.ts",
+        "packages/coding-agent/src/utils/ansi.ts",
+        "packages/coding-agent/src/utils/changelog.ts",
+        "packages/coding-agent/src/utils/git.ts",
+        "packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts",
+        "packages/coding-agent/test/agent-session-branching.test.ts",
+        "packages/coding-agent/test/agent-session-compaction.test.ts",
+        "packages/coding-agent/test/agent-session-concurrent.test.ts",
+        "packages/coding-agent/test/agent-session-context-window.test.ts",
+        "packages/coding-agent/test/agent-session-dynamic-provider.test.ts",
+        "packages/coding-agent/test/agent-session-dynamic-tools.test.ts",
+        "packages/coding-agent/test/agent-session-model-switch-thinking.test.ts",
+        "packages/coding-agent/test/agent-session-retry.test.ts",
+        "packages/coding-agent/test/agent-session-runtime-events.test.ts",
+        "packages/coding-agent/test/agent-session-tree-navigation.test.ts",
+        "packages/coding-agent/test/ansi-utils.test.ts",
+        "packages/coding-agent/test/args.test.ts",
+        "packages/coding-agent/test/assistant-message.test.ts",
+        "packages/coding-agent/test/auth-storage.test.ts",
+        "packages/coding-agent/test/branch-summary-extensions.test.ts",
+        "packages/coding-agent/test/cache-stats.test.ts",
+        "packages/coding-agent/test/changelog.test.ts",
+        "packages/coding-agent/test/compaction-extensions-example.test.ts",
+        "packages/coding-agent/test/compaction-extensions.test.ts",
+        "packages/coding-agent/test/compaction-summary-reasoning.test.ts",
+        "packages/coding-agent/test/compaction.test.ts",
+        "packages/coding-agent/test/config-value-migration.test.ts",
+        "packages/coding-agent/test/config.test.ts",
+        "packages/coding-agent/test/credential-print.test.ts",
+        "packages/coding-agent/test/custom-message.test.ts",
+        "packages/coding-agent/test/edit-tool-legacy-input.test.ts",
+        "packages/coding-agent/test/extension-manifest-key.test.ts",
+        "packages/coding-agent/test/extensions-discovery.test.ts",
+        "packages/coding-agent/test/extensions-draht-manifest.test.ts",
+        "packages/coding-agent/test/extensions-input-event.test.ts",
+        "packages/coding-agent/test/extensions-runner.test.ts",
+        "packages/coding-agent/test/first-time-setup-fork.test.ts",
+        "packages/coding-agent/test/first-time-setup.test.ts",
+        "packages/coding-agent/test/format-resume-command.test.ts",
+        "packages/coding-agent/test/git-merge-and-resolve-extension.test.ts",
+        "packages/coding-agent/test/git-ssh-url.test.ts",
+        "packages/coding-agent/test/git-update.test.ts",
+        "packages/coding-agent/test/gsd-domain-validator.test.ts",
+        "packages/coding-agent/test/gsd-domain.test.ts",
+        "packages/coding-agent/test/gsd-extension-loading.test.ts",
+        "packages/coding-agent/test/gsd-git.test.ts",
+        "packages/coding-agent/test/gsd-hook-utils.test.ts",
+        "packages/coding-agent/test/gsd-index.test.ts",
+        "packages/coding-agent/test/gsd-lifecycle.test.ts",
+        "packages/coding-agent/test/gsd-map-codebase.test.ts",
+        "packages/coding-agent/test/gsd-planning.test.ts",
+        "packages/coding-agent/test/http-dispatcher.test.ts",
+        "packages/coding-agent/test/initial-message.test.ts",
+        "packages/coding-agent/test/input-transform-streaming-example.test.ts",
+        "packages/coding-agent/test/interactive-mode-anthropic-warning.test.ts",
+        "packages/coding-agent/test/interactive-mode-clone-command.test.ts",
+        "packages/coding-agent/test/interactive-mode-compaction.test.ts",
+        "packages/coding-agent/test/interactive-mode-import-command.test.ts",
+        "packages/coding-agent/test/interactive-mode-startup-input.test.ts",
+        "packages/coding-agent/test/interactive-mode-status.test.ts",
+        "packages/coding-agent/test/interactive-mode-suspend.test.ts",
+        "packages/coding-agent/test/keybindings-migration.test.ts",
+        "packages/coding-agent/test/max-thinking.test.ts",
+        "packages/coding-agent/test/model-registry.test.ts",
+        "packages/coding-agent/test/model-resolver.test.ts",
+        "packages/coding-agent/test/model-runtime-auth-options.test.ts",
+        "packages/coding-agent/test/model-runtime-cloudflare-compat.test.ts",
+        "packages/coding-agent/test/model-runtime-modify-models-compat.test.ts",
+        "packages/coding-agent/test/model-runtime-test-utils.ts",
+        "packages/coding-agent/test/models-store.test.ts",
+        "packages/coding-agent/test/oauth-selector.test.ts",
+        "packages/coding-agent/test/package-command-paths.test.ts",
+        "packages/coding-agent/test/package-manager-ssh.test.ts",
+        "packages/coding-agent/test/package-manager.test.ts",
+        "packages/coding-agent/test/paths.test.ts",
+        "packages/coding-agent/test/plan-mode-extension.test.ts",
+        "packages/coding-agent/test/plan-mode-utils.test.ts",
+        "packages/coding-agent/test/radius.test.ts",
+        "packages/coding-agent/test/rlm-cli.test.ts",
+        "packages/coding-agent/test/rpc-client-clone.test.ts",
+        "packages/coding-agent/test/rpc-client-process-exit.test.ts",
+        "packages/coding-agent/test/rpc-example.ts",
+        "packages/coding-agent/test/rpc.test.ts",
+        "packages/coding-agent/test/runtime-credentials.test.ts",
+        "packages/coding-agent/test/sdk-codex-cache-probe-tool-loop.ts",
+        "packages/coding-agent/test/sdk-openrouter-attribution.test.ts",
+        "packages/coding-agent/test/sdk-session-manager.test.ts",
+        "packages/coding-agent/test/sdk-skills.test.ts",
+        "packages/coding-agent/test/sdk-stream-options.test.ts",
+        "packages/coding-agent/test/session-cwd.test.ts",
+        "packages/coding-agent/test/session-file-invalid.test.ts",
+        "packages/coding-agent/test/session-id-readonly.test.ts",
+        "packages/coding-agent/test/session-info-modified-timestamp.test.ts",
+        "packages/coding-agent/test/settings-manager-bug.test.ts",
+        "packages/coding-agent/test/settings-manager.test.ts",
+        "packages/coding-agent/test/startup-session-name.test.ts",
+        "packages/coding-agent/test/stdout-cleanliness.test.ts",
+        "packages/coding-agent/test/streaming-render-debug.ts",
+        "packages/coding-agent/test/suite/regressions/5661-uppercase-header-values.test.ts",
+        "packages/coding-agent/test/system-prompt.test.ts",
+        "packages/coding-agent/test/test-harness.test.ts",
+        "packages/coding-agent/test/test-harness.ts",
+        "packages/coding-agent/test/test-network-env.ts",
+        "packages/coding-agent/test/test-theme-colors.ts",
+        "packages/coding-agent/test/theme-detection.test.ts",
+        "packages/coding-agent/test/theme-export.test.ts",
+        "packages/coding-agent/test/theme-picker.test.ts",
+        "packages/coding-agent/test/tree-selector.test.ts",
+        "packages/coding-agent/test/trigger-compact-extension.test.ts",
+        "packages/coding-agent/test/truncate-to-width.test.ts",
+        "packages/coding-agent/test/trust-manager.test.ts",
+        "packages/coding-agent/test/trust-selector.test.ts",
+        "packages/coding-agent/test/user-message.test.ts",
+        "packages/coding-agent/test/utilities.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/agent-core",
+        "@draht/ai",
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:draht-monorepo",
+      "label": "draht-monorepo",
+      "size": 164,
+      "members": [
+        "go/cmd/draht-tools/doc.go",
+        "go/cmd/draht-tools/main.go",
+        "go/cmd/draht-tools/main_test.go",
+        "go/cmd/draht-tools/mapgraph.go",
+        "go/internal/cache/bench_test.go",
+        "go/internal/cache/cache.go",
+        "go/internal/cache/cache_test.go",
+        "go/internal/cache/doc.go",
+        "go/internal/cache/filestore.go",
+        "go/internal/cache/filestore_test.go",
+        "go/internal/cluster/adjacency.go",
+        "go/internal/cluster/adjacency_test.go",
+        "go/internal/cluster/cluster.go",
+        "go/internal/cluster/cluster_test.go",
+        "go/internal/cluster/doc.go",
+        "go/internal/cluster/propagate.go",
+        "go/internal/cluster/propagate_test.go",
+        "go/internal/cluster/seed.go",
+        "go/internal/cluster/seed_test.go",
+        "go/internal/cluster/surprising.go",
+        "go/internal/cluster/surprising_test.go",
+        "go/internal/container/build.go",
+        "go/internal/container/container.go",
+        "go/internal/container/container_test.go",
+        "go/internal/container/doc.go",
+        "go/internal/container/edges.go",
+        "go/internal/container/edges_test.go",
+        "go/internal/container/groups.go",
+        "go/internal/container/groups_test.go",
+        "go/internal/container/raw.go",
+        "go/internal/container/raw_test.go",
+        "go/internal/extract/callsites.go",
+        "go/internal/extract/doc.go",
+        "go/internal/extract/errors.go",
+        "go/internal/extract/exports.go",
+        "go/internal/extract/extract.go",
+        "go/internal/extract/extract_test.go",
+        "go/internal/extract/facts.go",
+        "go/internal/extract/routes.go",
+        "go/internal/extract/sinks.go",
+        "go/internal/extract/symbols.go",
+        "go/internal/flow/boxes.go",
+        "go/internal/flow/build.go",
+        "go/internal/flow/curate.go",
+        "go/internal/flow/doc.go",
+        "go/internal/flow/flow.go",
+        "go/internal/flow/flow_test.go",
+        "go/internal/flow/input.go",
+        "go/internal/flow/ordered.go",
+        "go/internal/graph/assemble.go",
+        "go/internal/graph/convert.go",
+        "go/internal/graph/determinism_test.go",
+        "go/internal/graph/doc.go",
+        "go/internal/graph/edges.go",
+        "go/internal/graph/edges_test.go",
+        "go/internal/graph/entry.go",
+        "go/internal/graph/entry_test.go",
+        "go/internal/graph/errors.go",
+        "go/internal/graph/layer.go",
+        "go/internal/graph/layer_test.go",
+        "go/internal/graph/parity_test.go",
+        "go/internal/graph/pipeline.go",
+        "go/internal/graph/pipeline_test.go",
+        "go/internal/graph/rationale.go",
+        "go/internal/graph/resolve.go",
+        "go/internal/graph/resolve_test.go",
+        "go/internal/graph/stats.go",
+        "go/internal/graph/stats_test.go",
+        "go/internal/graph/testdata/fixture-repo/cmd/tool/main.go",
+        "go/internal/graph/testdata/fixture-repo/packages/app/src/main.test.ts",
+        "go/internal/graph/testdata/fixture-repo/packages/core/src/index.ts",
+        "go/internal/graph/testdata/fixture-repo/packages/core/src/utils.ts",
+        "go/internal/graph/testdata/fixture-repo/scripts/build.py",
+        "go/internal/graph/testdata/fixture-repo/src/lib.rs",
+        "go/internal/graph/warm_test.go",
+        "go/internal/model/doc.go",
+        "go/internal/model/enums.go",
+        "go/internal/model/map.go",
+        "go/internal/model/map_test.go",
+        "go/internal/model/ordered.go",
+        "go/internal/model/ordered_test.go",
+        "go/internal/model/tofixed2.go",
+        "go/internal/model/tofixed2_test.go",
+        "go/internal/model/write.go",
+        "go/internal/model/write_test.go",
+        "go/internal/parse/concurrency_test.go",
+        "go/internal/parse/differential_test.go",
+        "go/internal/parse/doc.go",
+        "go/internal/parse/errors.go",
+        "go/internal/parse/grammar.go",
+        "go/internal/parse/grammar_test.go",
+        "go/internal/parse/parser.go",
+        "go/internal/parse/queries.go",
+        "go/internal/parse/regex.go",
+        "go/internal/parse/regex_test.go",
+        "go/internal/parse/strip.go",
+        "go/internal/parse/strip_test.go",
+        "go/internal/parse/treesitter.go",
+        "go/internal/parse/treesitter_test.go",
+        "go/internal/parse/version_test.go",
+        "go/internal/rank/degrees.go",
+        "go/internal/rank/degrees_test.go",
+        "go/internal/rank/depth.go",
+        "go/internal/rank/depth_test.go",
+        "go/internal/rank/determinism_test.go",
+        "go/internal/rank/doc.go",
+        "go/internal/rank/entrypoints.go",
+        "go/internal/rank/entrypoints_test.go",
+        "go/internal/rank/hotspots.go",
+        "go/internal/rank/hotspots_test.go",
+        "go/internal/rawobj/rawobj.go",
+        "go/internal/rawobj/rawobj_test.go",
+        "go/internal/scan/discover.go",
+        "go/internal/scan/discover_test.go",
+        "go/internal/scan/doc.go",
+        "go/internal/scan/errors.go",
+        "go/internal/scan/git.go",
+        "go/internal/scan/git_test.go",
+        "go/internal/scan/helpers_test.go",
+        "go/internal/scan/lang.go",
+        "go/internal/scan/lang_test.go",
+        "go/internal/scan/pkgjson.go",
+        "go/internal/scan/pkgjson_test.go",
+        "go/internal/scan/realrepo_test.go",
+        "go/internal/scan/root.go",
+        "go/internal/scan/root_test.go",
+        "go/internal/scan/walk.go",
+        "go/internal/scan/walk_test.go",
+        "go/internal/symindex/comments.go",
+        "go/internal/symindex/comments_test.go",
+        "go/internal/symindex/doc.go",
+        "go/internal/symindex/rationale.go",
+        "go/internal/symindex/rationale_test.go",
+        "go/internal/symindex/symbolindex.go",
+        "go/internal/symindex/symbolindex_test.go",
+        "install.sh",
+        "pi-test.sh",
+        "quest/app/src/main/java/dev/draht/geist/MainActivity.kt",
+        "quest/app/src/main/java/dev/draht/geist/input/RayCast.kt",
+        "quest/app/src/main/java/dev/draht/geist/panel/PassthroughPanel.kt",
+        "quest/app/src/main/java/dev/draht/geist/panel/RoomGlassMaterial.kt",
+        "scripts/build-binaries.sh",
+        "scripts/check-browser-smoke.mjs",
+        "scripts/check-draht-customizations.mjs",
+        "scripts/check-geist-boundary.mjs",
+        "scripts/check-geist-mirrors.mjs",
+        "scripts/check-plugin-mirrors.mjs",
+        "scripts/cost.ts",
+        "scripts/dev-link.mjs",
+        "scripts/dev-unlink.mjs",
+        "scripts/diff-model-catalog.mjs",
+        "scripts/edit-tool-stats.mjs",
+        "scripts/generate-hooks-json.mjs",
+        "scripts/profile-coding-agent-node.mjs",
+        "scripts/publish-workspaces.mjs",
+        "scripts/read-tool-stats.mjs",
+        "scripts/release.mjs",
+        "scripts/session-context-stats.mjs",
+        "scripts/stats.ts",
+        "scripts/sync-draht-tools.mjs",
+        "scripts/sync-versions.js",
+        "scripts/tool-stats.ts",
+        "scripts/verify.sh",
+        "test.sh"
+      ],
+      "dominantPackage": "draht-monorepo",
+      "dominantLayer": "application",
+      "packages": [
+        "draht-monorepo"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai",
+      "label": "packages/ai",
+      "size": 123,
+      "members": [
+        "packages/ai/scripts/generate-image-models.ts",
+        "packages/ai/src/api/bedrock-converse-stream.ts",
+        "packages/ai/src/api/google-shared.ts",
+        "packages/ai/src/api/transform-messages.ts",
+        "packages/ai/src/auth/context.ts",
+        "packages/ai/src/auth/credential-store.ts",
+        "packages/ai/src/compat.ts",
+        "packages/ai/src/env-api-keys.ts",
+        "packages/ai/src/images-models.ts",
+        "packages/ai/src/models-store.ts",
+        "packages/ai/src/providers/anthropic.models.ts",
+        "packages/ai/src/providers/anthropic.ts",
+        "packages/ai/src/providers/faux.ts",
+        "packages/ai/src/providers/openrouter-images.ts",
+        "packages/ai/src/types.ts",
+        "packages/ai/src/utils/event-stream.ts",
+        "packages/ai/src/utils/node-http-proxy.ts",
+        "packages/ai/src/utils/overflow.ts",
+        "packages/ai/src/utils/retry.ts",
+        "packages/ai/src/utils/typebox-helpers.ts",
+        "packages/ai/src/utils/uuid.ts",
+        "packages/ai/src/utils/validation.ts",
+        "packages/ai/test/abort.test.ts",
+        "packages/ai/test/anthropic-adaptive-thinking-models.test.ts",
+        "packages/ai/test/anthropic-auth-token.test.ts",
+        "packages/ai/test/anthropic-cache-write-1h-cost.test.ts",
+        "packages/ai/test/anthropic-eager-tool-input-compat.test.ts",
+        "packages/ai/test/anthropic-eager-tool-input-e2e.test.ts",
+        "packages/ai/test/anthropic-empty-thinking-signature-compat.test.ts",
+        "packages/ai/test/anthropic-force-adaptive-thinking.test.ts",
+        "packages/ai/test/anthropic-long-cache-retention-e2e.test.ts",
+        "packages/ai/test/anthropic-opus-4-7-smoke.test.ts",
+        "packages/ai/test/anthropic-opus-4-8-smoke.test.ts",
+        "packages/ai/test/anthropic-sse-parsing.test.ts",
+        "packages/ai/test/anthropic-temperature-compat.test.ts",
+        "packages/ai/test/anthropic-thinking-disable.test.ts",
+        "packages/ai/test/anthropic-tool-name-normalization.test.ts",
+        "packages/ai/test/azure-openai-base-url.test.ts",
+        "packages/ai/test/azure-openai-responses-reasoning-replay.test.ts",
+        "packages/ai/test/azure-utils.ts",
+        "packages/ai/test/bedrock-convert-messages.test.ts",
+        "packages/ai/test/bedrock-credentials.test.ts",
+        "packages/ai/test/bedrock-custom-headers.test.ts",
+        "packages/ai/test/bedrock-endpoint-resolution.test.ts",
+        "packages/ai/test/bedrock-models.test.ts",
+        "packages/ai/test/bedrock-raw-stop-reason.test.ts",
+        "packages/ai/test/bedrock-thinking-payload.test.ts",
+        "packages/ai/test/bedrock-utils.ts",
+        "packages/ai/test/cache-retention.test.ts",
+        "packages/ai/test/cloudflare-utils.ts",
+        "packages/ai/test/codex-websocket-cached-probe.ts",
+        "packages/ai/test/compat-env.test.ts",
+        "packages/ai/test/context-overflow.test.ts",
+        "packages/ai/test/cross-provider-handoff.test.ts",
+        "packages/ai/test/empty.test.ts",
+        "packages/ai/test/env-api-keys.test.ts",
+        "packages/ai/test/faux-provider.test.ts",
+        "packages/ai/test/fireworks-models.test.ts",
+        "packages/ai/test/github-copilot-anthropic.test.ts",
+        "packages/ai/test/google-shared-convert-tools.test.ts",
+        "packages/ai/test/google-shared-gemini3-unsigned-tool-call.test.ts",
+        "packages/ai/test/google-shared-image-tool-result-routing.test.ts",
+        "packages/ai/test/google-thinking-disable.test.ts",
+        "packages/ai/test/google-thinking-signature.test.ts",
+        "packages/ai/test/google-vertex-api-key-resolution.test.ts",
+        "packages/ai/test/image-model-data.test.ts",
+        "packages/ai/test/image-tool-result.test.ts",
+        "packages/ai/test/images-models.test.ts",
+        "packages/ai/test/interleaved-thinking.test.ts",
+        "packages/ai/test/lax-message-content.test.ts",
+        "packages/ai/test/max-thinking.test.ts",
+        "packages/ai/test/mistral-reasoning-mode.test.ts",
+        "packages/ai/test/mistral-tool-schema.test.ts",
+        "packages/ai/test/models-runtime.test.ts",
+        "packages/ai/test/node-http-proxy.test.ts",
+        "packages/ai/test/oauth.ts",
+        "packages/ai/test/openai-codex-cache-affinity-e2e.test.ts",
+        "packages/ai/test/openai-codex-stream.test.ts",
+        "packages/ai/test/openai-completions-cache-control-format.test.ts",
+        "packages/ai/test/openai-completions-deepseek-reasoning-replay.test.ts",
+        "packages/ai/test/openai-completions-empty-tools.test.ts",
+        "packages/ai/test/openai-completions-prompt-cache.test.ts",
+        "packages/ai/test/openai-completions-raw-stop-reason.test.ts",
+        "packages/ai/test/openai-completions-reasoning-details.test.ts",
+        "packages/ai/test/openai-completions-response-model.test.ts",
+        "packages/ai/test/openai-completions-retry.test.ts",
+        "packages/ai/test/openai-completions-thinking-as-text.test.ts",
+        "packages/ai/test/openai-completions-tool-choice.test.ts",
+        "packages/ai/test/openai-completions-tool-result-images.test.ts",
+        "packages/ai/test/openai-responses-cache-affinity-e2e.test.ts",
+        "packages/ai/test/openai-responses-compat.test.ts",
+        "packages/ai/test/openai-responses-empty-tool-result.test.ts",
+        "packages/ai/test/openai-responses-message-id.test.ts",
+        "packages/ai/test/openai-responses-partial-json-cleanup.test.ts",
+        "packages/ai/test/openai-responses-reasoning-replay-e2e.test.ts",
+        "packages/ai/test/openai-responses-terminal-event.test.ts",
+        "packages/ai/test/openai-responses-tool-result-images.test.ts",
+        "packages/ai/test/openrouter-cache-control-models.test.ts",
+        "packages/ai/test/openrouter-cache-write-repro.test.ts",
+        "packages/ai/test/openrouter-oauth.test.ts",
+        "packages/ai/test/overflow.test.ts",
+        "packages/ai/test/provider-error-body-regression.test.ts",
+        "packages/ai/test/providers.test.ts",
+        "packages/ai/test/qwen-token-plan-models.test.ts",
+        "packages/ai/test/responseid.test.ts",
+        "packages/ai/test/retry.test.ts",
+        "packages/ai/test/scratch.ts",
+        "packages/ai/test/stream.test.ts",
+        "packages/ai/test/supports-xhigh.test.ts",
+        "packages/ai/test/text.test.ts",
+        "packages/ai/test/together-models.test.ts",
+        "packages/ai/test/tokens.test.ts",
+        "packages/ai/test/tool-call-id-normalization.test.ts",
+        "packages/ai/test/tool-call-without-result.test.ts",
+        "packages/ai/test/total-tokens.test.ts",
+        "packages/ai/test/transform-messages-copilot-openai-to-anthropic.test.ts",
+        "packages/ai/test/unicode-surrogate.test.ts",
+        "packages/ai/test/uuid.test.ts",
+        "packages/ai/test/validation.test.ts",
+        "packages/ai/test/xhigh.test.ts",
+        "packages/ai/test/xiaomi-models.test.ts",
+        "packages/ai/test/xiaomi-token-plan-ams-anthropic-empty-signature-smoke.test.ts",
+        "packages/ai/test/zen.test.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent",
+      "label": "packages/coding-agent",
+      "size": 84,
+      "members": [
+        "packages/coding-agent/examples/extensions/antigravity-image-gen.ts",
+        "packages/coding-agent/examples/extensions/auto-commit-on-exit.ts",
+        "packages/coding-agent/examples/extensions/bash-spawn-hook.ts",
+        "packages/coding-agent/examples/extensions/bookmark.ts",
+        "packages/coding-agent/examples/extensions/border-status-editor.ts",
+        "packages/coding-agent/examples/extensions/built-in-tool-renderer.ts",
+        "packages/coding-agent/examples/extensions/claude-rules.ts",
+        "packages/coding-agent/examples/extensions/commands.ts",
+        "packages/coding-agent/examples/extensions/confirm-destructive.ts",
+        "packages/coding-agent/examples/extensions/custom-compaction.ts",
+        "packages/coding-agent/examples/extensions/custom-footer.ts",
+        "packages/coding-agent/examples/extensions/custom-header.ts",
+        "packages/coding-agent/examples/extensions/custom-provider-anthropic/index.ts",
+        "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo/index.ts",
+        "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo/test.ts",
+        "packages/coding-agent/examples/extensions/custom-provider-qwen-cli/index.ts",
+        "packages/coding-agent/examples/extensions/dirty-repo-guard.ts",
+        "packages/coding-agent/examples/extensions/doom-overlay/doom-component.ts",
+        "packages/coding-agent/examples/extensions/doom-overlay/doom-engine.ts",
+        "packages/coding-agent/examples/extensions/doom-overlay/doom-keys.ts",
+        "packages/coding-agent/examples/extensions/doom-overlay/index.ts",
+        "packages/coding-agent/examples/extensions/doom-overlay/wad-finder.ts",
+        "packages/coding-agent/examples/extensions/dynamic-resources/index.ts",
+        "packages/coding-agent/examples/extensions/dynamic-tools.ts",
+        "packages/coding-agent/examples/extensions/entry-renderer.ts",
+        "packages/coding-agent/examples/extensions/event-bus.ts",
+        "packages/coding-agent/examples/extensions/file-trigger.ts",
+        "packages/coding-agent/examples/extensions/git-checkpoint.ts",
+        "packages/coding-agent/examples/extensions/github-issue-autocomplete.ts",
+        "packages/coding-agent/examples/extensions/gondolin/index.ts",
+        "packages/coding-agent/examples/extensions/handoff.ts",
+        "packages/coding-agent/examples/extensions/hello.ts",
+        "packages/coding-agent/examples/extensions/hidden-thinking-label.ts",
+        "packages/coding-agent/examples/extensions/inline-bash.ts",
+        "packages/coding-agent/examples/extensions/input-transform.ts",
+        "packages/coding-agent/examples/extensions/interactive-shell.ts",
+        "packages/coding-agent/examples/extensions/kimi-deferred-tools.ts",
+        "packages/coding-agent/examples/extensions/mac-system-theme.ts",
+        "packages/coding-agent/examples/extensions/message-renderer.ts",
+        "packages/coding-agent/examples/extensions/minimal-mode.ts",
+        "packages/coding-agent/examples/extensions/modal-editor.ts",
+        "packages/coding-agent/examples/extensions/model-status.ts",
+        "packages/coding-agent/examples/extensions/notify.ts",
+        "packages/coding-agent/examples/extensions/overlay-qa-tests.ts",
+        "packages/coding-agent/examples/extensions/overlay-test.ts",
+        "packages/coding-agent/examples/extensions/permission-gate.ts",
+        "packages/coding-agent/examples/extensions/pirate.ts",
+        "packages/coding-agent/examples/extensions/preset.ts",
+        "packages/coding-agent/examples/extensions/project-trust.ts",
+        "packages/coding-agent/examples/extensions/prompt-customizer.ts",
+        "packages/coding-agent/examples/extensions/protected-paths.ts",
+        "packages/coding-agent/examples/extensions/provider-payload.ts",
+        "packages/coding-agent/examples/extensions/qna.ts",
+        "packages/coding-agent/examples/extensions/question.ts",
+        "packages/coding-agent/examples/extensions/questionnaire.ts",
+        "packages/coding-agent/examples/extensions/rainbow-editor.ts",
+        "packages/coding-agent/examples/extensions/reload-runtime.ts",
+        "packages/coding-agent/examples/extensions/rpc-demo.ts",
+        "packages/coding-agent/examples/extensions/sandbox/index.ts",
+        "packages/coding-agent/examples/extensions/send-user-message.ts",
+        "packages/coding-agent/examples/extensions/session-name.ts",
+        "packages/coding-agent/examples/extensions/shutdown-command.ts",
+        "packages/coding-agent/examples/extensions/snake.ts",
+        "packages/coding-agent/examples/extensions/space-invaders.ts",
+        "packages/coding-agent/examples/extensions/ssh.ts",
+        "packages/coding-agent/examples/extensions/sst-resource-manager.ts",
+        "packages/coding-agent/examples/extensions/status-line.ts",
+        "packages/coding-agent/examples/extensions/structured-output.ts",
+        "packages/coding-agent/examples/extensions/subagent/agents.ts",
+        "packages/coding-agent/examples/extensions/subagent/index.ts",
+        "packages/coding-agent/examples/extensions/summarize.ts",
+        "packages/coding-agent/examples/extensions/system-prompt-header.ts",
+        "packages/coding-agent/examples/extensions/tic-tac-toe.ts",
+        "packages/coding-agent/examples/extensions/timed-confirm.ts",
+        "packages/coding-agent/examples/extensions/titlebar-spinner.ts",
+        "packages/coding-agent/examples/extensions/todo.ts",
+        "packages/coding-agent/examples/extensions/tool-override.ts",
+        "packages/coding-agent/examples/extensions/tools.ts",
+        "packages/coding-agent/examples/extensions/truncated-tool.ts",
+        "packages/coding-agent/examples/extensions/widget-placement.ts",
+        "packages/coding-agent/examples/extensions/with-deps/index.ts",
+        "packages/coding-agent/examples/extensions/working-indicator.ts",
+        "packages/coding-agent/examples/extensions/working-message-test.ts",
+        "packages/coding-agent/src/index.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai:2",
+      "label": "packages/ai",
+      "size": 74,
+      "members": [
+        "packages/ai/src/api/anthropic-messages.lazy.ts",
+        "packages/ai/src/api/openai-completions.lazy.ts",
+        "packages/ai/src/api/openai-responses.lazy.ts",
+        "packages/ai/src/auth/helpers.ts",
+        "packages/ai/src/auth/oauth/load.ts",
+        "packages/ai/src/model-catalog.ts",
+        "packages/ai/src/models.generated.ts",
+        "packages/ai/src/models.ts",
+        "packages/ai/src/providers/all.ts",
+        "packages/ai/src/providers/ant-ling.models.ts",
+        "packages/ai/src/providers/ant-ling.ts",
+        "packages/ai/src/providers/cerebras.models.ts",
+        "packages/ai/src/providers/cerebras.ts",
+        "packages/ai/src/providers/cloudflare-ai-gateway.models.ts",
+        "packages/ai/src/providers/cloudflare-ai-gateway.ts",
+        "packages/ai/src/providers/cloudflare-auth.ts",
+        "packages/ai/src/providers/cloudflare-stream.ts",
+        "packages/ai/src/providers/cloudflare-workers-ai.models.ts",
+        "packages/ai/src/providers/cloudflare-workers-ai.ts",
+        "packages/ai/src/providers/deepseek.models.ts",
+        "packages/ai/src/providers/deepseek.ts",
+        "packages/ai/src/providers/fireworks.models.ts",
+        "packages/ai/src/providers/fireworks.ts",
+        "packages/ai/src/providers/groq.models.ts",
+        "packages/ai/src/providers/groq.ts",
+        "packages/ai/src/providers/huggingface.models.ts",
+        "packages/ai/src/providers/huggingface.ts",
+        "packages/ai/src/providers/kimi-coding.models.ts",
+        "packages/ai/src/providers/kimi-coding.ts",
+        "packages/ai/src/providers/minimax-cn.models.ts",
+        "packages/ai/src/providers/minimax-cn.ts",
+        "packages/ai/src/providers/minimax.models.ts",
+        "packages/ai/src/providers/minimax.ts",
+        "packages/ai/src/providers/moonshotai-cn.models.ts",
+        "packages/ai/src/providers/moonshotai-cn.ts",
+        "packages/ai/src/providers/moonshotai.models.ts",
+        "packages/ai/src/providers/moonshotai.ts",
+        "packages/ai/src/providers/nvidia.models.ts",
+        "packages/ai/src/providers/nvidia.ts",
+        "packages/ai/src/providers/openai-codex.models.ts",
+        "packages/ai/src/providers/openai-codex.ts",
+        "packages/ai/src/providers/openai.models.ts",
+        "packages/ai/src/providers/openai.ts",
+        "packages/ai/src/providers/opencode-go.models.ts",
+        "packages/ai/src/providers/opencode-go.ts",
+        "packages/ai/src/providers/opencode.models.ts",
+        "packages/ai/src/providers/opencode.ts",
+        "packages/ai/src/providers/openrouter.models.ts",
+        "packages/ai/src/providers/openrouter.ts",
+        "packages/ai/src/providers/qwen-token-plan-cn.models.ts",
+        "packages/ai/src/providers/qwen-token-plan-cn.ts",
+        "packages/ai/src/providers/qwen-token-plan.models.ts",
+        "packages/ai/src/providers/qwen-token-plan.ts",
+        "packages/ai/src/providers/together.models.ts",
+        "packages/ai/src/providers/together.ts",
+        "packages/ai/src/providers/vercel-ai-gateway.models.ts",
+        "packages/ai/src/providers/vercel-ai-gateway.ts",
+        "packages/ai/src/providers/xai.models.ts",
+        "packages/ai/src/providers/xai.ts",
+        "packages/ai/src/providers/xiaomi-token-plan-ams.models.ts",
+        "packages/ai/src/providers/xiaomi-token-plan-ams.ts",
+        "packages/ai/src/providers/xiaomi-token-plan-cn.models.ts",
+        "packages/ai/src/providers/xiaomi-token-plan-cn.ts",
+        "packages/ai/src/providers/xiaomi-token-plan-sgp.models.ts",
+        "packages/ai/src/providers/xiaomi-token-plan-sgp.ts",
+        "packages/ai/src/providers/xiaomi.models.ts",
+        "packages/ai/src/providers/xiaomi.ts",
+        "packages/ai/src/providers/zai-coding-cn.models.ts",
+        "packages/ai/src/providers/zai-coding-cn.ts",
+        "packages/ai/src/providers/zai.models.ts",
+        "packages/ai/src/providers/zai.ts",
+        "packages/ai/test/cloudflare-stream.test.ts",
+        "packages/ai/test/model-catalog-types.test.ts",
+        "packages/ai/test/xai-responses.test.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent:2",
+      "label": "packages/coding-agent",
+      "size": 62,
+      "members": [
+        "packages/coding-agent/src/cli/list-models.ts",
+        "packages/coding-agent/src/cli/project-trust.ts",
+        "packages/coding-agent/src/core/auth-guidance.ts",
+        "packages/coding-agent/src/core/compaction/branch-summarization.ts",
+        "packages/coding-agent/src/core/compaction/compaction.ts",
+        "packages/coding-agent/src/core/compaction/utils.ts",
+        "packages/coding-agent/src/core/diagnostics.ts",
+        "packages/coding-agent/src/core/export-html/ansi-to-html.ts",
+        "packages/coding-agent/src/core/export-html/index.ts",
+        "packages/coding-agent/src/core/export-html/tool-renderer.ts",
+        "packages/coding-agent/src/core/extensions/types.ts",
+        "packages/coding-agent/src/core/extensions/wrapper.ts",
+        "packages/coding-agent/src/core/messages.ts",
+        "packages/coding-agent/src/core/model-config.ts",
+        "packages/coding-agent/src/core/project-trust.ts",
+        "packages/coding-agent/src/core/provider-attribution.ts",
+        "packages/coding-agent/src/core/provider-composer.ts",
+        "packages/coding-agent/src/core/resolve-config-value.ts",
+        "packages/coding-agent/src/core/skills.ts",
+        "packages/coding-agent/src/core/slash-commands.ts",
+        "packages/coding-agent/src/core/socket-server/discovery.ts",
+        "packages/coding-agent/src/core/socket-server/session-integration.ts",
+        "packages/coding-agent/src/core/socket-server/socket-client.ts",
+        "packages/coding-agent/src/core/socket-server/socket-server.ts",
+        "packages/coding-agent/src/core/socket-server/types.ts",
+        "packages/coding-agent/src/core/source-info.ts",
+        "packages/coding-agent/src/core/telemetry.ts",
+        "packages/coding-agent/src/core/timings.ts",
+        "packages/coding-agent/src/core/tools/bash.ts",
+        "packages/coding-agent/src/core/tools/edit-diff.ts",
+        "packages/coding-agent/src/core/tools/edit.ts",
+        "packages/coding-agent/src/core/tools/file-mutation-queue.ts",
+        "packages/coding-agent/src/core/tools/find.ts",
+        "packages/coding-agent/src/core/tools/grep.ts",
+        "packages/coding-agent/src/core/tools/index.ts",
+        "packages/coding-agent/src/core/tools/ls.ts",
+        "packages/coding-agent/src/core/tools/output-accumulator.ts",
+        "packages/coding-agent/src/core/tools/path-utils.ts",
+        "packages/coding-agent/src/core/tools/read.ts",
+        "packages/coding-agent/src/core/tools/render-utils.ts",
+        "packages/coding-agent/src/core/tools/tool-definition-wrapper.ts",
+        "packages/coding-agent/src/core/tools/truncate.ts",
+        "packages/coding-agent/src/core/tools/write.ts",
+        "packages/coding-agent/src/modes/interactive/components/bash-execution.ts",
+        "packages/coding-agent/src/modes/interactive/components/tool-execution.ts",
+        "packages/coding-agent/src/modes/interactive/components/visual-truncate.ts",
+        "packages/coding-agent/src/utils/json.ts",
+        "packages/coding-agent/src/utils/paths.ts",
+        "packages/coding-agent/src/utils/tools-manager.ts",
+        "packages/coding-agent/test/bash-execution-width.test.ts",
+        "packages/coding-agent/test/compaction-serialization.test.ts",
+        "packages/coding-agent/test/edit-tool-no-full-redraw.test.ts",
+        "packages/coding-agent/test/export-html-whitespace.test.ts",
+        "packages/coding-agent/test/file-mutation-queue.test.ts",
+        "packages/coding-agent/test/path-utils.test.ts",
+        "packages/coding-agent/test/resolve-config-value.test.ts",
+        "packages/coding-agent/test/resource-loader.test.ts",
+        "packages/coding-agent/test/skills.test.ts",
+        "packages/coding-agent/test/suite/regressions/3302-find-path-glob.test.ts",
+        "packages/coding-agent/test/suite/regressions/3303-find-nested-gitignore.test.ts",
+        "packages/coding-agent/test/suite/regressions/4167-thinking-toggle-pending-tool-render.test.ts",
+        "packages/coding-agent/test/tool-execution-component.test.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages:2",
+      "label": "packages",
+      "size": 60,
+      "members": [
+        "packages/coding-agent/src/cli/config-selector.ts",
+        "packages/coding-agent/src/cli/session-picker.ts",
+        "packages/coding-agent/src/cli/startup-ui.ts",
+        "packages/coding-agent/src/core/bash-executor.ts",
+        "packages/coding-agent/src/core/experimental.ts",
+        "packages/coding-agent/src/core/footer-data-provider.ts",
+        "packages/coding-agent/src/core/output-guard.ts",
+        "packages/coding-agent/src/core/usage-totals.ts",
+        "packages/coding-agent/src/modes/index.ts",
+        "packages/coding-agent/src/modes/interactive/components/armin.ts",
+        "packages/coding-agent/src/modes/interactive/components/bordered-loader.ts",
+        "packages/coding-agent/src/modes/interactive/components/branch-summary-message.ts",
+        "packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts",
+        "packages/coding-agent/src/modes/interactive/components/config-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/countdown-timer.ts",
+        "packages/coding-agent/src/modes/interactive/components/custom-editor.ts",
+        "packages/coding-agent/src/modes/interactive/components/custom-entry.ts",
+        "packages/coding-agent/src/modes/interactive/components/daxnuts.ts",
+        "packages/coding-agent/src/modes/interactive/components/diff.ts",
+        "packages/coding-agent/src/modes/interactive/components/dynamic-border.ts",
+        "packages/coding-agent/src/modes/interactive/components/earendil-announcement.ts",
+        "packages/coding-agent/src/modes/interactive/components/extension-editor.ts",
+        "packages/coding-agent/src/modes/interactive/components/extension-input.ts",
+        "packages/coding-agent/src/modes/interactive/components/extension-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/first-time-setup.ts",
+        "packages/coding-agent/src/modes/interactive/components/footer.ts",
+        "packages/coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+        "packages/coding-agent/src/modes/interactive/components/session-selector-search.ts",
+        "packages/coding-agent/src/modes/interactive/components/session-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/show-images-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts",
+        "packages/coding-agent/src/modes/interactive/components/status-indicator.ts",
+        "packages/coding-agent/src/modes/interactive/components/theme-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/thinking-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/user-message-selector.ts",
+        "packages/coding-agent/src/modes/interactive/external-editor.ts",
+        "packages/coding-agent/src/modes/interactive/theme/theme-controller.ts",
+        "packages/coding-agent/src/modes/interactive/theme/theme.ts",
+        "packages/coding-agent/src/modes/print-mode.ts",
+        "packages/coding-agent/src/modes/rpc/jsonl.ts",
+        "packages/coding-agent/src/modes/rpc/rpc-mode.ts",
+        "packages/coding-agent/src/modes/rpc/rpc-types.ts",
+        "packages/coding-agent/src/utils/fs-watch.ts",
+        "packages/coding-agent/src/utils/shell.ts",
+        "packages/coding-agent/test/agent-session-stats.test.ts",
+        "packages/coding-agent/test/bash-close-hang-windows.test.ts",
+        "packages/coding-agent/test/experimental.test.ts",
+        "packages/coding-agent/test/external-editor.test.ts",
+        "packages/coding-agent/test/footer-data-provider.test.ts",
+        "packages/coding-agent/test/footer-width.test.ts",
+        "packages/coding-agent/test/print-mode.test.ts",
+        "packages/coding-agent/test/rpc-jsonl.test.ts",
+        "packages/coding-agent/test/rpc-prompt-response-semantics.test.ts",
+        "packages/coding-agent/test/session-selector-path-delete.test.ts",
+        "packages/coding-agent/test/session-selector-rename.test.ts",
+        "packages/coding-agent/test/session-selector-search.test.ts",
+        "packages/coding-agent/test/status-indicator.test.ts",
+        "packages/coding-agent/test/suite/regressions/5868-rpc-unknown-command-id.test.ts",
+        "packages/coding-agent/test/tools.test.ts",
+        "packages/tui/src/index.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/coding-agent",
+        "@draht/tui"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai:3",
+      "label": "packages/ai",
+      "size": 54,
+      "members": [
+        "packages/ai/src/api/anthropic-messages.ts",
+        "packages/ai/src/api/azure-openai-responses.lazy.ts",
+        "packages/ai/src/api/azure-openai-responses.ts",
+        "packages/ai/src/api/bedrock-converse-stream.lazy.ts",
+        "packages/ai/src/api/constrained-sampling.ts",
+        "packages/ai/src/api/github-copilot-headers.ts",
+        "packages/ai/src/api/google-generative-ai.lazy.ts",
+        "packages/ai/src/api/google-generative-ai.ts",
+        "packages/ai/src/api/google-vertex.lazy.ts",
+        "packages/ai/src/api/google-vertex.ts",
+        "packages/ai/src/api/lazy.ts",
+        "packages/ai/src/api/mistral-conversations.lazy.ts",
+        "packages/ai/src/api/mistral-conversations.ts",
+        "packages/ai/src/api/openai-codex-responses.lazy.ts",
+        "packages/ai/src/api/openai-codex-responses.ts",
+        "packages/ai/src/api/openai-completions.ts",
+        "packages/ai/src/api/openai-prompt-cache.ts",
+        "packages/ai/src/api/openai-responses-shared.ts",
+        "packages/ai/src/api/openai-responses.ts",
+        "packages/ai/src/api/openrouter-images.lazy.ts",
+        "packages/ai/src/api/openrouter-images.ts",
+        "packages/ai/src/api/pi-messages.lazy.ts",
+        "packages/ai/src/api/pi-messages.ts",
+        "packages/ai/src/api/simple-options.ts",
+        "packages/ai/src/legacy-api-aliases.ts",
+        "packages/ai/src/providers/amazon-bedrock.models.ts",
+        "packages/ai/src/providers/amazon-bedrock.ts",
+        "packages/ai/src/providers/azure-openai-responses.models.ts",
+        "packages/ai/src/providers/azure-openai-responses.ts",
+        "packages/ai/src/providers/google-vertex.models.ts",
+        "packages/ai/src/providers/google-vertex.ts",
+        "packages/ai/src/providers/google.models.ts",
+        "packages/ai/src/providers/google.ts",
+        "packages/ai/src/providers/mistral.models.ts",
+        "packages/ai/src/providers/mistral.ts",
+        "packages/ai/src/providers/radius-config.ts",
+        "packages/ai/src/providers/radius.ts",
+        "packages/ai/src/utils/error-body.ts",
+        "packages/ai/src/utils/estimate.ts",
+        "packages/ai/src/utils/hash.ts",
+        "packages/ai/src/utils/headers.ts",
+        "packages/ai/src/utils/json-parse.ts",
+        "packages/ai/src/utils/provider-retry.ts",
+        "packages/ai/src/utils/sanitize-unicode.ts",
+        "packages/ai/test/constrained-sampling.test.ts",
+        "packages/ai/test/context-estimate.test.ts",
+        "packages/ai/test/deferred-tools.test.ts",
+        "packages/ai/test/error-body.test.ts",
+        "packages/ai/test/fetch-option.test.ts",
+        "packages/ai/test/google-raw-stop-reason.test.ts",
+        "packages/ai/test/mistral-raw-stop-reason.test.ts",
+        "packages/ai/test/openai-responses-foreign-toolcall-id.test.ts",
+        "packages/ai/test/pi-messages.test.ts",
+        "packages/ai/test/provider-retry.test.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "presentation",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent:3",
+      "label": "packages/coding-agent",
+      "size": 50,
+      "members": [
+        "packages/coding-agent/src/core/agent-session-services.ts",
+        "packages/coding-agent/src/core/resource-loader.ts",
+        "packages/coding-agent/src/modes/interactive/components/model-selector.ts",
+        "packages/coding-agent/src/modes/interactive/components/scoped-models-selector.ts",
+        "packages/coding-agent/src/modes/interactive/model-search.ts",
+        "packages/coding-agent/test/suite/agent-session-bash-persistence.test.ts",
+        "packages/coding-agent/test/suite/agent-session-compaction.test.ts",
+        "packages/coding-agent/test/suite/agent-session-model-extension.test.ts",
+        "packages/coding-agent/test/suite/agent-session-queue.test.ts",
+        "packages/coding-agent/test/suite/agent-session-retry-events.test.ts",
+        "packages/coding-agent/test/suite/agent-session-runtime.test.ts",
+        "packages/coding-agent/test/suite/harness.ts",
+        "packages/coding-agent/test/suite/lax-message-content.test.ts",
+        "packages/coding-agent/test/suite/regressions/1717-2113-agent-session-event-settlement.test.ts",
+        "packages/coding-agent/test/suite/regressions/2023-queued-slash-command-followup.test.ts",
+        "packages/coding-agent/test/suite/regressions/2753-reload-stale-resource-settings.test.ts",
+        "packages/coding-agent/test/suite/regressions/2781-skill-collision-precedence.test.ts",
+        "packages/coding-agent/test/suite/regressions/2835-tools-allowlist-filters-extension-tools.test.ts",
+        "packages/coding-agent/test/suite/regressions/2860-replaced-session-context.test.ts",
+        "packages/coding-agent/test/suite/regressions/3217-scoped-model-order.test.ts",
+        "packages/coding-agent/test/suite/regressions/3317-network-connection-lost-retry.test.ts",
+        "packages/coding-agent/test/suite/regressions/3592-no-builtin-tools-keeps-extension-tools.test.ts",
+        "packages/coding-agent/test/suite/regressions/3616-settings-inmemory-reload.test.ts",
+        "packages/coding-agent/test/suite/regressions/3686-session-name-event.test.ts",
+        "packages/coding-agent/test/suite/regressions/3688-tree-cancel-compacting.test.ts",
+        "packages/coding-agent/test/suite/regressions/3982-message-end-cost-override.test.ts",
+        "packages/coding-agent/test/suite/regressions/5080-signal-shutdown-extension-cleanup.test.ts",
+        "packages/coding-agent/test/suite/regressions/5109-exclude-tools.test.ts",
+        "packages/coding-agent/test/suite/regressions/5208-late-bash-output.test.ts",
+        "packages/coding-agent/test/suite/regressions/5217-compaction-reason.test.ts",
+        "packages/coding-agent/test/suite/regressions/5596-missing-theme-export.test.ts",
+        "packages/coding-agent/test/suite/regressions/5724-sigterm-signal-exit.test.ts",
+        "packages/coding-agent/test/suite/regressions/5943-session-start-notify.test.ts",
+        "packages/coding-agent/test/suite/regressions/5996-session-name-newlines.test.ts",
+        "packages/coding-agent/test/suite/regressions/6019-explicit-provider-retry-message.test.ts",
+        "packages/coding-agent/test/suite/regressions/6162-extension-active-tools-next-turn.test.ts",
+        "packages/coding-agent/test/suite/regressions/6260-inline-extension-naming.test.ts",
+        "packages/coding-agent/test/suite/regressions/6324-branch-summary-ambient-auth.test.ts",
+        "packages/coding-agent/test/suite/regressions/6363-agent-settled-event.test.ts",
+        "packages/coding-agent/test/suite/regressions/6647-compaction-retries-transient-stream-drop.test.ts",
+        "packages/coding-agent/test/suite/regressions/6904-dns-transport-retry.test.ts",
+        "packages/coding-agent/test/suite/regressions/6949-unavailable-scoped-model.test.ts",
+        "packages/coding-agent/test/suite/regressions/6999-models-json-hot-reload.test.ts",
+        "packages/coding-agent/test/suite/regressions/7209-model-selector-filter-resets-selection.test.ts",
+        "packages/coding-agent/test/suite/regressions/core-builtins-always-loaded.test.ts",
+        "packages/coding-agent/test/suite/regressions/core-builtins-permission-gate-live.test.ts",
+        "packages/coding-agent/test/suite/regressions/extension-factory-cache.test.ts",
+        "packages/coding-agent/test/suite/regressions/pre-prompt-compaction-no-continue.test.ts",
+        "packages/coding-agent/test/suite/regressions/startup-session-rebind-duplicate-subscription.test.ts",
+        "packages/coding-agent/test/suite/regressions/tree-during-streaming.test.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent:4",
+      "label": "packages/coding-agent",
+      "size": 48,
+      "members": [
+        "packages/coding-agent/src/cli/file-processor.ts",
+        "packages/coding-agent/src/core/builtins/index.ts",
+        "packages/coding-agent/src/core/builtins/subagent.ts",
+        "packages/coding-agent/src/core/exec.ts",
+        "packages/coding-agent/src/core/multi-agent/index.ts",
+        "packages/coding-agent/src/core/prompt-templates.ts",
+        "packages/coding-agent/src/core/remote-catalog-provider.ts",
+        "packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
+        "packages/coding-agent/src/package-manager-cli.ts",
+        "packages/coding-agent/src/utils/child-process.ts",
+        "packages/coding-agent/src/utils/clipboard-image.ts",
+        "packages/coding-agent/src/utils/clipboard-native.ts",
+        "packages/coding-agent/src/utils/clipboard.ts",
+        "packages/coding-agent/src/utils/exif-orientation.ts",
+        "packages/coding-agent/src/utils/frontmatter.ts",
+        "packages/coding-agent/src/utils/html.ts",
+        "packages/coding-agent/src/utils/image-convert.ts",
+        "packages/coding-agent/src/utils/image-process.ts",
+        "packages/coding-agent/src/utils/image-resize-core.ts",
+        "packages/coding-agent/src/utils/image-resize-worker.ts",
+        "packages/coding-agent/src/utils/image-resize.ts",
+        "packages/coding-agent/src/utils/mime.ts",
+        "packages/coding-agent/src/utils/notify.ts",
+        "packages/coding-agent/src/utils/open-browser.ts",
+        "packages/coding-agent/src/utils/photon.ts",
+        "packages/coding-agent/src/utils/pi-user-agent.ts",
+        "packages/coding-agent/src/utils/sleep.ts",
+        "packages/coding-agent/src/utils/syntax-highlight.ts",
+        "packages/coding-agent/src/utils/version-check.ts",
+        "packages/coding-agent/src/utils/windows-self-update.ts",
+        "packages/coding-agent/test/block-images.test.ts",
+        "packages/coding-agent/test/clipboard-image-bmp-conversion.test.ts",
+        "packages/coding-agent/test/clipboard-image.test.ts",
+        "packages/coding-agent/test/clipboard-native.test.ts",
+        "packages/coding-agent/test/clipboard.test.ts",
+        "packages/coding-agent/test/frontmatter.test.ts",
+        "packages/coding-agent/test/image-process.test.ts",
+        "packages/coding-agent/test/image-processing.test.ts",
+        "packages/coding-agent/test/image-resize-callers.test.ts",
+        "packages/coding-agent/test/multi-agent/integration.test.ts",
+        "packages/coding-agent/test/pi-user-agent.test.ts",
+        "packages/coding-agent/test/prompt-templates.test.ts",
+        "packages/coding-agent/test/remote-catalog-provider.test.ts",
+        "packages/coding-agent/test/suite/agent-session-prompt.test.ts",
+        "packages/coding-agent/test/suite/regressions/5303-bash-output-truncation.test.ts",
+        "packages/coding-agent/test/suite/regressions/5433-extension-oauth-prompt-input.test.ts",
+        "packages/coding-agent/test/syntax-highlight.test.ts",
+        "packages/coding-agent/test/version-check.test.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/tui",
+      "label": "packages/tui",
+      "size": 39,
+      "members": [
+        "packages/tui/src/autocomplete.ts",
+        "packages/tui/src/components/image.ts",
+        "packages/tui/src/components/loader.ts",
+        "packages/tui/src/components/markdown.ts",
+        "packages/tui/src/components/spacer.ts",
+        "packages/tui/src/components/text.ts",
+        "packages/tui/src/components/truncated-text.ts",
+        "packages/tui/src/editor-component.ts",
+        "packages/tui/src/fuzzy.ts",
+        "packages/tui/src/native-modifiers.ts",
+        "packages/tui/src/terminal-image.ts",
+        "packages/tui/src/terminal.ts",
+        "packages/tui/src/tui.ts",
+        "packages/tui/src/utils.ts",
+        "packages/tui/test/autocomplete.test.ts",
+        "packages/tui/test/bug-regression-isimageline-startswith-bug.test.ts",
+        "packages/tui/test/chat-simple.ts",
+        "packages/tui/test/editor.test.ts",
+        "packages/tui/test/fuzzy.test.ts",
+        "packages/tui/test/image-test.ts",
+        "packages/tui/test/markdown.test.ts",
+        "packages/tui/test/overlay-non-capturing.test.ts",
+        "packages/tui/test/overlay-options.test.ts",
+        "packages/tui/test/overlay-short-content.test.ts",
+        "packages/tui/test/regression-overlay-cjk-boundary.test.ts",
+        "packages/tui/test/regression-regional-indicator-width.test.ts",
+        "packages/tui/test/tab-width.test.ts",
+        "packages/tui/test/terminal-colors.test.ts",
+        "packages/tui/test/terminal-image.test.ts",
+        "packages/tui/test/test-themes.ts",
+        "packages/tui/test/truncate-to-width.test.ts",
+        "packages/tui/test/truncated-text.test.ts",
+        "packages/tui/test/tui-cell-size-input.test.ts",
+        "packages/tui/test/tui-overlay-style-leak.test.ts",
+        "packages/tui/test/tui-render.test.ts",
+        "packages/tui/test/tui-shrink.test.ts",
+        "packages/tui/test/viewport-overwrite-repro.ts",
+        "packages/tui/test/virtual-terminal.ts",
+        "packages/tui/test/wrap-ansi.test.ts"
+      ],
+      "dominantPackage": "@draht/tui",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/tui"
+      ]
+    },
+    {
+      "id": "cluster:packages/web-ui",
+      "label": "packages/web-ui",
+      "size": 31,
+      "members": [
+        "packages/web-ui/scripts/count-prompt-tokens.ts",
+        "packages/web-ui/src/ChatPanel.ts",
+        "packages/web-ui/src/components/AgentInterface.ts",
+        "packages/web-ui/src/components/AttachmentTile.ts",
+        "packages/web-ui/src/components/ConsoleBlock.ts",
+        "packages/web-ui/src/components/Input.ts",
+        "packages/web-ui/src/components/MessageEditor.ts",
+        "packages/web-ui/src/components/MessageList.ts",
+        "packages/web-ui/src/components/Messages.ts",
+        "packages/web-ui/src/components/ProviderKeyInput.ts",
+        "packages/web-ui/src/components/SandboxedIframe.ts",
+        "packages/web-ui/src/components/StreamingMessageContainer.ts",
+        "packages/web-ui/src/components/message-renderer-registry.ts",
+        "packages/web-ui/src/components/sandbox/ArtifactsRuntimeProvider.ts",
+        "packages/web-ui/src/components/sandbox/AttachmentsRuntimeProvider.ts",
+        "packages/web-ui/src/components/sandbox/ConsoleRuntimeProvider.ts",
+        "packages/web-ui/src/components/sandbox/FileDownloadRuntimeProvider.ts",
+        "packages/web-ui/src/components/sandbox/RuntimeMessageBridge.ts",
+        "packages/web-ui/src/components/sandbox/RuntimeMessageRouter.ts",
+        "packages/web-ui/src/components/sandbox/SandboxRuntimeProvider.ts",
+        "packages/web-ui/src/dialogs/AttachmentOverlay.ts",
+        "packages/web-ui/src/dialogs/ModelSelector.ts",
+        "packages/web-ui/src/prompts/prompts.ts",
+        "packages/web-ui/src/tools/artifacts/Console.ts",
+        "packages/web-ui/src/tools/artifacts/HtmlArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/index.ts",
+        "packages/web-ui/src/tools/extract-document.ts",
+        "packages/web-ui/src/tools/javascript-repl.ts",
+        "packages/web-ui/src/utils/attachment-utils.ts",
+        "packages/web-ui/src/utils/format.ts",
+        "packages/web-ui/src/utils/proxy-utils.ts"
+      ],
+      "dominantPackage": "@draht/web-ui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/web-ui"
+      ]
+    },
+    {
+      "id": "cluster:packages/agent",
+      "label": "packages/agent",
+      "size": 29,
+      "members": [
+        "packages/agent/src/harness/agent-harness.ts",
+        "packages/agent/src/harness/compaction/branch-summarization.ts",
+        "packages/agent/src/harness/compaction/compaction.ts",
+        "packages/agent/src/harness/compaction/utils.ts",
+        "packages/agent/src/harness/messages.ts",
+        "packages/agent/src/harness/session/jsonl-repo.ts",
+        "packages/agent/src/harness/session/jsonl-storage.ts",
+        "packages/agent/src/harness/session/memory-repo.ts",
+        "packages/agent/src/harness/session/repo-utils.ts",
+        "packages/agent/src/harness/session/session.ts",
+        "packages/agent/src/harness/tools/bash.ts",
+        "packages/agent/src/harness/tools/edit-diff.ts",
+        "packages/agent/src/harness/tools/edit.ts",
+        "packages/agent/src/harness/tools/file-mutation-queue.ts",
+        "packages/agent/src/harness/tools/image.ts",
+        "packages/agent/src/harness/tools/path-utils.ts",
+        "packages/agent/src/harness/tools/read.ts",
+        "packages/agent/src/harness/tools/tool-context.ts",
+        "packages/agent/src/harness/tools/write.ts",
+        "packages/agent/src/harness/types.ts",
+        "packages/agent/src/harness/utils/shell-output.ts",
+        "packages/agent/src/harness/utils/truncate.ts",
+        "packages/agent/src/types.ts",
+        "packages/agent/test/harness/agent-harness-stream.test.ts",
+        "packages/agent/test/harness/compaction.test.ts",
+        "packages/agent/test/harness/repo.test.ts",
+        "packages/agent/test/harness/tool-context.types.ts",
+        "packages/agent/test/harness/tools.test.ts",
+        "packages/agent/test/harness/truncate.test.ts"
+      ],
+      "dominantPackage": "@draht/agent-core",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/agent-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai:4",
+      "label": "packages/ai",
+      "size": 25,
+      "members": [
+        "packages/ai/src/auth/oauth/anthropic.ts",
+        "packages/ai/src/auth/oauth/device-code.ts",
+        "packages/ai/src/auth/oauth/github-copilot.ts",
+        "packages/ai/src/auth/oauth/google-antigravity.ts",
+        "packages/ai/src/auth/oauth/google-gemini-cli.ts",
+        "packages/ai/src/auth/oauth/kimi-coding.ts",
+        "packages/ai/src/auth/oauth/oauth-page.ts",
+        "packages/ai/src/auth/oauth/openai-codex.ts",
+        "packages/ai/src/auth/oauth/openrouter.ts",
+        "packages/ai/src/auth/oauth/pkce.ts",
+        "packages/ai/src/auth/oauth/radius.ts",
+        "packages/ai/src/auth/oauth/xai.ts",
+        "packages/ai/src/auth/types.ts",
+        "packages/ai/src/bun-oauth.ts",
+        "packages/ai/src/oauth.ts",
+        "packages/ai/src/providers/github-copilot.models.ts",
+        "packages/ai/src/providers/github-copilot.ts",
+        "packages/ai/src/utils/provider-env.ts",
+        "packages/ai/test/anthropic-oauth.test.ts",
+        "packages/ai/test/github-copilot-oauth.test.ts",
+        "packages/ai/test/kimi-coding-oauth.test.ts",
+        "packages/ai/test/oauth-auth.test.ts",
+        "packages/ai/test/oauth-device-code.test.ts",
+        "packages/ai/test/openai-codex-oauth.test.ts",
+        "packages/ai/test/radius-oauth.test.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "infrastructure",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/gateway/src",
+      "label": "gateway/src",
+      "size": 25,
+      "members": [
+        "packages/gateway/src/__tests__/auth-timing.test.ts",
+        "packages/gateway/src/__tests__/auth.test.ts",
+        "packages/gateway/src/__tests__/cli.test.ts",
+        "packages/gateway/src/__tests__/concurrent-sessions.test.ts",
+        "packages/gateway/src/__tests__/error-middleware.test.ts",
+        "packages/gateway/src/__tests__/integration.test.ts",
+        "packages/gateway/src/__tests__/lifecycle.test.ts",
+        "packages/gateway/src/__tests__/logger.test.ts",
+        "packages/gateway/src/__tests__/session.test.ts",
+        "packages/gateway/src/__tests__/sessions-create-command.test.ts",
+        "packages/gateway/src/__tests__/sessions-routes.test.ts",
+        "packages/gateway/src/__tests__/sse-cleanup.test.ts",
+        "packages/gateway/src/__tests__/sse.test.ts",
+        "packages/gateway/src/cli.ts",
+        "packages/gateway/src/config/config.ts",
+        "packages/gateway/src/gateway/lifecycle.ts",
+        "packages/gateway/src/gateway/logger.ts",
+        "packages/gateway/src/gateway/middleware/auth.ts",
+        "packages/gateway/src/gateway/middleware/error.ts",
+        "packages/gateway/src/gateway/routes/session-stream.ts",
+        "packages/gateway/src/gateway/routes/sessions.ts",
+        "packages/gateway/src/gateway/routes/sse.ts",
+        "packages/gateway/src/gateway/routes/ws.ts",
+        "packages/gateway/src/gateway/server.ts",
+        "packages/gateway/src/session/session.ts"
+      ],
+      "dominantPackage": "@draht/gateway",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/gateway"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent:5",
+      "label": "packages/coding-agent",
+      "size": 20,
+      "members": [
+        "packages/coding-agent/bin/draht-tools.cjs",
+        "packages/coding-agent/examples/extensions/doom-overlay/doom/build.sh",
+        "packages/coding-agent/examples/extensions/doom-overlay/doom/doomgeneric_pi.c",
+        "packages/coding-agent/hooks/gsd/draht-post-phase.js",
+        "packages/coding-agent/hooks/gsd/draht-post-task.js",
+        "packages/coding-agent/hooks/gsd/draht-pre-execute.js",
+        "packages/coding-agent/hooks/gsd/draht-quality-gate.js",
+        "packages/coding-agent/scripts/migrate-sessions.sh",
+        "packages/coding-agent/src/core/export-html/template.js",
+        "packages/coding-agent/src/core/index.ts",
+        "packages/coding-agent/src/modes/interactive/components/index.ts",
+        "packages/coding-agent/src/utils/deprecation.ts",
+        "packages/coding-agent/src/utils/highlight-js-lib-index.d.ts",
+        "packages/coding-agent/test/export-html-skill-block.test.ts",
+        "packages/coding-agent/test/export-html-xss.test.ts",
+        "packages/coding-agent/test/fixtures/domain-fixture/index.ts",
+        "packages/coding-agent/test/fixtures/fake-external-editor.mjs",
+        "packages/coding-agent/test/gsd-domain-fixture.test.ts",
+        "packages/coding-agent/test/suite/regressions/2791-fswatch-error-crash.test.ts",
+        "packages/coding-agent/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/tui:2",
+      "label": "packages/tui",
+      "size": 20,
+      "members": [
+        "packages/tui/src/components/cancellable-loader.ts",
+        "packages/tui/src/components/editor.ts",
+        "packages/tui/src/components/input.ts",
+        "packages/tui/src/components/select-list.ts",
+        "packages/tui/src/components/settings-list.ts",
+        "packages/tui/src/keybindings.ts",
+        "packages/tui/src/keys.ts",
+        "packages/tui/src/kill-ring.ts",
+        "packages/tui/src/stdin-buffer.ts",
+        "packages/tui/src/terminal-colors.ts",
+        "packages/tui/src/undo-stack.ts",
+        "packages/tui/src/word-navigation.ts",
+        "packages/tui/test/input.test.ts",
+        "packages/tui/test/key-tester.ts",
+        "packages/tui/test/keybindings.test.ts",
+        "packages/tui/test/keys.test.ts",
+        "packages/tui/test/select-list.test.ts",
+        "packages/tui/test/stdin-buffer.test.ts",
+        "packages/tui/test/terminal.test.ts",
+        "packages/tui/test/word-navigation.test.ts"
+      ],
+      "dominantPackage": "@draht/tui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/tui"
+      ]
+    },
+    {
+      "id": "cluster:packages/web-ui/src",
+      "label": "web-ui/src",
+      "size": 20,
+      "members": [
+        "packages/web-ui/src/tools/artifacts/ArtifactElement.ts",
+        "packages/web-ui/src/tools/artifacts/ArtifactPill.ts",
+        "packages/web-ui/src/tools/artifacts/DocxArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/ExcelArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/GenericArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/ImageArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/MarkdownArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/PdfArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/SvgArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/TextArtifact.ts",
+        "packages/web-ui/src/tools/artifacts/artifacts-tool-renderer.ts",
+        "packages/web-ui/src/tools/artifacts/artifacts.ts",
+        "packages/web-ui/src/tools/index.ts",
+        "packages/web-ui/src/tools/renderer-registry.ts",
+        "packages/web-ui/src/tools/renderers/BashRenderer.ts",
+        "packages/web-ui/src/tools/renderers/CalculateRenderer.ts",
+        "packages/web-ui/src/tools/renderers/DefaultRenderer.ts",
+        "packages/web-ui/src/tools/renderers/GetCurrentTimeRenderer.ts",
+        "packages/web-ui/src/tools/types.ts",
+        "packages/web-ui/src/utils/i18n.ts"
+      ],
+      "dominantPackage": "@draht/web-ui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/web-ui"
+      ]
+    },
+    {
+      "id": "cluster:packages/agent:2",
+      "label": "packages/agent",
+      "size": 18,
+      "members": [
+        "packages/agent/src/harness/env/nodejs.ts",
+        "packages/agent/src/harness/prompt-templates.ts",
+        "packages/agent/src/harness/session/memory-storage.ts",
+        "packages/agent/src/harness/skills.ts",
+        "packages/agent/src/harness/system-prompt.ts",
+        "packages/agent/test/e2e.test.ts",
+        "packages/agent/test/harness/agent-harness.test.ts",
+        "packages/agent/test/harness/nodejs-env.test.ts",
+        "packages/agent/test/harness/prompt-templates.test.ts",
+        "packages/agent/test/harness/resource-formatting.test.ts",
+        "packages/agent/test/harness/session-test-utils.ts",
+        "packages/agent/test/harness/session.test.ts",
+        "packages/agent/test/harness/skills.test.ts",
+        "packages/agent/test/harness/storage.test.ts",
+        "packages/agent/test/harness/system-prompt.test.ts",
+        "packages/agent/test/scratch/simple.ts",
+        "packages/agent/test/utils/calculate.ts",
+        "packages/agent/test/utils/get-current-time.ts"
+      ],
+      "dominantPackage": "@draht/agent-core",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/agent-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-core",
+      "label": "packages/geist-core",
+      "size": 18,
+      "members": [
+        "packages/geist-core/src/fleet-registry.ts",
+        "packages/geist-core/src/grammar/resolve-utterance.ts",
+        "packages/geist-core/src/harness-session.ts",
+        "packages/geist-core/src/ledger/sha-ledger.ts",
+        "packages/geist-core/src/project.ts",
+        "packages/geist-core/src/registry/fleet-state-view.ts",
+        "packages/geist-core/src/registry/project-registry.ts",
+        "packages/geist-core/src/registry/recents-store.ts",
+        "packages/geist-core/src/registry/workspace-discovery.ts",
+        "packages/geist-core/src/variants/variant-set.ts",
+        "packages/geist-core/test/fleet-registry.test.ts",
+        "packages/geist-core/test/grammar/resolve-utterance.test.ts",
+        "packages/geist-core/test/ledger/sha-ledger.test.ts",
+        "packages/geist-core/test/registry/fleet-state-view.test.ts",
+        "packages/geist-core/test/registry/project-registry.test.ts",
+        "packages/geist-core/test/registry/recents-store.test.ts",
+        "packages/geist-core/test/registry/workspace-discovery.test.ts",
+        "packages/geist-core/test/variants/variant-set.test.ts"
+      ],
+      "dominantPackage": "@draht/geist-core",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai:5",
+      "label": "packages/ai",
+      "size": 15,
+      "members": [
+        "packages/ai/src/auth/oauth/opencode-go.ts",
+        "packages/ai/src/auth/resolve.ts",
+        "packages/ai/src/bedrock-provider.ts",
+        "packages/ai/src/cli.ts",
+        "packages/ai/src/image-models.generated.ts",
+        "packages/ai/src/image-models.ts",
+        "packages/ai/src/images-api-registry.ts",
+        "packages/ai/src/images.ts",
+        "packages/ai/src/providers/images/register-builtins.ts",
+        "packages/ai/src/session-resources.ts",
+        "packages/ai/src/utils/diagnostics.ts",
+        "packages/ai/test/images.test.ts",
+        "packages/ai/test/opencode-go-login.test.ts",
+        "packages/ai/test/openrouter-images.test.ts",
+        "packages/ai/test/provider-error-body-passthrough.test.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/web-ui/src:2",
+      "label": "web-ui/src",
+      "size": 15,
+      "members": [
+        "packages/web-ui/src/components/CustomProviderCard.ts",
+        "packages/web-ui/src/dialogs/ApiKeyPromptDialog.ts",
+        "packages/web-ui/src/dialogs/CustomProviderDialog.ts",
+        "packages/web-ui/src/dialogs/ProvidersModelsTab.ts",
+        "packages/web-ui/src/dialogs/SessionListDialog.ts",
+        "packages/web-ui/src/dialogs/SettingsDialog.ts",
+        "packages/web-ui/src/storage/app-storage.ts",
+        "packages/web-ui/src/storage/backends/indexeddb-storage-backend.ts",
+        "packages/web-ui/src/storage/store.ts",
+        "packages/web-ui/src/storage/stores/custom-providers-store.ts",
+        "packages/web-ui/src/storage/stores/provider-keys-store.ts",
+        "packages/web-ui/src/storage/stores/sessions-store.ts",
+        "packages/web-ui/src/storage/stores/settings-store.ts",
+        "packages/web-ui/src/storage/types.ts",
+        "packages/web-ui/src/utils/model-discovery.ts"
+      ],
+      "dominantPackage": "@draht/web-ui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/web-ui"
+      ]
+    },
+    {
+      "id": "cluster:packages/gateway/src:2",
+      "label": "gateway/src",
+      "size": 14,
+      "members": [
+        "packages/gateway/src/__tests__/event-bus.test.ts",
+        "packages/gateway/src/__tests__/health.test.ts",
+        "packages/gateway/src/__tests__/server.test.ts",
+        "packages/gateway/src/__tests__/session-manager-destroy-all.test.ts",
+        "packages/gateway/src/__tests__/session-manager-events.test.ts",
+        "packages/gateway/src/__tests__/session-stream.test.ts",
+        "packages/gateway/src/__tests__/sessions-input.test.ts",
+        "packages/gateway/src/__tests__/sessions-integration.test.ts",
+        "packages/gateway/src/__tests__/ws-auth.test.ts",
+        "packages/gateway/src/__tests__/ws-message-limit.test.ts",
+        "packages/gateway/src/__tests__/ws.test.ts",
+        "packages/gateway/src/index.ts",
+        "packages/gateway/src/session/event-bus.ts",
+        "packages/gateway/src/session/session-manager.ts"
+      ],
+      "dominantPackage": "@draht/gateway",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/gateway"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent/examples/sdk",
+      "label": "examples/sdk",
+      "size": 13,
+      "members": [
+        "packages/coding-agent/examples/sdk/01-minimal.ts",
+        "packages/coding-agent/examples/sdk/02-custom-model.ts",
+        "packages/coding-agent/examples/sdk/03-custom-prompt.ts",
+        "packages/coding-agent/examples/sdk/04-skills.ts",
+        "packages/coding-agent/examples/sdk/05-tools.ts",
+        "packages/coding-agent/examples/sdk/06-extensions.ts",
+        "packages/coding-agent/examples/sdk/07-context-files.ts",
+        "packages/coding-agent/examples/sdk/08-prompt-templates.ts",
+        "packages/coding-agent/examples/sdk/09-api-keys-and-oauth.ts",
+        "packages/coding-agent/examples/sdk/10-settings.ts",
+        "packages/coding-agent/examples/sdk/11-sessions.ts",
+        "packages/coding-agent/examples/sdk/12-full-control.ts",
+        "packages/coding-agent/examples/sdk/13-session-runtime.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages:3",
+      "label": "packages",
+      "size": 13,
+      "members": [
+        "packages/rlm/test/router-session.test.ts",
+        "packages/router/src/cli.ts",
+        "packages/router/src/config.ts",
+        "packages/router/src/cost.ts",
+        "packages/router/src/extension.ts",
+        "packages/router/src/router.ts",
+        "packages/router/src/types.ts",
+        "packages/router/test/config-security.test.ts",
+        "packages/router/test/config-validation.test.ts",
+        "packages/router/test/config.test.ts",
+        "packages/router/test/cost-tracking.test.ts",
+        "packages/router/test/fallback.test.ts",
+        "packages/router/test/router.test.ts"
+      ],
+      "dominantPackage": "@draht/router",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/rlm",
+        "@draht/router"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent:6",
+      "label": "packages/coding-agent",
+      "size": 10,
+      "members": [
+        "packages/coding-agent/src/core/multi-agent/fsm.ts",
+        "packages/coding-agent/src/core/multi-agent/mailbox.ts",
+        "packages/coding-agent/src/core/multi-agent/permission-gate.ts",
+        "packages/coding-agent/src/core/multi-agent/task-board.ts",
+        "packages/coding-agent/src/core/multi-agent/worktree.ts",
+        "packages/coding-agent/test/multi-agent/fsm.test.ts",
+        "packages/coding-agent/test/multi-agent/mailbox.test.ts",
+        "packages/coding-agent/test/multi-agent/permission-gate.test.ts",
+        "packages/coding-agent/test/multi-agent/task-board.test.ts",
+        "packages/coding-agent/test/multi-agent/worktree.test.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/draht-claude",
+      "label": "packages/draht-claude",
+      "size": 10,
+      "members": [
+        "packages/draht-claude/bin/draht-tools.cjs",
+        "packages/draht-claude/cli.mjs",
+        "packages/draht-claude/scripts/gsd-post-phase.cjs",
+        "packages/draht-claude/scripts/gsd-post-task.cjs",
+        "packages/draht-claude/scripts/gsd-pre-execute.cjs",
+        "packages/draht-claude/scripts/gsd-quality-gate.cjs",
+        "packages/draht-claude/scripts/post-edit-check.cjs",
+        "packages/draht-claude/scripts/prompt-context.cjs",
+        "packages/draht-claude/scripts/session-start.cjs",
+        "packages/draht-claude/scripts/stop-quality-gate.cjs"
+      ],
+      "dominantPackage": "draht-claude",
+      "dominantLayer": "infrastructure",
+      "packages": [
+        "draht-claude"
+      ]
+    },
+    {
+      "id": "cluster:packages/draht-codex",
+      "label": "packages/draht-codex",
+      "size": 10,
+      "members": [
+        "packages/draht-codex/bin/draht-tools.cjs",
+        "packages/draht-codex/cli.mjs",
+        "packages/draht-codex/scripts/gsd-post-phase.cjs",
+        "packages/draht-codex/scripts/gsd-post-task.cjs",
+        "packages/draht-codex/scripts/gsd-pre-execute.cjs",
+        "packages/draht-codex/scripts/gsd-quality-gate.cjs",
+        "packages/draht-codex/scripts/post-edit-check.cjs",
+        "packages/draht-codex/scripts/prompt-context.cjs",
+        "packages/draht-codex/scripts/session-start.cjs",
+        "packages/draht-codex/scripts/stop-quality-gate.cjs"
+      ],
+      "dominantPackage": "draht-codex",
+      "dominantLayer": "infrastructure",
+      "packages": [
+        "draht-codex"
+      ]
+    },
+    {
+      "id": "cluster:packages/rlm",
+      "label": "packages/rlm",
+      "size": 9,
+      "members": [
+        "packages/rlm/src/prompts.ts",
+        "packages/rlm/src/router-session.ts",
+        "packages/rlm/src/sandbox.ts",
+        "packages/rlm/src/session.ts",
+        "packages/rlm/src/trajectory.ts",
+        "packages/rlm/src/types.ts",
+        "packages/rlm/test/prompts.test.ts",
+        "packages/rlm/test/sandbox.test.ts",
+        "packages/rlm/test/trajectory.test.ts"
+      ],
+      "dominantPackage": "@draht/rlm",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/rlm"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent:7",
+      "label": "packages/coding-agent",
+      "size": 8,
+      "members": [
+        "packages/coding-agent/src/core/event-bus.ts",
+        "packages/coding-agent/src/extensions/index.ts",
+        "packages/coding-agent/src/extensions/llama/client.ts",
+        "packages/coding-agent/src/extensions/llama/huggingface.ts",
+        "packages/coding-agent/src/extensions/llama/index.ts",
+        "packages/coding-agent/src/extensions/llama/provider.ts",
+        "packages/coding-agent/src/extensions/llama/ui.ts",
+        "packages/coding-agent/test/llama-extension.test.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/compliance",
+      "label": "packages/compliance",
+      "size": 8,
+      "members": [
+        "packages/compliance/src/eu-ai-act.ts",
+        "packages/compliance/src/extension.ts",
+        "packages/compliance/src/gdpr-scanner.ts",
+        "packages/compliance/src/report.ts",
+        "packages/compliance/src/types.ts",
+        "packages/compliance/test/eu-ai-act.test.ts",
+        "packages/compliance/test/gdpr-scanner-german-corpus.test.ts",
+        "packages/compliance/test/gdpr-scanner.test.ts"
+      ],
+      "dominantPackage": "@draht/compliance",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/compliance"
+      ]
+    },
+    {
+      "id": "cluster:packages/invoice",
+      "label": "packages/invoice",
+      "size": 8,
+      "members": [
+        "packages/invoice/src/extension.ts",
+        "packages/invoice/src/generator.ts",
+        "packages/invoice/src/lexoffice.ts",
+        "packages/invoice/src/toggl.ts",
+        "packages/invoice/src/types.ts",
+        "packages/invoice/test/generator.test.ts",
+        "packages/invoice/test/lexoffice.test.ts",
+        "packages/invoice/test/toggl.test.ts"
+      ],
+      "dominantPackage": "@draht/invoice",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/invoice"
+      ]
+    },
+    {
+      "id": "cluster:packages/mom/src",
+      "label": "mom/src",
+      "size": 8,
+      "members": [
+        "packages/mom/src/agent.ts",
+        "packages/mom/src/context.ts",
+        "packages/mom/src/download.ts",
+        "packages/mom/src/events.ts",
+        "packages/mom/src/log.ts",
+        "packages/mom/src/main.ts",
+        "packages/mom/src/slack.ts",
+        "packages/mom/src/store.ts"
+      ],
+      "dominantPackage": "@draht/mom",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/mom"
+      ]
+    },
+    {
+      "id": "cluster:packages/mom/src:2",
+      "label": "mom/src",
+      "size": 8,
+      "members": [
+        "packages/mom/src/sandbox.ts",
+        "packages/mom/src/tools/attach.ts",
+        "packages/mom/src/tools/bash.ts",
+        "packages/mom/src/tools/edit.ts",
+        "packages/mom/src/tools/index.ts",
+        "packages/mom/src/tools/read.ts",
+        "packages/mom/src/tools/truncate.ts",
+        "packages/mom/src/tools/write.ts"
+      ],
+      "dominantPackage": "@draht/mom",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/mom"
+      ]
+    },
+    {
+      "id": "cluster:packages/pods/src",
+      "label": "pods/src",
+      "size": 8,
+      "members": [
+        "packages/pods/src/cli.ts",
+        "packages/pods/src/commands/models.ts",
+        "packages/pods/src/commands/pods.ts",
+        "packages/pods/src/commands/prompt.ts",
+        "packages/pods/src/config.ts",
+        "packages/pods/src/model-configs.ts",
+        "packages/pods/src/ssh.ts",
+        "packages/pods/src/types.ts"
+      ],
+      "dominantPackage": "@draht/pods",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/pods"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai:6",
+      "label": "packages/ai",
+      "size": 7,
+      "members": [
+        "packages/ai/scripts/check-model-data.ts",
+        "packages/ai/scripts/generate-models.ts",
+        "packages/ai/scripts/model-data.ts",
+        "packages/ai/scripts/models-dev-reasoning-options.ts",
+        "packages/ai/src/api/cloudflare.ts",
+        "packages/ai/test/model-data-validation.test.ts",
+        "packages/ai/test/reasoning-options.test.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent/test/session-manager",
+      "label": "test/session-manager",
+      "size": 7,
+      "members": [
+        "packages/coding-agent/test/session-manager/build-context.test.ts",
+        "packages/coding-agent/test/session-manager/custom-session-id.test.ts",
+        "packages/coding-agent/test/session-manager/file-operations.test.ts",
+        "packages/coding-agent/test/session-manager/labels.test.ts",
+        "packages/coding-agent/test/session-manager/migration.test.ts",
+        "packages/coding-agent/test/session-manager/save-entry.test.ts",
+        "packages/coding-agent/test/session-manager/tree-traversal.test.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages:4",
+      "label": "packages",
+      "size": 7,
+      "members": [
+        "packages/geist-acp/src/acp-harness-session.ts",
+        "packages/geist-acp/test/acp-harness-session.test.ts",
+        "packages/geist-acp/test/fixtures/mock-agent.ts",
+        "packages/geist-acp/test/smoke/claude-harness.smoke.test.ts",
+        "packages/geist-acp/test/stop-cancels-cleanly.test.ts",
+        "packages/geist-core/src/index.ts",
+        "packages/geist-protocol/src/index.ts"
+      ],
+      "dominantPackage": "@draht/geist-acp",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/geist-acp",
+        "@draht/geist-core",
+        "@draht/geist-protocol"
+      ]
+    },
+    {
+      "id": "cluster:packages:5",
+      "label": "packages",
+      "size": 7,
+      "members": [
+        "packages/geist-acp/src/index.ts",
+        "packages/geist/src/cli.ts",
+        "packages/geist/src/index.ts",
+        "packages/geist/src/pairing/server.ts",
+        "packages/geist/src/session-bridge.ts",
+        "packages/geist/test/pairing/server.test.ts",
+        "packages/geist/test/session-bridge.test.ts"
+      ],
+      "dominantPackage": "@draht/geist",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist",
+        "@draht/geist-acp"
+      ]
+    },
+    {
+      "id": "cluster:packages:6",
+      "label": "packages",
+      "size": 7,
+      "members": [
+        "packages/knowledge/src/client-config.ts",
+        "packages/knowledge/src/extension.ts",
+        "packages/knowledge/src/knowledge-manager.ts",
+        "packages/knowledge/src/vector-store.ts",
+        "packages/knowledge/test/vector-store.test.ts",
+        "packages/rlm/src/loaders.ts",
+        "packages/rlm/test/loaders.test.ts"
+      ],
+      "dominantPackage": "@draht/knowledge",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/knowledge",
+        "@draht/rlm"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai:7",
+      "label": "packages/ai",
+      "size": 6,
+      "members": [
+        "packages/ai/bedrock-provider.d.ts",
+        "packages/ai/bedrock-provider.js",
+        "packages/ai/scripts/generate-test-image.ts",
+        "packages/ai/src/providers/data-json.d.ts",
+        "packages/ai/test/lazy-module-load.test.ts",
+        "packages/ai/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/gateway/src:3",
+      "label": "gateway/src",
+      "size": 6,
+      "members": [
+        "packages/gateway/src/__tests__/platform-assumptions.test.ts",
+        "packages/gateway/src/__tests__/session-manager.test.ts",
+        "packages/gateway/src/__tests__/session-process-buffer.test.ts",
+        "packages/gateway/src/__tests__/session-process.test.ts",
+        "packages/gateway/src/__tests__/stdout-backpressure.test.ts",
+        "packages/gateway/src/session/session-process.ts"
+      ],
+      "dominantPackage": "@draht/gateway",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/gateway"
+      ]
+    },
+    {
+      "id": "cluster:packages/landing",
+      "label": "packages/landing",
+      "size": 6,
+      "members": [
+        "packages/landing/astro.config.mjs",
+        "packages/landing/public/install.sh",
+        "packages/landing/src/content.config.ts",
+        "packages/landing/src/pages/og.png.ts",
+        "packages/landing/sst-env.d.ts",
+        "packages/landing/sst.config.ts"
+      ],
+      "dominantPackage": "@draht/landing",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/landing"
+      ]
+    },
+    {
+      "id": "cluster:packages/rlm:2",
+      "label": "packages/rlm",
+      "size": 6,
+      "members": [
+        "packages/rlm/src/cost-comparison.ts",
+        "packages/rlm/src/index.ts",
+        "packages/rlm/test/cost-comparison.test.ts",
+        "packages/rlm/test/resource-limits.test.ts",
+        "packages/rlm/test/s-niah.test.ts",
+        "packages/rlm/test/session.test.ts"
+      ],
+      "dominantPackage": "@draht/rlm",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/rlm"
+      ]
+    },
+    {
+      "id": "cluster:packages/agent:3",
+      "label": "packages/agent",
+      "size": 5,
+      "members": [
+        "packages/agent/src/agent-loop.ts",
+        "packages/agent/src/agent.ts",
+        "packages/agent/src/proxy.ts",
+        "packages/agent/src/stream-fn.ts",
+        "packages/agent/test/agent-loop.test.ts"
+      ],
+      "dominantPackage": "@draht/agent-core",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/agent-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/agent:4",
+      "label": "packages/agent",
+      "size": 5,
+      "members": [
+        "packages/agent/src/harness/execution-env.ts",
+        "packages/agent/src/harness/tools/index.ts",
+        "packages/agent/src/node.ts",
+        "packages/agent/vitest.config.ts",
+        "packages/agent/vitest.harness.config.ts"
+      ],
+      "dominantPackage": "@draht/agent-core",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/agent-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent:8",
+      "label": "packages/coding-agent",
+      "size": 5,
+      "members": [
+        "packages/coding-agent/src/bun/cli.ts",
+        "packages/coding-agent/src/bun/register-bedrock.ts",
+        "packages/coding-agent/src/bun/restore-sandbox-env.ts",
+        "packages/coding-agent/src/cli.ts",
+        "packages/coding-agent/test/restore-sandbox-env.test.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "presentation",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/web-ui:2",
+      "label": "packages/web-ui",
+      "size": 5,
+      "members": [
+        "packages/web-ui/example/src/env.d.ts",
+        "packages/web-ui/example/vite.config.ts",
+        "packages/web-ui/src/components/ExpandableSection.ts",
+        "packages/web-ui/src/components/ThinkingBlock.ts",
+        "packages/web-ui/src/utils/test-sessions.ts"
+      ],
+      "dominantPackage": "@draht/web-ui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/web-ui"
+      ]
+    },
+    {
+      "id": "cluster:scripts",
+      "label": "scripts",
+      "size": 5,
+      "members": [
+        "scripts/agent-treeshake-smoke-entry.ts",
+        "scripts/browser-smoke-entry.ts",
+        "scripts/generate-thinking-capabilities.mjs",
+        "scripts/repro-5893-wsl-bash.mjs",
+        "scripts/session-transcripts.ts"
+      ],
+      "dominantPackage": "draht-monorepo",
+      "dominantLayer": "support",
+      "packages": [
+        "draht-monorepo"
+      ]
+    },
+    {
+      "id": "cluster:go/internal/graph/testdata/fixture-repo/packages/app/src",
+      "label": "app/src",
+      "size": 4,
+      "members": [
+        "go/internal/graph/testdata/fixture-repo/packages/app/src/Widget.tsx",
+        "go/internal/graph/testdata/fixture-repo/packages/app/src/lazy.ts",
+        "go/internal/graph/testdata/fixture-repo/packages/app/src/legacy.js",
+        "go/internal/graph/testdata/fixture-repo/packages/app/src/main.ts"
+      ],
+      "dominantPackage": "draht-monorepo",
+      "dominantLayer": "application",
+      "packages": [
+        "draht-monorepo"
+      ]
+    },
+    {
+      "id": "cluster:packages/ci",
+      "label": "packages/ci",
+      "size": 4,
+      "members": [
+        "packages/ci/src/action.ts",
+        "packages/ci/src/github.ts",
+        "packages/ci/src/reviewer.ts",
+        "packages/ci/test/reviewer.test.ts"
+      ],
+      "dominantPackage": "@draht/ci",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/ci"
+      ]
+    },
+    {
+      "id": "cluster:packages/draht-acp",
+      "label": "packages/draht-acp",
+      "size": 4,
+      "members": [
+        "packages/draht-acp/src/draht-acp-agent.ts",
+        "packages/draht-acp/src/main.ts",
+        "packages/draht-acp/test/draht-acp-agent.test.ts",
+        "packages/draht-acp/test/fixtures/faux-agent-entry.ts"
+      ],
+      "dominantPackage": "@draht/draht-acp",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/draht-acp"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-core:2",
+      "label": "packages/geist-core",
+      "size": 4,
+      "members": [
+        "packages/geist-core/src/composer/element-context.ts",
+        "packages/geist-core/src/composer/situation-prompt.ts",
+        "packages/geist-core/test/composer/element-context.test.ts",
+        "packages/geist-core/test/composer/situation-prompt.test.ts"
+      ],
+      "dominantPackage": "@draht/geist-core",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-protocol",
+      "label": "packages/geist-protocol",
+      "size": 4,
+      "members": [
+        "packages/geist-protocol/src/config.ts",
+        "packages/geist-protocol/src/messages.ts",
+        "packages/geist-protocol/test/config.test.ts",
+        "packages/geist-protocol/test/messages.test.ts"
+      ],
+      "dominantPackage": "@draht/geist-protocol",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist-protocol"
+      ]
+    },
+    {
+      "id": "cluster:packages/infra",
+      "label": "packages/infra",
+      "size": 4,
+      "members": [
+        "packages/infra/src/functions/clients.ts",
+        "packages/infra/src/functions/health.ts",
+        "packages/infra/src/functions/sessions.ts",
+        "packages/infra/sst.config.ts"
+      ],
+      "dominantPackage": "@draht/infra",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/infra"
+      ]
+    },
+    {
+      "id": "cluster:packages/orchestrator/src",
+      "label": "orchestrator/src",
+      "size": 4,
+      "members": [
+        "packages/orchestrator/src/decomposer.ts",
+        "packages/orchestrator/src/engine.ts",
+        "packages/orchestrator/src/extension.ts",
+        "packages/orchestrator/src/types.ts"
+      ],
+      "dominantPackage": "@draht/orchestrator",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/orchestrator"
+      ]
+    },
+    {
+      "id": "cluster:packages/rlm:3",
+      "label": "packages/rlm",
+      "size": 4,
+      "members": [
+        "packages/rlm/python/repl_driver.py",
+        "packages/rlm/test/repl-driver-guardrails.test.ts",
+        "packages/rlm/test/repl-driver.test.ts",
+        "packages/rlm/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/rlm",
+      "dominantLayer": "infrastructure",
+      "packages": [
+        "@draht/rlm"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai/src/utils",
+      "label": "src/utils",
+      "size": 3,
+      "members": [
+        "packages/ai/src/utils/abort-signals.ts",
+        "packages/ai/src/utils/deferred-tools.ts",
+        "packages/ai/src/utils/text.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent/src",
+      "label": "coding-agent/src",
+      "size": 3,
+      "members": [
+        "packages/coding-agent/src/cli/attach-mode.ts",
+        "packages/coding-agent/src/cli/list-sessions.ts",
+        "packages/coding-agent/src/core/socket-server/index.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "presentation",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent/test",
+      "label": "coding-agent/test",
+      "size": 3,
+      "members": [
+        "packages/coding-agent/test/gsd-quality-gate.test.ts",
+        "packages/coding-agent/test/test-utils/git-repo.test.ts",
+        "packages/coding-agent/test/test-utils/git-repo.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "infrastructure",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent/test/fixtures/domain-fixture",
+      "label": "fixtures/domain-fixture",
+      "size": 3,
+      "members": [
+        "packages/coding-agent/test/fixtures/domain-fixture/Customer.ts",
+        "packages/coding-agent/test/fixtures/domain-fixture/Order.ts",
+        "packages/coding-agent/test/fixtures/domain-fixture/OrderItem.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-console",
+      "label": "packages/geist-console",
+      "size": 3,
+      "members": [
+        "packages/geist-console/src/App.tsx",
+        "packages/geist-console/src/main.tsx",
+        "packages/geist-console/test/App.test.tsx"
+      ],
+      "dominantPackage": "@draht/geist-console",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/geist-console"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-console:2",
+      "label": "packages/geist-console",
+      "size": 3,
+      "members": [
+        "packages/geist-console/src/index.ts",
+        "packages/geist-console/test/build.test.ts",
+        "packages/geist-console/vite.config.ts"
+      ],
+      "dominantPackage": "@draht/geist-console",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist-console"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-core:3",
+      "label": "packages/geist-core",
+      "size": 3,
+      "members": [
+        "packages/geist-core/src/lanes/loop-context.ts",
+        "packages/geist-core/test/lanes/loop-context.test.ts",
+        "packages/geist-core/test/lanes/subagent-recognizer.test.ts"
+      ],
+      "dominantPackage": "@draht/geist-core",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/geist-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/mom",
+      "label": "packages/mom",
+      "size": 3,
+      "members": [
+        "packages/mom/dev.sh",
+        "packages/mom/docker.sh",
+        "packages/mom/scripts/migrate-timestamps.ts"
+      ],
+      "dominantPackage": "@draht/mom",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/mom"
+      ]
+    },
+    {
+      "id": "cluster:packages/pods",
+      "label": "packages/pods",
+      "size": 3,
+      "members": [
+        "packages/pods/scripts/model_run.sh",
+        "packages/pods/scripts/pod_setup.sh",
+        "packages/pods/src/index.ts"
+      ],
+      "dominantPackage": "@draht/pods",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/pods"
+      ]
+    },
+    {
+      "id": "cluster:packages/rlm-agent",
+      "label": "packages/rlm-agent",
+      "size": 3,
+      "members": [
+        "packages/rlm-agent/src/index.ts",
+        "packages/rlm-agent/test/real-session-loading.test.ts",
+        "packages/rlm-agent/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/rlm-agent",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/rlm-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/tui:3",
+      "label": "packages/tui",
+      "size": 3,
+      "members": [
+        "packages/tui/native/darwin/src/darwin-modifiers.c",
+        "packages/tui/native/win32/src/win32-console-mode.c",
+        "packages/tui/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/tui",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/tui"
+      ]
+    },
+    {
+      "id": "cluster:packages/web-ui:3",
+      "label": "packages/web-ui",
+      "size": 3,
+      "members": [
+        "packages/web-ui/example/src/custom-messages.ts",
+        "packages/web-ui/example/src/main.ts",
+        "packages/web-ui/src/index.ts"
+      ],
+      "dominantPackage": "@draht/web-ui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/web-ui"
+      ]
+    },
+    {
+      "id": "cluster:packages/ci:2",
+      "label": "packages/ci",
+      "size": 2,
+      "members": [
+        "packages/ci/test/github.test.ts",
+        "packages/ci/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/ci",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/ci"
+      ]
+    },
+    {
+      "id": "cluster:packages/deploy-guardian",
+      "label": "packages/deploy-guardian",
+      "size": 2,
+      "members": [
+        "packages/deploy-guardian/src/index.ts",
+        "packages/deploy-guardian/test/checks.test.ts"
+      ],
+      "dominantPackage": "@draht/deploy-guardian",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/deploy-guardian"
+      ]
+    },
+    {
+      "id": "cluster:packages/deploy-guardian/src",
+      "label": "deploy-guardian/src",
+      "size": 2,
+      "members": [
+        "packages/deploy-guardian/src/checks.ts",
+        "packages/deploy-guardian/src/extension.ts"
+      ],
+      "dominantPackage": "@draht/deploy-guardian",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/deploy-guardian"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist",
+      "label": "packages/geist",
+      "size": 2,
+      "members": [
+        "packages/geist/src/voice/transcribe.ts",
+        "packages/geist/test/voice/transcribe.test.ts"
+      ],
+      "dominantPackage": "@draht/geist",
+      "dominantLayer": "infrastructure",
+      "packages": [
+        "@draht/geist"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-core/src/lanes",
+      "label": "src/lanes",
+      "size": 2,
+      "members": [
+        "packages/geist-core/src/lanes/lane.ts",
+        "packages/geist-core/src/lanes/subagent-recognizer.ts"
+      ],
+      "dominantPackage": "@draht/geist-core",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-core:4",
+      "label": "packages/geist-core",
+      "size": 2,
+      "members": [
+        "packages/geist-core/src/pairing/pairing-state.ts",
+        "packages/geist-core/test/pairing/pairing-state.test.ts"
+      ],
+      "dominantPackage": "@draht/geist-core",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-core:5",
+      "label": "packages/geist-core",
+      "size": 2,
+      "members": [
+        "packages/geist-core/src/variants/assign-harnesses.ts",
+        "packages/geist-core/test/variants/assign-harnesses.test.ts"
+      ],
+      "dominantPackage": "@draht/geist-core",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-picker",
+      "label": "packages/geist-picker",
+      "size": 2,
+      "members": [
+        "packages/geist-picker/src/index.ts",
+        "packages/geist-picker/test/index.test.ts"
+      ],
+      "dominantPackage": "@draht/geist-picker",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/geist-picker"
+      ]
+    },
+    {
+      "id": "cluster:packages/knowledge",
+      "label": "packages/knowledge",
+      "size": 2,
+      "members": [
+        "packages/knowledge/src/index.ts",
+        "packages/knowledge/test/knowledge-manager.test.ts"
+      ],
+      "dominantPackage": "@draht/knowledge",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/knowledge"
+      ]
+    },
+    {
+      "id": "cluster:packages/orchestrator",
+      "label": "packages/orchestrator",
+      "size": 2,
+      "members": [
+        "packages/orchestrator/src/index.ts",
+        "packages/orchestrator/test/engine.test.ts"
+      ],
+      "dominantPackage": "@draht/orchestrator",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/orchestrator"
+      ]
+    },
+    {
+      "id": "cluster:packages/rlm-agent:2",
+      "label": "packages/rlm-agent",
+      "size": 2,
+      "members": [
+        "packages/rlm-agent/src/extension.ts",
+        "packages/rlm-agent/test/extension.test.ts"
+      ],
+      "dominantPackage": "@draht/rlm-agent",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/rlm-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/agent/test",
+      "label": "agent/test",
+      "size": 1,
+      "members": [
+        "packages/agent/test/agent.test.ts"
+      ],
+      "dominantPackage": "@draht/agent-core",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/agent-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/ai/src/compat",
+      "label": "src/compat",
+      "size": 1,
+      "members": [
+        "packages/ai/src/compat/extension-oauth-types.ts"
+      ],
+      "dominantPackage": "@draht/ai",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/ai"
+      ]
+    },
+    {
+      "id": "cluster:packages/coding-agent/examples",
+      "label": "coding-agent/examples",
+      "size": 1,
+      "members": [
+        "packages/coding-agent/examples/rpc-extension-ui.ts"
+      ],
+      "dominantPackage": "@draht/coding-agent",
+      "dominantLayer": "infrastructure",
+      "packages": [
+        "@draht/coding-agent"
+      ]
+    },
+    {
+      "id": "cluster:packages/compliance/src",
+      "label": "compliance/src",
+      "size": 1,
+      "members": [
+        "packages/compliance/src/index.ts"
+      ],
+      "dominantPackage": "@draht/compliance",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/compliance"
+      ]
+    },
+    {
+      "id": "cluster:packages/deploy-guardian:2",
+      "label": "packages/deploy-guardian",
+      "size": 1,
+      "members": [
+        "packages/deploy-guardian/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/deploy-guardian",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/deploy-guardian"
+      ]
+    },
+    {
+      "id": "cluster:packages/draht-acp/src",
+      "label": "draht-acp/src",
+      "size": 1,
+      "members": [
+        "packages/draht-acp/src/index.ts"
+      ],
+      "dominantPackage": "@draht/draht-acp",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/draht-acp"
+      ]
+    },
+    {
+      "id": "cluster:packages/draht-tools/bin",
+      "label": "draht-tools/bin",
+      "size": 1,
+      "members": [
+        "packages/draht-tools/bin/draht-tools.cjs"
+      ],
+      "dominantPackage": "@draht/tools",
+      "dominantLayer": "presentation",
+      "packages": [
+        "@draht/tools"
+      ]
+    },
+    {
+      "id": "cluster:packages/gateway/src/__tests__",
+      "label": "src/__tests__",
+      "size": 1,
+      "members": [
+        "packages/gateway/src/__tests__/package.test.ts"
+      ],
+      "dominantPackage": "@draht/gateway",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/gateway"
+      ]
+    },
+    {
+      "id": "cluster:packages/geist-core/src/variants",
+      "label": "src/variants",
+      "size": 1,
+      "members": [
+        "packages/geist-core/src/variants/index.ts"
+      ],
+      "dominantPackage": "@draht/geist-core",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/geist-core"
+      ]
+    },
+    {
+      "id": "cluster:packages/invoice/src",
+      "label": "invoice/src",
+      "size": 1,
+      "members": [
+        "packages/invoice/src/index.ts"
+      ],
+      "dominantPackage": "@draht/invoice",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/invoice"
+      ]
+    },
+    {
+      "id": "cluster:packages/knowledge:2",
+      "label": "packages/knowledge",
+      "size": 1,
+      "members": [
+        "packages/knowledge/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/knowledge",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/knowledge"
+      ]
+    },
+    {
+      "id": "cluster:packages/orchestrator:2",
+      "label": "packages/orchestrator",
+      "size": 1,
+      "members": [
+        "packages/orchestrator/vitest.config.ts"
+      ],
+      "dominantPackage": "@draht/orchestrator",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/orchestrator"
+      ]
+    },
+    {
+      "id": "cluster:packages/router/src",
+      "label": "router/src",
+      "size": 1,
+      "members": [
+        "packages/router/src/index.ts"
+      ],
+      "dominantPackage": "@draht/router",
+      "dominantLayer": "support",
+      "packages": [
+        "@draht/router"
+      ]
+    },
+    {
+      "id": "cluster:packages/tui/src/components",
+      "label": "src/components",
+      "size": 1,
+      "members": [
+        "packages/tui/src/components/box.ts"
+      ],
+      "dominantPackage": "@draht/tui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/tui"
+      ]
+    },
+    {
+      "id": "cluster:packages/web-ui/src/dialogs",
+      "label": "src/dialogs",
+      "size": 1,
+      "members": [
+        "packages/web-ui/src/dialogs/PersistentStorageDialog.ts"
+      ],
+      "dominantPackage": "@draht/web-ui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/web-ui"
+      ]
+    },
+    {
+      "id": "cluster:packages/web-ui/src/utils",
+      "label": "src/utils",
+      "size": 1,
+      "members": [
+        "packages/web-ui/src/utils/auth-token.ts"
+      ],
+      "dominantPackage": "@draht/web-ui",
+      "dominantLayer": "application",
+      "packages": [
+        "@draht/web-ui"
+      ]
+    }
+  ]
+}

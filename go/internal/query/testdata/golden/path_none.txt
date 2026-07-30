@@ -1,0 +1,1 @@
+no import path between go/cmd/draht-tools/doc.go and packages/ai/src/types.ts

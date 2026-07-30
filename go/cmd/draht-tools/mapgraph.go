@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/draht-dev/draht/go/internal/emit"
 	"github.com/draht-dev/draht/go/internal/graph"
 	"github.com/draht-dev/draht/go/internal/parse"
 	"github.com/draht-dev/draht/go/internal/scan"
@@ -264,6 +265,17 @@ func runMapGraph(args []string) int {
 		fmt.Fprintf(os.Stderr, "cache: %d hit / %d miss\n", report.CacheHits, report.CacheMisses)
 	}
 
+	// visWriteOutputs (cjs:5098-5124): GRAPH_REPORT.md shares MAP.json's
+	// unchanged-gate (report.Changed, from graph.Build's own
+	// model.WriteIfChanged call); MAP.html is unconditional unless --quiet.
+	// This runs on BOTH the quiet and non-quiet paths — the CJS's --quiet
+	// flag only skips the HTML write, never the report.
+	res, emitErr := emit.WriteOutputs(outDir, m, report.Changed, opts.quiet)
+	if emitErr != nil {
+		fmt.Fprintln(os.Stderr, "map-graph:", emitErr)
+		return 1
+	}
+
 	if opts.quiet {
 		fmt.Printf("map-graph: %d modules · schemaVersion %d · %dms → %s\n",
 			report.Modules, m.SchemaVersion, report.BuildMs, jsonPath)
@@ -271,18 +283,15 @@ func runMapGraph(args []string) int {
 	}
 
 	fmt.Println(strings.Repeat("━", 55))
-	fmt.Println(" DRAHT ► MAP-GRAPH (go, phase 1)")
+	fmt.Println(" DRAHT ► MAP-GRAPH")
 	fmt.Println(strings.Repeat("━", 55))
 
-	if report.Changed {
-		fmt.Printf("\nWrote:\n  %s\n", jsonPath)
-	} else {
-		fmt.Printf("\nUnchanged:\n  %s\n", jsonPath)
-	}
+	fmt.Printf("\nWrote:\n  %s\n  %s\n  %s\n", res.JSONPath, res.HTMLPath, res.ReportPath)
 
-	fmt.Printf("\nIndexed %d modules · %s LOC · %d edges · %d clusters in %dms  (cache: %d hit / %d miss)\n",
-		report.Modules, commaInt(report.TotalLoc), report.Edges, len(m.Clusters), report.BuildMs,
-		report.CacheHits, report.CacheMisses)
+	fmt.Printf("\nIndexed %d modules · %s LOC · %d edges · %d clusters in %dms\n",
+		report.Modules, commaInt(report.TotalLoc), report.Edges, len(m.Clusters), report.BuildMs)
+
+	fmt.Printf("\nRead the report: %s   ·   Serve live: draht-tools map-serve\n", res.ReportPath)
 
 	return 0
 }

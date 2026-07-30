@@ -1,0 +1,610 @@
+{
+  "godNodes": [
+    {
+      "id": "packages/ai/src/index.ts",
+      "path": "packages/ai/src/index.ts",
+      "package": "@draht/ai",
+      "inDegree": 144,
+      "outDegree": 0,
+      "loc": 48,
+      "score": 293.61,
+      "reason": "144 dependents · 0 deps"
+    },
+    {
+      "id": "packages/coding-agent/src/index.ts",
+      "path": "packages/coding-agent/src/index.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 117,
+      "outDegree": 0,
+      "loc": 408,
+      "score": 242.68,
+      "reason": "117 dependents · 0 deps"
+    },
+    {
+      "id": "packages/tui/src/index.ts",
+      "path": "packages/tui/src/index.ts",
+      "package": "@draht/tui",
+      "inDegree": 94,
+      "outDegree": 0,
+      "loc": 115,
+      "score": 194.86,
+      "reason": "94 dependents · 0 deps"
+    },
+    {
+      "id": "packages/ai/src/types.ts",
+      "path": "packages/ai/src/types.ts",
+      "package": "@draht/ai",
+      "inDegree": 61,
+      "outDegree": 12,
+      "loc": 794,
+      "score": 143.63,
+      "reason": "61 dependents · 12 deps"
+    },
+    {
+      "id": "packages/coding-agent/src/modes/interactive/theme/theme.ts",
+      "path": "packages/coding-agent/src/modes/interactive/theme/theme.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 56,
+      "outDegree": 6,
+      "loc": 1295,
+      "score": 128.34,
+      "reason": "56 dependents · 6 deps"
+    },
+    {
+      "id": "packages/agent/src/index.ts",
+      "path": "packages/agent/src/index.ts",
+      "package": "@draht/agent-core",
+      "inDegree": 60,
+      "outDegree": 0,
+      "loc": 51,
+      "score": 125.7,
+      "reason": "60 dependents · 0 deps"
+    },
+    {
+      "id": "packages/ai/src/models.ts",
+      "path": "packages/ai/src/models.ts",
+      "package": "@draht/ai",
+      "inDegree": 53,
+      "outDegree": 7,
+      "loc": 741,
+      "score": 122.54,
+      "reason": "53 dependents · 7 deps"
+    },
+    {
+      "id": "packages/coding-agent/src/config.ts",
+      "path": "packages/coding-agent/src/config.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 42,
+      "outDegree": 2,
+      "loc": 591,
+      "score": 95.21,
+      "reason": "42 dependents · 2 deps"
+    },
+    {
+      "id": "packages/coding-agent/src/core/extensions/types.ts",
+      "path": "packages/coding-agent/src/core/extensions/types.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 29,
+      "outDegree": 20,
+      "loc": 1702,
+      "score": 88.73,
+      "reason": "29 dependents · 20 deps"
+    },
+    {
+      "id": "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+      "path": "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 0,
+      "outDegree": 70,
+      "loc": 6147,
+      "score": 82.59,
+      "reason": "0 dependents · 70 deps"
+    },
+    {
+      "id": "packages/ai/src/model-catalog.ts",
+      "path": "packages/ai/src/model-catalog.ts",
+      "package": "@draht/ai",
+      "inDegree": 37,
+      "outDegree": 1,
+      "loc": 28,
+      "score": 79.86,
+      "reason": "37 dependents · 1 deps"
+    },
+    {
+      "id": "packages/ai/src/auth/helpers.ts",
+      "path": "packages/ai/src/auth/helpers.ts",
+      "package": "@draht/ai",
+      "inDegree": 35,
+      "outDegree": 1,
+      "loc": 50,
+      "score": 76.67,
+      "reason": "35 dependents · 1 deps"
+    },
+    {
+      "id": "packages/agent/src/harness/types.ts",
+      "path": "packages/agent/src/harness/types.ts",
+      "package": "@draht/agent-core",
+      "inDegree": 31,
+      "outDegree": 3,
+      "loc": 959,
+      "score": 74.91,
+      "reason": "31 dependents · 3 deps"
+    },
+    {
+      "id": "packages/web-ui/src/utils/i18n.ts",
+      "path": "packages/web-ui/src/utils/i18n.ts",
+      "package": "@draht/web-ui",
+      "inDegree": 30,
+      "outDegree": 0,
+      "loc": 654,
+      "score": 69.36,
+      "reason": "30 dependents · 0 deps"
+    },
+    {
+      "id": "packages/coding-agent/src/core/session-manager.ts",
+      "path": "packages/coding-agent/src/core/session-manager.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 23,
+      "outDegree": 5,
+      "loc": 1728,
+      "score": 61.76,
+      "reason": "23 dependents · 5 deps"
+    }
+  ],
+  "mostDependedOn": [
+    {
+      "id": "packages/ai/src/index.ts",
+      "path": "packages/ai/src/index.ts",
+      "package": "@draht/ai",
+      "inDegree": 144,
+      "outDegree": 0,
+      "loc": 48,
+      "score": 144,
+      "reason": "144 dependents"
+    },
+    {
+      "id": "packages/coding-agent/src/index.ts",
+      "path": "packages/coding-agent/src/index.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 117,
+      "outDegree": 0,
+      "loc": 408,
+      "score": 117,
+      "reason": "117 dependents"
+    },
+    {
+      "id": "packages/tui/src/index.ts",
+      "path": "packages/tui/src/index.ts",
+      "package": "@draht/tui",
+      "inDegree": 94,
+      "outDegree": 0,
+      "loc": 115,
+      "score": 94,
+      "reason": "94 dependents"
+    },
+    {
+      "id": "packages/ai/src/types.ts",
+      "path": "packages/ai/src/types.ts",
+      "package": "@draht/ai",
+      "inDegree": 61,
+      "outDegree": 12,
+      "loc": 794,
+      "score": 61,
+      "reason": "61 dependents"
+    },
+    {
+      "id": "packages/agent/src/index.ts",
+      "path": "packages/agent/src/index.ts",
+      "package": "@draht/agent-core",
+      "inDegree": 60,
+      "outDegree": 0,
+      "loc": 51,
+      "score": 60,
+      "reason": "60 dependents"
+    },
+    {
+      "id": "packages/coding-agent/src/modes/interactive/theme/theme.ts",
+      "path": "packages/coding-agent/src/modes/interactive/theme/theme.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 56,
+      "outDegree": 6,
+      "loc": 1295,
+      "score": 56,
+      "reason": "56 dependents"
+    },
+    {
+      "id": "packages/ai/src/models.ts",
+      "path": "packages/ai/src/models.ts",
+      "package": "@draht/ai",
+      "inDegree": 53,
+      "outDegree": 7,
+      "loc": 741,
+      "score": 53,
+      "reason": "53 dependents"
+    },
+    {
+      "id": "packages/coding-agent/src/config.ts",
+      "path": "packages/coding-agent/src/config.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 42,
+      "outDegree": 2,
+      "loc": 591,
+      "score": 42,
+      "reason": "42 dependents"
+    },
+    {
+      "id": "packages/ai/src/model-catalog.ts",
+      "path": "packages/ai/src/model-catalog.ts",
+      "package": "@draht/ai",
+      "inDegree": 37,
+      "outDegree": 1,
+      "loc": 28,
+      "score": 37,
+      "reason": "37 dependents"
+    },
+    {
+      "id": "packages/ai/src/auth/helpers.ts",
+      "path": "packages/ai/src/auth/helpers.ts",
+      "package": "@draht/ai",
+      "inDegree": 35,
+      "outDegree": 1,
+      "loc": 50,
+      "score": 35,
+      "reason": "35 dependents"
+    },
+    {
+      "id": "packages/agent/src/harness/types.ts",
+      "path": "packages/agent/src/harness/types.ts",
+      "package": "@draht/agent-core",
+      "inDegree": 31,
+      "outDegree": 3,
+      "loc": 959,
+      "score": 31,
+      "reason": "31 dependents"
+    },
+    {
+      "id": "packages/web-ui/src/utils/i18n.ts",
+      "path": "packages/web-ui/src/utils/i18n.ts",
+      "package": "@draht/web-ui",
+      "inDegree": 30,
+      "outDegree": 0,
+      "loc": 654,
+      "score": 30,
+      "reason": "30 dependents"
+    },
+    {
+      "id": "packages/coding-agent/src/core/extensions/types.ts",
+      "path": "packages/coding-agent/src/core/extensions/types.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 29,
+      "outDegree": 20,
+      "loc": 1702,
+      "score": 29,
+      "reason": "29 dependents"
+    },
+    {
+      "id": "packages/ai/src/api/openai-completions.lazy.ts",
+      "path": "packages/ai/src/api/openai-completions.lazy.ts",
+      "package": "@draht/ai",
+      "inDegree": 27,
+      "outDegree": 3,
+      "loc": 5,
+      "score": 27,
+      "reason": "27 dependents"
+    },
+    {
+      "id": "packages/coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+      "path": "packages/coding-agent/src/modes/interactive/components/keybinding-hints.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 26,
+      "outDegree": 2,
+      "loc": 49,
+      "score": 26,
+      "reason": "26 dependents"
+    }
+  ],
+  "orchestrators": [
+    {
+      "id": "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+      "path": "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 0,
+      "outDegree": 70,
+      "loc": 6147,
+      "score": 70,
+      "reason": "imports 70 modules"
+    },
+    {
+      "id": "packages/ai/src/providers/all.ts",
+      "path": "packages/ai/src/providers/all.ts",
+      "package": "@draht/ai",
+      "inDegree": 2,
+      "outDegree": 43,
+      "loc": 152,
+      "score": 43,
+      "reason": "imports 43 modules"
+    },
+    {
+      "id": "packages/ai/src/models.generated.ts",
+      "path": "packages/ai/src/models.generated.ts",
+      "package": "@draht/ai",
+      "inDegree": 1,
+      "outDegree": 37,
+      "loc": 119,
+      "score": 37,
+      "reason": "imports 37 modules"
+    },
+    {
+      "id": "packages/coding-agent/src/main.ts",
+      "path": "packages/coding-agent/src/main.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 2,
+      "outDegree": 34,
+      "loc": 933,
+      "score": 34,
+      "reason": "imports 34 modules"
+    },
+    {
+      "id": "packages/coding-agent/src/core/agent-session.ts",
+      "path": "packages/coding-agent/src/core/agent-session.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 8,
+      "outDegree": 32,
+      "loc": 3381,
+      "score": 32,
+      "reason": "imports 32 modules"
+    },
+    {
+      "id": "packages/coding-agent/src/core/extensions/types.ts",
+      "path": "packages/coding-agent/src/core/extensions/types.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 29,
+      "outDegree": 20,
+      "loc": 1702,
+      "score": 20,
+      "reason": "imports 20 modules"
+    },
+    {
+      "id": "packages/coding-agent/src/core/sdk.ts",
+      "path": "packages/coding-agent/src/core/sdk.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 3,
+      "outDegree": 20,
+      "loc": 406,
+      "score": 20,
+      "reason": "imports 20 modules"
+    },
+    {
+      "id": "packages/web-ui/src/tools/artifacts/artifacts.ts",
+      "path": "packages/web-ui/src/tools/artifacts/artifacts.ts",
+      "package": "@draht/web-ui",
+      "inDegree": 2,
+      "outDegree": 19,
+      "loc": 714,
+      "score": 19,
+      "reason": "imports 19 modules"
+    },
+    {
+      "id": "packages/ai/src/legacy-api-aliases.ts",
+      "path": "packages/ai/src/legacy-api-aliases.ts",
+      "package": "@draht/ai",
+      "inDegree": 0,
+      "outDegree": 17,
+      "loc": 109,
+      "score": 17,
+      "reason": "imports 17 modules"
+    },
+    {
+      "id": "packages/coding-agent/src/core/extensions/loader.ts",
+      "path": "packages/coding-agent/src/core/extensions/loader.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 1,
+      "outDegree": 17,
+      "loc": 685,
+      "score": 17,
+      "reason": "imports 17 modules"
+    },
+    {
+      "id": "packages/coding-agent/src/core/resource-loader.ts",
+      "path": "packages/coding-agent/src/core/resource-loader.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 6,
+      "outDegree": 16,
+      "loc": 1097,
+      "score": 16,
+      "reason": "imports 16 modules"
+    },
+    {
+      "id": "packages/ai/src/api/openai-codex-responses.ts",
+      "path": "packages/ai/src/api/openai-codex-responses.ts",
+      "package": "@draht/ai",
+      "inDegree": 3,
+      "outDegree": 15,
+      "loc": 1640,
+      "score": 15,
+      "reason": "imports 15 modules"
+    },
+    {
+      "id": "packages/ai/src/api/openai-completions.ts",
+      "path": "packages/ai/src/api/openai-completions.ts",
+      "package": "@draht/ai",
+      "inDegree": 3,
+      "outDegree": 15,
+      "loc": 1525,
+      "score": 15,
+      "reason": "imports 15 modules"
+    },
+    {
+      "id": "packages/ai/src/compat.ts",
+      "path": "packages/ai/src/compat.ts",
+      "package": "@draht/ai",
+      "inDegree": 0,
+      "outDegree": 15,
+      "loc": 299,
+      "score": 15,
+      "reason": "imports 15 modules"
+    },
+    {
+      "id": "packages/coding-agent/src/core/tools/read.ts",
+      "path": "packages/coding-agent/src/core/tools/read.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 1,
+      "outDegree": 14,
+      "loc": 352,
+      "score": 14,
+      "reason": "imports 14 modules"
+    }
+  ],
+  "largest": [
+    {
+      "id": "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+      "path": "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 0,
+      "outDegree": 70,
+      "loc": 6147,
+      "score": 6147,
+      "reason": "6147 LOC"
+    },
+    {
+      "id": "packages/coding-agent/bin/draht-tools.cjs",
+      "path": "packages/coding-agent/bin/draht-tools.cjs",
+      "package": "@draht/coding-agent",
+      "inDegree": 0,
+      "outDegree": 0,
+      "loc": 5696,
+      "score": 5696,
+      "reason": "5696 LOC"
+    },
+    {
+      "id": "packages/draht-claude/bin/draht-tools.cjs",
+      "path": "packages/draht-claude/bin/draht-tools.cjs",
+      "package": "draht-claude",
+      "inDegree": 0,
+      "outDegree": 0,
+      "loc": 5696,
+      "score": 5696,
+      "reason": "5696 LOC"
+    },
+    {
+      "id": "packages/draht-codex/bin/draht-tools.cjs",
+      "path": "packages/draht-codex/bin/draht-tools.cjs",
+      "package": "draht-codex",
+      "inDegree": 0,
+      "outDegree": 0,
+      "loc": 5696,
+      "score": 5696,
+      "reason": "5696 LOC"
+    },
+    {
+      "id": "packages/draht-tools/bin/draht-tools.cjs",
+      "path": "packages/draht-tools/bin/draht-tools.cjs",
+      "package": "@draht/tools",
+      "inDegree": 0,
+      "outDegree": 0,
+      "loc": 5696,
+      "score": 5696,
+      "reason": "5696 LOC"
+    },
+    {
+      "id": "packages/coding-agent/src/core/agent-session.ts",
+      "path": "packages/coding-agent/src/core/agent-session.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 8,
+      "outDegree": 32,
+      "loc": 3381,
+      "score": 3381,
+      "reason": "3381 LOC"
+    },
+    {
+      "id": "packages/ai/scripts/generate-models.ts",
+      "path": "packages/ai/scripts/generate-models.ts",
+      "package": "@draht/ai",
+      "inDegree": 0,
+      "outDegree": 4,
+      "loc": 2734,
+      "score": 2734,
+      "reason": "2734 LOC"
+    },
+    {
+      "id": "packages/coding-agent/src/core/package-manager.ts",
+      "path": "packages/coding-agent/src/core/package-manager.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 6,
+      "outDegree": 6,
+      "loc": 2665,
+      "score": 2665,
+      "reason": "2665 LOC"
+    },
+    {
+      "id": "packages/web-ui/src/utils/test-sessions.ts",
+      "path": "packages/web-ui/src/utils/test-sessions.ts",
+      "package": "@draht/web-ui",
+      "inDegree": 0,
+      "outDegree": 0,
+      "loc": 2358,
+      "score": 2358,
+      "reason": "2358 LOC"
+    },
+    {
+      "id": "packages/tui/src/components/editor.ts",
+      "path": "packages/tui/src/components/editor.ts",
+      "package": "@draht/tui",
+      "inDegree": 0,
+      "outDegree": 9,
+      "loc": 2352,
+      "score": 2352,
+      "reason": "2352 LOC"
+    },
+    {
+      "id": "packages/coding-agent/src/core/export-html/template.js",
+      "path": "packages/coding-agent/src/core/export-html/template.js",
+      "package": "@draht/coding-agent",
+      "inDegree": 0,
+      "outDegree": 0,
+      "loc": 1865,
+      "score": 1865,
+      "reason": "1865 LOC"
+    },
+    {
+      "id": "packages/coding-agent/src/core/session-manager.ts",
+      "path": "packages/coding-agent/src/core/session-manager.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 23,
+      "outDegree": 5,
+      "loc": 1728,
+      "score": 1728,
+      "reason": "1728 LOC"
+    },
+    {
+      "id": "packages/tui/src/tui.ts",
+      "path": "packages/tui/src/tui.ts",
+      "package": "@draht/tui",
+      "inDegree": 12,
+      "outDegree": 5,
+      "loc": 1721,
+      "score": 1721,
+      "reason": "1721 LOC"
+    },
+    {
+      "id": "packages/coding-agent/src/core/extensions/types.ts",
+      "path": "packages/coding-agent/src/core/extensions/types.ts",
+      "package": "@draht/coding-agent",
+      "inDegree": 29,
+      "outDegree": 20,
+      "loc": 1702,
+      "score": 1702,
+      "reason": "1702 LOC"
+    },
+    {
+      "id": "packages/ai/src/api/openai-codex-responses.ts",
+      "path": "packages/ai/src/api/openai-codex-responses.ts",
+      "package": "@draht/ai",
+      "inDegree": 3,
+      "outDegree": 15,
+      "loc": 1640,
+      "score": 1640,
+      "reason": "1640 LOC"
+    }
+  ]
+}

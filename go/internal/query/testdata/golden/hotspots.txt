@@ -1,0 +1,48 @@
+
+God nodes (most connected):
+  packages/ai/src/index.ts  [in 144 · out 0 · 48 LOC]  144 dependents · 0 deps
+  packages/coding-agent/src/index.ts  [in 117 · out 0 · 408 LOC]  117 dependents · 0 deps
+  packages/tui/src/index.ts  [in 94 · out 0 · 115 LOC]  94 dependents · 0 deps
+  packages/ai/src/types.ts  [in 61 · out 12 · 794 LOC]  61 dependents · 12 deps
+  packages/coding-agent/src/modes/interactive/theme/theme.ts  [in 56 · out 6 · 1295 LOC]  56 dependents · 6 deps
+  packages/agent/src/index.ts  [in 60 · out 0 · 51 LOC]  60 dependents · 0 deps
+  packages/ai/src/models.ts  [in 53 · out 7 · 741 LOC]  53 dependents · 7 deps
+  packages/coding-agent/src/config.ts  [in 42 · out 2 · 591 LOC]  42 dependents · 2 deps
+  packages/coding-agent/src/core/extensions/types.ts  [in 29 · out 20 · 1702 LOC]  29 dependents · 20 deps
+  packages/coding-agent/src/modes/interactive/interactive-mode.ts  [in 0 · out 70 · 6147 LOC]  0 dependents · 70 deps
+
+Most depended-on:
+  packages/ai/src/index.ts  [in 144 · out 0 · 48 LOC]  144 dependents
+  packages/coding-agent/src/index.ts  [in 117 · out 0 · 408 LOC]  117 dependents
+  packages/tui/src/index.ts  [in 94 · out 0 · 115 LOC]  94 dependents
+  packages/ai/src/types.ts  [in 61 · out 12 · 794 LOC]  61 dependents
+  packages/agent/src/index.ts  [in 60 · out 0 · 51 LOC]  60 dependents
+  packages/coding-agent/src/modes/interactive/theme/theme.ts  [in 56 · out 6 · 1295 LOC]  56 dependents
+  packages/ai/src/models.ts  [in 53 · out 7 · 741 LOC]  53 dependents
+  packages/coding-agent/src/config.ts  [in 42 · out 2 · 591 LOC]  42 dependents
+  packages/ai/src/model-catalog.ts  [in 37 · out 1 · 28 LOC]  37 dependents
+  packages/ai/src/auth/helpers.ts  [in 35 · out 1 · 50 LOC]  35 dependents
+
+Orchestrators (most deps):
+  packages/coding-agent/src/modes/interactive/interactive-mode.ts  [in 0 · out 70 · 6147 LOC]  imports 70 modules
+  packages/ai/src/providers/all.ts  [in 2 · out 43 · 152 LOC]  imports 43 modules
+  packages/ai/src/models.generated.ts  [in 1 · out 37 · 119 LOC]  imports 37 modules
+  packages/coding-agent/src/main.ts  [in 2 · out 34 · 933 LOC]  imports 34 modules
+  packages/coding-agent/src/core/agent-session.ts  [in 8 · out 32 · 3381 LOC]  imports 32 modules
+  packages/coding-agent/src/core/extensions/types.ts  [in 29 · out 20 · 1702 LOC]  imports 20 modules
+  packages/coding-agent/src/core/sdk.ts  [in 3 · out 20 · 406 LOC]  imports 20 modules
+  packages/web-ui/src/tools/artifacts/artifacts.ts  [in 2 · out 19 · 714 LOC]  imports 19 modules
+  packages/ai/src/legacy-api-aliases.ts  [in 0 · out 17 · 109 LOC]  imports 17 modules
+  packages/coding-agent/src/core/extensions/loader.ts  [in 1 · out 17 · 685 LOC]  imports 17 modules
+
+Largest:
+  packages/coding-agent/src/modes/interactive/interactive-mode.ts  [in 0 · out 70 · 6147 LOC]  6147 LOC
+  packages/coding-agent/bin/draht-tools.cjs  [in 0 · out 0 · 5696 LOC]  5696 LOC
+  packages/draht-claude/bin/draht-tools.cjs  [in 0 · out 0 · 5696 LOC]  5696 LOC
+  packages/draht-codex/bin/draht-tools.cjs  [in 0 · out 0 · 5696 LOC]  5696 LOC
+  packages/draht-tools/bin/draht-tools.cjs  [in 0 · out 0 · 5696 LOC]  5696 LOC
+  packages/coding-agent/src/core/agent-session.ts  [in 8 · out 32 · 3381 LOC]  3381 LOC
+  packages/ai/scripts/generate-models.ts  [in 0 · out 4 · 2734 LOC]  2734 LOC
+  packages/coding-agent/src/core/package-manager.ts  [in 6 · out 6 · 2665 LOC]  2665 LOC
+  packages/web-ui/src/utils/test-sessions.ts  [in 0 · out 0 · 2358 LOC]  2358 LOC
+  packages/tui/src/components/editor.ts  [in 0 · out 9 · 2352 LOC]  2352 LOC

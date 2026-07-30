@@ -1,0 +1,2 @@
+(no forward path) reverse: packages/coding-agent/src/index.ts is reached-by packages/ai/src/types.ts in 3 hops
+  src/types.ts → src/index.ts → core/agent-session.ts → src/index.ts

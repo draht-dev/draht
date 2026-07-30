@@ -1,0 +1,152 @@
+[
+  {
+    "score": 400,
+    "deg": 1,
+    "path": "packages/coding-agent/test/session-manager/build-context.test.ts",
+    "line": 41,
+    "kind": "function",
+    "name": "compaction",
+    "exported": false,
+    "doc": ""
+  },
+  {
+    "score": 300,
+    "deg": 81,
+    "path": "packages/coding-agent/src/core/session-manager.ts",
+    "line": 71,
+    "kind": "interface",
+    "name": "CompactionEntry",
+    "exported": true,
+    "doc": ""
+  },
+  {
+    "score": 300,
+    "deg": 59,
+    "path": "packages/coding-agent/src/core/settings-manager.ts",
+    "line": 11,
+    "kind": "interface",
+    "name": "CompactionSettings",
+    "exported": true,
+    "doc": ""
+  },
+  {
+    "score": 300,
+    "deg": 43,
+    "path": "packages/agent/src/harness/types.ts",
+    "line": 197,
+    "kind": "type",
+    "name": "CompactionErrorCode",
+    "exported": true,
+    "doc": "Stable compaction error codes returned by compaction helpers."
+  },
+  {
+    "score": 300,
+    "deg": 43,
+    "path": "packages/agent/src/harness/types.ts",
+    "line": 200,
+    "kind": "class",
+    "name": "CompactionError",
+    "exported": true,
+    "doc": "Error returned by compaction helpers."
+  },
+  {
+    "score": 300,
+    "deg": 43,
+    "path": "packages/agent/src/harness/types.ts",
+    "line": 403,
+    "kind": "interface",
+    "name": "CompactionEntry",
+    "exported": true,
+    "doc": ""
+  },
+  {
+    "score": 300,
+    "deg": 15,
+    "path": "packages/coding-agent/src/core/messages.ts",
+    "line": 11,
+    "kind": "const",
+    "name": "COMPACTION_SUMMARY_PREFIX",
+    "exported": true,
+    "doc": ""
+  },
+  {
+    "score": 300,
+    "deg": 15,
+    "path": "packages/coding-agent/src/core/messages.ts",
+    "line": 16,
+    "kind": "const",
+    "name": "COMPACTION_SUMMARY_SUFFIX",
+    "exported": true,
+    "doc": ""
+  },
+  {
+    "score": 300,
+    "deg": 15,
+    "path": "packages/coding-agent/src/core/messages.ts",
+    "line": 62,
+    "kind": "interface",
+    "name": "CompactionSummaryMessage",
+    "exported": true,
+    "doc": ""
+  },
+  {
+    "score": 300,
+    "deg": 9,
+    "path": "packages/agent/src/harness/compaction/compaction.ts",
+    "line": 35,
+    "kind": "interface",
+    "name": "CompactionDetails",
+    "exported": true,
+    "doc": "File-operation details stored on generated compaction entries."
+  },
+  {
+    "score": 300,
+    "deg": 9,
+    "path": "packages/agent/src/harness/compaction/compaction.ts",
+    "line": 103,
+    "kind": "interface",
+    "name": "CompactionResult",
+    "exported": true,
+    "doc": "Generated compaction data ready to be persisted as a compaction entry."
+  },
+  {
+    "score": 300,
+    "deg": 9,
+    "path": "packages/agent/src/harness/compaction/compaction.ts",
+    "line": 164,
+    "kind": "interface",
+    "name": "CompactionSettings",
+    "exported": true,
+    "doc": "Compaction thresholds and retention settings."
+  },
+  {
+    "score": 300,
+    "deg": 9,
+    "path": "packages/agent/src/harness/compaction/compaction.ts",
+    "line": 620,
+    "kind": "interface",
+    "name": "CompactionPreparation",
+    "exported": true,
+    "doc": "Prepared inputs for a compaction run."
+  },
+  {
+    "score": 300,
+    "deg": 8,
+    "path": "packages/coding-agent/src/core/compaction/compaction.ts",
+    "line": 34,
+    "kind": "interface",
+    "name": "CompactionDetails",
+    "exported": true,
+    "doc": "Details stored in CompactionEntry.details for file tracking"
+  },
+  {
+    "score": 300,
+    "deg": 8,
+    "path": "packages/coding-agent/src/core/compaction/compaction.ts",
+    "line": 88,
+    "kind": "interface",
+    "name": "CompactionResult",
+    "exported": true,
+    "doc": "Result from compact() - SessionManager adds uuid/parentUuid when saving"
+  }
+]

@@ -1,0 +1,6 @@
+resolved 'nodejs.ts' → packages/agent/src/harness/env/nodejs.ts
+packages/agent/src/harness/env/nodejs.ts  ·  pkg:@draht/agent-core  ·  layer:infrastructure  ·  cluster:packages/agent(18)  ·  entry:no
+  exports(1): NodeExecutionEnv
+  importers(11): harness/execution-env.ts, src/node.ts, harness/agent-harness.test.ts, harness/nodejs-env.test.ts, harness/prompt-templates.test.ts (+6 more)
+  imports(1): harness/types.ts
+  sinks: process:exec, env:read

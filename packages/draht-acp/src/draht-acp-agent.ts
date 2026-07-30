@@ -80,8 +80,8 @@ export interface DrahtAcpAgentConfig {
 	 * Resolves the `@draht/coding-agent` options for a new session's `cwd`.
 	 *
 	 * Return a `model` (a faux-provider model for keyless CI, or a real model for
-	 * deployment) plus any hermetic services (`modelRegistry`, `authStorage`,
-	 * `sessionManager`, ...). The shim layers permission-gated built-in tools on
+	 * deployment) plus any hermetic services (`modelRuntime`, `sessionManager`,
+	 * `settingsManager`, ...). The shim layers permission-gated built-in tools on
 	 * top and creates the `AgentSession` itself via `createAgentSession`, so
 	 * callers never wire ACP or the confinement flow.
 	 */

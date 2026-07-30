@@ -25,7 +25,7 @@ import { join } from "node:path";
 
 import { fauxAssistantMessage, fauxToolCall } from "@draht/ai";
 import { registerFauxProvider } from "@draht/ai/compat";
-import { AuthStorage, ModelRegistry, SessionManager, SettingsManager } from "@draht/coding-agent";
+import { AuthStorage, ModelRuntime, SessionManager, SettingsManager } from "@draht/coding-agent";
 
 import { type DrahtAcpAgentConfig, runDrahtAcpAgentStdio } from "../../src/draht-acp-agent.ts";
 
@@ -39,9 +39,9 @@ export const DRAHT_TOOL_CALL_ID = "draht-tool-1";
 /**
  * Builds the shim config with a keyless faux provider, mirroring the hermetic
  * wiring `@draht/coding-agent`'s own test harness uses (in-memory auth, model
- * registry, session, and settings managers; a temp agent dir).
+ * runtime, session, and settings managers; a temp agent dir).
  */
-function buildFauxConfig(): DrahtAcpAgentConfig {
+async function buildFauxConfig(): Promise<DrahtAcpAgentConfig> {
 	// Keep stdout pristine for the ACP ndJSON stream: reroute any stray logging.
 	console.log = (...args: unknown[]) => console.error(...args);
 	console.info = (...args: unknown[]) => console.error(...args);
@@ -59,10 +59,10 @@ function buildFauxConfig(): DrahtAcpAgentConfig {
 	]);
 
 	const agentDir = mkdtempSync(join(tmpdir(), "draht-acp-agentdir-"));
-	const authStorage = AuthStorage.inMemory();
-	authStorage.setRuntimeApiKey(model.provider, "faux-key");
-	const modelRegistry = ModelRegistry.inMemory(authStorage);
-	modelRegistry.registerProvider(model.provider, {
+	const authStorage = AuthStorage.inMemory({ [model.provider]: { type: "api_key", key: "faux-key" } });
+	// `modelsPath: null` keeps the catalog in memory — nothing is read from or written to disk.
+	const modelRuntime = await ModelRuntime.create({ credentials: authStorage, modelsPath: null });
+	modelRuntime.registerProvider(model.provider, {
 		baseUrl: model.baseUrl,
 		apiKey: "faux-key",
 		api: faux.api,
@@ -85,8 +85,7 @@ function buildFauxConfig(): DrahtAcpAgentConfig {
 		sessionOptions: () => ({
 			model,
 			agentDir,
-			authStorage,
-			modelRegistry,
+			modelRuntime,
 			settingsManager,
 			// Per-session, in-memory: no session history is persisted to disk.
 			sessionManager: SessionManager.inMemory(),
@@ -95,5 +94,5 @@ function buildFauxConfig(): DrahtAcpAgentConfig {
 }
 
 if (import.meta.main) {
-	runDrahtAcpAgentStdio(buildFauxConfig());
+	runDrahtAcpAgentStdio(await buildFauxConfig());
 }

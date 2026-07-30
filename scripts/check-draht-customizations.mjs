@@ -10,7 +10,11 @@
  *   1. Root package.json: version format, scripts, workspace deps, draht-only deps
  *   2. coding-agent package.json: drahtConfig, bin entries, files, workspace deps,
  *      build scripts, publishConfig, typescript version
- *   3. All upstream-shared packages use workspace:* deps
+ *   3. Every workspace package (discovered from the root "workspaces" globs)
+ *      uses workspace:* for its @draht/* deps, declares no file:/link:
+ *      specifier at all, and bun.lock carries no file:packages resolution
+ *      entries — a file: sibling dep duplicates the package physically,
+ *      breaks tsc, and makes the lockfile unreproducible
  *   4. Draht-only scripts exist on disk
  *   5. verify.sh branding check targets @mariozechner/pi-* (not @draht/*)
  *   6. .planning/ files are not modified vs main (branding guard must not touch them)
@@ -181,29 +185,125 @@ check(
 	`typescript devDep is not downgraded: ${caPkg.devDependencies?.typescript}`
 );
 
-// ── 3. All upstream-shared packages use workspace:* ─────────────────
+// ── 3. Every workspace package uses workspace:* for siblings ────────
+//
+// This used to iterate a hardcoded list of four packages, which is how
+// packages/web-ui/example/package.json got away with declaring
+// "@draht/ai": "file:../../ai" and "@draht/web-ui": "file:../" for months:
+// it simply was not on the list. The list is now discovered from the root
+// package.json "workspaces" globs, so a new workspace member is covered the
+// moment it is added.
 
 console.log("\nWorkspace deps");
 
-const sharedPkgs = [
-	"packages/agent/package.json",
-	"packages/coding-agent/package.json",
-	"packages/mom/package.json",
-	"packages/web-ui/package.json",
+const DEP_FIELDS = [
+	"dependencies",
+	"devDependencies",
+	"peerDependencies",
+	"optionalDependencies",
 ];
 
-for (const pkgPath of sharedPkgs) {
+const workspacePkgPaths = discoverWorkspacePackageJsons();
+
+check(
+	workspacePkgPaths.length > 1,
+	`discovered ${workspacePkgPaths.length} workspace package.json files from root "workspaces"`,
+);
+check(
+	workspacePkgPaths.includes("packages/web-ui/example/package.json"),
+	`discovery reaches nested workspace members (packages/web-ui/example)`,
+);
+
+for (const pkgPath of workspacePkgPaths) {
 	const pkg = readJson(pkgPath);
-	const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-	for (const [name, version] of Object.entries(deps)) {
-		if (name.startsWith("@draht/") && version !== "workspace:*") {
-			fail(`${pkgPath}: ${name} is "${version}" (expected workspace:*)`);
+	const offenders = [];
+	for (const field of DEP_FIELDS) {
+		for (const [name, version] of Object.entries(pkg[field] ?? {})) {
+			if (
+				name.startsWith("@draht/") &&
+				typeof version === "string" &&
+				version !== "workspace:*"
+			) {
+				offenders.push(`${field}.${name} is "${version}"`);
+			}
 		}
 	}
+	check(
+		offenders.length === 0,
+		`${pkgPath}: all @draht/* deps are workspace:*` +
+			(offenders.length ? ` — ${offenders.join(", ")}` : ""),
+	);
 }
-// If we get here without failures from the loop, mark a pass
-if (failures === 0 || true) {
-	// Individual failures already logged; just note overall
+
+// ── 3b. No file:/link: dependency specifiers anywhere ───────────────
+//
+// A file:/link: specifier pointing at a workspace sibling makes bun
+// materialise a second *physical copy* of that package under
+// node_modules/.bun/<name>@file+<path>+<hash>/ instead of symlinking the
+// workspace. Consequences, all observed in this repo:
+//   * tsc fails with TS2345 "Types have separate declarations of a private
+//     property" because two structurally identical classes now exist;
+//   * the duplicate is contagious — other consumers get attached to the copy;
+//   * bun.lock gains file:packages resolution entries, and the workaround
+//     (hand-stripping them out of the lockfile) leaves bun.lock
+//     unreproducible: `bun install --frozen-lockfile` then fails with
+//     "lockfile had changes, but lockfile is frozen".
+// Use workspace:* for siblings; use a registry version for anything else.
+
+console.log("\nDependency specifiers (no file:/link:)");
+
+const localSpecifierPattern = /^(file|link):/;
+
+for (const pkgPath of workspacePkgPaths) {
+	const pkg = readJson(pkgPath);
+	const offenders = [];
+	for (const field of DEP_FIELDS) {
+		for (const [name, version] of Object.entries(pkg[field] ?? {})) {
+			if (typeof version === "string" && localSpecifierPattern.test(version)) {
+				offenders.push(`${field}.${name} → "${version}"`);
+			}
+		}
+	}
+	check(
+		offenders.length === 0,
+		`${pkgPath}: no file:/link: dependency specifiers` +
+			(offenders.length
+				? ` — ${offenders.join(", ")}` +
+					` (banned: file:/link: forces a duplicate physical copy of the package,` +
+					` which breaks tsc with "separate declarations of a private property"` +
+					` and makes bun.lock unreproducible — use "workspace:*")`
+				: ""),
+	);
+}
+
+// ── 3c. bun.lock has no file:packages resolution entries ────────────
+//
+// The direct assertion of the invariant: catches the case where someone
+// regenerates the lockfile from a package.json that still has a file: dep.
+
+console.log("\nbun.lock reproducibility");
+
+const lockAbsPath = resolve(root, "bun.lock");
+if (existsSync(lockAbsPath)) {
+	const lockLines = readFileSync(lockAbsPath, "utf-8").split("\n");
+	const lockHits = [];
+	for (let i = 0; i < lockLines.length; i++) {
+		if (lockLines[i].includes("file:packages")) {
+			lockHits.push(`${i + 1}: ${lockLines[i].trim()}`);
+		}
+	}
+	check(
+		lockHits.length === 0,
+		`bun.lock: no file:packages resolution entries` +
+			(lockHits.length
+				? ` — ${lockHits.join(" | ")}` +
+					` (a file:/link: specifier leaked into the lockfile; fix the offending` +
+					` package.json to use "workspace:*" and re-run bun install — do NOT` +
+					` hand-strip these lines, that is what made the lockfile unreproducible)`
+				: ""),
+	);
+} else {
+	fail(`bun.lock: file not found at repo root`);
 }
 
 // ── 4. Draht-only scripts exist on disk ─────────────────────────────
@@ -745,6 +845,47 @@ if (existsSync(resolve(root, agentSessionServicesRelPath))) {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Every workspace member's package.json, discovered from the root
+ * package.json "workspaces" globs (plus the root manifest itself, which also
+ * declares @draht/* deps). Deliberately not a hardcoded list — the hardcoded
+ * list is what let packages/web-ui/example keep its file: specifiers.
+ */
+function discoverWorkspacePackageJsons() {
+	const patterns = Array.isArray(rootPkg.workspaces)
+		? rootPkg.workspaces
+		: (rootPkg.workspaces?.packages ?? []);
+	const dirs = new Set();
+	for (const pattern of patterns) {
+		const starIndex = pattern.indexOf("*");
+		if (starIndex === -1) {
+			dirs.add(pattern.replace(/\/+$/, ""));
+			continue;
+		}
+		// Only trailing "<base>/*" globs are used by bun workspaces here.
+		const base = pattern.slice(0, starIndex).replace(/\/+$/, "");
+		const absBase = resolve(root, base);
+		if (!existsSync(absBase)) continue;
+		let entries;
+		try {
+			entries = readdirSync(absBase, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+			dirs.add(`${base}/${entry.name}`);
+		}
+	}
+	const results = ["package.json"];
+	for (const dir of [...dirs].sort()) {
+		const relPath = `${dir}/package.json`;
+		if (existsSync(resolve(root, relPath))) results.push(relPath);
+	}
+	return results;
+}
 
 function findPackageJsons(baseDir) {
 	const results = [];

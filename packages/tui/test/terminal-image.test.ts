@@ -8,10 +8,12 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { Image } from "../src/components/image.ts";
 import {
+	cropKittyImageLine,
 	deleteAllKittyImages,
 	deleteKittyImage,
 	detectCapabilities,
 	encodeKitty,
+	getKittyImageMetadata,
 	hyperlink,
 	imageFallback,
 	isImageLine,
@@ -403,6 +405,30 @@ describe("Kitty image cursor movement", () => {
 			assert.ok(result);
 			assert.ok(result.sequence.includes(",C=1,"));
 			assert.strictEqual(result.rows, 2);
+		} finally {
+			resetCapabilitiesCache();
+			setCellDimensions({ widthPx: 9, heightPx: 18 });
+		}
+	});
+
+	it("registers metadata and crops a partially visible placement", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		setCellDimensions({ widthPx: 10, heightPx: 10 });
+		try {
+			const result = renderImage(
+				"AAAA",
+				{ widthPx: 100, heightPx: 100 },
+				{ maxWidthCells: 3, imageId: 42, moveCursor: false },
+			);
+			assert.ok(result);
+			assert.deepStrictEqual(getKittyImageMetadata(result.sequence), {
+				imageId: 42,
+				columns: 3,
+				rows: 3,
+				widthPx: 100,
+				heightPx: 100,
+			});
+			assert.ok(cropKittyImageLine(result.sequence, 2, 1).includes("y=66,h=34,r=1"));
 		} finally {
 			resetCapabilitiesCache();
 			setCellDimensions({ widthPx: 9, heightPx: 18 });

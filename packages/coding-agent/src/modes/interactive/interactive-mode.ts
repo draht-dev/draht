@@ -20,6 +20,7 @@ import type {
 	OverlayHandle,
 	OverlayOptions,
 	SlashCommand,
+	Terminal,
 } from "@draht/tui";
 import {
 	CombinedAutocompleteProvider,
@@ -35,7 +36,9 @@ import {
 	setKeybindings,
 	Text,
 	TruncatedText,
-	TUI,
+	type TUI,
+	TuiAltScreen,
+	TuiMainScreen,
 	visibleWidth,
 } from "@draht/tui";
 import chalk from "chalk";
@@ -111,6 +114,7 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { sendTerminalNotification } from "../../utils/notify.ts";
+import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -333,6 +337,24 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 	/** Force verbose startup (overrides quietStartup setting) */
 	verbose?: boolean;
+	/** Use the alternate-screen TUI renderer. */
+	alt?: boolean;
+}
+
+interface InteractiveTuiOptions {
+	alt: boolean;
+	showHardwareCursor: boolean;
+	logDirectory: string;
+	terminal?: Terminal;
+}
+
+/** Composition root for selecting the interactive terminal renderer. */
+export function createInteractiveTui(options: InteractiveTuiOptions): TUI {
+	const terminal = options.terminal ?? new ProcessTerminal();
+	if (options.alt) {
+		return new TuiAltScreen(terminal, options.showHardwareCursor, options.logDirectory, { openUrl: openBrowser });
+	}
+	return new TuiMainScreen(terminal, options.showHardwareCursor, options.logDirectory);
 }
 
 export class InteractiveMode {
@@ -490,7 +512,11 @@ export class InteractiveMode {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
 		});
 		this.version = VERSION;
-		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor(), getAgentDir());
+		this.ui = createInteractiveTui({
+			alt: options.alt ?? false,
+			showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
+			logDirectory: getAgentDir(),
+		});
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
@@ -1919,7 +1945,7 @@ export class InteractiveMode {
 		this.activeStatusIndicator?.dispose();
 		this.activeStatusIndicator = undefined;
 		this.statusContainer.clear();
-		if (hadActiveStatusIndicator && this.ui.getClearOnShrink()) {
+		if (hadActiveStatusIndicator && !this.options.alt && this.ui.getClearOnShrink()) {
 			this.statusContainer.addChild(this.idleStatus);
 		}
 	}

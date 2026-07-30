@@ -533,11 +533,20 @@ function collectAutoThemeEntries(dir: string): string[] {
 	return entries;
 }
 
+/**
+ * A package declares its extensions/skills/prompts/themes under a top-level
+ * manifest key. draht reads `draht` first and falls back to upstream's `pi`,
+ * mirroring CONFIG_DIR_NAME / LEGACY_CONFIG_DIR_NAME: packages authored for
+ * upstream (or copied from its docs) keep working unchanged.
+ */
+function readManifest(pkg: { draht?: PiManifest; pi?: PiManifest }): PiManifest | null {
+	return pkg.draht ?? pkg.pi ?? null;
+}
+
 function readPiManifestFile(packageJsonPath: string): PiManifest | null {
 	try {
 		const content = readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content) as { pi?: PiManifest };
-		return pkg.pi ?? null;
+		return readManifest(JSON.parse(content) as { draht?: PiManifest; pi?: PiManifest });
 	} catch {
 		return null;
 	}
@@ -2239,8 +2248,7 @@ export class DefaultPackageManager implements PackageManager {
 
 		try {
 			const content = readFileSync(packageJsonPath, "utf-8");
-			const pkg = JSON.parse(content) as { pi?: PiManifest };
-			return pkg.pi ?? null;
+			return readManifest(JSON.parse(content) as { draht?: PiManifest; pi?: PiManifest });
 		} catch {
 			return null;
 		}

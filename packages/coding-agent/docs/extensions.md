@@ -256,11 +256,13 @@ This pattern makes the fetched models available during normal startup and to `pi
     "zod": "^3.0.0",
     "chalk": "^5.0.0"
   },
-  "pi": {
+  "draht": {
     "extensions": ["./src/index.ts"]
   }
 }
 ```
+
+The manifest key is `draht`. Upstream's `pi` key is still read as a fallback, so extension packages written for pi work unchanged.
 
 Run `npm install` in the extension directory, then imports from `node_modules/` work automatically.
 

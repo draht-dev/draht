@@ -492,6 +492,8 @@ describe("InteractiveMode.showLoadedResources", () => {
 		toolOutputExpanded?: boolean;
 		cwd?: string;
 		contextFiles?: Array<{ path: string; content?: string }>;
+		systemPromptSource?: { path: string };
+		appendSystemPromptSources?: Array<{ path: string }>;
 		extensions?: ExtensionFixture[];
 		skills?: Array<{ filePath: string; name: string }>;
 		skillDiagnostics?: Array<{ type: "warning" | "error" | "collision"; message: string }>;
@@ -517,6 +519,8 @@ describe("InteractiveMode.showLoadedResources", () => {
 				resourceLoader: {
 					getPathMetadata: () => new Map(),
 					getAgentsFiles: () => ({ agentsFiles: options.contextFiles ?? [] }),
+					getSystemPromptSource: () => options.systemPromptSource,
+					getAppendSystemPromptSources: () => options.appendSystemPromptSources ?? [],
 					getSkills: () => ({
 						skills: options.skills ?? [],
 						diagnostics: options.skillDiagnostics ?? [],
@@ -1145,6 +1149,25 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect(output).toContain("[Context]");
 		expect(output).toContain("~/.pi/agent/AGENTS.md, AGENTS.md");
 		expect(output).not.toContain(`${cwd.replace(/\\/g, "/")}/AGENTS.md`);
+	});
+
+	test("shows system prompt context paths before project context files", () => {
+		const cwd = "/tmp/project";
+		const fakeThis = createShowLoadedResourcesThis({
+			quietStartup: false,
+			cwd,
+			systemPromptSource: { path: path.join(cwd, ".pi", "SYSTEM.md") },
+			appendSystemPromptSources: [{ path: path.join(cwd, ".pi", "APPEND_SYSTEM.md") }],
+			contextFiles: [{ path: path.join(cwd, "AGENTS.md") }],
+		});
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+			force: false,
+		});
+
+		const output = renderAll(fakeThis.loadedResourcesContainer).replace(/\\/g, "/");
+		expect(output).toContain("[Context]");
+		expect(output).toContain(".pi/SYSTEM.md, .pi/APPEND_SYSTEM.md, AGENTS.md");
 	});
 
 	test("shows full context paths when expanded", () => {

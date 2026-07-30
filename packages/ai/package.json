@@ -69,7 +69,7 @@
 		"undici": "^7.19.1",
 		"zod-to-json-schema": "^3.24.6",
 		"proxy-from-env": "^1.1.0",
-		"typebox": "^1.1.24",
+		"typebox": "^1.3.7",
 		"@smithy/node-http-handler": "^4.4.12",
 		"@smithy/types": "^4.0.0"
 	},

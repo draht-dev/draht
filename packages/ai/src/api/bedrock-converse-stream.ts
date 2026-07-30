@@ -267,6 +267,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 				} else if (item.contentBlockStop) {
 					handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
 				} else if (item.messageStop) {
+					output.rawStopReason = item.messageStop.stopReason;
 					const { stopReason, errorMessage } = mapStopReason(item.messageStop.stopReason);
 					output.stopReason = stopReason;
 					if (errorMessage) {
@@ -969,7 +970,9 @@ function mapStopReason(reason: string | undefined): { stopReason: StopReason; er
 		case BedrockStopReason.TOOL_USE:
 			return { stopReason: "toolUse" };
 		default:
-			return reason ? { stopReason: "error", errorMessage: reason } : { stopReason: "error" };
+			return reason
+				? { stopReason: "error", errorMessage: `Provider stopped with: ${reason}` }
+				: { stopReason: "error" };
 	}
 }
 

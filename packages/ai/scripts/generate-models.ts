@@ -265,6 +265,33 @@ const DEEPSEEK_V4_THINKING_LEVEL_MAP = {
 	high: "high",
 	max: "max",
 } as const;
+const QWEN_TOKEN_PLAN_HIGH_MAX_THINKING_LEVEL_MAP = {
+	minimal: null,
+	low: null,
+	medium: null,
+	high: "high",
+	xhigh: null,
+	max: "max",
+} as const;
+const QWEN_TOKEN_PLAN_QWEN38_THINKING_LEVEL_MAP = {
+	minimal: null,
+	low: "low",
+	medium: "medium",
+	high: null,
+	xhigh: "xhigh",
+	max: null,
+} as const;
+const QWEN_TOKEN_PLAN_REASONING_EFFORT_UNSUPPORTED_MODEL_IDS = new Set([
+	"MiniMax-M2.5",
+	"deepseek-v3.2",
+	"kimi-k2.5",
+	"kimi-k2.6",
+	"kimi-k2.7-code",
+	"qwen3.6-flash",
+	"qwen3.6-plus",
+	"qwen3.7-max",
+	"qwen3.7-plus",
+]);
 
 const KIMI_K3_MAX_TOKENS = 131072;
 const KIMI_K3_COST = {
@@ -1971,6 +1998,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			thinkingFormat: "qwen",
 			supportsDeveloperRole: false,
 			supportsStore: false,
+			supportsReasoningEffort: true,
 		};
 		const qwenTokenPlanVariants = [
 			{
@@ -1992,6 +2020,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			for (const [modelId, model] of Object.entries(providerModels)) {
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true) continue;
+				const supportsReasoningEffort = !QWEN_TOKEN_PLAN_REASONING_EFFORT_UNSUPPORTED_MODEL_IDS.has(modelId);
 
 				models.push({
 					id: modelId,
@@ -1999,7 +2028,17 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					api: "openai-completions",
 					provider,
 					baseUrl,
-					compat: qwenTokenPlanCompat,
+					compat: supportsReasoningEffort
+						? qwenTokenPlanCompat
+						: { ...qwenTokenPlanCompat, supportsReasoningEffort: false },
+					...(supportsReasoningEffort
+						? {
+								thinkingLevelMap:
+									modelId === "qwen3.8-max-preview"
+										? QWEN_TOKEN_PLAN_QWEN38_THINKING_LEVEL_MAP
+										: QWEN_TOKEN_PLAN_HIGH_MAX_THINKING_LEVEL_MAP,
+							}
+						: {}),
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
 					cost: {
@@ -2274,7 +2313,12 @@ async function generateModels() {
 	allModels.push(...antLingModels);
 
 	for (const candidate of allModels) {
-		if (candidate.api === "openai-completions" && candidate.id.includes("deepseek-v4")) {
+		if (
+			candidate.api === "openai-completions" &&
+			candidate.id.includes("deepseek-v4") &&
+			candidate.provider !== "qwen-token-plan" &&
+			candidate.provider !== "qwen-token-plan-cn"
+		) {
 			const preservesNativeReasoningEffort = candidate.provider === "openrouter" || candidate.provider === "opencode";
 			candidate.compat = {
 				...candidate.compat,
@@ -2415,29 +2459,6 @@ async function generateModels() {
 			contextWindow: 262144, // 256k tokens
 			maxTokens: 262144,
 		});
-	}
-
-	// Add qwen3.8-max-preview to Qwen Token Plan providers until models.dev includes it
-	for (const qwenTpProvider of ["qwen-token-plan", "qwen-token-plan-cn"] as const) {
-		if (!allModels.some((m) => m.provider === qwenTpProvider && m.id === "qwen3.8-max-preview")) {
-			const baseUrl =
-				qwenTpProvider === "qwen-token-plan"
-					? "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
-					: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
-			allModels.push({
-				id: "qwen3.8-max-preview",
-				name: "Qwen3.8 Max Preview",
-				api: "openai-completions",
-				provider: qwenTpProvider,
-				baseUrl,
-				compat: { thinkingFormat: "qwen", supportsDeveloperRole: false, supportsStore: false } satisfies OpenAICompletionsCompat,
-				reasoning: true,
-				input: ["text", "image"],
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 1000000,
-				maxTokens: 65536,
-			});
-		}
 	}
 
 	// Add "auto" alias for openrouter/auto

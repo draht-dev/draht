@@ -156,10 +156,12 @@ describe("AgentHarness", () => {
 		await harness.nextTurn("queued next turn");
 
 		let firstShutdownSettled = false;
-		const firstShutdown = harness.shutdown().then(() => {
+		harness.requestShutdown();
+		const firstShutdown = harness.waitForShutdown().then(() => {
 			firstShutdownSettled = true;
 		});
-		const secondShutdown = harness.shutdown();
+		harness.requestShutdown();
+		const secondShutdown = harness.waitForShutdown();
 		await Promise.resolve();
 
 		expect(signal?.aborted).toBe(true);
@@ -175,6 +177,49 @@ describe("AgentHarness", () => {
 		await expect(harness.appendMessage(createUserMessage("again"))).rejects.toMatchObject({
 			code: "invalid_state",
 		});
+	});
+
+	it("allows a hook to request shutdown without deadlocking its operation", async () => {
+		const registration = newFaux();
+		let providerCalls = 0;
+		registration.setResponses([
+			() => {
+				providerCalls++;
+				return fauxAssistantMessage("must not run");
+			},
+		]);
+		const harness = new AgentHarness({
+			models,
+			session: new Session(new InMemorySessionStorage()),
+			model: registration.getModel(),
+		});
+		harness.on("before_agent_start", () => {
+			harness.requestShutdown();
+			return undefined;
+		});
+
+		await expect(harness.prompt("hello")).rejects.toMatchObject({ code: "invalid_state" });
+		await expect(harness.waitForShutdown()).resolves.toBeUndefined();
+		expect(providerCalls).toBe(0);
+	});
+
+	it("allows a subscriber to request shutdown without deadlocking its operation", async () => {
+		const registration = newFaux();
+		registration.setResponses([() => fauxAssistantMessage("reply")]);
+		const harness = new AgentHarness({
+			models,
+			session: new Session(new InMemorySessionStorage()),
+			model: registration.getModel(),
+		});
+		let subscriberCalls = 0;
+		harness.subscribe(() => {
+			subscriberCalls++;
+			harness.requestShutdown();
+		});
+
+		await expect(harness.prompt("hello")).resolves.toMatchObject({ role: "assistant", stopReason: "aborted" });
+		await expect(harness.waitForShutdown()).resolves.toBeUndefined();
+		expect(subscriberCalls).toBeGreaterThan(1);
 	});
 
 	it("does not start a provider request when shutdown occurs during before_agent_start", async () => {
@@ -202,7 +247,8 @@ describe("AgentHarness", () => {
 		await entered.promise;
 
 		let shutdownSettled = false;
-		const shutdown = harness.shutdown().then(() => {
+		harness.requestShutdown();
+		const shutdown = harness.waitForShutdown().then(() => {
 			shutdownSettled = true;
 		});
 		await Promise.resolve();
@@ -235,7 +281,8 @@ describe("AgentHarness", () => {
 		await entered.promise;
 
 		let shutdownSettled = false;
-		const shutdown = harness.shutdown().then(() => {
+		harness.requestShutdown();
+		const shutdown = harness.waitForShutdown().then(() => {
 			shutdownSettled = true;
 		});
 		await Promise.resolve();
@@ -271,7 +318,8 @@ describe("AgentHarness", () => {
 		await entered.promise;
 
 		let shutdownSettled = false;
-		const shutdown = harness.shutdown().then(() => {
+		harness.requestShutdown();
+		const shutdown = harness.waitForShutdown().then(() => {
 			shutdownSettled = true;
 		});
 		await Promise.resolve();
@@ -319,7 +367,8 @@ describe("AgentHarness", () => {
 		];
 		await storage.allWritesStarted.promise;
 
-		const shutdown = harness.shutdown();
+		harness.requestShutdown();
+		const shutdown = harness.waitForShutdown();
 		const firstSettlement = await Promise.race([
 			shutdown.then(() => "shutdown" as const),
 			new Promise<"writes-pending">((resolve) => setImmediate(() => resolve("writes-pending"))),
@@ -340,7 +389,8 @@ describe("AgentHarness", () => {
 			model: getModel("anthropic", "claude-sonnet-4-5"),
 		});
 
-		await harness.shutdown();
+		harness.requestShutdown();
+		await harness.waitForShutdown();
 
 		const messages = (await session.getEntries()).flatMap((entry) =>
 			entry.type === "message" ? [entry.message] : [],

@@ -1100,12 +1100,9 @@ export class AgentHarness<
 		this.streamOptions = cloneStreamOptions(streamOptions);
 	}
 
-	/**
-	 * Permanently stop this harness instance without deleting its durable session.
-	 * Clears queued work, aborts the active operation, and waits for it to settle.
-	 */
-	async shutdown(): Promise<void> {
-		if (this.shutdownPromise) return this.shutdownPromise;
+	/** Permanently stop this harness instance without deleting its durable session. */
+	requestShutdown(): void {
+		if (this.isShutdown) return;
 		this.isShutdown = true;
 		this.pendingSessionWrites = [];
 		this.steerQueue = [];
@@ -1113,7 +1110,11 @@ export class AgentHarness<
 		this.nextTurnQueue = [];
 		this.activeAbortController?.abort();
 		this.shutdownPromise = this.waitForTasks();
-		return this.shutdownPromise;
+	}
+
+	/** Waits for work active when shutdown was requested to settle. */
+	waitForShutdown(): Promise<void> {
+		return this.shutdownPromise ?? Promise.resolve();
 	}
 
 	async abort(): Promise<AbortResult> {

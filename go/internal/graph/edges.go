@@ -2,8 +2,8 @@ package graph
 
 import (
 	"path"
-	"regexp"
 
+	"github.com/draht-dev/draht/go/internal/extract"
 	"github.com/draht-dev/draht/go/internal/model"
 	"github.com/draht-dev/draht/go/internal/parse"
 )
@@ -146,15 +146,6 @@ func CollectUsedLocals(resolved []ResolvedImport) []UsedLocal {
 	return out
 }
 
-// callRegexEscape ports `/[.*+?^${}()|[\]\\]/g` — the character class of
-// regex metacharacters draht-tools.cjs escapes before building a per-local
-// call-site regex.
-var callRegexEscape = regexp.MustCompile(`[.*+?^${}()|[\]\\]`)
-
-func escapeForCallRegex(name string) string {
-	return callRegexEscape.ReplaceAllString(name, `\$0`)
-}
-
 // CallConfidence classifies one symbol's call-site usage
 // (draht-tools.cjs:2318-2321): INFERRED when the local name was seen at
 // least once as a direct call (`name(`); AMBIGUOUS when it was seen only as
@@ -166,45 +157,115 @@ func CallConfidence(hasDirectCall bool) string {
 	return model.ConfidenceAmbiguous
 }
 
-// callSiteMaxCount is the CJS engine's per-local call-site scan cap
-// (draht-tools.cjs:2316 `if (count > 100) break`), which stops counting
-// after the 101st match.
-const callSiteMaxCount = 101
-
-// BuildCallEdges scans rawContent — the module's UNSTRIPPED source, exactly
-// as cjs:2311 reads `file.content` (design §R10: this intentionally still
-// sees comments/strings; do not "fix" this by stripping first) — for call
-// sites of each UsedLocal, in the given order (see CollectUsedLocals). A
-// local with zero call-site hits produces no CallEdge. Counting is capped
-// at callSiteMaxCount.
-//
-// NOT currently invoked by the Phase-1 pipeline: design D3 keeps
-// callEdges[] a Phase-1-deferred, always-empty top-level array (computing
-// it for real requires keeping each module's raw source available at the
-// assemble stage, which the extraction cache deliberately does not
-// persist). Provided here as a tested, Phase-2-ready building block that
-// implements the full EXTRACTED/INFERRED/AMBIGUOUS confidence contract.
-func BuildCallEdges(fromID string, rawContent []byte, locals []UsedLocal) []model.CallEdge {
+// BuildCallEdges joins one module's resolved UsedLocal set (see
+// CollectUsedLocals — already deduplicated, first-position/last-value,
+// re-export imports excluded) with its cached per-local call-site scan
+// (extract.CallSite, computed once at extraction time against the module's
+// RAW source — see extract.ScanCallSites / extract.File) into
+// model.CallEdge records, preserving locals' order. A local absent from
+// sites, or present with zero recorded matches, produces no edge.
+func BuildCallEdges(fromID string, locals []UsedLocal, sites map[string]extract.CallSite) []model.CallEdge {
 	if len(locals) == 0 {
 		return nil
 	}
-	text := string(rawContent)
 	out := make([]model.CallEdge, 0, len(locals))
 	for _, l := range locals {
-		safe := escapeForCallRegex(l.Local)
-		callRe := regexp.MustCompile(`\b` + safe + `\s*(?:\.[A-Za-z_$][\w$]*\s*)?\(`)
-		count := len(callRe.FindAllStringIndex(text, callSiteMaxCount))
-		if count == 0 {
+		site, ok := sites[l.Local]
+		if !ok || site.Count == 0 {
 			continue
 		}
-		directRe := regexp.MustCompile(`\b` + safe + `\s*\(`)
 		out = append(out, model.CallEdge{
 			From:       fromID,
 			To:         l.Target,
 			Symbol:     l.ImportedName,
-			Count:      count,
-			Confidence: CallConfidence(directRe.MatchString(text)),
+			Count:      site.Count,
+			Confidence: CallConfidence(site.Direct),
 		})
+	}
+	return out
+}
+
+// BuildCallEdgesAll builds the full callEdges[] list for every TS/JS module
+// in mi, in modules order then usedLocals-insertion order (matching
+// draht-tools.cjs's own callEdges construction order). sitesByPath is each
+// module's extract.CallSite scan results (extract.Facts.CallSites), keyed
+// by the module's repo-relative path; a module absent from it (no TS/JS
+// imports, or extraction never ran) contributes no callEdges. Imports are
+// re-resolved here (cheap, pure — see ResolveImports) rather than sharing
+// BuildEdges' pass, so this function has no dependency on edges[]'s own
+// construction order.
+func BuildCallEdgesAll(mi []ModuleImports, resolver *Resolver, sitesByPath map[string][]extract.CallSite) []model.CallEdge {
+	out := make([]model.CallEdge, 0)
+	for _, m := range mi {
+		sitesSlice := sitesByPath[m.Path]
+		if len(sitesSlice) == 0 {
+			continue
+		}
+		fromDir := path.Dir(m.Path)
+		resolved := ResolveImports(m.Imports, fromDir, resolver)
+		locals := CollectUsedLocals(resolved)
+		if len(locals) == 0 {
+			continue
+		}
+		sites := make(map[string]extract.CallSite, len(sitesSlice))
+		for _, s := range sitesSlice {
+			sites[s.Local] = s
+		}
+		out = append(out, BuildCallEdges(m.Path, locals, sites)...)
+	}
+	return out
+}
+
+// ImportDegrees builds the test-INCLUDED import-edge degree maps
+// (draht-tools.cjs:2364-2371 inDeg/outDeg — distinct from rank.NonTestDegrees'
+// test-excluded inDegNT/outDegNT). Only edges with Kind == "import"
+// contribute; duplicate edges are counted, not deduplicated. Shared by
+// internal/container's topFiles ranking and internal/symindex's symbolIndex
+// ranking, which both use this exact (test-inclusive) pair in the CJS
+// source.
+func ImportDegrees(edges []model.Edge) (in, out map[string]int) {
+	in = make(map[string]int)
+	out = make(map[string]int)
+	for _, e := range edges {
+		if e.Kind != model.EdgeKindImport {
+			continue
+		}
+		out[e.From]++
+		in[e.To]++
+	}
+	return in, out
+}
+
+// Adjacency builds the directed, import+re-export reachability adjacency
+// (draht-tools.cjs:2515-2520 / 2547-2550's `adj`), in edges order, with
+// duplicates preserved. Used by internal/flow's BFS import-fallback.
+func Adjacency(edges []model.Edge) map[string][]string {
+	out := make(map[string][]string)
+	for _, e := range edges {
+		if e.Kind != model.EdgeKindImport && e.Kind != model.EdgeKindReExport {
+			continue
+		}
+		out[e.From] = append(out[e.From], e.To)
+	}
+	return out
+}
+
+// ReExportTargets extracts, per module id, the RESOLVED re-export target
+// ids in edges order with self-targets removed (draht-tools.cjs:2559-2571's
+// reExportTargetsByModule). edges is already built in modules-ASC x
+// parsedImports order, and re-export edges retain their relative
+// parsedImports order within that — so this needs no independent
+// re-resolution pass.
+func ReExportTargets(edges []model.Edge) map[string][]string {
+	out := make(map[string][]string)
+	for _, e := range edges {
+		if e.Kind != model.EdgeKindReExport {
+			continue
+		}
+		if e.To == e.From {
+			continue
+		}
+		out[e.From] = append(out[e.From], e.To)
 	}
 	return out
 }

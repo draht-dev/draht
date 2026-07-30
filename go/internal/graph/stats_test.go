@@ -78,11 +78,16 @@ func assetsHasKey(a model.Assets, key string) (int, bool) {
 	return 0, false
 }
 
-func TestBuildStatsPhase1ZerosStayZero(t *testing.T) {
+// TestBuildStatsZeroInputCountersStayZero asserts the Phase-2 rollup
+// counters (Containers/Groups/CallEdges/ContainerEdges/EntryPoints/
+// SinkModules) default to 0 when the caller supplies no StatsInput values
+// for them — BuildStats never invents a count on its own, it only echoes
+// what the caller (Assemble) computed elsewhere.
+func TestBuildStatsZeroInputCountersStayZero(t *testing.T) {
 	stats, _ := BuildStats(StatsInput{})
 	if stats.Containers != 0 || stats.Groups != 0 || stats.CallEdges != 0 ||
 		stats.ContainerEdges != 0 || stats.EntryPoints != 0 || stats.SinkModules != 0 {
-		t.Errorf("expected all Phase-1-deferred counters to be 0, got %+v", stats)
+		t.Errorf("expected all zero-input counters to be 0, got %+v", stats)
 	}
 }
 

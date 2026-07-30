@@ -1,31 +1,44 @@
 package model
 
-import "math"
+import (
+	"encoding/json"
+)
 
 // Map is the schemaVersion-5 MAP.json wire format. Field order below is the
 // declaration/emission order (28 top-level keys). Construct via NewMap();
-// never build a &Map{...} literal directly (see design §R5 — the 13
-// deferred array fields must be non-nil empty slices, not nil).
+// never build a &Map{...} literal directly (see design §R5 — every top-level
+// array field must be a non-nil empty slice, not nil, even when empty).
 type Map struct {
-	SchemaVersion         int                    `json:"schemaVersion"`
-	GeneratedAt           string                 `json:"generatedAt"`
-	BuildMs               int                    `json:"buildMs"`
-	Root                  string                 `json:"root"`
-	Stats                 Stats                  `json:"stats"`
-	Assets                Assets                 `json:"assets"`
-	Packages              []Package              `json:"packages"`
-	Groups                []Group                `json:"groups"`
-	Containers            []Container            `json:"containers"`
-	BoundedContexts       []Container            `json:"boundedContexts"` // aliases Containers at assembly time
-	Modules               []Module               `json:"modules"`
-	Edges                 []Edge                 `json:"edges"`
-	CallEdges             []CallEdge             `json:"callEdges"`
-	ContainerEdges        []ContainerEdge        `json:"containerEdges"`
-	EntryPoints           []EntryPointRef        `json:"entryPoints"`
-	Sinks                 []SinkModule           `json:"sinks"`
-	Flows                 []Flow                 `json:"flows"`
-	Lanes                 []Lane                 `json:"lanes"`
-	Boxes                 []Box                  `json:"boxes"`
+	SchemaVersion int       `json:"schemaVersion"`
+	GeneratedAt   string    `json:"generatedAt"`
+	BuildMs       int       `json:"buildMs"`
+	Root          string    `json:"root"`
+	Stats         Stats     `json:"stats"`
+	Assets        Assets    `json:"assets"`
+	Packages      []Package `json:"packages"`
+	// Groups is an ordered list of raw (unmarshalled-key-order-preserving)
+	// JSON objects, not a typed []Group: the GROUPS.json curation merge
+	// (Object.assign semantics) must round-trip arbitrary unknown user keys,
+	// which a typed struct would silently drop. See internal/container's
+	// RawObject / ApplyGroupsCuration.
+	Groups          []json.RawMessage `json:"groups"`
+	Containers      []Container       `json:"containers"`
+	BoundedContexts []Container       `json:"boundedContexts"` // aliases Containers at assembly time
+	Modules         []Module          `json:"modules"`
+	Edges           []Edge            `json:"edges"`
+	CallEdges       []CallEdge        `json:"callEdges"`
+	ContainerEdges  []ContainerEdge   `json:"containerEdges"`
+	EntryPoints     []EntryPointRef   `json:"entryPoints"`
+	Sinks           []SinkModule      `json:"sinks"`
+	// Flows is pre-marshaled JSON (see Groups' comment — internal/flow's
+	// FLOWS.json curation has the identical Object.assign contract).
+	Flows []json.RawMessage `json:"flows"`
+	Lanes []Lane            `json:"lanes"`
+	// Boxes is pre-marshaled JSON: internal/flow.Box has 3 distinct JSON key
+	// orders (actor/package/sink) via its own MarshalJSON, and model must
+	// not import internal/flow (model has zero non-stdlib imports by
+	// design).
+	Boxes                 []json.RawMessage      `json:"boxes"`
 	SymbolIndex           []SymbolIndexEntry     `json:"symbolIndex"`
 	SymbolIndexTruncated  bool                   `json:"symbolIndexTruncated"`
 	Hotspots              Hotspots               `json:"hotspots"`
@@ -53,7 +66,11 @@ type Module struct {
 	Routes     []Route           `json:"routes"`
 	EntryPoint *ModuleEntryPoint `json:"entryPoint"`
 	Layer      string            `json:"layer"`
-	// Depth and Cluster are always nil in Phase 1 (emitted as null).
+	// Depth is the multi-source BFS distance from the nearest entry point
+	// (nil/null when unreachable). Cluster is this module's structural
+	// (import-topology) neighborhood id (nil/null only when the module was
+	// never assigned one — unreachable in practice, every module lands in
+	// exactly one cluster).
 	Depth   *int    `json:"depth"`
 	Cluster *string `json:"cluster"`
 }
@@ -109,8 +126,8 @@ type Edge struct {
 	Resolved *bool `json:"resolved,omitempty"`
 }
 
-// CallEdge is one symbol-level call inference. Phase 1 always emits zero of
-// these (design stats.go: callEdges is a Phase-1 zero).
+// CallEdge is one symbol-level call inference: caller-file uses callee-
+// file's Symbol (draht-tools.cjs:2288-2327).
 type CallEdge struct {
 	From       string `json:"from"`
 	To         string `json:"to"`
@@ -119,8 +136,8 @@ type CallEdge struct {
 	Confidence string `json:"confidence"`
 }
 
-// ContainerEdge is one cross-package dataflow edge. Phase 1 always emits
-// zero of these.
+// ContainerEdge is one cross-package dataflow edge (draht-tools.cjs:2422-
+// 2496). There is deliberately no "confidence" field on this record.
 type ContainerEdge struct {
 	From          string   `json:"from"`
 	To            string   `json:"to"`
@@ -151,45 +168,11 @@ type SinkModule struct {
 	Sinks   []string `json:"sinks"`
 }
 
-// Flow is one named dataflow scenario.
-type Flow struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	Description    string     `json:"description"`
-	Entry          string     `json:"entry"`
-	EntryKind      string     `json:"entryKind"`
-	EntryContainer string     `json:"entryContainer"`
-	Steps          []FlowStep `json:"steps"`
-}
-
-// FlowStep is one numbered step within a Flow.
-type FlowStep struct {
-	N           int     `json:"n"`
-	From        string  `json:"from"`
-	To          string  `json:"to"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Symbol      string  `json:"symbol,omitempty"`
-	FromFile    *string `json:"fromFile"`
-	ToFile      *string `json:"toFile"`
-	BoxFrom     string  `json:"boxFrom"`
-	BoxTo       string  `json:"boxTo"`
-}
-
 // Lane is one swim-lane layout row.
 type Lane struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Color string `json:"color"`
-}
-
-// Box is one swim-lane layout node.
-type Box struct {
-	ID       string `json:"id"`
-	Lane     string `json:"lane"`
-	Title    string `json:"title"`
-	Sublabel string `json:"sublabel"`
-	Color    string `json:"color"`
 }
 
 // SymbolIndexEntry is one repo-wide symbol index item.
@@ -224,10 +207,13 @@ type GodNode struct {
 
 // Cluster is one structural (import-topology) neighborhood.
 type Cluster struct {
-	ID      string   `json:"id"`
-	Label   string   `json:"label"`
-	Size    int      `json:"size"`
-	Members []string `json:"members"`
+	ID              string   `json:"id"`
+	Label           string   `json:"label"`
+	Size            int      `json:"size"`
+	Members         []string `json:"members"`
+	DominantPackage *string  `json:"dominantPackage"` // nil -> null (only for an empty group; unreachable in practice)
+	DominantLayer   string   `json:"dominantLayer"`   // default "support"
+	Packages        []string `json:"packages"`        // sorted ASC, never nil (emit [] not null)
 }
 
 // SurprisingConnection flags an import edge that bridges distant clusters,
@@ -347,7 +333,7 @@ func NewMap() *Map {
 	return &Map{
 		SchemaVersion:         5,
 		Packages:              []Package{},
-		Groups:                []Group{},
+		Groups:                []json.RawMessage{},
 		Containers:            []Container{},
 		BoundedContexts:       []Container{},
 		Modules:               []Module{},
@@ -356,8 +342,8 @@ func NewMap() *Map {
 		ContainerEdges:        []ContainerEdge{},
 		EntryPoints:           []EntryPointRef{},
 		Sinks:                 []SinkModule{},
-		Flows:                 []Flow{},
-		Boxes:                 []Box{},
+		Flows:                 []json.RawMessage{},
+		Boxes:                 []json.RawMessage{},
 		SymbolIndex:           []SymbolIndexEntry{},
 		Clusters:              []Cluster{},
 		SurprisingConnections: []SurprisingConnection{},
@@ -415,12 +401,6 @@ func DefaultAgentHints() AgentHints {
 			"Query the map with `draht-tools graph-context|graph-impact|graph-query|graph-callers|graph-callees|graph-path|graph-hotspots|graph-clusters` instead of reading this whole file or grepping.",
 		},
 	}
-}
-
-// Round2 rounds f to 2 decimal places, matching the CJS engine's
-// `Math.round(x*100)/100`.
-func Round2(f float64) float64 {
-	return math.Round(f*100) / 100
 }
 
 // Str/Int/Bool are pointer constructors for optional JSON fields.

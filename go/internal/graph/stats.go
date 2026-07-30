@@ -21,21 +21,35 @@ type StatsInput struct {
 	LangCounts []scan.LangCount
 	// Truncated mirrors the walk's file-cap flag.
 	Truncated bool
+	// Containers/Groups/CallEdges/ContainerEdges/EntryPoints/SinkModules are
+	// the Phase-2 rollup counts (draht-tools.cjs:2205-2213): each is simply
+	// len() of the correspondingly-named top-level array. Zero (the Go zero
+	// value) when the caller has none — e.g. Assemble's own fixture-only
+	// callers that never populate those fields.
+	Containers     int
+	Groups         int
+	CallEdges      int
+	ContainerEdges int
+	EntryPoints    int
+	SinkModules    int
 }
 
 // BuildStats rolls up per-module and per-language counts into model.Stats /
-// model.Assets (draht-tools.cjs:2205-2213, 2885-2886, 2938-2960). Phase 1
-// zeros (design D3): Containers, Groups, CallEdges, ContainerEdges,
-// EntryPoints, SinkModules are left at their Go zero value (0) — those
-// top-level rollups are Phase-2 deferred.
+// model.Assets (draht-tools.cjs:2205-2213, 2885-2886, 2938-2960).
 func BuildStats(in StatsInput) (model.Stats, model.Assets) {
 	stats := model.Stats{
-		Files:     len(in.Modules),
-		Languages: model.NewOrderedCounts(),
-		Packages:  in.Packages,
-		Edges:     in.EdgeCount,
-		Layers:    model.NewOrderedCounts(),
-		Truncated: in.Truncated,
+		Files:          len(in.Modules),
+		Languages:      model.NewOrderedCounts(),
+		Packages:       in.Packages,
+		Edges:          in.EdgeCount,
+		Layers:         model.NewOrderedCounts(),
+		Truncated:      in.Truncated,
+		Containers:     in.Containers,
+		Groups:         in.Groups,
+		CallEdges:      in.CallEdges,
+		ContainerEdges: in.ContainerEdges,
+		EntryPoints:    in.EntryPoints,
+		SinkModules:    in.SinkModules,
 	}
 	assets := model.Assets{ByLanguage: model.NewOrderedCounts()}
 

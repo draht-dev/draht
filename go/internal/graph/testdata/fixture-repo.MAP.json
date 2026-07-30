@@ -16,12 +16,12 @@
       "rust": 1
     },
     "packages": 3,
-    "containers": 0,
-    "groups": 0,
+    "containers": 2,
+    "groups": 2,
     "edges": 8,
-    "callEdges": 0,
-    "containerEdges": 0,
-    "entryPoints": 0,
+    "callEdges": 3,
+    "containerEdges": 1,
+    "entryPoints": 2,
     "sinkModules": 0,
     "layers": {
       "support": 5,
@@ -76,9 +76,138 @@
       "workspaceDeps": []
     }
   ],
-  "groups": [],
-  "containers": [],
-  "boundedContexts": [],
+  "groups": [
+    {
+      "id": "group:frontend",
+      "name": "Frontend",
+      "color": "#79c0ff",
+      "description": "User-facing web surfaces",
+      "members": [
+        "pkg:@fixture/app"
+      ],
+      "source": "auto",
+      "moduleCount": 6
+    },
+    {
+      "id": "group:core",
+      "name": "Core",
+      "color": "#d2a8ff",
+      "description": "Cross-cutting libraries used everywhere",
+      "members": [
+        "pkg:@fixture/core"
+      ],
+      "source": "auto",
+      "moduleCount": 2
+    }
+  ],
+  "containers": [
+    {
+      "id": "pkg:@fixture/app",
+      "name": "@fixture/app",
+      "path": "packages/app",
+      "kind": "package",
+      "description": null,
+      "moduleCount": 6,
+      "groupId": "group:frontend",
+      "topFiles": [
+        {
+          "path": "packages/app/src/main.ts",
+          "reason": "library entry",
+          "score": 12.46,
+          "loc": 21
+        },
+        {
+          "path": "packages/app/src/lazy.ts",
+          "reason": "core file",
+          "score": 6.17,
+          "loc": 5
+        },
+        {
+          "path": "packages/app/src/Widget.tsx",
+          "reason": "core file",
+          "score": 4.17,
+          "loc": 8
+        }
+      ]
+    },
+    {
+      "id": "pkg:@fixture/core",
+      "name": "@fixture/core",
+      "path": "packages/core",
+      "kind": "package",
+      "description": null,
+      "moduleCount": 2,
+      "groupId": "group:core",
+      "topFiles": [
+        {
+          "path": "packages/core/src/index.ts",
+          "reason": "library entry",
+          "score": 13.91,
+          "loc": 4
+        },
+        {
+          "path": "packages/core/src/utils.ts",
+          "reason": "core file",
+          "score": 4.58,
+          "loc": 5
+        }
+      ]
+    }
+  ],
+  "boundedContexts": [
+    {
+      "id": "pkg:@fixture/app",
+      "name": "@fixture/app",
+      "path": "packages/app",
+      "kind": "package",
+      "description": null,
+      "moduleCount": 6,
+      "groupId": "group:frontend",
+      "topFiles": [
+        {
+          "path": "packages/app/src/main.ts",
+          "reason": "library entry",
+          "score": 12.46,
+          "loc": 21
+        },
+        {
+          "path": "packages/app/src/lazy.ts",
+          "reason": "core file",
+          "score": 6.17,
+          "loc": 5
+        },
+        {
+          "path": "packages/app/src/Widget.tsx",
+          "reason": "core file",
+          "score": 4.17,
+          "loc": 8
+        }
+      ]
+    },
+    {
+      "id": "pkg:@fixture/core",
+      "name": "@fixture/core",
+      "path": "packages/core",
+      "kind": "package",
+      "description": null,
+      "moduleCount": 2,
+      "groupId": "group:core",
+      "topFiles": [
+        {
+          "path": "packages/core/src/index.ts",
+          "reason": "library entry",
+          "score": 13.91,
+          "loc": 4
+        },
+        {
+          "path": "packages/core/src/utils.ts",
+          "reason": "core file",
+          "score": 4.58,
+          "loc": 5
+        }
+      ]
+    }
+  ],
   "modules": [
     {
       "id": "cmd/tool/main.go",
@@ -103,7 +232,7 @@
       "entryPoint": null,
       "layer": "support",
       "depth": null,
-      "cluster": null
+      "cluster": "cluster:cmd/tool"
     },
     {
       "id": "packages/app/src/Widget.tsx",
@@ -135,7 +264,7 @@
       "entryPoint": null,
       "layer": "application",
       "depth": null,
-      "cluster": null
+      "cluster": "cluster:packages/app/src"
     },
     {
       "id": "packages/app/src/huge.ts",
@@ -153,7 +282,7 @@
       "entryPoint": null,
       "layer": "support",
       "depth": null,
-      "cluster": null
+      "cluster": "cluster:packages/app/src:2"
     },
     {
       "id": "packages/app/src/lazy.ts",
@@ -184,8 +313,8 @@
       "routes": [],
       "entryPoint": null,
       "layer": "application",
-      "depth": null,
-      "cluster": null
+      "depth": 1,
+      "cluster": "cluster:packages/app/src:3"
     },
     {
       "id": "packages/app/src/legacy.js",
@@ -202,8 +331,8 @@
       "routes": [],
       "entryPoint": null,
       "layer": "support",
-      "depth": null,
-      "cluster": null
+      "depth": 1,
+      "cluster": "cluster:packages/app/src:4"
     },
     {
       "id": "packages/app/src/main.test.ts",
@@ -221,7 +350,7 @@
       "entryPoint": null,
       "layer": "support",
       "depth": null,
-      "cluster": null
+      "cluster": "cluster:packages/app/src:5"
     },
     {
       "id": "packages/app/src/main.ts",
@@ -255,8 +384,8 @@
         "name": "@fixture/app"
       },
       "layer": "presentation",
-      "depth": null,
-      "cluster": null
+      "depth": 0,
+      "cluster": "cluster:packages/app/src:6"
     },
     {
       "id": "packages/core/src/index.ts",
@@ -276,8 +405,8 @@
         "name": "@fixture/core"
       },
       "layer": "support",
-      "depth": null,
-      "cluster": null
+      "depth": 0,
+      "cluster": "cluster:packages/core/src"
     },
     {
       "id": "packages/core/src/utils.ts",
@@ -308,8 +437,8 @@
       "routes": [],
       "entryPoint": null,
       "layer": "application",
-      "depth": null,
-      "cluster": null
+      "depth": 1,
+      "cluster": "cluster:packages/core/src:2"
     },
     {
       "id": "scripts/build.py",
@@ -341,7 +470,7 @@
       "entryPoint": null,
       "layer": "application",
       "depth": null,
-      "cluster": null
+      "cluster": "cluster:scripts"
     },
     {
       "id": "src/lib.rs",
@@ -373,7 +502,7 @@
       "entryPoint": null,
       "layer": "application",
       "depth": null,
-      "cluster": null
+      "cluster": "cluster:src"
     }
   ],
   "edges": [
@@ -428,11 +557,119 @@
       "confidence": "EXTRACTED"
     }
   ],
-  "callEdges": [],
-  "containerEdges": [],
-  "entryPoints": [],
+  "callEdges": [
+    {
+      "from": "packages/app/src/Widget.tsx",
+      "to": "packages/app/src/lazy.ts",
+      "symbol": "lazyValue",
+      "count": 1,
+      "confidence": "INFERRED"
+    },
+    {
+      "from": "packages/app/src/main.test.ts",
+      "to": "packages/core/src/index.ts",
+      "symbol": "helper",
+      "count": 1,
+      "confidence": "INFERRED"
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "packages/core/src/index.ts",
+      "symbol": "helper",
+      "count": 1,
+      "confidence": "INFERRED"
+    }
+  ],
+  "containerEdges": [
+    {
+      "from": "pkg:@fixture/app",
+      "to": "pkg:@fixture/core",
+      "count": 2,
+      "callCount": 2,
+      "label": "Uses",
+      "labels": [
+        "Uses"
+      ],
+      "symbolSamples": [
+        "helper"
+      ]
+    }
+  ],
+  "entryPoints": [
+    {
+      "id": "packages/app/src/main.ts",
+      "path": "packages/app/src/main.ts",
+      "package": "@fixture/app",
+      "kind": "library",
+      "name": "@fixture/app",
+      "routes": null
+    },
+    {
+      "id": "packages/core/src/index.ts",
+      "path": "packages/core/src/index.ts",
+      "package": "@fixture/core",
+      "kind": "library",
+      "name": "@fixture/core",
+      "routes": null
+    }
+  ],
   "sinks": [],
-  "flows": [],
+  "flows": [
+    {
+      "id": "flow:packages/app/src/main.ts",
+      "name": "@fixture/app (library)",
+      "description": "Library consumer imports from this entry. The trace shows what the entry exposes and which downstream side effects it can produce.",
+      "entry": "packages/app/src/main.ts",
+      "entryKind": "library",
+      "entryContainer": "pkg:@fixture/app",
+      "steps": [
+        {
+          "n": 1,
+          "from": "actor:user",
+          "to": "pkg:@fixture/app",
+          "title": "call @fixture/app",
+          "description": "Library consumer imports from packages/app/src/main.ts. Exposes function `run`.",
+          "fromFile": null,
+          "toFile": "packages/app/src/main.ts",
+          "boxFrom": "actor:user",
+          "boxTo": "pkg:@fixture/app"
+        },
+        {
+          "n": 2,
+          "from": "pkg:@fixture/app",
+          "to": "pkg:@fixture/core",
+          "boxFrom": "pkg:@fixture/app",
+          "boxTo": "pkg:@fixture/core",
+          "title": "helper() in index.ts",
+          "description": "src/main.ts calls `helper()` in src/index.ts.",
+          "symbol": "helper",
+          "fromFile": "packages/app/src/main.ts",
+          "toFile": "packages/core/src/index.ts"
+        }
+      ]
+    },
+    {
+      "id": "flow:packages/core/src/index.ts",
+      "name": "@fixture/core (library)",
+      "description": "Library consumer imports from this entry. The trace shows what the entry exposes and which downstream side effects it can produce.",
+      "entry": "packages/core/src/index.ts",
+      "entryKind": "library",
+      "entryContainer": "pkg:@fixture/core",
+      "steps": [
+        {
+          "n": 1,
+          "from": "actor:user",
+          "to": "pkg:@fixture/core",
+          "title": "call @fixture/core",
+          "description": "Library consumer imports from packages/core/src/index.ts.",
+          "fromFile": null,
+          "toFile": "packages/core/src/index.ts",
+          "boxFrom": "actor:user",
+          "boxTo": "pkg:@fixture/core"
+        }
+      ]
+    }
+  ],
   "lanes": [
     {
       "id": "actor",
@@ -465,17 +702,686 @@
       "color": "#ff7b72"
     }
   ],
-  "boxes": [],
-  "symbolIndex": [],
+  "boxes": [
+    {
+      "id": "actor:user",
+      "lane": "actor",
+      "title": "User",
+      "sublabel": "CLI / HTTP / library caller",
+      "color": "#ff9bd4"
+    },
+    {
+      "id": "pkg:@fixture/app",
+      "lane": "application",
+      "title": "@fixture/app",
+      "sublabel": "6 modules · 1 entry",
+      "color": "#8b949e",
+      "kind": "package",
+      "moduleCount": 6,
+      "hasEntry": true,
+      "sinks": []
+    },
+    {
+      "id": "pkg:@fixture/core",
+      "lane": "application",
+      "title": "@fixture/core",
+      "sublabel": "2 modules · 1 entry",
+      "color": "#7ee787",
+      "kind": "package",
+      "moduleCount": 2,
+      "hasEntry": true,
+      "sinks": []
+    }
+  ],
+  "symbolIndex": [
+    {
+      "name": "lazyValue",
+      "kind": "function",
+      "line": 2,
+      "file": "packages/app/src/lazy.ts",
+      "package": "@fixture/app",
+      "exported": true
+    },
+    {
+      "name": "Widget",
+      "kind": "function",
+      "line": 5,
+      "file": "packages/app/src/Widget.tsx",
+      "package": "@fixture/app",
+      "exported": true
+    },
+    {
+      "name": "run",
+      "kind": "function",
+      "line": 10,
+      "file": "packages/app/src/main.ts",
+      "package": "@fixture/app",
+      "exported": true
+    },
+    {
+      "name": "helper",
+      "kind": "function",
+      "line": 2,
+      "file": "packages/core/src/utils.ts",
+      "package": "@fixture/core",
+      "exported": true
+    },
+    {
+      "name": "main",
+      "kind": "def",
+      "line": 11,
+      "file": "scripts/build.py",
+      "package": "fixture-monorepo",
+      "exported": true
+    },
+    {
+      "name": "count",
+      "kind": "rust-pub",
+      "line": 4,
+      "file": "src/lib.rs",
+      "package": "fixture-monorepo",
+      "exported": true
+    }
+  ],
   "symbolIndexTruncated": false,
   "hotspots": {
-    "godNodes": null,
-    "mostDependedOn": null,
-    "orchestrators": null,
-    "largest": null
+    "godNodes": [
+      {
+        "id": "packages/app/src/main.ts",
+        "path": "packages/app/src/main.ts",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 3,
+        "loc": 21,
+        "score": 7.46,
+        "reason": "0 dependents · 3 deps"
+      },
+      {
+        "id": "packages/app/src/lazy.ts",
+        "path": "packages/app/src/lazy.ts",
+        "package": "@fixture/app",
+        "inDegree": 2,
+        "outDegree": 0,
+        "loc": 5,
+        "score": 6.58,
+        "reason": "2 dependents · 0 deps"
+      },
+      {
+        "id": "packages/app/src/legacy.js",
+        "path": "packages/app/src/legacy.js",
+        "package": "@fixture/app",
+        "inDegree": 1,
+        "outDegree": 0,
+        "loc": 6,
+        "score": 4.81,
+        "reason": "1 dependents · 0 deps"
+      },
+      {
+        "id": "packages/core/src/index.ts",
+        "path": "packages/core/src/index.ts",
+        "package": "@fixture/core",
+        "inDegree": 1,
+        "outDegree": 0,
+        "loc": 4,
+        "score": 4.32,
+        "reason": "1 dependents · 0 deps"
+      },
+      {
+        "id": "packages/app/src/Widget.tsx",
+        "path": "packages/app/src/Widget.tsx",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 1,
+        "loc": 8,
+        "score": 4.17,
+        "reason": "0 dependents · 1 deps"
+      },
+      {
+        "id": "scripts/build.py",
+        "path": "scripts/build.py",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 17,
+        "score": 4.17,
+        "reason": "0 dependents · 0 deps"
+      },
+      {
+        "id": "cmd/tool/main.go",
+        "path": "cmd/tool/main.go",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 13,
+        "score": 3.81,
+        "reason": "0 dependents · 0 deps"
+      },
+      {
+        "id": "src/lib.rs",
+        "path": "src/lib.rs",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 7,
+        "score": 3,
+        "reason": "0 dependents · 0 deps"
+      },
+      {
+        "id": "packages/core/src/utils.ts",
+        "path": "packages/core/src/utils.ts",
+        "package": "@fixture/core",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 5,
+        "score": 2.58,
+        "reason": "0 dependents · 0 deps"
+      },
+      {
+        "id": "packages/app/src/huge.ts",
+        "path": "packages/app/src/huge.ts",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 0,
+        "score": 0,
+        "reason": "0 dependents · 0 deps"
+      }
+    ],
+    "mostDependedOn": [
+      {
+        "id": "packages/app/src/lazy.ts",
+        "path": "packages/app/src/lazy.ts",
+        "package": "@fixture/app",
+        "inDegree": 2,
+        "outDegree": 0,
+        "loc": 5,
+        "score": 2,
+        "reason": "2 dependents"
+      },
+      {
+        "id": "packages/app/src/legacy.js",
+        "path": "packages/app/src/legacy.js",
+        "package": "@fixture/app",
+        "inDegree": 1,
+        "outDegree": 0,
+        "loc": 6,
+        "score": 1,
+        "reason": "1 dependents"
+      },
+      {
+        "id": "packages/core/src/index.ts",
+        "path": "packages/core/src/index.ts",
+        "package": "@fixture/core",
+        "inDegree": 1,
+        "outDegree": 0,
+        "loc": 4,
+        "score": 1,
+        "reason": "1 dependents"
+      },
+      {
+        "id": "cmd/tool/main.go",
+        "path": "cmd/tool/main.go",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 13,
+        "score": 0,
+        "reason": "0 dependents"
+      },
+      {
+        "id": "packages/app/src/Widget.tsx",
+        "path": "packages/app/src/Widget.tsx",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 1,
+        "loc": 8,
+        "score": 0,
+        "reason": "0 dependents"
+      },
+      {
+        "id": "packages/app/src/huge.ts",
+        "path": "packages/app/src/huge.ts",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 0,
+        "score": 0,
+        "reason": "0 dependents"
+      },
+      {
+        "id": "packages/app/src/main.ts",
+        "path": "packages/app/src/main.ts",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 3,
+        "loc": 21,
+        "score": 0,
+        "reason": "0 dependents"
+      },
+      {
+        "id": "packages/core/src/utils.ts",
+        "path": "packages/core/src/utils.ts",
+        "package": "@fixture/core",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 5,
+        "score": 0,
+        "reason": "0 dependents"
+      },
+      {
+        "id": "scripts/build.py",
+        "path": "scripts/build.py",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 17,
+        "score": 0,
+        "reason": "0 dependents"
+      },
+      {
+        "id": "src/lib.rs",
+        "path": "src/lib.rs",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 7,
+        "score": 0,
+        "reason": "0 dependents"
+      }
+    ],
+    "orchestrators": [
+      {
+        "id": "packages/app/src/main.ts",
+        "path": "packages/app/src/main.ts",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 3,
+        "loc": 21,
+        "score": 3,
+        "reason": "imports 3 modules"
+      },
+      {
+        "id": "packages/app/src/Widget.tsx",
+        "path": "packages/app/src/Widget.tsx",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 1,
+        "loc": 8,
+        "score": 1,
+        "reason": "imports 1 modules"
+      },
+      {
+        "id": "cmd/tool/main.go",
+        "path": "cmd/tool/main.go",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 13,
+        "score": 0,
+        "reason": "imports 0 modules"
+      },
+      {
+        "id": "packages/app/src/huge.ts",
+        "path": "packages/app/src/huge.ts",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 0,
+        "score": 0,
+        "reason": "imports 0 modules"
+      },
+      {
+        "id": "packages/app/src/lazy.ts",
+        "path": "packages/app/src/lazy.ts",
+        "package": "@fixture/app",
+        "inDegree": 2,
+        "outDegree": 0,
+        "loc": 5,
+        "score": 0,
+        "reason": "imports 0 modules"
+      },
+      {
+        "id": "packages/app/src/legacy.js",
+        "path": "packages/app/src/legacy.js",
+        "package": "@fixture/app",
+        "inDegree": 1,
+        "outDegree": 0,
+        "loc": 6,
+        "score": 0,
+        "reason": "imports 0 modules"
+      },
+      {
+        "id": "packages/core/src/index.ts",
+        "path": "packages/core/src/index.ts",
+        "package": "@fixture/core",
+        "inDegree": 1,
+        "outDegree": 0,
+        "loc": 4,
+        "score": 0,
+        "reason": "imports 0 modules"
+      },
+      {
+        "id": "packages/core/src/utils.ts",
+        "path": "packages/core/src/utils.ts",
+        "package": "@fixture/core",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 5,
+        "score": 0,
+        "reason": "imports 0 modules"
+      },
+      {
+        "id": "scripts/build.py",
+        "path": "scripts/build.py",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 17,
+        "score": 0,
+        "reason": "imports 0 modules"
+      },
+      {
+        "id": "src/lib.rs",
+        "path": "src/lib.rs",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 7,
+        "score": 0,
+        "reason": "imports 0 modules"
+      }
+    ],
+    "largest": [
+      {
+        "id": "packages/app/src/main.ts",
+        "path": "packages/app/src/main.ts",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 3,
+        "loc": 21,
+        "score": 21,
+        "reason": "21 LOC"
+      },
+      {
+        "id": "scripts/build.py",
+        "path": "scripts/build.py",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 17,
+        "score": 17,
+        "reason": "17 LOC"
+      },
+      {
+        "id": "cmd/tool/main.go",
+        "path": "cmd/tool/main.go",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 13,
+        "score": 13,
+        "reason": "13 LOC"
+      },
+      {
+        "id": "packages/app/src/Widget.tsx",
+        "path": "packages/app/src/Widget.tsx",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 1,
+        "loc": 8,
+        "score": 8,
+        "reason": "8 LOC"
+      },
+      {
+        "id": "src/lib.rs",
+        "path": "src/lib.rs",
+        "package": "fixture-monorepo",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 7,
+        "score": 7,
+        "reason": "7 LOC"
+      },
+      {
+        "id": "packages/app/src/legacy.js",
+        "path": "packages/app/src/legacy.js",
+        "package": "@fixture/app",
+        "inDegree": 1,
+        "outDegree": 0,
+        "loc": 6,
+        "score": 6,
+        "reason": "6 LOC"
+      },
+      {
+        "id": "packages/app/src/lazy.ts",
+        "path": "packages/app/src/lazy.ts",
+        "package": "@fixture/app",
+        "inDegree": 2,
+        "outDegree": 0,
+        "loc": 5,
+        "score": 5,
+        "reason": "5 LOC"
+      },
+      {
+        "id": "packages/core/src/utils.ts",
+        "path": "packages/core/src/utils.ts",
+        "package": "@fixture/core",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 5,
+        "score": 5,
+        "reason": "5 LOC"
+      },
+      {
+        "id": "packages/core/src/index.ts",
+        "path": "packages/core/src/index.ts",
+        "package": "@fixture/core",
+        "inDegree": 1,
+        "outDegree": 0,
+        "loc": 4,
+        "score": 4,
+        "reason": "4 LOC"
+      },
+      {
+        "id": "packages/app/src/huge.ts",
+        "path": "packages/app/src/huge.ts",
+        "package": "@fixture/app",
+        "inDegree": 0,
+        "outDegree": 0,
+        "loc": 0,
+        "score": 0,
+        "reason": "0 LOC"
+      }
+    ]
   },
-  "clusters": [],
-  "surprisingConnections": [],
+  "clusters": [
+    {
+      "id": "cluster:cmd/tool",
+      "label": "cmd/tool",
+      "size": 1,
+      "members": [
+        "cmd/tool/main.go"
+      ],
+      "dominantPackage": "fixture-monorepo",
+      "dominantLayer": "support",
+      "packages": [
+        "fixture-monorepo"
+      ]
+    },
+    {
+      "id": "cluster:packages/app/src",
+      "label": "app/src",
+      "size": 1,
+      "members": [
+        "packages/app/src/Widget.tsx"
+      ],
+      "dominantPackage": "@fixture/app",
+      "dominantLayer": "application",
+      "packages": [
+        "@fixture/app"
+      ]
+    },
+    {
+      "id": "cluster:packages/app/src:2",
+      "label": "app/src",
+      "size": 1,
+      "members": [
+        "packages/app/src/huge.ts"
+      ],
+      "dominantPackage": "@fixture/app",
+      "dominantLayer": "support",
+      "packages": [
+        "@fixture/app"
+      ]
+    },
+    {
+      "id": "cluster:packages/app/src:3",
+      "label": "app/src",
+      "size": 1,
+      "members": [
+        "packages/app/src/lazy.ts"
+      ],
+      "dominantPackage": "@fixture/app",
+      "dominantLayer": "application",
+      "packages": [
+        "@fixture/app"
+      ]
+    },
+    {
+      "id": "cluster:packages/app/src:4",
+      "label": "app/src",
+      "size": 1,
+      "members": [
+        "packages/app/src/legacy.js"
+      ],
+      "dominantPackage": "@fixture/app",
+      "dominantLayer": "support",
+      "packages": [
+        "@fixture/app"
+      ]
+    },
+    {
+      "id": "cluster:packages/app/src:5",
+      "label": "app/src",
+      "size": 1,
+      "members": [
+        "packages/app/src/main.test.ts"
+      ],
+      "dominantPackage": "@fixture/app",
+      "dominantLayer": "support",
+      "packages": [
+        "@fixture/app"
+      ]
+    },
+    {
+      "id": "cluster:packages/app/src:6",
+      "label": "app/src",
+      "size": 1,
+      "members": [
+        "packages/app/src/main.ts"
+      ],
+      "dominantPackage": "@fixture/app",
+      "dominantLayer": "presentation",
+      "packages": [
+        "@fixture/app"
+      ]
+    },
+    {
+      "id": "cluster:packages/core/src",
+      "label": "core/src",
+      "size": 1,
+      "members": [
+        "packages/core/src/index.ts"
+      ],
+      "dominantPackage": "@fixture/core",
+      "dominantLayer": "support",
+      "packages": [
+        "@fixture/core"
+      ]
+    },
+    {
+      "id": "cluster:packages/core/src:2",
+      "label": "core/src",
+      "size": 1,
+      "members": [
+        "packages/core/src/utils.ts"
+      ],
+      "dominantPackage": "@fixture/core",
+      "dominantLayer": "application",
+      "packages": [
+        "@fixture/core"
+      ]
+    },
+    {
+      "id": "cluster:scripts",
+      "label": "scripts",
+      "size": 1,
+      "members": [
+        "scripts/build.py"
+      ],
+      "dominantPackage": "fixture-monorepo",
+      "dominantLayer": "application",
+      "packages": [
+        "fixture-monorepo"
+      ]
+    },
+    {
+      "id": "cluster:src",
+      "label": "src",
+      "size": 1,
+      "members": [
+        "src/lib.rs"
+      ],
+      "dominantPackage": "fixture-monorepo",
+      "dominantLayer": "application",
+      "packages": [
+        "fixture-monorepo"
+      ]
+    }
+  ],
+  "surprisingConnections": [
+    {
+      "from": "packages/app/src/main.test.ts",
+      "to": "packages/core/src/index.ts",
+      "score": 3,
+      "reason": "bridge, cross-group",
+      "sampleSymbols": [
+        "helper"
+      ]
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "packages/core/src/index.ts",
+      "score": 3,
+      "reason": "bridge, cross-group",
+      "sampleSymbols": [
+        "helper"
+      ]
+    },
+    {
+      "from": "packages/app/src/Widget.tsx",
+      "to": "packages/app/src/lazy.ts",
+      "score": 2,
+      "reason": "bridge",
+      "sampleSymbols": [
+        "lazyValue"
+      ]
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "packages/app/src/lazy.ts",
+      "score": 2,
+      "reason": "bridge",
+      "sampleSymbols": []
+    },
+    {
+      "from": "packages/app/src/main.ts",
+      "to": "packages/app/src/legacy.js",
+      "score": 2,
+      "reason": "bridge",
+      "sampleSymbols": []
+    }
+  ],
   "rationaleIndex": [],
   "tests": {
     "total": 0,

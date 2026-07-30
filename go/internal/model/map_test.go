@@ -71,23 +71,6 @@ func TestEntryPointRefRoutesNullNotEmpty(t *testing.T) {
 	}
 }
 
-func TestRound2(t *testing.T) {
-	cases := []struct {
-		in   float64
-		want float64
-	}{
-		{144, 144},
-		{293.6149, 293.61},
-		{0, 0},
-		{2.345, 2.35}, // round-half-away-from-zero, matching Math.round semantics
-	}
-	for _, c := range cases {
-		if got := Round2(c.in); got != c.want {
-			t.Errorf("Round2(%v) = %v, want %v", c.in, got, c.want)
-		}
-	}
-}
-
 func TestPointerConstructors(t *testing.T) {
 	if s := Str("x"); s == nil || *s != "x" {
 		t.Errorf("Str(%q) = %v", "x", s)

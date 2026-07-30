@@ -8,11 +8,14 @@ import (
 )
 
 // FactsSchema is bumped whenever the on-disk shape of Facts changes.
-const FactsSchema = 1
+// Bumped 1 -> 2 for Phase 2's CallSites field (design's WP2 callEdges
+// rewiring — invalidates every cached entry exactly once).
+const FactsSchema = 2
 
 // Version identifies the regex extractors (exports/symbols/sinks/routes).
-// Bump on ANY behaviour change. Feeds cache.ComposeVersion.
-const Version = "x1"
+// Bump on ANY behaviour change. Feeds cache.ComposeVersion. Bumped "x1" ->
+// "x2" alongside FactsSchema for the same reason.
+const Version = "x2"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no
@@ -26,7 +29,14 @@ type Facts struct {
 	Sinks     []string       `json:"snk,omitempty"` // deduped, SinkPatterns order
 	SinkSites []SinkSite     `json:"sst,omitempty"` // UNTRUNCATED (max 2 per kind from CJS)
 	Routes    []Route        `json:"rt,omitempty"`  // UNTRUNCATED (cap 40 from CJS)
-	Degraded  bool           `json:"deg,omitempty"`
+	// CallSites is the per-import-local call-site scan (TS/JS only — see
+	// File), computed against RAW (unstripped) content for every distinct
+	// local name introduced by a non-re-export import, regardless of
+	// whether that import later turns out to resolve (design WP2: a
+	// harmless superset, since assemble-time joins this against the
+	// actually-resolved UsedLocal set by name).
+	CallSites []CallSite `json:"cs,omitempty"`
+	Degraded  bool       `json:"deg,omitempty"`
 }
 
 // Export is one exported declaration. Doc is "" when the CJS emits JSON

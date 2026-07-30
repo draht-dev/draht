@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -25,22 +26,24 @@ import (
 // captured snapshot.
 var parityMapFlag = flag.String("parity-map", "", "path to a pre-generated CJS MAP.json to compare against (optional; the test generates its own via `node .../draht-tools.cjs map-graph` when unset)")
 
-// TestParity_RegexParserMatchesCJSEngine is the G5 acceptance gate the
-// review flagged as missing: Go(--parser=regex) vs the CJS engine's
-// MAP.json, on modules[]/packages[]/edges[]/root/a stats subset. It uses
-// the regex parser (not the default tree-sitter one) because
-// parse.NewRegex is documented as "the byte-parity oracle for
-// --parser=regex" — a verbatim port of the CJS engine's own import-regex
-// logic — so this test's whole point is comparing that port against its
-// original, not comparing tree-sitter's (deliberately richer, D2-scoped)
-// AST-based extraction against a regex-era baseline.
+// TestParity_RegexParserMatchesCJSEngine is the G5 acceptance gate: Go
+// (--parser=regex) vs the CJS engine's MAP.json. It uses the regex parser
+// (not the default tree-sitter one) because parse.NewRegex is documented as
+// "the byte-parity oracle for --parser=regex" — a verbatim port of the CJS
+// engine's own import-regex logic — so this test's whole point is comparing
+// that port against its original, not comparing tree-sitter's (deliberately
+// richer, D2-scoped) AST-based extraction against a regex-era baseline (see
+// testdata/ts-vs-regex-edges.md for that separate, expected delta, which
+// only applies to the default --parser=treesitter build).
 //
-// modules[].depth and modules[].cluster are excluded from the comparison:
-// design §3 delta 2 requires Phase 1 to always emit them as null (Phase-2
-// deferred — see stats.go/map.go's "design D3" scope notes), while the CJS
-// engine computes real values for both. That is a documented, intentional
-// Phase-1 scope gap, not a parity bug; comparing them would make this test
-// permanently and uninformatively red.
+// This gate covers every field Phase 2 added — groups, containers,
+// boundedContexts, callEdges, containerEdges, entryPoints, sinks, flows,
+// lanes, boxes, symbolIndex, clusters, surprisingConnections,
+// rationaleIndex, hotspots — plus modules[*].depth/cluster, in addition to
+// the original Phase 1 root/packages/modules/edges/stats-subset coverage.
+// Nothing here is normalized away or excluded: every one of these fields is
+// real in both engines' output for this repo, and this test asserts they
+// match.
 func TestParity_RegexParserMatchesCJSEngine(t *testing.T) {
 	if os.Getenv("PARITY_SKIP") != "" {
 		t.Skip("PARITY_SKIP set")
@@ -57,6 +60,29 @@ func TestParity_RegexParserMatchesCJSEngine(t *testing.T) {
 	comparePackages(t, cjsMap.Packages, goMap.Packages)
 	compareModules(t, cjsMap.Modules, goMap.Modules)
 	compareEdges(t, cjsMap.Edges, goMap.Edges)
+
+	compareOrdered(t, "callEdges", cjsMap.CallEdges, goMap.CallEdges)
+	compareOrdered(t, "containerEdges", cjsMap.ContainerEdges, goMap.ContainerEdges)
+	compareOrdered(t, "containers", cjsMap.Containers, goMap.Containers)
+	compareOrdered(t, "boundedContexts", cjsMap.BoundedContexts, goMap.BoundedContexts)
+	compareOrdered(t, "entryPoints", cjsMap.EntryPoints, goMap.EntryPoints)
+	compareOrdered(t, "sinks", cjsMap.Sinks, goMap.Sinks)
+	compareOrdered(t, "lanes", cjsMap.Lanes, goMap.Lanes)
+	compareOrdered(t, "symbolIndex", cjsMap.SymbolIndex, goMap.SymbolIndex)
+	compareOrdered(t, "clusters", cjsMap.Clusters, goMap.Clusters)
+	compareOrdered(t, "surprisingConnections", cjsMap.SurprisingConnections, goMap.SurprisingConnections)
+	compareOrdered(t, "rationaleIndex", cjsMap.RationaleIndex, goMap.RationaleIndex)
+	compareOrdered(t, "hotspots.godNodes", cjsMap.Hotspots.GodNodes, goMap.Hotspots.GodNodes)
+	compareOrdered(t, "hotspots.mostDependedOn", cjsMap.Hotspots.MostDependedOn, goMap.Hotspots.MostDependedOn)
+	compareOrdered(t, "hotspots.orchestrators", cjsMap.Hotspots.Orchestrators, goMap.Hotspots.Orchestrators)
+	compareOrdered(t, "hotspots.largest", cjsMap.Hotspots.Largest, goMap.Hotspots.Largest)
+	if cjsMap.SymbolIndexTruncated != goMap.SymbolIndexTruncated {
+		t.Errorf("symbolIndexTruncated: cjs=%v go=%v", cjsMap.SymbolIndexTruncated, goMap.SymbolIndexTruncated)
+	}
+
+	compareRawJSON(t, "groups", cjsMap.Groups, goMap.Groups)
+	compareRawJSON(t, "flows", cjsMap.Flows, goMap.Flows)
+	compareRawJSON(t, "boxes", cjsMap.Boxes, goMap.Boxes)
 
 	// Stats SUBSET only (not the full Stats struct): Files/TotalLoc/Edges/
 	// Packages are the fields directly derived from the module/edge/package
@@ -78,6 +104,79 @@ func TestParity_RegexParserMatchesCJSEngine(t *testing.T) {
 	if cjsMap.Assets.Total != goMap.Assets.Total {
 		t.Errorf("assets.total: cjs=%d go=%d", cjsMap.Assets.Total, goMap.Assets.Total)
 	}
+}
+
+// compareOrdered positionally compares two already-final-ordered slices of
+// any comparable-by-DeepEqual element type (CallEdge, ContainerEdge,
+// Container, EntryPointRef, SinkModule, Lane, SymbolIndexEntry, Cluster,
+// SurprisingConnection, RationaleEntry, GodNode, ...). Every one of these
+// fields' order is a documented, deterministic property of the pipeline
+// (see each field's producing package's doc comments), so index-position
+// comparison — not by-id matching — is the correct, and stricter, check:
+// it also catches an ordering regression a by-id map comparison would miss.
+func compareOrdered[T any](t *testing.T, name string, cjs, gp []T) {
+	t.Helper()
+	if len(cjs) != len(gp) {
+		t.Errorf("%s: cjs has %d, go has %d", name, len(cjs), len(gp))
+	}
+	n := len(cjs)
+	if len(gp) < n {
+		n = len(gp)
+	}
+	mismatches := 0
+	for i := 0; i < n; i++ {
+		if !reflect.DeepEqual(cjs[i], gp[i]) {
+			mismatches++
+			if mismatches <= 5 {
+				t.Errorf("%s[%d] differs:\n  cjs: %+v\n  go:  %+v", name, i, cjs[i], gp[i])
+			}
+		}
+	}
+	if mismatches > 5 {
+		t.Errorf("%s: %d total mismatches in the first %d (showing first 5)", name, mismatches, n)
+	}
+}
+
+// compareRawJSON positionally compares two slices of pre-marshaled JSON
+// objects (groups/flows/boxes — see model.Map's doc comments on why these
+// three fields stay []json.RawMessage rather than typed structs: they must
+// round-trip GROUPS.json/FLOWS.json curation's schema-unknown user keys).
+// Each element is compacted (json.Compact strips only insignificant
+// whitespace — it never reorders object keys) before a string comparison,
+// so this remains sensitive to key-order and value differences (including
+// the HTML-escaping defect this gate is partly here to catch) while staying
+// insensitive to the two engines' incidental pretty-printing differences.
+func compareRawJSON(t *testing.T, name string, cjs, gp []json.RawMessage) {
+	t.Helper()
+	if len(cjs) != len(gp) {
+		t.Errorf("%s: cjs has %d, go has %d", name, len(cjs), len(gp))
+	}
+	n := len(cjs)
+	if len(gp) < n {
+		n = len(gp)
+	}
+	mismatches := 0
+	for i := 0; i < n; i++ {
+		cjsC, gpC := compactJSON(t, cjs[i]), compactJSON(t, gp[i])
+		if cjsC != gpC {
+			mismatches++
+			if mismatches <= 5 {
+				t.Errorf("%s[%d] differs:\n  cjs: %s\n  go:  %s", name, i, cjsC, gpC)
+			}
+		}
+	}
+	if mismatches > 5 {
+		t.Errorf("%s: %d total mismatches in the first %d (showing first 5)", name, mismatches, n)
+	}
+}
+
+func compactJSON(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		t.Fatalf("json.Compact: %v\nraw: %s", err, raw)
+	}
+	return buf.String()
 }
 
 // resolveMonorepoRoot finds the real draht-mono worktree root (the parent
@@ -203,15 +302,6 @@ func comparePackages(t *testing.T, cjs, gp []model.Package) {
 	}
 }
 
-// normalizeModule zeroes the two fields G5's own spec (§3 delta 2) excludes
-// from Phase-1 parity: Depth and Cluster are always nil in Go's output and
-// real values in the CJS engine's.
-func normalizeModule(m model.Module) model.Module {
-	m.Depth = nil
-	m.Cluster = nil
-	return m
-}
-
 func compareModules(t *testing.T, cjs, gp []model.Module) {
 	t.Helper()
 	if len(cjs) != len(gp) {
@@ -220,7 +310,7 @@ func compareModules(t *testing.T, cjs, gp []model.Module) {
 	byPath := func(mods []model.Module) map[string]model.Module {
 		out := make(map[string]model.Module, len(mods))
 		for _, m := range mods {
-			out[m.Path] = normalizeModule(m)
+			out[m.Path] = m
 		}
 		return out
 	}
@@ -236,7 +326,7 @@ func compareModules(t *testing.T, cjs, gp []model.Module) {
 		if !reflect.DeepEqual(cm, gm) {
 			mismatches++
 			if mismatches <= 5 {
-				t.Errorf("modules[%q] differs (depth/cluster excluded):\n  cjs: %+v\n  go:  %+v", path, cm, gm)
+				t.Errorf("modules[%q] differs:\n  cjs: %+v\n  go:  %+v", path, cm, gm)
 			}
 		}
 	}

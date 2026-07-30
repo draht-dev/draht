@@ -3,9 +3,27 @@ package graph
 import (
 	"testing"
 
+	"github.com/draht-dev/draht/go/internal/extract"
 	"github.com/draht-dev/draht/go/internal/model"
 	"github.com/draht-dev/draht/go/internal/parse"
 )
+
+// sitesFrom scans src for every local's call sites (via extract.ScanCallSites)
+// and returns them keyed by local name, the shape BuildCallEdges now expects
+// (Phase 2 moved the regex scan itself into internal/extract — see
+// extract.ScanCallSites/CallLocals).
+func sitesFrom(src string, locals []UsedLocal) map[string]extract.CallSite {
+	names := make([]string, len(locals))
+	for i, l := range locals {
+		names[i] = l.Local
+	}
+	scanned := extract.ScanCallSites([]byte(src), names)
+	out := make(map[string]extract.CallSite, len(scanned))
+	for _, s := range scanned {
+		out[s.Local] = s
+	}
+	return out
+}
 
 func idxFor(modules []string, workspaceEntry map[string]string) *ResolverIndex {
 	set := make(map[string]struct{}, len(modules))
@@ -223,7 +241,7 @@ func TestCallConfidence(t *testing.T) {
 func TestBuildCallEdgesDirectCallIsInferred(t *testing.T) {
 	src := `const result = calculateCost(a, b);`
 	locals := []UsedLocal{{Local: "calculateCost", ImportedName: "calculateCost", Target: "packages/ai/src/models.ts"}}
-	edges := BuildCallEdges("packages/ai/src/caller.ts", []byte(src), locals)
+	edges := BuildCallEdges("packages/ai/src/caller.ts", locals, sitesFrom(src, locals))
 	if len(edges) != 1 {
 		t.Fatalf("len(edges) = %d, want 1", len(edges))
 	}
@@ -242,7 +260,7 @@ func TestBuildCallEdgesDirectCallIsInferred(t *testing.T) {
 func TestBuildCallEdgesMemberOnlyCallIsAmbiguous(t *testing.T) {
 	src := `const x = models.calculateCost(a, b);`
 	locals := []UsedLocal{{Local: "models", ImportedName: "*", Target: "packages/ai/src/models.ts"}}
-	edges := BuildCallEdges("caller.ts", []byte(src), locals)
+	edges := BuildCallEdges("caller.ts", locals, sitesFrom(src, locals))
 	if len(edges) != 1 || edges[0].Confidence != model.ConfidenceAmbiguous {
 		t.Fatalf("edges = %+v, want a single AMBIGUOUS edge", edges)
 	}
@@ -253,7 +271,7 @@ func TestBuildCallEdgesMixedDirectAndMemberIsInferred(t *testing.T) {
 	// (at least one direct call was observed), count reflects BOTH forms.
 	src := `models(); models.foo();`
 	locals := []UsedLocal{{Local: "models", ImportedName: "*", Target: "m1"}}
-	edges := BuildCallEdges("caller.ts", []byte(src), locals)
+	edges := BuildCallEdges("caller.ts", locals, sitesFrom(src, locals))
 	if len(edges) != 1 {
 		t.Fatalf("edges = %+v", edges)
 	}
@@ -268,7 +286,7 @@ func TestBuildCallEdgesMixedDirectAndMemberIsInferred(t *testing.T) {
 func TestBuildCallEdgesZeroCallSitesProducesNoEdge(t *testing.T) {
 	src := `const x = 1;`
 	locals := []UsedLocal{{Local: "unused", ImportedName: "unused", Target: "m1"}}
-	edges := BuildCallEdges("caller.ts", []byte(src), locals)
+	edges := BuildCallEdges("caller.ts", locals, sitesFrom(src, locals))
 	if len(edges) != 0 {
 		t.Fatalf("edges = %+v, want none", edges)
 	}
@@ -280,7 +298,7 @@ func TestBuildCallEdgesCapsCountAt101(t *testing.T) {
 		src += "fn();"
 	}
 	locals := []UsedLocal{{Local: "fn", ImportedName: "fn", Target: "m1"}}
-	edges := BuildCallEdges("caller.ts", []byte(src), locals)
+	edges := BuildCallEdges("caller.ts", locals, sitesFrom(src, locals))
 	if len(edges) != 1 {
 		t.Fatalf("edges = %+v", edges)
 	}
@@ -296,7 +314,7 @@ func TestBuildCallEdgesEscapesRegexMetacharacters(t *testing.T) {
 	// anchor still applies, matching a real local name shape.
 	src := `const y = a$b(1);`
 	locals := []UsedLocal{{Local: "a$b", ImportedName: "a$b", Target: "m1"}}
-	edges := BuildCallEdges("caller.ts", []byte(src), locals)
+	edges := BuildCallEdges("caller.ts", locals, sitesFrom(src, locals))
 	if len(edges) != 1 || edges[0].Count != 1 {
 		t.Fatalf("edges = %+v", edges)
 	}

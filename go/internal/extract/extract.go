@@ -53,5 +53,15 @@ func File(ctx context.Context, p parse.Parser, lang parse.Lang, rel string, cont
 		facts.Degraded = res.Degraded
 	}
 
+	// callEdges are TS/JS-only (draht-tools.cjs:2288 `m.language ===
+	// "typescript" || "javascript"`). Scanning RAW content, exactly as
+	// cjs:2311 reads `file.content` — do not strip first (design §R10).
+	if (langStr == "typescript" || langStr == "javascript") && len(facts.Imports) > 0 {
+		locals := CallLocals(facts.Imports)
+		if len(locals) > 0 {
+			facts.CallSites = ScanCallSites(content, locals)
+		}
+	}
+
 	return facts, nil
 }

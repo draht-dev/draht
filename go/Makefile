@@ -29,9 +29,13 @@ vet:
 fmt:
 	gofmt -l .
 
-# Compares Go(--parser=regex) output against the CJS engine's MAP.json
-# (modules[]/packages[]/edges[]/root/a stats subset). Self-contained by
-# default: the test shells out to `node .../draht-tools.cjs map-graph
+# Compares Go(--parser=regex) output against the CJS engine's MAP.json:
+# root/packages/modules/edges/a stats subset (Phase 1) PLUS every Phase 2
+# field (groups/containers/boundedContexts/callEdges/containerEdges/
+# entryPoints/sinks/flows/lanes/boxes/symbolIndex/clusters/
+# surprisingConnections/rationaleIndex/hotspots) and modules[*].depth/
+# cluster. Self-contained by default: the test shells out to
+# `node .../draht-tools.cjs map-graph
 # --quiet` itself and compares against that fresh run. Pass PARITY_MAP to
 # compare against an already-generated MAP.json instead (e.g. in a sandbox
 # without `node` on PATH):

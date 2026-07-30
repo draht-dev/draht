@@ -130,6 +130,7 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	resolver := NewResolver(NewResolverIndex(modulePaths, workspaceEntry))
 
 	mi := make([]ModuleImports, 0, len(codeFiles))
+	sitesByPath := make(map[string][]extract.CallSite)
 	for i, f := range codeFiles {
 		if f.Lang != scan.LangTypeScript && f.Lang != scan.LangJavaScript {
 			continue // design D3: edges are built from TS/JS modules only
@@ -138,8 +139,23 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 			continue
 		}
 		mi = append(mi, ModuleImports{Path: f.Rel, Imports: facts[i].Imports})
+		if len(facts[i].CallSites) > 0 {
+			sitesByPath[f.Rel] = facts[i].CallSites
+		}
 	}
 	edges := BuildEdges(mi, resolver)
+	callEdges := BuildCallEdgesAll(mi, resolver, sitesByPath)
+
+	// Phase 2: inline SECURITY/BUG/.../WHY marker scan over EVERY eligible
+	// scanned file (not just code modules — draht-tools.cjs:2159 reaches
+	// markdown/html/sql too).
+	rationale := buildRationaleAll(discovery.Files, workerCount(opts.Jobs))
+
+	pkgHasBin := buildPkgHasBin(pkgs)
+
+	graphOutDir := scan.GraphOutDir(root)
+	groupsJSON, _ := os.ReadFile(filepath.Join(graphOutDir, "GROUPS.json"))
+	flowsJSON, _ := os.ReadFile(filepath.Join(graphOutDir, "FLOWS.json"))
 
 	modelPkgs := make([]model.Package, len(pkgs))
 	for i, p := range pkgs {
@@ -147,12 +163,17 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	}
 
 	m := Assemble(AssembleInput{
-		Root:       filepath.Base(root),
-		Modules:    modules,
-		Edges:      edges,
-		Packages:   modelPkgs,
-		LangCounts: discovery.LangCounts,
-		Truncated:  discovery.Truncated,
+		Root:             filepath.Base(root),
+		Modules:          modules,
+		Edges:            edges,
+		Packages:         modelPkgs,
+		LangCounts:       discovery.LangCounts,
+		Truncated:        discovery.Truncated,
+		CallEdges:        callEdges,
+		RationaleEntries: rationale,
+		PkgHasBin:        pkgHasBin,
+		GroupsJSON:       groupsJSON,
+		FlowsJSON:        flowsJSON,
 	})
 	m.BuildMs = int(time.Since(start).Milliseconds())
 
@@ -208,6 +229,20 @@ func workerCount(jobs int) int {
 		n = 1
 	}
 	return n
+}
+
+// buildPkgHasBin builds internal/container's PkgHasBin probe from the
+// already-parsed package manifests (scan.Package.Bin — draht-tools.cjs:1195-
+// 1201's own bin read), so no extra filesystem access is needed at assemble
+// time.
+func buildPkgHasBin(pkgs []scan.Package) func(pkgPath string) bool {
+	set := make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
+		if len(p.Bin) > 0 {
+			set[p.Path] = true
+		}
+	}
+	return func(pkgPath string) bool { return set[pkgPath] }
 }
 
 func toModuleSet(paths []string) map[string]struct{} {

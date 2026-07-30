@@ -7,6 +7,7 @@ import { createEditToolDefinition } from "../src/core/tools/edit.ts";
 import { computeEditsDiff, type Edit } from "../src/core/tools/edit-diff.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 class FakeTerminal implements Terminal {
 	columns = 80;
@@ -120,7 +121,7 @@ describe("edit tool TUI rendering", () => {
 		await waitForRender();
 
 		const callOnlyRender = await waitForRenderedText(
-			() => component.render(80).join("\n"),
+			() => stripAnsi(component.render(80).join("\n")),
 			"line 50 changed",
 			() => tui.requestRender(true),
 		);
@@ -143,7 +144,7 @@ describe("edit tool TUI rendering", () => {
 		expect(tui.fullRedraws).toBe(redrawsBeforeResult);
 		expect(terminal.fullClearCount).toBe(clearsBeforeResult);
 
-		const settledRender = component.render(80).join("\n");
+		const settledRender = stripAnsi(component.render(80).join("\n"));
 		expect(settledRender).toContain("line 50 changed");
 		expect(settledRender).toContain("line 950 changed");
 		expect(settledRender).not.toContain("Successfully replaced");
@@ -193,7 +194,7 @@ describe("edit tool TUI rendering", () => {
 		await waitForRender();
 		await waitForRender();
 
-		const rendered = component.render(80).join("\n");
+		const rendered = stripAnsi(component.render(80).join("\n"));
 		expect(rendered).toContain("line 50 changed");
 		expect(rendered).toContain("line 150 changed");
 	});
@@ -225,7 +226,7 @@ describe("edit tool TUI rendering", () => {
 		await waitForRender();
 
 		const rendered = await waitForRenderedText(
-			() => component.render(80).join("\n"),
+			() => stripAnsi(component.render(80).join("\n")),
 			"Could not find",
 			() => tui.requestRender(true),
 		);

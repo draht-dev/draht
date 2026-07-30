@@ -2,11 +2,8 @@ import type {
 	SessionMetadata,
 	SessionSearch,
 	SessionSearchHit,
-	SessionSearchIndex,
 	SessionSearchOptions,
-	SessionSearchRecord,
 	SessionStorage,
-	SessionTreeEntry,
 } from "../types.ts";
 import { findSessionEntryMatches } from "./repo-utils.ts";
 
@@ -39,46 +36,5 @@ export class ScanningSessionSearch<TMetadata extends SessionMetadata = SessionMe
 			}
 		}
 		return hits;
-	}
-}
-
-class FanoutSessionSearchIndex<TMetadata extends SessionMetadata> implements SessionSearchIndex<TMetadata> {
-	private readonly indexes: readonly SessionSearchIndex<TMetadata>[];
-
-	constructor(indexes: readonly SessionSearchIndex<TMetadata>[]) {
-		this.indexes = indexes;
-	}
-
-	async upsert(record: SessionSearchRecord<TMetadata>): Promise<void> {
-		for (const index of this.indexes) await index.upsert(record);
-	}
-
-	async replaceSession(metadata: TMetadata, entries: readonly SessionTreeEntry[]): Promise<void> {
-		for (const index of this.indexes) await index.replaceSession(metadata, entries);
-	}
-
-	async removeSession(metadata: TMetadata): Promise<void> {
-		for (const index of this.indexes) await index.removeSession(metadata);
-	}
-}
-
-/** Delegates queries to one search and fans index mutations out sequentially, like io.MultiWriter. */
-export class FanoutSessionSearch<TMetadata extends SessionMetadata = SessionMetadata>
-	implements SessionSearch<TMetadata>
-{
-	private readonly reader: SessionSearch<TMetadata>;
-	readonly index?: SessionSearchIndex<TMetadata>;
-
-	constructor(options: {
-		reader: SessionSearch<TMetadata>;
-		writers: readonly SessionSearch<TMetadata>[];
-	}) {
-		this.reader = options.reader;
-		const indexes = options.writers.flatMap((search) => (search.index ? [search.index] : []));
-		this.index = indexes.length > 0 ? new FanoutSessionSearchIndex(indexes) : undefined;
-	}
-
-	async search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]> {
-		return await this.reader.search(options);
 	}
 }

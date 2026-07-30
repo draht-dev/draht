@@ -438,6 +438,36 @@ if (existsSync(lockAbsPath)) {
 	fail(`bun.lock: file not found at repo root`);
 }
 
+// ── 3d. Every published package declares "files" ────────────────────
+//
+// Without a "files" allowlist npm packs everything not covered by
+// .npmignore/.gitignore, so the tarball silently accumulates whatever else
+// lives in the package directory. Both observed here:
+//   * @draht/web-ui shipped its nested example/package.json — which, once the
+//     example was switched to workspace:*, would have published a specifier
+//     npm cannot resolve for consumers;
+//   * @draht/gateway shipped .planning/attachable-sessions-prd.md (an internal
+//     PRD), SPEC.md, TAILSCALE_SETUP.md and all of src/__tests__.
+// Private packages are exempt — they are never published.
+
+console.log("\nPublished packages declare files");
+
+for (const pkgPath of workspacePkgPaths) {
+	if (pkgPath === "package.json") continue; // the private monorepo root
+	const pkg = readJson(pkgPath);
+	if (pkg.private) continue;
+	const files = pkg.files;
+	check(
+		Array.isArray(files) && files.length > 0,
+		`${pkgPath}: "${pkg.name}" declares a non-empty files array` +
+			(Array.isArray(files) && files.length > 0
+				? ""
+				: ` — got ${JSON.stringify(files)} (a published package without "files"` +
+					` packs every stray file in its directory: internal docs, planning notes,` +
+					` tests, and nested example manifests all leak into the tarball)`),
+	);
+}
+
 // ── 4. Draht-only scripts exist on disk ─────────────────────────────
 
 console.log("\nDraht-only scripts");

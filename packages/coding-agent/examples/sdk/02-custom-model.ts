@@ -4,13 +4,12 @@
  * Shows how to select a specific model and thinking level.
  */
 
-import { getModel } from "@draht/ai/compat";
 import { createAgentSession, ModelRuntime } from "@draht/coding-agent";
 
 const modelRuntime = await ModelRuntime.create();
 
 // Option 1: Find a specific built-in model by provider/id
-const opus = getModel("anthropic", "claude-opus-4-5");
+const opus = modelRuntime.getModel("anthropic", "claude-opus-4-5");
 if (opus) {
 	console.log(`Found model: ${opus.provider}/${opus.id}`);
 }

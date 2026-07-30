@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@mariozechner/mini-lit": "^0.2.0",
+    "@draht/agent-core": "workspace:*",
     "@draht/ai": "workspace:*",
     "@draht/web-ui": "workspace:*",
     "@tailwindcss/vite": "^4.1.17",

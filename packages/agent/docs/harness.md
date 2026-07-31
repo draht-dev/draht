@@ -2010,8 +2010,8 @@ Use `createJsonlSessionStore({ fs, sessionsRoot })` for filesystem persistence;
 the same scanning search composes with it. Omitting `search` is valid, but
 `repository.search()` then returns no hits. SQLite support is provided
 separately by `createSqliteSessionStore()` and should use
-`createSqliteSessionSearch({ ...options, mode: "canonical" })` against the same
-database. Drain all session or harness operations before the store leaves
+`createSqliteSessionSearch(options)` against the same canonical database. Drain
+all session or harness operations before the store leaves
 scope; repositories and sessions do not dispose it.
 
 A custom store implements `SessionStore`:

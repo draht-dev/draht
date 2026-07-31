@@ -515,15 +515,7 @@ export interface SessionSearchHit<TMetadata extends SessionMetadata = SessionMet
 	score?: number;
 }
 
-/** Maintains a derived search index. This is intentionally separate from query-only SessionSearch. */
-export interface SessionSearchIndex<TMetadata extends SessionMetadata = SessionMetadata> {
-	reset(): Promise<void>;
-	upsertEntry(metadata: TMetadata, entry: SessionTreeEntry): Promise<void>;
-	replaceSession(metadata: TMetadata, entries: readonly SessionTreeEntry[]): Promise<void>;
-	deleteSession(metadata: TMetadata): Promise<void>;
-}
-
-/** Owns session search queries. Index maintenance is composed at the store/adapter boundary. */
+/** Owns session search queries. */
 export interface SessionSearch<TMetadata extends SessionMetadata = SessionMetadata> {
 	search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]>;
 }

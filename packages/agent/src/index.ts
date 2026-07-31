@@ -40,7 +40,6 @@ export {
 } from "./harness/session/memory-store.ts";
 export * from "./harness/session/repository.ts";
 export * from "./harness/session/search-backend.ts";
-export * from "./harness/session/search-index.ts";
 export {
 	buildContextEntries,
 	buildSessionContext,

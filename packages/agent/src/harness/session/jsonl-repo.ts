@@ -12,9 +12,18 @@ import type {
 } from "../types.ts";
 import { SessionError, toError } from "../types.ts";
 import { JsonlSessionStorage, loadJsonlSessionMetadata } from "./jsonl-storage.ts";
-import { createSessionId, createTimestamp, getEntriesToFork, getFileSystemResultOrThrow } from "./repo-utils.ts";
+import {
+	createSessionId,
+	createTimestamp,
+	getEntriesToFork,
+	getFileSystemResultOrThrow,
+	SessionRepo,
+} from "./repo-utils.ts";
+import { ScanningSessionSearch } from "./search-backend.ts";
 
-type JsonlSessionStoreFileSystem = Pick<
+export type JsonlSessionStoreOptions = { fs: JsonlSessionStoreFileSystem; sessionsRoot: string };
+
+export type JsonlSessionStoreFileSystem = Pick<
 	FileSystem,
 	| "cwd"
 	| "absolutePath"
@@ -38,7 +47,7 @@ export class JsonlSessionStore implements JsonlSessionStoreApi {
 	private readonly sessionsRootInput: string;
 	private sessionsRoot: string | undefined;
 
-	constructor(options: { fs: JsonlSessionStoreFileSystem; sessionsRoot: string }) {
+	constructor(options: JsonlSessionStoreOptions) {
 		this.fs = options.fs;
 		this.sessionsRootInput = options.sessionsRoot;
 	}
@@ -198,4 +207,15 @@ export class JsonlSessionStore implements JsonlSessionStoreApi {
 		);
 		return entries.filter((entry) => entry.kind === "directory").map((entry) => entry.path);
 	}
+}
+
+export function createJsonlSessionStore(options: JsonlSessionStoreOptions): JsonlSessionStore {
+	return new JsonlSessionStore(options);
+}
+
+export function createJsonlSessionRepo(
+	options: JsonlSessionStoreOptions,
+): SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {
+	const store = createJsonlSessionStore(options);
+	return new SessionRepo({ store, search: new ScanningSessionSearch(store) });
 }

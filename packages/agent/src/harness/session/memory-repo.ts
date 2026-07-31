@@ -9,12 +9,15 @@ import {
 	type SessionTreeEntry,
 } from "../types.ts";
 import { InMemorySessionStorage } from "./memory-storage.ts";
-import { createSessionId, createTimestamp, getEntriesToFork } from "./repo-utils.ts";
+import { createSessionId, createTimestamp, getEntriesToFork, SessionRepo } from "./repo-utils.ts";
+import { ScanningSessionSearch } from "./search-backend.ts";
 
-export class InMemorySessionStore implements SessionStore<SessionMetadata, { id?: string }, void> {
+export type InMemorySessionCreateOptions = { id?: string };
+
+export class InMemorySessionStore implements SessionStore<SessionMetadata, InMemorySessionCreateOptions, void> {
 	private sessions = new Map<string, InMemorySessionStorage<SessionMetadata>>();
 
-	async create(options: { id?: string } = {}): Promise<SessionMetadata> {
+	async create(options: InMemorySessionCreateOptions = {}): Promise<SessionMetadata> {
 		const metadata: SessionMetadata = {
 			id: options.id ?? createSessionId(),
 			createdAt: createTimestamp(),
@@ -77,4 +80,13 @@ export class InMemorySessionStore implements SessionStore<SessionMetadata, { id?
 		this.sessions.set(metadata.id, storage);
 		return metadata;
 	}
+}
+
+export function createInMemorySessionStore(): InMemorySessionStore {
+	return new InMemorySessionStore();
+}
+
+export function createInMemorySessionRepo(): SessionRepo<SessionMetadata, InMemorySessionCreateOptions, void> {
+	const store = createInMemorySessionStore();
+	return new SessionRepo({ store, search: new ScanningSessionSearch(store) });
 }

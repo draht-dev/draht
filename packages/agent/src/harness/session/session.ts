@@ -149,14 +149,12 @@ export function buildSessionContext(
 	return { ...state, messages };
 }
 
-export interface SessionDependencies<TMetadata extends SessionMetadata = SessionMetadata> {
-	metadata: TMetadata;
+interface SessionDependencies<TMetadata extends SessionMetadata = SessionMetadata> {
 	load(): Promise<SessionSnapshot<TMetadata>>;
 	getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]>;
 	createEntryId(): Promise<string>;
 	appendEntry(entry: SessionTreeEntry): Promise<void>;
 	setLeafId(leafId: string | null): Promise<LeafEntry>;
-	storage?: SessionStorage<TMetadata>;
 }
 
 function entriesById(entries: readonly SessionTreeEntry[]): Map<string, SessionTreeEntry> {
@@ -240,18 +238,10 @@ function getSessionStats(entries: readonly SessionTreeEntry[]): SessionStats {
 function storageToDependencies<TMetadata extends SessionMetadata>(
 	storage: SessionStorage<TMetadata>,
 ): SessionDependencies<TMetadata> {
-	let metadata: TMetadata | undefined;
 	return {
-		get metadata() {
-			if (!metadata) {
-				throw new SessionError("storage", "Session metadata has not been loaded yet");
-			}
-			return metadata;
-		},
 		async load() {
-			metadata = await storage.getMetadata();
 			return {
-				metadata,
+				metadata: await storage.getMetadata(),
 				leafId: await storage.getLeafId(),
 				entries: await storage.getEntries(),
 			};
@@ -260,69 +250,20 @@ function storageToDependencies<TMetadata extends SessionMetadata>(
 		createEntryId: () => storage.createEntryId(),
 		appendEntry: (entry) => storage.appendEntry(entry),
 		setLeafId: (leafId) => storage.setLeafId(leafId),
-		storage,
-	} as SessionDependencies<TMetadata>;
-}
-
-function createStorageAdapter<TMetadata extends SessionMetadata>(
-	dependencies: SessionDependencies<TMetadata>,
-): SessionStorage<TMetadata> {
-	return {
-		async getMetadata() {
-			return (await dependencies.load()).metadata;
-		},
-		async getLeafId() {
-			return (await dependencies.load()).leafId;
-		},
-		setLeafId: (leafId) => dependencies.setLeafId(leafId),
-		createEntryId: () => dependencies.createEntryId(),
-		appendEntry: (entry) => dependencies.appendEntry(entry),
-		async getEntry(id) {
-			return entriesById((await dependencies.load()).entries).get(id);
-		},
-		async findEntries(type) {
-			return (await dependencies.load()).entries.filter(
-				(entry): entry is Extract<SessionTreeEntry, { type: typeof type }> => entry.type === type,
-			);
-		},
-		async getLabel(id) {
-			return getLabel((await dependencies.load()).entries, id);
-		},
-		async getSessionName() {
-			return getSessionName((await dependencies.load()).entries);
-		},
-		async getSessionStats() {
-			return getSessionStats((await dependencies.load()).entries);
-		},
-		async getPathToRootOrCompaction(leafId) {
-			return getPathToRootOrCompaction((await dependencies.load()).entries, leafId);
-		},
-		getEntries: (options) => dependencies.getEntries(options),
 	};
 }
 
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	private readonly dependencies: SessionDependencies<TMetadata>;
-	private readonly storageAdapter: SessionStorage<TMetadata>;
 	private readonly contextBuildOptions: SessionContextBuildOptions;
 
-	constructor(
-		storageOrDependencies: SessionStorage<TMetadata> | SessionDependencies<TMetadata>,
-		contextBuildOptions: SessionContextBuildOptions = {},
-	) {
-		this.dependencies =
-			"load" in storageOrDependencies ? storageOrDependencies : storageToDependencies(storageOrDependencies);
-		this.storageAdapter = this.dependencies.storage ?? createStorageAdapter(this.dependencies);
+	constructor(storage: SessionStorage<TMetadata>, contextBuildOptions: SessionContextBuildOptions = {}) {
+		this.dependencies = storageToDependencies(storage);
 		this.contextBuildOptions = contextBuildOptions;
 	}
 
 	async getMetadata(): Promise<TMetadata> {
 		return (await this.dependencies.load()).metadata;
-	}
-
-	/** Prefer the Session facade methods. Exposed for low-level adapter compatibility. */
-	getStorage(): SessionStorage<TMetadata> {
-		return this.storageAdapter;
 	}
 
 	async getLeafId(): Promise<string | null> {
@@ -372,11 +313,11 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return getSessionName((await this.dependencies.load()).entries);
 	}
 
-	async appendEntry(entry: SessionTreeEntry): Promise<void> {
+	private async appendEntry(entry: SessionTreeEntry): Promise<void> {
 		await this.dependencies.appendEntry(entry);
 	}
 
-	setLeafId(leafId: string | null): Promise<LeafEntry> {
+	private setLeafId(leafId: string | null): Promise<LeafEntry> {
 		return this.dependencies.setLeafId(leafId);
 	}
 

@@ -52,7 +52,7 @@ export function after<TArgs extends unknown[], TResult>(
 	};
 }
 
-export class SessionRepository<
+export class SessionRepo<
 	TMetadata extends SessionMetadata = SessionMetadata,
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
@@ -94,18 +94,16 @@ export class SessionRepository<
 	}
 }
 
-export function createSessionRepository<
+export function createSessionRepo<
 	TMetadata extends SessionMetadata = SessionMetadata,
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
 >(options: {
 	store: SessionStore<TMetadata, TCreateOptions, TListOptions>;
 	search?: SessionSearch<TMetadata> | null;
-}): SessionRepository<TMetadata, TCreateOptions, TListOptions> {
-	return new SessionRepository(options);
+}): SessionRepo<TMetadata, TCreateOptions, TListOptions> {
+	return new SessionRepo(options);
 }
-
-export { SessionRepository as SessionRepo };
 
 export function findSessionEntryMatches<TMetadata extends SessionMetadata>(
 	metadata: TMetadata,

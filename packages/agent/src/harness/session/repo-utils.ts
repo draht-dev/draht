@@ -111,7 +111,7 @@ export function toStoreSession<TMetadata extends SessionMetadata>(
 	const load = () => store.load(metadata);
 	const storage: SessionStorage<TMetadata> = {
 		async getMetadata() {
-			return (await load()).metadata;
+			return metadata;
 		},
 		async getLeafId() {
 			return (await load()).leafId;
@@ -144,7 +144,7 @@ export function toStoreSession<TMetadata extends SessionMetadata>(
 	return new Session(storage);
 }
 
-export class SessionRepo<
+export class SessionRepository<
 	TMetadata extends SessionMetadata = SessionMetadata,
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
@@ -186,15 +186,15 @@ export class SessionRepo<
 	}
 }
 
-export function createSessionRepo<
+export function createSessionRepository<
 	TMetadata extends SessionMetadata = SessionMetadata,
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
 >(options: {
 	store: SessionStore<TMetadata, TCreateOptions, TListOptions>;
 	search?: SessionSearch<TMetadata> | null;
-}): SessionRepo<TMetadata, TCreateOptions, TListOptions> {
-	return new SessionRepo(options);
+}): SessionRepository<TMetadata, TCreateOptions, TListOptions> {
+	return new SessionRepository(options);
 }
 
 export function findSessionEntryMatches<TMetadata extends SessionMetadata>(

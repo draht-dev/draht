@@ -9,7 +9,7 @@ import {
 	type SessionTreeEntry,
 } from "../types.ts";
 import { InMemorySessionStorage } from "./memory-storage.ts";
-import { createSessionId, createTimestamp, getEntriesToFork, SessionRepo } from "./repo-utils.ts";
+import { createSessionId, createTimestamp, getEntriesToFork, SessionRepository } from "./repo-utils.ts";
 import { ScanningSessionSearch } from "./search-backend.ts";
 
 export type InMemorySessionCreateOptions = { id?: string };
@@ -86,7 +86,11 @@ export function createInMemorySessionStore(): InMemorySessionStore {
 	return new InMemorySessionStore();
 }
 
-export function createInMemorySessionRepo(): SessionRepo<SessionMetadata, InMemorySessionCreateOptions, void> {
+export function createInMemorySessionRepository(): SessionRepository<
+	SessionMetadata,
+	InMemorySessionCreateOptions,
+	void
+> {
 	const store = createInMemorySessionStore();
-	return new SessionRepo({ store, search: new ScanningSessionSearch(store) });
+	return new SessionRepository({ store, search: new ScanningSessionSearch(store) });
 }

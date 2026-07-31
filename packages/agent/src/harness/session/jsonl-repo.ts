@@ -17,7 +17,7 @@ import {
 	createTimestamp,
 	getEntriesToFork,
 	getFileSystemResultOrThrow,
-	SessionRepo,
+	SessionRepository,
 } from "./repo-utils.ts";
 import { ScanningSessionSearch } from "./search-backend.ts";
 
@@ -213,9 +213,9 @@ export function createJsonlSessionStore(options: JsonlSessionStoreOptions): Json
 	return new JsonlSessionStore(options);
 }
 
-export function createJsonlSessionRepo(
+export function createJsonlSessionRepository(
 	options: JsonlSessionStoreOptions,
-): SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {
+): SessionRepository<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {
 	const store = createJsonlSessionStore(options);
-	return new SessionRepo({ store, search: new ScanningSessionSearch(store) });
+	return new SessionRepository({ store, search: new ScanningSessionSearch(store) });
 }

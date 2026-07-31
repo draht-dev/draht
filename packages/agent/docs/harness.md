@@ -1977,7 +1977,7 @@ type SessionForkOptions =
   /** New: the entire tree — all session entries, every branch, leaf preserved. */
   | { scope: "tree" };
 
-interface SessionRepo {
+interface SessionRepository {
   ...
   create(options: TCreateOptions): Promise<Session>;
   fork(source, options: SessionForkOptions & TCreateOptions): Promise<Session>;

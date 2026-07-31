@@ -172,9 +172,9 @@ class SessionEntryIndex {
 	}
 
 	getEntries(options?: SessionEntryCursorOptions): SessionTreeEntry[] {
-		if (options?.limit === undefined) return [...this.entries];
-		const end = options.afterEntrySeq ?? this.entries.length;
-		return this.entries.slice(Math.max(0, end - options.limit), end);
+		const start = options?.afterEntrySeq ?? 0;
+		const end = options?.limit === undefined ? undefined : start + options.limit;
+		return this.entries.slice(start, end);
 	}
 
 	append(entry: SessionTreeEntry): void {

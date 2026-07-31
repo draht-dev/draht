@@ -2001,14 +2001,18 @@ The in-memory store is the simplest built-in option:
 
 ```ts
 await using store = createInMemorySessionStore();
-const repository = createSessionRepository({ store });
+const search = createScanningSessionSearch(store);
+const repository = createSessionRepository({ store, search });
 const session = await repository.create({});
 ```
 
-Use `createJsonlSessionStore({ fs, sessionsRoot })` for filesystem persistence.
-SQLite support is provided separately by `createSqliteSessionStore()`. Drain all
-session or harness operations before the store leaves scope; repositories and
-sessions do not dispose it.
+Use `createJsonlSessionStore({ fs, sessionsRoot })` for filesystem persistence;
+the same scanning search composes with it. Omitting `search` is valid, but
+`repository.search()` then returns no hits. SQLite support is provided
+separately by `createSqliteSessionStore()` and should use
+`createSqliteSessionSearch({ ...options, mode: "canonical" })` against the same
+database. Drain all session or harness operations before the store leaves
+scope; repositories and sessions do not dispose it.
 
 A custom store implements `SessionStore`:
 

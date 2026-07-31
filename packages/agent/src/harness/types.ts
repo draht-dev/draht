@@ -491,6 +491,7 @@ export interface JsonlSessionMetadata extends SessionMetadata {
 }
 
 export interface SessionEntryCursorOptions {
+	/** Number of entries already consumed; reading starts at this zero-based sequence. */
 	afterEntrySeq?: number;
 	limit?: number;
 }

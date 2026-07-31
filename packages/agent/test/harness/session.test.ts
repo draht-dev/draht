@@ -31,6 +31,23 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 			expect(context.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
 		});
 
+		it("reads entries forward from the requested sequence", async () => {
+			const session = await (await createFixture()).createSession();
+			const ids = [
+				await session.appendMessage(createUserMessage("one")),
+				await session.appendMessage(createUserMessage("two")),
+				await session.appendMessage(createUserMessage("three")),
+			];
+
+			expect((await session.getEntries({ afterEntrySeq: 0, limit: 2 })).map((entry) => entry.id)).toEqual(
+				ids.slice(0, 2),
+			);
+			expect((await session.getEntries({ afterEntrySeq: 1, limit: 2 })).map((entry) => entry.id)).toEqual(
+				ids.slice(1),
+			);
+			expect((await session.getEntries({ afterEntrySeq: 2 })).map((entry) => entry.id)).toEqual(ids.slice(2));
+		});
+
 		it("tracks model and thinking level changes", async () => {
 			const session = await (await createFixture()).createSession();
 			await session.appendMessage(createUserMessage("one"));

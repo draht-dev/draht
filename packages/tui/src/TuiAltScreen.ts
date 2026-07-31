@@ -1,7 +1,14 @@
 import { AltScreenFlashContainer } from "./components/alt-screen-flash.ts";
 import { ScrollView } from "./components/scroll-view.ts";
 import { getKeybindings } from "./keybindings.ts";
-import { getScrollViewBox, getScrollViewsAt, type LayoutFrame, renderLayoutFrame } from "./layout.ts";
+import {
+	getScrollbarGeometry,
+	getScrollViewBox,
+	getScrollViewsAt,
+	type LayoutFrame,
+	renderLayoutFrame,
+	type ScrollbarGeometry,
+} from "./layout.ts";
 import type { Terminal } from "./terminal.ts";
 import {
 	deleteAllKittyImages,
@@ -25,8 +32,8 @@ const ENTER_ALT_SCREEN = "\x1b[?1049h";
 const EXIT_ALT_SCREEN = "\x1b[?1049l";
 const DISABLE_AUTOWRAP = "\x1b[?7l";
 const ENABLE_AUTOWRAP = "\x1b[?7h";
-const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
-const DISABLE_MOUSE = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
+const DISABLE_MOUSE = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 const BEGIN_SYNCHRONIZED_OUTPUT = "\x1b[?2026h";
 const END_SYNCHRONIZED_OUTPUT = "\x1b[?2026l";
 const OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
@@ -48,6 +55,16 @@ interface WheelEvent {
 	direction: -1 | 1;
 	x: number;
 	y: number;
+}
+
+interface ScrollbarDrag {
+	scrollView: ScrollView;
+	grabOffset: number;
+}
+
+interface ScrollbarTarget {
+	scrollView: ScrollView;
+	geometry: ScrollbarGeometry;
 }
 
 export interface TuiAltScreenOptions {
@@ -79,6 +96,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private selectionDragPointer?: { x: number; y: number };
 	private selectionAutoScrollDirection: -1 | 0 | 1 = 0;
 	private selectionAutoScrollTimer?: NodeJS.Timeout;
+	private scrollbarDrag?: ScrollbarDrag;
+	private scrollbarHover?: ScrollView;
 	private pressedUrl?: string;
 	private selectionDragged = false;
 	private readonly wheelScrollLines: number;
@@ -140,6 +159,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	protected override beforeTerminalStart(): void {
 		this.stopSelectionAutoScroll();
+		this.stopScrollbarHover();
+		this.stopScrollbarDrag();
 		this.flashes.dispose();
 		this.altScreenActive = true;
 		const capabilities = getCapabilities();
@@ -162,6 +183,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	protected override beforeTerminalStop(): void {
 		this.stopSelectionAutoScroll();
+		this.stopScrollbarHover();
+		this.stopScrollbarDrag();
 		this.flashes.dispose();
 		if (!this.altScreenActive) return;
 		this.terminal.write(
@@ -229,7 +252,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 		const mouseEvent = this.parseSgrMouseEvent(data);
 		if (mouseEvent) {
-			this.handleSelectionMouseEvent(mouseEvent);
+			const handled = this.handleScrollbarMouseEvent(mouseEvent);
+			if (!this.scrollbarDrag) this.updateScrollbarHover(mouseEvent.x, mouseEvent.y);
+			if (!handled) this.handleSelectionMouseEvent(mouseEvent);
 			return { consume: true };
 		}
 		if (this.isMouseSequence(data)) return { consume: true };
@@ -291,6 +316,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 		const primary = this.getPrimaryScrollView();
 		if (remaining !== 0 && !seen.has(primary)) primary.scrollBy(remaining);
+		this.updateScrollbarHover(event.x, event.y);
 		this.requestRender();
 	}
 
@@ -303,6 +329,81 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			y: Number.parseInt(match[3], 10) - 1,
 			release: match[4] === "m",
 		};
+	}
+
+	private getScrollbarTargetAt(x: number, y: number): ScrollbarTarget | undefined {
+		if (this.hasOverlay() || !this.currentLayout) return undefined;
+		for (const scrollView of getScrollViewsAt(this.currentLayout, x, y)) {
+			const box = getScrollViewBox(this.currentLayout, scrollView);
+			const geometry = box ? getScrollbarGeometry(box) : undefined;
+			if (
+				geometry &&
+				x === geometry.column &&
+				y >= geometry.thumbTop &&
+				y < geometry.thumbTop + geometry.thumbHeight
+			) {
+				return { scrollView, geometry };
+			}
+		}
+		return undefined;
+	}
+
+	private setScrollbarHover(scrollView: ScrollView | undefined): void {
+		if (scrollView === this.scrollbarHover) return;
+		this.scrollbarHover?.setScrollbarActive(false);
+		this.scrollbarHover = scrollView;
+		this.scrollbarHover?.setScrollbarActive(true);
+	}
+
+	private updateScrollbarHover(x: number, y: number): void {
+		this.setScrollbarHover(this.getScrollbarTargetAt(x, y)?.scrollView);
+	}
+
+	private stopScrollbarHover(): void {
+		this.setScrollbarHover(undefined);
+	}
+
+	private handleScrollbarMouseEvent(event: SgrMouseEvent): boolean {
+		if (this.scrollbarDrag) {
+			if (event.release) {
+				this.stopScrollbarDrag();
+				return true;
+			}
+			const box = this.currentLayout
+				? getScrollViewBox(this.currentLayout, this.scrollbarDrag.scrollView)
+				: undefined;
+			const geometry = box ? getScrollbarGeometry(box) : undefined;
+			if (geometry) {
+				const maxThumbOffset = geometry.trackHeight - geometry.thumbHeight;
+				const thumbOffset = Math.max(
+					0,
+					Math.min(maxThumbOffset, event.y - geometry.trackTop - this.scrollbarDrag.grabOffset),
+				);
+				const scrollTop =
+					maxThumbOffset === 0 ? 0 : Math.round((thumbOffset / maxThumbOffset) * geometry.maxScrollTop);
+				this.scrollbarDrag.scrollView.scrollTo(scrollTop);
+			}
+			return true;
+		}
+
+		if (event.release || (event.button & 32) !== 0 || (event.button & 3) !== 0) return false;
+		const target = this.getScrollbarTargetAt(event.x, event.y);
+		if (!target) return false;
+		this.stopSelectionAutoScroll();
+		this.selectionAnchor = undefined;
+		this.selectionFocus = undefined;
+		this.pressedUrl = undefined;
+		this.selectionDragged = false;
+		this.setScrollbarHover(target.scrollView);
+		this.scrollbarDrag = {
+			scrollView: target.scrollView,
+			grabOffset: event.y - target.geometry.thumbTop,
+		};
+		return true;
+	}
+
+	private stopScrollbarDrag(): void {
+		this.scrollbarDrag = undefined;
 	}
 
 	private getScrollSelectionPoint(scrollView: ScrollView, x: number, y: number): SelectionPoint | undefined {

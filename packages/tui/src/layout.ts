@@ -3,7 +3,7 @@ import { allocateStackSizes, visibleStackEntries } from "./components/stack.ts";
 import { getLayoutNode } from "./layout-node.ts";
 import { cropKittyImageLine, getKittyImageMetadata, isImageLine } from "./terminal-image.ts";
 import { type Component, CURSOR_MARKER, compositeTuiLine } from "./tui.ts";
-import { visibleWidth } from "./utils.ts";
+import { extractAnsiCode, getGraphemeCellRange, sliceByColumn, visibleWidth } from "./utils.ts";
 
 const OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
 
@@ -33,6 +33,15 @@ export interface LayoutFrame {
 	height: number;
 	lines: string[];
 	primaryScrollView?: ScrollView;
+}
+
+export interface ScrollbarGeometry {
+	column: number;
+	trackTop: number;
+	trackHeight: number;
+	thumbTop: number;
+	thumbHeight: number;
+	maxScrollTop: number;
 }
 
 interface LayoutContext {
@@ -218,6 +227,67 @@ function layoutComponent(
 	return box;
 }
 
+function styleScrollbarCell(line: string, column: number, totalWidth: number, style: (text: string) => string): string {
+	if (isImageLine(line)) return line;
+
+	const graphemeRange = getGraphemeCellRange(line, column);
+	const start = graphemeRange?.start ?? column;
+	const end = graphemeRange?.end ?? column + 1;
+	const before = sliceByColumn(line, 0, start, true);
+	const target = sliceByColumn(line, start, end - start, true);
+	const after = sliceByColumn(line, end, Math.max(0, totalWidth - end), true);
+
+	let targetPrefix = "";
+	let targetIndex = 0;
+	while (targetIndex < target.length) {
+		const ansi = extractAnsiCode(target, targetIndex);
+		if (!ansi) break;
+		targetPrefix += ansi.code;
+		targetIndex += ansi.length;
+	}
+	const targetText = target.slice(targetIndex) || " ".repeat(end - start);
+	const beforePadding = " ".repeat(Math.max(0, start - visibleWidth(before)));
+	return `${before}${beforePadding}${targetPrefix}${style(targetText)}${after}`;
+}
+
+export function getScrollbarGeometry(box: LayoutBox): ScrollbarGeometry | undefined {
+	if (!box.scrollView?.isScrollbarVisible || box.rect.width <= 0 || box.rect.height <= 0) return undefined;
+
+	const contentHeight = box.children[0]?.rect.height ?? box.scrollContentLines?.length ?? 0;
+	const trackHeight = box.rect.height;
+
+	const minThumbHeight = Math.min(2, trackHeight);
+	const thumbHeight = Math.max(
+		minThumbHeight,
+		Math.min(trackHeight, Math.round((trackHeight * trackHeight) / contentHeight)),
+	);
+	const maxScrollTop = contentHeight - trackHeight;
+	const maxThumbTop = trackHeight - thumbHeight;
+	const thumbOffset = Math.round((box.scrollView.scrollTop / maxScrollTop) * maxThumbTop);
+	const column = box.rect.x + box.rect.width - 1;
+	if (column < box.clip.x || column >= box.clip.x + box.clip.width) return undefined;
+
+	return {
+		column,
+		trackTop: box.rect.y,
+		trackHeight,
+		thumbTop: box.rect.y + thumbOffset,
+		thumbHeight,
+		maxScrollTop,
+	};
+}
+
+function paintScrollbar(box: LayoutBox, screen: string[], totalWidth: number): void {
+	const geometry = getScrollbarGeometry(box);
+	if (!geometry || !box.scrollView) return;
+
+	for (let offset = 0; offset < geometry.thumbHeight; offset++) {
+		const row = geometry.thumbTop + offset;
+		if (row < box.clip.y || row >= box.clip.y + box.clip.height || row < 0 || row >= screen.length) continue;
+		screen[row] = styleScrollbarCell(screen[row] ?? "", geometry.column, totalWidth, box.scrollView.scrollbarStyle);
+	}
+}
+
 function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 	if (box.lines) {
 		const offset = box.lineOffset ?? 0;
@@ -249,6 +319,8 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 			if (imageLine !== "") break;
 		}
 	}
+
+	paintScrollbar(box, screen, totalWidth);
 }
 
 export function renderLayoutFrame(

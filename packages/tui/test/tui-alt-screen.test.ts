@@ -143,6 +143,88 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("drags a visible scrollbar thumb and keeps it visible until release", async () => {
+		const terminal = new RecordingTerminal(10, 5);
+		const tui = new TuiAltScreen(terminal);
+		const scrollView = new ScrollView(
+			new Text(Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0),
+			{
+				primary: true,
+				scrollbar: "auto",
+				scrollbarHideDelayMs: 50,
+			},
+		);
+		tui.setLayoutRoot(scrollView);
+		tui.start();
+		await terminal.waitForRender();
+		assert.strictEqual(scrollView.isScrollbarVisible, false);
+
+		terminal.sendInput("\x1b[<65;10;1M");
+		await terminal.waitForRender();
+		assert.strictEqual(scrollView.scrollTop, 1);
+		assert.strictEqual(scrollView.isScrollbarVisible, true);
+
+		terminal.sendInput("\x1b[<0;10;1M");
+		await terminal.waitForRender();
+		await new Promise((resolve) => setTimeout(resolve, 70));
+		assert.strictEqual(scrollView.isScrollbarVisible, true);
+
+		terminal.sendInput("\x1b[<32;10;4M");
+		await terminal.waitForRender();
+		assert.strictEqual(scrollView.scrollTop, 15);
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 16", "line 17", "line 18", "line 19", "line 20"],
+		);
+
+		terminal.sendInput("\x1b[<0;10;4m");
+		await terminal.waitForRender();
+		assert.strictEqual(scrollView.isScrollbarVisible, true);
+		await new Promise((resolve) => setTimeout(resolve, 70));
+		assert.strictEqual(scrollView.isScrollbarVisible, true);
+		terminal.sendInput("\x1b[<35;9;4M");
+		await new Promise((resolve) => setTimeout(resolve, 70));
+		assert.strictEqual(scrollView.isScrollbarVisible, false);
+
+		terminal.sendInput("\x1b[<64;10;5M");
+		await terminal.waitForRender();
+		assert.strictEqual(scrollView.scrollTop, 14);
+		await new Promise((resolve) => setTimeout(resolve, 70));
+		assert.strictEqual(scrollView.isScrollbarVisible, true);
+		terminal.sendInput("\x1b[<35;9;5M");
+		await new Promise((resolve) => setTimeout(resolve, 70));
+		assert.strictEqual(scrollView.isScrollbarVisible, false);
+
+		assert.ok(terminal.events.every((event) => event.type !== "write" || !event.data.includes("\x1b]52;c;")));
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[?1003h")));
+		tui.stop();
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[?1003l")));
+	});
+
+	it("keeps the scrollbar column selectable while the thumb is hidden", async () => {
+		const terminal = new RecordingTerminal(10, 2);
+		const tui = new TuiAltScreen(terminal);
+		const scrollView = new ScrollView(new Text("123456789A\nabcdefghij\nmore\nlines", 0, 0), {
+			scrollbar: "auto",
+		});
+		tui.setLayoutRoot(scrollView);
+		tui.start();
+		await terminal.waitForRender();
+		assert.strictEqual(scrollView.isScrollbarVisible, false);
+
+		terminal.sendInput("\x1b[<0;10;1M");
+		terminal.sendInput("\x1b[<32;10;2M");
+		terminal.sendInput("\x1b[<0;10;2m");
+		await terminal.waitForRender();
+
+		const expected = `\x1b]52;c;${Buffer.from("A\nabcdefghij").toString("base64")}\x07`;
+		assert.ok(
+			terminal.events.some((event) => event.type === "write" && event.data.includes(expected)),
+			JSON.stringify(terminal.events.filter((event) => event.type === "write" && event.data.includes("\x1b]52;c;"))),
+		);
+		tui.stop();
+	});
+
 	it("chains unused wheel delta to an outer scroll view", async () => {
 		const terminal = new VirtualTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal, undefined, undefined, { wheelScrollLines: 3 });
@@ -181,7 +263,14 @@ describe("TuiAltScreen", () => {
 			["line 2", "line 3", "line 4", "line 5"],
 		);
 
-		terminal.sendInput("\x1b[1;5F");
+		terminal.sendInput("\x1bOH");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 1", "line 2", "line 3", "line 4"],
+		);
+
+		terminal.sendInput("\x1bOF");
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),

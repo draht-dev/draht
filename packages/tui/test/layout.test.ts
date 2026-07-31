@@ -104,6 +104,88 @@ describe("viewport layout", () => {
 		assert.strictEqual(scrollView.isFollowingEnd, true);
 	});
 
+	it("renders a transient proportional scrollbar without replacing cell content", async () => {
+		const sourceLines = ["abcd界", "abcde2", "abcde3", "abcde4", "abcde5", "abcde6", "abcde7", "abcde8"];
+		const contentBackground = "\x1b[42m";
+		const scrollbarBackground = "\x1b[48;5;1m";
+		const scrollbarStyle = (text: string) => `${scrollbarBackground}${text}\x1b[49m`;
+		const content = new Text(sourceLines.join("\n"), 0, 0, (text) => `${contentBackground}${text}\x1b[49m`);
+		const scrollView = new ScrollView(content, {
+			scrollbar: "auto",
+			scrollbarStyle,
+			scrollbarHideDelayMs: 10,
+		});
+		const render = () => renderLayoutFrame(scrollView, 6, 4, () => {}).lines;
+		const thumbRows = (lines: string[]) => lines.map((line) => line.includes(scrollbarBackground));
+
+		let lines = render();
+		assert.deepStrictEqual(thumbRows(lines), [false, false, false, false]);
+		assert.deepStrictEqual(lines.map(stripTerminalSequences), sourceLines.slice(0, 4));
+
+		scrollView.scrollBy(2);
+		lines = render();
+		assert.deepStrictEqual(thumbRows(lines), [false, true, true, false]);
+		assert.deepStrictEqual(lines.map(stripTerminalSequences), sourceLines.slice(2, 6));
+		assert.ok(lines[1]!.lastIndexOf(contentBackground) < lines[1]!.lastIndexOf(scrollbarBackground));
+
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		lines = render();
+		assert.deepStrictEqual(thumbRows(lines), [false, false, false, false]);
+
+		scrollView.scrollToEnd();
+		lines = render();
+		assert.deepStrictEqual(thumbRows(lines), [false, false, true, true]);
+		assert.deepStrictEqual(lines.map(stripTerminalSequences), sourceLines.slice(4));
+
+		const followedContent = new Text(sourceLines.join("\n"), 0, 0);
+		const followed = new ScrollView(followedContent, {
+			follow: "end",
+			scrollbar: "auto",
+			scrollbarStyle,
+		});
+		renderLayoutFrame(followed, 6, 4, () => {});
+		assert.strictEqual(followed.scrollTop, 4);
+		followedContent.setText(`${sourceLines.join("\n")}\nabcde9`);
+		const growthFrame = renderLayoutFrame(followed, 6, 4, () => {});
+		assert.strictEqual(followed.scrollTop, 5);
+		assert.ok(growthFrame.lines.every((line) => !line.includes(scrollbarBackground)));
+
+		const fittingContent = new Text("1\n2", 0, 0);
+		const automatic = new ScrollView(fittingContent, { scrollbar: "auto", scrollbarStyle });
+		renderLayoutFrame(automatic, 6, 4, () => {});
+		automatic.scrollBy(1);
+		assert.ok(
+			renderLayoutFrame(automatic, 6, 4, () => {}).lines.every((line) => !line.includes(scrollbarBackground)),
+		);
+
+		const alwaysFitting = new ScrollView(fittingContent, { scrollbar: "always", scrollbarStyle });
+		assert.ok(
+			renderLayoutFrame(alwaysFitting, 6, 4, () => {}).lines.every((line) => !line.includes(scrollbarBackground)),
+		);
+
+		const alwaysOverflowing = new ScrollView(content, { scrollbar: "always", scrollbarStyle });
+		assert.strictEqual(
+			renderLayoutFrame(alwaysOverflowing, 6, 4, () => {}).lines.filter((line) => line.includes(scrollbarBackground))
+				.length,
+			2,
+		);
+
+		const thumbHeightFor = (contentHeight: number) => {
+			const sized = new ScrollView(new Text(Array.from({ length: contentHeight }, () => "x").join("\n"), 0, 0), {
+				scrollbar: "auto",
+				scrollbarStyle,
+			});
+			renderLayoutFrame(sized, 6, 20, () => {});
+			sized.scrollBy(1);
+			return renderLayoutFrame(sized, 6, 20, () => {}).lines.filter((line) => line.includes(scrollbarBackground))
+				.length;
+		};
+		assert.strictEqual(thumbHeightFor(21), 19);
+		assert.strictEqual(thumbHeightFor(40), 10);
+		assert.strictEqual(thumbHeightFor(100), 4);
+		assert.strictEqual(thumbHeightFor(400), 2);
+	});
+
 	it("measures nested scroll content from constrained child geometry", () => {
 		const inner = new ScrollView(new Text("1\n2\n3\n4\n5\n6", 0, 0));
 		const outer = new ScrollView(new VStack([{ component: inner, basis: 2 }, new Text("tail", 0, 0)]));

@@ -53,9 +53,9 @@ describe("TuiAltScreen", () => {
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 4", "line 5", "line 6", "line 7"],
+			["line 6", "line 7", "line 8", "line 9"],
 		);
-		assert.strictEqual(tui.viewportTop, 3);
+		assert.strictEqual(tui.viewportTop, 5);
 		assert.strictEqual(tui.isFollowingOutput, false);
 
 		text.setText(Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n"));
@@ -63,7 +63,7 @@ describe("TuiAltScreen", () => {
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 4", "line 5", "line 6", "line 7"],
+			["line 6", "line 7", "line 8", "line 9"],
 		);
 
 		tui.stop();
@@ -94,7 +94,7 @@ describe("TuiAltScreen", () => {
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 2", "line 3", "line 4", "line 5", "editor", "footer"],
+			["line 4", "line 5", "line 6", "line 7", "editor", "footer"],
 		);
 		assert.strictEqual(transcript.isFollowingEnd, false);
 
@@ -103,7 +103,7 @@ describe("TuiAltScreen", () => {
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 2", "line 3", "line 4", "line 5", "editor", "footer"],
+			["line 4", "line 5", "line 6", "line 7", "editor", "footer"],
 		);
 
 		tui.scrollToBottom();
@@ -135,17 +135,17 @@ describe("TuiAltScreen", () => {
 		terminal.sendInput("\x1b[<64;15;1M");
 		await terminal.waitForRender();
 		assert.strictEqual(left.scrollTop, 3);
-		assert.strictEqual(right.scrollTop, 0);
+		assert.strictEqual(right.scrollTop, 2);
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["a4        b1", "a5        b2", "a6        b3", "a7        b4"],
+			["a4        b3", "a5        b4", "a6        b5", "a7        b6"],
 		);
 		tui.stop();
 	});
 
 	it("chains unused wheel delta to an outer scroll view", async () => {
 		const terminal = new VirtualTerminal(20, 4);
-		const tui = new TuiAltScreen(terminal);
+		const tui = new TuiAltScreen(terminal, undefined, undefined, { wheelScrollLines: 3 });
 		const inner = new ScrollView(new Text("i1\ni2\ni3\ni4\ni5\ni6", 0, 0));
 		const outer = new ScrollView(
 			new VStack([{ component: inner, basis: 2 }, new Text("tail1\ntail2\ntail3\ntail4\ntail5", 0, 0)]),

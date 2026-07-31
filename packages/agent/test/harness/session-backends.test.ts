@@ -157,6 +157,23 @@ describe("JsonlSessionStore", () => {
 		expect(existsSync(snapshot.metadata.path)).toBe(false);
 	});
 
+	it("scopes entry uniqueness to the session path", async () => {
+		const root = createTempDir();
+		const store = createJsonlSessionStore({ fs: new NodeExecutionEnv({ cwd: root }), sessionsRoot: root });
+		const first = await store.create({ cwd: "/tmp/first", id: "shared-session-id" });
+		const second = await store.create({ cwd: "/tmp/second", id: "shared-session-id" });
+		const entry = {
+			type: "message" as const,
+			id: "shared-entry-id",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: createUserMessage("one"),
+		};
+
+		await store.appendEntry(first.metadata, entry);
+		await expect(store.appendEntry(second.metadata, entry)).resolves.toBeUndefined();
+	});
+
 	it("rejects non-object header metadata", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });

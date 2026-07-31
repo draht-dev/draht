@@ -177,7 +177,7 @@ class JsonlSessionStore
 	private readonly fs: JsonlSessionStoreFileSystem;
 	private readonly sessionsRootInput: string;
 	private sessionsRoot: string | undefined;
-	private readonly entryIdsBySession = new Map<string, Set<string>>();
+	private readonly entryIdsByPath = new Map<string, Set<string>>();
 	private readonly operations = new SerialOperationQueue();
 	private disposed = false;
 	private disposePromise: Promise<void> | undefined;
@@ -206,7 +206,7 @@ class JsonlSessionStore
 			throw new SessionError("not_found", `Session not found: ${metadata.path}`);
 		}
 		const snapshot = await loadJsonlSession(this.fs, metadata.path);
-		this.entryIdsBySession.set(metadata.id, new Set(snapshot.entries.map((entry) => entry.id)));
+		this.entryIdsByPath.set(metadata.path, new Set(snapshot.entries.map((entry) => entry.id)));
 		return snapshot;
 	}
 
@@ -238,7 +238,7 @@ class JsonlSessionStore
 			) {
 				throw new SessionError("not_found", `Session not found: ${metadata.path}`);
 			}
-			let entryIds = this.entryIdsBySession.get(metadata.id);
+			let entryIds = this.entryIdsByPath.get(metadata.path);
 			if (!entryIds) {
 				const snapshot = await this.loadDocument(metadata);
 				entryIds = new Set(snapshot.entries.map((existing) => existing.id));
@@ -249,7 +249,7 @@ class JsonlSessionStore
 				`Failed to append session entry ${entry.id}`,
 			);
 			entryIds.add(entry.id);
-			this.entryIdsBySession.set(metadata.id, entryIds);
+			this.entryIdsByPath.set(metadata.path, entryIds);
 		});
 	}
 
@@ -260,7 +260,7 @@ class JsonlSessionStore
 				await this.fs.remove(metadata.path, { force: true }),
 				`Failed to delete session ${metadata.path}`,
 			);
-			this.entryIdsBySession.delete(metadata.id);
+			this.entryIdsByPath.delete(metadata.path);
 		});
 	}
 
@@ -320,7 +320,7 @@ class JsonlSessionStore
 		};
 		const content = [JSON.stringify(header), ...entries.map((entry) => JSON.stringify(entry)), ""].join("\n");
 		getFileSystemResultOrThrow(await this.fs.writeFile(path, content), `Failed to create session ${path}`);
-		this.entryIdsBySession.set(id, new Set(entries.map((entry) => entry.id)));
+		this.entryIdsByPath.set(path, new Set(entries.map((entry) => entry.id)));
 		return { metadata: metadataFromHeader(header, path), entries: [...entries] };
 	}
 

@@ -264,7 +264,7 @@ function storageToDependencies<TMetadata extends SessionMetadata>(
 	} as SessionDependencies<TMetadata>;
 }
 
-function createStorageFacade<TMetadata extends SessionMetadata>(
+function createStorageAdapter<TMetadata extends SessionMetadata>(
 	dependencies: SessionDependencies<TMetadata>,
 ): SessionStorage<TMetadata> {
 	return {
@@ -303,7 +303,7 @@ function createStorageFacade<TMetadata extends SessionMetadata>(
 
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	private readonly dependencies: SessionDependencies<TMetadata>;
-	private readonly storageFacade: SessionStorage<TMetadata>;
+	private readonly storageAdapter: SessionStorage<TMetadata>;
 	private readonly contextBuildOptions: SessionContextBuildOptions;
 
 	constructor(
@@ -312,7 +312,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	) {
 		this.dependencies =
 			"load" in storageOrDependencies ? storageOrDependencies : storageToDependencies(storageOrDependencies);
-		this.storageFacade = this.dependencies.storage ?? createStorageFacade(this.dependencies);
+		this.storageAdapter = this.dependencies.storage ?? createStorageAdapter(this.dependencies);
 		this.contextBuildOptions = contextBuildOptions;
 	}
 
@@ -322,7 +322,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 
 	/** Prefer the Session facade methods. Exposed for low-level adapter compatibility. */
 	getStorage(): SessionStorage<TMetadata> {
-		return this.storageFacade;
+		return this.storageAdapter;
 	}
 
 	async getLeafId(): Promise<string | null> {

@@ -112,7 +112,7 @@ async function createBlockingSession(expectedWrites: number): Promise<{
 			await source.appendEntry(metadata, entry);
 		},
 		delete: (metadata) => source.delete(metadata),
-		fork: (metadata, options, entries) => source.fork(metadata, options, entries),
+		fork: (metadata, options, selection) => source.fork(metadata, options, selection),
 		[Symbol.asyncDispose]: () => source[Symbol.asyncDispose](),
 	};
 	const session = await createSessionRepository({ store: blockingStore }).create({});

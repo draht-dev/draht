@@ -15,7 +15,7 @@ import type {
 	SessionEntryCursorOptions,
 	SessionInfoEntry,
 	SessionMetadata,
-	SessionSnapshot,
+	SessionReader,
 	SessionStats,
 	SessionStore,
 	SessionTreeEntry,
@@ -149,50 +149,13 @@ export function buildSessionContext(
 	return { ...state, messages };
 }
 
-class SessionEntryIndex {
+class HydratedSessionState {
 	private readonly entries: SessionTreeEntry[];
-	private readonly byId: Map<string, SessionTreeEntry>;
 	private readonly labelsById = new Map<string, string>();
-	private leafId: string | null = null;
 
 	constructor(entries: readonly SessionTreeEntry[]) {
 		this.entries = [...entries];
-		this.byId = new Map(this.entries.map((entry) => [entry.id, entry]));
 		for (const entry of this.entries) this.applyProjection(entry);
-		if (this.leafId !== null && !this.byId.has(this.leafId)) {
-			throw new SessionError("invalid_session", `Entry ${this.leafId} not found`);
-		}
-	}
-
-	getLeafId(): string | null {
-		return this.leafId;
-	}
-	getEntry(id: string): SessionTreeEntry | undefined {
-		return this.byId.get(id);
-	}
-
-	getEntries(options?: SessionEntryCursorOptions): SessionTreeEntry[] {
-		const start = options?.afterEntrySeq ?? 0;
-		const end = options?.limit === undefined ? undefined : start + options.limit;
-		return this.entries.slice(start, end);
-	}
-
-	append(entry: SessionTreeEntry): void {
-		this.entries.push(entry);
-		this.byId.set(entry.id, entry);
-		this.applyProjection(entry);
-	}
-
-	assertCanAppend(entry: SessionTreeEntry): void {
-		if (this.byId.has(entry.id)) throw new SessionError("invalid_entry", `Entry ${entry.id} already exists`);
-	}
-
-	createEntryId(): string {
-		for (let i = 0; i < 100; i++) {
-			const id = uuidv7().slice(-8);
-			if (!this.byId.has(id)) return id;
-		}
-		return uuidv7();
 	}
 
 	getLabel(id: string): string | undefined {
@@ -240,29 +203,7 @@ class SessionEntryIndex {
 		return { messageCount, cachedTokens, uncachedTokens, totalTokens, costTotal };
 	}
 
-	getPathToRootOrCompaction(leafId: string | null): SessionTreeEntry[] {
-		if (leafId === null) return [];
-		const path: SessionTreeEntry[] = [];
-		let stopAtEntryId: string | null = null;
-		let current = this.byId.get(leafId);
-		if (!current) throw new SessionError("not_found", `Entry ${leafId} not found`);
-		while (current) {
-			path.unshift(current);
-			if (stopAtEntryId !== null && current.id === stopAtEntryId) break;
-			if (current.type === "compaction") {
-				if (current.retainedTail) break;
-				stopAtEntryId = current.firstKeptEntryId ?? null;
-			}
-			if (!current.parentId) break;
-			const parent = this.byId.get(current.parentId);
-			if (!parent) throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
-			current = parent;
-		}
-		return path;
-	}
-
 	private applyProjection(entry: SessionTreeEntry): void {
-		this.leafId = entry.type === "leaf" ? entry.targetId : entry.id;
 		if (entry.type !== "label") return;
 		const label = entry.label?.trim();
 		if (label) this.labelsById.set(entry.targetId, label);
@@ -311,19 +252,23 @@ export interface Session<TMetadata extends SessionMetadata = SessionMetadata> {
 
 class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implements Session<TMetadata> {
 	private readonly store: Pick<SessionStore<TMetadata>, "appendEntry">;
+	private readonly reader: SessionReader<TMetadata>;
 	private readonly metadata: TMetadata;
-	private readonly index: SessionEntryIndex;
+	private hydratedStatePromise: Promise<HydratedSessionState> | undefined;
+	private leafId: string | null;
 	private readonly contextBuildOptions: SessionContextBuildOptions;
 	private appendTail: Promise<void> = Promise.resolve();
 
 	constructor(
 		store: Pick<SessionStore<TMetadata>, "appendEntry">,
-		snapshot: SessionSnapshot<TMetadata>,
+		reader: SessionReader<TMetadata>,
+		leafId: string | null,
 		contextBuildOptions: SessionContextBuildOptions = {},
 	) {
 		this.store = store;
-		this.metadata = snapshot.metadata;
-		this.index = new SessionEntryIndex(snapshot.entries);
+		this.reader = reader;
+		this.metadata = reader.metadata;
+		this.leafId = leafId;
 		this.contextBuildOptions = contextBuildOptions;
 	}
 
@@ -331,17 +276,17 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 		return this.metadata;
 	}
 	async getLeafId(): Promise<string | null> {
-		return this.index.getLeafId();
+		return this.leafId;
 	}
 	async getEntry(id: string): Promise<SessionTreeEntry | undefined> {
-		return this.index.getEntry(id);
+		return this.reader.readEntry(id);
 	}
 	async getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]> {
-		return this.index.getEntries(options);
+		return [...(await this.reader.readEntries(options))];
 	}
 
 	async getBranch(fromId?: string | null): Promise<SessionTreeEntry[]> {
-		return this.index.getPathToRootOrCompaction(fromId === undefined ? this.index.getLeafId() : fromId);
+		return [...(await this.reader.readPathToRootOrCompaction(fromId === undefined ? this.leafId : fromId))];
 	}
 
 	async buildContextEntries(options: SessionContextBuildOptions = {}): Promise<SessionTreeEntry[]> {
@@ -363,13 +308,26 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 	}
 
 	async getLabel(id: string): Promise<string | undefined> {
-		return this.index.getLabel(id);
+		return (await this.getHydratedState()).getLabel(id);
 	}
 	async getSessionStats(): Promise<SessionStats> {
-		return this.index.getSessionStats();
+		return (await this.getHydratedState()).getSessionStats();
 	}
 	async getSessionName(): Promise<string | undefined> {
-		return this.index.getSessionName();
+		return (await this.getHydratedState()).getSessionName();
+	}
+
+	private async getHydratedState(): Promise<HydratedSessionState> {
+		this.hydratedStatePromise ??= this.reader.readEntries().then((entries) => new HydratedSessionState(entries));
+		return this.hydratedStatePromise;
+	}
+
+	private async createEntryId(): Promise<string> {
+		for (let i = 0; i < 100; i++) {
+			const id = uuidv7().slice(-8);
+			if (!(await this.getEntry(id))) return id;
+		}
+		return uuidv7();
 	}
 
 	private enqueueAppend<TEntry extends SessionTreeEntry>(
@@ -377,13 +335,13 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 	): Promise<TEntry> {
 		const operation = this.appendTail.then(async () => {
 			const entry = createEntry({
-				id: this.index.createEntryId(),
-				parentId: this.index.getLeafId(),
+				id: await this.createEntryId(),
+				parentId: this.leafId,
 				timestamp: new Date().toISOString(),
 			});
-			this.index.assertCanAppend(entry);
 			await this.store.appendEntry(this.metadata, entry);
-			this.index.append(entry);
+			this.leafId = entry.type === "leaf" ? entry.targetId : entry.id;
+			this.hydratedStatePromise = undefined;
 			return entry;
 		});
 		this.appendTail = operation.then(
@@ -393,11 +351,11 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 		return operation;
 	}
 
-	private setLeafId(leafId: string | null): Promise<LeafEntry> {
+	private async setLeafId(leafId: string | null): Promise<LeafEntry> {
+		if (leafId !== null && !(await this.getEntry(leafId))) {
+			throw new SessionError("not_found", `Entry ${leafId} not found`);
+		}
 		return this.enqueueAppend((base) => {
-			if (leafId !== null && !this.index.getEntry(leafId)) {
-				throw new SessionError("not_found", `Entry ${leafId} not found`);
-			}
 			return { ...base, type: "leaf", targetId: leafId };
 		});
 	}
@@ -561,10 +519,10 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 }
 
 /** @internal Construct sessions only through SessionRepository. */
-export function createSessionFromSnapshot<TMetadata extends SessionMetadata>(
+export async function createSessionFromReader<TMetadata extends SessionMetadata>(
 	store: Pick<SessionStore<TMetadata>, "appendEntry">,
-	snapshot: SessionSnapshot<TMetadata>,
+	reader: SessionReader<TMetadata>,
 	contextBuildOptions: SessionContextBuildOptions = {},
-): Session<TMetadata> {
-	return new StoreSession(store, snapshot, contextBuildOptions);
+): Promise<Session<TMetadata>> {
+	return new StoreSession(store, reader, (await reader.readHead()).leafId, contextBuildOptions);
 }

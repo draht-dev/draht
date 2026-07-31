@@ -7,7 +7,7 @@ import {
 	type InMemorySessionCreateOptions,
 } from "../../src/harness/session/memory-store.ts";
 import { createSessionRepository } from "../../src/harness/session/repository.ts";
-import type { SessionMetadata, SessionStore } from "../../src/harness/types.ts";
+import type { SessionForkSelection, SessionMetadata, SessionReader, SessionStore } from "../../src/harness/types.ts";
 import { createAssistantMessage, createTempDir, createUserMessage } from "./session-test-utils.ts";
 
 afterEach(() => {
@@ -134,24 +134,57 @@ class BlockingAppendEnv extends NodeExecutionEnv {
 	}
 }
 
+interface SessionStoreReadCounter {
+	loadCount: number;
+	readHeadCount: number;
+	readEntriesCount: number;
+	readPathCount: number;
+	forkSelections: SessionForkSelection[];
+}
+
 function createCountingInMemorySessionStore(): {
 	store: SessionStore<SessionMetadata, InMemorySessionCreateOptions, void>;
-	counter: { loadCount: number };
+	counter: SessionStoreReadCounter;
 } {
 	const source = createInMemorySessionStore();
-	const counter = { loadCount: 0 };
+	const counter: SessionStoreReadCounter = {
+		loadCount: 0,
+		readHeadCount: 0,
+		readEntriesCount: 0,
+		readPathCount: 0,
+		forkSelections: [],
+	};
+	const countReads = (reader: SessionReader<SessionMetadata>): SessionReader<SessionMetadata> => ({
+		metadata: reader.metadata,
+		readHead: () => {
+			counter.readHeadCount += 1;
+			return reader.readHead();
+		},
+		readEntry: (id) => reader.readEntry(id),
+		readEntries: (options) => {
+			counter.readEntriesCount += 1;
+			return reader.readEntries(options);
+		},
+		readPathToRootOrCompaction: (leafId) => {
+			counter.readPathCount += 1;
+			return reader.readPathToRootOrCompaction(leafId);
+		},
+	});
 	return {
 		counter,
 		store: {
 			create: (options) => source.create(options),
 			async load(metadata) {
 				counter.loadCount += 1;
-				return source.load(metadata);
+				return countReads(await source.load(metadata));
 			},
 			list: (options) => source.list(options),
 			appendEntry: (metadata, entry) => source.appendEntry(metadata, entry),
 			delete: (metadata) => source.delete(metadata),
-			fork: (metadata, options, entries) => source.fork(metadata, options, entries),
+			fork: (metadata, options, selection) => {
+				counter.forkSelections.push(selection);
+				return source.fork(metadata, options, selection);
+			},
 			[Symbol.asyncDispose]: () => source[Symbol.asyncDispose](),
 		},
 	};
@@ -170,9 +203,39 @@ describe("InMemorySessionStore", () => {
 		const fork = await repo.fork(metadata, { entryId: user2, id: "session-2" });
 		expect((await fork.getEntries()).map((entry) => entry.id)).toEqual([user1, assistant1]);
 		const fullFork = await repo.fork(metadata, { id: "session-3" });
+		const throughFork = await repo.fork(metadata, {
+			entryId: assistant1,
+			position: "at",
+			id: "session-4",
+		});
+		expect((await throughFork.getEntries()).map((entry) => entry.id)).toEqual([user1, assistant1]);
+		await expect(repo.fork(metadata, { entryId: assistant1, id: "session-5" })).rejects.toMatchObject({
+			code: "invalid_fork_target",
+		});
+		await expect(repo.fork(metadata, { entryId: "missing", id: "session-6" })).rejects.toMatchObject({
+			code: "invalid_fork_target",
+		});
 		expect((await fullFork.getEntries()).map((entry) => entry.id)).toEqual([user1, assistant1, user2]);
 		await repo.delete(metadata);
 		await expect(repo.open(metadata)).rejects.toThrow("Session not found: session-1");
+	});
+
+	it("delegates full-session fork selection without opening the source", async () => {
+		const { store, counter } = createCountingInMemorySessionStore();
+		const repo = createSessionRepository({ store });
+		const source = await repo.create({ id: "session-1" });
+		await source.appendMessage(createUserMessage("one"));
+
+		const fork = await repo.fork(await source.getMetadata(), { id: "session-2" });
+
+		expect((await fork.getEntries()).map((entry) => entry.id)).toHaveLength(1);
+		expect(counter).toMatchObject({
+			loadCount: 0,
+			readHeadCount: 0,
+			readEntriesCount: 0,
+			readPathCount: 0,
+			forkSelections: [{ kind: "all" }],
+		});
 	});
 
 	it("retains the opened aggregate instead of reloading for scoped reads", async () => {
@@ -185,6 +248,18 @@ describe("InMemorySessionStore", () => {
 		await session.getLeafId();
 		await session.getEntry(entryId);
 		expect(counter.loadCount).toBe(0);
+	});
+
+	it("builds context from the branch reader without loading complete history", async () => {
+		const { store, counter } = createCountingInMemorySessionStore();
+		const repo = createSessionRepository({ store });
+		const created = await repo.create({ id: "session-1" });
+		await created.appendMessage(createUserMessage("one"));
+		const opened = await repo.open(await created.getMetadata());
+
+		await opened.buildContext();
+
+		expect(counter).toMatchObject({ loadCount: 1, readHeadCount: 1, readEntriesCount: 0, readPathCount: 1 });
 	});
 
 	it("rejects repository operations and session writes after store disposal", async () => {
@@ -220,6 +295,12 @@ describe("JsonlSessionStore", () => {
 			vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
 			const root = createTempDir();
 			const env = new BlockingCreateEnv({ cwd: root });
+			const sourcePath = `${root}/source.jsonl`;
+			writeFileSync(
+				sourcePath,
+				`${JSON.stringify({ type: "session", version: 3, id: "source", timestamp: "2025-01-01T00:00:00.000Z", cwd: "/tmp/source" })}\n`,
+			);
+			env.writtenPaths.add(sourcePath);
 			const store = createJsonlSessionStore({ fs: env, sessionsRoot: root });
 			const options = { cwd: "/tmp/target", id: "shared-id" };
 			const first = store.create(options);
@@ -232,10 +313,10 @@ describe("JsonlSessionStore", () => {
 								id: "source",
 								createdAt: "2025-01-01T00:00:00.000Z",
 								cwd: "/tmp/source",
-								path: "/tmp/source.jsonl",
+								path: sourcePath,
 							},
 							options,
-							[createEntry("fork-entry")],
+							{ kind: "all" },
 						);
 			const secondStartedBeforeFirstFinished = await settlesBeforeNextTurn(env.secondWriteStarted.promise);
 
@@ -372,7 +453,7 @@ describe("JsonlSessionStore", () => {
 		block.release.resolve();
 		await Promise.all([firstAppend, secondAppend]);
 		expect(appendCountWhileFirstWasBlocked).toBe(1);
-		expect((await store.load(snapshot.metadata)).entries.map((entry) => entry.id)).toEqual([
+		expect((await (await store.load(snapshot.metadata)).readEntries()).map((entry) => entry.id)).toEqual([
 			"first-entry",
 			"second-entry",
 		]);
@@ -496,6 +577,25 @@ describe("JsonlSessionStore", () => {
 		writeFileSync(metadata.path, "not json\n");
 
 		await expect(repo.list()).rejects.toMatchObject({ code: "invalid_session" });
+	});
+
+	it("rejects a missing active leaf when opened", async () => {
+		const root = createTempDir();
+		const store = createJsonlSessionStore({ fs: new NodeExecutionEnv({ cwd: root }), sessionsRoot: root });
+		const repo = createSessionRepository({ store });
+		const reader = await store.create({ cwd: root, id: "session-1" });
+		await store.appendEntry(reader.metadata, {
+			type: "leaf",
+			id: "leaf",
+			parentId: null,
+			targetId: "missing",
+			timestamp: "2026-01-01T00:00:00.000Z",
+		});
+
+		await expect(repo.open(reader.metadata)).rejects.toMatchObject({
+			code: "invalid_session",
+			message: "Entry missing not found",
+		});
 	});
 
 	it("opens, deletes, and forks by metadata", async () => {

@@ -1996,7 +1996,7 @@ Rules, both scopes:
 ## 14. Session stores
 
 `Session` is the only opened-session object. `SessionRepository` borrows a
-caller-owned `SessionStore`, loads snapshots, and constructs `Session` objects.
+caller-owned `SessionStore`, opens readers, and constructs `Session` objects.
 The in-memory store is the simplest built-in option:
 
 ```ts
@@ -2017,29 +2017,52 @@ scope; repositories and sessions do not dispose it.
 A custom store implements `SessionStore`:
 
 ```ts
+interface SessionReader<TMetadata extends SessionMetadata = SessionMetadata> {
+  readonly metadata: TMetadata;
+  readHead(): Promise<SessionHead>;
+  readEntry(id: string): Promise<SessionTreeEntry | undefined>;
+  readEntries(options?: SessionEntryCursorOptions): Promise<readonly SessionTreeEntry[]>;
+  readPathToRootOrCompaction(
+    leafId: string | null,
+  ): Promise<readonly SessionTreeEntry[]>;
+}
+
+type SessionForkSelection =
+  | { kind: "all" }
+  | { kind: "before_user_message"; entryId: string }
+  | { kind: "through_entry"; entryId: string };
+
 interface SessionStore<
   TMetadata extends SessionMetadata = SessionMetadata,
   TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
   TListOptions = void,
 > extends AsyncDisposable {
-  create(options: TCreateOptions): Promise<SessionSnapshot<TMetadata>>;
-  load(metadata: TMetadata): Promise<SessionSnapshot<TMetadata>>;
+  create(options: TCreateOptions): Promise<SessionReader<TMetadata>>;
+  load(metadata: TMetadata): Promise<SessionReader<TMetadata>>;
   list(options?: TListOptions): Promise<TMetadata[]>;
   appendEntry(metadata: TMetadata, entry: SessionTreeEntry): Promise<void>;
   delete(metadata: TMetadata): Promise<void>;
   fork(
     source: TMetadata,
-    options: SessionForkOptions & TCreateOptions,
-    entries: readonly SessionTreeEntry[],
-  ): Promise<SessionSnapshot<TMetadata>>;
+    options: TCreateOptions,
+    selection: SessionForkSelection,
+  ): Promise<SessionReader<TMetadata>>;
 }
 ```
 
-`create()` and `load()` return complete snapshots. `appendEntry()` receives a
-complete entry and must preserve append order and entry-id uniqueness. `fork()`
-stores the entries selected by the repository. Disposal rejects new operations,
-drains accepted writes, and releases owned resources. Store implementations
-know nothing about harness operations, queues, or recovery.
+`create()` and `load()` return a `SessionReader` with canonical metadata, head,
+entry, range, and branch-path reads. Reader lifetimes belong to the store.
+`appendEntry()` receives a complete entry and must preserve append order and
+entry-id uniqueness. `SessionRepository` converts public fork options into a
+`SessionForkSelection`; `fork()` validates and executes that selection inside
+the owning store, allowing backend-native copies without repository-level
+history materialization.
+Disposal rejects new operations and reader calls, drains accepted writes, and
+releases owned resources. Store implementations know nothing about harness
+operations, queues, or recovery.
+`Session.buildContext()` reads only the active path. Complete history is read on
+demand by `getEntries()` and by derived queries that currently require full
+hydration, such as session statistics, labels, and names.
 Expose custom implementations through a factory returning `SessionStore` rather
 than exporting the concrete class.
 
@@ -2048,7 +2071,8 @@ Contract, all stores:
 - One total append order (`seq`) across session and harness entries. Harness entries and leaf records carry `ref`; session entries do not (membership derives from parent linkage).
 - An append is durable when its promise resolves; events fire after.
 - Entry ids are unique per session, enforced at append.
-- Reads return immutable snapshots; callers cannot mutate stored state.
+- Reader methods return immutable entry arrays; callers cannot mutate stored state.
+- `readHead()` rejects `invalid_session` when its non-null leaf does not reference a canonical entry.
 - One writer per *session*, enforced by the serving layer; SQLite additionally rejects concurrent writers itself. This is per session, not per store: one SQLite database can host many sessions, all writable concurrently — each through its own single live harness. The same applies to a directory of JSONL files.
 
 ### JSONL

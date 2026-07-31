@@ -11,7 +11,8 @@ import {
 	type SessionStore,
 	type SessionTreeEntry,
 } from "../types.ts";
-import { createSessionFromSnapshot, type Session, type SessionContextBuildOptions } from "./session.ts";
+import { createSessionForkSelection } from "./fork-selection.ts";
+import { createSessionFromReader, type Session, type SessionContextBuildOptions } from "./session.ts";
 
 export function createSessionId(): string {
 	return uuidv7();
@@ -41,11 +42,11 @@ export class SessionRepository<
 	}
 
 	async create(options: TCreateOptions): Promise<Session<TMetadata>> {
-		return createSessionFromSnapshot(this.store, await this.store.create(options), this.contextBuildOptions);
+		return createSessionFromReader(this.store, await this.store.create(options), this.contextBuildOptions);
 	}
 
 	async open(metadata: TMetadata): Promise<Session<TMetadata>> {
-		return createSessionFromSnapshot(this.store, await this.store.load(metadata), this.contextBuildOptions);
+		return createSessionFromReader(this.store, await this.store.load(metadata), this.contextBuildOptions);
 	}
 
 	async list(options?: TListOptions): Promise<TMetadata[]> {
@@ -57,11 +58,13 @@ export class SessionRepository<
 	}
 
 	async fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<Session<TMetadata>> {
-		const sourceSession = await this.open(source);
-		const entries = await getEntriesToFork(sourceSession, options);
-		return createSessionFromSnapshot(
+		const selection = createSessionForkSelection(options);
+		const createOptions = { ...options };
+		delete createOptions.entryId;
+		delete createOptions.position;
+		return createSessionFromReader(
 			this.store,
-			await this.store.fork(source, options, entries),
+			await this.store.fork(source, createOptions, selection),
 			this.contextBuildOptions,
 		);
 	}
@@ -103,18 +106,4 @@ export function getFileSystemResultOrThrow<TValue>(result: Result<TValue, FileEr
 		throw new SessionError(code, `${message}: ${result.error.message}`, result.error);
 	}
 	return result.value;
-}
-
-export async function getEntriesToFork(
-	source: Pick<Session, "getEntries" | "getEntry" | "getBranch">,
-	options: { entryId?: string; position?: "before" | "at" },
-): Promise<SessionTreeEntry[]> {
-	if (!options.entryId) return source.getEntries();
-	const target = await source.getEntry(options.entryId);
-	if (!target) throw new SessionError("invalid_fork_target", `Entry ${options.entryId} not found`);
-	if ((options.position ?? "before") === "at") return source.getBranch(target.id);
-	if (target.type !== "message" || target.message.role !== "user") {
-		throw new SessionError("invalid_fork_target", `Entry ${options.entryId} is not a user message`);
-	}
-	return source.getBranch(target.parentId);
 }

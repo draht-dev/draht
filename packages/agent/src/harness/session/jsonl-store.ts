@@ -3,11 +3,14 @@ import type {
 	JsonlSessionCreateOptions,
 	JsonlSessionListOptions,
 	JsonlSessionMetadata,
-	SessionSnapshot,
+	SessionForkSelection,
+	SessionReader,
 	SessionStore,
 	SessionTreeEntry,
 } from "../types.ts";
 import { SessionError, toError } from "../types.ts";
+import { createArraySessionReader } from "./array-session-reader.ts";
+import { readSessionEntriesForFork } from "./fork-selection.ts";
 import { KeyedOperationQueue } from "./keyed-operation-queue.ts";
 import { createSessionId, createTimestamp, getFileSystemResultOrThrow } from "./repository.ts";
 
@@ -50,6 +53,11 @@ interface SessionDocumentDescriptor {
 	timestamp: string;
 	fileName: string;
 	operationKey: string;
+}
+
+interface JsonlSessionDocument {
+	metadata: JsonlSessionMetadata;
+	entries: SessionTreeEntry[];
 }
 
 function invalidSession(path: string, message: string, cause?: Error): SessionError {
@@ -145,10 +153,7 @@ export async function loadJsonlSessionMetadata(
 	return metadataFromHeader(parseHeader(lines[0], path), path);
 }
 
-async function loadJsonlSession(
-	fs: JsonlSessionFileSystem,
-	path: string,
-): Promise<SessionSnapshot<JsonlSessionMetadata>> {
+async function loadJsonlSession(fs: JsonlSessionFileSystem, path: string): Promise<JsonlSessionDocument> {
 	const content = getFileSystemResultOrThrow(await fs.readTextFile(path), `Failed to read session ${path}`);
 	const lines = content.split("\n").filter((line) => line.trim());
 	if (lines.length === 0) throw invalidSession(path, "missing session header");
@@ -195,6 +200,7 @@ class JsonlSessionStore
 	private readonly sessionsRootInput: string;
 	private sessionsRoot: string | undefined;
 	private readonly entryIdsByPath = new Map<string, Set<string>>();
+	private readonly entriesByPath = new Map<string, SessionTreeEntry[]>();
 	private readonly operationKeysByPath = new Map<string, string>();
 	private readonly operations: KeyedOperationQueue<string>;
 	private disposed = false;
@@ -208,7 +214,7 @@ class JsonlSessionStore
 		});
 	}
 
-	create(options: JsonlSessionCreateOptions): Promise<SessionSnapshot<JsonlSessionMetadata>> {
+	create(options: JsonlSessionCreateOptions): Promise<SessionReader<JsonlSessionMetadata>> {
 		this.assertOpen();
 		const descriptor = createDocumentDescriptor(options);
 		return this.operations.enqueue(descriptor.operationKey, () =>
@@ -216,20 +222,21 @@ class JsonlSessionStore
 		);
 	}
 
-	load(metadata: JsonlSessionMetadata): Promise<SessionSnapshot<JsonlSessionMetadata>> {
+	load(metadata: JsonlSessionMetadata): Promise<SessionReader<JsonlSessionMetadata>> {
 		this.assertOpen();
 		return this.operations.enqueue(this.operationKey(metadata), () => this.loadDocument(metadata));
 	}
 
-	private async loadDocument(metadata: JsonlSessionMetadata): Promise<SessionSnapshot<JsonlSessionMetadata>> {
+	private async loadDocument(metadata: JsonlSessionMetadata): Promise<SessionReader<JsonlSessionMetadata>> {
 		if (
 			!getFileSystemResultOrThrow(await this.fs.exists(metadata.path), `Failed to check session ${metadata.path}`)
 		) {
 			throw new SessionError("not_found", `Session not found: ${metadata.path}`);
 		}
-		const snapshot = await loadJsonlSession(this.fs, metadata.path);
-		this.entryIdsByPath.set(metadata.path, new Set(snapshot.entries.map((entry) => entry.id)));
-		return snapshot;
+		const document = await loadJsonlSession(this.fs, metadata.path);
+		this.entriesByPath.set(metadata.path, document.entries);
+		this.entryIdsByPath.set(metadata.path, new Set(document.entries.map((entry) => entry.id)));
+		return this.reader(document.metadata);
 	}
 
 	list(options: JsonlSessionListOptions = {}): Promise<JsonlSessionMetadata[]> {
@@ -262,8 +269,8 @@ class JsonlSessionStore
 			}
 			let entryIds = this.entryIdsByPath.get(metadata.path);
 			if (!entryIds) {
-				const snapshot = await this.loadDocument(metadata);
-				entryIds = new Set(snapshot.entries.map((existing) => existing.id));
+				await this.loadDocument(metadata);
+				entryIds = this.entryIdsByPath.get(metadata.path)!;
 			}
 			if (entryIds.has(entry.id)) throw new SessionError("invalid_entry", `Entry ${entry.id} already exists`);
 			getFileSystemResultOrThrow(
@@ -272,6 +279,7 @@ class JsonlSessionStore
 			);
 			entryIds.add(entry.id);
 			this.entryIdsByPath.set(metadata.path, entryIds);
+			this.entriesByPath.get(metadata.path)!.push(entry);
 		});
 	}
 
@@ -283,6 +291,7 @@ class JsonlSessionStore
 				`Failed to delete session ${metadata.path}`,
 			);
 			this.entryIdsByPath.delete(metadata.path);
+			this.entriesByPath.delete(metadata.path);
 			this.operationKeysByPath.delete(metadata.path);
 		});
 	}
@@ -290,17 +299,29 @@ class JsonlSessionStore
 	fork(
 		source: JsonlSessionMetadata,
 		options: JsonlSessionCreateOptions,
-		entries: readonly SessionTreeEntry[],
-	): Promise<SessionSnapshot<JsonlSessionMetadata>> {
+		selection: SessionForkSelection,
+	): Promise<SessionReader<JsonlSessionMetadata>> {
 		this.assertOpen();
 		const descriptor = createDocumentDescriptor(options);
-		return this.operations.enqueue(descriptor.operationKey, () =>
+		const sourceEntries = this.operations.enqueue(this.operationKey(source), async () => {
+			if (!getFileSystemResultOrThrow(await this.fs.exists(source.path), `Failed to check session ${source.path}`)) {
+				throw new SessionError("not_found", `Session not found: ${source.path}`);
+			}
+			const document = await loadJsonlSession(this.fs, source.path);
+			this.entriesByPath.set(source.path, document.entries);
+			this.entryIdsByPath.set(source.path, new Set(document.entries.map((entry) => entry.id)));
+			return readSessionEntriesForFork(
+				createArraySessionReader(document.metadata, () => document.entries),
+				selection,
+			);
+		});
+		return this.operations.enqueue(descriptor.operationKey, async () =>
 			this.createDocument(
 				descriptor,
 				options,
 				options.parentSessionPath ?? source.path,
 				options.metadata ?? source.metadata,
-				entries,
+				await sourceEntries,
 			),
 		);
 	}
@@ -327,7 +348,7 @@ class JsonlSessionStore
 		parentSessionPath: string | undefined,
 		metadata: Record<string, unknown> | undefined,
 		entries: readonly SessionTreeEntry[],
-	): Promise<SessionSnapshot<JsonlSessionMetadata>> {
+	): Promise<SessionReader<JsonlSessionMetadata>> {
 		const dir = await this.getSessionDir(options.cwd);
 		getFileSystemResultOrThrow(
 			await this.fs.createDir(dir, { recursive: true }),
@@ -351,9 +372,39 @@ class JsonlSessionStore
 		};
 		const content = [JSON.stringify(header), ...entries.map((entry) => JSON.stringify(entry)), ""].join("\n");
 		getFileSystemResultOrThrow(await this.fs.writeFile(path, content), `Failed to create session ${path}`);
-		this.entryIdsByPath.set(path, new Set(entries.map((entry) => entry.id)));
+		const storedEntries = [...entries];
+		this.entriesByPath.set(path, storedEntries);
+		this.entryIdsByPath.set(path, new Set(storedEntries.map((entry) => entry.id)));
 		this.operationKeysByPath.set(path, descriptor.operationKey);
-		return { metadata: metadataFromHeader(header, path), entries: [...entries] };
+		return this.reader(metadataFromHeader(header, path));
+	}
+
+	private reader(metadata: JsonlSessionMetadata): SessionReader<JsonlSessionMetadata> {
+		const reader = createArraySessionReader(metadata, () => {
+			const entries = this.entriesByPath.get(metadata.path);
+			if (!entries) throw new SessionError("not_found", `Session not found: ${metadata.path}`);
+			return entries;
+		});
+		const operationKey = this.operationKey(metadata);
+		return {
+			metadata: reader.metadata,
+			readHead: () => {
+				this.assertOpen();
+				return this.operations.enqueue(operationKey, () => reader.readHead());
+			},
+			readEntry: (id) => {
+				this.assertOpen();
+				return this.operations.enqueue(operationKey, () => reader.readEntry(id));
+			},
+			readEntries: (options) => {
+				this.assertOpen();
+				return this.operations.enqueue(operationKey, () => reader.readEntries(options));
+			},
+			readPathToRootOrCompaction: (leafId) => {
+				this.assertOpen();
+				return this.operations.enqueue(operationKey, () => reader.readPathToRootOrCompaction(leafId));
+			},
+		};
 	}
 
 	private async getSessionsRoot(): Promise<string> {

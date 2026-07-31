@@ -1,4 +1,4 @@
-import type { Api, AuthResult, Model, Provider } from "@draht/ai";
+import type { Api, AssistantMessage, AuthResult, Context, Model, ModelsApiStreamOptions, Provider } from "@draht/ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
 
@@ -94,6 +94,14 @@ export class ModelRegistry {
 
 	getProvider(provider: string): Provider | undefined {
 		return this.runtime.getProvider(provider);
+	}
+
+	complete<TApi extends Api>(
+		model: Model<TApi>,
+		context: Context,
+		options?: ModelsApiStreamOptions<TApi>,
+	): Promise<AssistantMessage> {
+		return this.runtime.complete(model, context, options);
 	}
 
 	getProviderDisplayName(provider: string): string {

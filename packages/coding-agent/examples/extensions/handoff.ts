@@ -13,8 +13,7 @@
  */
 
 import type { AgentMessage } from "@draht/agent-core";
-import { uuidv7 } from "@draht/ai";
-import { complete, type Message } from "@draht/ai/compat";
+import { type Message, uuidv7 } from "@draht/ai";
 import type { ExtensionAPI, SessionEntry } from "@draht/coding-agent";
 import { BorderedLoader, convertToLlm, serializeConversation } from "@draht/coding-agent";
 
@@ -134,7 +133,7 @@ export default function (pi: ExtensionAPI) {
 						timestamp: Date.now(),
 					};
 
-					const response = await complete(
+					const response = await ctx.modelRegistry.complete(
 						ctx.model!,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
 						{

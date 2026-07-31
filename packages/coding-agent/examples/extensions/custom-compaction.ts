@@ -14,7 +14,6 @@
  */
 
 import { uuidv7 } from "@draht/ai";
-import { complete } from "@draht/ai/compat";
 import type { ExtensionAPI } from "@draht/coding-agent";
 import { convertToLlm, serializeConversation } from "@draht/coding-agent";
 
@@ -88,7 +87,7 @@ ${conversationText}
 
 		try {
 			// Pass signal to honor abort requests (e.g., user cancels compaction)
-			const response = await complete(
+			const response = await ctx.modelRegistry.complete(
 				model,
 				{ messages: summaryMessages },
 				{

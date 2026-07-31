@@ -29,11 +29,11 @@ export function createArraySessionReader<TMetadata extends SessionMetadata>(
 	return {
 		metadata,
 		async readHead() {
-			const entries = updateIndex();
+			updateIndex();
 			if (leafId !== null && !byId.has(leafId)) {
 				throw new SessionError("invalid_session", `Entry ${leafId} not found`);
 			}
-			return { leafId, entryCount: entries.length };
+			return { leafId };
 		},
 		async readEntry(id) {
 			updateIndex();

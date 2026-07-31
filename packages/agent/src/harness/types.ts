@@ -536,7 +536,6 @@ export type SessionForkSelection =
 
 export interface SessionHead {
 	leafId: string | null;
-	entryCount: number;
 }
 
 /** Canonical reads for one stored session. Its lifetime is owned by the containing {@link SessionStore}. */

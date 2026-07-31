@@ -8,9 +8,15 @@ import type {
 	SessionTreeEntry,
 } from "../types.ts";
 import { SessionError, toError } from "../types.ts";
+import { KeyedOperationQueue } from "./keyed-operation-queue.ts";
 import { createSessionId, createTimestamp, getFileSystemResultOrThrow } from "./repository.ts";
 
-export type JsonlSessionStoreOptions = { fs: JsonlSessionStoreFileSystem; sessionsRoot: string };
+export interface JsonlSessionStoreOptions {
+	fs: JsonlSessionStoreFileSystem;
+	sessionsRoot: string;
+	/** Maximum active operations across session keys. Defaults to 4. */
+	maxConcurrentOperations?: number;
+}
 export type JsonlSessionStoreFileSystem = Pick<
 	FileSystem,
 	| "absolutePath"
@@ -27,6 +33,8 @@ export type JsonlSessionStoreFileSystem = Pick<
 
 type JsonlSessionFileSystem = Pick<FileSystem, "readTextFile" | "readTextLines" | "writeFile" | "appendFile">;
 
+const DEFAULT_MAX_CONCURRENT_OPERATIONS = 4;
+
 interface SessionHeader {
 	type: "session";
 	version: 3;
@@ -35,6 +43,13 @@ interface SessionHeader {
 	cwd: string;
 	parentSession?: string;
 	metadata?: Record<string, unknown>;
+}
+
+interface SessionDocumentDescriptor {
+	id: string;
+	timestamp: string;
+	fileName: string;
+	operationKey: string;
 }
 
 function invalidSession(path: string, message: string, cause?: Error): SessionError {
@@ -154,21 +169,23 @@ function encodeCwd(cwd: string): string {
 	return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
 
-class SerialOperationQueue {
-	private tail: Promise<void> = Promise.resolve();
-
-	enqueue<T>(operation: () => Promise<T> | T): Promise<T> {
-		const result = this.tail.then(operation);
-		this.tail = result.then(
-			() => undefined,
-			() => undefined,
-		);
-		return result;
+function createDocumentDescriptor(options: JsonlSessionCreateOptions): SessionDocumentDescriptor {
+	const id = options.id ?? createSessionId();
+	if (!id) throw new SessionError("invalid_session", "Session id cannot be empty");
+	let encodedId: string;
+	try {
+		encodedId = encodeURIComponent(id);
+	} catch (error) {
+		throw new SessionError("invalid_session", `Invalid session id ${JSON.stringify(id)}`, toError(error));
 	}
-
-	async drain(): Promise<void> {
-		await this.tail;
-	}
+	const timestamp = createTimestamp();
+	const fileName = `${timestamp.replace(/[:.]/g, "-")}_${encodedId}.jsonl`;
+	return {
+		id,
+		timestamp,
+		fileName,
+		operationKey: `document:${JSON.stringify([encodeCwd(options.cwd), fileName])}`,
+	};
 }
 
 class JsonlSessionStore
@@ -178,25 +195,30 @@ class JsonlSessionStore
 	private readonly sessionsRootInput: string;
 	private sessionsRoot: string | undefined;
 	private readonly entryIdsByPath = new Map<string, Set<string>>();
-	private readonly operations = new SerialOperationQueue();
+	private readonly operationKeysByPath = new Map<string, string>();
+	private readonly operations: KeyedOperationQueue<string>;
 	private disposed = false;
 	private disposePromise: Promise<void> | undefined;
 
 	constructor(options: JsonlSessionStoreOptions) {
 		this.fs = options.fs;
 		this.sessionsRootInput = options.sessionsRoot;
+		this.operations = new KeyedOperationQueue({
+			maxConcurrentOperations: options.maxConcurrentOperations ?? DEFAULT_MAX_CONCURRENT_OPERATIONS,
+		});
 	}
 
 	create(options: JsonlSessionCreateOptions): Promise<SessionSnapshot<JsonlSessionMetadata>> {
 		this.assertOpen();
-		return this.operations.enqueue(() =>
-			this.createDocument(options, options.parentSessionPath, options.metadata, []),
+		const descriptor = createDocumentDescriptor(options);
+		return this.operations.enqueue(descriptor.operationKey, () =>
+			this.createDocument(descriptor, options, options.parentSessionPath, options.metadata, []),
 		);
 	}
 
 	load(metadata: JsonlSessionMetadata): Promise<SessionSnapshot<JsonlSessionMetadata>> {
 		this.assertOpen();
-		return this.operations.enqueue(() => this.loadDocument(metadata));
+		return this.operations.enqueue(this.operationKey(metadata), () => this.loadDocument(metadata));
 	}
 
 	private async loadDocument(metadata: JsonlSessionMetadata): Promise<SessionSnapshot<JsonlSessionMetadata>> {
@@ -212,7 +234,7 @@ class JsonlSessionStore
 
 	list(options: JsonlSessionListOptions = {}): Promise<JsonlSessionMetadata[]> {
 		this.assertOpen();
-		return this.operations.enqueue(() => this.listSessions(options));
+		return this.operations.enqueueBarrier(() => this.listSessions(options));
 	}
 
 	private async listSessions(options: JsonlSessionListOptions): Promise<JsonlSessionMetadata[]> {
@@ -232,7 +254,7 @@ class JsonlSessionStore
 
 	appendEntry(metadata: JsonlSessionMetadata, entry: SessionTreeEntry): Promise<void> {
 		this.assertOpen();
-		return this.operations.enqueue(async () => {
+		return this.operations.enqueue(this.operationKey(metadata), async () => {
 			if (
 				!getFileSystemResultOrThrow(await this.fs.exists(metadata.path), `Failed to check session ${metadata.path}`)
 			) {
@@ -255,12 +277,13 @@ class JsonlSessionStore
 
 	delete(metadata: JsonlSessionMetadata): Promise<void> {
 		this.assertOpen();
-		return this.operations.enqueue(async () => {
+		return this.operations.enqueue(this.operationKey(metadata), async () => {
 			getFileSystemResultOrThrow(
 				await this.fs.remove(metadata.path, { force: true }),
 				`Failed to delete session ${metadata.path}`,
 			);
 			this.entryIdsByPath.delete(metadata.path);
+			this.operationKeysByPath.delete(metadata.path);
 		});
 	}
 
@@ -270,8 +293,10 @@ class JsonlSessionStore
 		entries: readonly SessionTreeEntry[],
 	): Promise<SessionSnapshot<JsonlSessionMetadata>> {
 		this.assertOpen();
-		return this.operations.enqueue(() =>
+		const descriptor = createDocumentDescriptor(options);
+		return this.operations.enqueue(descriptor.operationKey, () =>
 			this.createDocument(
+				descriptor,
 				options,
 				options.parentSessionPath ?? source.path,
 				options.metadata ?? source.metadata,
@@ -292,28 +317,34 @@ class JsonlSessionStore
 		if (this.disposed) throw new SessionError("storage", "JSONL session store is disposed");
 	}
 
+	private operationKey(metadata: JsonlSessionMetadata): string {
+		return this.operationKeysByPath.get(metadata.path) ?? metadata.path;
+	}
+
 	private async createDocument(
+		descriptor: SessionDocumentDescriptor,
 		options: JsonlSessionCreateOptions,
 		parentSessionPath: string | undefined,
 		metadata: Record<string, unknown> | undefined,
 		entries: readonly SessionTreeEntry[],
 	): Promise<SessionSnapshot<JsonlSessionMetadata>> {
-		const id = options.id ?? createSessionId();
-		const timestamp = createTimestamp();
 		const dir = await this.getSessionDir(options.cwd);
 		getFileSystemResultOrThrow(
 			await this.fs.createDir(dir, { recursive: true }),
 			`Failed to create session directory ${dir}`,
 		);
 		const path = getFileSystemResultOrThrow(
-			await this.fs.joinPath([dir, `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`]),
-			`Failed to resolve session file path for ${id}`,
+			await this.fs.joinPath([dir, descriptor.fileName]),
+			`Failed to resolve session file path for ${descriptor.id}`,
 		);
+		if (getFileSystemResultOrThrow(await this.fs.exists(path), `Failed to check session ${path}`)) {
+			throw new SessionError("invalid_session", `Session already exists: ${path}`);
+		}
 		const header: SessionHeader = {
 			type: "session",
 			version: 3,
-			id,
-			timestamp,
+			id: descriptor.id,
+			timestamp: descriptor.timestamp,
 			cwd: options.cwd,
 			parentSession: parentSessionPath,
 			metadata,
@@ -321,6 +352,7 @@ class JsonlSessionStore
 		const content = [JSON.stringify(header), ...entries.map((entry) => JSON.stringify(entry)), ""].join("\n");
 		getFileSystemResultOrThrow(await this.fs.writeFile(path, content), `Failed to create session ${path}`);
 		this.entryIdsByPath.set(path, new Set(entries.map((entry) => entry.id)));
+		this.operationKeysByPath.set(path, descriptor.operationKey);
 		return { metadata: metadataFromHeader(header, path), entries: [...entries] };
 	}
 

@@ -55,7 +55,8 @@ func main() {
 		// cache key silently drifting from the real dependency).
 		fmt.Printf("draht-tools (go) %s (gotreesitter@%s)\n", version, parse.LibraryVersion())
 	case "-h", "--help", "help":
-		fmt.Print(mapGraphUsage)
+		fmt.Print(topLevelUsage)
+		fmt.Print("\n", mapGraphUsage)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\nRun: draht-tools help\n", os.Args[1])
 		os.Exit(1)

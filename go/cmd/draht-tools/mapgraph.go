@@ -15,6 +15,36 @@ import (
 	"github.com/draht-dev/draht/go/internal/scan"
 )
 
+// topLevelUsage lists every subcommand this binary implements. It is printed
+// before mapGraphUsage for a bare `help`, so the query commands are
+// discoverable — previously `help` showed map-graph's flags only, and the rest
+// of the tool was invisible to anyone who had not read the source.
+const topLevelUsage = `draht-tools (go) — Draht knowledge-graph engine
+
+Build the graph:
+  map-graph [dir]            index the repo -> MAP.json + GRAPH_REPORT.md + MAP.html
+  map-serve                  serve MAP.html over HTTP
+
+Query the graph (all read the MAP.json produced above):
+  graph-context <file>       one module's package/layer/cluster, exports, importers, imports
+  graph-impact <file>...     what breaks if these change — modules, packages, entry points
+  graph-callers <file>       modules that import/call into this one
+  graph-callees <file>       modules this one imports/calls
+  graph-path <from> <to>     shortest import path between two modules
+  graph-query <term>         find symbols/modules by name
+  graph-hotspots             god nodes, most-depended-on, orchestrators, largest
+  graph-clusters             structural import-topology clusters
+
+Git integration:
+  graph-hook                 install/manage the post-commit hook that refreshes MAP.json
+
+Other:
+  --version                  print this binary's version and its gotreesitter version
+  -h, --help, help           show this help
+
+Run 'draht-tools map-graph --help' for map-graph's flags (also shown below).
+`
+
 // mapGraphUsage is printed for `map-graph -h`/`--help`.
 const mapGraphUsage = `Usage: draht-tools map-graph [dir] [flags]
 
@@ -30,7 +60,7 @@ flags:
       --ast-max-line N         skip AST parse if longest line > N bytes (default 0 = no limit)
       --verbose                per-file warnings + cache diagnostics on stderr
       --experimental-lang-edges
-                               PHASE 1 STUB: exits 2
+                               not implemented; exits 2
   -h, --help                   show this help
 `
 
@@ -209,7 +239,7 @@ func runMapGraph(args []string) int {
 		return 0
 	}
 	if opts.experimentalLangEdges {
-		fmt.Fprintln(os.Stderr, "experimental language edges are not implemented in phase 1")
+		fmt.Fprintln(os.Stderr, "experimental language edges are not implemented")
 		return 2
 	}
 

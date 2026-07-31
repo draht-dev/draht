@@ -308,6 +308,17 @@ export interface TUI extends Component {
 	queryTerminalColorScheme(options: { timeoutMs: number }): Promise<TerminalColorScheme | undefined>;
 }
 
+export const VIEWPORT_TUI = Symbol.for("@draht/tui/viewport");
+
+export interface ViewportTUI extends TUI {
+	readonly [VIEWPORT_TUI]: true;
+	setLayoutRoot(component: Component | undefined): void;
+}
+
+export function isViewportTUI(tui: TUI): tui is ViewportTUI {
+	return (tui as Partial<ViewportTUI>)[VIEWPORT_TUI] === true;
+}
+
 export abstract class TuiBase extends Container implements TUI {
 	public terminal: Terminal;
 	private focusedComponent: Component | null = null;
@@ -503,8 +514,12 @@ export abstract class TuiBase extends Container implements TUI {
 		}
 	}
 
+	protected getMountedRoots(): readonly Component[] {
+		return this.children;
+	}
+
 	private isComponentMounted(component: Component): boolean {
-		return this.children.some((child) => this.containsComponent(child, component));
+		return this.getMountedRoots().some((child) => this.containsComponent(child, component));
 	}
 
 	private containsComponent(root: Component, target: Component): boolean {

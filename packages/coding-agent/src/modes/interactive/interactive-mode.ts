@@ -22,6 +22,7 @@ import type {
 	SlashCommand,
 	Terminal,
 } from "@draht/tui";
+import * as TuiLayouts from "@draht/tui";
 import {
 	CombinedAutocompleteProvider,
 	type Component,
@@ -363,6 +364,7 @@ export class InteractiveMode {
 	private ui: TUI;
 	private loadedResourcesContainer: Container;
 	private chatContainer: Container;
+	private documentContainer: Container;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
@@ -373,6 +375,7 @@ export class InteractiveMode {
 	private fdPath: string | undefined;
 	private editorContainer: Container;
 	private footer: FooterComponent;
+	private footerContainer: Container;
 	private footerDataProvider: FooterDataProvider;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
@@ -522,6 +525,10 @@ export class InteractiveMode {
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
 		this.chatContainer = new Container();
+		this.documentContainer = new Container();
+		this.documentContainer.addChild(this.headerContainer);
+		this.documentContainer.addChild(this.loadedResourcesContainer);
+		this.documentContainer.addChild(this.chatContainer);
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
@@ -540,6 +547,8 @@ export class InteractiveMode {
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.footerContainer = new Container();
+		this.footerContainer.addChild(this.footer);
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -765,19 +774,37 @@ export class InteractiveMode {
 			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
 		}
 
-		// Add header container as first child. Populate it after applying theme settings.
-		// Keep loaded resources before chat so restored session messages never precede them.
-		this.ui.addChild(this.headerContainer);
-		this.ui.addChild(this.loadedResourcesContainer);
-
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
+		// Populate stable regions before selecting the renderer-specific composition.
 		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
-		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.widgetContainerBelow);
-		this.ui.addChild(this.footer);
+		if (TuiLayouts.isViewportTUI(this.ui)) {
+			const transcript = new TuiLayouts.ScrollView(this.documentContainer, {
+				follow: "end",
+				primary: true,
+				overscroll: "chain",
+			});
+			const dock = new TuiLayouts.VStack([
+				{ component: this.pendingMessagesContainer, shrink: 1, minSize: 0 },
+				{ component: this.statusContainer, shrink: 1, minSize: 0 },
+				{ component: this.widgetContainerAbove, shrink: 1, minSize: 0 },
+				{ component: this.editorContainer, shrink: 1, minSize: 3 },
+				{ component: this.widgetContainerBelow, shrink: 1, minSize: 0 },
+				{ component: this.footerContainer, shrink: 1, minSize: 1 },
+			]);
+			this.ui.setLayoutRoot(
+				new TuiLayouts.VStack([
+					{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+					{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+				]),
+			);
+		} else {
+			this.ui.addChild(this.documentContainer);
+			this.ui.addChild(this.pendingMessagesContainer);
+			this.ui.addChild(this.statusContainer);
+			this.ui.addChild(this.widgetContainerAbove);
+			this.ui.addChild(this.editorContainer);
+			this.ui.addChild(this.widgetContainerBelow);
+			this.ui.addChild(this.footerContainer);
+		}
 		this.ui.setFocus(this.editor);
 
 		this.setupKeyHandlers();
@@ -2134,21 +2161,15 @@ export class InteractiveMode {
 			this.customFooter.dispose();
 		}
 
-		// Remove current footer from UI
-		if (this.customFooter) {
-			this.ui.removeChild(this.customFooter);
-		} else {
-			this.ui.removeChild(this.footer);
-		}
-
+		this.footerContainer.clear();
 		if (factory) {
 			// Create and add custom footer, passing the data provider
 			this.customFooter = factory(this.ui, theme, this.footerDataProvider);
-			this.ui.addChild(this.customFooter);
+			this.footerContainer.addChild(this.customFooter);
 		} else {
 			// Restore built-in footer
 			this.customFooter = undefined;
-			this.ui.addChild(this.footer);
+			this.footerContainer.addChild(this.footer);
 		}
 
 		this.ui.requestRender();

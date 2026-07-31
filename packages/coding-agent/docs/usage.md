@@ -236,14 +236,14 @@ pi --no-extensions -e ./my-extension.ts
 |--------|-------------|
 | `--system-prompt <text>` | Replace default prompt; context files and skills are still appended |
 | `--append-system-prompt <text>` | Append to system prompt |
-| `--alt` | Use the alternate-screen TUI with application-owned scrolling in interactive mode |
+| `--alt` | Use the alternate-screen TUI with a scrollable transcript and fixed editor/status/footer dock |
 | `--verbose` | Force verbose startup |
 | `-a`, `--approve` | Trust project-local files for this run |
 | `-na`, `--no-approve` | Ignore project-local files for this run |
 | `-h`, `--help` | Show help |
 | `-v`, `--version` | Show version |
 
-When `--alt` is active, inline images work in terminals that support the Kitty graphics protocol, including Kitty and Ghostty. In iTerm2 they render as text placeholders because its inline-image protocol cannot delete or crop placements during application-owned scrolling. Without `--alt`, iTerm2 inline images continue to render normally.
+When `--alt` is active, the transcript scrolls inside the terminal viewport while queued messages, working status, extension widgets, editor, and footer remain fixed at the bottom. Mouse/trackpad input scrolls the region under the pointer; keyboard viewport actions always remain available. Inline images work in terminals that support the Kitty graphics protocol, including Kitty and Ghostty. In iTerm2 they render as text placeholders because its inline-image protocol cannot delete or crop placements during application-owned scrolling. Without `--alt`, pi uses the main screen and terminal-owned scrollback, and iTerm2 inline images continue to render normally.
 
 ### File Arguments
 

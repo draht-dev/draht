@@ -1,7 +1,10 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import { HStack } from "../src/components/h-stack.ts";
 import { Image } from "../src/components/image.ts";
+import { ScrollView } from "../src/components/scroll-view.ts";
 import { Text } from "../src/components/text.ts";
+import { VStack } from "../src/components/v-stack.ts";
 import { TuiAltScreen } from "../src/TuiAltScreen.ts";
 import {
 	encodeKitty,
@@ -63,6 +66,104 @@ describe("TuiAltScreen", () => {
 			["line 4", "line 5", "line 6", "line 7"],
 		);
 
+		tui.stop();
+	});
+
+	it("keeps an explicit dock fixed while the transcript scrolls", async () => {
+		const terminal = new VirtualTerminal(20, 6);
+		const tui = new TuiAltScreen(terminal);
+		const transcriptText = new Text(Array.from({ length: 8 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0);
+		const transcript = new ScrollView(transcriptText, { follow: "end", primary: true });
+		const dock = new VStack([new Text("editor", 0, 0), new Text("footer", 0, 0)]);
+		tui.setLayoutRoot(
+			new VStack([
+				{ component: transcript, basis: 0, grow: 1, minSize: 1 },
+				{ component: dock, basis: "auto", minSize: 1 },
+			]),
+		);
+		tui.start();
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 5", "line 6", "line 7", "line 8", "editor", "footer"],
+		);
+
+		// Wheel over the dock falls back to the primary transcript scroll view.
+		terminal.sendInput("\x1b[<64;1;6M");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 2", "line 3", "line 4", "line 5", "editor", "footer"],
+		);
+		assert.strictEqual(transcript.isFollowingEnd, false);
+
+		transcriptText.setText(Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"));
+		tui.requestRender();
+		await terminal.waitForRender();
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 2", "line 3", "line 4", "line 5", "editor", "footer"],
+		);
+
+		tui.scrollToBottom();
+		await terminal.waitForRender();
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 7", "line 8", "line 9", "line 10", "editor", "footer"],
+		);
+		tui.stop();
+	});
+
+	it("routes wheel input to the scroll view under the pointer", async () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const tui = new TuiAltScreen(terminal);
+		const left = new ScrollView(new Text("a1\na2\na3\na4\na5\na6\na7", 0, 0), {
+			follow: "end",
+			primary: true,
+		});
+		const right = new ScrollView(new Text("b1\nb2\nb3\nb4\nb5\nb6\nb7", 0, 0), { follow: "end" });
+		tui.setLayoutRoot(
+			new HStack([
+				{ component: left, basis: 10, shrink: 0 },
+				{ component: right, basis: 10, shrink: 0 },
+			]),
+		);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<64;15;1M");
+		await terminal.waitForRender();
+		assert.strictEqual(left.scrollTop, 3);
+		assert.strictEqual(right.scrollTop, 0);
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["a4        b1", "a5        b2", "a6        b3", "a7        b4"],
+		);
+		tui.stop();
+	});
+
+	it("chains unused wheel delta to an outer scroll view", async () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const tui = new TuiAltScreen(terminal);
+		const inner = new ScrollView(new Text("i1\ni2\ni3\ni4\ni5\ni6", 0, 0));
+		const outer = new ScrollView(
+			new VStack([{ component: inner, basis: 2 }, new Text("tail1\ntail2\ntail3\ntail4\ntail5", 0, 0)]),
+			{ primary: true },
+		);
+		tui.setLayoutRoot(outer);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<65;1;1M");
+		await terminal.waitForRender();
+		assert.strictEqual(inner.scrollTop, 3);
+		assert.strictEqual(outer.scrollTop, 0);
+
+		terminal.sendInput("\x1b[<65;1;1M");
+		await terminal.waitForRender();
+		assert.strictEqual(inner.scrollTop, 4);
+		assert.strictEqual(outer.scrollTop, 2);
 		tui.stop();
 	});
 
@@ -234,7 +335,39 @@ describe("TuiAltScreen", () => {
 			JSON.stringify(clipboardWrites),
 		);
 		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[7m")));
+		assert.ok(
+			terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[7m\x1b[0m\x1b[7m")),
+			"selection inverse must be reapplied after layout segment resets",
+		);
 
+		tui.stop();
+	});
+
+	it("auto-scrolls and extends a drag selection held at the viewport edge", async () => {
+		const terminal = new RecordingTerminal(20, 4);
+		const tui = new TuiAltScreen(terminal);
+		tui.addChild(new Text(Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+		assert.strictEqual(tui.viewportTop, 6);
+
+		terminal.sendInput("\x1b[<0;1;3M");
+		terminal.sendInput("\x1b[<32;1;1M");
+		await new Promise((resolve) => setTimeout(resolve, 130));
+		await terminal.waitForRender();
+
+		const selectionTop = tui.viewportTop;
+		assert.ok(selectionTop < 6, `expected auto-scroll above row 6, got ${selectionTop}`);
+		terminal.sendInput("\x1b[<0;1;1m");
+		await terminal.waitForRender();
+
+		const selectedLines = Array.from({ length: 8 - selectionTop }, (_, index) => `line ${selectionTop + index + 1}`);
+		selectedLines.push("l");
+		const expectedClipboardSequence = `\x1b]52;c;${Buffer.from(selectedLines.join("\n")).toString("base64")}\x07`;
+		assert.ok(
+			terminal.events.some((event) => event.type === "write" && event.data.includes(expectedClipboardSequence)),
+			JSON.stringify(terminal.events.filter((event) => event.type === "write" && event.data.includes("\x1b]52;c;"))),
+		);
 		tui.stop();
 	});
 

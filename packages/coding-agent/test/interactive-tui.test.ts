@@ -1,5 +1,5 @@
 import type { Component, Terminal } from "@draht/tui";
-import { Container, Text } from "@draht/tui";
+import { Container, isViewportTUI, Text } from "@draht/tui";
 import { describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { createInteractiveTui, InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
@@ -22,6 +22,7 @@ describe("createInteractiveTui", () => {
 			logDirectory: "/tmp",
 			terminal: mainTerminal,
 		});
+		expect(isViewportTUI(mainTui)).toBe(false);
 		mainTui.start();
 		await mainTerminal.waitForRender();
 		expect(mainTerminal.writes.some((write) => write.includes("\x1b[?1049h"))).toBe(false);
@@ -34,6 +35,7 @@ describe("createInteractiveTui", () => {
 			logDirectory: "/tmp",
 			terminal: altTerminal,
 		});
+		expect(isViewportTUI(altTui)).toBe(true);
 		altTui.start();
 		await altTerminal.waitForRender();
 		expect(altTerminal.writes.some((write) => write.includes("\x1b[?1049h"))).toBe(true);

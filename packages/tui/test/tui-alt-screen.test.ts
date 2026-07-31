@@ -433,6 +433,38 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("ignores orphan selection events and cancels an active selection on focus loss", async () => {
+		const terminal = new RecordingTerminal(20, 4);
+		const tui = new TuiAltScreen(terminal);
+		tui.addChild(new Text("alpha\nbeta\ngamma\ndelta", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		const clipboardWriteCount = () =>
+			terminal.events.filter((event) => event.type === "write" && event.data.includes("\x1b]52;c;")).length;
+
+		// A completed click leaves a zero-width anchor, but later orphaned drag/release events must not extend it.
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<0;1;1m");
+		terminal.sendInput("\x1b[<32;4;2M");
+		terminal.sendInput("\x1b[<0;4;2m");
+		await terminal.waitForRender();
+		assert.strictEqual(clipboardWriteCount(), 0);
+
+		// Losing focus also cancels a press whose matching release never arrived.
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[O");
+		terminal.sendInput("\x1b[I");
+		terminal.sendInput("\x1b[<32;4;2M");
+		terminal.sendInput("\x1b[<0;4;2m");
+		await terminal.waitForRender();
+		assert.strictEqual(clipboardWriteCount(), 0);
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[?1004h")));
+
+		tui.stop();
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[?1004l")));
+	});
+
 	it("stacks flash messages and collapses them as they expire", async () => {
 		const terminal = new VirtualTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal);

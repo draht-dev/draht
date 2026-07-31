@@ -1993,47 +1993,59 @@ Rules, both scopes:
 - Persisted config derives from the copied tree via the usual branch point queries; `main` sits at the fork point (`scope: "branch"`) or the source's `main` leaf (`scope: "tree"`).
 - **Threads are refs first.** A platform thread sharing one source of truth with its channel is a ref in the same session (section 6), not a fork. Fork when a *separate* session is wanted: subagents, exports, clones. Whether a thread becomes a ref, a fork, or a fresh session with platform backlog as prompt-time context is application policy; all three are supported.
 
-## 14. Storage backends
-### Session persistence
+## 14. Session stores
 
-`Session` is the only opened-session object. A `SessionStore` owns serialization,
-filesystem or database access, listing, deletion, forking, and shared resources.
-`SessionRepository` loads snapshots and constructs stateful `Session` aggregates.
-
-Store ownership is explicit. Repositories borrow their stores, and callers
-dispose stores after draining harness work:
+`Session` is the only opened-session object. `SessionRepository` borrows a
+caller-owned `SessionStore`, loads snapshots, and constructs `Session` objects.
+The in-memory store is the simplest built-in option:
 
 ```ts
-await using store = createJsonlSessionStore({ fs, sessionsRoot });
+await using store = createInMemorySessionStore();
 const repository = createSessionRepository({ store });
-const session = await repository.open(metadata);
-const harness = new AgentHarness({ session, models, model });
+const session = await repository.create({});
+```
 
-try {
-  await harness.prompt("...");
-} finally {
-  harness.requestShutdown();
-  await harness.waitForShutdown();
+Use `createJsonlSessionStore({ fs, sessionsRoot })` for filesystem persistence.
+SQLite support is provided separately by `createSqliteSessionStore()`. Drain all
+session or harness operations before the store leaves scope; repositories and
+sessions do not dispose it.
+
+A custom store implements `SessionStore`:
+
+```ts
+interface SessionStore<
+  TMetadata extends SessionMetadata = SessionMetadata,
+  TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
+  TListOptions = void,
+> extends AsyncDisposable {
+  create(options: TCreateOptions): Promise<SessionSnapshot<TMetadata>>;
+  load(metadata: TMetadata): Promise<SessionSnapshot<TMetadata>>;
+  list(options?: TListOptions): Promise<TMetadata[]>;
+  appendEntry(metadata: TMetadata, entry: SessionTreeEntry): Promise<void>;
+  delete(metadata: TMetadata): Promise<void>;
+  fork(
+    source: TMetadata,
+    options: SessionForkOptions & TCreateOptions,
+    entries: readonly SessionTreeEntry[],
+  ): Promise<SessionSnapshot<TMetadata>>;
 }
 ```
 
-Custom adapters implement `create()` and `load()` by returning a
-`SessionSnapshot`, persist complete entries through `appendEntry()`, and
-implement multi-session `list()`, `delete()`, `fork()`, and
-`Symbol.asyncDispose`. Disposal must reject new operations and wait for accepted
-writes before releasing resources. Search-index adapters implement `reset()` so
-rebuilds remove stale sessions. Direct `Session` construction remains available
-for tests and specialized owners as `new Session(store, snapshot)`.
+`create()` and `load()` return complete snapshots. `appendEntry()` receives a
+complete entry and must preserve append order and entry-id uniqueness. `fork()`
+stores the entries selected by the repository. Disposal rejects new operations,
+drains accepted writes, and releases owned resources. Store implementations
+know nothing about harness operations, queues, or recovery.
+Expose custom implementations through a factory returning `SessionStore` rather
+than exporting the concrete class.
 
-Backends implement append + read + the finder queries for one session. They know nothing about operations, queues, or recovery — the harness entry payloads are opaque to them apart from the columns they index.
-
-Contract, all backends:
+Contract, all stores:
 
 - One total append order (`seq`) across session and harness entries. Harness entries and leaf records carry `ref`; session entries do not (membership derives from parent linkage).
 - An append is durable when its promise resolves; events fire after.
 - Entry ids are unique per session, enforced at append.
 - Reads return immutable snapshots; callers cannot mutate stored state.
-- One writer per *session*, enforced by the serving layer; SQLite additionally rejects concurrent writers itself. This is per session, not per backend: one SQLite database is a repo hosting many sessions, all writable concurrently — each through its own single live harness. Same for a directory of JSONL files.
+- One writer per *session*, enforced by the serving layer; SQLite additionally rejects concurrent writers itself. This is per session, not per store: one SQLite database can host many sessions, all writable concurrently — each through its own single live harness. The same applies to a directory of JSONL files.
 
 ### JSONL
 
@@ -2084,7 +2096,7 @@ CREATE INDEX idx_harness_ref_kind_seq ON harness_entries(session_id, ref, type, 
 
 ### Append failure
 
-Any backend append failure faults the harness (section 4): the instance stops, in-flight calls resolve `faulted`, and the log remains a valid prefix. For SQLite, a failed transaction rolls back cleanly; for JSONL, a partial line becomes the torn tail the next open repairs.
+Any store append failure faults the harness (section 4): the instance stops, in-flight calls resolve `faulted`, and the log remains a valid prefix. For SQLite, a failed transaction rolls back cleanly; for JSONL, a partial line becomes the torn tail the next open repairs.
 
 ## 15. Telemetry
 

@@ -15,6 +15,8 @@ import {
 } from "../src/terminal-image.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
+const OSC133_ZONE_START = "\x1b]133;A\x07";
+
 class RecordingTerminal extends VirtualTerminal {
 	readonly events: Array<{ type: "write"; data: string } | { type: "start" } | { type: "stop" }> = [];
 
@@ -249,33 +251,82 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
-	it("supports configurable keyboard viewport navigation", async () => {
-		const terminal = new VirtualTerminal(20, 4);
+	it("supports configurable keyboard viewport navigation with four rows of page overlap", async () => {
+		const terminal = new VirtualTerminal(20, 8);
 		const tui = new TuiAltScreen(terminal);
-		tui.addChild(new Text(Array.from({ length: 8 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0));
+		tui.addChild(new Text(Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0));
 		tui.start();
 		await terminal.waitForRender();
 
-		terminal.sendInput("\x1b[5$");
+		terminal.sendInput("\x1b[57421u");
+		terminal.sendInput("\x1b[57421;1:3u");
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 2", "line 3", "line 4", "line 5"],
+			["line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8"],
+		);
+
+		terminal.sendInput("\x1b[57422u");
+		terminal.sendInput("\x1b[57422;1:3u");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 5", "line 6", "line 7", "line 8", "line 9", "line 10", "line 11", "line 12"],
 		);
 
 		terminal.sendInput("\x1bOH");
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 1", "line 2", "line 3", "line 4"],
+			["line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8"],
 		);
 
 		terminal.sendInput("\x1bOF");
 		await terminal.waitForRender();
 		assert.deepStrictEqual(
 			terminal.getViewport().map((line) => line.trimEnd()),
-			["line 5", "line 6", "line 7", "line 8"],
+			["line 5", "line 6", "line 7", "line 8", "line 9", "line 10", "line 11", "line 12"],
 		);
+
+		tui.stop();
+	});
+
+	it("jumps between OSC 133 semantic prompt markers", async () => {
+		const terminal = new VirtualTerminal(20, 3);
+		const tui = new TuiAltScreen(terminal);
+		tui.addChild(
+			new Text(
+				[1, 2, 3, 4].flatMap((message) => [`${OSC133_ZONE_START}message ${message}`, "detail"]).join("\n"),
+				0,
+				0,
+			),
+		);
+		tui.start();
+		await terminal.waitForRender();
+		assert.strictEqual(tui.viewportTop, 5);
+
+		terminal.sendInput("\x1b[57419;6u");
+		terminal.sendInput("\x1b[57419;6:3u");
+		await terminal.waitForRender();
+		assert.strictEqual(tui.viewportTop, 4);
+		assert.strictEqual(terminal.getViewport()[0]?.trimEnd(), "message 3");
+
+		terminal.sendInput("\x1b[1;6A");
+		await terminal.waitForRender();
+		assert.strictEqual(tui.viewportTop, 2);
+		assert.strictEqual(terminal.getViewport()[0]?.trimEnd(), "message 2");
+
+		terminal.sendInput("\x1b[57420;6u");
+		terminal.sendInput("\x1b[57420;6:3u");
+		await terminal.waitForRender();
+		assert.strictEqual(tui.viewportTop, 4);
+		assert.strictEqual(terminal.getViewport()[0]?.trimEnd(), "message 3");
+
+		terminal.sendInput("\x1b[1;6B");
+		await terminal.waitForRender();
+		assert.strictEqual(tui.viewportTop, 5);
+		assert.strictEqual(terminal.getViewport()[1]?.trimEnd(), "message 4");
+		assert.strictEqual(tui.isFollowingOutput, true);
 
 		tui.stop();
 	});

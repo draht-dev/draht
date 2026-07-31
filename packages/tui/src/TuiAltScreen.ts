@@ -1,6 +1,7 @@
 import { AltScreenFlashContainer } from "./components/alt-screen-flash.ts";
 import { ScrollView } from "./components/scroll-view.ts";
 import { getKeybindings } from "./keybindings.ts";
+import { isKeyRelease } from "./keys.ts";
 import {
 	getScrollbarGeometry,
 	getScrollViewBox,
@@ -39,6 +40,8 @@ const FOCUS_OUT = "\x1b[O";
 const BEGIN_SYNCHRONIZED_OUTPUT = "\x1b[?2026h";
 const END_SYNCHRONIZED_OUTPUT = "\x1b[?2026l";
 const OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
+const OSC133_PROMPT_START = /^\x1b\]133;A(?:\x07|\x1b\\)/;
+const PAGE_SCROLL_OVERLAP = 4;
 
 interface SelectionPoint {
 	row: number;
@@ -244,6 +247,20 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.requestRender();
 	}
 
+	private scrollToPrompt(direction: -1 | 1): void {
+		if (!this.currentLayout) return;
+		const scrollView = this.getPrimaryScrollView();
+		const lines = getScrollViewBox(this.currentLayout, scrollView)?.scrollContentLines;
+		if (!lines) return;
+
+		for (let row = scrollView.scrollTop + direction; row >= 0 && row < lines.length; row += direction) {
+			if (!OSC133_PROMPT_START.test(lines[row] ?? "")) continue;
+			scrollView.scrollTo(row);
+			this.requestRender();
+			return;
+		}
+	}
+
 	/** Show a transient message in the alternate-screen flash stack. */
 	flash(message: string, durationMs?: number): void {
 		this.flashes.flash(message, durationMs);
@@ -282,20 +299,33 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (this.isMouseSequence(data)) return { consume: true };
 
 		const keybindings = getKeybindings();
+		const isRelease = isKeyRelease(data);
 		if (keybindings.matches(data, "tui.altScreen.pageUp")) {
-			this.scrollBy(-Math.max(1, this.getPrimaryScrollView().viewportHeight - 1));
+			if (!isRelease) {
+				this.scrollBy(-Math.max(1, this.getPrimaryScrollView().viewportHeight - PAGE_SCROLL_OVERLAP));
+			}
 			return { consume: true };
 		}
 		if (keybindings.matches(data, "tui.altScreen.pageDown")) {
-			this.scrollBy(Math.max(1, this.getPrimaryScrollView().viewportHeight - 1));
+			if (!isRelease) {
+				this.scrollBy(Math.max(1, this.getPrimaryScrollView().viewportHeight - PAGE_SCROLL_OVERLAP));
+			}
+			return { consume: true };
+		}
+		if (keybindings.matches(data, "tui.altScreen.previousPrompt")) {
+			if (!isRelease) this.scrollToPrompt(-1);
+			return { consume: true };
+		}
+		if (keybindings.matches(data, "tui.altScreen.nextPrompt")) {
+			if (!isRelease) this.scrollToPrompt(1);
 			return { consume: true };
 		}
 		if (keybindings.matches(data, "tui.altScreen.top")) {
-			this.scrollToTop();
+			if (!isRelease) this.scrollToTop();
 			return { consume: true };
 		}
 		if (keybindings.matches(data, "tui.altScreen.bottom")) {
-			this.scrollToBottom();
+			if (!isRelease) this.scrollToBottom();
 			return { consume: true };
 		}
 		return undefined;

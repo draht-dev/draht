@@ -84,10 +84,12 @@ These actions apply when interactive mode uses `--ui-mode fullscreen` and target
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
-| `tui.altScreen.pageUp` | `shift+pageUp` | Scroll the transcript up by one page |
-| `tui.altScreen.pageDown` | `shift+pageDown` | Scroll the transcript down by one page |
-| `tui.altScreen.top` | `ctrl+home` | Scroll to the beginning of the transcript |
-| `tui.altScreen.bottom` | `ctrl+end` | Scroll to the transcript end and follow new output |
+| `tui.altScreen.pageUp` | `pageUp` | Scroll the transcript up by one page |
+| `tui.altScreen.pageDown` | `pageDown` | Scroll the transcript down by one page |
+| `tui.altScreen.previousPrompt` | `ctrl+shift+up` | Jump to the previous marked message |
+| `tui.altScreen.nextPrompt` | `ctrl+shift+down` | Jump to the next marked message |
+| `tui.altScreen.top` | `home` | Scroll to the beginning of the transcript |
+| `tui.altScreen.bottom` | `end` | Scroll to the transcript end and follow new output |
 
 ### Application
 

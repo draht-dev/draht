@@ -64,9 +64,9 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 			const assistant1 = await session.appendMessage(createAssistantMessage("two"));
 			await session.appendMessage(createUserMessage("three"));
 			await session.moveTo(user1);
-			await session.appendMessage(createAssistantMessage("branched"));
+			const branched = await session.appendMessage(createAssistantMessage("branched"));
 			const branch = await session.getBranch();
-			expect(branch.map((entry) => entry.id)).toContain(user1);
+			expect(branch.map((entry) => entry.id)).toEqual([user1, branched]);
 			expect(branch.map((entry) => entry.id)).not.toContain(assistant1);
 			const context = await session.buildContext();
 			expect(context.messages.map((message) => message.role)).toEqual(["user", "assistant"]);

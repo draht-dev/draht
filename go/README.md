@@ -181,6 +181,28 @@ above control for it by fixing the input `MAP.json`.
 both. `quest/` (the Kotlin/Quest 3 module) is the existing precedent for a
 non-npm toolchain living at the repo root instead.
 
+## Distribution
+
+The shipped artifact is named **`draht-graph`, not `draht-tools`** — even
+though `go/Makefile`'s local dev build still emits `bin/draht-tools` (no
+churn to the package dir / existing dev workflow). This is load-bearing, not
+cosmetic: both `@draht/tools` and `@draht/coding-agent` declare
+`bin.draht-tools` pointing at `packages/draht-tools/bin/draht-tools.cjs`
+itself, so if a `$PATH`-lookup fallback ever found a binary literally named
+`draht-tools`, it would resolve back to the CJS shim and spawn itself
+forever (inside the unattended `gsd-post-phase` and git `post-commit`
+hooks). `scripts/build-graph-binaries.sh` is the only thing that emits the
+`draht-graph` name; see "Building release artifacts" below.
+
+`draht-tools.cjs`'s dispatch shim resolves a binary via (one `statSync` each,
+no spawns, no hashing on this path): `$DRAHT_GRAPH_BIN` →
+`<bin/ of the running copy>/draht-graph[.exe]` →
+`~/.draht/bin/draht-graph[.exe]` → `$PATH`. `DRAHT_GRAPH_ENGINE` selects
+`auto` (default: prefer Go silently, fall back to JS silently), `go`
+(require Go, exit 127 with a candidate list if absent), or `js` (never even
+stat for a binary). Full detail: `.planning/kg-integration/SPEC.md`'s "Go
+engine cutover" section.
+
 ## Build
 
 Go 1.26.4 is not on `PATH` by default on this box, and there is **no C
@@ -209,6 +231,70 @@ make parity  # Go(--parser=regex) vs the real CJS engine's MAP.json (root/packag
 `make build-full` builds with no grammar tags (all 206 bundled grammars) —
 it exists purely to make the size delta visible in review; Phase 1 never
 ships it.
+
+## Grammar tag coupling
+
+The shipped binary is compiled with `grammar_subset` build tags that register
+exactly the grammars `cmd/draht-tools`' `buildParser` enables (design D2:
+typescript, tsx, javascript, python, go, rust). **That tag list has exactly
+one source and must never be hand-written anywhere** — `internal/langset`
+(`langset.CLILanguages` + `langset.BuildTags`), surfaced via
+`go run ./cmd/grammar-tags`, and consumed identically (i.e. all shelling out
+to that same command at build time, never a hand-copied list) by
+`go/Makefile`, `scripts/build-graph-binaries.sh` and
+`.github/workflows/ci.yml`. The hazard this closes: an unknown or typo'd
+`grammar_subset_<name>` tag is **not a build error** —
+`grammars.DetectLanguageByName` returns `nil` and
+`parse.NewTreeSitter` silently `continue`s past that language, so the
+binary still builds, still runs, and just stops seeing that language's
+imports. `internal/parse/grammarsubset_test.go`'s
+`TestShippedGrammarSubsetSupportsEveryCLILanguage` is the **behavioral**
+guard, but it only bites in the **tagged** CI pass
+(`go test -tags "$(go run ./cmd/grammar-tags)" ./...`) — the untagged pass
+(all 206 grammars compiled) can't fail this way by construction.
+`npm run check:grammar-tags` (`scripts/check-grammar-tags.mjs`) is a
+narrower, separate thing: a format/well-formedness sanity check on
+`cmd/grammar-tags`'s own output (non-empty, sorted, no malformed/duplicate
+tags), runnable from the root `npm`/`bun` toolchain that has no Go test
+runner. It intentionally does NOT hand-copy the tag list to compare against —
+that would recreate the exact hazard this section describes — so it cannot
+by itself catch a language silently dropping out of the shipped set; that is
+`grammarsubset_test.go`'s job.
+
+## Building release artifacts
+
+```sh
+./scripts/build-graph-binaries.sh              # all 5 platforms
+./scripts/build-graph-binaries.sh --platform linux-x64   # one platform
+# or: npm run build:graph-binaries
+```
+
+Cross-compiles `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`,
+`windows-x64` with `CGO_ENABLED=0` (mandatory — this repo's dev box has no C
+compiler, and it's what makes all five targets buildable from one machine),
+`-trimpath -ldflags="-s -w"`, and the generated `grammar_subset` tags above.
+Output is `go/binaries/`: `draht-graph-<platform>.tar.gz` (`.zip` for
+Windows), each wrapping a `draht-graph/` directory containing the binary +
+`README.md` + `LICENSE`, plus `SHA256SUMS` and a `manifest.json` index (the
+contract the installer and the CJS shim's resolver-side stamp check both
+read — see `.planning/kg-integration/SPEC.md`'s "Go engine cutover"). Also
+extracts each archive into `go/binaries/<platform>/draht-graph[.exe]` for
+local testing.
+
+Measured on this repo, subset-tagged, `-trimpath -ldflags="-s -w"`:
+
+| platform | binary | archive |
+|---|---|---|
+| linux-x64 | 14,434,466 B (13.76 MiB) | 6,319,543 B (6.02 MiB) tar.gz |
+| — full 206-grammar build (`make build-full`), for comparison | ~30.2 MiB | — |
+
+Binaries never enter npm — they ship only as GitHub release assets attached
+to the same `v<version>` tag `pi`'s binaries use
+(`.github/workflows/build-binaries.yml`'s `build-graph` job), fetched by an
+explicit `install-graph-engine` step
+(`packages/draht-claude/cli.mjs`/`packages/draht-codex/cli.mjs`), never from
+a command path — `gsd-post-phase` runs `map-graph --quiet` after every
+completed phase and must never block on the network.
 
 ### `-race` is unavailable on this box, and what stands in for it
 

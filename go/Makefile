@@ -4,11 +4,19 @@ NIX_GO_BIN := /nix/store/gb0njhqswlc5n127ikgyikvq39r40l6f-go-1.26.4/bin
 export PATH := $(NIX_GO_BIN):$(PATH)
 export CGO_ENABLED := 0
 
-# Phase 1 only builds kits for 6 grammars (design D2): typescript, tsx,
-# javascript, python, go, rust. This keeps the binary ~6-8MB instead of the
-# ~12.2MB all-206-grammars build.
-GRAMMAR_TAGS := grammar_subset grammar_subset_typescript grammar_subset_tsx \
-	grammar_subset_javascript grammar_subset_python grammar_subset_go grammar_subset_rust
+# GENERATED — never hand-edit. Single source of truth: internal/langset
+# (langset.CLILanguages, mirrored by cmd/draht-tools' buildParser, design
+# D2: typescript, tsx, javascript, python, go, rust). scripts/build-graph-
+# binaries.sh and .github/workflows/ci.yml take the SAME tag list from the
+# SAME `go run ./cmd/grammar-tags` — there is exactly one place this list
+# may be written. Hand-writing it anywhere risks a silent divergence: an
+# unknown/typo'd grammar_subset_<name> tag is NOT a build error, it just
+# quietly makes that language stop being parsed (see
+# internal/parse/grammarsubset_test.go and internal/langset's package doc).
+GRAMMAR_TAGS := $(shell go run ./cmd/grammar-tags)
+ifeq ($(strip $(GRAMMAR_TAGS)),)
+$(error grammar-tags produced an empty tag list — is the Go toolchain on PATH?)
+endif
 
 .PHONY: build build-full test vet fmt parity clean
 

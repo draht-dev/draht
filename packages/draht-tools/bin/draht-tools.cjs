@@ -8,7 +8,8 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { execSync, execFileSync } = require("node:child_process");
+const os = require("node:os");
+const { execSync, execFileSync, spawnSync } = require("node:child_process");
 
 const PLANNING_DIR = ".planning";
 const BANNER_WIDTH = 55;
@@ -275,7 +276,7 @@ commands["map-codebase"] = function (dir) {
 	// so `map-codebase` is a single command that produces both the prose docs and the graphify map.
 	let kg = null;
 	try {
-		kg = visWriteOutputs(repoRoot);
+		kg = graphBuildOutputs(repoRoot);
 	} catch (err) {
 		console.error(`\n⚠️  Knowledge graph build failed (run \`draht-tools map-graph\` to retry): ${err.message}`);
 	}
@@ -5095,6 +5096,262 @@ function visRenderReport(map) {
 	return L.join("\n");
 }
 
+// ============================================================================
+// Go graph engine — delegation shim
+// Resolution order: $DRAHT_GRAPH_BIN → <this bin/> → ~/.draht/bin → $PATH.
+// Engine choice: $DRAHT_GRAPH_ENGINE = auto (default) | go | js.
+// See .planning/kg-integration/SPEC.md § "Go engine cutover".
+// ============================================================================
+
+// Commands the Go engine implements with byte-identical stdout AND exit codes.
+// Anything not listed here always runs the JS implementation below.
+const GRAPH_GO_COMMANDS = new Set([
+	"map-graph", "map-serve", "graph-context", "graph-impact", "graph-callers",
+	"graph-callees", "graph-path", "graph-query", "graph-hotspots",
+	"graph-clusters", "graph-hook",
+]);
+
+// Deliberately NOT "draht-tools": the $PATH scan below would otherwise find the
+// npm shim for THIS file and spawn it forever. See also DRAHT_GRAPH_DELEGATED.
+const GRAPH_BIN_NAME = process.platform === "win32" ? "draht-graph.exe" : "draht-graph";
+
+// Must equal visBuildMap()'s schemaVersion (see the `schemaVersion: 5` literal
+// above). A stamped binary built for another schema is rejected rather than
+// silently producing an incompatible MAP.json.
+const GRAPH_SCHEMA_VERSION = 5;
+
+// Flip to true only when every gate in SPEC.md § "Requiring the Go engine" is
+// green. Until then a missing binary is a silent JS fallback, not an error.
+const GRAPH_REQUIRE_GO = false;
+
+function graphEngineMode() {
+	const v = String(process.env.DRAHT_GRAPH_ENGINE || "auto").trim().toLowerCase();
+	return v === "go" || v === "js" ? v : "auto";
+}
+
+// One statSync per candidate — existence AND the exec bit come from the same call.
+function graphStat(p) {
+	try {
+		const st = fs.statSync(p);
+		if (!st.isFile()) return null;
+		if (process.platform !== "win32" && (st.mode & 0o111) === 0) return null;
+		return st;
+	} catch {
+		return null;
+	}
+}
+
+// Cheap provenance tripwire. Unstamped binaries are trusted (dev builds, $PATH).
+// The stamp is written by `install-graph-engine` (packages/draht-claude/cli.mjs,
+// packages/draht-codex/cli.mjs), not read from the release manifest.json.
+function graphStampOk(binPath, st) {
+	let s;
+	try {
+		s = JSON.parse(fs.readFileSync(path.join(path.dirname(binPath), ".draht-graph.json"), "utf-8"));
+	} catch {
+		return true;
+	}
+	// JSON.parse("null")/("42")/("[]") all succeed without throwing, so `s` may be
+	// anything JSON-serializable here, not just an object — guard before touching
+	// `.size`/`.schemaVersion` or a malformed stamp file crashes the CLI BEFORE the
+	// JS fallback ever runs (see Phase 4 review finding #1).
+	if (!s || typeof s !== "object") return true;
+	if (typeof s.size === "number" && s.size !== st.size) return false;
+	if (typeof s.schemaVersion === "number" && s.schemaVersion !== GRAPH_SCHEMA_VERSION) return false;
+	return true;
+}
+
+let graphBinCache; // undefined = unresolved · null = resolved-as-missing · string = path
+let graphBinTried = []; // candidates actually stat'd — quoted verbatim in the error message
+let graphBinRejected = []; // candidates that exist + are executable but graphStampOk() rejected
+function graphResolveBin() {
+	if (graphBinCache !== undefined) return graphBinCache;
+	graphBinCache = null;
+	graphBinTried = [];
+	graphBinRejected = [];
+
+	const override = process.env.DRAHT_GRAPH_BIN;
+	if (override) { // explicit override: never silently ignored
+		graphBinTried.push(override);
+		const st = graphStat(override);
+		if (!st) console.error(`draht-tools: DRAHT_GRAPH_BIN=${override} is not an executable file`);
+		else graphBinCache = override;
+		return graphBinCache;
+	}
+
+	const home = (() => {
+		try {
+			return os.homedir();
+		} catch {
+			return null;
+		}
+	})();
+	const dirs = [__dirname];
+	if (home) dirs.push(path.join(home, ".draht", "bin"));
+	const cands = [];
+	for (const d of dirs) cands.push(path.join(d, GRAPH_BIN_NAME));
+	for (const d of String(process.env.PATH || "").split(path.delimiter)) {
+		if (d) cands.push(path.join(d, GRAPH_BIN_NAME));
+	}
+	for (const c of cands) {
+		graphBinTried.push(c);
+		const st = graphStat(c);
+		if (!st) continue;
+		if (!graphStampOk(c, st)) {
+			// Found and executable, but its .draht-graph.json provenance stamp is stale
+			// (size/schemaVersion mismatch). NOT silent: a stale stamp otherwise reverts
+			// every user to the ~6x slower JS engine with zero diagnostic (Phase 4 review
+			// finding #3). graphMissingMessage() below surfaces this distinctly too.
+			graphBinRejected.push(c);
+			console.error(`draht-tools: ${c} rejected by its .draht-graph.json provenance stamp (stale size/schemaVersion) — skipping`);
+			continue;
+		}
+		graphBinCache = c;
+		return graphBinCache;
+	}
+	return graphBinCache;
+}
+
+function graphMissingMessage() {
+	const rejectedNote = graphBinRejected.length
+		? [
+			"",
+			"Note: the following WERE found but rejected by their .draht-graph.json",
+			"provenance stamp (stale size or schemaVersion) — this is not the same as",
+			"\"not found\"; reinstall or remove the stale .draht-graph.json next to it:",
+			...graphBinRejected.map((p) => `  ${p}`),
+		]
+		: [];
+	return [
+		`draht-tools: the Go graph engine was required (DRAHT_GRAPH_ENGINE=go) but no usable \`draht-graph\` binary was found.`,
+		...rejectedNote,
+		"",
+		"Looked for:",
+		...graphBinTried.map((p) => `  ${p}`),
+		"",
+		"Install it:",
+		"  npx draht-claude install-graph-engine     # or: npx draht-codex install-graph-engine",
+		"",
+		"Build it from source:",
+		"  cd go && make build && mkdir -p ~/.draht/bin && cp bin/draht-tools ~/.draht/bin/draht-graph",
+		"",
+		"Or point at an existing build:",
+		"  export DRAHT_GRAPH_BIN=/path/to/draht-graph",
+		"",
+		"Or use the built-in JS engine instead:",
+		"  unset DRAHT_GRAPH_ENGINE          # (equivalent to DRAHT_GRAPH_ENGINE=auto)",
+	].join("\n");
+}
+
+// Delegates and EXITS the process on success; returns normally to fall through to JS.
+// Value-taking Go-only flags (accepted by the Go engine's own CLI, meaningless to
+// the JS engine's arg parsers) vs. boolean ones. graphParseArgs/map-graph's own
+// loop treat an unconsumed flag VALUE as a positional file/dir argument, so these
+// must be stripped — not just documented as "ignored" — before the JS path ever
+// sees argv (Phase 4 review finding #4).
+const GRAPH_GO_ONLY_VALUE_FLAGS = new Set(["jobs", "parser", "cache-dir", "out", "ast-max-bytes"]);
+const GRAPH_GO_ONLY_BOOL_FLAGS = new Set(["verbose"]);
+function graphStripGoOnlyFlags(args) {
+	const out = [];
+	for (let i = 0; i < args.length; i++) {
+		const a = String(args[i]);
+		const eq = a.indexOf("=");
+		const key = (eq === -1 ? a : a.slice(0, eq)).replace(/^--?/, "");
+		if (GRAPH_GO_ONLY_BOOL_FLAGS.has(key)) continue;
+		if (GRAPH_GO_ONLY_VALUE_FLAGS.has(key)) {
+			if (eq === -1) i++; // also skip the separate value token, e.g. `--out /tmp/x`
+			continue;
+		}
+		out.push(args[i]);
+	}
+	return out;
+}
+
+// MAP.json is a committed, hook-refreshed artifact (gsd-post-phase, the git
+// post-commit hook) — it must not silently change shape depending on whether the
+// person/CI running map-graph happens to have the Go binary installed. The Go
+// CLI's own default is `--parser treesitter` (AST; a deliberate improvement, see
+// go/README.md), which is NOT byte-identical to the JS engine's regex-based
+// output. Until a project-wide, version-controlled decision to switch the
+// committed artifact to AST lands (see .planning/kg-integration/SPEC.md § "Go
+// engine cutover"), pin delegated `map-graph` runs to `--parser regex` so the
+// two engines produce identical MAP.json — unless the caller explicitly asked
+// for a different parser. (Phase 4 review finding #11.)
+function graphPinRegexParser(cmd, args) {
+	if (cmd !== "map-graph") return args;
+	if (args.some((a) => a === "--parser" || String(a).startsWith("--parser="))) return args;
+	return ["--parser", "regex", ...args];
+}
+
+function graphMaybeDelegate(cmd, args) {
+	if (!GRAPH_GO_COMMANDS.has(cmd)) return;
+	if (process.env.DRAHT_GRAPH_DELEGATED) return; // recursion guard, belt and braces
+	const mode = graphEngineMode();
+	if (mode === "js") return;
+	const bin = graphResolveBin();
+	if (!bin) {
+		if (mode === "go" || GRAPH_REQUIRE_GO) {
+			console.error(graphMissingMessage());
+			process.exit(127);
+		}
+		return; // auto: silent JS fallback
+	}
+	const res = spawnSync(bin, [cmd, ...graphPinRegexParser(cmd, args)], {
+		stdio: "inherit", // byte-identical stdout/stderr, TTY preserved
+		windowsHide: true,
+		env: { ...process.env, DRAHT_GRAPH_DELEGATED: "1" },
+	});
+	if (res.error) { // raced the stat (deleted / EACCES / ENOEXEC)
+		if (mode === "go" || GRAPH_REQUIRE_GO) {
+			console.error(`draht-tools: failed to execute ${bin}: ${res.error.message}`);
+			process.exit(127);
+		}
+		return; // auto: JS fallback
+	}
+	if (res.signal) {
+		const n = os.constants.signals[res.signal];
+		process.exit(n ? 128 + n : 1);
+	}
+	process.exit(res.status === null ? 1 : res.status);
+}
+
+// map-codebase needs the built map IN-PROCESS (it prints stats/paths from it), so it
+// cannot use the stdout-passthrough path. Run the Go engine for its side effects, then
+// read MAP.json back. Any failure falls through to the JS builder, which is idempotent.
+function graphBuildOutputs(root, opts = {}) {
+	const mode = graphEngineMode();
+	const bin = mode === "js" ? null : graphResolveBin();
+	if (!bin) {
+		if (mode === "go" || GRAPH_REQUIRE_GO) {
+			console.error(graphMissingMessage());
+			process.exit(127);
+		}
+		return visWriteOutputs(root, opts);
+	}
+	const argv = ["map-graph", "--parser", "regex"]; // see graphPinRegexParser's doc comment
+	if (opts.quiet) argv.push("--quiet");
+	const res = spawnSync(bin, argv, {
+		cwd: root,
+		stdio: ["ignore", "ignore", "inherit"], // its stdout is map-graph's banner, not map-codebase's
+		windowsHide: true,
+		env: { ...process.env, DRAHT_GRAPH_DELEGATED: "1" },
+	});
+	if (res.error || res.status !== 0) return visWriteOutputs(root, opts);
+	const outDir = path.join(root, PLANNING_DIR, "codebase");
+	const jsonPath = path.join(outDir, "MAP.json");
+	try {
+		return {
+			jsonPath,
+			htmlPath: path.join(outDir, "MAP.html"),
+			reportPath: path.join(outDir, "GRAPH_REPORT.md"),
+			map: JSON.parse(fs.readFileSync(jsonPath, "utf-8")),
+			unchanged: false,
+		};
+	} catch {
+		return visWriteOutputs(root, opts);
+	}
+}
+
 function visWriteOutputs(root, opts = {}) {
 	const outDir = path.join(root, PLANNING_DIR, "codebase");
 	ensureDir(outDir);
@@ -5635,6 +5892,16 @@ Knowledge Graph (query MAP.json instead of grepping — run map-graph first):
   graph-clusters [--surprising] Structural neighborhoods (+ surprising/bridge connections)
   graph-hook install|uninstall|status   Git post-commit hook that refreshes MAP.json
   (all accept --json for machine output)
+
+  Knowledge graph commands run through a prebuilt \`draht-graph\` binary when one
+  resolves (~6x faster on a cold build), and fall back to this file's built-in JS
+  engine otherwise. DRAHT_GRAPH_ENGINE=go|js|auto (default auto) forces the choice;
+  DRAHT_GRAPH_BIN=/path/to/draht-graph overrides binary resolution. Go-only flags
+  (--jobs, --parser, --cache-dir, --out, --ast-max-bytes, --verbose) are recognized
+  and forwarded when the Go binary handles the command, and are stripped (not
+  passed through, not an error) when the JS engine handles it instead — so a
+  script using them works either way. Install the binary with
+  \`npx draht-claude install-graph-engine\` (or draht-codex).
   create-project [name]         Create PROJECT.md
   create-requirements           Create REQUIREMENTS.md
   create-domain-model           Generate DOMAIN-MODEL.md from PROJECT.md
@@ -5687,7 +5954,13 @@ const [cmd, ...args] = process.argv.slice(2);
 	if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
 		commands.help();
 	} else if (commands[cmd]) {
-		await commands[cmd](...args);
+		graphMaybeDelegate(cmd, args); // exits the process when the Go engine handles it
+		// Go-only flags (--jobs, --parser, --cache-dir, --out, --ast-max-bytes, --verbose)
+		// mean nothing to the JS engine and, left in, corrupt its own arg parsing (an
+		// unconsumed value token gets read as a positional file/dir — finding #4). Strip
+		// them here so the two engines accept the same command line.
+		const jsArgs = GRAPH_GO_COMMANDS.has(cmd) ? graphStripGoOnlyFlags(args) : args;
+		await commands[cmd](...jsArgs);
 	} else {
 		console.error(`Unknown command: ${cmd}\nRun: draht-tools help`);
 		process.exit(1);

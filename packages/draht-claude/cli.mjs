@@ -19,10 +19,12 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as zlib from "node:zlib";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = __dirname;
@@ -49,7 +51,10 @@ const IGNORE = new Set([
 function parseArgs(argv) {
 	const args = argv.slice(2);
 	const command = args[0];
-	const flags = { path: null, force: false, help: false, agent: null, model: null, list: false, reset: false };
+	const flags = {
+		path: null, force: false, help: false, agent: null, model: null, list: false, reset: false,
+		noGraphEngine: false, graphEngine: false, graphEngineVersion: null, from: null, purgeGraphEngine: false,
+	};
 	for (let i = 1; i < args.length; i++) {
 		const a = args[i];
 		if (a === "--path" || a === "-p") {
@@ -66,6 +71,19 @@ function parseArgs(argv) {
 			flags.list = true;
 		} else if (a === "--reset" || a === "-r") {
 			flags.reset = true;
+		} else if (a === "--graph-engine") {
+			flags.graphEngine = true;
+		} else if (a === "--no-graph-engine") {
+			// Retained for compatibility and for scripted installs that want to be
+			// explicit; the fetch is opt-in, so this is a no-op unless combined
+			// with --graph-engine, where refusing wins.
+			flags.noGraphEngine = true;
+		} else if (a === "--graph-engine-version") {
+			flags.graphEngineVersion = args[++i];
+		} else if (a === "--from") {
+			flags.from = args[++i];
+		} else if (a === "--purge-graph-engine") {
+			flags.purgeGraphEngine = true;
 		}
 	}
 	if (!command || command === "--help" || command === "-h") flags.help = true;
@@ -80,6 +98,9 @@ Usage:
   npx draht-claude install --force    Reinstall even if already present
   npx draht-claude install --path DIR Custom marketplace directory
   npx draht-claude uninstall          Remove the plugin and marketplace
+    --purge-graph-engine              Also remove ~/.draht/bin/draht-graph — WARNING: shared with
+                                       draht-codex/coding-agent and baked into every repo's
+                                       post-commit hook; those stop refreshing MAP.json silently
   npx draht-claude update             Reinstall (same as install --force)
   npx draht-claude status             Show install + enabled state
   npx draht-claude configure          Configure subagent models
@@ -87,11 +108,17 @@ Usage:
     --agent <name> --reset            Reset agent to inherit default model
     --reset                           Reset all agents to inherit
     --list                            List current agent model assignments
+  npx draht-claude install-graph-engine   Fetch the prebuilt draht-graph binary (alias: graph-engine)
+    --graph-engine-version <v>        Pin a version instead of this package's own version
+    --from <path>                     Install a locally built binary instead of fetching
+    --force                           Re-install even if the same version is already present
 
 Options:
   -p, --path <dir>   Custom local marketplace directory
   -f, --force        Overwrite existing install
   -h, --help         Show this help
+  --graph-engine     Also fetch the prebuilt draht-graph binary during install/update
+                     (opt-in; downloads an unsigned native binary from GitHub Releases)
 
 What this installs:
   • Local Claude Code marketplace named "${MARKETPLACE_NAME}" at ~/.draht/claude-marketplace/
@@ -101,7 +128,13 @@ What this installs:
   • 3 workflow skills (gsd-workflow, tdd-workflow, ddd-workflow)
   • Workflow hook scripts (pre-execute, post-task, post-phase, quality-gate)
   • Claude Code lifecycle hooks (SessionStart, UserPromptSubmit)
-  • Self-contained draht-tools CLI
+  • Self-contained draht-tools CLI (JS graph engine built in — works out of the box)
+
+Optional, not installed by default:
+  • The prebuilt draht-graph binary (~6x faster map-graph). It is an unsigned
+    native binary downloaded from GitHub Releases, so it is opt-in: pass
+    --graph-engine, or run 'npx draht-claude install-graph-engine' later.
+    Checksums are verified; any failure falls back to the built-in JS engine.
 
 After install, restart Claude Code. Commands appear in the slash command picker.
 
@@ -210,9 +243,255 @@ function writeMarketplaceManifest(marketplaceDir, pluginManifest) {
 	fs.writeFileSync(path.join(manifestDir, "marketplace.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+// ─── graph engine (Go binary fetch) ────────────────────────────────────────
+// Installs the prebuilt `draht-graph` binary (go/, Phase 4) into ~/.draht/bin
+// so draht-tools.cjs's dispatch shim can find it. This is the ONLY place in
+// this CLI that reaches the network for this feature — the command path
+// (map-graph, graph-*) must never fetch, since gsd-post-phase and the git
+// post-commit hook run it unattended. See .planning/kg-integration/SPEC.md
+// § "Go engine cutover".
+
+const GRAPH_BIN_DIR = path.join(os.homedir(), ".draht", "bin");
+const GRAPH_RELEASE_REPO = "draht-dev/draht";
+// Must equal draht-tools.cjs's GRAPH_SCHEMA_VERSION — kept in sync by hand,
+// these are separate npm packages with no shared import.
+const GRAPH_SCHEMA_VERSION = 5;
+// node-style platform ids matching scripts/build-graph-binaries.sh's
+// PLATFORMS table — the only shapes a release ever ships.
+const GRAPH_SHIPPED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64"]);
+
+function graphBinName() {
+	return process.platform === "win32" ? "draht-graph.exe" : "draht-graph";
+}
+
+function graphPlatform() {
+	const osName = { linux: "linux", darwin: "darwin", win32: "windows" }[process.platform];
+	const archName = { x64: "x64", arm64: "arm64" }[process.arch];
+	if (!osName || !archName) return null;
+	const p = `${osName}-${archName}`;
+	return GRAPH_SHIPPED_PLATFORMS.has(p) ? p : null;
+}
+
+function sha256(buf) {
+	return crypto.createHash("sha256").update(buf).digest("hex");
+}
+
+// entry.archive/entry.binary come from the fetched manifest.json (release
+// metadata, not this package's own code) and flow unmodified into a
+// path.join (path traversal), a download URL, and — in extractZip's
+// PowerShell fallback — a single-quoted -Command string, where one
+// apostrophe breaks out into arbitrary command execution. Reachable only by
+// whoever controls the release manifest or an HTTPS MITM, but cheap to
+// close: reject anything that isn't a plain filename.
+const GRAPH_MANIFEST_NAME_RE = /^[A-Za-z0-9._-]+$/;
+function graphManifestNameOk(name) {
+	return typeof name === "string" && name.length > 0 && GRAPH_MANIFEST_NAME_RE.test(name);
+}
+
+// Minimal POSIX ustar reader — Node ships no built-in tar support and this
+// package may add no new dependency. Only handles what
+// scripts/build-graph-binaries.sh actually produces (regular files +
+// directories, short names, no pax/long-name extensions). Rejects
+// path-traversal entries (zip-slip).
+function extractTarGz(archivePath, destDir) {
+	const tar = zlib.gunzipSync(fs.readFileSync(archivePath));
+	const readStr = (start, len) => {
+		const slice = tar.subarray(start, start + len);
+		const nul = slice.indexOf(0);
+		return Buffer.from(nul === -1 ? slice : slice.subarray(0, nul)).toString("utf-8");
+	};
+	let offset = 0;
+	while (offset + 512 <= tar.length) {
+		const header = tar.subarray(offset, offset + 512);
+		if (header.every((b) => b === 0)) break; // end-of-archive marker
+		const name = readStr(offset, 100);
+		const sizeOctal = readStr(offset + 124, 12).trim();
+		const typeflag = String.fromCharCode(header[156] || 0);
+		const size = sizeOctal ? Number.parseInt(sizeOctal, 8) || 0 : 0;
+		offset += 512;
+		const dataStart = offset;
+		const outPath = path.join(destDir, name);
+		if (!outPath.startsWith(destDir + path.sep) && outPath !== destDir) {
+			throw new Error(`unsafe tar entry path: ${name}`);
+		}
+		if (typeflag === "5") {
+			fs.mkdirSync(outPath, { recursive: true });
+		} else if (typeflag === "0" || typeflag === "\0" || typeflag === "") {
+			fs.mkdirSync(path.dirname(outPath), { recursive: true });
+			fs.writeFileSync(outPath, tar.subarray(dataStart, dataStart + size));
+		}
+		offset = dataStart + Math.ceil(size / 512) * 512;
+	}
+}
+
+// Windows-only artifact format (in practice this only ever runs on Windows,
+// since graphPlatform() only selects the .zip entry for windows-x64). No
+// zip-reading stdlib in Node, so this shells out to a system archive tool
+// rather than hand-rolling DEFLATE: `unzip` (WSL/Cygwin/msys), then
+// `tar.exe` (bsdtar, built into Windows 10 1803+, reads zip), then
+// PowerShell's Expand-Archive. All failing surfaces as a normal
+// ensureGraphEngine() catch.
+function extractZip(archivePath, destDir) {
+	fs.mkdirSync(destDir, { recursive: true });
+	let res = spawnSync("unzip", ["-o", "-q", archivePath, "-d", destDir], { stdio: "ignore" });
+	if (res.status === 0) return;
+	res = spawnSync("tar", ["-xf", archivePath, "-C", destDir], { stdio: "ignore" });
+	if (res.status === 0) return;
+	res = spawnSync(
+		"powershell",
+		["-NoProfile", "-Command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force`],
+		{ stdio: "ignore" },
+	);
+	if (res.status === 0) return;
+	throw new Error("no working zip extractor found (tried unzip, tar, and PowerShell Expand-Archive)");
+}
+
+async function fetchJson(url, timeoutMs) {
+	const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+	if (!res.ok) throw new Error(`GET ${url}: ${res.status} ${res.statusText}`);
+	return res.json();
+}
+
+async function fetchBuffer(url, timeoutMs) {
+	const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+	if (!res.ok) throw new Error(`GET ${url}: ${res.status} ${res.statusText}`);
+	return Buffer.from(await res.arrayBuffer());
+}
+
+// Atomically installs `srcPath` (an already-verified local binary) as the
+// stable ~/.draht/bin/draht-graph[.exe] entry point — a REAL COPY, not a
+// symlink (graph-hook bakes os.Executable()'s fully-resolved path into
+// .git/hooks/post-commit; a symlink target would break on the next
+// upgrade+prune) — and writes the provenance stamp draht-tools.cjs's
+// resolver checks. Used by both the network fetch path and `--from <path>`.
+function installGraphBinary(srcPath, { version, binarySha256, binaryBytes }) {
+	fs.mkdirSync(GRAPH_BIN_DIR, { recursive: true });
+	const target = path.join(GRAPH_BIN_DIR, graphBinName());
+	const tmp = `${target}.${process.pid}.tmp`;
+	fs.copyFileSync(srcPath, tmp);
+	fs.chmodSync(tmp, 0o755);
+	fs.renameSync(tmp, target);
+	if (process.platform === "darwin") {
+		// Unsigned/unnotarized artifacts get Gatekeeper-quarantined on
+		// download; a quarantined binary silently fails to exec inside a hook.
+		spawnSync("xattr", ["-d", "com.apple.quarantine", target], { stdio: "ignore" });
+	}
+	fs.writeFileSync(
+		path.join(GRAPH_BIN_DIR, ".draht-graph.json"),
+		`${JSON.stringify(
+			{
+				name: "draht-graph",
+				version,
+				schemaVersion: GRAPH_SCHEMA_VERSION,
+				sha256: binarySha256,
+				size: binaryBytes,
+				installedAt: new Date().toISOString(),
+			},
+			null,
+			2,
+		)}\n`,
+	);
+	return target;
+}
+
+// Never throws — every failure degrades to "draht will use the built-in JS
+// engine", per SPEC.md's non-negotiable install policy. Called as the LAST
+// step of cmdInstall (after the plugin itself is installed and enabled), so
+// a graph-engine fetch failure can never fail `npx draht-claude install`.
+async function ensureGraphEngine(flags) {
+	if (flags.noGraphEngine || process.env.DRAHT_SKIP_GRAPH_ENGINE) return;
+	try {
+		if (flags.from) {
+			const buf = fs.readFileSync(flags.from);
+			const target = installGraphBinary(flags.from, {
+				version: flags.graphEngineVersion || "local",
+				binarySha256: sha256(buf),
+				binaryBytes: buf.length,
+			});
+			log(`✓ graph engine installed from ${flags.from} → ${target}`);
+			return;
+		}
+
+		const target = path.join(GRAPH_BIN_DIR, graphBinName());
+		const stampPath = path.join(GRAPH_BIN_DIR, ".draht-graph.json");
+		let pkgVersion = "0.0.0";
+		try {
+			pkgVersion = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf-8")).version;
+		} catch { /* fall back to 0.0.0 — forces a fetch attempt rather than a false "up to date" */ }
+		const version = flags.graphEngineVersion || process.env.DRAHT_GRAPH_ENGINE_VERSION || pkgVersion;
+
+		if (fs.existsSync(target) && !flags.force) {
+			try {
+				const stamp = JSON.parse(fs.readFileSync(stampPath, "utf-8"));
+				if (stamp.version === version) {
+					log(`✓ graph engine v${version} already installed`);
+					return;
+				}
+			} catch { /* no/unreadable stamp — fall through and (re)fetch */ }
+		}
+
+		const platform = graphPlatform();
+		if (!platform) {
+			log(`⚠ no prebuilt graph engine binary for ${process.platform}/${process.arch} — draht will use the built-in JS engine.`);
+			return;
+		}
+
+		const tag = version.startsWith("v") ? version : `v${version}`;
+		const base = `https://github.com/${GRAPH_RELEASE_REPO}/releases/download/${tag}`;
+		const manifest = await fetchJson(`${base}/manifest.json`, 15_000);
+		const entry = (manifest.artifacts || []).find((a) => a.platform === platform);
+		if (!entry) {
+			log(`⚠ release ${tag} has no graph engine artifact for ${platform} — draht will use the built-in JS engine.`);
+			return;
+		}
+		if (!graphManifestNameOk(entry.archive) || !graphManifestNameOk(entry.binary)) {
+			log(`⚠ release ${tag}'s manifest.json has an invalid archive/binary name for ${platform} — refusing to use it. draht will use the built-in JS engine.`);
+			return;
+		}
+
+		const archiveBuf = await fetchBuffer(`${base}/${entry.archive}`, 120_000);
+		if (sha256(archiveBuf) !== entry.archiveSha256 || archiveBuf.length !== entry.archiveBytes) {
+			log(`⚠ graph engine download failed (checksum mismatch on ${entry.archive}) — draht will use the built-in JS engine.`);
+			return;
+		}
+
+		const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "draht-graph-"));
+		try {
+			const archivePath = path.join(workDir, entry.archive);
+			fs.writeFileSync(archivePath, archiveBuf);
+			const extractDir = path.join(workDir, "extracted");
+			if (entry.archive.endsWith(".zip")) extractZip(archivePath, extractDir);
+			else extractTarGz(archivePath, extractDir);
+
+			// Both archive formats wrap a draht-graph/ directory — see
+			// scripts/build-graph-binaries.sh.
+			const binPath = path.join(extractDir, "draht-graph", entry.binary);
+			const binBuf = fs.readFileSync(binPath);
+			if (sha256(binBuf) !== entry.binarySha256 || binBuf.length !== entry.binaryBytes) {
+				log(`⚠ graph engine download failed (checksum mismatch on extracted ${entry.binary}) — draht will use the built-in JS engine.`);
+				return;
+			}
+
+			installGraphBinary(binPath, { version, binarySha256: entry.binarySha256, binaryBytes: entry.binaryBytes });
+			log(`✓ graph engine v${version} → ${target} (${(entry.binaryBytes / 1e6).toFixed(1)} MB) — map-graph is now much faster`);
+		} finally {
+			fs.rmSync(workDir, { recursive: true, force: true });
+		}
+	} catch (error) {
+		log(`⚠ graph engine download failed (${error.message}) — draht will use the built-in JS engine.`);
+		log("  Retry any time:  npx draht-claude install-graph-engine");
+	}
+}
+
+function removeGraphEngine() {
+	if (!fs.existsSync(GRAPH_BIN_DIR)) return;
+	removeRecursive(path.join(GRAPH_BIN_DIR, graphBinName()));
+	removeRecursive(path.join(GRAPH_BIN_DIR, ".draht-graph.json"));
+}
+
 // ─── commands ───────────────────────────────────────────────────────────────
 
-function cmdInstall(flags) {
+async function cmdInstall(flags) {
 	const marketplaceDir = flags.path || DEFAULT_MARKETPLACE_DIR;
 	const pluginDir = path.join(marketplaceDir, "plugins", PLUGIN_NAME);
 	const manifest = readPluginManifest();
@@ -280,6 +559,19 @@ function cmdInstall(flags) {
 	// Enable explicitly — install usually enables automatically, but be safe
 	runClaude(["plugin", "enable", pluginSpec], { allowFail: true });
 
+	// The graph engine is a separate, OPT-IN download. It is deliberately not
+	// fetched by default: the artifact is an unsigned native binary pulled from
+	// a GitHub release, and silently downloading and exec'ing one as a side
+	// effect of installing a plugin is not a decision this installer should make
+	// for the user. `--graph-engine` (or `install-graph-engine` later) asks for
+	// it explicitly. Until binaries are actually published, a default fetch
+	// would also just be a doomed request on every install.
+	// Runs LAST so a download failure can never fail the plugin install
+	// (ensureGraphEngine never throws).
+	if (flags.graphEngine) {
+		await ensureGraphEngine(flags);
+	}
+
 	log("");
 	log(`✓ installed ${PLUGIN_NAME}@${MARKETPLACE_NAME} v${manifest.version}`);
 	log("");
@@ -295,6 +587,20 @@ function cmdUninstall(flags) {
 	const marketplaceDir = flags.path || DEFAULT_MARKETPLACE_DIR;
 	const pluginDir = path.join(marketplaceDir, "plugins", PLUGIN_NAME);
 	const pluginSpec = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+
+	// ~/.draht/bin is a sibling of the marketplace dir, shared across
+	// draht-claude/draht-codex/coding-agent, AND its resolved absolute path is
+	// baked into every repo's .git/hooks/post-commit (go/internal/hook). Removing
+	// it here would silently break graph-engine use in every OTHER package and
+	// silently no-op every repo's post-commit hook — so it is opt-in only.
+	if (flags.purgeGraphEngine) {
+		removeGraphEngine();
+		log("Removed ~/.draht/bin/draht-graph (--purge-graph-engine) — draht-codex/coding-agent");
+		log("and any repo's post-commit hook that used it will now fall back to the JS engine.");
+	} else if (fs.existsSync(GRAPH_BIN_DIR)) {
+		log("Leaving ~/.draht/bin/draht-graph in place (shared with draht-codex/coding-agent).");
+		log("Remove it too with: npx draht-claude uninstall --purge-graph-engine");
+	}
 
 	log("draht-claude uninstaller");
 	log(`  marketplace: ${marketplaceDir}`);
@@ -323,8 +629,8 @@ function cmdUninstall(flags) {
 	log("✓ uninstalled");
 }
 
-function cmdUpdate(flags) {
-	cmdInstall({ ...flags, force: true });
+async function cmdUpdate(flags) {
+	await cmdInstall({ ...flags, force: true });
 }
 
 function cmdStatus(flags) {
@@ -453,26 +759,32 @@ if (flags.help) {
 	process.exit(0);
 }
 
-switch (command) {
-	case "install":
-		cmdInstall(flags);
-		break;
-	case "uninstall":
-	case "remove":
-		cmdUninstall(flags);
-		break;
-	case "update":
-	case "upgrade":
-		cmdUpdate(flags);
-		break;
-	case "status":
-		cmdStatus(flags);
-		break;
-	case "configure":
-		cmdConfigure(flags);
-		break;
-	default:
-		err(`unknown command: ${command}`);
-		err("run 'draht-claude --help' for usage");
-		process.exit(1);
-}
+(async () => {
+	switch (command) {
+		case "install":
+			await cmdInstall(flags);
+			break;
+		case "uninstall":
+		case "remove":
+			cmdUninstall(flags);
+			break;
+		case "update":
+		case "upgrade":
+			await cmdUpdate(flags);
+			break;
+		case "status":
+			cmdStatus(flags);
+			break;
+		case "configure":
+			cmdConfigure(flags);
+			break;
+		case "install-graph-engine":
+		case "graph-engine":
+			await ensureGraphEngine(flags);
+			break;
+		default:
+			err(`unknown command: ${command}`);
+			err("run 'draht-claude --help' for usage");
+			process.exit(1);
+	}
+})();

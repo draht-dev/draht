@@ -10,6 +10,7 @@ import (
 
 	"github.com/draht-dev/draht/go/internal/emit"
 	"github.com/draht-dev/draht/go/internal/graph"
+	"github.com/draht-dev/draht/go/internal/langset"
 	"github.com/draht-dev/draht/go/internal/parse"
 	"github.com/draht-dev/draht/go/internal/scan"
 )
@@ -169,7 +170,14 @@ func buildParser(name string, astMaxBytes, astMaxLine int) (parse.Parser, error)
 	case "", "treesitter":
 		// design D2: AST import extraction covers exactly these 6 grammars
 		// (typescript implicitly also builds "tsx" — see NewTreeSitter).
-		langs := []parse.Lang{"typescript", "javascript", "python", "go", "rust"}
+		// langset.CLILanguages is the single source of truth for this list —
+		// it is also what generates the shipped binary's grammar_subset
+		// build tags (cmd/grammar-tags). Never hand-write this slice
+		// separately; see internal/langset's package doc for why.
+		langs := make([]parse.Lang, len(langset.CLILanguages))
+		for i, l := range langset.CLILanguages {
+			langs[i] = parse.Lang(l)
+		}
 		var tsOpts []parse.TSOption
 		if astMaxBytes > 0 {
 			tsOpts = append(tsOpts, parse.WithMaxBytes(astMaxBytes))

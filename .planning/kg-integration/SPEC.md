@@ -26,11 +26,100 @@ are additive (no renamed/removed fields).
 - **MAP.json must stay < ~1.5× its v3 size** (v3 is ~2.65 MB / 1237 modules here). Enforce the caps below.
 - **Query commands are READ-ONLY**: they never rebuild/mutate MAP.json (would dirty the git tree after
   every pull/checkout). If MAP.json is absent → print `no map — run <inv> map-graph` and exit 0.
-- Dependency-free, single-file CommonJS. No new file reads in enrichment (reuse `perFile` raw content).
+- Dependency-free, single-file CommonJS **on the JS engine path**. No new file reads in enrichment
+  (reuse `perFile` raw content). Superseded in part by the Go engine cutover (`go/`, Phase 4): the CJS
+  file is no longer the only implementation — `map-graph`/`map-codebase`/`graph-*` dispatch to a
+  prebuilt `draht-graph` binary when one resolves (`DRAHT_GRAPH_ENGINE=auto`, the default) and fall
+  back to this CommonJS implementation when it does not. The CommonJS path therefore stays
+  dependency-free AND functionally complete: it is the guaranteed-present engine, not a legacy shim.
+  Binaries are GitHub-release assets (attached to the same `v<version>` tag as the `pi` release
+  artifacts, via `.github/workflows/build-binaries.yml`'s `build-graph` job) installed by an explicit
+  `install-graph-engine` step (`packages/draht-claude/cli.mjs`, `packages/draht-codex/cli.mjs`), never
+  fetched from a command path (`gsd-post-phase` must never block on the network). See "Go engine
+  cutover" below and `go/README.md`.
 - Dispatcher passes args **positionally** (`commands[cmd](...args)`, line 4039). Every new command parses
   its own `args` array (the `map-serve` pattern, 3857-3867) — never named params; flags interleave.
 
 ---
+
+## Go engine cutover (Phase 4)
+
+`go/` is a from-scratch Go reimplementation of the knowledge-graph engine (real gotreesitter AST
+parsing instead of regex heuristics, a worker pool, an incremental content-hash cache). It ships as a
+prebuilt binary (`draht-graph`, ~14 MB per platform, 5 platforms: darwin-arm64, darwin-x64, linux-x64,
+linux-arm64, windows-x64) rather than as an npm dependency — see `go/README.md`'s "Dependency policy"
+and "Why this lives outside `packages/`".
+
+**Dispatch.** `draht-tools.cjs` gained a ~250-line delegation shim (inserted before `visWriteOutputs`,
+touch points documented inline): `GRAPH_GO_COMMANDS` lists the commands the Go engine implements with
+byte-identical stdout AND exit codes (`map-graph`, `map-serve`, `graph-context`, `graph-impact`,
+`graph-callers`, `graph-callees`, `graph-path`, `graph-query`, `graph-hotspots`, `graph-clusters`,
+`graph-hook`). `graphMaybeDelegate(cmd, args)` resolves a binary and, if found, `spawnSync`s it with
+`stdio: "inherit"` and exits the Node process with the child's exit code — anything not in the set, or
+any command when no binary resolves in `auto`/`js` mode, runs the existing JS implementation unchanged.
+`map-codebase` cannot use the passthrough path (it needs the built map in-process to print its own
+stats) — it calls `graphBuildOutputs`, which runs the Go binary for its side effects and reads
+`MAP.json` back, falling through to `visWriteOutputs` on any failure.
+
+**Engine selection**: `DRAHT_GRAPH_ENGINE=auto|go|js` (default `auto`). `auto` prefers Go silently when
+a binary resolves and falls back to JS silently when it does not (no stderr noise — the post-commit
+hook runs unattended). `go` requires the binary and exits 127 with a candidate-list error if none
+resolves. `js` never even stats for a binary.
+
+**Binary resolution** (one `statSync` per candidate, zero spawns, zero hashing, memoized per process):
+`$DRAHT_GRAPH_BIN` (explicit override; if set but not executable, this is the one case that prints in
+`auto` mode too) → `<bin/ dir of the running copy>/draht-graph[.exe]` → `~/.draht/bin/draht-graph[.exe]`
+→ each `$PATH` entry. The shipped binary is deliberately named `draht-graph`, **not** `draht-tools`:
+both `@draht/tools` and `@draht/coding-agent` declare `bin.draht-tools` pointing at this very CJS file,
+so a `$PATH` scan for `draht-tools` would find the npm shim and spawn itself forever. A
+`DRAHT_GRAPH_DELEGATED=1` env sentinel is the second, belt-and-braces recursion guard. A resolved
+binary is checked against an optional sidecar stamp (`.draht-graph.json`, written by the installer) for
+`size`/`schemaVersion` — unstamped binaries (dev builds, `$PATH` finds) are trusted, not rejected.
+
+**Install.** Binaries are never fetched from the command path. `install-graph-engine` (alias
+`graph-engine`) in `packages/draht-claude/cli.mjs` / `packages/draht-codex/cli.mjs` fetches
+`manifest.json` + the one matching platform archive from the `v<version>` GitHub release, verifies
+`archiveSha256`/`binarySha256`, extracts (a hand-rolled minimal tar reader for `.tar.gz`, since Node
+has no built-in tar support and this package may add no dependency; `unzip`/`tar`/PowerShell
+`Expand-Archive` for the Windows-only `.zip`), and installs a **real copy** (not a symlink — the Go
+`graph-hook install` bakes `os.Executable()`'s fully-resolved path into `.git/hooks/post-commit`) at
+`~/.draht/bin/draht-graph[.exe]`, alongside a provenance stamp. It runs as the LAST step of
+`cmdInstall`/`cmdUpdate`, after the plugin itself is installed — every failure (offline, 404, checksum
+mismatch, unmapped platform) is caught and degrades to a `⚠ ... falls back to the built-in JS engine`
+notice, never aborting the plugin install. `cmdUninstall` removes the shared `~/.draht/bin` binary +
+stamp. `--no-graph-engine` / `DRAHT_SKIP_GRAPH_ENGINE=1` skip the fetch; `--from <path>` installs a
+local build (air-gapped path); `--graph-engine-version <v>` pins a version.
+
+**Release pipeline.** `.github/workflows/build-binaries.yml`'s `build-graph` job (`needs: build`,
+`if: !cancelled()`) attaches the 5 platform archives + `SHA256SUMS` + `manifest.json` to the same
+`v<version>` release the existing `pi` binaries use — one tag, one release, no separate cadence.
+Locally: `./scripts/build-graph-binaries.sh [--platform <name>]` (also `npm run build:graph-binaries`).
+The grammar_subset build tags are generated, never hand-written — `go run ./cmd/grammar-tags`
+(`internal/langset`) is their single source, consumed identically (dynamically shelled out to, never
+hand-copied) by `go/Makefile`, the build script, and CI. `npm run check:grammar-tags` is a separate,
+narrower thing: a local format/well-formedness sanity check on that command's own output, for the
+`bun run check` toolchain that has no Go — see `go/README.md`'s "Grammar tag coupling" section for the
+actual behavioral coupling guard (`internal/parse/grammarsubset_test.go`, tagged CI pass only).
+
+**What is NOT yet true, honestly**: no binary has actually been published to a GitHub release from this
+environment (no network write access, no `gh` auth) — until one is, `install-graph-engine` will 404 and
+every install silently uses the JS engine, which is the correct and safe default. The Go engine's own
+CLI default is still `--parser=treesitter` (AST; a deliberate improvement — see `go/README.md`'s
+edge-count table), which is NOT byte-parity with the CJS engine's regex-based output. Because `MAP.json`
+is a *committed* artifact refreshed unattended by `gsd-post-phase` and the git post-commit hook, letting
+that default reach the committed file would mean the moment ONE contributor has the Go binary installed
+and others don't, every alternation between them rewrites the file. Mitigated for the two paths that
+actually touch the committed file: `draht-tools.cjs`'s delegation shim pins delegated `map-graph` runs
+to `--parser=regex` unless the caller explicitly overrides it (`graphPinRegexParser`), and
+`graphBuildOutputs` (used by `map-codebase`) does the same. **Not yet mitigated**: `draht-tools map-serve`
+regenerates `MAP.json` on every file-change via `internal/serve`, which always uses the Go engine's AST
+parser with no `--parser` override — an interactive `map-serve` session can still produce a
+divergent `MAP.json` from `map-graph`'s. A project-wide, version-controlled decision to move the
+*committed* artifact to AST parsing (bumping `schemaVersion`, regenerating once, everyone in sync) is
+still pending; until then, prefer `map-graph`/hooks over `map-serve` for anything that gets committed.
+The `graph-*` query commands are byte-parity-tested against a FIXED `MAP.json`, so this only matters for
+map generation itself — see `go/README.md`'s "Byte-exact `graph-*` parity" section for the two-tier test
+strategy and its explicit boundary.
 
 ## Part A — MAP.json enrichment (in `visBuildMap`)
 

@@ -48,6 +48,13 @@ func TestParity_RegexParserMatchesCJSEngine(t *testing.T) {
 	if os.Getenv("PARITY_SKIP") != "" {
 		t.Skip("PARITY_SKIP set")
 	}
+	// This test shells out to `node .../draht-tools.cjs map-graph --quiet`
+	// against the real monorepo — real coverage, but redundant (and slow) to
+	// re-run in every CI pass. CI runs it once, untagged, and passes -short
+	// to the grammar-subset-tagged and -race passes to skip the repeat.
+	if testing.Short() {
+		t.Skip("skipping CJS-shellout parity check in -short mode")
+	}
 
 	monorepoRoot := resolveMonorepoRoot(t)
 	cjsMap := loadCJSReferenceMap(t, monorepoRoot)

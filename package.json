@@ -17,7 +17,7 @@
     "build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../router && npm run build && cd ../knowledge && npm run build && cd ../rlm && npm run build && cd ../coding-agent && npm run build && cd ../mom && npm run build && cd ../web-ui && npm run build && cd ../pods && npm run build",
     "dev": "concurrently --names \"ai,agent,coding-agent,mom,web-ui,tui\" --prefix-colors \"cyan,yellow,red,white,green,magenta\" \"cd packages/ai && npm run dev\" \"cd packages/agent && npm run dev\" \"cd packages/coding-agent && npm run dev\" \"cd packages/mom && npm run dev\" \"cd packages/web-ui && npm run dev\" \"cd packages/tui && npm run dev\"",
     "dev:tsc": "concurrently --names \"ai,web-ui\" --prefix-colors \"cyan,green\" \"cd packages/ai && npm run dev:tsc\" \"cd packages/web-ui && npm run dev:tsc\"",
-    "check": "biome check --write --error-on-warnings . && tsc --noEmit && npm run check:browser-smoke && npm run check:mirrors && npm run check:geist-boundary && npm run check:geist-mirrors && npm run check:draht-tools && npm run check:hooks && cd packages/web-ui && npm run check && cd ../geist-console && npm run check",
+    "check": "biome check --write --error-on-warnings . && tsc --noEmit && npm run check:browser-smoke && npm run check:mirrors && npm run check:geist-boundary && npm run check:geist-mirrors && npm run check:draht-tools && npm run check:graph-engine-parity && npm run check:schema-version-sync && npm run check:hooks && cd packages/web-ui && npm run check && cd ../geist-console && npm run check",
     "check:mirrors": "node scripts/check-plugin-mirrors.mjs",
     "check:geist-boundary": "node scripts/check-geist-boundary.mjs",
     "check:geist-mirrors": "node scripts/check-geist-mirrors.mjs",
@@ -44,7 +44,11 @@
     "check:draht": "node scripts/check-draht-customizations.mjs",
     "sync:draht-tools": "node scripts/sync-draht-tools.mjs",
     "check:draht-tools": "node scripts/sync-draht-tools.mjs --check",
+    "check:graph-engine-parity": "node scripts/check-graph-engine-parity.mjs --check",
+    "check:schema-version-sync": "node scripts/check-schema-version-sync.mjs",
     "sync:hooks": "node scripts/generate-hooks-json.mjs",
+    "build:graph-binaries": "bash scripts/build-graph-binaries.sh",
+    "check:grammar-tags": "node scripts/check-grammar-tags.mjs",
     "prepare": "husky"
   },
   "devDependencies": {

@@ -77,3 +77,71 @@ jobs:
             pi-linux-arm64.tar.gz \
             pi-windows-x64.zip \
             --clobber
+
+  # Attaches the Go graph-engine binaries to the SAME release/tag as `build`
+  # (rather than a separate workflow) so two jobs never race on
+  # `gh release create` for the same tag. `needs: build` orders us after the
+  # release exists; `if: !cancelled()` means a partial/flaky `build` (its own
+  # `bun install` is the flakier of the two) does not block this job, while a
+  # genuinely cancelled run still short-circuits both.
+  build-graph:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Go
+        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          go-version-file: go/.go-version
+          cache-dependency-path: go/go.sum
+
+      - name: Build graph binaries
+        env:
+          DRAHT_VERSION: ${{ env.RELEASE_TAG }} # script strips a leading 'v'
+        run: ./scripts/build-graph-binaries.sh
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
+        with:
+          name: draht-graph-${{ env.RELEASE_TAG }}
+          path: |
+            go/binaries/*.tar.gz
+            go/binaries/*.zip
+            go/binaries/SHA256SUMS
+            go/binaries/manifest.json
+          retention-days: 7
+
+      - name: Attach to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd go/binaries
+          # `build` normally creates the release; `needs: build` + `if: !cancelled()`
+          # (see the job-level comment above) means this job still runs when `build`
+          # FAILED, not just when it flaked past a transient step. Blindly doing
+          # `gh release create ... || true` in that case would publish a release
+          # containing ONLY the graph binaries with generic placeholder notes — a
+          # broken/misleading release, silently. Require the release to already
+          # exist instead of ever creating it here; if `build` never got that far,
+          # fail loudly so the workflow run is visibly red rather than quietly
+          # publishing a partial release.
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "::error::release ${RELEASE_TAG} does not exist yet — the 'build' job must have failed before creating it. Refusing to publish a graph-binaries-only release; fix 'build' and re-run." >&2
+            exit 1
+          fi
+          gh release upload "${RELEASE_TAG}" \
+            draht-graph-darwin-arm64.tar.gz \
+            draht-graph-darwin-x64.tar.gz \
+            draht-graph-linux-x64.tar.gz \
+            draht-graph-linux-arm64.tar.gz \
+            draht-graph-windows-x64.zip \
+            SHA256SUMS \
+            manifest.json \
+            --clobber

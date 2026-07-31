@@ -44,3 +44,75 @@ jobs:
 
       - name: Test
         run: bun run test
+
+  go:
+    name: Go (draht-graph)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        # Needed for internal/graph's parity test, which shells out to
+        # `node .../draht-tools.cjs map-graph --quiet` in the untagged pass.
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/.go-version
+          cache-dependency-path: go/go.sum
+
+      # gofmt is a FAILING gate here (go/Makefile's `fmt` target only prints).
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt: these files are not formatted"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # Untagged pass: compiles all 206 bundled grammars. This is the pass
+      # that proves every grammar name langset asks for actually EXISTS
+      # upstream, and it is the one pass that runs the CJS shellout parity
+      # test (internal/graph/parity_test.go).
+      - name: go test (full grammar set)
+        run: go test -count=1 ./...
+
+      - name: Resolve shipped grammar tags
+        id: tags
+        run: echo "tags=$(go run ./cmd/grammar-tags)" >> "$GITHUB_OUTPUT"
+
+      - name: go build (shipped grammar subset)
+        run: |
+          go build -trimpath -ldflags="-s -w" \
+            -tags "${{ steps.tags.outputs.tags }}" \
+            -o /tmp/draht-graph ./cmd/draht-tools
+          ls -l /tmp/draht-graph
+
+      # Tagged pass: the tag-coupling gate (internal/langset,
+      # internal/parse/grammarsubset_test.go). Fails if a grammar the CLI
+      # asks for was not actually compiled in by the tag list. -short skips
+      # the CJS shellout parity test (already covered by the untagged pass).
+      - name: go test (shipped grammar subset)
+        run: go test -count=1 -short -tags "${{ steps.tags.outputs.tags }}" ./...
+
+      # -race REQUIRES a C toolchain, so CGO_ENABLED=1 here and only here.
+      # The project's own dev box has no C compiler at all, so this job is
+      # the only place this project can get race coverage — keep it, do not
+      # make it continue-on-error. ubuntu-latest ships gcc preinstalled.
+      - name: go test -race
+        env:
+          CGO_ENABLED: "1"
+        run: go test -count=1 -short -race ./...

@@ -7,7 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
+
+	"github.com/draht-dev/draht/go/internal/langset"
 )
 
 // binPath is the real CLI binary, built once in TestMain (not per-test:
@@ -28,7 +31,13 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(dir)
 
 	binPath = filepath.Join(dir, "draht-tools")
-	build := exec.Command("go", "build", "-o", binPath, ".")
+	// A bare `go build` does NOT inherit the outer `go test -tags …` — so
+	// without forwarding langset.BuildTags explicitly here, the tagged CI
+	// pass would silently test an all-206-grammar binary for everything
+	// under ./cmd/..., giving false confidence exactly where the shipped
+	// binary lives. Always build the shipped grammar-subset configuration.
+	tags := strings.Join(langset.BuildTags(langset.CLILanguages), " ")
+	build := exec.Command("go", "build", "-tags", tags, "-o", binPath, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "go build cmd/draht-tools: %v\n%s\n", err, out)
 		os.Exit(1)

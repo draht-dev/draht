@@ -9,6 +9,8 @@ import (
 
 	gts "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
+
+	"github.com/draht-dev/draht/go/internal/langset"
 )
 
 // gotreesitterModulePath is the dependency whose version is folded into
@@ -107,24 +109,18 @@ func NewTreeSitter(langs []Lang, opts ...TSOption) (Parser, error) {
 		libVersion: gotreesitterVersion(),
 	}
 
-	grammarNames := map[string]struct{}{}
-	for _, l := range langs {
-		if g := grammarFor(l, ""); g != "" {
-			grammarNames[g] = struct{}{}
-		}
-		if l == "typescript" {
-			grammarNames["tsx"] = struct{}{}
-		}
+	// langset.GrammarNamesFor is also what generates the shipped binary's
+	// grammar_subset build tags (cmd/grammar-tags) — routing both through
+	// the same function is what keeps "languages this parser tries to
+	// load" and "grammars actually compiled into the binary" from silently
+	// disagreeing. Its output is already sorted, giving deterministic
+	// construction order (which has no observable effect on Extract's
+	// output, but makes any future build-time diagnostics reproducible).
+	langStrs := make([]string, len(langs))
+	for i, l := range langs {
+		langStrs[i] = string(l)
 	}
-
-	// Sort for deterministic construction order. Construction order has no
-	// observable effect on Extract's output, but a deterministic build makes
-	// any future build-time diagnostics reproducible.
-	names := make([]string, 0, len(grammarNames))
-	for g := range grammarNames {
-		names = append(names, g)
-	}
-	sort.Strings(names)
+	names := langset.GrammarNamesFor(langStrs)
 
 	for _, g := range names {
 		entry := grammars.DetectLanguageByName(g)

@@ -26,6 +26,20 @@ func newTS(t *testing.T, langs ...Lang) Parser {
 	return p
 }
 
+// skipUnlessSupported skips tests for languages outside the shipped
+// grammar_subset (design D2: typescript/tsx/javascript/python/go/rust —
+// see internal/langset). NewTreeSitter silently drops unregistered grammars
+// rather than erroring at construction (see internal/langset's package doc),
+// so these tests would otherwise fail the -tags "$(go run ./cmd/grammar-tags)"
+// CI pass while still exercising real coverage in the untagged, full-206-
+// grammar pass.
+func skipUnlessSupported(t *testing.T, p Parser, lang Lang) {
+	t.Helper()
+	if !p.Supports(lang) {
+		t.Skipf("%s grammar not compiled into this build (grammar_subset tags active)", lang)
+	}
+}
+
 func extract(t *testing.T, p Parser, lang Lang, path, src string) Result {
 	t.Helper()
 	res, err := p.Extract(context.Background(), lang, path, []byte(src))
@@ -206,6 +220,7 @@ mod utils;
 
 func TestTreeSitter_Java(t *testing.T) {
 	p := newTS(t, "java")
+	skipUnlessSupported(t, p, "java")
 	src := `import java.util.List;
 import static java.lang.Math.PI;
 import com.foo.bar.*;
@@ -220,6 +235,7 @@ import com.foo.bar.*;
 
 func TestTreeSitter_Kotlin(t *testing.T) {
 	p := newTS(t, "kotlin")
+	skipUnlessSupported(t, p, "kotlin")
 	src := `import kotlin.collections.List
 import com.foo.Bar as Baz
 import com.foo.*
@@ -234,6 +250,7 @@ import com.foo.*
 
 func TestTreeSitter_Swift(t *testing.T) {
 	p := newTS(t, "swift")
+	skipUnlessSupported(t, p, "swift")
 	src := `import Foundation
 import class Foo.Bar
 @testable import MyModule
@@ -248,6 +265,7 @@ import class Foo.Bar
 
 func TestTreeSitter_Ruby(t *testing.T) {
 	p := newTS(t, "ruby")
+	skipUnlessSupported(t, p, "ruby")
 	src := "require \"json\"\nrequire_relative \"./lib/foo\"\nrequire 'net/http'\n"
 	res := extract(t, p, "ruby", "sample.rb", src)
 	assertImports(t, res.Imports, []wantImport{
@@ -259,6 +277,7 @@ func TestTreeSitter_Ruby(t *testing.T) {
 
 func TestTreeSitter_PHP(t *testing.T) {
 	p := newTS(t, "php")
+	skipUnlessSupported(t, p, "php")
 	src := "<?php\n" +
 		"require 'foo.php';\n" +
 		"require_once \"bar.php\";\n" +
@@ -277,6 +296,7 @@ func TestTreeSitter_PHP(t *testing.T) {
 
 func TestTreeSitter_CSharp(t *testing.T) {
 	p := newTS(t, "csharp")
+	skipUnlessSupported(t, p, "csharp")
 	src := `using System;
 using System.Collections.Generic;
 using Foo = System.Bar;
@@ -291,6 +311,7 @@ using Foo = System.Bar;
 
 func TestTreeSitter_C(t *testing.T) {
 	p := newTS(t, "c")
+	skipUnlessSupported(t, p, "c")
 	src := "#include <stdio.h>\n#include \"myheader.h\"\n"
 	res := extract(t, p, "c", "sample.c", src)
 	assertImports(t, res.Imports, []wantImport{
@@ -301,6 +322,7 @@ func TestTreeSitter_C(t *testing.T) {
 
 func TestTreeSitter_Cpp(t *testing.T) {
 	p := newTS(t, "cpp")
+	skipUnlessSupported(t, p, "cpp")
 	src := "#include <vector>\n#include \"myheader.hpp\"\nimport foo.mod;\n"
 	res := extract(t, p, "cpp", "sample.cpp", src)
 	assertImports(t, res.Imports, []wantImport{
@@ -312,6 +334,7 @@ func TestTreeSitter_Cpp(t *testing.T) {
 
 func TestTreeSitter_Shell(t *testing.T) {
 	p := newTS(t, "shell")
+	skipUnlessSupported(t, p, "shell")
 	src := "#!/bin/bash\nsource ./lib.sh\n. ./other.sh\ncurl https://example.com\n"
 	res := extract(t, p, "shell", "sample.sh", src)
 	assertImports(t, res.Imports, []wantImport{

@@ -16,6 +16,11 @@ import (
 // never fires under normal conditions.
 const defaultMemLimitBytes = 768 << 20
 
+// version/commit are stamped by scripts/build-graph-binaries.sh via
+// -ldflags "-X main.version=… -X main.commit=…". Local `go build`/`make
+// build` leave them at "dev"/"" — that is the intended dev signal.
+var version, commit = "dev", ""
+
 // main dispatches to the map-graph subcommand and the global --version/
 // -h/--help flags, per design §7.
 func main() {
@@ -48,7 +53,7 @@ func main() {
 		// go.mod, and so main_test.go can assert this binary's linked
 		// dependency version matches go.mod (guards against Version()'s
 		// cache key silently drifting from the real dependency).
-		fmt.Printf("draht-tools (go) dev (gotreesitter@%s)\n", parse.LibraryVersion())
+		fmt.Printf("draht-tools (go) %s (gotreesitter@%s)\n", version, parse.LibraryVersion())
 	case "-h", "--help", "help":
 		fmt.Print(mapGraphUsage)
 	default:

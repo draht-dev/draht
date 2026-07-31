@@ -70,6 +70,38 @@ describe("AuthStorage", () => {
 		});
 	});
 
+	test("coalesces file reloads across concurrent readers and storage instances", async () => {
+		writeAuthJson({ anthropic: { type: "api_key", key: "old" } });
+		const first = AuthStorage.create(authJsonPath);
+		const second = AuthStorage.create(authJsonPath);
+		const lockSpy = vi.spyOn(lockfile, "lock");
+
+		writeAuthJson({
+			anthropic: { type: "api_key", key: "new" },
+			openai: { type: "api_key", key: "openai-key" },
+		});
+
+		const [anthropic, openai, credentials] = await Promise.all([
+			first.read("anthropic"),
+			second.read("openai"),
+			first.list(),
+		]);
+		expect(anthropic).toEqual({ type: "api_key", key: "new" });
+		expect(openai).toEqual({ type: "api_key", key: "openai-key" });
+		expect(credentials).toEqual([
+			{ providerId: "anthropic", type: "api_key" },
+			{ providerId: "openai", type: "api_key" },
+		]);
+		expect(lockSpy).toHaveBeenCalledTimes(1);
+
+		await expect(second.read("anthropic")).resolves.toEqual({ type: "api_key", key: "new" });
+		expect(lockSpy).toHaveBeenCalledTimes(1);
+
+		writeAuthJson({ anthropic: { type: "api_key", key: "newest" } });
+		await expect(first.read("anthropic")).resolves.toEqual({ type: "api_key", key: "newest" });
+		expect(lockSpy).toHaveBeenCalledTimes(2);
+	});
+
 	test("modify persists a credential while preserving unrelated external edits", async () => {
 		writeAuthJson({ anthropic: { type: "api_key", key: "old" } });
 		const storage = AuthStorage.create(authJsonPath);

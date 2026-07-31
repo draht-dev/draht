@@ -1994,31 +1994,27 @@ Rules, both scopes:
 - **Threads are refs first.** A platform thread sharing one source of truth with its channel is a ref in the same session (section 6), not a fork. Fork when a *separate* session is wanted: subagents, exports, clones. Whether a thread becomes a ref, a fork, or a fresh session with platform backlog as prompt-time context is application policy; all three are supported.
 
 ## 14. Storage backends
-### Session persistence migration
+### Session persistence
 
 `Session` is the only opened-session object. A `SessionStore` owns serialization,
 filesystem or database access, listing, deletion, forking, and shared resources.
 `SessionRepository` loads snapshots and constructs stateful `Session` aggregates.
 
-Store ownership is explicit and repositories borrow their stores:
-
-```ts
-// Before: released per-session storage API
-const session = new Session(new InMemorySessionStorage());
-
-// After
-await using store = createInMemorySessionStore();
-const repository = createSessionRepository({ store });
-const session = await repository.create({});
-```
-
-Recent `SessionStore` consumers should pass the store as `store`, not `backend`,
-and dispose the store rather than individual sessions or repositories:
+Store ownership is explicit. Repositories borrow their stores, and callers
+dispose stores after draining harness work:
 
 ```ts
 await using store = createJsonlSessionStore({ fs, sessionsRoot });
 const repository = createSessionRepository({ store });
 const session = await repository.open(metadata);
+const harness = new AgentHarness({ session, models, model });
+
+try {
+  await harness.prompt("...");
+} finally {
+  harness.requestShutdown();
+  await harness.waitForShutdown();
+}
 ```
 
 Custom adapters implement `create()` and `load()` by returning a
@@ -2028,15 +2024,6 @@ implement multi-session `list()`, `delete()`, `fork()`, and
 writes before releasing resources. Search-index adapters implement `reset()` so
 rebuilds remove stale sessions. Direct `Session` construction remains available
 for tests and specialized owners as `new Session(store, snapshot)`.
-
-The owner drains session work before store disposal. Store disposal waits only
-for persistence operations already submitted to the store:
-
-```ts
-await harness.shutdown();
-await store[Symbol.asyncDispose]();
-```
-
 
 Backends implement append + read + the finder queries for one session. They know nothing about operations, queues, or recovery — the harness entry payloads are opaque to them apart from the columns they index.
 

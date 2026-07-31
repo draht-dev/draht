@@ -41,7 +41,15 @@ export {
 export * from "./harness/session/repository.ts";
 export * from "./harness/session/search-backend.ts";
 export * from "./harness/session/search-index.ts";
-export * from "./harness/session/session.ts";
+export {
+	buildContextEntries,
+	buildSessionContext,
+	type ContextEntryTransform,
+	type CustomEntryContextMessageProjector,
+	defaultContextEntryTransform,
+	type SessionContextBuildOptions,
+	sessionEntryToContextMessages,
+} from "./harness/session/session.ts";
 export * from "./harness/skills.ts";
 export * from "./harness/system-prompt.ts";
 export * from "./harness/tools/index.ts";

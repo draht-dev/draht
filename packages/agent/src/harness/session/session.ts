@@ -270,7 +270,46 @@ class SessionEntryIndex {
 	}
 }
 
-export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
+export interface Session<TMetadata extends SessionMetadata = SessionMetadata> {
+	getMetadata(): Promise<TMetadata>;
+	getLeafId(): Promise<string | null>;
+	getEntry(id: string): Promise<SessionTreeEntry | undefined>;
+	getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]>;
+	getBranch(fromId?: string | null): Promise<SessionTreeEntry[]>;
+	buildContextEntries(options?: SessionContextBuildOptions): Promise<SessionTreeEntry[]>;
+	buildContext(options?: SessionContextBuildOptions): Promise<SessionContext>;
+	getLabel(id: string): Promise<string | undefined>;
+	getSessionStats(): Promise<SessionStats>;
+	getSessionName(): Promise<string | undefined>;
+	appendMessage(message: AgentMessage): Promise<string>;
+	appendThinkingLevelChange(thinkingLevel: string): Promise<string>;
+	appendModelChange(provider: string, modelId: string): Promise<string>;
+	appendActiveToolsChange(activeToolNames: string[]): Promise<string>;
+	appendCompaction<T = unknown>(
+		summary: string,
+		firstKeptEntryId: string | undefined,
+		tokensBefore: number,
+		details?: T,
+		fromHook?: boolean,
+		usage?: Usage,
+		retainedTail?: AgentMessage[],
+	): Promise<string>;
+	appendCustomEntry(customType: string, data?: unknown): Promise<string>;
+	appendCustomMessageEntry<T = unknown>(
+		customType: string,
+		content: string | (TextContent | ImageContent)[],
+		display: boolean,
+		details?: T,
+	): Promise<string>;
+	appendLabel(targetId: string, label: string | undefined): Promise<string>;
+	appendSessionName(name: string): Promise<string>;
+	moveTo(
+		entryId: string | null,
+		summary?: { summary: string; details?: unknown; usage?: Usage; fromHook?: boolean },
+	): Promise<string | undefined>;
+}
+
+class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implements Session<TMetadata> {
 	private readonly store: Pick<SessionStore<TMetadata>, "appendEntry">;
 	private readonly metadata: TMetadata;
 	private readonly index: SessionEntryIndex;
@@ -519,4 +558,13 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 				}) satisfies BranchSummaryEntry,
 		);
 	}
+}
+
+/** @internal Construct sessions only through SessionRepository. */
+export function createSessionFromSnapshot<TMetadata extends SessionMetadata>(
+	store: Pick<SessionStore<TMetadata>, "appendEntry">,
+	snapshot: SessionSnapshot<TMetadata>,
+	contextBuildOptions: SessionContextBuildOptions = {},
+): Session<TMetadata> {
+	return new StoreSession(store, snapshot, contextBuildOptions);
 }

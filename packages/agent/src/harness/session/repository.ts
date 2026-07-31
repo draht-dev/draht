@@ -11,7 +11,7 @@ import {
 	type SessionStore,
 	type SessionTreeEntry,
 } from "../types.ts";
-import { Session } from "./session.ts";
+import { createSessionFromSnapshot, type Session, type SessionContextBuildOptions } from "./session.ts";
 
 export function createSessionId(): string {
 	return uuidv7();
@@ -28,21 +28,24 @@ export class SessionRepository<
 > {
 	private readonly store: SessionStore<TMetadata, TCreateOptions, TListOptions>;
 	private readonly searchStore: SessionSearch<TMetadata> | null;
+	private readonly contextBuildOptions: SessionContextBuildOptions;
 
 	constructor(options: {
 		store: SessionStore<TMetadata, TCreateOptions, TListOptions>;
 		search?: SessionSearch<TMetadata> | null;
+		contextBuildOptions?: SessionContextBuildOptions;
 	}) {
 		this.store = options.store;
 		this.searchStore = options.search ?? null;
+		this.contextBuildOptions = options.contextBuildOptions ?? {};
 	}
 
 	async create(options: TCreateOptions): Promise<Session<TMetadata>> {
-		return new Session(this.store, await this.store.create(options));
+		return createSessionFromSnapshot(this.store, await this.store.create(options), this.contextBuildOptions);
 	}
 
 	async open(metadata: TMetadata): Promise<Session<TMetadata>> {
-		return new Session(this.store, await this.store.load(metadata));
+		return createSessionFromSnapshot(this.store, await this.store.load(metadata), this.contextBuildOptions);
 	}
 
 	async list(options?: TListOptions): Promise<TMetadata[]> {
@@ -56,7 +59,11 @@ export class SessionRepository<
 	async fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<Session<TMetadata>> {
 		const sourceSession = await this.open(source);
 		const entries = await getEntriesToFork(sourceSession, options);
-		return new Session(this.store, await this.store.fork(source, options, entries));
+		return createSessionFromSnapshot(
+			this.store,
+			await this.store.fork(source, options, entries),
+			this.contextBuildOptions,
+		);
 	}
 
 	async search(options: Parameters<SessionSearch<TMetadata>["search"]>[0]): Promise<SessionSearchHit<TMetadata>[]> {
@@ -71,6 +78,7 @@ export function createSessionRepository<
 >(options: {
 	store: SessionStore<TMetadata, TCreateOptions, TListOptions>;
 	search?: SessionSearch<TMetadata> | null;
+	contextBuildOptions?: SessionContextBuildOptions;
 }): SessionRepository<TMetadata, TCreateOptions, TListOptions> {
 	return new SessionRepository(options);
 }

@@ -4,11 +4,8 @@ import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { createJsonlSessionStore } from "../../src/harness/session/jsonl-store.ts";
 import { createInMemorySessionStore } from "../../src/harness/session/memory-store.ts";
-import {
-	type ContextEntryTransform,
-	Session,
-	type SessionContextBuildOptions,
-} from "../../src/harness/session/session.ts";
+import { createSessionRepository } from "../../src/harness/session/repository.ts";
+import type { ContextEntryTransform, Session, SessionContextBuildOptions } from "../../src/harness/session/session.ts";
 import { createAssistantMessage, createTempDir, createUserMessage } from "./session-test-utils.ts";
 
 function getTextData(data: unknown): string {
@@ -20,14 +17,14 @@ function getTextData(data: unknown): string {
 }
 
 interface SessionFixture {
-	createSession(options?: SessionContextBuildOptions): Session;
+	createSession(options?: SessionContextBuildOptions): Promise<Session>;
 	reloadSession(options?: SessionContextBuildOptions): Promise<Session>;
 }
 
 async function runSessionSuite(name: string, createFixture: () => Promise<SessionFixture>, inspect?: () => void) {
 	describe(name, () => {
 		it("appends messages and builds context in order", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			await session.appendMessage(createUserMessage("one"));
 			await session.appendMessage(createAssistantMessage("two"));
 			const context = await session.buildContext();
@@ -35,7 +32,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("tracks model and thinking level changes", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			await session.appendMessage(createUserMessage("one"));
 			await session.appendModelChange("openai", "gpt-4.1");
 			await session.appendThinkingLevelChange("high");
@@ -45,7 +42,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("supports branching by moving the leaf and appending a new branch", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			const user1 = await session.appendMessage(createUserMessage("one"));
 			const assistant1 = await session.appendMessage(createAssistantMessage("two"));
 			await session.appendMessage(createUserMessage("three"));
@@ -59,7 +56,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("supports moving the leaf to root", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			await session.appendMessage(createUserMessage("one"));
 			await session.moveTo(null);
 			expect(await session.getLeafId()).toBeNull();
@@ -67,7 +64,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("reconstructs compaction summaries in context", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			await session.appendMessage(createUserMessage("one"));
 			await session.appendMessage(createAssistantMessage("two"));
 			const user2 = await session.appendMessage(createUserMessage("three"));
@@ -89,7 +86,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("supports moving with branch summary entries in context", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			const user1 = await session.appendMessage(createUserMessage("one"));
 			const summaryId = await session.moveTo(user1, { summary: "summary text" });
 			expect(summaryId).toBeTruthy();
@@ -100,7 +97,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("persists compaction usage", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			const firstKeptEntryId = await session.appendMessage(createUserMessage("one"));
 			const usage = {
 				input: 1,
@@ -125,7 +122,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("persists branch summary usage", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			const user1 = await session.appendMessage(createUserMessage("one"));
 			const usage = {
 				input: 1,
@@ -143,7 +140,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("supports custom message entries in context", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			await session.appendMessage(createUserMessage("one"));
 			await session.appendCustomMessageEntry("custom", "hello", true, { ok: true });
 			const context = await session.buildContext();
@@ -151,7 +148,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("keeps custom entries in context entries but omits them from messages by default", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			await session.appendMessage(createUserMessage("one"));
 			await session.appendCustomEntry("chat_message", { text: "hello" });
 			const contextEntries = await session.buildContextEntries();
@@ -161,7 +158,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("projects custom entries with configured custom-entry projectors", async () => {
-			const session = (await createFixture()).createSession({
+			const session = await (await createFixture()).createSession({
 				entryProjectors: {
 					chat_message: (entry) => [createUserMessage(`chat: ${getTextData(entry.data)}`)],
 				},
@@ -179,7 +176,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 				observedFirstEntryType = entries[0]?.type;
 				return entries.filter((entry) => entry.type !== "compaction");
 			};
-			const session = (await createFixture()).createSession({ entryTransforms: [dropCompaction] });
+			const session = await (await createFixture()).createSession({ entryTransforms: [dropCompaction] });
 			await session.appendMessage(createUserMessage("one"));
 			const kept = await session.appendMessage(createUserMessage("two"));
 			await session.appendCompaction("summary", kept, 1234);
@@ -190,13 +187,13 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("normalizes session names", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			await session.appendSessionName(" hello\nworld\r\nagain ");
 			expect(await session.getSessionName()).toBe("hello world again");
 		});
 
 		it("supports labels and session info entries without affecting context", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			const user1 = await session.appendMessage(createUserMessage("one"));
 			await session.appendLabel(user1, "checkpoint");
 			await session.appendSessionName("name");
@@ -209,13 +206,13 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 		});
 
 		it("rejects labels for missing entries", async () => {
-			const session = (await createFixture()).createSession();
+			const session = await (await createFixture()).createSession();
 			await expect(session.appendLabel("missing", "checkpoint")).rejects.toThrow("Entry missing not found");
 		});
 
 		it("persists leaf changes and appended entries through the store", async () => {
 			const fixture = await createFixture();
-			const session = fixture.createSession();
+			const session = await fixture.createSession();
 			const user1 = await session.appendMessage(createUserMessage("one"));
 			await session.appendMessage(createAssistantMessage("two"));
 			await session.appendLabel(user1, "checkpoint");
@@ -234,10 +231,11 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 
 runSessionSuite("Session with in-memory store", async () => {
 	const store = createInMemorySessionStore();
-	const snapshot = await store.create({});
+	const created = await createSessionRepository({ store }).create({});
+	const metadata = await created.getMetadata();
 	return {
-		createSession: (options) => new Session(store, snapshot, options),
-		reloadSession: async (options) => new Session(store, await store.load(snapshot.metadata), options),
+		createSession: (contextBuildOptions) => createSessionRepository({ store, contextBuildOptions }).open(metadata),
+		reloadSession: (contextBuildOptions) => createSessionRepository({ store, contextBuildOptions }).open(metadata),
 	};
 });
 
@@ -248,12 +246,12 @@ runSessionSuite(
 		const dir = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: dir });
 		const store = createJsonlSessionStore({ fs: env, sessionsRoot: join(dir, "sessions") });
-		const snapshot = await store.create({ cwd: dir, id: "session-1" });
-		const metadata = snapshot.metadata;
+		const created = await createSessionRepository({ store }).create({ cwd: dir, id: "session-1" });
+		const metadata = await created.getMetadata();
 		jsonlSessionPath = metadata.path;
 		return {
-			createSession: (options) => new Session(store, snapshot, options),
-			reloadSession: async (options) => new Session(store, await store.load(snapshot.metadata), options),
+			createSession: (contextBuildOptions) => createSessionRepository({ store, contextBuildOptions }).open(metadata),
+			reloadSession: (contextBuildOptions) => createSessionRepository({ store, contextBuildOptions }).open(metadata),
 		};
 	},
 	() => {

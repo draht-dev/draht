@@ -12,7 +12,8 @@ import { describe, expect, it } from "vitest";
 import { AgentHarness } from "../../src/harness/agent-harness.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { createInMemorySessionStore } from "../../src/harness/session/memory-store.ts";
-import { Session } from "../../src/harness/session/session.ts";
+import { createSessionRepository } from "../../src/harness/session/repository.ts";
+import type { Session } from "../../src/harness/session/session.ts";
 import type { AgentHarnessTool, PromptTemplate, Skill } from "../../src/harness/types.ts";
 import type { AgentMessage, AgentTool } from "../../src/types.ts";
 import { calculateTool, createCalculateToolWithUsage } from "../utils/calculate.ts";
@@ -97,19 +98,24 @@ async function createBlockingSession(expectedWrites: number): Promise<{
 	getEntries(): ReturnType<Session["getEntries"]>;
 }> {
 	const source = createInMemorySessionStore();
-	const snapshot = await source.create({});
 	const allWritesStarted = deferred();
 	const releaseWrites = deferred();
 	let writesStarted = 0;
-	const blockingStore = {
-		async appendEntry(metadata: typeof snapshot.metadata, entry: (typeof snapshot.entries)[number]) {
+	const blockingStore: ReturnType<typeof createInMemorySessionStore> = {
+		create: (options) => source.create(options),
+		load: (metadata) => source.load(metadata),
+		list: (options) => source.list(options),
+		async appendEntry(metadata, entry) {
 			writesStarted++;
 			if (writesStarted === expectedWrites) allWritesStarted.resolve();
 			await releaseWrites.promise;
 			await source.appendEntry(metadata, entry);
 		},
+		delete: (metadata) => source.delete(metadata),
+		fork: (metadata, options, entries) => source.fork(metadata, options, entries),
+		[Symbol.asyncDispose]: () => source[Symbol.asyncDispose](),
 	};
-	const session = new Session(blockingStore, snapshot);
+	const session = await createSessionRepository({ store: blockingStore }).create({});
 	return {
 		session,
 		allWritesStarted,

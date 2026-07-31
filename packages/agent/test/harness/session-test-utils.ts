@@ -4,11 +4,12 @@ import { join } from "node:path";
 import type { AgentMessage } from "@draht/agent-core";
 import { afterEach } from "vitest";
 import { createInMemorySessionStore } from "../../src/harness/session/memory-store.ts";
-import { Session } from "../../src/harness/session/session.ts";
+import { createSessionRepository } from "../../src/harness/session/repository.ts";
+import type { Session } from "../../src/harness/session/session.ts";
 
 export async function createInMemorySession(id?: string): Promise<Session> {
 	const store = createInMemorySessionStore();
-	return new Session(store, await store.create({ id }));
+	return createSessionRepository({ store }).create({ id });
 }
 
 export function createUserMessage(text: string): AgentMessage {

@@ -785,7 +785,7 @@ export class InteractiveMode {
 				primary: true,
 				overscroll: "chain",
 				scrollbar: this.settingsManager.getFullscreenScrollbar(),
-				scrollbarStyle: (text) => theme.bg("selectedBg", text),
+				scrollbarStyle: (text) => theme.bg("scrollbarThumb", text),
 			});
 			const dock = new TuiLayouts.VStack([
 				{ component: this.pendingMessagesContainer, shrink: 1, minSize: 0 },

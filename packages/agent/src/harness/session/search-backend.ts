@@ -13,9 +13,7 @@ type SessionSearchSource<TMetadata extends SessionMetadata> = {
 };
 
 /** Searches canonical sessions directly and therefore has no index to maintain. */
-export class ScanningSessionSearch<TMetadata extends SessionMetadata = SessionMetadata>
-	implements SessionSearch<TMetadata>
-{
+class ScanningSessionSearch<TMetadata extends SessionMetadata = SessionMetadata> implements SessionSearch<TMetadata> {
 	private readonly source: SessionSearchSource<TMetadata>;
 
 	constructor(source: SessionSearchSource<TMetadata>) {
@@ -32,4 +30,10 @@ export class ScanningSessionSearch<TMetadata extends SessionMetadata = SessionMe
 		}
 		return hits;
 	}
+}
+
+export function createScanningSessionSearch<TMetadata extends SessionMetadata>(
+	source: SessionSearchSource<TMetadata>,
+): SessionSearch<TMetadata> {
+	return new ScanningSessionSearch(source);
 }

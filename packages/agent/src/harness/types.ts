@@ -582,9 +582,6 @@ export interface JsonlSessionListOptions {
 	cwd?: string;
 }
 
-export interface JsonlSessionStoreApi
-	extends SessionStore<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {}
-
 export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
 
 export type PendingSessionWrite = SessionTreeEntry extends infer TEntry

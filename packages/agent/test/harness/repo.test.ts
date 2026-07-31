@@ -1,23 +1,43 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { JsonlSessionStore } from "../../src/harness/session/jsonl-repo.ts";
-import { InMemorySessionStore } from "../../src/harness/session/memory-repo.ts";
-import { SessionRepository } from "../../src/harness/session/repo-utils.ts";
+import { createJsonlSessionStore } from "../../src/harness/session/jsonl-repo.ts";
+import {
+	createInMemorySessionStore,
+	type InMemorySessionCreateOptions,
+} from "../../src/harness/session/memory-repo.ts";
+import { createSessionRepository } from "../../src/harness/session/repo-utils.ts";
+import type { SessionMetadata, SessionStore } from "../../src/harness/types.ts";
 import { createAssistantMessage, createTempDir, createUserMessage } from "./session-test-utils.ts";
 
-class CountingInMemorySessionStore extends InMemorySessionStore {
-	loadCount = 0;
-
-	override async load(...args: Parameters<InMemorySessionStore["load"]>) {
-		this.loadCount += 1;
-		return super.load(...args);
-	}
+function createCountingInMemorySessionStore(): {
+	store: SessionStore<SessionMetadata, InMemorySessionCreateOptions, void>;
+	counter: { loadCount: number };
+} {
+	const source = createInMemorySessionStore();
+	const counter = { loadCount: 0 };
+	return {
+		counter,
+		store: {
+			create: (options) => source.create(options),
+			async load(metadata) {
+				counter.loadCount += 1;
+				return source.load(metadata);
+			},
+			list: (options) => source.list(options),
+			getEntries: (metadata, options) => source.getEntries(metadata, options),
+			createEntryId: (metadata) => source.createEntryId(metadata),
+			appendEntry: (metadata, entry) => source.appendEntry(metadata, entry),
+			setLeafId: (metadata, leafId) => source.setLeafId(metadata, leafId),
+			delete: (metadata) => source.delete(metadata),
+			fork: (metadata, options) => source.fork(metadata, options),
+		},
+	};
 }
 
 describe("InMemorySessionStore", () => {
 	it("opens, deletes, and forks by metadata", async () => {
-		const repo = new SessionRepository({ store: new InMemorySessionStore() });
+		const repo = createSessionRepository({ store: createInMemorySessionStore() });
 		const session = await repo.create({ id: "session-1" });
 		const metadata = await session.getMetadata();
 		const user1 = await session.appendMessage(createUserMessage("one"));
@@ -34,21 +54,21 @@ describe("InMemorySessionStore", () => {
 	});
 
 	it("does not repeatedly load full snapshots for scoped reads", async () => {
-		const store = new CountingInMemorySessionStore();
-		const repo = new SessionRepository({ store });
+		const { store, counter } = createCountingInMemorySessionStore();
+		const repo = createSessionRepository({ store });
 		const session = await repo.create({ id: "session-1" });
 		const entryId = await session.appendMessage(createUserMessage("one"));
 
-		store.loadCount = 0;
+		counter.loadCount = 0;
 		await session.getMetadata();
-		expect(store.loadCount).toBe(0);
+		expect(counter.loadCount).toBe(0);
 
 		await session.getLeafId();
-		expect(store.loadCount).toBe(1);
+		expect(counter.loadCount).toBe(1);
 
-		store.loadCount = 0;
+		counter.loadCount = 0;
 		await session.getEntry(entryId);
-		expect(store.loadCount).toBe(1);
+		expect(counter.loadCount).toBe(1);
 	});
 });
 
@@ -58,7 +78,7 @@ describe("JsonlSessionStore", () => {
 		const env = new NodeExecutionEnv({ cwd: root });
 		const cwd = "/tmp/my-project";
 		const otherCwd = "/tmp/other-project";
-		const repo = new SessionRepository({ store: new JsonlSessionStore({ fs: env, sessionsRoot: root }) });
+		const repo = createSessionRepository({ store: createJsonlSessionStore({ fs: env, sessionsRoot: root }) });
 		const session = await repo.create({ cwd, id: "019de8c2-de29-73e9-ae0c-e134db34c447" });
 		const otherSession = await repo.create({ cwd: otherCwd, id: "other-session" });
 		const metadata = await session.getMetadata();
@@ -75,7 +95,7 @@ describe("JsonlSessionStore", () => {
 	it("opens, deletes, and forks by metadata", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const repo = new SessionRepository({ store: new JsonlSessionStore({ fs: env, sessionsRoot: root }) });
+		const repo = createSessionRepository({ store: createJsonlSessionStore({ fs: env, sessionsRoot: root }) });
 		const source = await repo.create({ cwd: "/tmp/source", id: "source-session" });
 		const sourceMetadata = await source.getMetadata();
 		const user1 = await source.appendMessage(createUserMessage("one"));
@@ -97,7 +117,7 @@ describe("JsonlSessionStore", () => {
 	it("persists header metadata through create, list, and fork", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const repo = new SessionRepository({ store: new JsonlSessionStore({ fs: env, sessionsRoot: root }) });
+		const repo = createSessionRepository({ store: createJsonlSessionStore({ fs: env, sessionsRoot: root }) });
 		const source = await repo.create({
 			cwd: "/tmp/source",
 			id: "source-session",

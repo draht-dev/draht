@@ -5,15 +5,14 @@ import {
 	bashExecutionToText,
 	convertToLlm,
 	createCustomMessage,
+	createInMemorySessionRepository,
 	FileError,
 	formatPromptTemplateInvocation,
 	formatSkillInvocation,
 	formatSkillsForSystemPrompt,
 	getOrThrow,
-	InMemorySessionStore,
 	ok,
 	parseCommandArgs,
-	SessionRepository,
 	streamProxy,
 	toError,
 	truncateHead,
@@ -27,7 +26,7 @@ const stream = createAssistantMessageEventStream();
 
 const agent = new Agent({ initialState: { model }, streamFn: streamSimple });
 agent.steer({ role: "user", content: [{ type: "text", text: "queued" }], timestamp: 0 });
-const repo = new SessionRepository({ store: new InMemorySessionStore() });
+const repo = createInMemorySessionRepository();
 const result = getOrThrow(ok({ value: 1 }));
 const customMessage = createCustomMessage("note", "hello", true, undefined, "2026-01-01T00:00:00.000Z");
 const llmMessages = convertToLlm([customMessage]);

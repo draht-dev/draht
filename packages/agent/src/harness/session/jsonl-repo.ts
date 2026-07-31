@@ -3,23 +3,24 @@ import type {
 	JsonlSessionCreateOptions,
 	JsonlSessionListOptions,
 	JsonlSessionMetadata,
-	JsonlSessionStoreApi,
 	LeafEntry,
 	SessionEntryCursorOptions,
 	SessionSnapshot,
 	SessionStorage,
+	SessionStore,
 	SessionTreeEntry,
 } from "../types.ts";
 import { SessionError, toError } from "../types.ts";
 import { JsonlSessionStorage, loadJsonlSessionMetadata } from "./jsonl-storage.ts";
 import {
 	createSessionId,
+	createSessionRepository,
 	createTimestamp,
 	getEntriesToFork,
 	getFileSystemResultOrThrow,
-	SessionRepository,
+	type SessionRepository,
 } from "./repo-utils.ts";
-import { ScanningSessionSearch } from "./search-backend.ts";
+import { createScanningSessionSearch } from "./search-backend.ts";
 
 export type JsonlSessionStoreOptions = { fs: JsonlSessionStoreFileSystem; sessionsRoot: string };
 
@@ -42,7 +43,9 @@ function encodeCwd(cwd: string): string {
 	return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
 
-export class JsonlSessionStore implements JsonlSessionStoreApi {
+class JsonlSessionStore
+	implements SessionStore<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>
+{
 	private readonly fs: JsonlSessionStoreFileSystem;
 	private readonly sessionsRootInput: string;
 	private sessionsRoot: string | undefined;
@@ -209,7 +212,9 @@ export class JsonlSessionStore implements JsonlSessionStoreApi {
 	}
 }
 
-export function createJsonlSessionStore(options: JsonlSessionStoreOptions): JsonlSessionStore {
+export function createJsonlSessionStore(
+	options: JsonlSessionStoreOptions,
+): SessionStore<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {
 	return new JsonlSessionStore(options);
 }
 
@@ -217,5 +222,5 @@ export function createJsonlSessionRepository(
 	options: JsonlSessionStoreOptions,
 ): SessionRepository<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {
 	const store = createJsonlSessionStore(options);
-	return new SessionRepository({ store, search: new ScanningSessionSearch(store) });
+	return createSessionRepository({ store, search: createScanningSessionSearch(store) });
 }

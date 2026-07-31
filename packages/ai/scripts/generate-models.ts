@@ -2169,6 +2169,19 @@ async function generateModels() {
 			candidate.baseUrl = "https://api.fireworks.ai/inference/v1";
 			candidate.compat = { supportsStore: false, supportsDeveloperRole: false };
 		}
+		if (candidate.provider === "fireworks" && candidate.id.includes("kimi-k3")) {
+			candidate.api = "openai-completions";
+			candidate.baseUrl = "https://api.fireworks.ai/inference/v1";
+			candidate.compat = {
+				supportsStore: false,
+				supportsDeveloperRole: false,
+				requiresReasoningContentOnAssistantMessages: true,
+				thinkingFormat: "openai",
+				deferredToolsMode: "kimi",
+				sendSessionAffinityHeaders: true,
+				supportsLongCacheRetention: false,
+			};
+		}
 	}
 
 

@@ -305,7 +305,13 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 			if (row < box.clip.y || row >= box.clip.y + box.clip.height || row < 0 || row >= screen.length) continue;
 			const sourceLine = box.lines[offset + localRow];
 			if (sourceLine === undefined) continue;
-			const line = sourceLine.replace(OSC133_ZONE_PREFIX, "");
+			let line = sourceLine.replace(OSC133_ZONE_PREFIX, "");
+			const imageMetadata = getKittyImageMetadata(line);
+			if (imageMetadata) {
+				const clipBottom = Math.min(screen.length, box.clip.y + box.clip.height);
+				const visibleRows = Math.min(imageMetadata.rows, clipBottom - row);
+				if (visibleRows < imageMetadata.rows) line = cropKittyImageLine(line, 0, visibleRows);
+			}
 			if (isImageLine(line) && box.rect.x === 0 && box.rect.width >= totalWidth) screen[row] = line;
 			else screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);
 		}

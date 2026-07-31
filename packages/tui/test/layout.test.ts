@@ -5,6 +5,7 @@ import { ScrollView } from "../src/components/scroll-view.ts";
 import { Text } from "../src/components/text.ts";
 import { VStack } from "../src/components/v-stack.ts";
 import { renderLayoutFrame } from "../src/layout.ts";
+import { encodeKitty, registerKittyImageMetadata } from "../src/terminal-image.ts";
 import { stripTerminalSequences } from "../src/utils.ts";
 
 function visibleLines(lines: string[]): string[] {
@@ -57,6 +58,24 @@ describe("viewport layout", () => {
 			stack.render(10).map((line) => line.trimEnd()),
 			["one", "", "two"],
 		);
+	});
+
+	it("crops Kitty images at a scroll view's lower boundary", () => {
+		const imageId = 124;
+		const imageLine = encodeKitty("AAAA", { columns: 2, rows: 3, imageId, moveCursor: false });
+		registerKittyImageMetadata({ imageId, columns: 2, rows: 3, widthPx: 100, heightPx: 100 });
+		const transcript = new ScrollView({
+			render: () => ["one", "two", imageLine, "", ""],
+			invalidate: () => {},
+		});
+		const frame = renderLayoutFrame(
+			new VStack([{ component: transcript, basis: 0, grow: 1 }, new Text("dock", 0, 0)]),
+			20,
+			4,
+			() => {},
+		);
+
+		assert.ok(frame.lines[2]?.includes("y=0,h=34,r=1"));
 	});
 
 	it("composes horizontal children at allocated widths", () => {

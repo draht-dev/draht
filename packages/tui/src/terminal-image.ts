@@ -284,12 +284,14 @@ export function getKittyImageMetadata(line: string): KittyImageMetadata | undefi
 export function cropKittyImageLine(line: string, hiddenRows: number, visibleRows: number): string {
 	const metadata = getKittyImageMetadata(line);
 	const match = /\x1b_G([^;]*);/.exec(line);
-	if (!metadata || !match || hiddenRows <= 0 || visibleRows <= 0) return line;
+	if (!metadata || !match || hiddenRows < 0 || hiddenRows >= metadata.rows || visibleRows <= 0) return line;
+	const croppedRows = Math.min(visibleRows, metadata.rows - hiddenRows);
+	if (hiddenRows === 0 && croppedRows === metadata.rows) return line;
 	const sourceY = Math.floor((metadata.heightPx * hiddenRows) / metadata.rows);
-	const sourceEnd = Math.ceil((metadata.heightPx * (hiddenRows + visibleRows)) / metadata.rows);
+	const sourceEnd = Math.ceil((metadata.heightPx * (hiddenRows + croppedRows)) / metadata.rows);
 	const sourceHeight = Math.max(1, Math.min(metadata.heightPx, sourceEnd) - sourceY);
 	const controls = match[1].split(",").filter((control) => !/^[yhr]=/.test(control));
-	controls.push(`y=${sourceY}`, `h=${sourceHeight}`, `r=${visibleRows}`);
+	controls.push(`y=${sourceY}`, `h=${sourceHeight}`, `r=${croppedRows}`);
 	return `${line.slice(0, match.index)}\x1b_G${controls.join(",")};${line.slice(match.index + match[0].length)}`;
 }
 

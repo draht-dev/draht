@@ -7,10 +7,12 @@ export interface SessionSearchIndexSource<TMetadata extends SessionMetadata, TLi
 
 export async function rebuildSessionSearchIndex<TMetadata extends SessionMetadata, TListOptions>(
 	source: SessionSearchIndexSource<TMetadata, TListOptions>,
-	index: Pick<SessionSearchIndex<TMetadata>, "replaceSession">,
+	index: Pick<SessionSearchIndex<TMetadata>, "reset" | "replaceSession">,
 	options?: TListOptions,
 ): Promise<void> {
+	await index.reset();
 	for (const metadata of await source.list(options)) {
-		await index.replaceSession(metadata, (await source.load(metadata)).entries);
+		const snapshot = await source.load(metadata);
+		await index.replaceSession(snapshot.metadata, snapshot.entries);
 	}
 }

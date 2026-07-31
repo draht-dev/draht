@@ -1994,6 +1994,49 @@ Rules, both scopes:
 - **Threads are refs first.** A platform thread sharing one source of truth with its channel is a ref in the same session (section 6), not a fork. Fork when a *separate* session is wanted: subagents, exports, clones. Whether a thread becomes a ref, a fork, or a fresh session with platform backlog as prompt-time context is application policy; all three are supported.
 
 ## 14. Storage backends
+### Session persistence migration
+
+`Session` is the only opened-session object. A `SessionStore` owns serialization,
+filesystem or database access, listing, deletion, forking, and shared resources.
+`SessionRepository` loads snapshots and constructs stateful `Session` aggregates.
+
+Store ownership is explicit and repositories borrow their stores:
+
+```ts
+// Before: released per-session storage API
+const session = new Session(new InMemorySessionStorage());
+
+// After
+await using store = createInMemorySessionStore();
+const repository = createSessionRepository({ store });
+const session = await repository.create({});
+```
+
+Recent `SessionStore` consumers should pass the store as `store`, not `backend`,
+and dispose the store rather than individual sessions or repositories:
+
+```ts
+await using store = createJsonlSessionStore({ fs, sessionsRoot });
+const repository = createSessionRepository({ store });
+const session = await repository.open(metadata);
+```
+
+Custom adapters implement `create()` and `load()` by returning a
+`SessionSnapshot`, persist complete entries through `appendEntry()`, and
+implement multi-session `list()`, `delete()`, `fork()`, and
+`Symbol.asyncDispose`. Disposal must reject new operations and wait for accepted
+writes before releasing resources. Search-index adapters implement `reset()` so
+rebuilds remove stale sessions. Direct `Session` construction remains available
+for tests and specialized owners as `new Session(store, snapshot)`.
+
+The owner drains session work before store disposal. Store disposal waits only
+for persistence operations already submitted to the store:
+
+```ts
+await harness.shutdown();
+await store[Symbol.asyncDispose]();
+```
+
 
 Backends implement append + read + the finder queries for one session. They know nothing about operations, queues, or recovery — the harness entry payloads are opaque to them apart from the columns they index.
 
@@ -2291,10 +2334,10 @@ Current implementation (what is being replaced or wrapped):
 5. `packages/agent/src/agent-loop.ts` — monolithic loop to split into step primitives.
 6. `packages/agent/src/agent.ts` — stateful wrapper: queues, continuation, abort, settlement.
 7. `packages/agent/src/harness/agent-harness.ts` — the harness this design replaces.
-8. `packages/agent/src/harness/types.ts` — entry union, storage contract, event/hook types.
+8. `packages/agent/src/harness/types.ts` — entry union, session store contract, event/hook types.
 9. `packages/agent/src/harness/session/session.ts` — Session, context build, entry creation.
-10. `packages/agent/src/harness/session/jsonl-storage.ts` — JSONL v3 format and reload.
-11. `packages/agent/src/harness/session/memory-storage.ts` — in-memory parity.
+10. `packages/agent/src/harness/session/jsonl-store.ts` — JSONL session store and v3 document codec.
+11. `packages/agent/src/harness/session/memory-store.ts` — in-memory session store.
 12. `packages/agent/src/harness/messages.ts` — defaultConvertToLlm and message helpers.
 12a. `packages/ai/src/utils/transform-messages.ts` — orphaned-tool-call healing; the adjacency backstop referenced in sections 5 and 13.
 13. `packages/agent/src/harness/compaction/compaction.ts` — preparation, split-turn generation, retry.
@@ -2308,7 +2351,7 @@ SQLite backend:
 18. `packages/storage/sqlite-node/src/sqlite/storage/branch-entries.ts` — active-branch materialization.
 19. `packages/storage/sqlite-node/src/sqlite/storage/session-materialized.ts` — stats/labels/config projections.
 20. `packages/storage/sqlite-node/src/sqlite/migrations/001_initial.sql` and `migrations.ts` — schema and migration mechanism.
-21. `packages/storage/sqlite-node/src/sqlite/repo.ts` — create/open/fork.
+21. `packages/storage/sqlite-node/src/sqlite/session-store.ts` — create/open/fork.
 
 Behavioral tests (compatibility requirements):
 
@@ -2316,5 +2359,5 @@ Behavioral tests (compatibility requirements):
 23. `packages/agent/test/agent.test.ts`
 24. `packages/agent/test/harness/agent-harness.test.ts`
 25. `packages/agent/test/harness/session.test.ts`
-26. `packages/agent/test/harness/storage.test.ts`
+26. `packages/agent/test/harness/session-stores.test.ts`
 27. `packages/agent/test/harness/sqlite-migrations.test.ts`

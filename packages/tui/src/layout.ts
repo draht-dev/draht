@@ -129,7 +129,16 @@ function layoutComponent(
 
 	if (node.type === "scroll") {
 		const previousScrollTop = node.state.scrollTop;
-		const childBox = layoutComponent(context, node.component, x, y - previousScrollTop, safeWidth, undefined, clip);
+		const contentWidth = node.state.getContentWidth(safeWidth);
+		const childBox = layoutComponent(
+			context,
+			node.component,
+			x,
+			y - previousScrollTop,
+			contentWidth,
+			undefined,
+			clip,
+		);
 		const contentHeight = childBox.rect.height;
 		const viewportHeight = height === undefined ? contentHeight : Math.max(0, Math.floor(height));
 		node.state.updateLayout(contentHeight, viewportHeight, context.requestRender);
@@ -144,7 +153,7 @@ function layoutComponent(
 			clip: childClip,
 			children: [childBox],
 			scrollView,
-			scrollContentLines: renderCached(context, node.component, safeWidth),
+			scrollContentLines: renderCached(context, node.component, contentWidth),
 			layer: 0,
 		};
 		childBox.parent = box;
@@ -261,9 +270,9 @@ export function getScrollbarGeometry(box: LayoutBox): ScrollbarGeometry | undefi
 		minThumbHeight,
 		Math.min(trackHeight, Math.round((trackHeight * trackHeight) / contentHeight)),
 	);
-	const maxScrollTop = contentHeight - trackHeight;
+	const maxScrollTop = Math.max(0, contentHeight - trackHeight);
 	const maxThumbTop = trackHeight - thumbHeight;
-	const thumbOffset = Math.round((box.scrollView.scrollTop / maxScrollTop) * maxThumbTop);
+	const thumbOffset = maxScrollTop === 0 ? 0 : Math.round((box.scrollView.scrollTop / maxScrollTop) * maxThumbTop);
 	const column = box.rect.x + box.rect.width - 1;
 	if (column < box.clip.x || column >= box.clip.x + box.clip.width) return undefined;
 

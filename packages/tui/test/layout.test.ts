@@ -159,16 +159,14 @@ describe("viewport layout", () => {
 		);
 
 		const alwaysFitting = new ScrollView(fittingContent, { scrollbar: "always", scrollbarStyle });
-		assert.ok(
-			renderLayoutFrame(alwaysFitting, 6, 4, () => {}).lines.every((line) => !line.includes(scrollbarBackground)),
-		);
+		const alwaysFittingFrame = renderLayoutFrame(alwaysFitting, 6, 4, () => {});
+		assert.strictEqual(alwaysFittingFrame.root.children[0]?.rect.width, 5);
+		assert.ok(alwaysFittingFrame.lines.every((line) => line.includes(scrollbarBackground)));
 
 		const alwaysOverflowing = new ScrollView(content, { scrollbar: "always", scrollbarStyle });
-		assert.strictEqual(
-			renderLayoutFrame(alwaysOverflowing, 6, 4, () => {}).lines.filter((line) => line.includes(scrollbarBackground))
-				.length,
-			2,
-		);
+		const alwaysOverflowingFrame = renderLayoutFrame(alwaysOverflowing, 6, 4, () => {});
+		assert.strictEqual(alwaysOverflowingFrame.root.children[0]?.rect.width, 5);
+		assert.strictEqual(alwaysOverflowingFrame.lines.filter((line) => line.includes(scrollbarBackground)).length, 2);
 
 		const thumbHeightFor = (contentHeight: number) => {
 			const sized = new ScrollView(new Text(Array.from({ length: contentHeight }, () => "x").join("\n"), 0, 0), {
@@ -184,6 +182,19 @@ describe("viewport layout", () => {
 		assert.strictEqual(thumbHeightFor(40), 10);
 		assert.strictEqual(thumbHeightFor(100), 4);
 		assert.strictEqual(thumbHeightFor(400), 2);
+	});
+
+	it("updates reserved scrollbar layout at runtime", () => {
+		const scrollView = new ScrollView(new Text("123456", 0, 0), { scrollbar: "always" });
+		const render = () => renderLayoutFrame(new HStack([scrollView], { align: "start" }), 6, 2, () => {});
+		const always = render();
+		assert.deepStrictEqual(visibleLines(always.lines), ["12345", "6"]);
+		assert.strictEqual(always.root.children[0]?.rect.width, 6);
+		assert.strictEqual(always.root.children[0]?.children[0]?.rect.width, 5);
+
+		scrollView.setScrollbar("hidden");
+		assert.strictEqual(render().root.children[0]?.children[0]?.rect.width, 6);
+		assert.strictEqual(scrollView.isScrollbarVisible, false);
 	});
 
 	it("measures nested scroll content from constrained child geometry", () => {

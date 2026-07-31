@@ -13,7 +13,7 @@ import {
 	Text,
 } from "@draht/tui";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
-import type { DefaultProjectTrust, WarningSettings } from "../../../core/settings-manager.ts";
+import type { DefaultProjectTrust, UiMode, WarningSettings } from "../../../core/settings-manager.ts";
 import {
 	getSelectListTheme,
 	getSettingsListTheme,
@@ -80,6 +80,7 @@ export interface SettingsConfig {
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
+	uiMode: UiMode;
 	warnings: WarningSettings;
 }
 
@@ -112,6 +113,7 @@ export interface SettingsCallbacks {
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
+	onUiModeChange: (mode: UiMode) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onCancel: () => void;
 }
@@ -620,6 +622,13 @@ export class SettingsSelectorComponent extends Container {
 					),
 			},
 			{
+				id: "ui-mode",
+				label: "UI mode",
+				description: "Interface layout used after restart; fullscreen mode is experimental",
+				currentValue: config.uiMode,
+				values: ["regular", "fullscreen"],
+			},
+			{
 				id: "theme",
 				label: "Theme",
 				description: "Color theme for the interface",
@@ -830,6 +839,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "terminal-progress":
 						callbacks.onShowTerminalProgressChange(newValue === "true");
+						break;
+					case "ui-mode":
+						callbacks.onUiModeChange(newValue as UiMode);
 						break;
 					case "theme":
 						callbacks.onThemeChange(newValue);

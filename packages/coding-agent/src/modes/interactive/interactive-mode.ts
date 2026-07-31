@@ -104,6 +104,7 @@ import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import type { UiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { boundedSafeText } from "../../core/socket-server/safe-text.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -339,12 +340,12 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 	/** Force verbose startup (overrides quietStartup setting) */
 	verbose?: boolean;
-	/** Use the alternate-screen TUI renderer. */
-	alt?: boolean;
+	/** UI layout mode. */
+	uiMode?: UiMode;
 }
 
 interface InteractiveTuiOptions {
-	alt: boolean;
+	uiMode: UiMode;
 	showHardwareCursor: boolean;
 	logDirectory: string;
 	terminal?: Terminal;
@@ -353,7 +354,7 @@ interface InteractiveTuiOptions {
 /** Composition root for selecting the interactive terminal renderer. */
 export function createInteractiveTui(options: InteractiveTuiOptions): TUI {
 	const terminal = options.terminal ?? new ProcessTerminal();
-	if (options.alt) {
+	if (options.uiMode === "fullscreen") {
 		return new TuiAltScreen(terminal, options.showHardwareCursor, options.logDirectory, { openUrl: openBrowser });
 	}
 	return new TuiMainScreen(terminal, options.showHardwareCursor, options.logDirectory);
@@ -507,7 +508,8 @@ export class InteractiveMode {
 
 	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
 		this.runtimeHost = runtimeHost;
-		this.options = options;
+		const uiMode = options.uiMode ?? this.settingsManager.getUiMode();
+		this.options = { ...options, uiMode };
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
 			this.resetExtensionUI();
@@ -517,7 +519,7 @@ export class InteractiveMode {
 		});
 		this.version = VERSION;
 		this.ui = createInteractiveTui({
-			alt: options.alt ?? false,
+			uiMode,
 			showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
 			logDirectory: getAgentDir(),
 		});
@@ -1979,7 +1981,7 @@ export class InteractiveMode {
 		this.activeStatusIndicator?.dispose();
 		this.activeStatusIndicator = undefined;
 		this.statusContainer.clear();
-		if (hadActiveStatusIndicator && !this.options.alt && this.ui.getClearOnShrink()) {
+		if (hadActiveStatusIndicator && this.options.uiMode === "regular" && this.ui.getClearOnShrink()) {
 			this.statusContainer.addChild(this.idleStatus);
 		}
 	}
@@ -4570,6 +4572,7 @@ export class InteractiveMode {
 					attachableSessions: this.settingsManager.getAttachableSessions(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
+					uiMode: this.settingsManager.getUiMode(),
 					warnings: this.settingsManager.getWarnings(),
 				},
 				{
@@ -4713,6 +4716,10 @@ export class InteractiveMode {
 					},
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
+					},
+					onUiModeChange: (mode) => {
+						this.settingsManager.setUiMode(mode);
+						this.showStatus(`UI mode: ${mode} (restart required)`);
 					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);

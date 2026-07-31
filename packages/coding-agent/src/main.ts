@@ -1106,7 +1106,7 @@ export async function main(args: string[], options?: MainOptions) {
 				initialImages,
 				initialMessages: parsed.messages,
 				verbose: parsed.verbose,
-				alt: parsed.alt,
+				uiMode: parsed.uiMode,
 			});
 			if (startupBenchmark) {
 				await interactiveMode.init();

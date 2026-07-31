@@ -11,7 +11,7 @@ import {
 	type SessionStore,
 	type SessionTreeEntry,
 } from "../types.ts";
-import { createSessionForkSelection } from "./fork-selection.ts";
+import { createSessionForkSelection } from "./fork.ts";
 import { createSessionFromReader, type Session, type SessionContextBuildOptions } from "./session.ts";
 
 export function createSessionId(): string {

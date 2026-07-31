@@ -10,7 +10,7 @@ import type {
 } from "../types.ts";
 import { SessionError, toError } from "../types.ts";
 import { createArraySessionReader } from "./array-session-reader.ts";
-import { readSessionEntriesForFork } from "./fork-selection.ts";
+import { readSessionEntriesForFork } from "./fork.ts";
 import { KeyedOperationQueue } from "./keyed-operation-queue.ts";
 import { createSessionId, createTimestamp, getFileSystemResultOrThrow } from "./repository.ts";
 

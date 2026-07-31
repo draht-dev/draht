@@ -29,7 +29,7 @@ export {
 } from "./harness/compaction/compaction.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
-export { readSessionEntriesForFork } from "./harness/session/fork-selection.ts";
+export { readSessionEntriesForFork } from "./harness/session/fork.ts";
 export {
 	createJsonlSessionStore,
 	type JsonlSessionStoreFileSystem,

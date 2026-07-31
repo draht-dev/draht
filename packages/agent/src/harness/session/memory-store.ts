@@ -1,7 +1,7 @@
 import type { SessionForkSelection, SessionMetadata, SessionReader, SessionStore, SessionTreeEntry } from "../types.ts";
 import { SessionError } from "../types.ts";
 import { createArraySessionReader } from "./array-session-reader.ts";
-import { readSessionEntriesForFork } from "./fork-selection.ts";
+import { readSessionEntriesForFork } from "./fork.ts";
 import { KeyedOperationQueue } from "./keyed-operation-queue.ts";
 import { createSessionId, createTimestamp } from "./repository.ts";
 

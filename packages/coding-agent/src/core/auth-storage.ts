@@ -214,8 +214,20 @@ export class AuthStorage implements CredentialStore {
 		}
 	}
 
+	private async readLatestData(): Promise<AuthStorageData> {
+		try {
+			return await this.storage.withLockAsync(async (content) => {
+				const currentData = this.parseStorageData(content);
+				this.data = currentData;
+				return { result: currentData };
+			});
+		} catch {
+			return this.data;
+		}
+	}
+
 	async read(provider: string): Promise<Credential | undefined> {
-		const credential = this.data[provider];
+		const credential = (await this.readLatestData())[provider];
 		if (credential?.type !== "api_key") return credential;
 		if (credential.key === undefined) return credential;
 		return { ...credential, key: resolveConfigValue(credential.key, credential.env) };
@@ -250,7 +262,10 @@ export class AuthStorage implements CredentialStore {
 
 	/** List credential metadata without resolving configured key values. */
 	async list(): Promise<readonly CredentialInfo[]> {
-		return Object.entries(this.data).map(([providerId, credential]) => ({ providerId, type: credential.type }));
+		return Object.entries(await this.readLatestData()).map(([providerId, credential]) => ({
+			providerId,
+			type: credential.type,
+		}));
 	}
 }
 

@@ -34,7 +34,7 @@ describe("parseExperimentalCliOptions", () => {
 		});
 	});
 
-	test("parses a client connection endpoint", () => {
+	test("parses a client transport address", () => {
 		const result = parseExperimentalCliOptions(["client", "--connect", "unix:///tmp/pi.sock"]);
 		expect(result).toMatchObject({
 			ok: true,
@@ -112,9 +112,9 @@ describe("parseExperimentalCliOptions", () => {
 		[["server", "hello"], "An initial prompt is only valid for combined or client mode"],
 		[["--provider", "anthropic"], "--provider requires --model"],
 		[["--thinking", "extreme"], 'Invalid thinking level "extreme"'],
-		[["--listen", "/tmp/pi.sock"], 'Invalid --listen endpoint "/tmp/pi.sock"'],
+		[["--listen", "/tmp/pi.sock"], 'Invalid --listen address "/tmp/pi.sock"'],
 		[["--listen", "ws://localhost:8080"], 'Unsupported --listen transport "ws:"'],
-		[["--listen", "unix://relative.sock"], "Unix endpoint must not include an authority"],
+		[["--listen", "unix://relative.sock"], "Unix transport address must not include an authority"],
 		[["client", "--listen", "unix:///tmp/pi.sock"], "--listen is only valid for combined or server mode"],
 		[["server", "--connect", "unix:///tmp/pi.sock"], "--connect is only valid for client mode"],
 		[["client", "--connect", "ws://localhost:8080"], 'Unsupported --connect transport "ws:"'],

@@ -1,7 +1,7 @@
 import type { ThinkingLevel } from "@draht/agent-core";
 import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../thinking-level.ts";
 import { type AuthInput, parseAuthInput } from "./auth-options.ts";
-import { type ExperimentalEndpoint, parseExperimentalEndpoint } from "./endpoint.ts";
+import { parseTransportAddress, type TransportAddress } from "./transport-address.ts";
 
 interface CommonOptions {
 	readonly cwd?: string;
@@ -14,7 +14,7 @@ interface CommonOptions {
 
 export interface ExperimentalCombinedOptions extends CommonOptions {
 	readonly role: "combined";
-	readonly listen?: readonly ExperimentalEndpoint[];
+	readonly listen?: readonly TransportAddress[];
 	readonly auth?: AuthInput;
 	readonly sessionId?: string;
 	readonly initialPrompt?: string;
@@ -22,13 +22,13 @@ export interface ExperimentalCombinedOptions extends CommonOptions {
 
 export interface ExperimentalServerOptions extends CommonOptions {
 	readonly role: "server";
-	readonly listen?: readonly ExperimentalEndpoint[];
+	readonly listen?: readonly TransportAddress[];
 	readonly auth?: AuthInput;
 }
 
 export interface ExperimentalClientOptions extends CommonOptions {
 	readonly role: "client";
-	readonly connect?: ExperimentalEndpoint;
+	readonly connect?: TransportAddress;
 	readonly auth?: AuthInput;
 	readonly sessionId?: string;
 	readonly initialPrompt?: string;
@@ -171,11 +171,11 @@ export function parseExperimentalCliOptions(argv: readonly string[]): Experiment
 
 	if (raw.provider !== undefined && raw.model === undefined) errors.push("--provider requires --model");
 	const listen = raw.listenValues.flatMap((value) => {
-		const result = parseExperimentalEndpoint(value, "--listen");
+		const result = parseTransportAddress(value, "--listen");
 		if (result.error) errors.push(result.error);
-		return result.endpoint ? [result.endpoint] : [];
+		return result.address ? [result.address] : [];
 	});
-	const connectResult = raw.connectValue ? parseExperimentalEndpoint(raw.connectValue, "--connect") : undefined;
+	const connectResult = raw.connectValue ? parseTransportAddress(raw.connectValue, "--connect") : undefined;
 	if (connectResult?.error) errors.push(connectResult.error);
 	errors.push(...parseAuthInput(raw).errors);
 	if (role === "client" && raw.listenValues.length > 0) {
@@ -219,7 +219,7 @@ export function parseExperimentalCliOptions(argv: readonly string[]): Experiment
 			options: {
 				role,
 				...roleOptions,
-				...(connectResult?.endpoint === undefined ? {} : { connect: connectResult.endpoint }),
+				...(connectResult?.address === undefined ? {} : { connect: connectResult.address }),
 				...(auth === undefined ? {} : { auth }),
 			},
 		};

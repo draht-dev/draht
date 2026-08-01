@@ -3,7 +3,7 @@ package parse
 // queryRev is folded into TreeSitter's Version(). Bump whenever ANY query
 // string in this file changes; parse/version_test.go golden-hashes the
 // concatenated query text and fails if it changes without a bump.
-const queryRev = 1
+const queryRev = 2
 
 // The four queries below (tsImportQuery, pyImportQuery, goImportQuery,
 // rsImportQuery) reproduce the patterns validated by the gotreesitter spike's
@@ -172,9 +172,23 @@ const cppImportQuery = cImportQuery + `
 // anchored via the `.` immediate-child operator so that only the FIRST
 // argument word is captured (a command like `source lib.sh arg1 arg2` must
 // not turn arg1/arg2 into spurious import records).
+// bashImportQuery covers `source X` and `. X` in the three ways X is written.
+//
+// The bare (word) patterns alone miss most real scripts: shellcheck tells
+// everyone to quote paths, so `source "./lib/common.sh"` is the common form.
+//
+// The double-quoted pattern anchors string_content as the string's ONLY child
+// (`. … .`). That is deliberate and load-bearing: a string containing an
+// expansion — `"$SCRIPT_DIR/lib.sh"` — has additional children and therefore
+// does not match, so it is skipped rather than resolved against a path that
+// only exists at runtime. Recall is lower; precision stays exact.
 const bashImportQuery = `
 (command name: (command_name (word) @_cmd) . argument: (word) @path (#eq? @_cmd "source")) @stmt
 (command name: (command_name (word) @_cmd) . argument: (word) @path (#eq? @_cmd ".")) @stmt
+(command name: (command_name (word) @_cmd) . argument: (string . (string_content) @path .) (#eq? @_cmd "source")) @stmt
+(command name: (command_name (word) @_cmd) . argument: (string . (string_content) @path .) (#eq? @_cmd ".")) @stmt
+(command name: (command_name (word) @_cmd) . argument: (raw_string) @path_raw (#eq? @_cmd "source")) @stmt
+(command name: (command_name (word) @_cmd) . argument: (raw_string) @path_raw (#eq? @_cmd ".")) @stmt
 `
 
 // ImportQueryFor returns the compiled S-expression query text for the

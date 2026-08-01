@@ -379,3 +379,24 @@ func TestTreeSitter_DoesNotPanicOnGarbage(t *testing.T) {
 		_ = err
 	}
 }
+
+// TestTreeSitter_ShellQuotedSource covers the query extension for quoted
+// source paths — the form shellcheck pushes everyone toward, and which the
+// original (word)-only query missed entirely.
+func TestTreeSitter_ShellQuotedSource(t *testing.T) {
+	p := newTS(t, "shell")
+	skipUnlessSupported(t, p, "shell")
+	src := "#!/bin/bash\n" +
+		"source \"./lib/common.sh\"\n" +
+		". './other.sh'\n" +
+		"source \"$SCRIPT_DIR/skipped.sh\"\n" +
+		"source ./bare.sh\n"
+	res := extract(t, p, "shell", "deploy.sh", src)
+	assertImports(t, res.Imports, []wantImport{
+		{kind: KindRequire, specifier: "./lib/common.sh"},
+		{kind: KindRequire, specifier: "./other.sh"},
+		// "$SCRIPT_DIR/skipped.sh" must NOT appear: it only exists at runtime,
+		// so resolving it would mean guessing.
+		{kind: KindRequire, specifier: "./bare.sh"},
+	})
+}

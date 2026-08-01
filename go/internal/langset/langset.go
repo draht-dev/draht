@@ -19,7 +19,7 @@ package langset
 import "sort"
 
 // CLILanguages is what cmd/draht-tools' buildParser enables (design D2).
-var CLILanguages = []string{"typescript", "javascript", "python", "go", "rust"}
+var CLILanguages = []string{"typescript", "javascript", "python", "go", "rust", "java", "ruby", "shell"}
 
 // GrammarFor maps a draht language id to a gotreesitter grammar name (i.e. a
 // name accepted by grammars.DetectLanguageByName). This does NOT resolve the

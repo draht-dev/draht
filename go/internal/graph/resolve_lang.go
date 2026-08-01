@@ -115,7 +115,8 @@ func NewLangResolver(idx *ResolverIndex, modules []scan.File, goModules []GoModu
 // Supports reports whether this resolver handles lang.
 func (lr *LangResolver) Supports(lang scan.Lang) bool {
 	switch lang {
-	case scan.LangPython, scan.LangGo, scan.LangRust:
+	case scan.LangPython, scan.LangGo, scan.LangRust,
+		scan.LangJava, scan.LangRuby, scan.LangShell:
 		return true
 	}
 	return false
@@ -138,6 +139,12 @@ func (lr *LangResolver) Resolve(lang scan.Lang, specifier, fromDir string) []str
 		return lr.resolveGo(specifier)
 	case scan.LangRust:
 		return lr.resolveRust(specifier, fromDir)
+	case scan.LangJava:
+		return lr.resolveJava(specifier)
+	case scan.LangRuby:
+		return lr.resolveRuby(specifier, fromDir)
+	case scan.LangShell:
+		return lr.resolveShell(specifier, fromDir)
 	}
 	return nil
 }
@@ -408,4 +415,122 @@ func BuildLangEdges(mi []LangModuleImports, lr *LangResolver) []model.Edge {
 // engine's `.test.`/`.spec.` regexes) does not recognise.
 func isGoTestFile(rel string) bool {
 	return strings.HasSuffix(rel, "_test.go")
+}
+
+// ── java ────────────────────────────────────────────────────────────────────
+
+// resolveJava maps a dotted type import to the file declaring it.
+//
+// Java's package-to-directory convention is rigid, but the source root is not:
+// the same type lives at src/main/java/a/b/C.java in one repo and a/b/C.java in
+// another. Rather than guessing roots, this matches on path SUFFIX and accepts
+// the result only when exactly one module matches — an ambiguous suffix (the
+// same class vendored twice, or main/ and test/ copies) yields no edge.
+//
+// The trailing segments of a specifier are not necessarily package parts:
+//
+//	import java.util.List        -> a/b/List.java
+//	import static a.b.C.member   -> the member is not a file
+//	import a.b.Outer.Inner       -> a nested class, also not a file
+//
+// so segments are dropped from the right until one names a real file.
+func (lr *LangResolver) resolveJava(spec string) []string {
+	segs := strings.Split(spec, ".")
+	for n := len(segs); n >= 1; n-- {
+		suffix := strings.Join(segs[:n], "/") + ".java"
+		if hit, ok := lr.uniqueSuffixMatch(suffix); ok {
+			return []string{hit}
+		}
+	}
+	return nil
+}
+
+// uniqueSuffixMatch returns the single module whose path is, or ends with
+// "/"+suffix. Zero or multiple matches both return false: ambiguity is
+// resolved by emitting nothing rather than picking arbitrarily.
+func (lr *LangResolver) uniqueSuffixMatch(suffix string) (string, bool) {
+	var hit string
+	n := 0
+	for m := range lr.idx.Modules {
+		if m == suffix || strings.HasSuffix(m, "/"+suffix) {
+			n++
+			if n > 1 {
+				return "", false
+			}
+			hit = m
+		}
+	}
+	return hit, n == 1
+}
+
+// ── ruby ────────────────────────────────────────────────────────────────────
+
+// resolveRuby handles both require forms, which the parse layer reports
+// identically (kind "require"), distinguished here by shape:
+//
+//	require_relative "./lib/foo" / "../x"  -> resolved against the file's dir
+//	require "json"                         -> a load-path lookup
+//
+// A require_relative specifier need not start with "." (`require_relative
+// "foo"` is legal and means a sibling), so a bare specifier is tried as a
+// sibling first, then against the conventional lib/ root and the repo root.
+//
+// Worth knowing when reading a Rails graph: Zeitwerk autoloads constants, so
+// idiomatic Rails code barely calls require at all. Sparse Ruby edges there
+// are correct, not a extraction failure.
+func (lr *LangResolver) resolveRuby(spec, fromDir string) []string {
+	if strings.HasPrefix(spec, ".") {
+		if hit, ok := lr.rbProbe(path.Join(fromDir, spec)); ok {
+			return []string{hit}
+		}
+		return nil
+	}
+	for _, cand := range []string{
+		path.Join(fromDir, spec), // require_relative "sibling"
+		path.Join("lib", spec),   // gem convention
+		spec,                     // repo-root relative
+	} {
+		if hit, ok := lr.rbProbe(cand); ok {
+			return []string{hit}
+		}
+	}
+	return nil
+}
+
+// rbProbe accepts an explicit .rb path or appends the extension.
+func (lr *LangResolver) rbProbe(stem string) (string, bool) {
+	stem = posixNormalize(stem)
+	cands := []string{stem}
+	if !strings.HasSuffix(stem, ".rb") {
+		cands = []string{stem + ".rb", stem}
+	}
+	for _, c := range cands {
+		if _, ok := lr.idx.Modules[c]; ok {
+			return c, true
+		}
+	}
+	return "", false
+}
+
+// ── shell ───────────────────────────────────────────────────────────────────
+
+// resolveShell resolves `source X` / `. X` against the sourcing script's
+// directory.
+//
+// This is an approximation: POSIX resolves a relative source path against the
+// runtime $PWD, not the script's location. Script-relative is the dominant
+// convention and the only one statically knowable, and the query already
+// refuses any path containing an expansion, so what is emitted is either right
+// or absent. Absolute paths are treated as external — they point outside the
+// repo by construction.
+func (lr *LangResolver) resolveShell(spec, fromDir string) []string {
+	if spec == "" || strings.HasPrefix(spec, "/") {
+		return nil
+	}
+	for _, cand := range []string{path.Join(fromDir, spec), spec} {
+		if _, ok := lr.idx.Modules[posixNormalize(cand)]; ok {
+			return []string{posixNormalize(cand)}
+		}
+	}
+	return nil
 }

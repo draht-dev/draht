@@ -365,6 +365,11 @@ func groupImports(cursor *gts.QueryCursor, lang *gts.Language, grammar string, s
 				g.moduleAlt = txt
 			case "module_angle":
 				g.module = strings.Trim(txt, "<>")
+			case "path_raw":
+				// bash single-quoted `source './lib.sh'`: raw_string is a
+				// single token INCLUDING its quotes, unlike a double-quoted
+				// string whose string_content child already excludes them.
+				g.module = strings.Trim(txt, "'")
 			case "dynamic":
 				g.module = txt
 				g.sawDynamic = true

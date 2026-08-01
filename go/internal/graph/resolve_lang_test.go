@@ -277,3 +277,110 @@ func TestBuildLangEdges_SkipsSelfEdge(t *testing.T) {
 		t.Errorf("edges = %+v, want a single edge to go/a/two.go", edges)
 	}
 }
+
+func TestLangResolver_Java(t *testing.T) {
+	files := []string{
+		"app/src/main/java/com/ex/Main.java",
+		"app/src/main/java/com/ex/util/Helper.java",
+		"lib/src/main/java/com/other/Thing.java",
+	}
+	lr := newLangFixture(t, files, nil)
+
+	tests := []struct {
+		name string
+		spec string
+		want []string
+	}{
+		{"type import via path suffix", "com.ex.util.Helper", []string{"app/src/main/java/com/ex/util/Helper.java"}},
+		{"across source roots", "com.other.Thing", []string{"lib/src/main/java/com/other/Thing.java"}},
+		// The member is not a file, so the rightmost segment is dropped until
+		// something resolves.
+		{"static import drops the member", "com.ex.util.Helper.build", []string{"app/src/main/java/com/ex/util/Helper.java"}},
+		{"nested class drops the inner name", "com.ex.Main.Inner", []string{"app/src/main/java/com/ex/Main.java"}},
+		{"jdk type is external", "java.util.List", nil},
+		{"unknown type is external", "org.junit.Test", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lr.Resolve(scan.LangJava, tt.spec, "app/src/main/java/com/ex"); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Resolve(java, %q) = %v, want %v", tt.spec, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLangResolver_JavaAmbiguousSuffixYieldsNoEdge pins the precision rule:
+// the same class present under two source roots (the classic main/ + test/ or
+// vendored-copy case) must produce NO edge rather than an arbitrary pick.
+func TestLangResolver_JavaAmbiguousSuffixYieldsNoEdge(t *testing.T) {
+	lr := newLangFixture(t, []string{
+		"a/src/com/ex/Dup.java",
+		"b/src/com/ex/Dup.java",
+	}, nil)
+	if got := lr.Resolve(scan.LangJava, "com.ex.Dup", "a/src/com/ex"); got != nil {
+		t.Errorf("ambiguous suffix resolved to %v, want no edge", got)
+	}
+}
+
+func TestLangResolver_Ruby(t *testing.T) {
+	files := []string{
+		"lib/app.rb",
+		"lib/app/thing.rb",
+		"spec/thing_spec.rb",
+		"tools/helper.rb",
+	}
+	lr := newLangFixture(t, files, nil)
+
+	tests := []struct {
+		name    string
+		spec    string
+		fromDir string
+		want    []string
+	}{
+		{"require_relative dot-prefixed", "./thing", "lib/app", []string{"lib/app/thing.rb"}},
+		{"require_relative parent", "../app", "lib/app", []string{"lib/app.rb"}},
+		{"bare require_relative sibling", "helper", "tools", []string{"tools/helper.rb"}},
+		{"require against lib root", "app/thing", ".", []string{"lib/app/thing.rb"}},
+		{"explicit .rb suffix", "./thing.rb", "lib/app", []string{"lib/app/thing.rb"}},
+		{"stdlib/gem is external", "json", "lib", nil},
+		{"nested gem path is external", "net/http", "lib", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lr.Resolve(scan.LangRuby, tt.spec, tt.fromDir); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Resolve(ruby, %q, %q) = %v, want %v", tt.spec, tt.fromDir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLangResolver_Shell(t *testing.T) {
+	files := []string{
+		"scripts/deploy.sh",
+		"scripts/lib/common.sh",
+		"scripts/lib/log.sh",
+		"top.sh",
+	}
+	lr := newLangFixture(t, files, nil)
+
+	tests := []struct {
+		name    string
+		spec    string
+		fromDir string
+		want    []string
+	}{
+		{"script-relative", "./lib/common.sh", "scripts", []string{"scripts/lib/common.sh"}},
+		{"sibling without dot prefix", "lib/log.sh", "scripts", []string{"scripts/lib/log.sh"}},
+		{"parent traversal", "../top.sh", "scripts", []string{"top.sh"}},
+		{"repo-root fallback", "top.sh", "scripts/lib", []string{"top.sh"}},
+		{"absolute path is external", "/etc/profile.d/x.sh", "scripts", nil},
+		{"unknown file yields no edge", "./missing.sh", "scripts", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lr.Resolve(scan.LangShell, tt.spec, tt.fromDir); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Resolve(shell, %q, %q) = %v, want %v", tt.spec, tt.fromDir, got, tt.want)
+			}
+		})
+	}
+}

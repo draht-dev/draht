@@ -26,7 +26,7 @@ func allQueryText() string {
 // corresponding queryRev bump in queries.go. To intentionally change a query,
 // bump queryRev, then update wantHash below to the value this test reports.
 func TestQueryGolden(t *testing.T) {
-	const wantRev = 1
+	const wantRev = 2
 	if queryRev != wantRev {
 		t.Fatalf("queryRev = %d, want %d (update wantRev alongside any deliberate query change)", queryRev, wantRev)
 	}
@@ -34,7 +34,7 @@ func TestQueryGolden(t *testing.T) {
 	sum := sha256.Sum256([]byte(allQueryText()))
 	got := hex.EncodeToString(sum[:])
 
-	const wantHash = "6857fd5160613bfa24769d52d82c9b6d63ad5049dd0270c29f43609d5c9ed2fd"
+	const wantHash = "f99ca7ad21233fb6a06511de89777d5a8c730e318e01b15bc35619ea2728bf55"
 	if got != wantHash {
 		t.Fatalf("import query text changed without a queryRev bump: got hash %s, want %s\n"+
 			"if this change is deliberate: bump queryRev in queries.go, then update wantHash to %s",

@@ -23,6 +23,15 @@ export function parseTransportAddress(
 	if (url.hostname || url.port || url.username || url.password) {
 		return { error: "Unix transport address must not include an authority" };
 	}
+	if (
+		!value.startsWith("unix:///") ||
+		value.startsWith("unix:////") ||
+		value.includes("?") ||
+		value.includes("#") ||
+		url.href !== value
+	) {
+		return { error: `Invalid ${option} address "${value}"` };
+	}
 	let path: string;
 	try {
 		path = decodeURIComponent(url.pathname);

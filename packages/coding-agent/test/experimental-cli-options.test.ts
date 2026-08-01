@@ -2,27 +2,47 @@ import { describe, expect, test } from "vitest";
 import { parseExperimentalCliOptions } from "../src/cli/experimental/options.ts";
 
 describe("parseExperimentalCliOptions", () => {
-	test("selects combined mode when no role is present", () => {
-		expect(parseExperimentalCliOptions(["--cwd", "/workspace", "inspect", "the project"])).toEqual({
+	test("selects combined mode and preserves existing CLI arguments", () => {
+		expect(
+			parseExperimentalCliOptions([
+				"--cwd",
+				"/workspace",
+				"--provider=anthropic",
+				"--model",
+				"claude-sonnet",
+				"--thinking=high",
+				"inspect",
+				"the project",
+			]),
+		).toEqual({
 			ok: true,
 			options: {
 				role: "combined",
-				cwd: "/workspace",
-				initialPrompt: "inspect the project",
-				help: false,
-				version: false,
+				remainingArgs: [
+					"--cwd",
+					"/workspace",
+					"--provider=anthropic",
+					"--model",
+					"claude-sonnet",
+					"--thinking=high",
+					"inspect",
+					"the project",
+				],
 			},
 		});
 	});
 
-	test("parses repeatable server listeners", () => {
-		const result = parseExperimentalCliOptions([
-			"server",
-			"--listen",
-			"unix:///tmp/pi.sock",
-			"--listen=unix:///tmp/pi-admin.sock",
-		]);
-		expect(result).toMatchObject({
+	test("parses repeatable server listeners and preserves other arguments", () => {
+		expect(
+			parseExperimentalCliOptions([
+				"server",
+				"--listen",
+				"unix:///tmp/pi.sock",
+				"--model",
+				"claude-sonnet",
+				"--listen=unix:///tmp/pi-admin.sock",
+			]),
+		).toEqual({
 			ok: true,
 			options: {
 				role: "server",
@@ -30,35 +50,18 @@ describe("parseExperimentalCliOptions", () => {
 					{ transport: "unix", path: "/tmp/pi.sock" },
 					{ transport: "unix", path: "/tmp/pi-admin.sock" },
 				],
+				remainingArgs: ["--model", "claude-sonnet"],
 			},
 		});
 	});
 
 	test("parses a client transport address", () => {
-		const result = parseExperimentalCliOptions(["client", "--connect", "unix:///tmp/pi.sock"]);
-		expect(result).toMatchObject({
-			ok: true,
-			options: { role: "client", connect: { transport: "unix", path: "/tmp/pi.sock" } },
-		});
-	});
-
-	test("parses shared model options and inline values", () => {
-		const result = parseExperimentalCliOptions([
-			"--provider=anthropic",
-			"--model",
-			"claude-sonnet",
-			"--thinking=high",
-			"--session",
-			"session-1",
-		]);
-		expect(result).toMatchObject({
+		expect(parseExperimentalCliOptions(["client", "--connect", "unix:///tmp/pi.sock", "hello"])).toEqual({
 			ok: true,
 			options: {
-				role: "combined",
-				provider: "anthropic",
-				model: "claude-sonnet",
-				thinking: "high",
-				sessionId: "session-1",
+				role: "client",
+				connect: { transport: "unix", path: "/tmp/pi.sock" },
+				remainingArgs: ["hello"],
 			},
 		});
 	});
@@ -66,80 +69,79 @@ describe("parseExperimentalCliOptions", () => {
 	test.each([
 		[["--auth-token", "secret"], { type: "token", token: "secret" }],
 		[["--auth-token-file", "/tmp/token"], { type: "file", path: "/tmp/token" }],
-	] as const)("parses server authentication source %j", (argv, auth) => {
-		const result = parseExperimentalCliOptions(argv);
-		expect(result).toMatchObject({ ok: true, options: { role: "combined", auth } });
-	});
-
-	test("accepts token and token-file authentication in client mode", () => {
-		expect(parseExperimentalCliOptions(["client", "--auth-token", "secret"])).toMatchObject({
+	] as const)("parses authentication source %j", (argv, auth) => {
+		expect(parseExperimentalCliOptions(argv)).toEqual({
 			ok: true,
-			options: { role: "client", auth: { type: "token", token: "secret" } },
-		});
-		expect(parseExperimentalCliOptions(["client", "--auth-token-file", "/tmp/token"])).toMatchObject({
-			ok: true,
-			options: { role: "client", auth: { type: "file", path: "/tmp/token" } },
-		});
-	});
-
-	test("supports help, version, and positional-only prompts", () => {
-		expect(parseExperimentalCliOptions(["-h", "-v", "--", "--review", "this"])).toEqual({
-			ok: true,
-			options: {
-				role: "combined",
-				help: true,
-				version: true,
-				initialPrompt: "--review this",
-			},
+			options: { role: "combined", auth, remainingArgs: [] },
 		});
 	});
 
 	test.each([[[]], [["server"]], [["client"]]] as const)(
 		"permits omitted authentication for later environment/default resolution",
 		(argv) => {
-			const result = parseExperimentalCliOptions(argv);
-			expect(result.ok).toBe(true);
-			if (result.ok) expect("auth" in result.options).toBe(false);
+			expect(parseExperimentalCliOptions(argv)).toEqual({
+				ok: true,
+				options: { role: argv[0] ?? "combined", remainingArgs: [] },
+			});
 		},
 	);
+
+	test("preserves unknown options, @file arguments, and the positional separator", () => {
+		expect(parseExperimentalCliOptions(["--unknown", "@prompt.md", "--", "--listen", "unix:///tmp/pi.sock"])).toEqual(
+			{
+				ok: true,
+				options: {
+					role: "combined",
+					remainingArgs: ["--unknown", "@prompt.md", "--", "--listen", "unix:///tmp/pi.sock"],
+				},
+			},
+		);
+	});
 
 	test.each([
 		[
 			["--auth-token", "secret", "--auth-token-file", "/tmp/token"],
 			"--auth-token and --auth-token-file are mutually exclusive",
 		],
-		[["server", "--session", "session-1"], "--session is only valid for combined or client mode"],
-		[["server", "hello"], "An initial prompt is only valid for combined or client mode"],
-		[["--provider", "anthropic"], "--provider requires --model"],
-		[["--thinking", "extreme"], 'Invalid thinking level "extreme"'],
 		[["--listen", "/tmp/pi.sock"], 'Invalid --listen address "/tmp/pi.sock"'],
 		[["--listen", "ws://localhost:8080"], 'Unsupported --listen transport "ws:"'],
 		[["--listen", "unix://relative.sock"], "Unix transport address must not include an authority"],
 		[["client", "--listen", "unix:///tmp/pi.sock"], "--listen is only valid for combined or server mode"],
 		[["server", "--connect", "unix:///tmp/pi.sock"], "--connect is only valid for client mode"],
 		[["client", "--connect", "ws://localhost:8080"], 'Unsupported --connect transport "ws:"'],
-		[["--unknown"], "Unknown option: --unknown"],
-		[["-x"], "Unknown option: -x"],
-		[["--model"], "--model requires a value"],
-		[["--model="], "--model requires a value"],
-		[["@prompt.md"], "@file arguments are not supported in experimental mode"],
-	] as const)("rejects invalid input %j", (argv, error) => {
+		[["--listen"], "--listen requires a value"],
+		[["--connect="], "--connect requires a value"],
+	] as const)("rejects invalid experimental input %j", (argv, error) => {
 		const result = parseExperimentalCliOptions(argv);
 		expect(result).toMatchObject({ ok: false });
 		if (!result.ok) expect(result.errors).toContainEqual(expect.stringContaining(error));
 	});
 
-	test("reports independent errors together", () => {
-		expect(parseExperimentalCliOptions(["server", "--provider", "anthropic", "hello"])).toEqual({
+	test("reports independent experimental errors together", () => {
+		expect(
+			parseExperimentalCliOptions([
+				"client",
+				"--listen",
+				"ws://localhost:8080",
+				"--auth-token",
+				"secret",
+				"--auth-token-file",
+				"/tmp/token",
+			]),
+		).toEqual({
 			ok: false,
-			errors: ["--provider requires --model", "An initial prompt is only valid for combined or client mode"],
+			errors: [
+				'Unsupported --listen transport "ws:"',
+				"--auth-token and --auth-token-file are mutually exclusive",
+				"--listen is only valid for combined or server mode",
+			],
 		});
 	});
 
-	test("treats role names after the first argument as a combined-mode prompt", () => {
-		expect(parseExperimentalCliOptions(["--cwd", "/workspace", "server"])).toMatchObject({
+	test("treats role names after the first argument as existing CLI arguments", () => {
+		expect(parseExperimentalCliOptions(["--cwd", "/workspace", "server"])).toEqual({
 			ok: true,
-			options: { role: "combined", initialPrompt: "server" },
+			options: { role: "combined", remainingArgs: ["--cwd", "/workspace", "server"] },
 		});
 	});
 });

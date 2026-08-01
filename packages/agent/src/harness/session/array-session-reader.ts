@@ -51,7 +51,7 @@ export function createArraySessionReader<TMetadata extends SessionMetadata>(
 				throw new RangeError("Session branch query limit must be a positive integer");
 			}
 			if (query.start === null) return [];
-			const path: SessionTreeEntry[] = [];
+			const pathFromStart: SessionTreeEntry[] = [];
 			const visited = new Set<string>();
 			let current = byId.get(query.start);
 			if (!current) throw new SessionError("not_found", `Entry ${query.start} not found`);
@@ -60,15 +60,22 @@ export function createArraySessionReader<TMetadata extends SessionMetadata>(
 					throw new SessionError("invalid_session", `Session branch contains a cycle at ${current.id}`);
 				}
 				visited.add(current.id);
-				path.push(current);
-				if (current.id === query.stopAtId || current.type === query.stopAtType) break;
+				pathFromStart.push(current);
+				if (query.order !== "oldestFirst" && (current.id === query.stopAtId || current.type === query.stopAtType)) {
+					break;
+				}
 				if (!current.parentId) break;
 				const parent = byId.get(current.parentId);
 				if (!parent) throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
 				current = parent;
 			}
-			if (query.order === "oldestFirst") path.reverse();
-			const entries = path.filter(
+			const traversal = query.order === "oldestFirst" ? pathFromStart.reverse() : pathFromStart;
+			const stopIndex =
+				query.order === "oldestFirst"
+					? traversal.findIndex((entry) => entry.id === query.stopAtId || entry.type === query.stopAtType)
+					: -1;
+			const bounded = stopIndex === -1 ? traversal : traversal.slice(0, stopIndex + 1);
+			const entries = bounded.filter(
 				(entry) =>
 					(query.type === undefined || entry.type === query.type) &&
 					(query.customType === undefined || (entry.type === "custom" && entry.customType === query.customType)),

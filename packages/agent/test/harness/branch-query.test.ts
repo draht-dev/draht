@@ -19,6 +19,7 @@ async function verifyBranchQueries(session: Session): Promise<{ tail: string; fu
 	const compaction = await session.appendCompaction("summary", child, 100, undefined, undefined, undefined, [
 		createAssistantMessage("child"),
 	]);
+	const recentCustom = await session.appendCustomEntry("note", { value: 2 });
 	const tail = await session.appendMessage(createUserMessage("tail"));
 	await session.moveTo(root);
 	const sibling = await session.appendMessage(createUserMessage("sibling"));
@@ -30,11 +31,12 @@ async function verifyBranchQueries(session: Session): Promise<{ tail: string; fu
 		custom,
 		child,
 		compaction,
+		recentCustom,
 		tail,
 	]);
 	expect(
 		(await session.findEntriesOnBranch({ start: tail, stopAtType: "compaction" })).map((entry) => entry.id),
-	).toEqual([tail, compaction]);
+	).toEqual([tail, recentCustom, compaction]);
 	expect(
 		(await session.findEntriesOnBranch({ start: tail, stopAtType: "compaction", type: "message" })).map(
 			(entry) => entry.id,
@@ -44,13 +46,27 @@ async function verifyBranchQueries(session: Session): Promise<{ tail: string; fu
 		(await session.findEntriesOnBranch({ start: tail, stopAtId: child, order: "oldestFirst" })).map(
 			(entry) => entry.id,
 		),
-	).toEqual([child, compaction, tail]);
+	).toEqual([root, custom, child]);
+	expect((await session.findEntriesOnBranch({ start: tail, stopAtType: "custom" })).map((entry) => entry.id)).toEqual([
+		tail,
+		recentCustom,
+	]);
+	expect(
+		(
+			await session.findEntriesOnBranch({
+				start: tail,
+				stopAtType: "custom",
+				order: "oldestFirst",
+			})
+		).map((entry) => entry.id),
+	).toEqual([root, custom]);
 	expect(
 		(await session.findEntriesOnBranch({ start: tail, type: "message", order: "oldestFirst" })).map(
 			(entry) => entry.id,
 		),
 	).toEqual([root, child, tail]);
 	expect((await session.findEntriesOnBranch({ start: tail, customType: "note" })).map((entry) => entry.id)).toEqual([
+		recentCustom,
 		custom,
 	]);
 	expect((await session.findEntriesOnBranch({ start: tail, limit: 1 })).map((entry) => entry.id)).toEqual([tail]);
@@ -67,7 +83,7 @@ async function verifyBranchQueries(session: Session): Promise<{ tail: string; fu
 	expect(await session.findEntryOnBranch({ start: tail, type: "compaction" })).toMatchObject({ id: compaction });
 	await expect(session.findEntriesOnBranch({ start: "missing" })).rejects.toMatchObject({ code: "not_found" });
 	await expect(session.findEntriesOnBranch({ limit: 0 })).rejects.toThrow("limit must be a positive integer");
-	return { tail, fullPath: [root, custom, child, compaction, tail] };
+	return { tail, fullPath: [root, custom, child, compaction, recentCustom, tail] };
 }
 
 describe("bounded session branch queries", () => {
@@ -95,6 +111,12 @@ describe("bounded session branch queries", () => {
 			message: createUserMessage("orphan"),
 		});
 
+		expect(
+			(await reader.findEntriesOnBranch({ start: "orphan", stopAtId: "orphan" })).map((entry) => entry.id),
+		).toEqual(["orphan"]);
+		expect(
+			(await reader.findEntriesOnBranch({ start: "orphan", stopAtType: "message" })).map((entry) => entry.id),
+		).toEqual(["orphan"]);
 		await expect(reader.findEntriesOnBranch({ start: "orphan" })).rejects.toMatchObject({
 			code: "invalid_session",
 			message: "Entry missing-parent not found",

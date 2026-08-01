@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -29,6 +30,14 @@ type Options struct {
 	ASTMaxBytes int
 	ASTMaxLine  int
 	Quiet       bool
+
+	// LangEdges enables import edges for python/go/rust (--experimental-lang-
+	// edges). OFF by default and deliberately so: the CJS engine emits no such
+	// edges, so turning this on makes MAP.json diverge from it — which would
+	// break the byte-clean cutover the shim's `--parser regex` pin depends on.
+	// With it off, edge construction is bit-for-bit what it was before the
+	// flag existed.
+	LangEdges bool
 }
 
 // Report is the run summary the CLI prints and the caller inspects.
@@ -130,12 +139,20 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	resolver := NewResolver(NewResolverIndex(modulePaths, workspaceEntry))
 
 	mi := make([]ModuleImports, 0, len(codeFiles))
+	langMI := make([]LangModuleImports, 0)
 	sitesByPath := make(map[string][]extract.CallSite)
 	for i, f := range codeFiles {
-		if f.Lang != scan.LangTypeScript && f.Lang != scan.LangJavaScript {
-			continue // design D3: edges are built from TS/JS modules only
-		}
 		if facts[i] == nil {
+			continue
+		}
+		if f.Lang != scan.LangTypeScript && f.Lang != scan.LangJavaScript {
+			// design D3: the CJS engine builds edges from TS/JS modules only,
+			// and the default path reproduces that exactly. Other languages
+			// are still parsed and cached above — their imports were simply
+			// discarded here until --experimental-lang-edges.
+			if opts.LangEdges {
+				langMI = append(langMI, LangModuleImports{Path: f.Rel, Lang: f.Lang, Imports: facts[i].Imports})
+			}
 			continue
 		}
 		mi = append(mi, ModuleImports{Path: f.Rel, Imports: facts[i].Imports})
@@ -145,6 +162,15 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	}
 	edges := BuildEdges(mi, resolver)
 	callEdges := BuildCallEdgesAll(mi, resolver, sitesByPath)
+
+	// Language edges are appended AFTER the TS/JS set so that prefix stays
+	// byte-identical to a flag-off run; call edges stay TS/JS-only (the
+	// call-site scan is a JS-specific heuristic).
+	if opts.LangEdges && len(langMI) > 0 {
+		lr := NewLangResolver(NewResolverIndex(modulePaths, workspaceEntry),
+			codeFiles, discoverGoModules(root, discovery.Files))
+		edges = append(edges, BuildLangEdges(langMI, lr)...)
+	}
 
 	// Phase 2: inline SECURITY/BUG/.../WHY marker scan over EVERY eligible
 	// scanned file (not just code modules — draht-tools.cjs:2159 reaches
@@ -448,4 +474,25 @@ func readPlanningDocs(root string) planningDocs {
 		d.domain = read("DOMAIN-MODEL.md")
 	}
 	return d
+}
+
+// discoverGoModules reads every go.mod among the scanned files and returns the
+// module path each declares. Files that cannot be read, or that declare no
+// module directive, are skipped — a malformed go.mod means "no module here",
+// never a failed index.
+func discoverGoModules(root string, files []scan.File) []GoModule {
+	var mods []GoModule
+	for _, f := range files {
+		if filepath.Base(f.Rel) != "go.mod" {
+			continue
+		}
+		src, err := os.ReadFile(f.Abs)
+		if err != nil {
+			continue
+		}
+		if p := ParseGoModulePath(src); p != "" {
+			mods = append(mods, GoModule{Path: p, Dir: path.Dir(f.Rel)})
+		}
+	}
+	return mods
 }

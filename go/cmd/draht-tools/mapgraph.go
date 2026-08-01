@@ -10,7 +10,6 @@ import (
 
 	"github.com/draht-dev/draht/go/internal/emit"
 	"github.com/draht-dev/draht/go/internal/graph"
-	"github.com/draht-dev/draht/go/internal/langset"
 	"github.com/draht-dev/draht/go/internal/parse"
 	"github.com/draht-dev/draht/go/internal/scan"
 )
@@ -60,7 +59,11 @@ flags:
       --ast-max-line N         skip AST parse if longest line > N bytes (default 0 = no limit)
       --verbose                per-file warnings + cache diagnostics on stderr
       --experimental-lang-edges
-                               not implemented; exits 2
+                               also build import edges for python/go/rust.
+                               OFF by default: the CJS engine emits no such
+                               edges, so enabling this makes MAP.json diverge
+                               from it (a Go import fans out to every non-test
+                               file of the imported package).
   -h, --help                   show this help
 `
 
@@ -200,14 +203,10 @@ func buildParser(name string, astMaxBytes, astMaxLine int) (parse.Parser, error)
 	case "", "treesitter":
 		// design D2: AST import extraction covers exactly these 6 grammars
 		// (typescript implicitly also builds "tsx" — see NewTreeSitter).
-		// langset.CLILanguages is the single source of truth for this list —
-		// it is also what generates the shipped binary's grammar_subset
-		// build tags (cmd/grammar-tags). Never hand-write this slice
-		// separately; see internal/langset's package doc for why.
-		langs := make([]parse.Lang, len(langset.CLILanguages))
-		for i, l := range langset.CLILanguages {
-			langs[i] = parse.Lang(l)
-		}
+		// parse.CLILangs derives from langset.CLILanguages, the single source
+		// of truth that also generates the shipped binary grammar_subset build
+		// tags (cmd/grammar-tags). Never hand-write this slice separately.
+		langs := parse.CLILangs()
 		var tsOpts []parse.TSOption
 		if astMaxBytes > 0 {
 			tsOpts = append(tsOpts, parse.WithMaxBytes(astMaxBytes))
@@ -238,11 +237,6 @@ func runMapGraph(args []string) int {
 		fmt.Print(mapGraphUsage)
 		return 0
 	}
-	if opts.experimentalLangEdges {
-		fmt.Fprintln(os.Stderr, "experimental language edges are not implemented")
-		return 2
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "map-graph:", err)
@@ -282,6 +276,7 @@ func runMapGraph(args []string) int {
 		ASTMaxBytes: opts.astMaxBytes,
 		ASTMaxLine:  opts.astMaxLine,
 		Quiet:       opts.quiet,
+		LangEdges:   opts.experimentalLangEdges,
 	}
 
 	m, report, err := graph.Build(context.Background(), buildOpts)

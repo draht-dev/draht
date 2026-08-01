@@ -22,10 +22,10 @@ export interface ClientCommand extends CommandBase {
 	readonly connect?: TransportAddress;
 }
 
-export type CliCommand = CombinedCommand | ServerCommand | ClientCommand;
+export type Command = CombinedCommand | ServerCommand | ClientCommand;
 
-export type CliCommandParseResult =
-	| { readonly ok: true; readonly command: CliCommand }
+export type CommandParseResult =
+	| { readonly ok: true; readonly command: Command }
 	| { readonly ok: false; readonly errors: readonly string[] };
 
 const VALUE_OPTIONS = new Set(["--listen", "--connect", "--auth-token", "--auth-token-file"]);
@@ -94,7 +94,7 @@ function parseRawOptions(argv: readonly string[]): { raw: RawCommandOptions; err
 	return { raw, errors };
 }
 
-export function parseCliCommand(argv: readonly string[]): CliCommandParseResult {
+export function parseCommand(argv: readonly string[]): CommandParseResult {
 	const [candidate, ...rest] = argv;
 	const commandName = candidate === "server" || candidate === "client" ? candidate : "combined";
 	const { raw, errors } = parseRawOptions(commandName === "combined" ? argv : rest);

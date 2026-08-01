@@ -8,6 +8,9 @@ import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import type { UiMode } from "../core/settings-manager.ts";
+import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "./thinking-level.ts";
+
+export { isValidThinkingLevel } from "./thinking-level.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -65,12 +68,6 @@ export interface Args {
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
 	unknownFlags: Map<string, boolean | string>;
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
-}
-
-const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-
-export function isValidThinkingLevel(level: string): level is ThinkingLevel {
-	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
 }
 
 export function parseArgs(args: string[]): Args {

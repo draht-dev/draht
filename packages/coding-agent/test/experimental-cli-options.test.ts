@@ -15,9 +15,31 @@ describe("parseExperimentalCliOptions", () => {
 		});
 	});
 
-	test.each(["server", "client"] as const)("selects explicit %s mode", (role) => {
-		const result = parseExperimentalCliOptions([role, "--socket", "/tmp/pi.sock"]);
-		expect(result).toMatchObject({ ok: true, options: { role, socketPath: "/tmp/pi.sock" } });
+	test("parses repeatable server listeners", () => {
+		const result = parseExperimentalCliOptions([
+			"server",
+			"--listen",
+			"unix:///tmp/pi.sock",
+			"--listen=unix:///tmp/pi-admin.sock",
+		]);
+		expect(result).toMatchObject({
+			ok: true,
+			options: {
+				role: "server",
+				listen: [
+					{ transport: "unix", path: "/tmp/pi.sock" },
+					{ transport: "unix", path: "/tmp/pi-admin.sock" },
+				],
+			},
+		});
+	});
+
+	test("parses a client connection endpoint", () => {
+		const result = parseExperimentalCliOptions(["client", "--connect", "unix:///tmp/pi.sock"]);
+		expect(result).toMatchObject({
+			ok: true,
+			options: { role: "client", connect: { transport: "unix", path: "/tmp/pi.sock" } },
+		});
 	});
 
 	test("parses shared model options and inline values", () => {
@@ -44,7 +66,6 @@ describe("parseExperimentalCliOptions", () => {
 	test.each([
 		[["--auth-token", "secret"], { type: "token", token: "secret" }],
 		[["--auth-token-file", "/tmp/token"], { type: "file", path: "/tmp/token" }],
-		[["--write-auth-token", "/tmp/token"], { type: "generated", writeTo: "/tmp/token" }],
 	] as const)("parses server authentication source %j", (argv, auth) => {
 		const result = parseExperimentalCliOptions(argv);
 		expect(result).toMatchObject({ ok: true, options: { role: "combined", auth } });
@@ -85,18 +106,18 @@ describe("parseExperimentalCliOptions", () => {
 	test.each([
 		[
 			["--auth-token", "secret", "--auth-token-file", "/tmp/token"],
-			"--auth-token, --auth-token-file, and --write-auth-token are mutually exclusive",
+			"--auth-token and --auth-token-file are mutually exclusive",
 		],
-		[
-			["--auth-token", "secret", "--write-auth-token", "/tmp/token"],
-			"--auth-token, --auth-token-file, and --write-auth-token are mutually exclusive",
-		],
-		[["client", "--write-auth-token", "/tmp/token"], "--write-auth-token is only valid for combined or server mode"],
 		[["server", "--session", "session-1"], "--session is only valid for combined or client mode"],
 		[["server", "hello"], "An initial prompt is only valid for combined or client mode"],
 		[["--provider", "anthropic"], "--provider requires --model"],
 		[["--thinking", "extreme"], 'Invalid thinking level "extreme"'],
-		[["--socket", "relative.sock"], "--socket requires an absolute Unix socket path"],
+		[["--listen", "/tmp/pi.sock"], 'Invalid --listen endpoint "/tmp/pi.sock"'],
+		[["--listen", "ws://localhost:8080"], 'Unsupported --listen transport "ws:"'],
+		[["--listen", "unix://relative.sock"], "Unix endpoint must not include an authority"],
+		[["client", "--listen", "unix:///tmp/pi.sock"], "--listen is only valid for combined or server mode"],
+		[["server", "--connect", "unix:///tmp/pi.sock"], "--connect is only valid for client mode"],
+		[["client", "--connect", "ws://localhost:8080"], 'Unsupported --connect transport "ws:"'],
 		[["--unknown"], "Unknown option: --unknown"],
 		[["-x"], "Unknown option: -x"],
 		[["--model"], "--model requires a value"],

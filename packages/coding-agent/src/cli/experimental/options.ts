@@ -1,10 +1,9 @@
-import { posix } from "node:path";
 import type { ThinkingLevel } from "@draht/agent-core";
 import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../thinking-level.ts";
-import { type ClientAuthInput, parseAuthInput, type ServerAuthInput } from "./auth-options.ts";
+import { type AuthInput, parseAuthInput } from "./auth-options.ts";
+import { type ExperimentalEndpoint, parseExperimentalEndpoint } from "./endpoint.ts";
 
 interface CommonOptions {
-	readonly socketPath?: string;
 	readonly cwd?: string;
 	readonly provider?: string;
 	readonly model?: string;
@@ -15,19 +14,22 @@ interface CommonOptions {
 
 export interface ExperimentalCombinedOptions extends CommonOptions {
 	readonly role: "combined";
-	readonly auth?: ServerAuthInput;
+	readonly listen?: readonly ExperimentalEndpoint[];
+	readonly auth?: AuthInput;
 	readonly sessionId?: string;
 	readonly initialPrompt?: string;
 }
 
 export interface ExperimentalServerOptions extends CommonOptions {
 	readonly role: "server";
-	readonly auth?: ServerAuthInput;
+	readonly listen?: readonly ExperimentalEndpoint[];
+	readonly auth?: AuthInput;
 }
 
 export interface ExperimentalClientOptions extends CommonOptions {
 	readonly role: "client";
-	readonly auth?: ClientAuthInput;
+	readonly connect?: ExperimentalEndpoint;
+	readonly auth?: AuthInput;
 	readonly sessionId?: string;
 	readonly initialPrompt?: string;
 }
@@ -42,10 +44,10 @@ export type ExperimentalCliParseResult =
 	| { readonly ok: false; readonly errors: readonly string[] };
 
 const VALUE_OPTIONS = new Set([
-	"--socket",
+	"--listen",
+	"--connect",
 	"--auth-token",
 	"--auth-token-file",
-	"--write-auth-token",
 	"--session",
 	"--cwd",
 	"--provider",
@@ -56,8 +58,8 @@ const VALUE_OPTIONS = new Set([
 interface RawOptions {
 	authToken?: string;
 	authTokenFile?: string;
-	writeAuthToken?: string;
-	socketPath?: string;
+	listenValues: string[];
+	connectValue?: string;
 	sessionId?: string;
 	cwd?: string;
 	provider?: string;
@@ -76,7 +78,7 @@ function splitOption(argument: string): { option: string; inlineValue?: string }
 }
 
 function parseRawOptions(argv: readonly string[]): { raw: RawOptions; errors: string[] } {
-	const raw: RawOptions = { help: false, version: false, positionals: [] };
+	const raw: RawOptions = { listenValues: [], help: false, version: false, positionals: [] };
 	const errors: string[] = [];
 	let positionalsOnly = false;
 
@@ -128,17 +130,18 @@ function parseRawOptions(argv: readonly string[]): { raw: RawOptions; errors: st
 		}
 
 		switch (option) {
-			case "--socket":
-				raw.socketPath = value;
+			case "--listen":
+				raw.listenValues.push(value);
+				break;
+			case "--connect":
+				if (raw.connectValue !== undefined) errors.push("--connect may only be specified once");
+				raw.connectValue = value;
 				break;
 			case "--auth-token":
 				raw.authToken = value;
 				break;
 			case "--auth-token-file":
 				raw.authTokenFile = value;
-				break;
-			case "--write-auth-token":
-				raw.writeAuthToken = value;
 				break;
 			case "--session":
 				raw.sessionId = value;
@@ -167,11 +170,18 @@ export function parseExperimentalCliOptions(argv: readonly string[]): Experiment
 	const { raw, errors } = parseRawOptions(role === "combined" ? argv : rest);
 
 	if (raw.provider !== undefined && raw.model === undefined) errors.push("--provider requires --model");
-	if (raw.socketPath !== undefined && !posix.isAbsolute(raw.socketPath)) {
-		errors.push("--socket requires an absolute Unix socket path");
+	const listen = raw.listenValues.flatMap((value) => {
+		const result = parseExperimentalEndpoint(value, "--listen");
+		if (result.error) errors.push(result.error);
+		return result.endpoint ? [result.endpoint] : [];
+	});
+	const connectResult = raw.connectValue ? parseExperimentalEndpoint(raw.connectValue, "--connect") : undefined;
+	if (connectResult?.error) errors.push(connectResult.error);
+	errors.push(...parseAuthInput(raw).errors);
+	if (role === "client" && raw.listenValues.length > 0) {
+		errors.push("--listen is only valid for combined or server mode");
 	}
-	const authErrors = role === "client" ? parseAuthInput(raw, "client").errors : parseAuthInput(raw, role).errors;
-	errors.push(...authErrors);
+	if (role !== "client" && raw.connectValue !== undefined) errors.push("--connect is only valid for client mode");
 	if (role === "server") {
 		if (raw.sessionId !== undefined) errors.push("--session is only valid for combined or client mode");
 		if (raw.positionals.length > 0) errors.push("An initial prompt is only valid for combined or client mode");
@@ -179,7 +189,6 @@ export function parseExperimentalCliOptions(argv: readonly string[]): Experiment
 	if (errors.length > 0) return { ok: false, errors };
 
 	const common = {
-		...(raw.socketPath === undefined ? {} : { socketPath: raw.socketPath }),
 		...(raw.cwd === undefined ? {} : { cwd: raw.cwd }),
 		...(raw.provider === undefined ? {} : { provider: raw.provider }),
 		...(raw.model === undefined ? {} : { model: raw.model }),
@@ -187,9 +196,17 @@ export function parseExperimentalCliOptions(argv: readonly string[]): Experiment
 		help: raw.help,
 		version: raw.version,
 	};
+	const { auth } = parseAuthInput(raw);
 	if (role === "server") {
-		const { auth } = parseAuthInput(raw, "server");
-		return { ok: true, options: { role, ...common, ...(auth === undefined ? {} : { auth }) } };
+		return {
+			ok: true,
+			options: {
+				role,
+				...common,
+				...(listen.length === 0 ? {} : { listen }),
+				...(auth === undefined ? {} : { auth }),
+			},
+		};
 	}
 	const roleOptions = {
 		...common,
@@ -197,9 +214,23 @@ export function parseExperimentalCliOptions(argv: readonly string[]): Experiment
 		...(raw.positionals.length === 0 ? {} : { initialPrompt: raw.positionals.join(" ") }),
 	};
 	if (role === "client") {
-		const { auth } = parseAuthInput(raw, "client");
-		return { ok: true, options: { role, ...roleOptions, ...(auth === undefined ? {} : { auth }) } };
+		return {
+			ok: true,
+			options: {
+				role,
+				...roleOptions,
+				...(connectResult?.endpoint === undefined ? {} : { connect: connectResult.endpoint }),
+				...(auth === undefined ? {} : { auth }),
+			},
+		};
 	}
-	const { auth } = parseAuthInput(raw, "combined");
-	return { ok: true, options: { role, ...roleOptions, ...(auth === undefined ? {} : { auth }) } };
+	return {
+		ok: true,
+		options: {
+			role,
+			...roleOptions,
+			...(listen.length === 0 ? {} : { listen }),
+			...(auth === undefined ? {} : { auth }),
+		},
+	};
 }

@@ -1,5 +1,4 @@
 import type { ThinkingLevel } from "@draht/agent-core";
-import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../thinking-level.ts";
 import { type AuthInput, parseAuthInput } from "./auth-options.ts";
 import { parseTransportAddress, type TransportAddress } from "./transport-address.ts";
 
@@ -42,6 +41,12 @@ export type ExperimentalCliOptions =
 export type ExperimentalCliParseResult =
 	| { readonly ok: true; readonly options: ExperimentalCliOptions }
 	| { readonly ok: false; readonly errors: readonly string[] };
+
+const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+function isValidThinkingLevel(level: string): level is ThinkingLevel {
+	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
+}
 
 const VALUE_OPTIONS = new Set([
 	"--listen",

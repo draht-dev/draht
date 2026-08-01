@@ -117,6 +117,10 @@ class InMemorySessionStore implements SessionStore<SessionMetadata, InMemorySess
 				this.assertOpen();
 				return this.operations.enqueue(state.metadata.id, () => reader.readEntries(options));
 			},
+			findEntriesOnBranch: (query) => {
+				this.assertOpen();
+				return this.operations.enqueue(state.metadata.id, () => reader.findEntriesOnBranch(query));
+			},
 			readPathToRootOrCompaction: (leafId) => {
 				this.assertOpen();
 				return this.operations.enqueue(state.metadata.id, () => reader.readPathToRootOrCompaction(leafId));

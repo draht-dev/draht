@@ -11,6 +11,7 @@ import type {
 	LeafEntry,
 	MessageEntry,
 	ModelChangeEntry,
+	SessionBranchQuery,
 	SessionContext,
 	SessionEntryCursorOptions,
 	SessionInfoEntry,
@@ -217,6 +218,8 @@ export interface Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	getEntry(id: string): Promise<SessionTreeEntry | undefined>;
 	getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]>;
 	getBranch(fromId?: string | null): Promise<SessionTreeEntry[]>;
+	findEntriesOnBranch(query?: SessionBranchQuery): Promise<SessionTreeEntry[]>;
+	findEntryOnBranch(query?: SessionBranchQuery): Promise<SessionTreeEntry | undefined>;
 	buildContextEntries(options?: SessionContextBuildOptions): Promise<SessionTreeEntry[]>;
 	buildContext(options?: SessionContextBuildOptions): Promise<SessionContext>;
 	getLabel(id: string): Promise<string | undefined>;
@@ -287,6 +290,19 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 
 	async getBranch(fromId?: string | null): Promise<SessionTreeEntry[]> {
 		return [...(await this.reader.readPathToRootOrCompaction(fromId === undefined ? this.leafId : fromId))];
+	}
+
+	async findEntriesOnBranch(query: SessionBranchQuery = {}): Promise<SessionTreeEntry[]> {
+		return [
+			...(await this.reader.findEntriesOnBranch({
+				...query,
+				start: query.start === undefined ? this.leafId : query.start,
+			})),
+		];
+	}
+
+	async findEntryOnBranch(query: SessionBranchQuery = {}): Promise<SessionTreeEntry | undefined> {
+		return (await this.findEntriesOnBranch({ ...query, limit: 1 }))[0];
 	}
 
 	async buildContextEntries(options: SessionContextBuildOptions = {}): Promise<SessionTreeEntry[]> {

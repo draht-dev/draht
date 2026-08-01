@@ -1,0 +1,134 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
+import { createJsonlSessionStore } from "../../src/harness/session/jsonl-store.ts";
+import { createInMemorySessionStore } from "../../src/harness/session/memory-store.ts";
+import { createSessionRepository } from "../../src/harness/session/repository.ts";
+import type { Session } from "../../src/harness/session/session.ts";
+import { createAssistantMessage, createTempDir, createUserMessage } from "./session-test-utils.ts";
+
+const ownedStores: AsyncDisposable[] = [];
+
+afterEach(async () => {
+	for (const store of ownedStores.splice(0)) await store[Symbol.asyncDispose]();
+});
+
+async function verifyBranchQueries(session: Session): Promise<{ tail: string; fullPath: string[] }> {
+	const root = await session.appendMessage(createUserMessage("root"));
+	const custom = await session.appendCustomEntry("note", { value: 1 });
+	const child = await session.appendMessage(createAssistantMessage("child"));
+	const compaction = await session.appendCompaction("summary", child, 100, undefined, undefined, undefined, [
+		createAssistantMessage("child"),
+	]);
+	const tail = await session.appendMessage(createUserMessage("tail"));
+	await session.moveTo(root);
+	const sibling = await session.appendMessage(createUserMessage("sibling"));
+
+	expect((await session.findEntriesOnBranch()).map((entry) => entry.id)).toEqual([sibling, root]);
+	expect(await session.findEntriesOnBranch({ start: null })).toEqual([]);
+	expect((await session.findEntriesOnBranch({ start: tail, order: "oldestFirst" })).map((entry) => entry.id)).toEqual([
+		root,
+		custom,
+		child,
+		compaction,
+		tail,
+	]);
+	expect(
+		(await session.findEntriesOnBranch({ start: tail, stopAtType: "compaction" })).map((entry) => entry.id),
+	).toEqual([tail, compaction]);
+	expect(
+		(await session.findEntriesOnBranch({ start: tail, stopAtType: "compaction", type: "message" })).map(
+			(entry) => entry.id,
+		),
+	).toEqual([tail]);
+	expect(
+		(await session.findEntriesOnBranch({ start: tail, stopAtId: child, order: "oldestFirst" })).map(
+			(entry) => entry.id,
+		),
+	).toEqual([child, compaction, tail]);
+	expect(
+		(await session.findEntriesOnBranch({ start: tail, type: "message", order: "oldestFirst" })).map(
+			(entry) => entry.id,
+		),
+	).toEqual([root, child, tail]);
+	expect((await session.findEntriesOnBranch({ start: tail, customType: "note" })).map((entry) => entry.id)).toEqual([
+		custom,
+	]);
+	expect((await session.findEntriesOnBranch({ start: tail, limit: 1 })).map((entry) => entry.id)).toEqual([tail]);
+	expect(
+		(
+			await session.findEntriesOnBranch({
+				start: tail,
+				type: "message",
+				order: "oldestFirst",
+				limit: 1,
+			})
+		).map((entry) => entry.id),
+	).toEqual([root]);
+	expect(await session.findEntryOnBranch({ start: tail, type: "compaction" })).toMatchObject({ id: compaction });
+	await expect(session.findEntriesOnBranch({ start: "missing" })).rejects.toMatchObject({ code: "not_found" });
+	await expect(session.findEntriesOnBranch({ limit: 0 })).rejects.toThrow("limit must be a positive integer");
+	return { tail, fullPath: [root, custom, child, compaction, tail] };
+}
+
+describe("bounded session branch queries", () => {
+	it("provides identical in-memory query semantics", async () => {
+		const store = createInMemorySessionStore();
+		ownedStores.push(store);
+		const repo = createSessionRepository({ store });
+		const session = await repo.create({ id: "memory" });
+		const expected = await verifyBranchQueries(session);
+		const reopened = await repo.open(await session.getMetadata());
+		expect(
+			(await reopened.findEntriesOnBranch({ start: expected.tail, order: "oldestFirst" })).map((entry) => entry.id),
+		).toEqual(expected.fullPath);
+	});
+
+	it("rejects corrupt parent chains in array-backed readers", async () => {
+		const store = createInMemorySessionStore();
+		ownedStores.push(store);
+		const reader = await store.create({ id: "corrupt-memory" });
+		await store.appendEntry(reader.metadata, {
+			type: "message",
+			id: "orphan",
+			parentId: "missing-parent",
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: createUserMessage("orphan"),
+		});
+
+		await expect(reader.findEntriesOnBranch({ start: "orphan" })).rejects.toMatchObject({
+			code: "invalid_session",
+			message: "Entry missing-parent not found",
+		});
+		await store.appendEntry(reader.metadata, {
+			type: "message",
+			id: "cycle-a",
+			parentId: "cycle-b",
+			timestamp: "2026-01-01T00:00:01.000Z",
+			message: createUserMessage("a"),
+		});
+		await store.appendEntry(reader.metadata, {
+			type: "message",
+			id: "cycle-b",
+			parentId: "cycle-a",
+			timestamp: "2026-01-01T00:00:02.000Z",
+			message: createUserMessage("b"),
+		});
+		await expect(reader.findEntriesOnBranch({ start: "cycle-b" })).rejects.toMatchObject({
+			code: "invalid_session",
+			message: "Session branch contains a cycle at cycle-b",
+		});
+	});
+
+	it("provides identical JSONL query semantics", async () => {
+		const root = createTempDir();
+		const store = createJsonlSessionStore({ fs: new NodeExecutionEnv({ cwd: root }), sessionsRoot: root });
+		ownedStores.push(store);
+		const repo = createSessionRepository({ store });
+		const session = await repo.create({ id: "jsonl", cwd: root });
+		const expected = await verifyBranchQueries(session);
+		const reopened = await repo.open(await session.getMetadata());
+		expect(
+			(await reopened.findEntriesOnBranch({ start: expected.tail, order: "oldestFirst" })).map((entry) => entry.id),
+		).toEqual(expected.fullPath);
+	});
+});

@@ -534,6 +534,23 @@ export type SessionForkSelection =
 	/** Copy the target's active path, including the target. */
 	| { kind: "through_entry"; entryId: string };
 
+export interface SessionBranchQuery {
+	/** Entry where traversal starts. Session defaults this to its active leaf. */
+	start?: string | null;
+	/** Stop after the first matching entry, inclusive. */
+	stopAtType?: SessionTreeEntry["type"];
+	/** Stop after the matching entry, inclusive. */
+	stopAtId?: string;
+	/** Filter returned entries by type after determining traversal bounds. */
+	type?: SessionTreeEntry["type"];
+	/** Filter returned custom entries by custom type. */
+	customType?: string;
+	/** Traversal order. Defaults to newest first. */
+	order?: "newestFirst" | "oldestFirst";
+	/** Maximum number of filtered entries to return. */
+	limit?: number;
+}
+
 export interface SessionHead {
 	leafId: string | null;
 }
@@ -545,6 +562,7 @@ export interface SessionReader<TMetadata extends SessionMetadata = SessionMetada
 	readHead(): Promise<SessionHead>;
 	readEntry(id: string): Promise<SessionTreeEntry | undefined>;
 	readEntries(options?: SessionEntryCursorOptions): Promise<readonly SessionTreeEntry[]>;
+	findEntriesOnBranch(query: SessionBranchQuery & { start: string | null }): Promise<readonly SessionTreeEntry[]>;
 	readPathToRootOrCompaction(leafId: string | null): Promise<readonly SessionTreeEntry[]>;
 }
 

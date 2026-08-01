@@ -165,6 +165,7 @@ function createCountingInMemorySessionStore(): {
 			counter.readEntriesCount += 1;
 			return reader.readEntries(options);
 		},
+		findEntriesOnBranch: (query) => reader.findEntriesOnBranch(query),
 		readPathToRootOrCompaction: (leafId) => {
 			counter.readPathCount += 1;
 			return reader.readPathToRootOrCompaction(leafId);

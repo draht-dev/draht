@@ -400,6 +400,10 @@ class JsonlSessionStore
 				this.assertOpen();
 				return this.operations.enqueue(operationKey, () => reader.readEntries(options));
 			},
+			findEntriesOnBranch: (query) => {
+				this.assertOpen();
+				return this.operations.enqueue(operationKey, () => reader.findEntriesOnBranch(query));
+			},
 			readPathToRootOrCompaction: (leafId) => {
 				this.assertOpen();
 				return this.operations.enqueue(operationKey, () => reader.readPathToRootOrCompaction(leafId));

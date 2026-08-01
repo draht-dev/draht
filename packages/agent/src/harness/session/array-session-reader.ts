@@ -45,6 +45,36 @@ export function createArraySessionReader<TMetadata extends SessionMetadata>(
 			const end = options?.limit === undefined ? undefined : start + options.limit;
 			return entries.slice(start, end);
 		},
+		async findEntriesOnBranch(query) {
+			updateIndex();
+			if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit <= 0)) {
+				throw new RangeError("Session branch query limit must be a positive integer");
+			}
+			if (query.start === null) return [];
+			const path: SessionTreeEntry[] = [];
+			const visited = new Set<string>();
+			let current = byId.get(query.start);
+			if (!current) throw new SessionError("not_found", `Entry ${query.start} not found`);
+			while (current) {
+				if (visited.has(current.id)) {
+					throw new SessionError("invalid_session", `Session branch contains a cycle at ${current.id}`);
+				}
+				visited.add(current.id);
+				path.push(current);
+				if (current.id === query.stopAtId || current.type === query.stopAtType) break;
+				if (!current.parentId) break;
+				const parent = byId.get(current.parentId);
+				if (!parent) throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
+				current = parent;
+			}
+			if (query.order === "oldestFirst") path.reverse();
+			const entries = path.filter(
+				(entry) =>
+					(query.type === undefined || entry.type === query.type) &&
+					(query.customType === undefined || (entry.type === "custom" && entry.customType === query.customType)),
+			);
+			return query.limit === undefined ? entries : entries.slice(0, query.limit);
+		},
 		async readPathToRootOrCompaction(requestedLeafId) {
 			updateIndex();
 			if (requestedLeafId === null) return [];

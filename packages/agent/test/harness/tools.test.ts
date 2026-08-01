@@ -15,6 +15,7 @@ import {
 	type Result,
 	type ShellExecOptions,
 } from "../../src/harness/types.ts";
+import { DEFAULT_MAX_LINES } from "../../src/harness/utils/truncate.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
 function textOutput(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -101,13 +102,16 @@ class LateOutputExecutionEnv extends NodeExecutionEnv {
 	}
 }
 
-class TimeoutWithOutputExecutionEnv extends NodeExecutionEnv {
+const TRUNCATED_OUTPUT_LINES = DEFAULT_MAX_LINES + 1;
+
+class TimeoutOutputExecutionEnv extends NodeExecutionEnv {
 	override async exec(
 		_command: string,
 		options?: ShellExecOptions,
 	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
-		options?.onStdout?.(`${Array.from({ length: 3000 }, (_, index) => `line-${index + 1}`).join("\n")}\n`);
-		return err(new ExecutionError("timeout", "timed out"));
+		const output = `${Array.from({ length: TRUNCATED_OUTPUT_LINES }, (_, index) => `line-${index + 1}`).join("\n")}\n`;
+		options?.onStdout?.(output);
+		return err(new ExecutionError("timeout", `timeout:${options?.timeout}`));
 	}
 }
 
@@ -486,15 +490,15 @@ describe("AgentHarness tools", () => {
 		});
 
 		it("preserves truncated output when a command times out", async () => {
-			const env = new TimeoutWithOutputExecutionEnv({ cwd: createTempDir() });
+			const context = { env: new TimeoutOutputExecutionEnv({ cwd: createTempDir() }) };
 			let error: unknown;
 			try {
 				await createBashTool().execute(
 					"bash-timeout-output",
-					{ command: "emit output and time out", timeout: 0.05 },
+					{ command: "emit-output-then-time-out", timeout: 0.05 },
 					undefined,
 					undefined,
-					{ env },
+					context,
 				);
 			} catch (cause) {
 				error = cause;
@@ -505,9 +509,9 @@ describe("AgentHarness tools", () => {
 			expect(message).toContain("Command timed out after 0.05 seconds");
 			const fullOutputPath = message.match(/Full output: ([^\]\n]+)/)?.[1];
 			expect(fullOutputPath).toBeDefined();
-			const fullOutput = getOrThrow(await env.readTextFile(fullOutputPath!));
+			const fullOutput = getOrThrow(await context.env.readTextFile(fullOutputPath!));
 			expect(fullOutput).toContain("line-1\nline-2");
-			expect(fullOutput).toContain("line-2999\nline-3000");
+			expect(fullOutput).toContain(`line-${DEFAULT_MAX_LINES}\nline-${TRUNCATED_OUTPUT_LINES}`);
 		});
 
 		it("ignores output callbacks after execution settles", async () => {

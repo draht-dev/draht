@@ -7,7 +7,8 @@ import { createEditTool } from "../../src/harness/tools/edit.ts";
 import { createReadTool } from "../../src/harness/tools/read.ts";
 import { createWriteTool } from "../../src/harness/tools/write.ts";
 import {
-	type ExecutionError,
+	ExecutionError,
+	err,
 	type FileError,
 	getOrThrow,
 	ok,
@@ -97,6 +98,16 @@ class LateOutputExecutionEnv extends NodeExecutionEnv {
 		options?.onStdout?.("before\n");
 		setTimeout(() => options?.onStdout?.("late\n"), 0);
 		return ok({ stdout: "before\n", stderr: "", exitCode: 0 });
+	}
+}
+
+class TimeoutWithOutputExecutionEnv extends NodeExecutionEnv {
+	override async exec(
+		_command: string,
+		options?: ShellExecOptions,
+	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
+		options?.onStdout?.(`${Array.from({ length: 3000 }, (_, index) => `line-${index + 1}`).join("\n")}\n`);
+		return err(new ExecutionError("timeout", "timed out"));
 	}
 }
 
@@ -475,21 +486,15 @@ describe("AgentHarness tools", () => {
 		});
 
 		it("preserves truncated output when a command times out", async () => {
-			const context = createContext();
+			const env = new TimeoutWithOutputExecutionEnv({ cwd: createTempDir() });
 			let error: unknown;
 			try {
 				await createBashTool().execute(
 					"bash-timeout-output",
-					{
-						// The timeout must fire during the sleep, never mid-loop: a loaded
-						// CI runner needs far more than 50ms to echo 3000 lines, and the
-						// point here is that output produced before the timeout survives.
-						command: "i=1; while [ $i -le 3000 ]; do echo line-$i; i=$((i + 1)); done; sleep 10",
-						timeout: 1,
-					},
+					{ command: "emit output and time out", timeout: 0.05 },
 					undefined,
 					undefined,
-					context,
+					{ env },
 				);
 			} catch (cause) {
 				error = cause;
@@ -497,10 +502,10 @@ describe("AgentHarness tools", () => {
 
 			expect(error).toBeInstanceOf(Error);
 			const message = (error as Error).message;
-			expect(message).toContain("Command timed out after 1 seconds");
+			expect(message).toContain("Command timed out after 0.05 seconds");
 			const fullOutputPath = message.match(/Full output: ([^\]\n]+)/)?.[1];
 			expect(fullOutputPath).toBeDefined();
-			const fullOutput = getOrThrow(await context.env.readTextFile(fullOutputPath!));
+			const fullOutput = getOrThrow(await env.readTextFile(fullOutputPath!));
 			expect(fullOutput).toContain("line-1\nline-2");
 			expect(fullOutput).toContain("line-2999\nline-3000");
 		});

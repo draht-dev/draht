@@ -90,6 +90,14 @@ type Symbol struct {
 	Kind     string `json:"kind"`
 	Line     int    `json:"line"`
 	Exported bool   `json:"exported"`
+	// Signature is the declaration as written in the source (parameter list
+	// and return type included, body excluded), capped at
+	// extract.SignatureCap runes. Populated only when map-graph runs with
+	// --symbol-signatures; the omitempty is load-bearing, since an omitted
+	// key is what keeps MAP.json byte-identical to the CJS engine's by
+	// default. MUST stay the last field for the same reason: encoding/json
+	// emits struct fields in declaration order.
+	Signature string `json:"signature,omitempty"`
 }
 
 // SinkSite is one concrete call site for a detected sink kind.

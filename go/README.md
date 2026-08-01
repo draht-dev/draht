@@ -173,6 +173,54 @@ counts than the same commands run against the CJS engine's own freshly-built
 correctness improvement, not a parity bug — the golden/side-by-side tests
 above control for it by fixing the input `MAP.json`.
 
+### `--symbol-signatures`, and why it is opt-in
+
+`map-graph --symbol-signatures` records each symbol's declaration as written
+— parameter list and return type included, body excluded — as
+`modules[*].symbols[*].signature`, and `graph-context` then renders the
+exports facet as a block of declarations instead of a comma-joined list of
+bare names:
+
+```
+packages/ai/src/api/google-shared.ts  ·  pkg:@draht/ai  ·  layer:presentation  ·  …
+  exports(11):
+    export function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boolean
+    export function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Context): Content[]
+    …
+```
+
+It is **off by default**, for the two reasons this document already cares
+about:
+
+- The CJS engine has no such field, so emitting it makes `MAP.json` diverge
+  from it — the same reasoning as `--experimental-lang-edges`.
+- `graph-context`'s stdout is parsed structurally by ~30 prompt/skill files
+  (see above), and the block form is a different shape.
+
+Both are enforced structurally rather than by convention. `model.Symbol`'s
+`Signature` field is `omitempty` **and declared last** (`encoding/json`
+emits fields in declaration order), so with the flag off the key is absent
+and `modules[*].symbols` is byte-identical to the CJS engine's — which is
+what lets `TestParity_RegexParserMatchesCJSEngine` keep asserting full
+`DeepEqual` over `model.Module` with nothing normalized away. `graph-context`
+likewise only switches to the block form when a signature is actually
+present, so every map built without the flag — including every map the CJS
+engine ever wrote — still renders through the original inline path and the
+52 golden cases are untouched.
+
+Note the split between extraction and emission: signatures are extracted
+**unconditionally** (`extract.Symbol.Sig`) and only *emitted* under the flag
+(`graph.convertSymbols`). That is deliberate — it keeps a cache entry valid
+whether or not the run that produced it had the flag on, so toggling the
+flag never serves stale facts. `FactsSchema` 2→3 and `extract.Version`
+`x2`→`x3` invalidate the pre-signature cache once.
+
+The extractor is a **text** extractor, not a type checker: it reports what
+the source literally declares, so an unannotated parameter stays unannotated
+rather than being inferred. Declarations are capped at
+`extract.SignatureCap` (160 runes); on this repo that yields a median
+declaration of 54 characters and costs ~12% on `MAP.json`.
+
 ## Why this lives outside `packages/`
 
 `npm`/`bun` workspaces glob `packages/*`, and `scripts/sync-versions.js` +

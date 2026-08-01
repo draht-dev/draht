@@ -23,10 +23,18 @@ func convertExports(in []extract.Export) []model.Export {
 	return out
 }
 
-func convertSymbols(in []extract.Symbol) []model.Symbol {
+// convertSymbols maps cached symbols onto the wire shape. Signatures are
+// extracted unconditionally (so the cache stays valid across runs either
+// way) but only EMITTED when withSignatures is set — with it off, every
+// Signature is "", the omitempty drops the key, and modules[*].symbols is
+// byte-identical to what the CJS engine writes.
+func convertSymbols(in []extract.Symbol, withSignatures bool) []model.Symbol {
 	out := make([]model.Symbol, len(in))
 	for i, s := range in {
 		out[i] = model.Symbol{Name: s.Name, Kind: s.Kind, Line: s.Line, Exported: s.Exported}
+		if withSignatures {
+			out[i].Signature = s.Sig
+		}
 	}
 	return out
 }

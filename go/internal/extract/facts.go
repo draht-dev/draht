@@ -9,13 +9,15 @@ import (
 
 // FactsSchema is bumped whenever the on-disk shape of Facts changes.
 // Bumped 1 -> 2 for Phase 2's CallSites field (design's WP2 callEdges
-// rewiring — invalidates every cached entry exactly once).
-const FactsSchema = 2
+// rewiring — invalidates every cached entry exactly once). Bumped 2 -> 3 for
+// Symbol.Sig (the per-symbol declaration text), same one-time invalidation.
+const FactsSchema = 3
 
 // Version identifies the regex extractors (exports/symbols/sinks/routes).
 // Bump on ANY behaviour change. Feeds cache.ComposeVersion. Bumped "x1" ->
-// "x2" alongside FactsSchema for the same reason.
-const Version = "x2"
+// "x2" alongside FactsSchema for the same reason, then "x2" -> "x3" for
+// Symbol.Sig.
+const Version = "x3"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no
@@ -48,12 +50,17 @@ type Export struct {
 	Doc  string `json:"doc"`
 }
 
-// Symbol is one symbol-level node (exported or not).
+// Symbol is one symbol-level node (exported or not). Sig is the declaration
+// text as written (see signatureAt), capped at SignatureCap runes and "" when
+// nothing could be rendered. It is extracted UNCONDITIONALLY so a cache entry
+// is valid whether or not the run emitting it had --symbol-signatures on;
+// gating happens at emit time in graph.convertSymbols, not here.
 type Symbol struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Line     int    `json:"line"`
 	Exported bool   `json:"exported"`
+	Sig      string `json:"sig,omitempty"`
 }
 
 // SinkSite is one concrete call site for a detected sink kind.

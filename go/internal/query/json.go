@@ -38,6 +38,13 @@ type ContextJSON struct {
 	Imports      []string                `json:"imports"`
 	Sinks        []string                `json:"sinks"`
 	Rationale    []model.RationaleEntry  `json:"rationale"`
+	// Signatures is the declaration text for each entry in Exports, same
+	// order, same length. Present only for a MAP.json built with
+	// --symbol-signatures; the omitempty keeps the payload byte-identical
+	// to the CJS engine's for every other map. MUST stay the last field —
+	// encoding/json emits struct fields in declaration order, and the ones
+	// above match the CJS object literal's key order exactly.
+	Signatures []string `json:"signatures,omitempty"`
 }
 
 // OrderedStrSlices is an insertion-ordered string->[]string map (JS object

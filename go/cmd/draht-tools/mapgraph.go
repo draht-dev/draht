@@ -64,6 +64,12 @@ flags:
                                edges, so enabling this makes MAP.json diverge
                                from it (a Go import fans out to every non-test
                                file of the imported package).
+      --symbol-signatures      record each symbol's declaration text (parameter
+                               list and return type, body excluded) as
+                               modules[*].symbols[*].signature, and show it in
+                               'graph-context'. OFF by default: the CJS engine
+                               has no such field, so enabling it makes MAP.json
+                               diverge from it.
   -h, --help                   show this help
 `
 
@@ -80,6 +86,7 @@ type mapGraphOptions struct {
 	astMaxLine            int
 	verbose               bool
 	experimentalLangEdges bool
+	symbolSignatures      bool
 	help                  bool
 }
 
@@ -109,6 +116,8 @@ func parseMapGraphArgs(args []string) (mapGraphOptions, error) {
 			opts.verbose = true
 		case a == "--experimental-lang-edges":
 			opts.experimentalLangEdges = true
+		case a == "--symbol-signatures":
+			opts.symbolSignatures = true
 		case a == "-h" || a == "--help":
 			opts.help = true
 		case a == "--jobs":
@@ -277,6 +286,8 @@ func runMapGraph(args []string) int {
 		ASTMaxLine:  opts.astMaxLine,
 		Quiet:       opts.quiet,
 		LangEdges:   opts.experimentalLangEdges,
+
+		SymbolSignatures: opts.symbolSignatures,
 	}
 
 	m, report, err := graph.Build(context.Background(), buildOpts)

@@ -58,7 +58,7 @@ func Context(m *model.Map, argv []string, w io.Writer) int {
 			clLabelPtr = &l
 		}
 
-		exps := exportNames(mod)
+		exps, sigs := exportNamesAndSignatures(mod)
 		ins := adj.Rev[mod.ID]
 		outs := adj.Fwd[mod.ID]
 		ratAll := rationaleForFile(m, mod.ID)
@@ -78,7 +78,19 @@ func Context(m *model.Map, argv []string, w io.Writer) int {
 
 		lines = append(lines, fmt.Sprintf("%s  ·  pkg:%s  ·  layer:%s  ·  cluster:%s(%d)  ·  entry:%s",
 			mod.Path, pkg, mod.Layer, clLabel, clSize, entryKind))
-		lines = append(lines, fmt.Sprintf("  exports(%d): %s", len(exps), joinCapped(exps, 8, "…")))
+		if sigs != nil {
+			// Signatures are far too wide to comma-join onto one line, so
+			// they get a block — same 8-entry cap as the inline form.
+			lines = append(lines, fmt.Sprintf("  exports(%d):", len(exps)))
+			for i := 0; i < len(exps) && i < 8; i++ {
+				lines = append(lines, "    "+exportDisplay(exps, sigs, i))
+			}
+			if len(exps) > 8 {
+				lines = append(lines, fmt.Sprintf("    (+%d more)", len(exps)-8))
+			}
+		} else {
+			lines = append(lines, fmt.Sprintf("  exports(%d): %s", len(exps), joinCapped(exps, 8, "…")))
+		}
 		lines = append(lines, fmt.Sprintf("  importers(%d): %s", len(ins), joinCappedShort(ins, 5)))
 		lines = append(lines, fmt.Sprintf("  imports(%d): %s", len(outs), joinCappedShort(outs, 5)))
 		if len(mod.Sinks) > 0 {
@@ -104,6 +116,7 @@ func Context(m *model.Map, argv []string, w io.Writer) int {
 			Imports:      nonNilStrs(outs),
 			Sinks:        nonNilStrs(mod.Sinks),
 			Rationale:    nonNilRationale(ratAll),
+			Signatures:   sigs,
 		})
 	}
 
@@ -135,20 +148,47 @@ func clusterIndex(m *model.Map) map[string]*model.Cluster {
 // exportNames ports `(m.symbols.length ? m.symbols.filter(exported) :
 // m.exports).map(name)`.
 func exportNames(mod *model.Module) []string {
+	names, _ := exportNamesAndSignatures(mod)
+	return names
+}
+
+// exportNamesAndSignatures returns exportNames' list plus the parallel
+// declaration-text list (same length, same order). sigs is nil unless the
+// map was built with --symbol-signatures AND at least one exported symbol
+// actually rendered a signature — so every map produced before the flag
+// existed, and every map produced without it, takes the name-only path and
+// renders exactly as it did before.
+func exportNamesAndSignatures(mod *model.Module) (names, sigs []string) {
 	if len(mod.Symbols) > 0 {
-		var out []string
+		var any bool
 		for _, s := range mod.Symbols {
-			if s.Exported {
-				out = append(out, s.Name)
+			if !s.Exported {
+				continue
 			}
+			names = append(names, s.Name)
+			sigs = append(sigs, s.Signature)
+			any = any || s.Signature != ""
 		}
-		return out
+		if !any {
+			return names, nil
+		}
+		return names, sigs
 	}
-	out := make([]string, len(mod.Exports))
+	names = make([]string, len(mod.Exports))
 	for i, e := range mod.Exports {
-		out[i] = e.Name
+		names[i] = e.Name
 	}
-	return out
+	return names, nil
+}
+
+// exportDisplay picks the declaration text when one was recorded and falls
+// back to the bare name otherwise (a symbol whose signature could not be
+// rendered still has to appear in the list).
+func exportDisplay(names, sigs []string, i int) string {
+	if i < len(sigs) && sigs[i] != "" {
+		return sigs[i]
+	}
+	return names[i]
 }
 
 // rationaleForFile ports `map.rationaleIndex.filter(x => x.file === id)`

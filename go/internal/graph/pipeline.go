@@ -38,6 +38,13 @@ type Options struct {
 	// With it off, edge construction is bit-for-bit what it was before the
 	// flag existed.
 	LangEdges bool
+
+	// SymbolSignatures emits modules[*].symbols[*].signature — the
+	// declaration text for each symbol (--symbol-signatures). OFF by
+	// default for the same reason as LangEdges: the CJS engine has no such
+	// field, so emitting it makes MAP.json diverge from it. With it off the
+	// key is omitted entirely and MAP.json is unchanged.
+	SymbolSignatures bool
 }
 
 // Report is the run summary the CLI prints and the caller inspects.
@@ -131,7 +138,7 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	modules := make([]model.Module, len(codeFiles))
 	modulePaths := make([]string, len(codeFiles))
 	for i, f := range codeFiles {
-		modules[i] = buildModule(f, facts[i], pkgs, binFiles)
+		modules[i] = buildModule(f, facts[i], pkgs, binFiles, opts.SymbolSignatures)
 		modulePaths[i] = f.Rel
 	}
 
@@ -369,7 +376,7 @@ func extractOne(ctx context.Context, f scan.File, p parse.Parser, snap *cache.Sn
 // buildModule assembles one model.Module from a discovered file, its
 // (possibly nil, when extraction failed or was skipped) Facts, the
 // workspace package list, and the binFiles entry-point map.
-func buildModule(f scan.File, fa *extract.Facts, pkgs []scan.Package, binFiles map[string]string) model.Module {
+func buildModule(f scan.File, fa *extract.Facts, pkgs []scan.Package, binFiles map[string]string, symbolSignatures bool) model.Module {
 	isTest := f.IsTestFile()
 
 	var pkgName *string
@@ -390,7 +397,7 @@ func buildModule(f scan.File, fa *extract.Facts, pkgs []scan.Package, binFiles m
 			exports = convertExports(fa.Exports)
 		}
 		if fa.Symbols != nil {
-			symbols = convertSymbols(fa.Symbols)
+			symbols = convertSymbols(fa.Symbols, symbolSignatures)
 		}
 		if fa.Sinks != nil {
 			sinks = fa.Sinks

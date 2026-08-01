@@ -27,18 +27,26 @@ func buildSymbols(lang string, content []byte, exports []Export) []Symbol {
 	var syms []Symbol
 	seen := make(map[string]bool)
 
+	// Split once, up front: both the exported pass (which needs it for
+	// signatures) and the non-exported declaration scan below read it.
+	lines := strings.Split(string(content), "\n")
+
 	for _, e := range exports {
 		if seen[e.Name] {
 			continue
 		}
 		seen[e.Name] = true
-		syms = append(syms, Symbol{Name: e.Name, Kind: e.Kind, Line: e.Line, Exported: true})
+		syms = append(syms, Symbol{
+			Name:     e.Name,
+			Kind:     e.Kind,
+			Line:     e.Line,
+			Exported: true,
+			Sig:      signatureAt(lang, lines, e.Line-1),
+		})
 		if len(syms) >= 60 {
 			return syms
 		}
 	}
-
-	lines := strings.Split(string(content), "\n")
 
 	addDecl := func(re *regexp.Regexp, kindOf func(line string) string) bool {
 		for i, line := range lines {
@@ -57,7 +65,13 @@ func buildSymbols(lang string, content []byte, exports []Export) []Symbol {
 				continue
 			}
 			seen[name] = true
-			syms = append(syms, Symbol{Name: name, Kind: kindOf(line), Line: i + 1, Exported: false})
+			syms = append(syms, Symbol{
+				Name:     name,
+				Kind:     kindOf(line),
+				Line:     i + 1,
+				Exported: false,
+				Sig:      signatureAt(lang, lines, i),
+			})
 			if len(syms) >= 60 {
 				return true
 			}

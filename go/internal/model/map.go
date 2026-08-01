@@ -241,11 +241,16 @@ type Tests struct {
 }
 
 // Planning mirrors the .planning/ directory's presence + current state.
+//
+// CurrentState is a *string because the CJS emits literal null (not "") when
+// STATE.md is absent or empty — `planning.state ? …slice(0,2000) : null`
+// (draht-tools.cjs:2986). A plain string would serialize as "" and break
+// byte-parity on every repo without a STATE.md.
 type Planning struct {
-	HasProject   bool   `json:"hasProject"`
-	HasRoadmap   bool   `json:"hasRoadmap"`
-	HasDomain    bool   `json:"hasDomain"`
-	CurrentState string `json:"currentState"`
+	HasProject   bool    `json:"hasProject"`
+	HasRoadmap   bool    `json:"hasRoadmap"`
+	HasDomain    bool    `json:"hasDomain"`
+	CurrentState *string `json:"currentState"`
 }
 
 // AgentHints is the verbatim literal block guiding LLM consumers of

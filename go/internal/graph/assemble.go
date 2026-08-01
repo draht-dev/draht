@@ -2,11 +2,13 @@ package graph
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/draht-dev/draht/go/internal/cluster"
 	"github.com/draht-dev/draht/go/internal/container"
 	"github.com/draht-dev/draht/go/internal/flow"
+	"github.com/draht-dev/draht/go/internal/jsutil"
 	"github.com/draht-dev/draht/go/internal/model"
 	"github.com/draht-dev/draht/go/internal/rank"
 	"github.com/draht-dev/draht/go/internal/rawobj"
@@ -53,6 +55,19 @@ type AssembleInput struct {
 	// exist — the respective curation passes are then a no-op.
 	GroupsJSON []byte
 	FlowsJSON  []byte
+
+	// Planning* are the raw contents of .planning/STATE.md, ROADMAP.md,
+	// PROJECT.md and DOMAIN.md (falling back to DOMAIN-MODEL.md), or "" when
+	// the file is absent or unreadable — mirroring visReadPlanning
+	// (draht-tools.cjs:1746-1755). Read by the caller rather than here so
+	// Assemble stays filesystem-free, same as GroupsJSON/FlowsJSON.
+	//
+	// The CJS emits `hasX: !!content`, i.e. truthiness of the file *contents*,
+	// so a present-but-empty file reads as absent. "" reproduces that exactly.
+	PlanningState   string
+	PlanningRoadmap string
+	PlanningProject string
+	PlanningDomain  string
 }
 
 // mapTimeFormat matches JS's `new Date().toISOString()`: RFC3339 with
@@ -167,7 +182,54 @@ func Assemble(in AssembleInput) *model.Map {
 	m.Stats = stats
 	m.Assets = assets
 
+	m.Tests = buildTests(in.Modules, m.Containers)
+	m.Planning = buildPlanning(in)
+
 	return m
+}
+
+// buildTests mirrors draht-tools.cjs:2907-2910: a total count of test modules,
+// plus a per-container count keyed by container NAME (not id) in containers
+// order. A module belongs to a container when its path is under `path + "/"`,
+// so a module at the container root itself is deliberately not counted — that
+// is the CJS behaviour, matched exactly.
+func buildTests(modules []model.Module, containers []model.Container) model.Tests {
+	t := model.Tests{ByContainer: model.NewOrderedCounts()}
+	for _, m := range modules {
+		if m.IsTest {
+			t.Total++
+		}
+	}
+	for _, c := range containers {
+		prefix := c.Path + "/"
+		n := 0
+		for _, m := range modules {
+			if m.IsTest && strings.HasPrefix(m.Path, prefix) {
+				n++
+			}
+		}
+		// Set unconditionally: the CJS assigns every container a key even when
+		// the count is 0, and OrderedCounts preserves containers order.
+		t.ByContainer.Set(c.Name, n)
+	}
+	return t
+}
+
+// buildPlanning mirrors draht-tools.cjs:2982-2987. currentState is the first
+// 2000 UTF-16 code units of STATE.md — JS `.slice(0, 2000)` counts UTF-16
+// units, not bytes or runes — and is null (not "") when STATE.md is absent or
+// empty, which is why model.Planning.CurrentState is a *string.
+func buildPlanning(in AssembleInput) model.Planning {
+	p := model.Planning{
+		HasProject: in.PlanningProject != "",
+		HasRoadmap: in.PlanningRoadmap != "",
+		HasDomain:  in.PlanningDomain != "",
+	}
+	if in.PlanningState != "" {
+		s := jsutil.SliceUTF16(in.PlanningState, 2000)
+		p.CurrentState = &s
+	}
+	return p
 }
 
 // rawObjectsToRawMessages marshals an ordered list of container.RawObject

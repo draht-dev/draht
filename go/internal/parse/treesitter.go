@@ -210,18 +210,44 @@ func (p *treeSitterParser) Extract(ctx context.Context, lang Lang, path string, 
 	return Result{Imports: imports, Degraded: degraded}, nil
 }
 
-// Version identifies the query revision, the gotreesitter dependency
-// version actually linked into this binary, AND the AST size-limit options
-// (maxBytes/maxLineBytes) that change Extract's observable behaviour (a
-// file that's skipped for exceeding a limit produces a materially
-// different Result than one that's fully parsed). Every one of these MUST
-// be part of the cache key: a run with different opts.maxBytes/maxLineBytes
-// must never reuse another run's cached facts (see cache.ComposeVersion's
-// caller in graph/pipeline.go). libVersion is resolved once at construction
-// time via gotreesitterVersion() (debug.ReadBuildInfo), not hardcoded, so a
-// `go get -u` of the dependency also invalidates the cache automatically.
+// Version identifies EVERY input that changes Extract's observable output, so
+// that a cached fact is only ever reused by a parser that would have produced
+// it. Anything omitted here is a silent-staleness bug: the cache key matches,
+// so stale facts are served with no error and no way for a user to notice.
+//
+// Included, and why each one matters:
+//
+//   - queryRev — the .scm query text revision (golden-hashed by version_test).
+//   - libVersion — the gotreesitter version actually linked into this binary,
+//     resolved via debug.ReadBuildInfo rather than hardcoded, so `go get -u`
+//     invalidates automatically.
+//   - maxBytes/maxLineBytes — a file skipped for exceeding a size limit yields
+//     a materially different Result than one fully parsed. (This omission was
+//     a real bug: one diagnostic run with --ast-max-bytes poisoned every later
+//     run until each file's content changed.)
+//   - matchLimit — on exceeding it the query cursor truncates matches and the
+//     Result is flagged Degraded, i.e. fewer imports from identical input.
+//   - the compiled grammar set — the decisive one for adding languages. When a
+//     language is not in this parser's kits, Extract returns import-less Facts
+//     and those get cached. Enabling that language later changes no query text
+//     and no dependency version, so without the grammar set here the key is
+//     byte-identical and every already-cached file of the newly-enabled
+//     language keeps reporting zero imports until its content hash changes.
+//     Cost: enabling a language invalidates the whole cache once, which is
+//     correct — those entries genuinely are wrong.
+//
+// The set is taken from kits (grammars that actually loaded) rather than
+// p.langs (grammars requested), so a grammar that failed to resolve produces a
+// different key than one that succeeded — they extract differently.
 func (p *treeSitterParser) Version() string {
-	return fmt.Sprintf("ts/%d+gotreesitter@%s+b%d+l%d", queryRev, p.libVersion, p.opts.maxBytes, p.opts.maxLineBytes)
+	grammars := make([]string, 0, len(p.kits))
+	for name := range p.kits {
+		grammars = append(grammars, name)
+	}
+	sort.Strings(grammars) // map iteration is random; the key must be stable
+	return fmt.Sprintf("ts/%d+gotreesitter@%s+b%d+l%d+m%d+g:%s",
+		queryRev, p.libVersion, p.opts.maxBytes, p.opts.maxLineBytes,
+		p.opts.matchLimit, strings.Join(grammars, ","))
 }
 
 func (p *treeSitterParser) Close() error { return nil }

@@ -1,6 +1,10 @@
 package parse
 
-import "context"
+import (
+	"context"
+
+	"github.com/draht-dev/draht/go/internal/langset"
+)
 
 // Lang is the draht language id emitted into MAP.json (scan.LangFor's output
 // domain): typescript javascript python go rust java kotlin swift ruby php
@@ -76,4 +80,22 @@ type Parser interface {
 	// Close releases grammar/pool resources. Safe to call once, after all
 	// in-flight Extract calls have returned.
 	Close() error
+}
+
+// CLILangs returns the languages the shipped CLI enables for AST extraction,
+// converted from langset.CLILanguages — the single source of truth that also
+// generates the binary's grammar_subset build tags (cmd/grammar-tags).
+//
+// Every caller that constructs a tree-sitter parser for the *product* (as
+// opposed to a test fixture) must go through this, never a hand-written
+// slice. Two reasons, both silent when violated: the enabled grammar set is
+// part of the extraction cache key (see treeSitterParser.Version), so callers
+// sharing a cache must agree on it; and a hand-written list silently omits any
+// language later added to langset.
+func CLILangs() []Lang {
+	out := make([]Lang, len(langset.CLILanguages))
+	for i, l := range langset.CLILanguages {
+		out[i] = Lang(l)
+	}
+	return out
 }

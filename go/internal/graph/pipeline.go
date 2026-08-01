@@ -157,6 +157,8 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 	groupsJSON, _ := os.ReadFile(filepath.Join(graphOutDir, "GROUPS.json"))
 	flowsJSON, _ := os.ReadFile(filepath.Join(graphOutDir, "FLOWS.json"))
 
+	planning := readPlanningDocs(root)
+
 	modelPkgs := make([]model.Package, len(pkgs))
 	for i, p := range pkgs {
 		modelPkgs[i] = convertPackage(p)
@@ -174,6 +176,10 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 		PkgHasBin:        pkgHasBin,
 		GroupsJSON:       groupsJSON,
 		FlowsJSON:        flowsJSON,
+		PlanningState:    planning.state,
+		PlanningRoadmap:  planning.roadmap,
+		PlanningProject:  planning.project,
+		PlanningDomain:   planning.domain,
 	})
 	m.BuildMs = int(time.Since(start).Milliseconds())
 
@@ -406,4 +412,40 @@ func buildModule(f scan.File, fa *extract.Facts, pkgs []scan.Package, binFiles m
 		EntryPoint: entryPoint,
 		Layer:      layer,
 	}
+}
+
+// planningDocs holds the raw contents of the .planning/ narrative files that
+// feed MAP.json's `planning` block. Absent or unreadable files are "", which
+// is exactly what the CJS's `!!content` truthiness test treats as absent.
+type planningDocs struct {
+	state   string
+	roadmap string
+	project string
+	domain  string
+}
+
+// readPlanningDocs mirrors visReadPlanning (draht-tools.cjs:1746-1755),
+// including its DOMAIN.md -> DOMAIN-MODEL.md fallback. Read errors are
+// deliberately indistinguishable from "absent": the CJS guards with
+// existsSync and would likewise produce null for an unreadable file, and a
+// permissions problem on a narrative doc must not fail an indexing run.
+func readPlanningDocs(root string) planningDocs {
+	dir := filepath.Join(root, scan.PlanningDir)
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+	d := planningDocs{
+		state:   read("STATE.md"),
+		roadmap: read("ROADMAP.md"),
+		project: read("PROJECT.md"),
+		domain:  read("DOMAIN.md"),
+	}
+	if d.domain == "" {
+		d.domain = read("DOMAIN-MODEL.md")
+	}
+	return d
 }

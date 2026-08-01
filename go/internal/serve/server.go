@@ -271,7 +271,12 @@ func openURL(url string) {
 func Run(ctx context.Context, repoRoot string, o Options, stdout, stderr io.Writer) int {
 	outDir := scan.GraphOutDir(repoRoot)
 
-	parser, err := parse.NewTreeSitter([]parse.Lang{"typescript", "javascript", "python", "go", "rust"})
+	// Must come from langset, never a hand-written slice: map-serve shares the
+	// on-disk extraction cache with map-graph, and the enabled grammar set is
+	// part of the cache key. A drifted list here would mean two binaries
+	// writing entries under keys that disagree about which languages were
+	// parsed. (cmd/draht-tools/mapgraph.go states the same rule for the CLI.)
+	parser, err := parse.NewTreeSitter(parse.CLILangs())
 	if err != nil {
 		fmt.Fprintln(stderr, "map-serve: failed to start:", err)
 		return 1

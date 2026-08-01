@@ -1384,14 +1384,17 @@
   ],
   "rationaleIndex": [],
   "tests": {
-    "total": 0,
-    "byContainer": {}
+    "total": 1,
+    "byContainer": {
+      "@fixture/app": 1,
+      "@fixture/core": 0
+    }
   },
   "planning": {
     "hasProject": false,
     "hasRoadmap": false,
     "hasDomain": false,
-    "currentState": ""
+    "currentState": null
   },
   "agentHints": {
     "description": "Architecture map of this codebase. Read this BEFORE walking the file tree.",

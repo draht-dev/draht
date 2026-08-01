@@ -36,6 +36,20 @@ func (o *OrderedCounts) Add(k string, n int) {
 	o.m[k] += n
 }
 
+// Set assigns k's count, appending k on first sight — the equivalent of JS
+// `obj[k] = n`, as opposed to Add's `obj[k] += n`. Needed where the CJS
+// assigns rather than accumulates (e.g. tests.byContainer), so that two
+// containers sharing a name yield the last value instead of their sum.
+func (o *OrderedCounts) Set(k string, n int) {
+	if o.m == nil {
+		o.m = make(map[string]int)
+	}
+	if _, ok := o.m[k]; !ok {
+		o.keys = append(o.keys, k)
+	}
+	o.m[k] = n
+}
+
 // Get returns k's current count (0 if absent).
 func (o *OrderedCounts) Get(k string) int {
 	if o == nil || o.m == nil {

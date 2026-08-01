@@ -113,3 +113,67 @@ func TestGotreesitterVersion_FallsBackGracefully(t *testing.T) {
 		t.Fatal("gotreesitterVersion() returned empty string, want a non-empty fallback (e.g. \"unknown\")")
 	}
 }
+
+// TestTreeSitterVersion_FoldsGrammarSet pins the invariant that decides
+// whether adding a language is safe.
+//
+// The failure it guards against is silent: when a language is not compiled
+// into the parser, Extract returns import-less Facts and the pipeline caches
+// them. Enabling that language later changes no query text and no dependency
+// version, so if the grammar set were absent from Version() the cache key
+// would be byte-identical and every already-cached file of the newly-enabled
+// language would keep reporting zero imports — with no error, and no way for a
+// user to discover it short of deleting the cache.
+func TestTreeSitterVersion_FoldsGrammarSet(t *testing.T) {
+	goOnly, err := NewTreeSitter([]Lang{"go"})
+	if err != nil {
+		t.Fatalf("NewTreeSitter(go): %v", err)
+	}
+	defer goOnly.Close()
+
+	goAndPython, err := NewTreeSitter([]Lang{"go", "python"})
+	if err != nil {
+		t.Fatalf("NewTreeSitter(go,python): %v", err)
+	}
+	defer goAndPython.Close()
+
+	if goOnly.Version() == goAndPython.Version() {
+		t.Fatalf("enabling a language did not change the cache key: both %q\n"+
+			"a warm cache would serve import-less facts for every python file", goOnly.Version())
+	}
+
+	// Order must not matter: the same set has to produce the same key, or an
+	// incidental reordering of langset.CLILanguages would needlessly discard
+	// every user's cache.
+	reordered, err := NewTreeSitter([]Lang{"python", "go"})
+	if err != nil {
+		t.Fatalf("NewTreeSitter(python,go): %v", err)
+	}
+	defer reordered.Close()
+
+	if reordered.Version() != goAndPython.Version() {
+		t.Errorf("language order changed the cache key:\n  go,python = %q\n  python,go = %q",
+			goAndPython.Version(), reordered.Version())
+	}
+}
+
+// TestTreeSitterVersion_FoldsMatchLimit covers the other output-affecting
+// option: exceeding the query-cursor match limit truncates matches and flags
+// the Result Degraded, i.e. fewer imports from identical input.
+func TestTreeSitterVersion_FoldsMatchLimit(t *testing.T) {
+	base, err := NewTreeSitter([]Lang{"go"})
+	if err != nil {
+		t.Fatalf("NewTreeSitter: %v", err)
+	}
+	defer base.Close()
+
+	limited, err := NewTreeSitter([]Lang{"go"}, WithMatchLimit(64))
+	if err != nil {
+		t.Fatalf("NewTreeSitter(WithMatchLimit): %v", err)
+	}
+	defer limited.Close()
+
+	if base.Version() == limited.Version() {
+		t.Errorf("match limit not folded into cache key: both %q", base.Version())
+	}
+}

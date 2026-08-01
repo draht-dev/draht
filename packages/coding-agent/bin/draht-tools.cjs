@@ -5249,7 +5249,7 @@ function graphMissingMessage() {
 // loop treat an unconsumed flag VALUE as a positional file/dir argument, so these
 // must be stripped — not just documented as "ignored" — before the JS path ever
 // sees argv (Phase 4 review finding #4).
-const GRAPH_GO_ONLY_VALUE_FLAGS = new Set(["jobs", "parser", "cache-dir", "out", "ast-max-bytes"]);
+const GRAPH_GO_ONLY_VALUE_FLAGS = new Set(["jobs", "parser", "cache-dir", "out", "ast-max-bytes", "ast-max-line"]);
 const GRAPH_GO_ONLY_BOOL_FLAGS = new Set(["verbose"]);
 function graphStripGoOnlyFlags(args) {
 	const out = [];

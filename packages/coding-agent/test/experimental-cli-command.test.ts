@@ -1,10 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { parseExperimentalCliOptions } from "../src/cli/experimental/options.ts";
+import { parseCliCommand } from "../src/cli/experimental/command.ts";
 
-describe("parseExperimentalCliOptions", () => {
+describe("parseCliCommand", () => {
 	test("selects combined mode and preserves existing CLI arguments", () => {
 		expect(
-			parseExperimentalCliOptions([
+			parseCliCommand([
 				"--cwd",
 				"/workspace",
 				"--provider=anthropic",
@@ -16,8 +16,8 @@ describe("parseExperimentalCliOptions", () => {
 			]),
 		).toEqual({
 			ok: true,
-			options: {
-				role: "combined",
+			command: {
+				command: "combined",
 				remainingArgs: [
 					"--cwd",
 					"/workspace",
@@ -34,7 +34,7 @@ describe("parseExperimentalCliOptions", () => {
 
 	test("parses repeatable server listeners and preserves other arguments", () => {
 		expect(
-			parseExperimentalCliOptions([
+			parseCliCommand([
 				"server",
 				"--listen",
 				"unix:///tmp/pi.sock",
@@ -44,8 +44,8 @@ describe("parseExperimentalCliOptions", () => {
 			]),
 		).toEqual({
 			ok: true,
-			options: {
-				role: "server",
+			command: {
+				command: "server",
 				listen: [
 					{ transport: "unix", path: "/tmp/pi.sock" },
 					{ transport: "unix", path: "/tmp/pi-admin.sock" },
@@ -56,10 +56,10 @@ describe("parseExperimentalCliOptions", () => {
 	});
 
 	test("parses a client transport address", () => {
-		expect(parseExperimentalCliOptions(["client", "--connect", "unix:///tmp/pi.sock", "hello"])).toEqual({
+		expect(parseCliCommand(["client", "--connect", "unix:///tmp/pi.sock", "hello"])).toEqual({
 			ok: true,
-			options: {
-				role: "client",
+			command: {
+				command: "client",
 				connect: { transport: "unix", path: "/tmp/pi.sock" },
 				remainingArgs: ["hello"],
 			},
@@ -70,32 +70,30 @@ describe("parseExperimentalCliOptions", () => {
 		[["--auth-token", "secret"], { type: "token", token: "secret" }],
 		[["--auth-token-file", "/tmp/token"], { type: "file", path: "/tmp/token" }],
 	] as const)("parses authentication source %j", (argv, auth) => {
-		expect(parseExperimentalCliOptions(argv)).toEqual({
+		expect(parseCliCommand(argv)).toEqual({
 			ok: true,
-			options: { role: "combined", auth, remainingArgs: [] },
+			command: { command: "combined", auth, remainingArgs: [] },
 		});
 	});
 
 	test.each([[[]], [["server"]], [["client"]]] as const)(
 		"permits omitted authentication for later environment/default resolution",
 		(argv) => {
-			expect(parseExperimentalCliOptions(argv)).toEqual({
+			expect(parseCliCommand(argv)).toEqual({
 				ok: true,
-				options: { role: argv[0] ?? "combined", remainingArgs: [] },
+				command: { command: argv[0] ?? "combined", remainingArgs: [] },
 			});
 		},
 	);
 
 	test("preserves unknown options, @file arguments, and the positional separator", () => {
-		expect(parseExperimentalCliOptions(["--unknown", "@prompt.md", "--", "--listen", "unix:///tmp/pi.sock"])).toEqual(
-			{
-				ok: true,
-				options: {
-					role: "combined",
-					remainingArgs: ["--unknown", "@prompt.md", "--", "--listen", "unix:///tmp/pi.sock"],
-				},
+		expect(parseCliCommand(["--unknown", "@prompt.md", "--", "--listen", "unix:///tmp/pi.sock"])).toEqual({
+			ok: true,
+			command: {
+				command: "combined",
+				remainingArgs: ["--unknown", "@prompt.md", "--", "--listen", "unix:///tmp/pi.sock"],
 			},
-		);
+		});
 	});
 
 	test.each([
@@ -112,14 +110,14 @@ describe("parseExperimentalCliOptions", () => {
 		[["--listen"], "--listen requires a value"],
 		[["--connect="], "--connect requires a value"],
 	] as const)("rejects invalid experimental input %j", (argv, error) => {
-		const result = parseExperimentalCliOptions(argv);
+		const result = parseCliCommand(argv);
 		expect(result).toMatchObject({ ok: false });
 		if (!result.ok) expect(result.errors).toContainEqual(expect.stringContaining(error));
 	});
 
 	test("reports independent experimental errors together", () => {
 		expect(
-			parseExperimentalCliOptions([
+			parseCliCommand([
 				"client",
 				"--listen",
 				"ws://localhost:8080",
@@ -138,10 +136,10 @@ describe("parseExperimentalCliOptions", () => {
 		});
 	});
 
-	test("treats role names after the first argument as existing CLI arguments", () => {
-		expect(parseExperimentalCliOptions(["--cwd", "/workspace", "server"])).toEqual({
+	test("treats command names after the first argument as existing CLI arguments", () => {
+		expect(parseCliCommand(["--cwd", "/workspace", "server"])).toEqual({
 			ok: true,
-			options: { role: "combined", remainingArgs: ["--cwd", "/workspace", "server"] },
+			command: { command: "combined", remainingArgs: ["--cwd", "/workspace", "server"] },
 		});
 	});
 });

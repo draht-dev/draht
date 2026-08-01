@@ -1,39 +1,36 @@
-import { type AuthInput, parseAuthInput } from "./auth-options.ts";
+import { type AuthInput, parseAuthInput } from "./auth.ts";
 import { parseTransportAddress, type TransportAddress } from "./transport-address.ts";
 
-interface ExperimentalOptionsBase {
-	readonly role: "combined" | "server" | "client";
+interface CommandBase {
+	readonly command: "combined" | "server" | "client";
 	readonly auth?: AuthInput;
 	readonly remainingArgs: readonly string[];
 }
 
-export interface ExperimentalCombinedOptions extends ExperimentalOptionsBase {
-	readonly role: "combined";
+export interface CombinedCommand extends CommandBase {
+	readonly command: "combined";
 	readonly listen?: readonly TransportAddress[];
 }
 
-export interface ExperimentalServerOptions extends ExperimentalOptionsBase {
-	readonly role: "server";
+export interface ServerCommand extends CommandBase {
+	readonly command: "server";
 	readonly listen?: readonly TransportAddress[];
 }
 
-export interface ExperimentalClientOptions extends ExperimentalOptionsBase {
-	readonly role: "client";
+export interface ClientCommand extends CommandBase {
+	readonly command: "client";
 	readonly connect?: TransportAddress;
 }
 
-export type ExperimentalCliOptions =
-	| ExperimentalCombinedOptions
-	| ExperimentalServerOptions
-	| ExperimentalClientOptions;
+export type CliCommand = CombinedCommand | ServerCommand | ClientCommand;
 
-export type ExperimentalCliParseResult =
-	| { readonly ok: true; readonly options: ExperimentalCliOptions }
+export type CliCommandParseResult =
+	| { readonly ok: true; readonly command: CliCommand }
 	| { readonly ok: false; readonly errors: readonly string[] };
 
 const VALUE_OPTIONS = new Set(["--listen", "--connect", "--auth-token", "--auth-token-file"]);
 
-interface RawExperimentalOptions {
+interface RawCommandOptions {
 	authToken?: string;
 	authTokenFile?: string;
 	listenValues: string[];
@@ -48,8 +45,8 @@ function splitOption(argument: string): { option: string; inlineValue?: string }
 		: { option: argument.slice(0, equals), inlineValue: argument.slice(equals + 1) };
 }
 
-function parseRawOptions(argv: readonly string[]): { raw: RawExperimentalOptions; errors: string[] } {
-	const raw: RawExperimentalOptions = { listenValues: [], remainingArgs: [] };
+function parseRawOptions(argv: readonly string[]): { raw: RawCommandOptions; errors: string[] } {
+	const raw: RawCommandOptions = { listenValues: [], remainingArgs: [] };
 	const errors: string[] = [];
 
 	for (let index = 0; index < argv.length; index++) {
@@ -97,10 +94,10 @@ function parseRawOptions(argv: readonly string[]): { raw: RawExperimentalOptions
 	return { raw, errors };
 }
 
-export function parseExperimentalCliOptions(argv: readonly string[]): ExperimentalCliParseResult {
+export function parseCliCommand(argv: readonly string[]): CliCommandParseResult {
 	const [candidate, ...rest] = argv;
-	const role = candidate === "server" || candidate === "client" ? candidate : "combined";
-	const { raw, errors } = parseRawOptions(role === "combined" ? argv : rest);
+	const commandName = candidate === "server" || candidate === "client" ? candidate : "combined";
+	const { raw, errors } = parseRawOptions(commandName === "combined" ? argv : rest);
 	const listen = raw.listenValues.flatMap((value) => {
 		const result = parseTransportAddress(value, "--listen");
 		if (result.error) errors.push(result.error);
@@ -110,31 +107,33 @@ export function parseExperimentalCliOptions(argv: readonly string[]): Experiment
 	if (connectResult?.error) errors.push(connectResult.error);
 	const { auth, errors: authErrors } = parseAuthInput(raw);
 	errors.push(...authErrors);
-	if (role === "client" && raw.listenValues.length > 0) {
+	if (commandName === "client" && raw.listenValues.length > 0) {
 		errors.push("--listen is only valid for combined or server mode");
 	}
-	if (role !== "client" && raw.connectValue !== undefined) errors.push("--connect is only valid for client mode");
+	if (commandName !== "client" && raw.connectValue !== undefined) {
+		errors.push("--connect is only valid for client mode");
+	}
 	if (errors.length > 0) return { ok: false, errors };
 
 	const common = {
 		remainingArgs: raw.remainingArgs,
 		...(auth === undefined ? {} : { auth }),
 	};
-	if (role === "client") {
+	if (commandName === "client") {
 		return {
 			ok: true,
-			options: {
+			command: {
 				...common,
-				role,
+				command: commandName,
 				...(connectResult?.address === undefined ? {} : { connect: connectResult.address }),
 			},
 		};
 	}
 	return {
 		ok: true,
-		options: {
+		command: {
 			...common,
-			role,
+			command: commandName,
 			...(listen.length === 0 ? {} : { listen }),
 		},
 	};

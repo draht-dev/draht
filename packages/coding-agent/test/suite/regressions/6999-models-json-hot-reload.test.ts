@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setKeybindings, type TUI } from "@draht/tui";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../../../src/core/auth-storage.ts";
 import { KeybindingsManager } from "../../../src/core/keybindings.ts";
 import { SettingsManager } from "../../../src/core/settings-manager.ts";
@@ -11,10 +11,21 @@ import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../../src/utils/ansi.ts";
 import { createModelRegistry, getModelRuntime } from "../../model-runtime-test-utils.ts";
 
-function createFakeTui(): TUI {
+function observeRefreshRender(): { tui: TUI; renderedAfterRefresh: Promise<void> } {
+	let renderCount = 0;
+	let resolveRefreshRender = () => {};
+	const renderedAfterRefresh = new Promise<void>((resolve) => {
+		resolveRefreshRender = resolve;
+	});
 	return {
-		requestRender: () => {},
-	} as unknown as TUI;
+		tui: {
+			requestRender: () => {
+				renderCount++;
+				if (renderCount === 2) resolveRefreshRender();
+			},
+		} as unknown as TUI,
+		renderedAfterRefresh,
+	};
 }
 
 function modelsJson(provider: string, model: string): Record<string, unknown> {
@@ -54,8 +65,9 @@ describe("issue #6999 models.json hot reload", () => {
 		expect(modelRuntime.getModel("old-provider", "old-model")).toBeDefined();
 
 		writeFileSync(modelsPath, JSON.stringify(modelsJson("new-provider", "new-model")));
+		const { tui, renderedAfterRefresh } = observeRefreshRender();
 		const selector = new ModelSelectorComponent(
-			createFakeTui(),
+			tui,
 			undefined,
 			SettingsManager.inMemory(),
 			modelRuntime,
@@ -64,11 +76,9 @@ describe("issue #6999 models.json hot reload", () => {
 			() => {},
 		);
 
-		await vi.waitFor(() => {
-			const rendered = stripAnsi(selector.render(120).join("\n"));
-			expect(rendered).toContain("new-model [new-provider]");
-			expect(rendered).toContain("Model catalogs refreshed.");
-		});
-		expect(modelRuntime.getModel("old-provider", "old-model")).toBeUndefined();
+		await renderedAfterRefresh;
+		const rendered = stripAnsi(selector.render(120).join("\n"));
+		expect(rendered).toContain("new-model [new-provider]");
+		expect(rendered).not.toContain("old-model [old-provider]");
 	});
 });

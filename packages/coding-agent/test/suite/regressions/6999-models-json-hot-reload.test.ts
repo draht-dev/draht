@@ -1,12 +1,15 @@
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setKeybindings, type TUI } from "@draht/tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthStorage } from "../../../src/core/auth-storage.ts";
 import { KeybindingsManager } from "../../../src/core/keybindings.ts";
+import { SettingsManager } from "../../../src/core/settings-manager.ts";
 import { ModelSelectorComponent } from "../../../src/modes/interactive/components/model-selector.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../../src/utils/ansi.ts";
-import { createHarness, type Harness } from "../harness.ts";
+import { createModelRegistry, getModelRuntime } from "../../model-runtime-test-utils.ts";
 
 function createFakeTui(): TUI {
 	return {
@@ -28,7 +31,7 @@ function modelsJson(provider: string, model: string): Record<string, unknown> {
 }
 
 describe("issue #6999 models.json hot reload", () => {
-	let harness: Harness | undefined;
+	let tempDir: string | undefined;
 
 	beforeAll(() => {
 		initTheme("dark");
@@ -39,20 +42,23 @@ describe("issue #6999 models.json hot reload", () => {
 	});
 
 	afterEach(() => {
-		harness?.cleanup();
-		harness = undefined;
+		if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+		tempDir = undefined;
 	});
 
 	it("reloads models.json when opening /model", async () => {
-		harness = await createHarness({ modelsJson: modelsJson("old-provider", "old-model") });
-		expect(harness.session.modelRuntime.getModel("old-provider", "old-model")).toBeDefined();
+		tempDir = mkdtempSync(join(tmpdir(), "pi-models-json-hot-reload-"));
+		const modelsPath = join(tempDir, "models.json");
+		writeFileSync(modelsPath, JSON.stringify(modelsJson("old-provider", "old-model")));
+		const modelRuntime = getModelRuntime(await createModelRegistry(AuthStorage.inMemory(), modelsPath));
+		expect(modelRuntime.getModel("old-provider", "old-model")).toBeDefined();
 
-		writeFileSync(join(harness.tempDir, "models.json"), JSON.stringify(modelsJson("new-provider", "new-model")));
+		writeFileSync(modelsPath, JSON.stringify(modelsJson("new-provider", "new-model")));
 		const selector = new ModelSelectorComponent(
 			createFakeTui(),
-			harness.getModel(),
-			harness.settingsManager,
-			harness.session.modelRuntime,
+			undefined,
+			SettingsManager.inMemory(),
+			modelRuntime,
 			[],
 			() => {},
 			() => {},
@@ -63,6 +69,6 @@ describe("issue #6999 models.json hot reload", () => {
 			expect(rendered).toContain("new-model [new-provider]");
 			expect(rendered).toContain("Model catalogs refreshed.");
 		});
-		expect(harness.session.modelRuntime.getModel("old-provider", "old-model")).toBeUndefined();
+		expect(modelRuntime.getModel("old-provider", "old-model")).toBeUndefined();
 	});
 });

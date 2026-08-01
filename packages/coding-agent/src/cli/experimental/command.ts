@@ -58,8 +58,8 @@ function parseRawOptions(argv: readonly string[]): { raw: RawCommandOptions; err
 
 		const { option, inlineValue } = splitOption(argument);
 		if (!VALUE_OPTIONS.has(option)) {
-			raw.remainingArgs.push(argument);
-			continue;
+			raw.remainingArgs.push(...argv.slice(index));
+			break;
 		}
 
 		let value = inlineValue;
@@ -84,10 +84,12 @@ function parseRawOptions(argv: readonly string[]): { raw: RawCommandOptions; err
 				raw.connectValue = value;
 				break;
 			case "--auth-token":
-				raw.authToken = value;
+				if (raw.authToken !== undefined) errors.push("--auth-token may only be specified once");
+				else raw.authToken = value;
 				break;
 			case "--auth-token-file":
-				raw.authTokenFile = value;
+				if (raw.authTokenFile !== undefined) errors.push("--auth-token-file may only be specified once");
+				else raw.authTokenFile = value;
 				break;
 		}
 	}

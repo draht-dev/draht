@@ -38,9 +38,9 @@ describe("parseCommand", () => {
 				"server",
 				"--listen",
 				"unix:///tmp/pi.sock",
+				"--listen=unix:///tmp/pi-admin.sock",
 				"--model",
 				"claude-sonnet",
-				"--listen=unix:///tmp/pi-admin.sock",
 			]),
 		).toEqual({
 			ok: true,
@@ -51,6 +51,36 @@ describe("parseCommand", () => {
 					{ transport: "unix", path: "/tmp/pi-admin.sock" },
 				],
 				remainingArgs: ["--model", "claude-sonnet"],
+			},
+		});
+	});
+
+	test("preserves existing option values that look like experimental options", () => {
+		expect(parseCommand(["--system-prompt", "--listen", "unix:///tmp/pi.sock"])).toEqual({
+			ok: true,
+			command: {
+				command: "combined",
+				remainingArgs: ["--system-prompt", "--listen", "unix:///tmp/pi.sock"],
+			},
+		});
+	});
+
+	test("preserves experimental-looking arguments after the existing option prefix begins", () => {
+		expect(
+			parseCommand([
+				"server",
+				"--listen",
+				"unix:///tmp/pi.sock",
+				"--model",
+				"claude-sonnet",
+				"--listen=unix:///tmp/second.sock",
+			]),
+		).toEqual({
+			ok: true,
+			command: {
+				command: "server",
+				listen: [{ transport: "unix", path: "/tmp/pi.sock" }],
+				remainingArgs: ["--model", "claude-sonnet", "--listen=unix:///tmp/second.sock"],
 			},
 		});
 	});
@@ -101,12 +131,18 @@ describe("parseCommand", () => {
 			["--auth-token", "secret", "--auth-token-file", "/tmp/token"],
 			"--auth-token and --auth-token-file are mutually exclusive",
 		],
+		[["--auth-token", "first", "--auth-token", "second"], "--auth-token may only be specified once"],
+		[
+			["--auth-token-file", "/tmp/first", "--auth-token-file=/tmp/second"],
+			"--auth-token-file may only be specified once",
+		],
 		[["--listen", "/tmp/pi.sock"], 'Invalid --listen address "/tmp/pi.sock"'],
 		[["--listen", "ws://localhost:8080"], 'Unsupported --listen transport "ws:"'],
 		[["--listen", "unix://relative.sock"], "Unix transport address must not include an authority"],
 		[["--listen", "unix:///tmp/pi.sock?wrong=value"], 'Invalid --listen address "unix:///tmp/pi.sock?wrong=value"'],
 		[["--listen", "unix:///tmp/pi.sock#fragment"], 'Invalid --listen address "unix:///tmp/pi.sock#fragment"'],
 		[["--listen", "unix:/tmp/pi.sock"], 'Invalid --listen address "unix:/tmp/pi.sock"'],
+		[["--listen", "unix:///tmp/%00pi.sock"], 'Invalid --listen address "unix:///tmp/%00pi.sock"'],
 		[["client", "--listen", "unix:///tmp/pi.sock"], "--listen is only valid for combined or server mode"],
 		[["server", "--connect", "unix:///tmp/pi.sock"], "--connect is only valid for client mode"],
 		[["client", "--connect", "ws://localhost:8080"], 'Unsupported --connect transport "ws:"'],

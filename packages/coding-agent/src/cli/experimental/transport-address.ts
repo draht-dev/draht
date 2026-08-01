@@ -38,6 +38,9 @@ export function parseTransportAddress(
 	} catch {
 		return { error: `Invalid ${option} address "${value}"` };
 	}
+	if (path.includes("\0")) {
+		return { error: `Invalid ${option} address "${value}"` };
+	}
 	if (!posix.isAbsolute(path)) {
 		return { error: "Unix transport address requires an absolute path" };
 	}

@@ -305,6 +305,15 @@ interface QueueEnqueued extends RecordBase {
   target: ProvisionedEntry;
 }
 
+// Durable retraction of a pending queue item, before consumption. Without
+// this record a crash would resurrect the item: recovery treats a
+// queue_enqueued without its entry as pending.
+interface QueueCancelled extends RecordBase {
+  type: "queue_cancelled";
+  runId?: string;                      // matches the queue_enqueued it kills
+  entryId: string;                     // the enqueued target's provisioned id
+}
+
 // Deferred-write acceptance: an entry or configuration change requested
 // while a step was in flight. Applied at the next checkpoint.
 interface WriteDeferred extends RecordBase {
@@ -312,6 +321,12 @@ interface WriteDeferred extends RecordBase {
   runId: string;
   target: ProvisionedEntry;
 }
+
+type LaneRecord = OperationStarted | AbortRequested | OperationFinished
+  | TaskAttempt | ToolStarted | QueueEnqueued | QueueCancelled | WriteDeferred;
+
+type NewRecord<T extends LaneRecord = LaneRecord> =
+  T extends LaneRecord ? Omit<T, "seq" | "timestamp"> : never;
 ```
 
 Blocked or invalid tool calls write no `tool_started`. No effect starts, so no intent is needed: the block is durable as a tool-result entry with `isError: true` and the block reason as content. A crash before that entry loses only the decision, and recovery makes it again — `before_tool` runs again for a call with no `tool_started` and no result.
@@ -327,6 +342,7 @@ Recovery rejects a lane's log as corrupt when:
 - attempt numbers are not consecutive within a task;
 - `compactionReason` is absent from a compaction attempt or present on another task kind;
 - a steer or follow-up `queue_enqueued` for a run follows its `abort_requested`;
+- a `queue_cancelled` targets an id with no `queue_enqueued`, or one whose entry exists;
 - two `tool_started` records share an invocation identity;
 - a provisioned id exists with different content.
 
@@ -395,6 +411,16 @@ R   task_attempt                      next request sees the steering message
 ```
 
 Crash before `queue_enqueued`: the steer never happened; the caller's promise never resolved. Crash after: recovery finds the record without its entry and appends it at the same point the checkpoint would have.
+
+A queued item can be durably retracted before consumption:
+
+```text
+R   queue_enqueued                    steer, full payload, provisioned id
+    cancelQueued(entryId)             caller resolves here
+R   queue_cancelled                   the entry will never be appended
+```
+
+Crash between the two records: the item is still pending; the cancel promise never resolved. Cancellation and consumption are jobs on the lane mutation line, so `[cancel, consume]` and `[consume, cancel]` are the only histories (section 15).
 
 ### Input at the finish boundary
 
@@ -533,7 +559,7 @@ Deferred assistant messages carry a handle, not content; they project to nothing
 
 Opening a session restores every lane independently. Restore reads; it never appends and never starts effects.
 
-Per lane, one question: does the operation log hold an `operation_started` without a matching `operation_finished`? No: the lane is idle. Its only remaining state is pending next-run queue items. Next-run messages can be enqueued at any time; only the acceptance of a run consumes them — compaction and navigation pass over the queue. Pending items are therefore the `queue_enqueued` records after the lane's most recent run-kind `operation_started` whose provisioned entries do not exist; nothing older can still be pending. Items a run captured are listed in its intent's `initialMessages`, so a captured-but-unappended item is completed by that run's recovery and is never offered to the next run. Yes: the lane is suspended, and its state is reduced from two bounded reads:
+Per lane, one question: does the operation log hold an `operation_started` without a matching `operation_finished`? No: the lane is idle. Its only remaining state is pending next-run queue items. Next-run messages can be enqueued at any time; only the acceptance of a run consumes them — compaction and navigation pass over the queue. Pending items are therefore the `queue_enqueued` records after the lane's most recent run-kind `operation_started` whose provisioned entries do not exist and that no `queue_cancelled` retracts; nothing older can still be pending. Items a run captured are listed in its intent's `initialMessages`, so a captured-but-unappended item is completed by that run's recovery and is never offered to the next run. Yes: the lane is suspended, and its state is reduced from two bounded reads:
 
 1. **The lane's records** since that `operation_started`. Everything after the finish of the previous operation is irrelevant history.
 2. **The lane's own entries**: the path from its leaf back to the operation's anchor (`sourceLeafId`). These are exactly the entries this operation appended.
@@ -548,7 +574,7 @@ From those two reads, the lane's state:
 - **attempts used** — `task_attempt` records newer than the lane's newest own entry. An entry landing ends its task; attempts before it belong to finished work.
 - **tool batch** — the newest assistant entry with tool calls, each call matched against `tool_started` records and result entries (section 6, crash-site table). The assistant stop reason is retained: a `length` batch is truncated and never executes on recovery. Persisted `terminate` values on result entries decide whether the completed batch forces another step.
 - **deferred handle** — the newest own entry is a deferred assistant message with no successor.
-- **pending queue items** — `queue_enqueued` records whose provisioned entry does not exist.
+- **pending queue items** — `queue_enqueued` records whose provisioned entry does not exist, excluding items retracted by `queue_cancelled` and steer/follow-up items killed by this run's `abort_requested`.
 - **pending writes** — `write_deferred` records whose provisioned entry does not exist.
 - **missing initial messages** — provisioned ids from the run intent without entries.
 - **structural targets** — for compaction and navigation: does the provisioned result entry exist.
@@ -595,14 +621,17 @@ interface AgentLane {
   resume(): Promise<ResumeResult>;       // continue this lane's open operation
   abort(): Promise<AbortResult>;         // durable on resolve; reconciliation runs in background
 
-  // Queues. Durable on resolve (queue_enqueued record). steer/followUp
-  // require an active run; nextRun works anytime.
+  // Queues. Durable on resolve (queue_enqueued record); the returned
+  // entryId identifies the item until consumption. steer/followUp require
+  // an active run; nextRun and cancelQueued work anytime.
   steer(text: string, images?: ImageContent[]): Promise<QueueResult>;
   steer(message: AgentMessage): Promise<QueueResult>;
   followUp(text: string, images?: ImageContent[]): Promise<QueueResult>;
   followUp(message: AgentMessage): Promise<QueueResult>;
   nextRun(text: string, images?: ImageContent[]): Promise<QueueResult>;
   nextRun(message: AgentMessage): Promise<QueueResult>;
+  /** Durably retract a pending queue item (queue_cancelled record). */
+  cancelQueued(entryId: string): Promise<CancelQueuedResult>;
 
   waitForIdle(): Promise<void>;
   runWhenIdle(callback: () => void | Promise<void>): Promise<void>;   // runtime-only
@@ -764,7 +793,12 @@ type NavigationResult =
   | { ok: false; outcome: "failed"; runId: string; error: ErrorInfo }
   | Failure;
 
-type QueueResult = { ok: true } | Failure;
+type QueueResult = { ok: true; entryId: string } | Failure;
+
+type CancelQueuedResult =
+  | { ok: true }                                            // entry will never be appended
+  | { ok: false; outcome: "already_consumed" | "already_cleared" }
+  | Failure;                                                // unknown id: rejected
 
 type ResumeResult =
   | ({ kind: "run" } & RunResult)
@@ -772,7 +806,9 @@ type ResumeResult =
   | ({ kind: "navigation" } & NavigationResult);
 ```
 
-Rejection codes: `busy` (this lane), `no_active_run`, `no_active_operation`, `nothing_to_resume`, `missing_identities`, `invalid_message`, `unknown_skill`, `unknown_template`, `unknown_target`, `unknown_lane`, `lane_exists`, `invalid_lane`, `nothing_to_compact`, `closed`, `faulted`.
+Rejection codes: `busy` (this lane), `no_active_run`, `no_active_operation`, `nothing_to_resume`, `missing_identities`, `invalid_message`, `unknown_skill`, `unknown_template`, `unknown_target`, `unknown_queue_item`, `unknown_lane`, `lane_exists`, `invalid_lane`, `nothing_to_compact`, `closed`, `faulted`.
+
+`cancelQueued` outcomes mirror the mutation-line histories: `already_consumed` means the entry exists (the model saw or will see it); `already_cleared` means abort drained the item or an earlier cancel won.
 
 `finalMessage` is the run's newest entry that projects to an assistant message; `finalEntryId` is that entry's id. `leafId` is the lane's leaf when the operation finished — the race-free anchor for branch queries (`findEntriesOnBranch({ start: leafId })`). The two differ when a deferred write was applied after the final assistant message. Full transcripts are not duplicated into results; they are in the session and were delivered as events.
 
@@ -843,6 +879,11 @@ start((event) => send(client, event));                // flush buffer in order, 
 `watch()` is lane-scoped: this lane's transcript, operation state, queues, pending writes, and only this lane's events. A Slack thread renderer sees its thread and nothing else. `watchSession()` is the session-wide observer: lane inventory, no transcripts, unfiltered event stream. A dashboard composes both: `watchSession()` for the overview, `lane.watch()` per opened thread.
 
 ```ts
+interface QueuedItem {
+  entryId: string;                     // correlates with QueueResult and cancelQueued
+  message: AgentMessage;
+}
+
 interface LaneSnapshot {
   lane: string;
   /** This lane's branch, oldest first: the context window plus its
@@ -870,7 +911,7 @@ interface LaneSnapshot {
     retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
   };
 
-  queues: { steer: AgentMessage[]; followUp: AgentMessage[]; nextRun: AgentMessage[] };
+  queues: { steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] };
   pendingWrites: { id: string; entry: ProvisionedEntry }[];
 
   faulted: boolean;                      // harness-wide, mirrored into every snapshot
@@ -939,7 +980,7 @@ Guarantees:
 { type: "entry_added";   entry: Entry }              // non-message entries
 { type: "write_pending"; runId; entryId; entry }     // deferred write accepted; entry_added
                                                      // or message_end follows with the same id
-{ type: "queue_update";  steer: AgentMessage[]; followUp: AgentMessage[]; nextRun: AgentMessage[] }
+{ type: "queue_update";  steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] }
 { type: "fact_update" } & (
   | { fact: "name";  name: string }
   | { fact: "label"; targetId: string; label: string | undefined })
@@ -1608,6 +1649,7 @@ The jobs, by caller:
 - **Lane surface** (ungated, enqueue directly):
   - *Operation acceptance* — validate idle, capture the pending `nextRun` items into `initialMessages`, write `operation_started`, set `state.operation`. The second of two concurrent acceptances sees the first and rejects `busy` with no write. `before_run` ran before this job, outside the line, on the prompt only.
   - *Queue acceptance* (`steer`, `followUp`) — validate an active, non-aborting run; write `queue_enqueued`. `nextRun` validates nothing and always accepts.
+  - *Queue cancellation* (`cancelQueued`) — target entry exists: `already_consumed`; not pending (abort-drained or already cancelled): `already_cleared`; else write `queue_cancelled` and remove the item from its pending set.
   - *Deferred-write acceptance* (lane-view writes, config setters) — run open: write `write_deferred`; structural operation open: wait for it to end, then re-enter; idle: append the entry directly.
   - *Abort* — write `abort_requested`, set `aborting`, drain `pendingSteer`/`pendingFollowUp` (payloads return to the abort caller and in the `run_abort` event), signal the active effect's `AbortController`.
   - *Resume admission* — reserve the lane's single execution slot; no write.
@@ -1649,6 +1691,7 @@ The complete list. Each row names the two legal histories and the jobs that forc
 | 9 | config/tree write vs acceptance snapshot | committed before the run's first request · deferred write | both are line jobs; snapshots read after acceptance |
 | 10 | abort vs in-flight provider/tool effect | effect settles · effect interrupted | irreducible: signal cancellation; only the procedure commits results (abort path owns synthetics) |
 | 11 | cross-lane writes | any interleaving | storage `seq` linearization (section 13); lanes share no state |
+| 12 | `cancelQueued` vs consumption | consumed first: `already_consumed` · cancelled first: consumption skips, the model never sees it | cancel job + `consumeQueueItem` |
 
 Row 10 is the one race no ordering can remove: an external effect may have happened even though its result never arrived. The design's answer is the section 5 intent record plus the replay policy — the same answer as for a crash.
 
@@ -2279,7 +2322,7 @@ expect(suspended).toHaveLength(1);
 expect((await harness.resume()).ok).toBe(true);
 ```
 
-Coverage: every X1–X5 tool state, replay safe/never/changed declarations, every source-order position in a batch, truncated (`length`) batches proving no execution, abort before and after each durable point, the terminal-failure marker with and without later consumed input, missing initial messages, pending and abort-killed queue items, deferred writes, deferred handles (pending, ready, terminal, rejected fetch, abort), unfinished tasks and attempt caps across restart including auto-compaction exhaustion, post-move navigation states from the section 6 table, section 5 validity rejections, and half-completed recovery (run the same prefix through recovery twice).
+Coverage: every X1–X5 tool state, replay safe/never/changed declarations, every source-order position in a batch, truncated (`length`) batches proving no execution, abort before and after each durable point, the terminal-failure marker with and without later consumed input, missing initial messages, pending, cancelled, and abort-killed queue items, deferred writes, deferred handles (pending, ready, terminal, rejected fetch, abort), unfinished tasks and attempt caps across restart including auto-compaction exhaustion, post-move navigation states from the section 6 table, section 5 validity rejections, and half-completed recovery (run the same prefix through recovery twice).
 
 The in-memory backend is the reference. The parity suite runs the same setups against memory, JSONL, and SQLite; one case runs concurrent writes on two lanes and asserts unique increasing `seq` and identical `getLog()` order; another asserts every backend rejects the same non-JSON payloads.
 

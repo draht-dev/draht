@@ -1,5 +1,5 @@
 import type {
-	SessionCollection,
+	SessionForkOptions,
 	SessionForkSelection,
 	SessionMetadata,
 	SessionStorage,
@@ -7,9 +7,15 @@ import type {
 } from "../types.ts";
 import { SessionError } from "../types.ts";
 import { ArraySessionIndex } from "./array-session-index.ts";
-import { readSessionEntriesForFork } from "./fork.ts";
 import { KeyedOperationQueue } from "./keyed-operation-queue.ts";
-import { createSessionId, createTimestamp } from "./repository.ts";
+import {
+	createSessionForkSelection,
+	createSessionId,
+	createTimestamp,
+	readSessionEntriesForFork,
+	type SessionRepository,
+} from "./repository.ts";
+import { createSession, type Session, type SessionContextBuildOptions } from "./session.ts";
 
 export type InMemorySessionCreateOptions = { id?: string };
 
@@ -18,7 +24,7 @@ interface InMemorySessionState {
 	entries: ArraySessionIndex;
 }
 
-class InMemorySessionCollection implements SessionCollection<SessionMetadata, InMemorySessionCreateOptions, void> {
+export class InMemorySessionBackend {
 	private readonly sessions = new Map<string, InMemorySessionState>();
 	private readonly operations = new KeyedOperationQueue<string>();
 	private disposed = false;
@@ -109,7 +115,7 @@ class InMemorySessionCollection implements SessionCollection<SessionMetadata, In
 	}
 
 	private assertOpen(): void {
-		if (this.disposed) throw new SessionError("storage", "In-memory session collection is disposed");
+		if (this.disposed) throw new SessionError("storage", "In-memory session repository is disposed");
 	}
 
 	private getState(metadata: SessionMetadata): InMemorySessionState {
@@ -119,10 +125,48 @@ class InMemorySessionCollection implements SessionCollection<SessionMetadata, In
 	}
 }
 
-export function createInMemorySessionCollection(): SessionCollection<
-	SessionMetadata,
-	InMemorySessionCreateOptions,
-	void
-> {
-	return new InMemorySessionCollection();
+export interface InMemorySessionRepositoryOptions {
+	contextBuildOptions?: SessionContextBuildOptions;
+}
+
+export class InMemorySessionRepository
+	implements SessionRepository<SessionMetadata, InMemorySessionCreateOptions, void>
+{
+	private readonly backend = new InMemorySessionBackend();
+	private readonly contextBuildOptions: SessionContextBuildOptions;
+
+	constructor(options: InMemorySessionRepositoryOptions = {}) {
+		this.contextBuildOptions = options.contextBuildOptions ?? {};
+	}
+
+	async create(options: InMemorySessionCreateOptions = {}): Promise<Session<SessionMetadata>> {
+		return createSession(await this.backend.create(options), this.contextBuildOptions);
+	}
+
+	async open(metadata: SessionMetadata): Promise<Session<SessionMetadata>> {
+		return createSession(await this.backend.open(metadata), this.contextBuildOptions);
+	}
+
+	async list(): Promise<SessionMetadata[]> {
+		return await this.backend.list();
+	}
+
+	async delete(metadata: SessionMetadata): Promise<void> {
+		await this.backend.delete(metadata);
+	}
+
+	async fork(
+		source: SessionMetadata,
+		options: SessionForkOptions & InMemorySessionCreateOptions,
+	): Promise<Session<SessionMetadata>> {
+		const { entryId: _entryId, position: _position, ...createOptions } = options;
+		return createSession(
+			await this.backend.fork(source, createOptions, createSessionForkSelection(options)),
+			this.contextBuildOptions,
+		);
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.backend[Symbol.asyncDispose]();
+	}
 }

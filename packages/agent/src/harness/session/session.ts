@@ -421,7 +421,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	}
 }
 
-/** @internal Construct sessions only through SessionRepository. */
+/** Wraps an opened storage connection for a SessionRepository implementation. */
 export async function createSession<TMetadata extends SessionMetadata>(
 	storage: SessionStorage<TMetadata>,
 	contextBuildOptions: SessionContextBuildOptions = {},

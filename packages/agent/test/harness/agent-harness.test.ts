@@ -11,9 +11,8 @@ import { getModel } from "@draht/ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentHarness } from "../../src/harness/agent-harness.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { createInMemorySessionCollection } from "../../src/harness/session/memory-collection.ts";
-import { createSessionRepository } from "../../src/harness/session/repository.ts";
-import type { Session } from "../../src/harness/session/session.ts";
+import { InMemorySessionBackend } from "../../src/harness/session/memory-repo.ts";
+import { createSession, type Session } from "../../src/harness/session/session.ts";
 import type { AgentHarnessTool, PromptTemplate, Skill } from "../../src/harness/types.ts";
 import type { AgentMessage, AgentTool } from "../../src/types.ts";
 import { calculateTool, createCalculateToolWithUsage } from "../utils/calculate.ts";
@@ -97,7 +96,7 @@ async function createBlockingSession(expectedWrites: number): Promise<{
 	releaseWrites: ReturnType<typeof deferred>;
 	getEntries(): ReturnType<Session["getEntries"]>;
 }> {
-	const source = createInMemorySessionCollection();
+	const source = new InMemorySessionBackend();
 	const allWritesStarted = deferred();
 	const releaseWrites = deferred();
 	let writesStarted = 0;
@@ -110,15 +109,18 @@ async function createBlockingSession(expectedWrites: number): Promise<{
 			await storage.appendEntry(entry);
 		},
 	});
-	const blockingCollection: ReturnType<typeof createInMemorySessionCollection> = {
+	const blockingBackend: Pick<
+		InMemorySessionBackend,
+		"create" | "open" | "list" | "delete" | "fork" | typeof Symbol.asyncDispose
+	> = {
 		create: async (options) => blockWrites(await source.create(options)),
 		open: async (metadata) => blockWrites(await source.open(metadata)),
-		list: (options) => source.list(options),
+		list: () => source.list(),
 		delete: (metadata) => source.delete(metadata),
 		fork: async (metadata, options, selection) => blockWrites(await source.fork(metadata, options, selection)),
 		[Symbol.asyncDispose]: () => source[Symbol.asyncDispose](),
 	};
-	const session = await createSessionRepository({ collection: blockingCollection }).create({});
+	const session = await createSession(await blockingBackend.create({}));
 	return {
 		session,
 		allWritesStarted,

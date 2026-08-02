@@ -225,7 +225,6 @@ export class BranchSummaryError extends Error {
 
 export type SessionErrorCode =
 	| "not_found"
-	| "unsupported"
 	| "invalid_session"
 	| "invalid_entry"
 	| "invalid_fork_target"
@@ -556,7 +555,7 @@ export interface SessionHead {
 	leafId: string | null;
 }
 
-/** Complete storage contract for one opened session. Its lifetime is owned by its {@link SessionCollection}. */
+/** Complete storage contract for one opened session. Its lifetime is owned by its repository. */
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
 	readonly metadata: TMetadata;
 	/** Rejects with `invalid_session` when a non-null active leaf does not reference a stored entry. */
@@ -569,23 +568,6 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 	getLabel(id: string): Promise<string | undefined>;
 	getName(): Promise<string | undefined>;
 	getStats(): Promise<SessionStats>;
-}
-
-/** Owns the collection lifecycle and resources shared by sessions in a repository. */
-export interface SessionCollection<
-	TMetadata extends SessionMetadata = SessionMetadata,
-	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
-	TListOptions = void,
-> extends AsyncDisposable {
-	create(options: TCreateOptions): Promise<SessionStorage<TMetadata>>;
-	open(metadata: TMetadata): Promise<SessionStorage<TMetadata>>;
-	list(options?: TListOptions): Promise<TMetadata[]>;
-	delete(metadata: TMetadata): Promise<void>;
-	fork(
-		source: TMetadata,
-		options: TCreateOptions,
-		selection: SessionForkSelection,
-	): Promise<SessionStorage<TMetadata>>;
 }
 
 export interface JsonlSessionCreateOptions extends SessionCreateOptions {

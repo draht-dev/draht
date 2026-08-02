@@ -2,10 +2,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { createJsonlSessionCollection } from "../../src/harness/session/jsonl-collection.ts";
-import { createInMemorySessionCollection } from "../../src/harness/session/memory-collection.ts";
-import { createSessionRepository } from "../../src/harness/session/repository.ts";
-import type { ContextEntryTransform, Session, SessionContextBuildOptions } from "../../src/harness/session/session.ts";
+import { JsonlSessionBackend } from "../../src/harness/session/jsonl-repo.ts";
+import { InMemorySessionBackend } from "../../src/harness/session/memory-repo.ts";
+import {
+	type ContextEntryTransform,
+	createSession,
+	type Session,
+	type SessionContextBuildOptions,
+} from "../../src/harness/session/session.ts";
 import { createAssistantMessage, createTempDir, createUserMessage } from "./session-test-utils.ts";
 
 function getTextData(data: unknown): string {
@@ -227,7 +231,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 			await expect(session.appendLabel("missing", "checkpoint")).rejects.toThrow("Entry missing not found");
 		});
 
-		it("persists leaf changes and appended entries through the collection", async () => {
+		it("persists leaf changes and appended entries through the backend", async () => {
 			const fixture = await createFixture();
 			const session = await fixture.createSession();
 			const user1 = await session.appendMessage(createUserMessage("one"));
@@ -246,33 +250,29 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 	});
 }
 
-runSessionSuite("Session with in-memory collection", async () => {
-	const collection = createInMemorySessionCollection();
-	const created = await createSessionRepository({ collection }).create({});
+runSessionSuite("Session with in-memory backend", async () => {
+	const backend = new InMemorySessionBackend();
+	const created = await createSession(await backend.create({}));
 	const metadata = await created.getMetadata();
 	return {
-		createSession: (contextBuildOptions) =>
-			createSessionRepository({ collection, contextBuildOptions }).open(metadata),
-		reloadSession: (contextBuildOptions) =>
-			createSessionRepository({ collection, contextBuildOptions }).open(metadata),
+		createSession: async (contextBuildOptions) => createSession(await backend.open(metadata), contextBuildOptions),
+		reloadSession: async (contextBuildOptions) => createSession(await backend.open(metadata), contextBuildOptions),
 	};
 });
 
 let jsonlSessionPath = "";
 runSessionSuite(
-	"Session with JSONL collection",
+	"Session with JSONL backend",
 	async () => {
 		const dir = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: dir });
-		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: join(dir, "sessions") });
-		const created = await createSessionRepository({ collection }).create({ cwd: dir, id: "session-1" });
+		const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: join(dir, "sessions") });
+		const created = await createSession(await backend.create({ cwd: dir, id: "session-1" }));
 		const metadata = await created.getMetadata();
 		jsonlSessionPath = metadata.path;
 		return {
-			createSession: (contextBuildOptions) =>
-				createSessionRepository({ collection, contextBuildOptions }).open(metadata),
-			reloadSession: (contextBuildOptions) =>
-				createSessionRepository({ collection, contextBuildOptions }).open(metadata),
+			createSession: async (contextBuildOptions) => createSession(await backend.open(metadata), contextBuildOptions),
+			reloadSession: async (contextBuildOptions) => createSession(await backend.open(metadata), contextBuildOptions),
 		};
 	},
 	() => {

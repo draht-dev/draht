@@ -1993,31 +1993,47 @@ Rules, both scopes:
 - Persisted config derives from the copied tree via the usual branch point queries; `main` sits at the fork point (`scope: "branch"`) or the source's `main` leaf (`scope: "tree"`).
 - **Threads are refs first.** A platform thread sharing one source of truth with its channel is a ref in the same session (section 6), not a fork. Fork when a *separate* session is wanted: subagents, exports, clones. Whether a thread becomes a ref, a fork, or a fresh session with platform backlog as prompt-time context is application policy; all three are supported.
 
-## 14. Session collections
+## 14. Session repositories
 
-`Session` is the public opened-session facade. `SessionRepository` borrows a
-caller-owned `SessionCollection`, opens complete per-session `SessionStorage`
-implementations, and constructs `Session` objects.
-The in-memory collection is the simplest built-in option:
+`SessionRepository` is the single backend extension contract and owns all shared
+storage resources. `Session` is the opened-session facade over one coherent
+`SessionStorage`. Built-in repositories require no assembly:
 
 ```ts
-await using collection = createInMemorySessionCollection();
-const search = createScanningSessionSearch(collection);
-const repository = createSessionRepository({ collection, search });
+await using repository = new InMemorySessionRepository();
 const session = await repository.create({});
+const search = createScanningSessionSearch(repository);
 ```
 
-Use `createJsonlSessionCollection({ fs, sessionsRoot })` for filesystem persistence;
-the same scanning search composes with it. Omitting `search` is valid, but
-`repository.search()` then throws a `SessionError` with code `unsupported`.
-SQLite support is provided
-separately by `createSqliteSessionCollection()` and should use
-`createSqliteSessionSearch(options)` against the same canonical database. Drain
-all session or harness operations before the collection leaves
-scope; repositories and sessions do not dispose it.
+Use `new JsonlSessionRepository({ fs, sessionsRoot })` for filesystem persistence.
+Construct `SqliteSessionRepository` separately for SQLite support.
+`SessionSearch` is an independent derived capability: use
+`createScanningSessionSearch(repository)` or `createSqliteSessionSearch(options)`
+directly rather than attaching search to the repository. Drain all session or
+harness operations before the repository leaves scope.
 
-A custom backend implements `SessionCollection`; its lifecycle methods return one
-coherent `SessionStorage` for each opened session:
+A custom backend implements `SessionRepository` directly:
+
+```ts
+interface SessionRepository<
+  TMetadata extends SessionMetadata = SessionMetadata,
+  TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
+  TListOptions = void,
+> extends AsyncDisposable {
+  create(options: TCreateOptions): Promise<Session<TMetadata>>;
+  open(metadata: TMetadata): Promise<Session<TMetadata>>;
+  list(options?: TListOptions): Promise<TMetadata[]>;
+  delete(metadata: TMetadata): Promise<void>;
+  fork(
+    source: TMetadata,
+    options: SessionForkOptions & TCreateOptions,
+  ): Promise<Session<TMetadata>>;
+}
+```
+
+Repository implementations use `createSession(storage, contextBuildOptions)` to
+wrap each created or opened storage connection. The complete per-session storage
+contract is:
 
 ```ts
 interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
@@ -2034,56 +2050,27 @@ interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
   getName(): Promise<string | undefined>;
   getStats(): Promise<SessionStats>;
 }
-
-type SessionForkSelection =
-  | { kind: "all" }
-  | { kind: "before_user_message"; entryId: string }
-  | { kind: "through_entry"; entryId: string };
-
-interface SessionCollection<
-  TMetadata extends SessionMetadata = SessionMetadata,
-  TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
-  TListOptions = void,
-> extends AsyncDisposable {
-  create(options: TCreateOptions): Promise<SessionStorage<TMetadata>>;
-  open(metadata: TMetadata): Promise<SessionStorage<TMetadata>>;
-  list(options?: TListOptions): Promise<TMetadata[]>;
-  delete(metadata: TMetadata): Promise<void>;
-  fork(
-    source: TMetadata,
-    options: TCreateOptions,
-    selection: SessionForkSelection,
-  ): Promise<SessionStorage<TMetadata>>;
-}
 ```
 
-Storage lifetimes belong to the collection. `SessionStorage.appendEntry()` receives
-a complete entry and must preserve append order and entry-id uniqueness.
-`SessionRepository` converts public fork options into a
-`SessionForkSelection`; `fork()` validates and executes that selection inside
-the owning collection, allowing backend-native copies without repository-level
-history materialization.
-Disposal rejects new operations and storage calls, drains accepted writes, and
-releases owned resources. Collection implementations know nothing about harness
-operations, queues, or recovery.
+`SessionStorage.appendEntry()` receives a complete entry and must preserve append
+order and entry-id uniqueness. `createSessionForkSelection()` and
+`readSessionEntriesForFork()` provide shared fork selection and validation while
+allowing repository-native copies without generic history materialization.
+Repositories own storage lifetimes: disposal rejects new operations and storage
+calls, drains accepted writes, and releases shared resources.
 `Session.buildContext()` reads only the active path. Built-in Memory and JSONL
 storage maintain eager in-memory indexes; SQLite serves branch and projection
 queries from native indexes and materialized state.
 
-Custom collections return complete `SessionStorage` implementations. Memory and
-JSONL share a private array-backed index; SQLite implements the same contract
-with native queries and materialized projections.
-Expose custom implementations through a factory returning `SessionCollection` rather
-than exporting the concrete class.
+Contract, all repositories:
 
-Contract, all collections:
 
 - One total append order (`seq`) across session and harness entries. Harness entries and leaf records carry `ref`; session entries do not (membership derives from parent linkage).
 - An append is durable when its promise resolves; events fire after.
 - Entry ids are unique per session, enforced at append.
 - Storage methods return immutable entry arrays; callers cannot mutate stored state.
 - `readHead()` rejects `invalid_session` when its non-null leaf does not reference a canonical entry.
-- One writer per *session*, enforced by the serving layer; SQLite additionally rejects concurrent writers itself. This is per session, not per collection: one SQLite database can host many sessions, all writable concurrently — each through its own single live harness. The same applies to a directory of JSONL files.
+- One writer per *session*, enforced by the serving layer; SQLite additionally rejects concurrent writers itself. This is per session, not per repository: one SQLite database can host many sessions, all writable concurrently, each through its own single live harness. The same applies to a directory of JSONL files.
 
 ### JSONL
 
@@ -2371,10 +2358,10 @@ Current implementation (what is being replaced or wrapped):
 5. `packages/agent/src/agent-loop.ts` — monolithic loop to split into step primitives.
 6. `packages/agent/src/agent.ts` — stateful wrapper: queues, continuation, abort, settlement.
 7. `packages/agent/src/harness/agent-harness.ts` — the harness this design replaces.
-8. `packages/agent/src/harness/types.ts` — entry union, session collection contract, event/hook types.
+8. `packages/agent/src/harness/types.ts` — entry union, session storage contract, event/hook types.
 9. `packages/agent/src/harness/session/session.ts` — Session, context build, entry creation.
-10. `packages/agent/src/harness/session/jsonl-collection.ts` — JSONL session collection and v3 document codec.
-11. `packages/agent/src/harness/session/memory-collection.ts` — in-memory session collection.
+10. `packages/agent/src/harness/session/jsonl-repo.ts` — JSONL session repository and v3 document codec.
+11. `packages/agent/src/harness/session/memory-repo.ts` — in-memory session repository.
 12. `packages/agent/src/harness/messages.ts` — defaultConvertToLlm and message helpers.
 12a. `packages/ai/src/utils/transform-messages.ts` — orphaned-tool-call healing; the adjacency backstop referenced in sections 5 and 13.
 13. `packages/agent/src/harness/compaction/compaction.ts` — preparation, split-turn generation, retry.
@@ -2388,7 +2375,7 @@ SQLite backend:
 18. `packages/storage/sqlite-node/src/sqlite/storage/branch-entries.ts` — active-branch materialization.
 19. `packages/storage/sqlite-node/src/sqlite/storage/session-materialized.ts` — stats/labels/config projections.
 20. `packages/storage/sqlite-node/src/sqlite/migrations/001_initial.sql` and `migrations.ts` — schema and migration mechanism.
-21. `packages/storage/sqlite-node/src/sqlite/session-collection.ts` — create/open/fork.
+21. `packages/storage/sqlite-node/src/sqlite/repo.ts` — create/open/fork.
 
 Behavioral tests (compatibility requirements):
 
@@ -2396,5 +2383,5 @@ Behavioral tests (compatibility requirements):
 23. `packages/agent/test/agent.test.ts`
 24. `packages/agent/test/harness/agent-harness.test.ts`
 25. `packages/agent/test/harness/session.test.ts`
-26. `packages/agent/test/harness/session-collections.test.ts`
+26. `packages/agent/test/harness/session-backends.test.ts`
 27. `packages/agent/test/harness/sqlite-migrations.test.ts`

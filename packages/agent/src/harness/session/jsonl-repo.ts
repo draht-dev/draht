@@ -3,24 +3,31 @@ import type {
 	JsonlSessionCreateOptions,
 	JsonlSessionListOptions,
 	JsonlSessionMetadata,
-	SessionCollection,
+	SessionForkOptions,
 	SessionForkSelection,
 	SessionStorage,
 	SessionTreeEntry,
 } from "../types.ts";
 import { SessionError, toError } from "../types.ts";
 import { ArraySessionIndex } from "./array-session-index.ts";
-import { readSessionEntriesForFork } from "./fork.ts";
 import { KeyedOperationQueue } from "./keyed-operation-queue.ts";
-import { createSessionId, createTimestamp, getFileSystemResultOrThrow } from "./repository.ts";
+import {
+	createSessionForkSelection,
+	createSessionId,
+	createTimestamp,
+	getFileSystemResultOrThrow,
+	readSessionEntriesForFork,
+	type SessionRepository,
+} from "./repository.ts";
+import { createSession, type Session, type SessionContextBuildOptions } from "./session.ts";
 
-export interface JsonlSessionCollectionOptions {
-	fs: JsonlSessionCollectionFileSystem;
+export interface JsonlSessionBackendOptions {
+	fs: JsonlSessionRepositoryFileSystem;
 	sessionsRoot: string;
 	/** Maximum active operations across session keys. Defaults to 4. */
 	maxConcurrentOperations?: number;
 }
-export type JsonlSessionCollectionFileSystem = Pick<
+export type JsonlSessionRepositoryFileSystem = Pick<
 	FileSystem,
 	| "absolutePath"
 	| "joinPath"
@@ -199,10 +206,8 @@ function createDocumentDescriptor(options: JsonlSessionCreateOptions): SessionDo
 	};
 }
 
-class JsonlSessionCollection
-	implements SessionCollection<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>
-{
-	private readonly fs: JsonlSessionCollectionFileSystem;
+export class JsonlSessionBackend {
+	private readonly fs: JsonlSessionRepositoryFileSystem;
 	private readonly sessionsRootInput: string;
 	private sessionsRoot: string | undefined;
 	private readonly entryIndexesByPath = new Map<string, ArraySessionIndex>();
@@ -211,7 +216,7 @@ class JsonlSessionCollection
 	private disposed = false;
 	private disposePromise: Promise<void> | undefined;
 
-	constructor(options: JsonlSessionCollectionOptions) {
+	constructor(options: JsonlSessionBackendOptions) {
 		this.fs = options.fs;
 		this.sessionsRootInput = options.sessionsRoot;
 		this.operations = new KeyedOperationQueue({
@@ -340,7 +345,7 @@ class JsonlSessionCollection
 	}
 
 	private assertOpen(): void {
-		if (this.disposed) throw new SessionError("storage", "JSONL session collection is disposed");
+		if (this.disposed) throw new SessionError("storage", "JSONL session repository is disposed");
 	}
 
 	private operationKey(metadata: JsonlSessionMetadata): string {
@@ -433,8 +438,50 @@ class JsonlSessionCollection
 	}
 }
 
-export function createJsonlSessionCollection(
-	options: JsonlSessionCollectionOptions,
-): SessionCollection<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {
-	return new JsonlSessionCollection(options);
+export interface JsonlSessionRepositoryOptions extends JsonlSessionBackendOptions {
+	contextBuildOptions?: SessionContextBuildOptions;
+}
+
+export class JsonlSessionRepository
+	implements SessionRepository<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>
+{
+	private readonly backend: JsonlSessionBackend;
+	private readonly contextBuildOptions: SessionContextBuildOptions;
+
+	constructor(options: JsonlSessionRepositoryOptions) {
+		const { contextBuildOptions, ...backendOptions } = options;
+		this.backend = new JsonlSessionBackend(backendOptions);
+		this.contextBuildOptions = contextBuildOptions ?? {};
+	}
+
+	async create(options: JsonlSessionCreateOptions): Promise<Session<JsonlSessionMetadata>> {
+		return createSession(await this.backend.create(options), this.contextBuildOptions);
+	}
+
+	async open(metadata: JsonlSessionMetadata): Promise<Session<JsonlSessionMetadata>> {
+		return createSession(await this.backend.open(metadata), this.contextBuildOptions);
+	}
+
+	async list(options?: JsonlSessionListOptions): Promise<JsonlSessionMetadata[]> {
+		return await this.backend.list(options);
+	}
+
+	async delete(metadata: JsonlSessionMetadata): Promise<void> {
+		await this.backend.delete(metadata);
+	}
+
+	async fork(
+		source: JsonlSessionMetadata,
+		options: SessionForkOptions & JsonlSessionCreateOptions,
+	): Promise<Session<JsonlSessionMetadata>> {
+		const { entryId: _entryId, position: _position, ...createOptions } = options;
+		return createSession(
+			await this.backend.fork(source, createOptions, createSessionForkSelection(options)),
+			this.contextBuildOptions,
+		);
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.backend[Symbol.asyncDispose]();
+	}
 }

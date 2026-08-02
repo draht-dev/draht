@@ -1,18 +1,10 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { createJsonlSessionCollection } from "../../src/harness/session/jsonl-collection.ts";
-import {
-	createInMemorySessionCollection,
-	type InMemorySessionCreateOptions,
-} from "../../src/harness/session/memory-collection.ts";
-import { createSessionRepository } from "../../src/harness/session/repository.ts";
-import type {
-	SessionCollection,
-	SessionForkSelection,
-	SessionMetadata,
-	SessionStorage,
-} from "../../src/harness/types.ts";
+import { JsonlSessionBackend, JsonlSessionRepository } from "../../src/harness/session/jsonl-repo.ts";
+import { InMemorySessionBackend, InMemorySessionRepository } from "../../src/harness/session/memory-repo.ts";
+import { createSession } from "../../src/harness/session/session.ts";
+import type { SessionForkSelection, SessionMetadata, SessionStorage } from "../../src/harness/types.ts";
 import { createAssistantMessage, createTempDir, createUserMessage } from "./session-test-utils.ts";
 
 afterEach(() => {
@@ -139,7 +131,7 @@ class BlockingAppendEnv extends NodeExecutionEnv {
 	}
 }
 
-interface SessionCollectionReadCounter {
+interface SessionBackendReadCounter {
 	openCount: number;
 	readHeadCount: number;
 	readEntriesCount: number;
@@ -147,12 +139,12 @@ interface SessionCollectionReadCounter {
 	forkSelections: SessionForkSelection[];
 }
 
-function createCountingInMemorySessionCollection(): {
-	collection: SessionCollection<SessionMetadata, InMemorySessionCreateOptions, void>;
-	counter: SessionCollectionReadCounter;
+function createCountingInMemorySessionBackend(): {
+	backend: Pick<InMemorySessionBackend, "create" | "open" | "list" | "delete" | "fork" | typeof Symbol.asyncDispose>;
+	counter: SessionBackendReadCounter;
 } {
-	const source = createInMemorySessionCollection();
-	const counter: SessionCollectionReadCounter = {
+	const source = new InMemorySessionBackend();
+	const counter: SessionBackendReadCounter = {
 		openCount: 0,
 		readHeadCount: 0,
 		readEntriesCount: 0,
@@ -182,13 +174,13 @@ function createCountingInMemorySessionCollection(): {
 	});
 	return {
 		counter,
-		collection: {
+		backend: {
 			create: (options) => source.create(options),
 			async open(metadata) {
 				counter.openCount += 1;
 				return countReads(await source.open(metadata));
 			},
-			list: (options) => source.list(options),
+			list: () => source.list(),
 			delete: (metadata) => source.delete(metadata),
 			fork: (metadata, options, selection) => {
 				counter.forkSelections.push(selection);
@@ -199,18 +191,9 @@ function createCountingInMemorySessionCollection(): {
 	};
 }
 
-describe("InMemorySessionCollection", () => {
-	it("rejects search when no search implementation is configured", async () => {
-		const repo = createSessionRepository({ collection: createInMemorySessionCollection() });
-
-		await expect(repo.search({ text: "needle" })).rejects.toMatchObject({
-			code: "unsupported",
-			message: "Session search is not configured",
-		});
-	});
-
+describe("InMemorySessionBackend", () => {
 	it("opens, deletes, and forks by metadata", async () => {
-		const repo = createSessionRepository({ collection: createInMemorySessionCollection() });
+		const repo = new InMemorySessionRepository();
 		const session = await repo.create({ id: "session-1" });
 		const metadata = await session.getMetadata();
 		const user1 = await session.appendMessage(createUserMessage("one"));
@@ -239,12 +222,13 @@ describe("InMemorySessionCollection", () => {
 	});
 
 	it("delegates full-session fork selection without opening the source", async () => {
-		const { collection, counter } = createCountingInMemorySessionCollection();
-		const repo = createSessionRepository({ collection });
-		const source = await repo.create({ id: "session-1" });
+		const { backend, counter } = createCountingInMemorySessionBackend();
+		const source = await createSession(await backend.create({ id: "session-1" }));
 		await source.appendMessage(createUserMessage("one"));
 
-		const fork = await repo.fork(await source.getMetadata(), { id: "session-2" });
+		const fork = await createSession(
+			await backend.fork(await source.getMetadata(), { id: "session-2" }, { kind: "all" }),
+		);
 
 		expect((await fork.getEntries()).map((entry) => entry.id)).toHaveLength(1);
 		expect(counter).toMatchObject({
@@ -257,9 +241,8 @@ describe("InMemorySessionCollection", () => {
 	});
 
 	it("retains the opened aggregate instead of reloading for scoped reads", async () => {
-		const { collection, counter } = createCountingInMemorySessionCollection();
-		const repo = createSessionRepository({ collection });
-		const session = await repo.create({ id: "session-1" });
+		const { backend, counter } = createCountingInMemorySessionBackend();
+		const session = await createSession(await backend.create({ id: "session-1" }));
 		const entryId = await session.appendMessage(createUserMessage("one"));
 
 		await session.getMetadata();
@@ -269,43 +252,40 @@ describe("InMemorySessionCollection", () => {
 	});
 
 	it("builds context from the branch storage without loading complete history", async () => {
-		const { collection, counter } = createCountingInMemorySessionCollection();
-		const repo = createSessionRepository({ collection });
-		const created = await repo.create({ id: "session-1" });
+		const { backend, counter } = createCountingInMemorySessionBackend();
+		const created = await createSession(await backend.create({ id: "session-1" }));
 		await created.appendMessage(createUserMessage("one"));
-		const opened = await repo.open(await created.getMetadata());
+		const opened = await createSession(await backend.open(await created.getMetadata()));
 
 		await opened.buildContext();
 
 		expect(counter).toMatchObject({ openCount: 1, readHeadCount: 1, readEntriesCount: 0, readPathCount: 1 });
 	});
 
-	it("rejects repository operations and session writes after collection disposal", async () => {
-		const collection = createInMemorySessionCollection();
-		const repo = createSessionRepository({ collection });
+	it("rejects repository operations and session writes after disposal", async () => {
+		const repo = new InMemorySessionRepository();
 		const session = await repo.create({ id: "session-1" });
-		await collection[Symbol.asyncDispose]();
+		await repo[Symbol.asyncDispose]();
 
-		await expect(repo.list()).rejects.toThrow("In-memory session collection is disposed");
+		await expect(repo.list()).rejects.toThrow("In-memory session repository is disposed");
 		await expect(session.appendMessage(createUserMessage("late"))).rejects.toThrow(
-			"In-memory session collection is disposed",
+			"In-memory session repository is disposed",
 		);
 	});
 
 	it("supports lexical ownership with await using", async () => {
-		let listDisposedCollection: (() => Promise<SessionMetadata[]>) | undefined;
+		let listDisposedRepository: (() => Promise<SessionMetadata[]>) | undefined;
 		{
-			await using collection = createInMemorySessionCollection();
-			const repository = createSessionRepository({ collection });
-			listDisposedCollection = () => repository.list();
+			await using repository = new InMemorySessionRepository();
+			listDisposedRepository = () => repository.list();
 			await repository.create({ id: "session-1" });
 		}
 
-		await expect(listDisposedCollection!()).rejects.toThrow("In-memory session collection is disposed");
+		await expect(listDisposedRepository!()).rejects.toThrow("In-memory session repository is disposed");
 	});
 });
 
-describe("JsonlSessionCollection", () => {
+describe("JsonlSessionBackend", () => {
 	it.each(["create", "fork"] as const)(
 		"serializes conflicting create and %s destinations",
 		async (secondOperation) => {
@@ -319,14 +299,14 @@ describe("JsonlSessionCollection", () => {
 				`${JSON.stringify({ type: "session", version: 3, id: "source", timestamp: "2025-01-01T00:00:00.000Z", cwd: "/tmp/source" })}\n`,
 			);
 			env.writtenPaths.add(sourcePath);
-			const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: root });
+			const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: root });
 			const options = { cwd: "/tmp/target", id: "shared-id" };
-			const first = collection.create(options);
+			const first = backend.create(options);
 			await env.firstWriteStarted.promise;
 			const second =
 				secondOperation === "create"
-					? collection.create(options)
-					: collection.fork(
+					? backend.create(options)
+					: backend.fork(
 							{
 								id: "source",
 								createdAt: "2025-01-01T00:00:00.000Z",
@@ -353,8 +333,8 @@ describe("JsonlSessionCollection", () => {
 
 	it("encodes custom session IDs used in filenames", async () => {
 		const root = createTempDir();
-		const collection = createJsonlSessionCollection({ fs: new NodeExecutionEnv({ cwd: root }), sessionsRoot: root });
-		const snapshot = await collection.create({ cwd: root, id: "../unsafe\\id" });
+		const backend = new JsonlSessionBackend({ fs: new NodeExecutionEnv({ cwd: root }), sessionsRoot: root });
+		const snapshot = await backend.create({ cwd: root, id: "../unsafe\\id" });
 
 		expect(snapshot.metadata.path).toContain("..%2Funsafe%5Cid.jsonl");
 		expect(existsSync(snapshot.metadata.path)).toBe(true);
@@ -363,9 +343,9 @@ describe("JsonlSessionCollection", () => {
 	it("allows appends to different sessions to run concurrently", async () => {
 		const root = createTempDir();
 		const env = new PerPathBlockingAppendEnv({ cwd: root });
-		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: root });
-		const first = await collection.create({ cwd: "/tmp/first", id: "first" });
-		const second = await collection.create({ cwd: "/tmp/second", id: "second" });
+		const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: root });
+		const first = await backend.create({ cwd: "/tmp/first", id: "first" });
+		const second = await backend.create({ cwd: "/tmp/second", id: "second" });
 		const firstBlock = env.blockAppend(first.metadata.path);
 		const secondBlock = env.blockAppend(second.metadata.path);
 
@@ -383,10 +363,10 @@ describe("JsonlSessionCollection", () => {
 	it("caps concurrent operations across JSONL sessions at four by default", async () => {
 		const root = createTempDir();
 		const env = new PerPathBlockingAppendEnv({ cwd: root });
-		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: root });
+		const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: root });
 		const snapshots = [];
 		for (let index = 0; index < 6; index++) {
-			snapshots.push(await collection.create({ cwd: `/tmp/session-${index}`, id: `session-${index}` }));
+			snapshots.push(await backend.create({ cwd: `/tmp/session-${index}`, id: `session-${index}` }));
 		}
 		const blocks = snapshots.map((snapshot) => env.blockAppend(snapshot.metadata.path));
 		const appends = snapshots.map((snapshot, index) => snapshot.appendEntry(createEntry(`entry-${index}`)));
@@ -404,9 +384,9 @@ describe("JsonlSessionCollection", () => {
 	it("allows overriding the JSONL concurrency limit", async () => {
 		const root = createTempDir();
 		const env = new PerPathBlockingAppendEnv({ cwd: root });
-		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: root, maxConcurrentOperations: 1 });
-		const first = await collection.create({ cwd: "/tmp/first", id: "first" });
-		const second = await collection.create({ cwd: "/tmp/second", id: "second" });
+		const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: root, maxConcurrentOperations: 1 });
+		const first = await backend.create({ cwd: "/tmp/first", id: "first" });
+		const second = await backend.create({ cwd: "/tmp/second", id: "second" });
 		const firstBlock = env.blockAppend(first.metadata.path);
 		const secondBlock = env.blockAppend(second.metadata.path);
 		const firstAppend = first.appendEntry(createEntry("first-entry"));
@@ -424,25 +404,26 @@ describe("JsonlSessionCollection", () => {
 		"rejects invalid JSONL concurrency limit %s",
 		(maxConcurrentOperations) => {
 			const root = createTempDir();
-			expect(() =>
-				createJsonlSessionCollection({
-					fs: new NodeExecutionEnv({ cwd: root }),
-					sessionsRoot: root,
-					maxConcurrentOperations,
-				}),
+			expect(
+				() =>
+					new JsonlSessionBackend({
+						fs: new NodeExecutionEnv({ cwd: root }),
+						sessionsRoot: root,
+						maxConcurrentOperations,
+					}),
 			).toThrow("maxConcurrentOperations must be a positive integer");
 		},
 	);
 
 	it("releases JSONL concurrency capacity after an operation fails", async () => {
 		const root = createTempDir();
-		const collection = createJsonlSessionCollection({
+		const backend = new JsonlSessionBackend({
 			fs: new NodeExecutionEnv({ cwd: root }),
 			sessionsRoot: root,
 			maxConcurrentOperations: 1,
 		});
-		const first = await collection.create({ cwd: "/tmp/first", id: "first" });
-		const second = await collection.create({ cwd: "/tmp/second", id: "second" });
+		const first = await backend.create({ cwd: "/tmp/first", id: "first" });
+		const second = await backend.create({ cwd: "/tmp/second", id: "second" });
 		const duplicate = createEntry("duplicate-entry");
 		await first.appendEntry(duplicate);
 
@@ -456,8 +437,8 @@ describe("JsonlSessionCollection", () => {
 	it("serializes appends to the same session", async () => {
 		const root = createTempDir();
 		const env = new PerPathBlockingAppendEnv({ cwd: root });
-		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: root });
-		const snapshot = await collection.create({ cwd: root, id: "session" });
+		const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: root });
+		const snapshot = await backend.create({ cwd: root, id: "session" });
 		const block = env.blockAppend(snapshot.metadata.path);
 
 		const firstAppend = snapshot.appendEntry(createEntry("first-entry"));
@@ -469,7 +450,7 @@ describe("JsonlSessionCollection", () => {
 		block.release.resolve();
 		await Promise.all([firstAppend, secondAppend]);
 		expect(appendCountWhileFirstWasBlocked).toBe(1);
-		expect((await (await collection.open(snapshot.metadata)).readEntries()).map((entry) => entry.id)).toEqual([
+		expect((await (await backend.open(snapshot.metadata)).readEntries()).map((entry) => entry.id)).toEqual([
 			"first-entry",
 			"second-entry",
 		]);
@@ -478,16 +459,16 @@ describe("JsonlSessionCollection", () => {
 	it("uses listing as a barrier between accepted session operations", async () => {
 		const root = createTempDir();
 		const env = new PerPathBlockingAppendEnv({ cwd: root });
-		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: root });
-		const first = await collection.create({ cwd: "/tmp/first", id: "first" });
-		const second = await collection.create({ cwd: "/tmp/second", id: "second" });
+		const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: root });
+		const first = await backend.create({ cwd: "/tmp/first", id: "first" });
+		const second = await backend.create({ cwd: "/tmp/second", id: "second" });
 		const firstBlock = env.blockAppend(first.metadata.path);
 		const secondBlock = env.blockAppend(second.metadata.path);
 		const listBlock = env.blockNextList();
 
 		const firstAppend = first.appendEntry(createEntry("first-entry"));
 		await firstBlock.started.promise;
-		const list = collection.list();
+		const list = backend.list();
 		const secondAppend = second.appendEntry(createEntry("second-entry"));
 		const listStartedBeforeFirstFinished = await settlesBeforeNextTurn(listBlock.started.promise);
 
@@ -508,9 +489,9 @@ describe("JsonlSessionCollection", () => {
 	it("waits for every accepted session operation during disposal", async () => {
 		const root = createTempDir();
 		const env = new PerPathBlockingAppendEnv({ cwd: root });
-		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: root });
-		const first = await collection.create({ cwd: "/tmp/first", id: "first" });
-		const second = await collection.create({ cwd: "/tmp/second", id: "second" });
+		const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: root });
+		const first = await backend.create({ cwd: "/tmp/first", id: "first" });
+		const second = await backend.create({ cwd: "/tmp/second", id: "second" });
 		const firstBlock = env.blockAppend(first.metadata.path);
 		const secondBlock = env.blockAppend(second.metadata.path);
 		const firstAppend = first.appendEntry(createEntry("first-entry"));
@@ -518,7 +499,7 @@ describe("JsonlSessionCollection", () => {
 		await Promise.all([firstBlock.started.promise, secondBlock.started.promise]);
 
 		let disposed = false;
-		const dispose = collection[Symbol.asyncDispose]().then(() => {
+		const dispose = backend[Symbol.asyncDispose]().then(() => {
 			disposed = true;
 		});
 		firstBlock.release.resolve();
@@ -535,13 +516,12 @@ describe("JsonlSessionCollection", () => {
 	it("waits for accepted appends before disposal and rejects later writes", async () => {
 		const root = createTempDir();
 		const env = new BlockingAppendEnv({ cwd: root });
-		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: root });
-		const repo = createSessionRepository({ collection });
+		const repo = new JsonlSessionRepository({ fs: env, sessionsRoot: root });
 		const session = await repo.create({ cwd: root, id: "session-1" });
 		const append = session.appendMessage(createUserMessage("accepted"));
 		await env.appendStarted.promise;
 		let closed = false;
-		const dispose = collection[Symbol.asyncDispose]().then(() => {
+		const dispose = repo[Symbol.asyncDispose]().then(() => {
 			closed = true;
 		});
 		await Promise.resolve();
@@ -550,16 +530,14 @@ describe("JsonlSessionCollection", () => {
 		await append;
 		await dispose;
 		await expect(session.appendMessage(createUserMessage("late"))).rejects.toThrow(
-			"JSONL session collection is disposed",
+			"JSONL session repository is disposed",
 		);
 	});
 
 	it("parses once when opened and retains state across appends", async () => {
 		const root = createTempDir();
 		const env = new CountingReadEnv({ cwd: root });
-		const repo = createSessionRepository({
-			collection: createJsonlSessionCollection({ fs: env, sessionsRoot: root }),
-		});
+		const repo = new JsonlSessionRepository({ fs: env, sessionsRoot: root });
 		const created = await repo.create({ cwd: root, id: "session-1" });
 		const metadata = await created.getMetadata();
 		await created.appendMessage(createUserMessage("initial"));
@@ -569,14 +547,12 @@ describe("JsonlSessionCollection", () => {
 		expect(env.readCount).toBe(1);
 	});
 
-	it("collections sessions below encoded cwd directories and lists by cwd", async () => {
+	it("collects sessions below encoded cwd directories and lists by cwd", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
 		const cwd = "/tmp/my-project";
 		const otherCwd = "/tmp/other-project";
-		const repo = createSessionRepository({
-			collection: createJsonlSessionCollection({ fs: env, sessionsRoot: root }),
-		});
+		const repo = new JsonlSessionRepository({ fs: env, sessionsRoot: root });
 		const session = await repo.create({ cwd, id: "019de8c2-de29-73e9-ae0c-e134db34c447" });
 		const otherSession = await repo.create({ cwd: otherCwd, id: "other-session" });
 		const metadata = await session.getMetadata();
@@ -593,9 +569,7 @@ describe("JsonlSessionCollection", () => {
 	it("fails loudly when listing a malformed session file", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const repo = createSessionRepository({
-			collection: createJsonlSessionCollection({ fs: env, sessionsRoot: root }),
-		});
+		const repo = new JsonlSessionRepository({ fs: env, sessionsRoot: root });
 		const session = await repo.create({ cwd: root, id: "session-1" });
 		const metadata = await session.getMetadata();
 		writeFileSync(metadata.path, "not json\n");
@@ -605,9 +579,10 @@ describe("JsonlSessionCollection", () => {
 
 	it("rejects a missing active leaf when opened", async () => {
 		const root = createTempDir();
-		const collection = createJsonlSessionCollection({ fs: new NodeExecutionEnv({ cwd: root }), sessionsRoot: root });
-		const repo = createSessionRepository({ collection });
-		const storage = await collection.create({ cwd: root, id: "session-1" });
+		const env = new NodeExecutionEnv({ cwd: root });
+		const backend = new JsonlSessionBackend({ fs: env, sessionsRoot: root });
+		const repo = new JsonlSessionRepository({ fs: env, sessionsRoot: root });
+		const storage = await backend.create({ cwd: root, id: "session-1" });
 		await storage.appendEntry({
 			type: "leaf",
 			id: "leaf",
@@ -625,9 +600,7 @@ describe("JsonlSessionCollection", () => {
 	it("opens, deletes, and forks by metadata", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const repo = createSessionRepository({
-			collection: createJsonlSessionCollection({ fs: env, sessionsRoot: root }),
-		});
+		const repo = new JsonlSessionRepository({ fs: env, sessionsRoot: root });
 		const source = await repo.create({ cwd: "/tmp/source", id: "source-session" });
 		const sourceMetadata = await source.getMetadata();
 		const user1 = await source.appendMessage(createUserMessage("one"));
@@ -649,9 +622,7 @@ describe("JsonlSessionCollection", () => {
 	it("persists header metadata through create, list, and fork", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const repo = createSessionRepository({
-			collection: createJsonlSessionCollection({ fs: env, sessionsRoot: root }),
-		});
+		const repo = new JsonlSessionRepository({ fs: env, sessionsRoot: root });
 		const source = await repo.create({
 			cwd: "/tmp/source",
 			id: "source-session",

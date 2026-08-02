@@ -29,23 +29,25 @@ export {
 } from "./harness/compaction/compaction.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
-export { readSessionEntriesForFork } from "./harness/session/fork.ts";
 export {
-	createJsonlSessionCollection,
-	type JsonlSessionCollectionFileSystem,
-	type JsonlSessionCollectionOptions,
-} from "./harness/session/jsonl-collection.ts";
+	JsonlSessionRepository,
+	type JsonlSessionRepositoryFileSystem,
+	type JsonlSessionRepositoryOptions,
+	loadJsonlSessionMetadata,
+} from "./harness/session/jsonl-repo.ts";
 export {
-	createInMemorySessionCollection,
 	type InMemorySessionCreateOptions,
-} from "./harness/session/memory-collection.ts";
+	InMemorySessionRepository,
+	type InMemorySessionRepositoryOptions,
+} from "./harness/session/memory-repo.ts";
 export * from "./harness/session/repository.ts";
-export * from "./harness/session/scanning-session-search.ts";
+export * from "./harness/session/search.ts";
 export {
 	buildContextEntries,
 	buildSessionContext,
 	type ContextEntryTransform,
 	type CustomEntryContextMessageProjector,
+	createSession,
 	defaultContextEntryTransform,
 	type SessionContextBuildOptions,
 	sessionEntryToContextMessages,

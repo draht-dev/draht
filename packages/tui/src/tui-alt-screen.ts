@@ -19,7 +19,8 @@ import {
 	setCapabilities,
 	type TerminalCapabilities,
 } from "./terminal-image.ts";
-import { type Component, CURSOR_MARKER, compositeTuiLine, TuiBase, VIEWPORT_TUI, type ViewportTUI } from "./tui.ts";
+import { type Component, CURSOR_MARKER, compositeTuiLine, VIEWPORT_TUI, type ViewportTUI } from "./tui.ts";
+import { TuiMainScreen } from "./tui-main-screen.ts";
 import {
 	extractAnsiCode,
 	getGraphemeCellRange,
@@ -82,8 +83,15 @@ export interface TuiAltScreenOptions {
 }
 
 /** Alternate-screen TUI with a scrollable, application-owned viewport. */
-export class TuiAltScreen extends TuiBase implements ViewportTUI {
-	readonly [VIEWPORT_TUI] = true as const;
+export class TuiAltScreen extends TuiMainScreen implements ViewportTUI {
+	protected get alternateScreenEnabled(): boolean {
+		return true;
+	}
+
+	get [VIEWPORT_TUI](): true {
+		// Switchable subclasses are not viewport TUIs while using the main screen.
+		return this.alternateScreenEnabled ? true : (undefined as never);
+	}
 	private previousScreen: string[] = [];
 	private lastDocument: string[] = [];
 	private previousScreenWidth = 0;
@@ -128,7 +136,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.wheelScrollLines = Math.max(1, Math.floor(options.wheelScrollLines ?? 1));
 		this.mouseEnabled = options.mouse ?? true;
 		this.openUrl = options.openUrl;
-		this.addInputListener((data) => this.handleViewportInput(data));
+		this.addInputListener((data) => (this.alternateScreenEnabled ? this.handleViewportInput(data) : undefined));
 	}
 
 	get viewportTop(): number {
@@ -147,16 +155,16 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	override render(width: number): string[] {
-		return this.layoutRoot?.render(width) ?? super.render(width);
+		return this.alternateScreenEnabled && this.layoutRoot ? this.layoutRoot.render(width) : super.render(width);
 	}
 
 	override invalidate(): void {
 		super.invalidate();
-		this.layoutRoot?.invalidate();
+		if (this.alternateScreenEnabled) this.layoutRoot?.invalidate();
 	}
 
 	protected override getMountedRoots(): readonly Component[] {
-		return this.layoutRoot ? [this.layoutRoot] : this.children;
+		return this.alternateScreenEnabled && this.layoutRoot ? [this.layoutRoot] : this.children;
 	}
 
 	private getPrimaryScrollView(): ScrollView {
@@ -164,6 +172,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	protected override beforeTerminalStart(): void {
+		if (!this.alternateScreenEnabled) {
+			super.beforeTerminalStart();
+			return;
+		}
 		this.stopSelectionAutoScroll();
 		this.selectionPressActive = false;
 		this.stopScrollbarHover();
@@ -189,6 +201,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	protected override beforeTerminalStop(): void {
+		if (!this.alternateScreenEnabled) {
+			super.beforeTerminalStop();
+			return;
+		}
 		this.stopSelectionAutoScroll();
 		this.selectionPressActive = false;
 		this.stopScrollbarHover();
@@ -196,36 +212,48 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.flashes.dispose();
 		if (!this.altScreenActive) return;
 		this.terminal.write(
-			`${BEGIN_SYNCHRONIZED_OUTPUT}${this.deleteKittyImages()}${this.mouseEnabled ? DISABLE_MOUSE : ""}${ENABLE_AUTOWRAP}${END_SYNCHRONIZED_OUTPUT}`,
+			`${BEGIN_SYNCHRONIZED_OUTPUT}${this.deleteAltKittyImages()}${this.mouseEnabled ? DISABLE_MOUSE : ""}${ENABLE_AUTOWRAP}${END_SYNCHRONIZED_OUTPUT}`,
 		);
 	}
 
 	protected override afterTerminalStop(): void {
+		if (!this.alternateScreenEnabled) {
+			super.afterTerminalStop();
+			return;
+		}
 		if (!this.altScreenActive) return;
 		this.altScreenActive = false;
-		const width = Math.max(1, this.terminal.columns);
-		const documentLines = this.render(width).map((line) => line.replace(OSC133_ZONE_PREFIX, ""));
-		this.lastDocument = this.applyLineResets(documentLines.map((line) => line.replaceAll(CURSOR_MARKER, ""))).map(
-			(line) => (isImageLine(line) || visibleWidth(line) <= width ? line : sliceByColumn(line, 0, width, true)),
-		);
-		let buffer = `${BEGIN_SYNCHRONIZED_OUTPUT}${EXIT_ALT_SCREEN}${DISABLE_AUTOWRAP}`;
-		for (let row = 0; row < this.lastDocument.length; row++) {
-			if (row > 0) buffer += "\r\n";
-			buffer += `\r\x1b[2K${this.lastDocument[row] ?? ""}`;
+		if (this.isRendererSwitchStop) {
+			this.terminal.write(`${BEGIN_SYNCHRONIZED_OUTPUT}${EXIT_ALT_SCREEN}\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`);
+		} else {
+			const width = Math.max(1, this.terminal.columns);
+			const documentLines = this.render(width).map((line) => line.replace(OSC133_ZONE_PREFIX, ""));
+			this.lastDocument = this.applyLineResets(documentLines.map((line) => line.replaceAll(CURSOR_MARKER, ""))).map(
+				(line) => (isImageLine(line) || visibleWidth(line) <= width ? line : sliceByColumn(line, 0, width, true)),
+			);
+			let buffer = `${BEGIN_SYNCHRONIZED_OUTPUT}${EXIT_ALT_SCREEN}${DISABLE_AUTOWRAP}`;
+			for (let row = 0; row < this.lastDocument.length; row++) {
+				if (row > 0) buffer += "\r\n";
+				buffer += `\r\x1b[2K${this.lastDocument[row] ?? ""}`;
+			}
+			buffer += `\x1b[0m${ENABLE_AUTOWRAP}\r\n\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`;
+			this.terminal.write(buffer);
 		}
-		buffer += `\x1b[0m${ENABLE_AUTOWRAP}\r\n\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`;
-		this.terminal.write(buffer);
 		if (this.savedCapabilities) {
 			setCapabilities(this.savedCapabilities);
 			this.savedCapabilities = undefined;
 		}
 	}
 
-	private deleteKittyImages(): string {
+	private deleteAltKittyImages(): string {
 		return this.imageProtocol === "kitty" ? deleteAllKittyImages() : "";
 	}
 
 	protected override resetRenderState(): void {
+		if (!this.alternateScreenEnabled) {
+			super.resetRenderState();
+			return;
+		}
 		this.previousScreen = [];
 		this.previousScreenWidth = 0;
 		this.previousScreenHeight = 0;
@@ -751,6 +779,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	protected override doRender(): void {
+		if (!this.alternateScreenEnabled) {
+			super.doRender();
+			return;
+		}
 		if (this.stopped || !this.altScreenActive) return;
 		const width = Math.max(1, this.terminal.columns);
 		const height = Math.max(1, this.terminal.rows);
@@ -778,9 +810,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		let buffer = BEGIN_SYNCHRONIZED_OUTPUT;
 		if (fullRedraw) {
 			this.fullRedrawCount += 1;
-			buffer += `${this.deleteKittyImages()}\x1b[2J`;
+			buffer += `${this.deleteAltKittyImages()}\x1b[2J`;
 		} else if (imagesNeedRedraw) {
-			buffer += this.imageProtocol === "iterm2" ? "\x1b[2J" : this.deleteKittyImages();
+			buffer += this.imageProtocol === "iterm2" ? "\x1b[2J" : this.deleteAltKittyImages();
 		}
 
 		for (let row = 0; row < height; row++) {

@@ -9,7 +9,6 @@ import {
 	type SessionMetadata,
 	type SessionSearch,
 	type SessionSearchHit,
-	type SessionTreeEntry,
 } from "../types.ts";
 import { createSessionForkSelection } from "./fork.ts";
 import { createSession, type Session, type SessionContextBuildOptions } from "./session.ts";
@@ -28,16 +27,16 @@ export class SessionRepository<
 	TListOptions = void,
 > {
 	private readonly collection: SessionCollection<TMetadata, TCreateOptions, TListOptions>;
-	private readonly sessionSearch: SessionSearch<TMetadata> | null;
+	private readonly sessionSearch: SessionSearch<TMetadata> | undefined;
 	private readonly contextBuildOptions: SessionContextBuildOptions;
 
 	constructor(options: {
 		collection: SessionCollection<TMetadata, TCreateOptions, TListOptions>;
-		search?: SessionSearch<TMetadata> | null;
+		search?: SessionSearch<TMetadata>;
 		contextBuildOptions?: SessionContextBuildOptions;
 	}) {
 		this.collection = options.collection;
-		this.sessionSearch = options.search ?? null;
+		this.sessionSearch = options.search;
 		this.contextBuildOptions = options.contextBuildOptions ?? {};
 	}
 
@@ -66,7 +65,8 @@ export class SessionRepository<
 	}
 
 	async search(options: Parameters<SessionSearch<TMetadata>["search"]>[0]): Promise<SessionSearchHit<TMetadata>[]> {
-		return this.sessionSearch ? await this.sessionSearch.search(options) : [];
+		if (!this.sessionSearch) throw new SessionError("unsupported", "Session search is not configured");
+		return await this.sessionSearch.search(options);
 	}
 }
 
@@ -76,24 +76,10 @@ export function createSessionRepository<
 	TListOptions = void,
 >(options: {
 	collection: SessionCollection<TMetadata, TCreateOptions, TListOptions>;
-	search?: SessionSearch<TMetadata> | null;
+	search?: SessionSearch<TMetadata>;
 	contextBuildOptions?: SessionContextBuildOptions;
 }): SessionRepository<TMetadata, TCreateOptions, TListOptions> {
 	return new SessionRepository(options);
-}
-
-export function findSessionEntryMatches<TMetadata extends SessionMetadata>(
-	metadata: TMetadata,
-	entries: readonly SessionTreeEntry[],
-	text: string,
-): SessionSearchHit<TMetadata>[] {
-	const normalizedText = text.trim().toLowerCase();
-	if (!normalizedText) return [];
-	return entries.flatMap((entry) => {
-		const payload = JSON.stringify(entry);
-		if (!payload.toLowerCase().includes(normalizedText)) return [];
-		return [{ metadata, entryId: entry.id, timestamp: entry.timestamp, snippet: payload }];
-	});
 }
 
 export function getFileSystemResultOrThrow<TValue>(result: Result<TValue, FileError>, message: string): TValue {

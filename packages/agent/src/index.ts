@@ -40,7 +40,7 @@ export {
 	type InMemorySessionCreateOptions,
 } from "./harness/session/memory-collection.ts";
 export * from "./harness/session/repository.ts";
-export * from "./harness/session/search-backend.ts";
+export * from "./harness/session/scanning-session-search.ts";
 export {
 	buildContextEntries,
 	buildSessionContext,

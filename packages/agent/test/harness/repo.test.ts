@@ -200,6 +200,15 @@ function createCountingInMemorySessionCollection(): {
 }
 
 describe("InMemorySessionCollection", () => {
+	it("rejects search when no search implementation is configured", async () => {
+		const repo = createSessionRepository({ collection: createInMemorySessionCollection() });
+
+		await expect(repo.search({ text: "needle" })).rejects.toMatchObject({
+			code: "unsupported",
+			message: "Session search is not configured",
+		});
+	});
+
 	it("opens, deletes, and forks by metadata", async () => {
 		const repo = createSessionRepository({ collection: createInMemorySessionCollection() });
 		const session = await repo.create({ id: "session-1" });

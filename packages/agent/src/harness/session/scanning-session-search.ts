@@ -5,7 +5,6 @@ import type {
 	SessionSearchOptions,
 	SessionStorage,
 } from "../types.ts";
-import { findSessionEntryMatches } from "./repository.ts";
 
 type SessionSearchSource<TMetadata extends SessionMetadata> = {
 	open(metadata: TMetadata): Promise<SessionStorage<TMetadata>>;
@@ -21,12 +20,23 @@ class ScanningSessionSearch<TMetadata extends SessionMetadata = SessionMetadata>
 	}
 
 	async search(options: SessionSearchOptions): Promise<SessionSearchHit<TMetadata>[]> {
+		const normalizedText = options.text.trim().toLowerCase();
+		if (!normalizedText) return [];
 		const hits: SessionSearchHit<TMetadata>[] = [];
 		for (const metadata of await this.source.list()) {
 			const cwd = (metadata as { cwd?: unknown }).cwd;
 			if (options.cwd !== undefined && cwd !== options.cwd) continue;
 			const storage = await this.source.open(metadata);
-			hits.push(...findSessionEntryMatches(storage.metadata, await storage.readEntries(), options.text));
+			for (const entry of await storage.readEntries()) {
+				const payload = JSON.stringify(entry);
+				if (!payload.toLowerCase().includes(normalizedText)) continue;
+				hits.push({
+					metadata: storage.metadata,
+					entryId: entry.id,
+					timestamp: entry.timestamp,
+					snippet: payload,
+				});
+			}
 		}
 		return hits;
 	}

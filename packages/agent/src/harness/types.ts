@@ -225,6 +225,7 @@ export class BranchSummaryError extends Error {
 
 export type SessionErrorCode =
 	| "not_found"
+	| "unsupported"
 	| "invalid_session"
 	| "invalid_entry"
 	| "invalid_fork_target"

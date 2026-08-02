@@ -2009,7 +2009,8 @@ const session = await repository.create({});
 
 Use `createJsonlSessionCollection({ fs, sessionsRoot })` for filesystem persistence;
 the same scanning search composes with it. Omitting `search` is valid, but
-`repository.search()` then returns no hits. SQLite support is provided
+`repository.search()` then throws a `SessionError` with code `unsupported`.
+SQLite support is provided
 separately by `createSqliteSessionCollection()` and should use
 `createSqliteSessionSearch(options)` against the same canonical database. Drain
 all session or harness operations before the collection leaves

@@ -31,6 +31,23 @@ describe("viewport layout", () => {
 		assert.deepStrictEqual(visibleLines(frame.lines), ["top", "body", "", ""]);
 	});
 
+	it("does not render fixed-basis scroll content during stack measurement", () => {
+		let renderCount = 0;
+		const transcript = new ScrollView({
+			render: () => {
+				renderCount += 1;
+				return ["one", "two", "three"];
+			},
+			invalidate: () => {},
+		});
+		const root = new VStack([
+			{ component: transcript, basis: 0, grow: 1 },
+			{ component: new Text("dock", 0, 0), basis: "auto" },
+		]);
+		renderLayoutFrame(root, 10, 3, () => {});
+		assert.strictEqual(renderCount, 1);
+	});
+
 	it("shrinks entries to their minimum sizes", () => {
 		const frame = renderLayoutFrame(
 			new VStack([

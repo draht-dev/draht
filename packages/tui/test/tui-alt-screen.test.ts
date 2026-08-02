@@ -411,6 +411,56 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("reuses moved Kitty images without dropping HStack siblings", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		try {
+			const terminal = new RecordingTerminal(20, 6);
+			const tui = new TuiAltScreen(terminal);
+			const label = new Text("left", 0, 0);
+			const image = new Image(
+				"A".repeat(8192),
+				"image/png",
+				{ fallbackColor: (value) => value },
+				{},
+				{ widthPx: 100, heightPx: 100 },
+			);
+			const header = new Text("header", 0, 0);
+			const row = new HStack([
+				{ component: label, basis: 10 },
+				{ component: image, basis: 10 },
+			]);
+			tui.setLayoutRoot(
+				new VStack([
+					{ component: header, basis: "auto" },
+					{ component: row, basis: 4 },
+				]),
+			);
+			tui.start();
+			await terminal.waitForRender();
+			assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b_Ga=T")));
+
+			const eventCount = terminal.events.length;
+			label.setText("changed");
+			header.setText("header\nsecond");
+			tui.requestRender();
+			await terminal.waitForRender();
+			const redrawWrites = terminal.events
+				.slice(eventCount)
+				.filter((event): event is { type: "write"; data: string } => event.type === "write")
+				.map((event) => event.data)
+				.join("");
+			const placementIndex = redrawWrites.indexOf("\x1b_Ga=p,q=2");
+			assert.ok(redrawWrites.includes("\x1b_Ga=d,d=a,q=2\x1b\\"));
+			assert.ok(placementIndex > redrawWrites.indexOf("changed"));
+			assert.ok(!redrawWrites.includes("\x1b_Ga=T"));
+			assert.ok(redrawWrites.length < 2000, `expected placement-only redraw, got ${redrawWrites.length} bytes`);
+			assert.ok(terminal.getViewport().some((line) => line.trimEnd() === "changed"));
+			tui.stop();
+		} finally {
+			resetCapabilitiesCache();
+		}
+	});
+
 	it("opens an OSC 8 hyperlink on click but not on drag", async () => {
 		const terminal = new RecordingTerminal(20, 3);
 		const openedUrls: string[] = [];

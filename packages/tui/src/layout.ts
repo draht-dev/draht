@@ -164,7 +164,9 @@ function layoutComponent(
 	const entries = visibleStackEntries(node.entries, context.viewport);
 	const gapTotal = Math.max(0, entries.length - 1) * node.gap;
 	if (node.type === "vstack") {
-		const intrinsicHeights = entries.map((entry) => measureHeight(context, entry.component, safeWidth));
+		const intrinsicHeights = entries.map((entry) =>
+			typeof entry.basis === "number" ? entry.basis : measureHeight(context, entry.component, safeWidth),
+		);
 		const sizes = allocateStackSizes(entries, intrinsicHeights, height, node.gap);
 		const naturalHeight = sizes.reduce((sum, size) => sum + size, 0) + gapTotal;
 		const allocatedHeight = height === undefined ? naturalHeight : Math.max(0, Math.floor(height));
@@ -189,7 +191,9 @@ function layoutComponent(
 		return box;
 	}
 
-	const intrinsicWidths = entries.map((entry) => measureWidth(context, entry.component, safeWidth));
+	const intrinsicWidths = entries.map((entry) =>
+		typeof entry.basis === "number" ? entry.basis : measureWidth(context, entry.component, safeWidth),
+	);
 	const widths = allocateStackSizes(entries, intrinsicWidths, safeWidth, node.gap);
 	const intrinsicHeights = entries.map((entry, index) =>
 		measureHeight(context, entry.component, Math.max(1, widths[index]!)),

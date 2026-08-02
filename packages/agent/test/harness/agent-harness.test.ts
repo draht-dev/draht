@@ -11,7 +11,7 @@ import { getModel } from "@draht/ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentHarness } from "../../src/harness/agent-harness.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { createInMemorySessionStore } from "../../src/harness/session/memory-store.ts";
+import { createInMemorySessionCollection } from "../../src/harness/session/memory-collection.ts";
 import { createSessionRepository } from "../../src/harness/session/repository.ts";
 import type { Session } from "../../src/harness/session/session.ts";
 import type { AgentHarnessTool, PromptTemplate, Skill } from "../../src/harness/types.ts";
@@ -97,25 +97,28 @@ async function createBlockingSession(expectedWrites: number): Promise<{
 	releaseWrites: ReturnType<typeof deferred>;
 	getEntries(): ReturnType<Session["getEntries"]>;
 }> {
-	const source = createInMemorySessionStore();
+	const source = createInMemorySessionCollection();
 	const allWritesStarted = deferred();
 	const releaseWrites = deferred();
 	let writesStarted = 0;
-	const blockingStore: ReturnType<typeof createInMemorySessionStore> = {
-		create: (options) => source.create(options),
-		load: (metadata) => source.load(metadata),
-		list: (options) => source.list(options),
-		async appendEntry(metadata, entry) {
+	const blockWrites = async (storage: Awaited<ReturnType<typeof source.create>>) => ({
+		...storage,
+		async appendEntry(entry: Parameters<typeof storage.appendEntry>[0]) {
 			writesStarted++;
 			if (writesStarted === expectedWrites) allWritesStarted.resolve();
 			await releaseWrites.promise;
-			await source.appendEntry(metadata, entry);
+			await storage.appendEntry(entry);
 		},
+	});
+	const blockingCollection: ReturnType<typeof createInMemorySessionCollection> = {
+		create: async (options) => blockWrites(await source.create(options)),
+		open: async (metadata) => blockWrites(await source.open(metadata)),
+		list: (options) => source.list(options),
 		delete: (metadata) => source.delete(metadata),
-		fork: (metadata, options, selection) => source.fork(metadata, options, selection),
+		fork: async (metadata, options, selection) => blockWrites(await source.fork(metadata, options, selection)),
 		[Symbol.asyncDispose]: () => source[Symbol.asyncDispose](),
 	};
-	const session = await createSessionRepository({ store: blockingStore }).create({});
+	const session = await createSessionRepository({ collection: blockingCollection }).create({});
 	return {
 		session,
 		allWritesStarted,

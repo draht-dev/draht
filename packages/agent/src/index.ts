@@ -31,14 +31,14 @@ export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
 export { readSessionEntriesForFork } from "./harness/session/fork.ts";
 export {
-	createJsonlSessionStore,
-	type JsonlSessionStoreFileSystem,
-	type JsonlSessionStoreOptions,
-} from "./harness/session/jsonl-store.ts";
+	createJsonlSessionCollection,
+	type JsonlSessionCollectionFileSystem,
+	type JsonlSessionCollectionOptions,
+} from "./harness/session/jsonl-collection.ts";
 export {
-	createInMemorySessionStore,
+	createInMemorySessionCollection,
 	type InMemorySessionCreateOptions,
-} from "./harness/session/memory-store.ts";
+} from "./harness/session/memory-collection.ts";
 export * from "./harness/session/repository.ts";
 export * from "./harness/session/search-backend.ts";
 export {

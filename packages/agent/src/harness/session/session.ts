@@ -16,9 +16,8 @@ import type {
 	SessionEntryCursorOptions,
 	SessionInfoEntry,
 	SessionMetadata,
-	SessionReader,
 	SessionStats,
-	SessionStore,
+	SessionStorage,
 	SessionTreeEntry,
 	ThinkingLevelChangeEntry,
 } from "../types.ts";
@@ -150,127 +149,21 @@ export function buildSessionContext(
 	return { ...state, messages };
 }
 
-class HydratedSessionState {
-	private readonly entries: SessionTreeEntry[];
-	private readonly labelsById = new Map<string, string>();
-
-	constructor(entries: readonly SessionTreeEntry[]) {
-		this.entries = [...entries];
-		for (const entry of this.entries) this.applyProjection(entry);
-	}
-
-	getLabel(id: string): string | undefined {
-		return this.labelsById.get(id);
-	}
-
-	getSessionName(): string | undefined {
-		for (let i = this.entries.length - 1; i >= 0; i--) {
-			const entry = this.entries[i]!;
-			if (entry.type === "session_info") return entry.name?.trim() || undefined;
-		}
-		return undefined;
-	}
-
-	getSessionStats(): SessionStats {
-		let messageCount = 0;
-		let cachedTokens = 0;
-		let uncachedTokens = 0;
-		let totalTokens = 0;
-		let costTotal = 0;
-		for (const entry of this.entries) {
-			if (entry.type === "message") messageCount += 1;
-			const usage =
-				entry.type === "message"
-					? entry.message.role === "assistant"
-						? entry.message.usage
-						: undefined
-					: entry.type === "compaction" || entry.type === "branch_summary"
-						? entry.usage
-						: undefined;
-			if (
-				!usage ||
-				typeof usage.input !== "number" ||
-				typeof usage.output !== "number" ||
-				typeof usage.cacheRead !== "number" ||
-				typeof usage.cacheWrite !== "number" ||
-				typeof usage.cost?.total !== "number"
-			)
-				continue;
-			cachedTokens += usage.cacheRead;
-			uncachedTokens += usage.input + usage.cacheWrite;
-			totalTokens += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-			costTotal += usage.cost.total;
-		}
-		return { messageCount, cachedTokens, uncachedTokens, totalTokens, costTotal };
-	}
-
-	private applyProjection(entry: SessionTreeEntry): void {
-		if (entry.type !== "label") return;
-		const label = entry.label?.trim();
-		if (label) this.labelsById.set(entry.targetId, label);
-		else this.labelsById.delete(entry.targetId);
-	}
-}
-
-export interface Session<TMetadata extends SessionMetadata = SessionMetadata> {
-	getMetadata(): Promise<TMetadata>;
-	getLeafId(): Promise<string | null>;
-	getEntry(id: string): Promise<SessionTreeEntry | undefined>;
-	getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]>;
-	getBranch(fromId?: string | null): Promise<SessionTreeEntry[]>;
-	findEntriesOnBranch(query?: SessionBranchQuery): Promise<SessionTreeEntry[]>;
-	findEntryOnBranch(query?: SessionBranchQuery): Promise<SessionTreeEntry | undefined>;
-	buildContextEntries(options?: SessionContextBuildOptions): Promise<SessionTreeEntry[]>;
-	buildContext(options?: SessionContextBuildOptions): Promise<SessionContext>;
-	getLabel(id: string): Promise<string | undefined>;
-	getSessionStats(): Promise<SessionStats>;
-	getSessionName(): Promise<string | undefined>;
-	appendMessage(message: AgentMessage): Promise<string>;
-	appendThinkingLevelChange(thinkingLevel: string): Promise<string>;
-	appendModelChange(provider: string, modelId: string): Promise<string>;
-	appendActiveToolsChange(activeToolNames: string[]): Promise<string>;
-	appendCompaction<T = unknown>(
-		summary: string,
-		firstKeptEntryId: string | undefined,
-		tokensBefore: number,
-		details?: T,
-		fromHook?: boolean,
-		usage?: Usage,
-		retainedTail?: AgentMessage[],
-	): Promise<string>;
-	appendCustomEntry(customType: string, data?: unknown): Promise<string>;
-	appendCustomMessageEntry<T = unknown>(
-		customType: string,
-		content: string | (TextContent | ImageContent)[],
-		display: boolean,
-		details?: T,
-	): Promise<string>;
-	appendLabel(targetId: string, label: string | undefined): Promise<string>;
-	appendSessionName(name: string): Promise<string>;
-	moveTo(
-		entryId: string | null,
-		summary?: { summary: string; details?: unknown; usage?: Usage; fromHook?: boolean },
-	): Promise<string | undefined>;
-}
-
-class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implements Session<TMetadata> {
-	private readonly store: Pick<SessionStore<TMetadata>, "appendEntry">;
-	private readonly reader: SessionReader<TMetadata>;
+export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
+	private readonly storage: SessionStorage<TMetadata>;
 	private readonly metadata: TMetadata;
-	private hydratedStatePromise: Promise<HydratedSessionState> | undefined;
 	private leafId: string | null;
 	private readonly contextBuildOptions: SessionContextBuildOptions;
 	private appendTail: Promise<void> = Promise.resolve();
 
+	/** @internal Construct sessions through SessionRepository. */
 	constructor(
-		store: Pick<SessionStore<TMetadata>, "appendEntry">,
-		reader: SessionReader<TMetadata>,
+		storage: SessionStorage<TMetadata>,
 		leafId: string | null,
 		contextBuildOptions: SessionContextBuildOptions = {},
 	) {
-		this.store = store;
-		this.reader = reader;
-		this.metadata = reader.metadata;
+		this.storage = storage;
+		this.metadata = storage.metadata;
 		this.leafId = leafId;
 		this.contextBuildOptions = contextBuildOptions;
 	}
@@ -282,19 +175,19 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 		return this.leafId;
 	}
 	async getEntry(id: string): Promise<SessionTreeEntry | undefined> {
-		return this.reader.readEntry(id);
+		return this.storage.readEntry(id);
 	}
 	async getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]> {
-		return [...(await this.reader.readEntries(options))];
+		return [...(await this.storage.readEntries(options))];
 	}
 
 	async getBranch(fromId?: string | null): Promise<SessionTreeEntry[]> {
-		return [...(await this.reader.readPathToRootOrCompaction(fromId === undefined ? this.leafId : fromId))];
+		return [...(await this.storage.readPathToRootOrCompaction(fromId === undefined ? this.leafId : fromId))];
 	}
 
 	async findEntriesOnBranch(query: SessionBranchQuery = {}): Promise<SessionTreeEntry[]> {
 		return [
-			...(await this.reader.findEntriesOnBranch({
+			...(await this.storage.findEntriesOnBranch({
 				...query,
 				start: query.start === undefined ? this.leafId : query.start,
 			})),
@@ -324,18 +217,13 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 	}
 
 	async getLabel(id: string): Promise<string | undefined> {
-		return (await this.getHydratedState()).getLabel(id);
+		return this.storage.getLabel(id);
 	}
 	async getSessionStats(): Promise<SessionStats> {
-		return (await this.getHydratedState()).getSessionStats();
+		return this.storage.getStats();
 	}
 	async getSessionName(): Promise<string | undefined> {
-		return (await this.getHydratedState()).getSessionName();
-	}
-
-	private async getHydratedState(): Promise<HydratedSessionState> {
-		this.hydratedStatePromise ??= this.reader.readEntries().then((entries) => new HydratedSessionState(entries));
-		return this.hydratedStatePromise;
+		return this.storage.getName();
 	}
 
 	private async createEntryId(): Promise<string> {
@@ -349,22 +237,21 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 	private enqueueAppend<TEntry extends SessionTreeEntry>(
 		createEntry: (base: Pick<SessionTreeEntry, "id" | "parentId" | "timestamp">) => TEntry,
 	): Promise<TEntry> {
-		const operation = this.appendTail.then(async () => {
+		const commit = this.appendTail.then(async () => {
 			const entry = createEntry({
 				id: await this.createEntryId(),
 				parentId: this.leafId,
 				timestamp: new Date().toISOString(),
 			});
-			await this.store.appendEntry(this.metadata, entry);
+			await this.storage.appendEntry(entry);
 			this.leafId = entry.type === "leaf" ? entry.targetId : entry.id;
-			this.hydratedStatePromise = undefined;
 			return entry;
 		});
-		this.appendTail = operation.then(
+		this.appendTail = commit.then(
 			() => undefined,
 			() => undefined,
 		);
-		return operation;
+		return commit;
 	}
 
 	private async setLeafId(leafId: string | null): Promise<LeafEntry> {
@@ -535,10 +422,9 @@ class StoreSession<TMetadata extends SessionMetadata = SessionMetadata> implemen
 }
 
 /** @internal Construct sessions only through SessionRepository. */
-export async function createSessionFromReader<TMetadata extends SessionMetadata>(
-	store: Pick<SessionStore<TMetadata>, "appendEntry">,
-	reader: SessionReader<TMetadata>,
+export async function createSession<TMetadata extends SessionMetadata>(
+	storage: SessionStorage<TMetadata>,
 	contextBuildOptions: SessionContextBuildOptions = {},
 ): Promise<Session<TMetadata>> {
-	return new StoreSession(store, reader, (await reader.readHead()).leafId, contextBuildOptions);
+	return new Session(storage, (await storage.readHead()).leafId, contextBuildOptions);
 }

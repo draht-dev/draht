@@ -8,7 +8,7 @@ import {
 	AgentHarness,
 	createBashTool,
 	createEditTool,
-	createInMemorySessionStore,
+	createInMemorySessionCollection,
 	createReadTool,
 	createSessionRepository,
 	createWriteTool,
@@ -51,8 +51,8 @@ if (!model) {
 	process.exit(-1);
 }
 
-await using store = createInMemorySessionStore();
-const session = await createSessionRepository({ store }).create({});
+await using collection = createInMemorySessionCollection();
+const session = await createSessionRepository({ collection }).create({});
 const agent = new AgentHarness({
 	session,
 	models,

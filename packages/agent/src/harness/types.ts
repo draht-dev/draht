@@ -555,29 +555,36 @@ export interface SessionHead {
 	leafId: string | null;
 }
 
-/** Canonical reads for one stored session. Its lifetime is owned by the containing {@link SessionStore}. */
-export interface SessionReader<TMetadata extends SessionMetadata = SessionMetadata> {
+/** Complete storage contract for one opened session. Its lifetime is owned by its {@link SessionCollection}. */
+export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
 	readonly metadata: TMetadata;
 	/** Rejects with `invalid_session` when a non-null active leaf does not reference a stored entry. */
 	readHead(): Promise<SessionHead>;
 	readEntry(id: string): Promise<SessionTreeEntry | undefined>;
 	readEntries(options?: SessionEntryCursorOptions): Promise<readonly SessionTreeEntry[]>;
+	appendEntry(entry: SessionTreeEntry): Promise<void>;
 	findEntriesOnBranch(query: SessionBranchQuery & { start: string | null }): Promise<readonly SessionTreeEntry[]>;
 	readPathToRootOrCompaction(leafId: string | null): Promise<readonly SessionTreeEntry[]>;
+	getLabel(id: string): Promise<string | undefined>;
+	getName(): Promise<string | undefined>;
+	getStats(): Promise<SessionStats>;
 }
 
-/** Owns persistence and resources shared by all sessions in a repository. */
-export interface SessionStore<
+/** Owns the collection lifecycle and resources shared by sessions in a repository. */
+export interface SessionCollection<
 	TMetadata extends SessionMetadata = SessionMetadata,
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
 > extends AsyncDisposable {
-	create(options: TCreateOptions): Promise<SessionReader<TMetadata>>;
-	load(metadata: TMetadata): Promise<SessionReader<TMetadata>>;
+	create(options: TCreateOptions): Promise<SessionStorage<TMetadata>>;
+	open(metadata: TMetadata): Promise<SessionStorage<TMetadata>>;
 	list(options?: TListOptions): Promise<TMetadata[]>;
-	appendEntry(metadata: TMetadata, entry: SessionTreeEntry): Promise<void>;
 	delete(metadata: TMetadata): Promise<void>;
-	fork(source: TMetadata, options: TCreateOptions, selection: SessionForkSelection): Promise<SessionReader<TMetadata>>;
+	fork(
+		source: TMetadata,
+		options: TCreateOptions,
+		selection: SessionForkSelection,
+	): Promise<SessionStorage<TMetadata>>;
 }
 
 export interface JsonlSessionCreateOptions extends SessionCreateOptions {

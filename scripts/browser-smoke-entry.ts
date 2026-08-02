@@ -5,7 +5,7 @@ import {
 	bashExecutionToText,
 	convertToLlm,
 	createCustomMessage,
-	createInMemorySessionStore,
+	createInMemorySessionCollection,
 	createSessionRepository,
 	FileError,
 	formatPromptTemplateInvocation,
@@ -27,7 +27,7 @@ const stream = createAssistantMessageEventStream();
 
 const agent = new Agent({ initialState: { model }, streamFn: streamSimple });
 agent.steer({ role: "user", content: [{ type: "text", text: "queued" }], timestamp: 0 });
-const repo = createSessionRepository({ store: createInMemorySessionStore() });
+const repo = createSessionRepository({ collection: createInMemorySessionCollection() });
 const result = getOrThrow(ok({ value: 1 }));
 const customMessage = createCustomMessage("note", "hello", true, undefined, "2026-01-01T00:00:00.000Z");
 const llmMessages = convertToLlm([customMessage]);

@@ -2,17 +2,17 @@ import { uuidv7 } from "@draht/ai";
 import {
 	type FileError,
 	type Result,
+	type SessionCollection,
 	type SessionCreateOptions,
 	SessionError,
 	type SessionForkOptions,
 	type SessionMetadata,
 	type SessionSearch,
 	type SessionSearchHit,
-	type SessionStore,
 	type SessionTreeEntry,
 } from "../types.ts";
 import { createSessionForkSelection } from "./fork.ts";
-import { createSessionFromReader, type Session, type SessionContextBuildOptions } from "./session.ts";
+import { createSession, type Session, type SessionContextBuildOptions } from "./session.ts";
 
 export function createSessionId(): string {
 	return uuidv7();
@@ -27,34 +27,34 @@ export class SessionRepository<
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
 > {
-	private readonly store: SessionStore<TMetadata, TCreateOptions, TListOptions>;
-	private readonly searchStore: SessionSearch<TMetadata> | null;
+	private readonly collection: SessionCollection<TMetadata, TCreateOptions, TListOptions>;
+	private readonly sessionSearch: SessionSearch<TMetadata> | null;
 	private readonly contextBuildOptions: SessionContextBuildOptions;
 
 	constructor(options: {
-		store: SessionStore<TMetadata, TCreateOptions, TListOptions>;
+		collection: SessionCollection<TMetadata, TCreateOptions, TListOptions>;
 		search?: SessionSearch<TMetadata> | null;
 		contextBuildOptions?: SessionContextBuildOptions;
 	}) {
-		this.store = options.store;
-		this.searchStore = options.search ?? null;
+		this.collection = options.collection;
+		this.sessionSearch = options.search ?? null;
 		this.contextBuildOptions = options.contextBuildOptions ?? {};
 	}
 
 	async create(options: TCreateOptions): Promise<Session<TMetadata>> {
-		return createSessionFromReader(this.store, await this.store.create(options), this.contextBuildOptions);
+		return createSession(await this.collection.create(options), this.contextBuildOptions);
 	}
 
 	async open(metadata: TMetadata): Promise<Session<TMetadata>> {
-		return createSessionFromReader(this.store, await this.store.load(metadata), this.contextBuildOptions);
+		return createSession(await this.collection.open(metadata), this.contextBuildOptions);
 	}
 
 	async list(options?: TListOptions): Promise<TMetadata[]> {
-		return await this.store.list(options);
+		return await this.collection.list(options);
 	}
 
 	async delete(metadata: TMetadata): Promise<void> {
-		await this.store.delete(metadata);
+		await this.collection.delete(metadata);
 	}
 
 	async fork(source: TMetadata, options: SessionForkOptions & TCreateOptions): Promise<Session<TMetadata>> {
@@ -62,15 +62,11 @@ export class SessionRepository<
 		const createOptions = { ...options };
 		delete createOptions.entryId;
 		delete createOptions.position;
-		return createSessionFromReader(
-			this.store,
-			await this.store.fork(source, createOptions, selection),
-			this.contextBuildOptions,
-		);
+		return createSession(await this.collection.fork(source, createOptions, selection), this.contextBuildOptions);
 	}
 
 	async search(options: Parameters<SessionSearch<TMetadata>["search"]>[0]): Promise<SessionSearchHit<TMetadata>[]> {
-		return this.searchStore ? await this.searchStore.search(options) : [];
+		return this.sessionSearch ? await this.sessionSearch.search(options) : [];
 	}
 }
 
@@ -79,7 +75,7 @@ export function createSessionRepository<
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
 >(options: {
-	store: SessionStore<TMetadata, TCreateOptions, TListOptions>;
+	collection: SessionCollection<TMetadata, TCreateOptions, TListOptions>;
 	search?: SessionSearch<TMetadata> | null;
 	contextBuildOptions?: SessionContextBuildOptions;
 }): SessionRepository<TMetadata, TCreateOptions, TListOptions> {

@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { createJsonlSessionStore } from "../../src/harness/session/jsonl-store.ts";
-import { createInMemorySessionStore } from "../../src/harness/session/memory-store.ts";
+import { createJsonlSessionCollection } from "../../src/harness/session/jsonl-collection.ts";
+import { createInMemorySessionCollection } from "../../src/harness/session/memory-collection.ts";
 import { createSessionRepository } from "../../src/harness/session/repository.ts";
 import type { ContextEntryTransform, Session, SessionContextBuildOptions } from "../../src/harness/session/session.ts";
 import { createAssistantMessage, createTempDir, createUserMessage } from "./session-test-utils.ts";
@@ -227,7 +227,7 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 			await expect(session.appendLabel("missing", "checkpoint")).rejects.toThrow("Entry missing not found");
 		});
 
-		it("persists leaf changes and appended entries through the store", async () => {
+		it("persists leaf changes and appended entries through the collection", async () => {
 			const fixture = await createFixture();
 			const session = await fixture.createSession();
 			const user1 = await session.appendMessage(createUserMessage("one"));
@@ -246,29 +246,33 @@ async function runSessionSuite(name: string, createFixture: () => Promise<Sessio
 	});
 }
 
-runSessionSuite("Session with in-memory store", async () => {
-	const store = createInMemorySessionStore();
-	const created = await createSessionRepository({ store }).create({});
+runSessionSuite("Session with in-memory collection", async () => {
+	const collection = createInMemorySessionCollection();
+	const created = await createSessionRepository({ collection }).create({});
 	const metadata = await created.getMetadata();
 	return {
-		createSession: (contextBuildOptions) => createSessionRepository({ store, contextBuildOptions }).open(metadata),
-		reloadSession: (contextBuildOptions) => createSessionRepository({ store, contextBuildOptions }).open(metadata),
+		createSession: (contextBuildOptions) =>
+			createSessionRepository({ collection, contextBuildOptions }).open(metadata),
+		reloadSession: (contextBuildOptions) =>
+			createSessionRepository({ collection, contextBuildOptions }).open(metadata),
 	};
 });
 
 let jsonlSessionPath = "";
 runSessionSuite(
-	"Session with JSONL store",
+	"Session with JSONL collection",
 	async () => {
 		const dir = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: dir });
-		const store = createJsonlSessionStore({ fs: env, sessionsRoot: join(dir, "sessions") });
-		const created = await createSessionRepository({ store }).create({ cwd: dir, id: "session-1" });
+		const collection = createJsonlSessionCollection({ fs: env, sessionsRoot: join(dir, "sessions") });
+		const created = await createSessionRepository({ collection }).create({ cwd: dir, id: "session-1" });
 		const metadata = await created.getMetadata();
 		jsonlSessionPath = metadata.path;
 		return {
-			createSession: (contextBuildOptions) => createSessionRepository({ store, contextBuildOptions }).open(metadata),
-			reloadSession: (contextBuildOptions) => createSessionRepository({ store, contextBuildOptions }).open(metadata),
+			createSession: (contextBuildOptions) =>
+				createSessionRepository({ collection, contextBuildOptions }).open(metadata),
+			reloadSession: (contextBuildOptions) =>
+				createSessionRepository({ collection, contextBuildOptions }).open(metadata),
 		};
 	},
 	() => {

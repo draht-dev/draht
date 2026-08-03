@@ -29,6 +29,7 @@ import {
 import type { RelayOutcome } from "../../core/permission-relay/types.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
+import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type {
 	RpcCommand,
@@ -416,7 +417,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		unsubscribe = session.subscribe((event) => {
-			output(event);
+			output(toJsonEvent(event));
 			if (event.type === "agent_settled") {
 				void checkShutdownRequested();
 			}

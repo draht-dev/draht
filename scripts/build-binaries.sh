@@ -96,14 +96,19 @@ fi
 
 for platform in "${PLATFORMS[@]}"; do
     echo "Building for $platform..."
+    bun_target="bun-$platform"
+    if [[ "$platform" == *-x64 ]]; then
+        bun_target="${bun_target}-baseline"
+    fi
+
     # Externalize koffi to avoid embedding all 18 platform .node files (~74MB)
     # into every binary. Koffi is only used on Windows for VT input and the
     # call site has a try/catch fallback. For Windows builds, we copy the
     # appropriate .node file alongside the binary below.
     if [[ "$platform" == "windows-x64" ]]; then
-        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/draht.exe
+        bun build --compile --external koffi --target="$bun_target" ./dist/bun/cli.js --outfile binaries/$platform/draht.exe
     else
-        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/draht
+        bun build --compile --external koffi --target="$bun_target" ./dist/bun/cli.js --outfile binaries/$platform/draht
     fi
 done
 

@@ -234,8 +234,6 @@ export function parseArgs(args: string[]): Args {
 					message: `Invalid UI mode "${mode}". Valid values: regular, fullscreen`,
 				});
 			}
-		} else if (arg === "--alt") {
-			result.uiMode = "fullscreen";
 		} else if (arg === "--verbose") {
 			result.verbose = true;
 		} else if (arg === "--approve" || arg === "-a") {

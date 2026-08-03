@@ -39,6 +39,7 @@ import {
 	cleanupSessionResources,
 	getSupportedThinkingLevels,
 	isContextOverflow,
+	isRecoverableLength,
 	isRetryableAssistantError,
 	modelsAreEqual,
 	type RetryCallbacks,
@@ -683,7 +684,7 @@ export class AgentSession {
 				this._lastAssistantMessage = event.message;
 
 				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.stopReason !== "error") {
+				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
 					this._overflowRecoveryAttempted = false;
 				}
 
@@ -2019,7 +2020,8 @@ export class AgentSession {
 	 * Called after agent_end and before prompt submission.
 	 *
 	 * Two cases:
-	 * 1. Overflow: LLM returned context overflow error, remove error message from agent state, compact, auto-retry
+	 * 1. Recoverable failure: LLM returned context overflow or stopped below its desired output limit;
+	 *    remove the assistant message, compact, and auto-retry once
 	 * 2. Threshold: Context over threshold, compact, NO auto-retry (user continues manually)
 	 *
 	 * @param assistantMessage The assistant message to check
@@ -2051,11 +2053,13 @@ export class AgentSession {
 			return false;
 		}
 
-		// Case 1: Overflow - LLM returned context overflow error, or reported usage exceeded
-		// the configured window. A successful response over the configured window should compact
-		// but must not retry: the assistant answer already completed and agent.continue() cannot
-		// continue from an assistant message.
-		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+		// Case 1: Recoverable failure. Explicit/silent context overflow still uses context metadata.
+		// A length stop is recoverable when output ended below the model's original desired limit,
+		// independent of the configured context size or any context-clamped provider request limit.
+		// A successful response over the configured window should compact but must not retry: the
+		// assistant answer already completed and agent.continue() cannot continue from an assistant.
+		const recoverableLength = sameModel && isRecoverableLength(assistantMessage, this.model?.maxTokens ?? 0);
+		if (sameModel && (isContextOverflow(assistantMessage, contextWindow) || recoverableLength)) {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
 			if (!willRetry) {
@@ -2076,8 +2080,8 @@ export class AgentSession {
 			}
 
 			this._overflowRecoveryAttempted = true;
-			// Remove the error message from agent state (it IS saved to session for history,
-			// but we don't want it in context for the retry)
+			// Remove the failed or truncated message from agent state. It remains in session history,
+			// but must not be included in the compact-and-retry context.
 			const messages = this.agent.state.messages;
 			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 				this.agent.state.messages = messages.slice(0, -1);
@@ -2259,7 +2263,11 @@ export class AgentSession {
 			if (willRetry) {
 				const messages = this.agent.state.messages;
 				const lastMsg = messages[messages.length - 1];
-				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
+				// The overflow response was persisted on message_end before _checkCompaction() removed it
+				// from agent state. Rebuilding state from the new compaction can restore that kept entry,
+				// leaving an assistant as the final message. agent.continue() rejects that state, so remove
+				// the retriable error or truncated-length response again before continuing the interrupted turn.
+				if (lastMsg?.role === "assistant" && (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")) {
 					this.agent.state.messages = messages.slice(0, -1);
 				}
 				return true;

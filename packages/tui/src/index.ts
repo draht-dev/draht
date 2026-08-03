@@ -123,6 +123,7 @@ export {
 	type TUI,
 	type TuiInputListener,
 	type TuiInputListenerResult,
+	type TuiMode,
 	type ViewportTUI,
 } from "./tui.ts";
 export { TuiAltScreen, type TuiAltScreenOptions } from "./tui-alt-screen.ts";

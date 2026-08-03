@@ -1,0 +1,78 @@
+{
+	"openai-completions": {
+		"zai-org/GLM-5.2": {
+			"id": "zai-org/GLM-5.2",
+			"name": "GLM 5.2",
+			"api": "openai-completions",
+			"provider": "baseten",
+			"baseUrl": "https://inference.baseten.co/v1",
+			"reasoning": true,
+			"thinkingLevelMap": {
+				"off": "none",
+				"minimal": null,
+				"low": null,
+				"medium": null,
+				"high": "high",
+				"xhigh": null,
+				"max": "max"
+			},
+			"input": ["text"],
+			"cost": {
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.3,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 262144,
+			"compat": {
+				"supportsStore": false,
+				"supportsDeveloperRole": false,
+				"supportsReasoningEffort": true,
+				"supportsUsageInStreaming": true,
+				"maxTokensField": "max_tokens",
+				"supportsStrictMode": true,
+				"supportsLongCacheRetention": false,
+				"thinkingFormat": "baseten",
+				"chatTemplateArgs": { "enable_thinking": { "$var": "thinking.enabled" } }
+			}
+		},
+		"moonshotai/Kimi-K2.6": {
+			"id": "moonshotai/Kimi-K2.6",
+			"name": "Kimi K2.6",
+			"api": "openai-completions",
+			"provider": "baseten",
+			"baseUrl": "https://inference.baseten.co/v1",
+			"reasoning": true,
+			"thinkingLevelMap": {
+				"off": "off",
+				"minimal": null,
+				"low": null,
+				"medium": null,
+				"high": "high",
+				"xhigh": null,
+				"max": null
+			},
+			"input": ["text"],
+			"cost": {
+				"input": 0.6,
+				"output": 2.5,
+				"cacheRead": 0.15,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 131072,
+			"compat": {
+				"supportsStore": false,
+				"supportsDeveloperRole": false,
+				"supportsReasoningEffort": false,
+				"supportsUsageInStreaming": true,
+				"maxTokensField": "max_tokens",
+				"supportsStrictMode": true,
+				"supportsLongCacheRetention": false,
+				"thinkingFormat": "baseten",
+				"chatTemplateArgs": { "enable_thinking": { "$var": "thinking.enabled" } }
+			}
+		}
+	}
+}

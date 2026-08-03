@@ -36,6 +36,7 @@ const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode
 	sendSessionAffinityHeaders: false,
 	supportsLongCacheRetention: false,
 	chatTemplateKwargs: {},
+	chatTemplateArgs: {},
 	sessionAffinityFormat: "openai",
 };
 

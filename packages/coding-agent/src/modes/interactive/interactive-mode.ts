@@ -98,9 +98,9 @@ import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import {
 	defaultModelPerProvider,
 	findExactModelReferenceMatch,
-	resolveModelScope,
-	resolveModelScopeWithDiagnostics,
+	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
+import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
@@ -403,6 +403,8 @@ export class InteractiveMode {
 	private autocompleteProviderWrappers: AutocompleteProviderFactory[] = [];
 	private fdPath: string | undefined;
 	private editorContainer: Container;
+	private activeSelectorToken?: object;
+	private activeSelectorDispose?: () => void;
 	private footer: FooterComponent;
 	private footerContainer: Container;
 	private footerDataProvider: FooterDataProvider;
@@ -656,12 +658,11 @@ export class InteractiveMode {
 
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
-			modelCommand.getArgumentCompletions = async (prefix: string): Promise<AutocompleteItem[] | null> => {
-				// Get available models (scoped or from registry)
+			modelCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
 				const models =
 					this.session.scopedModels.length > 0
 						? this.session.scopedModels.map((s) => s.model)
-						: await this.session.modelRuntime.getAvailable();
+						: this.session.modelRuntime.getAvailableSnapshot();
 
 				if (models.length === 0) return null;
 
@@ -1037,10 +1038,13 @@ export class InteractiveMode {
 		await this.init();
 
 		if (!process.env.DRAHT_OFFLINE) {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 15_000);
 			void this.session.modelRuntime
-				.refresh()
+				.refresh({ signal: controller.signal })
 				.then(() => this.updateAvailableProviderCount())
-				.catch(() => {});
+				.catch(() => {})
+				.finally(() => clearTimeout(timeout));
 		}
 
 		// Start version check asynchronously
@@ -2490,6 +2494,7 @@ export class InteractiveMode {
 			);
 			this.extensionSelectorSettle = settle;
 
+			this.disposeActiveSelector();
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionSelector);
 			this.ui.setFocus(this.extensionSelector);
@@ -2689,6 +2694,7 @@ export class InteractiveMode {
 			);
 			this.extensionInputSettle = settle;
 
+			this.disposeActiveSelector();
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionInput);
 			this.ui.setFocus(this.extensionInput);
@@ -2758,6 +2764,7 @@ export class InteractiveMode {
 			);
 			this.extensionEditorSettle = settle;
 
+			this.disposeActiveSelector();
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionEditor);
 			this.ui.setFocus(this.extensionEditor);
@@ -2801,6 +2808,7 @@ export class InteractiveMode {
 		// Save text from current editor before switching
 		const currentText = this.editor.getText();
 
+		this.disposeActiveSelector();
 		this.editorContainer.clear();
 
 		if (factory) {
@@ -2942,6 +2950,7 @@ export class InteractiveMode {
 						// Expose handle to caller for visibility control
 						options?.onHandle?.(handle);
 					} else {
+						this.disposeActiveSelector();
 						this.editorContainer.clear();
 						this.editorContainer.addChild(component);
 						this.ui.setFocus(component);
@@ -4627,20 +4636,39 @@ export class InteractiveMode {
 	// Selectors
 	// =========================================================================
 
+	private disposeActiveSelector(): void {
+		const dispose = this.activeSelectorDispose;
+		this.activeSelectorToken = undefined;
+		this.activeSelectorDispose = undefined;
+		dispose?.();
+	}
+
 	/**
 	 * Shows a selector component in place of the editor.
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
-	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
+	private showSelector(
+		create: (done: () => void) => { component: Component; focus: Component; dispose?: () => void },
+	): void {
+		const token = {};
+		let dispose: (() => void) | undefined;
 		const done = () => {
+			dispose?.();
+			if (this.activeSelectorToken !== token) return;
+			this.activeSelectorToken = undefined;
+			this.activeSelectorDispose = undefined;
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.ui.setFocus(this.editor);
 		};
-		const { component, focus } = create(done);
+		const created = create(done);
+		dispose = created.dispose;
+		this.disposeActiveSelector();
+		this.activeSelectorToken = token;
+		this.activeSelectorDispose = dispose;
 		this.editorContainer.clear();
-		this.editorContainer.addChild(component);
-		this.ui.setFocus(focus);
+		this.editorContainer.addChild(created.component);
+		this.ui.setFocus(created.focus);
 		this.ui.requestRender();
 	}
 
@@ -4877,21 +4905,37 @@ export class InteractiveMode {
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
-		const models = await this.getModelCandidates();
-		return findExactModelReferenceMatch(searchTerm, models);
-	}
+		const cachedModels =
+			this.session.scopedModels.length > 0
+				? this.session.scopedModels.map((scoped) => scoped.model)
+				: [...this.session.modelRuntime.getAvailableSnapshot()];
+		const cachedMatch = findExactModelReferenceMatch(searchTerm, cachedModels);
+		if (cachedMatch || this.session.scopedModels.length > 0) return cachedMatch;
 
-	private async getModelCandidates(): Promise<Model<any>[]> {
-		if (this.session.scopedModels.length > 0) {
-			return this.session.scopedModels.map((scoped) => scoped.model);
-		}
-
+		this.showStatus("Refreshing model catalogs…");
+		const controller = new AbortController();
+		let timedOut = false;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, 15_000);
 		try {
-			await this.session.modelRuntime.refresh();
-			return [...(await this.session.modelRuntime.getAvailable())];
-		} catch {
-			return [];
+			const result = await this.session.modelRuntime.refresh({ signal: controller.signal });
+			if (result.aborted && timedOut) {
+				this.showWarning("Model refresh timed out; searching cached models.");
+			} else if (result.errors.size > 0) {
+				this.showWarning(`Could not refresh ${[...result.errors.keys()].join(", ")}; searching cached models.`);
+			}
+		} catch (error) {
+			this.showWarning(
+				timedOut
+					? "Model refresh timed out; searching cached models."
+					: `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		} finally {
+			clearTimeout(timeout);
 		}
+		return findExactModelReferenceMatch(searchTerm, [...this.session.modelRuntime.getAvailableSnapshot()]);
 	}
 
 	/** Update the footer's available provider count from the current snapshot without refreshing catalogs. */
@@ -5013,86 +5057,75 @@ export class InteractiveMode {
 				},
 				initialSearchInput,
 			);
-			return { component: selector, focus: selector };
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private async showModelsSelector(): Promise<void> {
-		// Get all available models
-		await this.session.modelRuntime.refresh();
-		const allModels = [...(await this.session.modelRuntime.getAvailable())];
-		const allModelIds = new Set(allModels.map((model) => `${model.provider}/${model.id}`));
+	private showModelsSelector(): void {
+		let availableModels = [...this.session.modelRuntime.getAvailableSnapshot()];
+		let availableModelIds = new Set(availableModels.map((model) => `${model.provider}/${model.id}`));
 		const configuredPatterns = this.settingsManager.getEnabledModels();
 		const sessionScopedModels = this.session.scopedModels;
+		const configuredEnabledIds = (models: readonly Model<any>[]): string[] | null => {
+			if (!configuredPatterns?.length) return null;
+			const resolved = resolveModelScopeFromModels(configuredPatterns, models);
+			const ids = resolved.scopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
+			for (const diagnostic of resolved.diagnostics) {
+				if (diagnostic.code === "no-match" && !ids.includes(diagnostic.pattern)) ids.push(diagnostic.pattern);
+			}
+			return ids;
+		};
 
-		if (allModels.length === 0 && !configuredPatterns?.length && sessionScopedModels.length === 0) {
-			this.showStatus("No models available");
-			return;
-		}
+		let currentEnabledIds =
+			sessionScopedModels.length > 0
+				? sessionScopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`)
+				: configuredEnabledIds(availableModels);
+		let selectionChanged = false;
 
-		const configuredScope = configuredPatterns?.length
-			? await resolveModelScopeWithDiagnostics(configuredPatterns, this.session.modelRuntime)
-			: undefined;
-
-		// Check if session has scoped models (from previous session-only changes or CLI --models)
-		const hasSessionScope = sessionScopedModels.length > 0;
-
-		// Build enabled model IDs from session state or settings
-		let currentEnabledIds: string[] | null = null;
-
-		if (hasSessionScope) {
-			// Use current session's scoped models
-			currentEnabledIds = sessionScopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
-		} else if (configuredScope) {
-			currentEnabledIds = configuredScope.scopedModels.map(
-				(scoped) => `${scoped.model.provider}/${scoped.model.id}`,
-			);
-		}
-
-		for (const diagnostic of configuredScope?.diagnostics ?? []) {
-			if (diagnostic.code !== "no-match") continue;
-			currentEnabledIds ??= [];
-			if (!currentEnabledIds.includes(diagnostic.pattern)) currentEnabledIds.push(diagnostic.pattern);
-		}
-
-		// Helper to update session's scoped models (session-only, no persist)
-		const updateSessionModels = async (enabledIds: string[] | null) => {
+		const updateSessionModels = (enabledIds: string[] | null): void => {
 			currentEnabledIds = enabledIds === null ? null : [...enabledIds];
-			const hasEnabledAvailableModel = enabledIds?.some((id) => allModelIds.has(id)) ?? false;
+			const hasEnabledAvailableModel = enabledIds?.some((id) => availableModelIds.has(id)) ?? false;
 			const allAvailableModelsEnabled =
-				enabledIds !== null && [...allModelIds].every((id) => enabledIds.includes(id));
+				enabledIds !== null && [...availableModelIds].every((id) => enabledIds.includes(id));
 			if (enabledIds && hasEnabledAvailableModel && !allAvailableModelsEnabled) {
-				const newScopedModels = await resolveModelScope(enabledIds, this.session.modelRuntime);
+				const newScopedModels = resolveModelScopeFromModels(enabledIds, availableModels).scopedModels;
 				this.session.setScopedModels(
-					newScopedModels.map((sm) => ({
-						model: sm.model,
-						thinkingLevel: sm.thinkingLevel,
+					newScopedModels.map((scoped) => ({
+						model: scoped.model,
+						thinkingLevel: scoped.thinkingLevel,
 					})),
 				);
 			} else {
-				// All enabled or none enabled = no filter
 				this.session.setScopedModels([]);
 			}
-			await this.updateAvailableProviderCount();
+			this.updateAvailableProviderCount();
 			this.ui.requestRender();
 		};
 
 		this.showSelector((done) => {
+			let disposed = false;
+			let timedOut = false;
+			const controller = new AbortController();
+			const timeout = setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+			}, 15_000);
 			const selector = new ScopedModelsSelectorComponent(
 				{
-					allModels,
+					allModels: availableModels,
 					enabledModelIds: currentEnabledIds,
+					refreshStatus: "Refreshing model catalogs…",
 				},
 				{
-					onChange: async (enabledIds) => {
-						await updateSessionModels(enabledIds);
+					onChange: (enabledIds) => {
+						selectionChanged = true;
+						updateSessionModels(enabledIds);
 					},
 					onPersist: (enabledIds) => {
-						// Persist to settings
 						const allEnabled =
 							enabledIds !== null &&
-							enabledIds.length === allModels.length &&
-							enabledIds.every((id) => allModelIds.has(id));
+							enabledIds.length === availableModels.length &&
+							enabledIds.every((id) => availableModelIds.has(id));
 						const newPatterns = enabledIds === null || allEnabled ? undefined : enabledIds;
 						this.settingsManager.setEnabledModels(newPatterns ? [...newPatterns] : undefined);
 						this.showStatus("Model selection saved to settings");
@@ -5103,7 +5136,51 @@ export class InteractiveMode {
 					},
 				},
 			);
-			return { component: selector, focus: selector };
+			void this.session.modelRuntime
+				.refresh({ signal: controller.signal })
+				.then((result) => {
+					if (disposed) return;
+					availableModels = [...this.session.modelRuntime.getAvailableSnapshot()];
+					availableModelIds = new Set(availableModels.map((model) => `${model.provider}/${model.id}`));
+					if (!selectionChanged && sessionScopedModels.length === 0) {
+						currentEnabledIds = configuredEnabledIds(availableModels);
+						selector.updateModels(availableModels, currentEnabledIds);
+					} else {
+						selector.updateModels(availableModels);
+					}
+					if (currentEnabledIds !== null) updateSessionModels(currentEnabledIds);
+					if (result.aborted && timedOut) {
+						selector.setRefreshStatus("Model refresh timed out; showing cached models.", "warning");
+					} else if (result.errors.size > 0) {
+						selector.setRefreshStatus(
+							`Could not refresh ${[...result.errors.keys()].join(", ")}; showing cached models.`,
+							"warning",
+						);
+					} else {
+						selector.setRefreshStatus("Model catalogs refreshed.", "success");
+					}
+					this.ui.requestRender();
+				})
+				.catch((error: unknown) => {
+					if (disposed) return;
+					selector.setRefreshStatus(
+						timedOut
+							? "Model refresh timed out; showing cached models."
+							: `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`,
+						"warning",
+					);
+					this.ui.requestRender();
+				})
+				.finally(() => clearTimeout(timeout));
+			return {
+				component: selector,
+				focus: selector,
+				dispose: () => {
+					disposed = true;
+					clearTimeout(timeout);
+					controller.abort();
+				},
+			};
 		});
 	}
 
@@ -5567,7 +5644,7 @@ export class InteractiveMode {
 	}
 
 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		return (await this.session.modelRuntime.listCredentials())
+		return (await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) }))
 			.map(({ providerId, type }) => ({
 				id: providerId,
 				name: this.session.modelRuntime.getProvider(providerId)?.name ?? providerId,
@@ -5591,7 +5668,6 @@ export class InteractiveMode {
 	}
 
 	private async handleLoginCommand(providerRef?: string): Promise<void> {
-		await this.session.modelRuntime.getAvailable();
 		if (!providerRef) {
 			this.showLoginAuthTypeSelector();
 			return;
@@ -5731,7 +5807,13 @@ export class InteractiveMode {
 			return;
 		}
 
-		const providerOptions = await this.getLogoutProviderOptions();
+		let providerOptions: AuthSelectorProvider[];
+		try {
+			providerOptions = await this.getLogoutProviderOptions();
+		} catch (error) {
+			this.showError(`Could not read stored credentials: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
 		if (providerOptions.length === 0) {
 			this.showStatus(
 				"No stored credentials to remove. /logout only removes credentials saved by /login; environment variables and models.json config are unchanged.",
@@ -5752,7 +5834,9 @@ export class InteractiveMode {
 					}
 
 					try {
-						await this.session.modelRuntime.logout(providerOption.id);
+						await this.session.modelRuntime.logout(providerOption.id, {
+							signal: AbortSignal.timeout(15_000),
+						});
 						await this.updateAvailableProviderCount();
 						const message =
 							providerOption.authType === "oauth"
@@ -5760,7 +5844,12 @@ export class InteractiveMode {
 								: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
 						this.showStatus(message);
 					} catch (error: unknown) {
-						this.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
+						const message = error instanceof Error ? error.message : String(error);
+						this.showError(
+							error instanceof CredentialSynchronizationError
+								? `Credentials removed for ${providerOption.name}, but local model state could not be synchronized: ${message}`
+								: `Logout failed: ${message}`,
+						);
 					}
 				},
 				() => {
@@ -5778,14 +5867,12 @@ export class InteractiveMode {
 		authType: "oauth" | "api_key",
 		previousModel: Model<any> | undefined,
 	): Promise<void> {
-		await this.session.modelRuntime.getAvailable();
-
 		const actionLabel = authType === "oauth" ? `Logged in to ${providerName}` : `Saved API key for ${providerName}`;
 
 		let selectedModel: Model<any> | undefined;
 		let selectionError: string | undefined;
 		if (isUnknownModel(previousModel)) {
-			const availableModels = await this.session.modelRuntime.getAvailable();
+			const availableModels = this.session.modelRuntime.getAvailableSnapshot();
 			const providerModels = availableModels.filter((model) => model.provider === providerId);
 			if (!hasDefaultModelProvider(providerId)) {
 				selectionError = `${actionLabel}, but no default model is configured for provider "${providerId}". Use /model to select a model.`;
@@ -5823,6 +5910,27 @@ export class InteractiveMode {
 				void this.maybeWarnAboutAnthropicSubscriptionAuth();
 			}
 		}
+
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 15_000);
+		void this.session.modelRuntime
+			.refresh({ providers: [providerId], signal: controller.signal })
+			.then((result) => {
+				if (result.aborted) {
+					this.showWarning(`${actionLabel}, but its model catalog refresh timed out; using cached models.`);
+				} else if (result.errors.size > 0) {
+					this.showWarning(`${actionLabel}, but its model catalog could not be refreshed; using cached models.`);
+				}
+				this.updateAvailableProviderCount();
+				this.footer.invalidate();
+				this.ui.requestRender();
+			})
+			.catch((error: unknown) => {
+				this.showWarning(
+					`${actionLabel}, but its model catalog could not be refreshed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			})
+			.finally(() => clearTimeout(timeout));
 	}
 
 	private showAmbientAuthDialog(providerOption: AuthSelectorProvider): void {
@@ -5887,7 +5995,11 @@ export class InteractiveMode {
 		} catch (error: unknown) {
 			restoreEditor();
 			const errorMsg = error instanceof Error ? error.message : String(error);
-			if (errorMsg !== "Login cancelled") {
+			if (error instanceof CredentialSynchronizationError) {
+				this.showError(
+					`Saved API key for ${providerName}, but local model state could not be synchronized: ${errorMsg}`,
+				);
+			} else if (errorMsg !== "Login cancelled") {
 				this.showError(`Failed to save API key for ${providerName}: ${errorMsg}`);
 			}
 		}
@@ -5997,7 +6109,11 @@ export class InteractiveMode {
 		} catch (error: unknown) {
 			restoreEditor();
 			const errorMsg = error instanceof Error ? error.message : String(error);
-			if (errorMsg !== "Login cancelled") {
+			if (error instanceof CredentialSynchronizationError) {
+				this.showError(
+					`Logged in to ${providerName}, but local model state could not be synchronized: ${errorMsg}`,
+				);
+			} else if (errorMsg !== "Login cancelled") {
 				this.showError(`Failed to login to ${providerName}: ${errorMsg}`);
 			}
 		}
@@ -6709,6 +6825,7 @@ ${cycleContextWindow ? `| \`${cycleContextWindow}\` | Cycle context window |\n` 
 	}
 
 	stop(): void {
+		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
 		}

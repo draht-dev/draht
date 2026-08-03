@@ -1138,7 +1138,7 @@ describe("ModelRegistry", () => {
 				}),
 			).toThrow('Provider broken-provider: "api" is required when registering streamSimple.');
 
-			await expect(registry.refresh()).resolves.toBeUndefined();
+			await expect(registry.refresh()).resolves.toMatchObject({ aborted: false });
 		});
 
 		test("failed registerProvider does not remove existing provider models", async () => {
@@ -1182,7 +1182,7 @@ describe("ModelRegistry", () => {
 			).toThrow('Provider demo-provider, model broken-model: no "api" specified.');
 
 			expect(registry.find("demo-provider", "demo-model")).toBeDefined();
-			await expect(registry.refresh()).resolves.toBeUndefined();
+			await expect(registry.refresh()).resolves.toMatchObject({ aborted: false });
 			expect(registry.find("demo-provider", "demo-model")).toBeDefined();
 		});
 

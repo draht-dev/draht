@@ -35,7 +35,7 @@ export interface ExtensionOAuthConfig {
 	/** @deprecated Retained for extension source compatibility; ignored by canonical auth flows. */
 	usesCallbackServer?: boolean;
 	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-	refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+	refreshToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials>;
 	getApiKey(credentials: OAuthCredentials): string;
 	modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
 }
@@ -242,7 +242,7 @@ function adaptOAuth(config: ExtensionOAuthConfig): OAuthAuth {
 			});
 			return { ...credential, type: "oauth" };
 		},
-		refresh: async (credential) => ({ ...(await config.refreshToken(credential)), type: "oauth" }),
+		refresh: async (credential, signal) => ({ ...(await config.refreshToken(credential, signal)), type: "oauth" }),
 		toAuth: async (credential) => ({ apiKey: config.getApiKey(credential) }),
 	};
 }
@@ -476,18 +476,23 @@ export function composeModelProvider(
 			base?.refreshModels || extension?.refreshModels || extension?.oauth?.modifyModels
 				? async (context) => {
 						await base?.refreshModels?.(context);
-						if (extension?.refreshModels) {
-							const refreshed = await extension.refreshModels(context);
-							if (!context.signal?.aborted) {
-								// Validate before publishing the new synchronous list.
-								applyExtension(providerId, applyModelsJson(providerId, base?.getModels() ?? [], config), {
-									...extension,
-									models: refreshed,
-								});
-								refreshedExtensionModels = refreshed;
-							}
-						}
-						extensionOAuthCredential = context.credential?.type === "oauth" ? context.credential : undefined;
+						let refreshed: NonNullable<ProviderConfigInput["models"]> | undefined;
+						if (extension?.refreshModels) refreshed = await extension.refreshModels(context);
+						if (context.signal.aborted) return;
+						const oauthCredential = context.credential?.type === "oauth" ? context.credential : undefined;
+						await context.publish({
+							update: () => {
+								if (refreshed) {
+									// Validate before publishing the new synchronous list.
+									applyExtension(providerId, applyModelsJson(providerId, base?.getModels() ?? [], config), {
+										...extension,
+										models: refreshed,
+									});
+									refreshedExtensionModels = refreshed;
+								}
+								extensionOAuthCredential = oauthCredential;
+							},
+						});
 					}
 				: undefined,
 		filterModels: base?.filterModels

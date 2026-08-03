@@ -743,7 +743,7 @@ describe("default model selection", () => {
 		};
 
 		const registry = {
-			getAvailable: async () => [aiGatewayModel],
+			getAvailableSnapshot: () => [aiGatewayModel],
 		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
 
 		const result = await findInitialModel({
@@ -780,7 +780,7 @@ describe("default model selection", () => {
 					? savedDeepSeekModel
 					: undefined,
 			hasConfiguredAuth: (provider: string) => provider === "spark-two",
-			getAvailable: async () => [localDeepSeekModel],
+			getAvailableSnapshot: () => [localDeepSeekModel],
 		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
 
 		const result = await findInitialModel({

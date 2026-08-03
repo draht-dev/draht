@@ -5,6 +5,8 @@ import type {
 	Context,
 	Model,
 	ModelsApiStreamOptions,
+	ModelsRefreshOptions,
+	ModelsRefreshResult,
 	Provider,
 	ProviderHeaders,
 } from "@draht/ai";
@@ -34,8 +36,8 @@ export class ModelRegistry {
 	}
 
 	/** Reload models.json asynchronously. Await before making synchronous registry reads. */
-	async refresh(): Promise<void> {
-		await this.runtime.refresh();
+	refresh(options?: ModelsRefreshOptions): Promise<ModelsRefreshResult> {
+		return this.runtime.refresh(options);
 	}
 
 	getError(): string | undefined {

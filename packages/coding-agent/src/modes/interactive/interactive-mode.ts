@@ -791,13 +791,13 @@ export class InteractiveMode {
 	private stopInteractiveTui(): void {
 		if (this.renderer.mode === "fullscreen") {
 			while (this.renderer.hasOverlayEntries) this.renderer.hideOverlay();
-			this.switchUiMode("regular", false);
+			this.switchUiMode("regular", false, false);
 			this.renderer.renderNow();
 		}
 		this.ui.stop();
 	}
 
-	private switchUiMode(mode: UiMode, restoreProgress = true): boolean {
+	private switchUiMode(mode: UiMode, restoreProgress = true, startRenderer = true): boolean {
 		const previousUi = this.renderer;
 		if (mode === previousUi.mode) return true;
 		if (previousUi.hasOverlayEntries) return false;
@@ -833,6 +833,7 @@ export class InteractiveMode {
 		this.mountInteractiveTui(nextUi, components);
 		nextUi.invalidate();
 		nextUi.setFocus(focus);
+		if (!startRenderer) return true;
 		nextUi.start();
 		this.themeController.rebindTui();
 		this.rebindExtensionTerminalInputListeners();

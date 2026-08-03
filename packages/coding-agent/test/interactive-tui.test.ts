@@ -104,7 +104,8 @@ describe("createInteractiveTui", () => {
 		}) as SwitchContext;
 		stableUi = createInteractiveTuiReference(() => context.renderer);
 		context.ui = stableUi;
-		const { switchUiMode } = InteractiveMode.prototype as unknown as {
+		const { stopInteractiveTui, switchUiMode } = InteractiveMode.prototype as unknown as {
+			stopInteractiveTui(this: SwitchContext): void;
 			switchUiMode(this: SwitchContext, mode: UiMode, restoreProgress?: boolean): boolean;
 		};
 
@@ -119,7 +120,11 @@ describe("createInteractiveTui", () => {
 		expect(component.focused).toBe(true);
 		expect(invalidatedModes).toEqual(["fullscreen"]);
 		expect([terminal.startCount, terminal.stopCount]).toEqual([2, 1]);
-		stableUi.stop();
+
+		stopInteractiveTui.call(context);
+
+		expect(stableUi.mode).toBe("regular");
+		expect([terminal.startCount, terminal.stopCount]).toEqual([2, 3]);
 	});
 });
 

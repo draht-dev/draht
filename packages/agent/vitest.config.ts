@@ -5,6 +5,7 @@ const aiSrcIndex = fileURLToPath(new URL("../ai/src/index.ts", import.meta.url))
 const aiSrcCompat = fileURLToPath(new URL("../ai/src/compat.ts", import.meta.url));
 const aiSrcProviders = fileURLToPath(new URL("../ai/src/providers", import.meta.url));
 const agentSrcIndex = fileURLToPath(new URL("./src/index.ts", import.meta.url));
+const agentSrcExperimental = fileURLToPath(new URL("./src/experimental.ts", import.meta.url));
 
 export default defineConfig({
 	test: {
@@ -22,6 +23,7 @@ export default defineConfig({
 		// agent runtime reads. See packages/coding-agent/vitest.config.ts for the same fix.
 		alias: [
 			{ find: /^@draht\/agent-core$/, replacement: agentSrcIndex },
+			{ find: /^@draht\/agent-core\/experimental$/, replacement: agentSrcExperimental },
 			{ find: /^@draht\/ai$/, replacement: aiSrcIndex },
 			{ find: /^@draht\/ai\/compat$/, replacement: aiSrcCompat },
 			{ find: /^@draht\/ai\/providers\/(.+)$/, replacement: `${aiSrcProviders}/$1.ts` },

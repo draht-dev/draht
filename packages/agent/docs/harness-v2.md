@@ -39,7 +39,7 @@ The harness executes runs against one session. The session holds four kinds of s
 - **Exactly-once hook side effects.** A hook result becomes durable when the record or entry that consumes it commits. A crash before that commit can run the hook again (section 11 replay table). Side effects a hook makes on its own are invisible to the harness: HTTP calls, file writes. A hook that needs crash-safe external effects must be idempotent, for example keyed by operation id.
 - **Provider stream resumption.** Partial streams are never persisted. An interrupted streaming request is retried or abandoned. Deferred requests are different and in scope: the provider returns a handle at once and serves the result later (e.g. `background: true` on a Responses API, batch APIs). @draht/ai returns an assistant message with stop reason `deferred` that carries the handle; it is persisted like any assistant message. Redeeming the handle appends a normal assistant message. Recovery sees the unredeemed handle and fetches instead of paying for a new request.
 - **Multiple writers.** Two processes on one session are out of scope. The serving layer routes all traffic for a session to the process that holds its harness. Lanes cover the workloads that look like multi-writer: parallel threads over shared history.
-- **Replication.** A session lives in one place. Coordination-free sync of diverging copies is a different design. Parked; see open questions.
+- **Replication.** A session lives in one place. Coordination-free sync of diverging copies is a different design. Nothing forecloses it later; section 19 records why.
 
 ## 2. What a session is
 
@@ -1274,7 +1274,7 @@ harness.hooks.on("before_run", async () => ({
 
 Semantics, uniform across all hooks:
 
-- Registration is harness-global. Every hook event carries `lane` (omitted below); a handler scopes itself. Per-lane registration is an open question (section 19).
+- Registration is harness-global. Every hook event carries `lane` (omitted below); a handler scopes itself. Per-lane registration was considered and rejected (section 19).
 - `before_run` and `before_resume` registrations require a stable `id`. An id is unique within one hook name; duplicate registration rejects synchronously. The same extension uses the same id for both hooks across restarts. The runner stores each `before_run` handler's `resumeData` under its id and hands each `before_resume` handler only the value under the same id.
 - `before_run` runs on the normalized caller prompt, outside the lane mutation line, before acceptance. It does not see captured nextRun items; the acceptance mutation captures those afterwards (section 15). A rejected acceptance (busy lane) discards the hook output.
 - Handlers run sequentially in registration order. Each transformation handler sees the output of the previous one; returned `messages` append and a returned `systemPrompt` replaces the current value.
@@ -2278,6 +2278,8 @@ async function redeemDeferred(): Promise<AssistantMessage> {
 
 One fetch per `resume()`. Pending re-parks without a write. A terminal answer — returned or converted from a rejected fetch — lands as the error entry and fails the run through the normal drain path, which still honors input accepted before the failure (section 6).
 
+**Fixed-point self-check.** When `resume()` completes, parks, or closes its operation, the harness recomputes the section 7 reduction from storage and compares it to the live `LaneState`. A mismatch is corruption and faults the harness — writer/reducer drift is caught the moment it happens instead of one crash later. The check is cheap (the same two bounded reads restore performs) and runs in production, not only under test.
+
 ### Tools
 
 The live path is section 14 `executeToolBatch`; the durability callbacks route through `fx`, so the gate and the traces see every write in order:
@@ -2699,10 +2701,12 @@ Telemetry is separate from events and hooks:
 - Hooks can change execution.
 - Telemetry is passive process-local diagnostics.
 
-## 19. Open questions
+## 19. Resolved questions
 
-1. **Per-lane hooks and events.** Registration is harness-global; every payload carries `lane`, handlers scope themselves. Enough, or do we want `lane.hooks.on(...)` with scoped delivery — for example a `before_tool` policy for one Slack thread? Global-with-lane is more general but pushes filtering onto every scoped consumer.
-2. **Records and replication.** Lane operation logs are flat sequences without parent links, because a single writer per lane makes order equal causality (section 2). Replicating or merging diverged copies of a session would need explicit causality — parent links or equivalent. Out of scope (section 1); recorded here so the flat encoding is a known, deliberate bet.
+Formerly open; both answered during review.
+
+1. **Per-lane hooks and events — no.** Registration stays harness-global; every payload carries `lane` and handlers scope themselves. Scoped registration would add API surface without new capability.
+2. **Records and replication — stays out of scope, and nothing forecloses it.** Lane operation logs are flat sequences without parent links because a single writer per lane makes order equal causality (section 2). If replication is ever wanted, it falls out of the design as-is — append-only logs under one writer with a shared `seq` replicate by log shipping; no parent links or schema change needed now.
 
 ## 20. Testing strategy
 
@@ -2733,6 +2737,8 @@ The in-memory backend is the reference. The parity suite runs the same setups ag
 
 Tier A assumes live execution writes the correct prefix; Tier B verifies it. Run the public harness against an instrumented `Session` recording every entry (`E`), record (`R`), fact (`G`), and hook (`H`). Assert exact order against the section 6 traces: one-tool run, retry, terminal failure, steering during a tool, finish-boundary orders, deferred write mid-turn, abort during a tool, auto-compaction, manual compaction, navigation (move-first), deferred suspension and every fetch outcome. This tier catches the critical regression class: an effect starting before its intent record.
 
+Tier B also asserts the append-only-context invariant (section 4) executably: within a run, every faux-provider request's message list extends the previous request's as an exact prefix — except across a compaction entry, the one sanctioned invalidation. This turns the KV-cache discipline from prose into a failing test whenever a write path inserts before the tail.
+
 ### Tier C — deterministic interleavings
 
 `drive: "manual"` against the real `AgentHarness`, the faux provider, and a real backend. The gate is the only test hook; there is no second machine.
@@ -2752,9 +2758,11 @@ await harness.runToCompletion();
 expect((await promptResult).ok).toBe(true);
 ```
 
-Crash simulation is `close()` at a chosen boundary, then reopening the same backend and resuming. Coverage: **both orders of every race-catalog row (section 15)**, input injected between arbitrary actions, abort while a cancellable effect is parked and while it runs, process loss at every action of the section 6 traces, and automatic versus manual drive producing identical durable logs and outcomes for the same scripted provider.
+Crash simulation is `close()` at a chosen boundary, then reopening the same backend and resuming. Crash sites are derived mechanically, not hand-picked: drive each section 6 trace in manual mode, snapshot the backend after **every** `executeAction()`, then reopen every snapshot and `resume()` — and run recovery twice per snapshot, proving half-completed recovery is safe. New effects added to a trace get crash coverage automatically. Coverage: **both orders of every race-catalog row (section 15)**, input injected between arbitrary actions, abort while a cancellable effect is parked and while it runs, and automatic versus manual drive producing identical durable logs and outcomes for the same scripted provider.
 
 Gate invariants, asserted across Tier C:
+
+- after every `resume()` outcome, the recomputed reduction equals live `LaneState` (the section 15 fixed-point self-check fired and passed);
 
 - `peekAction()` has no side effect and is stable until `executeAction()`.
 - `executeAction()` releases exactly the peeked action, never a later one.
@@ -2773,6 +2781,8 @@ Gate invariants, asserted across Tier C:
 - v3 fixtures: labels, session info, and `leaf` entries mid-chain and at end of file, old `firstKeptEntryId` compactions — all open as one normalized idle `main` lane.
 
 ## 21. Implementation sequence
+
+Implementation lives in `packages/agent/src/harness/experimental/`, tests in `packages/agent/test/harness/experimental/`. Nothing outside `experimental/` is modified in place; when the experimental implementation is complete and green, **everything currently under `src/harness/` outside `experimental/` is removed** and the experimental code replaces it wholesale.
 
 Keep each stage passing before starting the next.
 

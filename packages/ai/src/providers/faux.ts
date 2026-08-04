@@ -3,6 +3,7 @@ import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
 	Context,
+	DeferredCancelOptions,
 	DeferredFetchOptions,
 	DeferredHandle,
 	ImageContent,
@@ -606,12 +607,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 						...submissionOptions
 					} = entry.options ?? {};
 					try {
-						entry.final = await resolveResponse(
-							entry.step,
-							entry.context,
-							{ ...submissionOptions, ...fetchOptions },
-							entry.model,
-						);
+						entry.final = await resolveResponse(entry.step, entry.context, submissionOptions, entry.model);
 					} catch (error) {
 						entry.final = createErrorMessage(error, api, provider, entry.model.id);
 					}
@@ -637,7 +633,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 	const cancelDeferred = async (
 		requestModel: Model<string>,
 		handle: DeferredHandle,
-		cancelOptions?: StreamOptions,
+		cancelOptions?: DeferredCancelOptions,
 	): Promise<void> => {
 		state.cancelledDeferred.push(structuredClone(handle));
 		const entry = deferredResponses.get(handle.id);

@@ -11,7 +11,15 @@ import { cloudflareAIGatewayProvider } from "../src/providers/cloudflare-ai-gate
 import { cloudflareWorkersAIProvider } from "../src/providers/cloudflare-workers-ai.ts";
 import { fauxAssistantMessage, fauxProvider } from "../src/providers/faux.ts";
 import { googleVertexProvider } from "../src/providers/google-vertex.ts";
-import type { Api, Context, DeferredHandle, Model, ProviderStreams } from "../src/types.ts";
+import type {
+	Api,
+	Context,
+	DeferredCancelOptions,
+	DeferredFetchOptions,
+	DeferredHandle,
+	Model,
+	ProviderStreams,
+} from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
 
 function fakeAuthContext(env: Record<string, string>, files: string[] = []): AuthContext {
@@ -415,6 +423,81 @@ describe("createProvider", () => {
 		expect(capturedEnv).toEqual({ PROVIDER_ONLY: "provider", REQUEST_ONLY: "request", SHARED: "request" });
 	});
 
+	it("applies resolved request options to deferred fetch and cancellation", async () => {
+		let fetchedModel: Model<Api> | undefined;
+		let fetchedOptions: DeferredFetchOptions | undefined;
+		let cancelledOptions: DeferredCancelOptions | undefined;
+		const deferredModel = { ...testModel("api-a", "model-a"), provider: "deferred-provider" };
+		const streams = recordingStreams("deferred", []);
+		streams.fetchDeferred = (model, _handle, options) => {
+			fetchedModel = model;
+			fetchedOptions = options;
+			return streams.streamSimple(model, context);
+		};
+		streams.cancelDeferred = async (_model, _handle, options) => {
+			cancelledOptions = options;
+		};
+		const provider = createProvider({
+			id: "deferred-provider",
+			auth: {
+				apiKey: {
+					name: "Test",
+					resolve: async () => ({
+						auth: {
+							apiKey: "provider-key",
+							baseUrl: "https://resolved.test/v1",
+							headers: { Authorization: "Bearer provider", "X-Shared": "provider" },
+						},
+						env: { PROVIDER_ONLY: "provider", SHARED: "provider" },
+					}),
+				},
+			},
+			models: [deferredModel],
+			api: streams,
+		});
+		const models = createModels();
+		models.setProvider(provider);
+		const handle: DeferredHandle = {
+			provider: deferredModel.provider,
+			modelId: deferredModel.id,
+			api: deferredModel.api,
+			id: "response-1",
+		};
+
+		await models.fetchDeferred(deferredModel, handle, {
+			wait: 50,
+			timeoutMs: 100,
+			apiKey: "request-key",
+			headers: { "X-Request": "request", "x-shared": "request" },
+			env: { REQUEST_ONLY: "request", SHARED: "request" },
+			transformHeaders: (headers) => ({ ...headers, "X-Transformed": "yes" }),
+		});
+		await models.cancelDeferred(deferredModel, handle, {
+			timeoutMs: 200,
+			transformHeaders: (headers) => ({ ...headers, "X-Cancel": "yes" }),
+		});
+
+		expect(fetchedModel?.baseUrl).toBe("https://resolved.test/v1");
+		expect(fetchedOptions).toMatchObject({
+			wait: 50,
+			timeoutMs: 100,
+			apiKey: "request-key",
+			headers: {
+				Authorization: "Bearer provider",
+				"X-Request": "request",
+				"x-shared": "request",
+				"X-Transformed": "yes",
+			},
+			env: { PROVIDER_ONLY: "provider", REQUEST_ONLY: "request", SHARED: "request" },
+		});
+		expect(cancelledOptions).toMatchObject({
+			timeoutMs: 200,
+			apiKey: "provider-key",
+			headers: { Authorization: "Bearer provider", "X-Shared": "provider", "X-Cancel": "yes" },
+			env: { PROVIDER_ONLY: "provider", SHARED: "provider" },
+		});
+	});
+
 	it("produces a stream error for a model whose api has no implementation", async () => {
 		const provider = createProvider({
 			id: "mixed",
@@ -510,7 +593,7 @@ describe("fauxProvider", () => {
 		});
 		if (!deferred.deferred) throw new Error("Faux response did not include a deferred handle");
 
-		const pending = await models.fetchDeferred(model, deferred.deferred, { wait: 0 });
+		const pending = await models.fetchDeferred(model, deferred.deferred);
 		expect(pending.stopReason).toBe("deferred");
 		expect(pending.deferred).toEqual(deferred.deferred);
 

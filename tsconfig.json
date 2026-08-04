@@ -11,7 +11,6 @@
 			"@draht/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
 			"@draht/ai/dist/*": ["./packages/ai/src/*"],
 			"@draht/agent-core": ["./packages/agent/src/index.ts"],
-			"@draht/agent-core/experimental": ["./packages/agent/src/experimental.ts"],
 			"@draht/agent-core/*": ["./packages/agent/src/*"],
 			"@draht/coding-agent": ["./packages/coding-agent/src/index.ts"],
 			"@draht/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],

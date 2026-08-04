@@ -3,12 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@draht/agent-core";
 import { afterEach } from "vitest";
-import { InMemorySessionRepository } from "../../src/harness/session/memory-repo.ts";
-import type { Session } from "../../src/harness/session/session.ts";
-
-export async function createInMemorySession(id?: string): Promise<Session> {
-	return new InMemorySessionRepository().create({ id });
-}
 
 export function createUserMessage(text: string): AgentMessage {
 	return {

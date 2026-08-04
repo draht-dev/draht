@@ -246,9 +246,11 @@ describe("AgentHarness", () => {
 			model: registration.getModel(),
 		});
 		let subscriberCalls = 0;
-		harness.subscribe(() => {
+		harness.subscribe((event) => {
 			subscriberCalls++;
-			harness.requestShutdown();
+			if (event.type === "message_start" && event.message.role === "assistant") {
+				harness.requestShutdown();
+			}
 		});
 
 		await expect(harness.prompt("hello")).resolves.toMatchObject({ role: "assistant", stopReason: "aborted" });

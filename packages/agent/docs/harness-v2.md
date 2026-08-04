@@ -114,7 +114,7 @@ An operation is accepted before it executes. Acceptance is durable: after a cras
 
 A run is a sequence of turns. A turn is one assistant step plus the complete tool batch requested by that assistant message.
 
-A step is a retryable unit of work inside an operation: produce an assistant message, a compaction summary, or a branch summary. A step may make zero, one, or several provider requests. A failed attempt retries the same step; the attempt count is durable and survives restarts. A deferred provider request suspends an assistant step: the handle arrives inside a persisted assistant message, the lane suspends, and redemption later appends the real result (section 1).
+A step is a retryable unit of work inside an operation: produce an assistant message, a compaction summary, or a branch summary. A step may make zero, one, or several provider requests. A failed attempt retries the same step; the attempt count is durable and survives restarts. A deferred provider request ends an assistant step: the handle arrives inside a persisted assistant message that closes the step, the operation suspends, and redemption later appends the real result (section 1).
 
 Each tool call that starts an effect is also a step. `tool_started` opens it; its tool-result entry closes it. A parallel batch holds several open tool steps at once; their effects run concurrently and finalize in source order (section 14).
 
@@ -262,7 +262,7 @@ interface OperationFinishedRecord extends RecordBase {
 }
 
 // Written before each attempt at a retryable step. Marks: we are about to
-// do this, for the n-th time. Steps are logged only because they are
+// do this, for the n-th time. Steps are logged because they are
 // retryable: the durable count caps retries across restarts — a
 // crash-restart loop cannot reset it. One record per attempt; one attempt
 // may make zero or several provider requests (split-turn compaction
@@ -658,7 +658,7 @@ Both reads are bounded by the size of the open operation, not by the size of the
 From those two reads, the lane's state:
 
 - **aborting** — an `abort_requested` record exists.
-- **attempts used** — the newest `step_attempt` whose `resultEntryId` has no entry is the unfinished step; its `attempt` field is the durable count, its kind and `compactionReason` select the resume path. Closure is a point lookup, not adjacency inference: a step is closed exactly when the newest attempt's provisioned result exists. Earlier attempts' unfulfilled ids belong to finished work and need no inspection.
+- **attempts used** — the newest `step_attempt`, when its `resultEntryId` has no entry, is the unfinished step; its `attempt` field is the durable count, its kind and `compactionReason` select the resume path. Closure is a point lookup, not adjacency inference: a step is closed exactly when the newest attempt's provisioned result exists. Earlier attempts' unfulfilled ids belong to finished work and need no inspection.
 - **overflow recovery used** — a compaction `step_attempt` with reason `overflow` is newer than the newest consumed conversational message of this run (section 6, overflow guard).
 - **tool batch** — the newest assistant entry with tool calls, each call matched against `tool_started` records and result entries (section 6, crash-site table). The assistant stop reason is retained: a `length` batch is truncated and never executes on recovery. Persisted `terminate` values on result entries decide whether the completed batch forces another turn.
 - **deferred handle** — the newest own entry is a deferred assistant message with no successor.
@@ -1037,7 +1037,7 @@ Calls on a faulted harness reject with the same `HarnessFault` instance until th
 
 `finalMessage` is the run's newest entry that projects to an assistant message; `finalEntryId` is that entry's id. `leafId` is the lane's leaf when the operation finished — the race-free anchor for branch queries (`findEntriesOnBranch({ start: leafId })`). The two differ when a deferred write was applied after the final assistant message. Full transcripts are not duplicated into results; they are in the session and were delivered as events.
 
-**Type provenance.** Types this document uses but does not redefine — `QueueMode`, `RetryPolicy`, `CompactionSettings`, `CompactionPreparation`, `NavigationPreparation`, `CompactResult`, `ToolResultPatch`, `SessionStats`, `SessionMetadata`, `NavigateOptions`, `EntryCursor`, `LogItem`, `StreamOptionsPatch` — keep their existing `harness/types.ts` shapes. Lowercase helpers in section 15 pseudocode without a definition (`preparation`, `runToolBatchForSingleCall`, request/option bags such as `AssistantRequest` and `FactWrite`) are constructive implementation detail, not contract.
+**Type provenance.** Types this document uses but does not redefine — `QueueMode`, `RetryPolicy`, `CompactionSettings`, `CompactionPreparation`, `NavigationPreparation` (today's `TreePreparation`, renamed), `CompactResult`, `ToolResultPatch`, `SessionStats`, `SessionMetadata`, `NavigateOptions`, `EntryCursor`, `LogItem`, `StreamOptionsPatch` — keep their existing `harness/types.ts` shapes. Lowercase helpers in section 15 pseudocode without a definition (`preparation`, `runToolBatchForSingleCall`, request/option bags such as `AssistantRequest` and `FactWrite`) are constructive implementation detail, not contract.
 
 ### Suspended operations
 
@@ -1373,8 +1373,9 @@ after_tool: {
 // Structural operations ------------------------------------------------
 
 // Decline, adjust, or supply the summary. Runs after operation_started,
-// live and on resume alike. Not re-run when the result entry exists or a
-// step_attempt already durably selected generated-summary work.
+// live and on resume alike. Not re-run when the result entry exists or
+// any step_attempt for this work already exists (hook-written or generated
+// — records cannot distinguish them, and neither needs the hook again).
 before_compaction: {
   event:  { reason: "manual" | "threshold" | "overflow"; preparation: CompactionPreparation; customInstructions? };
   result: { decline?: boolean; compaction?: CompactResult } | undefined;
@@ -1398,7 +1399,7 @@ Hooks re-run only where the work itself re-runs. Persisted outputs are never rec
 | `after_response` | per response | per response | per response |
 | `before_tool` | per call | — | not when `tool_started` exists |
 | `after_tool` | per executed result | — | on safe replay only |
-| `before_compaction`, `before_navigation` | per operation | no | not when a result entry or a generated-summary `step_attempt` exists |
+| `before_compaction`, `before_navigation` | per operation | no | not when a result entry or any `step_attempt` for this work exists |
 | `before_run_end` | per normal finish boundary | — | at the boundary resume reaches (may repeat); never for abort, terminal failure, or exhausted auto-compaction |
 
 ## 12. Session and SessionTree
@@ -2349,7 +2350,8 @@ async function reconcileToolBatch(batch: ToolBatchState): Promise<void> {
                            tool: toolByName(call.started.toolName),
                            args: call.started.effectiveArgs };   // persisted, not re-derived
         const executed  = await fx.executeTool(prepared);
-        const finalized = await finalizeToolCall(prepared, executed, { afterToolCall }, abortSignal);
+        const finalized = await finalizeToolCall(prepared, executed,
+          { afterToolCall }, toolContext, abortSignal);   // the fx-wired hook callback (runToolBatch)
         if (finalized.result.usage) {
           await fx.appendRecord(toolUsageRecord(op.id, call.started.resultEntryId,
             call.toolCall.id, finalized.result.usage));   // the replay's own record
@@ -2425,7 +2427,7 @@ async function autoCompact(reason: "threshold" | "overflow"): Promise<void> {
   if (op.step?.kind !== "compaction") {   // no durable compaction decision yet; on the overflow
                                           // path op.step is the abandoned assistant step
     const prep = preparation(state);
-    if (prep.nothingToCompact) {
+    if (nothingToCompact(prep)) {
       if (reason === "overflow") throw new RunFailed(truncationError());
       return;
     }
@@ -2830,7 +2832,7 @@ Gate invariants, asserted across Tier C:
 - The existing `agent-loop` and `agent` suites pass unchanged — the section 14 compatibility criterion.
 - Event ordering per section 10, including `message_end` after commit.
 - Hooks: registration-id `resumeData` round trips, duplicate-id rejection, aggregation order, fail-closed `before_tool`.
-- Ledger completeness and the match invariant: every provider request leaves exactly one `usage` record per physical request (split-turn: two per attempt); failed compaction series and discarded overflow responses lose no recorded cost; each usage-bearing entry's snapshot equals the newest non-adjustment record(s) bound to its id; a replayed tool records both executions; adjustments never alter entries and sum into read-time effective cost; `getStats()` equals the ledger sum and the `usage` event's totals after every commit; forks start at zero; v3 conversion preserves totals through the aggregate import adjustment.
+- Ledger completeness and the match invariant: every provider request leaves exactly one `usage` record per physical request (split-turn: two per attempt; a pending deferred fetch that reports no usage writes none); failed compaction series and discarded overflow responses lose no recorded cost; each usage-bearing entry's snapshot equals the newest non-adjustment record(s) bound to its id; a replayed tool records both executions; adjustments never alter entries and sum into read-time effective cost; `getStats()` equals the ledger sum and the `usage` event's totals after every commit; forks start at zero; v3 conversion preserves totals through the aggregate import adjustment.
 - Overflow classification against the reported provider shapes: prompt 268,009 of a 272,000 window and 81,217 of 84,500 (recoverable), non-zero reasoning-only output, cache-write-heavy usage, a Codex-style provider that rejects `max_output_tokens`, a genuine 1,024-token cap fully used (not recoverable), and `length → length` stopping after exactly one recovery per conversational input.
 - v3 fixtures: labels, session info, and `leaf` entries mid-chain and at end of file, old `firstKeptEntryId` compactions — all open as one normalized idle `main` lane.
 

@@ -14,6 +14,10 @@
 	},
 	"files": [
 		"dist/**/*",
+		"native/win32/prebuilds/**/*.node",
+		"native/darwin/prebuilds/**/*.node",
+		"native/darwin/src/**/*.c",
+		"native/darwin/build.sh",
 		"README.md"
 	],
 	"keywords": [

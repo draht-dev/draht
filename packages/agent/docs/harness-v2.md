@@ -1656,7 +1656,8 @@ One file per session: a header line, then one JSON object per line, in `seq` ord
 
 ```text
 {"kind":"header", "version":4, id, createdAt, cwd, parentSessionId?, legacyParentSessionPath?, metadata?}
-{"kind":"entry",  "lane":"main", id, parentId, type, timestamp, ...}
+{"kind":"entry",  "lane":"main", id, parentId, type, timestamp, ...}  // append; advances main
+{"kind":"entry",  id, parentId, type, timestamp, ...}                    // fork import; advances no lane
 {"kind":"record", "lane":"main", id, runId?, type, timestamp, ...}
 {"kind":"lane",   "lane":"slack:t1", "leafId":"e42"}        // create or move
 {"kind":"fact",   "fact":"name",  "name":"Refactor auth"}
@@ -1664,7 +1665,7 @@ One file per session: a header line, then one JSON object per line, in `seq` ord
 ```
 
 - Open reads the whole file into memory; all queries run against that state. One session-wide append queue serializes writes from every lane, one line each; the queue allocates `seq`, and its order is the line order. Every storage mutation in this section is exactly one line — nothing in the design needs a multi-line atomic write.
-- The `lane` field on entry lines is envelope metadata: replay derives each lane's leaf from it (last entry line per lane, overridden by later `lane` lines). It dies at decode; entries expose `seq` but no lane.
+- The optional `lane` on an entry line is envelope metadata and dies at decode. When present, the line atomically appends the entry and advances that lane; replay requires `parentId` to equal its current leaf. When absent, the line imports a fork entry without moving a lane. Entries expose `seq` but no lane.
 - Torn tail: a malformed final line is the append that died mid-write. Open truncates it; the write was never acknowledged, nothing is lost. A malformed line anywhere else is corruption; open rejects.
 - Durability is process-crash level: a resolved append call. No fsync promise; if power-loss durability is ever needed, it becomes an explicit capability.
 - v3 files: entries only, no `kind` tags. Open builds the normalized logical tree from section 12; every entry belongs to `main`, and `main`'s leaf resolves through the last `leaf` entry to its nearest retained ancestor. Before the first v4 append, the file is rewritten once with a v4 header (write temp, rename). This is the single conversion the compatibility policy allows. Read-only opens never rewrite.
@@ -2682,7 +2683,7 @@ repo.fork(source, options & { id?, parentSessionId? }): Promise<Session>;
 repo.create({ id?, parentSessionId? }): Promise<Session>;
 ```
 
-- Entries only. No records, no queues: a fork starts idle, every lane question answers "no open operation". No records also means no ledger: a fork's `getStats()` starts at zero — cost belongs to the session that incurred it; entry usage snapshots still display.
+- Entries only. JSONL copies them without `lane`, then writes the final lane pointers. No records, no queues: a fork starts idle, every lane question answers "no open operation". No records also means no ledger: a fork's `getStats()` starts at zero — cost belongs to the session that incurred it; entry usage snapshots still display.
 - Lanes: `scope: "branch"` → the fork has only `main`, at the fork point. `scope: "tree"` → every lane name and leaf pointer is copied. No operation logs or queues are copied either way, so every forked lane is idle.
 - Facts: `scope: "tree"` copies all; `scope: "branch"` copies the name always, labels only when their target entry was copied.
 - The fork point may be any message entry. A copy whose tip sits mid-tool-batch is still promptable: @draht/ai's transformMessages inserts synthetic empty results for orphaned tool calls at request build time.

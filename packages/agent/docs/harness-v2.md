@@ -2657,7 +2657,9 @@ repo.create({ id?, parentSessionId? }): Promise<Session>;
 
 ## 18. Telemetry
 
-Telemetry uses explicit context propagation. Core code does not use `AsyncLocalStorage`, global current-span state, or runtime-specific context APIs. This section defines the harness telemetry mechanism; `packages/agent/docs/observability.md` provides background only.
+Telemetry uses explicit context propagation. Core code does not use `AsyncLocalStorage`, global current-span state, or runtime-specific context APIs: pi runs in Node, Bun, browsers, and workers, so no runtime's ambient-context mechanism can be the core abstraction, and explicit arguments are the only portable one. This section is the complete telemetry design; no other document defines any of it.
+
+Pi ships no exporter and depends on no telemetry vendor. The application supplies the `ExecutionContext` below; an **adapter** is such an implementation that bridges spans into OTel, Sentry, logs, or metrics. The contract passes live span objects, not span/trace ids — an adapter that needs ids (every OTel-shaped backend does) allocates and correlates them internally, so core never carries id plumbing. An adapter may use `AsyncLocalStorage` inside its own implementation on runtimes that have it; core will never require it.
 
 ### Context contract
 
@@ -2876,4 +2878,3 @@ For a fresh implementation session, in this order. This document wins over anyth
 15. `packages/storage/sqlite-node/src/sqlite/storage/branch-entries.ts` — the branch cache being generalized.
 16. `packages/storage/sqlite-node/src/sqlite/repo.ts` — create/open/fork.
 17. `packages/coding-agent/docs/session-format.md` — v3 JSONL, the compatibility target.
-18. `packages/agent/docs/observability.md` — telemetry background; section 18 defines context propagation.

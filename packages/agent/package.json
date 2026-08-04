@@ -5,6 +5,25 @@
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./node": {
+			"types": "./dist/node.d.ts",
+			"import": "./dist/node.js"
+		},
+		"./experimental": {
+			"types": "./dist/experimental.d.ts",
+			"import": "./dist/experimental.js"
+		},
+		"./experimental/session/testing": {
+			"types": "./dist/harness/experimental/session/testing/index.d.ts",
+			"import": "./dist/harness/experimental/session/testing/index.js"
+		},
+		"./package.json": "./package.json"
+	},
 	"files": [
 		"dist",
 		"README.md"

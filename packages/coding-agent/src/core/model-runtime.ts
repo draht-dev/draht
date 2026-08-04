@@ -14,10 +14,13 @@ import {
 	type CredentialInfo,
 	type CredentialStore,
 	createModels,
+	type DeferredFetchOptions,
+	type DeferredHandle,
 	lazyStream,
 	type Model,
 	type Models,
 	type ModelsApiStreamOptions,
+	type ModelsDeferredOptions,
 	ModelsError,
 	type ModelsRefreshOptions,
 	type ModelsRefreshResult,
@@ -623,6 +626,28 @@ export class ModelRuntime implements Models {
 
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {
 		return this.streamSimple(model, context, options).result();
+	}
+
+	async fetchDeferred(
+		model: Model<Api>,
+		handle: DeferredHandle,
+		options?: ModelsDeferredOptions,
+	): Promise<AssistantMessage> {
+		return lazyStream(model, async () => {
+			const prepared = await this.prepareRequest(model, options);
+			if (!prepared.provider.fetchDeferred) {
+				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
+			}
+			return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
+		}).result();
+	}
+
+	async cancelDeferred(model: Model<Api>, handle: DeferredHandle, options?: ModelsDeferredOptions): Promise<void> {
+		const prepared = await this.prepareRequest(model, options);
+		if (!prepared.provider.cancelDeferred) {
+			throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
+		}
+		await prepared.provider.cancelDeferred(prepared.model, handle, prepared.options);
 	}
 
 	login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential> {

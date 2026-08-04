@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryModelsStore, type Model, type Provider } from "@draht/ai";
+import { createAssistantMessageEventStream, InMemoryModelsStore, type Model, type Provider } from "@draht/ai";
 import { describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
@@ -82,6 +82,101 @@ describe("extension provider model lifecycle", () => {
 
 		registry.unregisterProvider("extension-native");
 		expect(registry.getProvider("extension-native")).toBeUndefined();
+	});
+
+	it("preserves native deferred methods through provider overlays", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "pi-native-provider-deferred-"));
+		const modelsPath = join(tempDir, "models.json");
+		writeFileSync(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					"extension-native-deferred": { baseUrl: "https://overlay.test/v1" },
+				},
+			}),
+		);
+		try {
+			const runtime = await ModelRuntime.create({
+				credentials: AuthStorage.inMemory(),
+				modelsStore: new InMemoryModelsStore(),
+				modelsPath,
+				allowModelNetwork: false,
+			});
+			const nativeModel = {
+				...model("native-deferred"),
+				provider: "extension-native-deferred",
+				baseUrl: "https://native.test/v1",
+			};
+			let fetchedBaseUrl: string | undefined;
+			let cancelledId: string | undefined;
+			const provider: Provider = {
+				id: "extension-native-deferred",
+				name: "Extension Native Deferred",
+				auth: {
+					apiKey: {
+						name: "Native key",
+						resolve: async () => ({ auth: { apiKey: "key" }, source: "native" }),
+					},
+				},
+				getModels: () => [nativeModel],
+				stream: () => {
+					throw new Error("unused");
+				},
+				streamSimple: () => {
+					throw new Error("unused");
+				},
+				fetchDeferred: (requestModel) => {
+					fetchedBaseUrl = requestModel.baseUrl;
+					const message = {
+						role: "assistant" as const,
+						content: [],
+						api: requestModel.api,
+						provider: requestModel.provider,
+						model: requestModel.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop" as const,
+						timestamp: 0,
+					};
+					const stream = createAssistantMessageEventStream();
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+					stream.end(message);
+					return stream;
+				},
+				cancelDeferred: async (_requestModel, handle) => {
+					cancelledId = handle.id;
+				},
+			};
+
+			runtime.registerNativeProvider(provider);
+			const composedModel = runtime.getModel(provider.id, nativeModel.id);
+			expect(composedModel).toBeDefined();
+
+			await runtime.fetchDeferred(composedModel!, {
+				provider: provider.id,
+				modelId: nativeModel.id,
+				api: nativeModel.api,
+				id: "fetch-id",
+			});
+			await runtime.cancelDeferred(composedModel!, {
+				provider: provider.id,
+				modelId: nativeModel.id,
+				api: nativeModel.api,
+				id: "cancel-id",
+			});
+
+			expect(fetchedBaseUrl).toBe("https://overlay.test/v1");
+			expect(cancelledId).toBe("cancel-id");
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	it("applies models.json overrides above native providers", async () => {

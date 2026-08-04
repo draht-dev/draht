@@ -208,6 +208,11 @@ export interface StreamOptions {
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
 
+export interface DeferredFetchOptions extends StreamOptions {
+	/** Maximum time in milliseconds to wait for a terminal response. Zero checks once. */
+	wait?: number;
+}
+
 /**
  * Maps known APIs to their full provider-specific stream option types.
  * Type-only imports from API implementation modules are erased at emit, so
@@ -236,8 +241,8 @@ export type ApiStreamOptions<TApi extends Api> = TApi extends keyof ApiOptionsMa
 
 /**
  * The uniform stream contract of an API implementation module: every module
- * under `src/api/` exports exactly `stream` and `streamSimple`, so the module
- * itself satisfies this interface. Lazy wrappers (`lazyApi()`) and provider
+ * under `src/api/` exports `stream` and `streamSimple`; capable modules may also
+ * export deferred-response methods. Lazy wrappers (`lazyApi()`) and provider
  * factories pass these around as values. This is the untyped dispatch shape;
  * per-API option typing lives on the implementation modules themselves and on
  * `Provider.stream()` via `ApiStreamOptions`.
@@ -245,6 +250,12 @@ export type ApiStreamOptions<TApi extends Api> = TApi extends keyof ApiOptionsMa
 export interface ProviderStreams {
 	stream(model: Model<Api>, context: Context, options?: StreamOptions): AssistantMessageEventStream;
 	streamSimple(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
+	fetchDeferred?(
+		model: Model<Api>,
+		handle: DeferredHandle,
+		options?: DeferredFetchOptions,
+	): AssistantMessageEventStream;
+	cancelDeferred?(model: Model<Api>, handle: DeferredHandle, options?: StreamOptions): Promise<void>;
 }
 
 /**
@@ -314,6 +325,8 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 // Unified options with reasoning passed to streamSimple() and completeSimple()
 export interface SimpleStreamOptions extends StreamOptions {
 	reasoning?: ThinkingLevel;
+	/** Ask a capable provider to return a durable handle and continue the request asynchronously. */
+	deferred?: boolean | { window?: "15m" | "1h" | "24h" };
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
 }
@@ -397,7 +410,21 @@ export interface Usage {
 	};
 }
 
-export type StopReason = "pending" | "stop" | "length" | "toolUse" | "error" | "aborted";
+export type StopReason = "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
+
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+export interface DeferredHandle {
+	provider: string;
+	modelId: string;
+	api: string;
+	/** Provider token, such as a response id or batch id plus row id. */
+	id: string;
+	expiresAt?: number;
+	pollAfterMs?: number;
+	/** Provider conversion data required to reconstruct the final assistant message. */
+	data?: JsonValue;
+}
 
 export interface UserMessage {
 	role: "user";
@@ -416,6 +443,7 @@ export interface AssistantMessage {
 	diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
 	usage: Usage;
 	stopReason: StopReason;
+	deferred?: DeferredHandle;
 	errorMessage?: string;
 	rawStopReason?: string;
 	timestamp: number; // Unix timestamp in milliseconds
@@ -518,7 +546,11 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
-	| { type: "done"; reason: Extract<StopReason, "stop" | "length" | "toolUse">; message: AssistantMessage }
+	| {
+			type: "done";
+			reason: Extract<StopReason, "stop" | "length" | "toolUse" | "deferred">;
+			message: AssistantMessage;
+	  }
 	| { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
 
 /**

@@ -1,4 +1,26 @@
+import type { FileSystem } from "../../types.ts";
 import type { JsonValue, SessionCreateOptions, SessionMetadata } from "../types.ts";
+
+export type JsonlSessionRepoFileSystem = Pick<
+	FileSystem,
+	| "cwd"
+	| "absolutePath"
+	| "joinPath"
+	| "readTextFile"
+	| "writeFile"
+	| "appendFile"
+	| "fileInfo"
+	| "listDir"
+	| "exists"
+	| "createDir"
+	| "remove"
+>;
+
+export interface JsonlSessionRepoOptions {
+	fs: JsonlSessionRepoFileSystem;
+	sessionsRoot: string;
+	cwd?: string;
+}
 
 export interface JsonlSessionMetadata extends SessionMetadata {
 	cwd: string;

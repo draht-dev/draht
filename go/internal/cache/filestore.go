@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -86,7 +87,16 @@ func (f *fileStore) Load(ctx context.Context) (*Snapshot, error) {
 
 	readFile := f.readFile
 	if readFile == nil {
-		readFile = os.ReadFile
+		readFile = func(path string) ([]byte, error) {
+			file, err := os.Open(path)
+			if err != nil {
+				return nil, err
+			}
+			defer file.Close()
+			// Read one byte beyond the accepted limit so growth between Stat and
+			// Open is detected without ever allocating the remainder of the file.
+			return io.ReadAll(io.LimitReader(file, maxCacheFileBytes+1))
+		}
 	}
 	data, err := readFile(path)
 	if err != nil {

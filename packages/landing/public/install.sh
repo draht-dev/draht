@@ -89,10 +89,30 @@ CHECKSUMS="$WORK_DIR/DRAHT-SHA256SUMS"
 ARCHIVE_PATH="$WORK_DIR/$ARCHIVE"
 BASE="https://github.com/$REPO/releases/download/$TAG"
 
+MAX_MANIFEST_BYTES=$((2 * 1024 * 1024))
+MAX_CHECKSUM_BYTES=$((2 * 1024 * 1024))
+MAX_ARCHIVE_BYTES=$((256 * 1024 * 1024))
+MAX_DOWNLOAD_BYTES=$((260 * 1024 * 1024))
+downloaded_bytes=0
+
+bounded_download() {
+  url="$1"; destination="$2"; limit="$3"; label="$4"
+  [ "$limit" -gt 0 ] || error "$label has a non-positive byte limit."
+  remaining=$((MAX_DOWNLOAD_BYTES - downloaded_bytes))
+  [ "$remaining" -gt 0 ] || error "Draht release downloads exceed the aggregate byte limit."
+  [ "$limit" -le "$remaining" ] || limit="$remaining"
+  rm -f "$destination"
+  curl -fsSL --max-filesize "$limit" "$url" -o "$destination" || error "$label download failed or exceeded its $limit byte limit."
+  size="$(wc -c < "$destination" | tr -d '[:space:]')"
+  [ "$size" -gt 0 ] || error "$label download is empty."
+  [ "$size" -le "$limit" ] || error "$label download exceeds its $limit byte limit."
+  downloaded_bytes=$((downloaded_bytes + size))
+  [ "$downloaded_bytes" -le "$MAX_DOWNLOAD_BYTES" ] || error "Draht release downloads exceed the aggregate byte limit."
+}
+
 info "Downloading Draht $TAG for $PLATFORM..."
-curl -fsSL "$BASE/runtime-manifest.json" -o "$MANIFEST"
-curl -fsSL "$BASE/DRAHT-SHA256SUMS" -o "$CHECKSUMS"
-curl -fsSL "$BASE/$ARCHIVE" -o "$ARCHIVE_PATH"
+bounded_download "$BASE/runtime-manifest.json" "$MANIFEST" "$MAX_MANIFEST_BYTES" "runtime-manifest.json"
+bounded_download "$BASE/DRAHT-SHA256SUMS" "$CHECKSUMS" "$MAX_CHECKSUM_BYTES" "DRAHT-SHA256SUMS"
 
 if command -v gh >/dev/null 2>&1; then
   info "Verifying GitHub build provenance..."
@@ -130,7 +150,6 @@ if command -v gh >/dev/null 2>&1; then
   }
   verify_provenance "$MANIFEST" runtime-manifest.json
   verify_provenance "$CHECKSUMS" DRAHT-SHA256SUMS
-  verify_provenance "$ARCHIVE_PATH" "$ARCHIVE"
 elif [ "${DRAHT_ALLOW_UNVERIFIED:-0}" = "1" ]; then
   info "WARNING: gh is unavailable; DRAHT_ALLOW_UNVERIFIED=1 enables checksum-only verification."
 else
@@ -146,13 +165,24 @@ jq -e --arg version "$VERSION" --arg tag "$TAG" --arg commit "$TAG_COMMIT" --arg
     (.archiveBytes | type == "number" and . > 0 and floor == .) and
     (.archiveSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
     (.binaryBytes | type == "number" and . > 0 and floor == .) and
-    (.binarySha256 | type == "string" and test("^[0-9a-f]{64}$")))
+    (.binarySha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.files | type == "array" and length > 0 and
+      all(.[]; type == "string" and test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$") and endswith("/") | not) and
+      (length == (unique | length)) and any(.[]; . == (if $platform == "windows-x64" then $binary else "draht/" + $binary end))))
 ' "$MANIFEST" >/dev/null || error "runtime-manifest.json does not bind $TAG, release commit $TAG_COMMIT, $PLATFORM and $ARCHIVE."
 
 manifest_size="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .archiveBytes' "$MANIFEST")"
 manifest_hash="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .archiveSha256' "$MANIFEST")"
 manifest_binary_size="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .binaryBytes' "$MANIFEST")"
 manifest_binary_hash="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .binarySha256' "$MANIFEST")"
+expected_files="$WORK_DIR/expected-files"
+jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .files[]' "$MANIFEST" | LC_ALL=C sort > "$expected_files"
+[ "$manifest_size" -le "$MAX_ARCHIVE_BYTES" ] || error "runtime-manifest.json archive size exceeds the archive byte limit."
+[ $((downloaded_bytes + manifest_size)) -le "$MAX_DOWNLOAD_BYTES" ] || error "Declared Draht release downloads exceed the aggregate byte limit."
+bounded_download "$BASE/$ARCHIVE" "$ARCHIVE_PATH" "$manifest_size" "$ARCHIVE"
+if command -v gh >/dev/null 2>&1; then
+  verify_provenance "$ARCHIVE_PATH" "$ARCHIVE"
+fi
 checksum_hash="$(awk -v name="$ARCHIVE" '$2 == name { print $1 }' "$CHECKSUMS")"
 printf '%s' "$checksum_hash" | grep -Eq '^[0-9a-f]{64}$' || error "DRAHT-SHA256SUMS has no unique valid checksum for $ARCHIVE."
 [ "$(awk -v name="$ARCHIVE" '$2 == name { n++ } END { print n+0 }' "$CHECKSUMS")" = 1 ] || error "DRAHT-SHA256SUMS has duplicate entries for $ARCHIVE."
@@ -175,17 +205,62 @@ validate_paths() {
 
 EXTRACT_DIR="$WORK_DIR/extracted"
 mkdir -p "$EXTRACT_DIR"
+expanded_limit=$((manifest_binary_size + 2 * 1024 * 1024))
 if [ "$os" = windows ]; then
   command -v unzip >/dev/null 2>&1 || error "unzip is required for Windows archives."
+  zip_listing="$WORK_DIR/zip-listing"
+  unzip -Z -l "$ARCHIVE_PATH" > "$zip_listing" || error "Could not inspect ZIP archive."
+  awk '$1 ~ /^[dlcbps-]/ { print $NF }' "$zip_listing" | sed '/\/$/d' | LC_ALL=C sort > "$WORK_DIR/archive-files"
+  [ "$(uniq -d "$WORK_DIR/archive-files" | wc -l | tr -d '[:space:]')" = 0 ] || error "ZIP archive contains duplicate members."
+  if awk '$1 ~ /^[lcbps]/ { found=1 } END { exit !found }' "$zip_listing"; then error "Unsafe ZIP link or special member type."; fi
+  cmp -s "$expected_files" "$WORK_DIR/archive-files" || error "ZIP archive members do not exactly match runtime-manifest.json files."
   unzip -Z1 "$ARCHIVE_PATH" | validate_paths
-  unzip -q "$ARCHIVE_PATH" -d "$EXTRACT_DIR"
+  total=0
+  while IFS= read -r entry; do
+    remaining=$((expanded_limit - total))
+    [ "$remaining" -ge 0 ] || error "ZIP archive uncompressed data exceeds the expanded byte limit."
+    set +o pipefail
+    entry_size="$(unzip -p "$ARCHIVE_PATH" "$entry" | head -c $((remaining + 1)) | wc -c | tr -d '[:space:]')"
+    set -o pipefail
+    [ "$entry_size" -le "$remaining" ] || error "ZIP archive uncompressed data exceeds the expanded byte limit."
+    total=$((total + entry_size))
+  done < "$expected_files"
+  total=0
+  while IFS= read -r entry; do
+    destination="$EXTRACT_DIR/$entry"
+    mkdir -p "$(dirname "$destination")"
+    remaining=$((expanded_limit - total))
+    set +o pipefail
+    unzip -p "$ARCHIVE_PATH" "$entry" | head -c $((remaining + 1)) > "$destination"
+    set -o pipefail
+    entry_size="$(wc -c < "$destination" | tr -d '[:space:]')"
+    [ "$entry_size" -le "$remaining" ] || error "ZIP extraction exceeds the expanded byte limit."
+    total=$((total + entry_size))
+  done < "$expected_files"
   PAYLOAD_DIR="$EXTRACT_DIR"
 else
   command -v tar >/dev/null 2>&1 || error "tar is required for release archives."
-  tar -tzf "$ARCHIVE_PATH" | validate_paths
-  # Reject link entries as well as lexical traversal: links can escape after extraction.
-  if tar -tvzf "$ARCHIVE_PATH" | grep -Eq '^[^d-]'; then error "Unsafe archive entry type."; fi
-  tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
+  command -v gzip >/dev/null 2>&1 || error "gzip is required for release archives."
+  bounded_tar="$WORK_DIR/archive.tar"
+  tar_stream_limit=$((expanded_limit + 128 * 1024 + 1))
+  set +o pipefail
+  gzip -dc "$ARCHIVE_PATH" | head -c "$tar_stream_limit" > "$bounded_tar"
+  set -o pipefail
+  tar_stream_size="$(wc -c < "$bounded_tar" | tr -d '[:space:]')"
+  [ "$tar_stream_size" -lt "$tar_stream_limit" ] || error "Archive decompressed data exceeds the expanded byte limit."
+  tar -tf "$bounded_tar" | validate_paths
+  tar -tvf "$bounded_tar" > "$WORK_DIR/tar-listing" || error "Could not inspect tar archive."
+  tar -tf "$bounded_tar" | sed '/\/$/d' | LC_ALL=C sort > "$WORK_DIR/archive-files"
+  [ "$(uniq -d "$WORK_DIR/archive-files" | wc -l | tr -d '[:space:]')" = 0 ] || error "Tar archive contains duplicate members."
+  if grep -Eq '^[^d-]' "$WORK_DIR/tar-listing"; then error "Unsafe archive entry type or special member."; fi
+  cmp -s "$expected_files" "$WORK_DIR/archive-files" || error "Tar archive members do not exactly match runtime-manifest.json files."
+  total=0
+  while IFS= read -r entry; do
+    entry_size="$(tar -xOf "$bounded_tar" "$entry" | wc -c | tr -d '[:space:]')" || error "Could not inspect tar member $entry."
+    total=$((total + entry_size))
+    [ "$total" -le "$expanded_limit" ] || error "Tar archive uncompressed data exceeds the expanded byte limit."
+  done < "$expected_files"
+  tar -xf "$bounded_tar" -C "$EXTRACT_DIR"
   PAYLOAD_DIR="$EXTRACT_DIR/draht"
 fi
 if find "$EXTRACT_DIR" -type l -print -quit | grep -q .; then error "Unsafe archive link entry."; fi

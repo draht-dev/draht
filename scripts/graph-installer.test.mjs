@@ -4,10 +4,50 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { deflateRawSync } from "node:zlib";
 import test from "node:test";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const IMPLEMENTATIONS = ["draht-claude", "draht-codex"];
+
+function crc32(bytes) {
+	let crc = 0xffffffff;
+	for (const byte of bytes) {
+		crc ^= byte;
+		for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+	}
+	return (crc ^ 0xffffffff) >>> 0;
+}
+
+function makeZip(entries) {
+	const local = [];
+	const central = [];
+	let offset = 0;
+	for (const entry of entries) {
+		const name = Buffer.from(entry.name);
+		const data = Buffer.from(entry.data || "");
+		const compressed = entry.method === 0 ? data : deflateRawSync(data);
+		const method = entry.method ?? 8;
+		const flags = entry.flags ?? 0;
+		const localHeader = Buffer.alloc(30);
+		localHeader.writeUInt32LE(0x04034b50, 0);
+		localHeader.writeUInt16LE(20, 4); localHeader.writeUInt16LE(flags, 6); localHeader.writeUInt16LE(method, 8);
+		localHeader.writeUInt32LE(crc32(data), 14); localHeader.writeUInt32LE(compressed.length, 18); localHeader.writeUInt32LE(data.length, 22); localHeader.writeUInt16LE(name.length, 26);
+		local.push(localHeader, name, compressed);
+		const centralHeader = Buffer.alloc(46);
+		centralHeader.writeUInt32LE(0x02014b50, 0); centralHeader.writeUInt16LE(0x031e, 4); centralHeader.writeUInt16LE(20, 6);
+		centralHeader.writeUInt16LE(flags, 8); centralHeader.writeUInt16LE(method, 10); centralHeader.writeUInt32LE(crc32(data), 16);
+		centralHeader.writeUInt32LE(entry.compressedSize ?? compressed.length, 20); centralHeader.writeUInt32LE(entry.uncompressedSize ?? data.length, 24); centralHeader.writeUInt16LE(name.length, 28);
+		centralHeader.writeUInt32LE(entry.externalAttributes ?? (entry.name.endsWith("/") ? 0x41ed0010 : 0x81a40000), 38); centralHeader.writeUInt32LE(offset, 42);
+		central.push(centralHeader, name);
+		offset += localHeader.length + name.length + compressed.length;
+	}
+	const centralBytes = Buffer.concat(central);
+	const eocd = Buffer.alloc(22);
+	eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
+	eocd.writeUInt32LE(centralBytes.length, 12); eocd.writeUInt32LE(offset, 16);
+	return Buffer.concat([...local, centralBytes, eocd]);
+}
 
 function validManifest(version = "2026.8.5") {
 	return {
@@ -31,6 +71,47 @@ function validManifest(version = "2026.8.5") {
 }
 
 for (const implementation of IMPLEMENTATIONS) {
+	test(`${implementation} performs controlled ZIP extraction of the exact graph payload`, async () => {
+		const { extractGraphZip } = await import(`../packages/${implementation}/graph-archive.mjs`);
+		const root = mkdtempSync(join(tmpdir(), `${implementation}-zip-`));
+		const archive = join(root, "graph.zip");
+		writeFileSync(archive, makeZip([
+			{ name: "draht-graph/", data: "", method: 0 },
+			{ name: "draht-graph/draht-graph.exe", data: "binary" },
+			{ name: "draht-graph/README.md", data: "readme" },
+			{ name: "draht-graph/LICENSE", data: "license" },
+		]));
+		const dest = join(root, "out");
+		extractGraphZip(archive, dest, { binary: "draht-graph.exe", binaryBytes: 6, maxUncompressedBytes: 1024, maxCompressedBytes: 1024 });
+		assert.equal(readFileSync(join(dest, "draht-graph", "draht-graph.exe"), "utf8"), "binary");
+	});
+
+	for (const [label, entries, limits, pattern] of [
+		["encrypted members", [{ name: "draht-graph/draht-graph.exe", data: "binary", flags: 1 }], {}, /encrypt/i],
+		["duplicate members", [{ name: "draht-graph/draht-graph.exe", data: "binary" }, { name: "draht-graph/draht-graph.exe", data: "binary" }], {}, /duplicate/i],
+		["traversal members", [{ name: "../draht-graph.exe", data: "binary" }], {}, /path|traversal/i],
+		["symlink members", [{ name: "draht-graph/draht-graph.exe", data: "target", externalAttributes: 0xa1ff0000 }], {}, /link|type/i],
+		["device members", [{ name: "draht-graph/draht-graph.exe", data: "", externalAttributes: 0x61ff0000 }], {}, /type|special/i],
+		["special members", [{ name: "draht-graph/draht-graph.exe", data: "", externalAttributes: 0x11ff0000 }], {}, /type|special/i],
+		["unexpected members", [{ name: "draht-graph/draht-graph.exe", data: "binary" }, { name: "evil", data: "x" }], {}, /unexpected|exact/i],
+		["missing members", [{ name: "draht-graph/README.md", data: "readme" }], {}, /missing|exact/i],
+		["aggregate uncompressed overrun", [{ name: "draht-graph/draht-graph.exe", data: "binary" }, { name: "draht-graph/README.md", data: "123456" }, { name: "draht-graph/LICENSE", data: "123456" }], { maxUncompressedBytes: 12 }, /uncompressed.*limit/i],
+		["aggregate compressed overrun", [{ name: "draht-graph/draht-graph.exe", data: "binary", method: 0 }, { name: "draht-graph/README.md", data: "readme", method: 0 }, { name: "draht-graph/LICENSE", data: "license", method: 0 }], { maxCompressedBytes: 10 }, /compressed.*limit/i],
+		["archive expansion", [{ name: "draht-graph/", data: "", method: 0 }, { name: "draht-graph/draht-graph.exe", data: Buffer.alloc(4096), uncompressedSize: 6 }, { name: "draht-graph/README.md", data: "readme" }, { name: "draht-graph/LICENSE", data: "license" }], { maxUncompressedBytes: 1024 }, /expanded|uncompressed|size/i],
+	]) {
+		test(`${implementation} rejects ZIP ${label} before publication`, async () => {
+			const { extractGraphZip } = await import(`../packages/${implementation}/graph-archive.mjs`);
+			const root = mkdtempSync(join(tmpdir(), `${implementation}-bad-zip-`));
+			const archive = join(root, "graph.zip");
+			writeFileSync(archive, makeZip(entries));
+			assert.throws(() => extractGraphZip(archive, join(root, "out"), {
+				binary: "draht-graph.exe", binaryBytes: 6,
+				maxUncompressedBytes: limits.maxUncompressedBytes ?? 1024 * 1024,
+				maxCompressedBytes: limits.maxCompressedBytes ?? 1024 * 1024,
+			}), pattern);
+		});
+	}
+
 	test(`${implementation} accepts a manifest bound to the requested release and platform`, async () => {
 		const { validateGraphManifest } = await import(`../packages/${implementation}/graph-manifest.mjs`);
 		assert.equal(validateGraphManifest(validManifest(), { version: "2026.8.5", tag: "v2026.8.5", platform: "linux-x64", commit: "c".repeat(40) }).archiveBytes, 123);

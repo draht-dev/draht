@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -13,7 +13,7 @@ function sha256(bytes) {
 	return createHash("sha256").update(bytes).digest("hex");
 }
 
-function fixture({ unsafe = false, withGh = true, manifestCommit = "2".repeat(40), ghMode = "valid" } = {}) {
+function fixture({ archiveMode = "valid", withGh = true, manifestCommit = "2".repeat(40), ghMode = "valid", curlMode = "valid" } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "draht-install-test-"));
 	const release = join(root, "release");
 	const fakeBin = join(root, "fake-bin");
@@ -25,12 +25,23 @@ function fixture({ unsafe = false, withGh = true, manifestCommit = "2".repeat(40
 	mkdirSync(payload, { recursive: true });
 	writeFileSync(join(payload, "draht"), "#!/bin/sh\nprintf 'draht fixture\\n'\n");
 	chmodSync(join(payload, "draht"), 0o755);
+	writeFileSync(join(payload, "README.md"), "fixture readme\n");
+	if (archiveMode === "expansion") writeFileSync(join(payload, "padding"), Buffer.alloc(3 * 1024 * 1024));
+	if (archiveMode === "symlink") symlinkSync("draht", join(payload, "link"));
+	if (archiveMode === "special") {
+		const fifo = spawnSync("mkfifo", [join(payload, "fifo")]);
+		assert.equal(fifo.status, 0, fifo.stderr?.toString());
+	}
 	const binaryBytes = readFileSync(join(payload, "draht"));
 	const archiveName = "draht-linux-x64.tar.gz";
 	const archive = join(release, archiveName);
-	const tarArgs = unsafe
+	const tarArgs = archiveMode === "traversal"
 		? ["-czf", archive, "--transform=s|^|../|", "-C", join(root, "payload"), "draht"]
-		: ["-czf", archive, "-C", join(root, "payload"), "draht"];
+		: archiveMode === "missing"
+			? ["-czf", archive, "-C", join(root, "payload"), "draht/README.md"]
+			: archiveMode === "duplicate"
+				? ["-czf", archive, "-C", join(root, "payload"), "draht/draht", "draht/draht", "draht/README.md"]
+				: ["-czf", archive, "-C", join(root, "payload"), "draht"];
 	const tar = spawnSync("tar", tarArgs, { encoding: "utf8" });
 	assert.equal(tar.status, 0, tar.stderr);
 	const archiveBytes = readFileSync(archive);
@@ -48,6 +59,7 @@ function fixture({ unsafe = false, withGh = true, manifestCommit = "2".repeat(40
 			binary: "draht",
 			binarySha256: sha256(binaryBytes),
 			binaryBytes: binaryBytes.length,
+			files: ["draht/draht", "draht/README.md"],
 		}],
 	}));
 	writeFileSync(join(release, "DRAHT-SHA256SUMS"), `${sha256(archiveBytes)}  ${archiveName}\n`);
@@ -76,7 +88,13 @@ case "$url" in
     ;;
 esac
 name="\${url##*/}"
-cp "$DRAHT_TEST_RELEASE/$name" "$out"
+src="$DRAHT_TEST_RELEASE/$name"
+case "$DRAHT_TEST_CURL_MODE:$name" in
+  missing-length-overrun:runtime-manifest.json|lying-length-overrun:runtime-manifest.json|aggregate-overrun:DRAHT-SHA256SUMS)
+    dd if=/dev/zero bs=1048576 count=3 2>/dev/null
+    ;;
+  *) cat "$src" ;;
+esac > "$out"
 `, "utf8");
 	chmodSync(join(fakeBin, "curl"), 0o755);
 	for (const command of ["git", "bun"]) {
@@ -104,7 +122,7 @@ jq -n --arg digest "$digest" --arg commit "$commit" --arg repository "$repositor
 `, "utf8");
 		chmodSync(join(fakeBin, "gh"), 0o755);
 	}
-	return { root, release, fakeBin, home, ghLog: join(root, "gh.log"), commit: "2".repeat(40), ghMode };
+	return { root, release, fakeBin, home, ghLog: join(root, "gh.log"), commit: "2".repeat(40), ghMode, curlMode };
 }
 
 function runInstaller(installer, f, extraEnv = {}) {
@@ -123,9 +141,32 @@ function runInstaller(installer, f, extraEnv = {}) {
 			DRAHT_TEST_GH_LOG: f.ghLog,
 			DRAHT_TEST_COMMIT: f.commit,
 			DRAHT_TEST_GH_MODE: f.ghMode,
+			DRAHT_TEST_CURL_MODE: f.curlMode,
 			...extraEnv,
 		},
 	});
+}
+
+function windowsZipFixture({ symlink = false } = {}) {
+	const f = fixture({ withGh: false });
+	const payload = join(f.root, "windows-payload");
+	mkdirSync(payload);
+	writeFileSync(join(payload, "draht.exe"), "windows binary");
+	if (symlink) symlinkSync("draht.exe", join(payload, "link"));
+	const archiveName = "draht-windows-x64.zip";
+	const archive = join(f.release, archiveName);
+	const zip = spawnSync("zip", ["-q", "-y", archive, "draht.exe", ...(symlink ? ["link"] : [])], { cwd: payload, encoding: "utf8" });
+	assert.equal(zip.status, 0, zip.stderr);
+	const binary = readFileSync(join(payload, "draht.exe"));
+	const archiveBytes = readFileSync(archive);
+	writeFileSync(join(f.release, "runtime-manifest.json"), JSON.stringify({ schemaVersion: 1, name: "draht", version: "1.2.3", tag: "v1.2.3", gitCommit: f.commit, artifacts: [{
+		platform: "windows-x64", archive: archiveName, archiveSha256: sha256(archiveBytes), archiveBytes: archiveBytes.length,
+		binary: "draht.exe", binarySha256: sha256(binary), binaryBytes: binary.length, files: ["draht.exe", ...(symlink ? ["link"] : [])],
+	}] }));
+	writeFileSync(join(f.release, "DRAHT-SHA256SUMS"), `${sha256(archiveBytes)}  ${archiveName}\n`);
+	writeFileSync(join(f.fakeBin, "uname"), "#!/bin/sh\ncase \"$1\" in -s) echo MINGW64_NT;; -m) echo x86_64;; esac\n");
+	chmodSync(join(f.fakeBin, "uname"), 0o755);
+	return f;
 }
 
 for (const installer of INSTALLERS) {
@@ -187,7 +228,7 @@ for (const installer of INSTALLERS) {
 	});
 
 	test(`${label} rejects unsafe archive paths before extraction`, () => {
-		const f = fixture({ unsafe: true, withGh: false });
+		const f = fixture({ archiveMode: "traversal", withGh: false });
 		const result = runInstaller(installer, f, { DRAHT_ALLOW_UNVERIFIED: "1" });
 		assert.notEqual(result.status, 0);
 		assert.match(result.stderr, /unsafe archive path/i);
@@ -201,5 +242,46 @@ for (const installer of INSTALLERS) {
 		assert.notEqual(result.status, 0);
 		assert.match(result.stderr, /DRAHT-SHA256SUMS/);
 		assert.equal(existsSync(join(f.home, "bin", "draht")), false);
+	});
+
+	for (const mode of ["missing-length-overrun", "lying-length-overrun", "aggregate-overrun"]) {
+		test(`${label} bounds ${mode.replaceAll("-", " ")} while streaming downloads`, () => {
+			const f = fixture({ withGh: false, curlMode: mode });
+			const result = runInstaller(installer, f, { DRAHT_ALLOW_UNVERIFIED: "1" });
+			assert.notEqual(result.status, 0);
+			assert.match(result.stderr, /byte|size|download|limit/i);
+			assert.equal(existsSync(join(f.home, "bin", "draht")), false);
+		});
+	}
+
+	for (const [mode, message] of [
+		["expansion", /expanded|decompress|uncompressed|limit/i],
+		["duplicate", /duplicate/i],
+		["symlink", /type|link/i],
+		["special", /type|special/i],
+		["valid", /unexpected|manifest|member/i],
+		["missing", /missing|manifest|member/i],
+	]) {
+		test(`${label} rejects ${mode === "valid" ? "an unexpected archive member" : `${mode} archive members`}`, () => {
+			const f = fixture({ archiveMode: mode, withGh: false });
+			if (mode === "valid") {
+				const manifestPath = join(f.release, "runtime-manifest.json");
+				const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+				manifest.artifacts[0].files = ["draht/draht"];
+				writeFileSync(manifestPath, JSON.stringify(manifest));
+			}
+			const result = runInstaller(installer, f, { DRAHT_ALLOW_UNVERIFIED: "1" });
+			assert.notEqual(result.status, 0);
+			assert.match(result.stderr, message);
+			assert.equal(existsSync(join(f.home, "bin", "draht")), false);
+		});
+	}
+
+	test(`${label} rejects a ZIP symlink even when the manifest names it`, () => {
+		const f = windowsZipFixture({ symlink: true });
+		const result = runInstaller(installer, f, { DRAHT_ALLOW_UNVERIFIED: "1" });
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /type|link|special/i);
+		assert.equal(existsSync(join(f.home, "bin", "draht.exe")), false);
 	});
 }

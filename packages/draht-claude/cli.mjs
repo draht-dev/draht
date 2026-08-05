@@ -25,6 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as zlib from "node:zlib";
+import { extractGraphZip } from "./graph-archive.mjs";
 import { GRAPH_IO_LIMITS, validateGraphAttestation, validateGraphChecksums, validateGraphManifest } from "./graph-manifest.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -604,26 +605,13 @@ function extractTarGz(archivePath, destDir, maxDecompressedBytes) {
 	}
 }
 
-// Windows-only artifact format (in practice this only ever runs on Windows,
-// since graphPlatform() only selects the .zip entry for windows-x64). No
-// zip-reading stdlib in Node, so this shells out to a system archive tool
-// rather than hand-rolling DEFLATE: `unzip` (WSL/Cygwin/msys), then
-// `tar.exe` (bsdtar, built into Windows 10 1803+, reads zip), then
-// PowerShell's Expand-Archive. All failing surfaces as a normal
-// ensureGraphEngine() catch.
-function extractZip(archivePath, destDir) {
-	fs.mkdirSync(destDir, { recursive: true });
-	let res = spawnSync("unzip", ["-o", "-q", archivePath, "-d", destDir], { stdio: "ignore" });
-	if (res.status === 0) return;
-	res = spawnSync("tar", ["-xf", archivePath, "-C", destDir], { stdio: "ignore" });
-	if (res.status === 0) return;
-	res = spawnSync(
-		"powershell",
-		["-NoProfile", "-Command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force`],
-		{ stdio: "ignore" },
-	);
-	if (res.status === 0) return;
-	throw new Error("no working zip extractor found (tried unzip, tar, and PowerShell Expand-Archive)");
+function extractZip(archivePath, destDir, entry) {
+	extractGraphZip(archivePath, destDir, {
+		binary: entry.binary,
+		binaryBytes: entry.binaryBytes,
+		maxUncompressedBytes: Math.min(GRAPH_IO_LIMITS.decompressedBytes, entry.binaryBytes + 2 * 1024 * 1024),
+		maxCompressedBytes: entry.archiveBytes,
+	});
 }
 
 async function fetchBuffer(url, timeoutMs, { limit, label, aggregate }) {
@@ -799,7 +787,7 @@ async function ensureGraphEngine(flags) {
 			fs.writeFileSync(archivePath, archiveBuf);
 			verifyGraphAttestation(archivePath, entry, releaseCommit, tag);
 			const extractDir = path.join(workDir, "extracted");
-			if (entry.archive.endsWith(".zip")) extractZip(archivePath, extractDir);
+			if (entry.archive.endsWith(".zip")) extractZip(archivePath, extractDir, entry);
 			else extractTarGz(archivePath, extractDir, Math.min(GRAPH_IO_LIMITS.decompressedBytes, entry.binaryBytes + 2 * 1024 * 1024));
 
 			// Both archive formats wrap a draht-graph/ directory — see

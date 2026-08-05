@@ -15,6 +15,7 @@
 		"agents",
 		"skills",
 		"cli.mjs",
+		"graph-archive.mjs",
 		"graph-manifest.mjs",
 		"README.md",
 		"LICENSE",

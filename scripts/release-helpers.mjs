@@ -51,6 +51,7 @@ export const EXPECTED_RELEASE_ASSETS = Object.freeze([
 export const SCOPE_TO_PACKAGES = Object.freeze({
 	ai: ["ai"],
 	tui: ["tui"],
+	telemetry: ["telemetry"],
 	agent: ["agent"],
 	"agent-core": ["agent"],
 	"coding-agent": ["coding-agent"],

@@ -28,6 +28,7 @@
       "version": "2026.7.30",
       "dependencies": {
         "@draht/ai": "workspace:*",
+        "@draht/telemetry": "workspace:*",
         "diff": "^8.0.2",
         "ignore": "^7.0.5",
         "typebox": "^1.3.7",
@@ -49,6 +50,7 @@
       "dependencies": {
         "@anthropic-ai/sdk": "^0.91.1",
         "@aws-sdk/client-bedrock-runtime": "^3.1030.0",
+        "@draht/telemetry": "workspace:*",
         "@google/genai": "^1.40.0",
         "@mistralai/mistralai": "^2.2.6",
         "@opentelemetry/api": "^1.9.0",
@@ -471,6 +473,14 @@
         "@draht/coding-agent": "workspace:*",
       },
     },
+    "packages/telemetry": {
+      "name": "@draht/telemetry",
+      "version": "2026.7.30",
+      "devDependencies": {
+        "@types/node": "^24.3.0",
+        "vitest": "^3.2.4",
+      },
+    },
     "packages/templates": {
       "name": "@draht/templates",
       "version": "2026.7.30",
@@ -788,6 +798,8 @@
     "@draht/rlm-agent": ["@draht/rlm-agent@workspace:packages/rlm-agent"],
 
     "@draht/router": ["@draht/router@workspace:packages/router"],
+
+    "@draht/telemetry": ["@draht/telemetry@workspace:packages/telemetry"],
 
     "@draht/templates": ["@draht/templates@workspace:packages/templates"],
 
@@ -2791,6 +2803,8 @@
 
     "@draht/orchestrator/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.39.0", "", { "dependencies": { "@types/node": "^18.11.18", "@types/node-fetch": "^2.6.4", "abort-controller": "^3.0.0", "agentkeepalive": "^4.2.1", "form-data-encoder": "1.7.2", "formdata-node": "^4.3.2", "node-fetch": "^2.6.7" } }, "sha512-eMyDIPRZbt1CCLErRCi3exlAvNkBtRe+kW5vvJyef93PmNr/clstYgHhtvmkxN82nlKgzyGPCyGxrm0JQ1ZIdg=="],
 
+    "@draht/telemetry/@types/node": ["@types/node@24.11.0", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-fPxQqz4VTgPI/IQ+lj9r0h+fDR66bzoeMGHp8ASee+32OSGIkeASsoZuJixsQoVef1QJbeubcPBxKk22QVoWdw=="],
+
     "@draht/web-ui/highlight.js": ["highlight.js@11.11.1", "", {}, "sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w=="],
 
     "@earendil-works/gondolin/undici": ["undici@6.27.0", "", {}, "sha512-YmfV3YnEDzXRC5lZ2jWtWWHKGUm1zIt8AhesR1tens+HTNv+YZlN/dp6G727LOvMJ8xjP9Be7Y2Sdr96LDm+pg=="],
@@ -2976,6 +2990,8 @@
     "@draht/mom/@types/node/undici-types": ["undici-types@7.16.0", "", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
 
     "@draht/orchestrator/@anthropic-ai/sdk/@types/node": ["@types/node@18.19.130", "", { "dependencies": { "undici-types": "~5.26.4" } }, "sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg=="],
+
+    "@draht/telemetry/@types/node/undici-types": ["undici-types@7.16.0", "", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
 
     "@lmstudio/sdk/chalk/supports-color": ["supports-color@7.2.0", "", { "dependencies": { "has-flag": "^4.0.0" } }, "sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw=="],
 

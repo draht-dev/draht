@@ -1,14 +1,7 @@
 // Core Agent
 
+export { uuidv7 } from "@draht/ai";
 export type {
-	AiSpan,
-	AiSpanAttributes,
-	AiSpanEndAttributes,
-	AiSpanEventAttributes,
-	AiSpanEventName,
-	AiSpanName,
-	AiSpanStartAttributes,
-	AiTelemetrySpan,
 	AttributeValue,
 	ExactTelemetryAttributes,
 	InferEventAttributes,
@@ -37,14 +30,8 @@ export type {
 	TelemetrySpan,
 	TelemetrySpanDefinition,
 	TelemetryStartAttributeDefinition,
-} from "@draht/ai";
-export {
-	AI_TELEMETRY_SCHEMA,
-	defineTelemetrySchema,
-	NOOP_TELEMETRY_CONTEXT,
-	startAiSpan,
-	uuidv7,
-} from "@draht/ai";
+} from "@draht/telemetry";
+export { defineTelemetrySchema, NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
 export * from "./agent.ts";
 // Loop functions
 export * from "./agent-loop.ts";
@@ -87,6 +74,14 @@ export * from "./harness/session/search.ts";
 export * from "./harness/skills.ts";
 export * from "./harness/system-prompt.ts";
 export type {
+	AiSpan,
+	AiSpanAttributes,
+	AiSpanEndAttributes,
+	AiSpanEventAttributes,
+	AiSpanEventName,
+	AiSpanName,
+	AiSpanStartAttributes,
+	AiTelemetrySpan,
 	HarnessSpan,
 	HarnessSpanAttributes,
 	HarnessSpanEndAttributes,
@@ -96,7 +91,12 @@ export type {
 	HarnessSpanStartAttributes,
 	HarnessTelemetrySpan,
 } from "./harness/telemetry.ts";
-export { HARNESS_TELEMETRY_SCHEMA, startHarnessSpan } from "./harness/telemetry.ts";
+export {
+	AI_TELEMETRY_SCHEMA,
+	HARNESS_TELEMETRY_SCHEMA,
+	startAiSpan,
+	startHarnessSpan,
+} from "./harness/telemetry.ts";
 export * from "./harness/tools/index.ts";
 export {
 	type AgentHarnessResources,

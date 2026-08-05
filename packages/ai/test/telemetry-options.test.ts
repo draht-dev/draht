@@ -1,10 +1,10 @@
+import { NOOP_TELEMETRY_CONTEXT, type TelemetryContext } from "@draht/telemetry";
 import { describe, expect, it } from "vitest";
 import { buildBaseOptions } from "../src/api/simple-options.ts";
 import { generateImages } from "../src/images.ts";
 import { registerImagesApiProvider } from "../src/images-api-registry.ts";
 import { createImagesModels, createImagesProvider } from "../src/images-models.ts";
 import { createModels, createProvider } from "../src/models.ts";
-import { NOOP_TELEMETRY_CONTEXT, type TelemetryContext } from "../src/telemetry.ts";
 import type {
 	Context,
 	DeferredHandle,

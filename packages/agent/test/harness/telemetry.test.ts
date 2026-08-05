@@ -1,17 +1,23 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { NOOP_TELEMETRY_CONTEXT, type TelemetryContext } from "@draht/ai";
+import { NOOP_TELEMETRY_CONTEXT, type TelemetryContext } from "@draht/telemetry";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { renderTelemetrySchemaMarkdown } from "../../../ai/scripts/generate-telemetry-docs.ts";
+import { renderAgentTelemetrySchemaMarkdown } from "../../scripts/generate-telemetry-docs.ts";
 import {
+	AI_TELEMETRY_SCHEMA,
+	type AiSpanEndAttributes,
+	type AiSpanStartAttributes,
 	HARNESS_TELEMETRY_SCHEMA,
 	type HarnessSpanEndAttributes,
 	type HarnessSpanStartAttributes,
+	startAiSpan,
 	startHarnessSpan,
 } from "../../src/harness/telemetry.ts";
 
-describe("HARNESS_TELEMETRY_SCHEMA", () => {
-	it("is serializable, exhaustive, and generates the checked-in reference", () => {
+describe("agent telemetry schemas", () => {
+	it("serializes both schemas and generates the checked-in reference", () => {
+		expect(() => JSON.stringify(AI_TELEMETRY_SCHEMA)).not.toThrow();
+		expect(() => JSON.stringify(HARNESS_TELEMETRY_SCHEMA)).not.toThrow();
 		expect(Object.keys(HARNESS_TELEMETRY_SCHEMA.spans)).toEqual([
 			"pi.harness.run",
 			"pi.harness.compaction",
@@ -25,13 +31,61 @@ describe("HARNESS_TELEMETRY_SCHEMA", () => {
 			"pi.harness.event_handler",
 			"pi.session.write",
 		]);
-		expect(() => JSON.stringify(HARNESS_TELEMETRY_SCHEMA)).not.toThrow();
-		const expected = renderTelemetrySchemaMarkdown(HARNESS_TELEMETRY_SCHEMA, "Pi Agent Harness Telemetry Schema");
 		const actual = readFileSync(resolve(import.meta.dirname, "../../docs/telemetry-schema.md"), "utf8");
-		expect(actual).toBe(expected);
+		expect(actual).toBe(renderAgentTelemetrySchemaMarkdown());
 	});
 
-	it("infers per-span literals and optional completion enrichment", async () => {
+	it("infers exact AI start and optional end attributes", async () => {
+		type Start = AiSpanStartAttributes<"pi.ai.request">;
+		type End = AiSpanEndAttributes<"pi.ai.request">;
+		expectTypeOf<Start>().toMatchTypeOf<{
+			"pi.ai.operation": "stream" | "fetch_deferred" | "cancel_deferred" | "generate_images";
+			"pi.ai.provider": string;
+			"pi.ai.model": string;
+			"pi.ai.api": string;
+			"pi.ai.streaming": boolean;
+			"pi.ai.deferred"?: boolean;
+		}>();
+		expectTypeOf<End["pi.ai.response.stop_reason"]>().toEqualTypeOf<
+			"stop" | "length" | "tool_use" | "error" | "aborted" | "deferred" | undefined
+		>();
+
+		const telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT;
+		await startAiSpan(
+			telemetryContext,
+			"pi.ai.request",
+			{
+				"pi.ai.operation": "stream",
+				"pi.ai.provider": "provider",
+				"pi.ai.model": "model",
+				"pi.ai.api": "api",
+				"pi.ai.streaming": true,
+			},
+			(span) => {
+				span.setAttributes({ "pi.ai.response.stop_reason": "tool_use" });
+				// @ts-expect-error pi.ai.request declares no span events
+				span.addEvent("chunk");
+			},
+		);
+
+		const compileTimeFailures = () => {
+			const extraAttributes = {
+				"pi.ai.operation": "stream",
+				"pi.ai.provider": "provider",
+				"pi.ai.model": "model",
+				"pi.ai.api": "api",
+				"pi.ai.streaming": true,
+				"pi.ai.unknown": true,
+			} as const;
+			// @ts-expect-error variables with unknown attributes are rejected
+			void startAiSpan(telemetryContext, "pi.ai.request", extraAttributes, () => {});
+			// @ts-expect-error missing required start attributes
+			void startAiSpan(telemetryContext, "pi.ai.request", { "pi.ai.operation": "stream" }, () => {});
+		};
+		expectTypeOf(compileTimeFailures).toBeFunction();
+	});
+
+	it("infers per-span harness literals and optional completion enrichment", async () => {
 		type RunStart = HarnessSpanStartAttributes<"pi.harness.run">;
 		type RunEnd = HarnessSpanEndAttributes<"pi.harness.run">;
 		expectTypeOf<RunStart["pi.operation.kind"]>().toEqualTypeOf<"run">();

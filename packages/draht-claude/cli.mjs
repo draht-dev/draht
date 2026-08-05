@@ -186,6 +186,157 @@ function removeRecursive(target) {
 	fs.rmSync(target, { recursive: true, force: true });
 }
 
+const MARKETPLACE_LOCK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+function processIdentity(pid) {
+	try {
+		if (process.platform === "linux") {
+			const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+			return stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/)[19] || null;
+		}
+		if (process.platform === "win32") {
+			const result = spawnSync("wmic", ["process", "where", `processid=${pid}`, "get", "CreationDate", "/value"], { encoding: "utf8" });
+			return result.status === 0 ? result.stdout.trim() || null : null;
+		}
+		const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+		return result.status === 0 ? result.stdout.trim() || null : null;
+	} catch {
+		return null;
+	}
+}
+
+function acquireMarketplaceLock(marketplaceDir) {
+	const lockPath = `${marketplaceDir}.draht-update-lock`;
+	for (;;) {
+		const token = crypto.randomBytes(8).toString("hex");
+		const owner = {
+			owner: "draht-plugin-installer",
+			pid: process.pid,
+			identity: processIdentity(process.pid),
+			createdAt: Date.now(),
+			token,
+		};
+		const ownerPath = `${lockPath}.${process.pid}-${token}`;
+		fs.writeFileSync(ownerPath, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+		try {
+			fs.linkSync(ownerPath, lockPath);
+			return { lockPath, token };
+		} catch (error) {
+			if (error.code !== "EEXIST") throw error;
+		} finally {
+			fs.rmSync(ownerPath, { force: true });
+		}
+
+		let existing;
+		try {
+			existing = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+		} catch {
+			throw new Error(`plugin update lock exists but is not readable: ${lockPath}`);
+		}
+		if (existing?.owner !== "draht-plugin-installer" || !Number.isSafeInteger(existing.pid) || typeof existing.token !== "string" ||
+			(existing.identity !== null && typeof existing.identity !== "string") || !Number.isSafeInteger(existing.createdAt)) {
+			throw new Error(`plugin update lock is not owned by draht: ${lockPath}`);
+		}
+		const identity = processIdentity(existing.pid);
+		let ownerAlive = identity !== null && existing.identity !== null && identity === existing.identity;
+		if (identity === null || existing.identity === null) {
+			try {
+				process.kill(existing.pid, 0);
+				ownerAlive = Date.now() - existing.createdAt < MARKETPLACE_LOCK_MAX_AGE_MS;
+			} catch (error) {
+				ownerAlive = error.code !== "ESRCH" && Date.now() - existing.createdAt < MARKETPLACE_LOCK_MAX_AGE_MS;
+			}
+		}
+		if (ownerAlive) throw new Error(`another plugin update is already in progress (pid ${existing.pid})`);
+		try {
+			fs.unlinkSync(lockPath);
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+	}
+}
+
+function releaseMarketplaceLock(lock) {
+	if (!fs.existsSync(lock.lockPath)) return;
+	const owner = JSON.parse(fs.readFileSync(lock.lockPath, "utf8"));
+	if (owner.token !== lock.token) throw new Error(`plugin update lock ownership changed: ${lock.lockPath}`);
+	fs.unlinkSync(lock.lockPath);
+}
+
+function marketplaceTransactionPaths(marketplaceDir) {
+	const parent = path.dirname(marketplaceDir);
+	const name = path.basename(marketplaceDir);
+	if (!fs.existsSync(parent)) return { temps: [], backups: [] };
+	const entries = fs.readdirSync(parent);
+	const matching = (kind) => {
+		const prefix = `${name}.${kind}-`;
+		return entries
+			.filter((entry) => entry.startsWith(prefix) && /^\d+-[0-9a-f]{16}$/.test(entry.slice(prefix.length)))
+			.map((entry) => path.join(parent, entry));
+	};
+	return {
+		temps: matching("tmp"),
+		backups: matching("backup"),
+	};
+}
+
+function recoverMarketplaceTransaction(marketplaceDir) {
+	const { temps, backups } = marketplaceTransactionPaths(marketplaceDir);
+	for (const temp of temps) removeRecursive(temp);
+	if (backups.length === 0) return;
+	backups.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+	const [backup, ...staleBackups] = backups;
+	removeRecursive(marketplaceDir);
+	fs.renameSync(backup, marketplaceDir);
+	for (const staleBackup of staleBackups) removeRecursive(staleBackup);
+}
+
+function stageMarketplace(marketplaceDir, manifest) {
+	fs.mkdirSync(path.dirname(marketplaceDir), { recursive: true });
+	const lock = acquireMarketplaceLock(marketplaceDir);
+	const suffix = `${process.pid}-${lock.token}`;
+	const tempDir = `${marketplaceDir}.tmp-${suffix}`;
+	const backupDir = `${marketplaceDir}.backup-${suffix}`;
+	let hadPrevious = false;
+	let backedUp = false;
+	try {
+		if (fs.existsSync(marketplaceDir) && fs.lstatSync(marketplaceDir).isSymbolicLink()) {
+			throw new Error(`refusing to update symlink marketplace: ${marketplaceDir}`);
+		}
+		recoverMarketplaceTransaction(marketplaceDir);
+		hadPrevious = fs.existsSync(marketplaceDir);
+		if (hadPrevious) fs.cpSync(marketplaceDir, tempDir, { recursive: true, preserveTimestamps: true });
+		else fs.mkdirSync(tempDir, { recursive: true });
+		const stagedPluginDir = path.join(tempDir, "plugins", PLUGIN_NAME);
+		removeRecursive(stagedPluginDir);
+		fs.mkdirSync(stagedPluginDir, { recursive: true });
+		copyRecursive(PACKAGE_ROOT, stagedPluginDir);
+		removeRecursive(path.join(tempDir, "plugins", "draht-claude"));
+		writeMarketplaceManifest(tempDir, manifest);
+		if (hadPrevious) {
+			fs.renameSync(marketplaceDir, backupDir);
+			backedUp = true;
+		}
+		fs.renameSync(tempDir, marketplaceDir);
+		return { marketplaceDir, backupDir, hadPrevious, lock };
+	} catch (error) {
+		removeRecursive(tempDir);
+		if (backedUp && !fs.existsSync(marketplaceDir)) fs.renameSync(backupDir, marketplaceDir);
+		releaseMarketplaceLock(lock);
+		throw error;
+	}
+}
+
+function rollbackMarketplace(transaction) {
+	removeRecursive(transaction.marketplaceDir);
+	if (transaction.hadPrevious) fs.renameSync(transaction.backupDir, transaction.marketplaceDir);
+	releaseMarketplaceLock(transaction.lock);
+}
+
+function commitMarketplace(transaction) {
+	removeRecursive(transaction.backupDir);
+	releaseMarketplaceLock(transaction.lock);
+}
+
 function hasClaudeCli() {
 	const which = spawnSync(process.platform === "win32" ? "where" : "which", ["claude"], { encoding: "utf-8" });
 	return which.status === 0 && which.stdout.trim().length > 0;
@@ -199,6 +350,38 @@ function runClaude(args, { allowFail = false } = {}) {
 		process.exit(1);
 	}
 	return res.status === 0;
+}
+
+function pluginListEntryMatches(entry, pluginSpec) {
+	if (entry === pluginSpec) return true;
+	if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+	for (const key of ["id", "pluginId", "plugin_id", "spec", "name"]) {
+		if (entry[key] === pluginSpec) return true;
+	}
+	const names = [entry.name, entry.plugin, entry.pluginName, entry.plugin_name];
+	const marketplaces = [entry.marketplace, entry.marketplaceName, entry.marketplace_name, entry.source];
+	return names.includes(PLUGIN_NAME) && marketplaces.includes(MARKETPLACE_NAME);
+}
+
+function claudePluginState(pluginSpec) {
+	log("Checking whether the plugin is currently installed...");
+	log("  $ claude plugin list --json");
+	const result = spawnSync("claude", ["plugin", "list", "--json"], { encoding: "utf8" });
+	if (result.status !== 0) throw new Error(`claude plugin list failed with exit code ${result.status}`);
+	let entries;
+	try {
+		entries = JSON.parse(result.stdout);
+	} catch {
+		throw new Error("claude plugin list returned invalid JSON");
+	}
+	if (!Array.isArray(entries)) throw new Error("claude plugin list returned an unexpected JSON shape");
+	const entry = entries.find((candidate) => pluginListEntryMatches(candidate, pluginSpec));
+	if (!entry) return { installed: false, enabled: false };
+	const status = typeof entry === "object" && typeof entry.status === "string" ? entry.status.toLowerCase() : null;
+	return {
+		installed: true,
+		enabled: !(typeof entry === "object" && entry.enabled === false) && status !== "disabled",
+	};
 }
 
 function setModelInFrontmatter(content, model) {
@@ -556,21 +739,30 @@ async function cmdInstall(flags) {
 		process.exit(1);
 	}
 
-	// Copy plugin files into marketplace dir
-	log("Copying plugin files...");
-	if (flags.force && fs.existsSync(pluginDir)) {
-		removeRecursive(pluginDir);
+	const pluginSpec = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+
+	// Build the complete marketplace beside the live tree, then switch it with
+	// rename operations. A surviving backup means an interrupted transaction and
+	// is restored before staging the next update.
+	log("Staging plugin files and marketplace.json...");
+	const marketplaceTransaction = stageMarketplace(marketplaceDir, manifest);
+
+	// Capture registration state while holding the marketplace transaction lock
+	// and before any destructive CLI command. JSON avoids display-format parsing.
+	let previousPlugin = { installed: false, enabled: false };
+	if (flags.force) {
+		try {
+			previousPlugin = claudePluginState(pluginSpec);
+		} catch (error) {
+			try {
+				rollbackMarketplace(marketplaceTransaction);
+			} catch (rollbackError) {
+				err(`rollback failed: marketplace restore failed: ${rollbackError.message}`);
+			}
+			err(`could not determine existing plugin state: ${error.message}`);
+			process.exit(1);
+		}
 	}
-	fs.mkdirSync(pluginDir, { recursive: true });
-	copyRecursive(PACKAGE_ROOT, pluginDir);
-
-	// Drop the legacy plugin dir from the pre-rename layout ("draht-claude" → "draht") — it
-	// lingers with an ancient draht-tools copy and confuses debugging.
-	removeRecursive(path.join(marketplaceDir, "plugins", "draht-claude"));
-
-	// Write marketplace manifest
-	log("Writing marketplace.json...");
-	writeMarketplaceManifest(marketplaceDir, manifest);
 
 	// Validate marketplace + plugin before registering
 	log("Validating manifest...");
@@ -584,8 +776,7 @@ async function cmdInstall(flags) {
 	runClaude(["plugin", "marketplace", "update", MARKETPLACE_NAME], { allowFail: true });
 
 	// Install the plugin
-	const pluginSpec = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
-	if (flags.force) {
+	if (flags.force && previousPlugin.installed) {
 		// `claude plugin install` is a no-op when the same plugin version is already installed —
 		// it never re-copies from the marketplace. Uninstall first so --force actually refreshes
 		// the runtime copy (same pattern as draht-codex, where updates propagate correctly).
@@ -593,10 +784,41 @@ async function cmdInstall(flags) {
 		runClaude(["plugin", "uninstall", pluginSpec], { allowFail: true });
 	}
 	log("Installing plugin...");
-	runClaude(["plugin", "install", pluginSpec, "--scope", "user"]);
+	const installed = runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true });
+	if (!installed) {
+		const rollbackFailures = [];
+		let marketplaceRestored = false;
+		try {
+			rollbackMarketplace(marketplaceTransaction);
+			marketplaceRestored = true;
+		} catch (error) {
+			rollbackFailures.push(`marketplace restore failed: ${error.message}`);
+		}
+		if (previousPlugin.installed && marketplaceTransaction.hadPrevious && marketplaceRestored) {
+			if (!runClaude(["plugin", "marketplace", "update", MARKETPLACE_NAME], { allowFail: true })) {
+				rollbackFailures.push("could not refresh the restored marketplace registration");
+			}
+			if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) {
+				rollbackFailures.push("could not reinstall the previously working plugin");
+			} else if (previousPlugin.enabled) {
+				if (!runClaude(["plugin", "enable", pluginSpec], { allowFail: true })) {
+					rollbackFailures.push("reinstalled but could not enable the previously working plugin");
+				}
+			} else if (!runClaude(["plugin", "disable", pluginSpec], { allowFail: true })) {
+				rollbackFailures.push("reinstalled but could not preserve the previously disabled plugin state");
+			}
+		}
+		err("replacement install failed");
+		if (marketplaceRestored) {
+			err(marketplaceTransaction.hadPrevious ? "rollback: restored the previous marketplace content" : "rollback: removed the failed marketplace content");
+		}
+		for (const failure of rollbackFailures) err(`rollback failed: ${failure}`);
+		process.exit(1);
+	}
 
 	// Enable explicitly — install usually enables automatically, but be safe
 	runClaude(["plugin", "enable", pluginSpec], { allowFail: true });
+	commitMarketplace(marketplaceTransaction);
 
 	// The graph engine is a separate, OPT-IN download. It is deliberately not
 	// fetched by default: the artifact is an unsigned native binary pulled from

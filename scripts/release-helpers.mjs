@@ -20,6 +20,9 @@ const GRAPH_PLATFORM_METADATA = Object.freeze({
 	"windows-x64": { goos: "windows", goarch: "amd64", binary: "draht-graph.exe" },
 });
 
+const MAX_RELEASE_ASSET_BYTES = 512 * 1024 * 1024;
+const MAX_ARCHIVE_LISTING_BYTES = 16 * 1024 * 1024;
+
 export const EXPECTED_RELEASE_ASSETS = Object.freeze([
 	"draht-darwin-arm64.tar.gz",
 	"draht-darwin-x64.tar.gz",
@@ -217,14 +220,21 @@ function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles }) {
 	try {
 		writeFileSync(archivePath, bytes);
 		const zip = archive.endsWith(".zip");
-		const listing = execFileSync(zip ? "unzip" : "tar", zip ? ["-Z1", archivePath] : ["-tzf", archivePath], { encoding: "utf8" });
+		const listing = execFileSync(zip ? "unzip" : "tar", zip ? ["-Z1", archivePath] : ["-tzf", archivePath], {
+			encoding: "utf8",
+			maxBuffer: MAX_ARCHIVE_LISTING_BYTES,
+		});
 		const members = listing.split("\n").filter(Boolean).filter((name) => !name.endsWith("/"));
 		if (!members.length || members.some((name) => name.startsWith("/") || name.split("/").includes(".."))) throw new Error("empty or unsafe payload");
 		if (expectedFiles && JSON.stringify([...members].sort()) !== JSON.stringify([...expectedFiles].sort())) throw new Error("payload does not exactly match manifest contract");
 		if (!expectedFiles && wrapper && members.some((name) => !name.startsWith(`${wrapper}/`))) throw new Error(`payload outside ${wrapper}/`);
 		const binaryMember = wrapper ? `${wrapper}/${binary}` : binary;
 		if (members.filter((name) => name === binaryMember).length !== 1) throw new Error(`expected exactly one ${binaryMember}`);
-		const binaryBytes = execFileSync(zip ? "unzip" : "tar", zip ? ["-p", archivePath, binaryMember] : ["-xOzf", archivePath, binaryMember]);
+		const binaryBytes = execFileSync(
+			zip ? "unzip" : "tar",
+			zip ? ["-p", archivePath, binaryMember] : ["-xOzf", archivePath, binaryMember],
+			{ maxBuffer: MAX_RELEASE_ASSET_BYTES },
+		);
 		return { members, binaryBytes };
 	} catch (error) {
 		throw new Error(`Invalid archive ${archive}: ${error.message}`, { cause: error });
@@ -272,7 +282,9 @@ export async function validateReleaseArtifacts({
 	const downloaded = new Map();
 	for (const name of EXPECTED_RELEASE_ASSETS) {
 		const asset = assets.get(name);
-		if (!Number.isSafeInteger(asset.size) || asset.size <= 0) throw new Error(`Release asset ${name} must have a positive size`);
+		if (!Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > MAX_RELEASE_ASSET_BYTES) {
+			throw new Error(`Release asset ${name} must have a positive bounded size`);
+		}
 		const bytes = await downloadReleaseAsset(asset, { fetchImpl, token });
 		downloaded.set(name, bytes);
 	}
@@ -323,7 +335,7 @@ export async function validateReleaseArtifacts({
 			if (artifact.goos !== metadata.goos || artifact.goarch !== metadata.goarch || artifact.binary !== metadata.binary) {
 				throw new Error(`Graph platform ${artifact.platform} metadata must be ${metadata.goos}/${metadata.goarch}/${metadata.binary}`);
 			}
-			if (!Number.isSafeInteger(artifact.binaryBytes) || artifact.binaryBytes <= 0) {
+			if (!Number.isSafeInteger(artifact.binaryBytes) || artifact.binaryBytes <= 0 || artifact.binaryBytes > MAX_RELEASE_ASSET_BYTES) {
 				throw new Error(`Graph platform ${artifact.platform} binaryBytes must be a positive integer`);
 			}
 			if (!/^[0-9a-f]{64}$/.test(artifact.binarySha256)) {
@@ -364,7 +376,10 @@ export async function validateReleaseArtifacts({
 		const expectedArchive = `draht-${artifact.platform}${artifact.platform === "windows-x64" ? ".zip" : ".tar.gz"}`;
 		const expectedBinary = artifact.platform === "windows-x64" ? "draht.exe" : "draht";
 		if (artifact.archive !== expectedArchive || artifact.binary !== expectedBinary) throw new Error(`Runtime platform ${artifact.platform} has non-canonical archive/binary names`);
-		if (!Number.isSafeInteger(artifact.archiveBytes) || artifact.archiveBytes <= 0 || !Number.isSafeInteger(artifact.binaryBytes) || artifact.binaryBytes <= 0) throw new Error(`Runtime platform ${artifact.platform} sizes must be positive integers`);
+		if (
+			!Number.isSafeInteger(artifact.archiveBytes) || artifact.archiveBytes <= 0 || artifact.archiveBytes > MAX_RELEASE_ASSET_BYTES ||
+			!Number.isSafeInteger(artifact.binaryBytes) || artifact.binaryBytes <= 0 || artifact.binaryBytes > MAX_RELEASE_ASSET_BYTES
+		) throw new Error(`Runtime platform ${artifact.platform} sizes must be positive bounded integers`);
 		if (!/^[0-9a-f]{64}$/.test(artifact.archiveSha256) || !/^[0-9a-f]{64}$/.test(artifact.binarySha256)) throw new Error(`Runtime platform ${artifact.platform} hashes must be SHA-256`);
 		const bytes = downloaded.get(expectedArchive);
 		if (assets.get(expectedArchive).size !== artifact.archiveBytes || bytes.length !== artifact.archiveBytes || digestBytes(bytes) !== artifact.archiveSha256) throw new Error(`Runtime archive ${expectedArchive} does not match GitHub size or manifest size/hash`);

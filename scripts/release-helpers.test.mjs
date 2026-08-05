@@ -277,6 +277,27 @@ test("release artifact validation cannot bypass the complete asset gate", async 
 	);
 });
 
+test("release artifact validation rejects oversized assets before download", async () => {
+	const fixture = verifiedReleaseFixture();
+	fixture.release.assets[0].size = 513 * 1024 * 1024;
+	let downloads = 0;
+	await assert.rejects(
+		() => validateReleaseArtifacts({
+			tag: "v2.0.0",
+			version: "2.0.0",
+			commit: fixture.commit,
+			release: fixture.release,
+			fetchImpl: async (...args) => {
+				downloads++;
+				return fixture.fetchImpl(...args);
+			},
+			verifyAttestation: fixture.verifyAttestation,
+		}),
+		/positive bounded size/,
+	);
+	assert.equal(downloads, 0);
+});
+
 test("release verification rejects stale release and manifest identities", async (t) => {
 	await t.test("release tag", async () => {
 		const fixture = verifiedReleaseFixture();

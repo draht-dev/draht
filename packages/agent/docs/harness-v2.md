@@ -3044,7 +3044,7 @@ These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `
   - Primary files: JSONL type/codec modules and focused codec tests; no public repository export yet.
   - Implement the `JsonlSessionMetadata`, create/list options, format-4 header, line discriminants, `modifiedAt`, metadata, and parent-id/legacy-parent-path rules from section 13.
   - Acceptance: type and codec round trips cover every header field and line kind; no filesystem lifecycle yet.
-- [ ] **J1 — format-4 per-session storage.** Dependencies: J0.
+- [x] **J1 — format-4 per-session storage.** Dependencies: J0.
   - Implement one-session replay/write support for entries, records, lanes, facts, statistics, branch queries, operation-kind queries, and open-operation projection.
   - Keep it internal; do not export a partially implemented repository.
   - Acceptance: focused round-trip tests cover every mutation, shared `seq`, query bounds, immutable reads, and JSON validation.

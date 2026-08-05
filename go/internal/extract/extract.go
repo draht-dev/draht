@@ -30,7 +30,7 @@ import (
 // to skip snap.Put on error, so a transient parser failure (a recovered
 // panic, a nil tree) is never cached as "this file permanently has zero
 // imports" under a content hash that hasn't actually changed.
-func File(ctx context.Context, p parse.Parser, lang parse.Lang, rel string, content []byte) (*Facts, error) {
+func File(ctx context.Context, p parse.Parser, lang parse.Lang, rel string, content []byte, symbolSignatures ...bool) (*Facts, error) {
 	facts := &Facts{
 		Loc: len(bytes.Split(content, []byte("\n"))),
 	}
@@ -39,7 +39,8 @@ func File(ctx context.Context, p parse.Parser, lang parse.Lang, rel string, cont
 	stripped := parse.StripComments(content, lang)
 
 	facts.Exports = extractExports(langStr, content)
-	facts.Symbols = buildSymbols(langStr, content, facts.Exports)
+	withSignatures := len(symbolSignatures) > 0 && symbolSignatures[0]
+	facts.Symbols = buildSymbols(langStr, content, facts.Exports, withSignatures)
 	facts.Sinks = DetectSinks(stripped)
 	facts.SinkSites = FindSinkSites(content)
 	facts.Routes = DetectRoutes(stripped)

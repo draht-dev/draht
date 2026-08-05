@@ -50,7 +50,7 @@ const mapGraphUsage = `Usage: draht-tools map-graph [dir] [flags]
 flags:
   -q, --quiet                 single-line output; MAP.json only (hook path)
       --jobs N                worker count (default: min(GOMAXPROCS, 8))
-      --parser NAME            treesitter | regex          (default: treesitter)
+      --parser NAME            treesitter | regex          (default: regex)
       --no-cache               bypass the extraction cache entirely
       --cache-dir PATH         override <repoRoot>/.planning/codebase/.cache/graph-v1
                                (env GRAPH_CACHE_DIR; flag wins)
@@ -95,7 +95,7 @@ type mapGraphOptions struct {
 // Go-only flags from design §7. Flags that take a value accept both
 // "--flag value" and "--flag=value".
 func parseMapGraphArgs(args []string) (mapGraphOptions, error) {
-	opts := mapGraphOptions{parserName: "treesitter"}
+	opts := mapGraphOptions{parserName: "regex"}
 
 	next := func(i *int) (string, error) {
 		*i++
@@ -209,7 +209,7 @@ func parseMapGraphArgs(args []string) (mapGraphOptions, error) {
 // meaningful for the tree-sitter implementation.
 func buildParser(name string, astMaxBytes, astMaxLine int) (parse.Parser, error) {
 	switch name {
-	case "", "treesitter":
+	case "treesitter":
 		// design D2: AST import extraction covers exactly these 6 grammars
 		// (typescript implicitly also builds "tsx" — see NewTreeSitter).
 		// parse.CLILangs derives from langset.CLILanguages, the single source
@@ -224,7 +224,7 @@ func buildParser(name string, astMaxBytes, astMaxLine int) (parse.Parser, error)
 			tsOpts = append(tsOpts, parse.WithMaxLineBytes(astMaxLine))
 		}
 		return parse.NewTreeSitter(langs, tsOpts...)
-	case "regex":
+	case "", "regex":
 		return parse.NewRegex(), nil
 	default:
 		return nil, fmt.Errorf("unknown --parser %q (want treesitter or regex)", name)

@@ -102,7 +102,7 @@ func signatureAt(lang string, lines []string, idx int) string {
 	hashComments := hashCommentLangs[lang]
 	regexLiterals := regexLiteralLangs[lang]
 	variableDecl := regexLiterals && tsVariableDeclRe.MatchString(lines[idx])
-	variableArrow := variableDecl && variableDeclarationHasArrow(lines, idx, last)
+	variableArrow := variableDecl && variableDeclarationHasLeadingArrow(lines, idx, last)
 
 	// One entry per source line consumed, joined structurally by foldParts
 	// rather than with a blind space (a wrapped parameter list must come
@@ -227,54 +227,281 @@ func signatureAt(lang string, lines []string, idx int) string {
 		}
 	}
 
-	return normalizeSignature(foldParts(parts))
+	return normalizeSignature(stripDefaultInitializers(foldParts(parts), variableArrow))
 }
 
-// variableDeclarationHasArrow limits arrow detection to the declaration that
-// starts at idx. A declaration only continues onto another source line while
-// its parameter brackets remain open; once a line ends at depth zero, a later
-// declaration's => cannot turn the current variable initializer into a
-// signature.
-func variableDeclarationHasArrow(lines []string, idx, last int) bool {
-	depth := 0
-	for i := idx; i < last; i++ {
-		line := lines[i]
-		var quote byte
-		for j := 0; j < len(line); j++ {
-			c := line[j]
-			if quote != 0 {
-				if c == '\\' && j+1 < len(line) {
-					j++
-					continue
-				}
-				if c == quote {
-					quote = 0
-				}
+// variableDeclarationHasLeadingArrow reports whether the first top-level
+// assignment's RHS is itself an arrow function. An arrow in a neighboring
+// declaration or nested inside an array/object/callback value is irrelevant:
+// those RHS forms are ordinary initializers and must be dropped wholesale.
+func variableDeclarationHasLeadingArrow(lines []string, idx, last int) bool {
+	source := strings.Join(lines[idx:last], "\n")
+	paren, bracket, brace := 0, 0, 0
+	var quote byte
+	for i := 0; i < len(source); i++ {
+		c := source[i]
+		if quote != 0 {
+			if c == '\\' && i+1 < len(source) {
+				i++
 				continue
 			}
-			if c == '/' && j+1 < len(line) && (line[j+1] == '/' || line[j+1] == '*') {
-				break
+			if c == quote {
+				quote = 0
 			}
-			switch c {
-			case '"', '\'', '`':
-				quote = c
-			case '(', '[':
-				depth++
-			case ')', ']':
-				if depth > 0 {
-					depth--
-				}
-			case '=':
-				if j+1 < len(line) && line[j+1] == '>' {
-					return true
-				}
-			}
+			continue
 		}
-		if depth == 0 {
+		if c == '/' && i+1 < len(source) && (source[i+1] == '/' || source[i+1] == '*') {
 			return false
+		}
+		switch c {
+		case '"', '\'', '`':
+			quote = c
+		case '(':
+			paren++
+		case ')':
+			if paren > 0 {
+				paren--
+			}
+		case '[':
+			bracket++
+		case ']':
+			if bracket > 0 {
+				bracket--
+			}
+		case '{':
+			brace++
+		case '}':
+			if brace > 0 {
+				brace--
+			}
+		case '=':
+			if paren == 0 && bracket == 0 && brace == 0 && (i+1 >= len(source) || source[i+1] != '>') {
+				return rhsStartsArrow(source[i+1:])
+			}
 		}
 	}
 	return false
+}
+
+func rhsStartsArrow(rhs string) bool {
+	rhs = strings.TrimSpace(rhs)
+	if strings.HasPrefix(rhs, "async") && len(rhs) > len("async") && (rhs[len("async")] == ' ' || rhs[len("async")] == '	' || rhs[len("async")] == '\n') {
+		rhs = strings.TrimSpace(rhs[len("async"):])
+	}
+	if rhs == "" {
+		return false
+	}
+	if isIdentStart(rhs[0]) {
+		i := 1
+		for i < len(rhs) && isIdentContinue(rhs[i]) {
+			i++
+		}
+		return strings.HasPrefix(strings.TrimSpace(rhs[i:]), "=>")
+	}
+	if rhs[0] != '(' {
+		return false
+	}
+
+	depth := 0
+	var quote byte
+	closeAt := -1
+	for i := 0; i < len(rhs); i++ {
+		c := rhs[i]
+		if quote != 0 {
+			if c == '\\' && i+1 < len(rhs) {
+				i++
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'', '`':
+			quote = c
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				closeAt = i
+				i = len(rhs)
+			}
+		}
+	}
+	if closeAt < 0 {
+		return false
+	}
+
+	// After the parameter list, allow a declared return type (including
+	// nested object/tuple/function types) but accept only a top-level =>.
+	paren, bracket, brace := 0, 0, 0
+	quote = 0
+	for i := closeAt + 1; i < len(rhs); i++ {
+		c := rhs[i]
+		if quote != 0 {
+			if c == '\\' && i+1 < len(rhs) {
+				i++
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'', '`':
+			quote = c
+		case '(':
+			paren++
+		case ')':
+			paren--
+		case '[':
+			bracket++
+		case ']':
+			bracket--
+		case '{':
+			brace++
+		case '}':
+			brace--
+		case '=':
+			if paren == 0 && bracket == 0 && brace == 0 && i+1 < len(rhs) && rhs[i+1] == '>' {
+				return true
+			}
+		case ';', ',':
+			if paren == 0 && bracket == 0 && brace == 0 {
+				return false
+			}
+		}
+	}
+	return false
+}
+
+func isIdentStart(c byte) bool {
+	return c == '_' || c == '$' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+
+func isIdentContinue(c byte) bool {
+	return isIdentStart(c) || c >= '0' && c <= '9'
+}
+
+// stripDefaultInitializers removes every parameter/default binding RHS while
+// preserving names and annotations. It tracks nested literals structurally so
+// commas and closing brackets inside arrays, objects, calls, and callbacks do
+// not terminate the skipped value early. For an arrow variable, the one
+// top-level assignment introducing the arrow is declaration syntax and stays.
+func stripDefaultInitializers(s string, preserveTopLevelAssignment bool) string {
+	var out strings.Builder
+	paren, bracket, brace := 0, 0, 0
+	preservedTop := false
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == '=' && (i+1 >= len(s) || s[i+1] != '>') && (i == 0 || (s[i-1] != '=' && s[i-1] != '!' && s[i-1] != '<' && s[i-1] != '>')) {
+			if preserveTopLevelAssignment && !preservedTop && paren == 0 && bracket == 0 && brace == 0 {
+				preservedTop = true
+				out.WriteByte(c)
+				i++
+				continue
+			}
+			baseParen, baseBracket, baseBrace := paren, bracket, brace
+			i++
+			for i < len(s) && (s[i] == ' ' || s[i] == '	') {
+				i++
+			}
+			var quote byte
+			var lastSig byte
+			for i < len(s) {
+				c = s[i]
+				if quote != 0 {
+					if c == '\\' && i+1 < len(s) {
+						i += 2
+						continue
+					}
+					i++
+					if c == quote {
+						quote = 0
+					}
+					continue
+				}
+				if c == '/' && isRegexStart(lastSig) {
+					i = scanRegexLiteral(s, i)
+					lastSig = '/'
+					continue
+				}
+				switch c {
+				case '"', '\'', '`':
+					quote = c
+					i++
+				case '(':
+					paren++
+					lastSig = c
+					i++
+				case '[':
+					bracket++
+					lastSig = c
+					i++
+				case '{':
+					brace++
+					lastSig = c
+					i++
+				case ')':
+					if paren == baseParen && bracket == baseBracket && brace == baseBrace {
+						goto initializerDone
+					}
+					paren--
+					i++
+				case ']':
+					if paren == baseParen && bracket == baseBracket && brace == baseBrace {
+						goto initializerDone
+					}
+					bracket--
+					i++
+				case '}':
+					if paren == baseParen && bracket == baseBracket && brace == baseBrace {
+						goto initializerDone
+					}
+					brace--
+					i++
+				case ',':
+					if paren == baseParen && bracket == baseBracket && brace == baseBrace {
+						goto initializerDone
+					}
+					i++
+				default:
+					if c != ' ' && c != '	' {
+						lastSig = c
+					}
+					i++
+				}
+			}
+		initializerDone:
+			continue
+		}
+		switch c {
+		case '(':
+			paren++
+		case ')':
+			if paren > 0 {
+				paren--
+			}
+		case '[':
+			bracket++
+		case ']':
+			if bracket > 0 {
+				bracket--
+			}
+		case '{':
+			brace++
+		case '}':
+			if brace > 0 {
+				brace--
+			}
+		}
+		out.WriteByte(c)
+		i++
+	}
+	return out.String()
 }
 
 // foldParts joins the per-line fragments of a wrapped declaration back into
@@ -311,6 +538,9 @@ func foldParts(parts []string) string {
 // the result at SignatureCap runes.
 func normalizeSignature(s string) string {
 	s = strings.TrimSpace(sigWhitespaceRe.ReplaceAllString(s, " "))
+	s = strings.ReplaceAll(s, " ,", ",")
+	s = strings.ReplaceAll(s, " )", ")")
+	s = strings.ReplaceAll(s, " ]", "]")
 	for {
 		t := strings.TrimSpace(strings.TrimRight(s, " \t{=:;,"))
 		if t == s {

@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestSignatureExtractorVersionInvalidatesCrossDeclarationArrowCache(t *testing.T) {
-	if Version != "x5" {
-		t.Fatalf("Version = %q, want x5 after cross-declaration arrow semantics changed", Version)
+func TestSignatureExtractorVersionInvalidatesInitializerSanitizationCache(t *testing.T) {
+	if Version != "x6" {
+		t.Fatalf("Version = %q, want x6 after initializer sanitization changed", Version)
 	}
 }
 
@@ -53,6 +53,42 @@ func TestSignatureAt(t *testing.T) {
 			want: "export const CANARY_TOKEN: string",
 		},
 		{
+			name: "same-line neighboring arrow cannot retain scalar initializer",
+			lang: "typescript",
+			src:  `export const API_TOKEN: string = "same-line-secret"; export const callback = () => 1;`,
+			want: "export const API_TOKEN: string",
+		},
+		{
+			name: "array callback cannot classify array initializer as arrow",
+			lang: "typescript",
+			src:  `export const CONFIG = ["array-secret", () => 1];`,
+			want: "export const CONFIG",
+		},
+		{
+			name: "object callback cannot classify object initializer as arrow",
+			lang: "typescript",
+			src:  `export const CONFIG = { token: "object-secret", callback: () => 1 };`,
+			want: "export const CONFIG",
+		},
+		{
+			name: "comma binding arrow cannot retain first initializer",
+			lang: "typescript",
+			src:  `export const first: string = "comma-secret", second = () => 1;`,
+			want: "export const first: string",
+		},
+		{
+			name: "function scalar default initializer is stripped",
+			lang: "typescript",
+			src:  `export function connect(token: string = "default-secret", retries = 3): void {}`,
+			want: "export function connect(token: string, retries): void",
+		},
+		{
+			name: "arrow parameter callback and object defaults are stripped",
+			lang: "typescript",
+			src:  `export const run = (callback = () => "callback-secret", config: object = {token: "object-default-secret"}): void => {}`,
+			want: "export const run = (callback, config: object): void",
+		},
+		{
 			name: "ts type alias drops the dangling equals",
 			lang: "typescript",
 			src:  "export type OutlineItemKind =\n  | \"function\"\n  | \"class\"",
@@ -80,13 +116,13 @@ func TestSignatureAt(t *testing.T) {
 			name: "python def keeps annotations and drops the colon",
 			lang: "python",
 			src:  "def resolve(path: str, strict: bool = False) -> Optional[Module]:\n    pass",
-			want: "def resolve(path: str, strict: bool = False) -> Optional[Module]",
+			want: "def resolve(path: str, strict: bool) -> Optional[Module]",
 		},
 		{
 			name: "python hash comment is stripped",
 			lang: "python",
 			src:  "CAP = 160  # tuned for context budgets",
-			want: "CAP = 160",
+			want: "CAP",
 		},
 		{
 			name: "ts hash is not a comment (private class field)",
@@ -104,13 +140,13 @@ func TestSignatureAt(t *testing.T) {
 			name: "braces and slashes inside a string literal are not structural",
 			lang: "typescript",
 			src:  "export function tpl(value = \"{ // not a comment\"): void {}",
-			want: "export function tpl(value = \"{ // not a comment\"): void",
+			want: "export function tpl(value): void",
 		},
 		{
 			name: "escaped quote does not end the string",
 			lang: "typescript",
 			src:  "export function q(value = \"a\\\"{b\"): void {}",
-			want: "export function q(value = \"a\\\"{b\"): void",
+			want: "export function q(value): void",
 		},
 		{
 			name: "inline object type inside params is kept",
@@ -139,13 +175,13 @@ func TestSignatureAt(t *testing.T) {
 				" */",
 				"export function isWhitespaceChar(char: string): boolean {",
 			}, "\n"),
-			want: "export function punctuation(value = /[(){}[\\]<>.,;:'\"!?+\\-=*/\\\\|&%^$#@~`]/): RegExp",
+			want: "export function punctuation(value): RegExp",
 		},
 		{
 			name: "division is not mistaken for a regex literal",
 			lang: "typescript",
 			src:  "export function half(value = total / 2): number {}",
-			want: "export function half(value = total / 2): number",
+			want: "export function half(value): number",
 		},
 		{
 			name: "block comment ends the declaration text",
@@ -175,7 +211,7 @@ func TestSignatureAt(t *testing.T) {
 				"  b: string) {",
 				"SHOULD_NOT_APPEAR",
 			}, "\n"),
-			want: "export function f(sep = \"unterminated",
+			want: "export function f(sep",
 		},
 		{
 			name: "rust attribute hash is not a comment",
@@ -243,7 +279,7 @@ func TestBuildSymbols_PopulatesSignatures(t *testing.T) {
 	}, "\n"))
 	exports := []Export{{Name: "publicOne", Kind: "function", Line: 1}}
 
-	syms := buildSymbols("typescript", src, exports)
+	syms := buildSymbols("typescript", src, exports, true)
 
 	want := map[string]string{
 		"publicOne": "export function publicOne(a: string): number",
@@ -271,7 +307,7 @@ func TestBuildSymbols_NamedExportsResolveLocalDeclarations(t *testing.T) {
 		"export { foo, local as aliased, missing }",
 	}, "\n"))
 
-	syms := buildSymbols("typescript", src, extractExports("typescript", src))
+	syms := buildSymbols("typescript", src, extractExports("typescript", src), true)
 	got := make(map[string]string, len(syms))
 	for _, sym := range syms {
 		if sym.Exported {

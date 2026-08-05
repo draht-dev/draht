@@ -24,7 +24,7 @@ var (
 // names first (from the already-computed, untruncated exports slice), hard
 // stop at 60, then a per-language best-effort non-exported top-level
 // declaration scan.
-func buildSymbols(lang string, content []byte, exports []Export) []Symbol {
+func buildSymbols(lang string, content []byte, exports []Export, withSignatures bool) []Symbol {
 	var syms []Symbol
 	seen := make(map[string]bool)
 
@@ -32,7 +32,7 @@ func buildSymbols(lang string, content []byte, exports []Export) []Symbol {
 	// signatures) and the non-exported declaration scan below read it.
 	lines := strings.Split(string(content), "\n")
 	tsDeclLines := make(map[string]int)
-	if lang == "typescript" || lang == "javascript" {
+	if withSignatures && (lang == "typescript" || lang == "javascript") {
 		for i, line := range lines {
 			if m := tsDeclRe.FindStringSubmatch(line); m != nil {
 				tsDeclLines[m[1]] = i
@@ -45,8 +45,11 @@ func buildSymbols(lang string, content []byte, exports []Export) []Symbol {
 			continue
 		}
 		seen[e.Name] = true
-		sig := signatureAt(lang, lines, e.Line-1)
-		if e.Kind == "named" && (lang == "typescript" || lang == "javascript") {
+		sig := ""
+		if withSignatures {
+			sig = signatureAt(lang, lines, e.Line-1)
+		}
+		if withSignatures && e.Kind == "named" && (lang == "typescript" || lang == "javascript") {
 			sig = ""
 			if local := namedExportLocalAt(lines, e.Line-1, e.Name); local != "" {
 				if declLine, ok := tsDeclLines[local]; ok {
@@ -83,12 +86,16 @@ func buildSymbols(lang string, content []byte, exports []Export) []Symbol {
 				continue
 			}
 			seen[name] = true
+			sig := ""
+			if withSignatures {
+				sig = signatureAt(lang, lines, i)
+			}
 			syms = append(syms, Symbol{
 				Name:     name,
 				Kind:     kindOf(line),
 				Line:     i + 1,
 				Exported: false,
-				Sig:      signatureAt(lang, lines, i),
+				Sig:      sig,
 			})
 			if len(syms) >= 60 {
 				return true

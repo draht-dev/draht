@@ -18,8 +18,10 @@ const FactsSchema = 3
 // "x2" alongside FactsSchema for the same reason, "x2" -> "x3" for
 // Symbol.Sig, "x3" -> "x4" when signatures stopped retaining variable
 // initializers and named exports began resolving local declarations, and
-// "x4" -> "x5" when arrow detection became declaration-scoped.
-const Version = "x5"
+// "x4" -> "x5" when arrow detection became declaration-scoped, and "x5"
+// -> "x6" when initializer sanitization became structural and signatures
+// became opt-in at extraction time.
+const Version = "x6"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no
@@ -54,9 +56,8 @@ type Export struct {
 
 // Symbol is one symbol-level node (exported or not). Sig is the declaration
 // text as written (see signatureAt), capped at SignatureCap runes and "" when
-// nothing could be rendered. It is extracted UNCONDITIONALLY so a cache entry
-// is valid whether or not the run emitting it had --symbol-signatures on;
-// gating happens at emit time in graph.convertSymbols, not here.
+// nothing could be rendered. It is extracted only when --symbol-signatures is
+// enabled; flag-off facts therefore contain no opt-in declaration text.
 type Symbol struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`

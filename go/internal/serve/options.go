@@ -40,7 +40,7 @@ var allDigitsRe = regexp.MustCompile(`^\d+$`)
 func ParseOptions(argv []string) Options {
 	o := Options{
 		Port:        4878,
-		ParserName:  "treesitter",
+		ParserName:  "regex",
 		OpenBrowser: false,
 		MaxRetries:  10,
 		MaxClients:  64,

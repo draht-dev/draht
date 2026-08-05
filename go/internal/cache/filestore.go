@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,9 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"sync"
 )
 
 // cacheFileName is the single NDJSON file a fileStore reads and writes,
@@ -30,6 +29,14 @@ const cacheTool = "draht-graph"
 // corrupted cache file into memory. Exceeding it is treated exactly like any
 // other corruption: an empty snapshot and an advisory error.
 const maxCacheFileBytes = 128 << 20 // 128 MiB
+
+// These bounds prevent a byte-bounded cache from amplifying into millions of
+// per-line allocations or one pathological JSON token. They count every
+// physical line, including blanks and corrupt records.
+const (
+	maxCacheLineBytes = 8 << 20
+	maxCacheLines     = 262145 // one header plus at most 262144 entries
+)
 
 // fileHeader is line 1 of facts.ndjson.
 type fileHeader struct {
@@ -52,6 +59,8 @@ type fileStore struct {
 	dir          string
 	readFile     func(string) ([]byte, error)
 	maxFileBytes int64 // zero uses maxCacheFileBytes; tests may exercise small boundaries
+	maxLineBytes int   // zero uses maxCacheLineBytes
+	maxLines     int   // zero uses maxCacheLines
 }
 
 var errCacheTooLarge = errors.New("cache output exceeds size limit")
@@ -59,6 +68,17 @@ var errCacheTooLarge = errors.New("cache output exceeds size limit")
 type boundedWriter struct {
 	w         io.Writer
 	remaining int64
+}
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	return n, err
 }
 
 func (w *boundedWriter) Write(p []byte) (int, error) {
@@ -99,110 +119,108 @@ func (f *fileStore) Load(ctx context.Context) (*Snapshot, error) {
 		}
 		return NewSnapshot(), fmt.Errorf("cache: read %s: %w", path, err)
 	}
-	if info.Size() > maxCacheFileBytes {
-		return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", path, maxCacheFileBytes)
+	fileLimit := f.maxFileBytes
+	if fileLimit == 0 {
+		fileLimit = maxCacheFileBytes
+	}
+	if info.Size() > fileLimit {
+		return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", path, fileLimit)
 	}
 
-	readFile := f.readFile
-	if readFile == nil {
-		readFile = func(path string) ([]byte, error) {
-			file, err := os.Open(path)
-			if err != nil {
-				return nil, err
+	var reader io.ReadCloser
+	if f.readFile != nil {
+		data, readErr := f.readFile(path)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				return NewSnapshot(), nil
 			}
-			defer file.Close()
-			// Read one byte beyond the accepted limit so growth between Stat and
-			// Open is detected without ever allocating the remainder of the file.
-			return io.ReadAll(io.LimitReader(file, maxCacheFileBytes+1))
+			return NewSnapshot(), fmt.Errorf("cache: read %s: %w", path, readErr)
 		}
-	}
-	data, err := readFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return NewSnapshot(), nil
+		if int64(len(data)) > fileLimit {
+			return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", path, fileLimit)
 		}
-		// Any other read error (permissions, I/O) degrades to a cold cache;
-		// it is not this caller's job to fail the whole index build.
-		return NewSnapshot(), fmt.Errorf("cache: read %s: %w", path, err)
+		reader = io.NopCloser(bytes.NewReader(data))
+	} else {
+		file, openErr := os.Open(path)
+		if openErr != nil {
+			if os.IsNotExist(openErr) {
+				return NewSnapshot(), nil
+			}
+			return NewSnapshot(), fmt.Errorf("cache: read %s: %w", path, openErr)
+		}
+		reader = file
 	}
-	if len(data) > maxCacheFileBytes {
-		return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", path, maxCacheFileBytes)
+	defer reader.Close()
+
+	lineLimit := f.maxLineBytes
+	if lineLimit == 0 {
+		lineLimit = maxCacheLineBytes
 	}
-	if len(bytes.TrimSpace(data)) == 0 {
-		return NewSnapshot(), fmt.Errorf("cache: %s is empty", f.path())
+	lineCountLimit := f.maxLines
+	if lineCountLimit == 0 {
+		lineCountLimit = maxCacheLines
 	}
 
-	lines := bytes.Split(data, []byte("\n"))
+	// Read at most one byte past the accepted file budget so growth between
+	// Stat and Open is detected. Scanner retains only the current line; entries
+	// are decoded directly into the final map instead of bytes.Split plus an
+	// all-results array proportional to the physical line count.
+	counter := &countingReader{r: io.LimitReader(reader, fileLimit+1)}
+	scanner := bufio.NewScanner(counter)
+	initialBuffer := 64 << 10
+	if lineLimit+1 < initialBuffer {
+		initialBuffer = lineLimit + 1
+	}
+	scanner.Buffer(make([]byte, initialBuffer), lineLimit+1)
+
+	lineNo := 0
+	entries := make(map[string]record)
 	var hdr fileHeader
-	if err := json.Unmarshal(lines[0], &hdr); err != nil || hdr.V != cacheFormatVersion {
-		return NewSnapshot(), fmt.Errorf("cache: %s has an invalid or unsupported header (v=%d): %w", f.path(), hdr.V, err)
-	}
-	lines = lines[1:]
-	// Drop a trailing blank line (Commit's Encoder appends a final "\n") and
-	// any other blank line so a truncated write does not spawn a spurious
-	// entry.
-	for len(lines) > 0 && len(bytes.TrimSpace(lines[len(lines)-1])) == 0 {
-		lines = lines[:len(lines)-1]
-	}
-
-	type parsed struct {
-		ok bool
-		e  diskEntry
-	}
-	results := make([]parsed, len(lines))
-	if len(lines) > 0 {
-		workers := runtime.GOMAXPROCS(0)
-		if workers < 1 {
-			workers = 1
+	for scanner.Scan() {
+		lineNo++
+		if lineNo > lineCountLimit {
+			return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d lines, treating as cold", path, lineCountLimit)
 		}
-		if workers > len(lines) {
-			workers = len(lines)
+		line := scanner.Bytes()
+		if len(line) > lineLimit {
+			return NewSnapshot(), fmt.Errorf("cache: %s line %d exceeds %d bytes, treating as cold", path, lineNo, lineLimit)
 		}
-
-		jobs := make(chan int, workers)
-		var wg sync.WaitGroup
-		for w := 0; w < workers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for i := range jobs {
-					line := lines[i]
-					if len(bytes.TrimSpace(line)) == 0 {
-						continue
-					}
-					var e diskEntry
-					if err := json.Unmarshal(line, &e); err != nil {
-						continue // corrupt line => that entry is a miss, never fatal
-					}
-					if e.Path == "" || e.ContentHash == "" || e.Version == "" {
-						continue // incomplete record => miss
-					}
-					results[i] = parsed{ok: true, e: e}
-				}
-			}()
-		}
-		for i := range lines {
-			jobs <- i
-		}
-		close(jobs)
-		wg.Wait()
-	}
-
-	// Build the map single-threaded, in original line order, so that if the
-	// same path somehow appears twice the later occurrence wins
-	// deterministically (Commit itself never produces duplicates).
-	entries := make(map[string]record, len(results))
-	for _, p := range results {
-		if !p.ok {
+		if lineNo == 1 {
+			if err := json.Unmarshal(line, &hdr); err != nil || hdr.V != cacheFormatVersion {
+				return NewSnapshot(), fmt.Errorf("cache: %s has an invalid or unsupported header (v=%d): %w", path, hdr.V, err)
+			}
+			if hdr.Entries+1 > lineCountLimit {
+				return NewSnapshot(), fmt.Errorf("cache: %s header declares %d entries above line limit %d", path, hdr.Entries, lineCountLimit-1)
+			}
 			continue
 		}
-		entries[p.e.Path] = record{
-			key:     Key{Path: p.e.Path, ContentHash: p.e.ContentHash, Version: p.e.Version},
-			payload: append([]byte(nil), p.e.Payload...),
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var e diskEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue // corrupt line => that entry is a miss, never fatal
+		}
+		if e.Path == "" || e.ContentHash == "" || e.Version == "" {
+			continue // incomplete record => miss
+		}
+		// Original line order is preserved, so duplicate paths deterministically
+		// retain the later occurrence (Commit never produces duplicates).
+		entries[e.Path] = record{
+			key:     Key{Path: e.Path, ContentHash: e.ContentHash, Version: e.Version},
+			payload: append([]byte(nil), e.Payload...),
 			live:    false,
 		}
 	}
-
+	if err := scanner.Err(); err != nil {
+		return NewSnapshot(), fmt.Errorf("cache: scan %s: %w", path, err)
+	}
+	if counter.n > fileLimit {
+		return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", path, fileLimit)
+	}
+	if lineNo == 0 {
+		return NewSnapshot(), fmt.Errorf("cache: %s is empty", path)
+	}
 	return &Snapshot{entries: entries}, nil
 }
 

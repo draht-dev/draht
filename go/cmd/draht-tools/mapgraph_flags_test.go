@@ -2,6 +2,28 @@ package main
 
 import "testing"
 
+func TestParseMapGraphArgs_ParserDefaultsToRegex(t *testing.T) {
+	opts, err := parseMapGraphArgs(nil)
+	if err != nil {
+		t.Fatalf("parseMapGraphArgs(nil): %v", err)
+	}
+	if opts.parserName != "regex" {
+		t.Errorf("parserName = %q, want regex", opts.parserName)
+	}
+}
+
+func TestParseMapGraphArgs_TreeSitterRequiresExplicitFlag(t *testing.T) {
+	for _, argv := range [][]string{{"--parser", "treesitter"}, {"--parser=treesitter"}} {
+		opts, err := parseMapGraphArgs(argv)
+		if err != nil {
+			t.Fatalf("parseMapGraphArgs(%v): %v", argv, err)
+		}
+		if opts.parserName != "treesitter" {
+			t.Errorf("argv=%v parserName = %q, want treesitter", argv, opts.parserName)
+		}
+	}
+}
+
 func TestParseMapGraphArgs_SymbolSignaturesDefaultsOff(t *testing.T) {
 	opts, err := parseMapGraphArgs(nil)
 	if err != nil {

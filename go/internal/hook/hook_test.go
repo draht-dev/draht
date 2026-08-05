@@ -62,7 +62,7 @@ func TestRun_InstallThenStatusThenUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hook: %v", err)
 	}
-	wantContent := "#!/bin/sh\n\n# >>> draht map-graph >>>\n\"/abs/path/to/draht-tools\" map-graph --quiet 2>/dev/null || true\n# <<< draht map-graph <<<\n"
+	wantContent := "#!/bin/sh\n\n# >>> draht map-graph >>>\n\"/abs/path/to/draht-tools\" map-graph --quiet --parser regex 2>/dev/null || true\n# <<< draht map-graph <<<\n"
 	if string(content) != wantContent {
 		t.Errorf("hook content = %q, want %q", content, wantContent)
 	}
@@ -145,7 +145,7 @@ func TestRun_InstallPreservesExistingHookContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hook: %v", err)
 	}
-	wantContent := "#!/bin/sh\necho custom\n\n# >>> draht map-graph >>>\n\"/self\" map-graph --quiet 2>/dev/null || true\n# <<< draht map-graph <<<\n"
+	wantContent := "#!/bin/sh\necho custom\n\n# >>> draht map-graph >>>\n\"/self\" map-graph --quiet --parser regex 2>/dev/null || true\n# <<< draht map-graph <<<\n"
 	if string(content) != wantContent {
 		t.Errorf("hook content = %q, want %q", content, wantContent)
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -153,6 +154,42 @@ func TestFileStoreAtSizeLimitIsRead(t *testing.T) {
 	}
 	if !readCalled {
 		t.Error("cache at exact size limit was rejected before read")
+	}
+}
+
+func TestFileStoreRejectsNewlineDenseInputAtInjectedLineCountLimit(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"v":1,"tool":"draht-graph","entries":1}` + "\n" +
+		`{"p":"good.go","h":"hash","k":"version","f":{"loc":1}}` + "\n\n\n\n"
+	if err := os.WriteFile(filepath.Join(dir, cacheFileName), []byte(content), 0o644); err != nil {
+		t.Fatalf("write dense cache: %v", err)
+	}
+
+	store := &fileStore{dir: dir, maxLines: 4, maxLineBytes: 1024}
+	snap, err := store.Load(context.Background())
+	if err == nil {
+		t.Fatal("newline-dense cache above line-count limit returned nil error")
+	}
+	if got := snap.Stats().Entries; got != 0 {
+		t.Fatalf("newline-dense cache entries = %d, want cold snapshot", got)
+	}
+}
+
+func TestFileStoreRejectsEntryAboveInjectedPerLineLimit(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"v":1,"tool":"draht-graph","entries":1}` + "\n" +
+		`{"p":"oversized.go","h":"hash","k":"version","f":"` + strings.Repeat("x", 128) + `"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, cacheFileName), []byte(content), 0o644); err != nil {
+		t.Fatalf("write long-line cache: %v", err)
+	}
+
+	store := &fileStore{dir: dir, maxLines: 10, maxLineBytes: 96}
+	snap, err := store.Load(context.Background())
+	if err == nil {
+		t.Fatal("cache entry above per-line limit returned nil error")
+	}
+	if got := snap.Stats().Entries; got != 0 {
+		t.Fatalf("long-line cache entries = %d, want cold snapshot", got)
 	}
 }
 

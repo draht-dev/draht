@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/draht-dev/draht/go/internal/parse"
@@ -103,7 +104,7 @@ func TestBuildSymbolsIncludesExportedAndNonExported(t *testing.T) {
 function priv() {}
 `)
 	exports := extractExports("typescript", src)
-	syms := buildSymbols("typescript", src, exports)
+	syms := buildSymbols("typescript", src, exports, false)
 
 	var sawPub, sawPriv bool
 	for _, s := range syms {
@@ -119,6 +120,34 @@ function priv() {}
 	}
 	if !sawPriv {
 		t.Errorf("expected non-exported symbol 'priv', got %+v", syms)
+	}
+}
+
+func TestFile_SignaturesAreExtractedOnlyWhenEnabled(t *testing.T) {
+	const secret = "file-signature-secret"
+	src := []byte(`export function connect(token: string = "file-signature-secret"): void {}`)
+
+	off, err := File(context.Background(), nil, "typescript", "x.ts", src)
+	if err != nil {
+		t.Fatalf("File signatures off: %v", err)
+	}
+	if len(off.Symbols) != 1 || off.Symbols[0].Sig != "" {
+		t.Fatalf("signatures off extracted declaration text: %+v", off.Symbols)
+	}
+	offJSON, err := MarshalFacts(off)
+	if err != nil {
+		t.Fatalf("MarshalFacts(off): %v", err)
+	}
+	if strings.Contains(string(offJSON), secret) || strings.Contains(string(offJSON), `"sig"`) {
+		t.Fatalf("signatures-off facts persisted opt-in data: %s", offJSON)
+	}
+
+	on, err := File(context.Background(), nil, "typescript", "x.ts", src, true)
+	if err != nil {
+		t.Fatalf("File signatures on: %v", err)
+	}
+	if got, want := on.Symbols[0].Sig, "export function connect(token: string): void"; got != want {
+		t.Fatalf("signature = %q, want %q", got, want)
 	}
 }
 

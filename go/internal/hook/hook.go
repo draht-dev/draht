@@ -67,7 +67,7 @@ func readHook(hookPath string) string {
 // byte-identical to the CJS engine (a different absolute path, and a
 // different launcher) — the surrounding message TEXT stays identical.
 func buildHookBody(selfPath string) string {
-	return fmt.Sprintf("%s\n\"%s\" map-graph --quiet 2>/dev/null || true\n%s", BeginMarker, selfPath, EndMarker)
+	return fmt.Sprintf("%s\n\"%s\" map-graph --quiet --parser regex 2>/dev/null || true\n%s", BeginMarker, selfPath, EndMarker)
 }
 
 // Run ports graph-hook (cjs:5573-5597). cwd is process.cwd() (NOT the repo

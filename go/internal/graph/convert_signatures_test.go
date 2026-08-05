@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -78,28 +79,42 @@ func TestConvertSymbols_PreservesNonSignatureFields(t *testing.T) {
 	}
 }
 
-// TestBuild_SignatureCanaryNeverReachesOutputOrCache reproduces the exact
-// independent-review canary: a plain variable is immediately followed by an
-// arrow declaration. With --symbol-signatures off (the default), neither
-// MAP.json nor facts.ndjson may contain the initializer. Enabling output may
-// expose only the declaration signature, never the initializer value.
-func TestBuild_SignatureCanaryNeverReachesOutputOrCache(t *testing.T) {
-	const (
-		secret = "initializer-secret-canary"
-		source = `export const CANARY_TOKEN: string = "initializer-secret-canary"
-export const later = (value: string): string => value
+// TestBuild_SignatureCanariesAreOptInAndInitializerFree is the exact
+// facts.ndjson + MAP.json canary gate. A flag-off build must never extract a
+// signature at all. Reusing that cache with the flag on must miss (mode is
+// part of cache identity), persist only sanitized signatures, and emit those
+// same sanitized declarations in MAP.json.
+func TestBuild_SignatureCanariesAreOptInAndInitializerFree(t *testing.T) {
+	const source = `export const API_TOKEN: string = "same-line-secret"; export const callback = () => 1;
+export const ARRAY_CONFIG = ["array-secret", () => 1];
+export const OBJECT_CONFIG = { token: "object-secret", callback: () => 1 };
+export const first: string = "comma-secret", second = () => 1;
+export function connect(token: string = "default-secret", retries = 3): void {}
+export const run = (callback = () => "callback-secret", config: object = {token: "nested-secret"}): void => {}
 `
-	)
+	canaries := []string{
+		"same-line-secret", "array-secret", "object-secret", "comma-secret",
+		"default-secret", "callback-secret", "nested-secret",
+	}
+	wantSignatures := []string{
+		"export const API_TOKEN: string",
+		"export const ARRAY_CONFIG",
+		"export const OBJECT_CONFIG",
+		"export const first: string",
+		"export function connect(token: string, retries): void",
+		"export const run = (callback, config: object): void",
+	}
+
 	root := t.TempDir()
+	cacheDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "canary.ts"), []byte(source), 0o644); err != nil {
 		t.Fatalf("write canary: %v", err)
 	}
 
-	build := func(t *testing.T, signatures bool) ([]byte, []byte) {
+	build := func(t *testing.T, signatures bool) ([]byte, []byte, Report) {
 		t.Helper()
 		outDir := t.TempDir()
-		cacheDir := t.TempDir()
-		_, _, err := Build(context.Background(), Options{
+		_, report, err := Build(context.Background(), Options{
 			Root: root, OutDir: outDir, CacheDir: cacheDir,
 			Parser: parse.NewRegex(), SymbolSignatures: signatures,
 		})
@@ -114,30 +129,43 @@ export const later = (value: string): string => value
 		if err != nil {
 			t.Fatalf("read facts.ndjson: %v", err)
 		}
-		return mapJSON, facts
+		return mapJSON, facts, report
 	}
 
-	t.Run("symbol-signatures off", func(t *testing.T) {
-		mapJSON, facts := build(t, false)
-		for name, data := range map[string][]byte{"MAP.json": mapJSON, "facts.ndjson": facts} {
-			if strings.Contains(string(data), secret) {
-				t.Errorf("%s retained initializer secret with --symbol-signatures off", name)
+	mapOff, factsOff, offReport := build(t, false)
+	if offReport.CacheMisses != 1 {
+		t.Fatalf("flag-off cache misses = %d, want 1", offReport.CacheMisses)
+	}
+	for name, data := range map[string][]byte{"MAP.json": mapOff, "facts.ndjson": factsOff} {
+		for _, canary := range canaries {
+			if strings.Contains(string(data), canary) {
+				t.Errorf("%s retained initializer canary %q with --symbol-signatures off", name, canary)
 			}
 		}
-		if strings.Contains(string(mapJSON), `"signature"`) {
-			t.Error("MAP.json emitted signatures with --symbol-signatures off")
-		}
-	})
+	}
+	if strings.Contains(string(mapOff), `"signature"`) || strings.Contains(string(factsOff), `"sig"`) {
+		t.Fatalf("flag-off artifacts persisted signature data\nMAP: %s\nfacts: %s", mapOff, factsOff)
+	}
 
-	t.Run("symbol-signatures on", func(t *testing.T) {
-		mapJSON, facts := build(t, true)
-		for name, data := range map[string][]byte{"MAP.json": mapJSON, "facts.ndjson": facts} {
-			if strings.Contains(string(data), secret) {
-				t.Errorf("%s retained initializer secret with --symbol-signatures on", name)
+	mapOn, factsOn, onReport := build(t, true)
+	if onReport.CacheMisses != 1 || onReport.CacheHits != 0 {
+		t.Fatalf("signature mode reused flag-off cache: hits=%d misses=%d", onReport.CacheHits, onReport.CacheMisses)
+	}
+	for name, data := range map[string][]byte{"MAP.json": mapOn, "facts.ndjson": factsOn} {
+		for _, canary := range canaries {
+			if strings.Contains(string(data), canary) {
+				t.Errorf("%s retained initializer canary %q with --symbol-signatures on", name, canary)
 			}
 		}
-		if !strings.Contains(string(mapJSON), `"signature": "export const CANARY_TOKEN: string"`) {
-			t.Errorf("MAP.json did not emit the safe canary declaration signature: %s", mapJSON)
+	}
+	for _, signature := range wantSignatures {
+		mapNeedle := `"signature": ` + strconv.Quote(signature)
+		factsNeedle := `"sig":` + strconv.Quote(signature)
+		if !strings.Contains(string(mapOn), mapNeedle) {
+			t.Errorf("MAP.json missing exact sanitized signature %q: %s", signature, mapOn)
 		}
-	})
+		if !strings.Contains(string(factsOn), factsNeedle) {
+			t.Errorf("facts.ndjson missing exact sanitized signature %q: %s", signature, factsOn)
+		}
+	}
 }

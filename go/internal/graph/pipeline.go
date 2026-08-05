@@ -117,7 +117,12 @@ func Build(ctx context.Context, opts Options) (*model.Map, Report, error) {
 
 	codeFiles := discovery.CodeFiles()
 	factsVersion := cache.ComposeVersion(extract.FactsSchema, parser.Version(), extract.Version)
-	facts, warnings := extractAll(ctx, codeFiles, parser, snap, factsVersion, workerCount(opts.Jobs))
+	if opts.SymbolSignatures {
+		factsVersion += "|s1"
+	} else {
+		factsVersion += "|s0"
+	}
+	facts, warnings := extractAll(ctx, codeFiles, parser, snap, factsVersion, workerCount(opts.Jobs), opts.SymbolSignatures)
 	report.Warnings = append(report.Warnings, warnings...)
 
 	// extractAll's job-feed loop breaks early on ctx.Done() (see its
@@ -297,7 +302,7 @@ func toModuleSet(paths []string) map[string]struct{} {
 // miss) extracting each file. results is index-addressed so no result
 // channel or re-sort is needed — result order is always input order
 // (design §4.2).
-func extractAll(ctx context.Context, files []scan.File, p parse.Parser, snap *cache.Snapshot, version string, workers int) ([]*extract.Facts, []string) {
+func extractAll(ctx context.Context, files []scan.File, p parse.Parser, snap *cache.Snapshot, version string, workers int, symbolSignatures ...bool) ([]*extract.Facts, []string) {
 	results := make([]*extract.Facts, len(files))
 	warnings := make([]string, len(files))
 
@@ -308,7 +313,7 @@ func extractAll(ctx context.Context, files []scan.File, p parse.Parser, snap *ca
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				results[i], warnings[i] = extractOne(ctx, files[i], p, snap, version)
+				results[i], warnings[i] = extractOne(ctx, files[i], p, snap, version, symbolSignatures...)
 			}
 		}()
 	}
@@ -332,7 +337,7 @@ loop:
 	return results, out
 }
 
-func extractOne(ctx context.Context, f scan.File, p parse.Parser, snap *cache.Snapshot, version string) (facts *extract.Facts, warning string) {
+func extractOne(ctx context.Context, f scan.File, p parse.Parser, snap *cache.Snapshot, version string, symbolSignatures ...bool) (facts *extract.Facts, warning string) {
 	defer func() {
 		if r := recover(); r != nil {
 			facts = nil
@@ -363,7 +368,7 @@ func extractOne(ctx context.Context, f scan.File, p parse.Parser, snap *cache.Sn
 		// fatal error.
 	}
 
-	fa, err := extract.File(ctx, p, parse.Lang(f.Lang), f.Rel, content)
+	fa, err := extract.File(ctx, p, parse.Lang(f.Lang), f.Rel, content, symbolSignatures...)
 	if err != nil {
 		return nil, fmt.Sprintf("%s: extract: %v", f.Rel, err)
 	}

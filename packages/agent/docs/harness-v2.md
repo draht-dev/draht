@@ -3048,7 +3048,7 @@ These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `
   - Implement one-session replay/write support for entries, records, lanes, facts, statistics, branch queries, operation-kind queries, and open-operation projection.
   - Keep it internal; do not export a partially implemented repository.
   - Acceptance: focused round-trip tests cover every mutation, shared `seq`, query bounds, immutable reads, and JSON validation.
-- [ ] **J2 — format-4 repository lifecycle and forks.** Dependencies: J1.
+- [x] **J2 — format-4 repository lifecycle and forks.** Dependencies: J1.
   - Add create/open/list/delete, one writer queue per session, metadata ordering/filtering, branch/tree forks, and the concrete public `JsonlSessionRepo` export.
   - Acceptance: the complete backend-neutral conformance suite passes against JSONL, including concurrent lane writes and forks.
 - [ ] **J3 — format-4 crash and corruption behavior.** Dependencies: J2.

@@ -5,9 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-	EXPECTED_GRAPH_RELEASE_ASSETS,
+	EXPECTED_RELEASE_ASSETS,
 	assertReleaseVersions,
 	getScopePackages,
+	listGithubReleaseAssets,
 	missingReleaseAssets,
 	setVersion,
 	waitForReleaseAssets,
@@ -44,8 +45,13 @@ test("setting package versions synchronizes plugin manifests and dependency vers
 	assert.equal(JSON.parse(readFileSync(join(root, "packages/draht-codex/package.json"))).dependencies.a, "workspace:*");
 });
 
-test("release asset gate requires manifest, checksums, and every graph archive", () => {
-	assert.deepEqual(EXPECTED_GRAPH_RELEASE_ASSETS, [
+test("release asset gate requires every primary and graph runtime archive", () => {
+	assert.deepEqual(EXPECTED_RELEASE_ASSETS, [
+		"pi-darwin-arm64.tar.gz",
+		"pi-darwin-x64.tar.gz",
+		"pi-linux-x64.tar.gz",
+		"pi-linux-arm64.tar.gz",
+		"pi-windows-x64.zip",
 		"manifest.json",
 		"SHA256SUMS",
 		"draht-graph-darwin-arm64.tar.gz",
@@ -54,7 +60,10 @@ test("release asset gate requires manifest, checksums, and every graph archive",
 		"draht-graph-linux-arm64.tar.gz",
 		"draht-graph-windows-x64.zip",
 	]);
-	assert.deepEqual(missingReleaseAssets(["manifest.json", "SHA256SUMS"]), EXPECTED_GRAPH_RELEASE_ASSETS.slice(2));
+	assert.deepEqual(missingReleaseAssets(["manifest.json", "SHA256SUMS"]), [
+		...EXPECTED_RELEASE_ASSETS.slice(0, 5),
+		...EXPECTED_RELEASE_ASSETS.slice(7),
+	]);
 });
 
 test("release asset gate polls until all required assets exist", async () => {
@@ -63,10 +72,10 @@ test("release asset gate polls until all required assets exist", async () => {
 		tag: "v2.0.0",
 		attempts: 2,
 		intervalMs: 0,
-		listAssets: async () => (++calls === 1 ? ["manifest.json"] : EXPECTED_GRAPH_RELEASE_ASSETS),
+		listAssets: async () => (++calls === 1 ? ["manifest.json"] : EXPECTED_RELEASE_ASSETS),
 	});
 	assert.equal(calls, 2);
-	assert.deepEqual(assets, EXPECTED_GRAPH_RELEASE_ASSETS);
+	assert.deepEqual(assets, EXPECTED_RELEASE_ASSETS);
 });
 
 test("release asset gate rejects a release that remains partial", async () => {
@@ -74,6 +83,20 @@ test("release asset gate rejects a release that remains partial", async () => {
 		waitForReleaseAssets({ tag: "v2.0.0", attempts: 2, intervalMs: 0, listAssets: async () => ["manifest.json"] }),
 		/SHA256SUMS.*draht-graph-windows-x64\.zip/s,
 	);
+});
+
+test("GitHub release lookup uses the API without requiring gh and authenticates when configured", async () => {
+	let request;
+	const assets = await listGithubReleaseAssets("v2.0.0+rc", {
+		token: "test-token",
+		fetchImpl: async (url, options) => {
+			request = { url, options };
+			return { ok: true, json: async () => ({ assets: [{ name: "manifest.json" }] }) };
+		},
+	});
+	assert.equal(request.url, "https://api.github.com/repos/draht-dev/draht/releases/tags/v2.0.0%2Brc");
+	assert.equal(request.options.headers.Authorization, "Bearer test-token");
+	assert.deepEqual(assets, [{ name: "manifest.json" }]);
 });
 
 test("go changelog scope reaches every npm package that ships or resolves the graph engine", () => {

@@ -350,12 +350,13 @@ run("git push origin main");
 run(`git push origin v${version}`);
 console.log();
 
-// 7. Gate npm publication on the complete GitHub release. A partial release is
-// retried for up to ten minutes and then aborts before any npm package is public.
-console.log("Waiting for required graph release assets...");
+// 7. Gate npm publication on the complete GitHub release. This includes both
+// the primary pi runtime archives and the Go graph-engine assets. A partial
+// release is retried for up to ten minutes and then aborts before any npm package is public.
+console.log("Waiting for required release assets...");
 if (!DRY_RUN) {
 	await waitForReleaseAssets({ tag: `v${version}`, listAssets: listGithubReleaseAssets });
-	console.log("  GitHub release contains manifest.json, SHA256SUMS, and all five graph archives\n");
+	console.log("  GitHub release contains all primary and graph runtime assets\n");
 } else {
 	console.log("  (dry-run: release asset polling skipped)\n");
 }

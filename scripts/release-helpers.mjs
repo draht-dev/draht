@@ -1,8 +1,12 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const EXPECTED_GRAPH_RELEASE_ASSETS = Object.freeze([
+export const EXPECTED_RELEASE_ASSETS = Object.freeze([
+	"pi-darwin-arm64.tar.gz",
+	"pi-darwin-x64.tar.gz",
+	"pi-linux-x64.tar.gz",
+	"pi-linux-arm64.tar.gz",
+	"pi-windows-x64.zip",
 	"manifest.json",
 	"SHA256SUMS",
 	"draht-graph-darwin-arm64.tar.gz",
@@ -101,13 +105,13 @@ export function setVersion(root, version) {
 
 export function missingReleaseAssets(assets) {
 	const names = new Set(assets.map((asset) => (typeof asset === "string" ? asset : asset.name)));
-	return EXPECTED_GRAPH_RELEASE_ASSETS.filter((name) => !names.has(name));
+	return EXPECTED_RELEASE_ASSETS.filter((name) => !names.has(name));
 }
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function waitForReleaseAssets({ tag, listAssets, attempts = 60, intervalMs = 10_000, sleep = delay }) {
-	let missing = [...EXPECTED_GRAPH_RELEASE_ASSETS];
+	let missing = [...EXPECTED_RELEASE_ASSETS];
 	for (let attempt = 1; attempt <= attempts; attempt++) {
 		try {
 			const assets = await listAssets(tag);
@@ -118,13 +122,26 @@ export async function waitForReleaseAssets({ tag, listAssets, attempts = 60, int
 		}
 		if (attempt < attempts) await sleep(intervalMs);
 	}
-	throw new Error(`Release ${tag} is missing required graph assets: ${missing.join(", ")}`);
+	throw new Error(`Release ${tag} is missing required assets: ${missing.join(", ")}`);
 }
 
-export function listGithubReleaseAssets(tag) {
-	const output = execFileSync("gh", ["release", "view", tag, "--json", "assets", "--jq", ".assets[].name"], {
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "pipe"],
+export async function listGithubReleaseAssets(
+	tag,
+	{ fetchImpl = globalThis.fetch, token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN } = {},
+) {
+	const headers = {
+		Accept: "application/vnd.github+json",
+		"User-Agent": "draht-release",
+		"X-GitHub-Api-Version": "2022-11-28",
+	};
+	if (token) headers.Authorization = `Bearer ${token}`;
+	const response = await fetchImpl(`https://api.github.com/repos/draht-dev/draht/releases/tags/${encodeURIComponent(tag)}`, {
+		headers,
 	});
-	return output.trim().split("\n").filter(Boolean);
+	if (!response.ok) {
+		throw new Error(`GitHub release API returned ${response.status} ${response.statusText}`.trim());
+	}
+	const release = await response.json();
+	if (!Array.isArray(release.assets)) throw new Error("GitHub release API response has no assets array");
+	return release.assets;
 }

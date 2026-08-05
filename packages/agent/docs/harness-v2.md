@@ -3040,7 +3040,7 @@ These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module ins
 
 These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `JsonlSessionRepo` export, and `packages/agent/test/harness/session/jsonl*.test.ts`. They merge J0 → J1 → J2 → J3 → J4 → J5 and may proceed in parallel with tracks L and I after R0.
 
-- [ ] **J0 — JSONL metadata and codec contracts.** Dependencies: R0.
+- [x] **J0 — JSONL metadata and codec contracts.** Dependencies: R0.
   - Primary files: JSONL type/codec modules and focused codec tests; no public repository export yet.
   - Implement the `JsonlSessionMetadata`, create/list options, format-4 header, line discriminants, `modifiedAt`, metadata, and parent-id/legacy-parent-path rules from section 13.
   - Acceptance: type and codec round trips cover every header field and line kind; no filesystem lifecycle yet.

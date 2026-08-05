@@ -750,12 +750,14 @@ export function createSessionBackendConformance(
 				strictEqual(await fork.getLabel(threadChild), undefined);
 				deepStrictEqual(await fork.findRecords(), []);
 				deepStrictEqual(await fork.getStats(), {
-					messageCount: 0,
+					messageCount: 3,
 					cachedTokens: 0,
 					uncachedTokens: 0,
 					totalTokens: 0,
 					costTotal: 0,
 				});
+				await fork.appendMessage(createUserMessage("after fork"));
+				strictEqual((await fork.getStats()).messageCount, 4);
 				const metadata = await fork.getMetadata();
 				deepStrictEqual(
 					{ id: metadata.id, parentSessionId: metadata.parentSessionId },
@@ -779,6 +781,7 @@ export function createSessionBackendConformance(
 				{ lane: "thread", leafId: threadChild },
 			]);
 			strictEqual(await fork.getLabel(threadChild), "thread-tip");
+			strictEqual((await fork.getStats()).messageCount, 3);
 			deepStrictEqual(
 				(await fork.getLog()).filter((item) => item.kind === "lane"),
 				[

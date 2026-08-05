@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -81,5 +81,63 @@ for (const implementation of IMPLEMENTATIONS) {
 		const stamp = JSON.parse(readFileSync(join(home, ".draht", "bin", ".draht-graph.json"), "utf8"));
 		assert.equal(stamp.version, "2.0.0");
 		assert.equal(stamp.sha256, createHash("sha256").update("updated graph binary").digest("hex"));
+	});
+
+	test(`${implementation} repairs a same-version binary whose digest no longer matches its stamp`, () => {
+		const home = mkdtempSync(join(tmpdir(), `${implementation}-repair-home-`));
+		const fixture = mkdtempSync(join(tmpdir(), `${implementation}-repair-release-`));
+		const payloadDir = join(fixture, "payload", "draht-graph");
+		mkdirSync(payloadDir, { recursive: true });
+		const expected = "#!/bin/sh\nprintf repaired\\n\n";
+		const releasedBinary = join(payloadDir, "draht-graph");
+		writeFileSync(releasedBinary, expected);
+		chmodSync(releasedBinary, 0o755);
+		const archive = join(fixture, "draht-graph-linux-x64.tar.gz");
+		const tar = spawnSync("tar", ["-czf", archive, "-C", join(fixture, "payload"), "draht-graph"]);
+		assert.equal(tar.status, 0, tar.stderr?.toString());
+		const archiveBytes = readFileSync(archive);
+		const manifest = validManifest("1.2.3");
+		Object.assign(manifest.artifacts[0], {
+			archiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
+			archiveBytes: archiveBytes.length,
+			binarySha256: createHash("sha256").update(expected).digest("hex"),
+			binaryBytes: Buffer.byteLength(expected),
+		});
+		writeFileSync(join(fixture, "manifest.json"), JSON.stringify(manifest));
+		const preload = join(fixture, "mock-fetch.mjs");
+		writeFileSync(preload, `
+			import { readFileSync } from "node:fs";
+			globalThis.fetch = async (url) => {
+				const file = String(url).endsWith("/manifest.json") ? process.env.DRAHT_TEST_MANIFEST : process.env.DRAHT_TEST_ARCHIVE;
+				return new Response(readFileSync(file), { status: 200 });
+			};
+		`);
+		const binDir = join(home, ".draht", "bin");
+		mkdirSync(binDir, { recursive: true });
+		const target = join(binDir, "draht-graph");
+		const tampered = expected.replace("repaired", "TAMPERED");
+		assert.equal(Buffer.byteLength(tampered), Buffer.byteLength(expected));
+		writeFileSync(target, tampered);
+		chmodSync(target, 0o755);
+		writeFileSync(join(binDir, ".draht-graph.json"), JSON.stringify({
+			name: "draht-graph",
+			version: "1.2.3",
+			schemaVersion: 5,
+			sha256: createHash("sha256").update(expected).digest("hex"),
+			size: Buffer.byteLength(expected),
+		}));
+		const cli = join(ROOT, "packages", implementation, "cli.mjs");
+		const repaired = spawnSync(process.execPath, ["--import", preload, cli, "install-graph-engine", "--graph-engine-version", "1.2.3"], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				HOME: home,
+				USERPROFILE: home,
+				DRAHT_TEST_MANIFEST: join(fixture, "manifest.json"),
+				DRAHT_TEST_ARCHIVE: archive,
+			},
+		});
+		assert.equal(repaired.status, 0, repaired.stderr || repaired.stdout);
+		assert.equal(readFileSync(target, "utf8"), expected);
 	});
 }

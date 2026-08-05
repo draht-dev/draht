@@ -363,31 +363,53 @@ async function fetchBuffer(url, timeoutMs) {
 function installGraphBinary(srcPath, { version, binarySha256, binaryBytes }) {
 	fs.mkdirSync(GRAPH_BIN_DIR, { recursive: true });
 	const target = path.join(GRAPH_BIN_DIR, graphBinName());
-	const tmp = `${target}.${process.pid}.tmp`;
-	fs.copyFileSync(srcPath, tmp);
-	fs.chmodSync(tmp, 0o755);
-	fs.renameSync(tmp, target);
+	const stampPath = path.join(GRAPH_BIN_DIR, ".draht-graph.json");
+	const nonce = `${process.pid}.${Date.now()}`;
+	const binaryTmp = `${target}.${nonce}.tmp`;
+	const stampTmp = `${stampPath}.${nonce}.tmp`;
+	const stamp = `${JSON.stringify(
+		{
+			name: "draht-graph",
+			version,
+			schemaVersion: GRAPH_SCHEMA_VERSION,
+			sha256: binarySha256,
+			size: binaryBytes,
+			installedAt: new Date().toISOString(),
+		},
+		null,
+		2,
+	)}\n`;
+	try {
+		fs.copyFileSync(srcPath, binaryTmp);
+		fs.chmodSync(binaryTmp, 0o755);
+		fs.writeFileSync(stampTmp, stamp, { mode: 0o600 });
+		// Each file replacement is atomic. Publishing the stamp first means a crash
+		// between renames leaves a digest mismatch, which all resolvers reject.
+		fs.renameSync(stampTmp, stampPath);
+		fs.renameSync(binaryTmp, target);
+	} finally {
+		fs.rmSync(binaryTmp, { force: true });
+		fs.rmSync(stampTmp, { force: true });
+	}
 	if (process.platform === "darwin") {
 		// Unsigned/unnotarized artifacts get Gatekeeper-quarantined on
 		// download; a quarantined binary silently fails to exec inside a hook.
 		spawnSync("xattr", ["-d", "com.apple.quarantine", target], { stdio: "ignore" });
 	}
-	fs.writeFileSync(
-		path.join(GRAPH_BIN_DIR, ".draht-graph.json"),
-		`${JSON.stringify(
-			{
-				name: "draht-graph",
-				version,
-				schemaVersion: GRAPH_SCHEMA_VERSION,
-				sha256: binarySha256,
-				size: binaryBytes,
-				installedAt: new Date().toISOString(),
-			},
-			null,
-			2,
-		)}\n`,
-	);
 	return target;
+}
+
+function installedGraphBinaryMatches(target, stampPath, version) {
+	try {
+		const stamp = JSON.parse(fs.readFileSync(stampPath, "utf-8"));
+		if (!stamp || typeof stamp !== "object" || Array.isArray(stamp)) return false;
+		if (stamp.name !== "draht-graph" || stamp.version !== version || stamp.schemaVersion !== GRAPH_SCHEMA_VERSION) return false;
+		if (!Number.isSafeInteger(stamp.size) || stamp.size < 0 || !/^[0-9a-f]{64}$/.test(stamp.sha256)) return false;
+		const binary = fs.readFileSync(target);
+		return binary.length === stamp.size && sha256(binary) === stamp.sha256;
+	} catch {
+		return false;
+	}
 }
 
 // Never throws — every failure degrades to "draht will use the built-in JS
@@ -416,14 +438,9 @@ async function ensureGraphEngine(flags) {
 		} catch { /* fall back to 0.0.0 — forces a fetch attempt rather than a false "up to date" */ }
 		const version = flags.graphEngineVersion || process.env.DRAHT_GRAPH_ENGINE_VERSION || pkgVersion;
 
-		if (fs.existsSync(target) && !flags.force) {
-			try {
-				const stamp = JSON.parse(fs.readFileSync(stampPath, "utf-8"));
-				if (stamp.version === version) {
-					log(`graph engine v${version} already installed`);
-					return;
-				}
-			} catch { /* no/unreadable stamp — fall through and (re)fetch */ }
+		if (fs.existsSync(target) && !flags.force && installedGraphBinaryMatches(target, stampPath, version)) {
+			log(`graph engine v${version} already installed`);
+			return;
 		}
 
 		const platform = graphPlatform();

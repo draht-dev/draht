@@ -7,6 +7,7 @@
  */
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const os = require("node:os");
 const { execSync, execFileSync, spawnSync } = require("node:child_process");
@@ -5141,24 +5142,30 @@ function graphStat(p) {
 	}
 }
 
-// Cheap provenance tripwire. Unstamped binaries are trusted (dev builds, $PATH).
+// Unstamped binaries are trusted (dev builds and $PATH). If a stamp exists,
+// however, it marks a managed binary and every identity/integrity field is
+// mandatory; malformed or stale metadata must never turn verification off.
 // The stamp is written by `install-graph-engine` (packages/draht-claude/cli.mjs,
 // packages/draht-codex/cli.mjs), not read from the release manifest.json.
 function graphStampOk(binPath, st) {
+	const stampPath = path.join(path.dirname(binPath), ".draht-graph.json");
+	if (!fs.existsSync(stampPath)) return true;
 	let s;
 	try {
-		s = JSON.parse(fs.readFileSync(path.join(path.dirname(binPath), ".draht-graph.json"), "utf-8"));
+		s = JSON.parse(fs.readFileSync(stampPath, "utf-8"));
 	} catch {
-		return true;
+		return false;
 	}
 	// JSON.parse("null")/("42")/("[]") all succeed without throwing, so `s` may be
 	// anything JSON-serializable here, not just an object — guard before touching
 	// `.size`/`.schemaVersion` or a malformed stamp file crashes the CLI BEFORE the
 	// JS fallback ever runs (see Phase 4 review finding #1).
-	if (!s || typeof s !== "object") return true;
-	if (typeof s.size === "number" && s.size !== st.size) return false;
-	if (typeof s.schemaVersion === "number" && s.schemaVersion !== GRAPH_SCHEMA_VERSION) return false;
-	return true;
+	if (!s || typeof s !== "object" || Array.isArray(s)) return false;
+	if (s.name !== "draht-graph" || typeof s.version !== "string" || s.version.length === 0) return false;
+	if (s.schemaVersion !== GRAPH_SCHEMA_VERSION || !Number.isSafeInteger(s.size) || s.size < 0 || s.size !== st.size) return false;
+	if (typeof s.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(s.sha256)) return false;
+	const actual = crypto.createHash("sha256").update(fs.readFileSync(binPath)).digest("hex");
+	return actual === s.sha256;
 }
 
 let graphBinCache; // undefined = unresolved · null = resolved-as-missing · string = path
@@ -5174,8 +5181,14 @@ function graphResolveBin() {
 	if (override) { // explicit override: never silently ignored
 		graphBinTried.push(override);
 		const st = graphStat(override);
-		if (!st) console.error(`draht-tools: DRAHT_GRAPH_BIN=${override} is not an executable file`);
-		else graphBinCache = override;
+		if (!st) {
+			console.error(`draht-tools: DRAHT_GRAPH_BIN=${override} is not an executable file`);
+		} else if (!graphStampOk(override, st)) {
+			graphBinRejected.push(override);
+			console.error(`draht-tools: DRAHT_GRAPH_BIN=${override} rejected by its .draht-graph.json provenance stamp (malformed or stale size/schema/SHA-256)`);
+		} else {
+			graphBinCache = override;
+		}
 		return graphBinCache;
 	}
 
@@ -5203,7 +5216,7 @@ function graphResolveBin() {
 			// every user to the ~6x slower JS engine with zero diagnostic (Phase 4 review
 			// finding #3). graphMissingMessage() below surfaces this distinctly too.
 			graphBinRejected.push(c);
-			console.error(`draht-tools: ${c} rejected by its .draht-graph.json provenance stamp (stale size/schemaVersion) — skipping`);
+			console.error(`draht-tools: ${c} rejected by its .draht-graph.json provenance stamp (malformed or stale size/schema/SHA-256) — skipping`);
 			continue;
 		}
 		graphBinCache = c;
@@ -5217,7 +5230,7 @@ function graphMissingMessage() {
 		? [
 			"",
 			"Note: the following WERE found but rejected by their .draht-graph.json",
-			"provenance stamp (stale size or schemaVersion) — this is not the same as",
+			"provenance stamp (malformed or stale size/schema/SHA-256) — this is not the same as",
 			"\"not found\"; reinstall or remove the stale .draht-graph.json next to it:",
 			...graphBinRejected.map((p) => `  ${p}`),
 		]

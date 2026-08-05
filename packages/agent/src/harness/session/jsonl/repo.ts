@@ -38,13 +38,11 @@ export class JsonlSessionRepo
 {
 	private readonly fs: JsonlSessionRepoFileSystem;
 	private readonly sessionsRootInput: string;
-	private readonly cwd: string;
 	private rootPromise: Promise<string> | undefined;
 
 	constructor(options: JsonlSessionRepoOptions) {
 		this.fs = options.fs;
 		this.sessionsRootInput = options.sessionsRoot;
-		this.cwd = options.cwd ?? options.fs.cwd;
 	}
 
 	async create(options: JsonlSessionCreateOptions): Promise<Session<JsonlSessionMetadata>> {
@@ -129,10 +127,7 @@ export class JsonlSessionRepo
 			throw new SessionError("already_exists", `Session already exists: ${id}`);
 		}
 
-		const cwd = fileResult(
-			await this.fs.absolutePath(options.cwd ?? this.cwd),
-			`Failed to resolve session cwd ${options.cwd ?? this.cwd}`,
-		);
+		const cwd = fileResult(await this.fs.absolutePath(options.cwd), `Failed to resolve session cwd ${options.cwd}`);
 		const createdAt = Date.now();
 		const sessionDirectory = await this.sessionDirectory(cwd);
 		const path = fileResult(

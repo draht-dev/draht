@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../../src/harness/env/nodejs.ts";
-import { JsonlSessionRepo } from "../../../src/harness/session/index.ts";
+import { JsonlSessionRepo, type SessionRepo } from "../../../src/harness/session/index.ts";
 import {
 	createSessionBackendConformance,
 	type SessionBackendFixture,
@@ -22,8 +22,23 @@ function createRepository(root: string): JsonlSessionRepo {
 	return new JsonlSessionRepo({
 		fs: new NodeExecutionEnv({ cwd: root }),
 		sessionsRoot: root,
-		cwd: root,
 	});
+}
+
+function withDefaultSessionCwd(repository: SessionRepo, cwd: string): SessionRepo {
+	return {
+		create(options) {
+			const optionsWithCwd = { ...options, cwd };
+			return repository.create(optionsWithCwd);
+		},
+		open: (metadata) => repository.open(metadata),
+		list: () => repository.list(),
+		delete: (metadata) => repository.delete(metadata),
+		fork(source, options) {
+			const optionsWithCwd = { ...options, cwd };
+			return repository.fork(source, optionsWithCwd);
+		},
+	};
 }
 
 function expectedSessionPath(root: string, cwd: string, createdAt: number, id: string): string {
@@ -37,7 +52,8 @@ afterEach(() => {
 });
 
 const conformance = createSessionBackendConformance(async () => {
-	const repository = createRepository(createTempDir());
+	const root = createTempDir();
+	const repository = withDefaultSessionCwd(createRepository(root), root);
 	return {
 		repository,
 		[Symbol.asyncDispose]: () => Promise.resolve(),
@@ -106,7 +122,7 @@ describe("JSONL v4 persistence", () => {
 				return typeof value === "function" ? value.bind(target) : value;
 			},
 		});
-		const repository = new JsonlSessionRepo({ fs: countingFs, sessionsRoot: root, cwd: root });
+		const repository = new JsonlSessionRepo({ fs: countingFs, sessionsRoot: root });
 
 		await repository.create({ cwd: root });
 
@@ -299,7 +315,6 @@ describe("JSONL v4 persistence", () => {
 		const failingRepository = new JsonlSessionRepo({
 			fs: failingFs,
 			sessionsRoot: root,
-			cwd: root,
 		});
 
 		await expect(failingRepository.open(metadata)).rejects.toMatchObject({

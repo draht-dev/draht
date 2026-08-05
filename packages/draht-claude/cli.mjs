@@ -183,8 +183,22 @@ function copyRecursive(src, dest) {
 }
 
 function removeRecursive(target) {
-	if (!fs.existsSync(target)) return;
+	try {
+		fs.lstatSync(target);
+	} catch (error) {
+		if (error.code === "ENOENT") return;
+		throw error;
+	}
 	fs.rmSync(target, { recursive: true, force: true });
+}
+
+function lstatIfExists(target) {
+	try {
+		return fs.lstatSync(target);
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	}
 }
 
 const MARKETPLACE_LOCK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -328,13 +342,23 @@ function marketplaceTransactionPaths(marketplaceDir) {
 
 function recoverMarketplaceTransaction(marketplaceDir) {
 	const { temps, backups } = marketplaceTransactionPaths(marketplaceDir);
-	for (const temp of temps) removeRecursive(temp);
+	for (const temp of temps) {
+		const stat = fs.lstatSync(temp);
+		if (stat.isSymbolicLink()) fs.unlinkSync(temp);
+		else removeRecursive(temp);
+	}
 	if (backups.length === 0) return;
-	backups.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-	const [backup, ...staleBackups] = backups;
+	const inspected = backups.map((backup) => ({ backup, stat: fs.lstatSync(backup) }));
+	const unsafe = inspected.filter(({ stat }) => stat.isSymbolicLink() || !stat.isDirectory());
+	if (unsafe.length > 0) {
+		for (const { backup } of unsafe) removeRecursive(backup);
+		throw new Error(`refusing unsafe stale marketplace backup (symbolic link or non-directory): ${unsafe[0].backup}`);
+	}
+	inspected.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+	const [{ backup }, ...staleBackups] = inspected;
 	removeRecursive(marketplaceDir);
 	fs.renameSync(backup, marketplaceDir);
-	for (const staleBackup of staleBackups) removeRecursive(staleBackup);
+	for (const staleBackup of staleBackups) removeRecursive(staleBackup.backup);
 }
 
 function stageMarketplace(marketplaceDir, manifest) {
@@ -346,11 +370,15 @@ function stageMarketplace(marketplaceDir, manifest) {
 	let hadPrevious = false;
 	let backedUp = false;
 	try {
-		if (fs.existsSync(marketplaceDir) && fs.lstatSync(marketplaceDir).isSymbolicLink()) {
+		if (lstatIfExists(marketplaceDir)?.isSymbolicLink()) {
 			throw new Error(`refusing to update symlink marketplace: ${marketplaceDir}`);
 		}
 		recoverMarketplaceTransaction(marketplaceDir);
-		hadPrevious = fs.existsSync(marketplaceDir);
+		const restoredRoot = lstatIfExists(marketplaceDir);
+		if (restoredRoot && (restoredRoot.isSymbolicLink() || !restoredRoot.isDirectory())) {
+			throw new Error(`refusing to stage through unsafe restored marketplace root: ${marketplaceDir}`);
+		}
+		hadPrevious = restoredRoot !== null;
 		if (hadPrevious) fs.cpSync(marketplaceDir, tempDir, { recursive: true, preserveTimestamps: true });
 		else fs.mkdirSync(tempDir, { recursive: true });
 		const stagedPluginDir = path.join(tempDir, "plugins", PLUGIN_NAME);

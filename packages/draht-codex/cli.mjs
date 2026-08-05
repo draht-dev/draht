@@ -176,8 +176,22 @@ function copyRecursive(src, dest) {
 }
 
 function removeRecursive(target) {
-	if (!fs.existsSync(target)) return;
+	try {
+		fs.lstatSync(target);
+	} catch (error) {
+		if (error.code === "ENOENT") return;
+		throw error;
+	}
 	fs.rmSync(target, { recursive: true, force: true });
+}
+
+function lstatIfExists(target) {
+	try {
+		return fs.lstatSync(target);
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	}
 }
 
 const MARKETPLACE_LOCK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -320,13 +334,23 @@ function marketplaceTransactionPaths(marketplaceDir) {
 
 function recoverMarketplaceTransaction(marketplaceDir) {
 	const { temps, backups } = marketplaceTransactionPaths(marketplaceDir);
-	for (const temp of temps) removeRecursive(temp);
+	for (const temp of temps) {
+		const stat = fs.lstatSync(temp);
+		if (stat.isSymbolicLink()) fs.unlinkSync(temp);
+		else removeRecursive(temp);
+	}
 	if (backups.length === 0) return;
-	backups.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-	const [backup, ...staleBackups] = backups;
+	const inspected = backups.map((backup) => ({ backup, stat: fs.lstatSync(backup) }));
+	const unsafe = inspected.filter(({ stat }) => stat.isSymbolicLink() || !stat.isDirectory());
+	if (unsafe.length > 0) {
+		for (const { backup } of unsafe) removeRecursive(backup);
+		throw new Error(`refusing unsafe stale marketplace backup (symbolic link or non-directory): ${unsafe[0].backup}`);
+	}
+	inspected.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+	const [{ backup }, ...staleBackups] = inspected;
 	removeRecursive(marketplaceDir);
 	fs.renameSync(backup, marketplaceDir);
-	for (const staleBackup of staleBackups) removeRecursive(staleBackup);
+	for (const staleBackup of staleBackups) removeRecursive(staleBackup.backup);
 }
 
 function stageMarketplace(marketplaceDir, manifest) {
@@ -338,11 +362,15 @@ function stageMarketplace(marketplaceDir, manifest) {
 	let hadPrevious = false;
 	let backedUp = false;
 	try {
-		if (fs.existsSync(marketplaceDir) && fs.lstatSync(marketplaceDir).isSymbolicLink()) {
+		if (lstatIfExists(marketplaceDir)?.isSymbolicLink()) {
 			throw new Error(`refusing to update symlink marketplace: ${marketplaceDir}`);
 		}
 		recoverMarketplaceTransaction(marketplaceDir);
-		hadPrevious = fs.existsSync(marketplaceDir);
+		const restoredRoot = lstatIfExists(marketplaceDir);
+		if (restoredRoot && (restoredRoot.isSymbolicLink() || !restoredRoot.isDirectory())) {
+			throw new Error(`refusing to stage through unsafe restored marketplace root: ${marketplaceDir}`);
+		}
+		hadPrevious = restoredRoot !== null;
 		if (hadPrevious) fs.cpSync(marketplaceDir, tempDir, { recursive: true, preserveTimestamps: true });
 		else fs.mkdirSync(tempDir, { recursive: true });
 		const stagedPluginDir = path.join(tempDir, "plugins", PLUGIN_NAME);
@@ -364,10 +392,17 @@ function stageMarketplace(marketplaceDir, manifest) {
 	}
 }
 
-function rollbackMarketplace(transaction) {
+function restoreMarketplaceContent(transaction) {
 	removeRecursive(transaction.marketplaceDir);
 	if (transaction.hadPrevious) fs.renameSync(transaction.backupDir, transaction.marketplaceDir);
-	releaseMarketplaceLock(transaction.lock);
+}
+
+function rollbackMarketplace(transaction) {
+	try {
+		restoreMarketplaceContent(transaction);
+	} finally {
+		releaseMarketplaceLock(transaction.lock);
+	}
 }
 
 function commitMarketplace(transaction) {
@@ -416,38 +451,68 @@ function isCodexPluginInstalled(pluginSpec) {
 	return output.installed.some((entry) => pluginListEntryMatches(entry, pluginSpec));
 }
 
-function rollbackCodexPlugin(transaction, previouslyInstalled, pluginSpec) {
+function isCodexMarketplaceRegistered() {
+	log("Checking whether the marketplace is currently registered...");
+	log("  $ codex plugin marketplace list --json");
+	const result = spawnSync("codex", ["plugin", "marketplace", "list", "--json"], { encoding: "utf8" });
+	if (result.status !== 0) throw new Error(`codex plugin marketplace list failed with exit code ${result.status}`);
+	let output;
+	try {
+		output = JSON.parse(result.stdout);
+	} catch {
+		throw new Error("codex plugin marketplace list returned invalid JSON");
+	}
+	if (!output || !Array.isArray(output.marketplaces)) {
+		throw new Error("codex plugin marketplace list returned an unexpected JSON shape");
+	}
+	return output.marketplaces.some((entry) => entry && typeof entry === "object" && entry.name === MARKETPLACE_NAME);
+}
+
+function rollbackCodexPlugin(transaction, previousState, pluginSpec) {
 	const failures = [];
 	let marketplaceRestored = false;
 	try {
-		rollbackMarketplace(transaction);
+		restoreMarketplaceContent(transaction);
 		marketplaceRestored = true;
 	} catch (error) {
 		failures.push(`marketplace restore failed: ${error.message}`);
 	}
-	if (!marketplaceRestored) return failures;
-	const registrationCommand = transaction.hadPrevious
-		? ["plugin", "marketplace", "add", transaction.marketplaceDir]
-		: ["plugin", "marketplace", "remove", MARKETPLACE_NAME];
-	if (!runCodex(registrationCommand, { allowFail: true })) failures.push("could not restore the previous marketplace registration");
-	let current;
 	try {
-		current = isCodexPluginInstalled(pluginSpec);
-	} catch (error) {
-		failures.push(`could not inspect plugin state during rollback: ${error.message}`);
+		if (!marketplaceRestored) return failures;
+		const registrationCommand = previousState.registered
+			? ["plugin", "marketplace", "add", transaction.marketplaceDir]
+			: ["plugin", "marketplace", "remove", MARKETPLACE_NAME];
+		if (!runCodex(registrationCommand, { allowFail: true })) failures.push("could not restore the previous marketplace registration");
+		let current;
+		try {
+			current = isCodexPluginInstalled(pluginSpec);
+		} catch (error) {
+			failures.push(`could not inspect plugin state during rollback: ${error.message}`);
+			return failures;
+		}
+		if (current && !runCodex(["plugin", "remove", pluginSpec], { allowFail: true })) {
+			failures.push("could not remove the failed replacement plugin");
+			return failures;
+		}
+		if (previousState.installed && !runCodex(["plugin", "add", pluginSpec], { allowFail: true })) failures.push("could not reinstall the previously working plugin");
+		try {
+			if (isCodexPluginInstalled(pluginSpec) !== previousState.installed) failures.push("plugin state did not match the pre-update state after rollback");
+		} catch (error) {
+			failures.push(`could not verify plugin state after rollback: ${error.message}`);
+		}
+		try {
+			if (isCodexMarketplaceRegistered() !== previousState.registered) failures.push("marketplace registration did not match the pre-update state after rollback");
+		} catch (error) {
+			failures.push(`could not verify marketplace registration after rollback: ${error.message}`);
+		}
 		return failures;
+	} finally {
+		try {
+			releaseMarketplaceLock(transaction.lock);
+		} catch (error) {
+			failures.push(`could not release marketplace transaction lock: ${error.message}`);
+		}
 	}
-	if (current && !runCodex(["plugin", "remove", pluginSpec], { allowFail: true })) {
-		failures.push("could not remove the failed replacement plugin");
-		return failures;
-	}
-	if (previouslyInstalled && !runCodex(["plugin", "add", pluginSpec], { allowFail: true })) failures.push("could not reinstall the previously working plugin");
-	try {
-		if (isCodexPluginInstalled(pluginSpec) !== previouslyInstalled) failures.push("plugin state did not match the pre-update state after rollback");
-	} catch (error) {
-		failures.push(`could not verify plugin state after rollback: ${error.message}`);
-	}
-	return failures;
 }
 
 function setModelInFrontmatter(content, model) {
@@ -828,9 +893,12 @@ async function cmdInstall(flags) {
 
 	// Capture registration state while holding the marketplace transaction lock
 	// and before any destructive CLI command. JSON avoids display-format parsing.
-	let previouslyInstalled;
+	let previousState;
 	try {
-		previouslyInstalled = isCodexPluginInstalled(pluginSpec);
+		previousState = {
+			registered: isCodexMarketplaceRegistered(),
+			installed: isCodexPluginInstalled(pluginSpec),
+		};
 	} catch (error) {
 		try {
 			rollbackMarketplace(marketplaceTransaction);
@@ -845,7 +913,7 @@ async function cmdInstall(flags) {
 		log("Registering marketplace with Codex...");
 		if (!runCodex(["plugin", "marketplace", "add", marketplaceDir], { allowFail: true })) throw new Error("marketplace registration failed");
 
-		if (previouslyInstalled) {
+		if (previousState.installed) {
 			log("Removing previous installed plugin cache...");
 			if (!runCodex(["plugin", "remove", pluginSpec], { allowFail: true })) throw new Error("previous plugin removal failed");
 		}
@@ -854,7 +922,7 @@ async function cmdInstall(flags) {
 		if (!runCodex(["plugin", "add", pluginSpec], { allowFail: true })) throw new Error("replacement install failed");
 		if (!isCodexPluginInstalled(pluginSpec)) throw new Error("post-install plugin state verification failed");
 	} catch (error) {
-		const rollbackFailures = rollbackCodexPlugin(marketplaceTransaction, previouslyInstalled, pluginSpec);
+		const rollbackFailures = rollbackCodexPlugin(marketplaceTransaction, previousState, pluginSpec);
 		err(error.message);
 		err(marketplaceTransaction.hadPrevious ? "rollback: restored the previous marketplace content" : "rollback: removed the failed marketplace content");
 		for (const failure of rollbackFailures) err(`rollback failed: ${failure}`);

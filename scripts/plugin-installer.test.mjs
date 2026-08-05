@@ -4,6 +4,7 @@ import {
 	chmodSync,
 	cpSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -34,6 +35,7 @@ const IMPLEMENTATIONS = {
 		binary: "codex",
 		manifestDir: ".codex-plugin",
 		list: "plugin list --json",
+		marketplaceList: "plugin marketplace list --json",
 		installedList: '{"installed":[{"id":"draht@draht"}],"available":[]}',
 		absentList: '{"installed":[{"id":"not-draht@draht-extra"}],"available":[]}',
 		remove: "plugin remove draht@draht",
@@ -41,7 +43,12 @@ const IMPLEMENTATIONS = {
 	},
 };
 
-function fixture(implementation, { brokenSource = false, marketplaceExists = true, pluginInstalled = false } = {}) {
+function fixture(implementation, {
+	brokenSource = false,
+	marketplaceExists = true,
+	marketplaceRegistered = marketplaceExists,
+	pluginInstalled = false,
+} = {}) {
 	const config = { ...IMPLEMENTATIONS[implementation] };
 	const root = mkdtempSync(join(tmpdir(), `${implementation}-plugin-atomic-`));
 	const source = join(root, "source");
@@ -51,7 +58,9 @@ function fixture(implementation, { brokenSource = false, marketplaceExists = tru
 	const log = join(root, "commands.log");
 	const failState = join(root, "fail-state");
 	const pluginState = join(root, "plugin-state");
+	const registrationState = join(root, "registration-state");
 	writeFileSync(pluginState, pluginInstalled ? "1" : "0");
+	writeFileSync(registrationState, marketplaceRegistered ? "1" : "0");
 	cpSync(join(ROOT, "packages", implementation), source, { recursive: true });
 	writeFileSync(join(source, "version-marker.txt"), "new");
 	if (brokenSource) symlinkSync("missing-copy-source", join(source, "agents", "zz-broken-copy"));
@@ -61,6 +70,20 @@ function fixture(implementation, { brokenSource = false, marketplaceExists = tru
 set -eu
 command="$*"
 printf '%s\\n' "$command" >> "$DRAHT_TEST_COMMAND_LOG"
+if [ -n "\${DRAHT_TEST_FAIL_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_FAIL_COMMAND" ]; then
+  if [ ! -f "$DRAHT_TEST_FAIL_STATE" ]; then
+    : > "$DRAHT_TEST_FAIL_STATE"
+    exit 42
+  fi
+fi
+if [ -n "\${DRAHT_TEST_MARKETPLACE_LIST_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_MARKETPLACE_LIST_COMMAND" ]; then
+  if [ "$(cat "$DRAHT_TEST_REGISTRATION_STATE")" = 1 ]; then
+    printf '{"marketplaces":[{"name":"draht","root":"%s"}]}\\n' "$DRAHT_TEST_MARKETPLACE"
+  else
+    printf '{"marketplaces":[]}\\n'
+  fi
+  exit 0
+fi
 if [ "$command" = "$DRAHT_TEST_LIST_COMMAND" ]; then
   if [ "$(cat "$DRAHT_TEST_PLUGIN_STATE")" = 1 ]; then
     printf '%s\\n' "$DRAHT_TEST_INSTALLED_LIST"
@@ -77,15 +100,14 @@ if [ "$command" = "$DRAHT_TEST_REMOVE_COMMAND" ]; then
   fi
   printf 'remove-saw:%s\\n' "$marker" >> "$DRAHT_TEST_COMMAND_LOG"
 fi
-if [ -n "\${DRAHT_TEST_FAIL_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_FAIL_COMMAND" ]; then
-  if [ ! -f "$DRAHT_TEST_FAIL_STATE" ]; then
-    : > "$DRAHT_TEST_FAIL_STATE"
-    exit 42
-  fi
+if [ "\${DRAHT_TEST_LOG_REGISTRATION_LOCK:-0}" = 1 ] && { [ "$command" = "$DRAHT_TEST_MARKETPLACE_ADD_COMMAND" ] || [ "$command" = "$DRAHT_TEST_MARKETPLACE_REMOVE_COMMAND" ]; }; then
+  if [ -f "$DRAHT_TEST_LOCK_PATH" ]; then printf 'registration-lock:held\\n' >> "$DRAHT_TEST_COMMAND_LOG"; else printf 'registration-lock:missing\\n' >> "$DRAHT_TEST_COMMAND_LOG"; fi
 fi
 if [ "\${DRAHT_TEST_NO_MUTATE:-0}" != 1 ]; then
   if [ "$command" = "$DRAHT_TEST_REMOVE_COMMAND" ]; then printf '0' > "$DRAHT_TEST_PLUGIN_STATE"; fi
   if [ "$command" = "$DRAHT_TEST_INSTALL_COMMAND" ]; then printf '1' > "$DRAHT_TEST_PLUGIN_STATE"; fi
+  if [ "$command" = "$DRAHT_TEST_MARKETPLACE_ADD_COMMAND" ]; then printf '1' > "$DRAHT_TEST_REGISTRATION_STATE"; fi
+  if [ "$command" = "$DRAHT_TEST_MARKETPLACE_REMOVE_COMMAND" ]; then printf '0' > "$DRAHT_TEST_REGISTRATION_STATE"; fi
 fi
 exit 0
 `);
@@ -94,7 +116,10 @@ exit 0
 	config.validate = config.binary === "claude" ? `plugin validate ${join(marketplace, "plugins", "draht")}` : undefined;
 	config.marketplaceAdd = `plugin marketplace add ${marketplace}`;
 	config.marketplaceRemove = "plugin marketplace remove draht";
-	return { config, root, source, fakeBin, home, marketplace, log, failState, pluginState, pluginInstalled };
+	return {
+		config, root, source, fakeBin, home, marketplace, log, failState,
+		pluginState, registrationState, pluginInstalled,
+	};
 }
 
 function writeOldMarketplace(marketplace, config) {
@@ -126,6 +151,11 @@ function runEnvironment(f, extraEnv = {}) {
 		DRAHT_TEST_ABSENT_LIST: f.config.absentList,
 		DRAHT_TEST_PLUGIN_INSTALLED: f.pluginInstalled ? "1" : "0",
 		DRAHT_TEST_PLUGIN_STATE: f.pluginState,
+		DRAHT_TEST_REGISTRATION_STATE: f.registrationState,
+		DRAHT_TEST_MARKETPLACE_LIST_COMMAND: f.config.marketplaceList || "",
+		DRAHT_TEST_MARKETPLACE_ADD_COMMAND: f.config.marketplaceAdd,
+		DRAHT_TEST_MARKETPLACE_REMOVE_COMMAND: f.config.marketplaceRemove,
+		DRAHT_TEST_LOCK_PATH: `${f.marketplace}.draht-update-lock`,
 		DRAHT_TEST_INSTALL_COMMAND: f.config.install,
 		DRAHT_TEST_REMOVE_COMMAND: f.config.remove,
 		DRAHT_TEST_MARKETPLACE: f.marketplace,
@@ -246,6 +276,10 @@ for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 set -eu
 command="$*"
 printf '%s\\n' "$command" >> "$DRAHT_TEST_COMMAND_LOG"
+if [ -n "\${DRAHT_TEST_MARKETPLACE_LIST_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_MARKETPLACE_LIST_COMMAND" ]; then
+  printf '{"marketplaces":[{"name":"draht","root":"%s"}]}\\n' "$DRAHT_TEST_MARKETPLACE"
+  exit 0
+fi
 if [ "$command" = "$DRAHT_TEST_LIST_COMMAND" ]; then printf '%s\\n' "$DRAHT_TEST_INSTALLED_LIST"; exit 0; fi
 if [ "$command" = "$DRAHT_TEST_REMOVE_COMMAND" ]; then exit 0; fi
 if [ "$command" = "$DRAHT_TEST_FAIL_COMMAND" ]; then exit 42; fi
@@ -401,12 +435,90 @@ for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 }
 
 test("draht-codex fresh-install rollback removes the newly added marketplace registration", () => {
-	const f = fixture("draht-codex", { marketplaceExists: false, pluginInstalled: false });
+	const f = fixture("draht-codex", { marketplaceExists: false, marketplaceRegistered: false, pluginInstalled: false });
 	const result = run(f, { DRAHT_TEST_FAIL_COMMAND: f.config.install }, "install");
 	assert.notEqual(result.status, 0);
 	assert.equal(commands(f).includes(f.config.marketplaceRemove), true);
+	assert.equal(readFileSync(f.registrationState, "utf8"), "0");
 	assert.equal(existsSync(f.marketplace), false);
 });
+
+test("draht-codex files present but unregistered rollback restores unregistered state", () => {
+	const f = fixture("draht-codex", { marketplaceExists: true, marketplaceRegistered: false, pluginInstalled: false });
+	const result = run(f, { DRAHT_TEST_FAIL_COMMAND: f.config.install, DRAHT_TEST_LOG_REGISTRATION_LOCK: "1" });
+	assert.notEqual(result.status, 0);
+	const log = commands(f);
+	assert.ok(log.indexOf(f.config.marketplaceList) >= 0 && log.indexOf(f.config.marketplaceList) < log.indexOf(f.config.marketplaceAdd), log.join("\n"));
+	assert.equal(log.includes(f.config.marketplaceRemove), true);
+	assert.equal(log.includes("registration-lock:held"), true);
+	assert.equal(log.includes("registration-lock:missing"), false);
+	assert.equal(readFileSync(f.registrationState, "utf8"), "0");
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
+});
+
+test("draht-codex registered rollback preserves registered state", () => {
+	const f = fixture("draht-codex", { marketplaceExists: true, marketplaceRegistered: true, pluginInstalled: true });
+	const result = run(f, { DRAHT_TEST_FAIL_COMMAND: f.config.install, DRAHT_TEST_LOG_REGISTRATION_LOCK: "1" });
+	assert.notEqual(result.status, 0);
+	assert.equal(commands(f).includes(f.config.marketplaceList), true);
+	assert.equal(commands(f).includes("registration-lock:held"), true);
+	assert.equal(commands(f).includes("registration-lock:missing"), false);
+	assert.equal(readFileSync(f.registrationState, "utf8"), "1");
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
+});
+
+test("draht-codex fresh install registers an absent marketplace", () => {
+	const f = fixture("draht-codex", { marketplaceExists: false, marketplaceRegistered: false, pluginInstalled: false });
+	const result = run(f, {}, "install");
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	assert.equal(readFileSync(f.registrationState, "utf8"), "1");
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "new");
+});
+
+test("draht-codex marketplace registration inspection failure restores files without host mutation", () => {
+	const f = fixture("draht-codex", { marketplaceExists: true, marketplaceRegistered: false, pluginInstalled: false });
+	const result = run(f, { DRAHT_TEST_FAIL_COMMAND: f.config.marketplaceList });
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /marketplace.*list|registration state/i);
+	assert.deepEqual(commands(f), [f.config.marketplaceList]);
+	assert.equal(readFileSync(f.registrationState, "utf8"), "0");
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
+});
+
+for (const implementation of Object.keys(IMPLEMENTATIONS)) {
+	test(`${implementation} rejects a stale backup symlink without traversing its target`, () => {
+		const f = fixture(implementation);
+		const target = join(f.root, "backup-target");
+		const backup = `${f.marketplace}.backup-1234-cccccccccccccccc`;
+		mkdirSync(target, { recursive: true });
+		writeFileSync(join(target, "CANARY"), Buffer.from([0, 1, 2, 255, 10]));
+		symlinkSync(target, backup, "dir");
+		const before = readFileSync(join(target, "CANARY"));
+		const result = run(f);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /symbolic link|symlink/i);
+		assert.equal(lstatSync(f.marketplace).isSymbolicLink(), false);
+		assert.equal(existsSync(backup), false);
+		assert.deepEqual(readFileSync(join(target, "CANARY")), before);
+		assert.equal(existsSync(join(target, "plugins")), false);
+		assert.deepEqual(commands(f), []);
+	});
+
+	test(`${implementation} unlinks a stale temp symlink without traversing its target`, () => {
+		const f = fixture(implementation);
+		const target = join(f.root, "temp-target");
+		const temp = `${f.marketplace}.tmp-1234-dddddddddddddddd`;
+		mkdirSync(target, { recursive: true });
+		writeFileSync(join(target, "CANARY"), Buffer.from([255, 3, 0, 4]));
+		symlinkSync(target, temp, "dir");
+		const before = readFileSync(join(target, "CANARY"));
+		const result = run(f);
+		assert.equal(result.status, 0, result.stderr || result.stdout);
+		assert.equal(existsSync(temp), false);
+		assert.deepEqual(readFileSync(join(target, "CANARY")), before);
+		assert.equal(existsSync(join(target, "plugins")), false);
+	});
+}
 
 for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 	test(`${implementation} stale-lock contenders cannot delete a newly acquired owner`, async () => {
@@ -421,32 +533,27 @@ for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 		}));
 		const preload = join(f.root, "lock-interleave.cjs");
 		writeFileSync(preload, `
-+const fs = require("node:fs");
-+const originalRead = fs.readFileSync;
-+const originalUnlink = fs.unlinkSync;
-+const lock = process.env.DRAHT_TEST_LOCK_PATH;
-+const ready = process.env.DRAHT_TEST_READY;
-+fs.readFileSync = function(path, ...args) {
-+  const value = originalRead.call(this, path, ...args);
-+  if (path === lock && String(value).includes('"token":"stale-race"')) {
-+    try { fs.writeFileSync(ready + "." + process.env.DRAHT_TEST_ROLE, "ready", { flag: "wx" }); } catch {}
-+    const until = Date.now() + 5000;
-+    while (Date.now() < until && (!fs.existsSync(ready + ".A") || !fs.existsSync(ready + ".B"))) {}
-+  }
-+  return value;
-+};
-+fs.unlinkSync = function(path, ...args) {
-+  if (path === lock && process.env.DRAHT_TEST_ROLE === "B") {
-+    const until = Date.now() + 5000;
-+    while (Date.now() < until) {
-+      try {
-+        if (!String(originalRead.call(fs, lock, "utf8")).includes('"token":"stale-race"')) break;
-+      } catch {}
-+    }
-+  }
-+  return originalUnlink.call(this, path, ...args);
-+};
-+` .replace(/^\+/gm, ""));
+const fs = require("node:fs");
+const originalOpen = fs.openSync;
+const originalRead = fs.readFileSync;
+const lock = process.env.DRAHT_TEST_LOCK_PATH;
+const ready = process.env.DRAHT_TEST_READY;
+const lockDescriptors = new Set();
+fs.openSync = function(path, ...args) {
+  const descriptor = originalOpen.call(this, path, ...args);
+  if (path === lock) lockDescriptors.add(descriptor);
+  return descriptor;
+};
+fs.readFileSync = function(path, ...args) {
+  const value = originalRead.call(this, path, ...args);
+  if (lockDescriptors.has(path) && String(value).includes('"token":"stale-race"')) {
+    try { fs.writeFileSync(ready + "." + process.env.DRAHT_TEST_ROLE, "ready", { flag: "wx" }); } catch {}
+    const until = Date.now() + 5000;
+    while (Date.now() < until && (!fs.existsSync(ready + ".A") || !fs.existsSync(ready + ".B"))) {}
+  }
+  return value;
+};
+`);
 		const shared = {
 			NODE_OPTIONS: `--require=${preload}`,
 			DRAHT_TEST_LOCK_PATH: lockPath,

@@ -8,6 +8,8 @@ export interface Keybindings {
 	// Editor navigation and editing
 	"tui.editor.cursorUp": true;
 	"tui.editor.cursorDown": true;
+	"tui.editor.historyPrevious": true;
+	"tui.editor.historyNext": true;
 	"tui.editor.cursorLeft": true;
 	"tui.editor.cursorRight": true;
 	"tui.editor.cursorWordLeft": true;
@@ -61,6 +63,14 @@ export type KeybindingsConfig = Record<string, KeyId | KeyId[] | undefined>;
 export const TUI_KEYBINDINGS = {
 	"tui.editor.cursorUp": { defaultKeys: "up", description: "Move cursor up" },
 	"tui.editor.cursorDown": { defaultKeys: "down", description: "Move cursor down" },
+	"tui.editor.historyPrevious": {
+		defaultKeys: [],
+		description: "Select previous prompt history entry",
+	},
+	"tui.editor.historyNext": {
+		defaultKeys: [],
+		description: "Select next prompt history entry",
+	},
 	"tui.editor.cursorLeft": {
 		defaultKeys: ["left", "ctrl+b"],
 		description: "Move cursor left",

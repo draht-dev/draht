@@ -20,6 +20,13 @@ describe("KeybindingsManager", () => {
 		assert.deepStrictEqual(keybindings.getKeys("tui.editor.pageDown"), ["pageDown", "ctrl+pageDown"]);
 	});
 
+	it("leaves dedicated prompt history navigation unbound by default", () => {
+		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS);
+
+		assert.deepStrictEqual(keybindings.getKeys("tui.editor.historyPrevious"), []);
+		assert.deepStrictEqual(keybindings.getKeys("tui.editor.historyNext"), []);
+	});
+
 	it("binds unmodified terminal viewport shortcuts to alternate-screen navigation", () => {
 		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS);
 

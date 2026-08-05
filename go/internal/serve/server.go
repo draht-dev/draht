@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/draht-dev/draht/go/internal/emit"
 	"github.com/draht-dev/draht/go/internal/graph"
 	"github.com/draht-dev/draht/go/internal/model"
 	"github.com/draht-dev/draht/go/internal/parse"
+	"github.com/draht-dev/draht/go/internal/publication"
 	"github.com/draht-dev/draht/go/internal/scan"
 )
 
@@ -65,20 +65,15 @@ type state struct {
 	clients   map[*sseClient]struct{}
 }
 
-// build runs graph.Build + emit.WriteOutputs (quiet=false: MAP.html is
-// always refreshed by map-serve, matching visWriteOutputs(cwd) which is
-// called with no {quiet:true} override here) and records the result for
-// /health.
+// build runs the freshness-checked, inter-process coordinated publication and
+// records the result for /health.
 func (st *state) build(ctx context.Context) (*model.Map, error) {
-	m, report, err := graph.Build(ctx, graph.Options{
+	m, _, _, err := publication.Build(ctx, graph.Options{
 		Root:   st.repoRoot,
 		OutDir: st.outDir,
 		Parser: st.parser,
-	})
+	}, false)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := emit.WriteOutputs(st.outDir, m, report.Changed, false); err != nil {
 		return nil, err
 	}
 	st.mu.Lock()

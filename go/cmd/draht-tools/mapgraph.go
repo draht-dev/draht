@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/draht-dev/draht/go/internal/emit"
 	"github.com/draht-dev/draht/go/internal/graph"
 	"github.com/draht-dev/draht/go/internal/parse"
+	"github.com/draht-dev/draht/go/internal/publication"
 	"github.com/draht-dev/draht/go/internal/scan"
 )
 
@@ -290,7 +290,7 @@ func runMapGraph(args []string) int {
 		SymbolSignatures: opts.symbolSignatures,
 	}
 
-	m, report, err := graph.Build(context.Background(), buildOpts)
+	m, report, res, err := publication.Build(context.Background(), buildOpts, opts.quiet)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "map-graph:", err)
 		return 1
@@ -309,16 +309,9 @@ func runMapGraph(args []string) int {
 		fmt.Fprintf(os.Stderr, "cache: %d hit / %d miss\n", report.CacheHits, report.CacheMisses)
 	}
 
-	// visWriteOutputs (cjs:5098-5124): GRAPH_REPORT.md shares MAP.json's
-	// unchanged-gate (report.Changed, from graph.Build's own
-	// model.WriteIfChanged call); MAP.html is unconditional unless --quiet.
-	// This runs on BOTH the quiet and non-quiet paths — the CJS's --quiet
-	// flag only skips the HTML write, never the report.
-	res, emitErr := emit.WriteOutputs(outDir, m, report.Changed, opts.quiet)
-	if emitErr != nil {
-		fmt.Fprintln(os.Stderr, "map-graph:", emitErr)
-		return 1
-	}
+	// publication.Build renders and publishes MAP.json, GRAPH_REPORT.md, and
+	// MAP.html as one freshness-checked generation while retaining the CJS
+	// quiet/report gates.
 
 	if opts.quiet {
 		fmt.Printf("map-graph: %d modules · schemaVersion %d · %dms → %s\n",

@@ -26,6 +26,12 @@ function createRepository(root: string): JsonlSessionRepo {
 	});
 }
 
+function expectedSessionPath(root: string, cwd: string, createdAt: number, id: string): string {
+	const directory = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+	const timestamp = new Date(createdAt).toISOString().replace(/[:.]/g, "-");
+	return join(root, directory, `${timestamp}_${id}.jsonl`);
+}
+
 afterEach(() => {
 	while (tempDirs.length > 0) rmSync(tempDirs.pop()!, { recursive: true, force: true });
 });
@@ -52,9 +58,10 @@ describe("JSONL v4 persistence", () => {
 	it("exposes the complete metadata contract", async () => {
 		const root = createTempDir();
 		await using repository = createRepository(root);
+		const cwd = join(root, "workspace", "project");
 		const session = await repository.create({
 			id: "metadata",
-			cwd: "/workspace/project",
+			cwd,
 			parentSessionId: "parent",
 			metadata: { owner: "agent", nested: { enabled: true } },
 		});
@@ -64,22 +71,56 @@ describe("JSONL v4 persistence", () => {
 			id: "metadata",
 			createdAt: expect.any(Number),
 			parentSessionId: "parent",
-			path: join(root, "session-metadata.jsonl"),
-			cwd: "/workspace/project",
+			path: expectedSessionPath(root, metadata.cwd, metadata.createdAt, metadata.id),
+			cwd,
 			modifiedAt: statSync(metadata.path).mtimeMs,
 			sourceFormat: 4,
 			metadata: { owner: "agent", nested: { enabled: true } },
 		});
-		expect(await repository.list({ cwd: "/workspace/project" })).toEqual([metadata]);
-		expect(await repository.list({ cwd: "/other/project" })).toEqual([]);
+		expect(await repository.list({ cwd })).toEqual([metadata]);
+		expect(await repository.list({ cwd: join(root, "other", "project") })).toEqual([]);
+	});
+
+	it("rejects session ids that cannot be used in coding-agent filenames", async () => {
+		const root = createTempDir();
+		await using repository = createRepository(root);
+
+		await expect(repository.create({ id: "../escape", cwd: root })).rejects.toMatchObject({
+			code: "invalid_payload",
+		});
+	});
+
+	it("does not scan existing sessions for generated ids", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		let listCalls = 0;
+		const countingFs = new Proxy(env, {
+			get(target, property) {
+				if (property === "listDir") {
+					return (path: string, abortSignal?: AbortSignal) => {
+						listCalls++;
+						return target.listDir(path, abortSignal);
+					};
+				}
+				const value: unknown = Reflect.get(target, property, target);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		await using repository = new JsonlSessionRepo({ fs: countingFs, sessionsRoot: root, cwd: root });
+
+		await repository.create({ cwd: root });
+
+		expect(listCalls).toBe(0);
 	});
 
 	it("sorts listed sessions by current filesystem modification time", async () => {
 		const root = createTempDir();
 		await using repository = createRepository(root);
-		const newest = await repository.create({ id: "newest", cwd: root });
+		const newestCwd = join(root, "workspaces", "newest");
+		const oldestCwd = join(root, "workspaces", "oldest");
+		const newest = await repository.create({ id: "newest", cwd: newestCwd });
 		const newestMetadata = await newest.getMetadata();
-		const oldest = await repository.create({ id: "oldest", cwd: root });
+		const oldest = await repository.create({ id: "oldest", cwd: oldestCwd });
 		const oldestMetadata = await oldest.getMetadata();
 		const newestTime = new Date(1_700_000_002_000);
 		const oldestTime = new Date(1_700_000_001_000);
@@ -89,6 +130,7 @@ describe("JSONL v4 persistence", () => {
 		const listed = await repository.list();
 
 		expect(listed.map((metadata) => metadata.id)).toEqual(["newest", "oldest"]);
+		expect((await repository.list({ cwd: newestCwd })).map((metadata) => metadata.id)).toEqual(["newest"]);
 		expect(listed.map((metadata) => metadata.modifiedAt)).toEqual([
 			statSync(newestMetadata.path).mtimeMs,
 			statSync(oldestMetadata.path).mtimeMs,

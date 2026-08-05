@@ -18,6 +18,7 @@ export type JsonlSessionRepoFileSystem = Pick<
 
 export interface JsonlSessionRepoOptions {
 	fs: JsonlSessionRepoFileSystem;
+	/** Root containing coding-agent-compatible cwd-encoded session directories. */
 	sessionsRoot: string;
 	cwd?: string;
 }

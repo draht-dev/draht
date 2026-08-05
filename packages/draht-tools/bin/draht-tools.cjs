@@ -5548,6 +5548,25 @@ const VIS_WATCH_EXTS = new Set(
 );
 // Workspace/package manifests: don't carry a "code" extension but change the dependency graph.
 const VIS_WATCH_MANIFESTS = new Set(["package.json", "pnpm-workspace.yaml", "turbo.json", "nx.json", "lerna.json"]);
+// Planning inputs consumed verbatim by visSourceGeneration(). Keep this exact allowlist in sync with
+// that function: all other .planning paths are generated publications, caches, locks, or staging.
+const VIS_WATCH_PLANNING_INPUTS = new Set([
+	".planning/STATE.md", ".planning/ROADMAP.md", ".planning/PROJECT.md",
+	".planning/DOMAIN.md", ".planning/DOMAIN-MODEL.md",
+	".planning/codebase/GROUPS.json", ".planning/codebase/FLOWS.json",
+]);
+
+function visShouldWatchPath(file) {
+	if (VIS_WATCH_PLANNING_INPUTS.has(file)) return true;
+	if (file === ".planning" || file.startsWith(".planning/") || file.includes("/.planning/")) return false;
+	const firstSeg = file.split("/")[0];
+	if (VIS_DEFAULT_IGNORES.has(firstSeg)) return false;
+	if (file.includes("/node_modules/") || file.includes("/.git/")) return false;
+	const base = file.split("/").pop() || "";
+	const dot = base.lastIndexOf(".");
+	const ext = dot >= 0 ? base.slice(dot).toLowerCase() : "";
+	return VIS_WATCH_MANIFESTS.has(base) || VIS_WATCH_EXTS.has(ext);
+}
 
 commands["map-serve"] = function (...args) {
 	const http = require("node:http");
@@ -5608,20 +5627,11 @@ commands["map-serve"] = function (...args) {
 		try {
 			const w = fs.watch(target, { recursive: recursive }, (_evt, fname) => {
 				if (!fname) return;
-				// Defect 16: normalize to posix separators BEFORE any segment/substring check — the
-				// previous checks below (`/node_modules/`, `/.git/`, …) silently never matched on win32,
-				// where fs.watch reports paths with backslashes.
-				const f = fname.toString().split(path.sep).join("/");
-				const firstSeg = f.split("/")[0];
-				if (VIS_DEFAULT_IGNORES.has(firstSeg)) return;
-				if (f.includes("/node_modules/") || f.includes("/.git/")) return;
-				if (f === ".planning" || f.startsWith(".planning/") || f.includes("/.planning/")) return;
-				// Defect 16: only code-language files (+ workspace manifests) trigger a rebuild — a
-				// touched README or a stray editor swapfile used to rebuild the whole graph.
-				const base = f.split("/").pop() || "";
-				const dot = base.lastIndexOf(".");
-				const ext = dot >= 0 ? base.slice(dot).toLowerCase() : "";
-				if (!VIS_WATCH_MANIFESTS.has(base) && !VIS_WATCH_EXTS.has(ext)) return;
+				// Normalize both separators and watcher-relative names to one repo-relative path.
+				// Linux fallback watchers report STATE.md while watching .planning; recursive root
+				// watchers report .planning/STATE.md. Admission must see the same path in both cases.
+				const f = path.relative(cwd, path.resolve(target, fname.toString())).split(path.sep).join("/");
+				if (!visShouldWatchPath(f)) return;
 				regen();
 			});
 			watchers.push(w);
@@ -5634,9 +5644,12 @@ commands["map-serve"] = function (...args) {
 		tryWatch(cwd, false);
 		for (const e of fs.readdirSync(cwd, { withFileTypes: true })) {
 			if (!e.isDirectory()) continue;
-			if (VIS_DEFAULT_IGNORES.has(e.name)) continue;
+			if (VIS_DEFAULT_IGNORES.has(e.name) && e.name !== PLANNING_DIR) continue;
 			tryWatch(path.join(cwd, e.name), false);
 		}
+		// GROUPS/FLOWS live one level below .planning. Linux's non-recursive fallback needs
+		// an explicit watcher there; exact path admission still rejects every generated peer.
+		tryWatch(path.join(cwd, PLANNING_DIR, "codebase"), false);
 		if (watchers.length === 0) console.error("map-serve: file watching unavailable — live reload disabled (use the reload button).");
 	}
 

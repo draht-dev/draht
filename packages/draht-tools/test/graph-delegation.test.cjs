@@ -131,6 +131,104 @@ function waitForText(child, text, timeoutMs = 5000) {
 	});
 }
 
+test("JavaScript map-serve watches planning sources exactly once without generated-output loops", async (t) => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "draht-planning-watch-test-"));
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "draht-planning-watch-home-"));
+	fs.writeFileSync(path.join(root, "package.json"), '{"name":"fixture"}\n');
+	fs.writeFileSync(path.join(root, "index.js"), "export const value = 1;\n");
+	fs.mkdirSync(path.join(root, ".planning", "codebase"), { recursive: true });
+	const planningSources = [
+		"STATE.md", "ROADMAP.md", "PROJECT.md", "DOMAIN.md", "DOMAIN-MODEL.md",
+		path.join("codebase", "GROUPS.json"), path.join("codebase", "FLOWS.json"),
+	];
+	for (const relative of planningSources) {
+		fs.writeFileSync(path.join(root, ".planning", relative), relative.endsWith(".json") ? "{}\n" : `${relative} v1\n`);
+	}
+
+	const port = await freePort();
+	const child = spawn(process.execPath, [cli, "map-serve", "--port", String(port), "--no-open"], {
+		cwd: root,
+		env: { ...process.env, HOME: home, PATH: "", DRAHT_GRAPH_ENGINE: "js" },
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let output = "";
+	child.stdout.on("data", (chunk) => { output += chunk; });
+	t.after(() => {
+		child.kill();
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(home, { recursive: true, force: true });
+	});
+	await waitForText(child, `Open http://localhost:${port}`);
+
+	const regenerationCount = () => (output.match(/regenerated MAP\.json/g) || []).length;
+	const waitForRegenerations = async (expected, timeoutMs = 5000) => {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline && regenerationCount() < expected) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		assert.equal(regenerationCount(), expected, `expected ${expected} regenerations; output=${output}`);
+	};
+	for (let i = 0; i < planningSources.length; i++) {
+		const relative = planningSources[i];
+		fs.writeFileSync(path.join(root, ".planning", relative), relative.endsWith(".json") ? `{"version":${i + 2}}\n` : `${relative} v2\n`);
+		await waitForRegenerations(i + 1);
+		await new Promise((resolve) => setTimeout(resolve, 650));
+		assert.equal(regenerationCount(), i + 1, `${relative} triggered a regeneration loop; output=${output}`);
+	}
+
+	const outDir = path.join(root, ".planning", "codebase");
+	fs.writeFileSync(path.join(outDir, "MAP.json"), "{}\n");
+	fs.writeFileSync(path.join(outDir, "MAP.html"), "generated\n");
+	fs.writeFileSync(path.join(outDir, "GRAPH_REPORT.md"), "generated\n");
+	for (const generatedDir of [".cache", ".map-publish-lock", ".map-publish-stage-js-test"]) {
+		const dir = path.join(outDir, generatedDir);
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, "generated.js"), "generated\n");
+	}
+	await new Promise((resolve) => setTimeout(resolve, 900));
+	assert.equal(regenerationCount(), planningSources.length, `generated outputs triggered regeneration; output=${output}`);
+});
+
+test("JavaScript map-serve caps SSE clients before sending stream bytes", async (t) => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "draht-sse-cap-test-"));
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "draht-sse-cap-home-"));
+	fs.writeFileSync(path.join(root, "package.json"), '{"name":"fixture"}\n');
+	fs.writeFileSync(path.join(root, "index.js"), "export const value = 1;\n");
+	const port = await freePort();
+	const child = spawn(process.execPath, [cli, "map-serve", "--port", String(port), "--no-open"], {
+		cwd: root,
+		env: { ...process.env, HOME: home, PATH: "", DRAHT_GRAPH_ENGINE: "js" },
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	const requests = [];
+	t.after(() => {
+		for (const request of requests) request.destroy();
+		child.kill();
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(home, { recursive: true, force: true });
+	});
+	await waitForText(child, `Open http://localhost:${port}`);
+
+	for (let i = 0; i < 64; i++) {
+		const request = http.get(`http://127.0.0.1:${port}/events`);
+		requests.push(request);
+		const response = await new Promise((resolve, reject) => {
+			request.once("response", resolve);
+			request.once("error", reject);
+		});
+		assert.equal(response.statusCode, 200);
+		await new Promise((resolve) => response.once("data", resolve));
+	}
+	const rejected = http.get(`http://127.0.0.1:${port}/events`);
+	requests.push(rejected);
+	const response = await new Promise((resolve, reject) => {
+		rejected.once("response", resolve);
+		rejected.once("error", reject);
+	});
+	assert.equal(response.statusCode, 503);
+	assert.notEqual(response.headers["content-type"], "text/event-stream");
+});
+
 test("JavaScript map-serve evicts an SSE client that signals backpressure", async (t) => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "draht-sse-test-"));
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "draht-sse-home-"));

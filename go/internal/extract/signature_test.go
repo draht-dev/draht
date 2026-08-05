@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestSignatureExtractorVersionInvalidatesPreInitializerCache(t *testing.T) {
-	if Version != "x4" {
-		t.Fatalf("Version = %q, want x4 after signature semantics changed", Version)
+func TestSignatureExtractorVersionInvalidatesCrossDeclarationArrowCache(t *testing.T) {
+	if Version != "x5" {
+		t.Fatalf("Version = %q, want x5 after cross-declaration arrow semantics changed", Version)
 	}
 }
 
@@ -42,6 +42,15 @@ func TestSignatureAt(t *testing.T) {
 			lang: "typescript",
 			src:  `export const API_TOKEN: string = "sk-production-secret"`,
 			want: "export const API_TOKEN: string",
+		},
+		{
+			name: "later arrow declaration cannot retain preceding initializer",
+			lang: "typescript",
+			src: strings.Join([]string{
+				`export const CANARY_TOKEN: string = "initializer-secret-canary"`,
+				`export const later = (value: string): string => value`,
+			}, "\n"),
+			want: "export const CANARY_TOKEN: string",
 		},
 		{
 			name: "ts type alias drops the dangling equals",

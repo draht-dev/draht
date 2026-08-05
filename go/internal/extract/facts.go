@@ -16,9 +16,10 @@ const FactsSchema = 3
 // Version identifies the regex extractors (exports/symbols/sinks/routes).
 // Bump on ANY behaviour change. Feeds cache.ComposeVersion. Bumped "x1" ->
 // "x2" alongside FactsSchema for the same reason, "x2" -> "x3" for
-// Symbol.Sig, and "x3" -> "x4" when signatures stopped retaining variable
-// initializers and named exports began resolving local declarations.
-const Version = "x4"
+// Symbol.Sig, "x3" -> "x4" when signatures stopped retaining variable
+// initializers and named exports began resolving local declarations, and
+// "x4" -> "x5" when arrow detection became declaration-scoped.
+const Version = "x5"
 
 // Facts is everything derivable from ONE file in isolation. It is exactly
 // what the cache stores. It deliberately contains NOTHING global: no

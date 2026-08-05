@@ -1,11 +1,15 @@
 package graph
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/draht-dev/draht/go/internal/extract"
+	"github.com/draht-dev/draht/go/internal/parse"
 )
 
 func signatureFacts() []extract.Symbol {
@@ -72,4 +76,68 @@ func TestConvertSymbols_PreservesNonSignatureFields(t *testing.T) {
 			t.Errorf("withSigs=%v: internal symbol mangled: %+v", withSigs, got[1])
 		}
 	}
+}
+
+// TestBuild_SignatureCanaryNeverReachesOutputOrCache reproduces the exact
+// independent-review canary: a plain variable is immediately followed by an
+// arrow declaration. With --symbol-signatures off (the default), neither
+// MAP.json nor facts.ndjson may contain the initializer. Enabling output may
+// expose only the declaration signature, never the initializer value.
+func TestBuild_SignatureCanaryNeverReachesOutputOrCache(t *testing.T) {
+	const (
+		secret = "initializer-secret-canary"
+		source = `export const CANARY_TOKEN: string = "initializer-secret-canary"
+export const later = (value: string): string => value
+`
+	)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "canary.ts"), []byte(source), 0o644); err != nil {
+		t.Fatalf("write canary: %v", err)
+	}
+
+	build := func(t *testing.T, signatures bool) ([]byte, []byte) {
+		t.Helper()
+		outDir := t.TempDir()
+		cacheDir := t.TempDir()
+		_, _, err := Build(context.Background(), Options{
+			Root: root, OutDir: outDir, CacheDir: cacheDir,
+			Parser: parse.NewRegex(), SymbolSignatures: signatures,
+		})
+		if err != nil {
+			t.Fatalf("Build(signatures=%v): %v", signatures, err)
+		}
+		mapJSON, err := os.ReadFile(filepath.Join(outDir, "MAP.json"))
+		if err != nil {
+			t.Fatalf("read MAP.json: %v", err)
+		}
+		facts, err := os.ReadFile(filepath.Join(cacheDir, "facts.ndjson"))
+		if err != nil {
+			t.Fatalf("read facts.ndjson: %v", err)
+		}
+		return mapJSON, facts
+	}
+
+	t.Run("symbol-signatures off", func(t *testing.T) {
+		mapJSON, facts := build(t, false)
+		for name, data := range map[string][]byte{"MAP.json": mapJSON, "facts.ndjson": facts} {
+			if strings.Contains(string(data), secret) {
+				t.Errorf("%s retained initializer secret with --symbol-signatures off", name)
+			}
+		}
+		if strings.Contains(string(mapJSON), `"signature"`) {
+			t.Error("MAP.json emitted signatures with --symbol-signatures off")
+		}
+	})
+
+	t.Run("symbol-signatures on", func(t *testing.T) {
+		mapJSON, facts := build(t, true)
+		for name, data := range map[string][]byte{"MAP.json": mapJSON, "facts.ndjson": facts} {
+			if strings.Contains(string(data), secret) {
+				t.Errorf("%s retained initializer secret with --symbol-signatures on", name)
+			}
+		}
+		if !strings.Contains(string(mapJSON), `"signature": "export const CANARY_TOKEN: string"`) {
+			t.Errorf("MAP.json did not emit the safe canary declaration signature: %s", mapJSON)
+		}
+	})
 }

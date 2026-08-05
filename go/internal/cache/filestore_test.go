@@ -1,11 +1,94 @@
 package cache
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func commitFixtureSize(t *testing.T, limit int64, payloadBytes int) (Store, *Snapshot) {
+	t.Helper()
+	dir := t.TempDir()
+	store := &fileStore{dir: dir, maxFileBytes: limit}
+	snap := NewSnapshot()
+	payload := append([]byte{'"'}, bytes.Repeat([]byte{'x'}, payloadBytes)...)
+	payload = append(payload, '"')
+	if !json.Valid(payload) {
+		t.Fatal("test payload is not valid JSON")
+	}
+	snap.Put(Key{Path: "a.go", ContentHash: "h", Version: "v"}, payload)
+	return store, snap
+}
+
+func TestFileStoreCommitHonorsExactWriterBoundary(t *testing.T) {
+	probe, snap := commitFixtureSize(t, 1<<20, 32)
+	if err := probe.Commit(context.Background(), snap); err != nil {
+		t.Fatalf("probe Commit: %v", err)
+	}
+	info, err := os.Stat(probe.(*fileStore).path())
+	if err != nil {
+		t.Fatalf("stat probe cache: %v", err)
+	}
+
+	store, boundarySnap := commitFixtureSize(t, info.Size(), 32)
+	if err := store.Commit(context.Background(), boundarySnap); err != nil {
+		t.Fatalf("Commit at exact boundary: %v", err)
+	}
+	got, err := os.Stat(store.(*fileStore).path())
+	if err != nil {
+		t.Fatalf("stat boundary cache: %v", err)
+	}
+	if got.Size() != info.Size() {
+		t.Fatalf("boundary cache size = %d, want %d", got.Size(), info.Size())
+	}
+}
+
+func TestFileStoreOversizeCommitSkipsCacheAndLeavesColdState(t *testing.T) {
+	store, snap := commitFixtureSize(t, 128, 256)
+	fs := store.(*fileStore)
+	fs.maxFileBytes = 1 << 20
+	seed := NewSnapshot()
+	seed.Put(Key{Path: "old.go", ContentHash: "old", Version: "v"}, []byte(`{"loc":1}`))
+	if err := store.Commit(context.Background(), seed); err != nil {
+		t.Fatalf("seed Commit: %v", err)
+	}
+	fs.maxFileBytes = 128
+
+	err := store.Commit(context.Background(), snap)
+	if err == nil {
+		t.Fatal("oversize Commit returned nil error")
+	}
+	if _, statErr := os.Stat(fs.path()); !os.IsNotExist(statErr) {
+		t.Fatalf("oversize Commit left facts.ndjson behind; stat error = %v", statErr)
+	}
+	loaded, loadErr := store.Load(context.Background())
+	if loadErr != nil {
+		t.Fatalf("cold Load after skipped Commit: %v", loadErr)
+	}
+	if loaded.Stats().Entries != 0 {
+		t.Fatalf("cold Load entries = %d, want 0", loaded.Stats().Entries)
+	}
+}
+
+func TestFileStoreCommittedOutputIsLoadableByReader(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	snap := NewSnapshot()
+	key := Key{Path: "loadable.go", ContentHash: "hash", Version: "version"}
+	snap.Put(key, []byte(`{"loc":7}`))
+	if err := store.Commit(context.Background(), snap); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	loaded, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load committed output: %v", err)
+	}
+	if _, ok := loaded.Get(key); !ok {
+		t.Fatal("reader rejected or lost committed cache entry")
+	}
+}
 
 func TestFileStoreOversizeRejectedBeforeRead(t *testing.T) {
 	dir := t.TempDir()

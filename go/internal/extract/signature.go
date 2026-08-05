@@ -102,7 +102,7 @@ func signatureAt(lang string, lines []string, idx int) string {
 	hashComments := hashCommentLangs[lang]
 	regexLiterals := regexLiteralLangs[lang]
 	variableDecl := regexLiterals && tsVariableDeclRe.MatchString(lines[idx])
-	variableArrow := variableDecl && strings.Contains(strings.Join(lines[idx:last], "\n"), "=>")
+	variableArrow := variableDecl && variableDeclarationHasArrow(lines, idx, last)
 
 	// One entry per source line consumed, joined structurally by foldParts
 	// rather than with a blind space (a wrapped parameter list must come
@@ -228,6 +228,53 @@ func signatureAt(lang string, lines []string, idx int) string {
 	}
 
 	return normalizeSignature(foldParts(parts))
+}
+
+// variableDeclarationHasArrow limits arrow detection to the declaration that
+// starts at idx. A declaration only continues onto another source line while
+// its parameter brackets remain open; once a line ends at depth zero, a later
+// declaration's => cannot turn the current variable initializer into a
+// signature.
+func variableDeclarationHasArrow(lines []string, idx, last int) bool {
+	depth := 0
+	for i := idx; i < last; i++ {
+		line := lines[i]
+		var quote byte
+		for j := 0; j < len(line); j++ {
+			c := line[j]
+			if quote != 0 {
+				if c == '\\' && j+1 < len(line) {
+					j++
+					continue
+				}
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			if c == '/' && j+1 < len(line) && (line[j+1] == '/' || line[j+1] == '*') {
+				break
+			}
+			switch c {
+			case '"', '\'', '`':
+				quote = c
+			case '(', '[':
+				depth++
+			case ')', ']':
+				if depth > 0 {
+					depth--
+				}
+			case '=':
+				if j+1 < len(line) && line[j+1] == '>' {
+					return true
+				}
+			}
+		}
+		if depth == 0 {
+			return false
+		}
+	}
+	return false
 }
 
 // foldParts joins the per-line fragments of a wrapped declaration back into

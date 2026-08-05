@@ -204,8 +204,33 @@ function processIdentity(pid) {
 	}
 }
 
+function readMarketplaceLock(lockPath) {
+	let descriptor;
+	try {
+		const before = fs.lstatSync(lockPath);
+		if (!before.isFile() || before.isSymbolicLink()) throw new Error("not a regular file");
+		const noFollow = fs.constants.O_NOFOLLOW || 0;
+		descriptor = fs.openSync(lockPath, fs.constants.O_RDONLY | noFollow);
+		const opened = fs.fstatSync(descriptor);
+		if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("changed while opening");
+		const owner = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+		const after = fs.lstatSync(lockPath);
+		if (after.dev !== opened.dev || after.ino !== opened.ino) throw new Error("changed while reading");
+		return { owner, stat: opened };
+	} catch (error) {
+		throw new Error(`plugin update lock exists but is not safely readable: ${lockPath} (${error.message})`);
+	} finally {
+		if (descriptor !== undefined) fs.closeSync(descriptor);
+	}
+}
+
+function sameFile(left, right) {
+	return left.dev === right.dev && left.ino === right.ino;
+}
+
 function acquireMarketplaceLock(marketplaceDir) {
 	const lockPath = `${marketplaceDir}.draht-update-lock`;
+	let ownedQuarantine = null;
 	for (;;) {
 		const token = crypto.randomBytes(8).toString("hex");
 		const owner = {
@@ -219,6 +244,7 @@ function acquireMarketplaceLock(marketplaceDir) {
 		fs.writeFileSync(ownerPath, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
 		try {
 			fs.linkSync(ownerPath, lockPath);
+			if (ownedQuarantine) fs.unlinkSync(ownedQuarantine);
 			return { lockPath, token };
 		} catch (error) {
 			if (error.code !== "EEXIST") throw error;
@@ -226,12 +252,7 @@ function acquireMarketplaceLock(marketplaceDir) {
 			fs.rmSync(ownerPath, { force: true });
 		}
 
-		let existing;
-		try {
-			existing = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-		} catch {
-			throw new Error(`plugin update lock exists but is not readable: ${lockPath}`);
-		}
+		const { owner: existing, stat: observedStat } = readMarketplaceLock(lockPath);
 		if (existing?.owner !== "draht-plugin-installer" || !Number.isSafeInteger(existing.pid) || typeof existing.token !== "string" ||
 			(existing.identity !== null && typeof existing.identity !== "string") || !Number.isSafeInteger(existing.createdAt)) {
 			throw new Error(`plugin update lock is not owned by draht: ${lockPath}`);
@@ -246,20 +267,45 @@ function acquireMarketplaceLock(marketplaceDir) {
 				ownerAlive = error.code !== "ESRCH" && Date.now() - existing.createdAt < MARKETPLACE_LOCK_MAX_AGE_MS;
 			}
 		}
-		if (ownerAlive) throw new Error(`another plugin update is already in progress (pid ${existing.pid})`);
+		if (ownerAlive) {
+			if (ownedQuarantine) fs.rmSync(ownedQuarantine, { force: true });
+			throw new Error(`another plugin update is already in progress (pid ${existing.pid})`);
+		}
+
+		const quarantineId = crypto.createHash("sha256").update(existing.token).digest("hex").slice(0, 16);
+		const quarantinePath = `${lockPath}.reclaim-${quarantineId}`;
 		try {
-			fs.unlinkSync(lockPath);
+			fs.linkSync(lockPath, quarantinePath);
 		} catch (error) {
-			if (error.code !== "ENOENT") throw error;
+			if (error.code === "EEXIST") throw new Error(`another plugin update is already in progress reclaiming a stale lock`);
+			if (error.code === "ENOENT") continue;
+			throw error;
+		}
+		try {
+			const quarantined = readMarketplaceLock(quarantinePath);
+			const current = fs.lstatSync(lockPath);
+			if (!sameFile(observedStat, quarantined.stat) || !sameFile(current, quarantined.stat) || quarantined.owner.token !== existing.token) continue;
+			fs.unlinkSync(lockPath);
+			ownedQuarantine = quarantinePath;
+		} finally {
+			if (ownedQuarantine !== quarantinePath) fs.rmSync(quarantinePath, { force: true });
 		}
 	}
 }
 
 function releaseMarketplaceLock(lock) {
-	if (!fs.existsSync(lock.lockPath)) return;
-	const owner = JSON.parse(fs.readFileSync(lock.lockPath, "utf8"));
+	const { owner, stat } = readMarketplaceLock(lock.lockPath);
 	if (owner.token !== lock.token) throw new Error(`plugin update lock ownership changed: ${lock.lockPath}`);
-	fs.unlinkSync(lock.lockPath);
+	const releasePath = `${lock.lockPath}.release-${lock.token}`;
+	fs.linkSync(lock.lockPath, releasePath);
+	try {
+		const linked = fs.lstatSync(releasePath);
+		const current = fs.lstatSync(lock.lockPath);
+		if (!sameFile(stat, linked) || !sameFile(current, linked)) throw new Error(`plugin update lock ownership changed: ${lock.lockPath}`);
+		fs.unlinkSync(lock.lockPath);
+	} finally {
+		fs.rmSync(releasePath, { force: true });
+	}
 }
 
 function marketplaceTransactionPaths(marketplaceDir) {
@@ -382,6 +428,50 @@ function claudePluginState(pluginSpec) {
 		installed: true,
 		enabled: !(typeof entry === "object" && entry.enabled === false) && status !== "disabled",
 	};
+}
+
+function rollbackClaudePlugin(transaction, previousPlugin, pluginSpec) {
+	const failures = [];
+	let marketplaceRestored = false;
+	try {
+		rollbackMarketplace(transaction);
+		marketplaceRestored = true;
+	} catch (error) {
+		failures.push(`marketplace restore failed: ${error.message}`);
+	}
+	if (!marketplaceRestored) return failures;
+	const registrationCommand = transaction.hadPrevious
+		? ["plugin", "marketplace", "update", MARKETPLACE_NAME]
+		: ["plugin", "marketplace", "remove", MARKETPLACE_NAME];
+	if (!runClaude(registrationCommand, { allowFail: true })) failures.push("could not restore the previous marketplace registration");
+	let current;
+	try {
+		current = claudePluginState(pluginSpec);
+	} catch (error) {
+		failures.push(`could not inspect plugin state during rollback: ${error.message}`);
+		return failures;
+	}
+	if (current.installed && !runClaude(["plugin", "uninstall", pluginSpec], { allowFail: true })) {
+		failures.push("could not remove the failed replacement plugin");
+		return failures;
+	}
+	if (previousPlugin.installed) {
+		if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) {
+			failures.push("could not reinstall the previously working plugin");
+			return failures;
+		}
+		const stateCommand = previousPlugin.enabled ? "enable" : "disable";
+		if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
+	}
+	try {
+		const restored = claudePluginState(pluginSpec);
+		if (restored.installed !== previousPlugin.installed || (restored.installed && restored.enabled !== previousPlugin.enabled)) {
+			failures.push("plugin state did not match the pre-update state after rollback");
+		}
+	} catch (error) {
+		failures.push(`could not verify plugin state after rollback: ${error.message}`);
+	}
+	return failures;
 }
 
 function setModelInFrontmatter(content, model) {
@@ -778,75 +868,49 @@ async function cmdInstall(flags) {
 
 	// Capture registration state while holding the marketplace transaction lock
 	// and before any destructive CLI command. JSON avoids display-format parsing.
-	let previousPlugin = { installed: false, enabled: false };
-	if (flags.force) {
-		try {
-			previousPlugin = claudePluginState(pluginSpec);
-		} catch (error) {
-			try {
-				rollbackMarketplace(marketplaceTransaction);
-			} catch (rollbackError) {
-				err(`rollback failed: marketplace restore failed: ${rollbackError.message}`);
-			}
-			err(`could not determine existing plugin state: ${error.message}`);
-			process.exit(1);
-		}
-	}
-
-	// Validate marketplace + plugin before registering
-	log("Validating manifest...");
-	runClaude(["plugin", "validate", pluginDir], { allowFail: true });
-
-	// Add marketplace to Claude Code (idempotent — will error if already added, so allow fail)
-	log("Registering marketplace with Claude Code...");
-	runClaude(["plugin", "marketplace", "add", marketplaceDir], { allowFail: true });
-
-	// Update marketplace so Claude Code picks up any changes to our plugin files on reinstall
-	runClaude(["plugin", "marketplace", "update", MARKETPLACE_NAME], { allowFail: true });
-
-	// Install the plugin
-	if (flags.force && previousPlugin.installed) {
-		// `claude plugin install` is a no-op when the same plugin version is already installed —
-		// it never re-copies from the marketplace. Uninstall first so --force actually refreshes
-		// the runtime copy (same pattern as draht-codex, where updates propagate correctly).
-		log("Removing previously installed plugin so Claude Code re-copies fresh files...");
-		runClaude(["plugin", "uninstall", pluginSpec], { allowFail: true });
-	}
-	log("Installing plugin...");
-	const installed = runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true });
-	if (!installed) {
-		const rollbackFailures = [];
-		let marketplaceRestored = false;
+	let previousPlugin;
+	try {
+		previousPlugin = claudePluginState(pluginSpec);
+	} catch (error) {
 		try {
 			rollbackMarketplace(marketplaceTransaction);
-			marketplaceRestored = true;
-		} catch (error) {
-			rollbackFailures.push(`marketplace restore failed: ${error.message}`);
+		} catch (rollbackError) {
+			err(`rollback failed: marketplace restore failed: ${rollbackError.message}`);
 		}
-		if (previousPlugin.installed && marketplaceTransaction.hadPrevious && marketplaceRestored) {
-			if (!runClaude(["plugin", "marketplace", "update", MARKETPLACE_NAME], { allowFail: true })) {
-				rollbackFailures.push("could not refresh the restored marketplace registration");
-			}
-			if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) {
-				rollbackFailures.push("could not reinstall the previously working plugin");
-			} else if (previousPlugin.enabled) {
-				if (!runClaude(["plugin", "enable", pluginSpec], { allowFail: true })) {
-					rollbackFailures.push("reinstalled but could not enable the previously working plugin");
-				}
-			} else if (!runClaude(["plugin", "disable", pluginSpec], { allowFail: true })) {
-				rollbackFailures.push("reinstalled but could not preserve the previously disabled plugin state");
-			}
+		err(`could not determine existing plugin state: ${error.message}`);
+		process.exit(1);
+	}
+
+	try {
+		log("Validating manifest...");
+		if (!runClaude(["plugin", "validate", pluginDir], { allowFail: true })) throw new Error("plugin validation failed");
+
+		log("Registering marketplace with Claude Code...");
+		const registrationCommand = flags.force || marketplaceTransaction.hadPrevious
+			? ["plugin", "marketplace", "update", MARKETPLACE_NAME]
+			: ["plugin", "marketplace", "add", marketplaceDir];
+		if (!runClaude(registrationCommand, { allowFail: true })) throw new Error("marketplace registration failed");
+
+		if (previousPlugin.installed) {
+			log("Removing previously installed plugin so Claude Code re-copies fresh files...");
+			if (!runClaude(["plugin", "uninstall", pluginSpec], { allowFail: true })) throw new Error("previous plugin removal failed");
 		}
-		err("replacement install failed");
-		if (marketplaceRestored) {
-			err(marketplaceTransaction.hadPrevious ? "rollback: restored the previous marketplace content" : "rollback: removed the failed marketplace content");
-		}
+		log("Installing plugin...");
+		if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) throw new Error("replacement install failed");
+
+		const shouldEnable = previousPlugin.installed ? previousPlugin.enabled : true;
+		const stateCommand = shouldEnable ? "enable" : "disable";
+		if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) throw new Error(`plugin ${stateCommand} failed`);
+		const installedState = claudePluginState(pluginSpec);
+		if (!installedState.installed || installedState.enabled !== shouldEnable) throw new Error("post-install plugin state verification failed");
+	} catch (error) {
+		const rollbackFailures = rollbackClaudePlugin(marketplaceTransaction, previousPlugin, pluginSpec);
+		err(error.message);
+		err(marketplaceTransaction.hadPrevious ? "rollback: restored the previous marketplace content" : "rollback: removed the failed marketplace content");
 		for (const failure of rollbackFailures) err(`rollback failed: ${failure}`);
 		process.exit(1);
 	}
 
-	// Enable explicitly — install usually enables automatically, but be safe
-	runClaude(["plugin", "enable", pluginSpec], { allowFail: true });
 	commitMarketplace(marketplaceTransaction);
 
 	// The graph engine is a separate, OPT-IN download. It is deliberately not

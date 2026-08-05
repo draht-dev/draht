@@ -197,8 +197,33 @@ function processIdentity(pid) {
 	}
 }
 
+function readMarketplaceLock(lockPath) {
+	let descriptor;
+	try {
+		const before = fs.lstatSync(lockPath);
+		if (!before.isFile() || before.isSymbolicLink()) throw new Error("not a regular file");
+		const noFollow = fs.constants.O_NOFOLLOW || 0;
+		descriptor = fs.openSync(lockPath, fs.constants.O_RDONLY | noFollow);
+		const opened = fs.fstatSync(descriptor);
+		if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("changed while opening");
+		const owner = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+		const after = fs.lstatSync(lockPath);
+		if (after.dev !== opened.dev || after.ino !== opened.ino) throw new Error("changed while reading");
+		return { owner, stat: opened };
+	} catch (error) {
+		throw new Error(`plugin update lock exists but is not safely readable: ${lockPath} (${error.message})`);
+	} finally {
+		if (descriptor !== undefined) fs.closeSync(descriptor);
+	}
+}
+
+function sameFile(left, right) {
+	return left.dev === right.dev && left.ino === right.ino;
+}
+
 function acquireMarketplaceLock(marketplaceDir) {
 	const lockPath = `${marketplaceDir}.draht-update-lock`;
+	let ownedQuarantine = null;
 	for (;;) {
 		const token = crypto.randomBytes(8).toString("hex");
 		const owner = {
@@ -212,6 +237,7 @@ function acquireMarketplaceLock(marketplaceDir) {
 		fs.writeFileSync(ownerPath, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
 		try {
 			fs.linkSync(ownerPath, lockPath);
+			if (ownedQuarantine) fs.unlinkSync(ownedQuarantine);
 			return { lockPath, token };
 		} catch (error) {
 			if (error.code !== "EEXIST") throw error;
@@ -219,12 +245,7 @@ function acquireMarketplaceLock(marketplaceDir) {
 			fs.rmSync(ownerPath, { force: true });
 		}
 
-		let existing;
-		try {
-			existing = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-		} catch {
-			throw new Error(`plugin update lock exists but is not readable: ${lockPath}`);
-		}
+		const { owner: existing, stat: observedStat } = readMarketplaceLock(lockPath);
 		if (existing?.owner !== "draht-plugin-installer" || !Number.isSafeInteger(existing.pid) || typeof existing.token !== "string" ||
 			(existing.identity !== null && typeof existing.identity !== "string") || !Number.isSafeInteger(existing.createdAt)) {
 			throw new Error(`plugin update lock is not owned by draht: ${lockPath}`);
@@ -239,20 +260,44 @@ function acquireMarketplaceLock(marketplaceDir) {
 				ownerAlive = error.code !== "ESRCH" && Date.now() - existing.createdAt < MARKETPLACE_LOCK_MAX_AGE_MS;
 			}
 		}
-		if (ownerAlive) throw new Error(`another plugin update is already in progress (pid ${existing.pid})`);
+		if (ownerAlive) {
+			if (ownedQuarantine) fs.rmSync(ownedQuarantine, { force: true });
+			throw new Error(`another plugin update is already in progress (pid ${existing.pid})`);
+		}
+		const quarantineId = crypto.createHash("sha256").update(existing.token).digest("hex").slice(0, 16);
+		const quarantinePath = `${lockPath}.reclaim-${quarantineId}`;
 		try {
-			fs.unlinkSync(lockPath);
+			fs.linkSync(lockPath, quarantinePath);
 		} catch (error) {
-			if (error.code !== "ENOENT") throw error;
+			if (error.code === "EEXIST") throw new Error("another plugin update is already in progress reclaiming a stale lock");
+			if (error.code === "ENOENT") continue;
+			throw error;
+		}
+		try {
+			const quarantined = readMarketplaceLock(quarantinePath);
+			const current = fs.lstatSync(lockPath);
+			if (!sameFile(observedStat, quarantined.stat) || !sameFile(current, quarantined.stat) || quarantined.owner.token !== existing.token) continue;
+			fs.unlinkSync(lockPath);
+			ownedQuarantine = quarantinePath;
+		} finally {
+			if (ownedQuarantine !== quarantinePath) fs.rmSync(quarantinePath, { force: true });
 		}
 	}
 }
 
 function releaseMarketplaceLock(lock) {
-	if (!fs.existsSync(lock.lockPath)) return;
-	const owner = JSON.parse(fs.readFileSync(lock.lockPath, "utf8"));
+	const { owner, stat } = readMarketplaceLock(lock.lockPath);
 	if (owner.token !== lock.token) throw new Error(`plugin update lock ownership changed: ${lock.lockPath}`);
-	fs.unlinkSync(lock.lockPath);
+	const releasePath = `${lock.lockPath}.release-${lock.token}`;
+	fs.linkSync(lock.lockPath, releasePath);
+	try {
+		const linked = fs.lstatSync(releasePath);
+		const current = fs.lstatSync(lock.lockPath);
+		if (!sameFile(stat, linked) || !sameFile(current, linked)) throw new Error(`plugin update lock ownership changed: ${lock.lockPath}`);
+		fs.unlinkSync(lock.lockPath);
+	} finally {
+		fs.rmSync(releasePath, { force: true });
+	}
 }
 
 function marketplaceTransactionPaths(marketplaceDir) {
@@ -368,6 +413,40 @@ function isCodexPluginInstalled(pluginSpec) {
 	}
 	if (!output || !Array.isArray(output.installed)) throw new Error("codex plugin list returned an unexpected JSON shape");
 	return output.installed.some((entry) => pluginListEntryMatches(entry, pluginSpec));
+}
+
+function rollbackCodexPlugin(transaction, previouslyInstalled, pluginSpec) {
+	const failures = [];
+	let marketplaceRestored = false;
+	try {
+		rollbackMarketplace(transaction);
+		marketplaceRestored = true;
+	} catch (error) {
+		failures.push(`marketplace restore failed: ${error.message}`);
+	}
+	if (!marketplaceRestored) return failures;
+	const registrationCommand = transaction.hadPrevious
+		? ["plugin", "marketplace", "add", transaction.marketplaceDir]
+		: ["plugin", "marketplace", "remove", MARKETPLACE_NAME];
+	if (!runCodex(registrationCommand, { allowFail: true })) failures.push("could not restore the previous marketplace registration");
+	let current;
+	try {
+		current = isCodexPluginInstalled(pluginSpec);
+	} catch (error) {
+		failures.push(`could not inspect plugin state during rollback: ${error.message}`);
+		return failures;
+	}
+	if (current && !runCodex(["plugin", "remove", pluginSpec], { allowFail: true })) {
+		failures.push("could not remove the failed replacement plugin");
+		return failures;
+	}
+	if (previouslyInstalled && !runCodex(["plugin", "add", pluginSpec], { allowFail: true })) failures.push("could not reinstall the previously working plugin");
+	try {
+		if (isCodexPluginInstalled(pluginSpec) !== previouslyInstalled) failures.push("plugin state did not match the pre-update state after rollback");
+	} catch (error) {
+		failures.push(`could not verify plugin state after rollback: ${error.message}`);
+	}
+	return failures;
 }
 
 function setModelInFrontmatter(content, model) {
@@ -761,49 +840,35 @@ async function cmdInstall(flags) {
 
 	// Capture registration state while holding the marketplace transaction lock
 	// and before any destructive CLI command. JSON avoids display-format parsing.
-	let previouslyInstalled = false;
-	if (flags.force) {
-		try {
-			previouslyInstalled = isCodexPluginInstalled(pluginSpec);
-		} catch (error) {
-			try {
-				rollbackMarketplace(marketplaceTransaction);
-			} catch (rollbackError) {
-				err(`rollback failed: marketplace restore failed: ${rollbackError.message}`);
-			}
-			err(`could not determine existing plugin state: ${error.message}`);
-			process.exit(1);
-		}
-	}
-
-	log("Registering marketplace with Codex...");
-	runCodex(["plugin", "marketplace", "add", marketplaceDir], { allowFail: true });
-
-	if (flags.force && previouslyInstalled) {
-		log("Removing previous installed plugin cache...");
-		runCodex(["plugin", "remove", pluginSpec], { allowFail: true });
-	}
-
-	log("Installing plugin...");
-	const installed = runCodex(["plugin", "add", pluginSpec], { allowFail: true });
-	if (!installed) {
-		const rollbackFailures = [];
-		let marketplaceRestored = false;
+	let previouslyInstalled;
+	try {
+		previouslyInstalled = isCodexPluginInstalled(pluginSpec);
+	} catch (error) {
 		try {
 			rollbackMarketplace(marketplaceTransaction);
-			marketplaceRestored = true;
-		} catch (error) {
-			rollbackFailures.push(`marketplace restore failed: ${error.message}`);
+		} catch (rollbackError) {
+			err(`rollback failed: marketplace restore failed: ${rollbackError.message}`);
 		}
-		if (previouslyInstalled && marketplaceTransaction.hadPrevious && marketplaceRestored) {
-			if (!runCodex(["plugin", "add", pluginSpec], { allowFail: true })) {
-				rollbackFailures.push("could not reinstall the previously working plugin");
-			}
+		err(`could not determine existing plugin state: ${error.message}`);
+		process.exit(1);
+	}
+
+	try {
+		log("Registering marketplace with Codex...");
+		if (!runCodex(["plugin", "marketplace", "add", marketplaceDir], { allowFail: true })) throw new Error("marketplace registration failed");
+
+		if (previouslyInstalled) {
+			log("Removing previous installed plugin cache...");
+			if (!runCodex(["plugin", "remove", pluginSpec], { allowFail: true })) throw new Error("previous plugin removal failed");
 		}
-		err("replacement install failed");
-		if (marketplaceRestored) {
-			err(marketplaceTransaction.hadPrevious ? "rollback: restored the previous marketplace content" : "rollback: removed the failed marketplace content");
-		}
+
+		log("Installing plugin...");
+		if (!runCodex(["plugin", "add", pluginSpec], { allowFail: true })) throw new Error("replacement install failed");
+		if (!isCodexPluginInstalled(pluginSpec)) throw new Error("post-install plugin state verification failed");
+	} catch (error) {
+		const rollbackFailures = rollbackCodexPlugin(marketplaceTransaction, previouslyInstalled, pluginSpec);
+		err(error.message);
+		err(marketplaceTransaction.hadPrevious ? "rollback: restored the previous marketplace content" : "rollback: removed the failed marketplace content");
 		for (const failure of rollbackFailures) err(`rollback failed: ${failure}`);
 		process.exit(1);
 	}

@@ -19,7 +19,6 @@
 
 import { isAbsolute, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
-
 import {
 	type AgentApp,
 	type AgentConnection,
@@ -43,10 +42,11 @@ import {
 	createWriteToolDefinition,
 	type ToolDefinition,
 } from "@draht/coding-agent";
+import packageMetadata from "../package.json" with { type: "json" };
 
 /** Reported to the ACP client in `initialize` unless overridden by config. */
 const DEFAULT_AGENT_NAME = "draht-acp";
-const AGENT_VERSION = "2026.7.11";
+const AGENT_VERSION = packageMetadata.version;
 
 /**
  * A tool definition with erased param/detail types — coding-agent's own `ToolDef`

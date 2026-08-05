@@ -32,7 +32,7 @@ none of its commits, tags, pushes, polling, or publication.
 `.github/workflows/build-binaries.yml`. Two jobs attach assets to that same
 release:
 
-- `build` — the existing `pi-*` archives (5 platforms).
+- `build` — the Draht-branded `draht-*` runtime archives (5 platforms).
 - `build-graph` (`needs: build`, `if: !cancelled()`) — the Go knowledge-graph
   engine: `draht-graph-<platform>.tar.gz`/`.zip` for
   darwin-arm64/darwin-x64/linux-x64/linux-arm64/windows-x64, plus
@@ -44,10 +44,11 @@ Local reproduction: `./scripts/build-graph-binaries.sh [--platform <name>]`
 (also `npm run build:graph-binaries`) — see `go/README.md`'s "Building
 release artifacts".
 
-The graph asset job uses GitHub Actions OIDC with
+Both binary jobs use GitHub Actions OIDC with
 `actions/attest-build-provenance` to create keyless build-provenance
-attestations for the five archives, `SHA256SUMS`, and `manifest.json`. Verify a
-downloaded asset with `gh attestation verify <asset> --repo draht-dev/draht`.
+attestations. This covers the five `draht-*` runtime archives and the five
+`draht-graph-*` archives, `SHA256SUMS`, and `manifest.json`. Verify a downloaded
+asset with `gh attestation verify <asset> --repo draht-dev/draht`.
 This proves which GitHub workflow, repository, commit, and runner identity built
 the bytes; it is not an Apple code-signing or notarization substitute.
 

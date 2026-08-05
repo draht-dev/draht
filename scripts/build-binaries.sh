@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build pi binaries for all platforms locally.
+# Build Draht binaries for all platforms locally.
 # Mirrors .github/workflows/build-binaries.yml
 #
 # Usage:
@@ -12,11 +12,11 @@
 #
 # Output:
 #   packages/coding-agent/binaries/
-#     pi-darwin-arm64.tar.gz
-#     pi-darwin-x64.tar.gz
-#     pi-linux-x64.tar.gz
-#     pi-linux-arm64.tar.gz
-#     pi-windows-x64.zip
+#     draht-darwin-arm64.tar.gz
+#     draht-darwin-x64.tar.gz
+#     draht-linux-x64.tar.gz
+#     draht-linux-arm64.tar.gz
+#     draht-windows-x64.zip
 
 set -euo pipefail
 
@@ -56,33 +56,16 @@ if [[ -n "$PLATFORM" ]]; then
 fi
 
 echo "==> Installing dependencies..."
-# Allow partial install failures — web-ui has deep node_modules paths that
-# hit NameTooLong on Linux CI. It's not needed for the binary build.
-bun install --frozen-lockfile || echo "Warning: bun install had errors (non-critical packages may have failed)"
+# Packaging below intentionally reads native assets from the root node_modules.
+# Request that layout explicitly instead of depending on Bun's evolving default
+# workspace linker, and fail closed if the reproducible install cannot finish.
+bun install --frozen-lockfile --linker hoisted
 
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."
-    # bun install only installs optional deps for the current platform
-    # We need all platform bindings for bun cross-compilation
-    # Use --force to bypass platform checks (os/cpu restrictions in package.json)
-    # Allow partial failures — @draht/web-ui has deep node_modules paths that
-    # hit NameTooLong on Linux CI. It's not needed for the binary build.
-    bun add --force \
-        @mariozechner/clipboard-darwin-arm64@0.3.0 \
-        @mariozechner/clipboard-darwin-x64@0.3.0 \
-        @mariozechner/clipboard-linux-x64-gnu@0.3.0 \
-        @mariozechner/clipboard-linux-arm64-gnu@0.3.0 \
-        @mariozechner/clipboard-win32-x64-msvc@0.3.0 \
-        @img/sharp-darwin-arm64@0.34.5 \
-        @img/sharp-darwin-x64@0.34.5 \
-        @img/sharp-linux-x64@0.34.5 \
-        @img/sharp-linux-arm64@0.34.5 \
-        @img/sharp-win32-x64@0.34.5 \
-        @img/sharp-libvips-darwin-arm64@1.2.4 \
-        @img/sharp-libvips-darwin-x64@1.2.4 \
-        @img/sharp-libvips-linux-x64@1.2.4 \
-        @img/sharp-libvips-linux-arm64@1.2.4 \
-        || echo "Warning: bun add had errors (non-critical packages may have failed)"
+    # Materialize every locked optional native binding without rewriting package
+    # metadata or resolving ad-hoc versions during a release build.
+    bun install --frozen-lockfile --linker hoisted --os='*' --cpu='*'
 else
     echo "==> Skipping cross-platform native bindings (--skip-deps)"
 fi
@@ -111,9 +94,9 @@ for platform in "${PLATFORMS[@]}"; do
     # call site has a try/catch fallback. For Windows builds, we copy the
     # appropriate .node file alongside the binary below.
     if [[ "$platform" == "windows-x64" ]]; then
-        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/pi.exe
+        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/draht.exe
     else
-        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/pi
+        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/draht
     fi
 done
 
@@ -187,12 +170,12 @@ cd binaries
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == "windows-x64" ]]; then
         # Windows (zip)
-        echo "Creating pi-$platform.zip..."
-        (cd $platform && zip -r ../pi-$platform.zip .)
+        echo "Creating draht-$platform.zip..."
+        (cd $platform && zip -r ../draht-$platform.zip .)
     else
         # Unix platforms (tar.gz) - use wrapper directory for mise compatibility
-        echo "Creating pi-$platform.tar.gz..."
-        mv $platform pi && tar -czf pi-$platform.tar.gz pi && mv pi $platform
+        echo "Creating draht-$platform.tar.gz..."
+        mv $platform draht && tar -czf draht-$platform.tar.gz draht && mv draht $platform
     fi
 done
 
@@ -201,9 +184,9 @@ echo "==> Extracting archives for testing..."
 for platform in "${PLATFORMS[@]}"; do
     rm -rf $platform
     if [[ "$platform" == "windows-x64" ]]; then
-        mkdir -p $platform && (cd $platform && unzip -q ../pi-$platform.zip)
+        mkdir -p $platform && (cd $platform && unzip -q ../draht-$platform.zip)
     else
-        tar -xzf pi-$platform.tar.gz && mv pi $platform
+        tar -xzf draht-$platform.tar.gz && mv draht $platform
     fi
 done
 
@@ -214,5 +197,9 @@ ls -lh *.tar.gz *.zip 2>/dev/null || true
 echo ""
 echo "Extracted directories for testing:"
 for platform in "${PLATFORMS[@]}"; do
-    echo "  binaries/$platform/pi"
+    if [[ "$platform" == "windows-x64" ]]; then
+        echo "  binaries/$platform/draht.exe"
+    else
+        echo "  binaries/$platform/draht"
+    fi
 done

@@ -25,9 +25,8 @@ import { join } from "path";
 import {
 	assertReleaseVersions,
 	getScopePackages,
-	listGithubReleaseAssets,
 	setVersion,
-	waitForReleaseAssets,
+	waitForVerifiedRelease,
 } from "./release-helpers.mjs";
 
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -318,6 +317,8 @@ console.log(`Version: ${version}\n`);
 console.log("Setting version across packages...");
 if (!DRY_RUN) {
 	setVersion(process.cwd(), version);
+	run("bun install --lockfile-only --ignore-scripts");
+	run("bun install --frozen-lockfile --ignore-scripts --linker hoisted");
 	assertReleaseVersions(process.cwd(), version);
 }
 console.log(`  Set all packages to ${version}\n`);
@@ -350,15 +351,16 @@ run("git push origin main");
 run(`git push origin v${version}`);
 console.log();
 
-// 7. Gate npm publication on the complete GitHub release. This includes both
-// the primary pi runtime archives and the Go graph-engine assets. A partial
-// release is retried for up to ten minutes and then aborts before any npm package is public.
-console.log("Waiting for required release assets...");
+// 7. Gate npm publication on the complete, content-verified GitHub release.
+// This includes both the primary Draht runtime archives and the Go graph-engine
+// assets. A partial, stale, or corrupted release is retried for up to ten
+// minutes and then aborts before any npm package is public.
+console.log("Waiting for and verifying required release assets...");
 if (!DRY_RUN) {
-	await waitForReleaseAssets({ tag: `v${version}`, listAssets: listGithubReleaseAssets });
-	console.log("  GitHub release contains all primary and graph runtime assets\n");
+	await waitForVerifiedRelease({ tag: `v${version}`, version });
+	console.log("  GitHub release identity, manifest, and runtime archives verified\n");
 } else {
-	console.log("  (dry-run: release asset polling skipped)\n");
+	console.log("  (dry-run: release artifact polling and verification skipped)\n");
 }
 
 console.log("Publishing npm packages...");

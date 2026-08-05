@@ -11,13 +11,12 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
-
 jobs:
   build:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -40,6 +39,13 @@ jobs:
 
       - name: Build binaries
         run: ./scripts/build-binaries.sh
+
+      - name: Attest Draht runtime asset provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            packages/coding-agent/binaries/*.tar.gz
+            packages/coding-agent/binaries/*.zip
 
       - name: Extract changelog for this version
         id: changelog
@@ -66,18 +72,18 @@ jobs:
           gh release create "${RELEASE_TAG}" \
             --title "${RELEASE_TAG}" \
             --notes-file /tmp/release-notes.md \
-            pi-darwin-arm64.tar.gz \
-            pi-darwin-x64.tar.gz \
-            pi-linux-x64.tar.gz \
-            pi-linux-arm64.tar.gz \
-            pi-windows-x64.zip \
+            draht-darwin-arm64.tar.gz \
+            draht-darwin-x64.tar.gz \
+            draht-linux-x64.tar.gz \
+            draht-linux-arm64.tar.gz \
+            draht-windows-x64.zip \
             2>/dev/null || \
           gh release upload "${RELEASE_TAG}" \
-            pi-darwin-arm64.tar.gz \
-            pi-darwin-x64.tar.gz \
-            pi-linux-x64.tar.gz \
-            pi-linux-arm64.tar.gz \
-            pi-windows-x64.zip \
+            draht-darwin-arm64.tar.gz \
+            draht-darwin-x64.tar.gz \
+            draht-linux-x64.tar.gz \
+            draht-linux-arm64.tar.gz \
+            draht-windows-x64.zip \
             --clobber
 
   # Attaches the Go graph-engine binaries to the SAME release/tag as `build`
@@ -89,6 +95,10 @@ jobs:
   build-graph:
     needs: build
     if: ${{ !cancelled() }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}

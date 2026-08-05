@@ -45,7 +45,7 @@ fi
 # Build
 info "Installing dependencies..."
 cd "$INSTALL_DIR"
-bun install --frozen-lockfile --quiet
+bun install --frozen-lockfile --linker hoisted --quiet
 
 info "Building..."
 bun run build --quiet 2>/dev/null || {

@@ -2957,6 +2957,8 @@ For one serial worker, the recommended next package is **R0**, because it unbloc
 
 ### Track F — scaffold truth and public ownership
 
+**In progress and reserved: F0 by @cristinaponcela.** Other agents must not pick F0 while this ownership marker remains.
+
 - [ ] **F0 — harden the scaffold.** Dependencies: none.
   - Primary files: `packages/agent/src/harness/agent-harness.ts`, `packages/agent/test/harness/agent-harness-scaffold.test.ts`.
   - Inventory every public method. Preserve only behavior that is genuinely correct without an operation runtime, such as immutable harness-global configuration copies and direct leaf reads. Make every other placeholder reject with `HarnessNotImplemented` instead of returning empty snapshots, idle state, or no-op drive/wait success.

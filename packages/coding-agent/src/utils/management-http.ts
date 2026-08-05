@@ -1,3 +1,5 @@
+type FetchInput = Parameters<typeof fetch>[0];
+
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 export interface FetchRetryOptions {
@@ -21,7 +23,7 @@ export interface FetchRetryOptions {
  * overall time budget shared by all attempts.
  */
 export async function fetchWithRetry(
-	input: RequestInfo | URL,
+	input: FetchInput,
 	init: RequestInit | undefined = undefined,
 	options: FetchRetryOptions = {},
 ): Promise<Response> {

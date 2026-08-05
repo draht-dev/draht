@@ -20,7 +20,15 @@ const GRAPH_PLATFORM_METADATA = Object.freeze({
 	"windows-x64": { goos: "windows", goarch: "amd64", binary: "draht-graph.exe" },
 });
 
-const MAX_RELEASE_ASSET_BYTES = 512 * 1024 * 1024;
+export const RELEASE_IO_LIMITS = Object.freeze({
+	perAssetBytes: 256 * 1024 * 1024,
+	manifestBytes: 2 * 1024 * 1024,
+	checksumBytes: 2 * 1024 * 1024,
+	archiveBytes: 256 * 1024 * 1024,
+	extractedBinaryBytes: 256 * 1024 * 1024,
+	decompressedBytes: 512 * 1024 * 1024,
+	aggregateDownloadBytes: 1024 * 1024 * 1024,
+});
 const MAX_ARCHIVE_LISTING_BYTES = 16 * 1024 * 1024;
 
 export const EXPECTED_RELEASE_ASSETS = Object.freeze([
@@ -187,7 +195,13 @@ function githubDownloadHeaders(token) {
 	return headers;
 }
 
-async function downloadReleaseAsset(asset, { fetchImpl, token }) {
+function releaseAssetLimit(name) {
+	if (name === "manifest.json" || name === "runtime-manifest.json") return RELEASE_IO_LIMITS.manifestBytes;
+	if (name === "SHA256SUMS" || name === "DRAHT-SHA256SUMS") return RELEASE_IO_LIMITS.checksumBytes;
+	return RELEASE_IO_LIMITS.archiveBytes;
+}
+
+async function downloadReleaseAsset(asset, { fetchImpl, token, limit, aggregate }) {
 	if (!asset) throw new Error("Required release asset is missing");
 	const url = asset.url ?? asset.browser_download_url;
 	if (!url) throw new Error(`Release asset ${asset.name} has no download URL`);
@@ -195,7 +209,28 @@ async function downloadReleaseAsset(asset, { fetchImpl, token }) {
 	if (!response.ok) {
 		throw new Error(`Downloading release asset ${asset.name} returned ${response.status} ${response.statusText}`.trim());
 	}
-	return Buffer.from(await response.arrayBuffer());
+	const boundedLimit = Math.min(limit, asset.size);
+	const contentLength = Number(response.headers?.get?.("content-length"));
+	if (Number.isFinite(contentLength) && contentLength > boundedLimit) throw new Error(`Release asset ${asset.name} Content-Length exceeds its ${boundedLimit} byte limit`);
+	if (!response.body?.getReader) throw new Error(`Release asset ${asset.name} response body is not a readable stream`);
+	const reader = response.body.getReader();
+	const chunks = [];
+	let size = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > boundedLimit) throw new Error(`Release asset ${asset.name} exceeds its declared ${boundedLimit} byte limit`);
+			if (aggregate.bytes + size > RELEASE_IO_LIMITS.aggregateDownloadBytes) throw new Error("Release asset downloads exceed aggregate byte limit");
+			chunks.push(Buffer.from(value));
+		}
+	} catch (error) {
+		await reader.cancel(error).catch(() => {});
+		throw error;
+	}
+	aggregate.bytes += size;
+	return Buffer.concat(chunks, size);
 }
 
 function digestBytes(bytes) {
@@ -214,7 +249,7 @@ function parseChecksums(bytes, label) {
 	return result;
 }
 
-function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles }) {
+function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles, maxExpandedBytes }) {
 	const temp = mkdtempSync(join(tmpdir(), "draht-release-archive-"));
 	const archivePath = join(temp, archive.endsWith(".zip") ? "asset.zip" : "asset.tar.gz");
 	try {
@@ -230,6 +265,11 @@ function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles }) {
 			encoding: "utf8",
 			maxBuffer: MAX_ARCHIVE_LISTING_BYTES,
 		});
+		const expandedBytes = zip
+			? execFileSync("unzip", ["-l", archivePath], { encoding: "utf8", maxBuffer: MAX_ARCHIVE_LISTING_BYTES })
+				.split("\n").map((line) => /^\s*(\d+)\s+\d{4}-\d{2}-\d{2}\s/.exec(line)?.[1]).filter(Boolean).reduce((sum, value) => sum + Number(value), 0)
+			: metadata.split("\n").map((line) => /^\S+\s+\S+\s+(\d+)\s/.exec(line)?.[1]).filter(Boolean).reduce((sum, value) => sum + Number(value), 0);
+		if (!Number.isSafeInteger(expandedBytes) || expandedBytes > maxExpandedBytes) throw new Error(`archive expanded size ${expandedBytes} exceeds decompression limit ${maxExpandedBytes}`);
 		const entryTypes = zip
 			? metadata.split("\n").filter((line) => /^[bcdlps-][rwxStTs-]{9}\s/.test(line)).map((line) => line[0])
 			: metadata.split("\n").filter(Boolean).map((line) => line[0]);
@@ -245,7 +285,7 @@ function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles }) {
 		const binaryBytes = execFileSync(
 			zip ? "unzip" : "tar",
 			zip ? ["-p", archivePath, binaryMember] : ["-xOzf", archivePath, binaryMember],
-			{ maxBuffer: MAX_RELEASE_ASSET_BYTES },
+			{ maxBuffer: RELEASE_IO_LIMITS.extractedBinaryBytes },
 		);
 		return { members, binaryBytes };
 	} catch (error) {
@@ -315,13 +355,22 @@ export async function validateReleaseArtifacts({
 	const missing = missingReleaseAssets(release.assets);
 	if (missing.length) throw new Error(`GitHub release is missing required assets: ${missing.join(", ")}`);
 	const assets = new Map(release.assets.map((asset) => [asset.name, asset]));
-	const downloaded = new Map();
+	let declaredAggregate = 0;
 	for (const name of EXPECTED_RELEASE_ASSETS) {
 		const asset = assets.get(name);
-		if (!Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > MAX_RELEASE_ASSET_BYTES) {
-			throw new Error(`Release asset ${name} must have a positive bounded size`);
+		const limit = Math.min(RELEASE_IO_LIMITS.perAssetBytes, releaseAssetLimit(name));
+		if (!Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > limit) {
+			throw new Error(`Release asset ${name} must have a positive bounded size within its ${limit} byte limit`);
 		}
-		const bytes = await downloadReleaseAsset(asset, { fetchImpl, token });
+		declaredAggregate += asset.size;
+	}
+	if (declaredAggregate > RELEASE_IO_LIMITS.aggregateDownloadBytes) throw new Error("Release asset declared sizes exceed aggregate byte limit");
+	const aggregate = { bytes: 0 };
+	const downloaded = new Map();
+	const controlAssets = ["manifest.json", "runtime-manifest.json", "SHA256SUMS", "DRAHT-SHA256SUMS"];
+	for (const name of controlAssets) {
+		const asset = assets.get(name);
+		const bytes = await downloadReleaseAsset(asset, { fetchImpl, token, limit: releaseAssetLimit(name), aggregate });
 		downloaded.set(name, bytes);
 	}
 	const manifestAsset = assets.get("manifest.json");
@@ -355,14 +404,13 @@ export async function validateReleaseArtifacts({
 	}
 	const missingPlatforms = GRAPH_PLATFORMS.filter((platform) => !seenPlatforms.has(platform));
 	if (missingPlatforms.length) throw new Error(`Graph manifest is missing platforms: ${missingPlatforms.join(", ")}`);
-	await Promise.all(
-		manifest.artifacts.map(async (artifact) => {
+	for (const artifact of manifest.artifacts) {
 			const metadata = GRAPH_PLATFORM_METADATA[artifact.platform];
 			const expectedArchive = `draht-graph-${artifact.platform}${artifact.platform === "windows-x64" ? ".zip" : ".tar.gz"}`;
 			if (artifact.archive !== expectedArchive) {
 				throw new Error(`Graph platform ${artifact.platform} archive must be ${expectedArchive}; got ${artifact.archive}`);
 			}
-			if (!Number.isSafeInteger(artifact.archiveBytes) || artifact.archiveBytes <= 0) {
+			if (!Number.isSafeInteger(artifact.archiveBytes) || artifact.archiveBytes <= 0 || artifact.archiveBytes > RELEASE_IO_LIMITS.archiveBytes) {
 				throw new Error(`Graph platform ${artifact.platform} archiveBytes must be a positive integer`);
 			}
 			if (!/^[0-9a-f]{64}$/.test(artifact.archiveSha256)) {
@@ -371,7 +419,7 @@ export async function validateReleaseArtifacts({
 			if (artifact.goos !== metadata.goos || artifact.goarch !== metadata.goarch || artifact.binary !== metadata.binary) {
 				throw new Error(`Graph platform ${artifact.platform} metadata must be ${metadata.goos}/${metadata.goarch}/${metadata.binary}`);
 			}
-			if (!Number.isSafeInteger(artifact.binaryBytes) || artifact.binaryBytes <= 0 || artifact.binaryBytes > MAX_RELEASE_ASSET_BYTES) {
+			if (!Number.isSafeInteger(artifact.binaryBytes) || artifact.binaryBytes <= 0 || artifact.binaryBytes > RELEASE_IO_LIMITS.extractedBinaryBytes) {
 				throw new Error(`Graph platform ${artifact.platform} binaryBytes must be a positive integer`);
 			}
 			if (!/^[0-9a-f]{64}$/.test(artifact.binarySha256)) {
@@ -384,7 +432,7 @@ export async function validateReleaseArtifacts({
 					`Archive size for ${artifact.platform}: GitHub reports ${releaseAsset.size}, manifest reports ${artifact.archiveBytes}`,
 				);
 			}
-			const bytes = downloaded.get(artifact.archive);
+			const bytes = await downloadReleaseAsset(releaseAsset, { fetchImpl, token, limit: RELEASE_IO_LIMITS.archiveBytes, aggregate });
 			if (bytes.length !== artifact.archiveBytes) {
 				throw new Error(
 					`Downloaded size for ${artifact.platform} is ${bytes.length}; manifest reports ${artifact.archiveBytes}`,
@@ -395,10 +443,15 @@ export async function validateReleaseArtifacts({
 				throw new Error(`Downloaded SHA-256 for ${artifact.platform} is ${digest}; manifest reports ${artifact.archiveSha256}`);
 			}
 			const exactFiles = [`draht-graph/${artifact.binary}`, "draht-graph/README.md", "draht-graph/LICENSE"];
-			const inspected = inspectArchive(bytes, artifact.archive, { wrapper: "draht-graph", binary: artifact.binary, expectedFiles: exactFiles });
+			const inspected = inspectArchive(bytes, artifact.archive, {
+				wrapper: "draht-graph",
+				binary: artifact.binary,
+				expectedFiles: exactFiles,
+				maxExpandedBytes: Math.min(RELEASE_IO_LIMITS.decompressedBytes, artifact.binaryBytes + 16 * 1024 * 1024),
+			});
 			if (inspected.binaryBytes.length !== artifact.binaryBytes || digestBytes(inspected.binaryBytes) !== artifact.binarySha256) throw new Error(`Graph binary payload for ${artifact.platform} does not match manifest size/hash`);
-		}),
-	);
+			await verifyAttestation({ name: artifact.archive, digest, fetchImpl, token, tag, commit });
+	}
 
 	let runtimeManifest;
 	try { runtimeManifest = JSON.parse(downloaded.get("runtime-manifest.json").toString("utf8")); }
@@ -413,25 +466,27 @@ export async function validateReleaseArtifacts({
 		const expectedBinary = artifact.platform === "windows-x64" ? "draht.exe" : "draht";
 		if (artifact.archive !== expectedArchive || artifact.binary !== expectedBinary) throw new Error(`Runtime platform ${artifact.platform} has non-canonical archive/binary names`);
 		if (
-			!Number.isSafeInteger(artifact.archiveBytes) || artifact.archiveBytes <= 0 || artifact.archiveBytes > MAX_RELEASE_ASSET_BYTES ||
-			!Number.isSafeInteger(artifact.binaryBytes) || artifact.binaryBytes <= 0 || artifact.binaryBytes > MAX_RELEASE_ASSET_BYTES
+			!Number.isSafeInteger(artifact.archiveBytes) || artifact.archiveBytes <= 0 || artifact.archiveBytes > RELEASE_IO_LIMITS.archiveBytes ||
+			!Number.isSafeInteger(artifact.binaryBytes) || artifact.binaryBytes <= 0 || artifact.binaryBytes > RELEASE_IO_LIMITS.extractedBinaryBytes
 		) throw new Error(`Runtime platform ${artifact.platform} sizes must be positive bounded integers`);
 		if (!/^[0-9a-f]{64}$/.test(artifact.archiveSha256) || !/^[0-9a-f]{64}$/.test(artifact.binarySha256)) throw new Error(`Runtime platform ${artifact.platform} hashes must be SHA-256`);
-		const bytes = downloaded.get(expectedArchive);
+		const bytes = await downloadReleaseAsset(assets.get(expectedArchive), { fetchImpl, token, limit: RELEASE_IO_LIMITS.archiveBytes, aggregate });
 		if (assets.get(expectedArchive).size !== artifact.archiveBytes || bytes.length !== artifact.archiveBytes || digestBytes(bytes) !== artifact.archiveSha256) throw new Error(`Runtime archive ${expectedArchive} does not match GitHub size or manifest size/hash`);
 		if (!Array.isArray(artifact.files) || artifact.files.length === 0 || artifact.files.some((file) => typeof file !== "string")) throw new Error(`Runtime platform ${artifact.platform} must declare its exact archive members`);
 		const inspected = inspectArchive(bytes, expectedArchive, {
 			wrapper: artifact.platform === "windows-x64" ? null : "draht",
 			binary: expectedBinary,
 			expectedFiles: artifact.files,
+			maxExpandedBytes: Math.min(RELEASE_IO_LIMITS.decompressedBytes, artifact.binaryBytes + 16 * 1024 * 1024),
 		});
 		if (inspected.binaryBytes.length !== artifact.binaryBytes || digestBytes(inspected.binaryBytes) !== artifact.binarySha256) throw new Error(`Runtime binary ${expectedBinary} does not match manifest size/hash`);
+		await verifyAttestation({ name: expectedArchive, digest: digestBytes(bytes), fetchImpl, token, tag, commit });
 	}
 	const graphSums = parseChecksums(downloaded.get("SHA256SUMS"), "SHA256SUMS");
 	const runtimeSums = parseChecksums(downloaded.get("DRAHT-SHA256SUMS"), "DRAHT-SHA256SUMS");
 	for (const artifact of manifest.artifacts) if (graphSums.get(artifact.archive) !== artifact.archiveSha256 || graphSums.get(`${artifact.platform}/${artifact.binary}`) !== artifact.binarySha256) throw new Error(`SHA256SUMS does not cross-check ${artifact.platform}`);
 	for (const artifact of runtimeManifest.artifacts) if (runtimeSums.get(artifact.archive) !== artifact.archiveSha256) throw new Error(`DRAHT-SHA256SUMS does not cross-check ${artifact.platform}`);
-	for (const name of EXPECTED_RELEASE_ASSETS) await verifyAttestation({ name, digest: digestBytes(downloaded.get(name)), fetchImpl, token, tag, commit });
+	for (const name of controlAssets) await verifyAttestation({ name, digest: digestBytes(downloaded.get(name)), fetchImpl, token, tag, commit });
 	return manifest;
 }
 

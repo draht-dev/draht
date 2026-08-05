@@ -407,7 +407,9 @@ function verifiedReleaseFixture(version = "2.0.0") {
 		verifyAttestation: async () => {},
 		fetchImpl: async (url) => {
 			const bytes = url.endsWith("/manifest.json") ? Buffer.from(JSON.stringify(manifest)) : url.endsWith("/runtime-manifest.json") ? Buffer.from(JSON.stringify(runtimeManifest)) : downloads.get(url);
-			return bytes ? { ok: true, arrayBuffer: async () => bytes } : { ok: false, status: 404, statusText: "Not Found" };
+			const asset = assets.find((item) => item.url === url);
+			if (asset && bytes) asset.size = bytes.length;
+			return bytes ? new Response(bytes, { status: 200 }) : new Response(null, { status: 404, statusText: "Not Found" });
 		},
 	};
 }
@@ -513,6 +515,66 @@ test("release artifact validation rejects oversized assets before download", asy
 	assert.equal(downloads, 0);
 });
 
+test("release artifact streaming cancels a missing or lying Content-Length overrun", async () => {
+	const fixture = verifiedReleaseFixture();
+	const manifestAsset = fixture.release.assets.find((asset) => asset.name === "manifest.json");
+	let cancelled = false;
+	const original = fixture.fetchImpl;
+	const fetchImpl = async (url, options) => {
+		if (url !== manifestAsset.url) return original(url, options);
+		let stage = 0;
+		return {
+			ok: true,
+			status: 200,
+			statusText: "OK",
+			headers: new Headers({ "content-length": "1" }),
+			body: { getReader: () => ({
+				async read() {
+					if (stage++ === 0) return { done: false, value: fixture.downloads.get(url) };
+					return { done: false, value: Buffer.from("overrun") };
+				},
+				async cancel() { cancelled = true; },
+			}) },
+		};
+	};
+	await assert.rejects(
+		() => validateReleaseArtifacts({ tag: "v2.0.0", version: "2.0.0", ...fixture, fetchImpl }),
+		/manifest\.json.*(?:declared|byte|size).*limit|limit.*manifest\.json/i,
+	);
+	assert.equal(cancelled, true, "bounded reader must cancel immediately on overrun");
+});
+
+test("release artifact aggregate metadata limit fails before any download", async () => {
+	const fixture = verifiedReleaseFixture();
+	for (const asset of fixture.release.assets) if (asset.name.endsWith(".tar.gz") || asset.name.endsWith(".zip")) asset.size = 110 * 1024 * 1024;
+	let downloads = 0;
+	await assert.rejects(
+		() => validateReleaseArtifacts({
+			tag: "v2.0.0",
+			version: "2.0.0",
+			...fixture,
+			fetchImpl: async () => { downloads++; throw new Error("must not download"); },
+		}),
+		/aggregate.*limit/i,
+	);
+	assert.equal(downloads, 0);
+});
+
+test("release validator rejects compressed expansion beyond the manifest-bound budget", async () => {
+	const fixture = verifiedReleaseFixture();
+	const bytes = makeArchive("draht-graph-linux-x64.tar.gz", {
+		"draht-graph/draht-graph": "graph-binary:linux-x64",
+		"draht-graph/README.md": "readme",
+		"draht-graph/LICENSE": "license",
+		"draht-graph/padding": Buffer.alloc(20 * 1024 * 1024),
+	});
+	replaceGraphArchive(fixture, "linux-x64", bytes);
+	await assert.rejects(
+		() => validateReleaseArtifacts({ tag: "v2.0.0", version: "2.0.0", ...fixture }),
+		/decompress|expanded/i,
+	);
+});
+
 test("release verification rejects stale release and manifest identities", async (t) => {
 	await t.test("release tag", async () => {
 		const fixture = verifiedReleaseFixture();
@@ -546,7 +608,7 @@ test("release verification rejects malformed or unsupported graph manifests", as
 		const fetchFixture = fixture.fetchImpl;
 		fixture.fetchImpl = async (url, options) =>
 			url.endsWith("manifest.json")
-				? { ok: true, arrayBuffer: async () => Buffer.from("{not-json") }
+				? new Response(Buffer.from("{not-json"), { status: 200 })
 				: fetchFixture(url, options);
 		await assert.rejects(
 			validateReleaseArtifacts({ tag: "v2.0.0", version: "2.0.0", ...fixture }),

@@ -1,6 +1,17 @@
 const MANIFEST_SCHEMA_VERSION = 1;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const COMMIT_RE = /^[a-f0-9]{40}$/;
+const GITHUB_WORKFLOW_BUILD_TYPE = "https://actions.github.io/buildtypes/workflow/v1";
+const RELEASE_WORKFLOW_PATH = ".github/workflows/build-binaries.yml";
+
+export const GRAPH_IO_LIMITS = Object.freeze({
+	manifestBytes: 1024 * 1024,
+	checksumBytes: 1024 * 1024,
+	archiveBytes: 128 * 1024 * 1024,
+	binaryBytes: 256 * 1024 * 1024,
+	decompressedBytes: 258 * 1024 * 1024,
+	aggregateDownloadBytes: 130 * 1024 * 1024,
+});
 
 const PLATFORM_METADATA = Object.freeze({
 	"darwin-arm64": { goos: "darwin", goarch: "arm64", archive: "draht-graph-darwin-arm64.tar.gz", binary: "draht-graph" },
@@ -38,6 +49,8 @@ export function validateGraphManifest(manifest, { version, tag, platform, commit
 	for (const field of ["archiveBytes", "binaryBytes"]) {
 		if (!Number.isSafeInteger(entry[field]) || entry[field] <= 0) invalid(`${platform} ${field} must be a positive integer`);
 	}
+	if (entry.archiveBytes > GRAPH_IO_LIMITS.archiveBytes) invalid(`${platform} archiveBytes exceeds the archive size limit`);
+	if (entry.binaryBytes > GRAPH_IO_LIMITS.binaryBytes) invalid(`${platform} binaryBytes exceeds the extracted binary size limit`);
 	return entry;
 }
 
@@ -53,23 +66,32 @@ export function validateGraphChecksums(text, entry, platform) {
 	if (sums.get(`${platform}/${entry.binary}`) !== entry.binarySha256) throw new Error(`SHA256SUMS is not bound to ${platform}/${entry.binary}`);
 }
 
-export function validateGraphAttestation(output, { archive, digest, repo, commit }) {
+export function validateGraphAttestation(output, { archive, digest, repo, commit, tag }) {
+	const repository = `https://github.com/${repo}`;
+	const workflowRef = `refs/tags/${tag}`;
 	let records;
 	try { records = JSON.parse(output); } catch { throw new Error("gh attestation output is not JSON"); }
 	if (!Array.isArray(records)) records = [records];
 	for (const record of records) {
 		const extensions = record?.verificationResult?.signature?.certificate?.extensions;
-		if (extensions?.sourceRepositoryURI !== `https://github.com/${repo}` || extensions?.sourceRepositoryDigest !== commit || extensions?.runnerEnvironment !== "github-hosted") continue;
+		if (extensions?.sourceRepositoryURI !== repository || extensions?.sourceRepositoryDigest !== commit || extensions?.runnerEnvironment !== "github-hosted") continue;
 		const envelope = record?.attestation?.bundle?.dsseEnvelope;
 		if (envelope?.payloadType !== "application/vnd.in-toto+json" || typeof envelope.payload !== "string") continue;
 		let statement;
 		try { statement = JSON.parse(Buffer.from(envelope.payload, "base64").toString("utf8")); } catch { continue; }
-		if (!statement || !Array.isArray(statement.subject)) continue;
+		if (statement?._type !== "https://in-toto.io/Statement/v1" || statement?.predicateType !== "https://slsa.dev/provenance/v1" || !Array.isArray(statement.subject)) continue;
 		const subject = statement.subject.find((item) => item?.name === archive && item?.digest?.sha256 === digest);
-		const dependencies = statement?.predicate?.buildDefinition?.resolvedDependencies;
+		const buildDefinition = statement?.predicate?.buildDefinition;
+		const workflow = buildDefinition?.externalParameters?.workflow;
+		const dependencies = buildDefinition?.resolvedDependencies;
 		const source = Array.isArray(dependencies) && dependencies.some((item) =>
-			item?.uri === `git+https://github.com/${repo}` && item?.digest?.gitCommit === commit);
-		if (subject && source) return;
+			item?.uri === `git+https://github.com/${repo}@${workflowRef}` && item?.digest?.gitCommit === commit);
+		const expectedWorkflow = buildDefinition?.buildType === GITHUB_WORKFLOW_BUILD_TYPE
+			&& workflow?.repository === repository
+			&& workflow?.path === RELEASE_WORKFLOW_PATH
+			&& workflow?.ref === workflowRef
+			&& statement?.predicate?.runDetails?.builder?.id === `${repository}/${RELEASE_WORKFLOW_PATH}@${workflowRef}`;
+		if (subject && source && expectedWorkflow) return;
 	}
 	throw new Error(`gh provenance attestation is not structurally bound to ${archive}, ${repo}, and ${commit}`);
 }

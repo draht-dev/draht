@@ -49,6 +49,8 @@ for (const implementation of IMPLEMENTATIONS) {
 		["binary", (m) => { m.artifacts[0].binary = "wrong"; }],
 		["archive hash metadata", (m) => { m.artifacts[0].archiveSha256 = "not-a-hash"; }],
 		["binary size metadata", (m) => { m.artifacts[0].binaryBytes = 0; }],
+		["archive size limit", (m) => { m.artifacts[0].archiveBytes = 129 * 1024 * 1024; }],
+		["binary size limit", (m) => { m.artifacts[0].binaryBytes = 257 * 1024 * 1024; }],
 	]) {
 		test(`${implementation} rejects manifest ${label} mismatch before download`, async () => {
 			const { validateGraphManifest } = await import(`../packages/${implementation}/graph-manifest.mjs`);
@@ -61,20 +63,40 @@ for (const implementation of IMPLEMENTATIONS) {
 		});
 	}
 
-	test(`${implementation} validates real gh verification JSON and checksum bindings`, async () => {
+	test(`${implementation} validates genuine attest-build-provenance v2.4.0 gh JSON and checksum bindings`, async () => {
 		const { validateGraphAttestation, validateGraphChecksums } = await import(`../packages/${implementation}/graph-manifest.mjs`);
 		const manifest = validManifest();
 		const entry = manifest.artifacts[0];
+		const tag = manifest.tag;
+		const workflowRef = `refs/tags/${tag}`;
 		const statement = {
+			_type: "https://in-toto.io/Statement/v1",
+			predicateType: "https://slsa.dev/provenance/v1",
 			subject: [{ name: entry.archive, digest: { sha256: entry.archiveSha256 } }],
-			predicate: { buildDefinition: { resolvedDependencies: [{ uri: "git+https://github.com/draht-dev/draht", digest: { gitCommit: manifest.gitCommit } }] } },
+			predicate: {
+				buildDefinition: {
+					buildType: "https://actions.github.io/buildtypes/workflow/v1",
+					externalParameters: { workflow: { repository: "https://github.com/draht-dev/draht", path: ".github/workflows/build-binaries.yml", ref: workflowRef } },
+					resolvedDependencies: [{ uri: `git+https://github.com/draht-dev/draht@${workflowRef}`, digest: { gitCommit: manifest.gitCommit } }],
+				},
+				runDetails: { builder: { id: `https://github.com/draht-dev/draht/.github/workflows/build-binaries.yml@${workflowRef}` } },
+			},
 		};
-		const realGhShape = JSON.stringify([{ attestation: { bundle: { dsseEnvelope: {
+		const ghRecord = (value) => ({ attestation: { bundle: { dsseEnvelope: {
 			payloadType: "application/vnd.in-toto+json",
-			payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
-		} } }, verificationResult: { signature: { certificate: { extensions: { sourceRepositoryURI: "https://github.com/draht-dev/draht", sourceRepositoryDigest: manifest.gitCommit, runnerEnvironment: "github-hosted" } } } } }]);
-		const constraints = { archive: entry.archive, digest: entry.archiveSha256, repo: "draht-dev/draht", commit: manifest.gitCommit };
-		assert.doesNotThrow(() => validateGraphAttestation(realGhShape, constraints));
+			payload: Buffer.from(JSON.stringify(value)).toString("base64"),
+		} } }, verificationResult: { signature: { certificate: { extensions: { sourceRepositoryURI: "https://github.com/draht-dev/draht", sourceRepositoryDigest: manifest.gitCommit, runnerEnvironment: "github-hosted" } } } } });
+		const constraints = { archive: entry.archive, digest: entry.archiveSha256, repo: "draht-dev/draht", commit: manifest.gitCommit, tag };
+		assert.doesNotThrow(() => validateGraphAttestation(JSON.stringify([ghRecord(statement)]), constraints));
+		for (const mutate of [
+			(value) => { value._type = "https://in-toto.io/Statement/v0.1"; },
+			(value) => { value.predicateType = "https://example.test/provenance"; },
+			(value) => { value.predicate.buildDefinition.externalParameters.workflow.path = ".github/workflows/untrusted.yml"; },
+		]) {
+			const invalid = structuredClone(statement);
+			mutate(invalid);
+			assert.throws(() => validateGraphAttestation(JSON.stringify([ghRecord(invalid)]), constraints), /structurally bound/i);
+		}
 		assert.throws(() => validateGraphAttestation(JSON.stringify([{ verificationResult: { statement } }]), constraints), /structurally bound/i);
 		assert.doesNotThrow(() => validateGraphChecksums(`${entry.archiveSha256}  ${entry.archive}\n${entry.binarySha256}  linux-x64/${entry.binary}\n`, entry, "linux-x64"));
 		assert.throws(() => validateGraphChecksums(`${entry.archiveSha256}  ../${entry.archive}\n${entry.binarySha256}  linux-x64/${entry.binary}\n`, entry, "linux-x64"), /not bound|invalid/i);
@@ -128,17 +150,47 @@ for (const implementation of IMPLEMENTATIONS) {
 		writeFileSync(join(fixture, "SHA256SUMS"), `${manifest.artifacts[0].archiveSha256}  ${manifest.artifacts[0].archive}\n${manifest.artifacts[0].binarySha256}  linux-x64/draht-graph\n`);
 		const preload = join(fixture, "mock-fetch.mjs");
 		writeFileSync(preload, `
-			import { readFileSync } from "node:fs";
+			import { readFileSync, writeFileSync } from "node:fs";
 			globalThis.fetch = async (url) => {
 				const value = String(url);
 				const file = value.endsWith("/manifest.json") ? process.env.DRAHT_TEST_MANIFEST : value.endsWith("/SHA256SUMS") ? process.env.DRAHT_TEST_SUMS : process.env.DRAHT_TEST_ARCHIVE;
-				return new Response(readFileSync(file), { status: 200 });
+				const bytes = readFileSync(file);
+				if (process.env.DRAHT_TEST_OVERRUN && file === process.env.DRAHT_TEST_ARCHIVE) {
+					let stage = 0;
+					return {
+						ok: true,
+						status: 200,
+						statusText: "OK",
+						headers: new Headers(),
+						body: { getReader: () => ({
+							async read() {
+								if (stage++ === 0) return { done: false, value: bytes };
+								return { done: false, value: Buffer.from("overrun") };
+							},
+							async cancel() { writeFileSync(process.env.DRAHT_TEST_CANCELLED, "cancelled"); },
+						}) },
+					};
+				}
+				return new Response(bytes, { status: 200 });
 			};
 		`);
 		const fakeBin = join(fixture, "bin");
 		mkdirSync(fakeBin);
 		const ghLog = join(fixture, "gh.log");
-		const statement = { subject: [{ name: manifest.artifacts[0].archive, digest: { sha256: manifest.artifacts[0].archiveSha256 } }], predicate: { buildDefinition: { resolvedDependencies: [{ uri: "git+https://github.com/draht-dev/draht", digest: { gitCommit: manifest.gitCommit } }] } } };
+		const workflowRef = `refs/tags/${manifest.tag}`;
+		const statement = {
+			_type: "https://in-toto.io/Statement/v1",
+			predicateType: "https://slsa.dev/provenance/v1",
+			subject: [{ name: manifest.artifacts[0].archive, digest: { sha256: manifest.artifacts[0].archiveSha256 } }],
+			predicate: {
+				buildDefinition: {
+					buildType: "https://actions.github.io/buildtypes/workflow/v1",
+					externalParameters: { workflow: { repository: "https://github.com/draht-dev/draht", path: ".github/workflows/build-binaries.yml", ref: workflowRef } },
+					resolvedDependencies: [{ uri: `git+https://github.com/draht-dev/draht@${workflowRef}`, digest: { gitCommit: manifest.gitCommit } }],
+				},
+				runDetails: { builder: { id: `https://github.com/draht-dev/draht/.github/workflows/build-binaries.yml@${workflowRef}` } },
+			},
+		};
 		const payload = Buffer.from(JSON.stringify(statement)).toString("base64");
 		const gh = join(fakeBin, process.platform === "win32" ? "gh.cmd" : "gh");
 		writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$DRAHT_TEST_GH_LOG"\ncase "$2" in\nrepos/*/git/ref/tags/*) if [ -n "$DRAHT_TEST_LIGHTWEIGHT" ]; then printf '%s\\n' '{"object":{"type":"commit","sha":"${manifest.gitCommit}"}}'; else printf '%s\\n' '{"object":{"type":"tag","sha":"${"d".repeat(40)}"}}'; fi;;\nrepos/*/git/tags/*) printf '%s\\n' '{"object":{"type":"commit","sha":"${manifest.gitCommit}"}}';;\nesac\nif [ "$1" = attestation ]; then printf '%s\\n' '${JSON.stringify([{ attestation: { bundle: { dsseEnvelope: { payloadType: "application/vnd.in-toto+json", payload } } }, verificationResult: { signature: { certificate: { extensions: { sourceRepositoryURI: "https://github.com/draht-dev/draht", sourceRepositoryDigest: manifest.gitCommit, runnerEnvironment: "github-hosted" } } } } }])}'; fi\n`);
@@ -184,5 +236,45 @@ for (const implementation of IMPLEMENTATIONS) {
 		});
 		assert.equal(lightweight.status, 0, lightweight.stderr || lightweight.stdout);
 		assert.equal(readFileSync(target, "utf8"), expected);
+
+		// A missing Content-Length cannot bypass the exact archive bound. The
+		// reader must cancel as soon as the next chunk crosses that bound.
+		writeFileSync(target, tampered);
+		const cancelled = join(fixture, "cancelled");
+		const overrun = spawnSync(process.execPath, ["--import", preload, cli, "install-graph-engine", "--graph-engine-version", "1.2.3", "--force"], {
+			encoding: "utf8",
+			env: { ...process.env, HOME: home, USERPROFILE: home, DRAHT_TEST_MANIFEST: join(fixture, "manifest.json"), DRAHT_TEST_SUMS: join(fixture, "SHA256SUMS"), DRAHT_TEST_ARCHIVE: archive, DRAHT_TEST_GH_LOG: ghLog, DRAHT_TEST_OVERRUN: "1", DRAHT_TEST_CANCELLED: cancelled, PATH: `${fakeBin}${delimiter}${process.env.PATH || ""}` },
+		});
+		assert.equal(overrun.status, 0, overrun.stderr || overrun.stdout);
+		assert.equal(readFileSync(target, "utf8"), tampered);
+		assert.equal(readFileSync(cancelled, "utf8"), "cancelled");
+		assert.match(overrun.stdout, /exceeds.*archive.*limit|archive.*exceeds.*limit/i);
+
+		// A tiny gzip may not expand beyond the manifest-bound decompression
+		// budget before any archive member is written.
+		const expansionDir = join(fixture, "expansion", "draht-graph");
+		mkdirSync(expansionDir, { recursive: true });
+		writeFileSync(join(expansionDir, "draht-graph"), expected);
+		writeFileSync(join(expansionDir, "padding"), Buffer.alloc(3 * 1024 * 1024));
+		const expansionArchive = join(fixture, "expansion.tar.gz");
+		const expansionTar = spawnSync("tar", ["-czf", expansionArchive, "-C", join(fixture, "expansion"), "draht-graph"]);
+		assert.equal(expansionTar.status, 0, expansionTar.stderr?.toString());
+		const expansionBytes = readFileSync(expansionArchive);
+		manifest.artifacts[0].archiveSha256 = createHash("sha256").update(expansionBytes).digest("hex");
+		manifest.artifacts[0].archiveBytes = expansionBytes.length;
+		writeFileSync(join(fixture, "manifest.json"), JSON.stringify(manifest));
+		writeFileSync(join(fixture, "SHA256SUMS"), `${manifest.artifacts[0].archiveSha256}  ${manifest.artifacts[0].archive}\n${manifest.artifacts[0].binarySha256}  linux-x64/draht-graph\n`);
+		const expansionStatement = structuredClone(statement);
+		expansionStatement.subject[0].digest.sha256 = manifest.artifacts[0].archiveSha256;
+		const expansionPayload = Buffer.from(JSON.stringify(expansionStatement)).toString("base64");
+		writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$DRAHT_TEST_GH_LOG"\ncase "$2" in\nrepos/*/git/ref/tags/*) printf '%s\\n' '{"object":{"type":"commit","sha":"${manifest.gitCommit}"}}';;\nesac\nif [ "$1" = attestation ]; then printf '%s\\n' '${JSON.stringify([{ attestation: { bundle: { dsseEnvelope: { payloadType: "application/vnd.in-toto+json", payload: expansionPayload } } }, verificationResult: { signature: { certificate: { extensions: { sourceRepositoryURI: "https://github.com/draht-dev/draht", sourceRepositoryDigest: manifest.gitCommit, runnerEnvironment: "github-hosted" } } } } }])}'; fi\n`);
+		chmodSync(gh, 0o755);
+		const expansion = spawnSync(process.execPath, ["--import", preload, cli, "install-graph-engine", "--graph-engine-version", "1.2.3", "--force"], {
+			encoding: "utf8",
+			env: { ...process.env, HOME: home, USERPROFILE: home, DRAHT_TEST_MANIFEST: join(fixture, "manifest.json"), DRAHT_TEST_SUMS: join(fixture, "SHA256SUMS"), DRAHT_TEST_ARCHIVE: expansionArchive, DRAHT_TEST_GH_LOG: ghLog, PATH: `${fakeBin}${delimiter}${process.env.PATH || ""}` },
+		});
+		assert.equal(expansion.status, 0, expansion.stderr || expansion.stdout);
+		assert.equal(readFileSync(target, "utf8"), tampered);
+		assert.match(expansion.stdout, /decompress|expanded/i);
 	});
 }

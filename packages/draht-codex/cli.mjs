@@ -24,7 +24,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as zlib from "node:zlib";
-import { validateGraphAttestation, validateGraphChecksums, validateGraphManifest } from "./graph-manifest.mjs";
+import { GRAPH_IO_LIMITS, validateGraphAttestation, validateGraphChecksums, validateGraphManifest } from "./graph-manifest.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = __dirname;
@@ -465,8 +465,14 @@ function graphManifestNameOk(name) {
 // scripts/build-graph-binaries.sh actually produces (regular files +
 // directories, short names, no pax/long-name extensions). Rejects
 // path-traversal entries (zip-slip).
-function extractTarGz(archivePath, destDir) {
-	const tar = zlib.gunzipSync(fs.readFileSync(archivePath));
+function extractTarGz(archivePath, destDir, maxDecompressedBytes) {
+	let tar;
+	try {
+		tar = zlib.gunzipSync(fs.readFileSync(archivePath), { maxOutputLength: maxDecompressedBytes });
+	} catch (error) {
+		if (error?.code === "ERR_BUFFER_TOO_LARGE") throw new Error(`graph archive decompressed data exceeds ${maxDecompressedBytes} bytes`);
+		throw error;
+	}
 	const readStr = (start, len) => {
 		const slice = tar.subarray(start, start + len);
 		const nul = slice.indexOf(0);
@@ -518,16 +524,36 @@ function extractZip(archivePath, destDir) {
 	throw new Error("no working zip extractor found (tried unzip, tar, and PowerShell Expand-Archive)");
 }
 
-async function fetchJson(url, timeoutMs) {
+async function fetchBuffer(url, timeoutMs, { limit, label, aggregate }) {
 	const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
 	if (!res.ok) throw new Error(`GET ${url}: ${res.status} ${res.statusText}`);
-	return res.json();
+	const contentLength = Number(res.headers?.get?.("content-length"));
+	if (Number.isFinite(contentLength) && contentLength > limit) throw new Error(`${label} Content-Length exceeds ${limit} byte limit`);
+	if (!res.body?.getReader) throw new Error(`${label} response body is not a readable stream`);
+	const reader = res.body.getReader();
+	const chunks = [];
+	let bytes = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			bytes += value.byteLength;
+			if (bytes > limit) throw new Error(`${label} exceeds ${limit} byte limit`);
+			if (aggregate.bytes + bytes > GRAPH_IO_LIMITS.aggregateDownloadBytes) throw new Error("graph release downloads exceed aggregate byte limit");
+			chunks.push(Buffer.from(value));
+		}
+	} catch (error) {
+		await reader.cancel(error).catch(() => {});
+		throw error;
+	}
+	aggregate.bytes += bytes;
+	return Buffer.concat(chunks, bytes);
 }
 
-async function fetchBuffer(url, timeoutMs) {
-	const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-	if (!res.ok) throw new Error(`GET ${url}: ${res.status} ${res.statusText}`);
-	return Buffer.from(await res.arrayBuffer());
+async function fetchJson(url, timeoutMs, aggregate) {
+	const bytes = await fetchBuffer(url, timeoutMs, { limit: GRAPH_IO_LIMITS.manifestBytes, label: "graph manifest", aggregate });
+	try { return JSON.parse(bytes.toString("utf8")); }
+	catch (error) { throw new Error(`graph manifest is not valid JSON: ${error.message}`, { cause: error }); }
 }
 
 function runGh(args) {
@@ -546,9 +572,9 @@ function resolveGraphReleaseCommit(tag) {
 	return object.sha;
 }
 
-function verifyGraphAttestation(archivePath, entry, commit) {
+function verifyGraphAttestation(archivePath, entry, commit, tag) {
 	const output = runGh(["attestation", "verify", archivePath, "--repo", GRAPH_RELEASE_REPO, "--predicate-type", "https://slsa.dev/provenance/v1", "--deny-self-hosted-runners", "--format", "json"]);
-	validateGraphAttestation(output, { archive: entry.archive, digest: entry.archiveSha256, repo: GRAPH_RELEASE_REPO, commit });
+	validateGraphAttestation(output, { archive: entry.archive, digest: entry.archiveSha256, repo: GRAPH_RELEASE_REPO, commit, tag });
 }
 
 // Atomically installs `srcPath` (an already-verified local binary) as the
@@ -649,16 +675,17 @@ async function ensureGraphEngine(flags) {
 		const tag = version.startsWith("v") ? version : `v${version}`;
 		const base = `https://github.com/${GRAPH_RELEASE_REPO}/releases/download/${tag}`;
 		const releaseCommit = resolveGraphReleaseCommit(tag);
-		const manifest = await fetchJson(`${base}/manifest.json`, 15_000);
+		const aggregate = { bytes: 0 };
+		const manifest = await fetchJson(`${base}/manifest.json`, 15_000, aggregate);
 		const entry = validateGraphManifest(manifest, { version, tag, platform, commit: releaseCommit });
 		if (!graphManifestNameOk(entry.archive) || !graphManifestNameOk(entry.binary)) {
 			log(`release ${tag}'s manifest.json has an invalid archive/binary name for ${platform} — refusing to use it. draht will use the built-in JS engine.`);
 			return;
 		}
-		const checksums = (await fetchBuffer(`${base}/SHA256SUMS`, 15_000)).toString("utf8");
+		const checksums = (await fetchBuffer(`${base}/SHA256SUMS`, 15_000, { limit: GRAPH_IO_LIMITS.checksumBytes, label: "graph checksum file", aggregate })).toString("utf8");
 		validateGraphChecksums(checksums, entry, platform);
 
-		const archiveBuf = await fetchBuffer(`${base}/${entry.archive}`, 120_000);
+		const archiveBuf = await fetchBuffer(`${base}/${entry.archive}`, 120_000, { limit: entry.archiveBytes, label: "graph archive", aggregate });
 		if (sha256(archiveBuf) !== entry.archiveSha256 || archiveBuf.length !== entry.archiveBytes) {
 			log(`graph engine download failed (checksum mismatch on ${entry.archive}) — draht will use the built-in JS engine.`);
 			return;
@@ -668,14 +695,16 @@ async function ensureGraphEngine(flags) {
 		try {
 			const archivePath = path.join(workDir, entry.archive);
 			fs.writeFileSync(archivePath, archiveBuf);
-			verifyGraphAttestation(archivePath, entry, releaseCommit);
+			verifyGraphAttestation(archivePath, entry, releaseCommit, tag);
 			const extractDir = path.join(workDir, "extracted");
 			if (entry.archive.endsWith(".zip")) extractZip(archivePath, extractDir);
-			else extractTarGz(archivePath, extractDir);
+			else extractTarGz(archivePath, extractDir, Math.min(GRAPH_IO_LIMITS.decompressedBytes, entry.binaryBytes + 2 * 1024 * 1024));
 
 			// Both archive formats wrap a draht-graph/ directory — see
 			// scripts/build-graph-binaries.sh.
 			const binPath = path.join(extractDir, "draht-graph", entry.binary);
+			const binarySize = fs.statSync(binPath).size;
+			if (binarySize > entry.binaryBytes || binarySize > GRAPH_IO_LIMITS.binaryBytes) throw new Error(`extracted graph binary exceeds ${entry.binaryBytes} byte limit`);
 			const binBuf = fs.readFileSync(binPath);
 			if (sha256(binBuf) !== entry.binarySha256 || binBuf.length !== entry.binaryBytes) {
 				log(`graph engine download failed (checksum mismatch on extracted ${entry.binary}) — draht will use the built-in JS engine.`);

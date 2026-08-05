@@ -25,6 +25,7 @@ function fixture({ unsafe = false, withGh = true } = {}) {
 	mkdirSync(payload, { recursive: true });
 	writeFileSync(join(payload, "draht"), "#!/bin/sh\nprintf 'draht fixture\\n'\n");
 	chmodSync(join(payload, "draht"), 0o755);
+	const binaryBytes = readFileSync(join(payload, "draht"));
 	const archiveName = "draht-linux-x64.tar.gz";
 	const archive = join(release, archiveName);
 	const tarArgs = unsafe
@@ -44,6 +45,8 @@ function fixture({ unsafe = false, withGh = true } = {}) {
 			archiveSha256: sha256(archiveBytes),
 			archiveBytes: archiveBytes.length,
 			binary: "draht",
+			binarySha256: sha256(binaryBytes),
+			binaryBytes: binaryBytes.length,
 		}],
 	}));
 	writeFileSync(join(release, "DRAHT-SHA256SUMS"), `${sha256(archiveBytes)}  ${archiveName}\n`);

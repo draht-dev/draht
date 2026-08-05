@@ -93,11 +93,15 @@ jq -e --arg version "$VERSION" --arg tag "$TAG" --arg platform "$PLATFORM" --arg
   ([.artifacts[] | select(.platform == $platform)][0] |
     .archive == $archive and .binary == $binary and
     (.archiveBytes | type == "number" and . > 0 and floor == .) and
-    (.archiveSha256 | type == "string" and test("^[0-9a-f]{64}$")))
+    (.archiveSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.binaryBytes | type == "number" and . > 0 and floor == .) and
+    (.binarySha256 | type == "string" and test("^[0-9a-f]{64}$")))
 ' "$MANIFEST" >/dev/null || error "runtime-manifest.json does not bind $TAG, $PLATFORM and $ARCHIVE."
 
 manifest_size="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .archiveBytes' "$MANIFEST")"
 manifest_hash="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .archiveSha256' "$MANIFEST")"
+manifest_binary_size="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .binaryBytes' "$MANIFEST")"
+manifest_binary_hash="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .binarySha256' "$MANIFEST")"
 checksum_hash="$(awk -v name="$ARCHIVE" '$2 == name { print $1 }' "$CHECKSUMS")"
 printf '%s' "$checksum_hash" | grep -Eq '^[0-9a-f]{64}$' || error "DRAHT-SHA256SUMS has no unique valid checksum for $ARCHIVE."
 [ "$(awk -v name="$ARCHIVE" '$2 == name { n++ } END { print n+0 }' "$CHECKSUMS")" = 1 ] || error "DRAHT-SHA256SUMS has duplicate entries for $ARCHIVE."
@@ -135,6 +139,10 @@ else
 fi
 if find "$EXTRACT_DIR" -type l -print -quit | grep -q .; then error "Unsafe archive link entry."; fi
 [ -f "$PAYLOAD_DIR/$BINARY_NAME" ] || error "Verified archive does not contain $BINARY_NAME at the expected path."
+actual_binary_size="$(wc -c < "$PAYLOAD_DIR/$BINARY_NAME" | tr -d '[:space:]')"
+[ "$actual_binary_size" = "$manifest_binary_size" ] || error "Extracted binary size does not match runtime-manifest.json."
+actual_binary_hash="$(sha256_file "$PAYLOAD_DIR/$BINARY_NAME")"
+[ "$actual_binary_hash" = "$manifest_binary_hash" ] || error "Extracted binary SHA-256 does not match runtime-manifest.json."
 chmod +x "$PAYLOAD_DIR/$BINARY_NAME"
 
 mkdir -p "$INSTALL_DIR/releases" "$BIN_DIR"

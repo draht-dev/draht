@@ -132,6 +132,13 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		return this.enqueue(async () => {
 			this.state.requireLane(newRecord.lane);
 			this.state.validateUnusedId(newRecord.id);
+			const currentOpenOperationId = this.state.findOpenOperations(newRecord.lane, { limit: 1 })[0]?.id;
+			if (newRecord.type === "operation_started" && currentOpenOperationId !== undefined) {
+				throw new SessionError(
+					"storage",
+					`Lane ${newRecord.lane} already has an open operation ${currentOpenOperationId}`,
+				);
+			}
 			const record = {
 				...structuredClone(newRecord),
 				seq: this.state.nextSequence,

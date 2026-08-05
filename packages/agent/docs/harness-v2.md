@@ -1619,8 +1619,8 @@ Contract rules, all backends:
 - `Session` and the harness provision ids with `session.idGenerator`; storage enforces per-session uniqueness at append.
 - Every durable payload must be JSON-serializable. `Session` validates before dispatch so Memory, JSONL, and SQLite accept the same values; Memory does not retain values JSONL would reject.
 - Reads return immutable data.
-- `findOpenOperations` is a required recovery projection: Memory maintains it with its record state, JSONL derives it while replaying the file, and SQLite answers it with indexed records. It returns unfinished starts newest first and must expose a second result so recovery can reject multiple open operations.
-- No conditional writes exist. Single-writer plus the lane mutation line make compare-and-set unnecessary; storage stays plain appends and pointer/fact updates.
+- `findOpenOperations` is a required recovery projection: Memory maintains it with its record state, JSONL derives it while replaying the file, and SQLite answers it from the lane's current open-operation projection. It returns unfinished starts newest first and must expose a second result when a replayed/imported backend observes multiple open operations so recovery can reject corruption. Backends with conditional current-state projections may reject a second `operation_started` append instead of creating that corruption through their normal write API.
+- No general conditional writes exist. Single-writer plus the lane mutation line make compare-and-set unnecessary for normal appends and pointer/fact updates. The lane open-operation projection is the narrow exception: starting an operation conditionally sets the lane's open operation from `null` to the run id, and a failed update means the lane is already busy.
 - One writer per session, enforced by the serving layer; SQLite additionally rejects a second writer itself. Per session, not per backend: one SQLite database hosts many sessions, each with its own single writer.
 - Any write failure faults the harness (section 4). The store is left a valid prefix.
 - Global-fact and lane-move history is kept, never rewritten: latest by `seq` wins. History is the cheaper implementation (insert, never update), and lane-move history is a reflog if anyone ever wants one.
@@ -1681,7 +1681,7 @@ Greenfield schema; existing WIP databases are discarded. The engine design is th
 session_sequences (session_id, next_seq)                    -- atomic seq allocator
 entries        (session_id, seq, id, parent_id, type, timestamp, payload)
 records        (session_id, seq, id, lane, run_id, type, op_kind, timestamp, payload)
-lanes          (session_id, lane, leaf_id)          -- current pointer per lane
+lanes          (session_id, lane, leaf_id, open_operation_id) -- current pointer + open op projection
 lane_moves     (session_id, seq, lane, leaf_id)     -- history; getLog parity
 facts          (session_id, seq, kind, key, value)  -- name, labels; latest by seq
 branch_entries (session_id, branch_id, entry_id, entry_seq, entry_type, custom_type)
@@ -1690,7 +1690,6 @@ writer_leases (session_id, owner_id, fence, expires_at_ms)  -- writer claim
 
 -- indexes
 records:        (session_id, lane, type, seq), (session_id, lane, type, op_kind, seq)
-                (session_id, lane, run_id, type)
 branch_entries: (session_id, branch_id, entry_type, entry_seq)
                 (session_id, entry_id)              -- reverse lookup: entry → branches
 ```
@@ -3016,8 +3015,8 @@ These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module ins
 
 - [x] **R0 — recovery-query contract.** Dependencies: none.
   - Primary files: `packages/agent/src/harness/session/types.ts`, `session.ts`, `memory.ts`, SQLite record storage/repository files, backend conformance, and focused recovery-query tests.
-  - Add `RecordQuery.operationKind` and `findOpenOperations(lane, { limit })` exactly as specified in sections 7, 12, and 13. Memory maintains the projection, JSONL will derive it during replay, and SQLite answers it with indexed records.
-  - Prove that zero/one open operations are distinguishable from multiple-open-operation corruption, and that the latest run-kind start is an indexed query. Add the SQLite `(session_id, lane, run_id, type)` index.
+  - Add `RecordQuery.operationKind` and `findOpenOperations(lane, { limit })` exactly as specified in sections 7, 12, and 13. Memory maintains the projection, JSONL will derive it during replay, and SQLite answers it from the lane open-operation projection.
+  - Prove that zero/one open operations are distinguishable, that normal writes cannot start a second operation on a busy lane, and that the latest run-kind start is an indexed query. Add the lane open-operation projection.
   - Acceptance: memory and SQLite have identical query behavior, invalid query combinations reject, and no restore algorithm needs a full historical scan.
 
 - [x] **R1 — pure record-log validity.** Dependencies: R0.

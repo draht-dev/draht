@@ -416,18 +416,27 @@ export function createSessionBackendConformance(
 			const session = await repository.create({ id: "session" });
 			await session.appendRecord(operationStarted("run-old", { lane: "main", kind: "run" }));
 			await session.appendRecord({
-				type: "operation_started",
-				id: "compaction",
+				type: "operation_finished",
+				id: "run-old-finished",
 				lane: "main",
-				sourceLeafId: null,
-				intent: { kind: "compaction", resultEntryId: "compaction-result" },
+				runId: "run-old",
+				outcome: "completed",
 			});
+			await session.appendRecord(operationStarted("compaction", { lane: "main", kind: "compaction" }));
 			await session.appendRecord({
-				type: "operation_started",
-				id: "navigation",
+				type: "operation_finished",
+				id: "compaction-finished",
 				lane: "main",
-				sourceLeafId: null,
-				intent: { kind: "navigation", targetId: null, summarize: false },
+				runId: "compaction",
+				outcome: "completed",
+			});
+			await session.appendRecord(operationStarted("navigation", { lane: "main", kind: "navigation" }));
+			await session.appendRecord({
+				type: "operation_finished",
+				id: "navigation-finished",
+				lane: "main",
+				runId: "navigation",
+				outcome: "completed",
 			});
 			await session.appendRecord(operationStarted("run-new", { lane: "main", kind: "run" }));
 
@@ -471,72 +480,56 @@ export function createSessionBackendConformance(
 			);
 		}),
 
-		createCase(
-			factory,
-			"records and log",
-			"distinguishes zero one and multiple open operations",
-			async (repository) => {
-				const session = await repository.create({ id: "session" });
-				deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), []);
+		createCase(factory, "records and log", "tracks and enforces one open operation per lane", async (repository) => {
+			const session = await repository.create({ id: "session" });
+			deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), []);
 
-				const first = await session.appendRecord(operationStarted("first", { lane: "main", kind: "run" }));
-				deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), [first]);
+			const first = await session.appendRecord(operationStarted("first", { lane: "main", kind: "run" }));
+			deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), [first]);
+			await rejectsWithCode(
+				session.appendRecord(operationStarted("second", { lane: "main", kind: "run" })),
+				"storage",
+			);
+			deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), [first]);
 
-				const second = await session.appendRecord(operationStarted("second", { lane: "main", kind: "run" }));
-				deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), [second, first]);
-
-				await session.appendRecord({
-					type: "operation_finished",
-					id: "finish-first",
-					lane: "main",
-					runId: first.id,
-					outcome: "completed",
-				});
-				deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), [second]);
-
-				await session.appendRecord({
-					type: "operation_finished",
-					id: "finish-second",
-					lane: "main",
-					runId: second.id,
-					outcome: "failed",
-				});
-				deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), []);
-			},
-		),
+			await session.appendRecord({
+				type: "operation_finished",
+				id: "finish-first",
+				lane: "main",
+				runId: first.id,
+				outcome: "completed",
+			});
+			deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), []);
+		}),
 
 		createCase(
 			factory,
 			"records and log",
-			"does not let an earlier finish close a later operation start",
+			"does not let an earlier finish close a later start",
 			async (repository) => {
 				const session = await repository.create({ id: "session" });
 				await session.appendRecord({
 					type: "operation_finished",
-					id: "early-finish",
+					id: "finish-before-start",
 					lane: "main",
-					runId: "late-start",
+					runId: "run",
 					outcome: "completed",
 				});
-				const started = await session.appendRecord(operationStarted("late-start", { lane: "main", kind: "run" }));
-
-				deepStrictEqual(await session.findOpenOperations("main"), [started]);
+				const started = await session.appendRecord(operationStarted("run", { lane: "main", kind: "run" }));
+				deepStrictEqual(await session.findOpenOperations("main", { limit: 2 }), [started]);
 			},
 		),
 
-		createCase(factory, "records and log", "scopes open operations by lane kind and limit", async (repository) => {
+		createCase(factory, "records and log", "scopes open operations by lane and limit", async (repository) => {
 			const session = await repository.create({ id: "session" });
 			await session.createLane("thread", null);
 			const mainRun = await session.appendRecord(operationStarted("main-run", { lane: "main", kind: "run" }));
-			const mainCompaction = await session.appendRecord(
-				operationStarted("main-compaction", { lane: "main", kind: "compaction" }),
-			);
 			const threadNavigation = await session.appendRecord(
 				operationStarted("thread-navigation", { lane: "thread", kind: "navigation" }),
 			);
 
-			deepStrictEqual(await session.findOpenOperations("main"), [mainCompaction, mainRun]);
-			deepStrictEqual(await session.findOpenOperations("main", { limit: 1 }), [mainCompaction]);
+			deepStrictEqual(await session.findOpenOperations("main"), [mainRun]);
+			deepStrictEqual(await session.findOpenOperations("main", { limit: 1 }), [mainRun]);
 			deepStrictEqual(await session.findOpenOperations("thread", { limit: 2 }), [threadNavigation]);
 		}),
 

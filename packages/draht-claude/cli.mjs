@@ -401,10 +401,17 @@ function stageMarketplace(marketplaceDir, manifest) {
 	}
 }
 
-function rollbackMarketplace(transaction) {
+function restoreMarketplaceContent(transaction) {
 	removeRecursive(transaction.marketplaceDir);
 	if (transaction.hadPrevious) fs.renameSync(transaction.backupDir, transaction.marketplaceDir);
-	releaseMarketplaceLock(transaction.lock);
+}
+
+function rollbackMarketplace(transaction) {
+	try {
+		restoreMarketplaceContent(transaction);
+	} finally {
+		releaseMarketplaceLock(transaction.lock);
+	}
 }
 
 function commitMarketplace(transaction) {
@@ -459,48 +466,76 @@ function claudePluginState(pluginSpec) {
 	};
 }
 
-function rollbackClaudePlugin(transaction, previousPlugin, pluginSpec) {
+function isClaudeMarketplaceRegistered() {
+	log("Checking whether the marketplace is currently registered...");
+	log("  $ claude plugin marketplace list --json");
+	const result = spawnSync("claude", ["plugin", "marketplace", "list", "--json"], { encoding: "utf8" });
+	if (result.status !== 0) throw new Error(`claude plugin marketplace list failed with exit code ${result.status}`);
+	let entries;
+	try {
+		entries = JSON.parse(result.stdout);
+	} catch {
+		throw new Error("claude plugin marketplace list returned invalid JSON");
+	}
+	if (!Array.isArray(entries)) throw new Error("claude plugin marketplace list returned an unexpected JSON shape");
+	return entries.some((entry) => entry && typeof entry === "object" && entry.name === MARKETPLACE_NAME);
+}
+
+function rollbackClaudePlugin(transaction, previousState, pluginSpec) {
 	const failures = [];
 	let marketplaceRestored = false;
 	try {
-		rollbackMarketplace(transaction);
+		restoreMarketplaceContent(transaction);
 		marketplaceRestored = true;
 	} catch (error) {
 		failures.push(`marketplace restore failed: ${error.message}`);
 	}
-	if (!marketplaceRestored) return failures;
-	const registrationCommand = transaction.hadPrevious
-		? ["plugin", "marketplace", "update", MARKETPLACE_NAME]
-		: ["plugin", "marketplace", "remove", MARKETPLACE_NAME];
-	if (!runClaude(registrationCommand, { allowFail: true })) failures.push("could not restore the previous marketplace registration");
-	let current;
 	try {
-		current = claudePluginState(pluginSpec);
-	} catch (error) {
-		failures.push(`could not inspect plugin state during rollback: ${error.message}`);
-		return failures;
-	}
-	if (current.installed && !runClaude(["plugin", "uninstall", pluginSpec], { allowFail: true })) {
-		failures.push("could not remove the failed replacement plugin");
-		return failures;
-	}
-	if (previousPlugin.installed) {
-		if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) {
-			failures.push("could not reinstall the previously working plugin");
+		if (!marketplaceRestored) return failures;
+		const registrationCommand = previousState.registered
+			? ["plugin", "marketplace", "add", transaction.marketplaceDir]
+			: ["plugin", "marketplace", "remove", MARKETPLACE_NAME];
+		if (!runClaude(registrationCommand, { allowFail: true })) failures.push("could not restore the previous marketplace registration");
+		let current;
+		try {
+			current = claudePluginState(pluginSpec);
+		} catch (error) {
+			failures.push(`could not inspect plugin state during rollback: ${error.message}`);
 			return failures;
 		}
-		const stateCommand = previousPlugin.enabled ? "enable" : "disable";
-		if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
-	}
-	try {
-		const restored = claudePluginState(pluginSpec);
-		if (restored.installed !== previousPlugin.installed || (restored.installed && restored.enabled !== previousPlugin.enabled)) {
-			failures.push("plugin state did not match the pre-update state after rollback");
+		if (current.installed && !runClaude(["plugin", "uninstall", pluginSpec], { allowFail: true })) {
+			failures.push("could not remove the failed replacement plugin");
+			return failures;
 		}
-	} catch (error) {
-		failures.push(`could not verify plugin state after rollback: ${error.message}`);
+		if (previousState.plugin.installed) {
+			if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) {
+				failures.push("could not reinstall the previously working plugin");
+				return failures;
+			}
+			const stateCommand = previousState.plugin.enabled ? "enable" : "disable";
+			if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
+		}
+		try {
+			const restored = claudePluginState(pluginSpec);
+			if (restored.installed !== previousState.plugin.installed || (restored.installed && restored.enabled !== previousState.plugin.enabled)) {
+				failures.push("plugin state did not match the pre-update state after rollback");
+			}
+		} catch (error) {
+			failures.push(`could not verify plugin state after rollback: ${error.message}`);
+		}
+		try {
+			if (isClaudeMarketplaceRegistered() !== previousState.registered) failures.push("marketplace registration did not match the pre-update state after rollback");
+		} catch (error) {
+			failures.push(`could not verify marketplace registration after rollback: ${error.message}`);
+		}
+		return failures;
+	} finally {
+		try {
+			releaseMarketplaceLock(transaction.lock);
+		} catch (error) {
+			failures.push(`could not release marketplace transaction lock: ${error.message}`);
+		}
 	}
-	return failures;
 }
 
 function setModelInFrontmatter(content, model) {
@@ -884,16 +919,19 @@ async function cmdInstall(flags) {
 
 	// Capture registration state while holding the marketplace transaction lock
 	// and before any destructive CLI command. JSON avoids display-format parsing.
-	let previousPlugin;
+	let previousState;
 	try {
-		previousPlugin = claudePluginState(pluginSpec);
+		previousState = {
+			registered: isClaudeMarketplaceRegistered(),
+			plugin: claudePluginState(pluginSpec),
+		};
 	} catch (error) {
 		try {
 			rollbackMarketplace(marketplaceTransaction);
 		} catch (rollbackError) {
 			err(`rollback failed: marketplace restore failed: ${rollbackError.message}`);
 		}
-		err(`could not determine existing plugin state: ${error.message}`);
+		err(`could not determine existing marketplace and plugin state: ${error.message}`);
 		process.exit(1);
 	}
 
@@ -902,25 +940,25 @@ async function cmdInstall(flags) {
 		if (!runClaude(["plugin", "validate", pluginDir], { allowFail: true })) throw new Error("plugin validation failed");
 
 		log("Registering marketplace with Claude Code...");
-		const registrationCommand = flags.force || marketplaceTransaction.hadPrevious
+		const registrationCommand = previousState.registered
 			? ["plugin", "marketplace", "update", MARKETPLACE_NAME]
 			: ["plugin", "marketplace", "add", marketplaceDir];
 		if (!runClaude(registrationCommand, { allowFail: true })) throw new Error("marketplace registration failed");
 
-		if (previousPlugin.installed) {
+		if (previousState.plugin.installed) {
 			log("Removing previously installed plugin so Claude Code re-copies fresh files...");
 			if (!runClaude(["plugin", "uninstall", pluginSpec], { allowFail: true })) throw new Error("previous plugin removal failed");
 		}
 		log("Installing plugin...");
 		if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) throw new Error("replacement install failed");
 
-		const shouldEnable = previousPlugin.installed ? previousPlugin.enabled : true;
+		const shouldEnable = previousState.plugin.installed ? previousState.plugin.enabled : true;
 		const stateCommand = shouldEnable ? "enable" : "disable";
 		if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) throw new Error(`plugin ${stateCommand} failed`);
 		const installedState = claudePluginState(pluginSpec);
 		if (!installedState.installed || installedState.enabled !== shouldEnable) throw new Error("post-install plugin state verification failed");
 	} catch (error) {
-		const rollbackFailures = rollbackClaudePlugin(marketplaceTransaction, previousPlugin, pluginSpec);
+		const rollbackFailures = rollbackClaudePlugin(marketplaceTransaction, previousState, pluginSpec);
 		err(error.message);
 		err(marketplaceTransaction.hadPrevious ? "rollback: restored the previous marketplace content" : "rollback: removed the failed marketplace content");
 		for (const failure of rollbackFailures) err(`rollback failed: ${failure}`);

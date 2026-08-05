@@ -23,6 +23,7 @@ const IMPLEMENTATIONS = {
 		binary: "claude",
 		manifestDir: ".claude-plugin",
 		list: "plugin list --json",
+		marketplaceList: "plugin marketplace list --json",
 		installedList: '[{"id":"draht@draht","enabled":true}]',
 		absentList: '[{"id":"not-draht@draht-extra","enabled":true}]',
 		remove: "plugin uninstall draht@draht",
@@ -70,17 +71,25 @@ function fixture(implementation, {
 set -eu
 command="$*"
 printf '%s\\n' "$command" >> "$DRAHT_TEST_COMMAND_LOG"
+if [ "\${DRAHT_TEST_LOG_COMMAND_LOCK:-0}" = 1 ]; then
+  if [ -f "$DRAHT_TEST_LOCK_PATH" ]; then printf 'command-lock:held:%s\\n' "$command" >> "$DRAHT_TEST_COMMAND_LOG"; else printf 'command-lock:missing:%s\\n' "$command" >> "$DRAHT_TEST_COMMAND_LOG"; fi
+fi
 if [ -n "\${DRAHT_TEST_FAIL_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_FAIL_COMMAND" ]; then
   if [ ! -f "$DRAHT_TEST_FAIL_STATE" ]; then
     : > "$DRAHT_TEST_FAIL_STATE"
     exit 42
   fi
 fi
+if [ -n "\${DRAHT_TEST_FAIL_ALWAYS_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_FAIL_ALWAYS_COMMAND" ]; then exit 43; fi
 if [ -n "\${DRAHT_TEST_MARKETPLACE_LIST_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_MARKETPLACE_LIST_COMMAND" ]; then
   if [ "$(cat "$DRAHT_TEST_REGISTRATION_STATE")" = 1 ]; then
-    printf '{"marketplaces":[{"name":"draht","root":"%s"}]}\\n' "$DRAHT_TEST_MARKETPLACE"
+    if [ "$DRAHT_TEST_BINARY" = claude ]; then
+      printf '[{"name":"draht","source":"directory","path":"%s"}]\\n' "$DRAHT_TEST_MARKETPLACE"
+    else
+      printf '{"marketplaces":[{"name":"draht","root":"%s"}]}\\n' "$DRAHT_TEST_MARKETPLACE"
+    fi
   else
-    printf '{"marketplaces":[]}\\n'
+    if [ "$DRAHT_TEST_BINARY" = claude ]; then printf '[]\\n'; else printf '{"marketplaces":[]}\\n'; fi
   fi
   exit 0
 fi
@@ -107,6 +116,7 @@ if [ "\${DRAHT_TEST_NO_MUTATE:-0}" != 1 ]; then
   if [ "$command" = "$DRAHT_TEST_REMOVE_COMMAND" ]; then printf '0' > "$DRAHT_TEST_PLUGIN_STATE"; fi
   if [ "$command" = "$DRAHT_TEST_INSTALL_COMMAND" ]; then printf '1' > "$DRAHT_TEST_PLUGIN_STATE"; fi
   if [ "$command" = "$DRAHT_TEST_MARKETPLACE_ADD_COMMAND" ]; then printf '1' > "$DRAHT_TEST_REGISTRATION_STATE"; fi
+  if [ "$command" = "$DRAHT_TEST_MARKETPLACE_UPDATE_COMMAND" ]; then printf '1' > "$DRAHT_TEST_REGISTRATION_STATE"; fi
   if [ "$command" = "$DRAHT_TEST_MARKETPLACE_REMOVE_COMMAND" ]; then printf '0' > "$DRAHT_TEST_REGISTRATION_STATE"; fi
 fi
 exit 0
@@ -144,6 +154,7 @@ function runEnvironment(f, extraEnv = {}) {
 		USERPROFILE: f.home,
 		PATH: `${f.fakeBin}:${process.env.PATH}`,
 		DRAHT_TEST_COMMAND_LOG: f.log,
+		DRAHT_TEST_BINARY: f.config.binary,
 		DRAHT_TEST_FAIL_STATE: f.failState,
 		DRAHT_TEST_FAIL_COMMAND: "",
 		DRAHT_TEST_LIST_COMMAND: f.config.list,
@@ -154,6 +165,7 @@ function runEnvironment(f, extraEnv = {}) {
 		DRAHT_TEST_REGISTRATION_STATE: f.registrationState,
 		DRAHT_TEST_MARKETPLACE_LIST_COMMAND: f.config.marketplaceList || "",
 		DRAHT_TEST_MARKETPLACE_ADD_COMMAND: f.config.marketplaceAdd,
+		DRAHT_TEST_MARKETPLACE_UPDATE_COMMAND: f.config.marketplaceUpdate || "",
 		DRAHT_TEST_MARKETPLACE_REMOVE_COMMAND: f.config.marketplaceRemove,
 		DRAHT_TEST_LOCK_PATH: `${f.marketplace}.draht-update-lock`,
 		DRAHT_TEST_INSTALL_COMMAND: f.config.install,
@@ -277,7 +289,7 @@ set -eu
 command="$*"
 printf '%s\\n' "$command" >> "$DRAHT_TEST_COMMAND_LOG"
 if [ -n "\${DRAHT_TEST_MARKETPLACE_LIST_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_MARKETPLACE_LIST_COMMAND" ]; then
-  printf '{"marketplaces":[{"name":"draht","root":"%s"}]}\\n' "$DRAHT_TEST_MARKETPLACE"
+  if [ "$DRAHT_TEST_BINARY" = claude ]; then printf '[{"name":"draht"}]\\n'; else printf '{"marketplaces":[{"name":"draht","root":"%s"}]}\\n' "$DRAHT_TEST_MARKETPLACE"; fi
   exit 0
 fi
 if [ "$command" = "$DRAHT_TEST_LIST_COMMAND" ]; then printf '%s\\n' "$DRAHT_TEST_INSTALLED_LIST"; exit 0; fi
@@ -407,7 +419,7 @@ for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 		assert.notEqual(result.status, 0);
 		const log = commands(f);
 		const removeAt = log.indexOf(f.config.remove);
-		const registration = implementation === "draht-claude" ? f.config.marketplaceUpdate : f.config.marketplaceAdd;
+		const registration = f.config.marketplaceAdd;
 		const restoredRegistrationAt = log.lastIndexOf(registration);
 		const rollbackInstallAt = log.indexOf(f.config.install);
 		assert.ok(removeAt >= 0 && restoredRegistrationAt > removeAt && rollbackInstallAt > restoredRegistrationAt, log.join("\n"));
@@ -441,6 +453,71 @@ test("draht-codex fresh-install rollback removes the newly added marketplace reg
 	assert.equal(commands(f).includes(f.config.marketplaceRemove), true);
 	assert.equal(readFileSync(f.registrationState, "utf8"), "0");
 	assert.equal(existsSync(f.marketplace), false);
+});
+
+test("draht-claude registered fresh-path rollback preserves registration and holds the lock through every CLI command", () => {
+	const f = fixture("draht-claude", { marketplaceExists: false, marketplaceRegistered: true, pluginInstalled: false });
+	const result = run(f, {
+		DRAHT_TEST_FAIL_COMMAND: f.config.install,
+		DRAHT_TEST_LOG_COMMAND_LOCK: "1",
+	}, "install");
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /replacement install failed/i);
+	const log = commands(f);
+	assert.ok(log.indexOf(f.config.marketplaceList) >= 0 && log.indexOf(f.config.marketplaceList) < log.indexOf(f.config.marketplaceAdd), log.join("\n"));
+	assert.equal(log.filter((entry) => entry.startsWith("command-lock:missing:")).length, 0, log.join("\n"));
+	assert.ok(log.filter((entry) => entry.startsWith("command-lock:held:")).length >= 6, log.join("\n"));
+	assert.equal(readFileSync(f.registrationState, "utf8"), "1");
+	assert.equal(existsSync(f.marketplace), false);
+	assert.equal(existsSync(`${f.marketplace}.draht-update-lock`), false);
+});
+
+test("draht-claude files present but initially unregistered rollback restores unregistered state", () => {
+	const f = fixture("draht-claude", { marketplaceExists: true, marketplaceRegistered: false, pluginInstalled: false });
+	const result = run(f, { DRAHT_TEST_FAIL_COMMAND: f.config.install });
+	assert.notEqual(result.status, 0);
+	const log = commands(f);
+	assert.ok(log.indexOf(f.config.marketplaceList) >= 0 && log.indexOf(f.config.marketplaceList) < log.indexOf(f.config.marketplaceAdd), log.join("\n"));
+	assert.equal(log.includes(f.config.marketplaceRemove), true);
+	assert.equal(readFileSync(f.registrationState, "utf8"), "0");
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
+});
+
+test("draht-claude fresh install registers an absent marketplace", () => {
+	const f = fixture("draht-claude", { marketplaceExists: false, marketplaceRegistered: false, pluginInstalled: false });
+	const result = run(f, {}, "install");
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	assert.equal(readFileSync(f.registrationState, "utf8"), "1");
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "new");
+});
+
+test("draht-claude marketplace registration inspection failure restores files without host mutation", () => {
+	const f = fixture("draht-claude", { marketplaceExists: true, marketplaceRegistered: false, pluginInstalled: false });
+	const result = run(f, {
+		DRAHT_TEST_FAIL_COMMAND: f.config.marketplaceList,
+		DRAHT_TEST_LOG_COMMAND_LOCK: "1",
+	});
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /marketplace.*list|registration state/i);
+	assert.equal(commands(f).includes(`command-lock:held:${f.config.marketplaceList}`), true);
+	assert.equal(commands(f).some((entry) => entry.startsWith("command-lock:missing:")), false);
+	assert.equal(readFileSync(f.registrationState, "utf8"), "0");
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
+	assert.equal(existsSync(`${f.marketplace}.draht-update-lock`), false);
+});
+
+test("draht-claude reports replacement and registration rollback failures", () => {
+	const f = fixture("draht-claude", { marketplaceExists: true, marketplaceRegistered: true, pluginInstalled: false });
+	const result = run(f, {
+		DRAHT_TEST_FAIL_COMMAND: f.config.install,
+		DRAHT_TEST_FAIL_ALWAYS_COMMAND: f.config.marketplaceAdd,
+		DRAHT_TEST_LOG_COMMAND_LOCK: "1",
+	});
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /replacement install failed/i);
+	assert.match(result.stderr, /rollback failed.*marketplace registration/i);
+	assert.equal(commands(f).some((entry) => entry.startsWith("command-lock:missing:")), false);
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
 });
 
 test("draht-codex files present but unregistered rollback restores unregistered state", () => {

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -231,6 +232,204 @@ func TestHandler_EventsCapReturns503BeforeAnyStreamBytes(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "too many live viewers" {
 		t.Errorf("body = %q, want %q", body, "too many live viewers")
+	}
+}
+
+type gatedResponseWriter struct {
+	mu      sync.Mutex
+	header  http.Header
+	status  int
+	arrived chan<- struct{}
+	release <-chan struct{}
+}
+
+func (w *gatedResponseWriter) Header() http.Header { return w.header }
+func (w *gatedResponseWriter) WriteHeader(status int) {
+	w.mu.Lock()
+	w.status = status
+	w.mu.Unlock()
+	w.arrived <- struct{}{}
+	<-w.release
+}
+func (w *gatedResponseWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *gatedResponseWriter) Flush()                      {}
+func (w *gatedResponseWriter) Status() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.status
+}
+
+func TestHandler_EventsSimultaneousRequestsCannotExceedCap(t *testing.T) {
+	const requests = 12
+	st := newTestState(t)
+	st.maxClients = 1
+	arrived := make(chan struct{}, requests)
+	release := make(chan struct{})
+	writers := make([]*gatedResponseWriter, requests)
+	cancels := make([]context.CancelFunc, requests)
+	done := make(chan struct{}, requests)
+
+	for i := range requests {
+		writers[i] = &gatedResponseWriter{header: make(http.Header), arrived: arrived, release: release}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancels[i] = cancel
+		req := httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx)
+		go func(w http.ResponseWriter) {
+			st.handleEvents(w, req)
+			done <- struct{}{}
+		}(writers[i])
+	}
+
+	for range requests {
+		select {
+		case <-arrived:
+		case <-time.After(time.Second):
+			t.Fatal("concurrent requests did not all reach admission response")
+		}
+	}
+	close(release)
+
+	accepted := 0
+	for _, w := range writers {
+		if w.Status() == http.StatusOK {
+			accepted++
+		}
+	}
+	if accepted != st.maxClients {
+		t.Errorf("simultaneous accepted clients = %d, want cap %d", accepted, st.maxClients)
+	}
+
+	for _, cancel := range cancels {
+		cancel()
+	}
+	for range requests {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("event handler did not exit after cancellation")
+		}
+	}
+}
+
+type blockingEventWriter struct {
+	header       http.Header
+	eventStarted chan<- struct{}
+	unblock      <-chan struct{}
+	writes       atomic.Int32
+}
+
+func (w *blockingEventWriter) Header() http.Header { return w.header }
+func (w *blockingEventWriter) WriteHeader(int)     {}
+func (w *blockingEventWriter) Flush()              {}
+func (w *blockingEventWriter) Write(p []byte) (int, error) {
+	if w.writes.Add(1) > 1 {
+		select {
+		case w.eventStarted <- struct{}{}:
+		default:
+		}
+		<-w.unblock
+	}
+	return len(p), nil
+}
+
+type observingEventWriter struct {
+	header http.Header
+	event  chan<- struct{}
+	writes atomic.Int32
+}
+
+func (w *observingEventWriter) Header() http.Header { return w.header }
+func (w *observingEventWriter) WriteHeader(int)     {}
+func (w *observingEventWriter) Flush()              {}
+func (w *observingEventWriter) Write(p []byte) (int, error) {
+	if w.writes.Add(1) > 1 && w.event != nil {
+		select {
+		case w.event <- struct{}{}:
+		default:
+		}
+	}
+	return len(p), nil
+}
+
+func TestBroadcast_StalledClientDoesNotBlockOthersOrAdmission(t *testing.T) {
+	st := newTestState(t)
+	st.maxClients = 3
+	stalled := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	delivered := make(chan struct{}, 1)
+	blockedWriter := &blockingEventWriter{header: make(http.Header), eventStarted: stalled, unblock: unblock}
+	fastWriter := &observingEventWriter{header: make(http.Header), event: delivered}
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done := make(chan struct{}, 3)
+	go func() {
+		st.handleEvents(blockedWriter, httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx1))
+		done <- struct{}{}
+	}()
+	go func() {
+		st.handleEvents(fastWriter, httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx2))
+		done <- struct{}{}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		st.clientsMu.Lock()
+		clients := len(st.clients)
+		st.clientsMu.Unlock()
+		if clients == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial event clients were not registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	broadcastDone := make(chan struct{})
+	go func() {
+		st.broadcast("data: changed\n\n")
+		close(broadcastDone)
+	}()
+	select {
+	case <-stalled:
+	case <-time.After(time.Second):
+		t.Fatal("stalled client did not receive broadcast")
+	}
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Error("responsive client was blocked by stalled client")
+	}
+
+	thirdWriter := &observingEventWriter{header: make(http.Header)}
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	go func() {
+		st.handleEvents(thirdWriter, httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx3))
+		done <- struct{}{}
+	}()
+	deadline = time.Now().Add(200 * time.Millisecond)
+	for thirdWriter.writes.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if thirdWriter.writes.Load() == 0 {
+		t.Error("admission was blocked by stalled client")
+	}
+	select {
+	case <-broadcastDone:
+	case <-time.After(200 * time.Millisecond):
+		t.Error("broadcast remained blocked on stalled client")
+	}
+
+	close(unblock)
+	cancel1()
+	cancel2()
+	cancel3()
+	for range 3 {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("event handler did not exit during cleanup")
+		}
 	}
 }
 

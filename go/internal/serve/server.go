@@ -39,9 +39,15 @@ func newParser(name string) (parse.Parser, error) {
 
 // sseClient is one open /events connection.
 type sseClient struct {
-	w  http.ResponseWriter
-	fl http.Flusher
+	w        http.ResponseWriter
+	fl       http.Flusher
+	messages chan string
+	stop     chan struct{}
 }
+
+// sseClientQueueSize bounds the work a slow viewer can retain. A client that
+// falls this far behind is removed rather than delaying every other viewer.
+const sseClientQueueSize = 16
 
 // state is map-serve's shared mutable state: the last built map (for
 // /health) and the set of live SSE clients (for broadcast).
@@ -85,8 +91,21 @@ func (st *state) broadcast(msg string) {
 	st.clientsMu.Lock()
 	defer st.clientsMu.Unlock()
 	for c := range st.clients {
-		fmt.Fprint(c.w, msg)
-		c.fl.Flush()
+		select {
+		case c.messages <- msg:
+		default:
+			delete(st.clients, c)
+			close(c.stop)
+		}
+	}
+}
+
+func (st *state) removeClient(c *sseClient) {
+	st.clientsMu.Lock()
+	defer st.clientsMu.Unlock()
+	if _, ok := st.clients[c]; ok {
+		delete(st.clients, c)
+		close(c.stop)
 	}
 }
 
@@ -218,10 +237,23 @@ func (st *state) handleHealth(w http.ResponseWriter) {
 }
 
 func (st *state) handleEvents(w http.ResponseWriter, r *http.Request) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	c := &sseClient{
+		w:        w,
+		fl:       fl,
+		messages: make(chan string, sseClientQueueSize),
+		stop:     make(chan struct{}),
+	}
+
+	// Admission and registration are one operation: no concurrent request can
+	// observe a free slot that another request has already claimed.
 	st.clientsMu.Lock()
-	tooMany := len(st.clients) >= st.maxClients
-	st.clientsMu.Unlock()
-	if tooMany {
+	if len(st.clients) >= st.maxClients {
+		st.clientsMu.Unlock()
 		// Must be a non-200 BEFORE any event-stream bytes (cjs comment,
 		// preserved): a cleanly closed 200 stream makes EventSource
 		// reconnect forever; a 503 fails the connection permanently.
@@ -230,12 +262,10 @@ func (st *state) handleEvents(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("too many live viewers"))
 		return
 	}
+	st.clients[c] = struct{}{}
+	st.clientsMu.Unlock()
+	defer st.removeClient(c)
 
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
 	w.Header().Set("content-type", "text/event-stream")
 	w.Header().Set("cache-control", "no-cache")
 	w.Header().Set("connection", "keep-alive")
@@ -243,17 +273,17 @@ func (st *state) handleEvents(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "retry: 2000\n\n")
 	fl.Flush()
 
-	c := &sseClient{w: w, fl: fl}
-	st.clientsMu.Lock()
-	st.clients[c] = struct{}{}
-	st.clientsMu.Unlock()
-	defer func() {
-		st.clientsMu.Lock()
-		delete(st.clients, c)
-		st.clientsMu.Unlock()
-	}()
-
-	<-r.Context().Done()
+	for {
+		select {
+		case msg := <-c.messages:
+			fmt.Fprint(c.w, msg)
+			c.fl.Flush()
+		case <-c.stop:
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (st *state) handler() http.Handler {

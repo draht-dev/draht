@@ -6,12 +6,10 @@ package publication
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/draht-dev/draht/go/internal/emit"
@@ -264,13 +262,13 @@ func acquire(ctx context.Context, outDir string) (*fileLock, error) {
 		return nil, fmt.Errorf("publication: open lock: %w", err)
 	}
 	for {
-		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return &fileLock{file: file}, nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+		locked, lockErr := tryLockFile(file)
+		if lockErr != nil {
 			file.Close()
-			return nil, fmt.Errorf("publication: lock: %w", err)
+			return nil, fmt.Errorf("publication: lock: %w", lockErr)
+		}
+		if locked {
+			return &fileLock{file: file}, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -282,6 +280,6 @@ func acquire(ctx context.Context, outDir string) (*fileLock, error) {
 }
 
 func (l *fileLock) release() {
-	_ = syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	_ = unlockFile(l.file)
 	_ = l.file.Close()
 }

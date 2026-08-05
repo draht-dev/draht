@@ -16,6 +16,9 @@
 	"files": [
 		"dist/**/*",
 		"native/win32/prebuilds/**/*.node",
+		"native/win32/src/**/*.c",
+		"native/win32/build.mjs",
+		"native/win32/README.md",
 		"native/darwin/prebuilds/**/*.node",
 		"native/darwin/src/**/*.c",
 		"native/darwin/build.sh",

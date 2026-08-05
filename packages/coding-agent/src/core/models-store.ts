@@ -46,16 +46,15 @@ export class InMemoryCodingAgentModelsStore implements ModelsStore {
 export class FileModelsStore implements ModelsStore {
 	private readonly storage: AuthStorageBackend;
 	private readonly path: string;
-	private readonly readState: ModelsFileReadState | undefined;
+	private readonly readState: ModelsFileReadState;
 
 	constructor(path: string = join(getAgentDir(), "models-store.json")) {
 		this.path = normalizePath(path);
 		this.storage = new FileAuthStorageBackend(this.path);
+		this.readState =
+			sharedModelsFileReadState?.path === this.path ? sharedModelsFileReadState.readState : { data: {} };
 		if (!sharedModelsFileReadState) {
-			this.readState = { data: {} };
 			sharedModelsFileReadState = { path: this.path, readState: this.readState };
-		} else if (sharedModelsFileReadState.path === this.path) {
-			this.readState = sharedModelsFileReadState.readState;
 		}
 	}
 
@@ -118,12 +117,6 @@ export class FileModelsStore implements ModelsStore {
 	}
 
 	async read(providerId: string, options?: ModelsStoreOperationOptions): Promise<ModelsStoreEntry | undefined> {
-		if (!this.readState) {
-			return this.storage.withLockAsync(
-				async (content) => ({ result: structuredClone(this.parse(content)[providerId]) }),
-				options,
-			);
-		}
 		const entry = (await this.readLatest(this.readState, options))[providerId];
 		options?.signal?.throwIfAborted();
 		return entry ? structuredClone(entry) : undefined;
@@ -137,7 +130,7 @@ export class FileModelsStore implements ModelsStore {
 			latest = current;
 			return { result: undefined, next: JSON.stringify(current, null, 2) };
 		}, options);
-		if (this.readState && latest) this.updateReadState(this.readState, latest);
+		if (latest) this.updateReadState(this.readState, latest);
 	}
 
 	async delete(providerId: string, options?: ModelsStoreOperationOptions): Promise<void> {
@@ -148,6 +141,6 @@ export class FileModelsStore implements ModelsStore {
 			latest = current;
 			return { result: undefined, next: JSON.stringify(current, null, 2) };
 		}, options);
-		if (this.readState && latest) this.updateReadState(this.readState, latest);
+		if (latest) this.updateReadState(this.readState, latest);
 	}
 }

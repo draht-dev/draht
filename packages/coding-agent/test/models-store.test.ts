@@ -88,7 +88,7 @@ describe("FileModelsStore", () => {
 		const [firstReload, thirdReload] = await Promise.all([first.read("one"), third.read("one")]);
 		expect(firstReload).toMatchObject({ models: [{ id: "newest-model" }] });
 		expect(thirdReload).toMatchObject({ models: [{ id: "newest-model" }] });
-		expect(lockSpy).toHaveBeenCalledTimes(4);
+		expect(lockSpy).toHaveBeenCalledTimes(3);
 	});
 
 	it("keeps a coalesced reload alive while another reader is still waiting", async () => {

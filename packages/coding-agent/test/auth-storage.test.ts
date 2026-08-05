@@ -81,9 +81,9 @@ describe("AuthStorage", () => {
 		});
 
 		const [anthropic, openai, credentials] = await Promise.all([
-			first.read("anthropic"),
-			second.read("openai"),
-			first.list(),
+			first.read("anthropic", { signal: new AbortController().signal }),
+			second.read("openai", { signal: new AbortController().signal }),
+			first.list({ signal: new AbortController().signal }),
 		]);
 		expect(anthropic).toEqual({ type: "api_key", key: "new" });
 		expect(openai).toEqual({ type: "api_key", key: "openai-key" });
@@ -103,14 +103,40 @@ describe("AuthStorage", () => {
 		await otherFirst.read("other");
 		await otherSecond.read("other");
 		await otherFirst.list();
-		expect(lockSpy).toHaveBeenCalledTimes(4);
+		expect(lockSpy).toHaveBeenCalledTimes(1);
 
 		const third = AuthStorage.create(authJsonPath);
 		writeAuthJson({ anthropic: { type: "api_key", key: "newest" } });
 		const [firstReload, thirdReload] = await Promise.all([first.read("anthropic"), third.read("anthropic")]);
 		expect(firstReload).toEqual({ type: "api_key", key: "newest" });
 		expect(thirdReload).toEqual({ type: "api_key", key: "newest" });
-		expect(lockSpy).toHaveBeenCalledTimes(5);
+		expect(lockSpy).toHaveBeenCalledTimes(2);
+	});
+
+	test("keeps a coalesced reload alive while another credential reader is waiting", async () => {
+		writeAuthJson({ anthropic: { type: "api_key", key: "old" } });
+		const storage = AuthStorage.create(authJsonPath);
+		writeAuthJson({ anthropic: { type: "api_key", key: "new" } });
+		let grantLock: (() => void) | undefined;
+		const lockGranted = new Promise<void>((resolve) => {
+			grantLock = resolve;
+		});
+		const release = vi.fn(async () => {});
+		const lockSpy = vi.spyOn(lockfile, "lock").mockImplementation(async () => {
+			await lockGranted;
+			return release;
+		});
+		const firstController = new AbortController();
+		const secondController = new AbortController();
+		const first = storage.read("anthropic", { signal: firstController.signal });
+		const second = storage.read("anthropic", { signal: secondController.signal });
+
+		firstController.abort();
+		await expect(first).rejects.toMatchObject({ name: "AbortError" });
+		grantLock?.();
+		await expect(second).resolves.toEqual({ type: "api_key", key: "new" });
+		expect(lockSpy).toHaveBeenCalledTimes(1);
+		expect(release).toHaveBeenCalledTimes(1);
 	});
 
 	test("modify persists a credential while preserving unrelated external edits", async () => {

@@ -340,7 +340,7 @@ describe("JSONL v4 persistence", () => {
 		expect((await reopened.getEntry(appendedId))?.seq).toBe(2);
 	});
 
-	it("rejects a malformed middle line", async () => {
+	it("rejects a malformed middle line without modifying the file", async () => {
 		const root = createTempDir();
 		const repository = createRepository(root);
 		const session = await repository.create({ id: "session", cwd: root });
@@ -348,10 +348,12 @@ describe("JSONL v4 persistence", () => {
 		await session.appendCustomEntry("first");
 		await session.appendCustomEntry("second");
 		const lines = readFileSync(metadata.path, "utf8").trimEnd().split("\n");
-		writeFileSync(metadata.path, `${lines[0]}\n${lines[1]}\nnot-json\n${lines[2]}\n`);
+		const corrupted = `${lines[0]}\n${lines[1]}\nnot-json\n${lines[2]}\n`;
+		writeFileSync(metadata.path, corrupted);
 
 		const reopenedRepository = createRepository(root);
 		await expect(reopenedRepository.open(metadata)).rejects.toMatchObject({ code: "invalid_entry" });
+		expect(readFileSync(metadata.path, "utf8")).toBe(corrupted);
 	});
 
 	it("rejects a lane-bound entry that does not chain to the lane leaf", async () => {

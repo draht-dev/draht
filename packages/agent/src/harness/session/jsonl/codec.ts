@@ -23,6 +23,7 @@ const RECORD_TYPES = new Set<LaneRecord["type"]>([
 	"write_deferred",
 	"usage",
 ]);
+const OPERATION_KINDS = new Set(["run", "compaction", "navigation"]);
 
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -123,6 +124,7 @@ export function parseMutation(line: string, path: string, lineNumber: number): S
 				throw invalidFile(path, lineNumber, `has unknown entry type ${type}`);
 			const parentId = requireNullableId(value.parentId, path, lineNumber, "parentId");
 			const timestamp = requireTimestamp(value.timestamp, path, lineNumber);
+			if (type === "custom") requireString(value.customType, path, lineNumber, "customType");
 			const { kind: _kind, lane: _lane, ...entryFields } = value;
 			const entry = { ...entryFields, id, type, parentId, seq, timestamp } as unknown as Entry;
 			return lane === undefined ? { kind: "entry", entry } : { kind: "entry", lane, entry };
@@ -134,6 +136,14 @@ export function parseMutation(line: string, path: string, lineNumber: number): S
 			if (!RECORD_TYPES.has(type as LaneRecord["type"]))
 				throw invalidFile(path, lineNumber, `has unknown record type ${type}`);
 			const timestamp = requireTimestamp(value.timestamp, path, lineNumber);
+			if (type === "operation_started") {
+				if (!isObject(value.intent)) throw invalidFile(path, lineNumber, "has invalid intent");
+				const operationKind = requireString(value.intent.kind, path, lineNumber, "operation kind");
+				if (!OPERATION_KINDS.has(operationKind)) {
+					throw invalidFile(path, lineNumber, `has unknown operation kind ${operationKind}`);
+				}
+			}
+			if (type === "operation_finished") requireString(value.runId, path, lineNumber, "runId");
 			const { kind: _kind, ...recordFields } = value;
 			return {
 				kind: "record",

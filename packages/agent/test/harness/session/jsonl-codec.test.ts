@@ -130,5 +130,38 @@ describe("JSONL v4 codec", () => {
 				label: "checkpoint",
 			});
 		});
+
+		it.each([
+			{
+				name: "a custom entry without customType",
+				mutation: { kind: "entry", type: "custom", id: "entry", parentId: null, seq: 1, timestamp: 1 },
+			},
+			{
+				name: "an operation_started record without intent",
+				mutation: {
+					kind: "record",
+					type: "operation_started",
+					id: "run",
+					lane: "main",
+					seq: 1,
+					timestamp: 1,
+					sourceLeafId: null,
+				},
+			},
+			{
+				name: "an operation_finished record without runId",
+				mutation: {
+					kind: "record",
+					type: "operation_finished",
+					id: "finish",
+					lane: "main",
+					seq: 1,
+					timestamp: 1,
+					outcome: "completed",
+				},
+			},
+		])("rejects $name", ({ mutation }) => {
+			expect(() => parseMutation(JSON.stringify(mutation), "/sessions/example.jsonl", 2)).toThrow();
+		});
 	});
 });

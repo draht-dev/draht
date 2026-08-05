@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "@draht/agent-core";
 import type { Transport } from "@draht/ai";
-import type { ScrollViewScrollbar, TuiMode } from "@draht/tui";
+import type { TuiMode as RendererTuiMode, ScrollViewScrollbar } from "@draht/tui";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -38,7 +38,7 @@ export interface RetrySettings {
 	provider?: ProviderRetrySettings;
 }
 
-export type UiMode = TuiMode;
+export type TuiMode = RendererTuiMode;
 
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
@@ -139,8 +139,8 @@ export interface Settings {
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
-	uiMode?: UiMode; // default: "regular"
-	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular UI mode
+	tuiMode?: TuiMode; // default: "regular"
+	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -1158,13 +1158,13 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getUiMode(): UiMode {
-		return this.settings.uiMode === "fullscreen" ? "fullscreen" : "regular";
+	getTuiMode(): TuiMode {
+		return this.settings.tuiMode === "fullscreen" ? "fullscreen" : "regular";
 	}
 
-	setUiMode(mode: UiMode): void {
-		this.globalSettings.uiMode = mode;
-		this.markModified("uiMode");
+	setTuiMode(mode: TuiMode): void {
+		this.globalSettings.tuiMode = mode;
+		this.markModified("tuiMode");
 		this.save();
 	}
 

@@ -5574,6 +5574,17 @@ commands["map-serve"] = function (...args) {
 	console.log(`Indexed ${lastBuild.map.stats.files} modules in ${lastBuild.map.buildMs}ms`);
 
 	const clients = new Set();
+	const dropClient = (client) => {
+		clients.delete(client);
+		try { client.end(); } catch { /* already closed */ }
+	};
+	const sendClient = (client, message) => {
+		try {
+			if (!client.write(message)) dropClient(client);
+		} catch {
+			dropClient(client);
+		}
+	};
 	let regenTimer = null;
 	const regen = () => {
 		clearTimeout(regenTimer);
@@ -5583,7 +5594,7 @@ commands["map-serve"] = function (...args) {
 				const ts = new Date().toLocaleTimeString();
 				console.log(`[${ts}] regenerated MAP.json (${lastBuild.map.stats.files} modules, ${lastBuild.map.buildMs}ms)`);
 				for (const c of clients) {
-					try { c.write("data: changed\n\n"); } catch { /* empty */ }
+					sendClient(c, "data: changed\n\n");
 				}
 			} catch (err) {
 				console.error("regen failed:", err.message);
@@ -5649,7 +5660,7 @@ commands["map-serve"] = function (...args) {
 					"cache-control": "no-cache",
 					connection: "keep-alive",
 				});
-				res.write("retry: 2000\n\n");
+				if (!res.write("retry: 2000\n\n")) { dropClient(res); return; }
 				clients.add(res);
 				req.on("close", () => clients.delete(res));
 			} else if (url === "/health") {
@@ -5670,7 +5681,7 @@ commands["map-serve"] = function (...args) {
 	// EventSource ignores lines starting with ":", so this never fires a message event.
 	const pingTimer = setInterval(() => {
 		for (const c of clients) {
-			try { c.write(": ping\n\n"); } catch { /* empty */ }
+			sendClient(c, ": ping\n\n");
 		}
 	}, 25000);
 

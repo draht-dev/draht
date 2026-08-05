@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +103,35 @@ func TestFileStoreCommittedOutputIsLoadableByReader(t *testing.T) {
 	}
 	if _, ok := loaded.Get(key); !ok {
 		t.Fatal("reader rejected or lost committed cache entry")
+	}
+}
+
+func TestFileStoreCommitRejectsEntriesAboveReaderLineLimitBeforePublication(t *testing.T) {
+	dir := t.TempDir()
+	store := &fileStore{dir: dir, maxLines: 3, maxLineBytes: 1024, maxFileBytes: 1 << 20}
+	snap := NewSnapshot()
+	for i := range 3 {
+		path := fmt.Sprintf("%d.go", i)
+		snap.Put(Key{Path: path, ContentHash: "hash", Version: "version"}, []byte(`{"loc":1}`))
+	}
+	if err := store.Commit(context.Background(), snap); err == nil {
+		t.Fatal("Commit above reader line-count limit returned nil error")
+	}
+	if _, err := os.Stat(store.path()); !os.IsNotExist(err) {
+		t.Fatalf("Commit above reader line-count limit published a cache: stat err=%v", err)
+	}
+}
+
+func TestFileStoreCommitRejectsEntryAboveReaderPerLineLimitBeforePublication(t *testing.T) {
+	dir := t.TempDir()
+	store := &fileStore{dir: dir, maxLines: 3, maxLineBytes: 96, maxFileBytes: 1 << 20}
+	snap := NewSnapshot()
+	snap.Put(Key{Path: "large.go", ContentHash: "hash", Version: "version"}, []byte(`"`+strings.Repeat("x", 128)+`"`))
+	if err := store.Commit(context.Background(), snap); err == nil {
+		t.Fatal("Commit above reader per-line limit returned nil error")
+	}
+	if _, err := os.Stat(store.path()); !os.IsNotExist(err) {
+		t.Fatalf("Commit above reader per-line limit published a cache: stat err=%v", err)
 	}
 }
 

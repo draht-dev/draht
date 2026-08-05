@@ -64,10 +64,65 @@ type fileStore struct {
 }
 
 var errCacheTooLarge = errors.New("cache output exceeds size limit")
+var errCacheLineTooLarge = errors.New("cache output exceeds per-line limit")
+var errCacheTooManyLines = errors.New("cache output exceeds line-count limit")
+
+type cacheLimits struct {
+	fileBytes int64
+	lineBytes int
+	lines     int
+}
+
+func (f *fileStore) limits() cacheLimits {
+	limits := cacheLimits{fileBytes: f.maxFileBytes, lineBytes: f.maxLineBytes, lines: f.maxLines}
+	if limits.fileBytes == 0 {
+		limits.fileBytes = maxCacheFileBytes
+	}
+	if limits.lineBytes == 0 {
+		limits.lineBytes = maxCacheLineBytes
+	}
+	if limits.lines == 0 {
+		limits.lines = maxCacheLines
+	}
+	return limits
+}
 
 type boundedWriter struct {
 	w         io.Writer
 	remaining int64
+}
+
+type boundedLineWriter struct {
+	w         io.Writer
+	remaining int
+	ended     bool
+}
+
+func (w *boundedLineWriter) Write(p []byte) (int, error) {
+	if w.ended {
+		return 0, errCacheLineTooLarge
+	}
+	newline := bytes.IndexByte(p, '\n')
+	contentBytes := len(p)
+	if newline >= 0 {
+		if newline != len(p)-1 || bytes.IndexByte(p[:newline], '\n') >= 0 {
+			return 0, errCacheLineTooLarge
+		}
+		contentBytes--
+	}
+	if contentBytes > w.remaining {
+		return 0, errCacheLineTooLarge
+	}
+	n, err := w.w.Write(p)
+	if n < contentBytes {
+		w.remaining -= n
+	} else {
+		w.remaining -= contentBytes
+	}
+	if err == nil && n == len(p) && newline >= 0 {
+		w.ended = true
+	}
+	return n, err
 }
 
 type countingReader struct {
@@ -119,10 +174,8 @@ func (f *fileStore) Load(ctx context.Context) (*Snapshot, error) {
 		}
 		return NewSnapshot(), fmt.Errorf("cache: read %s: %w", path, err)
 	}
-	fileLimit := f.maxFileBytes
-	if fileLimit == 0 {
-		fileLimit = maxCacheFileBytes
-	}
+	limits := f.limits()
+	fileLimit := limits.fileBytes
 	if info.Size() > fileLimit {
 		return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", path, fileLimit)
 	}
@@ -152,14 +205,8 @@ func (f *fileStore) Load(ctx context.Context) (*Snapshot, error) {
 	}
 	defer reader.Close()
 
-	lineLimit := f.maxLineBytes
-	if lineLimit == 0 {
-		lineLimit = maxCacheLineBytes
-	}
-	lineCountLimit := f.maxLines
-	if lineCountLimit == 0 {
-		lineCountLimit = maxCacheLines
-	}
+	lineLimit := limits.lineBytes
+	lineCountLimit := limits.lines
 
 	// Read at most one byte past the accepted file budget so growth between
 	// Stat and Open is detected. Scanner retains only the current line; entries
@@ -240,6 +287,10 @@ func (f *fileStore) Commit(ctx context.Context, s *Snapshot) error {
 
 	live := s.liveEntries()
 	sort.Slice(live, func(i, j int) bool { return live[i].key.Path < live[j].key.Path })
+	limits := f.limits()
+	if len(live)+1 > limits.lines {
+		return f.commitLimitError(errCacheTooManyLines, "entries")
+	}
 
 	if err := os.MkdirAll(f.dir, 0o755); err != nil {
 		return fmt.Errorf("cache: mkdir %s: %w", f.dir, err)
@@ -267,12 +318,9 @@ func (f *fileStore) Commit(ctx context.Context, s *Snapshot) error {
 		}
 	}()
 
-	limit := f.maxFileBytes
-	if limit == 0 {
-		limit = maxCacheFileBytes
-	}
-	bw := &boundedWriter{w: tmp, remaining: limit}
-	enc := json.NewEncoder(bw)
+	bw := &boundedWriter{w: tmp, remaining: limits.fileBytes}
+	headerLine := &boundedLineWriter{w: bw, remaining: limits.lineBytes}
+	enc := json.NewEncoder(headerLine)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(fileHeader{V: cacheFormatVersion, Tool: cacheTool, Entries: len(live)}); err != nil {
 		return f.commitEncodeError(tmp, tmpPath, err, "header")
@@ -281,7 +329,8 @@ func (f *fileStore) Commit(ctx context.Context, s *Snapshot) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := writeDiskEntry(bw, r); err != nil {
+		line := &boundedLineWriter{w: bw, remaining: limits.lineBytes}
+		if err := writeDiskEntry(line, r); err != nil {
 			return f.commitEncodeError(tmp, tmpPath, err, fmt.Sprintf("entry %q", r.key.Path))
 		}
 	}
@@ -296,14 +345,19 @@ func (f *fileStore) Commit(ctx context.Context, s *Snapshot) error {
 }
 
 func (f *fileStore) commitEncodeError(tmp *os.File, tmpPath string, err error, what string) error {
-	if errors.Is(err, errCacheTooLarge) {
+	if errors.Is(err, errCacheTooLarge) || errors.Is(err, errCacheLineTooLarge) || errors.Is(err, errCacheTooManyLines) {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		if removeErr := os.Remove(f.path()); removeErr != nil && !os.IsNotExist(removeErr) {
-			return fmt.Errorf("cache: encode %s: %w (also failed to clear prior cache: %v)", what, err, removeErr)
-		}
+		return f.commitLimitError(err, "encode "+what)
 	}
 	return fmt.Errorf("cache: encode %s: %w", what, err)
+}
+
+func (f *fileStore) commitLimitError(err error, what string) error {
+	if removeErr := os.Remove(f.path()); removeErr != nil && !os.IsNotExist(removeErr) {
+		return fmt.Errorf("cache: %s: %w (also failed to clear prior cache: %v)", what, err, removeErr)
+	}
+	return fmt.Errorf("cache: %s: %w", what, err)
 }
 
 // writeDiskEntry streams the potentially large raw payload instead of asking

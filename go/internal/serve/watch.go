@@ -16,6 +16,19 @@ import (
 // manifests trigger a rebuild.
 var watchExtSet, watchManifestSet = buildWatchSets()
 
+// planningWatchInputs are the planning files consumed by graph generation.
+// Keep generated MAP/HTML/report/cache files out of this list so a rebuild
+// cannot trigger itself.
+var planningWatchInputs = []string{
+	filepath.Join(scan.PlanningDir, "STATE.md"),
+	filepath.Join(scan.PlanningDir, "ROADMAP.md"),
+	filepath.Join(scan.PlanningDir, "PROJECT.md"),
+	filepath.Join(scan.PlanningDir, "DOMAIN.md"),
+	filepath.Join(scan.PlanningDir, "DOMAIN-MODEL.md"),
+	filepath.Join(scan.PlanningDir, "codebase", "GROUPS.json"),
+	filepath.Join(scan.PlanningDir, "codebase", "FLOWS.json"),
+}
+
 func buildWatchSets() (map[string]struct{}, map[string]struct{}) {
 	codeLangs := make(map[scan.Lang]struct{}, len(scan.CodeLangs))
 	for _, l := range scan.CodeLangs {
@@ -52,7 +65,7 @@ type fileSig struct {
 
 // snapshotWatched walks root (scan.Walk already excludes node_modules,
 // .git, .planning and the rest of DefaultIgnores) and returns a signature
-// for every watched file.
+// for every watched source plus the explicit non-output planning inputs.
 func snapshotWatched(root string) (map[string]fileSig, error) {
 	res, err := scan.Walk(scan.WalkOptions{Root: root})
 	if err != nil {
@@ -65,6 +78,13 @@ func snapshotWatched(root string) (map[string]fileSig, error) {
 		}
 		info, statErr := os.Stat(filepath.Join(root, rel))
 		if statErr != nil {
+			continue
+		}
+		out[rel] = fileSig{size: info.Size(), mtime: info.ModTime().UnixNano()}
+	}
+	for _, rel := range planningWatchInputs {
+		info, statErr := os.Stat(filepath.Join(root, rel))
+		if statErr != nil || !info.Mode().IsRegular() {
 			continue
 		}
 		out[rel] = fileSig{size: info.Size(), mtime: info.ModTime().UnixNano()}

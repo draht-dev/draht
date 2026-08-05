@@ -38,6 +38,23 @@ type managedStamp struct {
 	Size          int64  `json:"size"`
 }
 
+func managedExecutablePath(path string) bool {
+	wantName := "draht-graph"
+	if runtime.GOOS == "windows" {
+		wantName += ".exe"
+	}
+	equalName := func(a, b string) bool {
+		if runtime.GOOS == "windows" {
+			return strings.EqualFold(a, b)
+		}
+		return a == b
+	}
+	clean := filepath.Clean(path)
+	return equalName(filepath.Base(clean), wantName) &&
+		equalName(filepath.Base(filepath.Dir(clean)), "bin") &&
+		equalName(filepath.Base(filepath.Dir(filepath.Dir(clean))), ".draht")
+}
+
 func validateManagedExecutable() error {
 	executable, err := os.Executable()
 	if err != nil {
@@ -47,28 +64,18 @@ func validateManagedExecutable() error {
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil // a standalone binary remains usable when no managed home can be identified
-	}
-	wantName := "draht-graph"
-	if runtime.GOOS == "windows" {
-		wantName += ".exe"
-	}
-	managed := filepath.Join(home, ".draht", "bin", wantName)
 	invoked := os.Args[0]
 	if !filepath.IsAbs(invoked) {
 		invoked, _ = filepath.Abs(invoked)
 	}
-	equalPath := func(a, b string) bool {
-		if runtime.GOOS == "windows" {
-			return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
-		}
-		return filepath.Clean(a) == filepath.Clean(b)
+	managed := ""
+	if managedExecutablePath(executable) {
+		managed = executable
+	} else if managedExecutablePath(invoked) {
+		managed = invoked
 	}
-	isManaged := equalPath(executable, managed) || equalPath(invoked, managed)
-	if !isManaged {
-		return nil
+	if managed == "" {
+		return nil // standalone binaries outside a .draht/bin directory remain usable
 	}
 	stampBytes, err := os.ReadFile(filepath.Join(filepath.Dir(managed), ".draht-graph.json"))
 	if err != nil {

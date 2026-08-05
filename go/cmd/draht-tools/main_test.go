@@ -112,6 +112,13 @@ func TestManagedBinaryWithValidStampAndStandaloneBinaryStillExecute(t *testing.T
 	if _, stderr, code := runBinary(t, binPath, home, "--version"); code != 0 {
 		t.Fatalf("standalone binary failed: %s", stderr)
 	}
+	standalone := filepath.Join(t.TempDir(), "draht-graph")
+	if err := os.WriteFile(standalone, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := runBinary(t, standalone, home, "--version"); code != 0 {
+		t.Fatalf("standalone draht-graph outside .draht/bin failed: %s", stderr)
+	}
 }
 
 func TestManagedPathSymlinkCannotBypassMissingStamp(t *testing.T) {
@@ -127,6 +134,44 @@ func TestManagedPathSymlinkCannotBypassMissingStamp(t *testing.T) {
 	_, stderr, code := runBinary(t, target, home, "--version")
 	if code == 0 || !strings.Contains(stderr, "managed integrity") {
 		t.Fatalf("managed symlink bypassed missing stamp: code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestInstalledHookRejectsTamperedManagedBinaryWhenHomeChanges(t *testing.T) {
+	managedHome, target, data := managedBinary(t)
+	writeManagedStamp(t, target, data)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "index.ts"), []byte("export const x = 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(target, "graph-hook", "install")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "HOME="+managedHome, "USERPROFILE="+managedHome)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("install real hook: %v\n%s", err, out)
+	}
+
+	data[len(data)-1] ^= 1
+	tampered := target + ".tampered"
+	if err := os.WriteFile(tampered, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tampered, target); err != nil {
+		t.Fatal(err)
+	}
+	otherHome := t.TempDir()
+	hook := exec.Command(filepath.Join(root, ".git", "hooks", "post-commit"))
+	hook.Dir = root
+	hook.Env = append(os.Environ(), "HOME="+otherHome, "USERPROFILE="+otherHome)
+	if out, err := hook.CombinedOutput(); err != nil {
+		t.Fatalf("run installed hook: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".planning", "codebase", "MAP.json")); !os.IsNotExist(err) {
+		t.Fatalf("tampered managed binary executed through installed hook after HOME changed: stat err=%v", err)
 	}
 }
 

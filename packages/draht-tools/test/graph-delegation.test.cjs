@@ -5,7 +5,9 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const http = require("node:http");
+const net = require("node:net");
+const { spawn, spawnSync } = require("node:child_process");
 const test = require("node:test");
 
 const cli = path.resolve(__dirname, "../bin/draht-tools.cjs");
@@ -101,4 +103,79 @@ test("an explicit managed binary override cannot bypass its digest stamp", () =>
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(fs.existsSync(marker), false);
 	assert.match(result.stderr, /provenance stamp/i);
+});
+
+function freePort() {
+	return new Promise((resolve, reject) => {
+		const server = net.createServer();
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const { port } = server.address();
+			server.close((error) => error ? reject(error) : resolve(port));
+		});
+	});
+}
+
+function waitForText(child, text, timeoutMs = 5000) {
+	return new Promise((resolve, reject) => {
+		let output = "";
+		const timer = setTimeout(() => reject(new Error(`timed out waiting for ${text}; output=${output}`)), timeoutMs);
+		const onData = (chunk) => {
+			output += chunk;
+			if (!output.includes(text)) return;
+			clearTimeout(timer);
+			child.stdout.off("data", onData);
+			resolve();
+		};
+		child.stdout.on("data", onData);
+	});
+}
+
+test("JavaScript map-serve evicts an SSE client that signals backpressure", async (t) => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "draht-sse-test-"));
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "draht-sse-home-"));
+	const log = path.join(root, "writes.log");
+	const preload = path.join(root, "preload.cjs");
+	fs.writeFileSync(path.join(root, "package.json"), '{"name":"fixture"}\n');
+	fs.writeFileSync(path.join(root, "index.js"), "export const value = 1;\n");
+	fs.writeFileSync(preload, `
+const fs = require("node:fs");
+const http = require("node:http");
+const original = http.ServerResponse.prototype.write;
+let forced = false;
+http.ServerResponse.prototype.write = function (chunk, ...args) {
+  const text = String(chunk);
+  const result = original.call(this, chunk, ...args);
+  if (!text.includes("data: changed")) return result;
+  fs.appendFileSync(process.env.DRAHT_SSE_LOG, "event\\n");
+  if (!forced) { forced = true; return false; }
+  return result;
+};
+`);
+	const port = await freePort();
+	const child = spawn(process.execPath, ["--require", preload, cli, "map-serve", "--port", String(port), "--no-open"], {
+		cwd: root,
+		env: { ...process.env, HOME: home, PATH: "", DRAHT_GRAPH_ENGINE: "js", DRAHT_SSE_LOG: log },
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	t.after(() => {
+		child.kill();
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(home, { recursive: true, force: true });
+	});
+	await waitForText(child, `Open http://localhost:${port}`);
+
+	const request = http.get(`http://127.0.0.1:${port}/events`);
+	await new Promise((resolve, reject) => {
+		request.once("response", (response) => { response.once("data", resolve); });
+		request.once("error", reject);
+	});
+	for (let generation = 2; generation <= 3; generation++) {
+		const regenerated = waitForText(child, "regenerated MAP.json");
+		fs.writeFileSync(path.join(root, "index.js"), `export const value = ${generation};\n`);
+		await regenerated;
+	}
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	const writes = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : [];
+	assert.equal(writes.length, 1, `backpressured SSE response received ${writes.length} event writes`);
 });

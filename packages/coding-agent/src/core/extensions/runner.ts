@@ -352,10 +352,13 @@ export class ExtensionRunner {
 		// Bind runtime state methods to the runner
 		this.runtime.getCheckpointManager = () => this.resolveCheckpointManager();
 		this.runtime.assertActive = () => this.assertActive();
+		// Chain to the loader's invalidate so it can release extension-owned event-bus subscriptions.
+		const invalidateRuntime = this.runtime.invalidate;
 		this.runtime.invalidate = (message?: string) => {
 			if (!this.staleMessage) {
 				this.staleMessage = message ?? "This extension ctx is stale.";
 			}
+			invalidateRuntime(message);
 		};
 
 		// Context actions (required)

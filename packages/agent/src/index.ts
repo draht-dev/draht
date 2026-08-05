@@ -1,5 +1,50 @@
 // Core Agent
-export { uuidv7 } from "@draht/ai";
+
+export type {
+	AiSpan,
+	AiSpanAttributes,
+	AiSpanEndAttributes,
+	AiSpanEventAttributes,
+	AiSpanEventName,
+	AiSpanName,
+	AiSpanStartAttributes,
+	AiTelemetrySpan,
+	AttributeValue,
+	ExactTelemetryAttributes,
+	InferEventAttributes,
+	InferOptionalAttributes,
+	InferRequiredAndOptionalAttributes,
+	InferStartAttributes,
+	SchemaTelemetrySpan,
+	SpanAttributes,
+	SpanAttributes as TelemetrySpanAttributes,
+	SpanOptions,
+	SpanStatus,
+	TelemetryAttributeDefinition,
+	TelemetryAttributeMetadata,
+	TelemetryAttributeType,
+	TelemetryContext,
+	TelemetryEventAttributeDefinition,
+	TelemetryEventDefinition,
+	TelemetryParentDefinition,
+	TelemetrySchemaDefinition,
+	TelemetrySchemaSpanEndAttributes,
+	TelemetrySchemaSpanEventAttributes,
+	TelemetrySchemaSpanEventName,
+	TelemetrySchemaSpanName,
+	TelemetrySchemaSpanStartAttributes,
+	TelemetrySchemaSpanUnion,
+	TelemetrySpan,
+	TelemetrySpanDefinition,
+	TelemetryStartAttributeDefinition,
+} from "@draht/ai";
+export {
+	AI_TELEMETRY_SCHEMA,
+	defineTelemetrySchema,
+	NOOP_TELEMETRY_CONTEXT,
+	startAiSpan,
+	uuidv7,
+} from "@draht/ai";
 export * from "./agent.ts";
 // Loop functions
 export * from "./agent-loop.ts";
@@ -41,6 +86,17 @@ export * from "./harness/session/index.ts";
 export * from "./harness/session/search.ts";
 export * from "./harness/skills.ts";
 export * from "./harness/system-prompt.ts";
+export type {
+	HarnessSpan,
+	HarnessSpanAttributes,
+	HarnessSpanEndAttributes,
+	HarnessSpanEventAttributes,
+	HarnessSpanEventName,
+	HarnessSpanName,
+	HarnessSpanStartAttributes,
+	HarnessTelemetrySpan,
+} from "./harness/telemetry.ts";
+export { HARNESS_TELEMETRY_SCHEMA, startHarnessSpan } from "./harness/telemetry.ts";
 export * from "./harness/tools/index.ts";
 export {
 	type AgentHarnessResources,

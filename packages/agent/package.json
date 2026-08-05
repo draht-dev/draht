@@ -26,6 +26,8 @@
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
+		"generate-telemetry-docs": "npx tsx scripts/generate-telemetry-docs.ts",
+		"check:telemetry-docs": "npx tsx scripts/generate-telemetry-docs.ts --check",
 		"build": "tsc -p tsconfig.build.json",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",

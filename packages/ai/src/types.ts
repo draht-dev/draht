@@ -8,6 +8,7 @@ import type { OpenAICodexResponsesOptions } from "./api/openai-codex-responses.t
 import type { OpenAICompletionsOptions } from "./api/openai-completions.ts";
 import type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
 import type { PiMessagesOptions } from "./api/pi-messages.ts";
+import type { TelemetryContext } from "./telemetry.ts";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.ts";
 import type { AssistantMessageEventStream } from "./utils/event-stream.ts";
 
@@ -117,6 +118,8 @@ export interface ProviderResponse {
 /** Authentication, HTTP transport, and lifecycle callbacks shared by provider requests. */
 export interface ProviderRequestOptions<TModel = Model<Api>> {
 	signal?: AbortSignal;
+	/** Explicit parent context for telemetry produced by this logical request. */
+	telemetryContext?: TelemetryContext;
 	apiKey?: string;
 	/**
 	 * Optional fetch implementation for provider HTTP requests.

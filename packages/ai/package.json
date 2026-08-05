@@ -47,6 +47,8 @@
 		"generate-models": "npx tsx scripts/generate-models.ts --strict",
 		"hydrate-model-data": "npx tsx scripts/generate-models.ts --strict --data-only",
 		"check:model-data": "npx tsx scripts/check-model-data.ts",
+		"generate-telemetry-docs": "npx tsx scripts/generate-telemetry-docs.ts",
+		"check:telemetry-docs": "npx tsx scripts/generate-telemetry-docs.ts --check",
 		"build": "tsc -p tsconfig.build.json && shx rm -rf dist/providers/data && shx cp -r src/providers/data dist/providers/data",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"dev:tsc": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",

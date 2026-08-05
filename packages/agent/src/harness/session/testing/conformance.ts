@@ -854,7 +854,11 @@ export function createSessionBackendConformance(
 			const entryId = await session.appendMessage(createUserMessage("persisted"));
 			const metadata = await session.getMetadata();
 
-			deepStrictEqual(await repository.list(), [metadata]);
+			const listed = await repository.list();
+			strictEqual(listed.length, 1);
+			strictEqual(listed[0]?.id, metadata.id);
+			strictEqual(listed[0]?.createdAt, metadata.createdAt);
+			strictEqual(listed[0]?.parentSessionId, metadata.parentSessionId);
 			deepStrictEqual(await entryIds((await repository.open(metadata)).findEntries()), [entryId]);
 			await rejectsWithCode(repository.create({ id: "one" }), "already_exists");
 		}),

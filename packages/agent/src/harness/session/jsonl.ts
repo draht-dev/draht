@@ -1,6 +1,12 @@
 import { uuidv7 } from "@draht/ai";
 import type { FileError, FileSystem, Result } from "../types.ts";
-import { Session } from "./session.ts";
+import type {
+	JsonlSessionCreateOptions,
+	JsonlSessionListOptions,
+	JsonlSessionMetadata,
+	JsonlV4Header,
+} from "./jsonl/types.ts";
+import { assertJsonSerializable, Session } from "./session.ts";
 import { type SessionMutation, SessionState } from "./state.ts";
 import {
 	type BranchBounds,
@@ -15,13 +21,18 @@ import {
 	type OperationStartedRecord,
 	type ProvisionedEntry,
 	type RecordQuery,
-	type SessionCreateOptions,
 	SessionError,
-	type SessionMetadata,
 	type SessionRepo,
 	type SessionStats,
 	type SessionStorage,
 } from "./types.ts";
+
+export type {
+	JsonlSessionCreateOptions,
+	JsonlSessionListOptions,
+	JsonlSessionMetadata,
+	JsonlV4Header,
+} from "./jsonl/types.ts";
 
 export type JsonlSessionRepoFileSystem = Pick<
 	FileSystem,
@@ -31,6 +42,7 @@ export type JsonlSessionRepoFileSystem = Pick<
 	| "readTextFile"
 	| "writeFile"
 	| "appendFile"
+	| "fileInfo"
 	| "listDir"
 	| "exists"
 	| "createDir"
@@ -41,24 +53,6 @@ export interface JsonlSessionRepoOptions {
 	fs: JsonlSessionRepoFileSystem;
 	sessionsRoot: string;
 	cwd?: string;
-}
-
-export interface JsonlSessionCreateOptions extends SessionCreateOptions {
-	cwd?: string;
-}
-
-export interface JsonlSessionMetadata extends SessionMetadata {
-	path: string;
-	cwd: string;
-}
-
-interface HeaderLine {
-	kind: "header";
-	version: 4;
-	id: string;
-	createdAt: number;
-	cwd: string;
-	parentSessionId?: string;
 }
 
 const ENTRY_TYPES = new Set<Entry["type"]>([
@@ -134,7 +128,7 @@ function requireNullableId(value: unknown, path: string, line: number, field: st
 	return value as string | null;
 }
 
-function parseHeader(line: string, path: string): HeaderLine {
+function parseHeader(line: string, path: string): JsonlV4Header {
 	const value = parseObject(line, path, 1);
 	if (value.kind !== "header") throw invalidFile(path, 1, "is not a header");
 	if (value.version !== 4) throw invalidFile(path, 1, "has unsupported session version");
@@ -142,6 +136,16 @@ function parseHeader(line: string, path: string): HeaderLine {
 	if (parentSessionId !== undefined && typeof parentSessionId !== "string") {
 		throw invalidFile(path, 1, "has invalid parentSessionId");
 	}
+	const legacyParentSessionPath = value.legacyParentSessionPath;
+	if (legacyParentSessionPath !== undefined && typeof legacyParentSessionPath !== "string") {
+		throw invalidFile(path, 1, "has invalid legacyParentSessionPath");
+	}
+	if (parentSessionId !== undefined && legacyParentSessionPath !== undefined) {
+		throw invalidFile(path, 1, "has both parentSessionId and legacyParentSessionPath");
+	}
+	const metadataValue = value.metadata;
+	if (metadataValue !== undefined && !isObject(metadataValue)) throw invalidFile(path, 1, "has invalid metadata");
+	const metadata = metadataValue as JsonlV4Header["metadata"];
 	return {
 		kind: "header",
 		version: 4,
@@ -149,6 +153,24 @@ function parseHeader(line: string, path: string): HeaderLine {
 		createdAt: requireTimestamp(value.createdAt, path, 1),
 		cwd: requireString(value.cwd, path, 1, "cwd"),
 		parentSessionId,
+		legacyParentSessionPath,
+		metadata,
+	};
+}
+
+function metadataFromHeader(header: JsonlV4Header, path: string, modifiedAt: number): JsonlSessionMetadata {
+	return {
+		id: header.id,
+		createdAt: header.createdAt,
+		cwd: header.cwd,
+		path,
+		modifiedAt,
+		sourceFormat: 4,
+		...(header.parentSessionId === undefined ? {} : { parentSessionId: header.parentSessionId }),
+		...(header.legacyParentSessionPath === undefined
+			? {}
+			: { legacyParentSessionPath: header.legacyParentSessionPath }),
+		...(header.metadata === undefined ? {} : { metadata: header.metadata }),
 	};
 }
 
@@ -240,13 +262,8 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 		if (physicalLines.at(-1) === "") physicalLines.pop();
 		if (physicalLines.length === 0 || !physicalLines[0]) throw invalidFile(path, 1, "is missing a header");
 		const header = parseHeader(physicalLines[0], path);
-		const storage = new JsonlSessionStorage(fs, {
-			id: header.id,
-			createdAt: header.createdAt,
-			parentSessionId: header.parentSessionId,
-			path,
-			cwd: header.cwd,
-		});
+		const fileInfo = fileResult(await fs.fileInfo(path), `Failed to read session metadata ${path}`);
+		const storage = new JsonlSessionStorage(fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
 		for (let index = 1; index < physicalLines.length; index++) {
 			const line = physicalLines[index]!;
 			let mutation: SessionMutation;
@@ -444,7 +461,9 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 	}
 }
 
-export class JsonlSessionRepo implements SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions>, AsyncDisposable {
+export class JsonlSessionRepo
+	implements SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>, AsyncDisposable
+{
 	private readonly fs: JsonlSessionRepoFileSystem;
 	private readonly sessionsRootInput: string;
 	private readonly cwd: string;
@@ -459,7 +478,7 @@ export class JsonlSessionRepo implements SessionRepo<JsonlSessionMetadata, Jsonl
 		this.cwd = options.cwd ?? options.fs.cwd;
 	}
 
-	create(options: JsonlSessionCreateOptions = {}): Promise<Session<JsonlSessionMetadata>> {
+	create(options: JsonlSessionCreateOptions): Promise<Session<JsonlSessionMetadata>> {
 		return this.enqueue(async () => {
 			const id = options.id ?? uuidv7();
 			const path = await this.pathForId(id);
@@ -467,26 +486,23 @@ export class JsonlSessionRepo implements SessionRepo<JsonlSessionMetadata, Jsonl
 				throw new SessionError("already_exists", `Session already exists: ${id}`);
 			}
 			const cwd = options.cwd ?? this.cwd;
-			const header: HeaderLine = {
+			if (options.metadata !== undefined) assertJsonSerializable(options.metadata);
+			const header: JsonlV4Header = {
 				kind: "header",
 				version: 4,
 				id,
 				createdAt: Date.now(),
 				cwd,
 				parentSessionId: options.parentSessionId,
+				metadata: options.metadata,
 			};
 			fileResult(
 				await this.fs.createDir(await this.root(), { recursive: true }),
 				`Failed to create sessions directory`,
 			);
 			fileResult(await this.fs.writeFile(path, `${JSON.stringify(header)}\n`), `Failed to create session ${path}`);
-			const storage = new JsonlSessionStorage(this.fs, {
-				id,
-				createdAt: header.createdAt,
-				parentSessionId: header.parentSessionId,
-				path,
-				cwd,
-			});
+			const fileInfo = fileResult(await this.fs.fileInfo(path), `Failed to read session metadata ${path}`);
+			const storage = new JsonlSessionStorage(this.fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
 			this.storages.set(path, storage);
 			return new Session(storage);
 		});
@@ -508,7 +524,9 @@ export class JsonlSessionRepo implements SessionRepo<JsonlSessionMetadata, Jsonl
 		});
 	}
 
-	list(): Promise<JsonlSessionMetadata[]> {
+	list(): Promise<JsonlSessionMetadata[]>;
+	list(options: JsonlSessionListOptions): Promise<JsonlSessionMetadata[]>;
+	list(options: JsonlSessionListOptions = {}): Promise<JsonlSessionMetadata[]> {
 		return this.enqueue(async () => {
 			const root = await this.root();
 			if (!fileResult(await this.fs.exists(root), `Failed to check sessions directory ${root}`)) return [];
@@ -517,6 +535,14 @@ export class JsonlSessionRepo implements SessionRepo<JsonlSessionMetadata, Jsonl
 			);
 			const metadata: JsonlSessionMetadata[] = [];
 			for (const file of files) {
+				const existing = this.storages.get(file.path);
+				if (existing) {
+					const existingMetadata = await existing.getMetadata();
+					if (options.cwd === undefined || existingMetadata.cwd === options.cwd) {
+						metadata.push({ ...existingMetadata, modifiedAt: file.mtimeMs });
+					}
+					continue;
+				}
 				const content = fileResult(
 					await this.fs.readTextFile(file.path),
 					`Failed to read session header ${file.path}`,
@@ -524,15 +550,10 @@ export class JsonlSessionRepo implements SessionRepo<JsonlSessionMetadata, Jsonl
 				const firstLine = content.split("\n", 1)[0];
 				if (!firstLine) throw invalidFile(file.path, 1, "is missing a header");
 				const header = parseHeader(firstLine, file.path);
-				metadata.push({
-					id: header.id,
-					createdAt: header.createdAt,
-					parentSessionId: header.parentSessionId,
-					path: file.path,
-					cwd: header.cwd,
-				});
+				if (options.cwd !== undefined && header.cwd !== options.cwd) continue;
+				metadata.push(metadataFromHeader(header, file.path, file.mtimeMs));
 			}
-			return metadata.sort((left, right) => right.createdAt - left.createdAt);
+			return metadata.sort((left, right) => right.modifiedAt - left.modifiedAt);
 		});
 	}
 
@@ -547,7 +568,7 @@ export class JsonlSessionRepo implements SessionRepo<JsonlSessionMetadata, Jsonl
 
 	fork(
 		source: JsonlSessionMetadata,
-		options: ForkOptions & JsonlSessionCreateOptions = {},
+		options: ForkOptions & JsonlSessionCreateOptions,
 	): Promise<Session<JsonlSessionMetadata>> {
 		return this.enqueue(async () => {
 			const sourceSession = await this.openDirect(source);
@@ -629,26 +650,23 @@ export class JsonlSessionRepo implements SessionRepo<JsonlSessionMetadata, Jsonl
 			throw new SessionError("already_exists", `Session already exists: ${id}`);
 		}
 		const cwd = options.cwd ?? this.cwd;
-		const header: HeaderLine = {
+		if (options.metadata !== undefined) assertJsonSerializable(options.metadata);
+		const header: JsonlV4Header = {
 			kind: "header",
 			version: 4,
 			id,
 			createdAt: Date.now(),
 			cwd,
 			parentSessionId: options.parentSessionId,
+			metadata: options.metadata,
 		};
 		fileResult(
 			await this.fs.createDir(await this.root(), { recursive: true }),
 			`Failed to create sessions directory`,
 		);
 		fileResult(await this.fs.writeFile(path, `${JSON.stringify(header)}\n`), `Failed to create session ${path}`);
-		const storage = new JsonlSessionStorage(this.fs, {
-			id,
-			createdAt: header.createdAt,
-			parentSessionId: header.parentSessionId,
-			path,
-			cwd,
-		});
+		const fileInfo = fileResult(await this.fs.fileInfo(path), `Failed to read session metadata ${path}`);
+		const storage = new JsonlSessionStorage(this.fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
 		this.storages.set(path, storage);
 		return new Session(storage);
 	}

@@ -64,7 +64,11 @@ describe("AgentHarness v2 scaffold", () => {
 
 		expect(suspended).toEqual([]);
 		expect(harness.name).toBe("main");
+		expect(harness.session).toBe(session);
 		expect(await harness.getLeafId()).toBeNull();
+		expect(await harness.session.getLeafId()).toBeNull();
+
+		await expect(harness.close()).resolves.toBeUndefined();
 
 		const recorded = createSession("recorded");
 		await recorded.appendRecord(operationStarted("run"));

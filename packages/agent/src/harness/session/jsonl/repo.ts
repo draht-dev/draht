@@ -34,15 +34,12 @@ function sessionFileName(createdAt: number, id: string): string {
 }
 
 export class JsonlSessionRepo
-	implements SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>, AsyncDisposable
+	implements SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>
 {
 	private readonly fs: JsonlSessionRepoFileSystem;
 	private readonly sessionsRootInput: string;
 	private readonly cwd: string;
-	private readonly storages = new Map<string, JsonlSessionStorage>();
 	private rootPromise: Promise<string> | undefined;
-	private tail: Promise<void> = Promise.resolve();
-	private disposed = false;
 
 	constructor(options: JsonlSessionRepoOptions) {
 		this.fs = options.fs;
@@ -50,119 +47,81 @@ export class JsonlSessionRepo
 		this.cwd = options.cwd ?? options.fs.cwd;
 	}
 
-	create(options: JsonlSessionCreateOptions): Promise<Session<JsonlSessionMetadata>> {
-		return this.enqueue(() => this.createDirect(options));
+	async create(options: JsonlSessionCreateOptions): Promise<Session<JsonlSessionMetadata>> {
+		return (await this.createDirect(options)).session;
 	}
 
-	open(metadata: JsonlSessionMetadata): Promise<Session<JsonlSessionMetadata>> {
-		return this.enqueue(async () => {
-			const existing = this.storages.get(metadata.path);
-			if (existing) return new Session(existing);
-			if (!fileResult(await this.fs.exists(metadata.path), `Failed to check session ${metadata.path}`)) {
-				throw new SessionError("not_found", `Session not found: ${metadata.id}`);
-			}
-			const storage = await JsonlSessionStorage.load(this.fs, metadata.path);
-			const loadedMetadata = await storage.getMetadata();
-			if (loadedMetadata.id !== metadata.id)
-				throw new SessionError("invalid_entry", `Session id does not match header: ${metadata.id}`);
-			this.storages.set(metadata.path, storage);
-			return new Session(storage);
-		});
+	async open(metadata: JsonlSessionMetadata): Promise<Session<JsonlSessionMetadata>> {
+		return this.openDirect(metadata);
 	}
 
 	list(): Promise<JsonlSessionMetadata[]>;
 	list(options: JsonlSessionListOptions): Promise<JsonlSessionMetadata[]>;
-	list(options: JsonlSessionListOptions = {}): Promise<JsonlSessionMetadata[]> {
-		return this.enqueue(() => this.listDirect(options));
+	async list(options: JsonlSessionListOptions = {}): Promise<JsonlSessionMetadata[]> {
+		return this.listDirect(options);
 	}
 
-	delete(metadata: JsonlSessionMetadata): Promise<void> {
-		return this.enqueue(async () => {
-			const storage = this.storages.get(metadata.path);
-			if (storage) await storage.drain();
-			fileResult(await this.fs.remove(metadata.path, { force: true }), `Failed to delete session ${metadata.path}`);
-			this.storages.delete(metadata.path);
-		});
+	async delete(metadata: JsonlSessionMetadata): Promise<void> {
+		fileResult(await this.fs.remove(metadata.path, { force: true }), `Failed to delete session ${metadata.path}`);
 	}
 
-	fork(
+	async fork(
 		source: JsonlSessionMetadata,
 		options: ForkOptions & JsonlSessionCreateOptions,
 	): Promise<Session<JsonlSessionMetadata>> {
-		return this.enqueue(async () => {
-			const sourceSession = await this.openDirect(source);
-			let copiedEntries: Entry[];
-			let forkLanes: LanePointer[];
-			if (options.scope === "tree") {
-				copiedEntries = await sourceSession.findEntries({ order: "oldestFirst" });
-				forkLanes = await sourceSession.getLanes();
-			} else {
-				const selectedEntryId = options.entryId ?? (await sourceSession.getLeafId());
-				let targetId: string | null = null;
-				if (selectedEntryId !== null) {
-					const entry = await sourceSession.getEntry(selectedEntryId);
-					if (!entry || entry.type !== "message") {
-						throw new SessionError(
-							"invalid_fork_target",
-							`Fork target is not a message entry: ${selectedEntryId}`,
-						);
-					}
-					const position = options.position ?? (options.entryId === undefined ? "at" : "before");
-					targetId = position === "at" ? entry.id : entry.parentId;
+		const sourceSession = await this.openDirect(source);
+		let copiedEntries: Entry[];
+		let forkLanes: LanePointer[];
+		if (options.scope === "tree") {
+			copiedEntries = await sourceSession.findEntries({ order: "oldestFirst" });
+			forkLanes = await sourceSession.getLanes();
+		} else {
+			const selectedEntryId = options.entryId ?? (await sourceSession.getLeafId());
+			let targetId: string | null = null;
+			if (selectedEntryId !== null) {
+				const entry = await sourceSession.getEntry(selectedEntryId);
+				if (!entry || entry.type !== "message") {
+					throw new SessionError("invalid_fork_target", `Fork target is not a message entry: ${selectedEntryId}`);
 				}
-				copiedEntries =
-					targetId === null
-						? []
-						: await sourceSession.findEntriesOnBranch({ start: targetId, order: "oldestFirst" });
-				forkLanes = [{ lane: "main", leafId: targetId }];
+				const position = options.position ?? (options.entryId === undefined ? "at" : "before");
+				targetId = position === "at" ? entry.id : entry.parentId;
 			}
+			copiedEntries =
+				targetId === null ? [] : await sourceSession.findEntriesOnBranch({ start: targetId, order: "oldestFirst" });
+			forkLanes = [{ lane: "main", leafId: targetId }];
+		}
 
-			const target = await this.createDirect({
-				...options,
-				parentSessionId: options.parentSessionId ?? source.id,
-			});
-			const targetStorage = this.storages.get((await target.getMetadata()).path)!;
-			for (const entry of copiedEntries) await targetStorage.appendCopiedEntry(entry);
-			for (const pointer of forkLanes) await targetStorage.appendForkLane(pointer.lane, pointer.leafId);
-			const name = await sourceSession.getName();
-			if (name !== undefined) await target.setName(name);
-			for (const entry of copiedEntries) {
-				const label = await sourceSession.getLabel(entry.id);
-				if (label !== undefined) await target.setLabel(entry.id, label);
-			}
-			return target;
+		const { session: target, storage: targetStorage } = await this.createDirect({
+			...options,
+			parentSessionId: options.parentSessionId ?? source.id,
 		});
-	}
-
-	async [Symbol.asyncDispose](): Promise<void> {
-		if (this.disposed) return;
-		this.disposed = true;
-		await this.tail;
-		await Promise.all([...this.storages.values()].map((storage) => storage.drain()));
-	}
-
-	private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-		if (this.disposed) return Promise.reject(new SessionError("storage", "JSONL session repository is disposed"));
-		const result = this.tail.then(operation);
-		this.tail = result.then(
-			() => undefined,
-			() => undefined,
-		);
-		return result;
+		for (const entry of copiedEntries) await targetStorage.appendCopiedEntry(entry);
+		for (const pointer of forkLanes) await targetStorage.appendForkLane(pointer.lane, pointer.leafId);
+		const name = await sourceSession.getName();
+		if (name !== undefined) await target.setName(name);
+		for (const entry of copiedEntries) {
+			const label = await sourceSession.getLabel(entry.id);
+			if (label !== undefined) await target.setLabel(entry.id, label);
+		}
+		return target;
 	}
 
 	private async openDirect(metadata: JsonlSessionMetadata): Promise<Session<JsonlSessionMetadata>> {
-		const existing = this.storages.get(metadata.path);
-		if (existing) return new Session(existing);
 		if (!fileResult(await this.fs.exists(metadata.path), `Failed to check session ${metadata.path}`)) {
 			throw new SessionError("not_found", `Session not found: ${metadata.id}`);
 		}
 		const storage = await JsonlSessionStorage.load(this.fs, metadata.path);
-		this.storages.set(metadata.path, storage);
+		const loadedMetadata = await storage.getMetadata();
+		if (loadedMetadata.id !== metadata.id) {
+			throw new SessionError("invalid_entry", `Session id does not match header: ${metadata.id}`);
+		}
 		return new Session(storage);
 	}
 
-	private async createDirect(options: JsonlSessionCreateOptions): Promise<Session<JsonlSessionMetadata>> {
+	private async createDirect(options: JsonlSessionCreateOptions): Promise<{
+		session: Session<JsonlSessionMetadata>;
+		storage: JsonlSessionStorage;
+	}> {
 		const id = options.id ?? uuidv7();
 		validateSessionId(id);
 		// Skip the repository-wide scan for generated UUIDv7 ids because their collision risk is negligible.
@@ -194,8 +153,7 @@ export class JsonlSessionRepo
 		fileResult(await this.fs.writeFile(path, encodeHeader(header)), `Failed to create session ${path}`);
 		const fileInfo = fileResult(await this.fs.fileInfo(path), `Failed to read session metadata ${path}`);
 		const storage = new JsonlSessionStorage(this.fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
-		this.storages.set(path, storage);
-		return new Session(storage);
+		return { session: new Session(storage), storage };
 	}
 
 	private async listDirect(options: JsonlSessionListOptions): Promise<JsonlSessionMetadata[]> {
@@ -207,12 +165,6 @@ export class JsonlSessionRepo
 				`Failed to list sessions directory ${directory}`,
 			).filter((entry) => entry.kind !== "directory" && entry.name.endsWith(".jsonl"));
 			for (const file of files) {
-				const existing = this.storages.get(file.path);
-				if (existing) {
-					const existingMetadata = await existing.getMetadata();
-					metadata.push({ ...existingMetadata, modifiedAt: file.mtimeMs });
-					continue;
-				}
 				const content = fileResult(
 					await this.fs.readTextFile(file.path),
 					`Failed to read session header ${file.path}`,
@@ -226,9 +178,6 @@ export class JsonlSessionRepo
 	}
 
 	private async sessionIdExists(id: string): Promise<boolean> {
-		for (const storage of this.storages.values()) {
-			if ((await storage.getMetadata()).id === id) return true;
-		}
 		const suffix = `_${id}.jsonl`;
 		for (const directory of await this.sessionDirectories()) {
 			const files = fileResult(await this.fs.listDir(directory), `Failed to list sessions directory ${directory}`);

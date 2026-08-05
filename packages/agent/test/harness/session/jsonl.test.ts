@@ -40,7 +40,7 @@ const conformance = createSessionBackendConformance(async () => {
 	const repository = createRepository(createTempDir());
 	return {
 		repository,
-		[Symbol.asyncDispose]: () => repository[Symbol.asyncDispose](),
+		[Symbol.asyncDispose]: () => Promise.resolve(),
 	} satisfies SessionBackendFixture;
 });
 
@@ -57,7 +57,7 @@ describe("JsonlSessionRepo conformance", () => {
 describe("JSONL v4 persistence", () => {
 	it("exposes the complete metadata contract", async () => {
 		const root = createTempDir();
-		await using repository = createRepository(root);
+		const repository = createRepository(root);
 		const cwd = join(root, "workspace", "project");
 		const session = await repository.create({
 			id: "metadata",
@@ -83,7 +83,7 @@ describe("JSONL v4 persistence", () => {
 
 	it("rejects session ids that cannot be used in coding-agent filenames", async () => {
 		const root = createTempDir();
-		await using repository = createRepository(root);
+		const repository = createRepository(root);
 
 		await expect(repository.create({ id: "../escape", cwd: root })).rejects.toMatchObject({
 			code: "invalid_payload",
@@ -106,7 +106,7 @@ describe("JSONL v4 persistence", () => {
 				return typeof value === "function" ? value.bind(target) : value;
 			},
 		});
-		await using repository = new JsonlSessionRepo({ fs: countingFs, sessionsRoot: root, cwd: root });
+		const repository = new JsonlSessionRepo({ fs: countingFs, sessionsRoot: root, cwd: root });
 
 		await repository.create({ cwd: root });
 
@@ -115,7 +115,7 @@ describe("JSONL v4 persistence", () => {
 
 	it("sorts listed sessions by current filesystem modification time", async () => {
 		const root = createTempDir();
-		await using repository = createRepository(root);
+		const repository = createRepository(root);
 		const newestCwd = join(root, "workspaces", "newest");
 		const oldestCwd = join(root, "workspaces", "oldest");
 		const newest = await repository.create({ id: "newest", cwd: newestCwd });
@@ -154,7 +154,6 @@ describe("JSONL v4 persistence", () => {
 		await session.setName("Example");
 		await session.setLabel(entryId, "checkpoint");
 		await session.moveLane("main", null);
-		await repository[Symbol.asyncDispose]();
 
 		const lines = readFileSync(metadata.path, "utf8")
 			.trimEnd()
@@ -163,7 +162,7 @@ describe("JSONL v4 persistence", () => {
 		expect(lines.map((line) => line.kind)).toEqual(["header", "entry", "lane", "record", "fact", "fact", "lane"]);
 		expect(lines.slice(1).map((line) => line.seq)).toEqual([1, 2, 3, 4, 5, 6]);
 
-		await using reopenedRepository = createRepository(root);
+		const reopenedRepository = createRepository(root);
 		const reopened = await reopenedRepository.open(metadata);
 		expect(await reopened.getLanes()).toEqual([
 			{ lane: "main", leafId: null },
@@ -204,16 +203,14 @@ describe("JSONL v4 persistence", () => {
 		await source.appendMessage({ role: "user", content: [{ type: "text", text: "two" }], timestamp: 2 });
 		const fork = await repository.fork(await source.getMetadata(), { id: "fork", cwd: root });
 		const metadata = await fork.getMetadata();
-		await repository[Symbol.asyncDispose]();
 
 		const reopenedRepository = createRepository(root);
 		const reopened = await reopenedRepository.open(metadata);
 		expect((await reopened.getStats()).messageCount).toBe(2);
 		await reopened.appendMessage({ role: "user", content: [{ type: "text", text: "three" }], timestamp: 3 });
 		expect((await reopened.getStats()).messageCount).toBe(3);
-		await reopenedRepository[Symbol.asyncDispose]();
 
-		await using verificationRepository = createRepository(root);
+		const verificationRepository = createRepository(root);
 		const verified = await verificationRepository.open(metadata);
 		expect((await verified.getStats()).messageCount).toBe(3);
 	});
@@ -231,7 +228,6 @@ describe("JSONL v4 persistence", () => {
 		await source.setLabel(threadId, "tip");
 		const fork = await repository.fork(await source.getMetadata(), { scope: "tree", id: "fork", cwd: root });
 		const metadata = await fork.getMetadata();
-		await repository[Symbol.asyncDispose]();
 
 		const importedEntryLines = readFileSync(metadata.path, "utf8")
 			.trimEnd()
@@ -240,7 +236,7 @@ describe("JSONL v4 persistence", () => {
 			.filter((line) => line.kind === "entry");
 		expect(importedEntryLines.map((line) => "lane" in line)).toEqual([false, false, false]);
 
-		await using reopenedRepository = createRepository(root);
+		const reopenedRepository = createRepository(root);
 		const reopened = await reopenedRepository.open(metadata);
 		expect((await reopened.findEntries({ order: "oldestFirst" })).map((entry) => entry.id)).toEqual([
 			rootId,
@@ -262,7 +258,6 @@ describe("JSONL v4 persistence", () => {
 		const session = await repository.create({ id: "session", cwd: root });
 		const metadata = await session.getMetadata();
 		const firstId = await session.appendCustomEntry("first");
-		await repository[Symbol.asyncDispose]();
 		const unterminated = readFileSync(metadata.path, "utf8").trimEnd();
 		writeFileSync(metadata.path, unterminated);
 
@@ -270,9 +265,8 @@ describe("JSONL v4 persistence", () => {
 		const reopened = await reopenedRepository.open(metadata);
 		expect(readFileSync(metadata.path, "utf8")).toBe(`${unterminated}\n`);
 		const secondId = await reopened.appendCustomEntry("second");
-		await reopenedRepository[Symbol.asyncDispose]();
 
-		await using verificationRepository = createRepository(root);
+		const verificationRepository = createRepository(root);
 		const verified = await verificationRepository.open(metadata);
 		expect((await verified.findEntries({ order: "oldestFirst" })).map((entry) => entry.id)).toEqual([
 			firstId,
@@ -286,7 +280,6 @@ describe("JSONL v4 persistence", () => {
 		const session = await repository.create({ id: "session", cwd: root });
 		const metadata = await session.getMetadata();
 		await session.appendCustomEntry("first");
-		await repository[Symbol.asyncDispose]();
 		writeFileSync(metadata.path, readFileSync(metadata.path, "utf8").trimEnd());
 
 		const env = new NodeExecutionEnv({ cwd: root });
@@ -303,7 +296,7 @@ describe("JSONL v4 persistence", () => {
 				return typeof value === "function" ? value.bind(target) : value;
 			},
 		});
-		await using failingRepository = new JsonlSessionRepo({
+		const failingRepository = new JsonlSessionRepo({
 			fs: failingFs,
 			sessionsRoot: root,
 			cwd: root,
@@ -321,11 +314,10 @@ describe("JSONL v4 persistence", () => {
 		const session = await repository.create({ id: "session", cwd: root });
 		const metadata = await session.getMetadata();
 		await session.appendCustomEntry("note", { value: "kept" });
-		await repository[Symbol.asyncDispose]();
 		const validPrefix = readFileSync(metadata.path, "utf8");
 		appendFileSync(metadata.path, '{"kind":"entry"');
 
-		await using reopenedRepository = createRepository(root);
+		const reopenedRepository = createRepository(root);
 		const reopened = await reopenedRepository.open(metadata);
 		expect((await reopened.findEntries()).map((entry) => entry.id)).toHaveLength(1);
 		expect(readFileSync(metadata.path, "utf8")).toBe(validPrefix);
@@ -340,11 +332,10 @@ describe("JSONL v4 persistence", () => {
 		const metadata = await session.getMetadata();
 		await session.appendCustomEntry("first");
 		await session.appendCustomEntry("second");
-		await repository[Symbol.asyncDispose]();
 		const lines = readFileSync(metadata.path, "utf8").trimEnd().split("\n");
 		writeFileSync(metadata.path, `${lines[0]}\n${lines[1]}\nnot-json\n${lines[2]}\n`);
 
-		await using reopenedRepository = createRepository(root);
+		const reopenedRepository = createRepository(root);
 		await expect(reopenedRepository.open(metadata)).rejects.toMatchObject({ code: "invalid_entry" });
 	});
 
@@ -355,7 +346,6 @@ describe("JSONL v4 persistence", () => {
 		const metadata = await session.getMetadata();
 		await session.appendCustomEntry("first");
 		await session.appendCustomEntry("second");
-		await repository[Symbol.asyncDispose]();
 
 		const lines = readFileSync(metadata.path, "utf8")
 			.trimEnd()
@@ -364,7 +354,7 @@ describe("JSONL v4 persistence", () => {
 		lines[2].parentId = null;
 		writeFileSync(metadata.path, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
 
-		await using reopenedRepository = createRepository(root);
+		const reopenedRepository = createRepository(root);
 		await expect(reopenedRepository.open(metadata)).rejects.toMatchObject({
 			code: "invalid_entry",
 			message: expect.stringContaining("does not chain to the lane leaf"),
@@ -398,10 +388,9 @@ describe("JSONL v4 persistence", () => {
 		const imported = await importedRepository.open(metadata);
 		expect(await imported.getLeafId()).toBeNull();
 		expect((await imported.findEntries()).map((entry) => entry.id)).toEqual(["imported"]);
-		await importedRepository[Symbol.asyncDispose]();
 
 		appendFileSync(path, `${JSON.stringify({ kind: "lane", seq: 2, lane: "main", leafId: "imported" })}\n`);
-		await using movedRepository = createRepository(root);
+		const movedRepository = createRepository(root);
 		const moved = await movedRepository.open(metadata);
 		expect(await moved.getLeafId()).toBe("imported");
 	});

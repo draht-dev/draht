@@ -1667,6 +1667,7 @@ One file per session: a header line, then one JSON object per line, in `seq` ord
 ```
 
 - Open reads the whole file into memory; all queries run against that state. One session-wide append queue serializes writes from every lane, one line each; the queue allocates `seq`, and its order is the line order. Every storage mutation in this section is exactly one line — nothing in the design needs a multi-line atomic write.
+- The repository does not retain created or opened storage instances. It knows how to locate and load sessions, then transfers each storage and its write queue to the returned `Session`. Reopening loads a fresh storage instance; the serving layer's single-writer ownership rule prevents concurrent opens for writing. Repository operations are not serialized, so callers await operations with ordering dependencies.
 - The optional `lane` on an entry line is envelope metadata and dies at decode. When present, the line atomically appends the entry and advances that lane; replay requires `parentId` to equal its current leaf. When absent, the line imports a fork entry without moving a lane. Entries expose `seq` but no lane.
 - Torn tail: a malformed final line is the append that died mid-write. Open truncates it; the write was never acknowledged, nothing is lost. A malformed line anywhere else is corruption; open rejects.
 - Durability is process-crash level: a resolved append call. No fsync promise; if power-loss durability is ever needed, it becomes an explicit capability.

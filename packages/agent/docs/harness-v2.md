@@ -2,7 +2,7 @@
 
 > **Decision note.** This is the chosen design: straight-line async procedures with deterministic stepping through a gated effect boundary (section 15). A competing variant — the same Parts I and II over a synchronous state machine — was evaluated and rejected; it is preserved as `harness-v2-generator.md` at commit `01eeafd1`. Why this one: it is easy to follow and debug; plain async/await matches the rest of the codebase, with no machine/executor split to reason across; types just work — `fx.appendRecord()` returns the right thing, with no yield-result union casting at every boundary; it reuses the agent-loop building blocks as-is instead of reimplementing tool phases inside a machine; stepping is a wrapper around production code with zero overhead in automatic mode, and it can stop between parallel tool calls. The generator's one real edge — compiler-proven no-I/O between actions — is covered by the `Effects` interface through which all I/O must flow: not compile-time enforced, but the surface is small enough that violations are easy to spot, and the zero-writes-while-parked test catches them. If the machine is ever truly needed, it swaps in as a contained section 15 replacement; the action vocabulary is already shared.
 
-> **Compatibility policy.** Old coding-agent v3 JSONL sessions must open and restore idle. This is the only backward-compatibility requirement. All other formats and APIs in `packages/agent/src/harness` and `packages/storage/sqlite-node` (and their respective tests) may break. We do not write migrations, schema versioning, or conversion paths for anything else.
+> **Compatibility policy.** Old coding-agent v3 JSONL sessions must open and restore idle. This is the only backward-compatibility requirement. All other formats and APIs in `packages/agent/src/harness` and `packages/session-backends/sqlite-node` (and their respective tests) may break. We do not write migrations, schema versioning, or conversion paths for anything else.
 
 ```mermaid
 flowchart TD
@@ -2891,7 +2891,7 @@ Implementation lives directly in `packages/agent/src/harness/`, with v4 session 
 
 ### Scope boundary
 
-`packages/coding-agent/**` remains untouched. This plan implements `packages/agent` and `packages/storage/sqlite-node` only. The v3 requirement is an input-format requirement for the new JSONL repository, not a coding-agent migration. No work package may modify coding-agent source, tests, RPC, UI, or package metadata.
+`packages/coding-agent/**` remains untouched. This plan implements `packages/agent` and `packages/session-backends/sqlite-node` only. The v3 requirement is an input-format requirement for the new JSONL repository, not a coding-agent migration. No work package may modify coding-agent source, tests, RPC, UI, or package metadata.
 
 ### Package rules
 
@@ -3145,8 +3145,8 @@ For a fresh implementation session, in this order. This document wins over older
 2. `packages/agent/src/harness/session/types.ts` — v4 entries, records, storage, and repository contracts.
 3. `packages/agent/src/harness/session/session.ts` — session validation and lane-bound views.
 4. `packages/agent/src/harness/session/memory.ts` — reference backend.
-5. `packages/storage/sqlite-node/src/sqlite/repo.ts` — v4 SQLite repository, leases, and forks.
-6. `packages/storage/sqlite-node/src/sqlite/storage/branch-entries.ts` — branch cache queries.
+5. `packages/session-backends/sqlite-node/src/sqlite/repo.ts` — v4 SQLite repository, leases, and forks.
+6. `packages/session-backends/sqlite-node/src/sqlite/storage/branch-entries.ts` — branch cache queries.
 7. `packages/agent/src/harness/agent-harness.ts` — v2 public API scaffold.
 8. `packages/agent/src/agent-loop.ts` — the loop to split into the section 14 building blocks.
 9. `packages/agent/src/agent.ts` — queues, continuation, abort, settlement to preserve in spirit.

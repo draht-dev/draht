@@ -145,6 +145,13 @@ describe("JSONL v4 persistence", () => {
 		const metadata = await fork.getMetadata();
 		await repository[Symbol.asyncDispose]();
 
+		const importedEntryLines = readFileSync(metadata.path, "utf8")
+			.trimEnd()
+			.split("\n")
+			.map((line) => JSON.parse(line))
+			.filter((line) => line.kind === "entry");
+		expect(importedEntryLines.map((line) => "lane" in line)).toEqual([false, false, false]);
+
 		await using reopenedRepository = createRepository(root);
 		const reopened = await reopenedRepository.open(metadata);
 		expect((await reopened.findEntries({ order: "oldestFirst" })).map((entry) => entry.id)).toEqual([
@@ -251,5 +258,56 @@ describe("JSONL v4 persistence", () => {
 
 		await using reopenedRepository = createRepository(root);
 		await expect(reopenedRepository.open(metadata)).rejects.toMatchObject({ code: "invalid_entry" });
+	});
+
+	it("rejects a lane-bound entry that does not chain to the lane leaf", async () => {
+		const root = createTempDir();
+		const repository = createRepository(root);
+		const session = await repository.create({ id: "session" });
+		const metadata = await session.getMetadata();
+		await session.appendCustomEntry("first");
+		await session.appendCustomEntry("second");
+		await repository[Symbol.asyncDispose]();
+
+		const lines = readFileSync(metadata.path, "utf8")
+			.trimEnd()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		lines[2].parentId = null;
+		writeFileSync(metadata.path, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+
+		await using reopenedRepository = createRepository(root);
+		await expect(reopenedRepository.open(metadata)).rejects.toMatchObject({
+			code: "invalid_entry",
+			message: expect.stringContaining("does not chain to the lane leaf"),
+		});
+	});
+
+	it("does not move a lane for an imported entry without lane metadata", async () => {
+		const root = createTempDir();
+		const path = join(root, "session-import.jsonl");
+		const metadata = { id: "import", createdAt: 1, path, cwd: root };
+		const header = { kind: "header", version: 4, id: metadata.id, createdAt: metadata.createdAt, cwd: root };
+		const importedEntry = {
+			kind: "entry",
+			type: "custom",
+			id: "imported",
+			customType: "note",
+			parentId: null,
+			seq: 1,
+			timestamp: 1,
+		};
+		writeFileSync(path, `${JSON.stringify(header)}\n${JSON.stringify(importedEntry)}\n`);
+
+		const importedRepository = createRepository(root);
+		const imported = await importedRepository.open(metadata);
+		expect(await imported.getLeafId()).toBeNull();
+		expect((await imported.findEntries()).map((entry) => entry.id)).toEqual(["imported"]);
+		await importedRepository[Symbol.asyncDispose]();
+
+		appendFileSync(path, `${JSON.stringify({ kind: "lane", seq: 2, lane: "main", leafId: "imported" })}\n`);
+		await using movedRepository = createRepository(root);
+		const moved = await movedRepository.open(metadata);
+		expect(await moved.getLeafId()).toBe("imported");
 	});
 });

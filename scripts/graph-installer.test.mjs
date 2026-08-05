@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
@@ -15,6 +15,7 @@ function validManifest(version = "2026.8.5") {
 		name: "draht-graph",
 		version,
 		tag: `v${version}`,
+		gitCommit: "c".repeat(40),
 		artifacts: [{
 			platform: "linux-x64",
 			goos: "linux",
@@ -32,13 +33,14 @@ function validManifest(version = "2026.8.5") {
 for (const implementation of IMPLEMENTATIONS) {
 	test(`${implementation} accepts a manifest bound to the requested release and platform`, async () => {
 		const { validateGraphManifest } = await import(`../packages/${implementation}/graph-manifest.mjs`);
-		assert.equal(validateGraphManifest(validManifest(), { version: "2026.8.5", tag: "v2026.8.5", platform: "linux-x64" }).archiveBytes, 123);
+		assert.equal(validateGraphManifest(validManifest(), { version: "2026.8.5", tag: "v2026.8.5", platform: "linux-x64", commit: "c".repeat(40) }).archiveBytes, 123);
 	});
 
 	for (const [label, mutate] of [
 		["name", (m) => { m.name = "other"; }],
 		["version", (m) => { m.version = "2026.8.4"; }],
 		["tag", (m) => { m.tag = "v2026.8.4"; }],
+		["git commit", (m) => { m.gitCommit = "d".repeat(40); }],
 		["schema", (m) => { m.schemaVersion = 2; }],
 		["platform", (m) => { m.artifacts[0].platform = "darwin-x64"; }],
 		["goos", (m) => { m.artifacts[0].goos = "darwin"; }],
@@ -53,11 +55,30 @@ for (const implementation of IMPLEMENTATIONS) {
 			const manifest = validManifest();
 			mutate(manifest);
 			assert.throws(
-				() => validateGraphManifest(manifest, { version: "2026.8.5", tag: "v2026.8.5", platform: "linux-x64" }),
+				() => validateGraphManifest(manifest, { version: "2026.8.5", tag: "v2026.8.5", platform: "linux-x64", commit: "c".repeat(40) }),
 				/invalid graph release manifest/i,
 			);
 		});
 	}
+
+	test(`${implementation} validates real gh verification JSON and checksum bindings`, async () => {
+		const { validateGraphAttestation, validateGraphChecksums } = await import(`../packages/${implementation}/graph-manifest.mjs`);
+		const manifest = validManifest();
+		const entry = manifest.artifacts[0];
+		const statement = {
+			subject: [{ name: entry.archive, digest: { sha256: entry.archiveSha256 } }],
+			predicate: { buildDefinition: { resolvedDependencies: [{ uri: "git+https://github.com/draht-dev/draht", digest: { gitCommit: manifest.gitCommit } }] } },
+		};
+		const realGhShape = JSON.stringify([{ attestation: { bundle: { dsseEnvelope: {
+			payloadType: "application/vnd.in-toto+json",
+			payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
+		} } }, verificationResult: { signature: { certificate: { extensions: { sourceRepositoryURI: "https://github.com/draht-dev/draht", sourceRepositoryDigest: manifest.gitCommit, runnerEnvironment: "github-hosted" } } } } }]);
+		const constraints = { archive: entry.archive, digest: entry.archiveSha256, repo: "draht-dev/draht", commit: manifest.gitCommit };
+		assert.doesNotThrow(() => validateGraphAttestation(realGhShape, constraints));
+		assert.throws(() => validateGraphAttestation(JSON.stringify([{ verificationResult: { statement } }]), constraints), /structurally bound/i);
+		assert.doesNotThrow(() => validateGraphChecksums(`${entry.archiveSha256}  ${entry.archive}\n${entry.binarySha256}  linux-x64/${entry.binary}\n`, entry, "linux-x64"));
+		assert.throws(() => validateGraphChecksums(`${entry.archiveSha256}  ../${entry.archive}\n${entry.binarySha256}  linux-x64/${entry.binary}\n`, entry, "linux-x64"), /not bound|invalid/i);
+	});
 
 	test(`${implementation} performs fresh local graph install and replaces it on update`, () => {
 		const home = mkdtempSync(join(tmpdir(), `${implementation}-home-`));
@@ -104,14 +125,24 @@ for (const implementation of IMPLEMENTATIONS) {
 			binaryBytes: Buffer.byteLength(expected),
 		});
 		writeFileSync(join(fixture, "manifest.json"), JSON.stringify(manifest));
+		writeFileSync(join(fixture, "SHA256SUMS"), `${manifest.artifacts[0].archiveSha256}  ${manifest.artifacts[0].archive}\n${manifest.artifacts[0].binarySha256}  linux-x64/draht-graph\n`);
 		const preload = join(fixture, "mock-fetch.mjs");
 		writeFileSync(preload, `
 			import { readFileSync } from "node:fs";
 			globalThis.fetch = async (url) => {
-				const file = String(url).endsWith("/manifest.json") ? process.env.DRAHT_TEST_MANIFEST : process.env.DRAHT_TEST_ARCHIVE;
+				const value = String(url);
+				const file = value.endsWith("/manifest.json") ? process.env.DRAHT_TEST_MANIFEST : value.endsWith("/SHA256SUMS") ? process.env.DRAHT_TEST_SUMS : process.env.DRAHT_TEST_ARCHIVE;
 				return new Response(readFileSync(file), { status: 200 });
 			};
 		`);
+		const fakeBin = join(fixture, "bin");
+		mkdirSync(fakeBin);
+		const ghLog = join(fixture, "gh.log");
+		const statement = { subject: [{ name: manifest.artifacts[0].archive, digest: { sha256: manifest.artifacts[0].archiveSha256 } }], predicate: { buildDefinition: { resolvedDependencies: [{ uri: "git+https://github.com/draht-dev/draht", digest: { gitCommit: manifest.gitCommit } }] } } };
+		const payload = Buffer.from(JSON.stringify(statement)).toString("base64");
+		const gh = join(fakeBin, process.platform === "win32" ? "gh.cmd" : "gh");
+		writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$DRAHT_TEST_GH_LOG"\ncase "$2" in\nrepos/*/git/ref/tags/*) if [ -n "$DRAHT_TEST_LIGHTWEIGHT" ]; then printf '%s\\n' '{"object":{"type":"commit","sha":"${manifest.gitCommit}"}}'; else printf '%s\\n' '{"object":{"type":"tag","sha":"${"d".repeat(40)}"}}'; fi;;\nrepos/*/git/tags/*) printf '%s\\n' '{"object":{"type":"commit","sha":"${manifest.gitCommit}"}}';;\nesac\nif [ "$1" = attestation ]; then printf '%s\\n' '${JSON.stringify([{ attestation: { bundle: { dsseEnvelope: { payloadType: "application/vnd.in-toto+json", payload } } }, verificationResult: { signature: { certificate: { extensions: { sourceRepositoryURI: "https://github.com/draht-dev/draht", sourceRepositoryDigest: manifest.gitCommit, runnerEnvironment: "github-hosted" } } } } }])}'; fi\n`);
+		chmodSync(gh, 0o755);
 		const binDir = join(home, ".draht", "bin");
 		mkdirSync(binDir, { recursive: true });
 		const target = join(binDir, "draht-graph");
@@ -134,10 +165,24 @@ for (const implementation of IMPLEMENTATIONS) {
 				HOME: home,
 				USERPROFILE: home,
 				DRAHT_TEST_MANIFEST: join(fixture, "manifest.json"),
+				DRAHT_TEST_SUMS: join(fixture, "SHA256SUMS"),
 				DRAHT_TEST_ARCHIVE: archive,
+				DRAHT_TEST_GH_LOG: ghLog,
+				PATH: `${fakeBin}${delimiter}${process.env.PATH || ""}`,
 			},
 		});
 		assert.equal(repaired.status, 0, repaired.stderr || repaired.stdout);
+		assert.equal(readFileSync(target, "utf8"), expected);
+		assert.match(readFileSync(ghLog, "utf8"), /api .*git\/ref\/tags\/v1\.2\.3/);
+		assert.match(readFileSync(ghLog, "utf8"), /attestation verify .*--repo draht-dev\/draht .*--format json/);
+		// Repeat through the lightweight-tag shape; both tag kinds must resolve
+		// to the exact manifest commit before installation.
+		writeFileSync(target, tampered);
+		const lightweight = spawnSync(process.execPath, ["--import", preload, cli, "install-graph-engine", "--graph-engine-version", "1.2.3", "--force"], {
+			encoding: "utf8",
+			env: { ...process.env, HOME: home, USERPROFILE: home, DRAHT_TEST_MANIFEST: join(fixture, "manifest.json"), DRAHT_TEST_SUMS: join(fixture, "SHA256SUMS"), DRAHT_TEST_ARCHIVE: archive, DRAHT_TEST_GH_LOG: ghLog, DRAHT_TEST_LIGHTWEIGHT: "1", PATH: `${fakeBin}${delimiter}${process.env.PATH || ""}` },
+		});
+		assert.equal(lightweight.status, 0, lightweight.stderr || lightweight.stdout);
 		assert.equal(readFileSync(target, "utf8"), expected);
 	});
 }

@@ -255,7 +255,7 @@ func (f *fileStore) Commit(ctx context.Context, s *Snapshot) error {
 	}
 
 	tmpPath := filepath.Join(f.dir, fmt.Sprintf(".%s.tmp-%d", cacheFileName, os.Getpid()))
-	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("cache: create temp file: %w", err)
 	}

@@ -130,6 +130,76 @@ func TestTwoProcessesCannotPublishOlderGenerationAfterNewerGeneration(t *testing
 	}
 }
 
+func TestJavaScriptAndGoCannotPublishOlderGenerationAfterNewerGeneration(t *testing.T) {
+	root := t.TempDir()
+	out := filepath.Join(root, ".planning", "codebase")
+	cacheDir := filepath.Join(root, ".cache", "graph")
+	oldPath := filepath.Join(root, "old-generation.ts")
+	if err := os.WriteFile(oldPath, []byte("export const oldGeneration = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entered := filepath.Join(t.TempDir(), "js-entered")
+	release := filepath.Join(t.TempDir(), "js-release")
+	preload := filepath.Join(t.TempDir(), "block-publication.cjs")
+	script := `const fs=require("node:fs"); const path=require("node:path"); const original=fs.writeFileSync; let blocked=false; fs.writeFileSync=function(p,...args){ if(!blocked && path.basename(String(p))==="MAP.json"){ blocked=true; original(process.env.DRAHT_JS_ENTERED,"entered"); while(!fs.existsSync(process.env.DRAHT_JS_RELEASE)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10); } return original.call(this,p,...args); };`
+	if err := os.WriteFile(preload, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cli, err := filepath.Abs(filepath.Join("..", "..", "..", "packages", "draht-tools", "bin", "draht-tools.cjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := exec.Command("node", "--require", preload, cli, "map-graph")
+	old.Dir = root
+	old.Env = append(os.Environ(), "DRAHT_GRAPH_ENGINE=js", "DRAHT_JS_ENTERED="+entered, "DRAHT_JS_RELEASE="+release)
+	var oldOutput bytes.Buffer
+	old.Stdout, old.Stderr = &oldOutput, &oldOutput
+	if err := old.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, entered)
+	if err := os.Remove(oldPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "new-generation.ts"), []byte("export const newGeneration = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newer := helperCommand(t, root, out, cacheDir, "", "", "")
+	var newOutput bytes.Buffer
+	newer.Stdout, newer.Stderr = &newOutput, &newOutput
+	if err := newer.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Before coordination, Go can finish while the older JS writer is blocked;
+	// with the shared protocol it remains queued. The deadline only detects
+	// which state applies; ordering comes from the explicit JS publication gate.
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(filepath.Join(out, "MAP.json")); err == nil && strings.Contains(string(data), "new-generation") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.WriteFile(release, []byte("release"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Wait(); err != nil {
+		t.Fatalf("JavaScript process: %v\n%s", err, oldOutput.Bytes())
+	}
+	if err := newer.Wait(); err != nil {
+		t.Fatalf("Go process: %v\n%s", err, newOutput.Bytes())
+	}
+	for _, name := range []string{"MAP.json", "MAP.html", "GRAPH_REPORT.md", filepath.Join("..", "..", ".cache", "graph", "facts.ndjson")} {
+		data, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "old-generation") || !strings.Contains(string(data), "new-generation") {
+			t.Errorf("%s published stale/mixed JS/Go generation", name)
+		}
+	}
+}
+
 func TestSameProcessRegenerationStillPublishesChangedSource(t *testing.T) {
 	root := t.TempDir()
 	out := filepath.Join(root, ".planning", "codebase")

@@ -1,9 +1,16 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"strings"
 
 	"github.com/draht-dev/draht/go/internal/parse"
 )
@@ -21,9 +28,85 @@ const defaultMemLimitBytes = 768 << 20
 // build` leave them at "dev"/"" — that is the intended dev signal.
 var version, commit = "dev", ""
 
+const graphSchemaVersion = 5
+
+type managedStamp struct {
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	SchemaVersion int    `json:"schemaVersion"`
+	SHA256        string `json:"sha256"`
+	Size          int64  `json:"size"`
+}
+
+func validateManagedExecutable() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate executable: %w", err)
+	}
+	executable, err = filepath.Abs(executable)
+	if err != nil {
+		return fmt.Errorf("resolve executable: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil // a standalone binary remains usable when no managed home can be identified
+	}
+	wantName := "draht-graph"
+	if runtime.GOOS == "windows" {
+		wantName += ".exe"
+	}
+	managed := filepath.Join(home, ".draht", "bin", wantName)
+	invoked := os.Args[0]
+	if !filepath.IsAbs(invoked) {
+		invoked, _ = filepath.Abs(invoked)
+	}
+	equalPath := func(a, b string) bool {
+		if runtime.GOOS == "windows" {
+			return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+		}
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	isManaged := equalPath(executable, managed) || equalPath(invoked, managed)
+	if !isManaged {
+		return nil
+	}
+	stampBytes, err := os.ReadFile(filepath.Join(filepath.Dir(managed), ".draht-graph.json"))
+	if err != nil {
+		return fmt.Errorf("read provenance stamp: %w", err)
+	}
+	var stamp managedStamp
+	if err := json.Unmarshal(stampBytes, &stamp); err != nil {
+		return fmt.Errorf("parse provenance stamp: %w", err)
+	}
+	if stamp.Name != "draht-graph" || stamp.Version == "" || stamp.SchemaVersion != graphSchemaVersion || stamp.Size < 0 || len(stamp.SHA256) != sha256.Size*2 {
+		return fmt.Errorf("invalid provenance stamp schema")
+	}
+	f, err := os.Open(executable)
+	if err != nil {
+		return fmt.Errorf("open executable: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() != stamp.Size {
+		return fmt.Errorf("executable size does not match provenance stamp")
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash executable: %w", err)
+	}
+	if hex.EncodeToString(h.Sum(nil)) != stamp.SHA256 {
+		return fmt.Errorf("executable SHA-256 does not match provenance stamp")
+	}
+	return nil
+}
+
 // main dispatches to the map-graph subcommand and the global --version/
 // -h/--help flags, per design §7.
 func main() {
+	if err := validateManagedExecutable(); err != nil {
+		fmt.Fprintf(os.Stderr, "draht-graph: managed integrity check failed: %v\n", err)
+		os.Exit(126)
+	}
 	// D8: on by default, but never overrides an operator's explicit
 	// GOMEMLIMIT (debug.SetMemoryLimit is also settable via that env var
 	// natively by the Go runtime at startup — we only set our own default

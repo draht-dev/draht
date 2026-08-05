@@ -5,11 +5,15 @@ package publication
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/draht-dev/draht/go/internal/emit"
@@ -18,7 +22,15 @@ import (
 	"github.com/draht-dev/draht/go/internal/scan"
 )
 
-const lockDirName = ".map-publish-lock"
+const (
+	lockDirName      = ".map-publish-lock"
+	lockHeartbeat    = 250 * time.Millisecond
+	lockStaleAfter   = 2 * time.Second
+	lockRetryBackoff = 10 * time.Millisecond
+	lockMaxWait      = 2 * time.Minute
+	ownerPrefix      = ".owner-"
+	ownerSuffix      = ".json"
+)
 
 // Build runs graph assembly and derived-output rendering under an
 // output-scoped inter-process lock. Every attempt is rendered in a unique
@@ -240,46 +252,156 @@ func sourceGeneration(root string) ([sha256.Size]byte, error) {
 	return sum, nil
 }
 
-type fileLock struct{ file *os.File }
+type lockOwner struct {
+	Token string `json:"token"`
+	PID   int    `json:"pid"`
+}
+
+type fileLock struct {
+	dir   string
+	owner string
+	token string
+	stop  chan struct{}
+	done  chan struct{}
+}
 
 func acquire(ctx context.Context, outDir string) (*fileLock, error) {
 	canonical, err := filepath.Abs(outDir)
 	if err != nil {
 		return nil, fmt.Errorf("publication: resolve output: %w", err)
 	}
-	if resolved, evalErr := filepath.EvalSymlinks(canonical); evalErr == nil {
-		canonical = resolved
-	}
 	if err := os.MkdirAll(canonical, 0o755); err != nil {
 		return nil, fmt.Errorf("publication: create output: %w", err)
 	}
-	lockDir := filepath.Join(canonical, lockDirName)
-	if err := os.MkdirAll(lockDir, 0o755); err != nil {
-		return nil, fmt.Errorf("publication: create lock directory: %w", err)
-	}
-	file, err := os.OpenFile(filepath.Join(lockDir, "lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	canonical, err = filepath.EvalSymlinks(canonical)
 	if err != nil {
-		return nil, fmt.Errorf("publication: open lock: %w", err)
+		return nil, fmt.Errorf("publication: canonicalize output: %w", err)
 	}
+	waitCtx, cancel := context.WithTimeout(ctx, lockMaxWait)
+	defer cancel()
+	lockDir := filepath.Join(canonical, lockDirName)
 	for {
-		locked, lockErr := tryLockFile(file)
-		if lockErr != nil {
-			file.Close()
+		lock, lockErr := createLock(lockDir)
+		if lockErr == nil {
+			return lock, nil
+		}
+		if !os.IsExist(lockErr) {
 			return nil, fmt.Errorf("publication: lock: %w", lockErr)
 		}
-		if locked {
-			return &fileLock{file: file}, nil
+		if err := reapStaleLock(lockDir); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("publication: recover lock: %w", err)
 		}
 		select {
-		case <-ctx.Done():
-			file.Close()
-			return nil, fmt.Errorf("publication: lock: %w", ctx.Err())
-		case <-time.After(10 * time.Millisecond):
+		case <-waitCtx.Done():
+			return nil, fmt.Errorf("publication: lock: %w", waitCtx.Err())
+		case <-time.After(lockRetryBackoff):
+		}
+	}
+}
+
+func createLock(dir string) (*fileLock, error) {
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return nil, err
+	}
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		_ = os.Remove(dir)
+		return nil, err
+	}
+	token := hex.EncodeToString(random[:])
+	owner := filepath.Join(dir, ownerPrefix+token+ownerSuffix)
+	data, _ := json.Marshal(lockOwner{Token: token, PID: os.Getpid()})
+	file, err := os.OpenFile(owner, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err == nil {
+		_, err = file.Write(data)
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
+	lock := &fileLock{dir: dir, owner: owner, token: token, stop: make(chan struct{}), done: make(chan struct{})}
+	go lock.heartbeat()
+	return lock, nil
+}
+
+func reapStaleLock(dir string) error {
+	dirInfo, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("lock path is not a directory")
+	}
+	info := dirInfo
+	heartbeatPath := ""
+	entries, readErr := os.ReadDir(dir)
+	if readErr == nil {
+		var owners []os.DirEntry
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ownerPrefix) && strings.HasSuffix(name, ownerSuffix) {
+				owners = append(owners, entry)
+			}
+		}
+		if len(owners) == 1 && owners[0].Type().IsRegular() {
+			if ownerInfo, statErr := owners[0].Info(); statErr == nil {
+				var owner lockOwner
+				ownerPath := filepath.Join(dir, owners[0].Name())
+				data, ownerErr := os.ReadFile(ownerPath)
+				token := strings.TrimSuffix(strings.TrimPrefix(owners[0].Name(), ownerPrefix), ownerSuffix)
+				if ownerErr == nil && json.Unmarshal(data, &owner) == nil && owner.Token == token && owner.PID > 0 {
+					info = ownerInfo
+					heartbeatPath = ownerPath
+				}
+			}
+		}
+	}
+	if time.Since(info.ModTime()) <= lockStaleAfter {
+		return nil
+	}
+	// A stale observation is not enough to steal: give a live owner two
+	// heartbeat periods to prove liveness, then require the same token-specific
+	// file to remain unchanged. This closes the stat/heartbeat/rename race.
+	if heartbeatPath != "" {
+		observed := info.ModTime()
+		time.Sleep(2 * lockHeartbeat)
+		current, statErr := os.Lstat(heartbeatPath)
+		if statErr == nil && current.Mode().IsRegular() && current.ModTime().After(observed) {
+			return nil
+		}
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return statErr
+		}
+	}
+	stale := fmt.Sprintf("%s.stale-%d-%d", dir, os.Getpid(), time.Now().UnixNano())
+	if err := os.Rename(dir, stale); err != nil {
+		return err
+	}
+	return os.RemoveAll(stale)
+}
+
+func (l *fileLock) heartbeat() {
+	defer close(l.done)
+	ticker := time.NewTicker(lockHeartbeat)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-l.stop:
+			return
+		case now := <-ticker.C:
+			if err := os.Chtimes(l.owner, now, now); err != nil {
+				return
+			}
 		}
 	}
 }
 
 func (l *fileLock) release() {
-	_ = unlockFile(l.file)
-	_ = l.file.Close()
+	close(l.stop)
+	<-l.done
+	_ = os.Remove(l.owner)
+	_ = os.Remove(l.dir)
 }

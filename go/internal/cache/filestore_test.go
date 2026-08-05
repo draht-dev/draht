@@ -24,6 +24,20 @@ func commitFixtureSize(t *testing.T, limit int64, payloadBytes int) (Store, *Sna
 	return store, snap
 }
 
+func TestFileStoreCommitUsesPrivatePermissions(t *testing.T) {
+	store, snap := commitFixtureSize(t, 1<<20, 32)
+	if err := store.Commit(context.Background(), snap); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	info, err := os.Stat(store.(*fileStore).path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("cache mode = %04o, want 0600", got)
+	}
+}
+
 func TestFileStoreCommitHonorsExactWriterBoundary(t *testing.T) {
 	probe, snap := commitFixtureSize(t, 1<<20, 32)
 	if err := probe.Commit(context.Background(), snap); err != nil {

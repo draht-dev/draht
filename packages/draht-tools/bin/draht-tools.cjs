@@ -10,7 +10,7 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const os = require("node:os");
-const { execSync, execFileSync, spawnSync } = require("node:child_process");
+const { execSync, execFileSync, spawn, spawnSync } = require("node:child_process");
 
 const PLANNING_DIR = ".planning";
 const BANNER_WIDTH = 55;
@@ -5375,32 +5375,143 @@ function graphBuildOutputs(root, opts = {}) {
 	}
 }
 
+const GRAPH_PUBLISH_LOCK = ".map-publish-lock";
+const GRAPH_LOCK_STALE_MS = 2000;
+const GRAPH_LOCK_WAIT_MS = 120000;
+const GRAPH_LOCK_HEARTBEAT_MS = 250;
+
+function graphSleep(ms) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function graphAcquirePublication(outDir) {
+	ensureDir(outDir);
+	const lockDir = path.join(fs.realpathSync(outDir), GRAPH_PUBLISH_LOCK);
+	const token = crypto.randomBytes(16).toString("hex");
+	const ownerPath = path.join(lockDir, `.owner-${token}.json`);
+	const deadline = Date.now() + GRAPH_LOCK_WAIT_MS;
+	for (;;) {
+		try {
+			fs.mkdirSync(lockDir, { mode: 0o700 });
+			fs.writeFileSync(ownerPath, JSON.stringify({ token, pid: process.pid }), { mode: 0o600, flag: "wx" });
+			// An IPC channel is an OS-owned parent-liveness signal and cannot be
+			// fooled by PID reuse. The token-specific pathname prevents a delayed
+			// heartbeat from refreshing a successor after stale-lock recovery.
+			const heartbeatScript = `const fs=require("node:fs");const [owner,interval]=process.argv.slice(1);process.on("disconnect",()=>process.exit(0));setInterval(()=>{try{const now=new Date();fs.utimesSync(owner,now,now)}catch{process.exit(0)}},Number(interval));`;
+			const heartbeat = spawn(process.execPath, ["-e", heartbeatScript, ownerPath, String(GRAPH_LOCK_HEARTBEAT_MS)], {
+				stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true,
+			});
+			heartbeat.unref();
+			heartbeat.channel?.unref();
+			return { lockDir, ownerPath, token, heartbeat };
+		} catch (error) {
+			if (error.code !== "EEXIST") {
+				try { fs.rmSync(ownerPath, { force: true }); fs.rmdirSync(lockDir); } catch { /* best effort for our incomplete lock */ }
+				throw error;
+			}
+			let info;
+			let heartbeatPath = null;
+			try {
+				const lockInfo = fs.lstatSync(lockDir);
+				if (!lockInfo.isDirectory()) throw new Error(`graph publication lock path is not a directory: ${lockDir}`);
+				info = lockInfo;
+				const owners = fs.readdirSync(lockDir, { withFileTypes: true })
+					.filter((entry) => entry.isFile() && /^\.owner-[a-f0-9]{32}\.json$/.test(entry.name));
+				if (owners.length === 1) {
+					const candidate = path.join(lockDir, owners[0].name);
+					try {
+						const owner = JSON.parse(fs.readFileSync(candidate, "utf8"));
+						const token = owners[0].name.slice(".owner-".length, -".json".length);
+						if (owner?.token === token && Number.isSafeInteger(owner.pid) && owner.pid > 0) {
+							info = fs.statSync(candidate);
+							heartbeatPath = candidate;
+						}
+					} catch { /* malformed owner: recover according to directory age */ }
+				}
+			} catch (inspectError) {
+				if (inspectError.code === "ENOENT") continue;
+				throw inspectError;
+			}
+			if (Date.now() - info.mtimeMs > GRAPH_LOCK_STALE_MS) {
+				if (heartbeatPath) {
+					const observed = info.mtimeMs;
+					graphSleep(2 * GRAPH_LOCK_HEARTBEAT_MS);
+					try { if (fs.lstatSync(heartbeatPath).mtimeMs > observed) continue; }
+					catch (recheckError) { if (recheckError.code !== "ENOENT") throw recheckError; }
+				}
+				const stale = `${lockDir}.stale-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+				try { fs.renameSync(lockDir, stale); fs.rmSync(stale, { recursive: true, force: true }); } catch { /* another waiter won */ }
+				continue;
+			}
+			if (Date.now() >= deadline) throw new Error(`timed out waiting for graph publication lock ${lockDir}`);
+			graphSleep(10);
+		}
+	}
+}
+
+function graphReleasePublication(lock) {
+	try { lock.heartbeat.kill(); } catch { /* already exited */ }
+	// Token-specific unlink + rmdir is ABA-safe: an obsolete owner can never
+	// remove a successor's owner file, and rmdir fails while that file exists.
+	try { fs.rmSync(lock.ownerPath, { force: true }); } catch { /* stale recovery moved it */ }
+	try { fs.rmdirSync(lock.lockDir); } catch { /* stale recovery or successor owns it */ }
+}
+
+function visSourceGeneration(root) {
+	const hash = crypto.createHash("sha256");
+	for (const file of visWalk(root).files) {
+		hash.update(path.relative(root, file).split(path.sep).join("/"));
+		hash.update("\0");
+		try { hash.update(fs.readFileSync(file)); } catch (error) { hash.update(String(error.code || error.message)); }
+		hash.update("\0");
+	}
+	for (const relative of ["GROUPS.json", "FLOWS.json", "STATE.md", "ROADMAP.md", "PROJECT.md", "DOMAIN.md", "DOMAIN-MODEL.md"]) {
+		const file = path.join(root, PLANNING_DIR, relative === "GROUPS.json" || relative === "FLOWS.json" ? "codebase" : "", relative);
+		hash.update(relative);
+		try { hash.update(fs.readFileSync(file)); } catch (error) { hash.update(String(error.code || error.message)); }
+		hash.update("\0");
+	}
+	return hash.digest("hex");
+}
+
 function visWriteOutputs(root, opts = {}) {
 	const outDir = path.join(root, PLANNING_DIR, "codebase");
-	ensureDir(outDir);
-	const map = visBuildMap(root);
 	const jsonPath = path.join(outDir, "MAP.json");
 	const htmlPath = path.join(outDir, "MAP.html");
 	const reportPath = path.join(outDir, "GRAPH_REPORT.md");
-	// Idempotent write: if the new map differs from the committed file ONLY in the volatile
-	// generatedAt/buildMs fields, leave every artifact untouched — so the post-commit hook /
-	// stale rebuild never produces spurious git churn. Graph data is deterministic (see verify gate).
-	let unchanged = false;
+	const lock = graphAcquirePublication(outDir);
 	try {
-		const prev = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
-		unchanged = JSON.stringify(Object.assign({}, prev, { generatedAt: 0, buildMs: 0 }))
-			=== JSON.stringify(Object.assign({}, map, { generatedAt: 0, buildMs: 0 }));
-	} catch { /* no/invalid prior file → write fresh */ }
-	if (!unchanged) {
-		fs.writeFileSync(jsonPath, JSON.stringify(map, null, 2) + "\n", "utf-8");
-		fs.writeFileSync(reportPath, visRenderReport(map), "utf-8"); // a fresh human report is a parity feature
+		for (;;) {
+			const before = visSourceGeneration(root);
+			const map = visBuildMap(root);
+			const stage = fs.mkdtempSync(path.join(outDir, ".map-publish-stage-js-"));
+			try {
+				const stageJSON = path.join(stage, "MAP.json");
+				const stageHTML = path.join(stage, "MAP.html");
+				const stageReport = path.join(stage, "GRAPH_REPORT.md");
+				let unchanged = false;
+				try {
+					const prev = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
+					unchanged = JSON.stringify(Object.assign({}, prev, { generatedAt: 0, buildMs: 0 }))
+						=== JSON.stringify(Object.assign({}, map, { generatedAt: 0, buildMs: 0 }));
+				} catch { /* no/invalid prior file */ }
+				if (!unchanged) {
+					fs.writeFileSync(stageJSON, JSON.stringify(map, null, 2) + "\n", "utf-8");
+					fs.writeFileSync(stageReport, visRenderReport(map), "utf-8");
+				}
+				if (!opts.quiet) fs.writeFileSync(stageHTML, visRenderHtml(jsonPath, map), "utf-8");
+				if (before !== visSourceGeneration(root)) continue;
+				if (!unchanged) fs.renameSync(stageReport, reportPath);
+				if (!opts.quiet) fs.renameSync(stageHTML, htmlPath);
+				if (!unchanged) fs.renameSync(stageJSON, jsonPath);
+				return { jsonPath, htmlPath, reportPath, map, unchanged };
+			} finally {
+				fs.rmSync(stage, { recursive: true, force: true });
+			}
+		}
+	} finally {
+		graphReleasePublication(lock);
 	}
-	// MAP.html is a derived view artifact (not the git-committed source of truth), so on any full
-	// (non-quiet) build we always refresh it — otherwise template/visualization changes never reach
-	// MAP.html when the underlying graph data is unchanged. The JSON/report stay gated above so the
-	// committed data never churns. The post-commit hook uses --quiet and skips the HTML entirely.
-	if (!opts.quiet) fs.writeFileSync(htmlPath, visRenderHtml(jsonPath, map), "utf-8");
-	return { jsonPath, htmlPath, reportPath, map, unchanged };
 }
 
 // --- map-graph ---

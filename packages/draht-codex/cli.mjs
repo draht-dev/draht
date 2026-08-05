@@ -24,7 +24,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as zlib from "node:zlib";
-import { validateGraphManifest } from "./graph-manifest.mjs";
+import { validateGraphAttestation, validateGraphChecksums, validateGraphManifest } from "./graph-manifest.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = __dirname;
@@ -354,6 +354,27 @@ async function fetchBuffer(url, timeoutMs) {
 	return Buffer.from(await res.arrayBuffer());
 }
 
+function runGh(args) {
+	const result = spawnSync("gh", args, { encoding: "utf8", windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+	if (result.error) throw new Error(`gh ${args[0]} unavailable: ${result.error.message}`);
+	if (result.status !== 0) throw new Error(`gh ${args[0]} failed: ${(result.stderr || "").trim()}`);
+	return result.stdout;
+}
+
+function resolveGraphReleaseCommit(tag) {
+	let object = JSON.parse(runGh(["api", `repos/${GRAPH_RELEASE_REPO}/git/ref/tags/${tag}`])).object;
+	for (let depth = 0; depth < 8 && object?.type === "tag"; depth++) {
+		object = JSON.parse(runGh(["api", `repos/${GRAPH_RELEASE_REPO}/git/tags/${object.sha}`])).object;
+	}
+	if (object?.type !== "commit" || !/^[a-f0-9]{40}$/.test(object.sha)) throw new Error(`release tag ${tag} does not resolve to an exact commit`);
+	return object.sha;
+}
+
+function verifyGraphAttestation(archivePath, entry, commit) {
+	const output = runGh(["attestation", "verify", archivePath, "--repo", GRAPH_RELEASE_REPO, "--predicate-type", "https://slsa.dev/provenance/v1", "--deny-self-hosted-runners", "--format", "json"]);
+	validateGraphAttestation(output, { archive: entry.archive, digest: entry.archiveSha256, repo: GRAPH_RELEASE_REPO, commit });
+}
+
 // Atomically installs `srcPath` (an already-verified local binary) as the
 // stable ~/.draht/bin/draht-graph[.exe] entry point — a REAL COPY, not a
 // symlink (graph-hook bakes os.Executable()'s fully-resolved path into
@@ -451,12 +472,15 @@ async function ensureGraphEngine(flags) {
 
 		const tag = version.startsWith("v") ? version : `v${version}`;
 		const base = `https://github.com/${GRAPH_RELEASE_REPO}/releases/download/${tag}`;
+		const releaseCommit = resolveGraphReleaseCommit(tag);
 		const manifest = await fetchJson(`${base}/manifest.json`, 15_000);
-		const entry = validateGraphManifest(manifest, { version, tag, platform });
+		const entry = validateGraphManifest(manifest, { version, tag, platform, commit: releaseCommit });
 		if (!graphManifestNameOk(entry.archive) || !graphManifestNameOk(entry.binary)) {
 			log(`release ${tag}'s manifest.json has an invalid archive/binary name for ${platform} — refusing to use it. draht will use the built-in JS engine.`);
 			return;
 		}
+		const checksums = (await fetchBuffer(`${base}/SHA256SUMS`, 15_000)).toString("utf8");
+		validateGraphChecksums(checksums, entry, platform);
 
 		const archiveBuf = await fetchBuffer(`${base}/${entry.archive}`, 120_000);
 		if (sha256(archiveBuf) !== entry.archiveSha256 || archiveBuf.length !== entry.archiveBytes) {
@@ -468,6 +492,7 @@ async function ensureGraphEngine(flags) {
 		try {
 			const archivePath = path.join(workDir, entry.archive);
 			fs.writeFileSync(archivePath, archiveBuf);
+			verifyGraphAttestation(archivePath, entry, releaseCommit);
 			const extractDir = path.join(workDir, "extracted");
 			if (entry.archive.endsWith(".zip")) extractZip(archivePath, extractDir);
 			else extractTarGz(archivePath, extractDir);

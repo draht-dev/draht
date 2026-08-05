@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,6 +24,111 @@ import (
 // the test binary itself): build it, exec it as a subprocess, assert on its
 // stdout/stderr/exit code — the exact same interface a real caller sees.
 var binPath string
+
+func runBinary(t *testing.T, executable, home string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.Command(executable, args...)
+	cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	code := 0
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		code = exitErr.ExitCode()
+	} else if err != nil {
+		t.Fatalf("run managed binary: %v", err)
+	}
+	return stdout.String(), stderr.String(), code
+}
+
+func managedBinary(t *testing.T) (string, string, []byte) {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".draht", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "draht-graph")
+	if err := os.WriteFile(target, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return home, target, data
+}
+
+func writeManagedStamp(t *testing.T, target string, data []byte) {
+	t.Helper()
+	sum := sha256.Sum256(data)
+	stamp := map[string]any{"name": "draht-graph", "version": "test", "schemaVersion": 5, "sha256": hex.EncodeToString(sum[:]), "size": len(data)}
+	b, _ := json.Marshal(stamp)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(target), ".draht-graph.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagedBinaryFailsClosedOnMissingMalformedAndTamperedStamp(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(*testing.T, string, []byte)
+	}{
+		{"missing", func(*testing.T, string, []byte) {}},
+		{"malformed", func(t *testing.T, target string, _ []byte) {
+			_ = os.WriteFile(filepath.Join(filepath.Dir(target), ".draht-graph.json"), []byte("{bad"), 0o600)
+		}},
+		{"same-size-tampered", func(t *testing.T, target string, data []byte) {
+			writeManagedStamp(t, target, data)
+			data[len(data)/2] ^= 1
+			_ = os.WriteFile(target, data, 0o755)
+		}},
+		{"stamp-before-binary", func(t *testing.T, target string, data []byte) {
+			replacement := append([]byte(nil), data...)
+			replacement[len(replacement)/3] ^= 1
+			writeManagedStamp(t, target, replacement)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, target, data := managedBinary(t)
+			tc.prepare(t, target, data)
+			_, stderr, code := runBinary(t, target, home, "--version")
+			if code == 0 {
+				t.Fatalf("managed binary executed despite %s stamp", tc.name)
+			}
+			if !strings.Contains(stderr, "managed integrity") {
+				t.Fatalf("stderr %q does not explain managed integrity failure", stderr)
+			}
+		})
+	}
+}
+
+func TestManagedBinaryWithValidStampAndStandaloneBinaryStillExecute(t *testing.T) {
+	home, target, data := managedBinary(t)
+	writeManagedStamp(t, target, data)
+	if _, stderr, code := runBinary(t, target, home, "--version"); code != 0 {
+		t.Fatalf("valid managed binary failed: %s", stderr)
+	}
+	if _, stderr, code := runBinary(t, binPath, home, "--version"); code != 0 {
+		t.Fatalf("standalone binary failed: %s", stderr)
+	}
+}
+
+func TestManagedPathSymlinkCannotBypassMissingStamp(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".draht", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "draht-graph")
+	if err := os.Symlink(binPath, target); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, stderr, code := runBinary(t, target, home, "--version")
+	if code == 0 || !strings.Contains(stderr, "managed integrity") {
+		t.Fatalf("managed symlink bypassed missing stamp: code=%d stderr=%q", code, stderr)
+	}
+}
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "draht-tools-maintest-*")

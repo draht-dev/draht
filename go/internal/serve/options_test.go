@@ -4,6 +4,9 @@ import "testing"
 
 func TestParseOptions_Defaults(t *testing.T) {
 	o := ParseOptions(nil)
+	if o.ParserName != "treesitter" {
+		t.Errorf("ParserName = %q, want treesitter", o.ParserName)
+	}
 	if o.Port != 4878 {
 		t.Errorf("Port = %d, want 4878", o.Port)
 	}
@@ -15,6 +18,15 @@ func TestParseOptions_Defaults(t *testing.T) {
 	}
 	if o.MaxClients != 64 {
 		t.Errorf("MaxClients = %d, want 64", o.MaxClients)
+	}
+}
+
+func TestParseOptions_ParserLongForms(t *testing.T) {
+	for _, argv := range [][]string{{"--parser", "regex"}, {"--parser=regex"}} {
+		o := ParseOptions(argv)
+		if o.ParserName != "regex" {
+			t.Errorf("argv=%v ParserName = %q, want regex", argv, o.ParserName)
+		}
 	}
 }
 

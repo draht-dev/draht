@@ -26,6 +26,17 @@ import (
 // pollInterval is how often the watcher re-walks the repo (see watch.go).
 const pollInterval = time.Second
 
+func newParser(name string) (parse.Parser, error) {
+	switch name {
+	case "", "treesitter":
+		return parse.NewTreeSitter(parse.CLILangs())
+	case "regex":
+		return parse.NewRegex(), nil
+	default:
+		return nil, fmt.Errorf("unknown --parser %q (want treesitter or regex)", name)
+	}
+}
+
 // sseClient is one open /events connection.
 type sseClient struct {
 	w  http.ResponseWriter
@@ -39,6 +50,7 @@ type state struct {
 	parser                               parse.Parser
 	stdout, stderr                       io.Writer
 	maxClients                           int
+	regenFn                              func(context.Context)
 
 	mu      sync.Mutex
 	lastMap *model.Map
@@ -111,19 +123,60 @@ func (st *state) regen(ctx context.Context) {
 	st.broadcast("data: changed\n\n")
 }
 
+func (st *state) runRegen(ctx context.Context) {
+	if st.regenFn != nil {
+		st.regenFn(ctx)
+		return
+	}
+	st.regen(ctx)
+}
+
 // debouncedRegen returns a callback the watcher invokes on every detected
-// change; repeated calls within `debounce` coalesce into a single regen
-// (cjs: clearTimeout/setTimeout(400) per fs.watch event).
+// change. Calls inside `debounce` coalesce, and regeneration is single-flight:
+// if the debounce expires during a build, exactly one latest follow-up runs
+// after it. This prevents concurrent builders from publishing out of order.
 func (st *state) debouncedRegen(ctx context.Context, debounce time.Duration) func() {
 	var mu sync.Mutex
 	var timer *time.Timer
+	var generation uint64
+	var running, pending bool
+
+	fire := func(firedGeneration uint64) {
+		mu.Lock()
+		if firedGeneration != generation {
+			mu.Unlock()
+			return
+		}
+		if running {
+			pending = true
+			mu.Unlock()
+			return
+		}
+		running = true
+		mu.Unlock()
+
+		for {
+			st.runRegen(ctx)
+			mu.Lock()
+			if !pending {
+				running = false
+				mu.Unlock()
+				return
+			}
+			pending = false
+			mu.Unlock()
+		}
+	}
+
 	return func() {
 		mu.Lock()
 		defer mu.Unlock()
+		generation++
+		thisGeneration := generation
 		if timer != nil {
 			timer.Stop()
 		}
-		timer = time.AfterFunc(debounce, func() { st.regen(ctx) })
+		timer = time.AfterFunc(debounce, func() { fire(thisGeneration) })
 	}
 }
 
@@ -276,7 +329,7 @@ func Run(ctx context.Context, repoRoot string, o Options, stdout, stderr io.Writ
 	// part of the cache key. A drifted list here would mean two binaries
 	// writing entries under keys that disagree about which languages were
 	// parsed. (cmd/draht-tools/mapgraph.go states the same rule for the CLI.)
-	parser, err := parse.NewTreeSitter(parse.CLILangs())
+	parser, err := newParser(o.ParserName)
 	if err != nil {
 		fmt.Fprintln(stderr, "map-serve: failed to start:", err)
 		return 1

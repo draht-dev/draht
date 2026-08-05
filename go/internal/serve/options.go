@@ -6,12 +6,14 @@ package serve
 import (
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // Options is map-serve's parsed flag set (defaults per cjs:5161-5169).
 type Options struct {
 	Port        int
+	ParserName  string
 	OpenBrowser bool
 	MaxRetries  int
 	MaxClients  int
@@ -22,7 +24,9 @@ type Options struct {
 // allDigitsRe matches a bare positional port argument (cjs: /^\d+$/).
 var allDigitsRe = regexp.MustCompile(`^\d+$`)
 
-// ParseOptions ports map-serve's arg loop verbatim:
+// ParseOptions preserves map-serve's permissive CJS argument loop and adds the
+// Go-only --parser treesitter|regex selector. Parser values accept both
+// "--parser value" and "--parser=value" forms.
 //
 //	if (a === "--port" || a === "-p") port = parseInt(args[++i], 10) || port;
 //	else if (a === "--open") openBrowser = true;
@@ -36,6 +40,7 @@ var allDigitsRe = regexp.MustCompile(`^\d+$`)
 func ParseOptions(argv []string) Options {
 	o := Options{
 		Port:        4878,
+		ParserName:  "treesitter",
 		OpenBrowser: false,
 		MaxRetries:  10,
 		MaxClients:  64,
@@ -52,6 +57,13 @@ func ParseOptions(argv []string) Options {
 					o.Port = n
 				}
 			}
+		case a == "--parser":
+			i++
+			if i < len(argv) {
+				o.ParserName = argv[i]
+			}
+		case strings.HasPrefix(a, "--parser="):
+			o.ParserName = strings.TrimPrefix(a, "--parser=")
 		case a == "--open":
 			o.OpenBrowser = true
 		case a == "--no-open":

@@ -47,7 +47,8 @@ type diskEntry struct {
 }
 
 type fileStore struct {
-	dir string
+	dir      string
+	readFile func(string) ([]byte, error)
 }
 
 // NewFileStore returns the NDJSON store rooted at dir. It creates dir and a
@@ -71,17 +72,33 @@ func (f *fileStore) Load(ctx context.Context) (*Snapshot, error) {
 		return NewSnapshot(), err
 	}
 
-	data, err := os.ReadFile(f.path())
+	path := f.path()
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return NewSnapshot(), nil
+		}
+		return NewSnapshot(), fmt.Errorf("cache: read %s: %w", path, err)
+	}
+	if info.Size() > maxCacheFileBytes {
+		return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", path, maxCacheFileBytes)
+	}
+
+	readFile := f.readFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	data, err := readFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return NewSnapshot(), nil
 		}
 		// Any other read error (permissions, I/O) degrades to a cold cache;
 		// it is not this caller's job to fail the whole index build.
-		return NewSnapshot(), fmt.Errorf("cache: read %s: %w", f.path(), err)
+		return NewSnapshot(), fmt.Errorf("cache: read %s: %w", path, err)
 	}
 	if len(data) > maxCacheFileBytes {
-		return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", f.path(), maxCacheFileBytes)
+		return NewSnapshot(), fmt.Errorf("cache: %s exceeds %d bytes, treating as cold", path, maxCacheFileBytes)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
 		return NewSnapshot(), fmt.Errorf("cache: %s is empty", f.path())

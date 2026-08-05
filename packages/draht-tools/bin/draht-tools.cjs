@@ -5274,11 +5274,11 @@ function graphStripGoOnlyFlags(args) {
 // go/README.md), which is NOT byte-identical to the JS engine's regex-based
 // output. Until a project-wide, version-controlled decision to switch the
 // committed artifact to AST lands (see .planning/kg-integration/SPEC.md § "Go
-// engine cutover"), pin delegated `map-graph` runs to `--parser regex` so the
-// two engines produce identical MAP.json — unless the caller explicitly asked
-// for a different parser. (Phase 4 review finding #11.)
+// engine cutover"), pin delegated `map-graph` and `map-serve` runs to
+// `--parser regex` so the two engines produce identical MAP.json — unless the
+// caller explicitly asked for a different parser. (Phase 4 review finding #11.)
 function graphPinRegexParser(cmd, args) {
-	if (cmd !== "map-graph") return args;
+	if (cmd !== "map-graph" && cmd !== "map-serve") return args;
 	if (args.some((a) => a === "--parser" || String(a).startsWith("--parser="))) return args;
 	return ["--parser", "regex", ...args];
 }

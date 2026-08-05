@@ -2,6 +2,7 @@ package serve
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -9,10 +10,81 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/draht-dev/draht/go/internal/model"
 )
+
+func TestDebouncedRegen_SerializesBuildsAndRunsLatestGeneration(t *testing.T) {
+	var active, maxActive, calls atomic.Int32
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondDone := make(chan struct{})
+	st := &state{
+		regenFn: func(context.Context) {
+			n := active.Add(1)
+			for {
+				max := maxActive.Load()
+				if n <= max || maxActive.CompareAndSwap(max, n) {
+					break
+				}
+			}
+			call := calls.Add(1)
+			if call == 1 {
+				close(firstStarted)
+				<-releaseFirst
+			}
+			active.Add(-1)
+			if call == 2 {
+				close(secondDone)
+			}
+		},
+	}
+
+	trigger := st.debouncedRegen(context.Background(), time.Millisecond)
+	trigger()
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first regeneration did not start")
+	}
+
+	// Changes arriving during the build coalesce to one latest follow-up.
+	trigger()
+	trigger()
+	trigger()
+	time.Sleep(10 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("calls while first build is blocked = %d, want 1", got)
+	}
+	close(releaseFirst)
+
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("latest regeneration did not run")
+	}
+	time.Sleep(10 * time.Millisecond)
+	if got := maxActive.Load(); got != 1 {
+		t.Errorf("maximum concurrent regenerations = %d, want 1", got)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("regeneration calls = %d, want 2 (initial plus one latest)", got)
+	}
+}
+
+func TestNewParser_SelectsRegex(t *testing.T) {
+	p, err := newParser("regex")
+	if err != nil {
+		t.Fatalf("newParser(regex): %v", err)
+	}
+	defer p.Close()
+	if got := p.Version(); got != "re/1" {
+		t.Errorf("Version = %q, want re/1", got)
+	}
+}
 
 func newTestState(t *testing.T) *state {
 	t.Helper()

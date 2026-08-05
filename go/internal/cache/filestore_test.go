@@ -7,6 +7,72 @@ import (
 	"testing"
 )
 
+func TestFileStoreOversizeRejectedBeforeRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, cacheFileName)
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create oversized cache: %v", err)
+	}
+	if err := f.Truncate(maxCacheFileBytes + 1); err != nil {
+		f.Close()
+		t.Fatalf("truncate oversized cache: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close oversized cache: %v", err)
+	}
+
+	readCalled := false
+	store := &fileStore{
+		dir: dir,
+		readFile: func(string) ([]byte, error) {
+			readCalled = true
+			return nil, nil
+		},
+	}
+	snap, err := store.Load(context.Background())
+	if err == nil {
+		t.Fatal("Load oversized cache returned nil error")
+	}
+	if got := snap.Stats().Entries; got != 0 {
+		t.Errorf("oversized cache entries = %d, want 0", got)
+	}
+	if readCalled {
+		t.Error("oversized cache was read before enforcing the size limit")
+	}
+}
+
+func TestFileStoreAtSizeLimitIsRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, cacheFileName)
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create boundary cache: %v", err)
+	}
+	if err := f.Truncate(maxCacheFileBytes); err != nil {
+		f.Close()
+		t.Fatalf("truncate boundary cache: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close boundary cache: %v", err)
+	}
+
+	readCalled := false
+	store := &fileStore{
+		dir: dir,
+		readFile: func(string) ([]byte, error) {
+			readCalled = true
+			return []byte(`{"v":1,"tool":"draht-graph","entries":0}` + "\n"), nil
+		},
+	}
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatalf("Load cache at exact size limit: %v", err)
+	}
+	if !readCalled {
+		t.Error("cache at exact size limit was rejected before read")
+	}
+}
+
 func TestFileStoreLoadMissingFileIsEmptyNoError(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileStore(dir)

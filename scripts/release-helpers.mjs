@@ -224,7 +224,19 @@ function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles }) {
 			encoding: "utf8",
 			maxBuffer: MAX_ARCHIVE_LISTING_BYTES,
 		});
-		const members = listing.split("\n").filter(Boolean).filter((name) => !name.endsWith("/"));
+		const allMembers = listing.split("\n").filter(Boolean);
+		if (new Set(allMembers).size !== allMembers.length) throw new Error("duplicate archive member names");
+		const metadata = execFileSync(zip ? "zipinfo" : "tar", zip ? ["-l", archivePath] : ["-tvzf", archivePath], {
+			encoding: "utf8",
+			maxBuffer: MAX_ARCHIVE_LISTING_BYTES,
+		});
+		const entryTypes = zip
+			? metadata.split("\n").filter((line) => /^[bcdlps-][rwxStTs-]{9}\s/.test(line)).map((line) => line[0])
+			: metadata.split("\n").filter(Boolean).map((line) => line[0]);
+		if (entryTypes.length !== allMembers.length || entryTypes.some((type) => type !== "-" && type !== "d")) {
+			throw new Error("archive contains a link, device, FIFO, or other special entry type");
+		}
+		const members = allMembers.filter((name) => !name.endsWith("/"));
 		if (!members.length || members.some((name) => name.startsWith("/") || name.split("/").includes(".."))) throw new Error("empty or unsafe payload");
 		if (expectedFiles && JSON.stringify([...members].sort()) !== JSON.stringify([...expectedFiles].sort())) throw new Error("payload does not exactly match manifest contract");
 		if (!expectedFiles && wrapper && members.some((name) => !name.startsWith(`${wrapper}/`))) throw new Error(`payload outside ${wrapper}/`);
@@ -243,7 +255,28 @@ function inspectArchive(bytes, archive, { wrapper, binary, expectedFiles }) {
 	}
 }
 
-export async function verifyGithubAttestation({ name, digest: subjectDigest, commit, fetchImpl, token }) {
+const GITHUB_REPOSITORY_URL = "https://github.com/draht-dev/draht";
+const GITHUB_SOURCE_URI = "git+https://github.com/draht-dev/draht";
+const RELEASE_WORKFLOW_PATH = ".github/workflows/build-binaries.yml";
+
+function isExpectedGithubProvenance(statement, { subjectDigest, commit, tag }) {
+	const workflowRef = `refs/tags/${tag}`;
+	const workflow = statement?.predicate?.buildDefinition?.externalParameters?.workflow;
+	const dependencies = statement?.predicate?.buildDefinition?.resolvedDependencies;
+	return statement?._type === "https://in-toto.io/Statement/v1"
+		&& statement?.predicateType === "https://slsa.dev/provenance/v1"
+		&& statement?.predicate?.buildDefinition?.buildType === "https://actions.github.io/buildtypes/workflow/v1"
+		&& Array.isArray(statement?.subject)
+		&& statement.subject.some((subject) => subject?.digest?.sha256 === subjectDigest)
+		&& workflow?.repository === GITHUB_REPOSITORY_URL
+		&& workflow?.ref === workflowRef
+		&& workflow?.path === RELEASE_WORKFLOW_PATH
+		&& Array.isArray(dependencies)
+		&& dependencies.some((dependency) => dependency?.uri === `${GITHUB_SOURCE_URI}@${workflowRef}` && dependency?.digest?.gitCommit === commit)
+		&& statement?.predicate?.runDetails?.builder?.id === `${GITHUB_REPOSITORY_URL}/${RELEASE_WORKFLOW_PATH}@${workflowRef}`;
+}
+
+export async function verifyGithubAttestation({ name, digest: subjectDigest, commit, tag, fetchImpl, token }) {
 	const headers = { Accept: "application/vnd.github+json", "User-Agent": "draht-release", "X-GitHub-Api-Version": "2022-11-28" };
 	if (token) headers.Authorization = `Bearer ${token}`;
 	const response = await fetchImpl(`https://api.github.com/repos/draht-dev/draht/attestations/sha256:${subjectDigest}`, { headers });
@@ -254,14 +287,12 @@ export async function verifyGithubAttestation({ name, digest: subjectDigest, com
 		try {
 			const payload = attestation.bundle?.dsseEnvelope?.payload;
 			const statement = JSON.parse(Buffer.from(payload, "base64").toString("utf8"));
-			const subjectMatches = statement.subject?.some((subject) => subject.digest?.sha256 === subjectDigest);
-			const statementText = JSON.stringify(statement);
-			return subjectMatches && statementText.includes("draht-dev/draht") && statementText.includes(commit);
+			return isExpectedGithubProvenance(statement, { subjectDigest, commit, tag });
 		} catch {
 			return false;
 		}
 	});
-	if (!matches) throw new Error(`GitHub attestation for ${name} is not bound to draht-dev/draht commit ${commit}`);
+	if (!matches) throw new Error(`GitHub attestation for ${name} is not bound to draht-dev/draht commit ${commit} and ${RELEASE_WORKFLOW_PATH} at ${tag}`);
 }
 
 export async function validateReleaseArtifacts({
@@ -276,6 +307,11 @@ export async function validateReleaseArtifacts({
 	if (!/^[0-9a-f]{40}$/.test(commit ?? "")) throw new Error("Expected release commit must be an immutable 40-character Git SHA");
 	if (release.tag_name !== tag) throw new Error(`GitHub release tag ${release.tag_name} does not match requested ${tag}`);
 	if (!Array.isArray(release.assets)) throw new Error("GitHub release has no assets array");
+	const assetNames = release.assets.map((asset) => asset?.name);
+	const duplicateNames = [...new Set(assetNames.filter((name, index) => assetNames.indexOf(name) !== index))];
+	if (duplicateNames.length) throw new Error(`GitHub release has duplicate asset names: ${duplicateNames.join(", ")}`);
+	const unexpected = assetNames.filter((name) => !EXPECTED_RELEASE_ASSETS.includes(name));
+	if (unexpected.length) throw new Error(`GitHub release has unexpected assets: ${unexpected.join(", ")}`);
 	const missing = missingReleaseAssets(release.assets);
 	if (missing.length) throw new Error(`GitHub release is missing required assets: ${missing.join(", ")}`);
 	const assets = new Map(release.assets.map((asset) => [asset.name, asset]));

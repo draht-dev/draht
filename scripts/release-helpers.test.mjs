@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -111,6 +111,27 @@ test("primary runtime producers and payloads satisfy the Draht brand gate", () =
 });
 
 
+test("release workflow splits attestation authority from immutable release attachment", () => {
+	const workflow = readFileSync(join(process.cwd(), ".github/workflows/build-binaries.yml"), "utf8");
+	assert.doesNotMatch(workflow, /workflow_dispatch/,
+		"manual dispatch cannot produce tag-ref-bound GitHub provenance even when checkout uses a tag");
+	assert.match(workflow, /RELEASE_TAG: \$\{\{ github\.ref_name \}\}/);
+	assert.doesNotMatch(workflow, /--clobber|gh release upload/);
+	assert.match(workflow, /gh release view "\$\{RELEASE_TAG\}"[\s\S]*exit 1[\s\S]*gh release create/);
+	const attestJob = workflow.match(/\n  attest:\n([\s\S]*?)(?=\n  release:\n)/)?.[1] ?? "";
+	const releaseJob = workflow.match(/\n  release:\n([\s\S]*)$/)?.[1] ?? "";
+	assert.match(attestJob, /permissions:\n\s+contents: read\n\s+id-token: write\n\s+attestations: write/);
+	assert.doesNotMatch(attestJob, /contents: write|gh release/);
+	assert.match(attestJob, /actions\/attest-build-provenance@[0-9a-f]{40}/);
+	assert.match(releaseJob, /needs: \[build-runtime, build-graph, attest\]/);
+	assert.match(releaseJob, /permissions:\n\s+contents: write/);
+	assert.doesNotMatch(releaseJob, /id-token: write|attestations: write|attest-build-provenance/);
+	assert.match(releaseJob, /gh release create/);
+	assert.doesNotMatch(releaseJob, /assets=\([^)]*\*/s, "release attachment must not use asset wildcards");
+	const attachedAssets = [...releaseJob.matchAll(/^\s+release-assets\/(?:runtime|graph)\/([^\s)]+)$/gm)].map((match) => match[1]);
+	assert.deepEqual(attachedAssets.sort(), [...EXPECTED_RELEASE_ASSETS].sort(), "release job must attach exactly the canonical 14 assets");
+});
+
 test("GitHub release lookup uses the API without requiring gh and authenticates when configured", async () => {
 	let request;
 	const assets = await listGithubReleaseAssets("v2.0.0+rc", {
@@ -125,28 +146,85 @@ test("GitHub release lookup uses the API without requiring gh and authenticates 
 	assert.deepEqual(assets, [{ name: "manifest.json" }]);
 });
 
-test("GitHub attestation binds an asset digest to the release repository and commit", async () => {
-	const digest = "a".repeat(64);
-	const commit = "b".repeat(40);
-	const statement = {
+function provenanceStatement({ digest, commit, tag = "v2.0.0" }) {
+	return {
+		_type: "https://in-toto.io/Statement/v1",
+		predicateType: "https://slsa.dev/provenance/v1",
 		subject: [{ name: "draht-linux-x64.tar.gz", digest: { sha256: digest } }],
 		predicate: {
 			buildDefinition: {
-				resolvedDependencies: [{ uri: "git+https://github.com/draht-dev/draht", digest: { gitCommit: commit } }],
+				buildType: "https://actions.github.io/buildtypes/workflow/v1",
+				externalParameters: {
+					workflow: {
+						repository: "https://github.com/draht-dev/draht",
+						ref: `refs/tags/${tag}`,
+						path: ".github/workflows/build-binaries.yml",
+					},
+				},
+				resolvedDependencies: [{ uri: `git+https://github.com/draht-dev/draht@refs/tags/${tag}`, digest: { gitCommit: commit } }],
+			},
+			runDetails: {
+				builder: { id: `https://github.com/draht-dev/draht/.github/workflows/build-binaries.yml@refs/tags/${tag}` },
 			},
 		},
 	};
-	const fetchImpl = async () => ({
+}
+
+function attestationFetch(statement) {
+	return async () => ({
 		ok: true,
 		json: async () => ({
 			attestations: [{ bundle: { dsseEnvelope: { payload: Buffer.from(JSON.stringify(statement)).toString("base64") } } }],
 		}),
 	});
-	await assert.doesNotReject(() => verifyGithubAttestation({ name: "draht-linux-x64.tar.gz", digest, commit, fetchImpl }));
+}
+
+test("GitHub attestation structurally binds an asset to SLSA provenance, repository, commit, and workflow", async () => {
+	const digest = "a".repeat(64);
+	const commit = "b".repeat(40);
+	const tag = "v2.0.0";
+	const statement = provenanceStatement({ digest, commit, tag });
+	await assert.doesNotReject(() => verifyGithubAttestation({ name: "draht-linux-x64.tar.gz", digest, commit, tag, fetchImpl: attestationFetch(statement) }));
 	await assert.rejects(
-		() => verifyGithubAttestation({ name: "draht-linux-x64.tar.gz", digest, commit: "c".repeat(40), fetchImpl }),
+		() => verifyGithubAttestation({ name: "draht-linux-x64.tar.gz", digest, commit: "c".repeat(40), tag, fetchImpl: attestationFetch(statement) }),
 		/not bound.*commit/i,
 	);
+});
+
+test("GitHub attestation rejects expected values spoofed only in an unrelated note", async () => {
+	const digest = "a".repeat(64);
+	const commit = "b".repeat(40);
+	const tag = "v2.0.0";
+	const statement = provenanceStatement({ digest, commit: "c".repeat(40), tag });
+	statement.predicate.buildDefinition.externalParameters.workflow.repository = "https://github.com/attacker/repo";
+	statement.predicate.runDetails.builder.id = "https://github.com/attacker/repo/.github/workflows/evil.yml@refs/tags/v2.0.0";
+	statement.note = `draht-dev/draht ${commit} .github/workflows/build-binaries.yml`;
+	await assert.rejects(
+		() => verifyGithubAttestation({ name: "draht-linux-x64.tar.gz", digest, commit, tag, fetchImpl: attestationFetch(statement) }),
+		/not bound/i,
+	);
+});
+
+test("GitHub attestation rejects wrong in-toto type, predicate type, repository URI, or workflow identity", async (t) => {
+	const digest = "a".repeat(64);
+	const commit = "b".repeat(40);
+	const tag = "v2.0.0";
+	for (const [label, mutate] of [
+		["statement type", (s) => { s._type = "https://in-toto.io/Statement/v0.1"; }],
+		["predicate type", (s) => { s.predicateType = "https://example.test/provenance"; }],
+		["repository URI", (s) => { s.predicate.buildDefinition.resolvedDependencies[0].uri += "/fork"; }],
+		["source URI without the attested tag ref", (s) => { s.predicate.buildDefinition.resolvedDependencies[0].uri = "git+https://github.com/draht-dev/draht"; }],
+		["workflow identity", (s) => { s.predicate.runDetails.builder.id = "https://github.com/draht-dev/draht/.github/workflows/other.yml@refs/tags/v2.0.0"; }],
+	]) {
+		await t.test(label, async () => {
+			const statement = provenanceStatement({ digest, commit, tag });
+			mutate(statement);
+			await assert.rejects(
+				() => verifyGithubAttestation({ name: "asset", digest, commit, tag, fetchImpl: attestationFetch(statement) }),
+				/not bound/i,
+			);
+		});
+	}
 });
 
 function sha256(bytes) {
@@ -168,6 +246,108 @@ function makeArchive(name, files) {
 		assert.equal(result.status, 0, result.stderr);
 		return readFileSync(output);
 	} finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+function makeMalformedGraphArchive(kind) {
+	const root = mkdtempSync(join(tmpdir(), "draht-malformed-archive-"));
+	try {
+		mkdirSync(join(root, "draht-graph"), { recursive: true });
+		writeFileSync(join(root, "draht-graph/draht-graph"), "graph-binary:linux-x64");
+		writeFileSync(join(root, "draht-graph/LICENSE"), "license");
+		writeFileSync(join(root, "target"), "readme");
+		const readme = join(root, "draht-graph/README.md");
+		if (kind === "hardlink") linkSync(join(root, "draht-graph/LICENSE"), readme);
+		else if (kind === "symlink") symlinkSync("LICENSE", readme);
+		else if (kind === "fifo") {
+			const fifo = spawnSync("mkfifo", [readme], { encoding: "utf8" });
+			assert.equal(fifo.status, 0, fifo.stderr);
+		} else writeFileSync(readme, "readme");
+		const tarPath = join(root, "asset.tar");
+		let result = spawnSync("tar", ["-cf", tarPath, "draht-graph"], { cwd: root, encoding: "utf8" });
+		assert.equal(result.status, 0, result.stderr);
+		if (kind === "duplicate") {
+			result = spawnSync("tar", ["-rf", tarPath, "draht-graph/README.md"], { cwd: root, encoding: "utf8" });
+			assert.equal(result.status, 0, result.stderr);
+		}
+		const gzipPath = `${tarPath}.gz`;
+		result = spawnSync("gzip", ["-c", tarPath], { encoding: null });
+		assert.equal(result.status, 0, result.stderr?.toString());
+		writeFileSync(gzipPath, result.stdout);
+		return readFileSync(gzipPath);
+	} finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+function crc32(bytes) {
+	let crc = 0xffffffff;
+	for (const byte of bytes) {
+		crc ^= byte;
+		for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+	}
+	return (crc ^ 0xffffffff) >>> 0;
+}
+
+function makeStoredZip(entries) {
+	const locals = [];
+	const centrals = [];
+	let offset = 0;
+	for (const { name, content, mode = 0o100644 } of entries) {
+		const nameBytes = Buffer.from(name);
+		const bytes = Buffer.from(content);
+		const checksum = crc32(bytes);
+		const local = Buffer.alloc(30);
+		local.writeUInt32LE(0x04034b50, 0);
+		local.writeUInt16LE(20, 4);
+		local.writeUInt32LE(checksum, 14);
+		local.writeUInt32LE(bytes.length, 18);
+		local.writeUInt32LE(bytes.length, 22);
+		local.writeUInt16LE(nameBytes.length, 26);
+		locals.push(local, nameBytes, bytes);
+		const central = Buffer.alloc(46);
+		central.writeUInt32LE(0x02014b50, 0);
+		central.writeUInt16LE(0x031e, 4);
+		central.writeUInt16LE(20, 6);
+		central.writeUInt32LE(checksum, 16);
+		central.writeUInt32LE(bytes.length, 20);
+		central.writeUInt32LE(bytes.length, 24);
+		central.writeUInt16LE(nameBytes.length, 28);
+		central.writeUInt32LE((mode << 16) >>> 0, 38);
+		central.writeUInt32LE(offset, 42);
+		centrals.push(central, nameBytes);
+		offset += local.length + nameBytes.length + bytes.length;
+	}
+	const centralBytes = Buffer.concat(centrals);
+	const end = Buffer.alloc(22);
+	end.writeUInt32LE(0x06054b50, 0);
+	end.writeUInt16LE(entries.length, 8);
+	end.writeUInt16LE(entries.length, 10);
+	end.writeUInt32LE(centralBytes.length, 12);
+	end.writeUInt32LE(offset, 16);
+	return Buffer.concat([...locals, centralBytes, end]);
+}
+
+function makeMalformedGraphZip(kind) {
+	const entries = [
+		{ name: "draht-graph/draht-graph.exe", content: "graph-binary:windows-x64" },
+		{ name: "draht-graph/LICENSE", content: "license" },
+		kind === "symlink"
+			? { name: "draht-graph/README.md", content: "LICENSE", mode: 0o120777 }
+			: kind === "fifo"
+				? { name: "draht-graph/README.md", content: "", mode: 0o010644 }
+				: kind === "device"
+					? { name: "draht-graph/README.md", content: "", mode: 0o060644 }
+					: { name: "draht-graph/README.md", content: "readme" },
+	];
+	if (kind === "duplicate") entries.push({ name: "draht-graph/README.md", content: "second" });
+	return makeStoredZip(entries);
+}
+
+function replaceGraphArchive(fixture, platform, bytes) {
+	const artifact = fixture.manifest.artifacts.find((item) => item.platform === platform);
+	artifact.archiveBytes = bytes.length;
+	artifact.archiveSha256 = sha256(bytes);
+	fixture.downloads.set(`https://api.github.test/${artifact.archive}`, bytes);
+	fixture.release.assets.find((asset) => asset.name === artifact.archive).size = bytes.length;
+	fixture.downloads.set("https://api.github.test/SHA256SUMS", Buffer.from(`${fixture.manifest.artifacts.flatMap((item) => [`${item.archiveSha256}  ${item.archive}`, `${item.binarySha256}  ${item.platform}/${item.binary}`]).join("\n")}\n`));
 }
 
 function verifiedReleaseFixture(version = "2.0.0") {
@@ -261,20 +441,55 @@ test("runtime manifest must declare every archive member exactly", async () => {
 	);
 });
 
-test("release artifact validation cannot bypass the complete asset gate", async () => {
-	const fixture = verifiedReleaseFixture();
-	fixture.release.assets = fixture.release.assets.filter(({ name }) => name !== "draht-linux-arm64.tar.gz");
-	await assert.rejects(
-		validateReleaseArtifacts({
-			tag: "v2.0.0",
-			version: "2.0.0",
-			commit: fixture.commit,
-			release: fixture.release,
-			fetchImpl: fixture.fetchImpl,
-			verifyAttestation: fixture.verifyAttestation,
-		}),
-		/draht-linux-arm64\.tar\.gz/,
-	);
+test("release validator rejects real tar archives with duplicate, symlink, hardlink, or FIFO members", async (t) => {
+	for (const kind of ["duplicate", "symlink", "hardlink", "fifo"]) {
+		await t.test(kind, async () => {
+			const fixture = verifiedReleaseFixture();
+			replaceGraphArchive(fixture, "linux-x64", makeMalformedGraphArchive(kind));
+			await assert.rejects(
+				() => validateReleaseArtifacts({ tag: "v2.0.0", version: "2.0.0", ...fixture }),
+				/invalid archive.*(?:duplicate|entry type|special|regular)/i,
+			);
+		});
+	}
+});
+
+test("release validator rejects real ZIP archives with duplicate, symlink, FIFO, or device members", async (t) => {
+	for (const kind of ["duplicate", "symlink", "fifo", "device"]) {
+		await t.test(kind, async () => {
+			const fixture = verifiedReleaseFixture();
+			replaceGraphArchive(fixture, "windows-x64", makeMalformedGraphZip(kind));
+			await assert.rejects(
+				() => validateReleaseArtifacts({ tag: "v2.0.0", version: "2.0.0", ...fixture }),
+				/invalid archive.*(?:duplicate|entry type|special|regular)/i,
+			);
+		});
+	}
+});
+
+test("release artifact validation rejects missing, duplicate, pi-prefixed, and unexpected assets", async (t) => {
+	for (const [label, mutate, pattern] of [
+		["missing", (assets) => assets.filter(({ name }) => name !== "draht-linux-arm64.tar.gz"), /draht-linux-arm64\.tar\.gz/],
+		["duplicate", (assets) => [...assets, { ...assets[0] }], /duplicate.*asset/i],
+		["legacy pi", (assets) => [...assets, { name: "pi-linux-x64.tar.gz", size: 1, url: "https://api.github.test/pi" }], /unexpected.*pi-linux-x64/i],
+		["unexpected", (assets) => [...assets, { name: "notes.txt", size: 1, url: "https://api.github.test/notes" }], /unexpected.*notes\.txt/i],
+	]) {
+		await t.test(label, async () => {
+			const fixture = verifiedReleaseFixture();
+			fixture.release.assets = mutate(fixture.release.assets);
+			await assert.rejects(
+				validateReleaseArtifacts({
+					tag: "v2.0.0",
+					version: "2.0.0",
+					commit: fixture.commit,
+					release: fixture.release,
+					fetchImpl: fixture.fetchImpl,
+					verifyAttestation: fixture.verifyAttestation,
+				}),
+				pattern,
+			);
+		});
+	}
 });
 
 test("release artifact validation rejects oversized assets before download", async () => {

@@ -44,6 +44,25 @@ esac
 printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$' || error "DRAHT_VERSION must be a release version such as 2026.8.5."
 TAG="v$VERSION"
 
+info "Resolving immutable commit for $TAG..."
+TAG_OBJECT="$(curl -fsSL \
+  -H 'Accept: application/vnd.github+json' \
+  -H 'X-GitHub-Api-Version: 2022-11-28' \
+  "https://api.github.com/repos/$REPO/git/ref/tags/$TAG")" || error "Could not resolve $TAG through the GitHub API."
+object_type="$(printf '%s' "$TAG_OBJECT" | jq -er '.object.type')" || error "GitHub returned malformed tag data for $TAG."
+TAG_COMMIT="$(printf '%s' "$TAG_OBJECT" | jq -er '.object.sha')" || error "GitHub returned malformed tag data for $TAG."
+for _ in 1 2 3 4 5; do
+  [ "$object_type" = tag ] || break
+  TAG_OBJECT="$(curl -fsSL \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "https://api.github.com/repos/$REPO/git/tags/$TAG_COMMIT")" || error "Could not resolve annotated tag object $TAG_COMMIT."
+  object_type="$(printf '%s' "$TAG_OBJECT" | jq -er '.object.type')" || error "GitHub returned malformed annotated tag data."
+  TAG_COMMIT="$(printf '%s' "$TAG_OBJECT" | jq -er '.object.sha')" || error "GitHub returned malformed annotated tag data."
+done
+[ "$object_type" = commit ] || error "$TAG does not resolve to a Git commit."
+printf '%s' "$TAG_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || error "GitHub returned a non-immutable commit digest for $TAG."
+
 os="$(uname -s)"; arch="$(uname -m)"
 case "$os" in
   Linux) os=linux ;;
@@ -77,18 +96,50 @@ curl -fsSL "$BASE/$ARCHIVE" -o "$ARCHIVE_PATH"
 
 if command -v gh >/dev/null 2>&1; then
   info "Verifying GitHub build provenance..."
-  gh attestation verify "$MANIFEST" --repo "$REPO" >/dev/null || error "Provenance verification failed for runtime-manifest.json."
-  gh attestation verify "$CHECKSUMS" --repo "$REPO" >/dev/null || error "Provenance verification failed for DRAHT-SHA256SUMS."
-  gh attestation verify "$ARCHIVE_PATH" --repo "$REPO" >/dev/null || error "Provenance verification failed for $ARCHIVE."
+  verify_provenance() {
+    asset="$1"
+    label="$2"
+    output="$WORK_DIR/$label.attestation.json"
+    digest="$(sha256_file "$asset")"
+    gh attestation verify "$asset" \
+      --repo "$REPO" \
+      --source-digest "$TAG_COMMIT" \
+      --source-ref "refs/tags/$TAG" \
+      --signer-workflow "$REPO/.github/workflows/build-binaries.yml" \
+      --format json > "$output" || error "Provenance verification failed for $label."
+    jq -e \
+      --arg digest "$digest" \
+      --arg commit "$TAG_COMMIT" \
+      --arg repository "https://github.com/$REPO" \
+      --arg source "git+https://github.com/$REPO@refs/tags/$TAG" \
+      --arg ref "refs/tags/$TAG" \
+      --arg builder "https://github.com/$REPO/.github/workflows/build-binaries.yml@refs/tags/$TAG" '
+        type == "array" and any(.[];
+          .verificationResult.statement as $s |
+          $s._type == "https://in-toto.io/Statement/v1" and
+          $s.predicateType == "https://slsa.dev/provenance/v1" and
+          $s.predicate.buildDefinition.buildType == "https://actions.github.io/buildtypes/workflow/v1" and
+          any($s.subject[]?; .digest.sha256 == $digest) and
+          $s.predicate.buildDefinition.externalParameters.workflow.repository == $repository and
+          $s.predicate.buildDefinition.externalParameters.workflow.ref == $ref and
+          $s.predicate.buildDefinition.externalParameters.workflow.path == ".github/workflows/build-binaries.yml" and
+          any($s.predicate.buildDefinition.resolvedDependencies[]?; .uri == $source and .digest.gitCommit == $commit) and
+          $s.predicate.runDetails.builder.id == $builder
+        )
+      ' "$output" >/dev/null || error "Provenance for $label is not structurally bound to $REPO commit $TAG_COMMIT and the release workflow."
+  }
+  verify_provenance "$MANIFEST" runtime-manifest.json
+  verify_provenance "$CHECKSUMS" DRAHT-SHA256SUMS
+  verify_provenance "$ARCHIVE_PATH" "$ARCHIVE"
 elif [ "${DRAHT_ALLOW_UNVERIFIED:-0}" = "1" ]; then
   info "WARNING: gh is unavailable; DRAHT_ALLOW_UNVERIFIED=1 enables checksum-only verification."
 else
   error "GitHub CLI (gh) is required for provenance verification. Install gh, or explicitly opt out with DRAHT_ALLOW_UNVERIFIED=1."
 fi
 
-jq -e --arg version "$VERSION" --arg tag "$TAG" --arg platform "$PLATFORM" --arg archive "$ARCHIVE" --arg binary "$BINARY_NAME" '
+jq -e --arg version "$VERSION" --arg tag "$TAG" --arg commit "$TAG_COMMIT" --arg platform "$PLATFORM" --arg archive "$ARCHIVE" --arg binary "$BINARY_NAME" '
   .schemaVersion == 1 and .name == "draht" and
-  .version == $version and .tag == $tag and
+  .version == $version and .tag == $tag and .gitCommit == $commit and
   ([.artifacts[] | select(.platform == $platform)] | length == 1) and
   ([.artifacts[] | select(.platform == $platform)][0] |
     .archive == $archive and .binary == $binary and
@@ -96,7 +147,7 @@ jq -e --arg version "$VERSION" --arg tag "$TAG" --arg platform "$PLATFORM" --arg
     (.archiveSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
     (.binaryBytes | type == "number" and . > 0 and floor == .) and
     (.binarySha256 | type == "string" and test("^[0-9a-f]{64}$")))
-' "$MANIFEST" >/dev/null || error "runtime-manifest.json does not bind $TAG, $PLATFORM and $ARCHIVE."
+' "$MANIFEST" >/dev/null || error "runtime-manifest.json does not bind $TAG, release commit $TAG_COMMIT, $PLATFORM and $ARCHIVE."
 
 manifest_size="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .archiveBytes' "$MANIFEST")"
 manifest_hash="$(jq -r --arg platform "$PLATFORM" '.artifacts[] | select(.platform == $platform) | .archiveSha256' "$MANIFEST")"

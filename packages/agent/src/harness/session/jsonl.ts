@@ -1,10 +1,10 @@
 import { uuidv7 } from "@draht/ai";
 import type { FileError, FileSystem, Result } from "../types.ts";
 import { Session } from "./session.ts";
+import { type SessionMutation, SessionState } from "./state.ts";
 import {
 	type BranchBounds,
 	type Entry,
-	type EntryOrder,
 	type EntryQuery,
 	type ForkOptions,
 	type LanePointer,
@@ -60,13 +60,6 @@ interface HeaderLine {
 	cwd: string;
 	parentSessionId?: string;
 }
-
-type DecodedMutation =
-	| { kind: "entry"; lane?: string; entry: Entry }
-	| { kind: "record"; record: LaneRecord }
-	| { kind: "lane"; seq: number; lane: string; leafId: string | null }
-	| { kind: "fact"; seq: number; fact: "name"; name: string }
-	| { kind: "fact"; seq: number; fact: "label"; targetId: string; label: string | undefined };
 
 const ENTRY_TYPES = new Set<Entry["type"]>([
 	"message",
@@ -159,7 +152,7 @@ function parseHeader(line: string, path: string): HeaderLine {
 	};
 }
 
-function parseMutation(line: string, path: string, lineNumber: number): DecodedMutation {
+function parseMutation(line: string, path: string, lineNumber: number): SessionMutation {
 	const value = parseObject(line, path, lineNumber);
 	const seq = requireSequence(value.seq, path, lineNumber);
 	switch (value.kind) {
@@ -217,21 +210,7 @@ function parseMutation(line: string, path: string, lineNumber: number): DecodedM
 	}
 }
 
-function assertValidLimit(limit: number | undefined): void {
-	if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
-		throw new SessionError("invalid_query", "limit must be a positive integer");
-	}
-}
-
-function* ordered<T>(items: readonly T[], order: EntryOrder | undefined): IterableIterator<T> {
-	if (order === "oldestFirst") {
-		yield* items;
-		return;
-	}
-	for (let index = items.length - 1; index >= 0; index--) yield items[index]!;
-}
-
-function encodeMutation(mutation: DecodedMutation): string {
+function encodeMutation(mutation: SessionMutation): string {
 	switch (mutation.kind) {
 		case "entry":
 			return `${JSON.stringify({ kind: "entry", lane: mutation.lane, ...mutation.entry })}\n`;
@@ -247,23 +226,7 @@ function encodeMutation(mutation: DecodedMutation): string {
 class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 	private readonly fs: JsonlSessionRepoFileSystem;
 	private readonly metadata: JsonlSessionMetadata;
-	private sequence = 0;
-	private readonly usedIds = new Set<string>();
-	private readonly entries: Entry[] = [];
-	private readonly entriesById = new Map<string, Entry>();
-	private readonly records: LaneRecord[] = [];
-	private readonly openOperationsByLane = new Map<string, Map<string, OperationStartedRecord>>();
-	private readonly lanes = new Map<string, string | null>([["main", null]]);
-	private readonly log: LogItem[] = [];
-	private readonly stats: SessionStats = {
-		messageCount: 0,
-		cachedTokens: 0,
-		uncachedTokens: 0,
-		totalTokens: 0,
-		costTotal: 0,
-	};
-	private name: string | undefined;
-	private readonly labels = new Map<string, string>();
+	private readonly state = new SessionState();
 	private tail: Promise<void> = Promise.resolve();
 
 	constructor(fs: JsonlSessionRepoFileSystem, metadata: JsonlSessionMetadata) {
@@ -286,7 +249,7 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 		});
 		for (let index = 1; index < physicalLines.length; index++) {
 			const line = physicalLines[index]!;
-			let mutation: DecodedMutation;
+			let mutation: SessionMutation;
 			try {
 				mutation = parseMutation(line, path, index + 1);
 			} catch (error) {
@@ -313,14 +276,14 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 	}
 
 	async getLanes(): Promise<LanePointer[]> {
-		return [...this.lanes].map(([lane, leafId]) => ({ lane, leafId }));
+		return this.state.getLanes();
 	}
 
 	createLane(lane: string, at: string | null): Promise<void> {
 		return this.enqueue(async () => {
-			if (this.lanes.has(lane)) throw new SessionError("already_exists", `Lane already exists: ${lane}`);
-			this.validateTarget(at);
-			const mutation: DecodedMutation = { kind: "lane", seq: this.sequence + 1, lane, leafId: at };
+			this.state.validateNewLane(lane);
+			this.state.validateTarget(at);
+			const mutation: SessionMutation = { kind: "lane", seq: this.state.nextSequence, lane, leafId: at };
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 		});
@@ -328,9 +291,9 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 
 	moveLane(lane: string, to: string | null): Promise<void> {
 		return this.enqueue(async () => {
-			this.requireLane(lane);
-			this.validateTarget(to);
-			const mutation: DecodedMutation = { kind: "lane", seq: this.sequence + 1, lane, leafId: to };
+			this.state.requireLane(lane);
+			this.state.validateTarget(to);
+			const mutation: SessionMutation = { kind: "lane", seq: this.state.nextSequence, lane, leafId: to };
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 		});
@@ -338,15 +301,15 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 
 	appendEntry<TEntry extends Entry>(newEntry: ProvisionedEntry<TEntry>, lane: string): Promise<TEntry> {
 		return this.enqueue(async () => {
-			const parentId = this.requireLane(lane);
-			this.validateUnusedId(newEntry.id);
+			const parentId = this.state.requireLane(lane);
+			this.state.validateUnusedId(newEntry.id);
 			const entry = {
 				...structuredClone(newEntry),
 				parentId,
-				seq: this.sequence + 1,
+				seq: this.state.nextSequence,
 				timestamp: Date.now(),
 			} as unknown as TEntry;
-			const mutation: DecodedMutation = { kind: "entry", lane, entry };
+			const mutation: SessionMutation = { kind: "entry", lane, entry };
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 			return structuredClone(entry);
@@ -355,10 +318,10 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 
 	appendCopiedEntry<TEntry extends Entry>(source: TEntry): Promise<TEntry> {
 		return this.enqueue(async () => {
-			this.validateUnusedId(source.id);
-			this.validateTarget(source.parentId);
-			const entry = { ...structuredClone(source), seq: this.sequence + 1 };
-			const mutation: DecodedMutation = { kind: "entry", entry };
+			this.state.validateUnusedId(source.id);
+			this.state.validateTarget(source.parentId);
+			const entry = { ...structuredClone(source), seq: this.state.nextSequence };
+			const mutation: SessionMutation = { kind: "entry", entry };
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 			return structuredClone(entry);
@@ -367,8 +330,8 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 
 	appendForkLane(lane: string, leafId: string | null): Promise<void> {
 		return this.enqueue(async () => {
-			this.validateTarget(leafId);
-			const mutation: DecodedMutation = { kind: "lane", seq: this.sequence + 1, lane, leafId };
+			this.state.validateTarget(leafId);
+			const mutation: SessionMutation = { kind: "lane", seq: this.state.nextSequence, lane, leafId };
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 		});
@@ -376,14 +339,14 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 
 	appendRecord<TRecord extends LaneRecord>(newRecord: NewRecord<TRecord>): Promise<TRecord> {
 		return this.enqueue(async () => {
-			this.requireLane(newRecord.lane);
-			this.validateUnusedId(newRecord.id);
+			this.state.requireLane(newRecord.lane);
+			this.state.validateUnusedId(newRecord.id);
 			const record = {
 				...structuredClone(newRecord),
-				seq: this.sequence + 1,
+				seq: this.state.nextSequence,
 				timestamp: Date.now(),
 			} as unknown as TRecord;
-			const mutation: DecodedMutation = { kind: "record", record };
+			const mutation: SessionMutation = { kind: "record", record };
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 			return structuredClone(record);
@@ -391,39 +354,16 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 	}
 
 	async getEntry(id: string): Promise<Entry | undefined> {
-		const entry = this.entriesById.get(id);
+		const entry = this.state.getEntry(id);
 		return entry === undefined ? undefined : structuredClone(entry);
 	}
 
 	async findEntries(query: EntryQuery = {}): Promise<Entry[]> {
-		assertValidLimit(query.limit);
-		this.validateCursor(query.cursor?.afterSeq);
-		const results: Entry[] = [];
-		for (const entry of ordered(this.entries, query.order)) {
-			if (!this.matchesEntryQuery(entry, query)) continue;
-			results.push(entry);
-			if (results.length === query.limit) break;
-		}
-		return structuredClone(results);
+		return structuredClone(this.state.findEntries(query));
 	}
 
 	async findEntriesOnBranch(query: EntryQuery & BranchBounds & { start: string }): Promise<Entry[]> {
-		assertValidLimit(query.limit);
-		this.validateCursor(query.cursor?.afterSeq);
-		const results: Entry[] = [];
-		if (query.order === "oldestFirst") {
-			for (const entry of [...this.walkToRoot(query.start)].reverse()) {
-				const reachedBound = entry.id === query.stopAtId || entry.type === query.stopAtType;
-				if (this.matchesEntryQuery(entry, query)) results.push(entry);
-				if (reachedBound || results.length === query.limit) break;
-			}
-		} else {
-			for (const entry of this.walkToRoot(query.start, query)) {
-				if (this.matchesEntryQuery(entry, query)) results.push(entry);
-				if (results.length === query.limit) break;
-			}
-		}
-		return structuredClone(results);
+		return structuredClone(this.state.findEntriesOnBranch(query));
 	}
 
 	async findRecords<K extends LaneRecord["type"]>(
@@ -431,63 +371,50 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 	): Promise<Extract<LaneRecord, { type: K }>[]>;
 	async findRecords(query?: RecordQuery): Promise<LaneRecord[]>;
 	async findRecords(query: RecordQuery = {}): Promise<LaneRecord[]> {
-		assertValidLimit(query.limit);
-		if (query.afterSeq !== undefined) this.validateCursor(query.afterSeq);
-		const results: LaneRecord[] = [];
-		for (const record of ordered(this.records, query.order)) {
-			if (!this.matchesRecordQuery(record, query)) continue;
-			results.push(record);
-			if (results.length === query.limit) break;
-		}
-		return structuredClone(results);
+		return structuredClone(this.state.findRecords(query));
 	}
 
 	async findOpenOperations(lane: string, options?: { limit?: number }): Promise<OperationStartedRecord[]> {
-		assertValidLimit(options?.limit);
-		const openOperationsById = this.openOperationsByLane.get(lane);
-		const openOperations = openOperationsById ? [...openOperationsById.values()].reverse() : [];
-		return structuredClone(options?.limit === undefined ? openOperations : openOperations.slice(0, options.limit));
+		return structuredClone(this.state.findOpenOperations(lane, options));
 	}
 
 	async getLog(options: LogOptions = {}): Promise<LogItem[]> {
-		assertValidLimit(options.limit);
-		if (options.afterSeq !== undefined) this.validateCursor(options.afterSeq);
-		const results: LogItem[] = [];
-		for (const item of this.log) {
-			if (options.afterSeq !== undefined && item.seq <= options.afterSeq) continue;
-			results.push(item);
-			if (results.length === options.limit) break;
-		}
-		return structuredClone(results);
+		return structuredClone(this.state.getLog(options));
 	}
 
 	async getName(): Promise<string | undefined> {
-		return this.name;
+		return this.state.getName();
 	}
 
 	setName(name: string): Promise<void> {
 		return this.enqueue(async () => {
-			const mutation: DecodedMutation = { kind: "fact", seq: this.sequence + 1, fact: "name", name };
+			const mutation: SessionMutation = { kind: "fact", seq: this.state.nextSequence, fact: "name", name };
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 		});
 	}
 
 	async getLabel(id: string): Promise<string | undefined> {
-		return this.labels.get(id);
+		return this.state.getLabel(id);
 	}
 
 	setLabel(id: string, label: string | undefined): Promise<void> {
 		return this.enqueue(async () => {
-			this.validateTarget(id);
-			const mutation: DecodedMutation = { kind: "fact", seq: this.sequence + 1, fact: "label", targetId: id, label };
+			this.state.validateTarget(id);
+			const mutation: SessionMutation = {
+				kind: "fact",
+				seq: this.state.nextSequence,
+				fact: "label",
+				targetId: id,
+				label,
+			};
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 		});
 	}
 
 	async getStats(): Promise<SessionStats> {
-		return structuredClone(this.stats);
+		return structuredClone(this.state.getStats());
 	}
 
 	private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -499,162 +426,21 @@ class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 		return result;
 	}
 
-	private async appendMutation(mutation: DecodedMutation): Promise<void> {
+	private async appendMutation(mutation: SessionMutation): Promise<void> {
 		fileResult(
 			await this.fs.appendFile(this.metadata.path, encodeMutation(mutation)),
 			`Failed to append session ${this.metadata.path}`,
 		);
 	}
 
-	private applyMutation(mutation: DecodedMutation, path = this.metadata.path, line = this.sequence + 2): void {
-		const seq =
-			mutation.kind === "entry"
-				? mutation.entry.seq
-				: mutation.kind === "record"
-					? mutation.record.seq
-					: mutation.seq;
-		if (seq !== this.sequence + 1) throw invalidFile(path, line, `has non-consecutive seq ${seq}`);
-		switch (mutation.kind) {
-			case "entry": {
-				this.validateUnusedIdForReplay(mutation.entry.id, path, line);
-				if (mutation.lane !== undefined) {
-					const leafId = this.requireLaneForReplay(mutation.lane, path, line);
-					if (mutation.entry.parentId !== leafId) throw invalidFile(path, line, "does not chain to the lane leaf");
-				}
-				if (mutation.entry.parentId !== null && !this.entriesById.has(mutation.entry.parentId)) {
-					throw invalidFile(path, line, `references missing parent ${mutation.entry.parentId}`);
-				}
-				this.sequence = seq;
-				this.usedIds.add(mutation.entry.id);
-				this.entries.push(mutation.entry);
-				this.entriesById.set(mutation.entry.id, mutation.entry);
-				if (mutation.lane !== undefined) this.lanes.set(mutation.lane, mutation.entry.id);
-				this.log.push({ kind: "entry", seq, entry: mutation.entry });
-				if (mutation.entry.type === "message") this.stats.messageCount += 1;
-				break;
-			}
-			case "record": {
-				this.requireLaneForReplay(mutation.record.lane, path, line);
-				this.validateUnusedIdForReplay(mutation.record.id, path, line);
-				this.sequence = seq;
-				this.usedIds.add(mutation.record.id);
-				this.records.push(mutation.record);
-				if (mutation.record.type === "operation_started") {
-					let openOperations = this.openOperationsByLane.get(mutation.record.lane);
-					if (!openOperations) {
-						openOperations = new Map();
-						this.openOperationsByLane.set(mutation.record.lane, openOperations);
-					}
-					openOperations.set(mutation.record.id, mutation.record);
-				} else if (mutation.record.type === "operation_finished") {
-					this.openOperationsByLane.get(mutation.record.lane)?.delete(mutation.record.runId);
-				}
-				this.log.push({ kind: "record", seq, record: mutation.record });
-				if (mutation.record.type === "usage") {
-					this.stats.cachedTokens += mutation.record.usage.cacheRead;
-					this.stats.uncachedTokens += mutation.record.usage.input + mutation.record.usage.cacheWrite;
-					this.stats.totalTokens += mutation.record.usage.totalTokens;
-					this.stats.costTotal += mutation.record.usage.cost.total;
-				}
-				break;
-			}
-			case "lane": {
-				if (mutation.leafId !== null && !this.entriesById.has(mutation.leafId)) {
-					throw invalidFile(path, line, `references missing lane target ${mutation.leafId}`);
-				}
-				this.sequence = seq;
-				this.lanes.set(mutation.lane, mutation.leafId);
-				this.log.push({ kind: "lane", seq, lane: mutation.lane, leafId: mutation.leafId });
-				break;
-			}
-			case "fact":
-				this.sequence = seq;
-				if (mutation.fact === "name") {
-					this.name = mutation.name;
-					this.log.push({ kind: "fact", seq, fact: "name", name: mutation.name });
-				} else {
-					if (!this.entriesById.has(mutation.targetId))
-						throw invalidFile(path, line, `references missing label target ${mutation.targetId}`);
-					if (mutation.label === undefined) this.labels.delete(mutation.targetId);
-					else this.labels.set(mutation.targetId, mutation.label);
-					this.log.push({ kind: "fact", seq, fact: "label", targetId: mutation.targetId, label: mutation.label });
-				}
-				break;
-		}
-	}
-
-	private requireLane(lane: string): string | null {
-		const leafId = this.lanes.get(lane);
-		if (leafId === undefined) throw new SessionError("invalid_lane", `Lane not found: ${lane}`);
-		return leafId;
-	}
-
-	private requireLaneForReplay(lane: string, path: string, line: number): string | null {
-		const leafId = this.lanes.get(lane);
-		if (leafId === undefined) throw invalidFile(path, line, `references missing lane ${lane}`);
-		return leafId;
-	}
-
-	private validateTarget(targetId: string | null): void {
-		if (targetId !== null && !this.entriesById.has(targetId))
-			throw new SessionError("not_found", `Entry not found: ${targetId}`);
-	}
-
-	private validateUnusedId(id: string): void {
-		if (this.usedIds.has(id)) throw new SessionError("already_exists", `Session id already exists: ${id}`);
-	}
-
-	private validateUnusedIdForReplay(id: string, path: string, line: number): void {
-		if (this.usedIds.has(id)) throw invalidFile(path, line, `contains duplicate id ${id}`);
-	}
-
-	private validateCursor(afterSeq: number | undefined): void {
-		if (afterSeq !== undefined && (!Number.isInteger(afterSeq) || afterSeq < 0)) {
-			throw new SessionError("invalid_query", "cursor sequence must be a non-negative integer");
-		}
-	}
-
-	private *walkToRoot(
-		start: string | null,
-		bounds?: Pick<BranchBounds, "stopAtId" | "stopAtType">,
-	): IterableIterator<Entry> {
-		if (start === null) return;
-		const visited = new Set<string>();
-		let current = this.entriesById.get(start);
-		if (!current) throw new SessionError("not_found", `Entry not found: ${start}`);
-		while (current) {
-			if (visited.has(current.id))
-				throw new SessionError("invalid_entry", `Session branch contains a cycle at ${current.id}`);
-			visited.add(current.id);
-			yield current;
-			if (current.id === bounds?.stopAtId || current.type === bounds?.stopAtType || current.parentId === null) break;
-			const parentId: string = current.parentId;
-			current = this.entriesById.get(parentId);
-			if (!current) throw new SessionError("invalid_entry", `Entry not found: ${parentId}`);
-		}
-	}
-
-	private matchesEntryQuery(entry: Entry, query: EntryQuery): boolean {
-		return (
-			(query.type === undefined || entry.type === query.type) &&
-			(query.customType === undefined || (entry.type === "custom" && entry.customType === query.customType)) &&
-			(query.cursor === undefined ||
-				(query.order === "oldestFirst" ? entry.seq > query.cursor.afterSeq : entry.seq < query.cursor.afterSeq))
-		);
-	}
-
-	private matchesRecordQuery(record: LaneRecord, query: RecordQuery): boolean {
-		return (
-			(query.lane === undefined || record.lane === query.lane) &&
-			(query.type === undefined || record.type === query.type) &&
-			(query.runId === undefined ||
-				(record.type === "operation_started"
-					? record.id === query.runId
-					: "runId" in record && record.runId === query.runId)) &&
-			(query.operationKind === undefined ||
-				(record.type === "operation_started" && record.intent.kind === query.operationKind)) &&
-			(query.afterSeq === undefined || record.seq > query.afterSeq)
-		);
+	private applyMutation(
+		mutation: SessionMutation,
+		path = this.metadata.path,
+		line = this.state.nextSequence + 1,
+	): void {
+		this.state.applyMutation(mutation, (message) => {
+			throw invalidFile(path, line, message);
+		});
 	}
 }
 

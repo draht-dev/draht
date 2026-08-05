@@ -297,6 +297,12 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 		query: RecordQuery & { type: K },
 	): Promise<Extract<LaneRecord, { type: K }>[]>;
 	findRecords(query?: RecordQuery): Promise<LaneRecord[]>;
+	/**
+	 * Returns unfinished operation starts newest first. Recovery uses `limit: 2`:
+	 * zero results mean the lane is idle, one means it is suspended, and two
+	 * mean at least two operations are open, which is corruption. Further
+	 * results provide no additional recovery state.
+	 */
 	findOpenOperations(lane: string, options?: { limit?: number }): Promise<OperationStartedRecord[]>;
 	getLog(options?: { afterSeq?: number; limit?: number }): Promise<LogItem[]>;
 

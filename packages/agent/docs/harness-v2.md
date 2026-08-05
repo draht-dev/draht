@@ -2982,12 +2982,13 @@ These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module ins
   - Prove that zero/one open operations are distinguishable from multiple-open-operation corruption, and that the latest run-kind start is an indexed query. Add the SQLite `(session_id, lane, run_id, type)` index.
   - Acceptance: memory and SQLite have identical query behavior, invalid query combinations reject, and no restore algorithm needs a full historical scan.
 
-**In progress and reserved: R1 by @vegarsti.** Other agents must not pick R1 while this ownership marker remains.
-
-- [ ] **R1 — pure record-log validity.** Dependencies: R0.
+- [x] **R1 — pure record-log validity.** Dependencies: R0.
   - Primary files: `packages/agent/src/harness/reducer.ts`, `packages/agent/test/harness/reducer.test.ts`.
   - Validate the section 5 corruption rules from discovered open starts, bounded records, and point-looked-up entries, with no writes or effects.
   - Acceptance: one focused rejection test per validity bullet, plus valid prefixes at every section 6 crash point.
+
+**In progress and reserved: R2 by @vegarsti.** Other agents must not pick R2 while this ownership marker remains.
+
 - [ ] **R2 — pure lane-state reduction.** Dependencies: R1.
   - Primary files: `packages/agent/src/harness/reducer.ts`, `packages/agent/test/harness/reducer.test.ts`.
   - Derive `LaneState`, pending queues/writes, attempts, tool batches, deferred handles, structural targets, terminal-failure state, idle next-run state, and effective configuration from the section 7 query inputs.

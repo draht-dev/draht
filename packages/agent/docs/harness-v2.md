@@ -2979,6 +2979,9 @@ These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module ins
   - Add `RecordQuery.operationKind` and `findOpenOperations(lane, { limit })` exactly as specified in sections 7, 12, and 13. Memory maintains the projection, JSONL will derive it during replay, and SQLite answers it with indexed records.
   - Prove that zero/one open operations are distinguishable from multiple-open-operation corruption, and that the latest run-kind start is an indexed query. Add the SQLite `(session_id, lane, run_id, type)` index.
   - Acceptance: memory and SQLite have identical query behavior, invalid query combinations reject, and no restore algorithm needs a full historical scan.
+
+**In progress and reserved: R1 by @vegarsti.** Other agents must not pick R1 while this ownership marker remains.
+
 - [ ] **R1 — pure record-log validity.** Dependencies: R0.
   - Primary files: `packages/agent/src/harness/reducer.ts`, `packages/agent/test/harness/reducer.test.ts`.
   - Validate the section 5 corruption rules from discovered open starts, bounded records, and point-looked-up entries, with no writes or effects.

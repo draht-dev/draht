@@ -7,13 +7,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage, FileAuthStorageBackend } from "../src/core/auth-storage.ts";
 
 describe("AuthStorage", () => {
-	let tempDir: string;
-	let authJsonPath: string;
+	const tempDir = join(tmpdir(), `pi-test-auth-storage-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	const authJsonPath = join(tempDir, "auth.json");
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-test-auth-storage-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true });
 		mkdirSync(tempDir, { recursive: true });
-		authJsonPath = join(tempDir, "auth.json");
 	});
 
 	afterEach(() => {
@@ -97,9 +96,21 @@ describe("AuthStorage", () => {
 		await expect(second.read("anthropic")).resolves.toEqual({ type: "api_key", key: "new" });
 		expect(lockSpy).toHaveBeenCalledTimes(1);
 
+		const otherPath = join(tempDir, "other-auth.json");
+		writeFileSync(otherPath, JSON.stringify({ other: { type: "api_key", key: "other-key" } }));
+		const otherFirst = AuthStorage.create(otherPath);
+		const otherSecond = AuthStorage.create(otherPath);
+		await otherFirst.read("other");
+		await otherSecond.read("other");
+		await otherFirst.list();
+		expect(lockSpy).toHaveBeenCalledTimes(4);
+
+		const third = AuthStorage.create(authJsonPath);
 		writeAuthJson({ anthropic: { type: "api_key", key: "newest" } });
-		await expect(first.read("anthropic")).resolves.toEqual({ type: "api_key", key: "newest" });
-		expect(lockSpy).toHaveBeenCalledTimes(2);
+		const [firstReload, thirdReload] = await Promise.all([first.read("anthropic"), third.read("anthropic")]);
+		expect(firstReload).toEqual({ type: "api_key", key: "newest" });
+		expect(thirdReload).toEqual({ type: "api_key", key: "newest" });
+		expect(lockSpy).toHaveBeenCalledTimes(5);
 	});
 
 	test("modify persists a credential while preserving unrelated external edits", async () => {

@@ -2987,8 +2987,6 @@ These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module ins
   - Validate the section 5 corruption rules from discovered open starts, bounded records, and point-looked-up entries, with no writes or effects.
   - Acceptance: one focused rejection test per validity bullet, plus valid prefixes at every section 6 crash point.
 
-**In progress and reserved: R2 by @vegarsti.** Other agents must not pick R2 while this ownership marker remains.
-
 - [ ] **R2 — pure lane-state reduction.** Dependencies: R1.
   - Primary files: `packages/agent/src/harness/reducer.ts`, `packages/agent/test/harness/reducer.test.ts`.
   - Derive `LaneState`, pending queues/writes, attempts, tool batches, deferred handles, structural targets, terminal-failure state, idle next-run state, and effective configuration from the section 7 query inputs.

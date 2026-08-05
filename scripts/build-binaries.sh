@@ -22,6 +22,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+EXPECTED_BUN_REVISION="$(node -p "require('./package.json').drahtReleaseBunRevision")"
+ACTUAL_BUN_REVISION="$(bun --revision)"
+if [[ "$ACTUAL_BUN_REVISION" != "$EXPECTED_BUN_REVISION" ]]; then
+    echo "Bun revision $ACTUAL_BUN_REVISION does not match required $EXPECTED_BUN_REVISION" >&2
+    exit 1
+fi
+
 SKIP_DEPS=false
 PLATFORM=""
 
@@ -114,7 +121,8 @@ for platform in "${PLATFORMS[@]}"; do
     cp dist/modes/interactive/assets/* binaries/$platform/assets/ 2>/dev/null || echo "  (warning: no dist/modes/interactive/assets to copy)"
     cp -r dist/core/export-html binaries/$platform/
     cp -r docs binaries/$platform/
-    cp -r examples binaries/$platform/
+    mkdir -p binaries/$platform/examples
+    (cd examples && tar --exclude='node_modules' -cf - .) | (cd binaries/$platform/examples && tar -xf -)
 
     case "$platform" in
         darwin-arm64)
@@ -167,6 +175,12 @@ done
 # Create archives
 cd binaries
 
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+: > DRAHT-SHA256SUMS
+
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == "windows-x64" ]]; then
         # Windows (zip)
@@ -177,7 +191,21 @@ for platform in "${PLATFORMS[@]}"; do
         echo "Creating draht-$platform.tar.gz..."
         mv $platform draht && tar -czf draht-$platform.tar.gz draht && mv draht $platform
     fi
+
+    if [[ "$platform" == "windows-x64" ]]; then
+        archive="draht-$platform.zip"
+        binary="draht.exe"
+    else
+        archive="draht-$platform.tar.gz"
+        binary="draht"
+    fi
+    archive_sha="$(sha256_of "$archive")"
+    archive_bytes="$(wc -c < "$archive" | tr -d ' ')"
+    binary_sha="$(sha256_of "$platform/$binary")"
+    binary_bytes="$(wc -c < "$platform/$binary" | tr -d ' ')"
+    printf '%s  %s\n' "$archive_sha" "$archive" >> DRAHT-SHA256SUMS
 done
+node ../../../scripts/build-runtime-manifest.mjs "${PLATFORMS[@]}"
 
 # Extract archives for easy local testing
 echo "==> Extracting archives for testing..."

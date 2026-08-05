@@ -23,6 +23,7 @@ import { execSync } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
 import {
+	assertBunToolchain,
 	assertReleaseVersions,
 	getScopePackages,
 	setVersion,
@@ -316,6 +317,7 @@ console.log(`Version: ${version}\n`);
 // 4. Set version across all packages
 console.log("Setting version across packages...");
 if (!DRY_RUN) {
+	assertBunToolchain(process.cwd());
 	setVersion(process.cwd(), version);
 	run("bun install --lockfile-only --ignore-scripts");
 	run("bun install --frozen-lockfile --ignore-scripts --linker hoisted");
@@ -357,7 +359,8 @@ console.log();
 // minutes and then aborts before any npm package is public.
 console.log("Waiting for and verifying required release assets...");
 if (!DRY_RUN) {
-	await waitForVerifiedRelease({ tag: `v${version}`, version });
+	const commit = execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+	await waitForVerifiedRelease({ tag: `v${version}`, version, commit });
 	console.log("  GitHub release identity, manifest, and runtime archives verified\n");
 } else {
 	console.log("  (dry-run: release artifact polling and verification skipped)\n");

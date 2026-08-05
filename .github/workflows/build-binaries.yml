@@ -7,29 +7,25 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g., v0.12.0)'
+        description: 'Immutable tag to build (e.g., v0.12.0)'
         required: true
         type: string
 
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  BUN_PACKAGE_VERSION: 1.3.13-canary.20260425.1
+  BUN_REVISION: 1.3.14-canary.1+ed1c48f2b
+
 jobs:
-  build:
+  build-runtime:
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
-      - name: Checkout
+      - name: Checkout immutable release tag
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.RELEASE_TAG }}
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
-        with:
-          bun-version: 1.2.20
 
       - name: Setup Node.js
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
@@ -37,73 +33,35 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Build binaries
+      - name: Install and verify pinned Bun canary
+        run: |
+          npm install --global "bun@${BUN_PACKAGE_VERSION}"
+          test "$(bun --revision)" = "${BUN_REVISION}"
+
+      - name: Build Draht runtime assets
         run: ./scripts/build-binaries.sh
 
-      - name: Attest Draht runtime asset provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+      - name: Upload immutable runtime build output
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
         with:
-          subject-path: |
-            packages/coding-agent/binaries/*.tar.gz
-            packages/coding-agent/binaries/*.zip
+          name: draht-runtime-${{ env.RELEASE_TAG }}
+          path: |
+            packages/coding-agent/binaries/draht-darwin-arm64.tar.gz
+            packages/coding-agent/binaries/draht-darwin-x64.tar.gz
+            packages/coding-agent/binaries/draht-linux-x64.tar.gz
+            packages/coding-agent/binaries/draht-linux-arm64.tar.gz
+            packages/coding-agent/binaries/draht-windows-x64.zip
+            packages/coding-agent/binaries/runtime-manifest.json
+            packages/coding-agent/binaries/DRAHT-SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Extract changelog for this version
-        id: changelog
-        run: |
-          VERSION="${RELEASE_TAG}"
-          VERSION="${VERSION#v}"  # Remove 'v' prefix
-          
-          # Extract changelog section for this version
-          cd packages/coding-agent
-          awk "/^## \[${VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md > /tmp/release-notes.md
-          
-          # If empty, use a default message
-          if [ ! -s /tmp/release-notes.md ]; then
-            echo "Release ${VERSION}" > /tmp/release-notes.md
-          fi
-
-      - name: Create GitHub Release and upload binaries
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cd packages/coding-agent/binaries
-          
-          # Create release with changelog notes (or update if exists)
-          gh release create "${RELEASE_TAG}" \
-            --title "${RELEASE_TAG}" \
-            --notes-file /tmp/release-notes.md \
-            draht-darwin-arm64.tar.gz \
-            draht-darwin-x64.tar.gz \
-            draht-linux-x64.tar.gz \
-            draht-linux-arm64.tar.gz \
-            draht-windows-x64.zip \
-            2>/dev/null || \
-          gh release upload "${RELEASE_TAG}" \
-            draht-darwin-arm64.tar.gz \
-            draht-darwin-x64.tar.gz \
-            draht-linux-x64.tar.gz \
-            draht-linux-arm64.tar.gz \
-            draht-windows-x64.zip \
-            --clobber
-
-  # Attaches the Go graph-engine binaries to the SAME release/tag as `build`
-  # (rather than a separate workflow) so two jobs never race on
-  # `gh release create` for the same tag. `needs: build` orders us after the
-  # release exists; `if: !cancelled()` means a partial/flaky `build` (its own
-  # `bun install` is the flakier of the two) does not block this job, while a
-  # genuinely cancelled run still short-circuits both.
   build-graph:
-    needs: build
-    if: ${{ !cancelled() }}
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
-      - name: Checkout
+      - name: Checkout immutable release tag
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.RELEASE_TAG }}
@@ -114,58 +72,93 @@ jobs:
           go-version-file: go/.go-version
           cache-dependency-path: go/go.sum
 
-      - name: Build graph binaries
+      - name: Build graph assets
         env:
-          DRAHT_VERSION: ${{ env.RELEASE_TAG }} # script strips a leading 'v'
+          DRAHT_VERSION: ${{ env.RELEASE_TAG }}
         run: ./scripts/build-graph-binaries.sh
 
-      # GitHub's OIDC identity signs an immutable provenance statement for the
-      # workflow/repository/commit that produced every graph release asset. This
-      # is keyless: no project signing secret or long-lived private key exists.
-      - name: Attest graph release asset provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
-        with:
-          subject-path: |
-            go/binaries/*.tar.gz
-            go/binaries/*.zip
-            go/binaries/SHA256SUMS
-            go/binaries/manifest.json
-
-      - name: Upload workflow artifacts
+      - name: Upload immutable graph build output
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2
         with:
           name: draht-graph-${{ env.RELEASE_TAG }}
           path: |
-            go/binaries/*.tar.gz
-            go/binaries/*.zip
+            go/binaries/draht-graph-darwin-arm64.tar.gz
+            go/binaries/draht-graph-darwin-x64.tar.gz
+            go/binaries/draht-graph-linux-x64.tar.gz
+            go/binaries/draht-graph-linux-arm64.tar.gz
+            go/binaries/draht-graph-windows-x64.zip
             go/binaries/SHA256SUMS
             go/binaries/manifest.json
-          retention-days: 7
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Attach to GitHub Release
+  attest-and-release:
+    needs: [build-runtime, build-graph]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release metadata only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify immutable tag identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "${RELEASE_TAG}")"
+
+      - name: Download runtime output
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: draht-runtime-${{ env.RELEASE_TAG }}
+          path: release-assets/runtime
+
+      - name: Download graph output
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: draht-graph-${{ env.RELEASE_TAG }}
+          path: release-assets/graph
+
+      - name: Attest every Draht runtime asset
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            release-assets/runtime/draht-*.tar.gz
+            release-assets/runtime/draht-*.zip
+            release-assets/runtime/runtime-manifest.json
+            release-assets/runtime/DRAHT-SHA256SUMS
+
+      - name: Attest every graph asset
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            release-assets/graph/draht-graph-*.tar.gz
+            release-assets/graph/draht-graph-*.zip
+            release-assets/graph/SHA256SUMS
+            release-assets/graph/manifest.json
+
+      - name: Extract release notes
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          awk "/^## \\[${VERSION}\\]/{flag=1; next} /^## \\[/{flag=0} flag" packages/coding-agent/CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "Release ${VERSION}" > /tmp/release-notes.md
+          fi
+
+      - name: Create or update complete GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd go/binaries
-          # `build` normally creates the release; `needs: build` + `if: !cancelled()`
-          # (see the job-level comment above) means this job still runs when `build`
-          # FAILED, not just when it flaked past a transient step. Blindly doing
-          # `gh release create ... || true` in that case would publish a release
-          # containing ONLY the graph binaries with generic placeholder notes — a
-          # broken/misleading release, silently. Require the release to already
-          # exist instead of ever creating it here; if `build` never got that far,
-          # fail loudly so the workflow run is visibly red rather than quietly
-          # publishing a partial release.
-          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "::error::release ${RELEASE_TAG} does not exist yet — the 'build' job must have failed before creating it. Refusing to publish a graph-binaries-only release; fix 'build' and re-run." >&2
-            exit 1
+          assets=(release-assets/runtime/* release-assets/graph/*)
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" \
+              --verify-tag \
+              --title "${RELEASE_TAG}" \
+              --notes-file /tmp/release-notes.md \
+              "${assets[@]}"
           fi
-          gh release upload "${RELEASE_TAG}" \
-            draht-graph-darwin-arm64.tar.gz \
-            draht-graph-darwin-x64.tar.gz \
-            draht-graph-linux-x64.tar.gz \
-            draht-graph-linux-arm64.tar.gz \
-            draht-graph-windows-x64.zip \
-            SHA256SUMS \
-            manifest.json \
-            --clobber

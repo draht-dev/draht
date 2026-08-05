@@ -13,15 +13,22 @@
  * 3. Compute daily version (check existing tags for suffix)
  * 4. Set version across all packages
  * 5. Update CHANGELOG.md files: [Unreleased] -> [version] - date (auto-populated from commits)
- * 6. Commit and tag
- * 7. Publish to npm
+ * 6. Build, commit, tag, and push the release commit/tag
+ * 7. Wait for the complete matching GitHub release, then publish to npm
  * 8. Add new [Unreleased] section to changelogs
- * 9. Commit and push
+ * 9. Commit and push the next-cycle changelogs
  */
 
 import { execSync } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
+import {
+	assertReleaseVersions,
+	getScopePackages,
+	listGithubReleaseAssets,
+	setVersion,
+	waitForReleaseAssets,
+} from "./release-helpers.mjs";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 
@@ -70,55 +77,6 @@ function computeVersion() {
 	return `${base}-${maxSuffix + 1}`;
 }
 
-function setVersion(version) {
-	const packagesDir = "packages";
-	const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
-		.filter((d) => d.isDirectory())
-		.map((d) => d.name);
-
-	const versionMap = {};
-
-	// First pass: update all package versions and build name map
-	for (const dir of packageDirs) {
-		const pkgPath = join(packagesDir, dir, "package.json");
-		if (!existsSync(pkgPath)) continue;
-		const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-		pkg.version = version;
-		versionMap[pkg.name] = version;
-		writeFileSync(pkgPath, JSON.stringify(pkg, null, "\t") + "\n");
-	}
-
-	// Second pass: update inter-package dependency versions
-	for (const dir of packageDirs) {
-		const pkgPath = join(packagesDir, dir, "package.json");
-		if (!existsSync(pkgPath)) continue;
-		const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-		let updated = false;
-
-		for (const depType of ["dependencies", "devDependencies"]) {
-			if (!pkg[depType]) continue;
-			for (const [depName, currentVersion] of Object.entries(pkg[depType])) {
-				if (versionMap[depName] && !currentVersion.startsWith("workspace:")) {
-					const newVersion = `^${version}`;
-					if (currentVersion !== newVersion) {
-						pkg[depType][depName] = newVersion;
-						updated = true;
-					}
-				}
-			}
-		}
-
-		if (updated) {
-			writeFileSync(pkgPath, JSON.stringify(pkg, null, "\t") + "\n");
-		}
-	}
-
-	// Update root package.json
-	const rootPkg = JSON.parse(readFileSync("package.json", "utf-8"));
-	rootPkg.version = version;
-	writeFileSync("package.json", JSON.stringify(rootPkg, null, "  ") + "\n");
-}
-
 function getChangelogs() {
 	const packagesDir = "packages";
 	const packages = readdirSync(packagesDir);
@@ -131,21 +89,6 @@ function getChangelogs() {
  * Map conventional commit scopes to package directory names.
  * Scopes not listed here fall back to file-path-based detection.
  */
-const SCOPE_TO_PACKAGE = {
-	ai: "ai",
-	tui: "tui",
-	agent: "agent",
-	"agent-core": "agent",
-	"coding-agent": "coding-agent",
-	"draht-claude": "draht-claude",
-	mom: "mom",
-	pods: "pods",
-	"web-ui": "web-ui",
-	landing: "landing",
-	infra: "infra",
-	templates: "templates",
-};
-
 const TYPE_LABELS = {
 	feat: "### Added",
 	fix: "### Fixed",
@@ -255,9 +198,10 @@ function getCommitsPerPackage() {
 		// Determine target packages
 		let targetPackages = [];
 
-		if (scope && SCOPE_TO_PACKAGE[scope]) {
-			// Scope maps directly to a known package
-			targetPackages = [SCOPE_TO_PACKAGE[scope]];
+		if (scope && getScopePackages(scope).length > 0) {
+			// A scope may affect multiple published packages (for example the Go
+			// graph engine is shipped/resolved by all three Node consumers).
+			targetPackages = getScopePackages(scope);
 		} else {
 			// Fall back to file-path detection
 			targetPackages = getAffectedPackages(hash);
@@ -373,7 +317,8 @@ console.log(`Version: ${version}\n`);
 // 4. Set version across all packages
 console.log("Setting version across packages...");
 if (!DRY_RUN) {
-	setVersion(version);
+	setVersion(process.cwd(), version);
+	assertReleaseVersions(process.cwd(), version);
 }
 console.log(`  Set all packages to ${version}\n`);
 
@@ -388,16 +333,34 @@ console.log("Running tests...");
 run("./test.sh");
 console.log();
 
-// 6. Commit and tag
+// 6. Build, commit, tag, and make the immutable tag public. The tag-triggered
+// workflow must finish the matching GitHub release before npm can become public.
+console.log("Building packages...");
+run("bun run build");
+console.log();
+
 console.log("Committing and tagging...");
 run("git add .");
 run(`git commit -m "release: v${version}"`);
 run(`git tag v${version}`);
 console.log();
 
-// 7. Build and publish
-console.log("Building and publishing...");
-run("bun run build");
+console.log("Pushing release commit and tag...");
+run("git push origin main");
+run(`git push origin v${version}`);
+console.log();
+
+// 7. Gate npm publication on the complete GitHub release. A partial release is
+// retried for up to ten minutes and then aborts before any npm package is public.
+console.log("Waiting for required graph release assets...");
+if (!DRY_RUN) {
+	await waitForReleaseAssets({ tag: `v${version}`, listAssets: listGithubReleaseAssets });
+	console.log("  GitHub release contains manifest.json, SHA256SUMS, and all five graph archives\n");
+} else {
+	console.log("  (dry-run: release asset polling skipped)\n");
+}
+
+console.log("Publishing npm packages...");
 // Daily version suffixes like 2026.3.2-4 are NOT prereleases — they're the Nth release of the day.
 // Only versions with non-numeric suffixes (e.g., -beta, -rc.1, -alpha) are prereleases.
 const isPrerelease = /-[a-zA-Z]/.test(version);
@@ -413,15 +376,14 @@ if (!DRY_RUN) {
 }
 console.log();
 
-// 9. Commit and push
+// 9. Commit and push the next-cycle changelog section only after publication.
 console.log("Committing changelog updates...");
 run("git add .");
 run('git commit -m "chore: add [Unreleased] section for next cycle"');
 console.log();
 
-console.log("Pushing to remote...");
+console.log("Pushing changelog update...");
 run("git push origin main");
-run(`git push origin v${version}`);
 console.log();
 
 console.log(`=== Released v${version} ===`);

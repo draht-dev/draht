@@ -24,6 +24,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as zlib from "node:zlib";
+import { validateGraphManifest } from "./graph-manifest.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = __dirname;
@@ -434,11 +435,7 @@ async function ensureGraphEngine(flags) {
 		const tag = version.startsWith("v") ? version : `v${version}`;
 		const base = `https://github.com/${GRAPH_RELEASE_REPO}/releases/download/${tag}`;
 		const manifest = await fetchJson(`${base}/manifest.json`, 15_000);
-		const entry = (manifest.artifacts || []).find((a) => a.platform === platform);
-		if (!entry) {
-			log(`release ${tag} has no graph engine artifact for ${platform} — draht will use the built-in JS engine.`);
-			return;
-		}
+		const entry = validateGraphManifest(manifest, { version, tag, platform });
 		if (!graphManifestNameOk(entry.archive) || !graphManifestNameOk(entry.binary)) {
 			log(`release ${tag}'s manifest.json has an invalid archive/binary name for ${platform} — refusing to use it. draht will use the built-in JS engine.`);
 			return;

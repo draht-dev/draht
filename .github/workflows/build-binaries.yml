@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -106,6 +108,18 @@ jobs:
         env:
           DRAHT_VERSION: ${{ env.RELEASE_TAG }} # script strips a leading 'v'
         run: ./scripts/build-graph-binaries.sh
+
+      # GitHub's OIDC identity signs an immutable provenance statement for the
+      # workflow/repository/commit that produced every graph release asset. This
+      # is keyless: no project signing secret or long-lived private key exists.
+      - name: Attest graph release asset provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            go/binaries/*.tar.gz
+            go/binaries/*.zip
+            go/binaries/SHA256SUMS
+            go/binaries/manifest.json
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.2

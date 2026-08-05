@@ -1,0 +1,85 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import test from "node:test";
+
+const ROOT = resolve(import.meta.dirname, "..");
+const IMPLEMENTATIONS = ["draht-claude", "draht-codex"];
+
+function validManifest(version = "2026.8.5") {
+	return {
+		schemaVersion: 1,
+		name: "draht-graph",
+		version,
+		tag: `v${version}`,
+		artifacts: [{
+			platform: "linux-x64",
+			goos: "linux",
+			goarch: "amd64",
+			archive: "draht-graph-linux-x64.tar.gz",
+			archiveSha256: "a".repeat(64),
+			archiveBytes: 123,
+			binary: "draht-graph",
+			binarySha256: "b".repeat(64),
+			binaryBytes: 45,
+		}],
+	};
+}
+
+for (const implementation of IMPLEMENTATIONS) {
+	test(`${implementation} accepts a manifest bound to the requested release and platform`, async () => {
+		const { validateGraphManifest } = await import(`../packages/${implementation}/graph-manifest.mjs`);
+		assert.equal(validateGraphManifest(validManifest(), { version: "2026.8.5", tag: "v2026.8.5", platform: "linux-x64" }).archiveBytes, 123);
+	});
+
+	for (const [label, mutate] of [
+		["name", (m) => { m.name = "other"; }],
+		["version", (m) => { m.version = "2026.8.4"; }],
+		["tag", (m) => { m.tag = "v2026.8.4"; }],
+		["schema", (m) => { m.schemaVersion = 2; }],
+		["platform", (m) => { m.artifacts[0].platform = "darwin-x64"; }],
+		["goos", (m) => { m.artifacts[0].goos = "darwin"; }],
+		["goarch", (m) => { m.artifacts[0].goarch = "arm64"; }],
+		["archive", (m) => { m.artifacts[0].archive = "wrong.tar.gz"; }],
+		["binary", (m) => { m.artifacts[0].binary = "wrong"; }],
+		["archive hash metadata", (m) => { m.artifacts[0].archiveSha256 = "not-a-hash"; }],
+		["binary size metadata", (m) => { m.artifacts[0].binaryBytes = 0; }],
+	]) {
+		test(`${implementation} rejects manifest ${label} mismatch before download`, async () => {
+			const { validateGraphManifest } = await import(`../packages/${implementation}/graph-manifest.mjs`);
+			const manifest = validManifest();
+			mutate(manifest);
+			assert.throws(
+				() => validateGraphManifest(manifest, { version: "2026.8.5", tag: "v2026.8.5", platform: "linux-x64" }),
+				/invalid graph release manifest/i,
+			);
+		});
+	}
+
+	test(`${implementation} performs fresh local graph install and replaces it on update`, () => {
+		const home = mkdtempSync(join(tmpdir(), `${implementation}-home-`));
+		const sources = mkdtempSync(join(tmpdir(), `${implementation}-sources-`));
+		const first = join(sources, "first");
+		const second = join(sources, "second");
+		writeFileSync(first, "first graph binary");
+		writeFileSync(second, "updated graph binary");
+		const cli = join(ROOT, "packages", implementation, "cli.mjs");
+		const run = (source, version) => spawnSync(process.execPath, [cli, "install-graph-engine", "--from", source, "--graph-engine-version", version], {
+			encoding: "utf8",
+			env: { ...process.env, HOME: home, USERPROFILE: home },
+		});
+		const fresh = run(first, "1.0.0");
+		assert.equal(fresh.status, 0, fresh.stderr || fresh.stdout);
+		const target = join(home, ".draht", "bin", process.platform === "win32" ? "draht-graph.exe" : "draht-graph");
+		assert.equal(readFileSync(target, "utf8"), "first graph binary");
+		const updated = run(second, "2.0.0");
+		assert.equal(updated.status, 0, updated.stderr || updated.stdout);
+		assert.equal(readFileSync(target, "utf8"), "updated graph binary");
+		const stamp = JSON.parse(readFileSync(join(home, ".draht", "bin", ".draht-graph.json"), "utf8"));
+		assert.equal(stamp.version, "2.0.0");
+		assert.equal(stamp.sha256, createHash("sha256").update("updated graph binary").digest("hex"));
+	});
+}

@@ -117,15 +117,18 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 		signal: AbortSignal | undefined,
 		onCompromised: (error: Error) => void,
 	): Promise<() => Promise<void>> {
-		const maxRetries = 10;
-		for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		const staleMs = 30_000;
+		const maxDelayMs = 2_000;
+		const deadline = Date.now() + staleMs;
+		let retry = 0;
+		while (true) {
 			signal?.throwIfAborted();
 			let release: (() => Promise<void>) | undefined;
 			try {
 				release = await lockfile.lock(this.authPath, {
 					realpath: false,
 					retries: 0,
-					stale: 30000,
+					stale: staleMs,
 					onCompromised,
 				});
 			} catch (error) {
@@ -134,8 +137,11 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 					typeof error === "object" && error !== null && "code" in error
 						? String((error as { code?: unknown }).code)
 						: undefined;
-				if (code !== "ELOCKED" || attempt === maxRetries) throw error;
-				const delayMs = Math.min(Math.round((Math.random() + 1) * 100 * 2 ** attempt), 10000);
+				const remainingMs = deadline - Date.now();
+				if (code !== "ELOCKED" || remainingMs <= 0) throw error;
+				const baseDelayMs = Math.min(10 * 2 ** retry, maxDelayMs / 2);
+				retry++;
+				const delayMs = Math.min(Math.round(baseDelayMs * (1 + Math.random())), remainingMs);
 				if (signal) await sleep(delayMs, undefined, { signal });
 				else await sleep(delayMs);
 				continue;
@@ -146,7 +152,6 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			}
 			return release;
 		}
-		throw new Error("Failed to acquire auth storage lock");
 	}
 
 	async withLockAsync<T>(

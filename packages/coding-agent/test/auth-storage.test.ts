@@ -226,6 +226,24 @@ describe("AuthStorage", () => {
 		});
 	});
 
+	test("retries a briefly contended file lock", async () => {
+		writeAuthJson({ anthropic: { type: "api_key", key: "stored" } });
+		const backend = new FileAuthStorageBackend(authJsonPath);
+		const release = vi.fn(async () => {});
+		const lockSpy = vi
+			.spyOn(lockfile, "lock")
+			.mockRejectedValueOnce(Object.assign(new Error("locked"), { code: "ELOCKED" }))
+			.mockResolvedValueOnce(release);
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		const update = vi.fn(async () => ({ result: undefined }));
+
+		await backend.withLockAsync(update);
+
+		expect(lockSpy).toHaveBeenCalledTimes(2);
+		expect(update).toHaveBeenCalledTimes(1);
+		expect(release).toHaveBeenCalledTimes(1);
+	});
+
 	test("surfaces a compromised file storage lock", async () => {
 		writeAuthJson({ anthropic: { type: "api_key", key: "stored" } });
 		const backend = new FileAuthStorageBackend(authJsonPath);

@@ -3029,6 +3029,8 @@ These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `
 
 I0, I1, and I2 may proceed independently. I3 → I4 → I5 is serial and begins after R2 fixes the `LaneState` shape. These packages use separate modules with focused unit tests; I5 remains primitive-only and does not edit `agent-harness.ts`.
 
+**In progress and reserved: I0 by @badlogic.** Other agents must not pick I0 while this ownership marker remains.
+
 - [ ] **I0 — telemetry contracts and no-op context.** Dependencies: none.
   - Primary files: `packages/agent/src/harness/telemetry.ts` and focused telemetry tests. Do not edit `agent-harness.ts`; H0 replaces its temporary local type declarations after convergence.
   - Define the canonical `ExecutionContext`, spans, attributes, and no-op implementation required by section 14 compatibility wrappers.
@@ -3057,6 +3059,8 @@ I0, I1, and I2 may proceed independently. I3 → I4 → I5 is serial and begins 
 ### Track L — agent-loop building blocks
 
 These packages all own `packages/agent/src/agent-loop.ts` and therefore merge strictly L1 → L2 → L3. Existing `agent-loop` and `agent` tests pass unchanged after each package.
+
+**In progress and reserved: L1–L3 by @badlogic.** Other agents must not pick an L package while this ownership marker remains.
 
 - [ ] **L1 — extract assistant streaming.** Dependencies: I0.
   - Add `streamAssistant()` and `StreamAssistantConfig`, including explicit telemetry context; route the compatibility loop's request path through it without changing events or results.

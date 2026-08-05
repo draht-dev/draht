@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+func TestSignatureExtractorVersionInvalidatesPreInitializerCache(t *testing.T) {
+	if Version != "x4" {
+		t.Fatalf("Version = %q, want x4 after signature semantics changed", Version)
+	}
+}
+
 func TestSignatureAt(t *testing.T) {
 	tests := []struct {
 		name string
@@ -26,10 +32,16 @@ func TestSignatureAt(t *testing.T) {
 			want: "export function renderLine(item: OutlineItem, depth: number): string",
 		},
 		{
-			name: "ts const binding keeps its value",
+			name: "ts const binding excludes its initializer",
 			lang: "typescript",
 			src:  "export const OUTLINE_SIGNATURE_CAP = 160",
-			want: "export const OUTLINE_SIGNATURE_CAP = 160",
+			want: "export const OUTLINE_SIGNATURE_CAP",
+		},
+		{
+			name: "ts typed const keeps its declared type but excludes a secret initializer",
+			lang: "typescript",
+			src:  `export const API_TOKEN: string = "sk-production-secret"`,
+			want: "export const API_TOKEN: string",
 		},
 		{
 			name: "ts type alias drops the dangling equals",
@@ -82,14 +94,14 @@ func TestSignatureAt(t *testing.T) {
 		{
 			name: "braces and slashes inside a string literal are not structural",
 			lang: "typescript",
-			src:  "export const tpl = \"{ // not a comment\"",
-			want: "export const tpl = \"{ // not a comment\"",
+			src:  "export function tpl(value = \"{ // not a comment\"): void {}",
+			want: "export function tpl(value = \"{ // not a comment\"): void",
 		},
 		{
 			name: "escaped quote does not end the string",
 			lang: "typescript",
-			src:  "export const q = \"a\\\"{b\"",
-			want: "export const q = \"a\\\"{b\"",
+			src:  "export function q(value = \"a\\\"{b\"): void {}",
+			want: "export function q(value = \"a\\\"{b\"): void",
 		},
 		{
 			name: "inline object type inside params is kept",
@@ -111,20 +123,20 @@ func TestSignatureAt(t *testing.T) {
 			name: "regex literal full of structural characters is kept intact",
 			lang: "typescript",
 			src: strings.Join([]string{
-				"export const PUNCTUATION_REGEX = /[(){}[\\]<>.,;:'\"!?+\\-=*/\\\\|&%^$#@~`]/;",
+				"export function punctuation(value = /[(){}[\\]<>.,;:'\"!?+\\-=*/\\\\|&%^$#@~`]/): RegExp {",
 				"",
 				"/**",
 				" * Check if a character is whitespace.",
 				" */",
 				"export function isWhitespaceChar(char: string): boolean {",
 			}, "\n"),
-			want: "export const PUNCTUATION_REGEX = /[(){}[\\]<>.,;:'\"!?+\\-=*/\\\\|&%^$#@~`]/",
+			want: "export function punctuation(value = /[(){}[\\]<>.,;:'\"!?+\\-=*/\\\\|&%^$#@~`]/): RegExp",
 		},
 		{
 			name: "division is not mistaken for a regex literal",
 			lang: "typescript",
-			src:  "export const half = total / 2",
-			want: "export const half = total / 2",
+			src:  "export function half(value = total / 2): number {}",
+			want: "export function half(value = total / 2): number",
 		},
 		{
 			name: "block comment ends the declaration text",
@@ -239,6 +251,32 @@ func TestBuildSymbols_PopulatesSignatures(t *testing.T) {
 		}
 		if s.Sig != w {
 			t.Errorf("symbol %q sig\n got: %q\nwant: %q", s.Name, s.Sig, w)
+		}
+	}
+}
+
+func TestBuildSymbols_NamedExportsResolveLocalDeclarations(t *testing.T) {
+	src := []byte(strings.Join([]string{
+		"const foo: string = API_TOKEN",
+		"function local(value: number): boolean { return value > 0 }",
+		"export { foo, local as aliased, missing }",
+	}, "\n"))
+
+	syms := buildSymbols("typescript", src, extractExports("typescript", src))
+	got := make(map[string]string, len(syms))
+	for _, sym := range syms {
+		if sym.Exported {
+			got[sym.Name] = sym.Sig
+		}
+	}
+	want := map[string]string{
+		"foo":     "const foo: string",
+		"aliased": "function local(value: number): boolean",
+		"missing": "",
+	}
+	for name, signature := range want {
+		if got[name] != signature {
+			t.Errorf("export %q signature\n got: %q\nwant: %q", name, got[name], signature)
 		}
 	}
 }

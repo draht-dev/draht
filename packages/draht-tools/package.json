@@ -13,7 +13,7 @@
 		"CHANGELOG.md"
 	],
 	"scripts": {
-		"test": "node --test test/*.test.mjs && node bin/draht-tools.cjs --help > /dev/null"
+		"test": "node --test test/delegation.test.mjs test/graph-delegation.test.cjs && node bin/draht-tools.cjs --help > /dev/null"
 	},
 	"keywords": [
 		"draht",

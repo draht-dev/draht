@@ -17,6 +17,8 @@ const maxSignatureLines = 8
 
 var sigWhitespaceRe = regexp.MustCompile(`\s+`)
 
+var tsVariableDeclRe = regexp.MustCompile(`^\s*export\s+(?:declare\s+)?(?:const|let|var)\b|^\s*(?:const|let|var)\b`)
+
 // hashCommentLangs are the languages where `#` starts a line comment. It is
 // deliberately NOT applied to typescript/javascript (`#x` is a private class
 // field) or rust (`#[derive(...)]` is an attribute).
@@ -99,6 +101,8 @@ func signatureAt(lang string, lines []string, idx int) string {
 	}
 	hashComments := hashCommentLangs[lang]
 	regexLiterals := regexLiteralLangs[lang]
+	variableDecl := regexLiterals && tsVariableDeclRe.MatchString(lines[idx])
+	variableArrow := variableDecl && strings.Contains(strings.Join(lines[idx:last], "\n"), "=>")
 
 	// One entry per source line consumed, joined structurally by foldParts
 	// rather than with a blind space (a wrapped parameter list must come
@@ -186,6 +190,13 @@ func signatureAt(lang string, lines []string, idx int) string {
 					stop = true
 				}
 			case '=':
+				// Variable initializers are implementation details and may contain
+				// credentials. Keep only the declared name/type. Arrow functions
+				// are the exception: their parameter and return-type syntax lives
+				// on the initializer side and is still declaration information.
+				if depth == 0 && variableDecl && !variableArrow {
+					stop = true
+				}
 				// `=>` once the parameter list has closed is the arrow of
 				// an arrow function, i.e. the start of its body.
 				if depth == 0 && closed && j+1 < len(line) && line[j+1] == '>' {

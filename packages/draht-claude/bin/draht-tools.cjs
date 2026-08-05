@@ -5250,7 +5250,7 @@ function graphMissingMessage() {
 // must be stripped — not just documented as "ignored" — before the JS path ever
 // sees argv (Phase 4 review finding #4).
 const GRAPH_GO_ONLY_VALUE_FLAGS = new Set(["jobs", "parser", "cache-dir", "out", "ast-max-bytes", "ast-max-line"]);
-const GRAPH_GO_ONLY_BOOL_FLAGS = new Set(["verbose"]);
+const GRAPH_GO_ONLY_BOOL_FLAGS = new Set(["verbose", "symbol-signatures"]);
 function graphStripGoOnlyFlags(args) {
 	const out = [];
 	for (let i = 0; i < args.length; i++) {
@@ -5283,6 +5283,14 @@ function graphPinRegexParser(cmd, args) {
 	return ["--parser", "regex", ...args];
 }
 
+function graphWantsSymbolSignatures(cmd, args) {
+	return cmd === "map-graph" && args.some((a) => a === "--symbol-signatures");
+}
+
+function graphSignatureFallbackWarning() {
+	return "draht-tools: --symbol-signatures requires the Go graph engine, but no usable `draht-graph` binary is available; continuing with the JavaScript engine without symbol signatures.";
+}
+
 function graphMaybeDelegate(cmd, args) {
 	if (!GRAPH_GO_COMMANDS.has(cmd)) return;
 	if (process.env.DRAHT_GRAPH_DELEGATED) return; // recursion guard, belt and braces
@@ -5294,6 +5302,7 @@ function graphMaybeDelegate(cmd, args) {
 			console.error(graphMissingMessage());
 			process.exit(127);
 		}
+		if (graphWantsSymbolSignatures(cmd, args)) console.error(graphSignatureFallbackWarning());
 		return; // auto: silent JS fallback
 	}
 	const res = spawnSync(bin, [cmd, ...graphPinRegexParser(cmd, args)], {
@@ -5306,6 +5315,7 @@ function graphMaybeDelegate(cmd, args) {
 			console.error(`draht-tools: failed to execute ${bin}: ${res.error.message}`);
 			process.exit(127);
 		}
+		if (graphWantsSymbolSignatures(cmd, args)) console.error(graphSignatureFallbackWarning());
 		return; // auto: JS fallback
 	}
 	if (res.signal) {

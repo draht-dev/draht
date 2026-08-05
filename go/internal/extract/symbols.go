@@ -9,6 +9,7 @@ var (
 	tsSymbolRe = regexp.MustCompile(`^(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)|^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=`)
 	tsClassRe  = regexp.MustCompile(`^\s*(?:async\s+)?class\b`)
 	tsFuncRe   = regexp.MustCompile(`^\s*(?:async\s+)?function\b`)
+	tsDeclRe   = regexp.MustCompile(`^\s*(?:export\s+)?(?:declare\s+)?(?:async\s+)?(?:function|class|interface|type|enum|const|let|var)\s+([A-Za-z_$][\w$]*)\b`)
 
 	pySymbolRe = regexp.MustCompile(`^(?:class|def)\s+([A-Za-z_][\w]*)`)
 	pyClassRe  = regexp.MustCompile(`^class\b`)
@@ -30,18 +31,35 @@ func buildSymbols(lang string, content []byte, exports []Export) []Symbol {
 	// Split once, up front: both the exported pass (which needs it for
 	// signatures) and the non-exported declaration scan below read it.
 	lines := strings.Split(string(content), "\n")
+	tsDeclLines := make(map[string]int)
+	if lang == "typescript" || lang == "javascript" {
+		for i, line := range lines {
+			if m := tsDeclRe.FindStringSubmatch(line); m != nil {
+				tsDeclLines[m[1]] = i
+			}
+		}
+	}
 
 	for _, e := range exports {
 		if seen[e.Name] {
 			continue
 		}
 		seen[e.Name] = true
+		sig := signatureAt(lang, lines, e.Line-1)
+		if e.Kind == "named" && (lang == "typescript" || lang == "javascript") {
+			sig = ""
+			if local := namedExportLocalAt(lines, e.Line-1, e.Name); local != "" {
+				if declLine, ok := tsDeclLines[local]; ok {
+					sig = signatureAt(lang, lines, declLine)
+				}
+			}
+		}
 		syms = append(syms, Symbol{
 			Name:     e.Name,
 			Kind:     e.Kind,
 			Line:     e.Line,
 			Exported: true,
-			Sig:      signatureAt(lang, lines, e.Line-1),
+			Sig:      sig,
 		})
 		if len(syms) >= 60 {
 			return syms
@@ -109,4 +127,39 @@ func buildSymbols(lang string, content []byte, exports []Export) []Symbol {
 	}
 
 	return syms
+}
+
+// namedExportLocalAt returns the local binding behind one `export { ... }`
+// entry. It deliberately resolves only simple identifier clauses; anything
+// ambiguous stays unresolved so callers omit a signature instead of storing
+// the syntactically useless word "export".
+func namedExportLocalAt(lines []string, idx int, exported string) string {
+	if idx < 0 || idx >= len(lines) {
+		return ""
+	}
+	var statement strings.Builder
+	for i := idx; i < len(lines) && i < idx+maxSignatureLines; i++ {
+		statement.WriteString(lines[i])
+		statement.WriteByte(' ')
+		if strings.Contains(lines[i], "}") {
+			break
+		}
+	}
+	m := tsNamedExportRe.FindStringSubmatch(statement.String())
+	if m == nil {
+		return ""
+	}
+	for _, part := range strings.Split(m[1], ",") {
+		clause := strings.TrimSpace(tsLeadTypeRe.ReplaceAllString(strings.TrimSpace(part), ""))
+		if am := tsAsClauseRe.FindStringSubmatch(clause); am != nil {
+			name := am[2]
+			if name == "" {
+				name = am[1]
+			}
+			if name == exported {
+				return am[1]
+			}
+		}
+	}
+	return ""
 }

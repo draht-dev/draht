@@ -29,6 +29,7 @@ const deepseekCompat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode
 	openRouterRouting: {},
 	vercelGatewayRouting: {},
 	zaiToolStream: false,
+	supportsThinkingTokenBudget: false,
 	supportsOpenAIGrammarTools: false,
 	supportsStrictMode: true,
 	requiresReasoningContentOnAssistantMessages: false,

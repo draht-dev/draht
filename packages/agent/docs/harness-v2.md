@@ -3264,7 +3264,7 @@ To avoid every parallel PR conflicting in this file, package authors do not edit
 5. Run focused tests while iterating, then `npm run check` before handoff.
 6. Report completion to the merge/status owner so the checkbox is updated immediately after merge.
 
-The dependency-ready unreserved roots are **QA1, I1, I2, and L1**. Respect the active R2 and JSONL reservations below.
+The dependency-ready unreserved roots are **QA1, I1, I2, I3, and L1**. Respect the active R3 and JSONL reservations below.
 
 ### Track F — scaffold truth and public ownership
 
@@ -3320,7 +3320,7 @@ These packages merge QA1 → QA2 → QA3. QA packages own the audit document and
 
 These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module instead of growing `agent-harness.ts`. R3 is the first package in this track that owns `agent-harness.ts` and therefore runs after F0.
 
-**In progress and reserved: R2 by @vegarsti.** Other agents must not pick R2 while this ownership marker remains.
+**Reserved: R3 by @vegarsti.** Other agents must not pick R3 while this ownership marker remains.
 
 - [x] **R0 — recovery-query contract.** Dependencies: none.
   - Primary files: `packages/agent/src/harness/session/types.ts`, `session.ts`, `memory.ts`, SQLite record storage/repository files, backend conformance, and focused recovery-query tests.
@@ -3333,7 +3333,7 @@ These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module ins
   - Validate the section 5 corruption rules from discovered open starts, bounded records, and point-looked-up entries, with no writes or effects.
   - Acceptance: one focused rejection test per validity bullet, plus valid prefixes at every section 6 crash point.
 
-- [ ] **R2 — pure lane-state reduction.** Dependencies: R1.
+- [x] **R2 — pure lane-state reduction.** Dependencies: R1.
   - Primary files: `packages/agent/src/harness/reducer.ts`, `packages/agent/test/harness/reducer.test.ts`.
   - Implement the section 15 `LaneReductionInput` → `LaneReductionResult` contract. Derive pending queues/writes, attempts, tool batches, deferred handles, structural targets, and idle next-run state into `laneState`; derive effective configuration and terminal-failure provenance beside it from the same section 7 query inputs.
   - Keep `LaneState` limited to orchestration state. Reduction exclusively owns all three outputs; later recovery packages consume `LaneReductionResult` and do not re-reduce tool or operation records.

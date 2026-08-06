@@ -44,7 +44,8 @@ const ENTER_ALT_SCREEN = "\x1b[?1049h";
 const EXIT_ALT_SCREEN = "\x1b[?1049l";
 const DISABLE_AUTOWRAP = "\x1b[?7l";
 const ENABLE_AUTOWRAP = "\x1b[?7h";
-const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h";
+const ENABLE_BUTTON_MOTION_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h";
+const ENABLE_ALL_MOTION_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h";
 const DISABLE_MOUSE = "\x1b[?1006l\x1b[?1004l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 const FOCUS_IN = "\x1b[I";
 const FOCUS_OUT = "\x1b[O";
@@ -201,8 +202,19 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.pressedUrl = undefined;
 		this.selectionDragged = false;
 		this.resetRenderState();
+		const term = process.env.TERM?.toLowerCase() ?? "";
+		// Multiplexers can lag when every pointer movement is forwarded. Button-motion
+		// tracking preserves clicks, wheel events, selections, and scrollbar dragging.
+		const mouseSequence =
+			process.env.TMUX !== undefined ||
+			process.env.ZELLIJ !== undefined ||
+			process.env.STY !== undefined ||
+			term.startsWith("tmux") ||
+			term.startsWith("screen")
+				? ENABLE_BUTTON_MOTION_MOUSE
+				: ENABLE_ALL_MOTION_MOUSE;
 		this.terminal.write(
-			`${ENTER_ALT_SCREEN}${DISABLE_AUTOWRAP}${this.mouseEnabled ? ENABLE_MOUSE : ""}\x1b[2J\x1b[H\x1b[?25l`,
+			`${ENTER_ALT_SCREEN}${DISABLE_AUTOWRAP}${this.mouseEnabled ? mouseSequence : ""}\x1b[2J\x1b[H\x1b[?25l`,
 		);
 	}
 

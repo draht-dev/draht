@@ -161,6 +161,53 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("uses button-motion tracking inside terminal multiplexers", () => {
+		const environmentKeys = ["TMUX", "ZELLIJ", "STY", "TERM"] as const;
+		const previousEnvironment = new Map(environmentKeys.map((key) => [key, process.env[key]]));
+		try {
+			for (const key of environmentKeys) delete process.env[key];
+			process.env.TERM = "xterm-256color";
+			const directTerminal = new RecordingTerminal();
+			const directTui = new TuiAltScreen(directTerminal);
+			directTui.start();
+			const directWrites = directTerminal.events
+				.filter((event): event is { type: "write"; data: string } => event.type === "write")
+				.map((event) => event.data)
+				.join("");
+			assert.ok(directWrites.includes("\x1b[?1003h"));
+			directTui.stop();
+
+			const multiplexers = [
+				{ name: "tmux environment", environment: { TMUX: "/tmp/tmux/default,1,0" } },
+				{ name: "tmux TERM", environment: { TERM: "tmux-256color" } },
+				{ name: "Zellij environment", environment: { ZELLIJ: "0" } },
+				{ name: "Screen environment", environment: { STY: "123.session" } },
+				{ name: "Screen TERM", environment: { TERM: "screen-256color" } },
+			];
+			for (const { name, environment } of multiplexers) {
+				for (const key of environmentKeys) delete process.env[key];
+				for (const [key, value] of Object.entries(environment)) process.env[key] = value;
+				const terminal = new RecordingTerminal();
+				const tui = new TuiAltScreen(terminal);
+				tui.start();
+				const writes = terminal.events
+					.filter((event): event is { type: "write"; data: string } => event.type === "write")
+					.map((event) => event.data)
+					.join("");
+				assert.ok(writes.includes("\x1b[?1002h"), `${name} should enable button-motion tracking`);
+				assert.ok(!writes.includes("\x1b[?1003h"), `${name} should not enable all-motion tracking`);
+				assert.ok(writes.includes("\x1b[?1006h"), `${name} should enable SGR mouse encoding`);
+				tui.stop();
+			}
+		} finally {
+			for (const key of environmentKeys) {
+				const value = previousEnvironment.get(key);
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
 	it("drags a visible scrollbar thumb and keeps it visible until release", async () => {
 		const terminal = new RecordingTerminal(10, 5);
 		const tui = new TuiAltScreen(terminal);
@@ -214,9 +261,7 @@ describe("TuiAltScreen", () => {
 		assert.strictEqual(scrollView.isScrollbarVisible, false);
 
 		assert.ok(terminal.events.every((event) => event.type !== "write" || !event.data.includes("\x1b]52;c;")));
-		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[?1003h")));
 		tui.stop();
-		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[?1003l")));
 	});
 
 	it("keeps the scrollbar column selectable while the thumb is hidden", async () => {

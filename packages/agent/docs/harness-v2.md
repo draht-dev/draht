@@ -1,10 +1,6 @@
 # Durable AgentHarness design
 
-> **Decision note.** This is the chosen design: straight-line async procedures with deterministic stepping through a gated effect boundary (section 15). A competing variant — the same Parts I and II over a synchronous state machine — was evaluated and rejected; it is preserved as `harness-v2-generator.md` at commit `01eeafd1`. Why this one: it is easy to follow and debug; plain async/await matches the rest of the codebase, with no machine/executor split to reason across; types just work — `fx.appendRecord()` returns the right thing, with no yield-result union casting at every boundary; it reuses the agent-loop building blocks as-is instead of reimplementing tool phases inside a machine; stepping is a wrapper around production code with zero overhead in automatic mode, and it can stop between parallel tool calls. The generator's one real edge — compiler-proven no-I/O between actions — is covered by the `Effects` interface through which all I/O must flow: not compile-time enforced, but the surface is small enough that violations are easy to spot, and the zero-writes-while-parked test catches them. If the machine is ever truly needed, it swaps in as a contained section 15 replacement; the action vocabulary is already shared.
-
 > **Compatibility policy.** Old coding-agent v3 JSONL sessions must open and restore idle. This is the only backward-compatibility requirement. All other formats and APIs in `packages/agent/src/harness` and `packages/session-backends/sqlite-node` (and their respective tests) may break. We do not write migrations, schema versioning, or conversion paths for anything else.
-
-> **Implementation-status convention.** Sections 1–20 describe the chosen end state unless a paragraph explicitly says that behavior is landed; their code blocks are target contracts, not claims that the current scaffold implements them. Section 21 is the source of truth. The callback contract, schemas, typed helpers, no-op context, request-option propagation, exports, generator, and generated reference are landed. Section 16’s provider/deferred APIs are also landed, but its settled agent-side narrowing and harness integration are future work. The section 14 public building blocks, canonical `AgentHarnessOptions.telemetryContext`, effect-context threading, and all runtime span creation remain future L/H/I/O work; the scaffold still has its temporary `context?: ExecutionContext` surface.
 
 ```mermaid
 flowchart TD
@@ -42,7 +38,7 @@ The harness executes runs against one session. The session holds four kinds of s
 - **Provider stream resumption.** Partial streams are never persisted. An interrupted streaming request is retried or abandoned. Deferred requests are different and in scope: the provider returns a handle at once and serves the result later (e.g. `background: true` on a Responses API, batch APIs). @draht/ai returns an assistant message with stop reason `deferred` that carries the handle; it is persisted like any assistant message. Redeeming the handle appends a normal assistant message. Recovery sees the unredeemed handle and fetches instead of paying for a new request.
 - **Multiple writers.** Two processes on one session are out of scope. The serving layer routes all traffic for a session to the process that holds its harness. Lanes cover the workloads that look like multi-writer: parallel threads over shared history.
 - **Replication.** A session lives in one place. Coordination-free sync of diverging copies is a different design. Nothing forecloses it later; section 19 records why.
-- **Coding-agent migration.** `packages/coding-agent` remains on its current runtime; only telemetry dependency build ordering and generated locks may change. Compatibility means the new JSONL repository can read supported coding-agent v3 files; it does not mean coding-agent is switched to `AgentHarness` here.
+- **Coding-agent migration.** Migrating coding-agent to `AgentHarness` is out of scope. Compatibility means the new JSONL repository can read supported coding-agent v3 files.
 
 ## 2. What a session is
 
@@ -818,8 +814,6 @@ interface LaneInfo {
 
 ### Options
 
-This is the target H0 surface. At the I0 landing, `AgentHarnessOptions` still exposes the scaffold-only `context?: ExecutionContext`; it does not yet accept `telemetryContext` or use the no-op context by default.
-
 ```ts
 interface AgentHarnessOptions {
   // Identity and providers
@@ -1047,7 +1041,7 @@ Calls on a faulted harness reject with the same `HarnessFault` instance until th
 
 `finalMessage` is the run's newest entry that projects to an assistant message; `finalEntryId` is that entry's id. `leafId` is the lane's leaf when the operation finished — the race-free anchor for branch queries (`findEntriesOnBranch({ start: leafId })`). The two differ when a deferred write was applied after the final assistant message. Full transcripts are not duplicated into results; they are in the session and were delivered as events.
 
-**Type provenance.** Core conversation and tool types (`AgentMessage`, `AgentTool`, `AgentToolResult`, `QueueMode`, `ThinkingLevel`) come from `packages/agent/src/types.ts`. Provider types (`Model`, `Models`, `Usage`, `RetryPolicy`, stream options, deferred handles) come from `packages/ai`. The landed generic telemetry contract and schema machinery come from `packages/telemetry/src/index.ts`; the landed AI-request and harness span schemas come from `packages/agent/src/harness/telemetry.ts`. The current harness scaffold still declares its temporary local `ExecutionContext` / `ExecutionSpan` types and `context` option; H0 replaces those declarations with the canonical telemetry types and target `telemetryContext` option. Session, harness, hook, event, result, snapshot, navigation, and durable-record types are defined by the v2 implementation under `packages/agent/src/harness/`. Lowercase helpers in section 15 pseudocode without a definition (`preparation`, `runToolBatchForSingleCall`, request/option bags such as `AssistantRequest` and `FactWrite`) are constructive implementation detail, not contract.
+**Type provenance.** Core conversation and tool types (`AgentMessage`, `AgentTool`, `AgentToolResult`, `QueueMode`, `ThinkingLevel`) come from `packages/agent/src/types.ts`. Provider types (`Model`, `Models`, `Usage`, `RetryPolicy`, stream options, deferred handles) come from `packages/ai`. The generic telemetry contract and schema machinery come from `packages/telemetry`; the AI-request and harness span schemas come from `packages/agent/src/harness/telemetry.ts`. Session, harness, hook, event, result, snapshot, navigation, and durable-record types are defined under `packages/agent/src/harness/`. Lowercase helpers in section 15 pseudocode without a definition (`preparation`, `runToolBatchForSingleCall`, request/option bags such as `AssistantRequest` and `FactWrite`) are constructive implementation detail, not contract.
 
 ### Suspended operations
 
@@ -1570,7 +1564,7 @@ interface RecordQuery {
 }
 ```
 
-The old `getStorage()` escape hatch is gone: all writes flow through `Session`, which is the single writer the storage contract assumes.
+`Session` exposes no `getStorage()` escape hatch: all writes flow through `Session`, which is the single writer the storage contract assumes.
 
 **Ownership rule:** after an application passes a `Session` to `AgentHarness.create()`, it mutates that session only through the harness and its lane views until `close()` resolves. Concurrent writes through the original standalone reference are unsupported caller misuse; the harness adds no machinery for it.
 
@@ -1679,7 +1673,7 @@ One file per session: a header line, then one JSON object per line, in `seq` ord
 
 ### SQLite
 
-Greenfield schema; existing WIP databases are discarded. The engine design is the current engine's, with one persisted leaf per lane instead of the single implicit active leaf.
+SQLite uses a greenfield schema with one persisted leaf per lane.
 
 ```sql
 session_sequences (session_id, next_seq)                    -- atomic seq allocator
@@ -1756,15 +1750,13 @@ Case 4 — a branch still ends at an entry that has children.
   The has-children test would copy needlessly; the tip test never does.
 ```
 
-Stale branches (no lane resolves through them) are kept, matching the current engine.
+Stale branches (no lane resolves through them) are kept.
 
 Every restore query is an index seek plus a bounded scan: a lane's open operation via `(lane, type, seq)`, its last run-kind start via `(lane, type, op_kind, seq)`, its records above the operation via the same index, its own entries via the read plan from its leaf. No query touches another lane's traffic.
 
 ## 14. Agent-loop building blocks
 
-**Implementation status:** this section is the L1–L3 target. At the I0 landing, `agent-loop.ts` still exposes the legacy loop API over private monolithic helpers; it exports none of the `streamAssistant`, tool-phase, or batch building blocks below and threads no `TelemetryContext`.
-
-L1–L3 split `agent-loop.ts` into building blocks. Blocks own no durable state and know nothing about sessions, records, or lanes. The harness will compose them and insert its durability writes between their phases. The existing `agentLoop` / `runAgentLoop` API stays in the file as a thin composition of the same blocks, with its current signature and behavior — existing consumers do not change.
+`agent-loop.ts` exposes building blocks that own no durable state and know nothing about sessions, records, or lanes. The harness composes them and inserts durability writes between their phases.
 
 ### Streaming one assistant response
 
@@ -1864,7 +1856,7 @@ export interface ToolCallbacks {
   onToolResult?(message: ToolResultMessage, terminate: boolean): Promise<void>;
 }
 
-/** The batch driver. Rules, preserved from the current loop:
+/** Batch-driver rules:
     - stopReason "length" fails every call without executing: streamed
       arguments are salvage-parsed and can validate while silently
       truncated; none are safe.
@@ -1884,7 +1876,7 @@ export function executeToolBatch(
 
 ### Compatibility wrapper
 
-The existing public interface of `agent-loop.ts` must not break. Every current export keeps its signature and behavior: `agentLoop`, `agentLoopContinue`, `runAgentLoop`, `runAgentLoopContinue`, `AgentEventSink`, and the config surface they consume (`getSteeringMessages`, `getFollowUpMessages`, `prepareNextTurn`, `shouldStopAfterTurn`, `beforeToolCall`, `afterToolCall`, event order included). L3 will reimplement them as thin compositions of `streamAssistant` and `executeToolBatch` with the no-op `TelemetryContext` — no durability, no new semantics. Acceptance criterion: the existing `agent-loop` and `agent` test suites pass unchanged.
+The existing public interface of `agent-loop.ts` does not break. Every export keeps its signature and behavior: `agentLoop`, `agentLoopContinue`, `runAgentLoop`, `runAgentLoopContinue`, `AgentEventSink`, and the config surface they consume (`getSteeringMessages`, `getFollowUpMessages`, `prepareNextTurn`, `shouldStopAfterTurn`, `beforeToolCall`, `afterToolCall`, event order included). They compose `streamAssistant` and `executeToolBatch` with the no-op `TelemetryContext` — no durability, no new semantics. The existing `agent-loop` and `agent` test suites pass unchanged.
 
 ## 15. Harness internals
 
@@ -2479,7 +2471,7 @@ async function abortPath(): Promise<RunResult> {
 
     const done = await fx.finishOperation(op.id, "aborted");
     if (done === "finished") return finished("aborted");
-    // "continue": a deferred write landed meanwhile — apply it before closing
+    // "continue": a deferred write arrived meanwhile — apply it before closing
   }
 }
 ```
@@ -2621,28 +2613,24 @@ Notes:
 - Parallel batches and crash sites compose: `tool_started` records are written in source order during the sequential phase-1 pass, so a crash mid-batch leaves a source-order prefix of records — some with results, some without (section 6 table applies per call).
 - An aborted assistant message (`stopReason: "aborted"`) skips tool execution; `abortPath()` owns the synthetic results.
 - A crash between the navigation move and its summary entry loses the in-memory summary text; recovery regenerates it under the same attempt cap. A hook-supplied summary lost in that window is regenerated rather than re-asked: the hook's decline authority ended at the move.
-- One policy knob deferred to implementation: whether `resume()` waits inside `fetchDeferred` when the provider is not ready (`wait` option) or re-parks immediately.
 
 ## 16. @draht/ai: deferred requests
 
-**Implementation status:** the pi-ai option, handle, provider capability, authenticated `Models` dispatch, and faux-provider behavior in this section are landed. `TerminalStopReason` and `SettledAssistantMessage` are target agent-side narrowings for L1, not current pi-ai exports. Harness redemption/cancellation behavior remains H8, and request-span instrumentation remains O2.
-
-The provider-level interface the future harness builds on is already available. Everything is per-request; batch APIs can implement the same shape through a custom provider.
+Everything is per-request; batch APIs can implement the same shape through a custom provider.
 
 ```ts
 // Request. Providers map this to their native mechanism, e.g.
 // background: true on a Responses API, or a batch submission.
 interface SimpleStreamOptions extends StreamOptions {
   deferred?: boolean | { window?: "15m" | "1h" | "24h" };
-  // ... existing options
+  // ... other options
 }
 
 // Response. A deferred request resolves quickly with a handle instead of
 // content. The message is persisted like any assistant message; the handle
 // is the durable fact recovery needs.
 type StopReason = "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
-// Target agent-side narrowings added by L1; pi-ai currently exports StopReason
-// and AssistantMessage, but not these two aliases.
+// Agent-side settled-result narrowings.
 type TerminalStopReason = Exclude<StopReason, "pending">;
 type SettledAssistantMessage = AssistantMessage & { stopReason: TerminalStopReason };
 
@@ -2657,7 +2645,7 @@ interface DeferredHandle {
 }
 
 interface AssistantMessage {
-  // ... existing fields
+  // ... other fields
   stopReason: StopReason;
   deferred?: DeferredHandle;     // present iff stopReason === "deferred"
 }
@@ -2712,18 +2700,18 @@ export interface ProviderStreams {
 }
 ```
 
-`ProviderRequestOptions.telemetryContext` is inherited by `StreamOptions`, `SimpleStreamOptions`, `DeferredFetchOptions`, `DeferredCancelOptions`, and `ImagesOptions`; provider, `Models`, `ImagesModels`, and direct stream/image dispatch preserve it unchanged. `buildBaseOptions()` also preserves it when built-in `streamSimple()` implementations convert to provider-specific stream options. These are landed I0 behaviors.
+`ProviderRequestOptions.telemetryContext` is inherited by `StreamOptions`, `SimpleStreamOptions`, `DeferredFetchOptions`, `DeferredCancelOptions`, and `ImagesOptions`; provider, `Models`, `ImagesModels`, and direct stream/image dispatch preserve it unchanged. `buildBaseOptions()` also preserves it when built-in `streamSimple()` implementations convert to provider-specific stream options.
 
-`pending` is internal to a mutable live-stream message. L1 will narrow request-wrapper results to the target `SettledAssistantMessage`; H8 will enforce that harness-written entries and durable usage records cannot contain `pending`; O2 will apply the same rule to settled `pi.ai.request` spans and normalize terminal `toolUse` to `tool_use`.
+`pending` is internal to a mutable live-stream message. Request-wrapper results use `SettledAssistantMessage`; harness-written entries, durable usage records, and settled `pi.ai.request` spans cannot contain `pending`. Telemetry normalizes terminal `toolUse` to `tool_use`.
 
-The future harness runtime will not talk to a provider object directly; it will use the already-landed authenticated dispatch surface:
+The harness uses the authenticated `Models` dispatch surface rather than talking to a provider object directly:
 
 ```ts
 type ModelsDeferredFetchOptions = DeferredFetchOptions & ModelsRequestTransforms;
 type ModelsDeferredCancelOptions = DeferredCancelOptions & ModelsRequestTransforms;
 
 interface Models {
-  // existing methods
+  // other methods
   fetchDeferred(model: Model<Api>, handle: DeferredHandle,
                 options?: ModelsDeferredFetchOptions): Promise<AssistantMessage>;
   cancelDeferred(model: Model<Api>, handle: DeferredHandle,
@@ -2733,9 +2721,9 @@ interface Models {
 
 `Models.fetchDeferred` and `Models.cancelDeferred` delegate to the provider methods with normal model resolution and authentication (credential store, expiring tokens, header merge). Their options carry the normal HTTP request settings, lifecycle callbacks, and model transforms; fetch options additionally carry the provider long-poll duration. A provider that returns `stopReason: "deferred"` must implement fetch; cancellation is best effort.
 
-H8 will treat a terminal fetch answer as final for the run: the harness will append the error message and fail the operation (section 6), never start an automatic replacement request, and convert a rejected fetch promise into the same `stopReason: "error"` message form so expected provider and authentication failures stay in-band. On a returned still-deferred message it will require the complete handle to equal the persisted handle: a provider cannot replace durable handle data without a write, so a mismatch is a defect.
+A terminal fetch answer is final for the run: the harness appends the error message and fails the operation, never starts an automatic replacement request, and converts a rejected fetch promise into the same `stopReason: "error"` message form so expected provider and authentication failures stay in-band. On a returned still-deferred message it requires the complete handle to equal the persisted handle: a provider cannot replace durable handle data without a write, so a mismatch is a defect.
 
-Deferred assistant messages carry a handle, not content. The landed session context projection already omits them from provider context; H8 will wire durable suspension and redemption around that projection.
+Deferred assistant messages carry a handle, not content. Session context projection omits them from provider context; durable suspension and redemption use the persisted handle.
 
 Stop-reason normalization is the adapter's job, and the harness branches only on the normalized value. For OpenAI Responses: `incomplete_details.reason === "max_output_tokens"` maps to `stopReason: "length"`; `content_filter` maps to a non-retryable `stopReason: "error"`. Adapters may retain the provider's reason as `rawStopReason` for diagnostics; core logic never reads it.
 
@@ -2763,17 +2751,15 @@ repo.create({ id?, parentSessionId? }): Promise<Session>;
 
 ## 18. Telemetry
 
-**Implementation status:** I0 and the telemetry-package extraction landed the backend-neutral contract, no-op context, schema machinery, exact AI-request and harness schemas, typed helpers, request-option propagation, exports, one generator/reference, and focused tests. No current agent-loop or harness execution path calls `startAiSpan()` or `startHarnessSpan()`, so I0 emits no runtime spans. H0/L1–L3/I4 will establish canonical context plumbing; O2 will insert the spans described under Effects, nesting, and lifetime below.
-
 Telemetry uses explicit context propagation. Core code does not use `AsyncLocalStorage`, global current-span state, or runtime-specific context APIs: pi runs in Node, Bun, browsers, and workers, so no runtime's ambient-context mechanism can be the core abstraction. An adapter may use ambient context internally — for example, an OpenTelemetry adapter may activate its native child context so HTTP auto-instrumentation attaches correctly — but pi always passes the parent explicitly.
 
-Pi ships no exporter and requires no backend-specific telemetry implementation. The application supplies a `TelemetryContext`; an **adapter** implements that interface and bridges spans into OTel, Sentry, logs, or another backend. The adapter is trusted to obey the callback contract below. It owns backend ids and native context objects; core never carries trace-id plumbing.
+Pi ships no exporter and requires no backend-specific telemetry implementation. It does ship `InMemoryTelemetryContext` as the deterministic backend-neutral reference implementation; applications may use it for process-local capture or supply a `TelemetryContext` adapter that bridges spans into OTel, Sentry, logs, or another backend. The adapter is trusted to obey the callback contract below. It owns backend ids and native context objects; core never carries trace-id plumbing.
 
 ### Package ownership
 
-The generic contract, schema-definition machinery, and shared no-op implementation live in `packages/telemetry/src/index.ts` and are exported from `@draht/telemetry`. Pi-ai imports only `TelemetryContext` for request options; it owns no span schema or helper and emits no telemetry itself. `packages/agent/src/harness/telemetry.ts` owns both `AI_TELEMETRY_SCHEMA` / `startAiSpan()` and `HARNESS_TELEMETRY_SCHEMA` / `startHarnessSpan()`. The agent package root re-exports those domain schemas and helpers plus the generic telemetry surface. There is one generic contract and one current domain-schema owner.
+The generic contract, schema-definition machinery, shared no-op, and in-memory reference implementation live under `packages/telemetry/src/` and are exported from `@draht/telemetry`. The runner-independent conformance cases live under `packages/telemetry/src/testing/` and are exported from `@draht/telemetry/testing`. Pi-ai imports only `TelemetryContext` for request options; it owns no span schema or helper and emits no telemetry itself. `packages/agent/src/harness/telemetry.ts` owns both `AI_TELEMETRY_SCHEMA` / `startAiSpan()` and `HARNESS_TELEMETRY_SCHEMA` / `startHarnessSpan()`, plus the readonly `AGENT_TELEMETRY_SCHEMAS` tuple that composes their typed vocabularies without merging their schema data or versions. The agent package root re-exports those domain schemas, helpers, tuple, and the generic telemetry surface. There is one generic contract and one domain-schema owner.
 
-The landed `ProviderRequestOptions.telemetryContext` carries an optional parent through stream/simple-stream, deferred fetch/cancel, and image request options; provider, `Models`, `ImagesModels`, direct dispatch, and built-in simple-option conversion preserve the object unchanged. This leaves pi-ai API implementations free to use the context later without making pi-ai own the generic API today. The current `AgentHarnessOptions` still has its temporary `context?: ExecutionContext` field. H0 will replace that scaffold surface with `telemetryContext?: TelemetryContext`, L/I/H work will thread it, and O2 will make the agent-side request wrapper emit `pi.ai.request` through the agent-owned AI schema.
+`AgentHarnessOptions.telemetryContext` defaults to the no-op context, and the agent-side request wrapper emits `pi.ai.request` through the agent-owned AI schema.
 
 Both schemas are pi-owned. Span names use the `pi.ai.*`, `pi.harness.*`, and `pi.session.*` families; attributes use the same pi-owned `pi.*` vocabulary and do not adopt an external semantic-convention namespace. Adapters translate them when useful; the emitted pi vocabulary remains stable regardless of backend convention churn.
 
@@ -2815,7 +2801,7 @@ interface TelemetrySpan extends TelemetryContext {
 }
 ```
 
-The telemetry package exports the shared no-op context. The target harness and L3 compatibility wrapper will select it when no application context is supplied; the current scaffold does not yet apply that default. Under the context contract, `startSpan()` creates the child and invokes its callback synchronously, exactly once, before returning a promise. It keeps the span open until the callback's value or promise settles:
+The telemetry package exports the shared no-op context and the deterministic in-memory reference context. The harness and compatibility wrapper select the no-op when no application context is supplied. Under the context contract, `startSpan()` creates the child and invokes its callback synchronously, exactly once, before returning a promise. It keeps the span open until the callback's value or promise settles:
 
 - return or resolve: default status `ok`, then automatic end;
 - synchronous throw: return a promise rejected with the same thrown value, after automatic error status and end;
@@ -2825,9 +2811,9 @@ The telemetry package exports the shared no-op context. The target harness and L
 - `setAttributes()` merges keys; a later defined value overwrites an earlier one and `undefined` is ignored;
 - calls on a settled span are inert and never throw.
 
-Adapters preserve the callback's result and error. Their recording methods are synchronous, passive, and must not throw; asynchronous exporters buffer internally and flush on their own schedule. If native span creation or recording fails, the adapter suppresses that failure, substitutes no-op behavior, and still invokes the business callback exactly once. A nonconforming adapter is an application defect. The no-op implementation invokes the callback with one shared inert span, allocates no per-span object, inspects and retains no attributes, and otherwise preserves the callback's behavior. Flushing a real adapter at shutdown is the application's responsibility.
+Adapters preserve the callback's result and error. Their recording methods are synchronous, passive, and must not throw; asynchronous exporters buffer internally and flush on their own schedule. If native span creation or recording fails, the adapter suppresses that failure, ignores the failed recording call atomically, substitutes no-op behavior, and still invokes the business callback exactly once. A nonconforming adapter is an application defect. The no-op implementation invokes the callback with one shared inert span, allocates no per-span object, inspects and retains no attributes, and otherwise preserves the callback's behavior. Flushing a real adapter at shutdown is the application's responsibility.
 
-The target L/I/H runtime passes context to every effectful implementation boundary as a normal argument. No core function will look up a current context:
+The harness runtime passes context to every effectful implementation boundary as a normal argument. No core function looks up a current context:
 
 ```ts
 streamAssistant(messages, configWithTelemetryContext, emit);
@@ -2838,11 +2824,11 @@ fx.appendEntry(entry, telemetryContext);
 fx.runHook(name, event, telemetryContext);
 ```
 
-A `TelemetrySpan` is also the explicit child `TelemetryContext`. Passing the callback span to lower-level work creates nesting through the ordinary call graph. I4 will make every `Effects` method receive its parent as a parameter; O2 will give parallel tools separate child spans and therefore separate parent contexts.
+A `TelemetrySpan` is also the explicit child `TelemetryContext`. Passing the callback span to lower-level work creates nesting through the ordinary call graph. The schema-typed API below automates that handoff by giving each callback a child starter bound to its live span; it does not use ambient mutable context. Every `Effects` method receives its parent as a parameter, and parallel tools use separate child spans and therefore separate parent contexts.
 
 ### Typed schema
 
-The low-level adapter accepts the open `SpanAttributes` bag. O2 instrumentation must never construct untyped span names or attribute bags directly. The agent package already exports the two plain, serializable domain schema objects and their typed helpers for that purpose.
+The low-level adapter accepts the open `SpanAttributes` bag. Pi instrumentation never constructs untyped span names or attribute bags directly. The agent package exports the two plain, serializable domain schema objects and their typed helpers for that purpose.
 
 ```ts
 type TelemetryAttributeType =
@@ -2902,83 +2888,32 @@ interface TelemetrySchemaDefinition {
 declare function defineTelemetrySchema<const T extends TelemetrySchemaDefinition>(schema: T): T;
 ```
 
-`defineTelemetrySchema()` is a typed identity helper; the returned value is ordinary data, not a validation runtime. Attribute types, required keys, and literal `values` are inferred from that value:
+`defineTelemetrySchema()` is a typed identity helper; the returned value is ordinary serializable data, not a validation runtime. Span names, attribute types, required keys, and literal `values` are inferred from that value. The tables below are the normative domain vocabulary; `packages/agent/docs/telemetry-schema.md` is its generated reference.
+
+`createTypedSpanStarter(context, schemas)` binds one explicit parent context to the combined span vocabulary of a non-empty readonly schema tuple. The schemas retain independent objects, ownership, documentation, and versions; the tuple is not a third merged schema. Span names must be unique across the tuple and duplicate literal names fail compilation. The schema values are otherwise type-inference inputs only and are not inspected or retained at runtime.
+
+The returned `TypedSpanStarter` is a per-name overload set that accepts only a declared literal name and that span's exact start attributes. A union-valued name must be narrowed before the call so its runtime name cannot be paired with another span's attributes. Its callback receives the schema-scoped span plus another starter over the same schema tuple bound to the callback span. The child starter therefore creates correctly nested spans without ambient context or manual rebinding, and concurrent callbacks receive independent starters:
 
 ```ts
-const AI_TELEMETRY_SCHEMA = {
-  version: 1,
-  spans: {
-    "pi.ai.request": {
-      description: "One logical request to an AI provider",
-      parents: { kind: "any" },
-      startAttributes: {
-        "pi.ai.operation": {
-          type: "string", required: true,
-          values: ["stream", "fetch_deferred", "cancel_deferred", "generate_images"],
-          description: "Logical provider operation",
-        },
-        "pi.ai.provider": {
-          type: "string", required: true,
-          description: "Selected provider id",
-        },
-        "pi.ai.model": {
-          type: "string", required: true,
-          description: "Requested model id",
-        },
-        "pi.ai.api": {
-          type: "string", required: true,
-          description: "Provider API id",
-        },
-        "pi.ai.streaming": {
-          type: "boolean", required: true,
-          description: "Whether this operation returns a stream",
-        },
-        "pi.ai.deferred": {
-          type: "boolean", required: false,
-          description: "Whether the operation requests or participates in deferred execution",
-        },
-      },
-      endAttributes: {
-        "pi.ai.response.model": { type: "string", description: "Concrete response model" },
-        "pi.ai.response.id": {
-          type: "string", cardinality: "high", description: "Provider response id",
-        },
-        "pi.ai.response.stop_reason": {
-          type: "string",
-          values: ["stop", "length", "tool_use", "error", "aborted", "deferred"],
-          description: "Normalized terminal response reason",
-        },
-        "pi.ai.http.status_code": { type: "number", description: "Final HTTP status" },
-        "pi.ai.usage.input_tokens": { type: "number", description: "Reported input tokens" },
-        "pi.ai.usage.output_tokens": { type: "number", description: "Reported output tokens" },
-        "pi.ai.usage.cache_read_tokens": { type: "number", description: "Reported cache-read tokens" },
-        "pi.ai.usage.cache_write_tokens": { type: "number", description: "Reported cache-write tokens" },
-        "pi.ai.usage.reasoning_tokens": { type: "number", description: "Reported reasoning tokens" },
-        "pi.ai.usage.total_tokens": { type: "number", description: "Reported total tokens" },
-        "pi.ai.usage.cost": { type: "number", description: "Reported total cost" },
-        "pi.ai.stream.chunk_count": { type: "number", description: "Streamed update chunk count" },
-        "pi.ai.stream.time_to_first_chunk_ms": {
-          type: "number", description: "Elapsed milliseconds to first update chunk",
-        },
-        "pi.ai.error.type": {
-          type: "string", cardinality: "low", description: "Provider or transport error class",
-        },
-      },
-      status: { default: "ok", errorWhen: "The operation throws or returns an error result" },
-    },
-  },
-} as const satisfies TelemetrySchemaDefinition;
+const AGENT_TELEMETRY_SCHEMAS = [
+  AI_TELEMETRY_SCHEMA,
+  HARNESS_TELEMETRY_SCHEMA,
+] as const;
 
-type AiSpanName = keyof typeof AI_TELEMETRY_SCHEMA.spans;
-type AiSpanStartAttributes<Name extends AiSpanName> = InferStartAttributes<
-  (typeof AI_TELEMETRY_SCHEMA.spans)[Name]["startAttributes"]
->;
-type AiSpanEndAttributes<Name extends AiSpanName> = InferOptionalAttributes<
-  (typeof AI_TELEMETRY_SCHEMA.spans)[Name]["endAttributes"]
->;
-type AiSpanAttributes<Name extends AiSpanName> = AiSpanStartAttributes<Name>
-  & AiSpanEndAttributes<Name>;
+const startSpan = createTypedSpanStarter(
+  telemetryContext,
+  AGENT_TELEMETRY_SCHEMAS,
+);
+
+await startSpan("pi.harness.step", stepAttributes, async (stepSpan, startChildSpan) => {
+  stepSpan.setAttributes({ "pi.step.outcome": "succeeded" });
+  return startChildSpan("pi.ai.request", requestAttributes, async (requestSpan) => {
+    requestSpan.setAttributes({ "pi.ai.response.stop_reason": "stop" });
+  });
+});
 ```
+
+The callback span still retains the open generic `TelemetryContext.startSpan()` method, so it can be passed to a starter for a different schema tuple when an integration intentionally crosses vocabularies. `createTypedSpanStarter()` itself adds no runtime span, schema validation, parent-rule enforcement, or durable state.
 
 The following tables are normative input to the schema objects. `!` means a required start attribute; `?` means an optional start attribute. Every end attribute is optional enrichment. Array element sets use `elementValues`; all other closed sets use `values`. The automatic throw/reject rule from the context contract applies to every span in addition to the explicit status rule shown.
 
@@ -3016,7 +2951,7 @@ The following tables are normative input to the schema objects. `!` means a requ
 | `pi.ai.stream.time_to_first_chunk_ms` | number | elapsed milliseconds to first update chunk |
 | `pi.ai.error.type` | string | low-cardinality provider or transport error class |
 
-The schema declares no per-chunk telemetry event. When O2 inserts runtime spans, the existing assistant stream will continue to carry live deltas while telemetry records only aggregate chunk count and first-chunk latency. Default O2 telemetry must never contain request or response content.
+The schema declares no per-chunk telemetry event. The assistant stream carries live deltas while telemetry records only aggregate chunk count and first-chunk latency. Default telemetry never contains request or response content.
 
 #### Harness schema
 
@@ -3036,19 +2971,17 @@ The three operation spans share `pi.session.id` (string, required, high cardinal
 | `pi.harness.event_handler` | root or the scope emitting the event | `pi.event.type`! low-cardinality string with the section 10 event discriminants, `pi.lane.name`? string high-cardinality | none | listener throw; the event system catches it after the span rejects |
 | `pi.session.write` | root or the current harness scope | `pi.lane.name`!, `pi.operation.id`? string high-cardinality, `pi.session.mutation`!: `entry`, `record`, `lane`, `fact`; `pi.session.item_type`? string | `pi.session.seq` number when the committed API exposes it | storage rejection |
 
-The parent column maps directly to `TelemetryParentDefinition`: “root or application span” is `root_or_external`; “root or the current scope” and “root or any caller span” are `any`; every finite pi span list uses `spans` with exactly those names. Under O2, `pi.harness.tool` will wrap phase 2 (`executeTool`) only and settle before `after_tool` finalization: `pi.tool.is_error` describes the raw execution result, there is no final `terminate` attribute, and blocked or invalid calls that never execute emit no tool span. Live execution will supply the active turn id and parent the span to `pi.harness.turn`; reconciliation has no durable turn id, omits it, and parents the span directly to the resumed `pi.harness.run` invocation. The landed `pi.hook.name` values array is exactly `before_run`, `before_resume`, `before_run_end`, `transform_context`, `before_request`, `before_payload`, `after_response`, `before_tool`, `after_tool`, `before_compaction`, and `before_navigation`. The landed `pi.event.type` values array contains every `type` discriminant in the section 10 catalog and no others. `pi.harness.hook` describes one registered handler invocation, so O2 can give isolated handler failures their own status without failing the enclosing run. `pi.harness.event_handler` does the same for passive listener failures. The harness schema declares no span events initially.
+The parent column maps directly to `TelemetryParentDefinition`: “root or application span” is `root_or_external`; “root or the current scope” and “root or any caller span” are `any`; every finite pi span list uses `spans` with exactly those names. `pi.harness.tool` wraps phase 2 (`executeTool`) only and settles before `after_tool` finalization: `pi.tool.is_error` describes the raw execution result, there is no final `terminate` attribute, and blocked or invalid calls that never execute emit no tool span. Live execution supplies the active turn id and parents the span to `pi.harness.turn`; reconciliation has no durable turn id, omits it, and parents the span directly to the resumed `pi.harness.run` invocation. The `pi.hook.name` values array is exactly `before_run`, `before_resume`, `before_run_end`, `transform_context`, `before_request`, `before_payload`, `after_response`, `before_tool`, `after_tool`, `before_compaction`, and `before_navigation`. The `pi.event.type` values array contains every `type` discriminant in the section 10 catalog and no others. `pi.harness.hook` describes one registered handler invocation, so isolated handler failures have their own status without failing the enclosing run. `pi.harness.event_handler` does the same for passive listener failures. The harness schema declares no span events initially.
 
-Dynamic identifiers and names are attributes, never span names. The landed schema definitions are the exhaustive vocabulary O2 may emit; I0 itself emits no pi-written runtime span, event, or attribute.
+Dynamic identifiers and names are attributes, never span names. The schema definitions are the exhaustive vocabulary pi instrumentation may emit.
 
-The agent package exports both schemas, each span-name union, per-name start/end/combined attribute types, event types, discriminated span unions, and typed `startAiSpan()` / `startHarnessSpan()` helpers. A helper accepts only that span's start attributes; its callback receives a schema-scoped view of the live span whose `setAttributes()` accepts only that span's optional end attributes and whose `addEvent()` accepts only declared event names and attributes. Individual calls reject missing required start attributes, unknown attributes, type mismatches, and invalid closed-set values at compile time. TypeScript does not try to prove that any end setter ran; `startSpan()` always owns automatic settlement. The scoped view erases to the generic `TelemetrySpan`; production performs no schema validation.
+The agent package exports both schemas, `AGENT_TELEMETRY_SCHEMAS`, each span-name union, per-name start/end/combined attribute types, event types, discriminated span unions, and typed `startAiSpan()` / `startHarnessSpan()` helpers. The telemetry package exports `createTypedSpanStarter()` and `TypedSpanStarter`; callers can bind the agent tuple when one scope needs both AI-request and harness spans. Every typed starter or domain helper accepts only that span's start attributes; its callback receives a schema-scoped view of the live span whose `setAttributes()` accepts only that span's optional end attributes and whose `addEvent()` accepts only declared event names and attributes. Individual calls reject missing required attributes, duplicate composed span names, unknown attributes, type mismatches, and invalid closed-set values at compile time. TypeScript does not try to prove that any end setter ran; `startSpan()` always owns automatic settlement. The scoped view erases to the generic `TelemetrySpan`; production performs no schema validation.
 
 The schema objects are also the documentation source. `packages/agent/scripts/generate-telemetry-docs.ts`, exposed through package scripts `generate-telemetry-docs` and `check:telemetry-docs`, generates the combined AI-request and harness reference at `packages/agent/docs/telemetry-schema.md`. The Markdown file is repository documentation, not an npm package file; published consumers import both serializable schema objects from the agent package root. Schema `version` starts at 1; package changelogs record compatible additions and breaking renames, removals, type changes, or meaning changes. Explicit migration metadata is added only if a real consumer needs automatic translation.
 
 ### Effects and nesting
 
-**Implementation status:** this subsection is the O2 target, not landed I0 behavior.
-
-Telemetry wrappers will follow ownership of ordinary work. The procedure layer will wrap orchestration scopes — operation invocation, checkpoint, turn, and retryable step — and pass each callback's `TelemetrySpan` as the parent parameter to work below it. `Effects` will wrap the atomic effect it owns. Telemetry is not part of the gated action vocabulary and creates no durable crash boundary.
+Telemetry wrappers follow ownership of ordinary work. The procedure layer wraps orchestration scopes — operation invocation, checkpoint, turn, and retryable step — and passes each callback's `TelemetrySpan` as the parent parameter to work below it. `Effects` wraps the atomic effect it owns. Telemetry is not part of the gated action vocabulary and creates no durable crash boundary.
 
 ```ts
 async function assistantAttempt(
@@ -3081,7 +3014,7 @@ async function assistantAttempt(
 }
 ```
 
-Under O2, section 14's `streamAssistant()` will be the logical model-request wrapper. It will start `pi.ai.request` with `startAiSpan()`, pass that callback span as `ProviderRequestOptions.telemetryContext` through `Models`, record only schema-declared aggregate response fields, and return the same assistant message. `Effects.executeTool()` will similarly wrap only phase 2 in `pi.harness.tool`; hook and event runners will follow the same explicit-parent pattern.
+Section 14's `streamAssistant()` is the logical model-request wrapper. It starts `pi.ai.request` with `startAiSpan()`, passes that callback span as `ProviderRequestOptions.telemetryContext` through `Models`, records only schema-declared aggregate response fields, and returns the same assistant message. `Effects.executeTool()` similarly wraps only phase 2 in `pi.harness.tool`; hook and event runners follow the same explicit-parent pattern.
 
 | owner / method | target telemetry |
 |---|---|
@@ -3098,9 +3031,7 @@ A context object and adapter-native span are process-local capabilities. Neither
 
 ### Span lifetime
 
-**Implementation status:** these are O2 lifetime rules; I0 creates no operation spans.
-
-One operation span will wrap one admitted in-process invocation of operation work. An initial `prompt()` / `compact()` / `navigateTree()` starts its span only after its `operation_started` acceptance commit; an admission `Err` such as `LaneBusy`, `InvalidMessage`, `NothingToCompact`, or `UnknownTarget` emits no operation span. A `resume()` starts its wrapper only after lane reservation, identity checks, and the other expected rejection checks pass. Each successful resume admission gets another span with the same durable operation id and recovery `true`. Repeated deferred polling therefore produces repeated ordinary wrapper spans correlated by operation id — no extra public lifecycle concept or durable telemetry state.
+One operation span wraps one admitted in-process invocation of operation work. An initial `prompt()` / `compact()` / `navigateTree()` starts its span only after its `operation_started` acceptance commit; an admission `Err` such as `LaneBusy`, `InvalidMessage`, `NothingToCompact`, or `UnknownTarget` emits no operation span. A `resume()` starts its wrapper only after lane reservation, identity checks, and the other expected rejection checks pass. Each successful resume admission gets another span with the same durable operation id and recovery `true`. Repeated deferred polling therefore produces repeated ordinary wrapper spans correlated by operation id — no extra public lifecycle concept or durable telemetry state.
 
 - a returned `completed`, `declined`, `aborted`, or `suspended` result resolves normally; instrumentation may enrich the span with the matching allowed outcome;
 - a returned `failed` result explicitly sets error status and still resolves normally as the public API requires; it may also enrich the span with outcome `failed`;
@@ -3109,7 +3040,7 @@ One operation span will wrap one admitted in-process invocation of operation wor
 
 If an outcome attribute is set, run spans never use `declined`; that value exists only in the compaction and navigation schemas. Trace context is not durable. Persisting a backend-specific trace token would couple recovery data to one telemetry system. A serving layer may link a resumed span to an earlier trace when it has that information.
 
-The target span tree follows execution scopes:
+The span tree follows execution scopes:
 
 ```text
 draht.harness.run
@@ -3132,9 +3063,7 @@ The procedure layer owns operation, checkpoint, turn, and step scopes. `Effects`
 
 ### Safety and testing
 
-O2 default attributes will carry only schema-declared identifiers, names, counts, durations, stop reasons, status codes, and usage. They must never carry prompts, completions, tool arguments, tool output, file content, provider payloads, headers, or credentials. Schema fields flag any future sensitive or high-cardinality attribute explicitly.
-
-Current I0 tests cover schema inference and exactness, JSON serialization, generated-document freshness, no-op synchronous admission and result/error preservation, shared inert-span behavior, payload non-inspection, request-option propagation, and closed-set rejection. Pi ships no recording adapter, so the merge, status, and post-settlement rules above are adapter conformance obligations rather than stateful production behavior exercised by I0. O2's runtime tests will use a capture adapter to assert that each emitted start/end/event bag conforms to the owning schema after every status path; no test requires an end attribute to exist. Content and secret fixtures will assert absence, not merely redaction.
+Default attributes carry only schema-declared identifiers, names, counts, durations, stop reasons, status codes, and usage. They must never carry prompts, completions, tool arguments, tool output, file content, provider payloads, headers, or credentials. Schema fields flag any future sensitive or high-cardinality attribute explicitly.
 
 Telemetry remains separate from events and hooks:
 
@@ -3142,9 +3071,7 @@ Telemetry remains separate from events and hooks:
 - Hooks can change execution.
 - Telemetry is passive process-local diagnostics.
 
-## 19. Resolved questions
-
-Formerly open; both answered during review.
+## 19. Design decisions
 
 1. **Per-lane hooks and events — no.** Registration stays harness-global; every payload carries `lane` and handlers scope themselves. Scoped registration would add API surface without new capability.
 2. **Records and replication — stays out of scope, and nothing forecloses it.** Lane operation logs are flat sequences without parent links because a single writer per lane makes order equal causality (section 2). If replication is ever wanted, it falls out of the design as-is — append-only logs under one writer with a shared `seq` replicate by log shipping; no parent links or schema change needed now.
@@ -3213,6 +3140,8 @@ Gate invariants, asserted across Tier C:
 
 ### Other suites
 
+- The telemetry reference adapter and every third-party adapter run the exported conformance cases for synchronous admission, result/rejection identity, automatic and explicit status, attribute merging, event order, post-settlement behavior, parentage, and unreadable-payload suppression.
+- Runtime telemetry tests use the in-memory reference to assert exact schema-conforming span trees and independently valid start/end/event bags on every status path. End attributes remain optional. Content and secret fixtures assert absence, not merely redaction.
 - The existing `agent-loop` and `agent` suites pass unchanged — the section 14 compatibility criterion.
 - Event ordering per section 10, including `message_end` after commit.
 - Hooks: registration-id `resumeData` round trips, duplicate-id rejection, aggregation order, fail-closed `before_tool`.
@@ -3233,7 +3162,7 @@ Harness implementation lives directly in `packages/agent/src/harness/`, with v4 
 - Compaction preparation, context projection, and branch summarization use v4 `Entry` queries and no longer depend on the legacy `SessionTreeEntry` model. Reusable compaction tests and dedicated context tests cover this interim behavior.
 - `Session.getBranch()` is not part of v4 and must not be reintroduced. Branch callers use `findEntriesOnBranch()` with an explicit start and deliberate ordering semantics; callers may use the documented `newestFirst` default.
 - The pi-ai deferred request types, `Models.fetchDeferred()` / `cancelDeferred()` dispatch, and faux-provider pending/ready/terminal/cancellation support are already implemented and tested. Only harness integration remains.
-- The canonical telemetry contract, exact typed AI-request and harness schemas, no-op context, request-option propagation (including built-in simple-option conversion), generated reference, and focused tests are implemented. The current `AgentHarness` scaffold still uses temporary local execution-context types; canonical harness option/threading is H0/L/I work, and runtime span insertion remains O2.
+- The canonical telemetry contract, exact typed AI-request and harness schemas, no-op context, request-option propagation (including built-in simple-option conversion), generated reference, and focused tests are implemented. The current `AgentHarness` scaffold now imports canonical `TelemetryContext` for `AgentHarnessOptions.context`, but option renaming/defaulting/storage and execution threading remain H0/L/I work; runtime span insertion remains O2.
 
 ### Scope boundary
 
@@ -3380,13 +3309,13 @@ These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `
 I0, I1, and I2 may proceed independently. I3 → I4 → I5 is serial and begins after R2 fixes the `LaneState` shape. These packages use separate modules with focused unit tests; I5 remains primitive-only and does not edit `agent-harness.ts`.
 
 - [x] **I0 — telemetry contracts, typed schemas, and no-op context.** Dependencies: none.
-  - Primary files: `packages/telemetry/src/index.ts` and focused tests; pi-ai request-option types/propagation and focused tests; `packages/agent/src/harness/telemetry.ts`, `packages/agent/src/index.ts`, focused tests, package scripts, `packages/agent/scripts/generate-telemetry-docs.ts`, and generated `packages/agent/docs/telemetry-schema.md`. Do not edit `agent-harness.ts`; H0 replaces its temporary local type declarations after convergence.
-  - In telemetry, implement the one canonical section 18 callback-based `TelemetryContext` / `TelemetrySpan` contract, shared no-op context, and serializable `defineTelemetrySchema()` machinery.
+  - Primary files: `packages/telemetry/src/index.ts`, `packages/telemetry/src/memory.ts`, `packages/telemetry/src/testing/`, and focused tests; pi-ai request-option types/propagation and focused tests; `packages/agent/src/harness/telemetry.ts`, `packages/agent/src/index.ts`, focused tests, package scripts, `packages/agent/scripts/generate-telemetry-docs.ts`, and generated `packages/agent/docs/telemetry-schema.md`. Do not edit `agent-harness.ts`; its canonical context type is landed, while H0 owns option renaming/defaulting/storage and execution threading after convergence.
+  - In telemetry, implement the one canonical section 18 callback-based `TelemetryContext` / `TelemetrySpan` contract, shared no-op context, deterministic in-memory reference adapter, runner-independent adapter conformance cases, serializable `defineTelemetrySchema()` machinery, and `createTypedSpanStarter(context, schemas)` composition with child-bound starters.
   - In pi-ai, add optional `telemetryContext` to `ProviderRequestOptions` so every stream, deferred, and image option inherits it; provider, `Models`, `ImagesModels`, direct dispatch, and simple-option conversion preserve it. Pi-ai owns no domain schema or helper.
-  - In agent, define the complete normative `AI_TELEMETRY_SCHEMA` and `HARNESS_TELEMETRY_SCHEMA`, their inferred types, and typed `startAiSpan()` / `startHarnessSpan()` helpers. Export both schemas/helpers and re-export the generic telemetry surface from the agent package root. Do not duplicate the generic contract and do not adopt OTel or another external semantic convention.
+  - In agent, define the complete normative `AI_TELEMETRY_SCHEMA` and `HARNESS_TELEMETRY_SCHEMA`, their inferred types, the readonly `AGENT_TELEMETRY_SCHEMAS` composition tuple, and typed `startAiSpan()` / `startHarnessSpan()` helpers. Export both schemas, the tuple, and helpers, and re-export the generic telemetry surface from the agent package root. Do not duplicate the generic contract and do not adopt OTel or another external semantic convention.
   - Generate the combined repository-only Markdown reference from the runtime schema values with the named agent package scripts. Production helpers perform no runtime schema validation; schemas compile-time-check each pi-written start/end/event call and remain importable as machine-readable data.
   - Wire telemetry before pi-ai in workspace, local-release, publish, profiling, and coding-agent binary build order; add source-test aliases and refresh workspace/generated dependency locks.
-  - Landed coverage: focused tests exercise no-op synchronous admission, returned-value and sync/async rejection preservation, explicit no-op child propagation, one shared frozen inert span with no payload inspection, exact start/optional-end inference, rejection of missing, unknown, empty-schema, and invalid closed-set attributes, absence of declared span events, schema JSON serialization, option propagation across provider/`Models` stream and deferred dispatch, direct and `ImagesModels` image dispatch, built-in simple-option conversion, and generated-document freshness. Pi ships no recording adapter; section 18's merge/status/post-settlement rules are adapter obligations, while O2 will test pi's runtime status and nesting behavior with captured spans.
+  - Landed coverage: focused tests exercise no-op synchronous admission, returned-value and sync/async rejection preservation, explicit no-op child propagation, one shared frozen inert span with no payload inspection, exact start/optional-end inference, multi-schema vocabulary composition, child-starter parent propagation, rejection of duplicate span names and missing, unknown, empty-schema, and invalid closed-set attributes, absence of declared span events, schema JSON serialization, the in-memory reference against every exported adapter conformance case, option propagation across provider/`Models` stream and deferred dispatch, direct and `ImagesModels` image dispatch, built-in simple-option conversion, and generated-document freshness. O2 will use the reference adapter to test pi's runtime status and nesting behavior with captured spans.
 - [ ] **I1 — hook registry and runner.** Dependencies: none.
   - Primary files: `packages/agent/src/harness/hooks.ts`, `packages/agent/test/harness/hooks.test.ts`.
   - Implement typed registration, stable-id validation, ordered aggregation, error isolation, fail-closed `before_tool`, and per-id resume data handling.
@@ -3427,7 +3356,7 @@ These packages all own `packages/agent/src/agent-loop.ts` and therefore merge st
 H0 converges restore and primitives into `agent-harness.ts`. H0–H8 then merge strictly in order. Each package adds its Tier A recovery cases, Tier B exact trace, relevant events/hooks, and Tier C interleavings rather than deferring testing to the end.
 
 - [ ] **H0 — lane facades and primitive integration.** Dependencies: R3, I2, I5.
-  - Wire durable lane lookup/creation/inventory, equivalent name-bound facades, canonical hook/event/telemetry types, public manual-drive controls, and ownership/close plumbing.
+  - Wire durable lane lookup/creation/inventory, equivalent name-bound facades, canonical hook/event/telemetry types, rename `AgentHarnessOptions.context` to `telemetryContext` with the no-op default and stored root context, public manual-drive controls, and ownership/close plumbing.
   - Acceptance: repeated facades are equivalent, lanes remain isolated, public drive controls match gate actions, and no placeholder operation is accidentally enabled.
 - [ ] **H1 — one successful no-tool run.** Dependencies: H0, L3, I1.
   - Implement `prompt`, skill/template expansion, run acceptance, capture of already-pending next-run items, initial appends, one assistant step, usage record, message commit, conditional finish, result, and basic run/turn/message events/hooks.
@@ -3453,6 +3382,7 @@ H0 converges restore and primitives into `agent-harness.ts`. H0–H8 then merge 
   - Acceptance: complete tool crash matrix, changed replay declarations, parallel-prefix crashes, and idempotent second recovery.
 - [ ] **H8 — deferred provider redemption.** Dependencies: H7.
   - Integrate the already-landed pi-ai deferred APIs: suspend, pending re-park, ready continuation, terminal/rejected fetch failure, handle mismatch, and best-effort cancellation.
+  - Select and document whether `resume()` uses a non-zero `fetchDeferred` wait or checks once and re-parks immediately.
   - Acceptance: one fetch per resume; pending writes nothing except reported usage; terminal errors never start replacement requests.
 
 ### Track C/N — structural operations
@@ -3505,14 +3435,15 @@ For a fresh implementation session, in this order. This document wins over older
 4. `packages/agent/src/harness/session/memory.ts` — reference backend.
 5. `packages/session-backends/sqlite-node/src/sqlite/repo.ts` — v4 SQLite repository, leases, and forks.
 6. `packages/session-backends/sqlite-node/src/sqlite/storage/branch-entries.ts` — branch cache queries.
-7. `packages/agent/src/harness/agent-harness.ts` — v2 public API scaffold, including the temporary local execution-context declarations that H0 replaces.
-8. `packages/telemetry/src/index.ts` — canonical telemetry contract, no-op context, and schema machinery.
-9. `packages/agent/src/harness/telemetry.ts` — landed AI-request and harness schemas and typed helpers; no runtime instrumentation yet.
-10. `packages/agent/src/agent-loop.ts` — the still-legacy loop that L1–L3 will split into the section 14 public building blocks.
-11. `packages/agent/src/agent.ts` — queues, continuation, abort, settlement to preserve in spirit.
-12. `packages/agent/src/harness/messages.ts` — message conversion (`toProviderMessages` default).
-13. `packages/agent/src/harness/compaction/compaction.ts` — preparation and split-turn summaries.
-14. `packages/ai/src/utils/transform-messages.ts` — orphaned-tool-call healing.
-15. `packages/coding-agent/src/core/agent-session.ts` — read-only behavioral reference; do not modify it.
-16. `packages/coding-agent/src/core/extensions/runner.ts` — read-only error-isolation reference; do not modify it.
-17. `packages/coding-agent/docs/session-format.md` — read-only v3 JSONL format reference.
+7. `packages/agent/src/harness/agent-harness.ts` — public harness API and runtime.
+8. `packages/telemetry/src/index.ts` — canonical telemetry contract, schema machinery, typed starter, and public exports.
+9. `packages/telemetry/src/noop.ts`, `memory.ts`, and `testing/` — no-op/reference contexts and reusable conformance cases.
+10. `packages/agent/src/harness/telemetry.ts` — AI-request and harness schemas, combined schema tuple, and typed helpers.
+11. `packages/agent/src/agent-loop.ts` — agent-loop implementation and section 14 building blocks.
+12. `packages/agent/src/agent.ts` — queues, continuation, abort, settlement to preserve in spirit.
+13. `packages/agent/src/harness/messages.ts` — message conversion (`toProviderMessages` default).
+14. `packages/agent/src/harness/compaction/compaction.ts` — preparation and split-turn summaries.
+15. `packages/ai/src/utils/transform-messages.ts` — orphaned-tool-call healing.
+16. `packages/coding-agent/src/core/agent-session.ts` — read-only behavioral reference; do not modify it.
+17. `packages/coding-agent/src/core/extensions/runner.ts` — read-only error-isolation reference; do not modify it.
+18. `packages/coding-agent/docs/session-format.md` — read-only v3 JSONL format reference.

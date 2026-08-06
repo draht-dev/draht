@@ -36,6 +36,7 @@ export type {
 	TelemetrySpan,
 	TelemetrySpanDefinition,
 	TelemetryStartAttributeDefinition,
+	TypedSpanStarter,
 } from "@draht/telemetry";
 
 export const AI_TELEMETRY_SCHEMA = {
@@ -569,6 +570,9 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 		},
 	},
 } as const satisfies TelemetrySchemaDefinition;
+
+/** Combined typed span vocabulary for agent-owned AI-request and harness telemetry. */
+export const AGENT_TELEMETRY_SCHEMAS = [AI_TELEMETRY_SCHEMA, HARNESS_TELEMETRY_SCHEMA] as const;
 
 export type HarnessSpanName = TelemetrySchemaSpanName<typeof HARNESS_TELEMETRY_SCHEMA>;
 export type HarnessSpanStartAttributes<Name extends HarnessSpanName> = TelemetrySchemaSpanStartAttributes<

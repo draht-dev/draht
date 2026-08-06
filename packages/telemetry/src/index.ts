@@ -21,24 +21,7 @@ export interface TelemetrySpan extends TelemetryContext {
 	setStatus(status: SpanStatus): void;
 }
 
-function startNoopSpan<T>(_options: SpanOptions, callback: (span: TelemetrySpan) => T | Promise<T>): Promise<T> {
-	try {
-		return Promise.resolve(callback(noopTelemetrySpan));
-	} catch (error) {
-		return Promise.reject(error);
-	}
-}
-
-const noopTelemetrySpan: TelemetrySpan = {
-	startSpan: startNoopSpan,
-	addEvent: () => {},
-	setAttributes: () => {},
-	setStatus: () => {},
-};
-Object.freeze(noopTelemetrySpan);
-
-/** Shared telemetry context used when an application does not provide one. */
-export const NOOP_TELEMETRY_CONTEXT: TelemetryContext = noopTelemetrySpan;
+export { NOOP_TELEMETRY_CONTEXT } from "./noop.ts";
 
 export type TelemetryAttributeType = "string" | "number" | "boolean" | "string[]" | "number[]" | "boolean[]";
 
@@ -268,3 +251,107 @@ export type TelemetrySchemaSpanUnion<Schema extends TelemetrySchemaDefinition> =
 		};
 	};
 }[TelemetrySchemaSpanName<Schema>];
+
+type TelemetrySchemaTuple = readonly [TelemetrySchemaDefinition, ...TelemetrySchemaDefinition[]];
+
+type SpanNameInSchema<Schema extends TelemetrySchemaDefinition> = Schema extends TelemetrySchemaDefinition
+	? TelemetrySchemaSpanName<Schema>
+	: never;
+
+type SpanNameInSchemas<Schemas extends TelemetrySchemaTuple> = SpanNameInSchema<Schemas[number]>;
+
+type SpanStartAttributesInSchema<
+	Schema extends TelemetrySchemaDefinition,
+	Name extends string,
+> = Schema extends TelemetrySchemaDefinition
+	? Name extends TelemetrySchemaSpanName<Schema>
+		? TelemetrySchemaSpanStartAttributes<Schema, Name>
+		: never
+	: never;
+
+type SpanInSchema<
+	Schema extends TelemetrySchemaDefinition,
+	Name extends string,
+> = Schema extends TelemetrySchemaDefinition
+	? Name extends TelemetrySchemaSpanName<Schema>
+		? SchemaTelemetrySpan<Schema, Name>
+		: never
+	: never;
+
+type DuplicateTelemetrySpanNames<
+	Schemas extends readonly TelemetrySchemaDefinition[],
+	Seen extends string = never,
+> = Schemas extends readonly [
+	infer Schema extends TelemetrySchemaDefinition,
+	...infer Rest extends readonly TelemetrySchemaDefinition[],
+]
+	?
+			| Extract<TelemetrySchemaSpanName<Schema>, Seen>
+			| DuplicateTelemetrySpanNames<Rest, Seen | TelemetrySchemaSpanName<Schema>>
+	: never;
+
+type UniqueTelemetrySchemas<Schemas extends TelemetrySchemaTuple> = [DuplicateTelemetrySpanNames<Schemas>] extends [
+	never,
+]
+	? unknown
+	: { readonly "duplicate telemetry span names": DuplicateTelemetrySpanNames<Schemas> };
+
+type UnionToIntersection<Union> = (Union extends unknown ? (value: Union) => void : never) extends (
+	value: infer Intersection,
+) => void
+	? Intersection
+	: never;
+
+type TypedSpanStarterForName<Schemas extends TelemetrySchemaTuple, Name extends SpanNameInSchemas<Schemas>> = <
+	const Attributes extends SpanStartAttributesInSchema<Schemas[number], Name>,
+	Result,
+>(
+	name: Name,
+	attributes: ExactTelemetryAttributes<SpanStartAttributesInSchema<Schemas[number], Name>, Attributes>,
+	callback: (
+		span: SpanInSchema<Schemas[number], Name>,
+		startChildSpan: TypedSpanStarter<Schemas>,
+	) => Result | Promise<Result>,
+) => Promise<Result>;
+
+/** A per-span overload set bound to one explicit parent context and one or more schemas. */
+export type TypedSpanStarter<Schemas extends TelemetrySchemaTuple> = UnionToIntersection<
+	{
+		[Name in SpanNameInSchemas<Schemas>]: TypedSpanStarterForName<Schemas, Name>;
+	}[SpanNameInSchemas<Schemas>]
+>;
+
+function bindTypedSpanStarter<Schemas extends TelemetrySchemaTuple>(
+	telemetryContext: TelemetryContext,
+): TypedSpanStarter<Schemas> {
+	const startSpan = (
+		name: SpanNameInSchemas<Schemas>,
+		attributes: SpanAttributes,
+		callback: (
+			span: SpanInSchema<Schemas[number], SpanNameInSchemas<Schemas>>,
+			startChildSpan: TypedSpanStarter<Schemas>,
+		) => unknown,
+	): Promise<unknown> =>
+		telemetryContext.startSpan({ name, attributes }, (span) =>
+			callback(
+				span as SpanInSchema<Schemas[number], SpanNameInSchemas<Schemas>>,
+				bindTypedSpanStarter<Schemas>(span),
+			),
+		);
+
+	return startSpan as TypedSpanStarter<Schemas>;
+}
+
+/**
+ * Bind an explicit parent context to the combined span vocabulary of one or more schemas.
+ * Schema values are used only for type inference; no runtime schema validation is performed.
+ */
+export function createTypedSpanStarter<const Schemas extends TelemetrySchemaTuple>(
+	telemetryContext: TelemetryContext,
+	_schemas: Schemas & UniqueTelemetrySchemas<Schemas>,
+): TypedSpanStarter<Schemas> {
+	return bindTypedSpanStarter<Schemas>(telemetryContext);
+}
+
+export type { RecordedTelemetryEvent, RecordedTelemetrySpan } from "./memory.ts";
+export { InMemoryTelemetryContext } from "./memory.ts";

@@ -22,6 +22,7 @@ import type {
 	Session,
 	SessionTree,
 } from "./session/index.ts";
+import type { TelemetryContext } from "./telemetry.ts";
 import type { AgentHarnessResources, PromptTemplate, Skill } from "./types.ts";
 
 export class LaneBusy extends TaggedError("LaneBusy")<{
@@ -233,24 +234,6 @@ class UnavailableRegistry implements Hooks, Events {
 	}
 }
 
-export interface ExecutionSpan extends ExecutionContext {
-	addEvent(name: string, attributes?: SpanAttributes): void;
-	setAttributes(attributes: SpanAttributes): void;
-	end(result: SpanEnd): void;
-}
-
-export interface ExecutionContext {
-	startSpan(name: string, attributes?: SpanAttributes): ExecutionSpan;
-}
-export interface SpanAttributes {
-	[name: string]: string | number | boolean | undefined;
-}
-export interface SpanEnd {
-	status: "ok" | "error";
-	error?: { name: string; message: string };
-	attributes?: SpanAttributes;
-}
-
 export type HarnessTool = AgentTool & { replay?: "never" | "safe" };
 export type Resources = AgentHarnessResources<Skill, PromptTemplate>;
 export type StreamOptions = SimpleStreamOptions;
@@ -276,7 +259,7 @@ export interface AgentHarnessOptions {
 	drive?: "automatic" | "manual";
 	toProviderMessages?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	entryProjectors?: Record<string, EntryProjector>;
-	context?: ExecutionContext;
+	context?: TelemetryContext;
 }
 
 export interface WatchHandle<TSnapshot> {

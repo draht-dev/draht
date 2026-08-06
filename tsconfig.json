@@ -7,6 +7,7 @@
 		"paths": {
 			"*": ["./*"],
 			"@draht/telemetry": ["./packages/telemetry/src/index.ts"],
+			"@draht/telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
 			"@draht/ai": ["./packages/ai/src/index.ts"],
 			"@draht/ai/oauth": ["./packages/ai/src/oauth.ts"],
 			"@draht/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],

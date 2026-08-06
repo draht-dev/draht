@@ -8,6 +8,8 @@ export type {
 	InferOptionalAttributes,
 	InferRequiredAndOptionalAttributes,
 	InferStartAttributes,
+	RecordedTelemetryEvent,
+	RecordedTelemetrySpan,
 	SchemaTelemetrySpan,
 	SpanAttributes,
 	SpanAttributes as TelemetrySpanAttributes,
@@ -30,8 +32,14 @@ export type {
 	TelemetrySpan,
 	TelemetrySpanDefinition,
 	TelemetryStartAttributeDefinition,
+	TypedSpanStarter,
 } from "@draht/telemetry";
-export { defineTelemetrySchema, NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
+export {
+	createTypedSpanStarter,
+	defineTelemetrySchema,
+	InMemoryTelemetryContext,
+	NOOP_TELEMETRY_CONTEXT,
+} from "@draht/telemetry";
 export * from "./agent.ts";
 // Loop functions
 export * from "./agent-loop.ts";
@@ -92,6 +100,7 @@ export type {
 	HarnessTelemetrySpan,
 } from "./harness/telemetry.ts";
 export {
+	AGENT_TELEMETRY_SCHEMAS,
 	AI_TELEMETRY_SCHEMA,
 	HARNESS_TELEMETRY_SCHEMA,
 	startAiSpan,

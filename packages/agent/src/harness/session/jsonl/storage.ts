@@ -3,6 +3,7 @@ import {
 	type BranchBounds,
 	type Entry,
 	type EntryQuery,
+	type ForkOptions,
 	type LanePointer,
 	type LaneRecord,
 	type LogItem,
@@ -15,9 +16,34 @@ import {
 	type SessionStats,
 	type SessionStorage,
 } from "../types.ts";
-import { encodeMutation, metadataFromHeader, parseHeader, parseMutation } from "./codec.ts";
+import { encodeHeader, encodeMutation, metadataFromHeader, parseHeader, parseMutation } from "./codec.ts";
 import { fileResult, invalidFile } from "./errors.ts";
-import type { JsonlSessionMetadata, JsonlSessionRepoFileSystem } from "./types.ts";
+import type { JsonlSessionMetadata, JsonlSessionRepoFileSystem, JsonlV4Header } from "./types.ts";
+
+/**
+ * Build a complete sibling temporary file, then atomically rename it over the destination.
+ * The populate callback must create or overwrite `tempPath` with the complete file. The
+ * destination is untouched until the rename commits, so a process crash while populating
+ * can leave only the ignored `.tmp` file behind.
+ *
+ * Rejects when population or rename fails. On rejection, temporary-file removal is
+ * best-effort and the original error is preserved. Callers must serialize publications to
+ * the same destination because they share its deterministic `.tmp` path.
+ */
+async function publishFileAtomically(
+	fs: JsonlSessionRepoFileSystem,
+	destinationPath: string,
+	populate: (tempPath: string) => Promise<void>,
+): Promise<void> {
+	const tempPath = `${destinationPath}.tmp`;
+	try {
+		await populate(tempPath);
+		fileResult(await fs.renameFile(tempPath, destinationPath), `Failed to publish staged file ${destinationPath}`);
+	} catch (error) {
+		await fs.remove(tempPath, { force: true });
+		throw error;
+	}
+}
 
 export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
 	private readonly fs: JsonlSessionRepoFileSystem;
@@ -28,6 +54,16 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	constructor(fs: JsonlSessionRepoFileSystem, metadata: JsonlSessionMetadata) {
 		this.fs = fs;
 		this.metadata = structuredClone(metadata);
+	}
+
+	static async create(
+		fs: JsonlSessionRepoFileSystem,
+		path: string,
+		header: JsonlV4Header,
+	): Promise<JsonlSessionStorage> {
+		fileResult(await fs.writeFile(path, encodeHeader(header)), `Failed to initialize session ${path}`);
+		const fileInfo = fileResult(await fs.fileInfo(path), `Failed to read session metadata ${path}`);
+		return new JsonlSessionStorage(fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
 	}
 
 	static async load(fs: JsonlSessionRepoFileSystem, path: string): Promise<JsonlSessionStorage> {
@@ -47,7 +83,9 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 				if (index !== physicalLines.length - 1 || !(error instanceof SessionError) || error.cause === undefined)
 					throw error;
 				const validPrefix = `${physicalLines.slice(0, index).join("\n")}\n`;
-				fileResult(await fs.writeFile(path, validPrefix), `Failed to truncate torn session tail ${path}`);
+				await publishFileAtomically(fs, path, async (tempPath) => {
+					fileResult(await fs.writeFile(tempPath, validPrefix), `Failed to stage torn-tail repair ${path}`);
+				});
 				return storage;
 			}
 			storage.applyMutation(mutation, path, index + 1);
@@ -56,6 +94,18 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			fileResult(await fs.appendFile(path, "\n"), `Failed to repair unterminated session tail ${path}`);
 		}
 		return storage;
+	}
+
+	async fork(path: string, header: JsonlV4Header, options: ForkOptions): Promise<JsonlSessionStorage> {
+		const mutations = this.state.createForkMutations(options);
+		await publishFileAtomically(this.fs, path, async (tempPath) => {
+			const targetStorage = await JsonlSessionStorage.create(this.fs, tempPath, header);
+			for (const mutation of mutations) {
+				await targetStorage.appendMutation(mutation);
+				targetStorage.applyMutation(mutation);
+			}
+		});
+		return JsonlSessionStorage.load(this.fs, path);
 	}
 
 	async drain(): Promise<void> {
@@ -104,27 +154,6 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			await this.appendMutation(mutation);
 			this.applyMutation(mutation);
 			return structuredClone(entry);
-		});
-	}
-
-	appendCopiedEntry<TEntry extends Entry>(source: TEntry): Promise<TEntry> {
-		return this.enqueue(async () => {
-			this.state.validateUnusedId(source.id);
-			this.state.validateTarget(source.parentId);
-			const entry = { ...structuredClone(source), seq: this.state.nextSequence };
-			const mutation: SessionMutation = { kind: "entry", entry };
-			await this.appendMutation(mutation);
-			this.applyMutation(mutation);
-			return structuredClone(entry);
-		});
-	}
-
-	appendForkLane(lane: string, leafId: string | null): Promise<void> {
-		return this.enqueue(async () => {
-			this.state.validateTarget(leafId);
-			const mutation: SessionMutation = { kind: "lane", seq: this.state.nextSequence, lane, leafId };
-			await this.appendMutation(mutation);
-			this.applyMutation(mutation);
 		});
 	}
 

@@ -128,6 +128,27 @@ describe("createInteractiveTui", () => {
 	});
 });
 
+describe("InteractiveMode right-click paste", () => {
+	it("feeds clipboard text to the focused component as a bracketed paste", async () => {
+		clipboardMocks.readClipboardText.mockResolvedValue("clipboard text");
+		const handleInput = vi.fn<(data: string) => void>();
+		const target = { render: () => [], invalidate: () => {}, handleInput } satisfies Component;
+		const requestRender = vi.fn();
+		const context = {
+			renderer: { getFocusedComponent: () => target },
+			ui: { requestRender },
+		};
+		const prototype = InteractiveMode.prototype as unknown as {
+			handleRightClickPaste(this: typeof context): Promise<void>;
+		};
+
+		await prototype.handleRightClickPaste.call(context);
+
+		expect(handleInput).toHaveBeenCalledWith("\x1b[200~clipboard text\x1b[201~");
+		expect(requestRender).toHaveBeenCalledOnce();
+	});
+});
+
 type CopyCommandContext = {
 	session: { getLastAssistantText: () => string | undefined };
 	ui: ReturnType<typeof createInteractiveTui>;

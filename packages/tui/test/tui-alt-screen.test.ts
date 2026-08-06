@@ -209,6 +209,32 @@ describe("TuiAltScreen", () => {
 		}
 	});
 
+	it("invokes the right-click paste handler only on Windows", () => {
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		assert.ok(platformDescriptor);
+		const terminal = new VirtualTerminal();
+		let pasteCount = 0;
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			onRightClickPaste: () => {
+				pasteCount += 1;
+			},
+		});
+		try {
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			tui.start();
+			terminal.sendInput("\x1b[<2;1;1M");
+			terminal.sendInput("\x1b[<2;1;1m");
+			assert.strictEqual(pasteCount, 1);
+
+			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			terminal.sendInput("\x1b[<2;1;1M");
+			assert.strictEqual(pasteCount, 1);
+		} finally {
+			tui.stop();
+			Object.defineProperty(process, "platform", platformDescriptor);
+		}
+	});
+
 	it("drags a visible scrollbar thumb and keeps it visible until release", async () => {
 		const terminal = new RecordingTerminal(10, 5);
 		const tui = new TuiAltScreen(terminal);

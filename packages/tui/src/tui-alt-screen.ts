@@ -121,6 +121,8 @@ export interface TuiAltScreenOptions {
 	mouse?: boolean;
 	/** Open an OSC 8 hyperlink activated with a primary-button click. */
 	openUrl?: (url: string) => void;
+	/** Handle an unmodified secondary-button press for clipboard paste. Currently enabled on Windows only. */
+	onRightClickPaste?: () => void;
 }
 
 /** Alternate-screen TUI with a scrollable, application-owned viewport. */
@@ -156,6 +158,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private readonly wheelScrollLines: number;
 	private readonly mouseEnabled: boolean;
 	private readonly openUrl?: (url: string) => void;
+	private readonly onRightClickPaste?: () => void;
 
 	constructor(
 		terminal: Terminal,
@@ -175,6 +178,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.wheelScrollLines = Math.max(1, Math.floor(options.wheelScrollLines ?? 1));
 		this.mouseEnabled = options.mouse ?? true;
 		this.openUrl = options.openUrl;
+		this.onRightClickPaste = options.onRightClickPaste;
 		this.addInputListener((data) => this.handleViewportInput(data));
 	}
 
@@ -406,6 +410,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 		const mouseEvent = this.parseSgrMouseEvent(data);
 		if (mouseEvent) {
+			if (this.handleRightClickPaste(mouseEvent)) return { consume: true };
 			const handled = this.handleScrollbarMouseEvent(mouseEvent);
 			if (!this.scrollbarDrag) this.updateScrollbarHover(mouseEvent.x, mouseEvent.y);
 			if (!handled) this.handleSelectionMouseEvent(mouseEvent);
@@ -504,6 +509,18 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			y: Number.parseInt(match[3], 10) - 1,
 			release: match[4] === "m",
 		};
+	}
+
+	private handleRightClickPaste(event: SgrMouseEvent): boolean {
+		if (!this.onRightClickPaste || process.platform !== "win32" || event.release || event.button !== 2) {
+			return false;
+		}
+		try {
+			this.onRightClickPaste();
+		} catch {
+			// Clipboard paste is best-effort.
+		}
+		return true;
 	}
 
 	private getScrollbarTargetAt(x: number, y: number): ScrollbarTarget | undefined {

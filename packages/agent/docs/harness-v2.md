@@ -3310,6 +3310,9 @@ QA packages use the promotion test matrix as their backlog. QA1 creates the matr
   - Primary file: `packages/agent/docs/harness-v2-test-matrix.md` only.
   - Map every test removed by the promotion commit to one of: covered by v4 conformance, ported under a new API, intentionally inapplicable because the API was deleted, or uncovered with a named follow-up package.
   - Acceptance: no removed case is unexplained; no production or test code changes in this package.
+
+**Reserved: QA2 by @cristinaponcela.** Other agents must not pick QA2 while this ownership marker remains.
+
 - [ ] **QA2 — close storage and query gaps.** Dependencies: QA1, R0.
   - Primary files: focused tests under `packages/agent/test/harness/session/` and existing SQLite branch/query tests.
   - Port only uncovered v4 bounded-query validation/corruption, fork, immutable-read, lane, record-query, and recovery-query behavior. Do not duplicate backend conformance cases.

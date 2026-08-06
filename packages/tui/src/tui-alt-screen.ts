@@ -906,14 +906,14 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			maxColumn = Math.min(this.terminal.columns, box.rect.x + box.rect.width, box.clip.x + box.clip.width);
 			screenSelection = {
 				start: {
+					...selection.start,
 					row: box.rect.y + selection.start.row - selection.start.scrollView.scrollTop,
 					col: box.rect.x + selection.start.col,
-					scrollView: selection.start.scrollView,
 				},
 				end: {
+					...selection.end,
 					row: box.rect.y + selection.end.row - selection.start.scrollView.scrollTop,
 					col: box.rect.x + selection.end.col,
-					scrollView: selection.start.scrollView,
 				},
 			};
 		}

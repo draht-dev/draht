@@ -763,6 +763,39 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("does not append whitespace to double-click word highlighting", async () => {
+		const terminal = new RecordingTerminal(20, 1);
+		const tui = new TuiAltScreen(terminal);
+		tui.addChild(new Text("foo  bar", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<0;1;1m");
+		terminal.sendInput("\x1b[<0;3;1M");
+		await terminal.waitForRender();
+
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("foo\x1b[27m")));
+		tui.stop();
+	});
+
+	it("highlights a complete whitespace segment during a word drag", async () => {
+		const terminal = new RecordingTerminal(20, 1);
+		const tui = new TuiAltScreen(terminal);
+		tui.addChild(new Text("foo  bar", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<0;1;1m");
+		terminal.sendInput("\x1b[<0;2;1M");
+		terminal.sendInput("\x1b[<32;4;1M");
+		await terminal.waitForRender();
+
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("foo  \x1b[27m")));
+		tui.stop();
+	});
+
 	it("selects whole words on double click, extends word drags, and selects lines on triple click", async () => {
 		const terminal = new RecordingTerminal(20, 2);
 		const tui = new TuiAltScreen(terminal);

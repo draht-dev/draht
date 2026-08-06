@@ -427,6 +427,14 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			}
 			return { consume: true };
 		}
+		if (keybindings.matches(data, "tui.altScreen.halfPageUp")) {
+			if (!isRelease) this.scrollBy(-Math.max(1, Math.floor(this.getPrimaryScrollView().viewportHeight / 2)));
+			return { consume: true };
+		}
+		if (keybindings.matches(data, "tui.altScreen.halfPageDown")) {
+			if (!isRelease) this.scrollBy(Math.max(1, Math.floor(this.getPrimaryScrollView().viewportHeight / 2)));
+			return { consume: true };
+		}
 		if (keybindings.matches(data, "tui.altScreen.previousPrompt")) {
 			if (!isRelease) this.scrollToPrompt(-1);
 			return { consume: true };

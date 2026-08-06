@@ -399,6 +399,7 @@ function copilotEnterpriseDomain(credential: OAuthCredential): string | undefine
 
 export const githubCopilotOAuth: OAuthAuth = {
 	name: "GitHub Copilot",
+	isSubscription: true,
 	login: loginGitHubCopilot,
 	refresh: (credential, signal) =>
 		refreshGitHubCopilotToken(credential.refresh, copilotEnterpriseDomain(credential), signal),

@@ -353,6 +353,7 @@ async function refreshXaiToken(refreshToken: string, signal: AbortSignal): Promi
 
 export const xaiOAuth: OAuthAuth = {
 	name: "xAI (Grok/X subscription)",
+	isSubscription: true,
 	loginLabel: "Sign in with SuperGrok or X Premium",
 	login: loginXai,
 	refresh: (credential, signal) => refreshXaiToken(credential.refresh, signal),

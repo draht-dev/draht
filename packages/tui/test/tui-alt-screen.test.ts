@@ -763,6 +763,45 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("selects whole words on double click, extends word drags, and selects lines on triple click", async () => {
+		const terminal = new RecordingTerminal(20, 2);
+		const tui = new TuiAltScreen(terminal);
+		tui.addChild(new Text("zero alpha beta\ngamma delta", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		// The second click lands on a different character in alpha.
+		terminal.sendInput("\x1b[<0;6;1M");
+		terminal.sendInput("\x1b[<0;6;1m");
+		terminal.sendInput("\x1b[<0;10;1M");
+		terminal.sendInput("\x1b[<0;10;1m");
+		await terminal.waitForRender();
+		const alpha = `\x1b]52;c;${Buffer.from("alpha").toString("base64")}\x07`;
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes(alpha)));
+
+		// A double-click drag includes each word touched, rather than partial words.
+		terminal.sendInput("\x1b[<0;12;1M");
+		terminal.sendInput("\x1b[<0;12;1m");
+		terminal.sendInput("\x1b[<0;14;1M");
+		terminal.sendInput("\x1b[<32;3;2M");
+		terminal.sendInput("\x1b[<0;3;2m");
+		await terminal.waitForRender();
+		const words = `\x1b]52;c;${Buffer.from("beta\ngamma").toString("base64")}\x07`;
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes(words)));
+
+		terminal.sendInput("\x1b[<0;7;2M");
+		terminal.sendInput("\x1b[<0;7;2m");
+		terminal.sendInput("\x1b[<0;9;2M");
+		terminal.sendInput("\x1b[<0;9;2m");
+		terminal.sendInput("\x1b[<0;11;2M");
+		terminal.sendInput("\x1b[<0;11;2m");
+		await terminal.waitForRender();
+		const line = `\x1b]52;c;${Buffer.from("gamma delta").toString("base64")}\x07`;
+		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes(line)));
+
+		tui.stop();
+	});
+
 	it("ignores orphan selection events and cancels an active selection on focus loss", async () => {
 		const terminal = new RecordingTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal);

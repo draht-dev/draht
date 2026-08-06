@@ -3302,6 +3302,8 @@ I0, I1, and I2 may proceed independently. I3 → I4 → I5 is serial and begins 
 
 These packages all own `packages/agent/src/agent-loop.ts` and therefore merge strictly L1 → L2 → L3. Existing `agent-loop` and `agent` tests pass unchanged after each package.
 
+**Reserved: L1 by @cristinaponcela.** Other agents must not pick L1 while this ownership marker remains.
+
 - [ ] **L1 — extract assistant streaming.** Dependencies: I0.
   - Add `streamAssistant()` and `StreamAssistantConfig`, including explicit telemetry context; route the compatibility loop's request path through it without changing events or results.
   - Acceptance: focused stream tests cover settled-result narrowing (a final `pending` value is a defect), plus unchanged existing loop tests.

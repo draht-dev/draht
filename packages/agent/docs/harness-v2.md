@@ -3303,9 +3303,7 @@ This table is exhaustive. A package does not remove `HarnessNotImplemented` from
 
 These packages merge QA1 → QA2 → QA3. QA packages own the audit document and existing memory/SQLite/context tests; JSONL packages own new JSONL tests.
 
-**Reserved: QA1 by @cristinaponcela.** Other agents must not pick QA1 while this ownership marker remains.
-
-- [ ] **QA1 — inventory removed tests.** Dependencies: none.
+- [x] **QA1 — inventory removed tests.** Dependencies: none.
   - Primary file: `packages/agent/docs/harness-v2-test-matrix.md` only.
   - Map every test removed by the promotion commit to one of: covered by v4 conformance, ported under a new API, intentionally inapplicable because the API was deleted, or uncovered with a named follow-up package.
   - Acceptance: no removed case is unexplained; no production or test code changes in this package.

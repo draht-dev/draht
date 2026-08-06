@@ -7,7 +7,7 @@ This document maps each removed test case to one of the QA1 outcomes:
 - **Covered** — the behavior is already covered by v4 conformance or another current test.
 - **Ported** — the case was rewritten under the v4 API or moved to the SQLite package.
 - **Inapplicable** — the old API, implementation detail, or compatibility path was intentionally deleted.
-- **Uncovered** — the behavior is still required and is assigned to a named follow-up package.
+- **Uncovered** — the behavior may still be required but cannot be ported until a named implementation package lands. QA revisits it afterward; implementation packages derive their own tests from the design and do not use this matrix.
 
 No production or test changes are part of QA1.
 
@@ -30,7 +30,7 @@ Removed files:
 - `packages/agent/test/harness/agent-harness-stream.test.ts`
 - `packages/agent/test/harness/agent-harness.test.ts`
 
-The promotion intentionally replaced the behavior-complete legacy harness with the v2 scaffold. Runtime operation methods must reject with `HarnessNotImplemented` until their owning packages land; see the public method ownership table in `harness-v2.md` section 21.
+The promotion intentionally replaced the behavior-complete legacy harness with the v2 scaffold. Runtime operation methods must reject with `HarnessNotImplemented` until their owning packages land; see the public method ownership table in `harness-v2.md` section 20.
 
 | Removed test | Classification | Coverage / follow-up |
 |---|---|---|
@@ -182,9 +182,9 @@ Removed case from `packages/agent/test/harness/sqlite-node.test.ts`.
 |---|---|---|
 | searches canonical session entries by scanning | Ported / Inapplicable | Search moved to `packages/session-backends/sqlite-node/test/search.test.ts` using FTS5. The old scanning-search backend is intentionally deleted. |
 
-## Follow-up backlog extracted from the matrix
+## Implementation prerequisites for the final QA pass
 
-QA1 does not implement these; they are the named owners for uncovered rows above.
+These packages must land before QA3 can re-evaluate the uncovered rows above. They do not use this matrix as their test plan.
 
 - **QA2**: completed storage/query audit and ports for bounded-query corruption/validation behavior, repository/session disposal lifecycle, listing/disposal barriers, and branch-query retained-tail semantics outside context projection.
 - **J3**: JSONL malformed file, torn-tail, missing-reference, and lifecycle/concurrency edge cases.

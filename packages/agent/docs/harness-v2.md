@@ -37,7 +37,7 @@ The harness executes runs against one session. The session holds four kinds of s
 - **Exactly-once hook side effects.** A hook result becomes durable when the record or entry that consumes it commits. A crash before that commit can run the hook again (section 11 replay table). Side effects a hook makes on its own are invisible to the harness: HTTP calls, file writes. A hook that needs crash-safe external effects must be idempotent, for example keyed by operation id.
 - **Provider stream resumption.** Partial streams are never persisted. An interrupted streaming request is retried or abandoned. Deferred requests are different and in scope: the provider returns a handle at once and serves the result later (e.g. `background: true` on a Responses API, batch APIs). @draht/ai returns an assistant message with stop reason `deferred` that carries the handle; it is persisted like any assistant message. Redeeming the handle appends a normal assistant message. Recovery sees the unredeemed handle and fetches instead of paying for a new request.
 - **Multiple writers.** Two processes on one session are out of scope. The serving layer routes all traffic for a session to the process that holds its harness. Lanes cover the workloads that look like multi-writer: parallel threads over shared history.
-- **Replication.** A session lives in one place. Coordination-free sync of diverging copies is a different design. Nothing forecloses it later; section 19 records why.
+- **Replication.** A session lives in one place. Coordination-free sync of diverging copies is a different design. Nothing forecloses it later.
 - **Coding-agent migration.** Migrating coding-agent to `AgentHarness` is out of scope. Compatibility means the new JSONL repository can read supported coding-agent v3 files.
 
 ## 2. What a session is
@@ -430,7 +430,7 @@ R   usage
 E   assistant message
 ```
 
-Every provider request settles with a `usage` record (section 5); the other traces omit them for brevity. Per-request hooks (`transform_context`, `before_request`, `after_response`) run inside every request and are omitted everywhere; Tier B records them (section 20).
+Every provider request settles with a `usage` record (section 5); the other traces omit them for brevity. Per-request hooks (`transform_context`, `before_request`, `after_response`) run inside every request and are omitted everywhere; Tier B records them (section 19).
 
 Crash during backoff: restore counts two attempts; resume starts attempt 3. The count never resets. Retryable errors below the cap are never appended as entries. Attempts exhausted — or a non-retryable terminal error — appends an assistant message with the error, then `operation_finished` failed:
 
@@ -1283,7 +1283,7 @@ harness.hooks.on("before_run", async () => ({
 
 Semantics, uniform across all hooks:
 
-- Registration is harness-global. Every hook event carries `lane` (omitted below); a handler scopes itself. Per-lane registration was considered and rejected (section 19).
+- Registration is harness-global. Every hook event carries `lane` (omitted below); a handler scopes itself.
 - `before_run` and `before_resume` registrations require a stable `id`. An id is unique within one hook name; duplicate registration rejects synchronously. The same extension uses the same id for both hooks across restarts. The runner stores each `before_run` handler's `resumeData` under its id and hands each `before_resume` handler only the value under the same id.
 - `before_run` runs on the normalized caller prompt, outside the lane mutation line, before acceptance. It does not see captured nextRun items; the acceptance mutation captures those afterwards (section 15). A rejected acceptance (busy lane) discards the hook output.
 - Handlers run sequentially in registration order. Each transformation handler sees the output of the previous one; returned `messages` append and a returned `systemPrompt` replaces the current value.
@@ -1983,7 +1983,7 @@ steer vs finish                          abort vs before_run_end follow-up
 
 ### Race catalog
 
-The complete list. Each row names the two legal histories and the jobs that force them. Tier C (section 20) tests both orders of every row.
+The complete list. Each row names the two legal histories and the jobs that force them. Tier C (section 19) tests both orders of every row.
 
 | # | race | histories | mechanism |
 |---|---|---|---|
@@ -3071,12 +3071,7 @@ Telemetry remains separate from events and hooks:
 - Hooks can change execution.
 - Telemetry is passive process-local diagnostics.
 
-## 19. Design decisions
-
-1. **Per-lane hooks and events — no.** Registration stays harness-global; every payload carries `lane` and handlers scope themselves. Scoped registration would add API surface without new capability.
-2. **Records and replication — stays out of scope, and nothing forecloses it.** Lane operation logs are flat sequences without parent links because a single writer per lane makes order equal causality (section 2). If replication is ever wanted, it falls out of the design as-is — append-only logs under one writer with a shared `seq` replicate by log shipping; no parent links or schema change needed now.
-
-## 20. Testing strategy
+## 19. Testing strategy
 
 Three tiers. Each tests a different claim; none replaces another.
 
@@ -3149,52 +3144,21 @@ Gate invariants, asserted across Tier C:
 - Overflow classification against the reported provider shapes: prompt 268,009 of a 272,000 window and 81,217 of 84,500 (recoverable), non-zero reasoning-only output, cache-write-heavy usage, a Codex-style provider that rejects `max_output_tokens`, a genuine 1,024-token cap fully used (not recoverable), and `length → length` stopping after exactly one recovery per conversational input.
 - v3 fixtures: labels, session info, and `leaf` entries mid-chain and at end of file, old `firstKeptEntryId` compactions — all open as one normalized idle `main` lane.
 
-## 21. Implementation status and work packages
+## 20. Implementation status and work packages
 
-Harness implementation lives directly in `packages/agent/src/harness/`, with v4 session tests in `packages/agent/test/harness/session/`. The generic telemetry contract lives in `packages/telemetry/src/index.ts`; both current domain schemas live in `packages/agent/src/harness/telemetry.ts`. The v4 session and SQLite backend are the default package interfaces; there is no experimental package surface. Retained compaction, message projection, resource, tool, environment, and utility modules stay under `src/harness/` and are adapted in place.
+Work is limited to `packages/agent`, `packages/session-backends/sqlite-node`, `packages/telemetry`, and the telemetry request-option surface in `packages/ai`. Other package source is off limits. In particular, this plan does not migrate `packages/coding-agent`; I0's completed dependency wiring is the only exception. Coding-agent v3 compatibility means only that the new JSONL repository can read supported v3 sessions.
 
-### Landed foundation
+### Claiming and completing a package
 
-- The v4 `Session`, in-memory storage, backend-neutral conformance suite, and test helpers are the default agent package API.
-- The v4 SQLite repository, branch cache, leases, forks, and conformance coverage are the default SQLite package API.
-- The old harness/session runtime and experimental export surface have been removed.
-- `AgentHarness` is type-complete but not behavior-complete. Execution-bearing methods reject with `HarnessNotImplemented`; some read/configuration/watch/manual-drive methods still expose local scaffold behavior. F0 owns the audit and hardening of every public method before runtime work begins.
-- Compaction preparation, context projection, and branch summarization use v4 `Entry` queries and no longer depend on the legacy `SessionTreeEntry` model. Reusable compaction tests and dedicated context tests cover this interim behavior.
-- `Session.getBranch()` is not part of v4 and must not be reintroduced. Branch callers use `findEntriesOnBranch()` with an explicit start and deliberate ordering semantics; callers may use the documented `newestFirst` default.
-- The pi-ai deferred request types, `Models.fetchDeferred()` / `cancelDeferred()` dispatch, and faux-provider pending/ready/terminal/cancellation support are already implemented and tested. Only harness integration remains.
-- The canonical telemetry contract, exact typed AI-request and harness schemas, no-op context, request-option propagation (including built-in simple-option conversion), generated reference, and focused tests are implemented. The current `AgentHarness` scaffold now imports canonical `TelemetryContext` for `AgentHarnessOptions.context`, but option renaming/defaulting/storage and execution threading remain H0/L/I work; runtime span insertion remains O2.
-
-### Scope boundary
-
-Coding-agent source and runtime behavior remain untouched; its binary build order and generated dependency locks reflect the telemetry dependency. This plan implements `packages/agent` and `packages/session-backends/sqlite-node`, plus the generic telemetry package and pi-ai request-option propagation. O2 consumes the agent-owned AI telemetry schema but otherwise keeps provider behavior unchanged. The v3 requirement is an input-format requirement for the new JSONL repository, not a coding-agent migration. No work package may modify coding-agent source, tests, RPC, UI, or package metadata except I0's telemetry build-order integration.
-
-### Package rules
-
-Each package below is intended to be one focused PR or commit. Its dependencies must already be merged. A package is complete only when:
-
-1. its listed behavior is implemented without fake success paths;
-2. its focused tests pass, including every test file it creates or changes;
-3. existing compatibility tests named by the package still pass unchanged;
-4. `npm run check` passes; and
-5. its PR reports any contract correction discovered during implementation.
-
-Incomplete public operations reject with `HarnessNotImplemented`; do not make a scaffold method return a plausible but non-durable result. Do not restore deleted APIs or compatibility shims. The only compatibility target is coding-agent v3 JSONL input.
-
-Packages in the same file-ownership lane merge serially. In particular, only one package at a time may own `agent-loop.ts`, and only one package at a time may own `agent-harness.ts`. Storage, reducer, loop-splitting, and primitive packages may proceed in parallel only when their primary files below do not overlap.
-
-To avoid every parallel PR conflicting in this file, package authors do not edit the checkboxes below. The designated merge/status owner marks a package done immediately after merge in a small serialized documentation update. Until that update lands, fresh sessions verify status with `git log` and the package's acceptance tests.
-
-### Fresh-session pickup protocol
-
-1. Read this document, then the package-specific files from section 22.
-2. Check the package list, `git log`, and focused tests; do not infer status from the scaffold alone.
-3. Choose an unfinished package whose dependencies are done and whose ownership lane has no active owner.
-4. Check `packages/agent/docs/harness-v2-test-matrix.md` for the package id before starting, for example `rg -n "QA2" packages/agent/docs/harness-v2-test-matrix.md`. If the package id appears, treat every matching uncovered/audit row as part of the package scope. Each row must end the package either covered by a focused test, explicitly inapplicable, already covered with a cited current test, or reassigned to a later package with a precise reason.
-5. Keep changes inside the package's primary files unless a discovered contract error requires a documented correction. Packages with matching matrix rows may also update `packages/agent/docs/harness-v2-test-matrix.md` to record row resolutions or reassignments.
-6. Run focused tests while iterating, then `npm run check` before handoff.
-7. Report completion to the merge/status owner so the checkbox is updated immediately after merge.
-
-The dependency-ready unreserved roots are **QA1, I1, I2, I3, and L1**. Respect the active R3 and JSONL reservations below.
+1. Sync with `main`. A package is claimable only when its checkbox is empty, every dependency is checked, and no active reservation owns the package or overlapping primary files.
+2. Add `**Reserved: <package-id> by @<username>.**` immediately above the package entry. Land that change alone with commit message `docs(agent): reserve <package-id>`. The package is claimed only after this commit reaches `main`; if another conflicting reservation lands first, remove yours and choose again.
+3. Start from the reservation commit. Read the referenced design and primary files.
+4. Work in this loop:
+   1. Implement the package's described behavior within its primary files. Incomplete public operations keep rejecting with `HarnessNotImplemented`.
+   2. Implement comprehensive focused tests that encode the package's acceptance criteria and every design invariant the package owns. Smoke tests and happy-path coverage alone are insufficient; each owned invariant must have an executable assertion.
+   3. Iterate on the implementation and tests until the behavior is complete and all affected tests pass.
+   4. If the design does not hold, stop and consult Mario on Discord. After agreement, update the design and package description, then return to step 1.
+5. Run `npm run check`. The implementation PR or commit removes its reservation and changes the package checkbox to checked. If work is abandoned, remove the reservation without checking the package.
 
 ### Track F — scaffold truth and public ownership
 
@@ -3229,31 +3193,25 @@ This table is exhaustive. A package does not remove `HarnessNotImplemented` from
 | hooks/events registration primitives and harness wiring | I1/I2/H0 |
 | `watch`, `watchSession`, complete snapshots | O1 |
 
-### Track QA — promotion test audit
+### Track QA — legacy test salvage
 
-These packages merge QA1 → QA2 → QA3. QA packages own the audit document and existing memory/SQLite/context tests; JSONL packages own new JSONL tests.
-
-QA packages use the promotion test matrix as their backlog. QA1 creates the matrix. QA2 and QA3 must grep the matrix for their package id, resolve every assigned row, and update the matrix as they go: mark the row covered with the new/current test name, mark it inapplicable with the deleted-API reason, or reassign it to the owning later package with a precise reason. Do not leave a row as a vague audit item when the package completes.
+Implementation packages derive their tests from this design and do not use the promotion test matrix. The QA track alone owns `packages/agent/docs/harness-v2-test-matrix.md`. Old tests are evidence, not specification: QA ports a case only when it still expresses a target-design invariant and comprehensive current coverage does not already exist.
 
 - [x] **QA1 — inventory removed tests.** Dependencies: none.
-  - Primary file: `packages/agent/docs/harness-v2-test-matrix.md` only.
-  - Map every test removed by the promotion commit to one of: covered by v4 conformance, ported under a new API, intentionally inapplicable because the API was deleted, or uncovered with a named follow-up package.
-  - Acceptance: no removed case is unexplained; no production or test code changes in this package.
+  - Inventory the tests removed by the harness promotion and record whether each case is covered, inapplicable, or blocked on a new implementation package.
+  - Acceptance: every removed case has a disposition in the matrix; no production or test code changes.
 
-- [x] **QA2 — close storage and query gaps.** Dependencies: QA1, R0.
-  - Primary files: focused tests under `packages/agent/test/harness/session/` and existing SQLite branch/query tests.
-  - Port only uncovered v4 bounded-query validation/corruption, fork, immutable-read, lane, record-query, and recovery-query behavior. Do not duplicate backend conformance cases.
-  - Acceptance: every storage/query gap from the matrix is covered or reassigned to J1–J5 with a precise reason.
-- [ ] **QA3 — close context and configuration gaps.** Dependencies: QA2, F0.
-  - Primary files: `packages/agent/test/harness/session/context.test.ts` and focused scaffold/configuration tests.
-  - Port uncovered context transforms, projectors, compaction boundaries, deferred-message omission, and configuration-state derivation. Do not restore tests of deleted entry types or APIs.
-  - Acceptance: every remaining matrix row is covered or explicitly inapplicable.
+- [x] **QA2 — salvage storage and query tests.** Dependencies: QA1, R0.
+  - Port worthwhile bounded-query, corruption, fork, immutable-read, lane, record-query, and recovery-query cases whose replacement APIs already exist. Skip deleted implementation details and behavior already covered by backend conformance.
+  - Acceptance: each reviewed storage/query case is covered by a cited current test, ported as a comprehensive invariant test, marked inapplicable, or left blocked on J1–J5.
+
+- [ ] **QA3 — salvage remaining legacy tests.** Dependencies: QA2, J5, O2.
+  - After the new storage and harness runtime are complete, review every matrix case still blocked or uncovered. Port only still-valid invariants against the new public APIs; do not restore deleted APIs or old implementation details. QA3 may change focused tests and the matrix, but no production code.
+  - Acceptance: every matrix row ends covered by a cited current test, ported by a comprehensive new test, or explicitly inapplicable; no row remains blocked or uncovered.
 
 ### Track R — recovery query, reducer, and restore
 
 These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module instead of growing `agent-harness.ts`. R3 is the first package in this track that owns `agent-harness.ts` and therefore runs after F0.
-
-**Reserved: R3 by @vegarsti.** Other agents must not pick R3 while this ownership marker remains.
 
 - [x] **R0 — recovery-query contract.** Dependencies: none.
   - Primary files: `packages/agent/src/harness/session/types.ts`, `session.ts`, `memory.ts`, SQLite record storage/repository files, backend conformance, and focused recovery-query tests.
@@ -3271,6 +3229,9 @@ These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module ins
   - Implement the section 15 `LaneReductionInput` → `LaneReductionResult` contract. Derive pending queues/writes, attempts, tool batches, deferred handles, structural targets, and idle next-run state into `laneState`; derive effective configuration and terminal-failure provenance beside it from the same section 7 query inputs.
   - Keep `LaneState` limited to orchestration state. Reduction exclusively owns all three outputs; later recovery packages consume `LaneReductionResult` and do not re-reduce tool or operation records.
   - Acceptance: table-driven tests cover idle and every suspended state, configuration fallback/override, and terminal-failure provenance; reduction is deterministic and performs no writes.
+
+**Reserved: R3 by @vegarsti.**
+
 - [ ] **R3 — harness restore inventory.** Dependencies: F0, R2.
   - Primary files: `packages/agent/src/harness/agent-harness.ts`, reducer integration helpers, and restore tests.
   - Wire `AgentHarness.create()` to use indexed open-operation discovery, bounded idle/open scans, explicit provisioned-id point lookups, and bounded configuration lookups. Return accurate `SuspendedOperation[]` without starting effects.
@@ -3404,7 +3365,7 @@ These packages also own `agent-harness.ts` and merge after H8, in order C1 → C
 
 ### Track O — observability and core completion
 
-These packages merge O1 → O2 → O3 → O4 after N1. O4 also requires J5. They may not modify `packages/coding-agent/**`.
+These packages merge O1 → O2 → O3 → O4 after N1, with QA3 between O2 and O3. QA3 also requires J5. They may not modify `packages/coding-agent/**`.
 
 - [ ] **O1 — snapshots and event completeness.** Dependencies: N1, I2.
   - Finish live lane/session snapshots, event filtering, streaming/running-tool state, and all section 10 event insertion points.
@@ -3412,7 +3373,7 @@ These packages merge O1 → O2 → O3 → O4 after N1. O4 also requires J5. They
 - [ ] **O2 — runtime telemetry instrumentation.** Dependencies: O1, I0.
   - Insert operation/checkpoint/turn/step wrappers at their procedure scopes, effect and passive-handler spans at their owning boundaries with `startHarnessSpan()`, and logical model-request spans with `startAiSpan()`. Populate only schema-declared attributes, including parallel tool children and resumed operation correlation; expected in-band failures set error status explicitly.
   - Acceptance: captured telemetry has exact schema-conforming span trees for success, failure, suspend/resume, retry, compaction, and parallel tools; every emitted start/end/event bag conforms independently, callback spans settle exactly once, and no undeclared names, content, or secrets appear in defaults.
-- [ ] **O3 — action-prefix and race audit.** Dependencies: O2.
+- [ ] **O3 — action-prefix and race audit.** Dependencies: O2, QA3.
   - Complete Tier C for every race row, mechanically reopen every action prefix, compare automatic/manual logs, and verify reducer/live-state fixed points.
   - Acceptance: every race row has both orders and no documented crash action lacks a reopen test.
 - [ ] **O4 — backend parity and final core audit.** Dependencies: J5, O3.
@@ -3423,9 +3384,9 @@ These packages merge O1 → O2 → O3 → O4 after N1. O4 also requires J5. They
 
 The serial storage lane is **R0 → J0 → J1 → J2 → J3 → J4 → J5**. The reducer lane is **R0 → R1 → R2 → R3**. The loop lane is **I0 → L1 → L2 → L3**. The effects lane is **R2 → I3 → I4 → I5**, with I4 also requiring I0, I1, and L3. Before H0, the convergence gate is **F0 + R3 + I2 + I5**.
 
-The runtime merge lane is strictly **H0 → H1 → H2 → H3 → H4 → H5 → H6 → H7 → H8 → C1 → C2 → C3 → N1 → O1 → O2 → O3 → O4**. J5 may land independently at any time before O4. This ordering prevents concurrent rewrites of `agent-harness.ts`, assigns every public method, and ensures every live path lands only after its reducer, telemetry, interception, and effect boundaries exist.
+The runtime merge lane is strictly **H0 → H1 → H2 → H3 → H4 → H5 → H6 → H7 → H8 → C1 → C2 → C3 → N1 → O1 → O2 → QA3 → O3 → O4**. J5 may land independently at any time before QA3. This ordering prevents concurrent rewrites of `agent-harness.ts`, assigns every public method, and ensures every live path lands only after its reducer, telemetry, interception, and effect boundaries exist.
 
-## 22. Required reading
+## 21. Required reading
 
 For a fresh implementation session, in this order. This document wins over older harness designs.
 

@@ -3260,9 +3260,10 @@ To avoid every parallel PR conflicting in this file, package authors do not edit
 1. Read this document, then the package-specific files from section 22.
 2. Check the package list, `git log`, and focused tests; do not infer status from the scaffold alone.
 3. Choose an unfinished package whose dependencies are done and whose ownership lane has no active owner.
-4. Keep changes inside the package's primary files unless a discovered contract error requires a documented correction.
-5. Run focused tests while iterating, then `npm run check` before handoff.
-6. Report completion to the merge/status owner so the checkbox is updated immediately after merge.
+4. Check `packages/agent/docs/harness-v2-test-matrix.md` for the package id before starting, for example `rg -n "QA2" packages/agent/docs/harness-v2-test-matrix.md`. If the package id appears, treat every matching uncovered/audit row as part of the package scope. Each row must end the package either covered by a focused test, explicitly inapplicable, already covered with a cited current test, or reassigned to a later package with a precise reason.
+5. Keep changes inside the package's primary files unless a discovered contract error requires a documented correction. Packages with matching matrix rows may also update `packages/agent/docs/harness-v2-test-matrix.md` to record row resolutions or reassignments.
+6. Run focused tests while iterating, then `npm run check` before handoff.
+7. Report completion to the merge/status owner so the checkbox is updated immediately after merge.
 
 The dependency-ready unreserved roots are **QA1, I1, I2, I3, and L1**. Respect the active R3 and JSONL reservations below.
 
@@ -3302,6 +3303,8 @@ This table is exhaustive. A package does not remove `HarnessNotImplemented` from
 ### Track QA — promotion test audit
 
 These packages merge QA1 → QA2 → QA3. QA packages own the audit document and existing memory/SQLite/context tests; JSONL packages own new JSONL tests.
+
+QA packages use the promotion test matrix as their backlog. QA1 creates the matrix. QA2 and QA3 must grep the matrix for their package id, resolve every assigned row, and update the matrix as they go: mark the row covered with the new/current test name, mark it inapplicable with the deleted-API reason, or reassign it to the owning later package with a precise reason. Do not leave a row as a vague audit item when the package completes.
 
 - [x] **QA1 — inventory removed tests.** Dependencies: none.
   - Primary file: `packages/agent/docs/harness-v2-test-matrix.md` only.

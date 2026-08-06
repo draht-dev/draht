@@ -373,11 +373,19 @@ export function createInteractiveTuiReference(getTui: () => TUI): TUI {
 			const tui = getTui();
 			const value = Reflect.get(tui, property, tui);
 			if (typeof value !== "function") return value;
+			let methodTui = tui;
+			let method = value;
 			return (...args: unknown[]) => {
-				const tui = getTui();
-				const method = Reflect.get(tui, property, tui);
-				if (typeof method !== "function") throw new TypeError(`TUI property ${String(property)} is not callable`);
-				return Reflect.apply(method, tui, args);
+				const currentTui = getTui();
+				if (currentTui !== methodTui) {
+					const currentMethod = Reflect.get(currentTui, property, currentTui);
+					if (typeof currentMethod !== "function") {
+						throw new TypeError(`TUI property ${String(property)} is not callable`);
+					}
+					methodTui = currentTui;
+					method = currentMethod;
+				}
+				return Reflect.apply(method, methodTui, args);
 			};
 		},
 		set: (_target, property, value) => {

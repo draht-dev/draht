@@ -347,6 +347,36 @@ describe("JSONL v4 persistence", () => {
 		expect(readFileSync(metadata.path, "utf8")).toBe(corrupted);
 	});
 
+	it("rejects an imported entry that references a missing parent", async () => {
+		const root = createTempDir();
+		const path = join(root, "session-missing-parent.jsonl");
+		const header = { kind: "header", version: 4, id: "missing-parent", createdAt: 1, cwd: root };
+		const entry = {
+			kind: "entry",
+			type: "custom",
+			id: "orphan",
+			customType: "note",
+			parentId: "missing",
+			seq: 1,
+			timestamp: 1,
+		};
+		writeFileSync(path, `${JSON.stringify(header)}\n${JSON.stringify(entry)}\n`);
+		const metadata = {
+			id: header.id,
+			createdAt: header.createdAt,
+			path,
+			cwd: root,
+			modifiedAt: statSync(path).mtimeMs,
+			sourceFormat: 4 as const,
+		};
+
+		const repository = createRepository(root);
+		await expect(repository.open(metadata)).rejects.toMatchObject({
+			code: "invalid_entry",
+			message: expect.stringContaining("references missing parent missing"),
+		});
+	});
+
 	it("rejects a lane-bound entry that does not chain to the lane leaf", async () => {
 		const root = createTempDir();
 		const repository = createRepository(root);

@@ -122,12 +122,11 @@ export class JsonlSessionRepo
 	}> {
 		const id = options.id ?? uuidv7();
 		validateSessionId(id);
-		// Skip the repository-wide scan for generated UUIDv7 ids because their collision risk is negligible.
-		if (options.id !== undefined && (await this.sessionIdExists(id))) {
+		const cwd = fileResult(await this.fs.absolutePath(options.cwd), `Failed to resolve session cwd ${options.cwd}`);
+		if (await this.sessionIdExists(id, cwd)) {
 			throw new SessionError("already_exists", `Session already exists: ${id}`);
 		}
 
-		const cwd = fileResult(await this.fs.absolutePath(options.cwd), `Failed to resolve session cwd ${options.cwd}`);
 		const createdAt = Date.now();
 		const sessionDirectory = await this.sessionDirectory(cwd);
 		const path = fileResult(
@@ -172,13 +171,12 @@ export class JsonlSessionRepo
 		return metadata.sort((left, right) => right.modifiedAt - left.modifiedAt);
 	}
 
-	private async sessionIdExists(id: string): Promise<boolean> {
+	private async sessionIdExists(id: string, cwd: string): Promise<boolean> {
 		const suffix = `_${id}.jsonl`;
-		for (const directory of await this.sessionDirectories()) {
-			const files = fileResult(await this.fs.listDir(directory), `Failed to list sessions directory ${directory}`);
-			if (files.some((entry) => entry.kind !== "directory" && entry.name.endsWith(suffix))) return true;
-		}
-		return false;
+		const directory = await this.sessionDirectory(cwd);
+		if (!fileResult(await this.fs.exists(directory), `Failed to check sessions directory ${directory}`)) return false;
+		const files = fileResult(await this.fs.listDir(directory), `Failed to list sessions directory ${directory}`);
+		return files.some((entry) => entry.kind !== "directory" && entry.name.endsWith(suffix));
 	}
 
 	private async sessionDirectories(cwd?: string): Promise<string[]> {

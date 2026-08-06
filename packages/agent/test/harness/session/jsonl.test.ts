@@ -106,27 +106,18 @@ describe("JSONL v4 persistence", () => {
 		});
 	});
 
-	it("does not scan existing sessions for generated ids", async () => {
+	it("allows the same explicit session id in different working directories", async () => {
 		const root = createTempDir();
-		const env = new NodeExecutionEnv({ cwd: root });
-		let listCalls = 0;
-		const countingFs = new Proxy(env, {
-			get(target, property) {
-				if (property === "listDir") {
-					return (path: string, abortSignal?: AbortSignal) => {
-						listCalls++;
-						return target.listDir(path, abortSignal);
-					};
-				}
-				const value: unknown = Reflect.get(target, property, target);
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		});
-		const repository = new JsonlSessionRepo({ fs: countingFs, sessionsRoot: root });
+		const repository = createRepository(root);
+		const firstCwd = join(root, "workspaces", "first");
+		const secondCwd = join(root, "workspaces", "second");
 
-		await repository.create({ cwd: root });
+		const first = await repository.create({ id: "shared", cwd: firstCwd });
+		const second = await repository.create({ id: "shared", cwd: secondCwd });
 
-		expect(listCalls).toBe(0);
+		expect((await first.getMetadata()).cwd).toBe(firstCwd);
+		expect((await second.getMetadata()).cwd).toBe(secondCwd);
+		expect((await repository.list()).map((metadata) => metadata.id)).toEqual(["shared", "shared"]);
 	});
 
 	it("sorts listed sessions by current filesystem modification time", async () => {

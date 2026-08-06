@@ -359,21 +359,12 @@ describe("JSONL v4 persistence", () => {
 		writeFileSync(metadata.path, readFileSync(metadata.path, "utf8").trimEnd());
 
 		const env = new NodeExecutionEnv({ cwd: root });
-		const failingFs = new Proxy(env, {
-			get(target, property) {
-				if (property === "appendFile") {
-					return () =>
-						Promise.resolve({
-							ok: false as const,
-							error: new FileError("permission_denied", "repair denied", metadata.path),
-						});
-				}
-				const value: unknown = Reflect.get(target, property, target);
-				return typeof value === "function" ? value.bind(target) : value;
-			},
+		vi.spyOn(env, "appendFile").mockResolvedValueOnce({
+			ok: false,
+			error: new FileError("permission_denied", "repair denied", metadata.path),
 		});
 		const failingRepository = new JsonlSessionRepo({
-			fs: failingFs,
+			fs: env,
 			sessionsRoot: root,
 		});
 

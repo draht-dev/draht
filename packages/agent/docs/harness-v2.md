@@ -688,7 +688,7 @@ The same rules run live: during normal execution the harness updates this state 
 
 Recovery appends are ordinary appends with one extra rule: skip any provisioned id that already exists. A crash during recovery therefore leaves less to recover; re-running recovery is always safe. Recovery repeats an unknown effect only when its policy permits it: a retryable step starts a new durable attempt, and a tool replays only when both replay declarations say `safe`. Interrupted hook handlers follow the section 11 replay table.
 
-Old v3 sessions contain no records. Every lane question answers "idle"; section 12 normalization restores `main` at the final retained logical entry (v3 `leaf` entries and discarded fact-like entries resolve through their nearest retained ancestor).
+Old v3 sessions contain no records. Every lane question answers "idle"; section 12 normalization restores `main` at the final retained logical entry after discarded fact-like entries resolve through their nearest retained ancestor.
 
 # Part III — API and implementation
 
@@ -1441,12 +1441,12 @@ A harness-written assistant `MessageEntry` always contains a `SettledAssistantMe
 
 Every v4 compaction — generated or hook-supplied — stores the complete `retainedTail`; an empty tail is `[]`, never omission. The compaction entry is a self-contained checkpoint: context builds never read past it. Entry `usage` fields — on assistant messages, tool results, compactions, and branch summaries — are immutable display snapshots of the response(s) that produced that entry: a message entry matches its one producing record; a compaction or branch-summary entry carries its successful attempt's request(s), never failed attempts. The durable ledger is the `usage` records; effective cost including later adjustments is a read-time ledger query by `entryId` (sections 5, 13).
 
-v3 files additionally contain `custom_message`, `label`, `session_info`, and `leaf` entries, plus old compaction entries that use `firstKeptEntryId`. Load normalizes them before exposing the v4 tree:
+v3 files additionally contain `custom_message`, `label`, and `session_info` entries, plus old compaction entries that use `firstKeptEntryId`. Load normalizes them before exposing the v4 tree:
 
 - `custom_message` becomes a custom agent message.
 - `label` and `session_info` become global facts (latest by file position wins) and disappear from the logical tree. A label targets its nearest retained parent.
-- `leaf` entries disappear; `main`'s leaf resolves through the last `leaf` entry, then to the nearest retained ancestor if that target was discarded.
 - Each retained child of a discarded entry is reparented to the discarded entry's nearest retained ancestor.
+- `main`'s leaf is the final physical entry resolved through discarded entries to its nearest retained ancestor.
 - An old compaction resolves `firstKeptEntryId` against its own branch and materializes that range as `retainedTail`. V4 never exposes or persists `firstKeptEntryId`.
 - v3 entry timestamps are ISO strings and convert to Unix milliseconds.
 
@@ -1679,7 +1679,7 @@ One file per session: a header line, then one JSON object per line, in `seq` ord
 - The optional `lane` on an entry line is envelope metadata and dies at decode. When present, the line atomically appends the entry and advances that lane; replay requires `parentId` to equal its current leaf. When absent, the line imports a fork entry without moving a lane. Entries expose `seq` but no lane.
 - Torn tail: a malformed final line is the append that died mid-write. Open truncates it; the write was never acknowledged, nothing is lost. A malformed line anywhere else is corruption; open rejects.
 - Durability is process-crash level: a resolved append call. No fsync promise; if power-loss durability is ever needed, it becomes an explicit capability.
-- v3 files: entries only, no `kind` tags. Open builds the normalized logical tree from section 12; every entry belongs to `main`, and `main`'s leaf resolves through the last `leaf` entry to its nearest retained ancestor. Before the first v4 append, the file is rewritten once with a v4 header (write temp, rename). This is the single conversion the compatibility policy allows. Read-only opens never rewrite.
+- v3 files: entries only, no `kind` tags. Open builds the normalized logical tree from section 12; every entry belongs to `main`, and `main`'s leaf is the final physical entry resolved through discarded entries to its nearest retained ancestor. Before the first v4 append, the file is rewritten once with a v4 header (write temp, rename). This is the single conversion the compatibility policy allows. Read-only opens never rewrite.
 
 ### SQLite
 
@@ -3162,7 +3162,7 @@ Gate invariants, asserted across Tier C:
 - Hooks: registration-id `resumeData` round trips, duplicate-id rejection, aggregation order, fail-closed `before_tool`.
 - Ledger completeness and the match invariant: every provider request leaves exactly one `usage` record per physical request (split-turn: two per attempt; a pending deferred fetch that reports no usage writes none); failed compaction series and discarded overflow responses lose no recorded cost; each usage-bearing entry's snapshot equals the newest non-adjustment record(s) bound to its id; a replayed tool records both executions; adjustments never alter entries and sum into read-time effective cost; `getStats()` token and cost fields equal the ledger sum and the `usage` event's totals after every commit; fork token and cost fields start at zero while `messageCount` includes all copied message entries; v3 conversion preserves totals through the aggregate import adjustment.
 - Overflow classification against the reported provider shapes: prompt 268,009 of a 272,000 window and 81,217 of 84,500 (recoverable), non-zero reasoning-only output, cache-write-heavy usage, a Codex-style provider that rejects `max_output_tokens`, a genuine 1,024-token cap fully used (not recoverable), and `length → length` stopping after exactly one recovery per conversational input.
-- v3 fixtures: labels, session info, and `leaf` entries mid-chain and at end of file, old `firstKeptEntryId` compactions — all open as one normalized idle `main` lane.
+- v3 fixtures: labels and session info mid-chain and at end of file, plus old `firstKeptEntryId` compactions — all open as one normalized idle `main` lane.
 
 ## 20. Implementation status and work packages
 
@@ -3276,7 +3276,7 @@ These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `
   - Add torn-tail truncation, malformed-interior rejection, missing-reference rejection, and lifecycle/concurrency edge cases.
   - Acceptance: acknowledged writes survive reopen and malformed non-tail data is never silently repaired.
 - [ ] **J4 — read-only v3 normalization.** Dependencies: J3.
-  - Decode supported coding-agent v3 files into the normalized v4 logical tree: custom messages, labels, session info, leaf resolution, discarded-entry reparenting, old compactions, timestamps, parent mapping, and idle `main`.
+  - Decode supported coding-agent v3 files into the normalized v4 logical tree: custom messages, labels, session info, discarded-entry reparenting, old compactions, timestamps, parent mapping, and idle `main` at the final retained logical entry.
   - A read-only open must not modify the physical file. No coding-agent source or test is changed.
   - Acceptance: fixture tests cover every normalization rule in section 12 and malformed v3 input.
 - [ ] **J5 — first-write v3 conversion.** Dependencies: J4.

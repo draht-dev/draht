@@ -35,7 +35,7 @@ function createRepository(root: string): JsonlSessionRepo {
 	});
 }
 
-function withDefaultSessionCwd(repository: SessionRepo, cwd: string): SessionRepo {
+function withDefaultSessionCwd(repository: JsonlSessionRepo, cwd: string): SessionRepo<JsonlSessionMetadata> {
 	return {
 		create(options) {
 			const optionsWithCwd = { ...options, cwd };
@@ -143,6 +143,30 @@ describe("JSONL v4 persistence", () => {
 		expect((await first.getMetadata()).cwd).toBe(firstCwd);
 		expect((await second.getMetadata()).cwd).toBe(secondCwd);
 		expect((await repository.list()).map((metadata) => metadata.id)).toEqual(["shared", "shared"]);
+	});
+
+	it("rejects concurrent create calls for the same destination", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+		try {
+			const root = createTempDir();
+			const repository = createRepository(root);
+			const cwd = join(root, "workspace");
+
+			const results = await Promise.allSettled([
+				repository.create({ id: "same", cwd }),
+				repository.create({ id: "same", cwd }),
+			]);
+			const successes = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+			const failures = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+
+			expect(successes).toHaveLength(1);
+			expect(failures).toHaveLength(1);
+			expect(failures[0]).toMatchObject({ code: "already_exists" });
+			expect((await repository.list({ cwd })).map((listed) => listed.id)).toEqual(["same"]);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("sorts listed sessions by current filesystem modification time", async () => {

@@ -168,12 +168,9 @@ export class JsonlSessionRepo
 					`Failed to read session header ${file.path}`,
 				);
 				if (!firstLine) continue;
-				try {
-					metadata.push(metadataFromHeader(parseHeader(firstLine, file.path), file.path, file.mtimeMs));
-				} catch (error) {
-					if (error instanceof SessionError && error.code === "invalid_entry") continue;
-					throw error;
-				}
+				const headerResult = parseHeader(firstLine);
+				if (!headerResult.ok) continue;
+				metadata.push(metadataFromHeader(headerResult.value, file.path, file.mtimeMs));
 			}
 		}
 		return metadata.sort((left, right) => right.modifiedAt - left.modifiedAt);

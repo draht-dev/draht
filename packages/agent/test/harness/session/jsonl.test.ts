@@ -537,7 +537,7 @@ describe("JSONL v4 persistence", () => {
 		const repository = createRepository(root);
 		await expect(repository.open(metadata)).rejects.toMatchObject({
 			code: "invalid_entry",
-			message: expect.stringContaining("references missing parent missing"),
+			message: `Invalid JSONL v4 session ${path}: line 2 Invalid session mutation: references missing parent missing`,
 		});
 	});
 

@@ -1382,11 +1382,13 @@ after_tool: {
 // — records cannot distinguish them, and neither needs the hook again).
 before_compaction: {
   event:  { reason: "manual" | "threshold" | "overflow"; preparation: CompactionPreparation; customInstructions? };
+  /** A supplied compaction persists as a CompactionEntry with fromHook: true. */
   result: { decline?: boolean; compaction?: CompactResult } | undefined;
 }
 
 before_navigation: {
   event:  { targetId; preparation: NavigationPreparation };
+  /** A supplied summary persists as a BranchSummaryEntry with fromHook: true. */
   result: { decline?: boolean; summary?: { summary: string; details?; usage? } } | undefined;
 }
 ```
@@ -1428,9 +1430,9 @@ interface ThinkingLevelEntry     extends EntryBase { type: "thinking_level_chang
 interface ActiveToolsEntry       extends EntryBase { type: "active_tools_change"; activeToolNames: string[] }
 interface CompactionEntry        extends EntryBase { type: "compaction"; summary: string;
                                                      retainedTail: AgentMessage[];
-                                                     tokensBefore: number; details?; usage? }
+                                                     tokensBefore: number; details?; usage?; fromHook: boolean }
 interface BranchSummaryEntry     extends EntryBase { type: "branch_summary"; fromId: string; summary: string;
-                                                     details?; usage? }
+                                                     details?; usage?; fromHook: boolean }
 interface CustomEntry            extends EntryBase { type: "custom"; customType: string; data? }
 
 type Entry = MessageEntry | ModelChangeEntry | ThinkingLevelEntry | ActiveToolsEntry
@@ -1438,6 +1440,8 @@ type Entry = MessageEntry | ModelChangeEntry | ThinkingLevelEntry | ActiveToolsE
 ```
 
 A harness-written assistant `MessageEntry` always contains a `SettledAssistantMessage`; `pending` is rejected before any durable write. A v4 tool-result `MessageEntry` additionally persists the finalized batch-control decision as `terminate?: true` beside `message`. It is orchestration state for the reduction (section 7), never model context; the projection to provider messages ignores it. `AgentToolResult.terminate` exists at the tool API level but `ToolResultMessage` does not carry it, so the entry field is the durable form.
+
+For compaction and branch-summary entries, `fromHook: true` means the summary was supplied by `before_compaction` or `before_navigation`; `false` means the harness generated it. The field is required on every v4 entry. This durable provenance is also an ownership boundary for `details`: harness-generated summaries may use a harness-owned shape that later summary preparation can interpret (for example, cumulative file tracking), while hook-supplied details are opaque and must never be interpreted by the harness.
 
 Every v4 compaction — generated or hook-supplied — stores the complete `retainedTail`; an empty tail is `[]`, never omission. The compaction entry is a self-contained checkpoint: context builds never read past it. Entry `usage` fields — on assistant messages, tool results, compactions, and branch summaries — are immutable display snapshots of the response(s) that produced that entry: a message entry matches its one producing record; a compaction or branch-summary entry carries its successful attempt's request(s), never failed attempts. The durable ledger is the `usage` records; effective cost including later adjustments is a read-time ledger query by `entryId` (sections 5, 13).
 
@@ -1448,6 +1452,7 @@ v3 files additionally contain `custom_message`, `label`, and `session_info` entr
 - Each retained child of a discarded entry is reparented to the discarded entry's nearest retained ancestor.
 - `main`'s leaf is the final physical entry resolved through discarded entries to its nearest retained ancestor.
 - An old compaction resolves `firstKeptEntryId` against its own branch and materializes that range as `retainedTail`. V4 never exposes or persists `firstKeptEntryId`.
+- Existing `details` and `usage` on compaction and branch-summary entries are preserved unchanged. Existing `fromHook` provenance is preserved; an absent v3 value normalizes to `false`.
 - v3 entry timestamps are ISO strings and convert to Unix milliseconds.
 
 Read-only opens keep the physical v3 file unchanged; the first v4 write persists the normalized form (section 13).
@@ -2370,7 +2375,7 @@ async function assistantStep(): Promise<SettledAssistantMessage> {
 
 `isRecoverableOverflow(final, state)` is `isContextOverflow(final)` — overflow-pattern errors and silent overflow — or `isRecoverableLength(final, desiredMaxOutput(state))` from section 6, where `desiredMaxOutput(state)` is the caller-supplied `maxTokens` when set, else the lane model's `maxTokens`. The check runs before the retryable-error branch: an overflow-form error compacts instead of retrying the same oversized request.
 
-`summaryStep(step, reason, resultEntryId)` has the same shape: `step_attempt` before each attempt (`compactionReason` for compaction steps) carrying the step's single result id, `before_request`, one or two non-deferred requests — each followed by its `usage` record bound to that id — durable cap. It returns the summary value; the caller appends the result entry under that id. A hook-supplied summary makes no request and no request record; if it carries usage the hook measured itself, the appending procedure writes a `hook` usage record beside the entry. For reason `overflow` the appending procedure also writes the compaction `step_attempt`, so the once-per-input guard counts the recovery (section 6).
+`summaryStep(step, reason, resultEntryId)` has the same shape: `step_attempt` before each attempt (`compactionReason` for compaction steps) carrying the step's single result id, `before_request`, one or two non-deferred requests — each followed by its `usage` record bound to that id — durable cap. It returns the summary value; the caller appends the result entry under that id. A hook-supplied summary makes no request and no request record; its entry persists `fromHook: true`, and if it carries usage the hook measured itself, the appending procedure writes a `hook` usage record beside the entry. For reason `overflow` the appending procedure also writes the compaction `step_attempt`, so the once-per-input guard counts the recovery (section 6).
 
 ### Deferred redemption
 
@@ -2504,18 +2509,20 @@ async function compactionProcedure(): Promise<CompactionResult> {
     if (op.aborting) return await abortStructural();
     if (!op.targets.result) {
       let result: CompactResult | undefined;
+      let fromHook = false;
       if (!op.step) {          // no attempt yet: the decision hook may still run
         const hook = await fx.runHook("before_compaction",
           { reason: "manual", preparation: preparation(state),
             customInstructions: op.intent.customInstructions });
         if (hook?.decline) return await finishStructural("declined");
         result = hook?.compaction;
+        fromHook = result !== undefined;
         if (result?.usage) {
           await fx.appendRecord(hookUsageRecord(op.id, op.intent.resultEntryId, result.usage));
         }
       }
       result ??= await summaryStep("compaction", "manual", op.intent.resultEntryId);
-      await appendIfMissing(compactionEntry(op.intent.resultEntryId, result));
+      await appendIfMissing(compactionEntry(op.intent.resultEntryId, result, fromHook));
     }
     return await finishStructural("completed");
   } catch (e) { return await handleStructuralSignal(e); }
@@ -2548,12 +2555,12 @@ async function autoCompact(reason: "threshold" | "overflow"): Promise<void> {
       if (hook.compaction.usage) {
         await fx.appendRecord(hookUsageRecord(op.id, resultEntryId, hook.compaction.usage));
       }
-      await appendIfMissing(compactionEntry(resultEntryId, hook.compaction));
+      await appendIfMissing(compactionEntry(resultEntryId, hook.compaction, true));
       return;
     }
   }
   const result = await summaryStep("compaction", reason, resultEntryId);
-  await appendIfMissing(compactionEntry(resultEntryId, result));
+  await appendIfMissing(compactionEntry(resultEntryId, result, false));
 }
 
 async function navigationProcedure(): Promise<NavigationResult> {
@@ -2561,6 +2568,7 @@ async function navigationProcedure(): Promise<NavigationResult> {
     if (op.aborting) return await abortStructural();
     const moved = state.leafId === op.intent.targetId;       // acceptance rejected target == source
     let summary: SummaryValue | undefined;
+    let fromHook = false;
 
     if (op.intent.summarize && !op.targets.summary) {
       if (!moved && !op.step) {                              // decision hook: once, pre-move
@@ -2570,6 +2578,7 @@ async function navigationProcedure(): Promise<NavigationResult> {
                                                              // intent.sourceLeafId — valid pre- and post-move
         if (hook?.decline) return await finishStructural("declined");
         summary = hook?.summary;
+        fromHook = summary !== undefined;
         if (summary?.usage) {
           await fx.appendRecord(hookUsageRecord(op.id, op.intent.summaryEntryId!, summary.usage));
         }
@@ -2580,7 +2589,7 @@ async function navigationProcedure(): Promise<NavigationResult> {
 
     if (!moved) await fx.moveLane(op.intent.targetId);       // the commit point (section 6)
     if (op.intent.summarize && !op.targets.summary) {
-      await appendIfMissing(summaryEntry(op.intent.summaryEntryId!, summary!));  // chains to the target
+      await appendIfMissing(summaryEntry(op.intent.summaryEntryId!, summary!, fromHook));  // chains to the target
     }
     if (op.intent.label !== undefined) {
       await fx.setFact(labelFact(op.intent.targetId, op.intent.label));          // idempotent
@@ -3159,10 +3168,10 @@ Gate invariants, asserted across Tier C:
 - Runtime telemetry tests use the in-memory reference to assert exact schema-conforming span trees and independently valid start/end/event bags on every status path. End attributes remain optional. Content and secret fixtures assert absence, not merely redaction.
 - The existing `agent-loop` and `agent` suites pass unchanged — the section 14 compatibility criterion.
 - Event ordering per section 10, including `message_end` after commit.
-- Hooks: registration-id `resumeData` round trips, duplicate-id rejection, aggregation order, fail-closed `before_tool`.
+- Hooks: registration-id `resumeData` round trips, duplicate-id rejection, aggregation order, fail-closed `before_tool`, durable summary `fromHook` provenance, and no harness interpretation of hook-owned summary details.
 - Ledger completeness and the match invariant: every provider request leaves exactly one `usage` record per physical request (split-turn: two per attempt; a pending deferred fetch that reports no usage writes none); failed compaction series and discarded overflow responses lose no recorded cost; each usage-bearing entry's snapshot equals the newest non-adjustment record(s) bound to its id; a replayed tool records both executions; adjustments never alter entries and sum into read-time effective cost; `getStats()` token and cost fields equal the ledger sum and the `usage` event's totals after every commit; fork token and cost fields start at zero while `messageCount` includes all copied message entries; v3 conversion preserves totals through the aggregate import adjustment.
 - Overflow classification against the reported provider shapes: prompt 268,009 of a 272,000 window and 81,217 of 84,500 (recoverable), non-zero reasoning-only output, cache-write-heavy usage, a Codex-style provider that rejects `max_output_tokens`, a genuine 1,024-token cap fully used (not recoverable), and `length → length` stopping after exactly one recovery per conversational input.
-- v3 fixtures: labels and session info mid-chain and at end of file, plus old `firstKeptEntryId` compactions — all open as one normalized idle `main` lane.
+- v3 fixtures: labels and session info mid-chain and at end of file, old `firstKeptEntryId` compactions, and preserved `fromHook` provenance on compaction and branch-summary entries — all open as one normalized idle `main` lane.
 
 ## 20. Implementation status and work packages
 
@@ -3276,9 +3285,9 @@ These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `
   - Add torn-tail truncation, malformed-interior rejection, missing-reference rejection, and lifecycle/concurrency edge cases.
   - Acceptance: acknowledged writes survive reopen and malformed non-tail data is never silently repaired.
 - [ ] **J4 — read-only v3 normalization.** Dependencies: J3.
-  - Decode supported coding-agent v3 files into the normalized v4 logical tree: custom messages, labels, session info, discarded-entry reparenting, old compactions, timestamps, parent mapping, and idle `main` at the final retained logical entry.
+  - Decode supported coding-agent v3 files into the normalized v4 logical tree: custom messages, labels, session info, discarded-entry reparenting, old compactions, summary `fromHook` provenance, timestamps, parent mapping, and idle `main` at the final retained logical entry.
   - A read-only open must not modify the physical file. No coding-agent source or test is changed.
-  - Acceptance: fixture tests cover every normalization rule in section 12 and malformed v3 input.
+  - Acceptance: fixture tests cover every normalization rule in section 12, including `fromHook` true and false plus absent v3 values normalizing to false, and malformed v3 input.
 - [ ] **J5 — first-write v3 conversion.** Dependencies: J4.
   - Rewrite through a temporary format-4 file on the first mutation, preserve metadata/facts/tree and resolved or legacy parent linkage, and add the aggregate v3 usage adjustment.
   - Acceptance: crash-safe conversion tests cover failure before rename, successful reopen, statistics preservation, unresolved legacy parent paths, and no second conversion.
@@ -3379,7 +3388,7 @@ These packages also own `agent-harness.ts` and merge after H8, in order C1 → C
 
 - [ ] **C1 — manual compaction operation.** Dependencies: H8.
   - Add acceptance, hook decision, durable summary attempts/usage, complete `retainedTail`, result entry, abort/failure, and structural resume.
-  - Acceptance: exact manual-compaction traces and every crash boundary; hook-supplied summaries obey the same persisted entry contract.
+  - Acceptance: exact manual-compaction traces and every crash boundary; hook-supplied summaries obey the same persisted entry contract and persist `fromHook: true`.
 - [ ] **C2 — threshold auto-compaction.** Dependencies: C1, H4.
   - Run compaction inside the active run at checkpoints without a nested operation and continue the assistant loop.
   - Acceptance: append-only context holds except at the compaction boundary; repeated compaction retains the previous checkpoint tail.
@@ -3388,7 +3397,7 @@ These packages also own `agent-harness.ts` and merge after H8, in order C1 → C
   - Acceptance: every provider shape and crash row from sections 6 and 20, including hook decline and `length → length`.
 - [ ] **N1 — move-first navigation.** Dependencies: C3.
   - Add acceptance, abandoned-branch preparation, hook/generated summary, move commit, post-move summary/fact writes, abort/failure, and structural resume.
-  - Acceptance: every navigation crash row, including regeneration after a post-move crash and target/source validation.
+  - Acceptance: every navigation crash row, including regeneration after a post-move crash and target/source validation; hook-supplied summaries persist `fromHook: true`.
 
 ### Track O — observability and core completion
 

@@ -163,11 +163,10 @@ export class JsonlSessionRepo
 				`Failed to list sessions directory ${directory}`,
 			).filter((entry) => entry.kind !== "directory" && entry.name.endsWith(".jsonl"));
 			for (const file of files) {
-				const content = fileResult(
-					await this.fs.readTextFile(file.path),
+				const [firstLine] = fileResult(
+					await this.fs.readTextLines(file.path, { maxLines: 1 }),
 					`Failed to read session header ${file.path}`,
 				);
-				const firstLine = content.split("\n", 1)[0];
 				if (!firstLine) throw invalidFile(file.path, 1, "is missing a header");
 				metadata.push(metadataFromHeader(parseHeader(firstLine, file.path), file.path, file.mtimeMs));
 			}

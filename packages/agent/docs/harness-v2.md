@@ -3296,6 +3296,9 @@ I0, I1, and I2 may proceed independently. I3 → I4 → I5 is serial and begins 
   - Primary files: `packages/agent/src/harness/hooks.ts`, `packages/agent/test/harness/hooks.test.ts`.
   - Implement typed registration, stable-id validation, ordered aggregation, error isolation, fail-closed `before_tool`, and per-id resume data handling.
   - Acceptance: focused tests cover every section 11 aggregation and failure rule; no operation wiring yet.
+
+**Reserved: I2 by @vegarsti.**
+
 - [ ] **I2 — passive events and watch buffering.** Dependencies: none.
   - Primary files: `packages/agent/src/harness/events.ts`, `packages/agent/test/harness/events.test.ts`.
   - Implement passive listener isolation and the snapshot/start/unsubscribe buffer primitive used by lane and session watchers.

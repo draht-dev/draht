@@ -2239,7 +2239,10 @@ async function driverLoop(): Promise<RunResult> {
     for (const w of [...op.pendingWrites])            await fx.applyPendingWrite(op.id, w.id);
     for (const m of steeringForThisCheckpoint(op))    await fx.consumeQueueItem(op.id, "steer", m.id);
     if (op.aborting) return await abortPath();
-    if (await contextOverLimit()) await autoCompact(pressureReason());   // may throw RunFailed
+    if (await contextOverLimit()) {
+      await autoCompact(pressureReason());                  // may throw RunFailed
+      continue;                                             // fresh checkpoint: input may have arrived during compaction
+    }
 
     if (needsAssistant()) {
       const outcome = await runTurn();

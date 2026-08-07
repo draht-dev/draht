@@ -292,7 +292,7 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 	// Reads
 	getEntry(id: string): Promise<Entry | undefined>;
 	findEntries(query?: EntryQuery): Promise<Entry[]>;
-	/** start is mandatory here; defaulting to a lane's leaf is view sugar. */
+	/** start is mandatory here (as opposed to SessionTree's findEntriesOnBranch); defaulting to a lane's leaf is view sugar. */
 	findEntriesOnBranch(query: EntryQuery & BranchBounds & { start: string }): Promise<Entry[]>;
 	findRecords<K extends LaneRecord["type"]>(
 		query: RecordQuery & { type: K },

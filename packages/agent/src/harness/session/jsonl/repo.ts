@@ -2,7 +2,7 @@ import { uuidv7 } from "@draht/ai";
 import { assertJsonSerializable, Session } from "../session.ts";
 import { type ForkOptions, SessionError, type SessionRepo } from "../types.ts";
 import { metadataFromHeader, parseHeader } from "./codec.ts";
-import { fileResult, invalidFile } from "./errors.ts";
+import { fileResult } from "./errors.ts";
 import { JsonlSessionStorage } from "./storage.ts";
 import type {
 	JsonlSessionCreateOptions,
@@ -167,8 +167,13 @@ export class JsonlSessionRepo
 					await this.fs.readTextLines(file.path, { maxLines: 1 }),
 					`Failed to read session header ${file.path}`,
 				);
-				if (!firstLine) throw invalidFile(file.path, 1, "is missing a header");
-				metadata.push(metadataFromHeader(parseHeader(firstLine, file.path), file.path, file.mtimeMs));
+				if (!firstLine) continue;
+				try {
+					metadata.push(metadataFromHeader(parseHeader(firstLine, file.path), file.path, file.mtimeMs));
+				} catch (error) {
+					if (error instanceof SessionError && error.code === "invalid_entry") continue;
+					throw error;
+				}
 			}
 		}
 		return metadata.sort((left, right) => right.modifiedAt - left.modifiedAt);

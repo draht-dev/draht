@@ -1660,7 +1660,7 @@ interface JsonlSessionListOptions { cwd?: string; }
 
 A v3 `parentSession` path resolves to the parent header's id when that file is available. If it is unavailable, metadata retains `legacyParentSessionPath`; first-write conversion preserves that optional header field rather than silently dropping the relationship. Format-4 code uses `parentSessionId` for repository relationships. `modifiedAt` is read from the filesystem and is not a sequenced session mutation.
 
-The repository layout matches coding-agent v3. Under `sessionsRoot`, each resolved cwd uses a directory named `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`. New files are named `${createdAtIso.replace(/[:.]/g, "-")}_${sessionId}.jsonl`. `list({ cwd })` scans that cwd's directory; `list()` scans every direct child directory. First-write v3 conversion replaces the original file in place and never changes its directory or filename.
+The repository layout matches coding-agent v3. Under `sessionsRoot`, each resolved cwd uses a directory named `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`. New files are named `${createdAtIso.replace(/[:.]/g, "-")}_${sessionId}.jsonl`. `list({ cwd })` scans that cwd's directory; `list()` scans every direct child directory. Listing reads only each file's header and filesystem metadata; it does not open or replay the session. A file with a missing or malformed header is omitted from the result. First-write v3 conversion replaces the original file in place and never changes its directory or filename.
 
 One file per session: a header line, then one JSON object per line, in `seq` order. Every logical mutation is exactly one line; a line is the atomic unit.
 
@@ -3265,7 +3265,7 @@ These packages own `packages/agent/src/harness/session/jsonl/**`, the concrete `
 - [x] **J2 — format-4 repository lifecycle and forks.** Dependencies: J1.
   - Add create/open/list/delete, one writer queue per session, metadata ordering/filtering, branch/tree forks, and the concrete public `JsonlSessionRepo` export.
   - Acceptance: the complete backend-neutral conformance suite passes against JSONL, including concurrent lane writes and forks.
-- [ ] **J3 — format-4 crash and corruption behavior.** Dependencies: J2.
+- [x] **J3 — format-4 crash and corruption behavior.** Dependencies: J2.
   - Add torn-tail truncation, malformed-interior rejection, missing-reference rejection, and lifecycle/concurrency edge cases.
   - Acceptance: acknowledged writes survive reopen and malformed non-tail data is never silently repaired.
 - [ ] **J4 — read-only v3 normalization.** Dependencies: J3.

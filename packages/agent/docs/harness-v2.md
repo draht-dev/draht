@@ -1764,6 +1764,13 @@ Stale branches (no lane resolves through them) are kept.
 
 Every restore query is an index seek plus a bounded scan: a lane's open operation via `(lane, type, seq)`, its last run-kind start via `(lane, type, op_kind, seq)`, its records above the operation via the same index, its own entries via the read plan from its leaf. No query touches another lane's traffic.
 
+SQLite implementation follow-ups:
+
+- Finish search backend work now in progress.
+- Add limit and cursor support to search results.
+- Route `findEntries` through indexed/search-backed query paths where possible instead of decoding and filtering all session entries.
+- Re-audit SQLite query plans after search and `findEntries` changes to see whether further index or query-shape improvements are warranted.
+
 ## 14. Agent-loop building blocks
 
 `agent-loop.ts` exposes building blocks that own no durable state and know nothing about sessions, records, or lanes. The harness composes them and inserts durability writes between their phases.

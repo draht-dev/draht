@@ -3230,8 +3230,6 @@ These packages merge R0 → R1 → R2 → R3. R1 and R2 add a reducer module ins
   - Keep `LaneState` limited to orchestration state. Reduction exclusively owns all three outputs; later recovery packages consume `LaneReductionResult` and do not re-reduce tool or operation records.
   - Acceptance: table-driven tests cover idle and every suspended state, configuration fallback/override, and terminal-failure provenance; reduction is deterministic and performs no writes.
 
-**Reserved: R3 by @vegarsti.**
-
 - [ ] **R3 — harness restore inventory.** Dependencies: F0, R2.
   - Primary files: `packages/agent/src/harness/agent-harness.ts`, reducer integration helpers, and restore tests.
   - Wire `AgentHarness.create()` to use indexed open-operation discovery, bounded idle/open scans, explicit provisioned-id point lookups, and bounded configuration lookups. Return accurate `SuspendedOperation[]` without starting effects.

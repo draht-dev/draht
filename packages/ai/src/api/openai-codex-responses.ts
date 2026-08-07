@@ -543,11 +543,17 @@ function buildRequestBody(
 ): RequestBody {
 	const supportsStrictMode = model.compat?.supportsStrictMode ?? true;
 	const supportsOpenAIGrammarTools = model.compat?.supportsOpenAIGrammarTools ?? false;
-	const toolPlacement = splitDeferredTools(context, model.compat?.supportsToolSearch ?? false);
+	const deferredToolsMode = model.compat?.supportsAdditionalTools
+		? "additional-tools"
+		: model.compat?.supportsToolSearch
+			? "tool-search"
+			: undefined;
+	const toolPlacement = splitDeferredTools(context, deferredToolsMode !== undefined);
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 		grammarToolInputProperties,
 		deferredTools: toolPlacement.deferred,
+		deferredToolsMode,
 		toolOptions: {
 			strict: null,
 			supportsStrictMode,

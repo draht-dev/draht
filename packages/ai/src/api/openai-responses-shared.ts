@@ -119,6 +119,7 @@ export interface ConvertResponsesMessagesOptions {
 	includeSystemPrompt?: boolean;
 	grammarToolInputProperties?: ReadonlyMap<string, string>;
 	deferredTools?: ReadonlyMap<string, Tool>;
+	deferredToolsMode?: "additional-tools" | "tool-search";
 	toolOptions?: ConvertResponsesToolsOptions;
 }
 
@@ -316,7 +317,13 @@ export function convertResponsesMessages<TApi extends Api>(
 				loadedToolNames.add(name);
 				deferredTools.push(tool);
 			}
-			if (deferredTools.length > 0) {
+			if (deferredTools.length > 0 && options?.deferredToolsMode === "additional-tools") {
+				messages.push({
+					type: "additional_tools",
+					role: "developer",
+					tools: convertResponsesTools(deferredTools, options.toolOptions),
+				} satisfies ResponseInputItem);
+			} else if (deferredTools.length > 0 && options?.deferredToolsMode === "tool-search") {
 				const names = deferredTools.map((tool) => tool.name);
 				const searchCallId = `pi_tool_load_${shortHash(`${msg.toolCallId}:${names.join(",")}`)}`;
 				messages.push({
@@ -332,7 +339,7 @@ export function convertResponsesMessages<TApi extends Api>(
 					execution: "client",
 					status: "completed",
 					tools: convertResponsesTools(deferredTools, {
-						...options?.toolOptions,
+						...options.toolOptions,
 						deferLoading: true,
 					}),
 				} satisfies ResponseToolSearchOutputItemParam);

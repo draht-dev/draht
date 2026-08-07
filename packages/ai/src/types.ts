@@ -616,6 +616,8 @@ export interface OpenAIResponsesCompat {
 	supportsStrictMode?: boolean;
 	/** Whether to emit OpenAI custom tools with Lark/regex grammar formats. When false, grammar-constrained tools fall back to normal function tools. Default: false; the generated model catalog enables it for capable models. */
 	supportsOpenAIGrammarTools?: boolean;
+	/** Whether the model supports message-anchored `additional_tools` input items. Default: false. */
+	supportsAdditionalTools?: boolean;
 	/** Whether the model supports client-executed tool search for deferred tools. Default: false. */
 	supportsToolSearch?: boolean;
 	/** Whether the model accepts `prompt_cache_options` (OpenAI GPT-5.6+ explicit prompt caching). Older OpenAI models reject the parameter. Default: false. */

@@ -16,6 +16,27 @@ const runEndEvent: RunEndEvent = {
 };
 
 describe("HarnessEventBus", () => {
+	it("delivers matching events to direct listeners and watchers", () => {
+		const events = new HarnessEventBus();
+		const direct: RunStartEvent[] = [];
+		const watchEvents: HarnessEvent[] = [];
+		const off = events.on("run_start", (event) => {
+			direct.push(event);
+		});
+		const watch = events.watch(() => null);
+		watch.start((event) => {
+			watchEvents.push(event);
+		});
+
+		events.emit(runStartEvent);
+		events.emit(runEndEvent);
+		off();
+		events.emit(runStartEvent);
+
+		expect(direct).toEqual([runStartEvent]);
+		expect(watchEvents).toEqual([runStartEvent, runEndEvent, runStartEvent]);
+	});
+
 	it("captures a snapshot without an event gap, then flushes and delivers live events", () => {
 		const events = new HarnessEventBus();
 		const expectedSnapshot = { leafId: null };

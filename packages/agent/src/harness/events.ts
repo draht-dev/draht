@@ -34,10 +34,41 @@ export interface WatchHandle<TSnapshot> {
 	unsubscribe(): void;
 }
 
-export class HarnessEventBus {
+export class HarnessEventBus implements Events {
+	private readonly listeners = new Map<HarnessEventType, Set<HarnessEventListener>>();
 	private readonly watchListeners = new Set<(event: HarnessEvent) => void>();
 
+	/**
+	 * Register a listener for future events of one type and return its unsubscribe function.
+	 * Earlier events are not replayed, and no snapshot or event buffer is provided.
+	 */
+	on<TType extends HarnessEventType>(
+		type: TType,
+		listener: HarnessEventListener<HarnessEventOfType<TType>>,
+	): () => void {
+		// Reuse this event type's listener set, or create its first set.
+		const listeners = this.listeners.get(type) ?? new Set<HarnessEventListener>();
+		this.listeners.set(type, listeners);
+
+		// Wrap this event-specific callback so it can be stored as a general HarnessEvent listener.
+		// Keep the wrapper reference so unsubscribe can remove that exact function from the set.
+		const receive: HarnessEventListener = (event) => {
+			if (event.type === type) return listener(event as HarnessEventOfType<TType>);
+		};
+		listeners.add(receive);
+		return () => {
+			listeners.delete(receive);
+			if (listeners.size === 0) this.listeners.delete(type);
+		};
+	}
+
+	/** Publish an event to current event subscriptions and watch subscriptions. */
 	emit(event: HarnessEvent): void {
+		// Deliver only to direct listeners registered for this event type.
+		// Async results are not awaited because emit() is synchronous.
+		for (const listener of this.listeners.get(event.type) ?? []) void listener(event);
+
+		// Deliver every event to each watcher; watch() handles buffering until start().
 		for (const listener of this.watchListeners) listener(event);
 	}
 

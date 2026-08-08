@@ -1481,8 +1481,10 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		isCloudflareAiGateway ||
 		isAntLing;
 
+	const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
 	const useMaxTokens =
 		baseUrl.includes("chutes.ai") ||
+		isDeepSeek ||
 		isMoonshot ||
 		isCloudflareAiGateway ||
 		isTogether ||
@@ -1491,7 +1493,6 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		isZai;
 
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
-	const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
 	const isOpenRouterDeveloperRoleModel =
 		isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
 	const cacheControlFormat = provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;

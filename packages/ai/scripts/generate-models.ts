@@ -643,11 +643,18 @@ function detectOpenAICompletionsCompat(model: Model<"openai-completions">): Open
 		isCloudflareAiGateway ||
 		isAntLing;
 
+	const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
 	const useMaxTokens =
-		baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isNvidia || isAntLing || isZai;
+		baseUrl.includes("chutes.ai") ||
+		isDeepSeek ||
+		isMoonshot ||
+		isCloudflareAiGateway ||
+		isTogether ||
+		isNvidia ||
+		isAntLing ||
+		isZai;
 
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
-	const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
 	const isOpenRouterDeveloperRoleModel =
 		isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
 	const cacheControlFormat =

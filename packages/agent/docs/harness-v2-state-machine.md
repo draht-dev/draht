@@ -11,7 +11,7 @@ An `AgentHarness` owns one durable session. The session contains:
 1. **Conversation tree** — append-only message, compaction, branch-summary, and custom entries.
 2. **Lanes** — permanent names pointing at tree leaves. Each lane has at most one open operation.
 3. **Lane configuration** — one total replacement containing model reference, thinking level, and active tool names.
-4. **Operational state** — an immutable operation header plus append-only total snapshots of the current operation.
+4. **Operational state** — one immutable `OperationRecord` plus append-only total `OperationStateRecord`s.
 5. **Usage ledger** — immutable usage records, independent of whether later orchestration succeeds.
 6. **Global facts** — latest-wins name, labels, and custom facts.
 
@@ -25,7 +25,7 @@ A lane accepts one of three operation kinds:
 - **compaction** — standalone manual compaction;
 - **navigation** — move to another tree entry, optionally with a summary.
 
-An accepted operation has one durable header and a sequence of total state snapshots. The latest snapshot directly states what the operation is doing and what may happen next.
+An accepted operation has one durable `OperationRecord` and a sequence of total state records. The latest `OperationStateRecord` directly states what the operation is doing and what may happen next.
 
 ### Effects
 
@@ -47,16 +47,17 @@ External effects cannot generally be both durable and exactly once across proces
 
 Conversation persistence and provider context remain separate. Durable `error`, `aborted`, and `deferred` assistant responses do not project. Genuine output-limit `length` projects. Overflow compaction omits its exact superseded response from summary input and retained tail. Compaction entries remain self-contained context boundaries.
 
-## 2. Replace implicit reduction with total operation snapshots
+## 2. Replace implicit reduction with total operation state
 
 The current design reconstructs orchestration from combinations of records, entry presence, lane pointers, and later transitions. The redesign persists the continuation directly.
 
-### Operation header
+### Operation record
 
-The header contains immutable acceptance data and is written once:
+`OperationRecord` contains immutable acceptance data and is written once:
 
 ```ts
-interface OperationHeader {
+interface OperationRecord {
+  type: "operation";
   operationId: string;
   lane: string;
   sourceLeafId: string | null;
@@ -82,13 +83,13 @@ interface OperationHeader {
 }
 ```
 
-### Total operation snapshot
+### Total operation state record
 
-Every state transition appends a complete snapshot of all current mutable orchestration state for that operation:
+Every state transition appends one record containing all current mutable orchestration state for that operation:
 
 ```ts
-interface OperationSnapshotRecord {
-  type: "operation_snapshot";
+interface OperationStateRecord {
+  type: "operation_state";
   id: string;
   lane: string;
   operationId: string;
@@ -97,11 +98,11 @@ interface OperationSnapshotRecord {
 }
 ```
 
-`revision` starts at 1 and increases by exactly one. Snapshots are append-only; the latest revision is authoritative.
+`revision` starts at 1 and increases by exactly one. State records are append-only; the latest revision is authoritative.
 
-**Total means total.** A snapshot does not contain a patch and does not require older snapshots to interpret it. It contains the complete current workflow state, retry state, tool plan and per-call states, pending operation-owned queues and writes, deferred source, and cancellation control. It may reference immutable conversation entries, usage records, and the immutable operation header by ID, but no older operational snapshot supplies missing state.
+**Total means total.** An `OperationStateRecord` is not a patch and needs no older state record for interpretation. It contains the complete current workflow state, retry state, tool plan and per-call states, pending operation-owned queues and writes, deferred source, and cancellation control. It may reference immutable conversation entries, usage records, and its immutable `OperationRecord` by ID, but no older operational state record supplies missing state.
 
-The first implementation accepts the storage cost of total snapshots. Do not introduce delta chains, child-state logs, or patch replay to optimize them. If measurement later shows a problem, optimize physical encoding or compression while preserving the logical total-snapshot contract.
+The first implementation accepts the storage cost of total state records. Do not introduce delta chains, child-state logs, or patch replay to optimize them. If measurement later shows a problem, optimize physical encoding or compression while preserving the logical total-state contract.
 
 ### Loading current state
 
@@ -109,16 +110,16 @@ The public storage concept is:
 
 ```ts
 interface CurrentOperation {
-  header: OperationHeader;
-  snapshot: OperationSnapshotRecord;
+  operation: OperationRecord;
+  stateRecord: OperationStateRecord;
 }
 
 getCurrentOperation(lane: string): Promise<CurrentOperation | undefined>;
 ```
 
-Backends answer through their latest-operation index. They read the immutable header and exactly one latest total snapshot. They do not scan or fold operation history, inspect entry absence to infer a phase, or collect partial task state from several operational logs.
+Backends answer through their latest-operation index. They read one immutable `OperationRecord` and exactly one latest total `OperationStateRecord`. They do not scan or fold operation history, inspect entry absence to infer a phase, or collect partial task state from several operational logs.
 
-Memory keeps the latest snapshot in a map. JSONL updates its latest-snapshot projection while replaying the file. SQLite keeps a current-operation projection and reads the selected snapshot/header by indexed ID.
+Memory keeps the latest state record in a map. JSONL updates its latest-state projection while replaying the file. SQLite keeps a current-operation projection and reads the selected operation/state records by indexed ID.
 
 ### Records retained and replaced
 
@@ -126,11 +127,11 @@ Retain:
 
 - total `lane_config` replacements;
 - immutable usage and adjustment records;
-- operation header;
-- total operation snapshots;
+- immutable `OperationRecord`;
+- total `OperationStateRecord`s;
 - facts, lane history, and conversation entries.
 
-The total snapshot replaces the recovery authority currently spread across:
+The total state record replaces the recovery authority currently spread across:
 
 ```text
 abort_requested
@@ -298,7 +299,7 @@ type ToolCallState =
     };
 ```
 
-The total operation snapshot contains the complete batch and every call state. This can duplicate data across snapshots; correctness and direct recovery take priority. Parallel tool execution remains possible: several calls may be `effect_pending`, while result commits remain source ordered.
+The total operation state record contains the complete batch and every call state. This can duplicate data across state records; correctness and direct recovery take priority. Parallel tool execution remains possible: several calls may be `effect_pending`, while result commits remain source ordered.
 
 ### Deferred state
 
@@ -341,7 +342,7 @@ Only transition functions may construct terminal state. This makes terminal vali
 
 Every durable boundary follows one rule:
 
-> Compute one next total operation state, then atomically append all conversation, usage, fact, lane, and snapshot mutations that make that state true.
+> Compute one next total operation state, then atomically append all conversation, usage, fact, lane, and operation-state mutations that make that state true.
 
 A transaction either commits all logical mutations or none.
 
@@ -350,7 +351,7 @@ A transaction either commits all logical mutations or none.
 Plan before the effect:
 
 ```text
-TX operation snapshot:
+TX operation state:
      phase assistant
      generation effect_pending
      attempt 1
@@ -363,7 +364,7 @@ After the provider settles, classify in memory and commit settlement plus meanin
 ```text
 TX assistant entry R1
    usage U1
-   operation snapshot:
+   operation state:
      phase tools
      complete result-ID plan
 ```
@@ -373,7 +374,7 @@ or:
 ```text
 TX assistant entry R1
    usage U1
-   operation snapshot:
+   operation state:
      phase assistant
      retry_wait for attempt 2
 ```
@@ -383,7 +384,7 @@ or:
 ```text
 TX assistant entry R1
    usage U1
-   operation snapshot:
+   operation state:
      phase compaction
      exact overflow response link
      resumeAfter need_assistant
@@ -396,7 +397,7 @@ There is no durable response-without-usage or accounted-response-without-classif
 After clearance and immediately before execution:
 
 ```text
-TX operation snapshot:
+TX operation state:
      call i = effect_pending
      effective args and replay declaration stored
 ```
@@ -406,7 +407,7 @@ After execution/finalization:
 ```text
 TX tool usage, when present
    planned tool-result entry
-   operation snapshot:
+   operation state:
      call i = completed
      next continuation recorded when batch completes
 ```
@@ -415,11 +416,11 @@ If a crash leaves `effect_pending`, replay only when the declaration and impleme
 
 ### Queue or deferred-write application
 
-Acceptance updates the total snapshot with the complete provisioned payload. Application is atomic:
+Acceptance updates the total operation state with the complete provisioned payload. Application is atomic:
 
 ```text
 TX message/custom entry
-   operation snapshot with item removed
+   operation state with item removed
    continuation updated when the entry requires an assistant
 ```
 
@@ -441,7 +442,7 @@ TX generated usage, when present
    lane move to target
    exact branch-summary entry
    label fact, when present
-   finished operation snapshot
+   finished operation state
 ```
 
 The summary entry chains from the moved target because mutations apply in order. A crash sees either an uncommitted navigation at its source or a fully completed navigation. No prepared-summary or post-move recovery state is needed.
@@ -457,7 +458,7 @@ Determine whether useful context exists before operation acceptance. If not, ret
 ```ts
 async function drive(operation: CurrentOperation): Promise<OperationResult> {
   while (true) {
-    const action = nextAction(operation.snapshot.state);
+    const action = nextAction(operation.stateRecord.state);
 
     switch (action.kind) {
       case "transition":
@@ -498,12 +499,12 @@ Restore performs indexed reads only:
 
 ```text
 latest lane configuration
-current operation header + latest total snapshot
+current `OperationRecord` + latest total `OperationStateRecord`
 current lane leaf
 independent pending nextRun state
 ```
 
-`getCurrentOperation()` returns the materialized header and one latest total snapshot. No historical operation records or older snapshots are reduced. The snapshot directly selects the next interpreter action.
+`getCurrentOperation()` returns one immutable `OperationRecord` and one latest total `OperationStateRecord`. No historical operation or state records are reduced. The state record directly selects the next interpreter action.
 
 The remaining unavoidable crash state is:
 
@@ -518,9 +519,9 @@ For generation, a later attempt is allowed only under the captured generation re
 
 Before `prompt()`, `compact()`, or `navigateTree()` accepts work, the lane verifies that its configured model/provider and every active tool name can resolve. Missing identities return `MissingIdentities` and write nothing. The lane remains idle.
 
-For an already-open operation, `resume()` verifies the identities required by its next effect. Missing identities return `MissingIdentities`, perform no effect, and leave the operation open at the same snapshot.
+For an already-open operation, `resume()` verifies the identities required by its next effect. Missing identities return `MissingIdentities`, perform no effect, and leave the operation open at the same state record.
 
-Registering the missing tools/providers/models unblocks execution. An explicit escape hatch is also needed to replace a missing model/provider referenced by existing lane or operation state. Its exact API and whether it rewrites a pending generation snapshot remain unresolved.
+Registering the missing tools/providers/models unblocks execution. An explicit escape hatch is also needed to replace a missing model/provider referenced by existing lane or operation state. Its exact API and whether it rewrites pending generation state remain unresolved.
 
 ## 6. Storage and event boundaries
 
@@ -544,11 +545,11 @@ Whether durable commit events, especially usage totals, must be published in str
 
 This section records decisions made while developing the redesign. A later session must not silently reopen them without a concrete contradiction or failing trace.
 
-### 7.1 Total snapshots, not shallow or delta state
+### 7.1 Total state records, not shallow or delta state
 
-The latest operation snapshot is complete mutable operational state. Loading an operation reads its immutable header and exactly one latest snapshot. Do not split active generation, tool, queue, or deferred state into separate latest-value logs that must be collected and reconciled. Do not use patches or replay delta chains.
+The latest `OperationStateRecord` is complete mutable operational state. Loading an operation reads its immutable `OperationRecord` and exactly one latest state record. Do not split active generation, tool, queue, or deferred state into separate latest-value logs that must be collected and reconciled. Do not use patches or replay delta chains.
 
-Total snapshots may consume more storage. Correctness and direct recovery take priority. Measure before optimizing. Permitted future optimizations are physical compression, backend-internal structural sharing, or compact field encoding that still decodes one snapshot into the complete state. Tool batches are the likely worst case because every call state repeats after transitions.
+Total state records may consume more storage. Correctness and direct recovery take priority. Measure before optimizing. Permitted future optimizations are physical compression, backend-internal structural sharing, or compact field encoding that still decodes one state record into the complete state. Tool batches are the likely worst case because every call state repeats after transitions.
 
 ### 7.2 One external-effect non-goal
 
@@ -574,7 +575,7 @@ Existing projection rules remain. This redesign changes orchestration state, not
 
 `prompt()`, `compact()`, and `navigateTree()` check the lane's configured model/provider and active tool names before acceptance. If any are missing, return `MissingIdentities`, perform no effect, and write no operation. The lane remains idle until the application registers the missing identities or changes configuration.
 
-`resume()` checks only identities required by the next effect. Missing identities return `MissingIdentities`, perform no effect, and leave the existing operation open at the same total snapshot.
+`resume()` checks only identities required by the next effect. Missing identities return `MissingIdentities`, perform no effect, and leave the existing operation open at the same total state record.
 
 Tools are restored by registering every active tool name mentioned by the relevant configuration. An idle lane can replace a missing model with `setModel(validModel)`. An open operation may contain a captured missing model reference, so an explicit model/provider replacement escape hatch is needed; its API and durable semantics are unresolved.
 
@@ -602,7 +603,7 @@ Single writer, lane mutation serialization, atomic non-empty append arrays, mono
 
 ### 7.12 Lane-level next-run state
 
-`nextRun` exists independently of an operation. It therefore needs one total latest-value lane runtime record or equivalent current-state projection containing the complete pending next-run items. Run acceptance atomically removes the captured items from that total lane state, appends their entries, opens the operation, and writes its first total snapshot. It must not be reconstructed from queue history plus entry absence.
+`nextRun` exists independently of an operation. It therefore needs one total latest-value lane runtime record or equivalent current-state projection containing the complete pending next-run items. Run acceptance atomically removes the captured items from that total lane state, appends their entries, opens the operation, and writes its first total operation state record. It must not be reconstructed from queue history plus entry absence.
 
 The exact type and whether this lane runtime record also points at the current operation remain to be specified. Its semantic requirement is total latest-value state, not a patch/event stream.
 
@@ -722,15 +723,15 @@ Clarify that conversion writes a temporary file and atomically renames it over t
 
 The proposed/current `LogItem` distinguishes lane `create` and `move`, but the shown `lane_moves` table lacks an action column. Add it or define an unambiguous derivation. Explicit column is simpler.
 
-#### Storage efficiency of total snapshots — measure
+#### Storage efficiency of total state records — measure
 
-Total snapshots can repeat large queue payloads and tool batches. Do not weaken semantics preemptively. Add size benchmarks for long runs, large tool batches, and repeated queued writes. If needed, optimize physical backend representation while keeping `getCurrentOperation()` equivalent to header plus one total snapshot.
+Total state records can repeat large queue payloads and tool batches. Do not weaken semantics preemptively. Add size benchmarks for long runs, large tool batches, and repeated queued writes. If needed, optimize physical backend representation while keeping `getCurrentOperation()` equivalent to one `OperationRecord` plus one total `OperationStateRecord`.
 
 ### 8.4 Public API and identity follow-ups
 
 #### Missing model/provider replacement escape hatch — unresolved and important
 
-Idle lane configuration can be repaired with `setModel(validModel)`. An open operation may have captured the missing reference in its total snapshot; changing only lane configuration must not silently alter already-started generation under the prior contract. Possible APIs include an explicit operation-state repair method or runtime model-reference override registry. The API must be explicit, durable where necessary, and limited to missing identities rather than general in-flight mutation.
+Idle lane configuration can be repaired with `setModel(validModel)`. An open operation may have captured the missing reference in its total state record; changing only lane configuration must not silently alter already-started generation under the prior contract. Possible APIs include an explicit operation-state repair method or runtime model-reference override registry. The API must be explicit, durable where necessary, and limited to missing identities rather than general in-flight mutation.
 
 #### Undeclared tool context generic — note for implementation
 
@@ -780,7 +781,7 @@ Telemetry fixes, public type cleanup, fork behavior, and work-package ownership 
 
 ### 8.6 Validation required before adoption
 
-Prototype the total-snapshot model against these traces before replacing the canonical design:
+Prototype the total-state-record model against these traces before replacing the canonical design:
 
 1. successful assistant generation;
 2. retryable generation and crash with missing settlement;
@@ -795,4 +796,4 @@ Prototype the total-snapshot model against these traces before replacing the can
 11. repeated abort before effect, during effect, and after finish;
 12. missing identities for idle operation calls and resume.
 
-For every external effect, test crash before intent, after intent, and after atomic settlement. For every public race, test both lane-mutation orders. Compare automatic and manual drive durable snapshots and outcomes.
+For every external effect, test crash before intent, after intent, and after atomic settlement. For every public race, test both lane-mutation orders. Compare automatic and manual drive durable state records and outcomes.

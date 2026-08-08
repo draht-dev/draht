@@ -792,7 +792,7 @@ describe("TuiAltScreen", () => {
 	it("selects visible text with the mouse and copies it with OSC 52", async () => {
 		const terminal = new RecordingTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal);
-		tui.addChild(new Text("alpha\nbeta\ngamma\ndelta", 0, 0));
+		tui.addChild(new Text("\x1b[1mal\x1b[0mpha\nbeta\ngamma\ndelta", 0, 0));
 		tui.start();
 		await terminal.waitForRender();
 
@@ -811,8 +811,8 @@ describe("TuiAltScreen", () => {
 		);
 		assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[7m")));
 		assert.ok(
-			terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b[7m\x1b[0m\x1b[7m")),
-			"selection inverse must be reapplied after layout segment resets",
+			terminal.events.some((event) => event.type === "write" && event.data.includes("al\x1b[0m\x1b[7mpha")),
+			"selection inverse must be reapplied after a reset inside the selection",
 		);
 		assert.ok(terminal.getViewport().some((line) => line.includes("Copied!")));
 

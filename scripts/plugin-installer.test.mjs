@@ -357,6 +357,8 @@ exit 0
 		const result = run(f);
 		assert.equal(result.status, 0, result.stderr || result.stdout);
 		assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "new");
+		assert.equal(existsSync(join(f.marketplace, "plugins", "draht", "skills", "cinematic-continuation", "SKILL.md")), true);
+		assert.equal(existsSync(join(f.marketplace, "plugins", "draht", "skills", "cinematic-continuation", "scripts", "compile-continuation.mjs")), true);
 		assert.equal(readFileSync(join(f.marketplace, "unrelated.txt"), "utf8"), "keep me");
 		const log = commands(f);
 		const listAt = log.indexOf(f.config.list);

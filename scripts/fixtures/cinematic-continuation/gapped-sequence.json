@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "style_id": "draht-cinematic-action",
+  "sequence_id": "continuation-gap-test",
+  "intent": "This fixture must fail because its timeline has a gap.",
+  "duration_seconds": 6,
+  "aspect_ratio": "16:9",
+  "resolution": "1080p",
+  "continuity_anchor": {},
+  "shots": [
+    {
+      "start": 0,
+      "end": 2,
+      "shot_size": "wide",
+      "subject": "Subject A",
+      "action": "Setup",
+      "camera": "Locked",
+      "lighting": "Stable",
+      "audio": "Room tone",
+      "dialogue": "",
+      "transition": "hard cut"
+    },
+    {
+      "start": 2.5,
+      "end": 6,
+      "shot_size": "close-up",
+      "subject": "Subject A",
+      "action": "Recovery",
+      "camera": "Locked",
+      "lighting": "Stable",
+      "audio": "Room tone",
+      "dialogue": "",
+      "transition": "hold"
+    }
+  ],
+  "negative_constraints": [],
+  "provider_adapters": {}
+}

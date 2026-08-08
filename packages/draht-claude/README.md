@@ -52,11 +52,12 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `git-committer` | Stages and commits with conventional commit messages |
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
 
-### 3 workflow skills
+### Bundled workflow and creative skills
 
 - **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
 - **`tdd-workflow`** — red→green→refactor discipline, commit conventions, cycle violations
 - **`ddd-workflow`** — bounded contexts, ubiquitous language, aggregates, domain events
+- **`cinematic-continuation`** — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
 
 ### 4 workflow hook scripts
 

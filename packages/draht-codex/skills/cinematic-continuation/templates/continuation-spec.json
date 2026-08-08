@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "style_id": "draht-cinematic-continuation",
+  "sequence_id": "draht-next-sequence-001",
+  "intent": "Describe the new dramatic beat without reanalyzing source footage.",
+  "duration_seconds": 8,
+  "aspect_ratio": "16:9",
+  "resolution": "1080p",
+  "continuity_anchor": {
+    "reference_images": [],
+    "reference_videos": [],
+    "character_state": "Appearance-only description; no real-person identity claim.",
+    "wardrobe": "Preserve the selected subject's established wardrobe unless an intentional change is named.",
+    "vehicle_and_props": "Preserve silhouettes, materials, rigid geometry, ownership, and contact points.",
+    "environment": "Preserve place, weather, surfaces, screen direction, spatial anchors, and background topology.",
+    "camera_geometry": "Preserve mount, viewpoint, lens family, relative velocity, and framing drift.",
+    "emotional_state": "Continue from the selected causal beat while retaining visible emotional and material history."
+  },
+  "shots": [
+    {
+      "start": 0,
+      "end": 8,
+      "shot_size": "medium tracking shot",
+      "subject": "Describe the visible subject without naming or inferring a real identity.",
+      "action": "Describe one physically coherent setup-contact-consequence-recovery arc.",
+      "camera": "Specify mount, relative velocity, lens family, shake, pan or tilt, and framing drift.",
+      "lighting": "Specify motivated source direction, contrast, material response, and exposure behavior.",
+      "audio": "Specify ambience, physical sound effects, score contour, and only approved exact dialogue.",
+      "dialogue": "",
+      "transition": "seamless continuation"
+    }
+  ],
+  "negative_constraints": [
+    "no identity drift",
+    "no wardrobe, prop, or vehicle mutation",
+    "no screen-direction reversal",
+    "no impossible wheel, board, hand, contact, limb, or gravity behavior",
+    "no unexplained camera teleport or lens-family mixing",
+    "no duplicate subjects",
+    "no generated text, logos, subtitles, UI, promotional overlays, or watermarks",
+    "no over-smoothed skin, synthetic gloss, or reset material history"
+  ],
+  "provider_adapters": {
+    "seedance_2_5": {
+      "model": null,
+      "image_urls": [],
+      "extra_options": {}
+    }
+  }
+}

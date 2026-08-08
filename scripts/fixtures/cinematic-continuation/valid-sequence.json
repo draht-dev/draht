@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "style_id": "draht-cinematic-action",
+  "sequence_id": "continuation-test-001",
+  "intent": "Continue a physical action through one cut without reanalyzing source footage.",
+  "duration_seconds": 6,
+  "aspect_ratio": "16:9",
+  "resolution": "1080p",
+  "continuity_anchor": {
+    "reference_images": ["references/anchor-001.jpg"],
+    "reference_videos": [],
+    "character_state": "Appearance-only continuity; no identity claim.",
+    "wardrobe": "Preserve the established wardrobe.",
+    "vehicle_and_props": "Preserve rigid prop geometry and contact points.",
+    "environment": "Preserve weather, screen direction, and spatial anchors.",
+    "camera_geometry": "Preserve lens family and camera-to-subject geometry.",
+    "emotional_state": "Continue the established emotional residue."
+  },
+  "shots": [
+    {
+      "start": 0,
+      "end": 2.5,
+      "shot_size": "low wide tracking shot",
+      "subject": "The established subject remains screen-left.",
+      "action": "Setup and contact occur causally.",
+      "camera": "Matched-speed tracking with directional motion blur.",
+      "lighting": "Stable cool side light.",
+      "audio": "Road ambience and one contact transient; no dialogue.",
+      "dialogue": "",
+      "transition": "match action"
+    },
+    {
+      "start": 2.5,
+      "end": 6,
+      "shot_size": "locked close-up",
+      "subject": "The same visible subject state resolves the action.",
+      "action": "Consequence settles into a recovery hold.",
+      "camera": "Locked framing with no zoom.",
+      "lighting": "The same light direction and exposure continue.",
+      "audio": "Ambience settles; no dialogue.",
+      "dialogue": "",
+      "transition": "end on a stable anchor"
+    }
+  ],
+  "negative_constraints": [
+    "no identity drift",
+    "no impossible physics",
+    "no generated text, logos, subtitles, UI, or watermarks"
+  ],
+  "provider_adapters": {
+    "seedance_2_5": {
+      "model": null,
+      "image_urls": [],
+      "extra_options": {}
+    }
+  }
+}

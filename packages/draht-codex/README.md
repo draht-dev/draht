@@ -94,6 +94,7 @@ The GSD workflow templates live in `commands/`. The plugin also ships these supp
 - `brainstorming`
 - `debugging-workflow`
 - `atomic-reasoning`
+- `cinematic-continuation` — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
 
 ### Hooks and scripts
 

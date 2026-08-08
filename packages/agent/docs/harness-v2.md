@@ -1218,7 +1218,7 @@ Guarantees:
                                                      // or message_end follows with the same id
 { type: "queue_update";  steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] }
 { type: "fact_update" } & (
-  | { fact: "name";  name: string }
+  | { fact: "name";  name: string | undefined }
   | { fact: "label"; targetId: string; label: string | undefined })
 
 // Configuration. Compact payloads; clients re-read via getters.
@@ -1485,7 +1485,7 @@ interface SessionTree {
   // Global facts. Latest wins; not branch-scoped. "set", not "append":
   // append vocabulary is reserved for tree writes.
   getName(): Promise<string | undefined>;
-  setName(name: string): Promise<void>;
+  setName(name: string | undefined): Promise<void>;
   getLabel(targetId: string): Promise<string | undefined>;
   setLabel(targetId: string, label: string | undefined): Promise<void>;
 
@@ -1618,7 +1618,7 @@ interface SessionStorage {
   getLog(options?): Promise<LogItem[]>;
 
   // Global facts
-  getName(): Promise<string | undefined>;      setName(name: string): Promise<void>;
+  getName(): Promise<string | undefined>;      setName(name: string | undefined): Promise<void>;
   getLabel(id: string): Promise<string | undefined>;  setLabel(id, label): Promise<void>;
   getStats(): Promise<SessionStats>;
 }

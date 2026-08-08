@@ -180,7 +180,10 @@ function parseLaneMutation(value: Record<string, unknown>, seq: number): Extract
 
 function parseFactMutation(value: Record<string, unknown>, seq: number): Extract<SessionMutation, { kind: "fact" }> {
 	if (value.fact === "name") {
-		return { kind: "fact", seq, fact: "name", name: requireString(value.name, "name") };
+		if (value.name !== undefined && typeof value.name !== "string") {
+			throw new JsonlDecodeError("schema", "has invalid name");
+		}
+		return { kind: "fact", seq, fact: "name", name: value.name };
 	}
 	if (value.fact === "label") {
 		if (value.label !== undefined && typeof value.label !== "string") {

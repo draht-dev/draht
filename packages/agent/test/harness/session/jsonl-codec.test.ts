@@ -134,11 +134,12 @@ describe("JSONL v4 codec", () => {
 			expectMutationRoundTrip({ kind: "lane", seq: 1, lane: "thread", leafId: "entry-1" });
 		});
 
-		it("round trips both fact line discriminants", () => {
+		it("round trips fact lines, including cleared values", () => {
 			expectMutationRoundTrip({ kind: "fact", seq: 1, fact: "name", name: "Example" });
+			expectMutationRoundTrip({ kind: "fact", seq: 2, fact: "name", name: undefined });
 			expectMutationRoundTrip({
 				kind: "fact",
-				seq: 2,
+				seq: 3,
 				fact: "label",
 				targetId: "entry-1",
 				label: "checkpoint",

@@ -224,7 +224,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		return this.state.getName();
 	}
 
-	setName(name: string): Promise<void> {
+	setName(name: string | undefined): Promise<void> {
 		return this.enqueue(async () => {
 			const mutation: SessionMutation = { kind: "fact", seq: this.state.nextSequence, fact: "name", name };
 			await this.appendMutation(mutation);

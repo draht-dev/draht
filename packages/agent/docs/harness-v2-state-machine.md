@@ -47,6 +47,20 @@ External effects cannot generally be both durable and exactly once across proces
 
 Conversation persistence and provider context remain separate. Durable `error`, `aborted`, and `deferred` assistant responses do not project. Genuine output-limit `length` projects. Overflow compaction omits its exact superseded response from summary input and retained tail. Compaction entries remain self-contained context boundaries.
 
+### Why this is better
+
+The old design persisted many small orchestration events and reconstructed a hidden program counter from their combinations and from entry absence. One assistant settlement could be durable as response-only, response-plus-usage, response-plus-usage-plus-tool-plan, or several other prefixes. Queue status, failure clearance, and navigation progress were likewise inferred.
+
+The redesign persists the program counter directly as one total `OperationStateRecord` and commits output, accounting, and the next state atomically. This gives five concrete benefits:
+
+1. **Direct recovery.** Load one immutable operation record and one latest total state record; do not fold operation history.
+2. **Fewer crash states.** A repeat-sensitive effect has only intent absent, intent present with settlement absent, or settlement and next state committed.
+3. **Exhaustive transitions.** A pure transition function switches on explicit state and input. Missing cases are visible in types and tables.
+4. **Local terminal validity.** Only transitions from eligible states can create a finished state; finish validity is not a historical audit.
+5. **Mechanical testing.** Crash before intent, after intent, and after atomic settlement. Public races have two mutation-line orders.
+
+The trade-off is repeated state data. The first implementation accepts that cost. It must not recover space by reintroducing patches, partial child logs, or historical state collection.
+
 ## 2. Replace implicit reduction with total operation state
 
 The current design reconstructs orchestration from combinations of records, entry presence, lane pointers, and later transitions. The redesign persists the continuation directly.
@@ -149,11 +163,86 @@ operation_finished
 
 Some implementation may retain compact audit records, but recovery and transition validity must never depend on them.
 
+### Lane state and inbox records
+
+`nextRun` belongs to a lane even when no operation is open. Its current state is therefore a separate total lane record:
+
+```ts
+interface LaneStateRecord {
+  type: "lane_state";
+  id: string;
+  lane: string;
+  revision: number;
+  currentOperationId: string | null;
+  pendingNextRun: QueuedInput[];
+}
+
+interface QueuedInput {
+  entryId: string;
+  message: ProvisionedEntry<MessageEntry>;
+}
+```
+
+The latest `LaneStateRecord` is total. It is not reconstructed from queue history or entry absence. `getCurrentLaneState(lane)` returns that one record. Run acceptance atomically removes captured next-run items, appends their entries, sets `currentOperationId`, writes the immutable operation record, and writes the first total operation state.
+
+Run-owned input is contained completely in `ActiveRunState`:
+
+```ts
+interface RunInbox {
+  steer: QueuedInput[];
+  followUp: QueuedInput[];
+  writes: PendingWrite[];
+}
+
+interface PendingWrite {
+  entryId: string;
+  entry: ProvisionedEntry<MessageEntry | CustomEntry>;
+}
+```
+
+Queue acceptance writes a new total lane or operation state before resolving. Consumption atomically appends the entry and removes the item from total state. Deferred writes survive abort; steer and follow-up are moved into durable abort control and removed from the active inbox by the first abort transaction.
+
+Cancellation needs history only for an exact item lookup after it leaves current state. A compact disposition record supplies that without participating in recovery:
+
+```ts
+interface QueueDispositionRecord {
+  type: "queue_disposition";
+  id: string;
+  lane: string;
+  entryId: string;
+  disposition: "cancelled" | "cleared_by_abort";
+}
+```
+
+`cancelQueued(entryId)` runs on the lane mutation line:
+
+- pending in lane `nextRun` or run steer/follow-up: atomically remove it and append `cancelled`;
+- target entry exists or was captured and appended by run acceptance: `already_consumed`;
+- disposition exists: `already_cleared`;
+- otherwise: `UnknownQueueItem`.
+
+Capture and entry append occur in the same run-acceptance transaction, so no captured-but-unappended state exists. Queue modes affect which pending steer/follow-up items a checkpoint consumes, but every consumed set is removed and appended atomically.
+
+| Public input | Admission | Total-state transition |
+|---|---|---|
+| `nextRun` | any open harness state | append to `LaneStateRecord.pendingNextRun`; never starts a run |
+| `steer` | active running run | append complete item to `ActiveRunState.inbox.steer` |
+| `followUp` | active running run | append complete item to `ActiveRunState.inbox.followUp` |
+| lane-view tree write during run | active run, including suspension/cancellation | append complete item to `inbox.writes`; survives abort |
+| lane-view tree write while idle | idle lane | append entry directly and advance leaf |
+| lane-view tree write during compaction/navigation | structural operation open | wait until structural operation ends, then re-evaluate |
+| `cancelQueued` | item currently pending | remove from total state and append disposition atomically |
+| checkpoint consumes input | eligible pending item | append entry, remove item, and update continuation atomically |
+| first abort | running run | move steer/follow-up into durable abort control; writes remain pending |
+| finish | inbox empty and no required continuation | final operation state and lane current-operation clear atomically |
+
+Acceptance, cancellation, application, abort, and finish all run on the same lane mutation line. Thus each race has only caller-A-first or caller-B-first history; no item can be both pending and applied in durable current state.
+
 ## 3. Operation state
 
 ```ts
 type OperationState =
-  | RunOperationState
+  | ActiveRunState
   | ManualCompactionState
   | NavigationOperationState
   | FinishedOperationState;
@@ -183,9 +272,7 @@ interface ActiveRunState {
   kind: "run";
   control: OperationControl;
   phase: RunPhase;
-  pendingSteer: ProvisionedEntry<MessageEntry>[];
-  pendingFollowUp: ProvisionedEntry<MessageEntry>[];
-  pendingWrites: ProvisionedEntry<MessageEntry | CustomEntry>[];
+  inbox: RunInbox;
 }
 
 type RunPhase =
@@ -220,13 +307,14 @@ type CheckpointContinuation =
   | {
       kind: "need_assistant";
       triggerMessageId: string;
+      overflowRecoveryUsed: boolean;
     }
   | {
       kind: "may_finish";
     };
 ```
 
-`continuation` replaces inference such as `needsAssistant()`. A compaction stores the continuation it must resume. Overflow compaction resumes `need_assistant` with the same trigger. Applying a new user-context message changes the continuation to `need_assistant` with that message ID in the same atomic transaction.
+`continuation` replaces inference such as `needsAssistant()`. A compaction stores the continuation it must resume. Overflow compaction resumes `need_assistant` with the same trigger and `overflowRecoveryUsed: true`; another recoverable overflow for that trigger enters failure drain. Applying a new user-context message atomically changes the continuation to `need_assistant` with that message ID and resets the flag to false.
 
 ### Generation state
 
@@ -263,6 +351,58 @@ type GenerationState =
 ```
 
 `RetryPolicy` applies to generation requests, including generated summaries. It does not impose a retry or polling cap on deferred fetch.
+
+### Structural decision and summary state
+
+Manual compaction, auto-compaction, and summarized navigation first enter a decision state. The decision hook may decline, supply a complete result, or select generated work. A crash while the hook is running reruns it; hook-owned side effects follow the external-effect non-goal. Once generated work is selected, the state change is durable and the decision hook does not run again.
+
+```ts
+type StructuralDecisionState =
+  | {
+      status: "deciding";
+    }
+  | {
+      status: "generating";
+      generation: SummaryGenerationState;
+    };
+
+interface SummaryGenerationContext {
+  taskId: string;
+  resultEntryId: string;
+  kind: "compaction" | "branch_summary";
+  configuration: LaneConfiguration;
+  retryPolicy: RetryPolicy;
+  reason?: "manual" | "threshold" | "overflow";
+  overflow?: {
+    supersededResponseEntryId: string;
+    triggerMessageId: string;
+  };
+}
+
+type SummaryGenerationState =
+  | {
+      status: "ready";
+      context: SummaryGenerationContext;
+      nextAttempt: number;
+    }
+  | {
+      status: "effect_pending";
+      context: SummaryGenerationContext;
+      attempt: number;
+      usageRecordIds: string[];
+    }
+  | {
+      status: "retry_wait";
+      context: SummaryGenerationContext;
+      nextAttempt: number;
+      notBefore: number;
+      errorMessage: string;
+    };
+```
+
+One structural attempt may make one or two provider requests. Before its first request, total state becomes `effect_pending`. After each request, reported usage and a new total state containing its usage record ID commit atomically. Intermediate response content need not persist; a crash before the final structural transaction makes the whole attempt uncertain and starts a later numbered attempt only under the captured generation policy. Failed-attempt usage remains in the ledger.
+
+Hook-supplied compaction and branch-summary entries set `fromHook: true`; generated entries set it false. Hook usage, when present, commits atomically with the structural result. Generated result usage is the sum of successful-attempt request usage records.
 
 ### Tool batch state
 
@@ -309,19 +449,75 @@ type DeferredState =
       status: "suspended";
       stepId: string;
       sourceEntryId: string;
+      poll: number;
       configuration: LaneConfiguration;
     }
   | {
       status: "effect_pending";
       stepId: string;
       sourceEntryId: string;
+      poll: number;
       responseEntryId: string;
       usageRecordId: string;
       configuration: LaneConfiguration;
     };
 ```
 
-Each `resume()` performs at most one `fetchDeferred(..., { wait: 0 })`. The application decides whether and when to call `resume()` again. Deferred polling has no harness retry count, retry cap, or retry sleep. A pending response becomes the next source. Provider terminal errors fail the run. Provider behavior such as expiration or cancellation support is outside harness control.
+The original assistant generation that returns `deferred` atomically writes its response/usage and enters `suspended`, copying that generation's total configuration once. The exact source entry supplies provider, model, and complete handle; copied active tool names govern a ready response's tool calls.
+
+Each `resume()` performs at most one `fetchDeferred(..., { wait: 0 })`. It atomically changes `suspended` to `effect_pending` before polling. The application decides whether and when to call `resume()` again. Deferred polling has no harness retry count, retry cap, or retry sleep.
+
+Settlement is atomic:
+
+- another `deferred` response: append response/usage, require complete handle equality, increment `poll`, and suspend on the new response entry;
+- ready response: append response/usage and move to tools or the appropriate checkpoint continuation;
+- provider error or rejected fetch converted to error: append response/usage and enter failure drain;
+- unmarked returned `aborted`: append response/usage and suspend on the unchanged source; the application may resume again;
+- durable cancellation: best-effort cancel the newest source handle and settle any already-planned response under its ID as `aborted`.
+
+If a process dies with a poll `effect_pending`, the remote check may have happened but no settlement is durable. A later application `resume()` provisions a fresh poll and response/usage IDs; no retry cap is applied. Provider behavior such as expiration or cancellation support is outside harness control.
+
+### Manual compaction state
+
+```ts
+interface ManualCompactionState {
+  kind: "compaction";
+  control: OperationControl;
+  customInstructions?: string;
+  structural: StructuralDecisionState;
+}
+```
+
+Admission computes preparation against the source leaf. Empty preparation returns `NothingToCompact` before acceptance. Acceptance atomically writes `OperationRecord`, `ManualCompactionState` in `deciding`, and `LaneStateRecord.currentOperationId`. In `deciding`, `before_compaction` may decline, supply a complete compaction, or select generated work. Decline or hook-supplied completion commits finished state directly. Generated work follows `SummaryGenerationState`; success atomically commits usage, the complete `CompactionEntry`, and finished state.
+
+### Navigation state
+
+```ts
+type NavigationOperationState =
+  | {
+      kind: "navigation";
+      control: OperationControl;
+      targetId: string | null;
+      label?: string;
+      customInstructions?: string;
+      summarize: false;
+      phase: { kind: "ready_to_commit" };
+    }
+  | {
+      kind: "navigation";
+      control: OperationControl;
+      targetId: string;
+      label?: string;
+      customInstructions?: string;
+      summarize: true;
+      phase: {
+        kind: "summary";
+        structural: StructuralDecisionState;
+      };
+    };
+```
+
+After target/source validation, acceptance atomically writes `OperationRecord`, the appropriate navigation state, and `LaneStateRecord.currentOperationId`. Unsummarized navigation has no decision hook. Summarized navigation runs `before_navigation`, which may decline, supply a complete summary, or select generated work. All source-tree reads and provider/hook work happen before the final structural transaction. Completion atomically moves the lane, appends the exact summary when required, writes the label when present, writes finished operation state, and clears `LaneStateRecord.currentOperationId`.
 
 ### Terminal state
 
@@ -345,6 +541,57 @@ Every durable boundary follows one rule:
 > Compute one next total operation state, then atomically append all conversation, usage, fact, lane, and operation-state mutations that make that state true.
 
 A transaction either commits all logical mutations or none.
+
+### Lane configuration
+
+`lane_config` remains a separate total latest-value record containing model reference, thinking level, and active tool names. `AgentHarnessOptions` supplies an immutable seed used for first attachment of `main` and every later `createLane`; anchors and other lanes never supply configuration. Configured lane creation atomically creates the pointer and first total config.
+
+`setModel`, `setThinkingLevel`, and `setActiveTools` immediately commit one total replacement on the lane mutation line, including during an operation or cancellation. Starting a generation snapshots the current configuration into operation state in the same lane ordering. Later setters affect only later generations; retries keep the generation's captured value. Tool implementations and contexts remain environmental and are resolved by captured active names immediately before a real invocation.
+
+### Run acceptance
+
+`skill()` / `promptFromTemplate()` resource expansion and prompt normalization happen before acceptance. `before_run` is an effect before the lane acceptance transaction; it receives only the normalized caller prompt, not pending next-run items. Its returned messages, optional system-prompt override, and resume data are held until acceptance. A concurrent winner may make the lane busy, in which case the hook output is discarded and no operation is written.
+
+The acceptance transaction validates idle state and identities, captures all pending next-run input, and atomically writes:
+
+```text
+TX updated LaneStateRecord:
+     captured nextRun removed
+     currentOperationId = O
+   OperationRecord O
+   captured nextRun entries
+   caller prompt entries
+   before_run injected entries
+   first OperationStateRecord:
+     run checkpoint
+     continuation need_assistant(newest user-context entry)
+     inbox empty
+```
+
+The operation call resolves only after this transaction. There is no accepted operation with missing initial entries.
+
+### Checkpoint and finish boundary
+
+At a run checkpoint, transitions occur in this order:
+
+1. atomically apply accepted deferred writes;
+2. atomically consume eligible steering according to steering mode;
+3. run threshold compaction when required, preserving the current continuation;
+4. if continuation is `need_assistant`, start generation;
+5. after assistant/tool continuation is exhausted, atomically consume eligible follow-up input;
+6. when continuation is `may_finish` and inbox is empty, invoke `before_run_end`;
+7. conditionally finish.
+
+A `before_run_end` follow-up is committed only if control is still running and the operation is still at the same finish boundary. Its message entry and `need_assistant` state commit atomically. Abort or another input that wins first drops the stale hook result.
+
+Finish is one lane mutation transaction:
+
+```text
+TX final OperationStateRecord
+   LaneStateRecord.currentOperationId = null
+```
+
+It commits only when total state proves no required work remains. Steer/follow-up acceptance, deferred writes, abort, and finish are serialized, so only input-first or finish-first histories exist.
 
 ### Assistant attempt
 
@@ -392,6 +639,30 @@ TX assistant entry R1
 
 There is no durable response-without-usage or accounted-response-without-classification state.
 
+### Assistant settlement classifier
+
+Classification is pure and runs before the atomic settlement transaction. Cancellation control takes priority. Without cancellation, evaluate in this order:
+
+| Durable response | Next state |
+|---|---|
+| explicit provider context-limit error | overflow handling |
+| `stop` with reported input plus cache-read greater than captured context window | overflow handling |
+| Xiaomi-compatible zero-output/full-window pressure | overflow handling |
+| `length` with output below captured intended output limit | overflow handling |
+| `deferred` with valid handle | deferred suspended |
+| unmarked `aborted`, attempts remain | generation retry wait |
+| unmarked `aborted`, no attempts remain | failure drain |
+| retryable `error`, attempts remain | generation retry wait |
+| other `error` | failure drain |
+| `toolUse` or accepted response with calls | tools with complete result plan |
+| `stop` or genuine output-limit `length` | checkpoint `may_finish` |
+
+`intendedOutputLimit` is the caller's explicit limit or model limit before context clamping. The percentage heuristic is only the existing Xiaomi-compatible signal. Overflow handling never creates a tool plan.
+
+For overflow, `need_assistant` carries `overflowRecoveryUsed`. If false, enter compaction with the exact superseded response/trigger and resume with the flag true. If already true, enter failure drain. Consuming newer user-context input creates a new trigger and resets the flag.
+
+A genuine output-limit `length` remains in provider context. If it contains tool calls, create the complete batch plan but execute no call; append one planned `isError: true` result per call explaining that truncation may have left arguments incomplete. Those results require another assistant generation.
+
 ### Tool call
 
 After clearance and immediately before execution:
@@ -414,6 +685,23 @@ TX tool usage, when present
 
 If a crash leaves `effect_pending`, replay only when the declaration and implementation are safe; otherwise append the planned interrupted result.
 
+The complete batch plan exists before tool lookup, argument validation, or `before_tool`. Calls are identified privately by source index; public hooks/events/tool context use provider `toolCallId` and tool name. Tool IDs are required to be response-local unique.
+
+| Call state/input | Atomic result and next state |
+|---|---|
+| planned, unknown tool or invalid arguments | planned error result; mark completed |
+| planned, `before_tool` blocks or throws | planned blocked error; mark completed |
+| planned, control cancelled | planned aborted error; mark completed |
+| planned, clearance succeeds | total state becomes `effect_pending`; then dispatch effect |
+| live effect settles | run `after_tool`; usage + finalized result + completed state |
+| restored effect pending, replay safe now and when started | re-execute persisted args, finalize, usage + result + completed state |
+| restored effect pending, replay unsafe | interrupted error + completed state |
+| genuine `length` planned call | explanatory error + completed state; no clearance/effect |
+
+`after_tool` may patch content, details, error status, usage, and `terminate`; the finalized decision is stored in the result entry/state. Hook output must satisfy its contract. A hook crash before the atomic result transaction may rerun after a safe replay.
+
+Sequential mode clears, starts, executes, finalizes, and commits one call before the next. Parallel mode performs clearance and effect-intent commits in source order, dispatches effects in source order without awaiting earlier ones, allows concurrent settlement, and commits finalized results in source order. Several calls may therefore be durable `effect_pending` while results still form a source-order prefix.
+
 ### Queue or deferred-write application
 
 Acceptance updates the total operation state with the complete provisioned payload. Application is atomic:
@@ -425,6 +713,28 @@ TX message/custom entry
 ```
 
 A crash cannot consume an item without updating operation state, or update operation state without appending the entry.
+
+### Structural decision and generation transitions
+
+| State/input | Atomic result and next state |
+|---|---|
+| deciding, hook declines | finished `declined` for standalone operation; threshold returns to prior continuation; overflow enters failure drain |
+| deciding, hook supplies result | usage + exact typed entry + continuation/finished state |
+| deciding, hook selects generation | total state with generated summary `ready`; hook will not rerun |
+| generation ready or retry elapsed | total state `effect_pending`; then provider request(s) |
+| generation retryable failure | reported usage + retry-wait state |
+| generation terminal/exhausted | standalone finished failed or run failure drain |
+| generated compaction succeeds | usage + compaction entry + prior continuation/finished state |
+| generated branch summary succeeds | usage + move + summary + label + finished state |
+| cancellation before structural commit | reported usage still commits; generated result is discarded; finish aborted |
+
+Structural provider streams are internal and emit no public assistant-message lifecycle. Every provider request still crosses the effect boundary and writes reported usage before another request or structural completion. Hook-provided details remain opaque; generated details may use harness-owned structure.
+
+### Automatic compaction
+
+Threshold and overflow compaction are run phases, not nested operations. Threshold compaction preserves the continuation that caused the context check. Hook decline or empty useful preparation returns to that continuation because threshold compaction is proactive.
+
+Overflow compaction carries the exact superseded response entry and trigger in `SummaryGenerationContext`, omits that response from preparation and `retainedTail`, and resumes `need_assistant` with `overflowRecoveryUsed: true`. Hook decline or empty preparation enters failure drain because the rejected request cannot fit without compaction.
 
 ### Navigation
 
@@ -450,6 +760,50 @@ The summary entry chains from the moved target because mutations apply in order.
 ### Manual compaction
 
 Determine whether useful context exists before operation acceptance. If not, return `NothingToCompact` and write nothing. Successful settlement atomically appends usage, the compaction entry, and finished state.
+
+### Transition summary
+
+This is the normative high-level machine. Detailed transition functions must refine, not contradict, it.
+
+| Current state | Trigger | Durable transaction | Next state |
+|---|---|---|---|
+| idle lane | accepted prompt | lane state + operation record + initial entries + total operation state | run checkpoint `need_assistant` |
+| checkpoint `need_assistant` | drive | generation intent state | assistant effect pending |
+| assistant effect pending | settled response | response + usage + classified total state | retry/tools/deferred/compaction/checkpoint/failure |
+| assistant retry wait | delay elapsed | next generation intent state | assistant effect pending |
+| tools planned | clearance succeeds | call effect-pending total state | tools with started call |
+| tool effect pending | finalized result | usage + result + total state | tools or checkpoint |
+| checkpoint | accepted steer/follow-up/write | total state containing item | same checkpoint |
+| checkpoint | apply/consume item | entry + total state without item | `need_assistant` or prior continuation |
+| checkpoint | context threshold | compaction decision state | compaction |
+| compaction deciding | hook result | decline/result/generated-source transaction | continuation/generating/failure |
+| summary effect pending | provider outcome | usage + retry or final structural transaction | retry/continuation/finished/failure |
+| assistant response deferred | settlement | response + usage + copied deferred state | suspended |
+| deferred suspended | one `resume()` | poll intent state | deferred effect pending |
+| deferred effect pending | poll settles | response + usage + classified state | suspended/tools/checkpoint/failure |
+| failure drain | new user-context item applied | entry + total state | checkpoint `need_assistant` |
+| finish boundary | no hook follow-up or pending work | final state + lane state clears operation | finished |
+| any active state | first abort | cancellation control + drained inbox | same workflow under cancellation |
+| cancellation control | reconciliation complete | required results/writes + final state + clear lane operation | finished aborted |
+
+### Crash table
+
+Atomic transactions have no internal crash prefix. For each repeat-sensitive effect, only these states exist:
+
+| Crash point | Durable state | Recovery |
+|---|---|---|
+| before effect-intent transaction | previous total state | plan the effect normally |
+| after effect intent, before dispatch | effect pending; effect did not run or dispatch status was lost | apply the effect's uncertainty policy; cancellation prevents dispatch |
+| during/after external effect, before settlement transaction | effect pending; external outcome unknown | generation retries under captured policy, tools replay only when safe, deferred waits for another application resume, cancellation settles as specified |
+| after settlement transaction | output, usage, and next total state all durable | continue from next state; never repeat settlement |
+| before queue/write application transaction | item remains fully pending in total state | apply later |
+| after queue/write application transaction | entry exists and item is absent; continuation updated | continue; never apply twice |
+| before final structural transaction | source leaf and generated/hook work remain uncommitted | retry/recompute only according to current state and external-effect policy |
+| after final structural transaction | move/entry/label/usage/finished state all durable | operation is complete |
+| after first abort transaction | cancellation and drained payloads durable | never start new ordinary effects; reconcile pending workflow |
+| after terminal transaction | finished state and lane clear are durable | lane is idle |
+
+The unavoidable uncertain interval is effect intent durable with settlement absent. Provider, tool, hook, and billing examples all belong to the single external-effect non-goal.
 
 ## 5. Interpreter, abort, and recovery
 
@@ -523,6 +877,30 @@ For an already-open operation, `resume()` verifies the identities required by it
 
 Registering the missing tools/providers/models unblocks execution. An explicit escape hatch is also needed to replace a missing model/provider referenced by existing lane or operation state. Its exact API and whether it rewrites pending generation state remain unresolved.
 
+### Effects boundary and manual drive
+
+Every durable transition, provider request/fetch, individual tool invocation, hook invocation, and timer crosses one `Effects` method. Procedures receive no direct Session, Models, tool registry, or hook runner. Pure state calculation, immutable tree/context reads, and ID allocation are not gated effects; after any awaited read, the next effect/commit revalidates current total state and cancellation control.
+
+Automatic drive executes the interpreter. Manual drive parks before each effect and exposes one JSON-safe action. `peekAction()` is stable and side-effect free; `executeAction()` releases exactly one action; `runToCompletion()` releases nested actions before awaiting parents. Lane-surface operations such as steer, cancellation, configuration setters, and writes remain ungated so tests can exercise both race orders.
+
+Closing while an action is parked rejects it without execution. The durable state is exactly the prefix of committed total state records and effect intents.
+
+### Close
+
+Close is process lifecycle, not operation abort. It writes no cancellation or terminal operation state. It stops public admission, signals cooperative in-flight effects, rejects parked/local operation promises, lets already-admitted lane mutations and Session appends settle, drains storage, and releases only its writer claim. A prior effect intent may remain without settlement; reopening loads that total state and ordinary recovery applies. Durable open operations remain resumable.
+
+### Hook replay summary
+
+- `before_run`: before acceptance; output commits in the acceptance transaction; reruns only when no operation was accepted.
+- `transform_context`, `before_request`, and `before_payload`: per provider request; ephemeral and may rerun with a repeated request.
+- `after_response`: transforms the settled message before `message_end` and atomic settlement; `streamAssistant` still needs an explicit final-message callback to mount it.
+- `before_tool`: runs while call is planned; effective args become durable only in effect-pending state; reruns if that state did not commit.
+- `after_tool`: runs after a real effect or safe replay; output becomes durable with usage/result/completed state.
+- compaction/navigation decision hooks: run in `deciding`; generated-source state prevents rerun; supplied output commits directly with the result.
+- `before_run_end`: may rerun at the same finish boundary; its returned follow-up commits conditionally.
+
+Hook-owned external side effects must be idempotent under the external-effect non-goal.
+
 ## 6. Storage and event boundaries
 
 The redesign assumes the existing storage contract:
@@ -540,6 +918,24 @@ The state-machine design does not replace or weaken these requirements.
 Lifecycle events such as streaming updates remain process ordered. Events that claim a durable commit fire only after the atomic transaction commits. `message_end` still means streaming ended; `entry_added` still means the entry committed.
 
 Whether durable commit events, especially usage totals, must be published in strict global `seq` order remains unresolved. Strict ordering is more faithful to durable state but may briefly buffer a later lane's commit event until an earlier lane has installed and queued its event. Storage already resolves append promises in commit order, and state installation must contain no `await`, so expected buffering is small; this needs implementation-level validation before becoming a requirement.
+
+### Storage representation of new state
+
+All backends expose latest total lane/operation state through indexes or replayed projections:
+
+- Memory: latest lane state, open operation ID, immutable operation record, and latest operation state maps;
+- JSONL: ordinary object for one mutation and one array line for an atomic transition; replay updates latest-state/open-operation projections; a torn final array is discarded wholly;
+- SQLite: append-only operation-state rows plus a current lane/open-operation projection, all updated in the same transition transaction.
+
+A finished transition appends final operation state and clears the lane's current-operation projection atomically. Forks copy conversation, current facts, pointers, and fresh lane configuration, but no operation or usage state. Coding-agent v3 normalization still opens one idle, initially unconfigured `main`; first harness attachment seeds its total lane configuration.
+
+### Public surface consequences
+
+Existing lane methods remain: `prompt`, `skill`, `promptFromTemplate`, `compact`, `navigateTree`, `resume`, `abort`, `steer`, `followUp`, `nextRun`, `cancelQueued`, `recordUsage`, configuration setters/getters, lane tree view, `watch`, `waitForIdle`, `runWhenIdle`, manual drive, and `close`. Harness lane management (`lane`, `createLane`, `lanes`) and `watchSession` remain. Expected caller failures use `Result`; storage faults, close, and invariant defects may reject.
+
+`LaneSnapshot.operation` is derived directly from current total state. It reports running, suspended, or cancelling; streaming drafts and running tools remain process-local additions. `SuspendedOperation.missing` reports identities required by the next effect. Reconnect obtains a new snapshot and non-replayed event stream.
+
+`message_end` remains stream completion before durable settlement. An atomic settlement publishes `entry_added` for its entry after commit and then usage/operation events in logical mutation order. Internal structural provider streams emit no public assistant message lifecycle. Events and hooks may contain sensitive content; telemetry may not.
 
 ## 7. Decisions from the design session
 
@@ -603,9 +999,7 @@ Single writer, lane mutation serialization, atomic non-empty append arrays, mono
 
 ### 7.12 Lane-level next-run state
 
-`nextRun` exists independently of an operation. It therefore needs one total latest-value lane runtime record or equivalent current-state projection containing the complete pending next-run items. Run acceptance atomically removes the captured items from that total lane state, appends their entries, opens the operation, and writes its first total operation state record. It must not be reconstructed from queue history plus entry absence.
-
-The exact type and whether this lane runtime record also points at the current operation remain to be specified. Its semantic requirement is total latest-value state, not a patch/event stream.
+`nextRun` exists independently of an operation. `LaneStateRecord` is its total latest-value durable state and also names the current operation ID. Run acceptance atomically removes captured items, appends their entries, opens the operation, and writes its first total operation state record. Neither next-run state nor operation capture is reconstructed from queue history plus entry absence.
 
 ### 7.13 Commit-event ordering
 
@@ -616,6 +1010,18 @@ Strict global `seq` ordering for durable commit events is not yet accepted. Stor
 This section preserves the full audit result and its current disposition so a later session can continue without rerunning the entire conversation. Findings marked **addressed by redesign** still require tests and must not be assumed correct merely because the state shape permits a solution.
 
 ### 8.1 Runtime and recovery findings
+
+#### Inbox omitted from the first redesign draft — addressed
+
+The first draft mentioned pending input but did not define lane-level next-run state, operation-owned inbox state, acceptance, cancellation, capture, application, abort clearing, or race behavior. Sections 2 and 4 now define total lane state, complete run inbox payloads, disposition records used only for exact historical lookup, and atomic transition rules.
+
+#### Structural states referenced but undefined — addressed
+
+The first draft named manual compaction, navigation, and summary-generation states without defining them. Section 3 now defines their state and section 4 defines decision, generation, completion, failure, decline, and cancellation transitions.
+
+#### Acceptance and finish boundaries omitted — addressed
+
+The first draft did not model initial prompt/next-run/hook entry commit or `before_run_end` and finish races. Section 4 now defines both atomic boundaries and their lane-mutation ordering.
 
 #### Tool outcome racing abort — addressed by redesign
 

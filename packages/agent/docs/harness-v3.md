@@ -278,7 +278,8 @@ type RegisterNamespace = keyof RegisterValues;
 interface PendingEntry {
   type: "message" | "custom";
   customType?: string;
-  payload: JsonValue;        // the content that becomes the entry's payload
+  payload?: JsonValue;       // the content that becomes the entry's payload;
+                             // absent = a custom entry with no data
 }
 
 interface DurableFileOperations {
@@ -316,7 +317,7 @@ op.*               operation-lived; deleted by the terminal transaction (§3.13)
 pending.entry      lives until its content is placed or cancelled
 ```
 
-- `op.meta`, `op.tool_args`, and `op.preparation` keys are written exactly once and then deleted at the terminal transaction; only `op.state` is overwritten during the operation.
+- `op.meta` and `op.preparation` keys are written exactly once; `op.tool_args` keys are written once per key, keyed by the producing step so batches never collide. All are deleted no later than the terminal transaction; only `op.state` is overwritten during the operation.
 - Operation-owned `pending.entry` registers still unconsumed at the end (remaining inbox items and abort-drained items) are deleted by the terminal transaction — a consumed item's register dies in its placement transaction; lane-owned ones (`pendingNextRun`) outlive operations and die when consumed or cancelled (§3.11).
 - `lane.lastResult` is written only by terminal transactions and overwritten by the next one on its lane — one bounded register per lane, forever. Recovery never reads it; it exists so an application that accepted an operation, crashed, and reopened can still learn its outcome (§3.13).
 - Deleting a fact removes its register. Storing JSON `null` in `fact.custom` is a different, legal state; there are no tombstones.
@@ -397,7 +398,7 @@ Every settled provider attempt writes one `UsageRow` — successful, failed, ret
 
 - `entryId` names the entry the cost belongs to, when there is one. Structural (summary) attempts that fail before producing an entry, and standalone adjustments, have none.
 - `adjustment: true` marks a caller-supplied reconciliation (`recordUsage`, §5.1) rather than a provider report. The format-3 import writes one aggregate adjustment row (Appendix C).
-- Provider-attempt usage ids are UUIDv7s reserved in the intent commit (§1.2), so a settlement writes under exactly the id its intent promised. Adjustment rows and import aggregates mint their ids at commit; nothing reserves them.
+- Provider-attempt usage ids are UUIDv7s reserved in the intent commit (§1.2), so a settlement writes under exactly the id its intent promised. Adjustment rows, tool-reported usage rows, and import aggregates mint their ids at commit; nothing reserves them.
 - `getStats()` is a maintained projection over the ledger and the entry count. After every commit it equals the ledger sum; the conformance suite asserts this (Part 9). There is no ledger scan: totals come from the projection, and individual rows reach the application through the `usage` event at commit time (§5.5).
 
 ## 1.7 Backends
@@ -843,21 +844,560 @@ Repository implementations resolve `fork(source, ...)` to the source's serialize
 
 # Part 3 — The operation state machine
 
-Semantics carry from base Part 3 wholesale; the representation changes (jot 3, 8):
+## 3.1 Operations
 
-- **3.1 Operations** `[CARRY+]` — `op.meta` register; `promptEntryIds`.
-- **3.2 Operation state** `[REWRITE repr]` — inline `LaneConfiguration`/streamOptions/retryPolicy in generation/deferred/batch/summary contexts; tool args and preparation via deterministic `op.*` register keys; queue items are plain entry-id lists; **no `FinishedState`** in the union.
-- **3.3 Lane state and validity** `[CARRY+]` — validation checks registers/entries; no value checks.
-- **3.4 Atomic transition rule** `[CARRY]`
-- **3.5 The graph** `[CARRY]` — terminal node becomes "terminal TX" rather than a state.
-- **3.6 Acceptance** `[REWRITE TX tables]` — pending-capture placement; reservation admission for compact/summarized-nav carries.
-- **3.7 Assistant generation** `[REWRITE TX tables]` — classifier table, overflow rules, worked example carry verbatim; transactions re-expressed as entry inserts + register upserts.
-- **3.8 Tools** `[REWRITE TX tables]` — `op.tool_args` register at clearance; batch semantics carry.
-- **3.9 Summary generation** `[REWRITE TX tables]` — `op.preparation` register; decision/generation machinery carries.
-- **3.10 Navigation** `[CARRY+]` — one-TX completion; terminal writes per 3.13.
-- **3.11 Inbox, queues, deferred writes** `[REWRITE: jot 2, 9]` — pending registers; `cancelQueued` triage without dispositions: pending → `cancelled`; entry exists → `already_consumed`; else → `not_found`. Abort drains keep pending registers alive until terminal.
-- **3.12 The checkpoint procedure** `[CARRY]`
-- **3.13 Terminal transactions** `[NEW: jot 3]` — delete `op.meta`/`op.state`/`op.tool_args/*`/`op.preparation/*` and operation-owned pending registers (`inbox.* ∪ control.drained*`, never `pendingNextRun`); upsert `lane.lastResult`; clear `lane.state.currentOperationId`; result computed pre-commit; observation contract (live promise + lastResult until next terminal TX).
+```ts
+interface Operation {
+  operationId: string;
+  lane: string;
+  sourceLeafId: string | null;
+  startedAt: number;
+  intent:
+    | { kind: "run"; promptEntryIds: string[];
+        systemPromptOverride?: string; resumeData?: Record<string, JsonValue> }
+    | { kind: "compaction"; customInstructions?: string }
+    | { kind: "navigation"; targetId: string | null; summarize: boolean;
+        label?: string; customInstructions?: string };
+}
+```
+
+Acceptance data lives in the `op.meta/{operationId}` register: written once at acceptance, never overwritten, and deleted by the terminal transaction (§3.13). `sourceLeafId` is the lane's leaf *before* the operation; entries the operation itself appends come after it. `promptEntryIds` name the caller's normalized prompt entries, born placed in the acceptance transaction (§3.6).
+
+## 3.2 Operation state — the program counter
+
+`op.state/{operationId}` holds one total `OperationState` directly. Every transition overwrites the whole register; the terminal transaction deletes it (§3.13). There is no finished member of the union — an ended operation has no state at all, and its outcome lives in `lane.lastResult`.
+
+```ts
+type OperationState = RunState | CompactionState | NavigationState;
+
+type Control =
+  | { status: "running" }
+  | { status: "cancel_requested"; requestedAt: number;
+      /** Drained queue ids. Their pending.entry registers survive the drain
+          and are deleted only by the terminal transaction (§3.11, §3.13). */
+      drainedSteer: string[]; drainedFollowUp: string[] };
+
+interface RunState {
+  kind: "run";
+  control: Control;
+  /** Captured atomically at acceptance; setters affect later operations. */
+  settings: {
+    compaction: CompactionSettings;
+    steeringMode: QueueMode;
+    followUpMode: QueueMode;
+    toolExecution: "sequential" | "parallel";
+  };
+  phase: RunPhase;
+  inbox: Inbox;
+  /** Newest durable assistant generation/fetch response in this operation. */
+  latestAssistantEntryId: string | null;
+}
+
+interface CheckpointPhase {
+  kind: "checkpoint";
+  continuation: Continuation;
+  /** Durable correlation source for the next generation step. */
+  triggerEntryId: string;
+  /** Threshold compaction is attempted at most once per trigger boundary. */
+  thresholdCheckedTriggerEntryId?: string;
+  /** Generate before draining another queued input after one-at-a-time drain. */
+  skipInboxOnce?: boolean;
+}
+
+type RunPhase =
+  | CheckpointPhase
+  | { kind: "assistant"; generation: Generation }
+  | { kind: "tools"; batch: ToolBatch }
+  | { kind: "compaction"; reason: "threshold" | "overflow";
+      structural: StructuralDecision; resumeAfter: CheckpointPhase }
+  | { kind: "deferred"; deferred: Deferred }
+  | { kind: "failure_drain"; error: OperationError; provenance:
+      | { kind: "response"; entryId: string }
+      | { kind: "structural"; taskId: string } };
+
+type Continuation =
+  | { kind: "need_assistant"; overflowRecoveryUsed: boolean }
+  | { kind: "may_finish"; includeFinalAssistant: boolean };
+
+interface Inbox {
+  /** Reserved entry ids. Payloads — and, for writes, the entry type and
+      customType — live in each id's pending.entry register (§1.3, §2.2). */
+  steer: string[];
+  followUp: string[];
+  writes: string[];
+}
+
+interface OperationError { code: string; message: string; details?: JsonValue }
+```
+
+The old `QueuedInput { nodeId, valueId }` and `PendingWrite` pairs are gone: a queue item is one entry id, and everything else about it — payload, write type, `customType` — is dereferenced from its `pending.entry` register.
+
+`latestAssistantEntryId` updates in the same settlement transaction as every assistant generation or deferred-fetch response. It lets finish and resume construct results/events without a branch scan. A tool batch retains its producing turn id while tool work remains active.
+
+Any transition that appends conversational input or tool results and requires another assistant writes a checkpoint with `need_assistant(false)` and the appended entry as `triggerEntryId`. An unprojected custom write preserves the current checkpoint, including trigger and overflow flag. Entering threshold compaction first copies the checkpoint to `resumeAfter` with `thresholdCheckedTriggerEntryId = triggerEntryId`; decline, empty preparation, success, and crash therefore cannot recheck the same boundary.
+
+### Generation
+
+```ts
+interface NormalizedRetryPolicy { maxAttempts: number; baseDelayMs: number }
+
+interface GenerationContext {
+  stepId: string;
+  triggerEntryId: string;
+  /** Inline snapshot of the lane configuration at step start. */
+  configuration: LaneConfiguration;
+  streamOptions: AgentHarnessStreamOptions;
+  retryPolicy: NormalizedRetryPolicy;
+}
+
+type Generation =
+  | { status: "ready"; context: GenerationContext; nextAttempt: number }
+  | { status: "effect_pending"; context: GenerationContext; attempt: number;
+      responseEntryId: string; usageId: string;
+      intendedOutputLimit: number; contextWindow: number }
+  | { status: "retry_wait"; context: GenerationContext; nextAttempt: number;
+      notBefore: number; errorMessage: string };
+```
+
+The context snapshots configuration, stream options, and retry policy **inline** — there is no configuration value to point at, and `LaneConfiguration` is small. Recovery can therefore report exactly what is missing without resolving anything (§4.4). For each attempt, `before_request` runs from generation `ready` (an elapsed retry wait first returns to `ready`). Its curated patch is composed with the context's captured base stream options, then `intendedOutputLimit` and `contextWindow` are calculated and persisted in the `effect_pending` intent before dispatch. A pre-intent crash may rerun the hook. Harness-owned `before_payload`/`after_response` callbacks are mounted only after intent and cannot be replaced through stream options.
+
+### Tool batch
+
+```ts
+interface ToolBatch {
+  assistantEntryId: string;
+  /** Producing generation/fetch snapshot; active tool names come from here. */
+  configuration: LaneConfiguration;
+  /** The assistant generation step id; recovered tool events use it as turnId. */
+  turnId: string;
+  calls: ToolCall[];
+}
+
+type ToolCall =
+  | { status: "planned"; sourceIndex: number; resultEntryId: string }
+  | { status: "effect_pending"; sourceIndex: number; resultEntryId: string;
+      replay: "never" | "safe" }
+  | { status: "completed"; sourceIndex: number; resultEntryId: string;
+      terminate: boolean };
+```
+
+The source call comes from `assistantEntryId` plus `sourceIndex`; large effective arguments live once in the `op.tool_args/{operationId}:{stepId}:{sourceIndex}` register — the producing generation's `stepId` disambiguates batches across turns — written at clearance (§3.8) and located by that deterministic key — the state carries no per-call argument reference. Persist them unconditionally because `prepareArguments`, not only `before_tool`, may change them. Parallel calls may be effect-pending together; result entries commit in source order.
+
+### Deferred
+
+```ts
+type Deferred =
+  | { status: "suspended"; stepId: string; sourceEntryId: string; poll: number;
+      configuration: LaneConfiguration; streamOptions: AgentHarnessStreamOptions }
+  | { status: "effect_pending"; stepId: string; sourceEntryId: string; poll: number;
+      responseEntryId: string; usageId: string;
+      configuration: LaneConfiguration; streamOptions: AgentHarnessStreamOptions };
+```
+
+One `resume()` performs at most one `fetchDeferred(handle, { wait: 0 })`. Suspended `poll` is the number of completed polls; a fresh intent uses `poll + 1`, and that 1-based value is `before_request.attempt` and the poll turn-id suffix. A poll starts from the original generation's copied base stream options, forces `deferred:false`, runs `before_request`, mounts `before_payload`/`after_response`, then commits its fresh intent and dispatches like assistant generation. Current global stream settings do not affect it. There is no polling retry cap, backoff, or internal loop. A pending response must have a completely equal handle and becomes the next source. A mismatched pending handle is normalized to a durable `error` response explaining the mismatch; response, usage, `latestAssistantEntryId`, and response-provenance `failure_drain` commit atomically.
+
+### Structural work
+
+```ts
+type StructuralDecision = { taskId: string } & (
+  | { status: "deciding" }
+  | { status: "generating"; generation: SummaryGeneration }
+);
+
+interface SummaryContext {
+  taskId: string;
+  resultEntryId: string;
+  kind: "compaction" | "branch_summary";
+  configuration: LaneConfiguration;
+  streamOptions: AgentHarnessStreamOptions;
+  retryPolicy: NormalizedRetryPolicy;
+  reason?: "manual" | "threshold" | "overflow";
+}
+
+type SummaryGeneration =
+  | { status: "ready"; context: SummaryContext; nextAttempt: number }
+  | { status: "effect_pending"; context: SummaryContext; attempt: number;
+      /** Current nested request intent; absent between requests. */
+      request?: { index: number; usageId: string };
+      usageIds: string[] }
+  | { status: "retry_wait"; context: SummaryContext; nextAttempt: number;
+      notBefore: number; errorMessage: string };
+
+interface CompactionState {
+  kind: "compaction";
+  control: Control;
+  customInstructions?: string;
+  structural: StructuralDecision;
+}
+
+type NavigationState =
+  | { kind: "navigation"; control: Control; targetId: string | null; label?: string;
+      summarize: false; phase: { kind: "ready_to_commit" } }
+  | { kind: "navigation"; control: Control; targetId: string; label?: string;
+      customInstructions?: string; summarize: true;
+      phase: { kind: "summary"; structural: StructuralDecision } };
+```
+
+Structural preparation is built from the reserved source leaf and settings snapshot, normalized (`Set<string>` file-operation fields become sorted arrays), and written once to the `op.preparation/{operationId}:{taskId}` register before the decision hook, in the same transaction as the `deciding` state (§3.9). State carries only `taskId`; the deterministic key locates the register, and hooks/generators hydrate arrays back to the source preparation types. Reopen never rebuilds it from current settings, so the provider sees the same summary input the hook approved.
+
+One structural attempt may make one or two provider requests using the existing compaction implementation. Its request callback first commits `request:{index,usageId}`, then performs that provider request through a nested Effects action, then atomically writes usage and clears/advances the request field. Intermediate content remains process-local; any restored `effect_pending` attempt is treated as wholly uncertain and starts a later attempt under the captured policy rather than continuing request two. A durable `generating` decision prevents its decision hook from rerunning.
+
+## 3.3 Lane state and current-state validity
+
+```ts
+interface LaneState {
+  currentOperationId: string | null;
+  /** Reserved entry ids; payloads in pending.entry registers (§2.2). */
+  pendingNextRun: string[];
+}
+```
+
+Restore validates only the current lane and operation registers and the entries/registers they directly name; there is no history to audit and none exists. Required checks:
+
+- `lane.state/{lane}` holds a `LaneState`; when it names operation O, `op.meta/O` holds an `Operation` for that lane, and `op.state/O` holds an `OperationState` compatible with O's intent kind;
+- every entry id the current state names — trigger, latest assistant, batch assistant, deferred source, completed results, prompt entries, the lane leaf — resolves to an existing entry of the expected type;
+- reserved response/result/usage ids, if materialized, contain the intended kind and identity; an unmaterialized reserved id resolves to nothing, which is the expected pre-settlement condition, never an error;
+- every id in `inbox.*`, `control.drained*`, and `pendingNextRun` has a `pending.entry` register with a valid payload; every effect-pending call has its `op.tool_args` register; every structural decision has its `op.preparation` register;
+- tool source indices are complete, ordered, unique, in range, and use unique result ids; completed result entries match their source calls;
+- cancellation, navigation source/target, and structural-source combinations satisfy the state discriminants.
+
+Runtime schemas validate every decoded register value before publication. `lane.lastResult` is validated on its public read path — outcome/error/`runCompletion` combinations must be legal for the operation kind, and a completed run omits its final assistant only with `runCompletion: "terminated_tools"` — but it is never a recovery input (§3.13). These bounded checks reject corrupted/imported state that TypeScript transition functions could not have produced.
+
+## 3.4 The atomic transition rule
+
+> Compute the next total state in memory, then atomically commit every entry insert, usage insert, and register write that makes that state true.
+
+A transaction writing total `LaneState` rereads the latest register value inside the lane mutation line and changes only the fields owned by that transition. In particular, the terminal transaction clears `currentOperationId` while preserving concurrently accepted `pendingNextRun`. Conditional transitions identify the state they extend by register `seq` — the `op.state` seq, the `lane.state` seq, and, where a transition snapshots configuration, the expected `lane.config` seq (§4.1) — never by a value id; the CAS token changed, the linearization did not. Every edge below is exactly one `commit()`.
+
+## 3.5 The graph
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> checkpoint : prompt() accepted
+
+    checkpoint --> assistant : continuation = need_assistant
+    checkpoint --> compaction : context threshold
+    checkpoint --> checkpoint : apply write / consume steer / consume follow-up
+    checkpoint --> terminal : may_finish + empty inbox
+
+    assistant --> assistant : retryable error (retry_wait)
+    assistant --> tools : toolUse
+    assistant --> compaction : overflow (first time)
+    assistant --> deferred : stopReason deferred
+    assistant --> checkpoint : stop / genuine length
+    assistant --> failure_drain : terminal error / retries exhausted / 2nd overflow
+
+    tools --> tools : per-call intent + settlement
+    tools --> checkpoint : batch complete
+
+    compaction --> checkpoint : resumeAfter restored
+    compaction --> failure_drain : overflow compaction declined or failed
+
+    deferred --> deferred : poll returns pending
+    deferred --> tools : ready response with calls
+    deferred --> checkpoint : ready response without calls
+    deferred --> failure_drain : provider error
+
+    failure_drain --> checkpoint : new user-context input applied
+    failure_drain --> terminal : inbox drained (failed)
+
+    checkpoint --> terminal : abort reconciled (aborted)
+    terminal --> [*]
+```
+
+`terminal` is not a state. It is the terminal transaction (§3.13): after it commits, the operation has no `op.state` register at all.
+
+Standalone operations:
+
+```
+compaction:  deciding ──hook declines───────────→ terminal TX (declined)
+                      ──hook supplies result────→ terminal TX (completed)
+                      ──hook selects generation─→ generating ──→ terminal TX (completed|failed)
+
+navigation:  ready_to_commit ───────────────────→ terminal TX (completed)
+             summary.deciding ──→ generating ───→ terminal TX (completed)
+```
+
+## 3.6 Acceptance
+
+| From | Trigger | Transaction |
+|---|---|---|
+| idle lane | `prompt()` after `before_run` | `TX[ insert entries for captured nextRun items (payloads from their pending.entry registers) and the new messages (caller prompt, hook injections) in order, delete the captured pending.entry registers, upsert lane.leaf = newest entry, upsert op.meta/O, S(run{captured settings, checkpoint need_assistant(false), trigger = newest entry, skipInboxOnce, empty inbox}), L({currentOperationId: O, captured ids removed from pendingNextRun}) ]` |
+| reserved idle lane | `compact()` with non-empty preparation | `TX[ upsert op.preparation/O:{taskId} = P, upsert op.meta/O, S(compaction{deciding, taskId}), L({currentOperationId: O}) ]` |
+| idle lane | unsummarized `navigateTree()` after validation | `TX[ upsert op.meta/O, S(navigation{ready_to_commit}), L ]` |
+| reserved idle lane | summarized `navigateTree()` with preparation | `TX[ upsert op.preparation/O:{taskId} = P, upsert op.meta/O, S(navigation{summary.deciding, taskId}), L ]` |
+
+Captured `nextRun` items already have their payloads in `pending.entry` registers; acceptance inserts their entries from those payloads, deletes the registers, and removes the ids from `pendingNextRun` — the placement half of the one deliberate double write (§1.8). A late-captured item keeps its enqueue-minted id and lands in that id's partition (§1.2).
+
+Manual compaction first allocates its operation id and takes a process-local lane admission reservation, then reads preparation. Summarized navigation uses the same reservation while collecting/building branch preparation; unsummarized navigation needs none because validation and acceptance share one lane-line job. While reserved, competing operations receive `LaneBusy` naming that provisional id/kind and idle tree writes wait; `nextRun` and configuration changes may still commit because they do not move the leaf. Empty compaction preparation releases the reservation and returns `NothingToCompact` with no operation write. Non-empty preparation is accepted only against the unchanged reserved source leaf. Process death drops the reservation and leaves the lane idle.
+
+Pre-acceptance rejections write **nothing**: `LaneBusy`, `NothingToCompact`, `InvalidNavigation` (target is the current leaf, label on the root target, or summarize from root), `UnknownTarget` (non-null target missing), `MissingIdentities` (model, provider, or an active tool name does not resolve). Prompt allocates its operation id before `before_run` so hook idempotency keys are stable. The hook still runs before acceptance; if a concurrent caller wins the lane, its output and provisional id are discarded and no operation exists.
+
+**Acceptance must observe `currentOperationId === null`.** Because acceptance is on the lane mutation line, this is validation, not compare-and-swap.
+
+## 3.7 Assistant generation
+
+| From | Trigger | Transaction | To |
+|---|---|---|---|
+| checkpoint `need_assistant` | drive | conditionally snapshot current lane config, stream options, and normalized retry policy inline into the context in `TX[ S(assistant{ready, nextAttempt:1}) ]` | ready |
+| assistant `ready` | `before_request` aggregate completes | mint R and U, then `TX[ S(assistant{effect_pending, attempt=nextAttempt, responseEntryId R, usageId U, intendedOutputLimit, contextWindow}) ]` | effect_pending |
+| effect_pending | settles with tool calls | `TX[ insert response entry R, upsert lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, tools{plan with reserved result ids}) ]` | tools |
+| effect_pending | retryable error, attempts remain | `TX[ insert response entry R, upsert lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, assistant{retry_wait, nextAttempt k+1, notBefore}) ]` | retry_wait |
+| effect_pending | first overflow, preparation non-empty | `TX[ insert response entry R **normalized to error**, upsert lane.leaf = R, insert usage U, upsert op.preparation/O:{taskId} = P, S(latestAssistantEntryId=R, compaction{reason:overflow, structural:{deciding, taskId}, resumeAfter:{checkpoint, prior trigger, need_assistant(true)}}) ]` | compaction |
+| effect_pending | first overflow, preparation empty | `TX[ insert normalized response entry R, upsert lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, failure_drain{error, provenance:response R}) ]` | failure_drain |
+| effect_pending | `stopReason: "deferred"` | `TX[ insert response entry R, upsert lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, deferred{suspended, sourceEntryId R, poll 0, configuration/options copied}) ]` | deferred |
+| effect_pending | `stop` or genuine `length` | `TX[ insert response entry R, upsert lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, checkpoint{may_finish, includeFinalAssistant:true}) ]` | checkpoint |
+| effect_pending | terminal error, retries exhausted, or 2nd overflow | `TX[ insert response entry R, upsert lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, failure_drain{error, provenance:response R}) ]` | failure_drain |
+| retry_wait | `notBefore` elapsed | `TX[ S(assistant{ready, nextAttempt:k+1}) ]` | ready |
+
+**There is never a durable "response without usage" or "response and usage without a decision."** All three land together or none do. `R` and `U` are minted at intent and exist only as strings in the state until settlement inserts the complete rows (§2.2). A settlement that plans tools mints each `resultEntryId` as a follower of `R`, inheriting its 48-bit timestamp (§1.2), so the assistant and its results share a partition by construction.
+
+### Classification order
+
+Pure, computed in memory before the settlement transaction. First match wins.
+
+| Condition | Result |
+|---|---|
+| `control.status === "cancel_requested"` | normalize stop reason to `aborted`; commit `checkpoint{may_finish, includeFinalAssistant:true}` under cancelled control, then reconcile writes/finish |
+| overflow: adapter-reported, or `error` whose message matches the context-limit patterns, or `length` with output below `intendedOutputLimit` | **normalize stop reason to `error`**; compact (first time) or `failure_drain` (second) |
+| `deferred` with a valid handle | deferred suspended |
+| retryable `error`, attempts remain / otherwise | retry_wait / failure_drain |
+| `toolUse`, or an accepted response carrying calls | tools |
+| `stop` or genuine output-limit `length` | checkpoint `may_finish` |
+
+Two normalizations happen at commit, and both are deliberate. A cancelled response commits as `aborted`. An overflow-classified response commits as `error`. In both cases the original stop reason is overwritten and the reason is preserved in human-readable form in `errorMessage`.
+
+The overflow normalization is what removes every link from this design. Because the committed response is `error`, §2.5 rule 3 drops it from context automatically — no superseded-response id on the compaction, none in the operation state, and no omission rule of its own. The response stays in the tree as durable history, because a provider request happened and was billed.
+
+**Overflow detection is a heuristic and must be labelled as one.** Three sources, in decreasing reliability:
+
+1. **Adapter-reported.** A provider adapter that can compute `usage.input + usage.cacheRead > contextWindow` at settlement sets `stopReason: "error"` with a message matching the context-limit patterns. This requires no new stop reason and no change to any adapter's stop-reason mapping, which matters because those mappings typically throw on unknown values. An adapter doing this should also require negligible output, so a substantive answer that merely trips a counter is not discarded.
+2. **Error-message matching.** Providers usually return a context-limit failure as an HTTP error, which arrives as `error` with a message. Matching it is string matching, and it is brittle wherever it lives.
+3. **`length` below `intendedOutputLimit`.** Harness-side only. An adapter must not apply this rule, because it cannot distinguish an oversized request from a response truncated mid-thinking — and those need opposite treatment, since a genuine truncation must stay in context.
+
+Overflow is checked before retryable error, so an oversized request compacts rather than retrying unchanged.
+
+**`aborted` is not a classification input.** It means the harness's own abort signal fired (§4.6), and `abort()` commits `control` before signalling — so a settled `aborted` response always has `control.status === "cancel_requested"` and is caught by the first row. An `aborted` response with `control.status === "running"` is unreachable and is corruption (Part 9).
+
+An overflow classification never produces a tool plan. A *genuine* `length` that carries tool calls does produce the full plan, executes nothing, and appends one `isError: true` result per call explaining that truncation may have corrupted the arguments — those results then require another assistant turn.
+
+## 3.8 Tools
+
+| From | Trigger | Transaction | To |
+|---|---|---|---|
+| call *i* `planned` | clearance passed (`before_tool`, lookup, arg validation) | `TX[ upsert op.tool_args/O:{i} = effective args, S(call i = effect_pending, replay) ]` | dispatch |
+| call *i* `effect_pending` | effect settled, `after_tool` applied | `TX[ insert result entry, upsert lane.leaf, insert tool usage row (if reported), S(call i = completed, terminate) ]` | tools or checkpoint |
+| call *i* `planned` | unknown tool / invalid args / `before_tool` blocks or throws / control cancelled | `TX[ insert synthetic error result entry, upsert lane.leaf, S(call i = completed, terminate from an intentional block, otherwise false) ]` | tools |
+| all calls completed | — | folded into the last settlement, which also deletes the batch's `op.tool_args/{O}:{stepId}:*` registers | checkpoint |
+
+The batch's completion transition is:
+
+- **every** completed call set `terminate: true` → `checkpoint{may_finish, includeFinalAssistant: false}`
+- otherwise → `checkpoint{need_assistant(overflowRecoveryUsed: false)}`
+
+`terminate` exists so a tool can end the run without another provider turn. The motivating case is a "submit final result" tool used in place of structured output: the model calls it, the harness commits the result, and the run finishes with those tool results as its final entries — `run_end` then carries no `finalMessage`. Without this, every such run would pay for one more model turn whose only job is to stop.
+
+Modes:
+
+- **Sequential** (option, or any called tool declares `executionMode: "sequential"`): clear → intent → execute → finalize → commit, one call at a time.
+- **Parallel** (default): clearance and intent commits happen in source order; dispatch does not await earlier calls; effects settle concurrently; phase 3, result-message lifecycle, and result commits are awaited and finalized in source order.
+
+Blocked and invalid calls skip the intent commit and the effect, but still commit a result at their source position. Their `op.tool_args` register is never written.
+
+Calls are tracked internally by `sourceIndex`. Hooks, events, and tool context see the provider `toolCallId` and tool name — never the index.
+
+## 3.9 Summary generation — compaction and navigation summaries
+
+Both operations generate a summary through the same `deciding → generating → result` machinery, which is why they are specified together. The axes:
+
+| | compaction | navigation |
+|---|---|---|
+| **standalone operation** | `lane.compact()` — reason `manual` | `lane.navigateTree(target)` |
+| **phase inside a run** | reasons `threshold`, `overflow` | — |
+
+| reason | who asked | on hook decline |
+|---|---|---|
+| `manual` | the caller | operation finishes `declined` |
+| `threshold` | context-size check at a checkpoint | back to the stored `resumeAfter` |
+| `overflow` | a request that did not fit | `failure_drain` |
+
+"Auto compaction" is the in-run row: `threshold` and `overflow`. Non-empty preparation and the transition into `deciding` commit together (`upsert op.preparation/O:{taskId}` plus the structural state and, for threshold, marked `resumeAfter`). Preparation returning `undefined` never creates `StructuralDecision`: threshold atomically marks the checkpoint checked and continues; overflow atomically enters response-provenance `failure_drain` using the normalized overflow response. Neither path emits structural lifecycle. Empty standalone preparation is rejected before acceptance.
+
+| From | Trigger | Transaction |
+|---|---|---|
+| deciding | hook declines | standalone: the terminal transaction (§3.13) with outcome `declined` · threshold: `TX[ S(restore marked resumeAfter) ]` · overflow: `TX[ S(failure_drain{error, provenance:structural taskId}) ]` |
+| deciding | hook supplies compaction | standalone: `TX[ insert hook usage row?, insert compaction entry, upsert lane.leaf, terminal writes (§3.13) ]`; in-run: same result-publication writes plus `S(resumeAfter)` |
+| deciding | hook supplies navigation summary | use §3.10's final transaction with the hook usage/result |
+| deciding | hook selects generation | conditionally snapshot current config/policy inline in `TX[ S(generating{ready}) ]` — **the decision hook will never run again** |
+| generating ready / retry elapsed | drive | `TX[ S(effect_pending, attempt k) ]` |
+| generating effect_pending | one nested request returns | `TX[ insert usage row under request.usageId, S(effect_pending, request cleared, usageIds += id) ]`; commit another request intent before request two |
+| generating effect_pending | retryable attempt outcome | usage is already durable; `TX[ S(retry_wait) ]` |
+| generating effect_pending | terminal or attempts exhausted | standalone: the terminal transaction (§3.13) with outcome `failed` · in-run: `TX[ S(failure_drain{provenance:structural taskId}) ]` |
+| generating effect_pending | compaction succeeded | standalone: `TX[ insert result entry, upsert lane.leaf, terminal writes (§3.13) ]`; in-run: result-publication writes plus `S(resumeAfter)` |
+
+Structural provider streams are internal: they emit **no** public assistant-message lifecycle. The existing summary generator is retained, but its one/two request callback uses the nested request intent/effect/usage boundaries from §3.2 and §4.2. Intermediate content is not persisted; a crash before the final transaction makes the whole attempt unknown, and a later numbered attempt starts only under the captured retry policy. Failed-attempt usage stays in the ledger regardless — terminal cleanup deletes registers, never ledger rows (§1.6).
+
+### Worked example — overflow
+
+`e_40` is a tool result awaiting an assistant turn. The request does not fit.
+
+```
+… e_38 ── e_39 ── e_40                     phase: assistant, effect_pending
+                                           continuation was need_assistant(false)
+```
+
+**1. Settlement.** Classification says overflow. Preparation is built against the would-be branch; because the known response is normalized to `error`, ordinary projection excludes it. Response and preparation then commit together:
+
+```
+TX[ insert e_41 = { …assistant response, stopReason: "error",
+                    errorMessage: "context window exceeded: …" },
+    upsert lane.leaf/main = "e_41", insert usage u_41,
+    upsert op.preparation/op_9:t_1 = <structural preparation>,
+    S(compaction{ reason: overflow,
+                  structural: { deciding, taskId: "t_1" },
+                  resumeAfter: { checkpoint, triggerEntryId: "e_40",
+                                 continuation: need_assistant(true) } }) ]
+
+… e_38 ── e_39 ── e_40 ── e_41
+```
+
+**2. Compaction.** The durable preparation was built by the ordinary rules in §2.5. `e_41` is an `error` response, so rule 3 dropped it — from the summary input and from `retainedTail` alike, with no special case:
+
+```
+… e_40 ── e_41 ── e_42 (compaction)
+                  retainedTail: [e_39, e_40]        ← e_41 absent by rule 3
+```
+
+The tail ends on `e_40`, a tool result, which is the correct shape for a request that is about to ask for an assistant turn.
+
+**3. Resume.** `resumeAfter` restores `need_assistant(overflowRecoveryUsed: true)`. Context is now summary + tail + anything after `e_42`, which is small:
+
+```
+… e_41 ── e_42 ── e_43        the answer to e_40
+   ✗ (error, out of context)
+```
+
+`e_41` remains in the tree forever as durable history — a request was made and billed. If the retry overflows *again*, `overflowRecoveryUsed` is already `true` and the run goes to `failure_drain` rather than compacting in a loop. Consuming new user input appends to the tree and resets the flag to `false`.
+
+## 3.10 Navigation
+
+Unsummarized and summarized both finish in **one** transaction — navigation's terminal transaction (§3.13) with its result-publication writes inline:
+
+```
+TX[ insert hook-reported usage row (only for a hook-supplied summary),
+    upsert lane.leaf = target,
+    insert summary entry with its display usage snapshot (when summarize;
+      parent is the target),
+    upsert lane.leaf = summary entry (when summarize),
+    upsert fact.label (when a label is present),
+    delete the operation's op.* registers,
+    upsert lane.lastResult = { kind: "navigation", outcome: "completed", leafId },
+    L({ currentOperationId: null }) ]
+```
+
+Writes apply in order inside the transaction. Generated provider usage was already written per request in §3.9 and is not written again here; the summary payload only snapshots its producing attempt's usage. The summary entry explicitly names the target as parent, and the following register write makes that summary the completed lane leaf. A crash sees either an untouched navigation still at its source, or a fully completed one. **No prepared-summary state and no post-move recovery state exist.** Abort before this transaction ends in an aborted terminal transaction with no entry appended; abort after it means the operation completed.
+
+## 3.11 Inbox, queues, deferred writes
+
+Every queued admission mints the item's entry id (§1.2) and writes its payload once into `pending.entry/{id}`; queue lists carry only the id.
+
+| Public input | Admitted when | Transaction |
+|---|---|---|
+| `nextRun(msg)` | any state, including idle | `TX[ upsert pending.entry/{id} = payload, L(pendingNextRun += id) ]` — never starts a run |
+| `steer(msg)` | active running run | `TX[ upsert pending.entry/{id} = payload, S(inbox.steer += id) ]` |
+| `followUp(msg)` | active running run | `TX[ upsert pending.entry/{id} = payload, S(inbox.followUp += id) ]` |
+| tree write, run active | including suspended and cancelling | `TX[ upsert pending.entry/{id} = payload, S(inbox.writes += id) ]` — survives abort |
+| tree write, lane idle | idle | `TX[ insert entry, upsert lane.leaf ]` |
+| tree write, structural op open | — | wait for the operation to end, then re-evaluate |
+| `cancelQueued(id)` | item still pending | `TX[ S or L with the id removed, delete pending.entry/{id} ]` |
+| checkpoint consumes input | eligible | `TX[ insert entries from the register payloads, delete their pending.entry registers, upsert lane.leaf, S(ids removed, continuation → need_assistant(false), triggerEntryId = newest entry, skipInboxOnce = true) ]` |
+| first `abort()` | run active | `TX[ S(control = cancel_requested, requestedAt, drainedSteer, drainedFollowUp, steer/followUp emptied) ]` — drained pending.entry registers are **not** deleted |
+| finish | inbox empty, no required continuation | the terminal transaction (§3.13) |
+
+`cancelQueued` triage, in order: the id is still pending in a queue list → remove it and delete its `pending.entry` register in one transaction; the content is gone, never having touched the tree, and the call returns `cancelled`. An entry under that id exists → `already_consumed`. Neither → `not_found` — previously cancelled, cleared by abort, or never existed. A client retrying a lost cancel treats `not_found` as success. There are no disposition registers, and nothing here is ever a recovery input.
+
+The first `abort()` moves steer/follow-up ids into `control.drainedSteer`/`control.drainedFollowUp` but deletes none of their `pending.entry` registers: `AbortResult` and a post-crash `SuspendedOperation.aborting` dereference the drained payloads from those registers. They die in the terminal transaction (§3.13), never earlier. Deferred writes stay in `inbox.writes` and are applied during reconciliation.
+
+Because acceptance, cancellation, consumption, abort, and finish all serialize on the lane mutation line, every race has exactly two possible histories, and **no item can be both pending and applied** in durable state: at every commit boundary a queued id has its register (pending or drained), its entry (consumed), or neither (cancelled) — never both.
+
+## 3.12 The checkpoint procedure
+
+Order matters. At each queue drain point, `"all"` consumes every currently eligible item in acceptance order; `"one-at-a-time"` consumes only the oldest and leaves the rest pending. Any projecting drain sets durable `skipInboxOnce`; on that next pass the planner skips steps 1–2, starts generation, and clears the flag in the ready-state transition. Thus a crash cannot turn one-at-a-time into an all-item drain.
+
+1. Unless `skipInboxOnce`, atomically apply accepted deferred writes.
+2. Unless `skipInboxOnce`, atomically consume eligible steering, per the steering mode.
+3. Run threshold compaction only when `thresholdCheckedTriggerEntryId !== triggerEntryId`, preserving the marked checkpoint in `resumeAfter`.
+4. If the continuation is `need_assistant`, start generation and clear `skipInboxOnce`.
+5. Once assistant and tool continuation are exhausted, atomically consume eligible follow-up.
+6. If the continuation is `may_finish` and the inbox is empty, invoke `before_run_end`.
+7. Conditionally finish — the terminal transaction (§3.13).
+
+Consumed steer/follow-up and projecting message writes enter `need_assistant(false)`, set `triggerEntryId` to the newest appended entry, and set `skipInboxOnce`. Tool results do the same unless every result terminates. An unprojected custom write is appended and removed from the inbox but preserves the prior continuation, failure provenance, and overflow flag. Under cancelled control, every deferred write is appended and removed without changing phase/continuation or starting work; reconciliation ends in an aborted terminal transaction after writes drain.
+
+`before_run_end` may return a follow-up. It commits **only** if control is still running and the operation is still at the same finish boundary; otherwise the stale hook result is dropped. The follow-up is born placed — its entry and the `need_assistant` state commit together, with no pending register.
+
+`failure_drain` applies accepted writes, then eligible steer and follow-up input in the same order. Projecting user-context input atomically enters `checkpoint{need_assistant(false)}` and clears the failure. Unprojected custom writes do not. With no such input, it finishes failed without `before_run_end` or another provider request.
+
+## 3.13 Terminal transactions
+
+There is no finished state. An operation ends by ceasing to exist: one **terminal transaction** deletes every register the operation owns, records the outcome in `lane.lastResult`, and clears the lane's `currentOperationId`. After it commits, the operation's only durable footprint is the conversation entries and ledger rows it produced.
+
+The result is computed in memory, pre-commit, from the final operation state — the same value the caller's promise resolves with. What lands durably is its register form:
+
+```ts
+type LaneLastResult = {
+  operationId: string;
+  kind: "run" | "compaction" | "navigation";
+  leafId: string | null;
+  /** Newest settled assistant, when the outcome includes one (runs only). */
+  finalAssistantEntryId?: string;
+} & (
+  | { outcome: "failed"; error: OperationError; runCompletion?: never }
+  | { outcome: "completed"; error?: never;
+      runCompletion?: "assistant" | "terminated_tools" }
+  | { outcome: "declined" | "aborted"; error?: never; runCompletion?: never }
+);
+```
+
+A normal run finish copies `RunState.latestAssistantEntryId` and records `runCompletion: "assistant"` when `may_finish.includeFinalAssistant` is true. An all-terminating tool batch records `runCompletion: "terminated_tools"` and omits the final assistant. Failed and aborted run outcomes include the newest settled assistant when non-null and omit the field otherwise. Structural operations omit `runCompletion` and the final assistant. Only terminal transitions construct a `LaneLastResult`.
+
+Every terminal transaction, for every operation kind and outcome, has one shape:
+
+```
+TX[ <result-publication writes, when the terminal transition also publishes
+     content: §3.9's standalone summary entry and leaf move, §3.10's
+     navigation writes>,
+    delete op.meta/{O},
+    delete op.state/{O},
+    delete op.tool_args/{O}:*        prefix scan; catches keys leaked by a crash
+                                     between batch completion and cleanup,
+    delete op.preparation/{O}:*      prefix scan, same reason,
+    delete pending.entry/{id}        for every operation-owned pending id,
+    upsert lane.lastResult/{lane} = <computed result>,
+    L({ currentOperationId: null }) ]
+```
+
+Operation-owned pending ids are the remaining `inbox.steer ∪ inbox.followUp ∪ inbox.writes` plus `control.drainedSteer ∪ control.drainedFollowUp` — registers that survived an abort drain die here (§3.11). **Never `lane.state.pendingNextRun`**: those registers are lane-owned, outlive operations, and die only when consumed or cancelled. Ledger rows are never deleted (§1.6). The `L` write rereads the latest `LaneState` on the lane mutation line and clears only `currentOperationId`, preserving concurrently accepted `pendingNextRun` (§3.4).
+
+For the completed run of §0.3's shape — prompt `e_50`, tool call `e_51`/`e_52`, final answer `e_53`:
+
+```
+TX[ delete op.meta/op_9,
+    delete op.state/op_9,
+    delete op.tool_args/op_9:0,
+    upsert lane.lastResult/main = { operationId: "op_9", kind: "run",
+                                    outcome: "completed", leafId: "e_53",
+                                    finalAssistantEntryId: "e_53",
+                                    runCompletion: "assistant" },
+    upsert lane.state/main = { currentOperationId: null, pendingNextRun: [] } ]
+```
+
+After it, the session holds exactly the conversation entries, the ledger rows, and the lane's registers (`lane.leaf`, `lane.config`, `lane.state`, `lane.lastResult`). The run's ~10 `op.state` revisions, its tool-args register, and any pending payloads existed only as register overwrites and are gone — nothing to collect (§1.8).
+
+**The observation contract.** A terminal outcome is observable once through the live caller's promise (and the corresponding `run_end`/`compaction_end`/`navigation_end` event), which carries the full in-memory result, and thereafter through `lane.lastResult` until the next terminal transaction on the same lane overwrites it. `lane.lastResult` is written only by terminal transactions — one bounded register per lane, forever. Recovery never reads it: restore treats a lane with `currentOperationId: null` as idle regardless of the register's content. It exists so an application that accepted an operation, lost its process, and reopened can still answer "what happened to `op_9`?" — including outcomes the tree alone cannot reconstruct: a structural failure's error, `declined`, and the `aborted`-versus-`completed` ambiguity of a leaf that moved.
+
+The invariant this section carries (restated in Part 9): `op.*` registers and operation-owned `pending.entry` registers exist **iff** their operation is open, because the terminal transaction deletes them atomically with clearing `currentOperationId`. There is no partial-cleanup state to observe or repair.
 
 # Part 4 — Execution, recovery, abort, close
 

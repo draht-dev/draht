@@ -1,0 +1,299 @@
+version: 1
+config:
+  max_in_flight: 3
+  lease_ttl_hours: 12
+  max_attempts: 2
+  audit: true
+  audit_auto_risk: low
+  audit_max_new: 3
+  declined: []
+
+beats:
+  - id: B-031
+    title: Geist foundation and boundary enforcement
+    kind: planned
+    deps: []
+    risk: high
+    approved: true
+    status: ready
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 31 and R31-FOUND.1 through R31-FOUND.7. Preserve
+      the Geist workspace scaffold while proving that every non-shim Geist
+      package rejects both Draht-kernel and privileged-shim imports, Quest
+      rejects every @draht/* reference, config examples validate, and the
+      mirror/boundary gates remain wired into the repository check.
+    check: "npm run check"
+
+  - id: B-032
+    title: Quest panel and ray spike
+    kind: planned
+    deps: [B-031]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 32 and R32-M0.1 through R32-M0.4 using a pinned
+      Meta Spatial SDK on Quest 3: render the real panel, wire controller/hand
+      ray input, exercise both alpha materials, and archive H0 evidence with
+      commit, APK, headset, OS, and SDK identifiers. This beat is blocked
+      while the Spatial SDK toolchain and physical Quest evidence runner are
+      unavailable; isolated math or placeholder API work cannot satisfy it.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/evidence/h0-panel-ray.test.ts"
+
+  - id: B-033
+    title: Pairing and voice wire
+    kind: planned
+    deps: [B-031]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 33 and R33-M1.1 through R33-M1.7: make the
+      emitted Geist binary own the bridge, UI, safe config, named mock
+      session, production Quest pairing/reconnect, protocol mirrors, and
+      whisper.cpp DE/EN path while closing GSEC-04, GSEC-08, and GSEC-12.
+      Archive H1 live-transcript and restart evidence. The cloud beat remains
+      blocked until the physical Quest/voice evidence runner is available.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/e2e/m1-pairing-voice.test.ts"
+
+  - id: B-034
+    title: Pointed-element context pack
+    kind: planned
+    deps: [B-031, B-033]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 34 and R34-M2.1 through R34-M2.3. Wire the real
+      injected picker through the public protocol, always create a decodable
+      target.webp inside the managed task directory, capability-gate image
+      bytes while retaining a usable path, render the crop chip, and archive
+      H2 physical pointing evidence. The H2 hardware gate blocks unattended
+      completion until a Quest evidence runner is attached.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/e2e/m2-context-pack.test.ts"
+
+  - id: B-035
+    title: Close the ACP product loop
+    kind: planned
+    deps: [B-031, B-033]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 35 and R35-M3.1 through R35-M3.9 with one
+      emitted-binary, public-protocol flow covering spawn, dispatch,
+      tools/plans, deny/allow, edit, blocking review, durable approval,
+      second edit, transactional undo, and cleanup against deterministic ACP
+      and keyless draht-acp. Close every listed GSEC amendment and archive H3
+      on real Draht and Claude harnesses. H3 physical evidence currently
+      blocks the one-beat phase from honest completion.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/e2e/m3-acp-loop.test.ts"
+
+  - id: B-036
+    title: Commands, addressing, and project grammar
+    kind: planned
+    deps: [B-035]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 36 and R36-M4.1 through R36-M4.5. Carry live ACP
+      commands and modes into palette/voice UI, preserve raw slash commands,
+      enforce the locked precedence grammar, resolve approved projects from
+      validated sources, launch the exact named harness/worktree, render
+      disambiguation, and archive H4 across two physical projects. H4 capture
+      keeps this beat blocked in cloud-only execution.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/e2e/m4-commands-addressing.test.ts"
+
+  - id: B-037
+    title: Mixed-harness fleet
+    kind: planned
+    deps: [B-035, B-036]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 37 and R37-M5.1 through R37-M5.4. Render a live
+      mixed-harness fleet of at most four isolated sessions with project,
+      harness, status, and capability state; keep approve, undo, stop, and
+      capacity outcomes session-scoped; prove three real mock processes
+      across two repos in browser automation; and archive H5 physical panel,
+      point-routing, and 72 Hz evidence. H5 requires the unavailable headset
+      evidence runner, so this beat is blocked.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/e2e/m5-fleet.test.ts"
+
+  - id: B-038
+    title: Mixed-harness variants and winner selection
+    kind: planned
+    deps: [B-037]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 38 and R38-M6.1 through R38-M6.3. Validate
+      variant capacity and configured harnesses, round-robin optional harness
+      names, create isolated sibling worktrees/processes, render comparison,
+      and transactionally retain the pointed winner while removing every
+      sibling process and tracked/untracked output. Archive H6 physical
+      selection evidence; that hardware gate currently blocks completion.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/e2e/m6-variants.test.ts"
+
+  - id: B-039
+    title: Live ACP run rendering
+    kind: planned
+    deps: [B-035]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 39 and R39-M7.1 through R39-M7.4. Carry real ACP
+      tool and plan events through production state and protocol into generic,
+      plan, and data-driven typed lanes; refresh LOOP.md; prove scoped stop
+      suppresses late events in browser automation; and archive H7 real Draht
+      and untyped Claude lane evidence. H7 requires the physical/runtime
+      evidence environment and blocks cloud-only completion.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/e2e/m7-run-rendering.test.ts"
+
+  - id: B-040
+    title: Spatial dividends and pose persistence
+    kind: planned
+    deps: [B-037, B-038, B-039]
+    risk: high
+    approved: true
+    status: blocked
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 40 and R40-M8.1 through R40-M8.2. Implement
+      multi-viewport layout, pins/history, anchors, and versioned pose
+      serialization/restoration with recreation and migration coverage, then
+      archive H8 before/after pose and physical two-viewport headset-restart
+      evidence. H8 cannot be produced by the current cloud runner, so the beat
+      remains blocked.
+    check: "npm run check && cd packages/geist && npx tsx ../../node_modules/vitest/dist/cli.js --run test/e2e/m8-spatial-dividends.test.ts"
+
+  - id: B-041
+    title: Checkpoint capture and durable storage
+    kind: planned
+    deps: []
+    risk: high
+    approved: true
+    status: ready
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 41 and R41-CKP.1 through R41-CKP.7. Build the
+      first-class CheckpointManager with temporary-index Git snapshots,
+      namespaced durable refs, ignored-file exclusion, untracked-file capture,
+      tree deduplication, sidecar propagation for fork/clone, non-Git fallback,
+      pruning, and real-session builtin loading without touching the user's
+      index, HEAD, stash, or reflog.
+    check: "npm run check && cd packages/coding-agent && npx tsx ../../node_modules/vitest/dist/cli.js --run test/checkpoint-manager.test.ts"
+
+  - id: B-042
+    title: Atomic rewind command and restore UX
+    kind: planned
+    deps: [B-041]
+    risk: high
+    approved: true
+    status: ready
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 42 and R42-RWD.1 through R42-RWD.8. Implement
+      checkpoint-aware /rewind with conversation/files scope selection,
+      mandatory safety snapshots, exact diff-driven restoration, redo through
+      abandoned leaves, rollback on injected failure, and matching restore
+      offers for /tree and /fork. Conversation navigation must occur only
+      after file restoration succeeds.
+    check: "npm run check && cd packages/coding-agent && npx tsx ../../node_modules/vitest/dist/cli.js --run test/rewind.test.ts"
+
+  - id: B-043
+    title: Rewind safety, fallbacks, and documentation
+    kind: planned
+    deps: [B-042]
+    risk: high
+    approved: true
+    status: ready
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 43 and R43-SFT.1 through R43-SFT.7. Harden rewind
+      against interruption, double failure, concurrent sessions, filesystem
+      edge cases, ignored/large files, noninteractive restore, and performance
+      regressions; expose settings and extension events; and replace stale
+      rollback guidance while retaining both recovery refs on failure.
+    check: "npm run check && cd packages/coding-agent && npx tsx ../../node_modules/vitest/dist/cli.js --run test/rewind-safety.test.ts"
+
+  - id: B-044
+    title: OS-level sandbox executor core
+    kind: planned
+    deps: []
+    risk: high
+    approved: true
+    status: ready
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 44 and R44-SBX.1 through R44-SBX.6. Add a
+      pluggable SandboxExecutor with macOS Seatbelt and Linux Landlock or
+      namespace backends, real-path write policy, network toggle, startup
+      self-test, environment hygiene, explicit unavailable state, and a
+      BashOperations wrapper. Prove direct, symlink, Python, and Node escape
+      attempts cannot cross the configured boundary.
+    check: "npm run check && cd packages/coding-agent && npx tsx ../../node_modules/vitest/dist/cli.js --run test/sandbox-executor.test.ts"
+
+  - id: B-045
+    title: Sandbox permission integration and escalation UX
+    kind: planned
+    deps: [B-044]
+    risk: high
+    approved: true
+    status: ready
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 45 and R45-SBM.1 through R45-SBM.6. Compose the
+      sandbox with permission modes, settings, environment seeding, status UI,
+      outward-action and deny gates, and exactly-one unsandboxed escalation.
+      Noninteractive mode must never escalate, unavailable backends must fall
+      back with one notice, and approved reruns must be logged.
+    check: "npm run check && cd packages/coding-agent && npx tsx ../../node_modules/vitest/dist/cli.js --run test/suite/regressions/sandbox-permission-integration.test.ts"
+
+  - id: B-046
+    title: Sandbox hardening, performance, and documentation
+    kind: planned
+    deps: [B-045]
+    risk: high
+    approved: true
+    status: ready
+    attempts: 0
+    spec: |
+      Complete Roadmap Phase 46 and R46-SBH.1 through R46-SBH.5. Exercise the
+      full escape matrix, both Linux backend paths, Git-hook containment,
+      environment scrubbing, default cache roots, and bounded spawn overhead;
+      dogfood the repository check under confinement; and document the
+      sandbox as the hard boundary in front of heuristic permission UX.
+    check: "npm run check && cd packages/coding-agent && npx tsx ../../node_modules/vitest/dist/cli.js --run test/sandbox-hardening.test.ts"
+
+  - id: B-047
+    title: Reconcile the Go graph and release-hardening candidate
+    kind: audit
+    deps: []
+    risk: high
+    approved: false
+    status: blocked
+    attempts: 0
+    spec: |
+      Inspect the clean worktree-draht-graph-go branch and the related clean
+      release, installer, plugin, provenance, coordination, and SSE hardening
+      worktrees that are ahead of main. Determine the unique surviving commit
+      set, reject superseded or overlapping branches, integrate approved
+      changes into one canonical feature branch without rewriting main, and
+      preserve Draht public naming and package provenance. This audit beat is
+      blocked until Oskar approves which candidate history is intended to
+      survive; branch existence alone is not merge authorization.
+    check: "npm run check"

@@ -1,6 +1,4 @@
-# AgentHarness v3 — implementation specification
-
-This document supersedes `agent-harness-spec.md` in full, which itself superseded `harness-v2.md`.
+# AgentHarness — implementation specification
 
 # Part 0 — Orientation
 

@@ -217,8 +217,6 @@ interface UsageRow {
 }
 ```
 
-**Why placement and payload are one row.** The superseded design split content ("values") from placement ("nodes") because they can have different birth times: queued input has content at enqueue and placement much later; an assistant response needs its id fixed *before* the content exists. The split is gone; the differing birth times remain, and two reservation regimes cover them (§2.2). Content that is durable before placement is *current mutable state* and waits in a `pending.entry` register keyed by its reserved entry id; the placement transaction writes the complete entry and deletes the register. An id that must exist before its content — an assistant response, a tool result — is just a minted string inside `op.state`, and settlement inserts the complete entry. Every read returns the whole entry with no join, no `valueId`, and no way for content to exist without an owner.
-
 **Registers hold values, not pointers.** A register's value is the current typed state itself, never an id pointing at an immutable state value. Overwriting a register discards the previous value; nothing accumulates and there is no history to fold (§1.8). Deleting a register removes the key entirely and is a first-class write, distinct from storing JSON `null`, which remains a legal value where a namespace's type permits it (`lane.leaf` at the root, `fact.custom`).
 
 ## 1.2 Identity

@@ -217,11 +217,9 @@ interface UsageRow {
 }
 ```
 
-**Registers hold values, not snapshots.** A register's value is the current typed state itself — never an id pointing at an immutable state row, the superseded pattern that left a garbage value behind every update. Overwriting a register discards the previous value; nothing accumulates and there is no history to fold (§1.8). Registers may reference *other registers* by deterministic namespace/key — `op.state` names its `op.tool_args`/`op.preparation` keys, queue lists hold the ids that key `pending.entry` registers — and every such reference couples two pieces of current state whose lifecycles the same transactions manage together. Deleting a register removes the key entirely and is a first-class write, distinct from storing JSON `null`, which remains a legal value where a namespace's type permits it (`lane.leaf` at the root, `fact.custom`).
-
 ## 1.2 Identity
 
-Every id storage stores — entry ids, usage ids, and every reserved id that will become one — is a **UUIDv7**, minted through the session's id generator (§2.8); the sole exception is imported legacy-format ids, preserved verbatim (Appendix C). A UUIDv7 begins with 48 bits of Unix milliseconds: the first 12 hex characters of the id *are* its mint time. Every reference is therefore self-describing and time-sortable — a `parentId`, a `lane.leaf` value, a `fact.label` key, an id inside `op.state` JSON all carry their creation time with no lookup. The one cost: ids leak their creation time to applications. Accepted. (A future partitioned Postgres backend would build its retention design on this prefix; that sketch is the informative Part 6. Memory, JSONL, and SQLite never partition.)
+Every id storage stores — entry ids, usage ids, and every reserved id that will become one — is a **UUIDv7**, minted through the session's id generator (§2.8). Legacy-format imports re-mint their ids to conform (Appendix C). A UUIDv7 begins with 48 bits of Unix milliseconds: the first 12 hex characters of the id *are* its mint time. Every reference is therefore self-describing and time-sortable — a `parentId`, a `lane.leaf` value, a `fact.label` key, an id inside `op.state` JSON all carry their creation time with no lookup. The one cost: ids leak their creation time to applications. Accepted. (A future partitioned Postgres backend would build its retention design on this prefix; that sketch is the informative Part 6. Memory, JSONL, and SQLite never partition.)
 
 Minting rules:
 
@@ -2828,7 +2826,7 @@ The interpreter, effects boundary, hooks, events, classifier, abort/close semant
 - v3 ISO timestamps convert to Unix milliseconds.
 - A v3 `parentSession` path resolves to an available parent header id; otherwise metadata and first-write conversion preserve it as `legacyParentSessionPath`.
 - On first format-4 write, append one aggregate adjustment usage row with `details: { source: "v3-import" }`, summing v3 node usage so ledger-derived totals remain unchanged.
-- Legacy v3 ids are preserved verbatim and are not UUIDv7s. This is sound on the shipping backends, which never partition and treat ids as opaque strings (§1.2). A future partitioned backend (Part 6) requires time-prefixed ids; moving such a session there goes through the precise rewrite (§2.9), which is where legacy sessions acquire UUIDv7 ids.
+- Legacy v3 ids are re-minted at import: each entry gets a UUIDv7 whose prefix is the legacy entry's own timestamp (random tail for uniqueness), preserving time order and §1.2's every-id-is-time-prefixed property. All references the format knows are remapped — parent chains, `main`'s leaf, label keys, `fromId`, usage `entryId`. Ids embedded in opaque payloads (custom entry data, `details`, message text) are not rewritten; the opaque-payload contract (§1.2) already covers them.
 
 Read-only open leaves the file unchanged and computes stats from normalized entry snapshots. The first format-4 write persists normalization through a temporary file and atomic rename over the original path, including the aggregate adjustment so subsequent stats are ledger-derived, and stamps the current `storageVersion` (§7.3). A fork from an unconfigured read-only v3 session follows §2.7 and leaves destination `main` for first harness attachment to seed.
 

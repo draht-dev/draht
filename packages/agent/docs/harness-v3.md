@@ -53,6 +53,25 @@ What happens, in order:
 5. Tool calls follow the same intent → effect → settlement shape, one pair of commits each.
 6. When the model stops without tool calls, a terminal transaction deletes the operation's registers, records the outcome in `lane.lastResult`, and leaves the lane idle.
 
+As a trace (ids abbreviated; every `TX[...]` is one atomic commit):
+
+```text
+TX[ insert entry n1 (user msg), upsert op.meta/O, upsert op.state/O = checkpoint,
+    upsert lane.leaf = n1, upsert lane.state = { currentOperationId: O } ]
+TX[ upsert op.state/O = assistant ready (config snapshot) ]
+TX[ upsert op.state/O = effect_pending (reserves response n2, usage u1) ]
+… provider streams …                                  ← the uncertain window
+TX[ insert entry n2, insert usage u1, upsert lane.leaf = n2,
+    upsert op.state/O = tools (result id n3 reserved) ]
+TX[ upsert op.tool_args/O:s1:0, upsert op.state/O = call 0 effect_pending ]
+… tool runs …
+TX[ insert entry n3, upsert lane.leaf = n3, upsert op.state/O = checkpoint ]
+… second turn: ready · intent · stream · settle (n4, u2) …
+TX[ delete op.meta/O, op.state/O, op.tool_args/O:*,
+    upsert lane.lastResult = { O, completed, n4 },
+    upsert lane.state = { currentOperationId: null } ]
+```
+
 Kill the process between any two of those transactions and restart. The harness reads the lane's registers, sees exactly which of those sentences was the last one committed, and continues. If it died in step 3, it knows a request may have been billed and may or may not have produced output — that is the one genuinely uncertain window in the whole system, and there is a stated policy for it.
 
 Meanwhile a second thread in the same channel is running its own lane, over the same 400 entries of shared history, with no coordination between them.
@@ -65,7 +84,20 @@ lane.prompt("delete the stale migrations and run the test suite")
 
 The model returns two tool calls. The harness commits the batch plan, then commits `call 0 is about to execute, with these exact arguments, and it declares itself unsafe to replay`. The tool starts deleting files. The process is killed.
 
-On restart the harness reads one register and finds `calls[0].status = "effect_pending", replay = "never"`. It does not re-run the deletion. It appends a synthetic error result under the result id that was reserved before the effect started, marks the call complete, and continues to call 1. The conversation stays coherent — every tool call has a result — and nothing ran twice.
+```text
+TX[ insert entry n2 (assistant, 2 calls), insert usage u1, upsert lane.leaf = n2,
+    upsert op.state/O = tools (result ids n3, n4 reserved) ]
+TX[ upsert op.tool_args/O:s1:0, upsert op.state/O = call 0 effect_pending,
+                                                    replay: "never" ]
+… tool deletes files …  ← CRASH
+```
+
+On restart the harness reads one register and finds `calls[0].status = "effect_pending", replay = "never"`. It does not re-run the deletion. It appends a synthetic error result under the result id that was reserved before the effect started, marks the call complete, and continues to call 1:
+
+```text
+TX[ insert entry n3 (synthetic "interrupted" result), upsert lane.leaf = n3,
+    upsert op.state/O = call 0 completed ]
+``` The conversation stays coherent — every tool call has a result — and nothing ran twice.
 
 Had the tool declared `replay: "safe"` (a read, a query), the harness would have re-executed it with the persisted arguments instead.
 

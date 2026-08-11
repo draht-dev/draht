@@ -1,23 +1,6 @@
 # AgentHarness v3 — implementation specification
 
-**Status:** complete, pending final audit. Once that audit passes, this document supersedes `agent-harness-spec.md` in full, which itself superseded `harness-v2.md`. Until then, `agent-harness-spec.md` remains authoritative.
-
-**Sources being merged:**
-
-- `agent-harness-spec.md` — the audited base spec ("base" below). Its interpreter, effects boundary, hooks, events, classifier, abort/close, and race catalog carry over with mechanical renames only; do not rewrite them.
-- The storage walkthrough jot ("jot" below, parts 1–9) — the three-store model, pending registers, terminal cleanup, recovery, retention/partitioning, schema evolution, backend stories, API deltas, and the binding decisions in jot part 9.
-- The storage-redesign critique findings, as resolved by jot part 9.
-
-**Global renames applied throughout v3:**
-
-```text
-node / Node*            → entry / *Entry          (continuity with coding-agent)
-slot                    → register
-"storage substrate"     → "Storage"
-StoredValue / valueId   → gone (no values table)
-```
-
----
+This document supersedes `agent-harness-spec.md` in full, which itself superseded `harness-v2.md`.
 
 # Part 0 — Orientation
 
@@ -151,6 +134,8 @@ type SettledAssistantMessage = AssistantMessage & {
     provider/model and Models auth resolver without resolving auth yet. */
 interface ModelRequestLease {
   readonly model: Model;
+  // Generic parameters elided; the landed pi-ai API picks concrete generics
+  // (Model has no default Api parameter today).
   stream(context: Context, options?: ModelsApiStreamOptions<Api>):
     AssistantMessageEventStream;
   streamSimple(context: Context, options?: ModelsSimpleStreamOptions):
@@ -221,13 +206,13 @@ Every id storage stores — entry ids, usage ids, and every reserved id that wil
 
 Minting rules:
 
-1. An id is minted with `now()` **at reservation**. For born-placed entries — the hot path — reservation and placement are the same transaction, so the prefix equals the placement date.
+1. An id is minted with `now()` **at reservation**. For direct appends and prompt entries, reservation and placement are the same transaction, so the prefix equals the placement date; assistant responses and tool results mint at the intent commit and place at settlement, so their prefixes trail placement by at most the request duration.
 2. **Group cohesion: followers inherit the leader's timestamp.** Tool-result ids are minted with their assistant entry id's 48-bit timestamp — `idGenerator.next(timestampMs?)` (§2.8); fresh random bits keep them unique — so an assistant and its tool results form one time-cohesive group under id order, even across a midnight boundary. This is a deliberate, documented deviation from "UUID timestamp = wall clock": a call/result exchange is one unit — a tool result whose assistant call is missing heads a context every provider rejects — and its ids say so.
 3. **Synthetic settlement needs no special case.** Crash recovery writes under already-reserved ids (§4.5), so synthetic responses and results carry exactly the ids their intents promised.
 
 **The opaque-payload contract.** Application- and model-visible content — custom entry `data`, `details` fields, `fact.custom` values, message text, hook `resumeData` — may embed entry ids. The harness never tracks such references: they are opaque payload, invisible to validation and recovery, and a retention mechanism may leave them dangling. Content that must remain resolvable is copied into the payload rather than referenced by id.
 
-**Absolutes.** Entries and usage rows, once committed, are never deleted; the administrative precise rewrite (§2.9) is the sole sanctioned exception. A missing parent is always corruption — loud, never a clean stop.
+**Absolutes.** Within a session, entries and usage rows, once committed, are never deleted; the administrative precise rewrite (§2.9) is the sole sanctioned exception (repository-level `delete()` removes whole sessions, §2.8). A missing parent is always corruption — loud, never a clean stop.
 
 ## 1.3 Register namespaces
 
@@ -744,7 +729,8 @@ interface SessionMetadata {
   id: string;
   createdAt: number;
   /** Current storage schema version (Part 7). */
-  storageVersion: number;
+  storageVersion: number;      // starts at 1 for new format-4 sessions
+  cwd?: string;                // working directory, when the application records one
   parentSessionId?: string;
   /** Only when a v3 parent path cannot be resolved to an available header id. */
   legacyParentSessionPath?: string;
@@ -757,7 +743,7 @@ interface SessionCodecOptions {
 
 interface SessionSearchOptions { text: string; cwd?: string }
 interface SessionSearchHit<M extends SessionMetadata = SessionMetadata> {
-  metadata: M; entryId: string; timestamp: string; snippet?: string; score?: number;
+  metadata: M; entryId: string; timestamp: number; snippet?: string; score?: number;
 }
 interface SessionSearch<M extends SessionMetadata = SessionMetadata> {
   search(options: SessionSearchOptions): Promise<SessionSearchHit<M>[]>;
@@ -1082,6 +1068,8 @@ stateDiagram-v2
     failure_drain --> terminal : inbox drained (failed)
 
     checkpoint --> terminal : abort reconciled (aborted)
+    compaction --> terminal : abort before structural commit (aborted)
+    failure_drain --> terminal : abort reconciled after writes drain (aborted)
     terminal --> [*]
 ```
 
@@ -1288,8 +1276,8 @@ Every queued admission mints the item's entry id (§1.2) and writes its payload 
 | Public input | Admitted when | Transaction |
 |---|---|---|
 | `nextRun(msg)` | any state, including idle | `TX[ upsert pending.entry/{id} = payload, L(pendingNextRun += id) ]` — never starts a run |
-| `steer(msg)` | active running run | `TX[ upsert pending.entry/{id} = payload, S(inbox.steer += id) ]` |
-| `followUp(msg)` | active running run | `TX[ upsert pending.entry/{id} = payload, S(inbox.followUp += id) ]` |
+| `steer(msg)` | open run with running control — including deferred suspension; under `cancel_requested` → `NoActiveRun` | `TX[ upsert pending.entry/{id} = payload, S(inbox.steer += id) ]` |
+| `followUp(msg)` | open run with running control — including deferred suspension; under `cancel_requested` → `NoActiveRun` | `TX[ upsert pending.entry/{id} = payload, S(inbox.followUp += id) ]` |
 | tree write, run active | including suspended and cancelling | `TX[ upsert pending.entry/{id} = payload, S(inbox.writes += id) ]` — survives abort |
 | tree write, lane idle | idle | `TX[ insert entry, upsert lane.leaf ]` |
 | tree write, structural op open | — | wait for the operation to end, then re-evaluate |
@@ -1508,7 +1496,7 @@ type Action =
   | { kind: "await_effect"; key: EffectKey }
   | { kind: "wait"; until: number; telemetryContext: TelemetryContext }
   | { kind: "suspend"; result: OperationResult }
-  | { kind: "done"; result: OperationResult };
+  | { kind: "finish"; result: OperationResult };
 
 async function drive(current: CurrentOperation, live: DriveState): Promise<OperationResult> {
   while (true) {
@@ -1576,8 +1564,11 @@ async function drive(current: CurrentOperation, live: DriveState): Promise<Opera
         current = await reloadCurrent(current.operation.operationId);
         break;
 
+      case "finish":
+        current = await fx.commitTerminal(current, action.result) ?? current;
+        return action.result;
+
       case "suspend":
-      case "done":
         return action.result;
     }
   }
@@ -1619,6 +1610,13 @@ interface Effects {
   commitEffectSettlement(current: CurrentOperation, plan: EffectPlan,
                          output: SettlementOutput, telemetry: TelemetryContext):
     Promise<SettlementResult>;
+  /** The terminal transaction (§3.13): register deletes, lane.lastResult,
+      lane.state clear — plus any final entry/label writes the outcome carries
+      (§3.10). Conditional on op.state still being present at its expected seq;
+      undefined = externally finalized first (§4.9). Transition commits derive
+      their entry/usage writes from the state diff the same way. */
+  commitTerminal(current: CurrentOperation, result: OperationResult):
+    Promise<CurrentOperation | undefined>;
   /** Runs after_tool for the raw phase-two result selected in source order. */
   finalizeTool(plan: Extract<EffectPlan, { kind: "tool" }>,
                output: Extract<EffectOutput, { kind: "tool_raw" }>):
@@ -1823,7 +1821,9 @@ A failed storage commit faults the whole harness. A faulted harness stops all ef
 
 An operation can end from outside its own drive: administrative force-kill tooling — or any future repairer (Part 6) — may commit the terminal transaction (§3.13), with or without synthetic settlements under the reserved ids, while a live drive still holds the operation in memory. The drive discovers this in exactly one way: a conditional commit or `reloadCurrent` finds the operation is no longer the lane's current operation — its registers are absent.
 
-The rule: **the drive stops.** It pulls the operation signal so in-flight effects cancel, discards every in-memory result without writing — no register remains to own a settlement — emits the operation's end events, and resolves the live caller's promise from `lane.lastResult`, which the finalizing transaction wrote. It never re-creates registers, never commits a competing terminal transaction, and never treats the absence as corruption: absent `op.*` registers with a cleared `currentOperationId` is the ordinary post-terminal shape (§3.13).
+The rule: **the drive stops.** It pulls the operation signal so in-flight effects cancel, discards every in-memory result without writing — no register remains to own a settlement — emits the operation's end events, and resolves the live caller's promise from `lane.lastResult`, which the finalizing transaction wrote (dereferencing `finalAssistantEntryId` to reconstruct `finalMessage` when present).
+
+On the shipping backends a finalizer is either in-process — an admin surface committing on the lane mutation line like any other job — or a separate process that first takes over the writer lease after close/crash. Every terminal transaction, the drive's own included, is conditional on `op.state` still existing at its expected seq, which is what makes invariant 21 (at most one terminal transaction per operation) hold under the race. It never re-creates registers, never commits a competing terminal transaction, and never treats the absence as corruption: absent `op.*` registers with a cleared `currentOperationId` is the ordinary post-terminal shape (§3.13).
 
 A suspended operation needs no drive to stop. The finalizer's terminal transaction leaves the lane idle; a later `resume()` finds `currentOperationId: null` and returns `NothingToResume`, and the application reads the outcome from `getLastResult()` (§5.1) — the same reconciliation path as any post-crash outcome.
 
@@ -2537,7 +2537,7 @@ External output that violates durable JSON/schema contracts is converted before 
 
 For each live tool batch, the harness resolves `toolContext` exactly once, caches bound `AgentHarnessTool<TContext>` adapters in `DriveState.toolBatches`, and passes that same context as the fifth execute argument for every call. Safe replay after restart creates one new batch snapshot; context is environmental and never persisted.
 
-`executeToolBatch` preserves the existing sequential/parallel behavior: source-ordered preparation and dispatch, concurrent effects in parallel mode, source-ordered finalization/results, no effect for blocked/invalid/genuine-length calls, and `terminate: true` only when every finalized outcome terminates. Compatibility wrappers keep existing public loop signatures and events.
+`executeToolBatch` (the exported successor of the source's private `executeToolCalls`) preserves the existing sequential/parallel behavior: source-ordered preparation and dispatch, concurrent effects in parallel mode, source-ordered finalization/results, no effect for blocked/invalid/genuine-length calls, and `terminate: true` only when every finalized outcome terminates. Compatibility wrappers keep existing public loop signatures and events.
 
 ## 5.8 Telemetry
 

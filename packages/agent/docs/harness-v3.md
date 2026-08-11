@@ -349,6 +349,7 @@ interface Storage {
   scanBranch(q: BranchScan): Promise<Entry[]>;            // §2.5
   scanBranchStructure(q: BranchScan): Promise<EntryStructure[]>;
   scanEntries(q: EntryScan): Promise<Entry[]>;            // session-wide tree inventory
+  scanUsage(q: UsageScan): Promise<UsageRow[]>;           // seq-ranged ledger read (§1.6)
   getStats(): Promise<SessionStats>;                      // maintained projection (§1.6)
 
   close(): Promise<void>;
@@ -362,9 +363,14 @@ interface EntryScan {
   fromSeq?: number; toSeq?: number;
   order?: "asc" | "desc"; limit?: number;
 }
+
+interface UsageScan {
+  fromSeq?: number; toSeq?: number;
+  order?: "asc" | "desc"; limit?: number;
+}
 ```
 
-There is deliberately no cross-namespace register scan, no ledger scan, and no durable write log. Restore, facts, forks, and execution follow exact ids and keys; entry inventory uses `scanEntries`; totals use the stats projection (§1.6); test-order assertions wrap `commit()` with the instrumented-storage decorator (Part 9); production auditing belongs to telemetry (§5.8).
+There is deliberately no cross-namespace register scan and no durable write log. Restore, facts, forks, and execution follow exact ids and keys; entry inventory uses `scanEntries`; ledger reads use `scanUsage`; totals use the stats projection (§1.6); test-order assertions wrap `commit()` with the instrumented-storage decorator (Part 9); production auditing belongs to telemetry (§5.8).
 
 Recovery and execution reads must be index-driven and bounded. They may not infer state from an absent value, and there is no register history to fold. Exact dereference is allowed: one current state may name a bounded set of entries and registers, fetched in one batch without order-dependent reduction. Public inventory and debugging APIs may intentionally read more than a hot path; their `limit`/pagination behavior is explicit at the `SessionTree` layer.
 
@@ -382,7 +388,7 @@ Every settled provider attempt writes one `UsageRow` — successful, failed, ret
 - `entryId` names the entry the cost belongs to, when there is one. Structural (summary) attempts that fail before producing an entry, and standalone adjustments, have none.
 - `adjustment: true` marks a caller-supplied reconciliation (`recordUsage`, §5.1) rather than a provider report. The format-3 import writes one aggregate adjustment row (Appendix B).
 - Provider-attempt usage ids are UUIDv7s reserved in the intent commit (§1.2), so a settlement writes under exactly the id its intent promised. Adjustment rows, tool-reported usage rows, hook-supplied compaction/navigation usage rows (§3.9, §3.10), and import aggregates mint their ids at commit; nothing reserves them.
-- `getStats()` is a maintained projection over the ledger and the message-entry count — `messageCount` counts `message` entries only, not compactions, summaries, or custom entries. After every commit it equals the ledger sum; the conformance suite asserts this (Part 9). There is no ledger scan: totals come from the projection, and individual rows reach the application through the `usage` event at commit time (§5.5).
+- `getStats()` is a maintained projection over the ledger and the message-entry count — `messageCount` counts `message` entries only, not compactions, summaries, or custom entries. After every commit it equals the ledger sum; the conformance suite asserts this (Part 9). Individual rows reach the application through the `usage` event at commit time (§5.5), and `scanUsage` (§1.5) reads them back by seq range — a consumer that persists the greatest event `seq` it applied catches up after downtime with `scanUsage({ fromSeq })`. Recovery never reads the ledger.
 
 ## 1.7 Backends
 

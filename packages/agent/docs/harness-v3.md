@@ -433,37 +433,41 @@ When to compact: on open when the dead-bytes ratio crosses a threshold; optional
 
 ### SQLite
 
+**One database file per session.** The file is the session, exactly as a JSONL
+file is. Corruption is confined to one session, deletion is unlinking a file, and
+SQLite's one-writer-per-file rule coincides with the design's
+one-writer-per-session rule by construction.
+
 ```sql
-entries(session_id, id TEXT, parent_id TEXT, seq INTEGER, type TEXT, custom_type TEXT,
-        timestamp INTEGER, payload TEXT, PRIMARY KEY (session_id, id)) WITHOUT ROWID;
-CREATE INDEX ix_entry_parent ON entries(session_id, parent_id);
-CREATE INDEX ix_entry_seq ON entries(session_id, seq, type);
+entries(id TEXT PRIMARY KEY, parent_id TEXT, seq INTEGER, type TEXT,
+        custom_type TEXT, timestamp INTEGER, payload TEXT) WITHOUT ROWID;
+CREATE INDEX ix_entry_parent ON entries(parent_id);
+CREATE INDEX ix_entry_seq ON entries(seq, type);
 
-registers(session_id, namespace TEXT, key TEXT, seq INTEGER, value TEXT,
-          PRIMARY KEY (session_id, namespace, key));
+registers(namespace TEXT, key TEXT, seq INTEGER, value TEXT,
+          PRIMARY KEY (namespace, key));
 
-usage_ledger(session_id, id TEXT, seq INTEGER, entry_id TEXT, adjustment INTEGER,
-             usage TEXT, details TEXT, PRIMARY KEY (session_id, id)) WITHOUT ROWID;
-CREATE INDEX ix_usage_seq ON usage_ledger(session_id, seq);
+usage_ledger(id TEXT PRIMARY KEY, seq INTEGER, entry_id TEXT, adjustment INTEGER,
+             usage TEXT, details TEXT) WITHOUT ROWID;
+CREATE INDEX ix_usage_seq ON usage_ledger(seq);
 
 -- Private branch index (§2.6). Not registers; no equivalent in the other backends.
-branch_entries(session_id, branch_id TEXT, entry_id TEXT, entry_seq INTEGER, entry_type TEXT,
-               PRIMARY KEY (session_id, branch_id, entry_id)) WITHOUT ROWID;
+branch_entries(branch_id TEXT, entry_id TEXT, entry_seq INTEGER, entry_type TEXT,
+               PRIMARY KEY (branch_id, entry_id)) WITHOUT ROWID;
 -- Ordered scans. entry_seq must follow branch_id directly or ORDER BY needs a
 -- temp b-tree; entry_id and entry_type trail so the index covers id-only reads.
-CREATE INDEX ix_be_seq  ON branch_entries(session_id, branch_id, entry_seq, entry_id, entry_type);
+CREATE INDEX ix_be_seq  ON branch_entries(branch_id, entry_seq, entry_id, entry_type);
 -- Type-filtered scans.
-CREATE INDEX ix_be_type ON branch_entries(session_id, branch_id, entry_type, entry_seq, entry_id);
-CREATE INDEX ix_be_entry ON branch_entries(session_id, entry_id);
-branch_meta(session_id, branch_id TEXT, tip_entry_id TEXT, tip_seq INTEGER,
-            base_branch_id TEXT, base_seq INTEGER,
-            PRIMARY KEY (session_id, branch_id));
-CREATE UNIQUE INDEX ix_bm_tip ON branch_meta(session_id, tip_entry_id);
+CREATE INDEX ix_be_type ON branch_entries(branch_id, entry_type, entry_seq, entry_id);
+CREATE INDEX ix_be_entry ON branch_entries(entry_id);
+branch_meta(branch_id TEXT PRIMARY KEY, tip_entry_id TEXT, tip_seq INTEGER,
+            base_branch_id TEXT, base_seq INTEGER);
+CREATE UNIQUE INDEX ix_bm_tip ON branch_meta(tip_entry_id);
 
-sessions(session_id, created_at, parent_session_id, storage_version, metadata);
-session_stats(session_id, message_count, usage_payload);
-session_sequences(session_id, next_seq);
-writer_leases(session_id, owner_id TEXT, fence INTEGER, expires_at_ms INTEGER);
+-- One row each: the file is the session.
+session(created_at, parent_session_id, storage_version, metadata,
+        message_count, usage_payload, next_seq);
+writer_lease(owner_id TEXT, fence INTEGER, expires_at_ms INTEGER);
 ```
 
 One `commit()` is one SQL transaction: insert entries, insert ledger rows, upsert or delete registers, maintain the branch index, bump `session_stats`. Never an UPDATE or DELETE on an entry or ledger row; mutability is confined to registers, the branch index (`branch_meta` tips and bases), stats, sequences, the session catalog row, and leases.
@@ -475,13 +479,15 @@ lock; if another writer committed in between, SQLite fails that upgrade — and
 stale snapshot. The only recovery is rollback and full retry.
 
 Every commit has this shape, not just a few. Allocating the sequence range reads
-`session_sequences.next_seq` and then writes it, so a read precedes a write in every
+the session row's `next_seq` and then writes it, so a read precedes a write in every
 transaction the system performs. Branch creation (§2.6) adds a second instance,
 reading the newest compaction before inserting. `BEGIN IMMEDIATE` takes the write
 lock up front and avoids an unrecoverable stale-snapshot upgrade, so there is no case
 where a deferred `BEGIN` is the right choice here.
 
-**`writer_leases` enforces the single-writer rule.** Expiring fenced ownership:
+**`writer_lease` enforces the single-writer rule.** WAL happily lets two
+processes alternate writes to one file, which is exactly the interleaving the
+design forbids — so per-session files do not remove the need for the lease. Expiring fenced ownership:
 `open()` acquires the claim, storage renews it on appends and while idle, and close
 stops renewal after the queue drains and deletes only its matching `(owner_id,
 fence)` pair — so a stale owner cannot release the replacement that succeeded it.
@@ -489,15 +495,6 @@ This is what makes "one process owns one session" an enforced property rather th
 a convention the serving layer is trusted to uphold. Memory and JSONL have no
 equivalent and rely on process ownership; a JSONL session opened twice is corrupt
 and undetected.
-
-**Writer scope is per database file, not per session.** WAL mode permits exactly one
-writer per file. Because these tables are keyed by `session_id`, several sessions may
-share a file, and the design's one-writer-per-session rule does not by itself make
-writes uncontended. Choose deliberately:
-
-- *One file per session* — the single-writer claim becomes literally true, and there
-  is no cross-session contention. Preferred unless something forces otherwise.
-- *One file for many sessions* — correct, but all sessions share SQLite's one-writer queue. Use only when that contention is acceptable.
 
 Atomicity itself needs no special handling. A multi-write transaction is all-or-none
 by the file format: WAL frames become visible only when the commit record lands, so a
@@ -508,8 +505,8 @@ Each physical segment of `scanBranch` uses one JOIN; §2.6 combines segment rang
 ```sql
 SELECT e.id, e.parent_id, e.seq, e.type, e.custom_type, e.timestamp, e.payload
 FROM branch_entries b
-CROSS JOIN entries e ON e.session_id = b.session_id AND e.id = b.entry_id
-WHERE b.session_id = ? AND b.branch_id = ? AND b.entry_seq > ? AND b.entry_seq <= ?
+CROSS JOIN entries e ON e.id = b.entry_id
+WHERE b.branch_id = ? AND b.entry_seq > ? AND b.entry_seq <= ?
 ORDER BY b.entry_seq;
 ```
 
@@ -518,8 +515,8 @@ to itself the planner may drive from `entries`, scan the table, and sort through
 temporary b-tree. Assert the plan in a test:
 
 ```
-SEARCH b USING COVERING INDEX ix_be_seq (session_id=? AND branch_id=? AND entry_seq>?)
-SEARCH e USING PRIMARY KEY (session_id=? AND id=?)
+SEARCH b USING COVERING INDEX ix_be_seq (branch_id=? AND entry_seq>?)
+SEARCH e USING PRIMARY KEY (id=?)
 ```
 
 Any plan containing `USE TEMP B-TREE FOR ORDER BY` or a scan of `entries` is a
@@ -527,7 +524,7 @@ regression.
 
 `scanBranchStructure` is the same query without the payload column. `getEntries` is a primary-key lookup keyed by `e.id IN (...)`.
 
-The repository's existing `SessionSearch` surface remains. SQLite replaces its rowid-dependent index with an FTS projection keyed by stored `session_id` and `entry_id`; searchable text is the JSON serialization of the entry, matching the scanning fallback. The transaction that places an entry also inserts its projection after validation. Pending content is not searchable before placement. Fork import populates the same projection, and session deletion removes its rows. Search never depends on `entries.rowid`.
+Because the file is the session, the precise rewrite (§2.9) and forks are file operations: build a fresh database (`VACUUM INTO` or row copy over one read snapshot) and, for the rewrite, atomically swap it over the old path — the same shape JSONL uses.
 
 ## 1.8 Why write-once plus registers
 
@@ -756,14 +753,6 @@ interface SessionCodecOptions {
   customMessageSchemas?: Record<string, TSchema>;  // keyed by custom `role`
 }
 
-interface SessionSearchOptions { text: string; cwd?: string }
-interface SessionSearchHit<M extends SessionMetadata = SessionMetadata> {
-  metadata: M; entryId: string; timestamp: number; snippet?: string; score?: number;
-}
-interface SessionSearch<M extends SessionMetadata = SessionMetadata> {
-  search(options: SessionSearchOptions): Promise<SessionSearchHit<M>[]>;
-}
-
 interface SessionRepo<M extends SessionMetadata = SessionMetadata,
                       C extends { id?: string; parentSessionId?: string } =
                         { id?: string; parentSessionId?: string },
@@ -797,7 +786,9 @@ Repository constructors accept `SessionCodecOptions`. Every declaration-merged c
 
 `open()` compares the stored `storageVersion` with the binary's: equal proceeds; older runs chained migrations under the writer lease before returning (Part 7); newer refuses to open. Old coding-agent v3 JSONL sessions open through the same repository and normalize on load (Appendix B — "v3" there names the legacy JSONL session format, not this document).
 
-Repository implementations resolve `fork(source, ...)` to the source's serialized snapshot boundary: an active Memory/JSONL storage queues the snapshot with commits; an inactive JSONL file is read as one immutable prefix; SQLite uses one read transaction. Repositories may keep an active-storage registry by session id for this purpose. This is repository coordination, not part of the one-session `Storage` contract.
+Repository implementations resolve `fork(source, ...)` to the source's serialized snapshot boundary: an active Memory/JSONL storage queues the snapshot with commits; an inactive JSONL file is read as one immutable prefix; SQLite uses one read snapshot of the session's file. Repositories may keep an active-storage registry by session id for this purpose. This is repository coordination, not part of the one-session `Storage` contract.
+
+How a repository organizes its sessions is its own choice, constrained only by the storage backend: JSONL and SQLite storage are one file per session, so their repositories are file-based; a Postgres storage could hold every session in one database. Cross-session search is **not** a repository or storage concern: it is an external projection — typically a service subscribing to harness events (§5.5) with its own store — and no conformance test covers it.
 
 ## 2.9 The precise rewrite
 
@@ -2563,7 +2554,7 @@ Telemetry attributes may contain declared ids, names, counts, durations, statuse
 
 **This part is informative.** Nothing in it binds the shipping backends: Memory, JSONL, and SQLite never partition and never delete entries or usage rows (§1.2), and no core rule references this part for its correctness. It exists to show that the identity choices in §1.2 are sufficient for the one backend that would eventually retire old data — a possible Postgres deployment with TTL retention. It is a bridge we cross when we get there; this sketch is the current best guess, not a contract.
 
-- **The id is the partition key.** UUIDv7 sorts bytewise in time order, so the bulk tables — entries, usage ledger, FTS projection — use `PARTITION BY RANGE (id)` on the uuid id column, with period-boundary UUIDs (zeroed tails) as bounds. No partition column exists anywhere; §1.2's time prefix is the whole mechanism. Registers, `branch_meta`, stats, leases, and sessions stay in a hot unpartitioned catalog. `branch_entries` partitions by `entry_id` with the same bounds, so dropping a period cleans the branch index for free; `branch_meta` stays hot, and base pointers dangling into a dropped period are trimmed lazily on first access.
+- **The id is the partition key.** UUIDv7 sorts bytewise in time order, so the bulk tables — entries, usage ledger — use `PARTITION BY RANGE (id)` on the uuid id column, with period-boundary UUIDs (zeroed tails) as bounds. No partition column exists anywhere; §1.2's time prefix is the whole mechanism. Registers, `branch_meta`, stats, leases, and sessions stay in a hot unpartitioned catalog. `branch_entries` partitions by `entry_id` with the same bounds, so dropping a period cleans the branch index for free; `branch_meta` stays hot, and base pointers dangling into a dropped period are trimmed lazily on first access.
 - **Pre-pass repair.** Before a period P is dropped, an online repairer makes live state stop referencing it: reparent edges crossing into P onto the nearest retained ancestor, found by an indexed uuid-range query; null any dormant `lane.leaf` decoding into P via a register-seq CAS; force-expire open operations still referencing P register-only — the terminal transaction of §3.13 writing `lane.lastResult`, no synthetic entries, with any live drive stopping through external finalization (§4.9); delete `fact.label` registers whose keys decode into P with one uuid-range delete.
 - **The commit barrier.** Repair races ordinary commits, so the final step is atomic against all of them: `BEGIN; LOCK entries, registers IN ACCESS EXCLUSIVE MODE; <delta repair for anything committed since the online pass>; ALTER TABLE … DETACH PARTITION p; COMMIT;` — plain `DETACH`, not `CONCURRENTLY`, precisely because it is transactional under the lock; the `DROP TABLE` happens later, unhurried. The barrier makes repair-plus-detach one linearization point: every commit sees either the fully attached period or a fully repaired store without it.
 - **The default partition.** A `DEFAULT` partition absorbs stray inserts whose ids predate every attached partition — an ancient `pendingNextRun` item consumed years after its mint still places under its reserved id and simply lands there. Nothing errors and nothing is lost; the default partition stays small and is never dropped.
@@ -2664,7 +2655,7 @@ If implementation exposes a design contradiction, missing transition, or materia
 | 11 | **Manual compaction** | Adapt existing compaction implementation to reserved-lane admission, the `op.preparation/{opId}:{taskId}` register, total structural state, hook/generated sources, nested request intents/usage, retained tail, retry/recovery/abort. | Empty/reservation race, hook decline/result, crash after request one of split-turn generation, every state/crash, no public summary-stream messages. |
 | 12 | **Threshold and overflow compaction** | In-run structural decision, durable once-per-trigger threshold marker, continuation preservation, all overflow predicates, atomic response/preparation publication, specified normalization/projection, one overflow recovery flag, bounded second failure. | Threshold decline/empty across reopen, all overflow classifier/preparation inputs, no overflow tool plan, genuine length, crash/reopen at every transition. |
 | 13 | **Navigation** | Validation, summarized decision/generation, and one final transaction combining move/summary/leaf/label with the terminal writes; summary-only navigation hook. | Root/current/unknown rejection, summarized/unsummarized paths, final leaf at summary, abort race, exact atomic publication including register cleanup. |
-| 14 | **SQLite** | Rework the current unfinished schema/backend directly to entries/registers/usage-ledger tables, transactions, stats, leases, catalog `storageVersion`, repository operations, segmented branch cache, entry-id-keyed FTS search projection, and explicit repair. No values table, no `slot_history`, no `getLog`, no migration. | Shared conformance, `BEGIN IMMEDIATE`, fencing, query plans, segment-chain soundness, register upsert/delete, placed-only search, forks/search/stats/repair. |
+| 14 | **SQLite** | Rework the current unfinished schema/backend to one database file per session: entries/registers/usage-ledger tables, one-row session/lease rows, transactions, `storageVersion`, repository operations, segmented branch cache, `VACUUM INTO`-based rewrite/fork, and explicit repair. No values table, no `slot_history`, no `getLog`, no search projection, no migration. | Shared conformance, `BEGIN IMMEDIATE`, fencing, query plans, segment-chain soundness, register upsert/delete, forks/stats/repair. |
 | 15 | **Schema version and migrations** | Chained migrate-on-open under the writer lease, migration registry with total register mappings — open operations' `op.meta`/`op.state` included (§7.4), JSONL lenient old-shape replay and mandatory post-migration compaction, refuse-newer. | Version gate (equal/older/newer), chained idempotent migrations across crash, an open-operation state mapped across a state-machine change and resuming correctly, lenient replay of superseded shapes, compaction retiring old bytes. |
 | 16 | **Surface completion** | Complete snapshots/watch, event catalog/order/filtering, telemetry instrumentation/schema freshness, public exports, backend parity, and remove any remaining dead scaffold code. | Snapshot/event gap, attach during every live state, sensitive-event/content-free-telemetry assertions, full race/crash matrix on all backends. |
 

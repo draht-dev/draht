@@ -794,7 +794,52 @@ Repository constructors accept `SessionCodecOptions`. Every declaration-merged c
 
 Repository implementations resolve `fork(source, ...)` to the source's serialized snapshot boundary: an active Memory/JSONL storage queues the snapshot with commits; an inactive JSONL file is read as one immutable prefix; SQLite uses one read snapshot of the session's file. Repositories may keep an active-storage registry by session id for this purpose. This is repository coordination, not part of the one-session `Storage` contract.
 
-How a repository organizes its sessions is its own choice, constrained only by the storage backend: JSONL and SQLite storage are one file per session, so their repositories are file-based; a Postgres storage could hold every session in one database. Cross-session search is **not** a repository or storage concern: it is an external projection — typically a service subscribing to harness events (§5.5) with its own store — and no conformance test covers it.
+How a repository organizes its sessions is its own choice, constrained only by the storage backend: JSONL and SQLite storage are one file per session, so their repositories are file-based; a Postgres storage could hold every session in one database.
+
+### Search
+
+Search is an **optional collaborator** injected into the repository, with its own store. Storage knows nothing about it; no conformance test covers it; a repository without a service simply has no search.
+
+```ts
+interface SessionSearchService {
+  /** Sessions ranked by best match. Required. */
+  searchSessions(query: SearchQuery): Promise<SessionSearchHit[]>;
+  /** Entries ranked by match. Optional capability. */
+  searchEntries?(query: SearchQuery): Promise<EntrySearchHit[]>;
+
+  sync(): Promise<void>;              // enumerate sessions, catch up all cursors
+  notify(sessionId: string): void;    // freshness hint; debounced single-session pull
+  remove(sessionId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+interface SearchQuery { text: string; limit?: number }  // limit counts the method's unit
+
+interface SessionSearchHit {
+  sessionId: string;
+  score?: number;
+  top?: { entryId: string; snippet?: string; timestamp: number };  // best match, for display
+}
+
+interface EntrySearchHit {
+  sessionId: string; entryId: string; timestamp: number;
+  snippet?: string; score?: number;
+}
+```
+
+The repository, when constructed with a service, calls `sync()` at startup, `notify(sessionId)` when it observes entry placement on a session it opened, and `remove(sessionId)` on `delete()`; it exposes both query forms enriched with the metadata it owns:
+
+```ts
+searchSessions(q): Promise<Result<(SessionSearchHit & { metadata: M })[], SearchUnavailable>>;
+searchEntries(q):  Promise<Result<(EntrySearchHit  & { metadata: M })[],
+                                  SearchUnavailable | SearchNotSupported>>;
+```
+
+**Indexing is pull-based; events are only hints.** The service keeps a durable cursor per session — the highest entry `seq` it has indexed. `sync()` enumerates sessions via the repository (old, new, and files that arrived by copy alike), reads `scanEntries({ fromSeq: cursor + 1 })` on each, indexes message-entry text idempotently per `(sessionId, entryId)`, and advances the cursor. A crash mid-batch re-indexes a few rows into the same state; a service deployed against years of existing sessions starts empty and catches up with the same loop. `notify()` never carries content — it is a poke that triggers a debounced pull of one session; a lost poke is caught by the next sweep. The index is a rebuildable projection with zero authority: indexing failures never affect the harness or commits.
+
+Two mechanical notes. Reading a session another process is writing is legal — the writer lease gates writers, and WAL gives cross-process snapshot reads — but a sweep may skip lease-held sessions as an optimization, since `notify()` covers the hot ones. The precise rewrite (§2.9) swaps a session's store and may renumber seqs, so cursors key on `(sessionId, storeGeneration)`; the rewrite bumps a generation counter in metadata and a mismatch triggers a full re-index of that session.
+
+The reference implementation is one standalone SQLite database — an FTS5 table over `(session_id, entry_id, text)` plus the cursor table — and works unchanged over JSONL session files. Several processes may share it under the usual discipline (WAL, `busy_timeout`, `BEGIN IMMEDIATE`, idempotent rows, monotonic cursor updates); writers serialize.
 
 ## 2.9 The precise rewrite
 
@@ -2650,7 +2695,7 @@ If implementation exposes a design contradiction, missing transition, or materia
 |---|---|---|---|
 | 1 | **Single-session Storage** | Write-once entries/usage, registers with first-class set/delete, atomic transactions, UUIDv7 id generator with follower minting, runtime entry/register/custom-message schemas, stats projection, Memory backend, shared conformance helpers, and the instrumented-storage decorator (Part 9). | Rollback, sequence order, duplicate ids, register set/delete/recreate, delete-of-absent-key no-op, fact deletion vs JSON `null`, schema validation, unknown custom roles, immutable reads, stats-equals-ledger, follower minting, close. |
 | 2 | **JSONL v4 and format 3** | Single-item/array transaction lines, register set/delete replay, header `storageVersion`, torn-tail handling, snapshot compaction (GC keep-predicate), format-3 read normalization and first-write temp/rename conversion. Replace unfinished current v4 without migration. | Backend conformance, corrupt interior/final lines, whole-array tear, compaction logical-equivalence, every format-3 rule, resolved/unresolved parent paths, aggregate imported usage adjustment. |
-| 3 | **Tree and repositories** | Entries with inline payloads, lane/config/state registers, facts, branch/global queries, context projection, `SessionTree`, repository lifecycle with the `storageVersion` gate at open, coherent branch/tree forks. | Placement, divergence, filters/cursors/stops, custom entries with and without data, context, fork before first attachment, configured fork snapshots/facts/zero ledger. |
+| 3 | **Tree and repositories** | Entries with inline payloads, lane/config/state registers, facts, branch/global queries, context projection, `SessionTree`, repository lifecycle with the `storageVersion` gate at open, coherent branch/tree forks, optional search-service wiring plus the reference SQLite FTS implementation (§2.8). | Placement, divergence, filters/cursors/stops, custom entries with and without data, context, fork before first attachment, configured fork snapshots/facts/zero ledger, search sync/notify/remove and cursor catch-up. |
 | 4 | **Runtime shell** | Lane/settings mutation lines, total-state validation (idle lanes included), register-seq CAS tokens, runtime snapshots, `Effects`, manual scheduler/gate, hook/event primitives, restore inventory (five register reads plus bounded hydration), dispatch-time identity resolution, fault/close plumbing. Public operations may still report not implemented. | State/action exhaustiveness, seq-token settlement, parallel scheduler order, hook aggregation, event buffering, gate nesting, zero effects while parked, restore without history reads, idle-lane validation. |
 | 5 | **Minimal no-tool run** | Prompt expansion, `before_run`, atomic acceptance with pending-capture placement, captured request options/thinking inline, payload/response hooks, one generation intent/effect/settlement, usage, the terminal transaction (register cleanup plus `lane.lastResult`), results, basic events/telemetry. | Successful run with final assistant fields, invalid caller/provider/hook output, exact transaction/event order, terminal cleanup completeness and `lastResult`, automatic/manual identical state, close at every boundary. |
 | 6 | **Generation recovery and retry** | Retry waits, unknown-effect recovery, synthetic cap settlement, ordinary stop/error/deferred classification, provider-compliant `aborted`, and failure-drain foundation. Overflow classification remains explicitly unimplemented until slice 12. | Every generation state before/after reopen, caps/backoff, stop/error/aborted/deferred classification, missing identities. |

@@ -202,7 +202,7 @@ export class ProcessTerminal implements Terminal {
 	 * to handle the case where the response arrives split across multiple events.
 	 */
 	private setupStdinBuffer(): void {
-		this.stdinBuffer = new StdinBuffer({ timeout: resolveEscapeTimeoutMs() });
+		this.stdinBuffer = new StdinBuffer({ escapeTimeout: resolveEscapeTimeoutMs() });
 
 		// Forward individual sequences to the input handler
 		this.stdinBuffer.on("data", (sequence) => {

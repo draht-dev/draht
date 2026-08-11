@@ -224,11 +224,13 @@ describe("ProcessTerminal Kitty keyboard protocol negotiation", () => {
 		const harness = setupNegotiation();
 		try {
 			harness.send("\x1b[");
-			await wait(15);
+			await wait(15); // well under the 50ms StdinBuffer sequence timeout, not the lone-ESC timeout
 
 			assert.equal(harness.getInput(), undefined);
 
-			await wait(160);
+			// StdinBuffer flushes at 50ms, then the Kitty negotiation buffer waits
+			// another 150ms before replaying, so wait comfortably past both.
+			await wait(200);
 
 			assert.equal(harness.getInput(), "\x1b[");
 		} finally {

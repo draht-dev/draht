@@ -20,7 +20,8 @@
 import { EventEmitter } from "events";
 
 const ESC = "\x1b";
-const LONE_ESCAPE_TIMEOUT_MS = 10;
+const DEFAULT_SEQUENCE_TIMEOUT_MS = 50;
+const DEFAULT_ESCAPE_TIMEOUT_MS = 10;
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
 
@@ -257,10 +258,15 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 
 export type StdinBufferOptions = {
 	/**
-	 * Maximum time to wait for sequence completion (default: 50ms).
-	 * A lone Escape uses at most 10ms to preserve keyboard responsiveness.
+	 * Maximum time to wait for an incomplete sequence such as CSI or mouse
+	 * (default: 50ms).
 	 */
 	timeout?: number;
+	/**
+	 * Maximum time to wait after a lone ESC before treating it as Escape
+	 * (default: 10ms). Increase for high-latency Alt+key input (SSH).
+	 */
+	escapeTimeout?: number;
 };
 
 export type StdinBufferEventMap = {
@@ -276,13 +282,15 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	private buffer: string = "";
 	private timeout: ReturnType<typeof setTimeout> | null = null;
 	private readonly timeoutMs: number;
+	private readonly escapeTimeoutMs: number;
 	private pasteMode: boolean = false;
 	private pasteBuffer: string = "";
 	private pendingKittyPrintableCodepoint: number | undefined;
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
-		this.timeoutMs = options.timeout ?? 50;
+		this.timeoutMs = options.timeout ?? DEFAULT_SEQUENCE_TIMEOUT_MS;
+		this.escapeTimeoutMs = options.escapeTimeout ?? DEFAULT_ESCAPE_TIMEOUT_MS;
 	}
 
 	public process(data: string | Buffer): void {
@@ -377,7 +385,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}
 
 		if (this.buffer.length > 0) {
-			const timeoutMs = this.buffer === ESC ? Math.min(this.timeoutMs, LONE_ESCAPE_TIMEOUT_MS) : this.timeoutMs;
+			const timeoutMs = this.buffer === ESC ? this.escapeTimeoutMs : this.timeoutMs;
 			this.timeout = setTimeout(() => {
 				const flushed = this.flush();
 

@@ -149,6 +149,21 @@ describe("StdinBuffer", () => {
 		});
 
 		it("should merge ESC + CR split across chunks within a larger timeout", async () => {
+			buffer = new StdinBuffer({ escapeTimeout: 100 });
+			emittedSequences = [];
+			buffer.on("data", (sequence) => {
+				emittedSequences.push(sequence);
+			});
+
+			processInput("\x1b");
+			await wait(20); // > 10ms default escapeTimeout, < 100ms configured escapeTimeout
+			processInput("\r");
+
+			assert.deepStrictEqual(emittedSequences, ["\x1b\r"]);
+			assert.equal(matchesKey(emittedSequences[0] ?? "", "alt+enter"), true);
+		});
+
+		it("does not apply the sequence timeout to a lone ESC", async () => {
 			buffer = new StdinBuffer({ timeout: 100 });
 			emittedSequences = [];
 			buffer.on("data", (sequence) => {
@@ -156,11 +171,11 @@ describe("StdinBuffer", () => {
 			});
 
 			processInput("\x1b");
-			await wait(20); // > 10ms old default, < 100ms configured timeout
+			await wait(20);
 			processInput("\r");
 
-			assert.deepStrictEqual(emittedSequences, ["\x1b\r"]);
-			assert.equal(matchesKey(emittedSequences[0] ?? "", "alt+enter"), true);
+			assert.deepStrictEqual(emittedSequences, ["\x1b", "\r"]);
+			assert.equal(matchesKey(emittedSequences[0] ?? "", "escape"), true);
 		});
 
 		it("keeps fragmented mouse sequences buffered across delayed chunks by default", async () => {

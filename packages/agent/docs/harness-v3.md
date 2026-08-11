@@ -137,7 +137,7 @@ Had the tool declared `replay: "safe"` (a read, a query), the harness would have
 - **Provider stream resumption.** Partial streams are process-local, never persisted. A settled response is persisted *completely* before anything classifies it.
 - **Multiple writers.** One process per session. The serving layer routes accordingly, and the SQLite backend enforces it with a fenced lease (§1.7). Lanes cover the workload that looks like multi-writer.
 - **Replication.** A session lives in one place.
-- **Durable write history.** Registers hold only current values: an overwritten register is gone, and there is no `getLog` or history table. Order-of-write assertions in tests use an instrumented storage decorator around `commit()` (Part 9); production auditing belongs to the telemetry layer (§5.8).
+- **Durable write history.** Registers hold only current values: an overwritten register is gone, and no API or table exposes write history. Order-of-write assertions in tests use an instrumented storage decorator around `commit()` (Part 9); production auditing belongs to the telemetry layer (§5.8).
 - **Deletion as a runtime feature.** Entries and usage rows are never deleted: compaction changes provider context, not storage, and terminal cleanup deletes only registers. Note that `retainedTail` copies old messages forward into newer compaction entries and summaries derive from old content, so compaction is not erasure either. Compliance-grade "erase this" is the administrative precise rewrite (§2.9), the sole sanctioned exception.
 
 ## 0.7 Notation and source types
@@ -168,8 +168,6 @@ type SettledAssistantMessage = AssistantMessage & {
 // through Models at request time, which also applies auth. A missing or
 // swapped registry entry fails the request in-band, like an unknown tool.
 ```
-
-There are no orchestration "records" in this system. Every durable thing is an **entry**, a **register**, or a **usage row**.
 
 ---
 
@@ -571,7 +569,7 @@ Rules:
 - Tool-result entries carry `terminate?: true`. It is orchestration state that `ToolResultMessage` has no field for.
 - Every compaction and branch summary carries `fromHook`: `true` for hook output, `false` for generated.
 - Every compaction stores a complete `retainedTail` (`[]` when empty). **Context never reads past a compaction.** This is what makes a compaction a self-contained checkpoint rather than a pointer into history.
-- A custom entry may carry no `data`. There is no payload-compatibility table to check: an entry either decodes against its type's runtime schema or is corruption.
+- A custom entry may carry no `data`. An entry either decodes against its type's runtime schema or is corruption.
 - Payloads are inline, so two entries never share stored content; there is no deduplication layer.
 
 ## 2.2 Placement
@@ -589,7 +587,7 @@ TX[ insert e_a4 = { parent: e_q1, type: "message", message: <assistant response>
     upsert lane.leaf/main = "e_a4" ]
 ```
 
-**Content first, placement later** — queued input (`steer`, `followUp`, `nextRun`) and deferred tree writes. The entry id is minted at enqueue and doubles as the register key; queue state references content by that one id — the old `{ nodeId, valueId }` pair collapses to a single string. Two transactions, possibly far apart:
+**Content first, placement later** — queued input (`steer`, `followUp`, `nextRun`) and deferred tree writes. The entry id is minted at enqueue and doubles as the register key; queue state references content by that one id. Two transactions, possibly far apart:
 
 ```
 t0  TX[ upsert pending.entry/e_q1 = { type: "message", payload: <200KB message> },
@@ -684,7 +682,7 @@ Semantics: take the path from `start` toward the root, order it (default `newest
 4. Run custom entries through `entryProjectors`. An unprojected custom entry never enters context.
 5. Run `transform_context`, then `toProviderMessages`.
 
-There is no rule for omitting an overflow response, and no link anywhere pointing at one. An overflow response is committed with stop reason `error` (§3.7) and is therefore dropped by rule 3 like any other error, and by any downstream `transformMessages` that filters the same way.
+An overflow response needs no dedicated omission rule: it is committed with stop reason `error` (§3.7) and is therefore dropped by rule 3 like any other error, and by any downstream `transformMessages` that filters the same way.
 
 **Append-only context invariant.** Across the requests of one lane, provider context must only grow at the tail. An insertion before the previous request's tail invalidates the provider's KV cache and multiplies cost. This is *why* mid-run writes defer to checkpoints, where they append at the tail. Compaction is the one deliberate cache invalidation, and it trades that for a smaller context.
 
@@ -893,7 +891,7 @@ interface Inbox {
 interface OperationError { code: string; message: string; details?: JsonValue }
 ```
 
-The old `QueuedInput { nodeId, valueId }` and `PendingWrite` pairs are gone: a queue item is one entry id, and everything else about it — payload, write type, `customType` — is dereferenced from its `pending.entry` register.
+A queue item is one entry id; everything else about it — payload, write type, `customType` — is dereferenced from its `pending.entry` register.
 
 `latestAssistantEntryId` updates in the same settlement transaction as every assistant generation or deferred-fetch response. It lets finish and resume construct results/events without a branch scan. A tool batch retains its producing turn id while tool work remains active.
 
@@ -926,7 +924,7 @@ type Generation =
       notBefore: number; errorMessage: string };
 ```
 
-The context snapshots configuration, stream options, and retry policy **inline** — there is no configuration value to point at, and `LaneConfiguration` is small. Recovery can therefore report exactly what is missing without resolving anything (§4.4). For each attempt, `before_request` runs from generation `ready` (an elapsed retry wait first returns to `ready`). Its curated patch is composed with the context's captured base stream options, then `intendedOutputLimit` and `contextWindow` are calculated and persisted in the `effect_pending` intent before dispatch. A pre-intent crash may rerun the hook. Harness-owned `before_payload`/`after_response` callbacks are mounted only after intent and cannot be replaced through stream options.
+The context snapshots configuration, stream options, and retry policy **inline**; `LaneConfiguration` is small. Recovery can therefore report exactly what is missing without resolving anything (§4.4). For each attempt, `before_request` runs from generation `ready` (an elapsed retry wait first returns to `ready`). Its curated patch is composed with the context's captured base stream options, then `intendedOutputLimit` and `contextWindow` are calculated and persisted in the `effect_pending` intent before dispatch. A pre-intent crash may rerun the hook. Harness-owned `before_payload`/`after_response` callbacks are mounted only after intent and cannot be replaced through stream options.
 
 ### Tool batch
 
@@ -1155,7 +1153,7 @@ Pure, computed in memory before the settlement transaction. First match wins.
 
 Two normalizations happen at commit, and both are deliberate. A cancelled response commits as `aborted`. An overflow-classified response commits as `error`. In both cases the original stop reason is overwritten and the reason is preserved in human-readable form in `errorMessage`.
 
-The overflow normalization is what removes every link from this design. Because the committed response is `error`, §2.5 rule 3 drops it from context automatically — no superseded-response id on the compaction, none in the operation state, and no omission rule of its own. The response stays in the tree as durable history, because a provider request happened and was billed.
+Because the committed response is `error`, §2.5 rule 3 drops it from context automatically — the compaction and the operation state carry no reference to it, and no dedicated omission rule exists. The response stays in the tree as durable history, because a provider request happened and was billed.
 
 **Overflow detection is a heuristic and must be labelled as one.** Three sources, in decreasing reliability:
 
@@ -2581,7 +2579,7 @@ Full durability means snapshotting in-flight state, and in-flight state has the 
 
 ## 7.2 Why this design shrinks the problem
 
-Migration cost is proportional to what must be converted. The superseded value/history design would have had to convert — or version-read forever — years of dead operation-state values and history rows. This design deleted all of that (§1.8):
+Migration cost is proportional to what must be converted, and this design keeps the convertible surface small (§1.8):
 
 ```text
 what exists at upgrade time            migration burden
@@ -2593,7 +2591,7 @@ pending.entry registers                open-operation inbox items plus
                                        lane-owned queued nextRun items
 ```
 
-Deleting history is what makes migrate-on-open tractable at all: the entire mutable surface is a few dozen current registers. And the fenced single-writer lease (§1.7) means the opening process owns the session exclusively — migration has no concurrency story to solve.
+Because no history is retained, the entire mutable surface is a few dozen current registers — which is what makes migrate-on-open tractable at all. And the fenced single-writer lease (§1.7) means the opening process owns the session exclusively — migration has no concurrency story to solve.
 
 ## 7.3 The mechanism: storage version plus migrate-on-open
 
@@ -2712,8 +2710,6 @@ Operations:
 19. **The settlement transaction that commits a response with `stopReason: "aborted"` must, in that same transaction, write an operation state with `control.status === "cancel_requested"`.** The invariant is scoped to the committing transaction — later terminal cleanup or forks may remove the state without violating it. Providers must comply with the harness-owned signal contract; violation is corruption.
 20. Current-state validation (§3.3) runs on every decoded latest lane/operation state before execution — idle lanes included (§4.4). `lane.lastResult` never determines an open operation's next action.
 21. At most one terminal transaction ever commits per operation. A drive whose conditional commit or reload finds its operation's registers absent stops without writing and resolves from `lane.lastResult` (§4.9).
-
-Everything that used to require a bounded historical validity audit is now either unrepresentable in the types, deleted by the terminal transaction, or covered by one of the above.
 
 ## 9.2 Race catalog
 

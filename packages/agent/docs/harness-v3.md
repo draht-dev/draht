@@ -798,7 +798,15 @@ How a repository organizes its sessions is its own choice, constrained only by t
 
 ### Search
 
-Search is an **optional collaborator** injected into the repository, with its own store. Storage knows nothing about it; no conformance test covers it; a repository without a service simply has no search.
+Search is a **standalone service over the repository**, with its own store. The dependency points one way: the service consumes `repo.list()` and read-only session opens; the repository knows nothing about search and exposes no search methods, and no conformance test covers any of this. An application that wants search constructs the service and queries it directly:
+
+```ts
+const search = createSqliteSearchService({ repo, dbPath });    // reference impl
+await search.sync();                                           // catch up cursors
+events.on("entry_added", (e) => search.notify(e.sessionId));   // optional freshness
+
+const hits = await search.searchSessions({ text: "auth migration", limit: 10 });
+```
 
 ```ts
 interface SessionSearchService {
@@ -827,19 +835,34 @@ interface EntrySearchHit {
 }
 ```
 
-The repository, when constructed with a service, calls `sync()` at startup, `notify(sessionId)` when it observes entry placement on a session it opened, and `remove(sessionId)` on `delete()`; it exposes both query forms enriched with the metadata it owns:
-
-```ts
-searchSessions(q): Promise<Result<(SessionSearchHit & { metadata: M })[], SearchUnavailable>>;
-searchEntries(q):  Promise<Result<(EntrySearchHit  & { metadata: M })[],
-                                  SearchUnavailable | SearchNotSupported>>;
-```
+The application owns the lifecycle: `sync()` at startup or on a schedule, `notify()` wired to its event stream when it wants freshness, `remove()` alongside `repo.delete()` (or left to the next `sync()`, which reconciles against `repo.list()`). Hits carry `sessionId`; callers join metadata through the repository they already hold.
 
 **Indexing is pull-based; events are only hints.** The service keeps a durable cursor per session — the highest entry `seq` it has indexed. `sync()` enumerates sessions via the repository (old, new, and files that arrived by copy alike), reads `scanEntries({ fromSeq: cursor + 1 })` on each, indexes message-entry text idempotently per `(sessionId, entryId)`, and advances the cursor. A crash mid-batch re-indexes a few rows into the same state; a service deployed against years of existing sessions starts empty and catches up with the same loop. `notify()` never carries content — it is a poke that triggers a debounced pull of one session; a lost poke is caught by the next sweep. The index is a rebuildable projection with zero authority: indexing failures never affect the harness or commits.
 
 Two mechanical notes. Reading a session another process is writing is legal — the writer lease gates writers, and WAL gives cross-process snapshot reads — but a sweep may skip lease-held sessions as an optimization, since `notify()` covers the hot ones. The precise rewrite (§2.9) swaps a session's store and may renumber seqs, so cursors key on `(sessionId, storeGeneration)`; the rewrite bumps a generation counter in metadata and a mismatch triggers a full re-index of that session.
 
 The reference implementation is one standalone SQLite database — an FTS5 table over `(session_id, entry_id, text)` plus the cursor table — and works unchanged over JSONL session files. Several processes may share it under the usual discipline (WAL, `busy_timeout`, `BEGIN IMMEDIATE`, idempotent rows, monotonic cursor updates); writers serialize.
+
+**Open question — metadata filtering.** Coding-agent's resume flow filters sessions by `cwd`; other repositories have no cwd concept at all. Repositories already model implementation-specific listing through their `L` options generic (`list(options?: L)`), but `SearchQuery` is deliberately generic — how does a repo-specific filter reach the index? Candidates, to be settled by the people who will fight over it:
+
+```ts
+// (a) typed filter passthrough — service becomes generic over a filter type
+await search.searchSessions({ text: "auth", filter: { cwd: "/repo" } });
+
+// (b) pre-restrict via the repo's own listing; pass the candidate id set
+const local = await repo.list({ cwd: "/repo" });
+await search.searchSessions({ text: "auth", within: local.map((m) => m.id) });
+
+// (c) post-filter in the app — breaks ranking: limit applies before the filter
+const all = await search.searchSessions({ text: "auth", limit: 10 });
+const hits = all.filter((h) => byId.get(h.sessionId)?.cwd === "/repo");
+
+// (d) index chosen metadata fields at sync time; filter natively in the index
+createSqliteSearchService({ repo, dbPath, metadataFields: ["cwd"] });
+await search.searchSessions({ text: "auth", where: { cwd: "/repo" } });
+```
+
+(a) keeps one round trip but makes the service generic over each repo's filter vocabulary; (b) composes with any repo unchanged but ships a possibly huge id set into the query; (c) is unsound as shown — filtering after `limit` drops results; (d) is what the index does best but couples the service to the metadata fields chosen at sync time and needs re-`sync` when they change.
 
 ## 2.9 The precise rewrite
 
@@ -2695,7 +2718,7 @@ If implementation exposes a design contradiction, missing transition, or materia
 |---|---|---|---|
 | 1 | **Single-session Storage** | Write-once entries/usage, registers with first-class set/delete, atomic transactions, UUIDv7 id generator with follower minting, runtime entry/register/custom-message schemas, stats projection, Memory backend, shared conformance helpers, and the instrumented-storage decorator (Part 9). | Rollback, sequence order, duplicate ids, register set/delete/recreate, delete-of-absent-key no-op, fact deletion vs JSON `null`, schema validation, unknown custom roles, immutable reads, stats-equals-ledger, follower minting, close. |
 | 2 | **JSONL v4 and format 3** | Single-item/array transaction lines, register set/delete replay, header `storageVersion`, torn-tail handling, snapshot compaction (GC keep-predicate), format-3 read normalization and first-write temp/rename conversion. Replace unfinished current v4 without migration. | Backend conformance, corrupt interior/final lines, whole-array tear, compaction logical-equivalence, every format-3 rule, resolved/unresolved parent paths, aggregate imported usage adjustment. |
-| 3 | **Tree and repositories** | Entries with inline payloads, lane/config/state registers, facts, branch/global queries, context projection, `SessionTree`, repository lifecycle with the `storageVersion` gate at open, coherent branch/tree forks, optional search-service wiring plus the reference SQLite FTS implementation (§2.8). | Placement, divergence, filters/cursors/stops, custom entries with and without data, context, fork before first attachment, configured fork snapshots/facts/zero ledger, search sync/notify/remove and cursor catch-up. |
+| 3 | **Tree and repositories** | Entries with inline payloads, lane/config/state registers, facts, branch/global queries, context projection, `SessionTree`, repository lifecycle with the `storageVersion` gate at open, coherent branch/tree forks, the standalone reference SQLite FTS search service (§2.8). | Placement, divergence, filters/cursors/stops, custom entries with and without data, context, fork before first attachment, configured fork snapshots/facts/zero ledger, search sync/notify/remove and cursor catch-up. |
 | 4 | **Runtime shell** | Lane/settings mutation lines, total-state validation (idle lanes included), register-seq CAS tokens, runtime snapshots, `Effects`, manual scheduler/gate, hook/event primitives, restore inventory (five register reads plus bounded hydration), dispatch-time identity resolution, fault/close plumbing. Public operations may still report not implemented. | State/action exhaustiveness, seq-token settlement, parallel scheduler order, hook aggregation, event buffering, gate nesting, zero effects while parked, restore without history reads, idle-lane validation. |
 | 5 | **Minimal no-tool run** | Prompt expansion, `before_run`, atomic acceptance with pending-capture placement, captured request options/thinking inline, payload/response hooks, one generation intent/effect/settlement, usage, the terminal transaction (register cleanup plus `lane.lastResult`), results, basic events/telemetry. | Successful run with final assistant fields, invalid caller/provider/hook output, exact transaction/event order, terminal cleanup completeness and `lastResult`, automatic/manual identical state, close at every boundary. |
 | 6 | **Generation recovery and retry** | Retry waits, unknown-effect recovery, synthetic cap settlement, ordinary stop/error/deferred classification, provider-compliant `aborted`, and failure-drain foundation. Overflow classification remains explicitly unimplemented until slice 12. | Every generation state before/after reopen, caps/backoff, stop/error/aborted/deferred classification, missing identities. |

@@ -418,6 +418,8 @@ export type BeforeResumePrepared =
 			customInstructions?: string;
 	  };
 
+type VoidHookResult = ReturnType<() => void>;
+
 export interface HookMap {
 	before_run: {
 		event: { prompt: AgentMessage[]; systemPrompt: string; resources: Resources };
@@ -425,7 +427,7 @@ export interface HookMap {
 	};
 	before_resume: {
 		event: BeforeResumePrepared & { resumeData?: JsonValue };
-		result: undefined;
+		result: VoidHookResult;
 	};
 	before_run_end: {
 		event: { runId: string; messages: AgentMessage[] };
@@ -495,9 +497,9 @@ export type HookInvocation<TName extends HookName> = HookMap[TName]["event"] & {
 	lane: string;
 	runId: string;
 };
-export type HookHandler<TName extends HookName> = TName extends "before_resume"
-	? (event: HookInvocation<TName>) => void | Promise<void>
-	: (event: HookInvocation<TName>) => Promise<HookMap[TName]["result"]> | HookMap[TName]["result"];
+export type HookHandler<TName extends HookName> = (
+	event: HookInvocation<TName>,
+) => Promise<HookMap[TName]["result"]> | HookMap[TName]["result"];
 
 export interface Hooks {
 	on<TName extends HookName>(name: TName, handler: HookHandler<TName>, options?: { id?: string }): () => void;

@@ -35,7 +35,35 @@ An **operation** is one accepted unit of lane work: a run, compaction, or naviga
 
 Below the session and harness, `Storage` exposes atomic transactions and queries over three durable forms: immutable entries, mutable registers, and append-only usage rows. Registers form a mutable, namespaced key-value store. Facts live there; internal harness namespaces durably store pending content and lane and operation state needed for crash recovery. In particular, `op.meta` is written once with an operation's metadata, while `op.state` is replaced after each transition with its complete current state. The terminal transaction deletes both and writes `lane.lastResult`. No partial transaction is visible.
 
-## 0.3 Worked example — a Slack thread
+## 0.3 The three stores
+
+Everything in Parts 1–5 follows from these.
+
+**1. Three stores, one invariant.** Everything durable is one of:
+
+```text
+entries        the conversation tree — write-once, append-only
+registers      current mutable state — namespaced typed cells, overwrite or delete
+usage ledger   cost history — append-only rows
+```
+
+*Every payload is in an entry, a register, or the ledger; there is no third place.* An entry is the complete conversation record — placement and payload in one row. A register holds its current typed value directly; overwriting discards the old value, and deletion removes the key. Content that durably exists before it has a place in the tree (queued input, deferred writes) waits in a `pending.entry` register and becomes an entry in the transaction that places it. Per-backend projections — branch index, full-text search, stats — are rebuildable from the three stores and carry no authority.
+
+**2. Atomic transactions.** A transaction is a set of entry inserts, usage inserts, and register writes (set or delete), committed all-or-none with strictly increasing sequence numbers. There is no crash state inside a transaction. This is the only write primitive.
+
+**3. The durable program counter.** After every step, the harness overwrites one register — `op.state/{operationId}` — with the *complete* current state of the operation. Recovery does not replay a journal or infer position from what is missing; it reads that register and switches on it. The state is *total* — it never depends on a previous state. Small captured values (configuration, stream options, retry policy) are inline; large stable payloads live in sibling `op.*` registers or are named by id. When the operation ends, the terminal transaction deletes its registers: a finished session holds exactly the conversation, the ledger, and a handful of lane and fact registers. There is no dead state to collect.
+
+**4. The effect sandwich.** Provider requests and real tool calls are wrapped in two commits:
+
+```
+commit:  "about to do X; its output will use ids R and U"     ← intent
+         do X                                                  ← the uncertain part
+commit:  output + usage + next state                           ← settlement
+```
+
+Hooks follow their replay contract instead: a result becomes durable in the transaction that consumes it, and a crash before that transaction may rerun the hook. Thus every external effect can still happen without durable settlement. Provider/tool intents make that uncertainty explicit where replay policy depends on it; idempotent hooks accept it as a non-goal.
+
+## 0.4 Worked example — a Slack thread
 
 A user posts in a channel that already has 400 entries of history. The application creates a lane for the thread, anchored at the channel's current leaf. Entry ids are UUIDv7s (§1.2); examples abbreviate them.
 
@@ -76,7 +104,7 @@ Kill the process between any two of those transactions and restart. The harness 
 
 Meanwhile a second thread in the same channel is running its own lane, over the same 400 entries of shared history, with no coordination between them.
 
-## 0.4 Worked example — a crash mid-tool
+## 0.5 Worked example — a crash mid-tool
 
 ```
 lane.prompt("delete the stale migrations and run the test suite")
@@ -100,34 +128,6 @@ TX[ insert entry n3 (synthetic "interrupted" result), upsert lane.leaf = n3,
 ``` The conversation stays coherent — every tool call has a result — and nothing ran twice.
 
 Had the tool declared `replay: "safe"` (a read, a query), the harness would have re-executed it with the persisted arguments instead.
-
-## 0.5 The three stores
-
-Everything in Parts 1–5 follows from these.
-
-**1. Three stores, one invariant.** Everything durable is one of:
-
-```text
-entries        the conversation tree — write-once, append-only
-registers      current mutable state — namespaced typed cells, overwrite or delete
-usage ledger   cost history — append-only rows
-```
-
-*Every payload is in an entry, a register, or the ledger; there is no third place.* An entry is the complete conversation record — placement and payload in one row. A register holds its current typed value directly; overwriting discards the old value, and deletion removes the key. Content that durably exists before it has a place in the tree (queued input, deferred writes) waits in a `pending.entry` register and becomes an entry in the transaction that places it. Per-backend projections — branch index, full-text search, stats — are rebuildable from the three stores and carry no authority.
-
-**2. Atomic transactions.** A transaction is a set of entry inserts, usage inserts, and register writes (set or delete), committed all-or-none with strictly increasing sequence numbers. There is no crash state inside a transaction. This is the only write primitive.
-
-**3. The durable program counter.** After every step, the harness overwrites one register — `op.state/{operationId}` — with the *complete* current state of the operation. Recovery does not replay a journal or infer position from what is missing; it reads that register and switches on it. The state is *total* — it never depends on a previous state. Small captured values (configuration, stream options, retry policy) are inline; large stable payloads live in sibling `op.*` registers or are named by id. When the operation ends, the terminal transaction deletes its registers: a finished session holds exactly the conversation, the ledger, and a handful of lane and fact registers. There is no dead state to collect.
-
-**4. The effect sandwich.** Provider requests and real tool calls are wrapped in two commits:
-
-```
-commit:  "about to do X; its output will use ids R and U"     ← intent
-         do X                                                  ← the uncertain part
-commit:  output + usage + next state                           ← settlement
-```
-
-Hooks follow their replay contract instead: a result becomes durable in the transaction that consumes it, and a crash before that transaction may rerun the hook. Thus every external effect can still happen without durable settlement. Provider/tool intents make that uncertainty explicit where replay policy depends on it; idempotent hooks accept it as a non-goal.
 
 ## 0.6 Non-goals
 
@@ -1385,7 +1385,7 @@ TX[ <result-publication writes, when the terminal transition also publishes
 
 Operation-owned pending ids are the remaining `inbox.steer ∪ inbox.followUp ∪ inbox.writes` plus `control.drainedSteer ∪ control.drainedFollowUp` — registers that survived an abort drain die here (§3.11). **Never `lane.state.pendingNextRun`**: those registers are lane-owned, outlive operations, and die only when consumed or cancelled. Ledger rows are never deleted (§1.6). The `L` write rereads the latest `LaneState` on the lane mutation line and clears only `currentOperationId`, preserving concurrently accepted `pendingNextRun` (§3.4).
 
-For the completed run of §0.3's shape — prompt `e_50`, tool call `e_51`/`e_52`, final answer `e_53`:
+For the completed run of §0.4's shape — prompt `e_50`, tool call `e_51`/`e_52`, final answer `e_53`:
 
 ```
 TX[ delete op.meta/op_9,
@@ -1751,7 +1751,7 @@ Restore already fetched the directly named entries and registers for validation.
 
 ### Worked example — crash in the uncertain window
 
-The process died mid-stream after an assistant intent (§3.7's `effect_pending` row; the §0.3 run). Reopen:
+The process died mid-stream after an assistant intent (§3.7's `effect_pending` row; the §0.4 run). Reopen:
 
 ```
 lane.state/main -> { currentOperationId: "op_9" }

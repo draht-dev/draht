@@ -16,6 +16,7 @@ const COPILOT_HEADERS = {
 	"Copilot-Integration-Id": "vscode-chat",
 } as const;
 const COPILOT_API_VERSION = "2026-06-01";
+const COPILOT_POLICY_CONCURRENCY = 4;
 
 type DeviceCodeResponse = {
 	device_code: string;
@@ -321,11 +322,13 @@ async function enableGitHubCopilotModel(token: string, modelId: string, enterpri
  */
 async function enableAllGitHubCopilotModels(token: string, enterpriseDomain?: string): Promise<void> {
 	const models = Object.values(GITHUB_COPILOT_MODELS);
-	await Promise.all(
-		models.map(async (model) => {
-			await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
-		}),
-	);
+	for (let index = 0; index < models.length; index += COPILOT_POLICY_CONCURRENCY) {
+		await Promise.all(
+			models.slice(index, index + COPILOT_POLICY_CONCURRENCY).map(async (model) => {
+				await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
+			}),
+		);
+	}
 }
 
 async function loginGitHubCopilot(interaction: AuthInteraction): Promise<OAuthCredential> {

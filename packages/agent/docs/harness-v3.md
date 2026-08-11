@@ -125,7 +125,9 @@ On restart the harness reads one register and finds `calls[0].status = "effect_p
 ```text
 TX[ insert entry n3 (synthetic "interrupted" result), upsert lane.leaf = n3,
     upsert op.state/O = call 0 completed ]
-``` The conversation stays coherent — every tool call has a result — and nothing ran twice.
+```
+
+The conversation stays coherent — every tool call has a result — and nothing ran twice.
 
 Had the tool declared `replay: "safe"` (a read, a query), the harness would have re-executed it with the persisted arguments instead.
 

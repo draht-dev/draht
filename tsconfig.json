@@ -13,6 +13,9 @@
 			"@draht/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
 			"@draht/ai/dist/*": ["./packages/ai/src/*"],
 			"@draht/agent-core": ["./packages/agent/src/index.ts"],
+			"@draht/agent-core/session/testing": [
+				"./packages/agent/src/harness/session/testing/index.ts"
+			],
 			"@draht/agent-core/node": ["./packages/agent/src/node.ts"],
 			"@draht/agent-core/*": ["./packages/agent/src/*"],
 			"@draht/coding-agent": ["./packages/coding-agent/src/index.ts"],

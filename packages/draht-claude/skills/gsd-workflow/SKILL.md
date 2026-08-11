@@ -7,6 +7,8 @@ description: Draht's Get Shit Done workflow — how to use /new-project, /discus
 
 Draht's GSD workflow is a milestone → phase → plan → task hierarchy that lives in `.planning/` and is driven by slash commands + hooks.
 
+At repository-saga scope, each planned `saga-spawner` beat maps 1:1 to one roadmap phase; the saga graph schedules phases without replacing their plans or verification.
+
 ## Directory Structure
 
 ```

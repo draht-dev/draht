@@ -1,5 +1,3 @@
-// Core Agent
-
 export { uuidv7 } from "@draht/ai";
 export type {
 	AttributeValue,
@@ -41,7 +39,6 @@ export {
 	NOOP_TELEMETRY_CONTEXT,
 } from "@draht/telemetry";
 export * from "./agent.ts";
-// Loop functions
 export * from "./agent-loop.ts";
 export * from "./harness/agent-harness.ts";
 export {
@@ -75,7 +72,6 @@ export {
 } from "./harness/compaction/compaction.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
-// Harness
 export * from "./harness/result.ts";
 export * from "./harness/session/index.ts";
 export * from "./harness/skills.ts";
@@ -136,10 +132,7 @@ export {
 } from "./harness/types.ts";
 export * from "./harness/utils/shell-output.ts";
 export * from "./harness/utils/truncate.ts";
-// Proxy utilities
 export * from "./proxy.ts";
 export * from "./search/index.ts";
-// Stream defaults
 export { setDefaultStreamFn } from "./stream-fn.ts";
-// Types
 export * from "./types.ts";

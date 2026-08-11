@@ -49,13 +49,20 @@ function extractFileOperations(
 	const fileOps = createFileOps();
 	if (prevCompactionIndex >= 0) {
 		const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
-		if (prevCompaction.details) {
-			const details = prevCompaction.details as CompactionDetails;
-			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
+		if (
+			typeof prevCompaction.details === "object" &&
+			prevCompaction.details !== null &&
+			!Array.isArray(prevCompaction.details)
+		) {
+			if (Array.isArray(prevCompaction.details.readFiles)) {
+				for (const path of prevCompaction.details.readFiles) {
+					if (typeof path === "string") fileOps.read.add(path);
+				}
 			}
-			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) fileOps.edited.add(f);
+			if (Array.isArray(prevCompaction.details.modifiedFiles)) {
+				for (const path of prevCompaction.details.modifiedFiles) {
+					if (typeof path === "string") fileOps.edited.add(path);
+				}
 			}
 		}
 	}
@@ -330,9 +337,6 @@ function findValidCutPoints(entries: Entry[], startIndex: number, endIndex: numb
 				}
 				break;
 			}
-			case "thinking_level_change":
-			case "model_change":
-			case "active_tools_change":
 			case "compaction":
 			case "branch_summary":
 			case "custom":

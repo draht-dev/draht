@@ -1,22 +1,25 @@
-import type { StopReason, Usage } from "@draht/ai";
-import "../messages.ts";
-import type { AgentMessage } from "../../types.ts";
-import type { Session } from "./session.ts";
+import type { AssistantMessage, StopReason, Usage } from "@draht/ai";
+import type { TSchema } from "typebox";
+import type { AgentMessage, QueueMode, ThinkingLevel } from "../../types.ts";
+import type { BranchPreparation } from "../compaction/branch-summarization.ts";
+import type { CompactionPreparation, CompactionSettings } from "../compaction/compaction.ts";
+import type { AgentHarnessStreamOptions } from "../types.ts";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-export type SessionStopReason = Exclude<StopReason, "pending"> | "deferred";
+export type SettledAssistantMessage = AssistantMessage & {
+	stopReason: Exclude<StopReason, "pending">;
+};
 
-export interface IdGenerator {
-	next(): string;
-}
+export type EntryType = "message" | "compaction" | "branch_summary" | "custom";
 
 export interface EntryBase {
-	type: string;
 	id: string;
-	seq: number; // shared sequence; read-side, storage-assigned
-	parentId: string | null; // storage-assigned: the appending lane's leaf
-	timestamp: number; // Unix ms, storage-assigned
+	parentId: string | null;
+	seq: number;
+	timestamp: number;
+	type: EntryType;
+	customType?: string;
 }
 
 export interface MessageEntry extends EntryBase {
@@ -25,330 +28,498 @@ export interface MessageEntry extends EntryBase {
 	terminate?: true;
 }
 
-export interface ModelChangeEntry extends EntryBase {
-	type: "model_change";
-	provider: string;
-	modelId: string;
-}
-
-export interface ThinkingLevelEntry extends EntryBase {
-	type: "thinking_level_change";
-	thinkingLevel: string;
-}
-
-export interface ActiveToolsEntry extends EntryBase {
-	type: "active_tools_change";
-	activeToolNames: string[];
-}
-
 export interface CompactionEntry extends EntryBase {
 	type: "compaction";
 	summary: string;
 	retainedTail: AgentMessage[];
 	tokensBefore: number;
-	details?: unknown;
+	details?: JsonValue;
 	usage?: Usage;
+	fromHook: boolean;
 }
 
 export interface BranchSummaryEntry extends EntryBase {
 	type: "branch_summary";
 	fromId: string;
 	summary: string;
-	details?: unknown;
+	details?: JsonValue;
 	usage?: Usage;
+	fromHook: boolean;
 }
 
 export interface CustomEntry extends EntryBase {
 	type: "custom";
 	customType: string;
-	data?: unknown;
+	data?: JsonValue;
 }
 
-export type Entry =
-	| MessageEntry
-	| ModelChangeEntry
-	| ThinkingLevelEntry
-	| ActiveToolsEntry
-	| CompactionEntry
-	| BranchSummaryEntry
-	| CustomEntry;
+export type Entry = MessageEntry | CompactionEntry | BranchSummaryEntry | CustomEntry;
 
-export type ProvisionedEntry<TEntry extends Entry = Entry> = TEntry extends Entry
-	? Omit<TEntry, "parentId" | "seq" | "timestamp">
-	: never;
+/** Entry supplied to a transaction before storage assigns sequence and timestamp. */
+export type NewEntry<TEntry extends Entry = Entry> = TEntry extends Entry ? Omit<TEntry, "seq" | "timestamp"> : never;
 
-export interface RecordBase {
-	id: string;
-	seq: number;
+export interface LaneConfiguration {
+	model: { provider: string; modelId: string };
+	thinkingLevel: ThinkingLevel;
+	activeToolNames: string[];
+}
+
+export interface Operation {
+	operationId: string;
 	lane: string;
-	timestamp: number;
-}
-
-export interface OperationStartedRecord extends RecordBase {
-	type: "operation_started";
 	sourceLeafId: string | null;
+	startedAt: number;
 	intent:
 		| {
 				kind: "run";
-				/** Normalized caller input before before_run; kept for suspended operations and before_resume. */
-				originalPrompt: AgentMessage[];
-				/** Captured nextRun items, then the prompt, then before_run injections. */
-				initialMessages: ProvisionedEntry[];
+				promptEntryIds: string[];
 				systemPromptOverride?: string;
-				resumeData?: { [extensionId: string]: JsonValue };
+				resumeData?: Record<string, JsonValue>;
 		  }
-		| {
-				kind: "compaction";
-				customInstructions?: string;
-				resultEntryId: string;
-		  }
+		| { kind: "compaction"; customInstructions?: string }
 		| {
 				kind: "navigation";
 				targetId: string | null;
 				summarize: boolean;
-				customInstructions?: string;
 				label?: string;
-				summaryEntryId?: string;
+				customInstructions?: string;
 		  };
 }
 
-export interface AbortRequestedRecord extends RecordBase {
-	type: "abort_requested";
-	runId: string;
+export type Control =
+	| { status: "running" }
+	| {
+			status: "cancel_requested";
+			requestedAt: number;
+			drainedSteer: string[];
+			drainedFollowUp: string[];
+	  };
+
+export interface OperationError {
+	code: string;
+	message: string;
+	details?: JsonValue;
 }
 
-export interface OperationFinishedRecord extends RecordBase {
-	type: "operation_finished";
-	runId: string;
-	outcome: "completed" | "aborted" | "failed" | "declined";
-	error?: { code: string; message: string };
+export type Continuation =
+	| { kind: "need_assistant"; overflowRecoveryUsed: boolean }
+	| { kind: "may_finish"; includeFinalAssistant: boolean };
+
+export interface CheckpointPhase {
+	kind: "checkpoint";
+	continuation: Continuation;
+	triggerEntryId: string;
+	thresholdCheckedTriggerEntryId?: string;
+	skipInboxOnce?: boolean;
 }
 
-export type CompactionReason = "manual" | "threshold" | "overflow";
+export interface Inbox {
+	steer: string[];
+	followUp: string[];
+	writes: string[];
+}
 
-export type StepAttemptRecord = RecordBase &
-	(
-		| {
-				type: "step_attempt";
-				runId: string;
-				step: "assistant" | "branch_summary";
-				attempt: number;
-				resultEntryId: string;
-				compactionReason?: never;
-		  }
-		| {
-				type: "step_attempt";
-				runId: string;
-				step: "compaction";
-				attempt: number;
-				resultEntryId: string;
-				/** Persists why compaction summary generation started so recovery resumes the same work. */
-				compactionReason: CompactionReason;
-		  }
-	);
+export interface NormalizedRetryPolicy {
+	maxAttempts: number;
+	baseDelayMs: number;
+}
 
-export interface ToolStartedRecord extends RecordBase {
-	type: "tool_started";
-	runId: string;
+export interface GenerationContext {
+	stepId: string;
+	triggerEntryId: string;
+	configuration: LaneConfiguration;
+	streamOptions: AgentHarnessStreamOptions;
+	retryPolicy: NormalizedRetryPolicy;
+	overflowRecoveryUsed: boolean;
+}
+
+export type Generation =
+	| { status: "ready"; context: GenerationContext; nextAttempt: number }
+	| {
+			status: "effect_pending";
+			context: GenerationContext;
+			attempt: number;
+			responseEntryId: string;
+			usageId: string;
+			intendedOutputLimit: number;
+			contextWindow: number;
+	  }
+	| {
+			status: "retry_wait";
+			context: GenerationContext;
+			nextAttempt: number;
+			notBefore: number;
+			errorMessage: string;
+	  };
+
+export type ToolCall =
+	| { status: "planned"; sourceIndex: number; resultEntryId: string }
+	| {
+			status: "effect_pending";
+			sourceIndex: number;
+			resultEntryId: string;
+			replay: "never" | "safe";
+	  }
+	| {
+			status: "completed";
+			sourceIndex: number;
+			resultEntryId: string;
+			terminate: boolean;
+	  };
+
+export interface ToolBatch {
 	assistantEntryId: string;
-	toolIndex: number;
-	toolCallId: string;
-	toolName: string;
-	effectiveArgs: { [key: string]: unknown };
+	configuration: LaneConfiguration;
+	turnId: string;
+	calls: ToolCall[];
+}
+
+export type Deferred =
+	| {
+			status: "suspended";
+			stepId: string;
+			sourceEntryId: string;
+			poll: number;
+			configuration: LaneConfiguration;
+			streamOptions: AgentHarnessStreamOptions;
+	  }
+	| {
+			status: "effect_pending";
+			stepId: string;
+			sourceEntryId: string;
+			poll: number;
+			responseEntryId: string;
+			usageId: string;
+			configuration: LaneConfiguration;
+			streamOptions: AgentHarnessStreamOptions;
+	  };
+
+export interface SummaryContext {
+	taskId: string;
 	resultEntryId: string;
-	replay: "never" | "safe";
+	kind: "compaction" | "branch_summary";
+	configuration: LaneConfiguration;
+	streamOptions: AgentHarnessStreamOptions;
+	retryPolicy: NormalizedRetryPolicy;
+	reason?: "manual" | "threshold" | "overflow";
 }
 
-export type QueueEnqueuedRecord = RecordBase &
-	(
-		| {
-				type: "queue_enqueued";
-				queue: "steer" | "followUp";
-				runId: string;
-				target: ProvisionedEntry;
-		  }
-		| {
-				type: "queue_enqueued";
-				queue: "nextRun";
-				runId?: never;
-				target: ProvisionedEntry;
-		  }
-	);
+export type SummaryGeneration =
+	| { status: "ready"; context: SummaryContext; nextAttempt: number }
+	| {
+			status: "effect_pending";
+			context: SummaryContext;
+			attempt: number;
+			request?: { index: number; usageId: string };
+			usageIds: string[];
+	  }
+	| {
+			status: "retry_wait";
+			context: SummaryContext;
+			nextAttempt: number;
+			notBefore: number;
+			errorMessage: string;
+	  };
 
-export interface QueueCancelledRecord extends RecordBase {
-	type: "queue_cancelled";
-	runId?: string;
-	entryId: string;
+export type StructuralDecision = { taskId: string } & (
+	| { status: "deciding" }
+	| { status: "generating"; generation: SummaryGeneration }
+);
+
+export type RunPhase =
+	| CheckpointPhase
+	| { kind: "assistant"; generation: Generation }
+	| { kind: "tools"; batch: ToolBatch }
+	| {
+			kind: "compaction";
+			reason: "threshold" | "overflow";
+			structural: StructuralDecision;
+			resumeAfter: CheckpointPhase;
+	  }
+	| { kind: "deferred"; deferred: Deferred }
+	| {
+			kind: "failure_drain";
+			error: OperationError;
+			provenance: { kind: "response"; entryId: string } | { kind: "structural"; taskId: string };
+	  };
+
+export interface RunState {
+	kind: "run";
+	control: Control;
+	settings: {
+		compaction: CompactionSettings;
+		steeringMode: QueueMode;
+		followUpMode: QueueMode;
+		toolExecution: "sequential" | "parallel";
+	};
+	phase: RunPhase;
+	inbox: Inbox;
+	latestAssistantEntryId: string | null;
 }
 
-export interface WriteDeferredRecord extends RecordBase {
-	type: "write_deferred";
-	runId: string;
-	target: ProvisionedEntry;
+export interface CompactionState {
+	kind: "compaction";
+	control: Control;
+	customInstructions?: string;
+	structural: StructuralDecision;
 }
 
-export type UsageRecord = RecordBase & { type: "usage"; usage: Usage } & (
-		| {
-				cause: "assistant" | "compaction" | "branch_summary" | "deferred_fetch";
-				runId: string;
-				entryId: string;
-				attempt: number;
-				stopReason: SessionStopReason;
-		  }
-		| { cause: "tool"; runId: string; entryId: string; toolCallId: string }
-		| { cause: "hook"; runId: string; entryId: string }
-		| { cause: "adjustment"; runId?: string; entryId?: string; details?: JsonValue }
-	);
+export type NavigationState =
+	| {
+			kind: "navigation";
+			control: Control;
+			targetId: string | null;
+			label?: string;
+			summarize: false;
+			phase: { kind: "ready_to_commit" };
+	  }
+	| {
+			kind: "navigation";
+			control: Control;
+			targetId: string;
+			label?: string;
+			customInstructions?: string;
+			summarize: true;
+			phase: { kind: "summary"; structural: StructuralDecision };
+	  };
 
-export type LaneRecord =
-	| OperationStartedRecord
-	| AbortRequestedRecord
-	| OperationFinishedRecord
-	| StepAttemptRecord
-	| ToolStartedRecord
-	| QueueEnqueuedRecord
-	| QueueCancelledRecord
-	| WriteDeferredRecord
-	| UsageRecord;
-export type NewRecord<TRecord extends LaneRecord = LaneRecord> = TRecord extends LaneRecord
-	? Omit<TRecord, "seq" | "timestamp">
-	: never;
+export type OperationState = RunState | CompactionState | NavigationState;
 
-export type EntryOrder = "newestFirst" | "oldestFirst";
+export interface LaneState {
+	currentOperationId: string | null;
+	pendingNextRun: string[];
+}
+
+export type LaneLastResult = {
+	operationId: string;
+	kind: "run" | "compaction" | "navigation";
+	leafId: string | null;
+	finalAssistantEntryId?: string;
+} & (
+	| { outcome: "failed"; error: OperationError; runCompletion?: never }
+	| {
+			outcome: "completed";
+			error?: never;
+			runCompletion?: "assistant" | "terminated_tools";
+	  }
+	| { outcome: "declined" | "aborted"; error?: never; runCompletion?: never }
+);
+
+export interface PendingEntry {
+	type: "message" | "custom";
+	customType?: string;
+	payload?: JsonValue;
+}
+
+export interface DurableFileOperations {
+	read: string[];
+	written: string[];
+	edited: string[];
+}
+
+export type DurableStructuralPreparation =
+	| {
+			kind: "compaction";
+			messagesToSummarize: CompactionPreparation["messagesToSummarize"];
+			turnPrefixMessages: CompactionPreparation["turnPrefixMessages"];
+			retainedTail: CompactionPreparation["retainedTail"];
+			isSplitTurn: boolean;
+			tokensBefore: number;
+			previousSummary?: string;
+			fileOps: DurableFileOperations;
+			settings: CompactionSettings;
+	  }
+	| {
+			kind: "branch_summary";
+			messages: BranchPreparation["messages"];
+			fileOps: DurableFileOperations;
+			totalTokens: number;
+	  };
+
+export interface RegisterValues {
+	"lane.leaf": string | null;
+	"lane.config": LaneConfiguration;
+	"lane.state": LaneState;
+	"lane.lastResult": LaneLastResult;
+	"op.meta": Operation;
+	"op.state": OperationState;
+	"op.tool_args": Record<string, JsonValue>;
+	"op.preparation": DurableStructuralPreparation;
+	"pending.entry": PendingEntry;
+	"fact.name": string;
+	"fact.label": string;
+	"fact.custom": JsonValue;
+}
+
+export type RegisterNamespace = keyof RegisterValues;
+
+export interface Register<TNamespace extends RegisterNamespace = RegisterNamespace> {
+	namespace: TNamespace;
+	key: string;
+	value: RegisterValues[TNamespace];
+	seq: number;
+}
+
+export interface UsageRow {
+	id: string;
+	seq: number;
+	usage: Usage;
+	entryId?: string;
+	adjustment: boolean;
+	details?: JsonValue;
+}
+
+export type RegisterSetWrite = {
+	[TNamespace in RegisterNamespace]: {
+		kind: "register";
+		op: "set";
+		namespace: TNamespace;
+		key: string;
+		value: RegisterValues[TNamespace];
+	};
+}[RegisterNamespace];
+
+export type Write =
+	| { kind: "entry"; entry: NewEntry }
+	| { kind: "usage"; row: Omit<UsageRow, "seq"> }
+	| RegisterSetWrite
+	| { kind: "register"; op: "delete"; namespace: RegisterNamespace; key: string };
+
+export interface Transaction {
+	writes: Write[];
+}
+
+export interface CommitResult {
+	firstSeq: number;
+	seqs: number[];
+	timestamp: number;
+}
+
+export interface EntryStructure {
+	id: string;
+	parentId: string | null;
+	seq: number;
+	timestamp: number;
+	type: EntryType;
+	customType?: string;
+}
 
 export interface EntryCursor {
-	afterSeq: number;
+	seq: number;
 }
 
-export interface EntryQuery {
-	type?: Entry["type"];
-	customType?: string; // for type "custom"
-	order?: EntryOrder; // default newestFirst
+export interface BranchScan {
+	start?: string;
+	stopAtType?: EntryType;
+	stopAtId?: string;
+	type?: EntryType;
+	customType?: string;
+	order?: "newestFirst" | "oldestFirst";
 	limit?: number;
 	cursor?: EntryCursor;
 }
 
-/** Bounds of a branch scan. Default: the whole path, leaf to root. */
-export interface BranchBounds {
-	start?: string; // default: the view's lane leaf
-	stopAtType?: Entry["type"]; // scan ends after the first match, inclusive
-	stopAtId?: string;
+export type StorageBranchScan = BranchScan & { start: string };
+
+export interface EntryScan {
+	type?: EntryType;
+	customType?: string;
+	fromSeq?: number;
+	toSeq?: number;
+	order?: "asc" | "desc";
+	limit?: number;
 }
 
-export interface RecordQuery {
-	/** Exact lane match. Omit to query every lane. */
-	lane?: string;
-	/** Exact record discriminant match. Omit to query every record type. */
-	type?: LaneRecord["type"];
-	/**
-	 * Operation identity. Matches OperationStartedRecord.id and the runId
-	 * property of operation-owned records. Records without an operation
-	 * identity do not match.
-	 */
-	runId?: string;
-	/** Exact operation intent kind. Valid only with type "operation_started". */
-	operationKind?: OperationStartedRecord["intent"]["kind"];
-	/** Exclusive chronological lower bound: seq > afterSeq, regardless of order. */
-	afterSeq?: number;
-	/** Sequence order. Default: "newestFirst". */
-	order?: EntryOrder;
-	/** Positive maximum number of matching records. */
+export interface UsageScan {
+	fromSeq?: number;
+	toSeq?: number;
+	order?: "asc" | "desc";
 	limit?: number;
+}
+
+export interface SessionStats {
+	messageCount: number;
+	usage: Usage;
+}
+
+export interface Storage {
+	commit(transaction: Transaction): Promise<CommitResult>;
+	getEntries(ids: string[]): Promise<ReadonlyMap<string, Entry>>;
+	getRegister<TNamespace extends RegisterNamespace>(
+		namespace: TNamespace,
+		key: string,
+	): Promise<Register<TNamespace> | undefined>;
+	listRegisters<TNamespace extends RegisterNamespace>(
+		namespace: TNamespace,
+		keyPrefix?: string,
+	): Promise<Register<TNamespace>[]>;
+	scanBranch(query: StorageBranchScan): Promise<Entry[]>;
+	scanBranchStructure(query: StorageBranchScan): Promise<EntryStructure[]>;
+	scanEntries(query: EntryScan): Promise<Entry[]>;
+	scanUsage(query: UsageScan): Promise<UsageRow[]>;
+	getStats(): Promise<SessionStats>;
+	close(): Promise<void>;
 }
 
 export interface SessionMetadata {
 	id: string;
 	createdAt: number;
+	storageVersion: number;
+	cwd?: string;
 	parentSessionId?: string;
+	legacyParentSessionPath?: string;
 }
 
-export interface SessionStats {
-	messageCount: number;
-	cachedTokens: number;
-	uncachedTokens: number;
-	totalTokens: number;
-	costTotal: number;
+export interface SessionCodecOptions {
+	customMessageSchemas?: Record<string, TSchema>;
 }
 
-export interface LanePointer {
-	lane: string;
-	leafId: string | null;
+export interface IdGenerator {
+	next(timestampMs?: number): string;
 }
 
-export type LogItem =
-	| { kind: "entry"; seq: number; entry: Entry }
-	| { kind: "record"; seq: number; record: LaneRecord }
-	| { kind: "lane"; seq: number; lane: string; leafId: string | null }
-	| { kind: "fact"; seq: number; fact: "name"; name: string | undefined }
-	| { kind: "fact"; seq: number; fact: "label"; targetId: string; label: string | undefined };
-
-export interface LogOptions {
-	afterSeq?: number;
+export interface EntryQuery {
+	type?: EntryType;
+	customType?: string;
+	order?: "asc" | "desc";
 	limit?: number;
-}
-
-export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
-	getMetadata(): Promise<TMetadata>;
-
-	// Lanes
-	getLanes(): Promise<{ lane: string; leafId: string | null }[]>;
-	createLane(lane: string, at: string | null): Promise<void>;
-	moveLane(lane: string, to: string | null): Promise<void>;
-
-	// Entries and Records
-	appendEntry<TEntry extends Entry>(entry: ProvisionedEntry<TEntry>, lane: string): Promise<TEntry>;
-	appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord>;
-
-	// Reads
-	getEntry(id: string): Promise<Entry | undefined>;
-	findEntries(query?: EntryQuery): Promise<Entry[]>;
-	/** start is mandatory here (as opposed to SessionTree's findEntriesOnBranch); defaulting to a lane's leaf is view sugar. */
-	findEntriesOnBranch(query: EntryQuery & BranchBounds & { start: string }): Promise<Entry[]>;
-	findRecords<K extends LaneRecord["type"]>(
-		query: RecordQuery & { type: K },
-	): Promise<Extract<LaneRecord, { type: K }>[]>;
-	findRecords(query?: RecordQuery): Promise<LaneRecord[]>;
-	/**
-	 * Returns unfinished operation starts newest first. Recovery uses `limit: 2`:
-	 * zero results mean the lane is idle, one means it is suspended, and two
-	 * mean at least two operations are open, which is corruption. Further
-	 * results provide no additional recovery state.
-	 */
-	findOpenOperations(lane: string, options?: { limit?: number }): Promise<OperationStartedRecord[]>;
-	getLog(options?: { afterSeq?: number; limit?: number }): Promise<LogItem[]>;
-
-	// Global facts
-	getName(): Promise<string | undefined>;
-	setName(name: string | undefined): Promise<void>;
-	getLabel(id: string): Promise<string | undefined>;
-	setLabel(id: string, label: string | undefined): Promise<void>;
-	getStats(): Promise<SessionStats>;
+	cursor?: EntryCursor;
 }
 
 export interface SessionTree {
 	getLeafId(): Promise<string | null>;
 	getEntry(id: string): Promise<Entry | undefined>;
 	getStats(): Promise<SessionStats>;
-
-	// Global facts. Latest wins; not branch-scoped. "set", not "append":
-	// append vocabulary is reserved for tree writes.
 	getName(): Promise<string | undefined>;
 	setName(name: string | undefined): Promise<void>;
 	getLabel(targetId: string): Promise<string | undefined>;
 	setLabel(targetId: string, label: string | undefined): Promise<void>;
-
-	/** Session-wide, all branches, sequence order. */
+	getCustomFact(key: string): Promise<JsonValue | undefined>;
+	setCustomFact(key: string, value: JsonValue | undefined): Promise<void>;
 	findEntries(query?: EntryQuery): Promise<Entry[]>;
 	findEntry(query?: EntryQuery): Promise<Entry | undefined>;
-
-	/** Branch-scoped: the path from start toward root. */
-	findEntriesOnBranch(query?: EntryQuery & BranchBounds): Promise<Entry[]>;
-	findEntryOnBranch(query?: EntryQuery & BranchBounds): Promise<Entry | undefined>;
-
-	// Writes. Resolve on durable acceptance; the returned id is the entry's
-	// id (provisioned when the write defers).
+	findEntriesOnBranch(query?: BranchScan): Promise<Entry[]>;
+	findEntryOnBranch(query?: BranchScan): Promise<Entry | undefined>;
 	appendMessage(message: AgentMessage): Promise<string>;
-	appendCustomEntry(customType: string, data?: unknown): Promise<string>;
+	appendCustomEntry(customType: string, data?: JsonValue): Promise<string>;
+}
+
+export interface Session<TMetadata extends SessionMetadata = SessionMetadata> extends SessionTree {
+	readonly metadata: TMetadata;
+	readonly idGenerator: IdGenerator;
+	view(lane: string): SessionTree;
+	createLane(name: string, at: string | null, configuration: LaneConfiguration): Promise<SessionTree>;
+	commit(transaction: Transaction): Promise<CommitResult>;
+	getEntries(ids: string[]): Promise<ReadonlyMap<string, Entry>>;
+	getRegister<TNamespace extends RegisterNamespace>(
+		namespace: TNamespace,
+		key: string,
+	): Promise<Register<TNamespace> | undefined>;
+	listRegisters<TNamespace extends RegisterNamespace>(
+		namespace: TNamespace,
+		keyPrefix?: string,
+	): Promise<Register<TNamespace>[]>;
+	close(): Promise<void>;
 }
 
 export interface SessionCreateOptions {
@@ -360,34 +531,12 @@ export type ForkOptions = { scope?: "branch"; entryId?: string; position?: "befo
 
 export interface SessionRepo<
 	TMetadata extends SessionMetadata = SessionMetadata,
-	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
+	TCreateOptions extends { id?: string; parentSessionId?: string } = SessionCreateOptions,
 	TListOptions = void,
 > {
 	create(options: TCreateOptions): Promise<Session<TMetadata>>;
-	/** Opens the session for writing and acquires any backend writer claim. */
 	open(metadata: TMetadata): Promise<Session<TMetadata>>;
-	/** Lists session metadata without opening sessions or acquiring writer claims. */
 	list(options?: TListOptions): Promise<TMetadata[]>;
 	delete(metadata: TMetadata): Promise<void>;
 	fork(source: TMetadata, options: ForkOptions & TCreateOptions): Promise<Session<TMetadata>>;
-}
-
-export type SessionErrorCode =
-	| "not_found"
-	| "already_exists"
-	| "invalid_entry"
-	| "invalid_payload"
-	| "invalid_lane"
-	| "invalid_query"
-	| "invalid_fork_target"
-	| "storage";
-
-export class SessionError extends Error {
-	readonly code: SessionErrorCode;
-
-	constructor(code: SessionErrorCode, message: string, cause?: Error) {
-		super(message, cause === undefined ? undefined : { cause });
-		this.name = "SessionError";
-		this.code = code;
-	}
 }

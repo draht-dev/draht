@@ -707,14 +707,16 @@ interface LaneConfiguration {
 
 - A lane's leaf moves in exactly two ways: the lane appends an entry (leaf becomes that entry), or the lane navigates (leaf jumps to an existing entry).
 - `LaneConfiguration` is **total**. A setter overwrites the whole register; it is never a patch and never a tree entry.
+- `Session.createLane(name, at, configuration)` is the primitive that creates a lane. It validates the permanent lane name, rejects an existing lane or unknown non-null anchor, and commits all three registers atomically. The supplied configuration is a total seed; it is not inferred from the anchor or another lane. The method returns the new lane's `SessionTree` view.
 - Creating a lane copies no tree content, no history, and no configuration from its anchor:
 
 ```
-TX[ upsert lane.config/{name} = <seed configuration>,
+TX[ upsert lane.config/{name} = <supplied configuration>,
     upsert lane.leaf/{name}   = anchorEntryId,
     upsert lane.state/{name}  = { currentOperationId: null, pendingNextRun: [] } ]
 ```
 
+- `AgentHarness.createLane()` invokes this primitive on the lane mutation line with the harness's immutable captured seed, then publishes the harness event. Session-level callers use the same primitive directly when they need tree and lane management without runtime orchestration.
 - Lanes are never deleted or renamed. Names are permanent application keys.
 - `main` exists in every session.
 - Two lanes at the same leaf simply diverge on their next append.
@@ -848,6 +850,9 @@ interface Session<M extends SessionMetadata = SessionMetadata> extends SessionTr
   /** Mints UUIDv7 ids; a supplied timestamp mints a follower id (§1.2). */
   readonly idGenerator: { next(timestampMs?: number): string };
   view(lane: string): SessionTree;
+  /** Atomically creates a configured lane and returns its lane-bound tree view (§2.3). */
+  createLane(name: string, at: string | null,
+             configuration: LaneConfiguration): Promise<SessionTree>;
 
   /** Package-internal harness storage surface; validates before delegating to Storage. */
   commit(tx: Transaction): Promise<CommitResult>;
@@ -861,7 +866,7 @@ interface Session<M extends SessionMetadata = SessionMetadata> extends SessionTr
 }
 ```
 
-Repository constructors accept `SessionCodecOptions`. Every declaration-merged custom `AgentMessage` must have a string `role` and a registered runtime schema; unknown custom roles are rejected before persistence and on decode. A new repository session creates `main` with null leaf and an empty `LaneState`, but no configuration; first harness attachment writes its seed configuration.
+Repository constructors accept `SessionCodecOptions`. Every declaration-merged custom `AgentMessage` must have a string `role` and a registered runtime schema; unknown custom roles are rejected before persistence and on decode. A new repository session creates `main` with null leaf and an empty `LaneState`, but no configuration; first harness attachment writes its seed configuration. Every additional lane is created through `Session.createLane()` with a total configuration.
 
 `open()` compares the stored `storageVersion` with the binary's: equal proceeds; older runs chained migrations under the writer lease before returning (Part 7); newer refuses to open. Old coding-agent v3 JSONL sessions open through the same repository and normalize on load (Appendix B — "v3" there names the legacy JSONL session format, not this document).
 
@@ -1734,7 +1739,7 @@ A fresh operation drive starts with zero deferred permits; `resume()` starts wit
 
 ## 4.2 The effects boundary
 
-Every operation-procedure commit, provider request, tool invocation, hook call, and timer crosses exactly one injected `Effects` (`fx`) method. Procedures receive `fx`, their telemetry context, and a read-only runtime view — never `Session`, `Models`, the tool registry, or the hook runner directly. Ungated lane-surface commits—acceptance, queue/configuration calls, facts, lane creation, and idle writes—use the same lane mutation line and typed `Session` transaction API directly.
+Every operation-procedure commit, provider request, tool invocation, hook call, and timer crosses exactly one injected `Effects` (`fx`) method. Procedures receive `fx`, their telemetry context, and a read-only runtime view — never `Session`, `Models`, the tool registry, or the hook runner directly. Ungated lane-surface commits—acceptance, queue/configuration calls, facts, and idle writes—use the same lane mutation line and typed `Session` transaction API directly. Harness lane creation runs on that line and delegates its atomic register creation to `Session.createLane()`.
 
 ```ts
 type SummaryRequestOutput =
@@ -2220,7 +2225,7 @@ type EntryProjector = (entry: CustomEntry) =>
 
 `create()` copies the three seed fields into one immutable `LaneConfiguration`, storing the model as `{ provider, modelId }`. Before restore, it commits that seed as the first `lane.config` for a fresh or normalized-v3 `main`. Existing lanes use only their current config; the seed never overrides them. A configuration-less lane in a format-4 session is corrupt.
 
-`createLane(name, at)` atomically writes its registers and the original captured seed, regardless of later changes. Setters replace only their lane's register value. Reopen options can seed new lanes but cannot alter existing ones without a setter. Applications opt into deferred generation through `setStreamOptions({ deferred: ... })` or initial `streamOptions`; `before_request` may patch the same curated field per attempt.
+`createLane(name, at)` calls `Session.createLane(name, at, capturedSeed)` on the lane mutation line, regardless of later changes to existing lanes. It maps session validation failures to `LaneExists`, `InvalidLane`, or `UnknownTarget`, and emits `lane_created` only after the session transaction commits. Setters replace only their lane's register value. Reopen options can seed new lanes but cannot alter existing ones without a setter. Applications opt into deferred generation through `setStreamOptions({ deferred: ... })` or initial `streamOptions`; `before_request` may patch the same curated field per attempt.
 
 Initial, replacement, and hook-patched stream options are normalized to detached JSON-safe values before publication because ready states persist them. Functions, symbols, bigint values, cycles, non-finite numbers, and unsupported prototypes in metadata reject construction/the setter without changing settings; an invalid hook patch is isolated as `handler_error` and ignored without changing operation state. Patch deletion semantics are applied before this validation.
 
@@ -2788,7 +2793,7 @@ Each slice implements its named behavior end to end and adds focused tests for i
 | # | Slice | Implement | Required focused tests |
 |---|---|---|---|
 | 1 | **Types** | The complete shared type surface, behavior-free: `Entry`/`Register`/`UsageRow` and `RegisterValues` including the full Part 3 state tree, `Write`/`Transaction`/`Storage`/`Session`/`SessionTree`/`SessionRepo`, scans, the id-generator and `SessionSearchService` interfaces, `storageVersion`, and the Part 5 surface types (results, errors, events, snapshots, hooks). Delete `packages/agent/src/harness/**` and its tests outright; patch remaining consumers. The repo may not compile mid-slice; it compiles again — `npm run check` clean — at the end. | Type-level only; no behavior. |
-| 2 | **Session layer, Memory, conformance** | Entry materialization with inline payloads, lane/config/state registers, facts, branch/global queries, context projection, `SessionTree`/views, codec plus runtime entry/register/custom-message schemas, UUIDv7 generator with follower minting, stats projection, the Memory backend with repository lifecycle/forks and the `storageVersion` gate at open, the backend conformance suite, and the instrumented-storage decorator (Part 9). | Rollback, sequence order, duplicate ids, register set/delete/recreate, delete-of-absent-key no-op, fact deletion vs JSON `null`, schema validation, unknown custom roles, immutable reads, stats-equals-ledger, follower minting, placement, divergence, filters/cursors/stops, custom entries with and without data, context projection, fork before first attachment, configured fork snapshots/facts/zero ledger, close. |
+| 2 | **Session layer, Memory, conformance** | Entry materialization with inline payloads, atomic configured lane creation, lane/config/state registers, facts, branch/global queries, context projection, `SessionTree`/views, codec plus runtime entry/register/custom-message schemas, UUIDv7 generator with follower minting, stats projection, the Memory backend with repository lifecycle/forks and the `storageVersion` gate at open, the backend conformance suite, and the instrumented-storage decorator (Part 9). | Rollback, sequence order, duplicate ids, register set/delete/recreate, delete-of-absent-key no-op, atomic lane creation and duplicate/name/anchor rejection, fact deletion vs JSON `null`, schema validation, unknown custom roles, immutable reads, stats-equals-ledger, follower minting, placement, divergence, filters/cursors/stops, custom entries with and without data, context projection, fork before first attachment, configured fork snapshots/facts/zero ledger, close. |
 | S1 | **JSONL** | Format 4: single-item/array transaction lines, register set/delete replay, header `storageVersion`, torn-tail handling, snapshot compaction (GC keep-predicate), the file-based repository, format-3 read normalization and first-write temp/rename conversion with id re-minting (Appendix B). Replace the unfinished current v4 without migration. | Backend conformance, corrupt interior/final lines, whole-array tear, compaction logical-equivalence, every format-3 rule including id re-minting and reference remapping, resolved/unresolved parent paths, aggregate imported usage adjustment. |
 | S2 | **SQLite** | One database file per session: entries/registers/usage-ledger tables, one-row session/lease rows, transactions, `storageVersion`, the file-based repository, segmented branch cache, `VACUUM INTO`-based rewrite/fork, and explicit repair. No values table, no `slot_history`, no `getLog`, no search projection, no migration. | Shared conformance, `BEGIN IMMEDIATE`, fencing, query plans, segment-chain soundness, register upsert/delete, forks/stats/repair. |
 | S3 | **Search** | The standalone `SessionSearchService` (§2.8): durable per-session cursors, `sync()` enumeration and catch-up, debounced `notify()`, `remove()`/reconciliation, `(sessionId, storeGeneration)` cursor keys, and the reference SQLite FTS5 implementation working over any backend's repository. | Cursor catch-up from empty against existing sessions, idempotent re-index after crash mid-batch, notify/sweep equivalence, sessions-vs-entries queries and ranking, removal and reconciliation, shared-index multi-process discipline. |

@@ -114,6 +114,8 @@ export interface AgentHarnessStreamOptions {
 	metadata?: SimpleStreamOptions["metadata"];
 	/** Provider cache retention hint. */
 	cacheRetention?: SimpleStreamOptions["cacheRetention"];
+	/** Ask a capable provider to continue generation asynchronously. */
+	deferred?: boolean | { window?: "15m" | "1h" | "24h" };
 }
 
 /** Per-request stream option patch returned by provider hooks. */

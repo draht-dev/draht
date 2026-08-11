@@ -119,10 +119,23 @@ describe("agent telemetry schemas", () => {
 	it("infers per-span harness literals and optional completion enrichment", async () => {
 		type RunStart = HarnessSpanStartAttributes<"pi.harness.run">;
 		type RunEnd = HarnessSpanEndAttributes<"pi.harness.run">;
+		type WriteStart = HarnessSpanStartAttributes<"pi.session.write">;
+		type WriteEnd = HarnessSpanEndAttributes<"pi.session.write">;
 		expectTypeOf<RunStart["pi.operation.kind"]>().toEqualTypeOf<"run">();
 		expectTypeOf<RunEnd["pi.operation.outcome"]>().toEqualTypeOf<
 			"completed" | "aborted" | "failed" | "suspended" | undefined
 		>();
+		const writeStart = {
+			"pi.session.id": "session",
+			"pi.session.item_count": 2,
+			"pi.session.item_kinds": ["entry", "register"],
+		} satisfies WriteStart;
+		const writeEnd = {
+			"pi.session.first_seq": 1,
+			"pi.session.last_seq": 2,
+		} satisfies WriteEnd;
+		expectTypeOf(writeStart["pi.session.item_count"]).toEqualTypeOf<number>();
+		expectTypeOf(writeEnd["pi.session.last_seq"]).toEqualTypeOf<number>();
 
 		const telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT;
 		await startHarnessSpan(

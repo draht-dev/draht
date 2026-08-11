@@ -32,10 +32,9 @@ import { buildSessionContext } from "../../src/harness/session/context.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
+	CustomEntry,
 	Entry,
 	MessageEntry,
-	ModelChangeEntry,
-	ThinkingLevelEntry,
 } from "../../src/harness/session/types.ts";
 import { getOrThrow } from "../../src/harness/types.ts";
 import type { AgentMessage } from "../../src/types.ts";
@@ -102,29 +101,18 @@ function createCompactionEntry(
 		summary,
 		tokensBefore: 1234,
 		retainedTail: retainedTail ?? [],
+		fromHook: false,
 	};
 }
 
-function createThinkingLevelEntry(level: string, parentId: string | null = null): ThinkingLevelEntry {
+function createCustomEntry(customType: string, parentId: string | null = null): CustomEntry {
 	return {
-		type: "thinking_level_change",
+		type: "custom",
+		customType,
 		id: createId(),
 		parentId,
 		seq: nextId,
 		timestamp: Date.now(),
-		thinkingLevel: level,
-	};
-}
-
-function createModelChangeEntry(provider: string, modelId: string, parentId: string | null = null): ModelChangeEntry {
-	return {
-		type: "model_change",
-		id: createId(),
-		parentId,
-		seq: nextId,
-		timestamp: Date.now(),
-		provider,
-		modelId,
 	};
 }
 
@@ -199,9 +187,9 @@ describe("harness compaction", () => {
 	});
 
 	it("covers cut-point and turn-start edge cases", () => {
-		const thinking = createThinkingLevelEntry("high");
-		const modelChange = createModelChangeEntry("openai", "gpt-4", thinking.id);
-		expect(findCutPoint([thinking, modelChange], 0, 2, 1)).toEqual({
+		const firstCustom = createCustomEntry("first");
+		const secondCustom = createCustomEntry("second", firstCustom.id);
+		expect(findCutPoint([firstCustom, secondCustom], 0, 2, 1)).toEqual({
 			firstKeptEntryIndex: 0,
 			turnStartIndex: -1,
 			isSplitTurn: false,
@@ -210,16 +198,17 @@ describe("harness compaction", () => {
 		const branchSummary: BranchSummaryEntry = {
 			type: "branch_summary",
 			id: createId(),
-			parentId: modelChange.id,
+			parentId: secondCustom.id,
 			seq: nextId,
 			timestamp: Date.now(),
 			fromId: "branch",
 			summary: "branch summary",
+			fromHook: false,
 		};
-		expect(findTurnStartIndex([thinking, branchSummary], 1, 0)).toBe(1);
-		expect(findTurnStartIndex([thinking, modelChange], 1, 0)).toBe(-1);
+		expect(findTurnStartIndex([firstCustom, branchSummary], 1, 0)).toBe(1);
+		expect(findTurnStartIndex([firstCustom, secondCustom], 1, 0)).toBe(-1);
 
-		const result = findCutPoint([thinking, branchSummary], 0, 2, 1);
+		const result = findCutPoint([firstCustom, branchSummary], 0, 2, 1);
 		expect(result.firstKeptEntryIndex).toBe(0);
 
 		const toolResult = createMessageEntry({
@@ -356,14 +345,11 @@ describe("harness compaction", () => {
 		]);
 	});
 
-	it("tracks model and thinking level changes in built context", () => {
+	it("excludes failed assistant responses from built context", () => {
 		const user = createMessageEntry(createUserMessage("1"));
-		const modelChange = createModelChangeEntry("openai", "gpt-4", user.id);
-		const assistant = createMessageEntry(createAssistantMessage("a"), modelChange.id);
-		const thinkingChange = createThinkingLevelEntry("high", assistant.id);
-		const loaded = buildSessionContext([user, modelChange, assistant, thinkingChange]);
-		expect(loaded.model).toEqual({ provider: "anthropic", modelId: "claude-sonnet-4-5" });
-		expect(loaded.thinkingLevel).toBe("high");
+		const failed = createMessageEntry({ ...createAssistantMessage("failed"), stopReason: "error" }, user.id);
+		const loaded = buildSessionContext([user, failed]);
+		expect(loaded.messages).toEqual([user.message]);
 	});
 
 	it("prepares compaction using the latest compaction summary as previousSummary", () => {

@@ -14,10 +14,6 @@
 			"types": "./dist/node.d.ts",
 			"import": "./dist/node.js"
 		},
-		"./session/testing": {
-			"types": "./dist/harness/session/testing/index.d.ts",
-			"import": "./dist/harness/session/testing/index.js"
-		},
 		"./package.json": "./package.json"
 	},
 	"files": [

@@ -10,7 +10,7 @@ import {
 
 import type { AgentMessage } from "../../types.ts";
 import { convertToLlm, createBranchSummaryMessage, createCompactionSummaryMessage } from "../messages.ts";
-import { type Entry, type Session, SessionError } from "../session/index.ts";
+import type { Entry, SessionTree } from "../session/index.ts";
 import { BranchSummaryError, err, ok, type Result } from "../types.ts";
 import { completeSimpleWithRetries, estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.ts";
 import {
@@ -80,7 +80,7 @@ export interface GenerateBranchSummaryOptions {
 
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
 export async function collectEntriesForBranchSummary(
-	session: Session,
+	session: Pick<SessionTree, "findEntriesOnBranch" | "getEntry">,
 	oldLeafId: string | null,
 	targetId: string,
 ): Promise<CollectEntriesResult> {
@@ -101,7 +101,7 @@ export async function collectEntriesForBranchSummary(
 
 	while (current && current !== commonAncestorId) {
 		const entry = await session.getEntry(current);
-		if (!entry) throw new SessionError("invalid_entry", `Entry ${current} not found`);
+		if (!entry) throw new Error(`Corrupt session: entry ${current} not found`);
 		entries.push(entry);
 		current = entry.parentId;
 	}
@@ -120,9 +120,6 @@ function getMessageFromEntry(entry: Entry): AgentMessage | undefined {
 
 		case "compaction":
 			return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
-		case "thinking_level_change":
-		case "model_change":
-		case "active_tools_change":
 		case "custom":
 			return undefined;
 	}
@@ -134,15 +131,22 @@ export function prepareBranchEntries(entries: Entry[], tokenBudget: number = 0):
 	const fileOps = createFileOps();
 	let totalTokens = 0;
 	for (const entry of entries) {
-		if (entry.type === "branch_summary" && entry.details) {
-			const details = entry.details as BranchSummaryDetails;
-			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
+		if (
+			entry.type !== "branch_summary" ||
+			typeof entry.details !== "object" ||
+			entry.details === null ||
+			Array.isArray(entry.details)
+		) {
+			continue;
+		}
+		if (Array.isArray(entry.details.readFiles)) {
+			for (const path of entry.details.readFiles) {
+				if (typeof path === "string") fileOps.read.add(path);
 			}
-			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) {
-					fileOps.edited.add(f);
-				}
+		}
+		if (Array.isArray(entry.details.modifiedFiles)) {
+			for (const path of entry.details.modifiedFiles) {
+				if (typeof path === "string") fileOps.edited.add(path);
 			}
 		}
 	}

@@ -301,7 +301,7 @@ No declared span events.
 
 One retry delay
 
-- Parents: `pi.harness.step`, `pi.harness.run`
+- Parents: `pi.harness.run`, `pi.harness.compaction`, `pi.harness.navigation`, `pi.harness.turn`, `pi.harness.checkpoint`
 - Default status: `ok`
 - Error when: Sleep work throws
 
@@ -353,20 +353,21 @@ No declared span events.
 
 ### `pi.session.write`
 
-One committed session mutation
+One committed session transaction
 
 - Parents: root or any caller span
 - Default status: `ok`
-- Error when: Storage rejects the mutation
+- Error when: Storage rejects the transaction
 
 #### Start attributes
 
 | Name | Type | Required | Values | Notes | Description |
 |---|---|---:|---|---|---|
-| `pi.lane.name` | `string` | yes |  | high cardinality | Lane name |
-| `pi.operation.id` | `string` | no |  | high cardinality | Durable operation id when accepted |
-| `pi.session.mutation` | `string` | yes | entry, record, lane, fact |  | Session mutation kind |
-| `pi.session.item_type` | `string` | no |  |  | Entry, record, lane, or fact subtype |
+| `pi.session.id` | `string` | yes |  | high cardinality | Session id |
+| `pi.lane.name` | `string` | no |  | high cardinality | Lane name when supplied by the caller |
+| `pi.operation.id` | `string` | no |  | high cardinality | Durable operation id when supplied by the caller |
+| `pi.session.item_count` | `number` | yes |  |  | Number of writes in the transaction |
+| `pi.session.item_kinds` | `string[]` | yes | elements: entry, usage, register |  | Distinct write kinds in the transaction |
 
 #### End attributes
 
@@ -374,7 +375,8 @@ All end attributes are optional completion enrichment.
 
 | Name | Type | Values | Notes | Description |
 |---|---|---|---|---|
-| `pi.session.seq` | `number` |  |  | Committed session sequence when exposed |
+| `pi.session.first_seq` | `number` |  |  | First committed sequence in the transaction |
+| `pi.session.last_seq` | `number` |  |  | Last committed sequence in the transaction |
 
 #### Events
 

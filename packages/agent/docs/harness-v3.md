@@ -219,17 +219,17 @@ interface UsageRow {
 
 ## 1.2 Identity
 
-Every id storage stores — entry ids, usage ids, and every reserved id that will become one — is a **UUIDv7**, minted through the session's id generator (§2.8). Legacy-format imports re-mint their ids to conform (Appendix C). A UUIDv7 begins with 48 bits of Unix milliseconds: the first 12 hex characters of the id *are* its mint time. Every reference is therefore self-describing and time-sortable — a `parentId`, a `lane.leaf` value, a `fact.label` key, an id inside `op.state` JSON all carry their creation time with no lookup. The one cost: ids leak their creation time to applications. Accepted. (A future partitioned Postgres backend would build its retention design on this prefix; that sketch is the informative Part 6. Memory, JSONL, and SQLite never partition.)
+Every id — entry, usage, and every reserved id — is a **UUIDv7** from the session's id generator (§2.8); legacy imports re-mint to conform (Appendix C). The first 48 bits are the mint time, so every reference is self-describing and time-sortable. Cost accepted: ids leak creation time. (A future partitioned Postgres backend would build on this prefix — informative Part 6.)
 
 Minting rules:
 
-1. An id is minted with `now()` **at reservation**. For direct appends and prompt entries, reservation and placement are the same transaction, so the prefix equals the placement date; assistant responses and tool results mint at the intent commit and place at settlement, so their prefixes trail placement by at most the request duration.
-2. **Group cohesion: followers inherit the leader's timestamp.** Tool-result ids are minted with their assistant entry id's 48-bit timestamp — `idGenerator.next(timestampMs?)` (§2.8); fresh random bits keep them unique — so an assistant and its tool results form one time-cohesive group under id order, even across a midnight boundary. This is a deliberate, documented deviation from "UUID timestamp = wall clock": a call/result exchange is one unit — a tool result whose assistant call is missing heads a context every provider rejects — and its ids say so.
-3. **Synthetic settlement needs no special case.** Crash recovery writes under already-reserved ids (§4.5), so synthetic responses and results carry exactly the ids their intents promised.
+1. Ids are minted with `now()` **at reservation**. Direct appends place in the same transaction; assistant/tool ids trail placement by at most the request duration.
+2. **Tool-result ids inherit their assistant id's timestamp** (`idGenerator.next(timestampMs?)`, fresh random tail), so a call-and-results group is time-cohesive under id order even across a midnight boundary.
+3. Synthetic settlements write under already-reserved ids (§4.5) — no special case.
 
-**The opaque-payload contract.** Application- and model-visible content — custom entry `data`, `details` fields, `fact.custom` values, message text, hook `resumeData` — may embed entry ids. The harness never tracks such references: they are opaque payload, invisible to validation and recovery, and a retention mechanism may leave them dangling. Content that must remain resolvable is copied into the payload rather than referenced by id.
+**Opaque payloads** — custom entry `data`, `details`, `fact.custom` values, message text, hook `resumeData` — may embed entry ids. The harness never tracks those references and they may go stale; copy content, don't reference it.
 
-**Absolutes.** Within a session, entries and usage rows, once committed, are never deleted; the administrative precise rewrite (§2.9) is the sole sanctioned exception (repository-level `delete()` removes whole sessions, §2.8). A missing parent is always corruption — loud, never a clean stop.
+**Absolutes.** Within a session, entries and usage rows are never deleted — the precise rewrite (§2.9) is the sole exception. A missing parent is always corruption.
 
 ## 1.3 Register namespaces
 

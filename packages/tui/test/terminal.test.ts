@@ -1,7 +1,35 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { setKittyProtocolActive } from "../src/keys.ts";
-import { normalizeAppleTerminalInput, normalizeNativeShiftEnterInput, ProcessTerminal } from "../src/terminal.ts";
+import {
+	normalizeAppleTerminalInput,
+	normalizeNativeShiftEnterInput,
+	ProcessTerminal,
+	resolveEscapeTimeoutMs,
+} from "../src/terminal.ts";
+
+describe("resolveEscapeTimeoutMs", () => {
+	it("uses DRAHT_TUI_ESC_TIMEOUT when configured", () => {
+		assert.equal(resolveEscapeTimeoutMs({ DRAHT_TUI_ESC_TIMEOUT: "80" }), 80);
+		assert.equal(resolveEscapeTimeoutMs({ DRAHT_TUI_ESC_TIMEOUT: "80", SSH_TTY: "/dev/pts/1" }), 80);
+	});
+
+	it("ignores invalid DRAHT_TUI_ESC_TIMEOUT values", () => {
+		assert.equal(resolveEscapeTimeoutMs({ DRAHT_TUI_ESC_TIMEOUT: "abc" }), 10);
+		assert.equal(resolveEscapeTimeoutMs({ DRAHT_TUI_ESC_TIMEOUT: "0" }), 10);
+		assert.equal(resolveEscapeTimeoutMs({ DRAHT_TUI_ESC_TIMEOUT: "-5" }), 10);
+		assert.equal(resolveEscapeTimeoutMs({ DRAHT_TUI_ESC_TIMEOUT: "" }), 10);
+	});
+
+	it("defaults to 100ms over SSH", () => {
+		assert.equal(resolveEscapeTimeoutMs({ SSH_CONNECTION: "10.0.0.1 22" }), 100);
+		assert.equal(resolveEscapeTimeoutMs({ SSH_TTY: "/dev/pts/1" }), 100);
+	});
+
+	it("defaults to 10ms otherwise", () => {
+		assert.equal(resolveEscapeTimeoutMs({}), 10);
+	});
+});
 
 describe("normalizeNativeShiftEnterInput", () => {
 	it("rewrites Return to CSI-u Shift+Enter when native Shift detection is enabled and Shift is pressed", () => {

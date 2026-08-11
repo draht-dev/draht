@@ -217,7 +217,7 @@ interface UsageRow {
 }
 ```
 
-**Registers hold values, not pointers.** A register's value is the current typed state itself, never an id pointing at an immutable state value. Overwriting a register discards the previous value; nothing accumulates and there is no history to fold (§1.8). Deleting a register removes the key entirely and is a first-class write, distinct from storing JSON `null`, which remains a legal value where a namespace's type permits it (`lane.leaf` at the root, `fact.custom`).
+**Registers hold values, not snapshots.** A register's value is the current typed state itself — never an id pointing at an immutable state row, the superseded pattern that left a garbage value behind every update. Overwriting a register discards the previous value; nothing accumulates and there is no history to fold (§1.8). Registers may reference *other registers* by deterministic namespace/key — `op.state` names its `op.tool_args`/`op.preparation` keys, queue lists hold the ids that key `pending.entry` registers — and every such reference couples two pieces of current state whose lifecycles the same transactions manage together. Deleting a register removes the key entirely and is a first-class write, distinct from storing JSON `null`, which remains a legal value where a namespace's type permits it (`lane.leaf` at the root, `fact.custom`).
 
 ## 1.2 Identity
 

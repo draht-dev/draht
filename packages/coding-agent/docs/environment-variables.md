@@ -3,14 +3,19 @@
 draht uses environment variables in three ways:
 
 - Variables such as `DRAHT_OFFLINE` configure the draht process.
-- draht sets `DRAHT_CODING_AGENT` so child processes can detect that they run inside draht.
+- draht sets process markers so child processes can identify draht as the launching agent.
 - Commands run by the LLM-callable bash tool receive `DRAHT_*` variables describing the current session.
 
 Provider API-key variables are documented separately in [Providers](providers.md#environment-variables-or-auth-file).
 
 ## Process Marker
 
-The CLI and RPC entry points set `DRAHT_CODING_AGENT=true`. Child processes inherit it and can use it to detect that they run inside draht. It is not session-specific and is not set automatically when draht is embedded through the SDK.
+The CLI and RPC entry points set two process markers:
+
+- `AI_AGENT=draht` is a generic marker that lets tooling identify draht as the agent that launched the process.
+- `DRAHT_CODING_AGENT=true` is draht-specific and lets child processes detect that they run inside draht.
+
+Child processes inherit both markers. They are not session-specific and are not set automatically when draht is embedded through the SDK.
 
 ## Bash Tool Session Environment
 

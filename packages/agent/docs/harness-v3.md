@@ -298,7 +298,7 @@ pending.entry      lives until its content is placed or cancelled
 - Operation-owned `pending.entry` registers still unconsumed at the end (remaining inbox items and abort-drained items) are deleted by the terminal transaction — a consumed item's register dies in its placement transaction; lane-owned ones (`pendingNextRun`) outlive operations and die when consumed or cancelled (§3.11).
 - `lane.lastResult` is written only by terminal transactions and overwritten by the next one on its lane — one bounded register per lane, forever. Recovery never reads it; it exists so an application that accepted an operation, crashed, and reopened can still learn its outcome (§3.13).
 - Deleting a fact removes its register. Storing JSON `null` in `fact.custom` is a different, legal state; there are no tombstones.
-- There is no `queue.disposition` namespace. It existed solely so a repeated `cancelQueued` could answer `already_cleared`, at the cost of one immortal register per cancelled item. Triage is now: pending → `cancelled`; entry exists → `already_consumed`; else → `not_found` (§3.11). Clients that retry a lost cancel treat `not_found` as success.
+- Cancellations leave no trace: `cancelQueued` triages as pending → `cancelled`, entry exists → `already_consumed`, else → `not_found` (§3.11). A client retrying a lost cancel treats `not_found` as success.
 
 ## 1.4 Transactions
 

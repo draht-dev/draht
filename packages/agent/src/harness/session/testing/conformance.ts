@@ -1,5 +1,5 @@
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert/strict";
-import type { Usage } from "@draht/ai";
+import type { TextContent, Usage } from "@draht/ai";
 import type { CompactionEntry, CustomEntry, Entry, MessageEntry, NewEntry, Register, Transaction } from "../types.ts";
 import type { StorageConformanceCase, StorageFixture, StorageFixtureFactory } from "./types.ts";
 
@@ -64,6 +64,20 @@ function userEntry(id: string, parentId: string | null = null, text = id): NewEn
 			timestamp: MESSAGE_TIMESTAMP,
 		},
 	};
+}
+
+function userEntryTextContent(entry: NewEntry<MessageEntry> | MessageEntry): TextContent {
+	const { message } = entry;
+	ok(message.role === "user");
+	ok(Array.isArray(message.content));
+	const content = message.content[0];
+	ok(content?.type === "text");
+	return content;
+}
+
+function setUserEntryText(entry: NewEntry<MessageEntry> | MessageEntry, text: string): void {
+	const content = userEntryTextContent(entry);
+	content.text = text;
 }
 
 function customEntry(
@@ -571,19 +585,27 @@ export function createStorageConformance(factory: StorageFixtureFactory): readon
 			"detaches nested transaction inputs and read results",
 			async ({ storage }) => {
 				const entryData = { nested: { values: [1, 2] } };
+				const messageEntry = userEntry("message", "entry", "original");
 				const registerValue = { nested: [3, 4] };
 				const details = { source: { name: "original" } };
 				const transaction: Transaction = {
 					writes: [
 						{ kind: "entry", entry: customEntry("entry", null, "nested", entryData) },
+						{ kind: "entry", entry: messageEntry },
 						{ kind: "register", op: "set", namespace: "fact.custom", key: "object", value: registerValue },
 						{ kind: "usage", row: { id: "usage", usage: usage(4, 5), adjustment: false, details } },
 					],
 				};
 				await storage.commit(transaction);
 				entryData.nested.values[0] = 99;
+				setUserEntryText(messageEntry, "mutated input");
 				registerValue.nested[0] = 99;
 				details.source.name = "mutated";
+
+				const messageMap = await storage.getEntries(["message"]);
+				const readMessage = messageMap.get("message");
+				ok(readMessage?.type === "message");
+				setUserEntryText(readMessage, "mutated read");
 
 				const entryMap = await storage.getEntries(["entry"]);
 				const entry = entryMap.get("entry");
@@ -598,8 +620,15 @@ export function createStorageConformance(factory: StorageFixtureFactory): readon
 				rows[0]!.usage.input = 88;
 				const scannedEntries = await storage.scanEntries({ order: "asc" });
 				(scannedEntries[0] as CustomEntry).data = { replaced: true };
+				const scannedMessage = scannedEntries.find((candidate) => candidate.id === "message");
+				ok(scannedMessage?.type === "message");
+				setUserEntryText(scannedMessage, "mutated scan");
 				const branchEntries = await storage.scanBranch({ start: "entry" });
 				(branchEntries[0] as CustomEntry).data = { replaced: true };
+				const messageBranchEntries = await storage.scanBranch({ start: "message" });
+				const branchMessage = messageBranchEntries.find((candidate) => candidate.id === "message");
+				ok(branchMessage?.type === "message");
+				setUserEntryText(branchMessage, "mutated branch");
 				const structures = await storage.scanBranchStructure({ start: "entry" });
 				structures[0]!.timestamp = 0;
 				const stats = await storage.getStats();
@@ -610,6 +639,9 @@ export function createStorageConformance(factory: StorageFixtureFactory): readon
 					seq: entry.seq,
 					timestamp: entry.timestamp,
 				});
+				const storedMessage = (await storage.getEntries(["message"])).get("message");
+				ok(storedMessage?.type === "message");
+				strictEqual(userEntryTextContent(storedMessage).text, "original");
 				deepStrictEqual(await storage.getRegister("fact.custom", "object"), {
 					namespace: "fact.custom",
 					key: "object",

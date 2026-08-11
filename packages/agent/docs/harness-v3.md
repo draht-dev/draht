@@ -70,7 +70,7 @@ lane.prompt("what changed in auth last week?")
 What happens, in order:
 
 1. **Acceptance.** The harness validates, runs the `before_run` hook, and commits one transaction: the user-message entry, the operation's `op.meta` register, and its first `op.state` — *"I am at a checkpoint, and I need an assistant response."*
-2. **Intent.** It commits a second transaction: *"I am about to make a provider request. The response will be entry `0195c8d1-53a0-7c44-…` and the usage row will be `0195c8d1-53a0-7d18-…`."* Both ids are minted now; nothing has been sent yet.
+2. **Intent.** After an internal ready-state commit, it commits the request intent: *"I am about to make a provider request. The response will be entry `0195c8d1-53a0-7c44-…` and the usage row will be `0195c8d1-53a0-7d18-…`."* Both ids are minted now; nothing has been sent yet.
 3. **The request.** Streaming happens. This is the only part that is not durable.
 4. **Settlement.** One transaction commits the response entry, its usage row, and the next state: *"the response has tool calls; here is the batch plan, with result ids already assigned."*
 5. Tool calls follow the same intent → effect → settlement shape, one pair of commits each.
@@ -391,8 +391,8 @@ Every settled provider attempt writes one `UsageRow` — successful, failed, ret
 
 - `entryId` names the entry the cost belongs to, when there is one. Structural (summary) attempts that fail before producing an entry, and standalone adjustments, have none.
 - `adjustment: true` marks a caller-supplied reconciliation (`recordUsage`, §5.1) rather than a provider report. The format-3 import writes one aggregate adjustment row (Appendix C).
-- Provider-attempt usage ids are UUIDv7s reserved in the intent commit (§1.2), so a settlement writes under exactly the id its intent promised. Adjustment rows, tool-reported usage rows, and import aggregates mint their ids at commit; nothing reserves them.
-- `getStats()` is a maintained projection over the ledger and the entry count. After every commit it equals the ledger sum; the conformance suite asserts this (Part 9). There is no ledger scan: totals come from the projection, and individual rows reach the application through the `usage` event at commit time (§5.5).
+- Provider-attempt usage ids are UUIDv7s reserved in the intent commit (§1.2), so a settlement writes under exactly the id its intent promised. Adjustment rows, tool-reported usage rows, hook-supplied compaction/navigation usage rows (§3.9, §3.10), and import aggregates mint their ids at commit; nothing reserves them. A wall-clock-minted usage row may therefore land in a later partition than its follower-minted entry; per-period accounting tolerates that skew (Appendix D).
+- `getStats()` is a maintained projection over the ledger and the message-entry count — `messageCount` counts `message` entries only, not compactions, summaries, or custom entries. After every commit it equals the ledger sum; the conformance suite asserts this (Part 9). There is no ledger scan: totals come from the projection, and individual rows reach the application through the `usage` event at commit time (§5.5).
 
 ## 1.7 Backends
 
@@ -684,7 +684,8 @@ Setting a fact to `undefined` deletes its register — real deletion, not a tomb
 
 ```ts
 interface BranchScan {
-  start?: string;               // default: the view's lane leaf
+  start?: string;               // required at the Storage layer; the Session
+                                // tree view defaults it to the view's lane leaf
   stopAtType?: EntryType;       // scan ends after the first match, inclusive
   stopAtId?: string;
   type?: EntryType;
@@ -927,7 +928,7 @@ The old `QueuedInput { nodeId, valueId }` and `PendingWrite` pairs are gone: a q
 
 `latestAssistantEntryId` updates in the same settlement transaction as every assistant generation or deferred-fetch response. It lets finish and resume construct results/events without a branch scan. A tool batch retains its producing turn id while tool work remains active.
 
-Any transition that appends conversational input or tool results and requires another assistant writes a checkpoint with `need_assistant(false)` and the appended entry as `triggerEntryId`. An unprojected custom write preserves the current checkpoint, including trigger and overflow flag. Entering threshold compaction first copies the checkpoint to `resumeAfter` with `thresholdCheckedTriggerEntryId = triggerEntryId`; decline, empty preparation, success, and crash therefore cannot recheck the same boundary.
+Any transition that appends conversational input or tool results and requires another assistant writes a checkpoint with `need_assistant(false)` and the appended entry as `triggerEntryId`. A `may_finish` checkpoint sets `triggerEntryId` to the entry that caused the boundary: the settled response for a `stop`/genuine-`length` settlement (§3.7), the newest result entry for an all-terminating tool batch (§3.8) — so threshold dedup (§3.12) and restore validation (§3.3) always name an existing entry. An unprojected custom write preserves the current checkpoint, including trigger and overflow flag. Entering threshold compaction first copies the checkpoint to `resumeAfter` with `thresholdCheckedTriggerEntryId = triggerEntryId`; decline, empty preparation, success, and crash therefore cannot recheck the same boundary.
 
 ### Generation
 
@@ -941,6 +942,10 @@ interface GenerationContext {
   configuration: LaneConfiguration;
   streamOptions: AgentHarnessStreamOptions;
   retryPolicy: NormalizedRetryPolicy;
+  /** Copied from the producing checkpoint's need_assistant continuation so a
+      settlement classified after crash-restore still knows whether overflow
+      recovery was already spent (§3.7, §3.9). */
+  overflowRecoveryUsed: boolean;
 }
 
 type Generation =
@@ -1085,7 +1090,7 @@ stateDiagram-v2
     tools --> checkpoint : batch complete
 
     compaction --> checkpoint : resumeAfter restored
-    compaction --> failure_drain : overflow compaction declined or failed
+    compaction --> failure_drain : overflow declined; threshold/overflow generation failed
 
     deferred --> deferred : poll returns pending
     deferred --> tools : ready response with calls
@@ -1109,8 +1114,11 @@ compaction:  deciding ──hook declines───────────→ te
                       ──hook selects generation─→ generating ──→ terminal TX (completed|failed)
 
 navigation:  ready_to_commit ───────────────────→ terminal TX (completed)
-             summary.deciding ──→ generating ───→ terminal TX (completed)
+             summary.deciding ──hook declines───→ terminal TX (declined; no move)
+                              ──→ generating ───→ terminal TX (completed|failed)
 ```
+
+A declined summarized navigation moves nothing: the leaf stays at the source, and the terminal transaction records outcome `declined`. Abort before any structural commit finishes `aborted`, likewise without a move (§4.6).
 
 ## 3.6 Acceptance
 
@@ -1125,7 +1133,7 @@ Captured `nextRun` items already have their payloads in `pending.entry` register
 
 Manual compaction first allocates its operation id and takes a process-local lane admission reservation, then reads preparation. Summarized navigation uses the same reservation while collecting/building branch preparation; unsummarized navigation needs none because validation and acceptance share one lane-line job. While reserved, competing operations receive `LaneBusy` naming that provisional id/kind and idle tree writes wait; `nextRun` and configuration changes may still commit because they do not move the leaf. Empty compaction preparation releases the reservation and returns `NothingToCompact` with no operation write. Non-empty preparation is accepted only against the unchanged reserved source leaf. Process death drops the reservation and leaves the lane idle.
 
-Pre-acceptance rejections write **nothing**: `LaneBusy`, `NothingToCompact`, `InvalidNavigation` (target is the current leaf, label on the root target, or summarize from root), `UnknownTarget` (non-null target missing), `MissingIdentities` (model, provider, or an active tool name does not resolve). Prompt allocates its operation id before `before_run` so hook idempotency keys are stable. The hook still runs before acceptance; if a concurrent caller wins the lane, its output and provisional id are discarded and no operation exists.
+Pre-acceptance rejections write **nothing**: `LaneBusy`, `NothingToCompact`, `InvalidNavigation` (target is the current leaf, label on the root target, summarize from root, or a null target with summarize), `UnknownTarget` (non-null target missing), `MissingIdentities` (model, provider, or an active tool name does not resolve). Prompt allocates its operation id before `before_run` so hook idempotency keys are stable. The hook still runs before acceptance; if a concurrent caller wins the lane, its output and provisional id are discarded and no operation exists.
 
 **Acceptance must observe `currentOperationId === null`.** Because acceptance is on the lane mutation line, this is validation, not compare-and-swap.
 
@@ -1416,6 +1424,7 @@ type EffectKey = string; // deterministic from durable step/attempt or assistant
 
 /** Process-local leases captured before intent; never persisted or exposed. */
 type RuntimeProviderLease = ModelRequestLease;
+/** The context-bound AgentHarnessTool adapter, exposed as a plain AgentTool. */
 interface RuntimeToolLease { tool: AgentTool }
 interface RuntimeAssistantLease {
   provider: RuntimeProviderLease;
@@ -1428,7 +1437,7 @@ interface DriveState {
   deferredPollsRemaining: 0 | 1;
   running: Map<EffectKey, LiveEffect>;
   /** One context/tool-definition snapshot per live or restored batch. */
-  toolBatches: Map<string, ReadonlyMap<string, RuntimeToolLease>>;
+  toolBatches: Map<string, ReadonlyMap<string, RuntimeToolLease>>; // key: assistantEntryId
   /** Process-local best-effort attempts; reopen may attempt again. */
   deferredCancellations: Set<string>;
 }

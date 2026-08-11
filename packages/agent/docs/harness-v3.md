@@ -219,7 +219,7 @@ interface UsageRow {
 
 ## 1.2 Identity
 
-Every id — entry, usage, and every reserved id — is a **UUIDv7** from the session's id generator (§2.8); legacy imports re-mint to conform (Appendix C). The first 48 bits are the mint time, so every reference is self-describing and time-sortable. Cost accepted: ids leak creation time. (A future partitioned Postgres backend would build on this prefix — informative Part 6.)
+Every id — entry, usage, and every reserved id — is a **UUIDv7** from the session's id generator (§2.8); legacy imports re-mint to conform (Appendix B). The first 48 bits are the mint time, so every reference is self-describing and time-sortable. Cost accepted: ids leak creation time. (A future partitioned Postgres backend would build on this prefix — informative Part 6.)
 
 Minting rules:
 
@@ -382,7 +382,7 @@ Every settled provider attempt writes one `UsageRow` — successful, failed, ret
 ```
 
 - `entryId` names the entry the cost belongs to, when there is one. Structural (summary) attempts that fail before producing an entry, and standalone adjustments, have none.
-- `adjustment: true` marks a caller-supplied reconciliation (`recordUsage`, §5.1) rather than a provider report. The format-3 import writes one aggregate adjustment row (Appendix C).
+- `adjustment: true` marks a caller-supplied reconciliation (`recordUsage`, §5.1) rather than a provider report. The format-3 import writes one aggregate adjustment row (Appendix B).
 - Provider-attempt usage ids are UUIDv7s reserved in the intent commit (§1.2), so a settlement writes under exactly the id its intent promised. Adjustment rows, tool-reported usage rows, hook-supplied compaction/navigation usage rows (§3.9, §3.10), and import aggregates mint their ids at commit; nothing reserves them.
 - `getStats()` is a maintained projection over the ledger and the message-entry count — `messageCount` counts `message` entries only, not compactions, summaries, or custom entries. After every commit it equals the ledger sum; the conformance suite asserts this (Part 9). There is no ledger scan: totals come from the projection, and individual rows reach the application through the `usage` event at commit time (§5.5).
 
@@ -416,7 +416,7 @@ The file is not the state; it is the **replay recipe** for the Memory maps above
 {"kind":"register","op":"delete","seq":131,"namespace":"op.state","key":"op_9"}
 ```
 
-- This is format 4. The incompatible format-4 code currently in the source tree is unfinished and is replaced in place; no migration for it is required. Coding-agent format 3 remains supported (Appendix C).
+- This is format 4. The incompatible format-4 code currently in the source tree is unfinished and is replaced in place; no migration for it is required. Coding-agent format 3 remains supported (Appendix B).
 - Open replays lines in order into the Memory maps: entries and usage rows accumulate; a later register `set` overwrites the key, `delete` removes it. That is *decoding*, not recovery logic. Open verifies persisted sequence monotonicity — strictly increasing, gaps legal (§1.4) — and timestamps, and never regenerates committed timestamps. All queries then run in RAM.
 - **A torn final line is discarded whole**, including every element of an array, and is truncated before new writes are admitted. This is what makes "no crash prefix inside a transaction" true here.
 - A malformed *interior* line, or a complete-but-invalid transaction, is corruption. The one exception: superseded old-shape register lines from before a schema migration decode leniently as keyed raw JSON during replay (Part 7); compaction retires them.
@@ -797,13 +797,13 @@ interface Session<M extends SessionMetadata = SessionMetadata> extends SessionTr
 
 Repository constructors accept `SessionCodecOptions`. Every declaration-merged custom `AgentMessage` must have a string `role` and a registered runtime schema; unknown custom roles are rejected before persistence and on decode. A new repository session creates `main` with null leaf and an empty `LaneState`, but no configuration; first harness attachment writes its seed configuration.
 
-`open()` compares the stored `storageVersion` with the binary's: equal proceeds; older runs chained migrations under the writer lease before returning (Part 7); newer refuses to open. Old coding-agent v3 JSONL sessions open through the same repository and normalize on load (Appendix C — "v3" there names the legacy JSONL session format, not this document).
+`open()` compares the stored `storageVersion` with the binary's: equal proceeds; older runs chained migrations under the writer lease before returning (Part 7); newer refuses to open. Old coding-agent v3 JSONL sessions open through the same repository and normalize on load (Appendix B — "v3" there names the legacy JSONL session format, not this document).
 
 Repository implementations resolve `fork(source, ...)` to the source's serialized snapshot boundary: an active Memory/JSONL storage queues the snapshot with commits; an inactive JSONL file is read as one immutable prefix; SQLite uses one read transaction. Repositories may keep an active-storage registry by session id for this purpose. This is repository coordination, not part of the one-session `Storage` contract.
 
 ## 2.9 The precise rewrite
 
-Entries and usage rows are never deleted (§1.2). The sole sanctioned exception is the **precise rewrite**: an administrative repository operation that copies the retained set — entries, usage rows, facts, lane registers — into a fresh session store over a coherent snapshot, exactly as a fork does (§2.8), then atomically swaps it for the old store. Its keep-predicate can express what no runtime mechanism may: compliance-grade erasure (including content copied forward into `retainedTail`s and summaries), pruning abandoned branches, and re-minting legacy-format ids (Appendix C). It is tooling above the harness — no harness surface exposes it, and no core rule depends on it.
+Entries and usage rows are never deleted (§1.2). The sole sanctioned exception is the **precise rewrite**: an administrative repository operation that copies the retained set — entries, usage rows, facts, lane registers — into a fresh session store over a coherent snapshot, exactly as a fork does (§2.8), then atomically swaps it for the old store. Its keep-predicate can express what no runtime mechanism may: compliance-grade erasure (including content copied forward into `retainedTail`s and summaries), pruning abandoned branches, and re-minting legacy-format ids (Appendix B). It is tooling above the harness — no harness surface exposes it, and no core rule depends on it.
 
 # Part 3 — The operation state machine
 
@@ -2613,7 +2613,7 @@ Chained migrations run under the writer lease before `open()` returns (§2.8). E
 
 JSONL has one wrinkle in each direction. Replay must decode superseded old-shape register lines leniently — as keyed raw JSON, overwrite-by-key only — because pre-migration bytes remain in the file (§1.7). And a migration must trigger snapshot compaction, whose temp-file-and-rename both persists the new header version atomically and retires the old-shape bytes. Between crash and compaction, lenient replay plus idempotent conversion make the intermediate state harmless.
 
-Legacy coding-agent format 3 predates `storageVersion` entirely; it normalizes through Appendix C on load and receives the current version with its first format-4 write.
+Legacy coding-agent format 3 predates `storageVersion` entirely; it normalizes through Appendix B on load and receives the current version with its first format-4 write.
 
 ## 7.4 Migrations are total
 
@@ -2783,36 +2783,7 @@ One corruption assertion constructs an `aborted` response with running control d
 | **External finalization** | A terminal transaction committed from outside the live drive; the drive detects absent registers, stops without writing, and resolves from `lane.lastResult` (§4.9). |
 | **Precise rewrite** | The administrative copy-retained-and-swap rebuild of a session store — the sole sanctioned path that removes entries or usage rows (§2.9). |
 
-# Appendix B — Changes from agent-harness-spec.md
-
-| Change | Reason |
-|---|---|
-| Entries replace the value/node split; placement and payload are one row | The differing birth times that motivated the split are covered by two reservation regimes (§2.2); removes the join, `valueId`, value GC, and the old-value-under-new-partition hazard |
-| Registers hold values directly, with first-class delete; `slot_history` and `getLog` removed | Recovery reads only current state; durable write history was pure overhead. Tier B's oracle is an instrumented-storage decorator |
-| `FinishedState` removed; terminal transactions delete `op.*` and operation-owned pending registers; `lane.lastResult` added | A finished session holds exactly the conversation, the ledger, and lane/fact registers — nothing to collect — while outcomes stay observable after a crash |
-| Queue items are single entry ids; `pending.entry` registers hold unplaced payloads | `{ nodeId, valueId }` collapses to one string; cancellation deletes content outright; the one deliberate double write is paid only by queued items |
-| Usage is a first-class append-only store (`UsageRow`) | Billing is decoupled from orchestration and survives terminal cleanup and aborts |
-| Ids are UUIDv7 with the mint time as prefix; follower minting for call/result group cohesion | Every reference is self-describing and time-sortable; call/result exchanges stay id-cohesive (§1.2) |
-| Transaction seqs are strictly increasing with legal gaps (was: consecutive) | JSONL snapshot compaction leaves gaps; continuity bought nothing (§1.4) |
-| `queue.disposition` removed; `cancelQueued` triage is `cancelled`/`already_consumed`/`not_found`; `UnknownQueueItem` and `already_cleared` dropped | One immortal register per cancelled item bought only a rarely needed distinction; `not_found` is retry-safe |
-| Fact deletion is real register deletion; no tombstones | Delete is a first-class write; JSON `null` stays a legal custom value |
-| CAS tokens are register seqs (`operationStateSeq`, `laneStateSeq`, expected `lane.config` seq) | State values no longer exist; the linearization is unchanged, only the token |
-| Configuration, stream options, and retry policy are inline in operation-state contexts | No values table to point into; restore reports missing identities without resolving anything |
-| `op.tool_args/{opId}:{stepId}:{i}` and `op.preparation/{opId}:{taskId}` registers replace args/preparation value ids | Deterministic keys; deleted at batch completion and by the terminal prefix scan, which also catches crash-leaked keys |
-| Abort-drained pending registers survive until the terminal transaction | `AbortResult` and post-crash `SuspendedOperation.aborting` dereference the drained payloads; snapshot queues exclude them |
-| `RecordUsageResult { usageId }`; the `usage` event carries the ledger row | Value ids are gone; the row already carries its durable `seq` |
-| `entry_added`, `findEntries`, `getEntry`, `appendCustomEntry`, `EntryProjector` renames | jot part 9 nomenclature: one concept, one continuity name |
-| `getLastResult()` and the `lane.lastResult` read path | Post-crash outcome reconciliation, including outcomes the tree cannot reconstruct |
-| Restore validates idle lanes too (leaf plus `pendingNextRun` registers) | Idle lane state is current state; corruption there must not wait for the next operation to surface |
-| `PendingEntry.payload` optional; tool-reported usage ids mint at commit | Custom entries may carry no data; nothing reserves a tool usage id |
-| Entries and usage rows are never deleted; the administrative precise rewrite (§2.9) is the sole sanctioned exception; partitioned retention reduced to an informative future-Postgres sketch (Part 6) | Retention machinery bought no correctness on the shipping backends; the absolutes are simpler, and the partition bridge is crossed when that backend is real |
-| External finalization (§4.9) | Admin force-kill tooling — and a future repairer — can finalize an open operation; the drive stops cleanly instead of racing it |
-| Schema evolution specified (Part 7): `storageVersion`, migrate-on-open, total migrations | In-flight state must never brick a session: every state-machine change ships the mapping for its own states |
-| JSONL snapshot compaction | Register overwrites append in a log-structured file; physical reclamation is a rewrite |
-
-The interpreter, effects boundary, hooks, events, classifier, abort/close semantics, context projection, race catalog, and format-3 normalization carry from the base spec with mechanical renames; they are restated in full so this specification is self-contained with the named source types.
-
-# Appendix C — Coding-agent v3-format compatibility
+# Appendix B — Coding-agent v3-format compatibility
 
 "v3" in this appendix names the legacy coding-agent JSONL session format, not this document. Old coding-agent v3 JSONL files must open unchanged and restore idle. Normalization on load:
 
@@ -2830,7 +2801,7 @@ The interpreter, effects boundary, hooks, events, classifier, abort/close semant
 
 Read-only open leaves the file unchanged and computes stats from normalized entry snapshots. The first format-4 write persists normalization through a temporary file and atomic rename over the original path, including the aggregate adjustment so subsequent stats are ledger-derived, and stamps the current `storageVersion` (§7.3). A fork from an unconfigured read-only v3 session follows §2.7 and leaves destination `main` for first harness attachment to seed.
 
-# Appendix D — Open questions
+# Appendix C — Open questions
 
 1. **Repairing a missing model captured inside an open operation.** Registering the same provider/model identity unblocks it without changing state. Replacing it with a different durable identity needs an explicit repair API and is not silently performed by `setModel`.
 2. **Overflow detection remains heuristic.** The normalization specified in §3.7 is authoritative. Preserve the original reason in `errorMessage` for diagnosis.

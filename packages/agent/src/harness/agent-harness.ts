@@ -20,8 +20,8 @@ import { type Result, TaggedError } from "./result.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
-	CustomEntry,
 	Entry,
+	EntryProjector,
 	EntryType,
 	JsonValue,
 	LaneLastResult,
@@ -504,7 +504,7 @@ export interface Hooks {
 	on<TName extends HookName>(name: TName, handler: HookHandler<TName>, options?: { id?: string }): () => void;
 }
 
-export type EntryProjector = (entry: CustomEntry) => AgentMessage[] | undefined | Promise<AgentMessage[] | undefined>;
+export type { EntryProjector } from "./session/types.ts";
 
 export interface AgentHarnessOptions<TContext extends object | undefined = object | undefined> {
 	session: Session;

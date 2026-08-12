@@ -14,7 +14,7 @@ import {
 } from "@draht/ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import { convertToLlm, createBranchSummaryMessage, createCompactionSummaryMessage } from "../messages.ts";
-import { buildSessionContext } from "../session/context.ts";
+import { buildContextEntries, sessionEntryToContextMessages } from "../session/context.ts";
 import type { CompactionEntry, Entry } from "../session/types.ts";
 import { CompactionError, err, ok, type Result } from "../types.ts";
 import { addUsage } from "../utils/usage.ts";
@@ -630,7 +630,9 @@ export function prepareCompaction(
 	}
 	const boundaryEnd = compactableEntries.length;
 
-	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries)).tokens;
+	const tokensBefore = estimateContextTokens(
+		buildContextEntries(pathEntries).flatMap(sessionEntryToContextMessages),
+	).tokens;
 
 	const cutPoint = findCutPoint(compactableEntries, 0, boundaryEnd, settings.keepRecentTokens);
 	const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;

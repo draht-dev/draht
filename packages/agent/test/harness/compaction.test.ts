@@ -322,7 +322,7 @@ describe("harness compaction", () => {
 		expect(estimate.tokens).toBe(20 + estimate.trailingTokens);
 	});
 
-	it("builds session context with a compaction entry", () => {
+	it("builds session context with a compaction entry", async () => {
 		const u1 = createMessageEntry(createUserMessage("1"));
 		const a1 = createMessageEntry(createAssistantMessage("a"), u1.id);
 		const u2 = createMessageEntry(createUserMessage("2"), a1.id);
@@ -333,7 +333,7 @@ describe("harness compaction", () => {
 		]);
 		const u3 = createMessageEntry(createUserMessage("3"), compaction.id);
 		const a3 = createMessageEntry(createAssistantMessage("c"), u3.id);
-		const loaded = buildSessionContext([u1, a1, u2, a2, compaction, u3, a3]);
+		const loaded = await buildSessionContext([u1, a1, u2, a2, compaction, u3, a3]);
 		expect(loaded).toHaveLength(5);
 		expect(loaded[0]?.role).toBe("compactionSummary");
 		expect(loaded.map((message) => message.role)).toEqual([
@@ -345,7 +345,7 @@ describe("harness compaction", () => {
 		]);
 	});
 
-	it("prepares compaction using the latest compaction summary as previousSummary", () => {
+	it("prepares compaction using the latest compaction summary as previousSummary", async () => {
 		const u1 = createMessageEntry(createUserMessage("user msg 1"));
 		const a1 = createMessageEntry(createAssistantMessage("assistant msg 1"), u1.id);
 		const u2 = createMessageEntry(createUserMessage("user msg 2"), a1.id);
@@ -358,7 +358,7 @@ describe("harness compaction", () => {
 		expect(preparation).toBeDefined();
 		expect(preparation?.previousSummary).toBe("First summary");
 		expect(preparation?.retainedTail.length).toBeGreaterThan(0);
-		expect(preparation?.tokensBefore).toBe(estimateContextTokens(buildSessionContext(pathEntries)).tokens);
+		expect(preparation?.tokensBefore).toBe(estimateContextTokens(await buildSessionContext(pathEntries)).tokens);
 	});
 
 	it("carries a previous compaction's retained tail into the next preparation", () => {

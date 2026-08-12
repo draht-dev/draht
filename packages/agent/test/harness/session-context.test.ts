@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@draht/ai";
 import { describe, expect, it } from "vitest";
 import { buildSessionContext } from "../../src/harness/session/context.ts";
-import type { CompactionEntry, MessageEntry } from "../../src/harness/session/types.ts";
+import type { CompactionEntry, CustomEntry, MessageEntry } from "../../src/harness/session/types.ts";
 import type { AgentMessage } from "../../src/types.ts";
 
 const NOW = 1_700_000_000_000;
@@ -42,7 +42,7 @@ function messageEntry(id: string, parentId: string | null, seq: number, message:
 }
 
 describe("session context projection", () => {
-	it("filters non-context assistant response entries while preserving valid messages", () => {
+	it("filters non-context assistant response entries while preserving valid messages", async () => {
 		const user = userMessage("question");
 		const stopped = assistantMessage("stop", "answer");
 		const length = assistantMessage("length", "truncated answer");
@@ -60,10 +60,10 @@ describe("session context projection", () => {
 			messageEntry("length", "deferred", 7, length),
 		];
 
-		expect(buildSessionContext(entries)).toEqual([user, stopped, toolUse, length]);
+		expect(await buildSessionContext(entries)).toEqual([user, stopped, toolUse, length]);
 	});
 
-	it("filters retained-tail responses without hiding the compaction summary", () => {
+	it("filters retained-tail responses without hiding the compaction summary", async () => {
 		const user = userMessage("kept user");
 		const stopped = assistantMessage("stop", "kept answer");
 		const toolUse = assistantMessage("toolUse", "");
@@ -83,12 +83,97 @@ describe("session context projection", () => {
 			fromHook: false,
 		};
 
-		expect(buildSessionContext([compaction])).toEqual([
+		expect(await buildSessionContext([compaction])).toEqual([
 			{ role: "compactionSummary", summary: "summary", tokensBefore: 100, timestamp: NOW },
 			user,
 			stopped,
 			toolUse,
 			length,
 		]);
+	});
+	it("projects custom entries through synchronous and asynchronous canonical projectors in branch order", async () => {
+		const oldCustom: CustomEntry = {
+			id: "old-custom",
+			parentId: null,
+			seq: 1,
+			timestamp: NOW,
+			type: "custom",
+			customType: "sync",
+		};
+		const compaction: CompactionEntry = {
+			id: "compaction",
+			parentId: oldCustom.id,
+			seq: 2,
+			timestamp: NOW,
+			type: "compaction",
+			summary: "summary",
+			retainedTail: [],
+			tokensBefore: 100,
+			fromHook: false,
+		};
+		const syncCustom: CustomEntry = {
+			id: "sync-custom",
+			parentId: compaction.id,
+			seq: 3,
+			timestamp: NOW,
+			type: "custom",
+			customType: "sync",
+		};
+		const omittedCustom: CustomEntry = {
+			id: "omitted-custom",
+			parentId: syncCustom.id,
+			seq: 4,
+			timestamp: NOW,
+			type: "custom",
+			customType: "omitted",
+		};
+		const asyncCustom: CustomEntry = {
+			id: "async-custom",
+			parentId: omittedCustom.id,
+			seq: 5,
+			timestamp: NOW,
+			type: "custom",
+			customType: "async",
+		};
+		const projectedIds: string[] = [];
+
+		const messages = await buildSessionContext([oldCustom, compaction, syncCustom, omittedCustom, asyncCustom], {
+			entryProjectors: {
+				sync: (entry) => {
+					projectedIds.push(entry.id);
+					return [userMessage(`projected:${entry.id}`)];
+				},
+				async: async (entry) => {
+					await Promise.resolve();
+					projectedIds.push(entry.id);
+					return [userMessage(`projected:${entry.id}`)];
+				},
+			},
+		});
+
+		expect(projectedIds).toEqual([syncCustom.id, asyncCustom.id]);
+		expect(messages).toEqual([
+			{ role: "compactionSummary", summary: "summary", tokensBefore: 100, timestamp: NOW },
+			userMessage(`projected:${syncCustom.id}`),
+			userMessage(`projected:${asyncCustom.id}`),
+		]);
+	});
+
+	it("propagates custom projector failures", async () => {
+		const custom: CustomEntry = {
+			id: "custom",
+			parentId: null,
+			seq: 1,
+			timestamp: NOW,
+			type: "custom",
+			customType: "broken",
+		};
+		const failure = new Error("projector failed");
+
+		await expect(
+			buildSessionContext([custom], {
+				entryProjectors: { broken: async () => Promise.reject(failure) },
+			}),
+		).rejects.toBe(failure);
 	});
 });

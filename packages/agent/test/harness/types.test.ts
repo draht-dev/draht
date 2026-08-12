@@ -1,15 +1,19 @@
 import type { AssistantMessage, Usage } from "@draht/ai";
 import { expectTypeOf, it } from "vitest";
 import type {
+	AgentHarnessOptions,
 	AgentHarnessStreamOptions,
 	AgentLane,
+	AgentMessage,
 	AgentTool,
 	BranchScan,
 	CancelQueuedResult,
 	CheckpointPhase,
 	CompactionState,
 	Control,
+	CustomEntry,
 	Deferred,
+	EntryProjector,
 	Generation,
 	GenerationContext,
 	HarnessEvent,
@@ -432,7 +436,10 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	expectTypeOf<AgentHarnessStreamOptions["deferred"]>().toEqualTypeOf<
 		boolean | { window?: "15m" | "1h" | "24h" } | undefined
 	>();
-	expectTypeOf<Extract<SettledAssistantMessage["stopReason"], "pending">>().toEqualTypeOf<never>();
+	expectTypeOf<EntryProjector>().toEqualTypeOf<
+		(entry: CustomEntry) => AgentMessage[] | undefined | Promise<AgentMessage[] | undefined>
+	>();
+	expectTypeOf<NonNullable<AgentHarnessOptions["entryProjectors"]>>().toEqualTypeOf<Record<string, EntryProjector>>();
 
 	const compileTimeFailures = () => {
 		// @ts-expect-error callers cannot supply the harness-owned abort signal

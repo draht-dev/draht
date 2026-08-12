@@ -52,6 +52,9 @@ export interface CustomEntry extends EntryBase {
 	data?: JsonValue;
 }
 
+/** Convert an application-defined custom entry into model context. */
+export type EntryProjector = (entry: CustomEntry) => AgentMessage[] | undefined | Promise<AgentMessage[] | undefined>;
+
 export type Entry = MessageEntry | CompactionEntry | BranchSummaryEntry | CustomEntry;
 
 /** Entry supplied to a transaction before storage assigns sequence and timestamp. */

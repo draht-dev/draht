@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,6 +55,36 @@ function verifyEvidence(packageDir) {
 	}
 }
 
+function resolveFrozenTool(root, packageDir, name, relative) {
+	for (const base of [join(packageDir, "package.json"), join(root, "package.json")]) {
+		try {
+			const packageRequire = createRequire(base);
+			const packageJson = packageRequire.resolve(`${name}/package.json`);
+			return join(dirname(packageJson), relative);
+		} catch {
+			// Try the next declared frozen-install layout.
+		}
+	}
+
+	const lockPath = join(root, "bun.lock");
+	const store = join(root, "node_modules", ".bun");
+	if (!existsSync(lockPath) || !existsSync(store)) return undefined;
+	const lock = readFileSync(lockPath, "utf8");
+	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const match = new RegExp(`"${escaped}"\\s*:\\s*\\["${escaped}@([^"\\s]+)"`).exec(lock);
+	if (!match) return undefined;
+	const version = match[1];
+	for (const entry of readdirSync(store, { withFileTypes: true })) {
+		if (!entry.isDirectory() || !entry.name.startsWith(`${name}@${version}`)) continue;
+		const packageDirInStore = join(store, entry.name, "node_modules", ...name.split("/"));
+		const packageJson = join(packageDirInStore, "package.json");
+		if (!existsSync(packageJson)) continue;
+		const manifest = JSON.parse(readFileSync(packageJson, "utf8"));
+		if (manifest.name === name && manifest.version === version) return join(packageDirInStore, relative);
+	}
+	return undefined;
+}
+
 const root = parseRoot(process.argv.slice(2));
 const packageDir = join(root, "packages", "install");
 const manifestPath = join(packageDir, "package.json");
@@ -73,9 +104,9 @@ if (!existsSync(manifestPath)) {
 			process.exit();
 		}
 
-		const vitestCli = join(packageDir, "node_modules", "vitest", "dist", "cli.js");
-		const tscCli = join(packageDir, "node_modules", "typescript", "bin", "tsc");
-		if (!existsSync(vitestCli) || !existsSync(tscCli)) {
+		const vitestCli = resolveFrozenTool(root, packageDir, "vitest", join("dist", "cli.js"));
+		const tscCli = resolveFrozenTool(root, packageDir, "typescript", join("bin", "tsc"));
+		if (!vitestCli || !tscCli || !existsSync(vitestCli) || !existsSync(tscCli)) {
 			fail("cannot verify release evidence: local TypeScript/Vitest tools are unavailable");
 		} else {
 			const build = spawnSync(process.execPath, [tscCli, "-p", "tsconfig.build.json"], {

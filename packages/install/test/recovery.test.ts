@@ -239,7 +239,10 @@ describe("crash assessment", () => {
 			mkdirSync(h.target, { recursive: true });
 			writeFileSync(join(h.target, "payload.txt"), "COMMITTED");
 			const journal = join(h.root, "journal.jsonl");
-			writeFileSync(journal, `${readFileSync(journal, "utf8")}{"tx":"${tx}","event":"comm`);
+			writeFileSync(
+				journal,
+				`${readFileSync(journal, "utf8")}{"tx":"${tx}","seq":3,"at":"2026-01-01T00:00:02.000Z","event":"committed","detail":{"pid":`,
+			);
 
 			const result = recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
 
@@ -272,6 +275,26 @@ describe("crash assessment", () => {
 			expect(() => recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root })).toThrow(
 				/torn|incomplete/i,
 			);
+		} finally {
+			h.dispose();
+		}
+	});
+
+	it("refuses an ambiguous comment event prefix for a state-confirmed transaction", () => {
+		const h = harness();
+		try {
+			const tx = "tx-committed-ambiguous";
+			const state = createDefaultState();
+			state.lastTx = tx;
+			saveState(h.root, state);
+			appendJournal(h.root, { tx, seq: 1, at: "2026-01-01T00:00:00.000Z", event: "planned" });
+			const journal = join(h.root, "journal.jsonl");
+			writeFileSync(journal, `${readFileSync(journal, "utf8")}{"tx":"${tx}","event":"comment`);
+
+			const assessment = assessCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+
+			expect(assessment.recoverable).toBe(false);
+			expect(assessment.blockers.join(" ")).toMatch(/torn|incomplete/i);
 		} finally {
 			h.dispose();
 		}

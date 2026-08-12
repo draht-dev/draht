@@ -155,8 +155,8 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 		.sort();
 	const expectedCommittedTail =
 		committedTx !== undefined &&
-		tornTail?.includes(`"tx":"${committedTx}"`) === true &&
-		/"event"\s*:\s*"comm/.test(tornTail);
+		tornTail?.startsWith(`{"tx":${JSON.stringify(committedTx)},`) === true &&
+		/,"seq":\d+,"at":"[^"]+","event":"committed"(?:,|})/.test(tornTail);
 	if (torn && !(finalizeCommitted.length === 1 && transactions.length === 0 && expectedCommittedTail)) {
 		blockers.push(
 			"the transaction journal has a torn final line, so the last recorded step is incomplete and automatic recovery is refused",

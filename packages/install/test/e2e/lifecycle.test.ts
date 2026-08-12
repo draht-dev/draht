@@ -11,6 +11,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -207,9 +208,16 @@ beforeAll(async () => {
 	installed = join(workspace, "installed");
 	extractTarGz(readFileSync(join(workspace, tarballName as string)), installed);
 
-	// Dependencies resolve from the real package's node_modules; nothing is
-	// downloaded and no global install happens.
-	symlinkSync(join(PKG_ROOT, "node_modules"), join(installed, "node_modules"));
+	// Stage the exact declared runtime dependencies from the frozen repository
+	// install. Bun may hoist them into content-addressed internal directories, so
+	// no single source node_modules directory is a portable fixture.
+	const packageRequire = createRequire(join(PKG_ROOT, "package.json"));
+	for (const dependency of ["zod", "semver", "@draht/tools"]) {
+		const dependencyRoot = dirname(packageRequire.resolve(`${dependency}/package.json`));
+		const destination = join(installed, "node_modules", ...dependency.split("/"));
+		mkdirSync(dirname(destination), { recursive: true });
+		symlinkSync(dependencyRoot, destination, "dir");
+	}
 
 	// npm links bins by basename; reproduce that so basename dispatch is what
 	// actually selects the surface.

@@ -38,6 +38,24 @@ describe("MemorySessionRepo metadata", () => {
 		await Promise.all([session.close(), repo.close()]);
 	});
 
+	it("returns a fresh facade after close while retaining one session and storage", async () => {
+		const repo = new MemorySessionRepo({ now: () => NOW });
+		const first = await repo.create({ id: "session" });
+		const firstView = first.view("main");
+		const admittedWrite = first.setName("preserved");
+
+		await expect(repo.open(first.metadata)).rejects.toThrow("already open");
+		await Promise.all([admittedWrite, first.close()]);
+		await expect(first.getName()).rejects.toThrow("Session is closed");
+		await expect(firstView.getName()).rejects.toThrow("Session is closed");
+
+		const second = await repo.open(first.metadata);
+		expect(second).not.toBe(first);
+		expect(await second.getName()).toBe("preserved");
+		await second.close();
+		await repo.close();
+	});
+
 	it("captures fork options before waiting for its snapshot boundary", async () => {
 		const repo = new MemorySessionRepo({ now: () => NOW });
 		const source = await repo.create({ id: "source" });

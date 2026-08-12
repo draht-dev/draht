@@ -3,15 +3,22 @@
  * Import-boundary gate for geist (spec §17.1, R31-FOUND.4).
  *
  * geist is architecturally a SEPARATE product that happens to live in the draht
- * monorepo. Its harness-free layers must never gain code-level access to draht:
+ * monorepo. Every non-shim geist package must stay free of code-level access to
+ * draht — the kernel AND the privileged shim:
  *
- *   packages/geist-core     — harness-free product logic  → imports ZERO @draht/*
- *   packages/geist-acp      — ACP client / HarnessSession  → imports ZERO @draht/*
- *   packages/geist-console  — React /ui                    → imports ZERO @draht/*
- *   quest/                  — Kotlin headset app           → imports ZERO @draht/*
+ *   packages/geist           — CLI + composition root
+ *   packages/geist-core      — harness-free product logic
+ *   packages/geist-acp       — ACP client / HarnessSession
+ *   packages/geist-protocol  — wire types & config contracts
+ *   packages/geist-picker    — in-page element picker
+ *   packages/geist-console   — React /ui
+ *   quest/                   — Kotlin headset app → zero @draht/* references
  *
- * ONLY packages/draht-acp — the thin ACP shim wrapping @draht/coding-agent — is
- * allowed to import @draht/*, and so is deliberately NOT scanned here.
+ * Each of the six packages above may import ONLY its non-privileged geist
+ * siblings. `@draht/draht-acp` is the privileged shim — the one package allowed
+ * to import the Draht kernel — so importing IT from a boundary package would
+ * re-privilege draht through the back door (spec §19 risk row); the shim is
+ * deliberately NOT in the allowlist and deliberately NOT scanned here.
  *
  * Naming nuance: every package in this monorepo is npm-scoped `@draht/*`,
  * INCLUDING the geist family itself. So a bare "any @draht/* import is
@@ -19,6 +26,11 @@
  * `@draht/geist-protocol`. The GEIST_FAMILY allowlist below is the set of
  * sibling packages that are legitimate intra-family imports; anything else
  * matching /^@draht\// inside a boundary-checked package is a violation.
+ *
+ * The whole package directory is scanned — src, test, fixtures, config files —
+ * because a privileged import in a test leaks kernel access into the package's
+ * evidence just as surely as one in src (the 2026-07-13 audit reopened Phase 31
+ * precisely because enforcement was narrower than the claim).
  *
  * quest/ is Kotlin and has no legitimate @draht/* import at all (it mirrors
  * wire types by hand — see check-geist-mirrors.mjs), so ANY @draht/* specifier
@@ -36,8 +48,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
-// Sibling packages a boundary-checked geist package MAY import (intra-family).
-// Everything else matching /^@draht\// is a violation.
+// Sibling packages a boundary-checked geist package MAY import (intra-family,
+// non-privileged — @draht/draht-acp is NOT here and must never be). Everything
+// else matching /^@draht\// is a violation.
 const GEIST_FAMILY = new Set([
 	"@draht/geist",
 	"@draht/geist-core",
@@ -45,16 +58,17 @@ const GEIST_FAMILY = new Set([
 	"@draht/geist-protocol",
 	"@draht/geist-picker",
 	"@draht/geist-console",
-	"@draht/draht-acp",
 ]);
 
-// TS/JS layers that must not import outside the geist family. These dirs may not
-// all exist yet while sibling scaffold tasks run in parallel — a missing dir is
-// zero violations, not an error, so this script stays correct when run later.
-const BOUNDARY_SRC_DIRS = [
-	join(ROOT, "packages/geist-core/src"),
-	join(ROOT, "packages/geist-acp/src"),
-	join(ROOT, "packages/geist-console/src"),
+// The six non-shim geist packages (R31-FOUND.4). Whole package dirs — src,
+// test, fixtures, top-level config — are scanned, not just src/.
+const BOUNDARY_PACKAGES = [
+	join(ROOT, "packages/geist"),
+	join(ROOT, "packages/geist-core"),
+	join(ROOT, "packages/geist-acp"),
+	join(ROOT, "packages/geist-protocol"),
+	join(ROOT, "packages/geist-picker"),
+	join(ROOT, "packages/geist-console"),
 ];
 
 const QUEST_DIR = join(ROOT, "quest");
@@ -117,13 +131,13 @@ function rel(file) {
 
 const violations = [];
 
-// ── 1. geist TS/JS layers: only intra-family @draht/* imports allowed ─────────
-for (const dir of BOUNDARY_SRC_DIRS) {
+// ── 1. geist packages: only non-privileged intra-family @draht/* imports ──────
+for (const dir of BOUNDARY_PACKAGES) {
 	for (const file of walk(dir, CODE_EXTS)) {
 		for (const { line, specifier } of scanImports(file)) {
 			if (!/^@draht\//.test(specifier)) continue;
 			if (GEIST_FAMILY.has(packageNameOf(specifier))) continue;
-			violations.push(`${rel(file)}:${line}  imports "${specifier}" (outside the geist family)`);
+			violations.push(`${rel(file)}:${line}  imports "${specifier}" (outside the non-privileged geist family)`);
 		}
 	}
 }
@@ -147,7 +161,7 @@ if (violations.length > 0) {
 	console.error(`geist import boundary violated (${violations.length} problem(s)):\n`);
 	for (const v of violations) console.error(`  ✗ ${v}`);
 	console.error(
-		"\ngeist-core / geist-acp / geist-console / quest are harness-free — they must not import @draht/* (only packages/draht-acp may). Spec §17.1.",
+		"\ngeist / geist-core / geist-acp / geist-protocol / geist-picker / geist-console / quest are harness-free — they must not import the Draht kernel or the privileged @draht/draht-acp shim (only packages/draht-acp may import the kernel). Spec §17.1, R31-FOUND.4.",
 	);
 	process.exit(1);
 }

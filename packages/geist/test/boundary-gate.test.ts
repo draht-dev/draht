@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -151,5 +152,42 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 		}
 
 		expect(runGate().exitCode).toBe(0);
+	});
+
+	test("the gate fails loudly when a scanned surface is missing from the layout", () => {
+		// A gate that shrugs when a scan target vanishes shrinks its own scope
+		// silently — the exact failure mode the 2026-07-13 audit reopened this
+		// phase for. The real script is copied into a synthetic repo so the real
+		// worktree never has to lose a package to prove it.
+		const tmpRoot = mkdtempSync(join(tmpdir(), "geist-boundary-"));
+		const gateCopy = join(tmpRoot, "scripts", "check-geist-boundary.mjs");
+		const runCopy = () => spawnSync(process.execPath, [gateCopy], { encoding: "utf-8" });
+		try {
+			mkdirSync(join(tmpRoot, "scripts"), { recursive: true });
+			copyFileSync(GATE, gateCopy);
+			for (const pkg of BOUNDARY_PACKAGES) {
+				mkdirSync(join(tmpRoot, "packages", pkg, "src"), { recursive: true });
+			}
+			mkdirSync(join(tmpRoot, "quest"), { recursive: true });
+			writeFileSync(join(tmpRoot, "quest", "Placeholder.kt"), "package dev.draht.geist\n");
+
+			expect(runCopy().status).toBe(0);
+
+			rmSync(join(tmpRoot, "packages", "geist-picker"), { recursive: true, force: true });
+			const missingPackage = runCopy();
+			expect({ what: "geist-picker gone", status: missingPackage.status }).toEqual({
+				what: "geist-picker gone",
+				status: 1,
+			});
+			expect(missingPackage.stderr).toContain("geist-picker");
+
+			mkdirSync(join(tmpRoot, "packages", "geist-picker", "src"), { recursive: true });
+			rmSync(join(tmpRoot, "quest"), { recursive: true, force: true });
+			const missingQuest = runCopy();
+			expect({ what: "quest gone", status: missingQuest.status }).toEqual({ what: "quest gone", status: 1 });
+			expect(missingQuest.stderr).toContain("quest");
+		} finally {
+			rmSync(tmpRoot, { recursive: true, force: true });
+		}
 	});
 });

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { publishWorkspaces, topologicallySortPublicPackages } from "./publish-workspaces.mjs";
 
@@ -10,6 +13,42 @@ const packages = new Map([
 
 test("public workspaces are topologically sorted dependency-first", () => {
   assert.deepEqual(topologicallySortPublicPackages(packages).map(({ pkg }) => pkg.name), ["core", "lib", "app"]);
+});
+
+test("installer staging rewrites @draht/tools exactly and restores the source manifest", async () => {
+  const root = mkdtempSync(join(tmpdir(), "draht-install-publish-"));
+  try {
+    const toolsDir = join(root, "packages", "draht-tools");
+    const installDir = join(root, "packages", "install");
+    mkdirSync(toolsDir, { recursive: true });
+    mkdirSync(installDir, { recursive: true });
+    writeFileSync(join(toolsDir, "package.json"), `${JSON.stringify({ name: "@draht/tools", version: "2026.8.12-1" })}\n`);
+    const original = `${JSON.stringify({
+      name: "@draht/install",
+      version: "2026.8.12-1",
+      dependencies: { "@draht/tools": "workspace:*", zod: "^3.25.0" },
+    }, null, 2)}\n`;
+    const installManifest = join(installDir, "package.json");
+    writeFileSync(installManifest, original);
+    let staged;
+
+    await publishWorkspaces({
+      root,
+      dryRun: true,
+      run: async (command, args, options) => {
+        if (command === "npm" && args[0] === "pack" && options.cwd === installDir) {
+          staged = JSON.parse(readFileSync(installManifest, "utf8"));
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(staged.dependencies["@draht/tools"], "2026.8.12-1");
+    assert.doesNotMatch(JSON.stringify(staged), /workspace:/);
+    assert.equal(readFileSync(installManifest, "utf8"), original);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("all packages prepack and preflight before the first publish", async () => {

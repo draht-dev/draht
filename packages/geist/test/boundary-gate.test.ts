@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -119,6 +119,36 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 			expect({ exitCode }).toEqual({ exitCode: 1 });
 			expect(stderr).toContain("__boundary-mutation__.ts");
 		});
+
+		expect(runGate().exitCode).toBe(0);
+	});
+
+	test("geist package manifests reject kernel and shim dependencies, nested fixtures included", () => {
+		// A package.json dependency is the doorway a forbidden import walks
+		// through later — the gate must fail on the declaration, not wait for
+		// the first import. Nested manifests (test fixtures, examples) count
+		// exactly like the package root's.
+		expect(runGate().exitCode).toBe(0);
+
+		const mutations = [
+			{ field: "dependencies", dep: "@draht/coding-agent" },
+			{ field: "devDependencies", dep: "@draht/draht-acp" },
+		] as const;
+		for (const { field, dep } of mutations) {
+			const dir = join(REPO_ROOT, "packages", "geist-picker", "test", "__manifest-mutation__");
+			mkdirSync(dir, { recursive: true });
+			try {
+				writeFileSync(
+					join(dir, "package.json"),
+					JSON.stringify({ name: "boundary-mutation-fixture", [field]: { [dep]: "workspace:*" } }),
+				);
+				const { exitCode, stderr } = runGate();
+				expect({ field, dep, exitCode }).toEqual({ field, dep, exitCode: 1 });
+				expect(stderr).toContain(dep);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		}
 
 		expect(runGate().exitCode).toBe(0);
 	});

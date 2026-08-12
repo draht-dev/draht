@@ -59,12 +59,15 @@ export function loadState(root: string): InstallState {
  * the rename itself is durable across a crash.
  */
 export function saveState(root: string, state: InstallState): void {
-	mkdirSync(root, { recursive: true });
+	mkdirSync(root, { recursive: true, mode: 0o700 });
 	const path = statePath(root);
 	const serialized = `${JSON.stringify(state, null, 2)}\n`;
 	const tmpPath = join(root, `.state.json.tmp-${process.pid}-${randomBytes(6).toString("hex")}`);
 
-	const fd = openSync(tmpPath, "w");
+	// 0600 at creation time (not chmod after) so the document is never briefly
+	// world-readable — it records exactly which components and versions this
+	// machine runs.
+	const fd = openSync(tmpPath, "w", 0o600);
 	try {
 		writeSync(fd, serialized);
 		fsyncSync(fd);

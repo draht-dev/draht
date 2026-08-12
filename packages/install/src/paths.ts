@@ -2,16 +2,27 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
+ * The home directory every user-visible Draht path is derived from.
+ *
+ * `DRAHT_HOME` wins so a test (and the e2e harness) can present a fake HOME
+ * that the engine cannot escape; `HOME`/`USERPROFILE` come next; `os.homedir()`
+ * is the last resort. Nothing in the engine calls `os.homedir()` directly.
+ */
+export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
+	return env.DRAHT_HOME || env.HOME || env.USERPROFILE || homedir();
+}
+
+/**
  * The engine's install root: everything the engine itself writes (state,
- * journal, cache, staging, backups) lives under this directory. Component
- * payload TARGET directories are a separate concern — callers pass those in
- * explicitly (see `executor.ts`'s `materialize`), they are never derived
- * from this root.
+ * journal, cache, staging, backups, lock) lives under this directory.
+ * Component payload TARGET directories are a separate concern — callers pass
+ * those in explicitly (see `executor.ts`'s `materialize`), they are never
+ * derived from this root.
  */
 export function resolveInstallRoot(env: NodeJS.ProcessEnv = process.env): string {
 	const override = env.DRAHT_INSTALL_DIR;
 	if (override) return override;
-	return join(homedir(), ".draht", "install");
+	return join(resolveHome(env), ".draht", "install");
 }
 
 /** The durable state document: `loadState`/`saveState` in `state.ts`. */
@@ -24,9 +35,19 @@ export function journalPath(root: string): string {
 	return join(root, "journal.jsonl");
 }
 
-/** Downloaded/verified package payload cache, keyed and populated by callers of a later phase. */
+/** Downloaded/verified package payload cache, keyed by the source's integrity string. */
 export function cacheDir(root: string): string {
 	return join(root, "cache");
+}
+
+/** The mutual-exclusion lock file. Held for the whole of any mutating command. */
+export function lockPath(root: string): string {
+	return join(root, "lock.json");
+}
+
+/** Root under which `claude-plugin`/`codex-plugin` payload targets live, derived from the resolved home. */
+export function marketplaceRoot(home: string, host: "claude" | "codex"): string {
+	return join(home, ".draht", `${host}-marketplace`);
 }
 
 /** Parent of every transaction's staging working directory. */

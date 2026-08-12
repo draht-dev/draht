@@ -15,11 +15,13 @@ export interface ReadJournalResult {
  * line survives a crash immediately after this call returns.
  */
 export function appendJournal(root: string, entry: JournalEntry): void {
-	mkdirSync(root, { recursive: true });
+	mkdirSync(root, { recursive: true, mode: 0o700 });
 	const path = journalPath(root);
 	const line = `${JSON.stringify(entry)}\n`;
 
-	const fd = openSync(path, "a");
+	// 0600 applies only when this open creates the file; an existing journal
+	// keeps whatever mode it already had.
+	const fd = openSync(path, "a", 0o600);
 	try {
 		writeSync(fd, line);
 		fsyncSync(fd);

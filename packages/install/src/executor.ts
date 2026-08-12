@@ -7,7 +7,9 @@ import { loadState, saveState } from "./state.ts";
 import type {
 	ComponentSource,
 	ComponentState,
+	DelegatedInstall,
 	DoctorFinding,
+	Effectiveness,
 	InstallState,
 	JournalEvent,
 	PlanAction,
@@ -21,6 +23,23 @@ export interface MaterializedComponent {
 	files: Array<{ path: string; sha256: string }>;
 	version: string;
 	source: ComponentSource;
+	/** When the change takes effect. Defaults to `"unknown"` — the executor never guesses host semantics. */
+	effectiveness?: Effectiveness;
+	/** Whether the component's host registration succeeded, recorded by the caller's `register` callback. */
+	registered?: boolean;
+}
+
+/**
+ * What a `delegate` callback reports after an external mechanism (a package
+ * manager) has installed or removed a component. There is no target directory
+ * and no file manifest: the engine does not own those bytes and must not claim
+ * hash-level knowledge of them.
+ */
+export interface DelegatedComponent {
+	version: string;
+	source: ComponentSource;
+	delegated: DelegatedInstall;
+	effectiveness?: Effectiveness;
 }
 
 /** Per-action checkpoint names, fired right after the matching journal event — the fault-injection seam for tests. */
@@ -33,15 +52,33 @@ export interface RegisterContext {
 	targetDir: string;
 }
 
+/**
+ * What a `register` callback may report back. Every field is optional: a
+ * callback that reports nothing leaves the executor's conservative defaults in
+ * place rather than having a value guessed for it.
+ */
+export interface RegisterUpdate {
+	registered?: boolean;
+	effectiveness?: Effectiveness;
+}
+
 export interface ApplyPlanOptions {
 	root: string;
 	plan: PlanAction[];
 	/** Writes a component's payload into `stagingComponentDir` and reports where it ultimately belongs. */
 	materialize: (action: PlanAction, stagingComponentDir: string) => Promise<MaterializedComponent>;
-	/** Runs once a component's payload is in place at `targetDir` (e.g. wiring it into a host's config). */
-	register?: (action: PlanAction, ctx: RegisterContext) => Promise<void>;
+	/**
+	 * Runs once a component's payload is in place at `targetDir` (e.g. wiring it
+	 * into a host's config). May report how the change takes effect; anything it
+	 * omits keeps the executor's conservative default.
+	 */
+	register?: (action: PlanAction, ctx: RegisterContext) => Promise<RegisterUpdate | undefined>;
+	/** Carries out a `delegate-install`/`delegate-uninstall` action through an external mechanism. */
+	delegate?: (action: PlanAction) => Promise<DelegatedComponent>;
 	/** Fault-injection seam: called after each per-action journal event. Throwing here rolls back the whole transaction. */
 	checkpoint?: (name: CheckpointName, action?: PlanAction) => void;
+	/** Aborts the transaction between actions when the process is asked to stop. */
+	signal?: AbortSignal;
 }
 
 export interface ApplyPlanResult {
@@ -53,16 +90,27 @@ export interface ApplyPlanResult {
 export class ApplyError extends Error {
 	public readonly tx: string;
 	public readonly failedAction?: PlanAction;
+	/**
+	 * Effects this rollback could NOT undo — currently only delegated
+	 * package-manager installs, whose artifacts the engine does not own. Callers
+	 * must surface these verbatim: a rollback that silently leaves an external
+	 * global install in place while reporting "rolled back" is a lie.
+	 */
+	public readonly unrolledEffects: string[];
 
-	constructor(tx: string, failedAction: PlanAction | undefined, cause: unknown) {
+	constructor(tx: string, failedAction: PlanAction | undefined, cause: unknown, unrolledEffects: string[] = []) {
 		const causeError = cause instanceof Error ? cause : new Error(String(cause));
 		const componentSuffix = failedAction
 			? ` while applying "${failedAction.type}" for component "${failedAction.componentId}"`
 			: "";
-		super(`transaction ${tx} rolled back${componentSuffix}: ${causeError.message}`, { cause: causeError });
+		const unrolledSuffix = unrolledEffects.length > 0 ? ` (${unrolledEffects.join("; ")})` : "";
+		super(`transaction ${tx} rolled back${componentSuffix}: ${causeError.message}${unrolledSuffix}`, {
+			cause: causeError,
+		});
 		this.name = "ApplyError";
 		this.tx = tx;
 		this.failedAction = failedAction;
+		this.unrolledEffects = unrolledEffects;
 	}
 }
 
@@ -107,32 +155,51 @@ interface ActionProgress {
 	backedUp: boolean;
 	backupDir?: string;
 	swapped: boolean;
+	/** Set for delegated actions: an external effect the engine cannot undo. */
+	delegated?: DelegatedInstall;
 }
 
-function applyActionToState(state: InstallState, action: PlanAction, materialized: MaterializedComponent): void {
+function applyActionToState(
+	state: InstallState,
+	action: PlanAction,
+	outcome: MaterializedComponent | DelegatedComponent,
+): void {
 	if (action.type === "remove" || action.type === "delegate-uninstall") {
 		delete state.components[action.componentId];
 		return;
 	}
 
-	// install, update, delegate-install: record (or overwrite) the component's durable state.
-	// `effectiveness` starts "unknown": classifying whether a change is live/needs-reload/etc.
-	// requires host-specific knowledge this phase's executor doesn't have.
+	// install, update, delegate-install: record (or overwrite) the component's
+	// durable state. A delegated component has no engine-owned file manifest, so
+	// `files` stays empty rather than being invented.
+	const delegated = "delegated" in outcome ? outcome.delegated : undefined;
 	const nextComponent: ComponentState = {
 		id: action.componentId,
 		kind: action.kind,
-		version: materialized.version,
-		source: materialized.source,
-		files: materialized.files,
-		effectiveness: "unknown",
+		version: outcome.version,
+		source: outcome.source,
+		files: "files" in outcome ? outcome.files : [],
+		effectiveness: outcome.effectiveness ?? "unknown",
 	};
+	if (delegated) nextComponent.delegated = delegated;
+	if ("registered" in outcome && outcome.registered !== undefined) nextComponent.registered = outcome.registered;
 	state.components[action.componentId] = nextComponent;
 }
 
-/** Restores every backed-up/swapped directory this transaction touched, and removes leftover staging directories. */
-function rollback(progress: ActionProgress[]): void {
+/**
+ * Restores every backed-up/swapped directory this transaction touched, removes
+ * leftover staging directories, and reports the effects it could not undo.
+ */
+function rollback(progress: ActionProgress[]): string[] {
+	const unrolled: string[] = [];
 	for (let i = progress.length - 1; i >= 0; i--) {
 		const entry = progress[i];
+		if (entry.delegated) {
+			unrolled.push(
+				`${entry.delegated.packageName} was installed by ${entry.delegated.method} and was NOT rolled back: the engine does not own artifacts an external package manager installed`,
+			);
+			continue;
+		}
 		if (entry.targetDir && (entry.swapped || entry.backedUp)) {
 			removeIfExists(entry.targetDir);
 			if (entry.backedUp && entry.backupDir && existsSync(entry.backupDir)) {
@@ -141,6 +208,7 @@ function rollback(progress: ActionProgress[]): void {
 		}
 		removeIfExists(entry.stagingComponentDir);
 	}
+	return unrolled;
 }
 
 /**
@@ -158,7 +226,7 @@ function rollback(progress: ActionProgress[]): void {
  * thrown wrapping the original cause.
  */
 export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult> {
-	const { root, plan, materialize, register, checkpoint } = opts;
+	const { root, plan, materialize, register, delegate, checkpoint, signal } = opts;
 	const tx = generateTxId();
 	const state = loadState(root);
 	const progress: ActionProgress[] = [];
@@ -175,6 +243,39 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 
 		for (const action of plan) {
 			failedAction = action;
+
+			// Stopping is checked between actions only: a half-applied action has
+			// no safe interruption point, so an abort waits for the current one to
+			// finish and then rolls the whole transaction back.
+			if (signal?.aborted) {
+				throw new Error("interrupted before applying the remaining actions");
+			}
+
+			if (action.type === "delegate-install" || action.type === "delegate-uninstall") {
+				if (!delegate) {
+					throw new Error(`plan contains "${action.type}" but no delegate callback was provided`);
+				}
+				const delegated = await delegate(action);
+				const entry: ActionProgress = {
+					action,
+					stagingComponentDir: join(stagingDir(root, tx), action.componentId),
+					backedUp: false,
+					swapped: false,
+					// Only an install leaves an external artifact behind; an uninstall
+					// that already succeeded has nothing to un-remove.
+					delegated: action.type === "delegate-install" ? delegated.delegated : undefined,
+				};
+				progress.push(entry);
+				record("registered", {
+					componentId: action.componentId,
+					type: action.type,
+					delegated: delegated.delegated,
+				});
+				checkpoint?.("after-register", action);
+				applyActionToState(state, action, delegated);
+				continue;
+			}
+
 			const stagingComponentDir = join(stagingDir(root, tx), action.componentId);
 			mkdirSync(stagingComponentDir, { recursive: true });
 			const entry: ActionProgress = { action, stagingComponentDir, backedUp: false, swapped: false };
@@ -204,7 +305,14 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 			checkpoint?.("after-swap", action);
 
 			if (register) {
-				await register(action, { root, tx, targetDir: materialized.targetDir });
+				// A register callback may report how the change takes effect and
+				// whether the host accepted it; those go into durable state instead
+				// of the executor guessing.
+				const outcome = await register(action, { root, tx, targetDir: materialized.targetDir });
+				if (outcome) {
+					if (outcome.effectiveness !== undefined) materialized.effectiveness = outcome.effectiveness;
+					if (outcome.registered !== undefined) materialized.registered = outcome.registered;
+				}
 			}
 			record("registered", { componentId: action.componentId });
 			checkpoint?.("after-register", action);
@@ -220,15 +328,15 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 
 		return { tx, state };
 	} catch (error) {
-		rollback(progress);
+		const unrolledEffects = rollback(progress);
 		try {
-			record("rolled-back", { failedComponentId: failedAction?.componentId });
+			record("rolled-back", { failedComponentId: failedAction?.componentId, unrolledEffects });
 		} catch {
 			// Best-effort: if the journal write itself fails, the ApplyError below still surfaces the real cause.
 		}
 		removeIfExists(stagingDir(root, tx));
 		removeIfExists(backupsDir(root, tx));
-		throw new ApplyError(tx, failedAction, error);
+		throw new ApplyError(tx, failedAction, error, unrolledEffects);
 	}
 }
 

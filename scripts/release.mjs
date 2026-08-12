@@ -348,6 +348,14 @@ if (!DRY_RUN) {
 	console.log("  (dry-run: release artifact polling and verification skipped)\n");
 }
 
+// Publication-readiness gate. A package whose `private` flag has been removed —
+// the single action that authorizes publication — must carry passing release
+// evidence before one byte reaches the registry. While a package is still
+// private this is a no-op.
+console.log("Checking publication readiness...");
+run("node scripts/check-install-publishable.mjs");
+console.log();
+
 console.log("Publishing npm packages...");
 // Daily version suffixes like 2026.3.2-4 are NOT prereleases — they're the Nth release of the day.
 // Only versions with non-numeric suffixes (e.g., -beta, -rc.1, -alpha) are prereleases.

@@ -552,7 +552,7 @@ session(created_at, parent_session_id, storage_version, metadata,
 writer_lease(owner_id TEXT, fence INTEGER, expires_at_ms INTEGER);
 ```
 
-One `commit()` is one SQL transaction: insert entries, insert ledger rows, upsert or delete registers, maintain the branch index, bump `session_stats`. Never an UPDATE or DELETE on an entry or ledger row; mutability is confined to registers, the branch index (`branch_meta` tips and bases), stats, sequences, the session catalog row, and leases.
+One `commit()` is one SQL transaction: insert entries, insert ledger rows, upsert or delete registers, maintain the branch index, and bump `session_stats`. Session stats was the old table name; these values are now maintained projections in `session`: `message_count` for message entries and `usage_payload` for aggregate usage (cached/uncached tokens and cost). Never an UPDATE or DELETE on an entry or ledger row; mutability is confined to registers, the branch index (`branch_meta` tips and bases), stats, sequences, the session catalog row, and leases.
 
 **Every transaction must open with `BEGIN IMMEDIATE`.** A deferred `BEGIN` that
 reads before it writes takes a read snapshot and must later upgrade to the write

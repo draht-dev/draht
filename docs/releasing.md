@@ -2,22 +2,18 @@
 
 **Lockstep versioning**: All packages always share the same version number. Every release updates all packages together.
 
-**Version semantics** (no major releases):
-
-- `patch`: Bug fixes and new features
-- `minor`: API breaking changes
+**Version scheme**: CalVer, always suffixed — `YYYY.M.D-N`, where `N` starts at `1` for the first release of a day and increments for same-day follow-ups (`scripts/release.mjs` → `computeNextVersion` in `scripts/lib/version-stamp.mjs`). The bare `YYYY.M.D` form is retired: it sorted *above* every same-day `-N` under semver, which broke fielded update comparators. There are no `release:patch`/`release:minor` commands and no semver semantics.
 
 ## Steps
 
-1. **Update CHANGELOGs**: Ensure all changes since last release are documented in the `[Unreleased]` section of each affected package's CHANGELOG.md
+1. **Update CHANGELOGs**: Ensure all changes since the last release are documented in the `[Unreleased]` section of each affected package's CHANGELOG.md (conventional-commit collection in the script assists, but the `[Unreleased]` sections are the source of truth).
 
-2. **Run release script**:
+2. **Run the release script**:
    ```bash
-   npm run release:patch    # Fixes and additions
-   npm run release:minor    # API breaking changes
+   npm run release        # or: npm run release:dry to preview
    ```
 
-The script handles: version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+The script: computes the next version from existing tags (`computeNextVersion` in `scripts/lib/version-stamp.mjs`), stamps every version surface via `scripts/release-helpers.mjs` `setVersion` — every `packages/*/package.json`, the root `package.json`, **both plugin manifests** (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` — hosts key update detection off these; `check-draht-customizations.mjs` fails on drift), and the `bun.lock` workspace snapshots — then re-validates all of them with `assertReleaseVersions`, finalizes CHANGELOGs from conventional commits, runs `./test.sh`, builds, commits and tags, pushes commit + tag, waits for the verified GitHub release, publishes every non-private workspace package (`scripts/publish-workspaces.mjs`, `workspace:*` deps rewritten to exact versions), and adds fresh `[Unreleased]` sections.
 
 The release tag and commit are pushed before npm publication. The script then
 polls the matching GitHub release and refuses to publish npm packages until
@@ -84,3 +80,7 @@ only from an explicit install/update invocation. Escape hatches:
 (air-gapped path); `--no-graph-engine` / `DRAHT_SKIP_GRAPH_ENGINE=1` skip the
 fetch during `install`/`update`. Full detail:
 `.planning/kg-integration/SPEC.md`'s "Go engine cutover" section.
+
+## Channels
+
+**Not yet supported**: publishing to the `npm` `next` dist-tag — the historical `--tag next` branch in `release.mjs` is unreachable for every version `computeNextVersion` can emit, and the registry's existing `@draht/coding-agent@next` is a frozen 2026-03 artifact. See `.planning/specs/2026-08-12-unified-distribution-product.md` (deferred register) before adding a prerelease channel.

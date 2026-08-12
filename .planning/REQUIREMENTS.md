@@ -319,3 +319,61 @@
 - R46-SBH.3: Spawn-overhead budget enforced by test — added p95 < 50 ms per invocation
 - R46-SBH.4: Dogfood proof — full `npm run check` + build of this monorepo completes inside the sandbox on the curated default allowlist alone
 - R46-SBH.5: Docs — `extensions.md`, `quickstart.md` security section, permission-gate module doc updated to point at the sandbox as the hard boundary (text gate = heuristic UX in front of it)
+
+---
+
+## Milestone 7 — Unified Distribution
+
+> Design spec: `.planning/specs/2026-08-12-unified-distribution-product.md` (adjudicated synthesis of the three 2026-08-11 plans in /srv/work/draht/draht-mono-plans/).
+> Registry evidence as of 2026-08-11: unscoped `draht` is third-party (thenativeweb); `draht-install`, `draht-init`, `create-draht`, `@draht/install` unclaimed. New package: `packages/install/` (canonical `@draht/install`). No new bin named `draht`, `draht-tools`, `draht-claude`, or `draht-codex` anywhere in the milestone.
+> Scope note: launcher packages, `next` channel, version pinning, repair/rollback verbs, config merge/overlay, update-notice pipeline, plugin-CLI shims, provenance metadata, signed catalog, scheduled updates are explicitly deferred (spec §7).
+
+### R47-SKL: Canonical Skill Source & Generated Artifacts
+- R47-SKL.1: Repo-root `skills/` canonical tree — 9 dialect-neutralized discipline skills, 17 workflow skills as `<cmd>/{SKILL.md, command.md}` with in-dir references only, and a new `draht` umbrella/router skill (~27 total), every SKILL.md spec-clean (frontmatter exactly `name`+`description`, name==dirname)
+- R47-SKL.2: Generator `scripts/generate-skills-artifacts.mjs` renders Claude artifacts (17 commands + 10 skills) and Codex artifacts (17 commands + 27 skills incl. self-contained wrappers) from the canonical tree through a data-driven dialect table; the walk over `skills/` is dynamic — adding a canonical skill dir requires zero generator changes
+- R47-SKL.3: Migration byte-safety — regenerated Claude commands and the 9 pre-existing Claude discipline skills are byte-identical to the pre-migration committed files; Codex content changes are exactly the intended wrapper self-containment fix; both packages gain only `skills/draht/`
+- R47-SKL.4: Drift gate — `check:skills-artifacts` (regenerate + byte-compare, non-zero on drift) wired into root `npm run check` and both plugin packages' `prepublishOnly`; `check-plugin-mirrors.mjs` reduced to its agents/ byte-identity check
+- R47-SKL.5: Native artifact tests — Agent Skills spec validation, portability lint (no `../` escapes, no absolute paths, no `${CLAUDE_PLUGIN_ROOT}`/`${PLUGIN_ROOT` tokens, host-dialect markers only in an explicit documented allowlist), ≤500-line size gate, generator determinism, dialect completeness, wrapper-standalone resolution
+- R47-SKL.6: Catalog proof — a native implementation of the skills-CLI priority-walk semantics (root `skills/` short-circuit, first-found-wins name dedup) over this repository lists exactly the canonical skill set
+- R47-SKL.7: README truth — both plugin READMEs list the real skill surface (9 disciplines + `draht` router)
+
+### R48-ENG: Install Engine Core
+- R48-ENG.1: New workspace package `packages/install/` publishing `@draht/install` (private:false, `files` allowlist, lockstep CalVer, vitest suite, `workspace:*` dependency on `@draht/tools` for the init scaffold), wired into the root `build` chain and green under `npm run check` and `check-draht-customizations`
+- R48-ENG.2: Schema-versioned state manifest at `~/.draht/install/state.json` (`DRAHT_INSTALL_DIR` override): channel, profile, per-component version/source/integrity, per-file `{path, sha256}`, effectiveness; all writes temp-file + fsync + atomic rename, kill-proven
+- R48-ENG.3: Append-only `journal.jsonl` (`planned → staged → backed-up → swapped → registered → committed | rolled-back`), fsync per record, torn-final-line-tolerant reader, open-transaction detection
+- R48-ENG.4: Pure plan engine — desired (profile ∪ selectors, channel) vs actual (state + injected disk hashes) → ordered typed actions; deterministic; downgrades surface as typed `blocked` entries, never silent actions; removes only under explicit prune
+- R48-ENG.5: Transactional executor — staging → journaled per-component backup → atomic rename swap (EXDEV copy fallback) → registration callback → verified commit; any failure restores the pre-apply tree byte-identically, journals `rolled-back`, and leaves `state.json` untouched; named checkpoints as the fault-injection seam
+- R48-ENG.6: Idempotent convergence — re-planning after a successful apply yields zero actions, proven by hash-equal state and fs snapshots
+
+### R49-SRC: Component Sources, Detection & Adapters
+- R49-SRC.1: `RegistryClient` seam with an npm-registry implementation (packument fetch honoring `DRAHT_REGISTRY`, dist-tag resolution) and a hermetic fixture implementation; channel `latest` only — `next` refused with the honest frozen-tag message (registry `next: 2026.3.2-4` predates and is unreachable by the release pipeline)
+- R49-SRC.2: Tarball acquisition verified against registry-served ssri integrity (`sha512-…`/`sha256-…`) into `~/.draht/install/cache/` keyed by integrity; cache hits satisfy plans offline; corrupted downloads rejected before any staging
+- R49-SRC.3: `claude-plugin` adapter — stages the payload into the claude marketplace layout with full manifest tracking and drives the verified `cli.mjs` call sequence (validate → marketplace add → marketplace update → [force: uninstall] → `plugin install --scope user` → enable) against the host CLI; uninstall verifies host deregistration success before deleting local files (no allowFail-then-delete)
+- R49-SRC.4: `codex-plugin` adapter — same contract for the codex marketplace and verb set (marketplace add → [force: remove] → add)
+- R49-SRC.5: `global-cli` adapter (used by `coding-agent` and `installer` components) — delegated install via detected package manager, delegation recorded in state, symmetric uninstall, honest failure reporting
+- R49-SRC.6: Detection module — harness CLIs on PATH, legacy curl-clone (`~/.draht/.git`), `~/.local/bin/draht` wrapper, `~/.pi` legacy state; typed findings consumed by plan and doctor
+- R49-SRC.7: Component index as validated data (`components.json`: id, kind, npmName, provides, default-membership rules); adapters keyed by `kind`; unknown kinds fail closed only when selected; adding a package of a supported kind is a data-only change
+
+### R50-CLI: CLI Surface & Contracts
+- R50-CLI.1: Bins `draht-install` and `draht-init` from `@draht/install` (single entry, basename dispatch); no bin named `draht`/`draht-tools`/`draht-claude`/`draht-codex` (guard test)
+- R50-CLI.2: Verbs `plan`, `install`, `status`, `doctor`, `update`, `uninstall` per the spec contracts; `install --dry-run` prints the plan and writes nothing; `update` = re-resolve + apply for installed components; `uninstall --purge` additionally removes the state root
+- R50-CLI.3: Flags `--full`, `--agents`, `--skills`, `--coding-agent`, `--channel <latest>`, `--dry-run`, `--yes`, `--json`, `--fail-on-empty`; selector composition rules (selectors replace the default set; `--full`+selector errors); short flags only `-h/-y/-n`
+- R50-CLI.4: `--json` single-document output with `schemaVersion` on plan/status/doctor/uninstall, NDJSON event stream on `install --json`; schemas checked into the package and snapshot-tested
+- R50-CLI.5: Non-interactive discipline — mutating verbs require `--yes` without a TTY; read verbs never prompt; exit codes 0/1/2/3 as specified and test-pinned
+- R50-CLI.6: `draht-init` — ensures required components (offering `install`), scaffolds `.planning/` by subprocess-invoking the `draht-tools` bin from the package's own dependency, prints the agent handoff, refuses to overwrite an existing scaffold without `--force`
+- R50-CLI.7: Doctor catalogue with at minimum: node/npm environment, state/journal integrity, manifest drift, legacy curl-clone, wrapper/PATH shadowing, `~/.pi` legacy state, harness presence for installed components, crashed transactions, installed-payload manifest-version drift — each `{id, severity, message, repairable}`
+- R50-CLI.8: Help text disambiguates `draht install <source>` (coding-agent extension manager) from `draht-install` (machine components)
+
+### R51-SHIP: Release Integration, Docs & E2E
+- R51-SHIP.1: Shared stamping module (`scripts/lib/version-stamp.mjs`) rewrites both plugin manifests; called by `release.mjs`'s version step and `sync-versions.js`; both manifests converged to the lockstep version; `check-draht-customizations.mjs` fails on manifest/package version drift
+- R51-SHIP.2: Always-suffixed CalVer — `computeVersion` emits only `YYYY.M.D-N` (first release of a day `-1`); transition-day ordering edge documented and test-pinned; `--tag next` publishing remains explicitly deferred
+- R51-SHIP.3: `install.sh` refuses a non-empty non-git `~/.draht` with a clear message and `DRAHT_DIR` guidance (the npx-bootstrap rewrite is publish-gated, R52-PUB.3)
+- R51-SHIP.4: Docs truth — engine README, plugin README skill lists, `docs/releasing.md` reflecting the real CalVer/release process, CHANGELOG entries for touched packages
+- R51-SHIP.5: Hermetic lifecycle e2e — pack `@draht/install`, install from the tarball into a sandbox HOME with stub `claude`/`codex` on PATH, drive plan→install→status→injected drift→doctor→uninstall to a byte-clean home; zero live-registry access under test
+
+### R52-PUB: Publish, Launchers & Bootstrap (publish-gated)
+- R52-PUB.1: Unscoped launcher packages `draht-install`, `draht-init`, `create-draht` (bin stub + README + LICENSE + CHANGELOG only), `workspace:*`-pinned to `@draht/install`, published by the lockstep pipeline with `npm pack` content assertions
+- R52-PUB.2: `check-draht-customizations.mjs` structural duplicate-bin rule — a bin name may be declared by multiple workspace packages only when byte-synced (the `draht-tools` pair) or when every non-canonical declarer is a single-bin launcher exact-pinned to the `@draht/*` package declaring the same bin
+- R52-PUB.3: `install.sh` rewritten as a thin bootstrap (node check → `exec npx draht-install@latest "$@"`), preserving the published URL; no clone, no `git reset --hard`, no shell-rc mutation
+- R52-PUB.4: One-time registry hygiene — remediate the frozen `@draht/coding-agent@next` dist-tag; claim the unscoped launcher names
+- R52-PUB.5: Post-publish verification — `npx draht-install@latest plan` smoke in a clean container; live `npx skills add draht-dev/draht --list` equals the canonical catalog; all gated on reconciling the `fix/final-*`/`fix/review-*` branch family first

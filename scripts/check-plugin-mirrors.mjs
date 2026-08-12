@@ -2,14 +2,21 @@
 /**
  * Drift gate for the hand-maintained plugin mirrors.
  *
- * draht-claude and draht-codex ship the same agents, commands, scripts, skills
- * and hooks, differing only in two mechanical dimensions:
+ * draht-claude and draht-codex ship the same agents, scripts, and hooks,
+ * differing only in two mechanical dimensions:
  *   1. plugin-root path token (CLAUDE_PLUGIN_ROOT vs PLUGIN_ROOT fallback chain)
  *   2. subagent dispatch phrasing (Task tool / subagent_type vs Codex subagent)
  *
- * This script fails when the mirrors diverge in any OTHER way, so an edit to
- * one plugin that is not ported to the other is caught by `npm run check`
- * (and therefore the pre-commit hook) instead of at publish or never.
+ * commands/ and skills/ are NOT checked here anymore: they are generated from
+ * the single provider-neutral tree at repo-root skills/ by
+ * scripts/generate-skills-artifacts.mjs, whose own `--check` mode is a
+ * byte-exact equality gate (stronger than this script's dialect-tolerant
+ * diff) and is wired into each plugin package's `prepublishOnly`.
+ *
+ * This script fails when the remaining mirrors (agents/, scripts/, hooks/)
+ * diverge in any OTHER way than the two dimensions above, so an edit to one
+ * plugin that is not ported to the other is caught by `npm run check` (and
+ * therefore the pre-commit hook) instead of at publish or never.
  *
  * Usage:
  *   node scripts/check-plugin-mirrors.mjs        # exit 1 on drift
@@ -126,35 +133,14 @@ for (const f of checkFileSets("scripts", ".cjs")) {
 	checkDialectMirror(`scripts/${f}`, join(CLAUDE, "scripts", f), join(CODEX, "scripts", f));
 }
 
-// ── 3. commands/ — identical modulo path token + dispatch phrasing ──────────
-for (const f of checkFileSets("commands", ".md")) {
-	checkDialectMirror(`commands/${f}`, join(CLAUDE, "commands", f), join(CODEX, "commands", f));
-}
-
-// ── 4. hooks/hooks.json — identical modulo path token ────────────────────────
+// ── 3. hooks/hooks.json — identical modulo path token ────────────────────────
 {
 	const a = readFileSync(join(CLAUDE, "hooks/hooks.json"), "utf-8");
 	const b = normalizeCodex(readFileSync(join(CODEX, "hooks/hooks.json"), "utf-8"));
 	if (a !== b) problems.push("hooks/hooks.json: content differs beyond the path token");
 }
 
-// ── 5. skills/ — shared skills byte-identical; every command has a codex wrapper ──
-const claudeSkills = existsSync(join(CLAUDE, "skills")) ? readdirSync(join(CLAUDE, "skills")).sort() : [];
-for (const skill of claudeSkills) {
-	const aPath = join(CLAUDE, "skills", skill, "SKILL.md");
-	const bPath = join(CODEX, "skills", skill, "SKILL.md");
-	if (!existsSync(bPath)) {
-		problems.push(`skills/${skill}: missing in draht-codex`);
-		continue;
-	}
-	checkDialectMirror(`skills/${skill}/SKILL.md`, aPath, bPath);
-}
-for (const cmd of listFiles(join(CLAUDE, "commands"), ".md")) {
-	const name = cmd.replace(/\.md$/, "");
-	if (!existsSync(join(CODEX, "skills", name, "SKILL.md"))) {
-		problems.push(`skills/${name}: draht-codex is missing the wrapper skill for commands/${cmd}`);
-	}
-}
+// commands/ and skills/ are generated — see scripts/generate-skills-artifacts.mjs --check.
 
 // ── Report ────────────────────────────────────────────────────────────────────
 if (problems.length > 0) {

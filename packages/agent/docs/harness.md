@@ -876,52 +876,102 @@ How a repository organizes its sessions is its own choice, constrained only by t
 
 ### Search
 
-Search is a **standalone service over the repository**, with its own store. The dependency points one way: the service consumes `repo.list()` and read-only session opens; the repository knows nothing about search and exposes no search methods, and no conformance test covers any of this. An application that wants search constructs the service and queries it directly:
+Search is a **standalone service with its own store**. The repository knows nothing about search and exposes no search methods. Repository catch-up is separate glue: a sync utility consumes `repo.list()` and read-only session opens, then feeds the service/index store. Applications that want search construct the service, optionally run the sync utility, and query the service directly:
 
 ```ts
-const search = createSqliteSearchService({ repo, dbPath });    // reference impl
-await search.sync();                                           // catch up cursors
-events.on("entry_added", (e) => search.notify(e.sessionId));   // optional freshness
+const search = createSqliteSearchService({ dbPath });                 // reference impl
+await syncSessionSearch({ repo, search });                            // catch up cursors
+events.on("entry_added", (e) => notifySessionSearch({ repo, search, sessionId: e.sessionId }));
 
 const hits = await search.searchSessions({ text: "auth migration", limit: 10 });
 ```
 
-```ts
-interface SessionSearchService {
-  /** Sessions ranked by best match. Required. */
-  searchSessions(query: SearchQuery): Promise<SessionSearchHit[]>;
-  /** Entries ranked by match. Optional capability. */
-  searchEntries?(query: SearchQuery): Promise<EntrySearchHit[]>;
+The core entry-search API stays minimal:
 
-  sync(): Promise<void>;              // enumerate sessions, catch up all cursors
-  notify(sessionId: string): void;    // freshness hint; debounced single-session pull
+```ts
+export interface SessionSearchHit {
+  /** Logical identifier of the session that owns the entry. */
+  readonly sessionId: string;
+
+  /** Logical identifier of the entry within that session. */
+  readonly entryId: string;
+}
+
+export interface SessionSearchOptions {
+  /** Restrict results to specific canonical entry types. */
+  readonly entryTypes?: readonly Entry["type"][];
+
+  /** Maximum number of hits to return. Backends may return fewer, not more. */
+  readonly limit?: number;
+
+  /** Abort signal for cancellation, e.g. search-as-you-type. */
+  readonly signal?: AbortSignal;
+}
+
+export interface SessionSearch<T extends SessionSearchHit = SessionSearchHit> {
+  search(text: string, options?: SessionSearchOptions): AsyncIterable<T>;
+}
+
+interface SessionSearchService<
+  TSessionResult extends SessionSearchResult = SessionSearchResult,
+  TEntryHit extends SessionSearchHit = SessionSearchHit,
+> {
+  /** Sessions ranked by best match. Required. */
+  searchSessions(query: SearchQuery): Promise<TSessionResult[]>;
+  /** Entries ranked by match. Optional capability, using the core entry-search API. */
+  searchEntries?: SessionSearch<TEntryHit>;
+
+  /** Remove indexed state for a session; sync utilities may call this during reconciliation. */
   remove(sessionId: string): Promise<void>;
   close(): Promise<void>;
 }
 
-interface SearchQuery { text: string; limit?: number }  // limit counts the method's unit
-
-interface SessionSearchHit {
-  sessionId: string;
-  score?: number;
-  top?: { entryId: string; snippet?: string; timestamp: number };  // best match, for display
+// Implemented by services that want to use the shared repo catch-up utility.
+interface SessionSearchSyncTarget {
+  /** Durable cursor stored with the search projection. */
+  getCursor(sessionId: string, storeGeneration: number): Promise<number>;
+  /** Transactionally upsert projected entries and advance the cursor. */
+  indexBatch(batch: SearchIndexBatch): Promise<void>;
+  remove(sessionId: string): Promise<void>;
 }
 
-interface EntrySearchHit {
-  sessionId: string; entryId: string; timestamp: number;
-  snippet?: string; score?: number;
+interface SearchIndexBatch {
+  sessionId: string;
+  storeGeneration: number;
+  fromSeq: number;
+  toSeq: number;
+  entries: Array<{ entryId: string; seq: number; text: string; timestamp: number }>;
+}
+
+interface SearchQuery { text: string; limit?: number }  // limit counts sessions
+
+/** Stable identity for a session-level search result. */
+interface SessionSearchResult {
+  sessionId: string;
+}
+
+// Example extensions used by a UI-oriented service, or the TUI.
+interface DisplayEntrySearchHit extends SessionSearchHit {
+  timestamp: number;
+  snippet?: string;
+  score?: number;
+}
+
+interface DisplaySessionSearchResult extends SessionSearchResult {
+  score?: number;
+  top?: DisplayEntrySearchHit;  // best match, for display
 }
 ```
 
-The application owns the lifecycle: `sync()` at startup or on a schedule, `notify()` wired to its event stream when it wants freshness, `remove()` alongside `repo.delete()` (or left to the next `sync()`, which reconciles against `repo.list()`). Hits carry `sessionId`; callers join metadata through the repository they already hold.
+The application owns the lifecycle: run the sync utility at startup or on a schedule, wire the notify utility to its event stream when it wants freshness, and call `search.remove()` alongside `repo.delete()` (or leave stale rows to the next sync reconciliation). Session results carry `sessionId`; entry hits carry `(sessionId, entryId)`. Callers join metadata and fetch entries through the repository they already hold.
 
-**Indexing is pull-based; events are only hints.** The service keeps a durable cursor per session — the highest entry `seq` it has indexed. `sync()` enumerates sessions via the repository (old, new, and files that arrived by copy alike), reads `scanEntries({ fromSeq: cursor + 1 })` on each, indexes message-entry text idempotently per `(sessionId, entryId)`, and advances the cursor. A crash mid-batch re-indexes a few rows into the same state; a service deployed against years of existing sessions starts empty and catches up with the same loop. `notify()` never carries content — it is a poke that triggers a debounced pull of one session; a lost poke is caught by the next sweep. The index is a rebuildable projection with zero authority: indexing failures never affect the harness or commits.
+**Indexing is pull-based; events are only hints.** Sync is not part of the core service contract; it is a reusable utility that a search service can use. The search store keeps a durable cursor per session — the highest entry `seq` it has indexed. The sync utility enumerates sessions via the repository (old, new, and files that arrived by copy alike), reads `scanEntries({ fromSeq: cursor + 1 })` on each, asks the service/index store to index message-entry text idempotently per `(sessionId, entryId)`, and advances the cursor in the same store transaction. A crash mid-batch re-indexes a few rows into the same state; a service deployed against years of existing sessions starts empty and catches up with the same loop. The notify utility never carries content — it is a poke that triggers a debounced pull of one session; a lost poke is caught by the next sweep. The index is a rebuildable projection with zero authority: indexing failures never affect the harness or commits.
 
 Two mechanical notes. Reading a session another process is writing is legal — the writer lease gates writers, and WAL gives cross-process snapshot reads — but a sweep may skip lease-held sessions as an optimization, since `notify()` covers the hot ones. The precise rewrite (§2.9) swaps a session's store and may renumber seqs, so cursors key on `(sessionId, storeGeneration)`; the rewrite bumps a generation counter in metadata and a mismatch triggers a full re-index of that session.
 
-The reference implementation is one standalone SQLite database — an FTS5 table over `(session_id, entry_id, text)` plus the cursor table — and works unchanged over JSONL session files. Several processes may share it under the usual discipline (WAL, `busy_timeout`, `BEGIN IMMEDIATE`, idempotent rows, monotonic cursor updates); writers serialize.
+The reference implementation is one standalone SQLite database — an FTS5 table over `(session_id, entry_id, text)` plus the cursor table — and works unchanged over JSONL session files when paired with the sync utility. Several processes may share it under the usual discipline (WAL, `busy_timeout`, `BEGIN IMMEDIATE`, idempotent rows, monotonic cursor updates); writers serialize.
 
-**Open question — metadata filtering.** Coding-agent's resume flow filters sessions by `cwd`; other repositories have no cwd concept at all. Repositories already model implementation-specific listing through their `L` options generic (`list(options?: L)`), but `SearchQuery` is deliberately generic — how does a repo-specific filter reach the index? Candidates, to be settled by the people who will fight over it:
+**Open question — metadata filtering.** Coding-agent's resume flow filters sessions by `cwd`; other repositories have no cwd concept at all. Repositories already model implementation-specific listing through their `L` options generic (`list(options?: L)`), but search query/options are deliberately generic — how does a repo-specific filter reach the index? Candidates, to be settled by the people who will fight over it:
 
 ```ts
 // (a) typed filter passthrough — service becomes generic over a filter type

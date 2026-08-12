@@ -124,14 +124,21 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 		expect(runGate().exitCode).toBe(0);
 	});
 
-	test("multiline dynamic imports cannot evade the boundary scan", () => {
+	test("multiline and commented dynamic imports cannot evade the boundary scan", () => {
 		expect(runGate().exitCode).toBe(0);
 		const file = join(REPO_ROOT, "packages", "geist-core", "src", "__boundary-mutation__.ts");
-		withInjected(file, 'const forbidden = import(\n  "@draht/coding-agent"\n);\n', () => {
-			const { exitCode, stderr } = runGate();
-			expect(exitCode).toBe(1);
-			expect(stderr).toContain("@draht/coding-agent");
-		});
+		const kernel = ["@draht", "coding-agent"].join("/");
+		for (const source of [
+			`const forbidden = import(\n  ${JSON.stringify(kernel)}\n);\n`,
+			`const forbidden = import(/* boundary bypass */ ${JSON.stringify(kernel)});\n`,
+			`const forbidden = import(// boundary bypass\n ${JSON.stringify(kernel)});\n`,
+		]) {
+			withInjected(file, source, () => {
+				const { exitCode, stderr } = runGate();
+				expect(exitCode).toBe(1);
+				expect(stderr).toContain(kernel);
+			});
+		}
 		expect(runGate().exitCode).toBe(0);
 	});
 
@@ -174,6 +181,8 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 			for (const manifest of [
 				{ dependencies: { neutral: "npm:@draht/coding-agent@2026.7.30" } },
 				{ imports: { "#kernel": "@draht/coding-agent" } },
+				{ imports: { "#kernel": { node: "@draht/coding-agent", default: "./safe.js" } } },
+				{ imports: { "#kernel": ["./safe.js", { node: "@draht/coding-agent" }] } },
 			]) {
 				writeFileSync(manifestPath, JSON.stringify({ name: "boundary-alias-fixture", ...manifest }));
 				const { exitCode, stderr } = runGate();

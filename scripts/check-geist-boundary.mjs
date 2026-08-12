@@ -83,8 +83,8 @@ const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".gradle", ".git", "
 const SPECIFIER_PATTERNS = [
 	/\bfrom\s+["']([^"']+)["']/g, //            import x from "y" | export * from "y"
 	/\bimport\s+["']([^"']+)["']/g, //          import "y"  (side-effect)
-	/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g, // import("y")  (dynamic)
-	/\brequire\s*\(\s*["']([^"']+)["']\s*\)/g, // require("y")
+	/\bimport\s*\(\s*(?:(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$))\s*)*["']([^"']+)["']\s*\)/g, // import(/* trivia */ "y")
+	/\brequire\s*\(\s*(?:(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$))\s*)*["']([^"']+)["']\s*\)/g, // require(/* trivia */ "y")
 ];
 
 function walk(dir, exts) {
@@ -175,6 +175,16 @@ function forbiddenDrahtTarget(value) {
 	const target = npmTarget.startsWith("@") ? npmTarget.slice(0, npmTarget.indexOf("@", 1) === -1 ? undefined : npmTarget.indexOf("@", 1)) : npmTarget;
 	return /^@draht\//.test(target) && !GEIST_FAMILY.has(packageNameOf(target)) ? target : null;
 }
+
+function forbiddenDrahtTargets(value) {
+	if (typeof value === "string") {
+		const target = forbiddenDrahtTarget(value);
+		return target ? [target] : [];
+	}
+	if (Array.isArray(value)) return value.flatMap(forbiddenDrahtTargets);
+	if (value && typeof value === "object") return Object.values(value).flatMap(forbiddenDrahtTargets);
+	return [];
+}
 for (const dir of BOUNDARY_PACKAGES) {
 	for (const file of walk(dir, ["package.json"])) {
 		if (basename(file) !== "package.json") continue;
@@ -197,8 +207,7 @@ for (const dir of BOUNDARY_PACKAGES) {
 			}
 		}
 		for (const [alias, target] of Object.entries(manifest.imports ?? {})) {
-			const forbidden = forbiddenDrahtTarget(target);
-			if (forbidden) {
+			for (const forbidden of forbiddenDrahtTargets(target)) {
 				violations.push(
 					`${rel(file)}  imports alias "${alias}" targets "${forbidden}" (outside the non-privileged geist family)`,
 				);

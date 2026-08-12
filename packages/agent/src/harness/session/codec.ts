@@ -4,9 +4,11 @@ import type {
 	Entry,
 	JsonValue,
 	OperationState,
+	PendingEntry,
 	Register,
 	RegisterNamespace,
 	SessionCodecOptions,
+	SessionStats,
 	StructuralDecision,
 	Transaction,
 	UsageRow,
@@ -560,6 +562,7 @@ export const UsageRowSchema = strict({
 	adjustment: Type.Boolean(),
 	details: Type.Optional(JsonValueSchema),
 });
+const SessionStatsSchema = strict({ messageCount: SafeIntegerSchema, usage: UsageSchema });
 const RegisterKeySchemas: Record<RegisterNamespace, TSchema> = {
 	"lane.leaf": Type.String({ minLength: 1 }),
 	"lane.config": Type.String({ minLength: 1 }),
@@ -970,6 +973,19 @@ export class SessionCodec {
 		const detached = cloneJsonSafe(value, "$");
 		assertSchema(UsageRowSchema, detached, "$");
 		return detached as unknown as UsageRow;
+	}
+
+	encodePendingEntry(value: unknown): PendingEntry {
+		const detached = cloneJsonSafe(value, "$");
+		validateMessageRolesInRegister("pending.entry", { value: detached }, "$", this.customMessageSchemas);
+		assertSchema(this.registerSchemas["pending.entry"], detached, "$");
+		return detached as unknown as PendingEntry;
+	}
+
+	decodeSessionStats(value: unknown): SessionStats {
+		const detached = cloneJsonSafe(value, "$");
+		assertSchema(SessionStatsSchema, detached, "$");
+		return detached as unknown as SessionStats;
 	}
 
 	private parseTransaction(value: unknown): Transaction {

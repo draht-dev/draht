@@ -305,11 +305,9 @@ export type LaneLastResult = {
 	| { outcome: "declined" | "aborted"; error?: never; runCompletion?: never }
 );
 
-export interface PendingEntry {
-	type: "message" | "custom";
-	customType?: string;
-	payload?: JsonValue;
-}
+export type PendingEntry =
+	| { type: "message"; payload: AgentMessage }
+	| { type: "custom"; customType: string; payload?: JsonValue };
 
 export interface DurableFileOperations {
 	read: string[];

@@ -323,12 +323,10 @@ type RegisterNamespace = keyof RegisterValues;
 
 /** Unplaced content: current mutable state until the placement transaction
     writes the complete entry and deletes this register (§2.2). */
-interface PendingEntry {
-  type: "message" | "custom";
-  customType?: string;
-  payload?: JsonValue;       // the content that becomes the entry's payload;
-                             // absent = a custom entry with no data
-}
+type PendingEntry =
+  | { type: "message"; payload: AgentMessage }
+  | { type: "custom"; customType: string; payload?: JsonValue };
+    // absent custom payload = a custom entry with no data
 
 interface DurableFileOperations {
   read: string[]; written: string[]; edited: string[];

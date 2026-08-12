@@ -131,6 +131,17 @@ function rel(file) {
 
 const violations = [];
 
+// ── 0. every scanned surface must exist ───────────────────────────────────────
+// A missing scan target is a silent scope shrink, not a pass: if a boundary
+// package or quest/ moves or disappears, the gate screams until the layout and
+// this script agree again (R31-FOUND.1/.2 back the layout; the 2026-07-13
+// audit reopened Phase 31 over exactly this class of quiet under-enforcement).
+for (const dir of [...BOUNDARY_PACKAGES, QUEST_DIR]) {
+	if (!existsSync(dir)) {
+		violations.push(`${rel(dir)}  boundary scan target is missing (layout drift)`);
+	}
+}
+
 // ── 1. geist packages: only non-privileged intra-family @draht/* imports, ─────
 //      and no path imports escaping the package root (a relative import into
 //      packages/coding-agent is the same breach without the npm scope).

@@ -2,10 +2,6 @@ import type { AgentMessage } from "../../types.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../messages.ts";
 import type { CompactionEntry, CustomEntry, Entry } from "./types.ts";
 
-export interface SessionContext {
-	messages: AgentMessage[];
-}
-
 export type ContextEntryTransform = (entries: readonly Entry[]) => readonly Entry[];
 
 export type CustomEntryContextMessageProjector = (

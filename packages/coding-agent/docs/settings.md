@@ -195,6 +195,22 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 
 `npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. User-scoped npm packages install under `~/.pi/agent/npm/`; project-scoped npm packages install under `.pi/npm/`. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
 
+### Tools
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `defaultTools` | string[] | - | Initial tool allowlist. When omitted, Pi uses its standard defaults |
+
+`defaultTools` applies to built-in, extension, and custom tools, like the `--tools` CLI option:
+
+```json
+{
+  "defaultTools": ["bash", "edit", "write"]
+}
+```
+
+An empty array starts with no tools. `--tools`, `--no-tools`, and `--no-builtin-tools` override this setting; `--exclude-tools` filters the resulting list. A project `defaultTools` array replaces the global array.
+
 ### Sessions
 
 | Setting | Type | Default | Description |

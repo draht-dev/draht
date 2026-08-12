@@ -7,8 +7,8 @@ describe("scaffold", () => {
 		expect(1 + 1).toBe(2);
 	});
 
-	it("remains private until the executable CLI contract is complete", () => {
+	it("matches the explicit publication authorization mode", () => {
 		const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
-		expect(manifest.private).toBe(true);
+		expect(manifest.private).toBe(process.env.DRAHT_INSTALL_PUBLICATION_GATE !== "1");
 	});
 });

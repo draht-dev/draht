@@ -75,7 +75,7 @@ Short flags are exactly `-h`, `-y`, `-n`. There are no others, and no flag clust
 
 - **Confirmation.** Every mutating verb requires a TTY confirmation or `--yes`. Read verbs (`plan`, `status`, `doctor`) never prompt.
 - **Dry run.** `--dry-run` makes zero writes, registry requests, downloads and host calls. It is enforced structurally: the dry-run path is handed a registry and host runner that throw on every operation. Fresh installs and update checks report the symbolic target `latest`; an actual mutation resolves and pins the concrete version before applying.
-- **Mutual exclusion.** Mutating commands hold `lock.json` in the state root. A live owner is refused. A lock written by another host is refused, because this process cannot ask whether a pid on another machine is alive. An unparseable or stale lock is also refused rather than automatically removed: portable filesystem APIs cannot atomically prove that another process did not replace it. Inspect and remove a stale lock only while no installer process is running.
+- **Mutual exclusion.** Mutating commands atomically create a `lock.json/` ownership directory with a random token record. Release removes only its own token and cannot unlink a replacement owner's record. A live owner, foreign-host owner, unparseable lock, or stale lock is refused rather than automatically reclaimed. Legacy tokenless file locks remain readable but fail closed. Inspect and remove stale evidence only while no installer process is running.
 - **Refusal on damaged state.** A mutating command refuses to run when `state.json` is corrupt, when the journal's tail is torn, or when an interrupted transaction cannot be recovered from durable evidence. `doctor` reports each case.
 - **Path validation.** Component ids match `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`. Payload file paths must be plain relative POSIX paths — absolute paths, `..` segments, backslashes, Windows drive paths, empty segments and NUL bytes are all refused. A payload target must be an absolute path nested at least two levels under the resolved home, and may never be, contain, or sit inside the engine's own state root.
 - **Symlink pivots.** Every path segment from the home directory down to a payload target is checked; a symbolic link anywhere on that chain aborts the operation, so a swap can never be redirected into deleting something else.
@@ -83,7 +83,7 @@ Short flags are exactly `-h`, `-y`, `-n`. There are no others, and no flag clust
 - **Archive safety.** Tarballs are verified against the **registry-served** `dist.integrity` (npm's trust root — not a hash from the catalog, which would only prove the catalog agrees with itself), then extracted with a reader that refuses: non-gzip data, decompression bombs, over-large or over-numerous members, symlinks, hardlinks, devices, FIFOs, GNU long-name extensions, traversal and absolute paths, entries outside `package/`, and two members resolving to the same path. Nothing is written until the whole archive has passed.
 - **Deregistration before deletion.** On uninstall the adapter unwires the component from its host and then *verifies with the host* that it is gone. A payload is deleted only after that verification succeeds; if the host still lists the plugin, the command fails and the payload stays.
 - **No shell.** Host CLIs and the scaffolder are invoked through argv with `shell: false`. A component id or path containing shell metacharacters is data, never a second command.
-- **Permissions.** The state root is created `0700`; `state.json`, `journal.jsonl` and `lock.json` are created `0600`, at creation time rather than by a later `chmod`.
+- **Permissions.** The state root and lock ownership directory are created `0700`; `state.json`, `journal.jsonl`, and the random lock-owner record are created `0600`, at creation time rather than by a later `chmod`.
 - **Signals.** `SIGINT`/`SIGTERM` ask the engine to stop at its next safe point (between actions); the in-flight transaction rolls back and the command exits 3. A second signal exits immediately, leaving the journal and backups for the next run to recover.
 
 ## Transactions and crash recovery
@@ -103,7 +103,7 @@ Everything the engine writes lives under the install root (`~/.draht/install`, o
 ~/.draht/install/
   state.json        schema-versioned durable state (0600)
   journal.jsonl     append-only transaction journal (0600)
-  lock.json         mutual-exclusion lock, present only while mutating (0600)
+  lock.json/        atomic mutual-exclusion ownership directory (0700; token record 0600)
   cache/            integrity-keyed extracted payloads with revalidated tree manifests
   staging/<tx>/     in-flight payloads
   backups/<tx>/     previous payloads, retained until commit

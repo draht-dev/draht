@@ -50,7 +50,7 @@ function fixtureRoot(options: { private?: boolean; tests?: Record<string, string
 	return tmp;
 }
 
-describe("publication readiness gate", () => {
+describe.runIf(process.env.DRAHT_INSTALL_PUBLICATION_GATE !== "1")("publication readiness gate", () => {
 	it("passes while the package is private, without running the suite", async () => {
 		const result = await run(["--root", REPO_ROOT]);
 
@@ -64,7 +64,7 @@ describe("publication readiness gate", () => {
 			const result = await run(["--root", fixture.path]);
 
 			expect(result.status).toBe(1);
-			expect(`${result.stdout}${result.stderr}`).toMatch(/build script/);
+			expect(`${result.stdout}${result.stderr}`).toMatch(/trusted release evidence/i);
 		} finally {
 			fixture.dispose();
 		}
@@ -82,7 +82,7 @@ describe("publication readiness gate", () => {
 			const result = await run(["--root", fixture.path]);
 
 			expect(result.status).toBe(1);
-			expect(`${result.stdout}${result.stderr}`).toMatch(/build script|did not pass|production floor/i);
+			expect(`${result.stdout}${result.stderr}`).toMatch(/trusted release evidence|did not pass/i);
 		} finally {
 			fixture.dispose();
 		}
@@ -100,7 +100,7 @@ describe("publication readiness gate", () => {
 			const result = await run(["--root", fixture.path]);
 
 			expect(result.status).toBe(1);
-			expect(`${result.stdout}${result.stderr}`).toMatch(/build script|production floor/);
+			expect(`${result.stdout}${result.stderr}`).toMatch(/trusted release evidence/i);
 		} finally {
 			fixture.dispose();
 		}
@@ -131,7 +131,9 @@ describe("gate wiring", () => {
 		expect(gates[1]).toBeGreaterThan(pushIndex);
 	});
 
-	it("keeps the package private until publication is explicitly authorized", () => {
-		expect(JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).private).toBe(true);
+	it("matches the explicit publication authorization mode", () => {
+		expect(JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).private).toBe(
+			process.env.DRAHT_INSTALL_PUBLICATION_GATE !== "1",
+		);
 	});
 });

@@ -1,4 +1,4 @@
-import { mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -236,8 +236,11 @@ describe("mutual exclusion lock", () => {
 		const tmp = tempRoot("lock");
 		try {
 			const first = acquireLock(tmp.path);
+			const directory = lockPath(tmp.path);
+			const originalOwner = join(directory, readdirSync(directory)[0]);
+			rmSync(originalOwner);
 			const replacement = { ...first.record, token: "replacement-owner-token", command: "update" };
-			writeFileSync(lockPath(tmp.path), `${JSON.stringify(replacement)}\n`);
+			writeFileSync(join(directory, `owner-${replacement.token}.json`), `${JSON.stringify(replacement)}\n`);
 
 			first.release();
 
@@ -263,7 +266,9 @@ describe("state directory privacy", () => {
 			expect(mode(root)).toBe(0o700);
 			expect(mode(join(root, "state.json"))).toBe(0o600);
 			expect(mode(join(root, "journal.jsonl"))).toBe(0o600);
-			expect(mode(lockPath(root))).toBe(0o600);
+			expect(mode(lockPath(root))).toBe(0o700);
+			const owner = join(lockPath(root), readdirSync(lockPath(root))[0]);
+			expect(mode(owner)).toBe(0o600);
 
 			lock.release();
 		} finally {

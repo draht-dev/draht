@@ -25,6 +25,8 @@ export interface RecoveryAssessment {
 	recoverable: boolean;
 	/** Open transaction ids, sorted. */
 	transactions: string[];
+	/** Open journal transaction already confirmed durable by state.lastTx; finalize without rollback. */
+	finalizeCommitted: string[];
 	entries: RecoveryEntry[];
 	/** Reasons automatic recovery is refused. Non-empty means a human must intervene. */
 	blockers: string[];
@@ -111,6 +113,7 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 		return {
 			recoverable: false,
 			transactions: [],
+			finalizeCommitted: [],
 			entries: [],
 			blockers: [`the transaction journal cannot be read: ${(error as Error).message}`],
 		};
@@ -134,7 +137,9 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 		}
 	}
 
-	const openInJournal = openTransactions(journalEntries).filter((tx) => tx !== committedTx);
+	const allOpenInJournal = openTransactions(journalEntries);
+	const finalizeCommitted = committedTx && allOpenInJournal.includes(committedTx) ? [committedTx] : [];
+	const openInJournal = allOpenInJournal.filter((tx) => tx !== committedTx);
 	const leftoverStaging = listSubdirNames(stagingRootDir(root));
 	const leftoverBackups = listSubdirNames(backupsRootDir(root));
 	const known = new Set(journalEntries.map((entry) => entry.tx));
@@ -199,7 +204,7 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 		}
 	}
 
-	return { recoverable: blockers.length === 0, transactions, entries, blockers };
+	return { recoverable: blockers.length === 0, transactions, finalizeCommitted, entries, blockers };
 }
 
 function moveDir(src: string, dest: string): void {
@@ -235,17 +240,35 @@ export function recoverCrashedTransactions(root: string, bounds: TargetBounds): 
 			{ detail: { blockers: assessment.blockers } },
 		);
 	}
-	if (assessment.transactions.length === 0) {
+	if (assessment.transactions.length === 0 && assessment.finalizeCommitted.length === 0) {
 		return { recovered: true, transactions: [], entries: [], notes: [] };
 	}
 
 	const notes: string[] = [];
+	for (const tx of assessment.finalizeCommitted) {
+		rmSync(stagingDir(root, tx), { recursive: true, force: true });
+		rmSync(backupsDir(root, tx), { recursive: true, force: true });
+		appendJournal(root, {
+			tx,
+			seq: Number.MAX_SAFE_INTEGER,
+			at: new Date().toISOString(),
+			event: "committed",
+			detail: { recoveredBy: "draht-install", stateConfirmed: true, pid: process.pid },
+		});
+		notes.push(`finalized state-confirmed committed transaction ${tx}`);
+	}
 	// Reverse order mirrors the executor's own rollback: the last component the
 	// crashed transaction touched is the first one put back.
 	for (const entry of [...assessment.entries].reverse()) {
+		if (entry.action !== "none") {
+			assertSafeTarget(entry.targetDir, bounds);
+			assertNoSymlinkPivot(entry.targetDir, bounds.home);
+		}
 		if (entry.action === "restore-backup") {
 			const backupPath = join(backupsDir(root, entry.tx), entry.componentId);
 			rmSync(entry.targetDir, { recursive: true, force: true });
+			assertSafeTarget(entry.targetDir, bounds);
+			assertNoSymlinkPivot(entry.targetDir, bounds.home);
 			moveDir(backupPath, entry.targetDir);
 			notes.push(`restored ${entry.componentId} from the backup transaction ${entry.tx} left behind`);
 		} else if (entry.action === "remove-target") {
@@ -269,5 +292,10 @@ export function recoverCrashedTransactions(root: string, bounds: TargetBounds): 
 		});
 	}
 
-	return { recovered: true, transactions: assessment.transactions, entries: assessment.entries, notes };
+	return {
+		recovered: true,
+		transactions: [...assessment.finalizeCommitted, ...assessment.transactions],
+		entries: assessment.entries,
+		notes,
+	};
 }

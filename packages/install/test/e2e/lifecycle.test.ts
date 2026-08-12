@@ -276,8 +276,10 @@ describe("packed tarball", () => {
 		expect(readFileSync(join(installed, "dist", "cli.js"), "utf8").startsWith("#!/usr/bin/env node")).toBe(true);
 	});
 
-	it("stays private until publication is authorized", async () => {
-		expect(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")).private).toBe(true);
+	it("matches the explicit publication authorization mode", async () => {
+		expect(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")).private).toBe(
+			process.env.DRAHT_INSTALL_PUBLICATION_GATE !== "1",
+		);
 	});
 
 	it("leaves the built entry executable", async () => {

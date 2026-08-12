@@ -311,6 +311,34 @@ describe("applyPlan fault injection", () => {
 			unrolledEffects: [expect.stringMatching(/package-manager delegate-install for installer.*reconcile/i)],
 		});
 	});
+
+	it("revalidates target safety at the destructive boundary before live placement", async () => {
+		const plan: PlanAction[] = [
+			{
+				type: "install",
+				componentId: "alpha",
+				kind: "claude-plugin",
+				toVersion: "1.0.0",
+				source: sourceFor("alpha", "1.0.0"),
+			},
+		];
+		let validations = 0;
+
+		await expect(
+			applyPlan({
+				root,
+				plan,
+				materialize: makeMaterialize({ alpha: { "index.js": "new" } }),
+				assertTargetSafe: () => {
+					validations += 1;
+					throw new Error("ancestor pivoted before destructive operation");
+				},
+			}),
+		).rejects.toThrow(/ancestor pivoted/);
+
+		expect(validations).toBeGreaterThan(0);
+		expect(existsSync(targetDirFor("alpha"))).toBe(false);
+	});
 });
 
 describe("applyPlan idempotence", () => {

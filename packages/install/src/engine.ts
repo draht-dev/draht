@@ -333,6 +333,10 @@ export class Engine {
 				root: this.deps.root,
 				plan: plan.actions,
 				signal: this.deps.signal,
+				assertTargetSafe: (targetDir) => {
+					assertSafeTarget(targetDir, { home: this.deps.home, installRoot: this.deps.root });
+					assertNoSymlinkPivot(targetDir, this.deps.home);
+				},
 
 				materialize: async (action, stagingComponentDir, transaction): Promise<MaterializedComponent> => {
 					onEvent?.({ event: "action-start", componentId: action.componentId, type: action.type });

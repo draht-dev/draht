@@ -1,6 +1,19 @@
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	fsyncSync,
+	lstatSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	rmdirSync,
+	rmSync,
+	writeSync,
+} from "node:fs";
 import { hostname } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 import { CliError } from "./errors.ts";
 import { lockPath } from "./paths.ts";
@@ -51,7 +64,10 @@ export function readLockFile(root: string): LockRecord | null {
 	const path = lockPath(root);
 	if (!existsSync(path)) return null;
 	try {
-		const parsed = LockRecordSchema.safeParse(JSON.parse(readFileSync(path, "utf8")));
+		const recordPath = lstatSync(path).isDirectory()
+			? join(path, readdirSync(path).find((name) => name.startsWith("owner-")) ?? "missing")
+			: path;
+		const parsed = LockRecordSchema.safeParse(JSON.parse(readFileSync(recordPath, "utf8")));
 		return parsed.success ? parsed.data : null;
 	} catch {
 		return null;
@@ -63,16 +79,20 @@ export function lockFileExists(root: string): boolean {
 	return existsSync(lockPath(root));
 }
 
-function writeLock(path: string, record: LockRecord): void {
-	// `wx` fails with EEXIST rather than truncating, which is what makes this an
-	// atomic create-or-fail on every filesystem the engine targets.
-	const fd = openSync(path, "wx", 0o600);
+function writeLock(path: string, record: LockRecord): string {
+	// Directory creation is the atomic ownership claim. The random token names
+	// the owner file, so release can remove only its own identity and `rmdir`
+	// fails if a replacement owner exists.
+	mkdirSync(path, { mode: 0o700 });
+	const ownerPath = join(path, `owner-${record.token}.json`);
+	const fd = openSync(ownerPath, "wx", 0o600);
 	try {
 		writeSync(fd, `${JSON.stringify(record)}\n`);
 		fsyncSync(fd);
 	} finally {
 		closeSync(fd);
 	}
+	return ownerPath;
 }
 
 /**
@@ -101,8 +121,9 @@ export function acquireLock(root: string, options: AcquireLockOptions = {}): Loc
 		token: randomBytes(16).toString("hex"),
 	};
 
+	let ownerPath: string;
 	try {
-		writeLock(path, record);
+		ownerPath = writeLock(path, record);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 
@@ -141,9 +162,21 @@ export function acquireLock(root: string, options: AcquireLockOptions = {}): Loc
 			released = true;
 			// Only remove a lock this handle still owns: if a stale-takeover
 			// replaced it, deleting it would release someone else's lock.
-			const current = readLockFile(root);
-			if (current?.token === record.token) {
-				rmSync(path, { force: true });
+			// Never unlink the shared pathname after a separate ownership read.
+			// Removing this cryptographically unique child cannot affect a
+			// replacement directory; `rmdir` succeeds only while no other owner
+			// record exists.
+			rmSync(ownerPath, { force: true });
+			try {
+				rmdirSync(path);
+			} catch (error) {
+				if (
+					!(["ENOENT", "ENOTEMPTY", "EEXIST"] as Array<string | undefined>).includes(
+						(error as NodeJS.ErrnoException).code,
+					)
+				) {
+					throw error;
+				}
 			}
 		},
 	};

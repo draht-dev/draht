@@ -147,7 +147,7 @@ describe("crash assessment", () => {
 		}
 	});
 
-	it("treats a transaction that state.json already committed as finished, not as a rollback candidate", () => {
+	it("finalizes a transaction that state.json committed before the terminal journal event", () => {
 		const h = harness();
 		try {
 			const state = createDefaultState();
@@ -161,11 +161,20 @@ describe("crash assessment", () => {
 				event: "swapped",
 				detail: { componentId: "alpha" },
 			});
+			mkdirSync(join(stagingDir(h.root, "tx-committed"), "alpha"), { recursive: true });
+			mkdirSync(join(backupsDir(h.root, "tx-committed"), "alpha"), { recursive: true });
+			mkdirSync(h.target, { recursive: true });
+			writeFileSync(join(h.target, "payload.txt"), "COMMITTED");
 
-			const assessment = assessCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+			const result = recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
 
-			expect(assessment.recoverable).toBe(true);
-			expect(assessment.entries.filter((entry) => entry.action !== "none")).toEqual([]);
+			expect(result.transactions).toContain("tx-committed");
+			expect(result.notes.join(" ")).toMatch(/finalized.*committed/i);
+			expect(readFileSync(join(h.target, "payload.txt"), "utf8")).toBe("COMMITTED");
+			expect(existsSync(stagingDir(h.root, "tx-committed"))).toBe(false);
+			expect(existsSync(backupsDir(h.root, "tx-committed"))).toBe(false);
+			expect(openTransactions(readJournal(h.root).entries)).not.toContain("tx-committed");
+			expect(recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root }).transactions).toEqual([]);
 		} finally {
 			h.dispose();
 		}

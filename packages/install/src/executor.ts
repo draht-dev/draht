@@ -85,6 +85,8 @@ export interface ApplyPlanOptions {
 	afterLiveMove?: (action: PlanAction) => void;
 	/** Aborts the transaction between actions when the process is asked to stop. */
 	signal?: AbortSignal;
+	/** Revalidates target ancestry immediately before every destructive operation. */
+	assertTargetSafe?: (targetDir: string) => void;
 }
 
 export interface ApplyPlanResult {
@@ -198,7 +200,7 @@ function applyActionToState(
  * Restores every backed-up/swapped directory this transaction touched, removes
  * leftover staging directories, and reports the effects it could not undo.
  */
-function rollback(progress: ActionProgress[]): string[] {
+function rollback(progress: ActionProgress[], assertTargetSafe?: (targetDir: string) => void): string[] {
 	const unrolled: string[] = [];
 	for (let i = progress.length - 1; i >= 0; i--) {
 		const entry = progress[i];
@@ -209,8 +211,10 @@ function rollback(progress: ActionProgress[]): string[] {
 		}
 		unrolled.push(...entry.externalEffects);
 		if (entry.targetDir && (entry.swapped || entry.backedUp)) {
+			assertTargetSafe?.(entry.targetDir);
 			removeIfExists(entry.targetDir);
 			if (entry.backedUp && entry.backupDir && existsSync(entry.backupDir)) {
+				assertTargetSafe?.(entry.targetDir);
 				moveDir(entry.backupDir, entry.targetDir);
 			}
 		}
@@ -234,7 +238,7 @@ function rollback(progress: ActionProgress[]): string[] {
  * thrown wrapping the original cause.
  */
 export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult> {
-	const { root, plan, materialize, register, delegate, checkpoint, afterLiveMove, signal } = opts;
+	const { root, plan, materialize, register, delegate, checkpoint, afterLiveMove, signal, assertTargetSafe } = opts;
 	const tx = generateTxId();
 	const state = loadState(root);
 	const progress: ActionProgress[] = [];
@@ -321,6 +325,7 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 			checkpoint?.("after-stage", action);
 
 			if (existsSync(materialized.targetDir)) {
+				assertTargetSafe?.(materialized.targetDir);
 				const backupComponentDir = join(backupsDir(root, tx), action.componentId);
 				moveDir(materialized.targetDir, backupComponentDir);
 				entry.backedUp = true;
@@ -331,6 +336,7 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 
 			record("swap-intent", { componentId: action.componentId, targetDir: materialized.targetDir });
 			if (dirHasEntries(stagingComponentDir)) {
+				assertTargetSafe?.(materialized.targetDir);
 				moveDir(stagingComponentDir, materialized.targetDir);
 			} else {
 				removeIfExists(stagingComponentDir);
@@ -375,7 +381,7 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 
 		return { tx, state };
 	} catch (error) {
-		const unrolledEffects = rollback(progress);
+		const unrolledEffects = rollback(progress, assertTargetSafe);
 		try {
 			record("rolled-back", { failedComponentId: failedAction?.componentId, unrolledEffects });
 		} catch {

@@ -153,6 +153,35 @@ for (const dir of BOUNDARY_PACKAGES) {
 	}
 }
 
+// ── 1b. geist package manifests: no @draht/* dependency outside the family ────
+// The import scan catches code; this catches the doorway — a package.json
+// dependency on the kernel or the shim is a boundary breach before any import
+// exists. Nested manifests (test fixtures, examples) count exactly like the
+// package root's, and an unparseable manifest fails loudly instead of passing
+// silently.
+const DEP_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+for (const dir of BOUNDARY_PACKAGES) {
+	for (const file of walk(dir, ["package.json"])) {
+		if (basename(file) !== "package.json") continue;
+		let manifest;
+		try {
+			manifest = JSON.parse(readFileSync(file, "utf-8"));
+		} catch {
+			violations.push(`${rel(file)}  unparseable package.json in a boundary package`);
+			continue;
+		}
+		for (const field of DEP_FIELDS) {
+			for (const dep of Object.keys(manifest[field] ?? {})) {
+				if (/^@draht\//.test(dep) && !GEIST_FAMILY.has(dep)) {
+					violations.push(
+						`${rel(file)}  ${field} on "${dep}" (outside the non-privileged geist family)`,
+					);
+				}
+			}
+		}
+	}
+}
+
 // ── 2. quest/: zero @draht/* references in ANY file, and no npm package.json ──
 // quest/ is Kotlin: imports there never look like JS specifiers, so the scan is
 // plain full text — a reference in a comment or string is a violation exactly

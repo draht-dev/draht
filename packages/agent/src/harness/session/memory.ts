@@ -53,14 +53,9 @@ export class MemoryStorage implements Storage {
 		this.now = options.now ?? Date.now;
 	}
 
-	commit(transaction: Transaction): Promise<CommitResult> {
-		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		let admittedTransaction: Transaction;
-		try {
-			admittedTransaction = clone(transaction);
-		} catch (error) {
-			return Promise.reject(error);
-		}
+	async commit(transaction: Transaction): Promise<CommitResult> {
+		if (this.state !== "open") throw new Error("MemoryStorage is closed");
+		const admittedTransaction = clone(transaction);
 		const result = this.commitQueue.then(() => this.applyCommit(admittedTransaction));
 		this.commitQueue = result.then(
 			() => undefined,

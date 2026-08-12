@@ -25,6 +25,8 @@ export function payloadCachePath(root: string, pkg: ResolvedPackage): string {
 
 export interface MaterializeOptions {
 	limits?: TarLimits;
+	/** Test-only race seam after invalid observation and before atomic quarantine. */
+	afterInvalidObserved?: () => void | Promise<void>;
 }
 
 async function cacheEntryValid(target: string, pkg: ResolvedPackage): Promise<boolean> {
@@ -65,9 +67,39 @@ export async function materializeFromCache(
 	const target = payloadCachePath(root, pkg);
 	if (await cacheEntryValid(target, pkg)) return target;
 
-	// Either absent or torn: discard whatever is there and redo it.
-	rmSync(target, { recursive: true, force: true });
 	mkdirSync(cacheDir(root), { recursive: true, mode: 0o700 });
+	await options.afterInvalidObserved?.();
+	if (await cacheEntryValid(target, pkg)) return target;
+
+	// Never delete the shared pathname after validating an earlier object at
+	// that path. Atomically move the exact observed object to quarantine first.
+	if (existsSync(target)) {
+		const quarantine = `${target}.invalid-${process.pid}-${randomBytes(8).toString("hex")}`;
+		try {
+			renameSync(target, quarantine);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		if (existsSync(quarantine)) {
+			if (await cacheEntryValid(quarantine, pkg)) {
+				if (await cacheEntryValid(target, pkg)) {
+					rmSync(quarantine, { recursive: true, force: true });
+					return target;
+				}
+				try {
+					renameSync(quarantine, target);
+					return target;
+				} catch (error) {
+					if (await cacheEntryValid(target, pkg)) {
+						rmSync(quarantine, { recursive: true, force: true });
+						return target;
+					}
+					throw error;
+				}
+			}
+			rmSync(quarantine, { recursive: true, force: true });
+		}
+	}
 
 	const bytes = await client.fetchTarball(pkg);
 	const staging = `${target}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`;

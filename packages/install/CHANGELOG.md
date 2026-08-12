@@ -18,7 +18,7 @@
 - Automatic crash recovery from durable journal and backup evidence, proven by SIGKILL subprocess tests; recovery is refused rather than guessed when evidence is incomplete, and `doctor` reports those cases as non-repairable.
 - Write-ahead `swap-intent` and `external-intent` journal records covering the live-rename/pre-journal crash window and preventing automatic recovery from misreporting uncertain host/package-manager effects.
 - Atomic token-directory lock ownership, destructive-boundary target revalidation, and state-confirmed commit finalization after a state/terminal-journal crash.
-- Extracted cache tree manifests are rehashed before reuse; modified content under an intact completion marker is discarded and fetched again through integrity verification.
+- Extracted cache tree manifests are rehashed before reuse; modified content under an intact completion marker is atomically quarantined rather than path-deleted, so a losing writer cannot delete a valid concurrent winner.
 - SHA-256-bound release evidence over the exact installer source/test/config/documentation path set, with direct compiler and full-suite execution in publication mode.
 - `doctor` findings for node/npm availability, corrupt or torn state and journal, hash drift, payload manifest drift, legacy `~/.draht` clone, `~/.local/bin/draht` shadowing, `~/.pi` legacy state, missing hosts for installed components, open transactions and held locks.
 - Schema-versioned JSON: one document for read commands, NDJSON event records for mutations, schema-stable error output, and no prose on stdout in JSON mode.

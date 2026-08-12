@@ -455,4 +455,42 @@ describe("integrity-keyed payload cache", () => {
 			tmp.dispose();
 		}
 	});
+
+	it("does not delete a valid winner published after invalid observation", async () => {
+		const tmp = tempRoot("cache");
+		try {
+			const tarball = createPackageTarGz("draht-codex", "3.0.0", { "a.txt": "a" });
+			const dir = join(tmp.path, "registry");
+			writeLocalRegistry(dir, [
+				{ name: "draht-codex", distTags: { latest: "3.0.0" }, versions: [{ version: "3.0.0", tarball }] },
+			]);
+			const client = createLocalRegistryClient(dir);
+			const resolved = await client.resolve("draht-codex", "latest");
+			const root = join(tmp.path, "install");
+			const target = await materializeFromCache(root, resolved, client);
+			const marker = readFileSync(join(target, ".complete"), "utf8");
+			writeFileSync(join(target, "a.txt"), "invalid-first-observation");
+			let fetches = 0;
+			const counting = {
+				...client,
+				fetchTarball: async (pkg: typeof resolved) => {
+					fetches += 1;
+					return client.fetchTarball(pkg);
+				},
+			};
+
+			const result = await materializeFromCache(root, resolved, counting, {
+				afterInvalidObserved: () => {
+					writeFileSync(join(target, "a.txt"), "a");
+					writeFileSync(join(target, ".complete"), marker);
+				},
+			});
+
+			expect(result).toBe(target);
+			expect(fetches).toBe(0);
+			expect(readFileSync(join(target, "a.txt"), "utf8")).toBe("a");
+		} finally {
+			tmp.dispose();
+		}
+	});
 });

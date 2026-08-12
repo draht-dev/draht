@@ -59,7 +59,7 @@
   - [5.4 Snapshots and subscription](#54-snapshots-and-subscription)
   - [5.5 Events](#55-events)
   - [5.6 Hooks](#56-hooks)
-  - [5.7 Agent-loop building blocks](#57-agent-loop-building-blocks)
+  - [5.7 Harness execution blocks](#57-harness-execution-blocks)
   - [5.8 Telemetry](#58-telemetry)
 - [Part 6 — Future: partitioned retention (Postgres)](#part-6--future-partitioned-retention-postgres)
 - [Part 7 — Schema evolution](#part-7--schema-evolution)
@@ -224,7 +224,6 @@ Had the tool declared `replay: "safe"` (a read, a query), the harness would have
 Source type provenance:
 
 - `AgentMessage`, `AgentTool`, `AgentToolResult`, `QueueMode`, and `ThinkingLevel`: `packages/agent/src/types.ts`.
-- `AgentEventSink`: `packages/agent/src/agent-loop.ts`.
 - `Skill`, `PromptTemplate`, `AgentHarnessResources` (`Resources` below), `AgentHarnessTool`, `AgentHarnessStreamOptions`, and `AgentHarnessStreamOptionsPatch`: `packages/agent/src/harness/types.ts`.
 - `Model`, `Models`, `Usage`, `RetryPolicy`, `StopReason`, `AssistantMessage`, `ImageContent`, provider messages, stream options, and deferred handles: `packages/ai`.
 - `CompactionSettings`, `CompactionPreparation`, `CompactResult`, `BranchPreparation`, and `BranchSummaryResult`: `packages/agent/src/harness/compaction/`. Existing preparation and split-turn algorithms remain the implementation starting point unless this document explicitly changes them.
@@ -2679,77 +2678,169 @@ Replay across retry and resume:
 
 `before_run_end` may fire again after a crash at the same boundary. Handlers that must not double-fire keep their own durable marker. This is the exactly-once non-goal (§0.6) surfacing in the hook layer.
 
-## 5.7 Agent-loop building blocks
+## 5.7 Harness execution blocks
 
-The existing `agent-loop.ts` remains behavior-compatible and is refactored into these exported phases. Existing fields on `AgentTool`, `AgentToolResult`, and provider messages are retained. Add recovery declaration `replay?: "never" | "safe"` to `AgentTool`; omission means `"never"`. `AgentHarnessTool` inherits it. The `AgentEventSink` below is the existing agent-loop sink, not the harness event listener; the harness adapts agent events into §5.5 events.
+The harness owns purpose-built execution blocks under `packages/agent/src/harness/execution/`. They implement the provider and tool mechanics needed inside `Effects`; they know nothing about durable operation state, lanes, retries, classification, or storage. `packages/agent/src/agent-loop.ts` is an independent compatibility implementation and is not modified or rebuilt on these blocks. Its existing exports, injected `StreamFn`, callback shapes, mutable-context behavior, and event ordering remain unchanged.
+
+### Assistant streaming
+
+`assistant.ts` owns one already-approved provider request. Before the request intent commits, the interpreter verifies that the captured durable `{ provider, modelId }` resolves in the harness's `Models` registry and runs `before_request`. After that commit, `Effects.run` resolves the same pair to a concrete `Model` and supplies a request function backed by the registry. The block itself receives only executable values:
 
 ```ts
-interface StreamAssistantConfig {
+interface AssistantResponseMetadata {
+  status?: number;
+  headers?: Record<string, string>;
+}
+
+interface AssistantStreamObserver {
+  start(message: AssistantMessage): void | Promise<void>;
+  update(message: AssistantMessage, event: AssistantMessageEvent): void | Promise<void>;
+  end(message: SettledAssistantMessage): void | Promise<void>;
+}
+
+interface HarnessAssistantStreamConfig {
   model: Model;
-  thinkingLevel: ThinkingLevel;
   systemPrompt?: string;
   tools?: AgentTool[];
+  thinkingLevel: ThinkingLevel;
+  streamOptions: AgentHarnessStreamOptions;
   transformContext?: (messages: AgentMessage[], signal: AbortSignal) =>
     Promise<AgentMessage[]>;
   toProviderMessages: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
-  models: Models;                           // resolves identity + auth per request
-  streamOptions?: AgentHarnessStreamOptions;
-  /** Harness-owned before_payload adapter; undefined keeps the payload. */
-  transformPayload?: (payload: unknown, model: Model) =>
+  /** Adapter for the before_payload hook; undefined keeps the payload. */
+  beforePayload?: (payload: unknown, model: Model) =>
     unknown | undefined | Promise<unknown | undefined>;
-  /** Final settled-message transform used by after_response, before message_end. */
-  transformResponse?: (message: SettledAssistantMessage,
-                       metadata: { status?: number; headers?: Record<string, string> }) =>
+  /** Adapter for after_response; runs after settlement and before observer.end. */
+  afterResponse?: (message: SettledAssistantMessage,
+                   metadata: AssistantResponseMetadata) =>
     Promise<SettledAssistantMessage>;
+  /** Concrete Models-backed dispatch supplied after resolving { provider, modelId }. */
+  request(context: Context, options: SimpleStreamOptions):
+    AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
+  observer: AssistantStreamObserver;
   telemetryContext: TelemetryContext;
   signal: AbortSignal;
 }
 
-function streamAssistant(messages: AgentMessage[], config: StreamAssistantConfig,
-                         emit: AgentEventSink): Promise<SettledAssistantMessage>;
-// The implementation converts curated streamOptions to provider options and
-// installs harness-owned payload/response callbacks; callers cannot replace them.
-// Existing summary helpers keep their Models-based request path.
-
-type PreparedToolCall = { kind: "prepared"; toolCall: AgentToolCall;
-  tool: AgentTool; args: Record<string, JsonValue> };
-type ImmediateOutcome = { kind: "immediate"; result: AgentToolResult<unknown>;
-  isError: true; terminate: boolean };
-type FinalizedToolCall = { toolCall: AgentToolCall; result: AgentToolResult<unknown>;
-  isError: boolean; terminate: boolean };
-
-interface ToolCallbacks {
-  beforeToolCall?(call: AgentToolCall, args: Record<string, JsonValue>):
-    Promise<HookMap["before_tool"]["result"]>;
-  afterToolCall?(call: AgentToolCall, args: Record<string, JsonValue>,
-                 result: AgentToolResult<unknown>, isError: boolean):
-    Promise<HookMap["after_tool"]["result"]>;
-  executeTool?(call: PreparedToolCall):
-    Promise<{ result: AgentToolResult<unknown>; isError: boolean }>;
-  onToolStart?(call: AgentToolCall, effectiveArgs: Record<string, JsonValue>): Promise<void>;
-  onToolResult?(call: AgentToolCall, message: ToolResultMessage,
-                terminate: boolean): Promise<void>;
-}
-
-function prepareToolCall(call: AgentToolCall, tools: AgentTool[], callbacks: ToolCallbacks,
-                         telemetry: TelemetryContext, signal: AbortSignal):
-  Promise<PreparedToolCall | ImmediateOutcome>;
-function executeToolCall(call: PreparedToolCall, emit: AgentEventSink,
-                         telemetry: TelemetryContext, signal: AbortSignal):
-  Promise<{ result: AgentToolResult<unknown>; isError: boolean }>;
-function finalizeToolCall(call: PreparedToolCall,
-                          executed: { result: AgentToolResult<unknown>; isError: boolean },
-                          callbacks: ToolCallbacks, telemetry: TelemetryContext,
-                          signal: AbortSignal): Promise<FinalizedToolCall>;
+function streamHarnessAssistant(messages: AgentMessage[],
+                                config: HarnessAssistantStreamConfig):
+  Promise<SettledAssistantMessage>;
 ```
 
+The block does, in order:
+
+```text
+transformContext
+→ toProviderMessages
+→ construct provider Context
+→ map curated stream options + thinking level to SimpleStreamOptions
+→ install signal, telemetry context, beforePayload, and response-metadata capture
+→ request
+→ observer.start
+→ observer.update*
+→ settle the stream completely
+→ afterResponse(settled message, captured metadata)
+→ observer.end
+→ return the final settled message
+```
+
+It never mutates `messages`. If the stream terminates without a start event, it emits `observer.start` for the final message before `observer.end`, matching the harness lifecycle contract. `beforePayload` maps to pi-ai's payload callback. Response metadata capture maps to pi-ai's `onResponse`; it is distinct from `afterResponse`, because `onResponse` runs before the response body is consumed while the harness hook transforms the settled assistant message afterward. The harness exposes neither callback through `AgentHarnessStreamOptions`.
+
+The request function, not this block, owns registry dispatch and auth. A normal adapter is:
+
+```ts
+(context, options) => models.streamSimple(resolvedModel, context, options)
+```
+
+Suspension because a captured provider, model, or tool is unavailable remains an interpreter/`Effects` decision (§4.4); the block is never called without a resolved model. Existing summary helpers keep their separate `Models`-based request path.
+
+### Tool phases
+
+`tools.ts` exposes phases at the exact durable boundaries from §3.8. Hooks remain separately gated `Effects` actions, and commits remain explicit interpreter actions; neither is hidden behind a callback bag.
+
+```ts
+type PreparedToolCall = {
+  toolCall: AgentToolCall;
+  tool: AgentTool;
+  args: Record<string, JsonValue>;
+};
+
+type ImmediateToolOutcome = {
+  kind: "immediate";
+  toolCall: AgentToolCall;
+  result: AgentToolResult<unknown>;
+  isError: true;
+  terminate: boolean;
+};
+
+type BeforeToolDecision = {
+  args?: Record<string, JsonValue>;
+  block?: { reason: string; terminate?: boolean };
+};
+
+type ClearedToolCall = {
+  toolCall: AgentToolCall;
+  tool: AgentTool;
+  args: Record<string, JsonValue>;
+};
+
+type ExecutedToolCall = {
+  result: AgentToolResult<unknown>;
+  isError: boolean;
+};
+
+type AfterToolPatch = {
+  content?: AgentToolResult<unknown>["content"];
+  details?: JsonValue;
+  isError?: boolean;
+  usage?: Usage;
+  terminate?: boolean;
+};
+
+type FinalizedToolCall = {
+  toolCall: AgentToolCall;
+  result: AgentToolResult<unknown>;
+  isError: boolean;
+  terminate: boolean;
+};
+
+function prepareToolCall(call: AgentToolCall, tools: AgentTool[]):
+  PreparedToolCall | ImmediateToolOutcome;
+function applyBeforeToolDecision(prepared: PreparedToolCall,
+                                 decision: BeforeToolDecision | undefined):
+  ClearedToolCall | ImmediateToolOutcome;
+function executeToolCall(call: ClearedToolCall, signal: AbortSignal,
+                         onUpdate: (partial: AgentToolResult<unknown>) => void,
+                         telemetryContext: TelemetryContext):
+  Promise<ExecutedToolCall>;
+function finalizeToolCall(call: ClearedToolCall, executed: ExecutedToolCall,
+                          patch: AfterToolPatch | undefined): FinalizedToolCall;
+function createToolResultMessage(call: FinalizedToolCall): ToolResultMessage;
+```
+
+The interpreter composes them explicitly:
+
+```text
+planned call
+→ prepareToolCall                    lookup · prepareArguments · initial validation
+→ before_tool hook effect
+→ applyBeforeToolDecision            block or validate replacement arguments
+→ commit op.tool_args + effect_pending intent
+→ executeToolCall                    the uncertain external effect
+→ after_tool hook effect
+→ finalizeToolCall
+→ commit result entry + usage + next state
+```
+
+Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. `executeToolCall` converts expected tool throws to an error result, stops accepting updates after settlement, and emits the required raw tool-effect telemetry. `finalizeToolCall` applies the documented field-by-field patch semantics.
+
+For each live batch, the harness resolves `toolContext` once and binds its `AgentHarnessTool<TContext>` values into ordinary `AgentTool` adapters cached in `DriveState.toolBatches`; every call in that batch therefore observes the same context. Safe replay after restart creates one new batch snapshot. `AgentTool.replay` defaults to `"never"` when omitted.
+
+There is deliberately no harness `executeToolBatch`. Sequential/parallel dispatch, source-ordered clearance, source-ordered finalization and result commits, cancellation, and durable batch completion belong to the interpreter and `DriveState`, where each crash boundary remains visible. Genuine-`length` calls bypass these phases and receive their specified synthetic results (§3.7).
+
+The legacy agent loop remains useful behavioral evidence for ordinary provider streaming and tool execution. Harness differences are deliberate: `before_tool` returns explicit replacement arguments that are revalidated, hooks are separate gated effects, and parallel results finalize and commit in source order.
+
 Remote protocol adapters validate untrusted wire data before returning typed provider values. The harness trusts those typed values and all in-process tool, hook, and extension values; violations are defects in the adapter or extension, not storage validation cases. Expected provider failures still become assistant `error` settlements, tool preparation/argument failures still become synthetic tool results, throwing hooks retain their documented handling, and invalid public caller operations still return their declared errors before acceptance.
-
-`AgentTool.prepareArguments` is deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. `ToolCallbacks` contains the existing before/after callbacks plus `executeTool`, `onToolStart`, and `onToolResult` durability callbacks described in §3.8. `onToolStart` receives effective arguments after `prepareArguments`, validation, and `before_tool`; `onToolResult` receives the finalized message and terminate decision. Blocked calls may terminate when `before_tool.block.terminate` is true. Replacement arguments are validated again.
-
-For each live tool batch, the harness resolves `toolContext` exactly once, caches bound `AgentHarnessTool<TContext>` adapters in `DriveState.toolBatches`, and passes that same context as the fifth execute argument for every call. Safe replay after restart creates one new batch snapshot; context is environmental and never persisted.
-
-`executeToolBatch` (the exported successor of the source's private `executeToolCalls`) preserves the existing sequential/parallel behavior: source-ordered preparation and dispatch, concurrent effects in parallel mode, source-ordered finalization/results, no effect for blocked/invalid/genuine-length calls, and `terminate: true` only when every finalized outcome terminates. Compatibility wrappers keep existing public loop signatures and events.
 
 ## 5.8 Telemetry
 
@@ -2865,10 +2956,11 @@ Each slice implements its named behavior end to end and adds focused tests for i
 | S2 | **SQLite** | One database file per session: entries/registers/usage-ledger tables, one-row session/lease rows, transactions, `storageVersion`, the file-based repository, segmented branch cache, `VACUUM INTO`-based rewrite/fork, and explicit repair. No values table, no `slot_history`, no `getLog`, no search projection, no migration. | Shared conformance, `BEGIN IMMEDIATE`, fencing, query plans, segment-chain soundness, register upsert/delete, forks/stats/repair. |
 | S3 | **Search** | The standalone `SessionSearchService` plus repo catch-up utilities (§2.8): core entry search as `SessionSearch<T>`, session-level ranked results, optional `searchEntries?: SessionSearch<TEntryHit>`, `remove()`, the `SessionSearchSyncTarget` cursor/index-batch contract, sync enumeration and catch-up outside the service contract, debounced notify as a utility, `(sessionId, storeGeneration)` cursor keys, and the reference SQLite FTS5 implementation working over any backend's repository through the sync utility. | Cursor catch-up from empty against existing sessions, idempotent re-index after crash mid-batch, notify-utility/sweep equivalence, sessions-vs-entries queries and ranking, removal and reconciliation, shared-index multi-process discipline. |
 | S4 | **Dev TUI and Client** | A minimal `AgentClient` over one lane — `LaneSnapshot` plus `watch()` events, `prompt`/`steer`/`followUp`/`abort`/`resume`/`cancelQueued`, `lane.lastResult` read — and a throwaway alt-screen TUI on `packages/tui`: transcript from snapshot and events, input box, status/queue display, abort key. Built first against a scripted fake client on the slice-1 types; binds to the real harness as Track R lands. Not final. | Compiles; fake-client smoke test. No durability obligations. |
+| R0 | **Harness execution primitives** | The complete harness-side replacement for the provider and tool mechanics embedded in `agent-loop.ts`: implement the behavior-only blocks under `packages/agent/src/harness/execution/` from §5.7. `assistant.ts` owns context conversion, curated request options, harness-owned signal/callback mounting, streaming observation, response metadata, and response transformation. `tools.ts` owns lookup/preparation/validation, application of before-tool decisions, tool execution and updates, after-tool patch finalization, and result-message construction. These blocks know nothing about lanes, durable operation state, storage, retries, queues, or interpreter scheduling. The compatibility `agent-loop.ts` remains unchanged. | Direct assistant-block tests for context immutability, option/signal mapping, callback and observer ordering, metadata capture, transformed settlement, missing start events, and provider failures. Direct tool-phase tests for lookup, preparation failures, initial and replacement argument validation, blocking, updates, expected tool failures, patch semantics, termination, usage, and result construction. |
 | R1 | **Runtime shell** | Lane/settings mutation lines, total-state validation (idle lanes included), register-seq CAS tokens, runtime snapshots, `Effects`, manual scheduler/gate, hook/event primitives, restore inventory (five register reads plus bounded hydration), dispatch-time identity resolution, fault/close plumbing. Public operations may still report not implemented. | State/action exhaustiveness, seq-token settlement, parallel scheduler order, hook aggregation, event buffering, gate nesting, zero effects while parked, restore without history reads, idle-lane validation. |
-| R2 | **Minimal no-tool run** | Prompt expansion, `before_run`, atomic acceptance with pending-capture placement, captured request options/thinking inline, payload/response hooks, one generation intent/effect/settlement, usage, the terminal transaction (register cleanup plus `lane.lastResult`), results, basic events/telemetry. | Successful run with final assistant fields, caller rejection and adapter-reported provider failures, exact transaction/event order, terminal cleanup completeness and `lastResult`, automatic/manual identical state, close at every boundary. |
+| R2 | **Minimal no-tool run** | Compose R0's assistant block with prompt expansion, `before_run`, atomic acceptance with pending-capture placement, captured request options/thinking inline, payload/response hooks, one generation intent/effect/settlement, usage, the terminal transaction (register cleanup plus `lane.lastResult`), results, basic events/telemetry. | Successful run with final assistant fields, caller rejection and adapter-reported provider failures, exact transaction/event order around the assistant block, terminal cleanup completeness and `lastResult`, automatic/manual identical state, close at every boundary. |
 | R3 | **Generation recovery and retry** | Retry waits, unknown-effect recovery, synthetic cap settlement, ordinary stop/error/deferred classification, provider-compliant `aborted`, and failure-drain foundation. Overflow classification remains explicitly unimplemented until R9. | Every generation state before/after reopen, caps/backoff, stop/error/aborted/deferred classification, missing identities. |
-| R4 | **Tools** | Refactor the existing loop into three phases, bind `AgentHarnessTool` context, durable complete plans, `op.tool_args/{opId}:{stepId}:{i}` registers with batch-completion deletion, replay, sequential/parallel modes, blocked terminate, genuine-length results, tool events/hooks/usage. | Existing loop compatibility plus a built-in context-bound tool, invalid model-supplied arguments and expected tool failures, every planned/pending/completed state, tool-args register lifecycle including crash-leak prefix cleanup, safe/unsafe replay, ordering, termination, abort-ready states. |
+| R4 | **Tools** | Compose R0's tool phases with bound `AgentHarnessTool` context, durable complete plans, `op.tool_args/{opId}:{stepId}:{i}` registers with batch-completion deletion, replay, sequential/parallel modes, blocked terminate, genuine-length results, tool events/hooks/usage. | A built-in context-bound tool, interpreter integration for model-supplied and hook-replacement argument failures, every planned/pending/completed state, tool-args register lifecycle including crash-leak prefix cleanup, safe/unsafe replay, ordering, termination, abort-ready states. |
 | R5 | **Inbox, configuration, and writes** | `nextRun`/steer/follow-up via `pending.entry` registers, `cancelQueued` triage (`not_found`), durable drain markers, checkpoint consumption with register deletion, immediate total config setters, deferred tree writes, adjustments. | Capture/cancel/consume races, repeated cancellation answering `not_found`, one-at-a-time crash after one drain, register/entry exclusivity at every boundary, custom-write continuation, config-step race, writes surviving reopen. |
 | R6 | **Abort, close, and failure drain** | Orthogonal control, drained ids in control with surviving pending registers, signalling, per-phase reconciliation, best-effort cancellation of the current deferred source, waiters/run-when-idle, controlled-crash close, terminal deletion of inbox-and-drained registers, and the external-finalization stop on absent operation registers (§4.9). | Abort at every existing state, repeated abort, deferred cancellation, live/restore tool outcomes, writes before finish, drained-register survival and terminal deletion, close races, an externally finalized operation stopping the drive without writes and resolving from `lastResult`, failure revived only by projecting input. |
 | R7 | **Deferred provider redemption** | One poll per resume, copied configuration/options inline, per-poll request hooks, exact source lineage/equality, fresh intent after unknown poll, mismatch-to-error, ready tools, and advancement of R6 cancellation to each newest source. | Repeated pending, ready/error/aborted/mismatch, crash positions, no cap/backoff/loop, newest-handle cancellation. |
@@ -2882,7 +2974,7 @@ Each slice implements its named behavior end to end and adds focused tests for i
 Existing source guidance:
 
 - `packages/agent/src/harness/**` and all of its tests are **deletable outright** in slice 1 — no obligation to adapt anything. Salvaging pieces (the compaction preparation/split-turn algorithms for R8–R9 and session fragments) is optional and never required.
-- `packages/agent/src/agent-loop.ts`: preserve behavior; R4 extracts its phases.
+- `packages/agent/src/agent-loop.ts` is an independent compatibility implementation. Do not modify or refactor it for the harness. R0 creates the harness-side replacement for its provider/tool mechanics under `packages/agent/src/harness/execution/` (§5.7); later runtime slices compose those primitives.
 - `packages/session-backends/sqlite-node`: S2 may keep the working transaction and lease primitives or start clean.
 - Telemetry contracts (`packages/telemetry`, the agent-owned schemas) remain authoritative.
 - Existing tests are evidence, not authority. Keep those that assert unchanged behavior; delete the rest with the code they tested.

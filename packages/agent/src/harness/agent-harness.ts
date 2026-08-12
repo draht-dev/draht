@@ -12,8 +12,7 @@ import type {
 	Usage,
 } from "@draht/ai";
 import type { TelemetryContext } from "@draht/telemetry";
-import type { AgentEventSink } from "../agent-loop.ts";
-import type { AgentMessage, AgentTool, AgentToolCall, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
+import type { AgentMessage, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
 import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
 import { type Result, TaggedError } from "./result.ts";
@@ -589,81 +588,3 @@ export interface AgentHarnessConstructor {
 		options: AgentHarnessOptions<TContext>,
 	): Promise<{ harness: AgentHarness<TContext>; suspended: SuspendedOperation[] }>;
 }
-
-export interface StreamAssistantConfig {
-	model: Model<Api>;
-	thinkingLevel: ThinkingLevel;
-	systemPrompt?: string;
-	tools?: AgentTool[];
-	transformContext?: (messages: AgentMessage[], signal: AbortSignal) => Promise<AgentMessage[]>;
-	toProviderMessages: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
-	models: Models;
-	streamOptions?: AgentHarnessStreamOptions;
-	transformPayload?: (payload: unknown, model: Model<Api>) => unknown | undefined | Promise<unknown | undefined>;
-	transformResponse?: (
-		message: SettledAssistantMessage,
-		metadata: { status?: number; headers?: Record<string, string> },
-	) => Promise<SettledAssistantMessage>;
-	telemetryContext: TelemetryContext;
-	signal: AbortSignal;
-}
-
-export type StreamAssistant = (
-	messages: AgentMessage[],
-	config: StreamAssistantConfig,
-	emit: AgentEventSink,
-) => Promise<SettledAssistantMessage>;
-
-export type PreparedToolCall = {
-	kind: "prepared";
-	toolCall: AgentToolCall;
-	tool: AgentTool;
-	args: Record<string, JsonValue>;
-};
-export type ImmediateOutcome = {
-	kind: "immediate";
-	result: AgentToolResult<unknown>;
-	isError: true;
-	terminate: boolean;
-};
-export type FinalizedToolCall = {
-	toolCall: AgentToolCall;
-	result: AgentToolResult<unknown>;
-	isError: boolean;
-	terminate: boolean;
-};
-
-export interface ToolCallbacks {
-	beforeToolCall?(call: AgentToolCall, args: Record<string, JsonValue>): Promise<HookMap["before_tool"]["result"]>;
-	afterToolCall?(
-		call: AgentToolCall,
-		args: Record<string, JsonValue>,
-		result: AgentToolResult<unknown>,
-		isError: boolean,
-	): Promise<HookMap["after_tool"]["result"]>;
-	executeTool?(call: PreparedToolCall): Promise<{ result: AgentToolResult<unknown>; isError: boolean }>;
-	onToolStart?(call: AgentToolCall, effectiveArgs: Record<string, JsonValue>): Promise<void>;
-	onToolResult?(call: AgentToolCall, message: ToolResultMessage, terminate: boolean): Promise<void>;
-}
-
-/** Type-only signatures for the R4 agent-loop phases. */
-export type PrepareToolCall = (
-	call: AgentToolCall,
-	tools: AgentTool[],
-	callbacks: ToolCallbacks,
-	telemetry: TelemetryContext,
-	signal: AbortSignal,
-) => Promise<PreparedToolCall | ImmediateOutcome>;
-export type ExecuteToolCall = (
-	call: PreparedToolCall,
-	emit: AgentEventSink,
-	telemetry: TelemetryContext,
-	signal: AbortSignal,
-) => Promise<{ result: AgentToolResult<unknown>; isError: boolean }>;
-export type FinalizeToolCall = (
-	call: PreparedToolCall,
-	executed: { result: AgentToolResult<unknown>; isError: boolean },
-	callbacks: ToolCallbacks,
-	telemetry: TelemetryContext,
-	signal: AbortSignal,
-) => Promise<FinalizedToolCall>;

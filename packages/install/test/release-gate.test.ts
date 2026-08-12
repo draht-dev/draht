@@ -58,13 +58,13 @@ describe("publication readiness gate", () => {
 		expect(result.stdout).toMatch(/private/i);
 	});
 
-	it("refuses publication when it is enabled but the release evidence tests are missing", async () => {
+	it("refuses publication when it is enabled but the package cannot build", async () => {
 		const fixture = fixtureRoot({ private: false });
 		try {
 			const result = await run(["--root", fixture.path]);
 
 			expect(result.status).toBe(1);
-			expect(`${result.stdout}${result.stderr}`).toMatch(/lifecycle\.test\.ts/);
+			expect(`${result.stdout}${result.stderr}`).toMatch(/build script/);
 		} finally {
 			fixture.dispose();
 		}
@@ -82,13 +82,13 @@ describe("publication readiness gate", () => {
 			const result = await run(["--root", fixture.path]);
 
 			expect(result.status).toBe(1);
-			expect(`${result.stdout}${result.stderr}`).toMatch(/fail/i);
+			expect(`${result.stdout}${result.stderr}`).toMatch(/build script|did not pass|production floor/i);
 		} finally {
 			fixture.dispose();
 		}
 	}, 300_000);
 
-	it("allows publication when it is enabled and the release evidence tests pass", async () => {
+	it("refuses publication when same-named evidence files are replaced by vacuous tests", async () => {
 		const fixture = fixtureRoot({
 			private: false,
 			tests: {
@@ -99,7 +99,8 @@ describe("publication readiness gate", () => {
 		try {
 			const result = await run(["--root", fixture.path]);
 
-			expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+			expect(result.status).toBe(1);
+			expect(`${result.stdout}${result.stderr}`).toMatch(/build script|production floor/);
 		} finally {
 			fixture.dispose();
 		}
@@ -114,14 +115,20 @@ describe("gate wiring", () => {
 		expect(rootManifest.scripts.check).toContain("check:install-publishable");
 	});
 
-	it("runs before anything is published", () => {
+	it("runs before any immutable release publication and again before npm publication", () => {
 		const release = readFileSync(join(REPO_ROOT, "scripts", "release.mjs"), "utf8");
-		const gateIndex = release.indexOf("check-install-publishable.mjs");
+		const gates = [...release.matchAll(/check-install-publishable\.mjs/g)].map((match) => match.index ?? -1);
+		const commitIndex = release.indexOf('git commit -m "release:');
+		const tagIndex = release.indexOf("git tag v");
+		const pushIndex = release.indexOf("git push origin main");
 		const publishIndex = release.indexOf("publish-workspaces.mjs");
 
-		expect(gateIndex).toBeGreaterThan(-1);
-		expect(publishIndex).toBeGreaterThan(-1);
-		expect(gateIndex).toBeLessThan(publishIndex);
+		expect(gates).toHaveLength(2);
+		expect(gates[0]).toBeLessThan(commitIndex);
+		expect(gates[0]).toBeLessThan(tagIndex);
+		expect(gates[0]).toBeLessThan(pushIndex);
+		expect(gates[1]).toBeLessThan(publishIndex);
+		expect(gates[1]).toBeGreaterThan(pushIndex);
 	});
 
 	it("keeps the package private until publication is explicitly authorized", () => {

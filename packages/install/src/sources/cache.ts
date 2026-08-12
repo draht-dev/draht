@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { hashTree } from "../hash.ts";
 import { cacheDir } from "../paths.ts";
 import { extractTarGz, type TarLimits } from "./tar.ts";
 import type { RegistryClient, ResolvedPackage } from "./types.ts";
@@ -26,6 +27,27 @@ export interface MaterializeOptions {
 	limits?: TarLimits;
 }
 
+async function cacheEntryValid(target: string, pkg: ResolvedPackage): Promise<boolean> {
+	const markerPath = join(target, COMPLETE_MARKER);
+	if (!existsSync(markerPath)) return false;
+	try {
+		const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
+			name?: unknown;
+			version?: unknown;
+			integrity?: unknown;
+			files?: unknown;
+		};
+		if (marker.name !== pkg.name || marker.version !== pkg.version || marker.integrity !== (pkg.integrity ?? null)) {
+			return false;
+		}
+		if (!Array.isArray(marker.files)) return false;
+		const actual = (await hashTree(target)).filter((file) => file.path !== COMPLETE_MARKER);
+		return JSON.stringify(actual) === JSON.stringify(marker.files);
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Returns a directory holding the package's extracted payload, downloading and
  * extracting it only if the cache does not already hold a *complete* entry.
@@ -41,7 +63,7 @@ export async function materializeFromCache(
 	options: MaterializeOptions = {},
 ): Promise<string> {
 	const target = payloadCachePath(root, pkg);
-	if (existsSync(join(target, COMPLETE_MARKER))) return target;
+	if (await cacheEntryValid(target, pkg)) return target;
 
 	// Either absent or torn: discard whatever is there and redo it.
 	rmSync(target, { recursive: true, force: true });
@@ -53,9 +75,10 @@ export async function materializeFromCache(
 
 	try {
 		extractTarGz(bytes, staging, options.limits);
+		const files = await hashTree(staging);
 		writeFileSync(
 			join(staging, COMPLETE_MARKER),
-			`${JSON.stringify({ name: pkg.name, version: pkg.version, integrity: pkg.integrity ?? null })}\n`,
+			`${JSON.stringify({ name: pkg.name, version: pkg.version, integrity: pkg.integrity ?? null, files })}\n`,
 			{
 				mode: 0o600,
 			},

@@ -221,6 +221,25 @@ describe("install", () => {
 		}
 	});
 
+	it("keeps every mutating JSON failure line valid NDJSON", async () => {
+		const world = createWorld({
+			responses: [
+				...claudeHappyPath(),
+				{ match: "plugin install draht@draht", respond: { status: 1, stderr: "host refused" } },
+			],
+		});
+		try {
+			const run = await world.run(["install", "claude-plugin", "--yes", "--json"]);
+			const records = parseNdjson(run.stdout);
+
+			expect(run.code).toBe(EXIT_PARTIAL);
+			expect(records.length).toBeGreaterThan(1);
+			expect(records.at(-1)).toMatchObject({ command: "install", ok: false });
+		} finally {
+			world.dispose();
+		}
+	});
+
 	it("restores the previous payload byte-for-byte when a re-install fails", async () => {
 		const world = createWorld();
 		try {

@@ -120,6 +120,33 @@ describe("crash assessment", () => {
 		}
 	});
 
+	it("refuses automatic recovery when a crash may have changed an external host", () => {
+		const h = harness();
+		try {
+			appendJournal(h.root, { tx: "tx-host", seq: 1, at: "2026-01-01T00:00:00.000Z", event: "planned" });
+			appendJournal(h.root, {
+				tx: "tx-host",
+				seq: 2,
+				at: "2026-01-01T00:00:00.000Z",
+				event: "external-intent",
+				detail: {
+					componentId: "claude-plugin",
+					description: "claude host registration may have changed; reconcile it",
+				},
+			});
+
+			const assessment = assessCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+
+			expect(assessment.recoverable).toBe(false);
+			expect(assessment.blockers.join(" ")).toMatch(/claude-plugin.*reconcile/i);
+			expect(() => recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root })).toThrow(
+				/claude-plugin.*reconcile/i,
+			);
+		} finally {
+			h.dispose();
+		}
+	});
+
 	it("treats a transaction that state.json already committed as finished, not as a rollback candidate", () => {
 		const h = harness();
 		try {
@@ -176,6 +203,22 @@ describe("crash recovery after a real SIGKILL", () => {
 			crashChild(h.root, h.target, "after-swap");
 
 			expect(existsSync(join(h.target, "payload.txt"))).toBe(true);
+
+			const result = recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+
+			expect(result.recovered).toBe(true);
+			expect(existsSync(h.target)).toBe(false);
+			expect(loadState(h.root).components).toEqual({});
+		} finally {
+			h.dispose();
+		}
+	});
+
+	it("removes a fresh payload when killed after the live move but before the swapped journal event", () => {
+		const h = harness();
+		try {
+			crashChild(h.root, h.target, "after-swap-before-journal");
+			expect(readFileSync(join(h.target, "payload.txt"), "utf8")).toBe("NEW");
 
 			const result = recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
 

@@ -4,7 +4,7 @@ import { type CliError, toCliError } from "./errors.ts";
 import { EXIT_OK } from "./exit-codes.ts";
 import { helpText } from "./help.ts";
 import type { HostRunner } from "./host.ts";
-import { jsonDocument, jsonError, renderJson } from "./json.ts";
+import { jsonDocument, jsonError, renderJson, renderNdjson } from "./json.ts";
 import type { RegistryClient } from "./sources/types.ts";
 import { packageVersion } from "./version.ts";
 
@@ -106,7 +106,9 @@ function commandLabel(argv: string[], bin: BinName): string {
  */
 function reportError(io: CliIo, error: CliError, json: boolean, command: string, bin: BinName): void {
 	if (json) {
-		io.stdout(renderJson(jsonError(command, error.code, error.message, error.detail)));
+		const document = jsonError(command, error.code, error.message, error.detail);
+		const mutating = bin === "draht-init" || new Set(["install", "update", "uninstall"]).has(command);
+		io.stdout(mutating ? renderNdjson(document) : renderJson(document));
 	}
 	io.stderr(`${bin}: ${error.message}\n`);
 }

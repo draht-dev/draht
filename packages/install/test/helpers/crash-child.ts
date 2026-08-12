@@ -34,6 +34,9 @@ await applyPlan({
 			source: { npmName: "draht-claude", resolvedVersion: "2.0.0" },
 		};
 	},
+	afterLiveMove: () => {
+		if (killAfter === "after-swap-before-journal") process.kill(process.pid, "SIGKILL");
+	},
 	checkpoint: (name: CheckpointName) => {
 		if (name === killAfter) {
 			process.kill(process.pid, "SIGKILL");

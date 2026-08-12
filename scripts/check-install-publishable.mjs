@@ -16,12 +16,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Suites that must pass before the package may be published. */
-const REQUIRED_EVIDENCE = [
-	join("test", "e2e", "lifecycle.test.ts"),
-	join("test", "release-pipeline.test.ts"),
-];
-
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function parseRoot(argv) {
@@ -50,18 +44,29 @@ if (!existsSync(manifestPath)) {
 			"check-install-publishable: @draht/install is publishable, so release evidence is required. Verifying...",
 		);
 
-		const missing = REQUIRED_EVIDENCE.filter((relative) => !existsSync(join(packageDir, relative)));
-		if (missing.length > 0) {
-			fail(
-				`publication is enabled but required release evidence is missing: ${missing.join(", ")}. ` +
-					`Restore these suites or set "private": true in ${manifestPath}.`,
-			);
+		if (typeof manifest.scripts?.build !== "string") {
+			fail(`publication is enabled but ${manifestPath} has no build script`);
 		} else {
 			const vitestCli = join(packageDir, "node_modules", "vitest", "dist", "cli.js");
 			if (!existsSync(vitestCli)) {
 				fail(`cannot verify release evidence: vitest is not installed at ${vitestCli}`);
 			} else {
-				const result = spawnSync(process.execPath, [vitestCli, "--run", ...REQUIRED_EVIDENCE], {
+				const build = spawnSync("npm", ["run", "build"], {
+					cwd: packageDir,
+					encoding: "utf8",
+					stdio: "pipe",
+					timeout: 10 * 60 * 1000,
+				});
+				process.stdout.write(build.stdout ?? "");
+				process.stderr.write(build.stderr ?? "");
+				if (build.status !== 0) {
+					fail("publication is enabled but the exact installer package did not build successfully");
+					process.exit();
+				}
+
+				// The gate owns test selection: repository code cannot substitute two
+				// vacuous same-named files for the actual package acceptance matrix.
+				const result = spawnSync(process.execPath, [vitestCli, "--run"], {
 					cwd: packageDir,
 					encoding: "utf8",
 					stdio: "pipe",
@@ -71,10 +76,19 @@ if (!existsSync(manifestPath)) {
 				process.stderr.write(result.stderr ?? "");
 				if (result.status !== 0) {
 					fail(
-						"publication is enabled but the release evidence suites did not pass. " +
+						"publication is enabled but the complete installer acceptance suite did not pass. " +
 							"Publication stays blocked until they do.",
 					);
 				} else {
+					const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+					const files = /Test Files\s+(\d+) passed/.exec(output);
+					const tests = /Tests\s+(\d+) passed/.exec(output);
+					if (!files || !tests || Number(files[1]) < 20 || Number(tests[1]) < 900) {
+						fail(
+							`publication evidence is below the production floor (need at least 20 test files and 900 tests; observed ${files?.[1] ?? "unknown"} files and ${tests?.[1] ?? "unknown"} tests)`,
+						);
+						process.exit();
+					}
 					console.log("check-install-publishable: release evidence passed; publication is permitted.");
 				}
 			}

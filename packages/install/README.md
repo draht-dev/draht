@@ -9,8 +9,9 @@ Both bins are the same entry point (`dist/cli.js`); the behavior is selected by 
 
 > **Not published.** This package is `private: true`. Publication is gated by
 > `scripts/check-install-publishable.mjs`, which fails the repo-wide check and
-> the release script if `private` is removed while the release-evidence suites
-> do not pass.
+> the release script if `private` is removed while the exact package build and
+> complete acceptance matrix do not pass. The gate runs before release tagging
+> or pushing and again immediately before npm publication.
 
 ## Usage
 
@@ -87,11 +88,11 @@ Short flags are exactly `-h`, `-y`, `-n`. There are no others, and no flag clust
 
 ## Transactions and crash recovery
 
-Each apply is one transaction: `planned → per action {staged → backed-up → swapped → registered} → committed`, journaled to an append-only `journal.jsonl` with `fsync` before each step's effect is observable. `state.json` is written temp-file + `fsync` + atomic rename.
+Each apply is one transaction: `planned → per action {staged → backed-up → swap-intent → swapped → external-intent? → registered} → committed`, journaled to an append-only `journal.jsonl` with `fsync`. Filesystem and external effects have durable write-ahead intent before the corresponding potentially mutating call. `state.json` is written temp-file + `fsync` + atomic rename.
 
 - **Ordinary failure** (host refuses, archive is bad, filesystem error) restores every engine-owned directory byte-identically, removes staging, journals `rolled-back`, and leaves `state.json` untouched. Host and package-manager effects are outside that filesystem transaction: if a host call may have mutated before failing, the command exits 3 and names the component/effect that must be inspected and reconciled before retrying.
-- **Crash** (the process is killed outright) is recovered by the next mutating command, which restores each component from the backup the crashed transaction left behind, or removes a half-installed fresh payload that had no predecessor. This is exercised by tests that **SIGKILL a real subprocess** mid-transaction and then assert byte-identical restoration — not by simulated in-process faults.
-- Recovery is **refused, never guessed**, when the journal tail is torn, when a leftover backup belongs to a transaction the journal never recorded, or when a recorded target fails target-safety validation. Those cases become non-repairable `doctor` findings.
+- **Crash** (the process is killed outright) is recovered by the next mutating command, which restores each component from the backup the crashed transaction left behind, or removes a half-installed fresh payload that had no predecessor. This includes the narrow window after a live rename but before its completion event. It is exercised by tests that **SIGKILL a real subprocess** mid-transaction and then assert byte-identical restoration — not by simulated in-process faults.
+- Recovery is **refused, never guessed**, when the journal tail is torn, when a leftover backup belongs to a transaction the journal never recorded, when a recorded target fails target-safety validation, or when durable external intent means a host/package manager may have changed. Those cases become non-repairable `doctor` findings with reconciliation detail.
 - **Delegated installs cannot be rolled back.** When a transaction that already ran `npm install --global` later fails, the rollback reports that external effect verbatim rather than claiming to have undone it.
 
 ## State layout
@@ -103,7 +104,7 @@ Everything the engine writes lives under the install root (`~/.draht/install`, o
   state.json        schema-versioned durable state (0600)
   journal.jsonl     append-only transaction journal (0600)
   lock.json         mutual-exclusion lock, present only while mutating (0600)
-  cache/            integrity-keyed extracted payloads
+  cache/            integrity-keyed extracted payloads with revalidated tree manifests
   staging/<tx>/     in-flight payloads
   backups/<tx>/     previous payloads, retained until commit
 ```
@@ -123,7 +124,7 @@ Payload targets live outside the install root:
 
 - Read commands (`plan`, `status`, `doctor`) emit exactly **one** document on stdout: `{ "schemaVersion": 1, "command": …, … }`.
 - Mutating commands (`install`, `update`, `uninstall`, `draht-init`) emit **NDJSON** event records, one per line, each with `schemaVersion` and `event`, ending with an `event: "summary"` record.
-- Human prose is never mixed into stdout in JSON mode. In human mode errors go to stderr; in JSON mode a schema-stable `{ ok: false, error: { code, message } }` document goes to stdout and the message is repeated on stderr.
+- Human prose is never mixed into stdout in JSON mode. In human mode errors go to stderr; in JSON mode a schema-stable `{ ok: false, error: { code, message } }` record goes to stdout and the message is repeated on stderr. Mutation failures remain one-line NDJSON even after progress events have already streamed.
 - `error.code` is the stable machine-readable discriminator (`usage`, `lock-held`, `unsafe`, `integrity-mismatch`, …). `error.message` is prose and may change between releases — do not parse it.
 - No environment dump, no credentials, and no registry auth material appears in any output.
 

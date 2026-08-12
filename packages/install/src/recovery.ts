@@ -41,7 +41,9 @@ interface TxComponentInfo {
 	componentId: string;
 	targetDir?: string;
 	swapped: boolean;
+	swapIntended: boolean;
 	backedUp?: boolean;
+	externalEffects: string[];
 }
 
 function collectPerTransaction(entries: JournalEntry[]): Map<string, Map<string, TxComponentInfo>> {
@@ -59,13 +61,20 @@ function collectPerTransaction(entries: JournalEntry[]): Map<string, Map<string,
 		}
 		let info = components.get(componentId);
 		if (!info) {
-			info = { componentId, swapped: false };
+			info = { componentId, swapped: false, swapIntended: false, externalEffects: [] };
 			components.set(componentId, info);
 		}
 
 		if (entry.event === "staged" && typeof detail.targetDir === "string") info.targetDir = detail.targetDir;
 		if (entry.event === "backed-up") info.backedUp = detail.backedUp === true;
+		if (entry.event === "swap-intent") {
+			info.swapIntended = true;
+			if (typeof detail.targetDir === "string") info.targetDir = detail.targetDir;
+		}
 		if (entry.event === "swapped") info.swapped = true;
+		if (entry.event === "external-intent" && typeof detail.description === "string") {
+			info.externalEffects.push(detail.description);
+		}
 	}
 
 	return byTx;
@@ -147,6 +156,11 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 		const components = perTx.get(tx);
 		if (!components) continue;
 		for (const info of components.values()) {
+			if (info.externalEffects.length > 0) {
+				blockers.push(
+					`transaction ${tx} may have changed external host/package-manager state for "${info.componentId}": ${info.externalEffects.join("; ")}`,
+				);
+			}
 			try {
 				assertSafeComponentId(info.componentId);
 			} catch (error) {
@@ -157,7 +171,7 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 			const backupPath = join(backupsDir(root, tx), info.componentId);
 			const hasBackup = existsSync(backupPath);
 
-			if (!info.swapped && !hasBackup) {
+			if (!info.swapped && !info.swapIntended && !hasBackup) {
 				entries.push({ tx, componentId: info.componentId, targetDir: info.targetDir ?? "", action: "none" });
 				continue;
 			}

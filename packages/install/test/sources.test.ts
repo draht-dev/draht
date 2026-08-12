@@ -385,4 +385,35 @@ describe("integrity-keyed payload cache", () => {
 			tmp.dispose();
 		}
 	});
+
+	it("revalidates completed cache bytes and re-extracts modified content", async () => {
+		const tmp = tempRoot("cache");
+		try {
+			const tarball = createPackageTarGz("draht-codex", "3.0.0", { "a.txt": "a" });
+			const dir = join(tmp.path, "registry");
+			writeLocalRegistry(dir, [
+				{ name: "draht-codex", distTags: { latest: "3.0.0" }, versions: [{ version: "3.0.0", tarball }] },
+			]);
+			const client = createLocalRegistryClient(dir);
+			const resolved = await client.resolve("draht-codex", "latest");
+			let fetches = 0;
+			const counting = {
+				...client,
+				fetchTarball: async (pkg: typeof resolved) => {
+					fetches += 1;
+					return client.fetchTarball(pkg);
+				},
+			};
+			const root = join(tmp.path, "install");
+			const path = await materializeFromCache(root, resolved, counting);
+			writeFileSync(join(path, "a.txt"), "modified-under-intact-marker");
+
+			const again = await materializeFromCache(root, resolved, counting);
+
+			expect(fetches).toBe(2);
+			expect(readFileSync(join(again, "a.txt"), "utf8")).toBe("a");
+		} finally {
+			tmp.dispose();
+		}
+	});
 });

@@ -81,6 +81,8 @@ export interface ApplyPlanOptions {
 	delegate?: (action: PlanAction) => Promise<DelegatedComponent>;
 	/** Fault-injection seam: called after each per-action journal event. Throwing here rolls back the whole transaction. */
 	checkpoint?: (name: CheckpointName, action?: PlanAction) => void;
+	/** Test-only crash seam immediately after live placement and before the post-effect journal event. */
+	afterLiveMove?: (action: PlanAction) => void;
 	/** Aborts the transaction between actions when the process is asked to stop. */
 	signal?: AbortSignal;
 }
@@ -232,7 +234,7 @@ function rollback(progress: ActionProgress[]): string[] {
  * thrown wrapping the original cause.
  */
 export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult> {
-	const { root, plan, materialize, register, delegate, checkpoint, signal } = opts;
+	const { root, plan, materialize, register, delegate, checkpoint, afterLiveMove, signal } = opts;
 	const tx = generateTxId();
 	const state = loadState(root);
 	const progress: ActionProgress[] = [];
@@ -273,6 +275,11 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 					],
 				};
 				progress.push(entry);
+				record("external-intent", {
+					componentId: action.componentId,
+					type: action.type,
+					description: entry.externalEffects[0],
+				});
 				const delegated = await delegate(action);
 				if (action.type === "delegate-install") {
 					entry.delegated = delegated.delegated;
@@ -304,7 +311,10 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 			progress.push(entry);
 
 			const materialized = await materialize(action, stagingComponentDir, {
-				noteExternalEffect: (description) => entry.externalEffects.push(description),
+				noteExternalEffect: (description) => {
+					entry.externalEffects.push(description);
+					record("external-intent", { componentId: action.componentId, type: action.type, description });
+				},
 			});
 			entry.targetDir = materialized.targetDir;
 			record("staged", { componentId: action.componentId, type: action.type, targetDir: materialized.targetDir });
@@ -319,12 +329,14 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 			record("backed-up", { componentId: action.componentId, backedUp: entry.backedUp });
 			checkpoint?.("after-backup", action);
 
+			record("swap-intent", { componentId: action.componentId, targetDir: materialized.targetDir });
 			if (dirHasEntries(stagingComponentDir)) {
 				moveDir(stagingComponentDir, materialized.targetDir);
 			} else {
 				removeIfExists(stagingComponentDir);
 			}
 			entry.swapped = true;
+			afterLiveMove?.(action);
 			record("swapped", { componentId: action.componentId });
 			checkpoint?.("after-swap", action);
 
@@ -335,6 +347,11 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 				entry.externalEffects.push(
 					`host registration for ${action.componentId} may have changed and was NOT rolled back: inspect and reconcile its host before retrying`,
 				);
+				record("external-intent", {
+					componentId: action.componentId,
+					type: action.type,
+					description: entry.externalEffects.at(-1),
+				});
 				// A register callback may report how the change takes effect and
 				// whether the host accepted it; those go into durable state instead
 				// of the executor guessing.

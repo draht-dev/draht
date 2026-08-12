@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { EXIT_ERROR, EXIT_OK, EXIT_PARTIAL } from "../src/exit-codes.ts";
 import { resolveDrahtToolsBin } from "../src/init.ts";
-import { loadState } from "../src/state.ts";
+import { createDefaultState, loadState, saveState } from "../src/state.ts";
 import { createWorld } from "./helpers/world.ts";
 
 /** A stand-in for the draht-tools CLI that records exactly how it was invoked. */
@@ -250,6 +250,32 @@ describe("draht-init", () => {
 		}
 	});
 
+	it("refuses to scaffold when an explicitly requested component plan is blocked", async () => {
+		const h = initWorld();
+		try {
+			const state = createDefaultState();
+			state.components["claude-plugin"] = {
+				id: "claude-plugin",
+				kind: "claude-plugin",
+				version: "9999.1.1",
+				source: { npmName: "draht-claude", resolvedVersion: "9999.1.1" },
+				files: [],
+				registered: true,
+				effectiveness: "live",
+			};
+			saveState(h.world.root, state);
+
+			const run = await h.run([h.project, "--yes", "--component", "claude-plugin"]);
+
+			expect(run.code).toBe(EXIT_PARTIAL);
+			expect(run.stderr).toMatch(/blocked|downgrade/i);
+			expect(existsSync(h.project)).toBe(false);
+			expect(h.invocations()).toEqual([]);
+		} finally {
+			h.world.dispose();
+		}
+	});
+
 	it("emits NDJSON events only under --json", async () => {
 		const h = initWorld();
 		try {
@@ -262,6 +288,10 @@ describe("draht-init", () => {
 				.map((line) => JSON.parse(line));
 			expect(records.length).toBeGreaterThan(0);
 			expect(records.some((record) => record.event === "summary")).toBe(true);
+			expect(records.every((record) => record.command === "init")).toBe(true);
+			expect(
+				records.filter((record) => record.event === "scaffold-start").every((record) => Array.isArray(record.argv)),
+			).toBe(true);
 		} finally {
 			h.world.dispose();
 		}

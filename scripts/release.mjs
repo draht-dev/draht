@@ -318,6 +318,12 @@ console.log("Running tests...");
 run("./test.sh");
 console.log();
 
+// Fail closed before creating or publishing an immutable release commit/tag.
+// Keep the second check below as defense in depth immediately before npm.
+console.log("Checking publication readiness before immutable release objects...");
+run("node scripts/check-install-publishable.mjs");
+console.log();
+
 // 6. Build, commit, tag, and make the immutable tag public. The tag-triggered
 // workflow must finish the matching GitHub release before npm can become public.
 console.log("Building packages...");

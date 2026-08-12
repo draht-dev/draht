@@ -94,7 +94,7 @@ export async function runInit(ctx: CommandContext): Promise<number> {
 	const project = isAbsolute(targetArg) ? resolve(targetArg) : resolve(ctx.cwd, targetArg);
 	const projectName = basename(project);
 	const emit = (record: Record<string, unknown>): void => {
-		if (args.json) io.stdout(renderNdjson({ schemaVersion: JSON_SCHEMA_VERSION, command: "init", ...record }));
+		if (args.json) io.stdout(renderNdjson({ schemaVersion: JSON_SCHEMA_VERSION, ...record, command: "init" }));
 	};
 
 	// Collision checks run before anything is created, so a refusal leaves the
@@ -153,6 +153,13 @@ export async function runInit(ctx: CommandContext): Promise<number> {
 	// 1. Components, through exactly the engine draht-install uses.
 	await runtime.engine.prepareDiskHashes();
 	const plan = await runtime.engine.resolvePlan(selection);
+	if (plan.blocked.length > 0) {
+		throw new BlockedError(
+			"blocked-plan",
+			`refusing to scaffold ${project}: ${plan.blocked.length} selected component action(s) are blocked (${plan.blocked.map((item) => item.reason).join("; ")})`,
+			{ project, blocked: plan.blocked },
+		);
+	}
 	if (plan.actions.length > 0) {
 		const outcome = await runtime.engine.apply(plan, {
 			command: "init",
@@ -166,7 +173,7 @@ export async function runInit(ctx: CommandContext): Promise<number> {
 	// 2. Scaffolding, only once components are settled.
 	mkdirSync(project, { recursive: true });
 	for (const command of [["create-project", projectName], ["init-state"]]) {
-		emit({ event: "scaffold-start", command });
+		emit({ event: "scaffold-start", argv: command });
 		runDrahtTools(toolsBin, command, project, ctx.env);
 	}
 

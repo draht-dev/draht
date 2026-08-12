@@ -142,18 +142,39 @@ for (const dir of BOUNDARY_PACKAGES) {
 	}
 }
 
-// ── 2. quest/: no @draht/* import at all, and no npm package.json ─────────────
+// ── 2. quest/: zero @draht/* references in ANY file, and no npm package.json ──
+// quest/ is Kotlin: imports there never look like JS specifiers, so the scan is
+// plain full text — a reference in a comment or string is a violation exactly
+// like an import (R31-FOUND.7: "every @draht/* reference"). Binary artifacts
+// (gradle wrapper jars, images, keystores) are skipped by extension.
+const QUEST_BINARY_EXTS = new Set([
+	".jar",
+	".png",
+	".webp",
+	".jpg",
+	".so",
+	".zip",
+	".keystore",
+	".jks",
+	".bin",
+	".aab",
+	".apk",
+]);
 for (const file of walk(QUEST_DIR, null)) {
 	if (basename(file) === "package.json") {
 		violations.push(`${rel(file)}  quest/ must NOT be an npm workspace (spec §8)`);
 		continue;
 	}
-	if (!CODE_EXTS.includes(extname(file))) continue;
-	for (const { line, specifier } of scanImports(file)) {
-		if (/^@draht\//.test(specifier)) {
-			violations.push(`${rel(file)}:${line}  imports "${specifier}" (quest/ may import zero @draht/*)`);
-		}
-	}
+	if (QUEST_BINARY_EXTS.has(extname(file))) continue;
+	readFileSync(file, "utf-8")
+		.split("\n")
+		.forEach((text, idx) => {
+			if (text.includes("@draht/")) {
+				violations.push(
+					`${rel(file)}:${idx + 1}  references "@draht/" (quest/ must hold zero @draht/* references)`,
+				);
+			}
+		});
 }
 
 // ── Report ────────────────────────────────────────────────────────────────────

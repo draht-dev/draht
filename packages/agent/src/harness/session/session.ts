@@ -62,7 +62,7 @@ export class SessionLaneExistsError extends Error {
 /** A pending assistant message cannot be persisted as a session entry. */
 export class SessionPendingAssistantMessageError extends Error {
 	constructor() {
-		super("Cannot append a pending assistant message");
+		super("Cannot persist a pending assistant message");
 		this.name = "SessionPendingAssistantMessageError";
 	}
 }
@@ -92,7 +92,21 @@ class StorageBackedSessionMutator implements SessionMutator {
 	commit(transaction: Transaction): Promise<CommitResult> {
 		this.assertActive();
 		if (this.commitResult !== undefined) return Promise.reject(new Error("SessionMutator commit already attempted"));
-		this.commitResult = this.storage.commit(transaction);
+		try {
+			for (const write of transaction.writes) {
+				if (
+					write.kind === "entry" &&
+					write.entry.type === "message" &&
+					write.entry.message.role === "assistant" &&
+					write.entry.message.stopReason === "pending"
+				) {
+					throw new SessionPendingAssistantMessageError();
+				}
+			}
+			this.commitResult = this.storage.commit(transaction);
+		} catch (error) {
+			this.commitResult = Promise.reject(error);
+		}
 		return this.commitResult;
 	}
 

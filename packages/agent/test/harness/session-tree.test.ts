@@ -382,6 +382,30 @@ describe("StorageBackedSession SessionTree", () => {
 		await session.close();
 	});
 
+	it("diverges lanes that append from the same shared leaf", async () => {
+		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
+		await commitSession(session, {
+			writes: [{ kind: "entry", entry: customEntry(ROOT_ID, null) }, ...laneWrites(ROOT_ID)],
+		});
+		const configuration = {
+			model: { provider: "provider", modelId: "model" },
+			thinkingLevel: "off" as const,
+			activeToolNames: [],
+		};
+		const review = await session.createLane("review", ROOT_ID, configuration);
+
+		const [mainId, reviewId] = await Promise.all([
+			session.appendCustomEntry("main-child"),
+			review.appendCustomEntry("review-child"),
+		]);
+
+		expect((await session.findEntriesOnBranch()).map((entry) => entry.id)).toEqual([mainId, ROOT_ID]);
+		expect((await review.findEntriesOnBranch()).map((entry) => entry.id)).toEqual([reviewId, ROOT_ID]);
+		expect((await session.getEntry(mainId))?.parentId).toBe(ROOT_ID);
+		expect((await session.getEntry(reviewId))?.parentId).toBe(ROOT_ID);
+		await session.close();
+	});
+
 	it("serializes concurrent appends into one linear lane branch", async () => {
 		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
 		await commitSession(session, {

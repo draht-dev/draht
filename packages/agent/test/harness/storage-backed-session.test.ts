@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@draht/ai";
 import { describe, expect, it } from "vitest";
 import type { CustomMessage } from "../../src/harness/messages.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
@@ -45,6 +46,37 @@ describe("StorageBackedSession", () => {
 		if (entry?.type !== "custom") throw new Error("Expected custom entry");
 		expect(entry.data).toBe(data);
 		expect((await session.getRegister("fact.custom", "state"))?.value).toBe(data);
+		await session.close();
+	});
+
+	it("rejects pending assistant entries at the durable session write boundary", async () => {
+		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
+		const session = new StorageBackedSession(metadata, storage);
+		const pending: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "pending",
+			timestamp: NOW,
+		};
+
+		await expect(
+			commitSession(session, {
+				writes: [{ kind: "entry", entry: { id: ENTRY_ID, parentId: null, type: "message", message: pending } }],
+			}),
+		).rejects.toThrow("Cannot persist a pending assistant message");
+		expect(storage.getCommitAttempts()).toEqual([]);
+		expect(await session.getEntries([ENTRY_ID])).toEqual(new Map());
 		await session.close();
 	});
 
@@ -107,6 +139,18 @@ describe("StorageBackedSession", () => {
 			}),
 		).resolves.toBeUndefined();
 		expect(storage.getCommitAttempts()).toHaveLength(1);
+		await session.close();
+	});
+
+	it("mints distinct follower ids with the leader timestamp", async () => {
+		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
+		const leaderTimestamp = 0x0123456789ab;
+		const leader = session.idGenerator.next(leaderTimestamp);
+		const followers = [session.idGenerator.next(leaderTimestamp), session.idGenerator.next(leaderTimestamp)];
+		const decodeTimestamp = (id: string): number => Number.parseInt(id.replaceAll("-", "").slice(0, 12), 16);
+
+		expect([leader, ...followers].map(decodeTimestamp)).toEqual([leaderTimestamp, leaderTimestamp, leaderTimestamp]);
+		expect(new Set([leader, ...followers])).toHaveLength(3);
 		await session.close();
 	});
 

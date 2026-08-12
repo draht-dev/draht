@@ -268,6 +268,49 @@ export function createStorageConformance(factory: StorageFixtureFactory): readon
 			},
 		),
 
+		createCase(factory, "transactions", "places pending content under its reserved entry id", async ({ storage }) => {
+			const entry = userEntry("reserved", null, "queued");
+			await storage.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "pending.entry",
+						key: entry.id,
+						value: { type: "message", payload: entry.message },
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
+				],
+			});
+
+			strictEqual((await storage.getEntries([entry.id])).has(entry.id), false);
+			deepStrictEqual((await storage.getRegister("pending.entry", entry.id))?.value, {
+				type: "message",
+				payload: entry.message,
+			});
+			strictEqual((await storage.getRegister("lane.leaf", "main"))?.value, null);
+
+			const placement = await storage.commit({
+				writes: [
+					{ kind: "entry", entry },
+					{ kind: "register", op: "delete", namespace: "pending.entry", key: entry.id },
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: entry.id },
+				],
+			});
+
+			deepStrictEqual(
+				await storage.getEntries([entry.id]),
+				new Map([[entry.id, { ...entry, seq: placement.seqs[0], timestamp: placement.timestamp }]]),
+			);
+			strictEqual(await storage.getRegister("pending.entry", entry.id), undefined);
+			deepStrictEqual(await storage.getRegister("lane.leaf", "main"), {
+				namespace: "lane.leaf",
+				key: "main",
+				value: entry.id,
+				seq: placement.seqs[2],
+			});
+		}),
+
 		createCase(
 			factory,
 			"registers",

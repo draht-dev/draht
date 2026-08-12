@@ -1,7 +1,12 @@
 import type { AssistantMessage } from "@draht/ai";
 import { describe, expect, it } from "vitest";
 import { buildSessionContext } from "../../src/harness/session/context.ts";
-import type { CompactionEntry, CustomEntry, MessageEntry } from "../../src/harness/session/types.ts";
+import type {
+	BranchSummaryEntry,
+	CompactionEntry,
+	CustomEntry,
+	MessageEntry,
+} from "../../src/harness/session/types.ts";
 import type { AgentMessage } from "../../src/types.ts";
 
 const NOW = 1_700_000_000_000;
@@ -63,6 +68,32 @@ describe("session context projection", () => {
 		expect(await buildSessionContext(entries)).toEqual([user, stopped, toolUse, length]);
 	});
 
+	it("projects branch summaries in branch order", async () => {
+		const before = messageEntry("before", null, 1, userMessage("before summary"));
+		const summary: BranchSummaryEntry = {
+			id: "branch-summary",
+			parentId: before.id,
+			seq: 2,
+			timestamp: NOW,
+			type: "branch_summary",
+			fromId: "source-leaf",
+			summary: "work on the abandoned branch",
+			fromHook: false,
+		};
+		const after = messageEntry("after", summary.id, 3, userMessage("after summary"));
+
+		expect(await buildSessionContext([before, summary, after])).toEqual([
+			userMessage("before summary"),
+			{
+				role: "branchSummary",
+				summary: "work on the abandoned branch",
+				fromId: "source-leaf",
+				timestamp: NOW,
+			},
+			userMessage("after summary"),
+		]);
+	});
+
 	it("filters retained-tail responses without hiding the compaction summary", async () => {
 		const user = userMessage("kept user");
 		const stopped = assistantMessage("stop", "kept answer");
@@ -91,6 +122,40 @@ describe("session context projection", () => {
 			length,
 		]);
 	});
+	it("uses only the latest compaction checkpoint and entries after it", async () => {
+		const beforeFirst = messageEntry("before-first", null, 1, userMessage("before first"));
+		const first: CompactionEntry = {
+			id: "first-compaction",
+			parentId: beforeFirst.id,
+			seq: 2,
+			timestamp: NOW,
+			type: "compaction",
+			summary: "stale summary",
+			retainedTail: [userMessage("stale tail")],
+			tokensBefore: 100,
+			fromHook: false,
+		};
+		const between = messageEntry("between", first.id, 3, userMessage("between compactions"));
+		const latest: CompactionEntry = {
+			id: "latest-compaction",
+			parentId: between.id,
+			seq: 4,
+			timestamp: NOW,
+			type: "compaction",
+			summary: "latest summary",
+			retainedTail: [userMessage("latest tail")],
+			tokensBefore: 200,
+			fromHook: false,
+		};
+		const after = messageEntry("after", latest.id, 5, userMessage("after latest"));
+
+		expect(await buildSessionContext([beforeFirst, first, between, latest, after])).toEqual([
+			{ role: "compactionSummary", summary: "latest summary", tokensBefore: 200, timestamp: NOW },
+			userMessage("latest tail"),
+			userMessage("after latest"),
+		]);
+	});
+
 	it("projects custom entries through synchronous and asynchronous canonical projectors in branch order", async () => {
 		const oldCustom: CustomEntry = {
 			id: "old-custom",

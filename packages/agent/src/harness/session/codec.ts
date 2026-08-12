@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import type {
 	Entry,
 	JsonValue,
+	LaneConfiguration,
 	OperationState,
 	PendingEntry,
 	Register,
@@ -973,6 +974,12 @@ export class SessionCodec {
 		const detached = cloneJsonSafe(value, "$");
 		assertSchema(UsageRowSchema, detached, "$");
 		return detached as unknown as UsageRow;
+	}
+
+	encodeLaneConfiguration(value: unknown): LaneConfiguration {
+		const detached = cloneJsonSafe(value, "$");
+		assertSchema(this.registerSchemas["lane.config"], detached, "$");
+		return detached as unknown as LaneConfiguration;
 	}
 
 	encodePendingEntry(value: unknown): PendingEntry {

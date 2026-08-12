@@ -9,6 +9,7 @@ import type {
 	EntryQuery,
 	IdGenerator,
 	JsonValue,
+	LaneConfiguration,
 	Operation,
 	OperationState,
 	PendingEntry,
@@ -23,18 +24,6 @@ import type {
 	Transaction,
 } from "./types.ts";
 
-type StorageBackedSessionContract<TMetadata extends SessionMetadata> = Pick<
-	Session<TMetadata>,
-	| keyof SessionTree
-	| "metadata"
-	| "idGenerator"
-	| "view"
-	| "commit"
-	| "getEntries"
-	| "getRegister"
-	| "listRegisters"
-	| "close"
->;
 interface StorageBackedSessionConcurrency {
 	laneMutationLine?: LaneMutationLine;
 }
@@ -47,11 +36,43 @@ export class SessionInvariantError extends Error {
 	}
 }
 
+/** A requested session lane name is invalid. */
+export class SessionInvalidLaneError extends Error {
+	readonly lane: string;
+	readonly reason: string;
+
+	constructor(lane: string, reason: string) {
+		super(`Invalid lane ${JSON.stringify(lane)}: ${reason}`);
+		this.name = "SessionInvalidLaneError";
+		this.lane = lane;
+		this.reason = reason;
+	}
+}
+
+/** A requested session lane already exists. */
+export class SessionLaneExistsError extends Error {
+	readonly lane: string;
+
+	constructor(lane: string) {
+		super(`Lane already exists: ${lane}`);
+		this.name = "SessionLaneExistsError";
+		this.lane = lane;
+	}
+}
+
+/** A requested session entry target does not exist. */
+export class SessionUnknownTargetError extends Error {
+	readonly targetId: string;
+
+	constructor(targetId: string) {
+		super(`Unknown target: ${targetId}`);
+		this.name = "SessionUnknownTargetError";
+		this.targetId = targetId;
+	}
+}
+
 /** Package-internal validated boundary shared by concrete session repositories. */
-// TODO: Implement createLane() and replace this subset with Session<TMetadata>.
-export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMetadata>
-	implements StorageBackedSessionContract<TMetadata>
-{
+export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMetadata> implements Session<TMetadata> {
 	readonly metadata: TMetadata;
 	readonly idGenerator: IdGenerator = { next: uuidv7 };
 	private readonly storage: Storage;
@@ -140,6 +161,63 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 			appendMessage: (message) => this.appendMessageForLane(lane, message),
 			appendCustomEntry: (customType, data) => this.appendCustomEntryForLane(lane, customType, data),
 		};
+	}
+
+	createLane(name: string, at: string | null, configuration: LaneConfiguration): Promise<SessionTree> {
+		try {
+			this.assertOpen();
+			if (name.length === 0) throw new SessionInvalidLaneError(name, "lane name must not be empty");
+			const capturedConfiguration = this.codec.encodeLaneConfiguration(configuration);
+			return this.laneMutationLine.run(name, async () => {
+				// R1 owns complete idle-lane and current-state validation. Slice 2 only
+				// distinguishes valid existing lane shapes from partial durable lane state.
+				const [leaf, storedConfiguration, laneState, lastResult] = await Promise.all([
+					this.getRegister("lane.leaf", name),
+					this.getRegister("lane.config", name),
+					this.getRegister("lane.state", name),
+					this.getRegister("lane.lastResult", name),
+				]);
+				const presentCount = [leaf, storedConfiguration, laneState, lastResult].filter(
+					(register) => register !== undefined,
+				).length;
+				if (
+					leaf !== undefined &&
+					laneState !== undefined &&
+					(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
+				) {
+					throw new SessionLaneExistsError(name);
+				}
+				if (presentCount !== 0) {
+					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
+				}
+				if (at !== null && !(await this.getEntries([at])).has(at)) throw new SessionUnknownTargetError(at);
+
+				// R6 adds the harness-wide admission barrier. Until then, close may reject
+				// this lane job before Storage.commit admits it; admitted commits still drain.
+				await this.commit({
+					writes: [
+						{
+							kind: "register",
+							op: "set",
+							namespace: "lane.config",
+							key: name,
+							value: capturedConfiguration,
+						},
+						{ kind: "register", op: "set", namespace: "lane.leaf", key: name, value: at },
+						{
+							kind: "register",
+							op: "set",
+							namespace: "lane.state",
+							key: name,
+							value: { currentOperationId: null, pendingNextRun: [] },
+						},
+					],
+				});
+				return this.view(name);
+			});
+		} catch (error) {
+			return Promise.reject(error);
+		}
 	}
 
 	getLeafId(): Promise<string | null> {

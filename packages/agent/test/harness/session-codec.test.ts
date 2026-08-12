@@ -1,7 +1,7 @@
 import type { AssistantMessage, ToolResultMessage, Usage, UserMessage } from "@draht/ai";
 import Type from "typebox";
 import { describe, expect, it } from "vitest";
-import { SessionCodec, SessionCodecError } from "../../src/harness/session/index.ts";
+import { SessionCodec, SessionCodecError } from "../../src/harness/session/codec.ts";
 import type {
 	Entry,
 	LaneConfiguration,

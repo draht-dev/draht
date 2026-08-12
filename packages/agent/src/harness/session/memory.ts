@@ -508,6 +508,8 @@ export class MemorySessionRepo implements SessionRepo {
 	}
 
 	open(metadata: SessionMetadata): Promise<Session> {
+		// Memory sessions are always created at the current storage version, so
+		// persistent-backend version gating does not apply here.
 		this.assertOpen();
 		const record = this.sessions.get(metadata.id);
 		if (record === undefined) return Promise.reject(new Error(`Unknown session: ${metadata.id}`));

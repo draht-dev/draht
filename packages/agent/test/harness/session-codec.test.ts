@@ -10,9 +10,36 @@ import type {
 	OperationState,
 	RegisterNamespace,
 	RegisterValues,
+	RunState,
 	Transaction,
 	UsageRow,
 } from "../../src/harness/session/types.ts";
+
+const ENTRY_ID = "00000000-0000-7000-8000-000000000001";
+const PARENT_ID = "00000000-0000-7000-8000-000000000002";
+const USAGE_ID = "00000000-0000-7000-8000-000000000003";
+const OPERATION_ID = "00000000-0000-7000-8000-000000000004";
+const STEP_ID = "00000000-0000-7000-8000-000000000005";
+const TASK_ID = "00000000-0000-7000-8000-000000000006";
+const FOLLOWER_ID = "00000000-0000-7000-8000-000000000007";
+const OTHER_TIMESTAMP_ID = "00000000-0001-7000-8000-000000000008";
+
+const USER_ID = "00000000-0000-7000-8000-000000000009";
+const ASSISTANT_ID = "00000000-0000-7000-8000-00000000000a";
+const TOOL_ID = "00000000-0000-7000-8000-00000000000b";
+const COMPACTION_ID = "00000000-0000-7000-8000-00000000000c";
+const SUMMARY_ID = "00000000-0000-7000-8000-00000000000d";
+const MARKER_ID = "00000000-0000-7000-8000-00000000000e";
+const NOTE_ID = "00000000-0000-7000-8000-00000000000f";
+const NOTICE_ID = "00000000-0000-7000-8000-000000000010";
+const TRIGGER_ID = "00000000-0000-7000-8000-000000000011";
+const PROMPT_ID = "00000000-0000-7000-8000-000000000012";
+const TARGET_ID = "00000000-0000-7000-8000-000000000013";
+const PENDING_ID = "00000000-0000-7000-8000-000000000014";
+const CUSTOM_ID = "00000000-0000-7000-8000-000000000015";
+const SECOND_FOLLOWER_ID = "00000000-0000-7000-8000-000000000018";
+const MESSAGE_ID = "00000000-0000-7000-8000-000000000016";
+const BAD_ID = "00000000-0000-7000-8000-000000000017";
 
 const NOW = 1_700_000_000_000;
 const configuration = {
@@ -67,7 +94,7 @@ function stored<TEntry extends NewEntry>(entry: TEntry, seq = 1): TEntry & { seq
 	return { ...entry, seq, timestamp: NOW };
 }
 
-function checkpointState(): OperationState {
+function checkpointState(): RunState {
 	return {
 		kind: "run",
 		control: { status: "running" },
@@ -80,7 +107,7 @@ function checkpointState(): OperationState {
 		phase: {
 			kind: "checkpoint",
 			continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
-			triggerEntryId: "trigger",
+			triggerEntryId: TRIGGER_ID,
 		},
 		inbox: { steer: [], followUp: [], writes: [] },
 		latestAssistantEntryId: null,
@@ -88,14 +115,14 @@ function checkpointState(): OperationState {
 }
 
 function operation(kind: Operation["intent"]["kind"]): Operation {
-	const base = { operationId: `operation-${kind}`, lane: "main", sourceLeafId: null, startedAt: NOW };
+	const base = { operationId: OPERATION_ID, lane: "main", sourceLeafId: null, startedAt: NOW };
 	switch (kind) {
 		case "run":
-			return { ...base, intent: { kind, promptEntryIds: ["prompt"], resumeData: { extension: null } } };
+			return { ...base, intent: { kind, promptEntryIds: [PROMPT_ID], resumeData: { extension: null } } };
 		case "compaction":
 			return { ...base, intent: { kind, customInstructions: "short" } };
 		case "navigation":
-			return { ...base, intent: { kind, targetId: "target", summarize: true, label: "target" } };
+			return { ...base, intent: { kind, targetId: TARGET_ID, summarize: true, label: "target" } };
 	}
 }
 
@@ -106,7 +133,7 @@ function operationStates(): OperationState[] {
 			kind: "compaction",
 			control: { status: "running" },
 			customInstructions: "short",
-			structural: { status: "deciding", taskId: "task" },
+			structural: { status: "deciding", taskId: TASK_ID },
 		},
 		{
 			kind: "navigation",
@@ -118,17 +145,32 @@ function operationStates(): OperationState[] {
 		{
 			kind: "navigation",
 			control: { status: "running" },
-			targetId: "target",
+			targetId: TARGET_ID,
 			summarize: true,
-			phase: { kind: "summary", structural: { status: "deciding", taskId: "task" } },
+			phase: { kind: "summary", structural: { status: "deciding", taskId: TASK_ID } },
 		},
 	];
 }
 
+const registerKeys = {
+	"lane.leaf": "main",
+	"lane.config": "main",
+	"lane.state": "main",
+	"lane.lastResult": "main",
+	"op.meta": OPERATION_ID,
+	"op.state": OPERATION_ID,
+	"op.tool_args": `${OPERATION_ID}:${STEP_ID}:0`,
+	"op.preparation": `${OPERATION_ID}:${TASK_ID}`,
+	"pending.entry": PENDING_ID,
+	"fact.name": "",
+	"fact.label": ENTRY_ID,
+	"fact.custom": "key",
+} satisfies Record<RegisterNamespace, string>;
+
 function registerValue<TNamespace extends RegisterNamespace>(
 	namespace: TNamespace,
 	value: RegisterValues[TNamespace],
-	key = namespace === "fact.name" ? "" : "key",
+	key = registerKeys[namespace],
 ): { namespace: TNamespace; key: string; value: RegisterValues[TNamespace]; seq: number } {
 	return { namespace, key, value, seq: 1 };
 }
@@ -179,12 +221,12 @@ describe("SessionCodec entries and messages", () => {
 	it("decodes every entry family and built-in pi-ai message role", () => {
 		const codec = new SessionCodec();
 		const entries = [
-			stored({ id: "user", parentId: null, type: "message", message: userMessage }),
-			stored({ id: "assistant", parentId: "user", type: "message", message: assistantMessage }),
-			stored({ id: "tool", parentId: "assistant", type: "message", message: toolResultMessage, terminate: true }),
+			stored({ id: USER_ID, parentId: null, type: "message", message: userMessage }),
+			stored({ id: ASSISTANT_ID, parentId: USER_ID, type: "message", message: assistantMessage }),
+			stored({ id: TOOL_ID, parentId: ASSISTANT_ID, type: "message", message: toolResultMessage, terminate: true }),
 			stored({
-				id: "compaction",
-				parentId: "tool",
+				id: COMPACTION_ID,
+				parentId: TOOL_ID,
 				type: "compaction",
 				summary: "summary",
 				retainedTail: [userMessage, assistantMessage, toolResultMessage],
@@ -194,20 +236,46 @@ describe("SessionCodec entries and messages", () => {
 				fromHook: false,
 			}),
 			stored({
-				id: "summary",
-				parentId: "compaction",
+				id: SUMMARY_ID,
+				parentId: COMPACTION_ID,
 				type: "branch_summary",
-				fromId: "tool",
+				fromId: TOOL_ID,
 				summary: "branch summary",
 				details: null,
 				usage,
 				fromHook: true,
 			}),
-			stored({ id: "marker", parentId: "summary", type: "custom", customType: "marker" }),
-			stored({ id: "note", parentId: "marker", type: "custom", customType: "note", data: { text: "remember" } }),
+			stored({ id: MARKER_ID, parentId: SUMMARY_ID, type: "custom", customType: "marker" }),
+			stored({ id: NOTE_ID, parentId: MARKER_ID, type: "custom", customType: "note", data: { text: "remember" } }),
 		] satisfies Entry[];
 
 		expect(entries.map((entry) => codec.decodeEntry(entry))).toEqual(entries);
+	});
+
+	it("requires canonical UUIDv7 harness identities while preserving opaque provider ids", () => {
+		const codec = new SessionCodec();
+		const entry = stored({ id: ENTRY_ID, parentId: null, type: "message", message: assistantMessage });
+
+		expect(codec.decodeEntry(entry)).toEqual(entry);
+		expect(assistantMessage.responseId).toBe("response-1");
+		expect(assistantMessage.content[1]).toMatchObject({ id: "call-1" });
+		const deferredMessage: AssistantMessage = {
+			...assistantMessage,
+			stopReason: "deferred",
+			deferred: { provider: "provider", modelId: "model", api: "api", id: "opaque-handle" },
+		};
+		expect(
+			codec.decodeEntry(stored({ id: PARENT_ID, parentId: ENTRY_ID, type: "message", message: deferredMessage })),
+		).toMatchObject({ message: { deferred: { id: "opaque-handle" } } });
+		for (const id of [
+			"entry",
+			"00000000-0000-4000-8000-000000000001",
+			"00000000-0000-7000-7000-000000000001",
+			"00000000-0000-7000-8000-00000000000A",
+		]) {
+			expect(() => codec.decodeEntry({ ...entry, id })).toThrow(SessionCodecError);
+		}
+		expect(() => codec.decodeEntry({ ...entry, parentId: "parent" })).toThrow(SessionCodecError);
 	});
 
 	it("accepts a registered custom role and rejects unknown or non-string roles in both directions", () => {
@@ -221,13 +289,13 @@ describe("SessionCodec entries and messages", () => {
 		});
 		const customMessage = { role: "notice", text: "maintenance", timestamp: NOW };
 		const entry = stored({
-			id: "notice",
+			id: NOTICE_ID,
 			parentId: null,
 			type: "message",
 			message: customMessage,
 		} as unknown as NewEntry);
 
-		const newEntry = { id: "notice", parentId: null, type: "message", message: customMessage };
+		const newEntry = { id: NOTICE_ID, parentId: null, type: "message", message: customMessage };
 		expect(codec.decodeEntry(entry)).toEqual(entry);
 		expect(codec.decodeWrite({ kind: "entry", entry: newEntry })).toEqual({ kind: "entry", entry: newEntry });
 		expect(
@@ -245,14 +313,14 @@ describe("SessionCodec entries and messages", () => {
 			{ role: 42, text: "no" },
 		]) {
 			expect(() =>
-				codec.decodeEntry(stored({ id: "bad", parentId: null, type: "message", message } as unknown as NewEntry)),
+				codec.decodeEntry(stored({ id: BAD_ID, parentId: null, type: "message", message } as unknown as NewEntry)),
 			).toThrow(SessionCodecError);
 			expect(() =>
-				codec.decodeWrite({ kind: "entry", entry: { id: "bad", parentId: null, type: "message", message } }),
+				codec.decodeWrite({ kind: "entry", entry: { id: BAD_ID, parentId: null, type: "message", message } }),
 			).toThrow(SessionCodecError);
 			expect(() =>
 				codec.encodeTransaction({
-					writes: [{ kind: "entry", entry: { id: "bad", parentId: null, type: "message", message } }],
+					writes: [{ kind: "entry", entry: { id: BAD_ID, parentId: null, type: "message", message } }],
 				} as unknown as Transaction),
 			).toThrow(SessionCodecError);
 		}
@@ -276,14 +344,14 @@ describe("SessionCodec entries and messages", () => {
 			{ role: "alpha", beta: 1, timestamp: NOW },
 			{ role: "beta", alpha: "wrong schema", timestamp: NOW },
 		]) {
-			const entry = { id: `bad-${message.role}`, parentId: null, type: "message", message };
+			const entry = { id: BAD_ID, parentId: null, type: "message", message };
 			expect(() => codec.decodeEntry(stored(entry as unknown as NewEntry))).toThrow(SessionCodecError);
 			expect(() => codec.decodeWrite({ kind: "entry", entry })).toThrow(SessionCodecError);
 			expect(() => codec.decodeTransaction({ writes: [{ kind: "entry", entry }] })).toThrow(SessionCodecError);
 			expect(() =>
 				codec.decodeRegister("pending.entry", {
 					namespace: "pending.entry",
-					key: `pending-${message.role}`,
+					key: PENDING_ID,
 					value: { type: "message", payload: message },
 					seq: 1,
 				}),
@@ -294,7 +362,7 @@ describe("SessionCodec entries and messages", () => {
 	it("does not let a permissive custom schema admit malformed built-in messages", () => {
 		const codec = new SessionCodec({ customMessageSchemas: { notice: Type.Any() } });
 		const malformedUser = { role: "user", content: 42, timestamp: NOW };
-		const entry = { id: "malformed-user", parentId: null, type: "message", message: malformedUser };
+		const entry = { id: BAD_ID, parentId: null, type: "message", message: malformedUser };
 
 		expect(() => codec.decodeEntry(stored(entry as unknown as NewEntry))).toThrow(SessionCodecError);
 		expect(() => codec.decodeWrite({ kind: "entry", entry })).toThrow(SessionCodecError);
@@ -302,7 +370,7 @@ describe("SessionCodec entries and messages", () => {
 		expect(() =>
 			codec.decodeRegister("pending.entry", {
 				namespace: "pending.entry",
-				key: "pending-user",
+				key: PENDING_ID,
 				value: { type: "message", payload: malformedUser },
 				seq: 1,
 			}),
@@ -313,24 +381,24 @@ describe("SessionCodec entries and messages", () => {
 		const codec = new SessionCodec();
 		const pending = { ...assistantMessage, stopReason: "pending" };
 		const invalidEntries: unknown[] = [
-			stored({ id: "pending", parentId: null, type: "message", message: pending } as unknown as NewEntry),
+			stored({ id: BAD_ID, parentId: null, type: "message", message: pending } as unknown as NewEntry),
 			stored({
-				id: "message",
+				id: MESSAGE_ID,
 				parentId: null,
 				type: "message",
 				customType: "wrong",
 				message: userMessage,
 			} as unknown as NewEntry),
-			stored({ id: "custom", parentId: null, type: "custom", data: null } as unknown as NewEntry),
+			stored({ id: CUSTOM_ID, parentId: null, type: "custom", data: null } as unknown as NewEntry),
 			stored({
-				id: "custom",
+				id: CUSTOM_ID,
 				parentId: null,
 				type: "custom",
 				customType: "note",
 				message: userMessage,
 			} as unknown as NewEntry),
 			stored({
-				id: "compaction",
+				id: COMPACTION_ID,
 				parentId: null,
 				type: "compaction",
 				summary: "missing tail",
@@ -338,7 +406,7 @@ describe("SessionCodec entries and messages", () => {
 				fromHook: false,
 			} as unknown as NewEntry),
 			stored({
-				id: "compaction",
+				id: COMPACTION_ID,
 				parentId: null,
 				type: "compaction",
 				summary: "missing hook",
@@ -346,28 +414,28 @@ describe("SessionCodec entries and messages", () => {
 				tokensBefore: 1,
 			} as unknown as NewEntry),
 			stored({
-				id: "summary",
+				id: SUMMARY_ID,
 				parentId: null,
 				type: "branch_summary",
-				fromId: "from",
+				fromId: PARENT_ID,
 				summary: "missing hook",
 			} as unknown as NewEntry),
 			stored({
-				id: "user",
+				id: USER_ID,
 				parentId: null,
 				type: "message",
 				message: userMessage,
 				terminate: true,
 			} as unknown as NewEntry),
 			stored({
-				id: "tool",
+				id: TOOL_ID,
 				parentId: null,
 				type: "message",
 				message: toolResultMessage,
 				terminate: false,
 			} as unknown as NewEntry),
-			{ ...stored({ id: "seq", parentId: null, type: "custom", customType: "note" }), seq: 0 },
-			{ ...stored({ id: "timestamp", parentId: null, type: "custom", customType: "note" }), timestamp: -1 },
+			{ ...stored({ id: CUSTOM_ID, parentId: null, type: "custom", customType: "note" }), seq: 0 },
+			{ ...stored({ id: NOTE_ID, parentId: null, type: "custom", customType: "note" }), timestamp: -1 },
 		];
 
 		for (const entry of invalidEntries) expect(() => codec.decodeEntry(entry)).toThrow(SessionCodecError);
@@ -382,24 +450,24 @@ describe("SessionCodec registers and operation states", () => {
 			{ namespace: "lane.config", register: registerValue("lane.config", configuration) },
 			{
 				namespace: "lane.state",
-				register: registerValue("lane.state", { currentOperationId: "operation-run", pendingNextRun: ["pending"] }),
+				register: registerValue("lane.state", { currentOperationId: OPERATION_ID, pendingNextRun: [PENDING_ID] }),
 			},
 			{
 				namespace: "lane.lastResult",
 				register: registerValue("lane.lastResult", {
-					operationId: "operation-run",
+					operationId: OPERATION_ID,
 					kind: "run",
-					leafId: "assistant",
-					finalAssistantEntryId: "assistant",
+					leafId: ASSISTANT_ID,
+					finalAssistantEntryId: ASSISTANT_ID,
 					outcome: "completed",
 					runCompletion: "assistant",
 				}),
 			},
-			{ namespace: "op.meta", register: registerValue("op.meta", operation("run"), "operation-run") },
+			{ namespace: "op.meta", register: registerValue("op.meta", operation("run")) },
 			{ namespace: "op.state", register: registerValue("op.state", checkpointState()) },
 			{
 				namespace: "op.tool_args",
-				register: registerValue("op.tool_args", { path: "README.md", line: 1 }, "op:step:0"),
+				register: registerValue("op.tool_args", { path: "README.md", line: 1 }),
 			},
 			{
 				namespace: "op.preparation",
@@ -416,7 +484,7 @@ describe("SessionCodec registers and operation states", () => {
 						fileOps: { read: ["README.md"], written: [], edited: [] },
 						settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 2_000 },
 					},
-					"op:task",
+					registerKeys["op.preparation"],
 				),
 			},
 			{
@@ -429,14 +497,14 @@ describe("SessionCodec registers and operation states", () => {
 						fileOps: { read: [], written: ["result.txt"], edited: [] },
 						totalTokens: 100,
 					},
-					"op:task",
+					registerKeys["op.preparation"],
 				),
 			},
 			{
 				namespace: "pending.entry",
 				register: {
 					namespace: "pending.entry",
-					key: "pending",
+					key: PENDING_ID,
 					value: { type: "message", payload: userMessage },
 					seq: 1,
 				},
@@ -455,10 +523,274 @@ describe("SessionCodec registers and operation states", () => {
 		}
 	});
 
+	it("requires UUIDv7 state identities and namespace-specific register keys", () => {
+		const codec = new SessionCodec();
+		const invalidRegisters: Array<[RegisterNamespace, unknown]> = [
+			["fact.label", { namespace: "fact.label", key: "entry", value: "label", seq: 1 }],
+			[
+				"pending.entry",
+				{
+					namespace: "pending.entry",
+					key: "pending",
+					value: { type: "message", payload: userMessage },
+					seq: 1,
+				},
+			],
+			["op.meta", { namespace: "op.meta", key: "operation", value: operation("run"), seq: 1 }],
+			["op.state", { namespace: "op.state", key: "operation", value: checkpointState(), seq: 1 }],
+			["op.tool_args", { namespace: "op.tool_args", key: "operation:step:0", value: {}, seq: 1 }],
+			[
+				"op.preparation",
+				{
+					namespace: "op.preparation",
+					key: "operation:task",
+					value: {
+						kind: "branch_summary",
+						messages: [],
+						fileOps: { read: [], written: [], edited: [] },
+						totalTokens: 0,
+					},
+					seq: 1,
+				},
+			],
+		];
+
+		for (const [namespace, register] of invalidRegisters) {
+			expect(() => codec.decodeRegister(namespace, register)).toThrow(SessionCodecError);
+		}
+		expect(() =>
+			codec.decodeRegister("op.meta", {
+				namespace: "op.meta",
+				key: PARENT_ID,
+				value: operation("run"),
+				seq: 1,
+			}),
+		).toThrow("op.meta register key must equal value.operationId");
+		expect(() =>
+			codec.decodeRegister("op.tool_args", {
+				namespace: "op.tool_args",
+				key: `${OPERATION_ID}:${STEP_ID}:9007199254740992`,
+				value: {},
+				seq: 1,
+			}),
+		).toThrow("sourceIndex must be a safe integer");
+
+		expect(() =>
+			codec.decodeRegister("op.state", {
+				namespace: "op.state",
+				key: OPERATION_ID,
+				value: { ...checkpointState(), phase: { ...checkpointState().phase, triggerEntryId: "trigger" } },
+				seq: 1,
+			}),
+		).toThrow(SessionCodecError);
+	});
+
+	it("requires tool-result reservations to follow the assistant UUIDv7 timestamp", () => {
+		const codec = new SessionCodec();
+		const toolState = (resultEntryIds: string[], turnId = STEP_ID): RunState => ({
+			...checkpointState(),
+			phase: {
+				kind: "tools",
+				batch: {
+					assistantEntryId: ENTRY_ID,
+					configuration,
+					turnId,
+					calls: resultEntryIds.map((resultEntryId, sourceIndex) => ({
+						status: "planned" as const,
+						sourceIndex,
+						resultEntryId,
+					})),
+				},
+			},
+		});
+		const decode = (state: RunState) =>
+			codec.decodeRegister("op.state", {
+				namespace: "op.state",
+				key: OPERATION_ID,
+				value: state,
+				seq: 1,
+			});
+
+		for (const state of [
+			toolState([OTHER_TIMESTAMP_ID]),
+			toolState([ENTRY_ID]),
+			toolState([FOLLOWER_ID, FOLLOWER_ID]),
+		]) {
+			expect(() => decode(state)).toThrow(SessionCodecError);
+		}
+		const followerState = toolState([FOLLOWER_ID, SECOND_FOLLOWER_ID]);
+		expect(decode(followerState)).toMatchObject({ value: followerState });
+		expect(() => decode(toolState([FOLLOWER_ID], `${STEP_ID}:poll:0`))).toThrow(SessionCodecError);
+		expect(() => decode(toolState([FOLLOWER_ID], `${STEP_ID}:poll:9007199254740992`))).toThrow(SessionCodecError);
+	});
+
+	it("requires complete source-ordered tool-call indexes", () => {
+		const codec = new SessionCodec();
+		const state = (sourceIndexes: number[]): RunState => ({
+			...checkpointState(),
+			phase: {
+				kind: "tools",
+				batch: {
+					assistantEntryId: ENTRY_ID,
+					configuration,
+					turnId: STEP_ID,
+					calls: sourceIndexes.map((sourceIndex, index) => ({
+						status: "planned",
+						sourceIndex,
+						resultEntryId: index === 0 ? FOLLOWER_ID : SECOND_FOLLOWER_ID,
+					})),
+				},
+			},
+		});
+		const decode = (value: RunState) =>
+			codec.decodeRegister("op.state", {
+				namespace: "op.state",
+				key: OPERATION_ID,
+				value,
+				seq: 1,
+			});
+
+		expect(decode(state([0, 1]))).toMatchObject({ value: state([0, 1]) });
+		expect(() => decode(state([0, 0]))).toThrow("complete and in source order");
+		expect(() => decode(state([1]))).toThrow("complete and in source order");
+	});
+
+	it("keeps locally visible reserved entry and usage ids distinct", () => {
+		const codec = new SessionCodec();
+		const pendingGeneration = (responseEntryId: string, usageId: string): RunState => ({
+			...checkpointState(),
+			phase: {
+				kind: "assistant",
+				generation: {
+					status: "effect_pending",
+					context: {
+						stepId: STEP_ID,
+						triggerEntryId: TRIGGER_ID,
+						configuration,
+						streamOptions: {},
+						retryPolicy: { maxAttempts: 1, baseDelayMs: 0 },
+						overflowRecoveryUsed: false,
+					},
+					attempt: 1,
+					responseEntryId,
+					usageId,
+					intendedOutputLimit: 1,
+					contextWindow: 1,
+				},
+			},
+		});
+		const decode = (state: OperationState) =>
+			codec.decodeRegister("op.state", {
+				namespace: "op.state",
+				key: OPERATION_ID,
+				value: state,
+				seq: 1,
+			});
+
+		expect(decode(pendingGeneration(ENTRY_ID, USAGE_ID))).toMatchObject({
+			value: pendingGeneration(ENTRY_ID, USAGE_ID),
+		});
+		expect(() => decode(pendingGeneration(ENTRY_ID, ENTRY_ID))).toThrow("must be distinct");
+		expect(() => decode(pendingGeneration(TRIGGER_ID, USAGE_ID))).toThrow("must be distinct");
+	});
+
+	it("keeps structural task identity stable and reserved rows distinct", () => {
+		const codec = new SessionCodec();
+		const summaryState = (
+			contextTaskId: string,
+			resultEntryId: string,
+			usageIds: string[],
+			requestUsageId: string,
+		): OperationState => ({
+			kind: "compaction",
+			control: { status: "running" },
+			structural: {
+				taskId: TASK_ID,
+				status: "generating",
+				generation: {
+					status: "effect_pending",
+					context: {
+						taskId: contextTaskId,
+						resultEntryId,
+						kind: "compaction",
+						configuration,
+						streamOptions: {},
+						retryPolicy: { maxAttempts: 1, baseDelayMs: 0 },
+					},
+					attempt: 1,
+					request: { index: 0, usageId: requestUsageId },
+					usageIds,
+				},
+			},
+		});
+		const decode = (state: OperationState) =>
+			codec.decodeRegister("op.state", {
+				namespace: "op.state",
+				key: OPERATION_ID,
+				value: state,
+				seq: 1,
+			});
+		const valid = summaryState(TASK_ID, ENTRY_ID, [USAGE_ID], SECOND_FOLLOWER_ID);
+
+		expect(decode(valid)).toMatchObject({ value: valid });
+		expect(() => decode(summaryState(PARENT_ID, ENTRY_ID, [USAGE_ID], SECOND_FOLLOWER_ID))).toThrow(
+			"task ids must match",
+		);
+		expect(() => decode(summaryState(TASK_ID, ENTRY_ID, [ENTRY_ID], SECOND_FOLLOWER_ID))).toThrow("must be distinct");
+		expect(() => decode(summaryState(TASK_ID, ENTRY_ID, [USAGE_ID], USAGE_ID))).toThrow("must be distinct");
+	});
+
+	it("uses zero-based completed deferred polls and one-based pending poll intents", () => {
+		const codec = new SessionCodec();
+		const decode = (state: RunState) =>
+			codec.decodeRegister("op.state", {
+				namespace: "op.state",
+				key: OPERATION_ID,
+				value: state,
+				seq: 1,
+			});
+		const suspended: RunState = {
+			...checkpointState(),
+			phase: {
+				kind: "deferred",
+				deferred: {
+					status: "suspended",
+					stepId: STEP_ID,
+					sourceEntryId: ENTRY_ID,
+					poll: 0,
+					configuration,
+					streamOptions: {},
+				},
+			},
+		};
+		const pending = (poll: number, responseEntryId = FOLLOWER_ID, usageId = USAGE_ID): RunState => ({
+			...suspended,
+			phase: {
+				kind: "deferred",
+				deferred: {
+					status: "effect_pending",
+					stepId: STEP_ID,
+					sourceEntryId: ENTRY_ID,
+					poll,
+					responseEntryId,
+					usageId,
+					configuration,
+					streamOptions: {},
+				},
+			},
+		});
+
+		expect(decode(suspended)).toMatchObject({ value: suspended });
+		expect(() => decode(pending(0))).toThrow(SessionCodecError);
+		expect(decode(pending(1))).toMatchObject({ value: pending(1) });
+		expect(() => decode(pending(1, ENTRY_ID, USAGE_ID))).toThrow("must be distinct");
+		expect(() => decode(pending(1, FOLLOWER_ID, FOLLOWER_ID))).toThrow("must be distinct");
+	});
+
 	it("accepts every operation-state top-level discriminant and rejects malformed variants", () => {
 		const codec = new SessionCodec();
 		for (const [index, state] of operationStates().entries()) {
-			const register = { namespace: "op.state", key: `operation-${index}`, value: state, seq: index + 1 };
+			const register = { namespace: "op.state", key: OPERATION_ID, value: state, seq: index + 1 };
 			expect(codec.decodeRegister("op.state", register)).toEqual(register);
 		}
 
@@ -475,12 +807,12 @@ describe("SessionCodec registers and operation states", () => {
 			{
 				kind: "compaction",
 				control: { status: "cancel_requested", requestedAt: NOW, drainedSteer: [] },
-				structural: { status: "deciding", taskId: "task" },
+				structural: { status: "deciding", taskId: TASK_ID },
 			},
 		];
 		for (const value of malformed) {
 			expect(() =>
-				codec.decodeRegister("op.state", { namespace: "op.state", key: "operation", value, seq: 1 }),
+				codec.decodeRegister("op.state", { namespace: "op.state", key: OPERATION_ID, value, seq: 1 }),
 			).toThrow(SessionCodecError);
 		}
 	});
@@ -501,7 +833,7 @@ describe("SessionCodec registers and operation states", () => {
 					namespace: "lane.lastResult",
 					key: "main",
 					value: {
-						operationId: "op",
+						operationId: OPERATION_ID,
 						kind: "compaction",
 						leafId: null,
 						outcome: "completed",
@@ -510,12 +842,12 @@ describe("SessionCodec registers and operation states", () => {
 					seq: 1,
 				},
 			],
-			["pending.entry", { namespace: "pending.entry", key: "pending", value: { type: "message" }, seq: 1 }],
+			["pending.entry", { namespace: "pending.entry", key: PENDING_ID, value: { type: "message" }, seq: 1 }],
 			[
 				"pending.entry",
 				{
 					namespace: "pending.entry",
-					key: "pending",
+					key: PENDING_ID,
 					value: { type: "message", customType: "note", payload: userMessage },
 					seq: 1,
 				},
@@ -533,10 +865,10 @@ describe("SessionCodec usage and transactions", () => {
 	it("decodes usage rows and rejects malformed ledger shape", () => {
 		const codec = new SessionCodec();
 		const row = {
-			id: "usage",
+			id: USAGE_ID,
 			seq: 3,
 			usage,
-			entryId: "assistant",
+			entryId: ASSISTANT_ID,
 			adjustment: false,
 			details: { attempt: 1 },
 		} satisfies UsageRow;
@@ -552,15 +884,24 @@ describe("SessionCodec usage and transactions", () => {
 		}
 	});
 
+	it("requires UUIDv7 usage and entry references", () => {
+		const codec = new SessionCodec();
+		const row = { id: USAGE_ID, seq: 1, usage, entryId: ENTRY_ID, adjustment: false };
+
+		expect(codec.decodeUsageRow(row)).toEqual(row);
+		expect(() => codec.decodeUsageRow({ ...row, id: "usage" })).toThrow(SessionCodecError);
+		expect(() => codec.decodeUsageRow({ ...row, entryId: "entry" })).toThrow(SessionCodecError);
+	});
+
 	it("validates every write kind and a complete mapped transaction", () => {
 		const codec = new SessionCodec();
 		const transaction = {
 			writes: [
-				{ kind: "entry", entry: { id: "message", parentId: null, type: "message", message: userMessage } },
-				{ kind: "usage", row: { id: "usage", usage, entryId: "message", adjustment: false, details: null } },
-				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: "message" },
+				{ kind: "entry", entry: { id: MESSAGE_ID, parentId: null, type: "message", message: userMessage } },
+				{ kind: "usage", row: { id: USAGE_ID, usage, entryId: MESSAGE_ID, adjustment: false, details: null } },
+				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: MESSAGE_ID },
 				{ kind: "register", op: "set", namespace: "fact.custom", key: "nullable", value: null },
-				{ kind: "register", op: "delete", namespace: "fact.label", key: "message" },
+				{ kind: "register", op: "delete", namespace: "fact.label", key: MESSAGE_ID },
 			],
 		} satisfies Transaction;
 
@@ -569,12 +910,57 @@ describe("SessionCodec usage and transactions", () => {
 		for (const write of transaction.writes) expect(codec.decodeWrite(write)).toEqual(write);
 	});
 
+	it("applies namespace-specific UUIDv7 key schemas to register writes", () => {
+		const codec = new SessionCodec();
+		for (const write of [
+			{ kind: "register", op: "delete", namespace: "fact.label", key: "entry" },
+			{
+				kind: "register",
+				op: "set",
+				namespace: "pending.entry",
+				key: "pending",
+				value: { type: "message", payload: userMessage },
+			},
+			{ kind: "register", op: "set", namespace: "op.tool_args", key: "operation:step:0", value: {} },
+			{
+				kind: "register",
+				op: "set",
+				namespace: "op.tool_args",
+				key: `${OPERATION_ID}:${STEP_ID}:9007199254740992`,
+				value: {},
+			},
+		]) {
+			expect(() => codec.decodeWrite(write)).toThrow(SessionCodecError);
+			expect(() => codec.decodeTransaction({ writes: [write] })).toThrow(SessionCodecError);
+		}
+	});
+
+	it("accepts deletion of UUIDv7-keyed registers without requiring a value", () => {
+		const codec = new SessionCodec();
+		const transaction: Transaction = {
+			writes: [
+				{ kind: "register", op: "delete", namespace: "op.state", key: OPERATION_ID },
+				{ kind: "register", op: "delete", namespace: "pending.entry", key: PENDING_ID },
+			],
+		};
+
+		expect(codec.encodeTransaction(transaction)).toEqual(transaction);
+		expect(() =>
+			codec.decodeWrite({
+				kind: "register",
+				op: "delete",
+				namespace: "op.tool_args",
+				key: `${OPERATION_ID}:${STEP_ID}:9007199254740992`,
+			}),
+		).toThrow("sourceIndex must be a safe integer");
+	});
+
 	it("rejects malformed write discriminants and mapped register set values", () => {
 		const codec = new SessionCodec();
 		for (const write of [
 			{ kind: "other" },
 			{ kind: "entry", row: {} },
-			{ kind: "usage", row: { id: "usage", usage, adjustment: false, seq: 1 } },
+			{ kind: "usage", row: { id: USAGE_ID, usage, adjustment: false, seq: 1 } },
 			{ kind: "register", op: "replace", namespace: "fact.name", key: "", value: "name" },
 			{ kind: "register", op: "set", namespace: "fact.name", key: "", value: null },
 			{ kind: "register", op: "delete", namespace: "unknown", key: "key" },
@@ -594,7 +980,7 @@ describe("SessionCodec durable JSON boundary", () => {
 	it.each(invalidJsonValues())("rejects $name while decoding stored data with a useful path", ({ value }) => {
 		const codec = new SessionCodec();
 		const entry = stored({
-			id: "custom",
+			id: CUSTOM_ID,
 			parentId: null,
 			type: "custom",
 			customType: "data",
@@ -610,7 +996,7 @@ describe("SessionCodec durable JSON boundary", () => {
 				{
 					kind: "entry",
 					entry: {
-						id: "custom",
+						id: CUSTOM_ID,
 						parentId: null,
 						type: "custom",
 						customType: "data",
@@ -626,7 +1012,7 @@ describe("SessionCodec durable JSON boundary", () => {
 		expect(encoded).toEqual(source);
 		expect(decoded).toEqual(source);
 		const absentData = codec.decodeEntry(
-			stored({ id: "marker", parentId: null, type: "custom", customType: "marker" }),
+			stored({ id: MARKER_ID, parentId: null, type: "custom", customType: "marker" }),
 		);
 		expect(absentData.type).toBe("custom");
 		expect("data" in absentData).toBe(false);

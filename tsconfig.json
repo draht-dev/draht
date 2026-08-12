@@ -36,7 +36,9 @@
 			"@draht/geist-protocol/*": ["./packages/geist-protocol/src/*"],
 			"@draht/geist-picker": ["./packages/geist-picker/src/index.ts"],
 			"@draht/geist-console": ["./packages/geist-console/src/index.ts"],
-			"@draht/draht-acp": ["./packages/draht-acp/src/index.ts"]
+			"@draht/draht-acp": ["./packages/draht-acp/src/index.ts"],
+			"@draht/x-markdown": ["./packages/x-markdown/src/index.ts"],
+			"@draht/x-markdown/*": ["./packages/x-markdown/src/*"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],

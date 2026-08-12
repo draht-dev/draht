@@ -107,7 +107,7 @@ function ids(entries: readonly Entry[]): string[] {
 
 function assertStrictlyIncreasing(values: readonly number[]): void {
 	for (let index = 1; index < values.length; index++) {
-		ok(values[index - 1]! < values[index]!, `Expected ${values.join(", ")} to be strictly increasing`);
+		ok(values[index - 1] < values[index], `Expected ${values.join(", ")} to be strictly increasing`);
 	}
 }
 

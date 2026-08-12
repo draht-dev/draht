@@ -231,6 +231,21 @@ describe("mutual exclusion lock", () => {
 			tmp.dispose();
 		}
 	});
+
+	it("does not delete a replacement lock owned by a different token", () => {
+		const tmp = tempRoot("lock");
+		try {
+			const first = acquireLock(tmp.path);
+			const replacement = { ...first.record, token: "replacement-owner-token", command: "update" };
+			writeFileSync(lockPath(tmp.path), `${JSON.stringify(replacement)}\n`);
+
+			first.release();
+
+			expect(readLockFile(tmp.path)).toEqual(replacement);
+		} finally {
+			tmp.dispose();
+		}
+	});
 });
 
 describe("state directory privacy", () => {

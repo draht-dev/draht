@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hashTree } from "../hash.ts";
@@ -70,7 +70,7 @@ export async function materializeFromCache(
 	mkdirSync(cacheDir(root), { recursive: true, mode: 0o700 });
 
 	const bytes = await client.fetchTarball(pkg);
-	const staging = `${target}.tmp-${process.pid}-${createHash("sha256").update(`${Date.now()}`).digest("hex").slice(0, 8)}`;
+	const staging = `${target}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
 	rmSync(staging, { recursive: true, force: true });
 
 	try {
@@ -83,7 +83,17 @@ export async function materializeFromCache(
 				mode: 0o600,
 			},
 		);
-		renameSync(staging, target);
+		try {
+			renameSync(staging, target);
+		} catch (error) {
+			// Another writer may have atomically published the same integrity-keyed
+			// payload first. Accept only a fully revalidated winner.
+			if (await cacheEntryValid(target, pkg)) {
+				rmSync(staging, { recursive: true, force: true });
+				return target;
+			}
+			throw error;
+		}
 	} catch (error) {
 		rmSync(staging, { recursive: true, force: true });
 		throw error;

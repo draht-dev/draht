@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { z } from "zod";
@@ -9,6 +10,7 @@ export const LockRecordSchema = z.object({
 	hostname: z.string().min(1),
 	startedAt: z.string().min(1),
 	command: z.string().min(1),
+	token: z.string().min(16).optional(),
 });
 export type LockRecord = z.infer<typeof LockRecordSchema>;
 
@@ -96,6 +98,7 @@ export function acquireLock(root: string, options: AcquireLockOptions = {}): Loc
 		hostname: hostname(),
 		startedAt: new Date().toISOString(),
 		command,
+		token: randomBytes(16).toString("hex"),
 	};
 
 	try {
@@ -139,7 +142,7 @@ export function acquireLock(root: string, options: AcquireLockOptions = {}): Loc
 			// Only remove a lock this handle still owns: if a stale-takeover
 			// replaced it, deleting it would release someone else's lock.
 			const current = readLockFile(root);
-			if (current && current.pid === record.pid && current.startedAt === record.startedAt) {
+			if (current?.token === record.token) {
 				rmSync(path, { force: true });
 			}
 		},

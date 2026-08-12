@@ -416,4 +416,43 @@ describe("integrity-keyed payload cache", () => {
 			tmp.dispose();
 		}
 	});
+
+	it("publishes one valid cache entry when two writers race", async () => {
+		const tmp = tempRoot("cache");
+		try {
+			const tarball = createPackageTarGz("draht-codex", "3.0.0", { "a.txt": "a" });
+			const dir = join(tmp.path, "registry");
+			writeLocalRegistry(dir, [
+				{ name: "draht-codex", distTags: { latest: "3.0.0" }, versions: [{ version: "3.0.0", tarball }] },
+			]);
+			const client = createLocalRegistryClient(dir);
+			const resolved = await client.resolve("draht-codex", "latest");
+			let waiting = 0;
+			let release!: () => void;
+			const barrier = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const racing = {
+				...client,
+				fetchTarball: async (pkg: typeof resolved) => {
+					waiting += 1;
+					if (waiting === 2) release();
+					await barrier;
+					return client.fetchTarball(pkg);
+				},
+			};
+			const root = join(tmp.path, "install");
+
+			const [a, b] = await Promise.all([
+				materializeFromCache(root, resolved, racing),
+				materializeFromCache(root, resolved, racing),
+			]);
+
+			expect(a).toBe(b);
+			expect(readFileSync(join(a, "a.txt"), "utf8")).toBe("a");
+			expect(readFileSync(join(a, ".complete"), "utf8")).toMatch(/"files"/);
+		} finally {
+			tmp.dispose();
+		}
+	});
 });

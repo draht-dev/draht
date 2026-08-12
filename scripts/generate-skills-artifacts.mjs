@@ -32,6 +32,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HAND_MIRRORED_SKILL_DIRS } from "./hand-mirrored-skills.mjs";
 import {
 	COMMAND_DIALECT,
 	DISCIPLINE_DIALECT,
@@ -167,9 +168,53 @@ export function writeArtifacts(artifacts, outputRoot) {
 	return written;
 }
 
+/** Recursively list every file under dir as slash-joined dir-relative paths. */
+function walkFiles(dir, prefix = "") {
+	if (!existsSync(dir)) return [];
+	const files = [];
+	for (const entry of readdirSync(dir).sort()) {
+		const full = join(dir, entry);
+		const rel = prefix ? `${prefix}/${entry}` : entry;
+		if (statSync(full).isDirectory()) {
+			files.push(...walkFiles(full, rel));
+		} else {
+			files.push(rel);
+		}
+	}
+	return files;
+}
+
+/**
+ * Completeness half of the equality gate: every file that actually exists
+ * under packages/<pkg>/commands/ and packages/<pkg>/skills/ must either be
+ * a generated artifact or live inside an allowlisted hand-mirrored skill
+ * dir (scripts/hand-mirrored-skills.mjs, pair-gated by
+ * check-plugin-mirrors.mjs). Without this, a hand-added file next to the
+ * generated ones is invisible to the byte-equality check and ships ungated.
+ */
+export function findUnexpectedFiles(artifacts, outputRoot) {
+	const problems = [];
+	const generated = new Set(artifacts.map((a) => `${a.pkg}/${a.relPath}`));
+	for (const pkg of Object.values(PACKAGE_NAME)) {
+		for (const area of ["commands", "skills"]) {
+			const areaDir = join(outputRoot, "packages", pkg, area);
+			for (const rel of walkFiles(areaDir)) {
+				const relPath = `${area}/${rel}`;
+				if (generated.has(`${pkg}/${relPath}`)) continue;
+				if (area === "skills" && HAND_MIRRORED_SKILL_DIRS.includes(rel.split("/")[0])) continue;
+				problems.push(
+					`unexpected: ${join(areaDir, rel)} — not generated from skills/ and not an allowlisted hand-mirrored skill (scripts/hand-mirrored-skills.mjs)`,
+				);
+			}
+		}
+	}
+	return problems;
+}
+
 /**
  * Compare artifacts against outputRoot without writing anything. Returns a
- * list of precise drift problems (empty when in sync).
+ * list of precise drift problems (empty when in sync): missing artifacts,
+ * byte drift, and unexpected non-generated files.
  */
 export function checkArtifacts(artifacts, outputRoot) {
 	const problems = [];
@@ -184,6 +229,7 @@ export function checkArtifacts(artifacts, outputRoot) {
 			problems.push(`drift: ${path}`);
 		}
 	}
+	problems.push(...findUnexpectedFiles(artifacts, outputRoot));
 	return problems;
 }
 

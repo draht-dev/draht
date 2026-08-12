@@ -62,7 +62,15 @@ export declare function computeArtifacts(skillsRoot: string): Artifact[];
 export declare function writeArtifacts(artifacts: Artifact[], outputRoot: string): WrittenArtifact[];
 
 /**
+ * Completeness half of the equality gate: every file under
+ * packages/<pkg>/commands/ and packages/<pkg>/skills/ must be a generated
+ * artifact or live inside an allowlisted hand-mirrored skill dir.
+ */
+export declare function findUnexpectedFiles(artifacts: Artifact[], outputRoot: string): string[];
+
+/**
  * Compare artifacts against outputRoot without writing anything. Returns a
- * list of precise drift problems (empty when in sync).
+ * list of precise drift problems (empty when in sync): missing artifacts,
+ * byte drift, and unexpected non-generated files.
  */
 export declare function checkArtifacts(artifacts: Artifact[], outputRoot: string): string[];

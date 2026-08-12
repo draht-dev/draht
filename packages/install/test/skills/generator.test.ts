@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -132,5 +132,71 @@ describe("generate-skills-artifacts: CLI, isolated in a temp output root", () =>
 		rmSync(join(tmpRoot, "packages/draht-codex/skills/draht"), { recursive: true, force: true });
 
 		expect(() => run(["--check", "--output-root", tmpRoot])).toThrow();
+	});
+
+	it("--check exits non-zero and says 'unexpected' for a stray file inside a generated skill dir", () => {
+		cpSync(CLAUDE_PKG, join(tmpRoot, "packages/draht-claude"), { recursive: true });
+		cpSync(CODEX_PKG, join(tmpRoot, "packages/draht-codex"), { recursive: true });
+		writeFileSync(join(tmpRoot, "packages/draht-codex/skills/fix/notes.md"), "hand-added, not generated\n");
+
+		let threw = false;
+		try {
+			run(["--check", "--output-root", tmpRoot]);
+		} catch (error) {
+			threw = true;
+			const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+			expect(stderr).toContain("unexpected");
+			expect(stderr).toContain("skills/fix/notes.md");
+		}
+		expect(threw).toBe(true);
+	});
+
+	it("--check exits non-zero for a whole skill dir that is neither generated nor allowlisted", () => {
+		cpSync(CLAUDE_PKG, join(tmpRoot, "packages/draht-claude"), { recursive: true });
+		cpSync(CODEX_PKG, join(tmpRoot, "packages/draht-codex"), { recursive: true });
+		mkdirSync(join(tmpRoot, "packages/draht-claude/skills/rogue"), { recursive: true });
+		writeFileSync(join(tmpRoot, "packages/draht-claude/skills/rogue/SKILL.md"), "---\nname: rogue\n---\n");
+
+		let threw = false;
+		try {
+			run(["--check", "--output-root", tmpRoot]);
+		} catch (error) {
+			threw = true;
+			const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+			expect(stderr).toContain("unexpected");
+			expect(stderr).toContain("skills/rogue/SKILL.md");
+		}
+		expect(threw).toBe(true);
+	});
+
+	it("--check tolerates files inside an allowlisted hand-mirrored skill dir (pair identity is the mirror gate's job)", () => {
+		cpSync(CLAUDE_PKG, join(tmpRoot, "packages/draht-claude"), { recursive: true });
+		cpSync(CODEX_PKG, join(tmpRoot, "packages/draht-codex"), { recursive: true });
+		// cinematic-continuation is already present from the copy; add one more
+		// file inside it to prove the exemption covers the whole dir, not just
+		// the files that happen to exist today.
+		writeFileSync(
+			join(tmpRoot, "packages/draht-claude/skills/cinematic-continuation/references/extra.md"),
+			"hand-mirrored extension\n",
+		);
+
+		expect(() => run(["--check", "--output-root", tmpRoot])).not.toThrow();
+	});
+
+	it("--check exits non-zero for a stray file under commands/", () => {
+		cpSync(CLAUDE_PKG, join(tmpRoot, "packages/draht-claude"), { recursive: true });
+		cpSync(CODEX_PKG, join(tmpRoot, "packages/draht-codex"), { recursive: true });
+		writeFileSync(join(tmpRoot, "packages/draht-claude/commands/rogue.md"), "not generated\n");
+
+		let threw = false;
+		try {
+			run(["--check", "--output-root", tmpRoot]);
+		} catch (error) {
+			threw = true;
+			const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+			expect(stderr).toContain("unexpected");
+			expect(stderr).toContain("commands/rogue.md");
+		}
+		expect(threw).toBe(true);
 	});
 });

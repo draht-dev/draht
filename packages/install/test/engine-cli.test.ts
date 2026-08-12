@@ -211,8 +211,9 @@ describe("install", () => {
 		try {
 			const run = await world.run(["install", "claude-plugin", "--yes"]);
 
-			expect(run.code).toBe(EXIT_ERROR);
+			expect(run.code).toBe(EXIT_PARTIAL);
 			expect(run.stderr).toContain("host refused");
+			expect(run.stderr).toMatch(/host registration for claude-plugin may have changed.*reconcile/i);
 			expect(existsSync(world.claudeTarget)).toBe(false);
 			expect(loadState(world.root).components).toEqual({});
 		} finally {
@@ -239,7 +240,8 @@ describe("install", () => {
 				},
 			});
 
-			expect(run.code).toBe(EXIT_ERROR);
+			expect(run.code).toBe(EXIT_PARTIAL);
+			expect(run.stderr).toMatch(/host registration for claude-plugin may have changed.*reconcile/i);
 			expect(readFileSync(join(world.claudeTarget, ".claude-plugin", "marketplace.json"), "utf8")).toBe(
 				originalManifest,
 			);

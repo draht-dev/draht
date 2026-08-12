@@ -477,6 +477,16 @@ export class Engine {
 			return { tx: result.tx, applied: plan.actions, blocked: plan.blocked, notes, state: result.state };
 		} catch (error) {
 			if (error instanceof ApplyError) {
+				// External hosts and package managers are outside the byte-atomic
+				// filesystem transaction. If one may have changed, this is a partial
+				// outcome even when an abort signal was also observed.
+				if (error.unrolledEffects.length > 0) {
+					throw new CliError("apply-partial", error.message, {
+						exitCode: 3,
+						detail: { tx: error.tx, unrolledEffects: error.unrolledEffects },
+						cause: error,
+					});
+				}
 				// An operator-requested stop is a blocked command, not a failure:
 				// the transaction rolled back and the machine is exactly as it was.
 				if (this.deps.signal?.aborted) {
@@ -485,12 +495,6 @@ export class Engine {
 						`interrupted before the transaction completed; it was rolled back and nothing was changed (${error.message})`,
 						{ tx: error.tx, unrolledEffects: error.unrolledEffects },
 					);
-				}
-				if (error.unrolledEffects.length > 0) {
-					throw new CliError("apply-failed", error.message, {
-						detail: { tx: error.tx, unrolledEffects: error.unrolledEffects },
-						cause: error,
-					});
 				}
 			}
 			throw error;

@@ -551,8 +551,9 @@ process.exit(0);
 
 			const result = await h.cli("draht-install", ["install", "claude-plugin", "--yes"]);
 
-			expect(result.status).toBe(1);
+			expect(result.status).toBe(3);
 			expect(result.stderr).toContain("host refused");
+			expect(result.stderr).toMatch(/host registration for claude-plugin may have changed.*reconcile/i);
 			expect(existsSync(join(h.home, ".draht", "claude-marketplace"))).toBe(false);
 		} finally {
 			h.dispose();

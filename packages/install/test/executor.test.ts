@@ -218,6 +218,55 @@ describe("applyPlan fault injection", () => {
 		expect(existsSync(stagingDir(root, applyError.tx))).toBe(false);
 		expect(existsSync(backupsDir(root, applyError.tx))).toBe(false);
 	});
+
+	it("reports a possibly mutated host when registration throws after the filesystem swap", async () => {
+		const seedPlan: PlanAction[] = [
+			{
+				type: "install",
+				componentId: "alpha",
+				kind: "claude-plugin",
+				toVersion: "1.0.0",
+				source: sourceFor("alpha", "1.0.0"),
+			},
+		];
+		await applyPlan({ root, plan: seedPlan, materialize: makeMaterialize({ alpha: { "index.js": "old" } }) });
+		const beforeState = loadState(root);
+		const beforeTree = await hashTree(targetsRoot);
+
+		let caught: unknown;
+		try {
+			await applyPlan({
+				root,
+				plan: [
+					{
+						type: "update",
+						componentId: "alpha",
+						kind: "claude-plugin",
+						fromVersion: "1.0.0",
+						toVersion: "2.0.0",
+						source: sourceFor("alpha", "2.0.0"),
+					},
+				],
+				materialize: makeMaterialize({ alpha: { "index.js": "new" } }),
+				register: async () => {
+					throw new Error("host removed the old registration, then rejected the replacement");
+				},
+			});
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(ApplyError);
+		const applyError = caught as ApplyError;
+		expect(applyError.unrolledEffects).toEqual([
+			expect.stringMatching(/host registration for alpha may have changed.*reconcile/i),
+		]);
+		expect(await hashTree(targetsRoot)).toEqual(beforeTree);
+		expect(loadState(root)).toEqual(beforeState);
+		const rolledBack = readJournal(root).entries.at(-1);
+		expect(rolledBack?.event).toBe("rolled-back");
+		expect(rolledBack?.detail).toMatchObject({ unrolledEffects: applyError.unrolledEffects });
+	});
 });
 
 describe("applyPlan idempotence", () => {

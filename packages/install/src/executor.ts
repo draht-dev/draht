@@ -157,6 +157,8 @@ interface ActionProgress {
 	swapped: boolean;
 	/** Set for delegated actions: an external effect the engine cannot undo. */
 	delegated?: DelegatedInstall;
+	/** Host/package-manager effects the filesystem rollback cannot prove it undid. */
+	externalEffects: string[];
 }
 
 function applyActionToState(
@@ -198,8 +200,8 @@ function rollback(progress: ActionProgress[]): string[] {
 			unrolled.push(
 				`${entry.delegated.packageName} was installed by ${entry.delegated.method} and was NOT rolled back: the engine does not own artifacts an external package manager installed`,
 			);
-			continue;
 		}
+		unrolled.push(...entry.externalEffects);
 		if (entry.targetDir && (entry.swapped || entry.backedUp)) {
 			removeIfExists(entry.targetDir);
 			if (entry.backedUp && entry.backupDir && existsSync(entry.backupDir)) {
@@ -264,6 +266,12 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 					// Only an install leaves an external artifact behind; an uninstall
 					// that already succeeded has nothing to un-remove.
 					delegated: action.type === "delegate-install" ? delegated.delegated : undefined,
+					externalEffects:
+						action.type === "delegate-uninstall"
+							? [
+									`${delegated.delegated.packageName} was uninstalled by ${delegated.delegated.method} and was NOT restored: reconcile the external package manager before retrying`,
+								]
+							: [],
 				};
 				progress.push(entry);
 				record("registered", {
@@ -278,7 +286,13 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 
 			const stagingComponentDir = join(stagingDir(root, tx), action.componentId);
 			mkdirSync(stagingComponentDir, { recursive: true });
-			const entry: ActionProgress = { action, stagingComponentDir, backedUp: false, swapped: false };
+			const entry: ActionProgress = {
+				action,
+				stagingComponentDir,
+				backedUp: false,
+				swapped: false,
+				externalEffects: [],
+			};
 			progress.push(entry);
 
 			const materialized = await materialize(action, stagingComponentDir);
@@ -305,6 +319,12 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 			checkpoint?.("after-swap", action);
 
 			if (register) {
+				// Registration is outside the filesystem transaction. Record the
+				// possible effect before calling the host because it may mutate and
+				// then fail; a later action can also fail after registration succeeds.
+				entry.externalEffects.push(
+					`host registration for ${action.componentId} may have changed and was NOT rolled back: inspect and reconcile its host before retrying`,
+				);
 				// A register callback may report how the change takes effect and
 				// whether the host accepted it; those go into durable state instead
 				// of the executor guessing.

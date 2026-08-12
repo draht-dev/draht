@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MemoryStorage } from "../../src/harness/session/index.ts";
+import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { createStorageConformance, type StorageFixture } from "../../src/harness/session/testing/index.ts";
 
 const NOW = 1_700_000_000_000;

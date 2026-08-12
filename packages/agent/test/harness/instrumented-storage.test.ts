@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { type CommitResult, MemoryStorage, type Transaction } from "../../src/harness/session/index.ts";
+import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { InstrumentedStorage } from "../../src/harness/session/testing/index.ts";
+import type { CommitResult, Transaction } from "../../src/harness/session/types.ts";
 
 class ControlledCommitStorage extends MemoryStorage {
 	private readonly pending: Array<{

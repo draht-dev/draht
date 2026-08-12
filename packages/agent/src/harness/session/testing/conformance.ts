@@ -1,5 +1,5 @@
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert/strict";
-import type { TextContent, Usage } from "@draht/ai";
+import type { Usage } from "@draht/ai";
 import type { CompactionEntry, CustomEntry, Entry, MessageEntry, NewEntry, Register, Transaction } from "../types.ts";
 import type { StorageConformanceCase, StorageFixture, StorageFixtureFactory } from "./types.ts";
 
@@ -64,20 +64,6 @@ function userEntry(id: string, parentId: string | null = null, text = id): NewEn
 			timestamp: MESSAGE_TIMESTAMP,
 		},
 	};
-}
-
-function userEntryTextContent(entry: NewEntry<MessageEntry> | MessageEntry): TextContent {
-	const { message } = entry;
-	ok(message.role === "user");
-	ok(Array.isArray(message.content));
-	const content = message.content[0];
-	ok(content?.type === "text");
-	return content;
-}
-
-function setUserEntryText(entry: NewEntry<MessageEntry> | MessageEntry, text: string): void {
-	const content = userEntryTextContent(entry);
-	content.text = text;
 }
 
 function customEntry(
@@ -576,91 +562,6 @@ export function createStorageConformance(factory: StorageFixtureFactory): readon
 						},
 					},
 				});
-			},
-		),
-
-		createCase(
-			factory,
-			"immutability",
-			"detaches nested transaction inputs and read results",
-			async ({ storage }) => {
-				const entryData = { nested: { values: [1, 2] } };
-				const messageEntry = userEntry("message", "entry", "original");
-				const registerValue = { nested: [3, 4] };
-				const details = { source: { name: "original" } };
-				const transaction: Transaction = {
-					writes: [
-						{ kind: "entry", entry: customEntry("entry", null, "nested", entryData) },
-						{ kind: "entry", entry: messageEntry },
-						{ kind: "register", op: "set", namespace: "fact.custom", key: "object", value: registerValue },
-						{ kind: "usage", row: { id: "usage", usage: usage(4, 5), adjustment: false, details } },
-					],
-				};
-				await storage.commit(transaction);
-				entryData.nested.values[0] = 99;
-				setUserEntryText(messageEntry, "mutated input");
-				registerValue.nested[0] = 99;
-				details.source.name = "mutated";
-
-				const messageMap = await storage.getEntries(["message"]);
-				const readMessage = messageMap.get("message");
-				ok(readMessage?.type === "message");
-				setUserEntryText(readMessage, "mutated read");
-
-				const entryMap = await storage.getEntries(["entry"]);
-				const entry = entryMap.get("entry");
-				ok(entry?.type === "custom");
-				(entry.data as { nested: { values: number[] } }).nested.values[0] = 88;
-				(entryMap as Map<string, Entry>).clear();
-				const register = await storage.getRegister("fact.custom", "object");
-				ok(register !== undefined);
-				(register.value as { nested: number[] }).nested[0] = 88;
-				const rows = await storage.scanUsage({ order: "asc" });
-				(rows[0]!.details as { source: { name: string } }).source.name = "changed";
-				rows[0]!.usage.input = 88;
-				const scannedEntries = await storage.scanEntries({ order: "asc" });
-				(scannedEntries[0] as CustomEntry).data = { replaced: true };
-				const scannedMessage = scannedEntries.find((candidate) => candidate.id === "message");
-				ok(scannedMessage?.type === "message");
-				setUserEntryText(scannedMessage, "mutated scan");
-				const branchEntries = await storage.scanBranch({ start: "entry" });
-				(branchEntries[0] as CustomEntry).data = { replaced: true };
-				const messageBranchEntries = await storage.scanBranch({ start: "message" });
-				const branchMessage = messageBranchEntries.find((candidate) => candidate.id === "message");
-				ok(branchMessage?.type === "message");
-				setUserEntryText(branchMessage, "mutated branch");
-				const structures = await storage.scanBranchStructure({ start: "entry" });
-				structures[0]!.timestamp = 0;
-				const stats = await storage.getStats();
-				stats.usage.input = 88;
-
-				deepStrictEqual((await storage.getEntries(["entry"])).get("entry"), {
-					...customEntry("entry", null, "nested", { nested: { values: [1, 2] } }),
-					seq: entry.seq,
-					timestamp: entry.timestamp,
-				});
-				const storedMessage = (await storage.getEntries(["message"])).get("message");
-				ok(storedMessage?.type === "message");
-				strictEqual(userEntryTextContent(storedMessage).text, "original");
-				deepStrictEqual(await storage.getRegister("fact.custom", "object"), {
-					namespace: "fact.custom",
-					key: "object",
-					value: { nested: [3, 4] },
-					seq: register.seq,
-				});
-				deepStrictEqual(await storage.scanUsage({ order: "asc" }), [
-					{
-						id: "usage",
-						seq: rows[0]!.seq,
-						usage: usage(4, 5),
-						adjustment: false,
-						details: { source: { name: "original" } },
-					},
-				]);
-				deepStrictEqual((await storage.scanEntries({ order: "asc" }))[0]?.type, "custom");
-				deepStrictEqual((await storage.scanBranch({ start: "entry" }))[0]?.type, "custom");
-				strictEqual((await storage.scanBranchStructure({ start: "entry" }))[0]?.timestamp, entry.timestamp);
-				strictEqual((await storage.getStats()).usage.input, 4);
 			},
 		),
 

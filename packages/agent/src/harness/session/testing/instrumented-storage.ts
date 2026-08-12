@@ -13,7 +13,7 @@ import type {
 	UsageScan,
 } from "../types.ts";
 
-/** A deeply detached, mutable transaction snapshot captured at commit admission. */
+/** A transaction captured at commit admission. */
 export type RecordedCommitAttempt = Transaction;
 
 /** Test-only transparent Storage decorator that records commit admission. */
@@ -25,28 +25,20 @@ export class InstrumentedStorage implements Storage {
 		this.delegate = delegate;
 	}
 
-	/** Returns a readonly list of freshly cloned, mutable attempt snapshots. */
 	getCommitAttempts(): readonly RecordedCommitAttempt[] {
-		return structuredClone(this.commitAttempts);
+		return this.commitAttempts.slice();
 	}
 
 	clearCommitAttempts(): void {
 		this.commitAttempts.length = 0;
 	}
 
-	/** Clone failure rejects without recording or admitting the transaction to the delegate. */
 	commit(transaction: Transaction): Promise<CommitResult> {
-		let snapshot: Transaction;
-		try {
-			snapshot = structuredClone(transaction);
-		} catch (error) {
-			return Promise.reject(error);
-		}
-		this.commitAttempts.push(snapshot);
+		this.commitAttempts.push(transaction);
 		return this.delegate.commit(transaction);
 	}
 
-	getEntries(ids: string[]): Promise<ReadonlyMap<string, Entry>> {
+	getEntries(ids: string[]): Promise<Map<string, Entry>> {
 		return this.delegate.getEntries(ids);
 	}
 

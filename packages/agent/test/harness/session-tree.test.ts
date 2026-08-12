@@ -1,17 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SessionCodecError } from "../../src/harness/session/codec.ts";
 import { LaneMutationLine } from "../../src/harness/session/lane-mutations.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { SessionInvariantError, StorageBackedSession } from "../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../src/harness/session/testing/index.ts";
-import type {
-	LaneState,
-	NewEntry,
-	Operation,
-	RunState,
-	SessionMetadata,
-	SessionStats,
-} from "../../src/harness/session/types.ts";
+import type { LaneState, NewEntry, Operation, RunState, SessionMetadata } from "../../src/harness/session/types.ts";
 
 const NOW = 1_700_000_000_000;
 const ROOT_ID = "00000000-0000-7000-8000-000000000001";
@@ -85,19 +77,6 @@ async function createTreeSession(): Promise<StorageBackedSession> {
 	return session;
 }
 
-class CorruptStatsStorage extends MemoryStorage {
-	override getStats(): Promise<SessionStats> {
-		return Promise.resolve({ messageCount: -1, usage: {} } as unknown as SessionStats);
-	}
-}
-
-class CorruptScanStorage extends MemoryStorage {
-	override async scanEntries(query: Parameters<MemoryStorage["scanEntries"]>[0]) {
-		const entries = await super.scanEntries(query);
-		return entries.map((entry) => ({ ...entry, seq: 0 }));
-	}
-}
-
 class CountingLaneMutationLine extends LaneMutationLine {
 	runCount = 0;
 
@@ -153,20 +132,10 @@ describe("StorageBackedSession SessionTree", () => {
 		await session.close();
 	});
 
-	it("rejects missing lanes and corrupted stats or query entries", async () => {
+	it("rejects missing lanes", async () => {
 		const session = await createTreeSession();
 		await expect(session.view("missing").getLeafId()).rejects.toThrow("Unknown lane");
 		await session.close();
-
-		const corruptStats = new StorageBackedSession(metadata, new CorruptStatsStorage());
-		await expect(corruptStats.getStats()).rejects.toBeInstanceOf(SessionCodecError);
-		await corruptStats.close();
-
-		const storage = new CorruptScanStorage({ now: () => NOW });
-		await storage.commit({ writes: [{ kind: "entry", entry: customEntry(ROOT_ID, null) }] });
-		const corruptScan = new StorageBackedSession(metadata, storage);
-		await expect(corruptScan.findEntries()).rejects.toBeInstanceOf(SessionCodecError);
-		await corruptScan.close();
 	});
 
 	it("reads, sets, and deletes global facts while preserving JSON null", async () => {
@@ -193,16 +162,12 @@ describe("StorageBackedSession SessionTree", () => {
 		await session.close();
 	});
 
-	it("validates and detaches fact writes before storage admission", async () => {
+	it("passes fact values directly to storage", async () => {
 		const session = await createTreeSession();
 		const value = { nested: ["original"] };
 
-		const set = session.setCustomFact("state", value);
-		value.nested[0] = "mutated";
-		await set;
-		expect(await session.getCustomFact("state")).toEqual({ nested: ["original"] });
-		await expect(session.setLabel("not-a-uuid", "bad")).rejects.toBeInstanceOf(SessionCodecError);
-		await expect(session.setCustomFact("state", Number.NaN)).rejects.toBeInstanceOf(SessionCodecError);
+		await session.setCustomFact("state", value);
+		expect(await session.getCustomFact("state")).toBe(value);
 		await session.close();
 	});
 
@@ -420,30 +385,24 @@ describe("StorageBackedSession SessionTree", () => {
 		await session.close();
 	});
 
-	it("captures append payloads before the first await and rejects invalid payloads before admission", async () => {
+	it("passes append payloads directly to storage", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const laneMutationLine = new CountingLaneMutationLine();
-		const session = new StorageBackedSession(metadata, storage, {}, { laneMutationLine });
+		const session = new StorageBackedSession(metadata, storage, { laneMutationLine });
 		await session.commit({ writes: [...laneWrites(null)] });
 		storage.clearCommitAttempts();
 		const data = { nested: ["original"] };
 
-		const append = session.appendCustomEntry("note", data);
-		data.nested[0] = "mutated";
-		const id = await append;
-		expect(await session.getEntry(id)).toMatchObject({ data: { nested: ["original"] } });
+		const id = await session.appendCustomEntry("note", data);
+		const entry = await session.getEntry(id);
+		if (entry?.type !== "custom") throw new Error("Expected custom entry");
+		expect(entry.data).toBe(data);
 		expect(storage.getCommitAttempts()).toHaveLength(1);
-		storage.clearCommitAttempts();
 		const message = { role: "user" as const, content: "original", timestamp: NOW };
-		const messageAppend = session.appendMessage(message);
-		message.content = "mutated";
-		const messageId = await messageAppend;
-		expect(await session.getEntry(messageId)).toMatchObject({ message: { content: "original" } });
-		expect(laneMutationLine.runCount).toBe(2);
-		storage.clearCommitAttempts();
-
-		await expect(session.appendCustomEntry("bad", Number.NaN)).rejects.toBeInstanceOf(SessionCodecError);
-		expect(storage.getCommitAttempts()).toEqual([]);
+		const messageId = await session.appendMessage(message);
+		const messageEntry = await session.getEntry(messageId);
+		if (messageEntry?.type !== "message") throw new Error("Expected message entry");
+		expect(messageEntry.message).toBe(message);
 		expect(laneMutationLine.runCount).toBe(2);
 		await session.close();
 	});

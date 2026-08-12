@@ -12,7 +12,6 @@ import type {
 	Usage,
 } from "@draht/ai";
 import type { TelemetryContext } from "@draht/telemetry";
-import type { TSchema } from "typebox";
 import type { AgentEventSink } from "../agent-loop.ts";
 import type { AgentMessage, AgentTool, AgentToolCall, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
 import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
@@ -668,5 +667,3 @@ export type FinalizeToolCall = (
 	telemetry: TelemetryContext,
 	signal: AbortSignal,
 ) => Promise<FinalizedToolCall>;
-
-export type CustomMessageSchemas = Record<string, TSchema>;

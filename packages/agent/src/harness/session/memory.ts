@@ -23,10 +23,6 @@ function registerKey(namespace: RegisterNamespace, key: string): string {
 	return `${namespace}\u0000${key}`;
 }
 
-function clone<T>(value: T): T {
-	return structuredClone(value);
-}
-
 function emptyUsage(): Usage {
 	return {
 		input: 0,
@@ -55,8 +51,7 @@ export class MemoryStorage implements Storage {
 
 	async commit(transaction: Transaction): Promise<CommitResult> {
 		if (this.state !== "open") throw new Error("MemoryStorage is closed");
-		const admittedTransaction = clone(transaction);
-		const result = this.commitQueue.then(() => this.applyCommit(admittedTransaction));
+		const result = this.commitQueue.then(() => this.applyCommit(transaction));
 		this.commitQueue = result.then(
 			() => undefined,
 			() => undefined,
@@ -99,12 +94,12 @@ export class MemoryStorage implements Storage {
 			seqs.push(seq);
 			switch (write.kind) {
 				case "entry":
-					stats ??= clone(this.stats);
+					stats ??= { messageCount: this.stats.messageCount, usage: this.stats.usage };
 					entries.push({ ...write.entry, seq, timestamp } as Entry);
 					if (write.entry.type === "message") stats.messageCount++;
 					break;
 				case "usage":
-					stats ??= clone(this.stats);
+					stats ??= { messageCount: this.stats.messageCount, usage: this.stats.usage };
 					usage.push({ ...write.row, seq });
 					stats.usage = addUsage(stats.usage, write.row.usage);
 					break;
@@ -136,12 +131,12 @@ export class MemoryStorage implements Storage {
 		return { firstSeq, seqs, timestamp };
 	}
 
-	getEntries(ids: string[]): Promise<ReadonlyMap<string, Entry>> {
+	getEntries(ids: string[]): Promise<Map<string, Entry>> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
 		const found = new Map<string, Entry>();
 		for (const id of ids) {
 			const entry = this.entries.get(id);
-			if (entry !== undefined) found.set(id, clone(entry));
+			if (entry !== undefined) found.set(id, entry);
 		}
 		return Promise.resolve(found);
 	}
@@ -152,7 +147,7 @@ export class MemoryStorage implements Storage {
 	): Promise<Register<TNamespace> | undefined> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
 		const register = this.registers.get(registerKey(namespace, key));
-		return Promise.resolve(register === undefined ? undefined : (clone(register) as Register<TNamespace>));
+		return Promise.resolve(register as Register<TNamespace> | undefined);
 	}
 
 	listRegisters<TNamespace extends RegisterNamespace>(
@@ -163,7 +158,7 @@ export class MemoryStorage implements Storage {
 		const registers = [...this.registers.values()]
 			.filter((register) => register.namespace === namespace && register.key.startsWith(keyPrefix))
 			.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
-		return Promise.resolve(clone(registers) as Register<TNamespace>[]);
+		return Promise.resolve(registers as Register<TNamespace>[]);
 	}
 
 	private scanBranchEntries(query: StorageBranchScan): Entry[] {
@@ -198,7 +193,7 @@ export class MemoryStorage implements Storage {
 
 	async scanBranch(query: StorageBranchScan): Promise<Entry[]> {
 		if (this.state !== "open") throw new Error("MemoryStorage is closed");
-		return clone(this.scanBranchEntries(query));
+		return this.scanBranchEntries(query);
 	}
 
 	async scanBranchStructure(query: StorageBranchScan): Promise<EntryStructure[]> {
@@ -221,7 +216,7 @@ export class MemoryStorage implements Storage {
 			.filter((entry) => query.fromSeq === undefined || entry.seq >= query.fromSeq)
 			.filter((entry) => query.toSeq === undefined || entry.seq <= query.toSeq)
 			.sort((left, right) => (query.order === "desc" ? right.seq - left.seq : left.seq - right.seq));
-		return Promise.resolve(clone(query.limit === undefined ? entries : entries.slice(0, Math.max(0, query.limit))));
+		return Promise.resolve(query.limit === undefined ? entries : entries.slice(0, Math.max(0, query.limit)));
 	}
 
 	scanUsage(query: UsageScan): Promise<UsageRow[]> {
@@ -230,12 +225,12 @@ export class MemoryStorage implements Storage {
 			.filter((row) => query.fromSeq === undefined || row.seq >= query.fromSeq)
 			.filter((row) => query.toSeq === undefined || row.seq <= query.toSeq)
 			.sort((left, right) => (query.order === "desc" ? right.seq - left.seq : left.seq - right.seq));
-		return Promise.resolve(clone(query.limit === undefined ? rows : rows.slice(0, Math.max(0, query.limit))));
+		return Promise.resolve(query.limit === undefined ? rows : rows.slice(0, Math.max(0, query.limit)));
 	}
 
 	getStats(): Promise<SessionStats> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		return Promise.resolve(clone(this.stats));
+		return Promise.resolve(this.stats);
 	}
 
 	close(): Promise<void> {

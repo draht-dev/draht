@@ -2,7 +2,6 @@
 // Full state validation is R1; harness-wide close admission is R6.
 
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { SessionCodecError } from "../../src/harness/session/codec.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { SessionInvariantError, StorageBackedSession } from "../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../src/harness/session/testing/index.ts";
@@ -119,24 +118,21 @@ describe("StorageBackedSession.createLane", () => {
 		await session.close();
 	});
 
-	it("captures configuration before queued creation runs and rejects malformed values", async () => {
+	it("passes configuration directly to storage", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
 		await session.commit(rootTransaction());
 		storage.clearCommitAttempts();
-		const supplied = structuredClone(configuration);
+		const supplied = {
+			model: { ...configuration.model },
+			thinkingLevel: configuration.thinkingLevel,
+			activeToolNames: [...configuration.activeToolNames],
+		};
 
-		const creation = session.createLane("captured", ROOT_ID, supplied);
-		supplied.model.modelId = "mutated";
-		supplied.activeToolNames[0] = "write";
-		await creation;
+		await session.createLane("captured", ROOT_ID, supplied);
 
-		expect(await session.getRegister("lane.config", "captured")).toMatchObject({ value: configuration });
+		expect((await session.getRegister("lane.config", "captured"))?.value).toBe(supplied);
 		expect(storage.getCommitAttempts()).toHaveLength(1);
-		storage.clearCommitAttempts();
-		const malformed = { ...configuration, thinkingLevel: "huge" } as unknown as LaneConfiguration;
-		await expect(session.createLane("malformed", ROOT_ID, malformed)).rejects.toBeInstanceOf(SessionCodecError);
-		expect(storage.getCommitAttempts()).toEqual([]);
 		await session.close();
 	});
 
@@ -173,18 +169,16 @@ describe("StorageBackedSession.createLane", () => {
 		await session.close();
 	});
 
-	it("rejects malformed or unknown non-null anchors without writing", async () => {
+	it("rejects unknown non-null anchors without writing", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
 		await session.commit(rootTransaction());
 		storage.clearCommitAttempts();
 
-		for (const targetId of ["not-a-uuid", MISSING_ID]) {
-			await expect(session.createLane(`target-${targetId}`, targetId, configuration)).rejects.toMatchObject({
-				name: "SessionUnknownTargetError",
-				targetId,
-			});
-		}
+		await expect(session.createLane("missing-target", MISSING_ID, configuration)).rejects.toMatchObject({
+			name: "SessionUnknownTargetError",
+			targetId: MISSING_ID,
+		});
 		expect(storage.getCommitAttempts()).toEqual([]);
 		await session.close();
 	});

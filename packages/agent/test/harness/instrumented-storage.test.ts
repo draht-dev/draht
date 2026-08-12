@@ -65,77 +65,17 @@ describe("InstrumentedStorage", () => {
 		expect(await secondCommit).toBe(secondResult);
 		await storage.close();
 	});
-	it("captures a detached snapshot of a failed commit attempt without replacing its rejection", async () => {
+	it("records the transaction reference passed to the delegate", async () => {
 		const delegate = new ControlledCommitStorage();
 		const storage = new InstrumentedStorage(delegate);
-		const value = { nested: ["original"] };
 		const transaction: Transaction = {
-			writes: [{ kind: "register", op: "set", namespace: "fact.custom", key: "state", value }],
+			writes: [{ kind: "register", op: "set", namespace: "fact.name", key: "", value: "value" }],
 		};
 
 		const commit = storage.commit(transaction);
-		value.nested[0] = "mutated";
-		const rejection = new Error("delegate rejection");
-		delegate.rejectNextCommit(rejection);
-
-		await expect(commit).rejects.toBe(rejection);
-		expect(storage.getCommitAttempts()).toEqual([
-			{
-				writes: [
-					{
-						kind: "register",
-						op: "set",
-						namespace: "fact.custom",
-						key: "state",
-						value: { nested: ["original"] },
-					},
-				],
-			},
-		]);
-		await storage.close();
-	});
-
-	it("returns detached observation snapshots", async () => {
-		const delegate = new MemoryStorage({ now: () => 100 });
-		const storage = new InstrumentedStorage(delegate);
-		await storage.commit({
-			writes: [
-				{
-					kind: "register",
-					op: "set",
-					namespace: "fact.custom",
-					key: "state",
-					value: { nested: ["original"] },
-				},
-			],
-		});
-
-		const observed = storage.getCommitAttempts() as Transaction[];
-		const write = observed[0]?.writes[0];
-		if (write?.kind !== "register" || write.op !== "set" || write.namespace !== "fact.custom") {
-			throw new Error("Expected recorded fact.custom set");
-		}
-		if (write.value === null || Array.isArray(write.value) || typeof write.value !== "object") {
-			throw new Error("Expected recorded object value");
-		}
-		const nested = write.value.nested;
-		if (!Array.isArray(nested)) throw new Error("Expected recorded nested array");
-		nested[0] = "mutated";
-		observed.length = 0;
-
-		expect(storage.getCommitAttempts()).toEqual([
-			{
-				writes: [
-					{
-						kind: "register",
-						op: "set",
-						namespace: "fact.custom",
-						key: "state",
-						value: { nested: ["original"] },
-					},
-				],
-			},
-		]);
+		expect(storage.getCommitAttempts()[0]).toBe(transaction);
+		delegate.resolveNextCommit({ firstSeq: 1, seqs: [1], timestamp: 10 });
+		await commit;
 		await storage.close();
 	});
 
@@ -210,21 +150,5 @@ describe("InstrumentedStorage", () => {
 		await Promise.all([firstClose, secondClose]);
 		await expect(storage.getStats()).rejects.toThrow("MemoryStorage is closed");
 		expect(storage.getCommitAttempts()).toHaveLength(1);
-	});
-
-	it("fails before delegate admission when an attempt cannot be cloned", async () => {
-		const delegate = new ControlledCommitStorage();
-		const storage = new InstrumentedStorage(delegate);
-		const transaction = new Proxy<Transaction>(
-			{
-				writes: [{ kind: "register", op: "set", namespace: "fact.name", key: "", value: "uncloneable" }],
-			},
-			{},
-		);
-
-		await expect(storage.commit(transaction)).rejects.toThrow();
-		expect(delegate.admissionCount).toBe(0);
-		expect(storage.getCommitAttempts()).toEqual([]);
-		await storage.close();
 	});
 });

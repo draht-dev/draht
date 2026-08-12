@@ -1,6 +1,5 @@
 import { uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../types.ts";
-import { SessionCodec, SessionCodecError } from "./codec.ts";
 import { LaneMutationLine } from "./lane-mutations.ts";
 import type {
 	BranchScan,
@@ -16,7 +15,6 @@ import type {
 	Register,
 	RegisterNamespace,
 	Session,
-	SessionCodecOptions,
 	SessionMetadata,
 	SessionStats,
 	SessionTree,
@@ -71,49 +69,30 @@ export class SessionUnknownTargetError extends Error {
 	}
 }
 
-/** Package-internal validated boundary shared by concrete session repositories. */
+/** Package-internal typed boundary shared by concrete session repositories. */
 export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMetadata> implements Session<TMetadata> {
 	readonly metadata: TMetadata;
 	readonly idGenerator: IdGenerator = { next: uuidv7 };
 	private readonly storage: Storage;
-	private readonly codec: SessionCodec;
 	private readonly laneMutationLine: LaneMutationLine;
 	private readonly closedError = new Error("Session is closed");
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
 
-	constructor(
-		metadata: TMetadata,
-		storage: Storage,
-		codecOptions: SessionCodecOptions = {},
-		concurrency: StorageBackedSessionConcurrency = {},
-	) {
-		this.metadata = structuredClone(metadata);
+	constructor(metadata: TMetadata, storage: Storage, concurrency: StorageBackedSessionConcurrency = {}) {
+		this.metadata = metadata;
 		this.storage = storage;
-		this.codec = new SessionCodec(codecOptions);
 		this.laneMutationLine = concurrency.laneMutationLine ?? new LaneMutationLine();
 	}
 
 	async commit(transaction: Transaction): Promise<CommitResult> {
 		this.assertOpen();
-		const encoded = this.codec.encodeTransaction(transaction);
-		return this.storage.commit(encoded);
+		return this.storage.commit(transaction);
 	}
 
-	async getEntries(ids: string[]): Promise<ReadonlyMap<string, Entry>> {
+	async getEntries(ids: string[]): Promise<Map<string, Entry>> {
 		this.assertOpen();
-		const requestedIds = new Set(ids);
-		const stored = await this.storage.getEntries(ids);
-		const entries = new Map<string, Entry>();
-		for (const [key, value] of stored) {
-			const path = `$[${JSON.stringify(key)}]`;
-			if (!requestedIds.has(key))
-				throw new SessionCodecError(path, "storage returned an entry that was not requested");
-			const entry = this.codec.decodeEntry(value);
-			if (entry.id !== key) throw new SessionCodecError(`${path}.id`, "entry id must equal its storage map key");
-			entries.set(key, entry);
-		}
-		return entries;
+		return this.storage.getEntries(ids);
 	}
 
 	async getRegister<TNamespace extends RegisterNamespace>(
@@ -121,11 +100,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		key: string,
 	): Promise<Register<TNamespace> | undefined> {
 		this.assertOpen();
-		const stored = await this.storage.getRegister(namespace, key);
-		if (stored === undefined) return undefined;
-		const register = this.codec.decodeRegister(namespace, stored);
-		if (register.key !== key) throw new SessionCodecError("$.key", "register key must equal the requested key");
-		return register;
+		return this.storage.getRegister(namespace, key);
 	}
 
 	async listRegisters<TNamespace extends RegisterNamespace>(
@@ -133,14 +108,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		keyPrefix?: string,
 	): Promise<Register<TNamespace>[]> {
 		this.assertOpen();
-		const stored = await this.storage.listRegisters(namespace, keyPrefix);
-		return stored.map((value, index) => {
-			const register = this.codec.decodeRegister(namespace, value);
-			if (keyPrefix !== undefined && !register.key.startsWith(keyPrefix)) {
-				throw new SessionCodecError(`$[${index}].key`, "register key must match the requested prefix");
-			}
-			return register;
-		});
+		return this.storage.listRegisters(namespace, keyPrefix);
 	}
 
 	view(lane: string): SessionTree {
@@ -163,61 +131,50 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		};
 	}
 
-	createLane(name: string, at: string | null, configuration: LaneConfiguration): Promise<SessionTree> {
-		try {
-			this.assertOpen();
-			if (name.length === 0) throw new SessionInvalidLaneError(name, "lane name must not be empty");
-			const capturedConfiguration = this.codec.encodeLaneConfiguration(configuration);
-			return this.laneMutationLine.run(name, async () => {
-				// R1 owns complete idle-lane and current-state validation. Slice 2 only
-				// distinguishes valid existing lane shapes from partial durable lane state.
-				const [leaf, storedConfiguration, laneState, lastResult] = await Promise.all([
-					this.getRegister("lane.leaf", name),
-					this.getRegister("lane.config", name),
-					this.getRegister("lane.state", name),
-					this.getRegister("lane.lastResult", name),
-				]);
-				const presentCount = [leaf, storedConfiguration, laneState, lastResult].filter(
-					(register) => register !== undefined,
-				).length;
-				if (
-					leaf !== undefined &&
-					laneState !== undefined &&
-					(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
-				) {
-					throw new SessionLaneExistsError(name);
-				}
-				if (presentCount !== 0) {
-					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
-				}
-				if (at !== null && !(await this.getEntries([at])).has(at)) throw new SessionUnknownTargetError(at);
+	async createLane(name: string, at: string | null, configuration: LaneConfiguration): Promise<SessionTree> {
+		this.assertOpen();
+		if (name.length === 0) throw new SessionInvalidLaneError(name, "lane name must not be empty");
+		return this.laneMutationLine.run(name, async () => {
+			// R1 owns complete idle-lane and current-state validation. Slice 2 only
+			// distinguishes valid existing lane shapes from partial durable lane state.
+			const [leaf, storedConfiguration, laneState, lastResult] = await Promise.all([
+				this.getRegister("lane.leaf", name),
+				this.getRegister("lane.config", name),
+				this.getRegister("lane.state", name),
+				this.getRegister("lane.lastResult", name),
+			]);
+			const presentCount = [leaf, storedConfiguration, laneState, lastResult].filter(
+				(register) => register !== undefined,
+			).length;
+			if (
+				leaf !== undefined &&
+				laneState !== undefined &&
+				(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
+			) {
+				throw new SessionLaneExistsError(name);
+			}
+			if (presentCount !== 0) {
+				throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
+			}
+			if (at !== null && !(await this.getEntries([at])).has(at)) throw new SessionUnknownTargetError(at);
 
-				// R6 adds the harness-wide admission barrier. Until then, close may reject
-				// this lane job before Storage.commit admits it; admitted commits still drain.
-				await this.commit({
-					writes: [
-						{
-							kind: "register",
-							op: "set",
-							namespace: "lane.config",
-							key: name,
-							value: capturedConfiguration,
-						},
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: name, value: at },
-						{
-							kind: "register",
-							op: "set",
-							namespace: "lane.state",
-							key: name,
-							value: { currentOperationId: null, pendingNextRun: [] },
-						},
-					],
-				});
-				return this.view(name);
+			// R6 adds the harness-wide admission barrier. Until then, close may reject
+			// this lane job before Storage.commit admits it; admitted commits still drain.
+			await this.commit({
+				writes: [
+					{ kind: "register", op: "set", namespace: "lane.config", key: name, value: configuration },
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: name, value: at },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "lane.state",
+						key: name,
+						value: { currentOperationId: null, pendingNextRun: [] },
+					},
+				],
 			});
-		} catch (error) {
-			return Promise.reject(error);
-		}
+			return this.view(name);
+		});
 	}
 
 	getLeafId(): Promise<string | null> {
@@ -230,7 +187,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 
 	async getStats(): Promise<SessionStats> {
 		this.assertOpen();
-		return this.codec.decodeSessionStats(await this.storage.getStats());
+		return this.storage.getStats();
 	}
 
 	async getName(): Promise<string | undefined> {
@@ -282,7 +239,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 			if (order === "asc" && query.cursor.seq === Number.MAX_SAFE_INTEGER) return [];
 			if (order === "desc" && query.cursor.seq <= 1) return [];
 		}
-		const stored = await this.storage.scanEntries({
+		return this.storage.scanEntries({
 			type: query.type,
 			customType: query.customType,
 			order,
@@ -293,7 +250,6 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 					? { fromSeq: query.cursor.seq + 1 }
 					: { toSeq: query.cursor.seq - 1 }),
 		});
-		return stored.map((entry) => this.codec.decodeEntry(entry));
 	}
 
 	async findEntry(query: EntryQuery = {}): Promise<Entry | undefined> {
@@ -346,8 +302,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		this.assertOpen();
 		const start = query.start ?? (await this.getLeafIdForLane(lane));
 		if (start === null) return [];
-		const stored = await this.storage.scanBranch({ ...query, start, order: query.order ?? "newestFirst" });
-		return stored.map((entry) => this.codec.decodeEntry(entry));
+		return this.storage.scanBranch({ ...query, start, order: query.order ?? "newestFirst" });
 	}
 
 	private async findEntryOnBranchForLane(lane: string, query: BranchScan = {}): Promise<Entry | undefined> {
@@ -370,16 +325,9 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		});
 	}
 
-	private captureAppend(lane: string, value: unknown): Promise<string> {
-		try {
-			this.assertOpen();
-			const pending = this.codec.encodePendingEntry(value);
-			const id = this.idGenerator.next();
-			return this.appendCaptured(lane, id, pending);
-		} catch (error) {
-			// SessionTree methods return promises; translate synchronous validation into that declared boundary.
-			return Promise.reject(error);
-		}
+	private async captureAppend(lane: string, pending: PendingEntry): Promise<string> {
+		this.assertOpen();
+		return this.appendCaptured(lane, this.idGenerator.next(), pending);
 	}
 
 	private async appendCaptured(lane: string, id: string, pending: PendingEntry): Promise<string> {

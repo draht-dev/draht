@@ -1,5 +1,4 @@
 import type { AssistantMessage, StopReason, Usage } from "@draht/ai";
-import type { TSchema } from "typebox";
 import type { AgentMessage, QueueMode, ThinkingLevel } from "../../types.ts";
 import type { BranchPreparation } from "../compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings } from "../compaction/compaction.ts";
@@ -442,7 +441,7 @@ export interface SessionStats {
 
 export interface Storage {
 	commit(transaction: Transaction): Promise<CommitResult>;
-	getEntries(ids: string[]): Promise<ReadonlyMap<string, Entry>>;
+	getEntries(ids: string[]): Promise<Map<string, Entry>>;
 	getRegister<TNamespace extends RegisterNamespace>(
 		namespace: TNamespace,
 		key: string,
@@ -466,10 +465,6 @@ export interface SessionMetadata {
 	cwd?: string;
 	parentSessionId?: string;
 	legacyParentSessionPath?: string;
-}
-
-export interface SessionCodecOptions {
-	customMessageSchemas?: Record<string, TSchema>;
 }
 
 export interface IdGenerator {
@@ -508,7 +503,7 @@ export interface Session<TMetadata extends SessionMetadata = SessionMetadata> ex
 	view(lane: string): SessionTree;
 	createLane(name: string, at: string | null, configuration: LaneConfiguration): Promise<SessionTree>;
 	commit(transaction: Transaction): Promise<CommitResult>;
-	getEntries(ids: string[]): Promise<ReadonlyMap<string, Entry>>;
+	getEntries(ids: string[]): Promise<Map<string, Entry>>;
 	getRegister<TNamespace extends RegisterNamespace>(
 		namespace: TNamespace,
 		key: string,

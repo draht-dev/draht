@@ -58,6 +58,14 @@ export class SessionLaneExistsError extends Error {
 	}
 }
 
+/** A pending assistant message cannot be persisted as a session entry. */
+export class SessionPendingAssistantMessageError extends Error {
+	constructor() {
+		super("Cannot append a pending assistant message");
+		this.name = "SessionPendingAssistantMessageError";
+	}
+}
+
 /** A requested session entry target does not exist. */
 export class SessionUnknownTargetError extends Error {
 	readonly targetId: string;
@@ -327,6 +335,13 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 
 	private async captureAppend(lane: string, pending: PendingEntry): Promise<string> {
 		this.assertOpen();
+		if (
+			pending.type === "message" &&
+			pending.payload.role === "assistant" &&
+			pending.payload.stopReason === "pending"
+		) {
+			throw new SessionPendingAssistantMessageError();
+		}
 		return this.appendCaptured(lane, this.idGenerator.next(), pending);
 	}
 

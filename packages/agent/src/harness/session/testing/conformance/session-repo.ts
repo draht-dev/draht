@@ -1,4 +1,5 @@
 import { deepStrictEqual, rejects, strictEqual } from "node:assert/strict";
+import type { AssistantMessage, StopReason } from "@draht/ai";
 import type { LaneConfiguration, LaneState, UsageRow } from "../../types.ts";
 import type { SessionRepoConformanceCase, SessionRepoFixture, SessionRepoFixtureFactory } from "../types.ts";
 
@@ -14,6 +15,32 @@ const configuration = {
 	thinkingLevel: "off",
 	activeToolNames: ["read"],
 } satisfies LaneConfiguration;
+
+function assistantMessage(stopReason: StopReason): AssistantMessage {
+	return {
+		role: "assistant",
+		content:
+			stopReason === "toolUse"
+				? [{ type: "toolCall", id: "call", name: "read", arguments: {} }]
+				: [{ type: "text", text: stopReason }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason,
+		...(stopReason === "deferred"
+			? { deferred: { provider: "anthropic", modelId: "claude-sonnet-4-5", api: "anthropic-messages", id: "job" } }
+			: {}),
+		timestamp: 1,
+	};
+}
 
 function usageRow(): Omit<UsageRow, "seq"> {
 	return {
@@ -128,6 +155,48 @@ export function createSessionRepoConformance(
 				if (result.status === "fulfilled") await result.value.close();
 			}
 			await source.close();
+		}),
+
+		createCase(
+			factory,
+			"messages",
+			"rejects pending assistant messages without changing the tree",
+			async ({ repo }) => {
+				const session = await repo.create({ id: "session" });
+
+				await rejects(session.appendMessage(assistantMessage("pending")));
+
+				strictEqual(await session.getLeafId(), null);
+				deepStrictEqual(await session.findEntries(), []);
+				await session.close();
+			},
+		),
+		createCase(factory, "messages", "preserves every settled assistant stop reason", async ({ repo }) => {
+			const session = await repo.create({ id: "session" });
+			const messagesByStopReason = {
+				stop: assistantMessage("stop"),
+				length: assistantMessage("length"),
+				toolUse: assistantMessage("toolUse"),
+				error: assistantMessage("error"),
+				aborted: assistantMessage("aborted"),
+				deferred: assistantMessage("deferred"),
+			} satisfies Record<Exclude<StopReason, "pending">, AssistantMessage>;
+			const messages = Object.values(messagesByStopReason);
+			const ids: string[] = [];
+
+			for (const message of messages) ids.push(await session.appendMessage(message));
+
+			const entries = await session.findEntries({ order: "asc", type: "message" });
+			deepStrictEqual(
+				entries.map((entry) => entry.id),
+				ids,
+			);
+			for (const [index, entry] of entries.entries()) {
+				if (entry.type !== "message") throw new Error("Expected message entry");
+				deepStrictEqual(entry.message, messages[index]);
+			}
+			strictEqual(await session.getLeafId(), ids.at(-1));
+			await session.close();
 		}),
 
 		createCase(factory, "forks", "forks a fresh session before first attachment", async ({ repo }) => {

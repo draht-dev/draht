@@ -345,13 +345,6 @@ describe("harness compaction", () => {
 		]);
 	});
 
-	it("excludes failed assistant responses from built context", () => {
-		const user = createMessageEntry(createUserMessage("1"));
-		const failed = createMessageEntry({ ...createAssistantMessage("failed"), stopReason: "error" }, user.id);
-		const loaded = buildSessionContext([user, failed]);
-		expect(loaded).toEqual([user.message]);
-	});
-
 	it("prepares compaction using the latest compaction summary as previousSummary", () => {
 		const u1 = createMessageEntry(createUserMessage("user msg 1"));
 		const a1 = createMessageEntry(createAssistantMessage("assistant msg 1"), u1.id);

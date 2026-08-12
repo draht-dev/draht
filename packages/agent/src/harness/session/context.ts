@@ -35,6 +35,13 @@ export function buildContextEntries(pathEntries: readonly Entry[], options: Sess
 	return entries;
 }
 
+function isContextMessage(message: AgentMessage): boolean {
+	return (
+		message.role !== "assistant" ||
+		(message.stopReason !== "error" && message.stopReason !== "aborted" && message.stopReason !== "deferred")
+	);
+}
+
 export function sessionEntryToContextMessages(
 	entry: Entry,
 	index: number,
@@ -43,19 +50,11 @@ export function sessionEntryToContextMessages(
 ): AgentMessage[] {
 	switch (entry.type) {
 		case "message":
-			if (
-				entry.message.role === "assistant" &&
-				(entry.message.stopReason === "error" ||
-					entry.message.stopReason === "aborted" ||
-					entry.message.stopReason === "deferred")
-			) {
-				return [];
-			}
-			return [entry.message];
+			return isContextMessage(entry.message) ? [entry.message] : [];
 		case "compaction":
 			return [
 				createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
-				...entry.retainedTail,
+				...entry.retainedTail.filter(isContextMessage),
 			];
 		case "branch_summary":
 			return entry.summary ? [createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)] : [];

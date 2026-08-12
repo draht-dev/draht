@@ -7,6 +7,7 @@
 
 import { readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { stampPluginManifests } from './lib/version-stamp.mjs';
 
 const packagesDir = join(process.cwd(), 'packages');
 const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
@@ -97,28 +98,8 @@ if (totalUpdates === 0) {
 	console.log(`\n✅ Updated ${totalUpdates} dependency version(s)`);
 }
 
-// Plugin manifests are what Claude Code / Codex use to decide whether an update exists —
-// if they freeze while package.json moves on, installed plugins silently never refresh.
-// Keep them in lockstep with their package version.
-const pluginManifests = [
-	join(packagesDir, 'draht-claude', '.claude-plugin', 'plugin.json'),
-	join(packagesDir, 'draht-codex', '.codex-plugin', 'plugin.json'),
-];
-for (const manifestPath of pluginManifests) {
-	let manifest;
-	try {
-		manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-	} catch (e) {
-		console.error(`Failed to read ${manifestPath}:`, e.message);
-		process.exitCode = 1;
-		continue;
-	}
-	const target = [...versions][0];
-	if (manifest.version !== target) {
-		console.log(`\n${manifestPath}:`);
-		console.log(`  version: ${manifest.version} → ${target}`);
-		manifest.version = target;
-		writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-	}
-}
-console.log('✅ Plugin manifests in lockstep');
+// Keep plugin manifests in lockstep with the package version too — see
+// lib/version-stamp.mjs for why (Claude Code / Codex key update detection
+// off the manifest version) and the shared implementation, also used by
+// scripts/release.mjs so the two paths cannot drift apart again.
+stampPluginManifests([...versions][0], process.cwd());

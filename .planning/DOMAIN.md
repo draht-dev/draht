@@ -40,7 +40,7 @@ Each imports `@draht/coding-agent`'s Extension API and registers tools/hooks. No
 
 ### Tier E — Distribution / Tooling (support, non-domain)
 
-`@draht/tools` (canonical GSD CLI source), `draht-claude` & `draht-codex` (plugin wrappers mirroring tools/agents/skills), `@draht/templates` (AGENTS.md library), `@draht/workflows` (n8n templates). Packaging/distribution shells, not domain logic.
+`@draht/tools` (canonical GSD CLI source), `draht-claude` & `draht-codex` (plugin wrappers whose skill/command content is **generated** from the repo-root canonical `skills/` tree — Milestone 7 — with `agents/` still byte-synced), `@draht/install` (unified installer engine: transactional component management over hash-manifested state, bins `draht-install`/`draht-init`), `@draht/templates` (AGENTS.md library), `@draht/workflows` (n8n templates). Packaging/distribution shells, not domain logic. Vocabulary: see the Unified Distribution glossary rows and `.planning/specs/2026-08-12-unified-distribution-product.md`.
 
 ### Tier F — geist (spatial ADE, harness-independent; target architecture)
 
@@ -180,6 +180,19 @@ There are no SQL tables anywhere in the monorepo (inferred). State lives as: (a)
 | Variant | geist | One sibling worktree in a `variants n` comparison; may carry its own harness. |
 | room-glass / content-glass | geist | The two-material design system (spec §13): opaque/alpha-smoke panel chrome vs. full blur+refraction inside panels — split because Quest cannot sample passthrough. |
 | Target ring | geist | Target signature UI from the spec; not implemented in the current picker/console/Quest code. |
+| Component | Unified Distribution | An installable unit the engine manages (`claude-plugin`, `codex-plugin`, `coding-agent`, `installer`); registered as data in the component index, never as engine code. |
+| Component index | Unified Distribution | Zod-validated data (`packages/install/src/components.json`) mapping component ids to kind/npmName/default-membership; the extensibility seam for future packages. |
+| Adapter | Unified Distribution | The per-`kind` code seam that stages payloads and drives host registration (claude-plugin / codex-plugin / global-cli); the only place host specifics live. |
+| Manifest (install state) | Unified Distribution | `~/.draht/install/state.json` — schema-versioned record of channel, profile, and per-component versions + per-file sha256; the answer to "what did draht write to this machine". |
+| Journal | Unified Distribution | Append-only JSONL transaction log (`planned → staged → backed-up → swapped → registered → committed \| rolled-back`); crash recovery reads it, disk state remains the truth. |
+| Plan / Apply | Unified Distribution | Pure diff of desired vs actual state producing typed actions; transactional execution of those actions with staging, backups, and rollback-on-failure. |
+| Profile | Unified Distribution | Which components a run targets: detection-based default, `--full`, or explicit selectors. |
+| Channel | Unified Distribution | npm dist-tag a component resolves through; `latest` only until the `next` pipeline is repaired (frozen-tag hazard). |
+| Effectiveness | Unified Distribution | Honest per-host update semantics: `live \| after-reload \| next-session \| restart-required \| unknown` — never "all agents updated". |
+| Canonical skill tree | Unified Distribution | Repo-root `skills/` — the provider-neutral Agent Skills source of truth the public catalog serves and the generator consumes. |
+| Dialect table | Unified Distribution | Data-driven (canonical → Claude, Codex) span renderings the generator applies; the only permitted per-host divergence in generated artifacts. |
+| Generated consumer | Unified Distribution | `packages/draht-claude`/`packages/draht-codex` skill+command content — committed build outputs equality-checked against regeneration (`check:skills-artifacts`), never hand-edited. |
+| Launcher | Unified Distribution | A thin unscoped npm package (bin stub) exposing the engine for cold `npx`; publish-gated (Phase 52). |
 
 ## Concerns (inferred, for later confirmation)
 

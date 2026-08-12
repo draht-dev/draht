@@ -4,8 +4,9 @@
  *
  * Usage: node scripts/release.mjs [--dry-run]
  *
- * Version format: YYYY.M.D (e.g. 2026.2.28)
- * Multiple releases per day: 2026.2.28-1, 2026.2.28-2, etc.
+ * Version format: always-suffixed CalVer YYYY.M.D-N (e.g. 2026.2.28-1).
+ * The first release of a day is -1; a second release the same day is -2, etc.
+ * (see lib/version-stamp.mjs computeNextVersion for the exact rules)
  *
  * Steps:
  * 1. Fetch tags from pull remote (for changelog scoping)
@@ -29,6 +30,7 @@ import {
 	setVersion,
 	waitForVerifiedRelease,
 } from "./release-helpers.mjs";
+import { computeNextVersion } from "./lib/version-stamp.mjs";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 
@@ -50,31 +52,11 @@ function run(cmd, options = {}) {
 }
 
 function computeVersion() {
-	const now = new Date();
-	const base = `${now.getFullYear()}.${now.getMonth() + 1}.${now.getDate()}`;
-
 	// Check existing tags for today
 	const tags = execSync("git tag -l", { encoding: "utf-8" }).trim().split("\n").filter(Boolean);
-	const todayTags = tags.filter((t) => t === `v${base}` || t.startsWith(`v${base}-`));
+	const existingVersions = tags.filter((t) => t.startsWith("v")).map((t) => t.slice(1));
 
-	if (todayTags.length === 0) {
-		return base;
-	}
-
-	// Find highest suffix
-	let maxSuffix = 0;
-	for (const tag of todayTags) {
-		if (tag === `v${base}`) {
-			maxSuffix = Math.max(maxSuffix, 0);
-		} else {
-			const match = tag.match(new RegExp(`^v${base.replace(/\./g, "\\.")}-(\\d+)$`));
-			if (match) {
-				maxSuffix = Math.max(maxSuffix, Number.parseInt(match[1], 10));
-			}
-		}
-	}
-
-	return `${base}-${maxSuffix + 1}`;
+	return computeNextVersion(existingVersions, new Date());
 }
 
 function getChangelogs() {

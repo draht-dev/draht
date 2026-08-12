@@ -327,6 +327,25 @@
         "typescript": "7.0.2",
       },
     },
+    "packages/install": {
+      "name": "@draht/install",
+      "version": "2026.7.30",
+      "bin": {
+        "draht-install": "./dist/cli.js",
+        "draht-init": "./dist/cli.js",
+      },
+      "dependencies": {
+        "@draht/tools": "workspace:*",
+        "semver": "^7.8.0",
+        "zod": "^3.25.0",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.5",
+        "@types/semver": "^7.7.1",
+        "typescript": "7.0.2",
+        "vitest": "^3.2.4",
+      },
+    },
     "packages/invoice": {
       "name": "@draht/invoice",
       "version": "2026.7.30",
@@ -730,6 +749,8 @@
     "@draht/geist-protocol": ["@draht/geist-protocol@workspace:packages/geist-protocol"],
 
     "@draht/infra": ["@draht/infra@workspace:packages/infra"],
+
+    "@draht/install": ["@draht/install@workspace:packages/install"],
 
     "@draht/invoice": ["@draht/invoice@workspace:packages/invoice"],
 

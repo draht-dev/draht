@@ -44,6 +44,11 @@
  *      extensionFactories. Files existing with passing unit tests is not
  *      sufficient — this was dead code for a full phase because nothing
  *      asserted the import chain reached the running CLI.
+ *  21. Plugin manifest versions (draht-claude, draht-codex) equal their own
+ *      package.json version — the release path stamps every package's
+ *      package.json, but Claude Code / Codex key update detection off the
+ *      plugin manifest version, so a gap between the two writers freezes
+ *      installed plugins on a stale version without anyone noticing.
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -1005,6 +1010,43 @@ if (existsSync(resolve(root, agentSessionServicesRelPath))) {
 	check(
 		/extensionFactories:\s*\[\s*\.\.\.CORE_BUILTIN_EXTENSIONS/.test(servicesContent),
 		`${agentSessionServicesRelPath}: extensionFactories spreads ...CORE_BUILTIN_EXTENSIONS (actually reachable, not just imported)`,
+	);
+}
+
+// ── 21. Plugin manifest version matches its own package.json version ────
+//
+// scripts/release.mjs (setVersion) and scripts/sync-versions.js both write
+// packages/*/package.json, but Claude Code / Codex read the *plugin*
+// manifest version (.claude-plugin/plugin.json, .codex-plugin/plugin.json)
+// to decide whether an update exists. A previous fix landed only in
+// sync-versions.js's stamping — which the release path never calls — so the
+// manifests froze at an old version while every package.json kept moving.
+// This check exists so that regression is a red check here, not a silent
+// plugin-cache freeze discovered later.
+
+console.log("\nPlugin manifest version lockstep");
+
+const pluginManifestPairs = [
+	{
+		pkgPath: "packages/draht-claude/package.json",
+		manifestPath: "packages/draht-claude/.claude-plugin/plugin.json",
+	},
+	{
+		pkgPath: "packages/draht-codex/package.json",
+		manifestPath: "packages/draht-codex/.codex-plugin/plugin.json",
+	},
+];
+
+for (const { pkgPath, manifestPath } of pluginManifestPairs) {
+	if (!existsSync(resolve(root, pkgPath)) || !existsSync(resolve(root, manifestPath))) {
+		fail(`${manifestPath}: cannot compare — ${pkgPath} or ${manifestPath} not found`);
+		continue;
+	}
+	const pkg = readJson(pkgPath);
+	const manifest = readJson(manifestPath);
+	check(
+		manifest.version === pkg.version,
+		`${manifestPath}: version "${manifest.version}" matches ${pkgPath} version "${pkg.version}"`,
 	);
 }
 

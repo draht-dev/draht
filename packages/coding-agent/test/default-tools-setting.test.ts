@@ -2,14 +2,15 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModel } from "@draht/ai/compat";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
-import { type CreateAgentSessionOptions, createAgentSession } from "../src/core/sdk.ts";
+import { type CreateAgentSessionOptions, createAgentSession, type InlineExtension } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 
-type ToolOptions = Pick<CreateAgentSessionOptions, "tools" | "excludeTools" | "noTools">;
+type ToolOptions = Pick<CreateAgentSessionOptions, "tools" | "excludeTools" | "noTools" | "customTools">;
 
 describe("defaultTools setting", () => {
 	let tempDir: string;
@@ -27,9 +28,18 @@ describe("defaultTools setting", () => {
 		}
 	});
 
-	async function createSession(defaultTools: string[], options: ToolOptions = {}) {
+	async function createSession(
+		defaultTools: string[],
+		options: ToolOptions = {},
+		extensionFactories: InlineExtension[] = [],
+	) {
 		const settingsManager = SettingsManager.inMemory({ defaultTools });
-		const resourceLoader = new DefaultResourceLoader({ cwd: tempDir, agentDir, settingsManager });
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+			extensionFactories,
+		});
 		await resourceLoader.reload();
 
 		return (
@@ -45,13 +55,62 @@ describe("defaultTools setting", () => {
 		).session;
 	}
 
-	it("uses the configured list as the initial tool allowlist", async () => {
+	it("uses the configured list as the initial built-in selection", async () => {
 		const session = await createSession(["grep", "find"]);
 
-		expect(session.getAllTools().map((tool) => tool.name)).toEqual(["grep", "find"]);
+		expect(
+			session
+				.getAllTools()
+				.map((tool) => tool.name)
+				.sort(),
+		).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
 		expect(session.getActiveToolNames()).toEqual(["grep", "find"]);
 		expect(session.systemPrompt).toContain("- grep:");
 		expect(session.systemPrompt).not.toContain("- read:");
+		session.dispose();
+	});
+
+	it("keeps extension and SDK custom tools enabled", async () => {
+		const session = await createSession(
+			["grep"],
+			{
+				customTools: [
+					{
+						name: "sdk_tool",
+						label: "SDK Tool",
+						description: "SDK custom tool",
+						parameters: Type.Object({}),
+						execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+					},
+				],
+			},
+			[
+				(pi) => {
+					pi.registerTool({
+						name: "static_tool",
+						label: "Static Tool",
+						description: "Statically registered extension tool",
+						parameters: Type.Object({}),
+						execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+					});
+					pi.on("session_start", () => {
+						pi.registerTool({
+							name: "dynamic_tool",
+							label: "Dynamic Tool",
+							description: "Dynamically registered extension tool",
+							parameters: Type.Object({}),
+							execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+						});
+					});
+				},
+			],
+		);
+		await session.bindExtensions({});
+
+		expect(session.getActiveToolNames().sort()).toEqual(["dynamic_tool", "grep", "sdk_tool", "static_tool"]);
+		expect(session.getAllTools().map((tool) => tool.name)).toEqual(
+			expect.arrayContaining(["read", "dynamic_tool", "sdk_tool", "static_tool"]),
+		);
 		session.dispose();
 	});
 
@@ -79,7 +138,12 @@ describe("defaultTools setting", () => {
 			model: getModel("anthropic", "claude-sonnet-4-5")!,
 		});
 
-		expect(session.getAllTools().map((tool) => tool.name)).toEqual(["ls"]);
+		expect(
+			session
+				.getAllTools()
+				.map((tool) => tool.name)
+				.sort(),
+		).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
 		expect(session.getActiveToolNames()).toEqual(["ls"]);
 		session.dispose();
 	});

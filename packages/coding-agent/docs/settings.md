@@ -199,9 +199,9 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `defaultTools` | string[] | - | Initial tool allowlist. When omitted, Pi uses its standard defaults |
+| `defaultTools` | string[] | - | Built-in tools enabled initially. When omitted, Pi uses its standard defaults |
 
-`defaultTools` applies to built-in, extension, and custom tools, like the `--tools` CLI option:
+`defaultTools` selects the built-in tools enabled at startup. Extension and SDK custom tools remain enabled:
 
 ```json
 {
@@ -209,7 +209,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 }
 ```
 
-An empty array starts with no tools. `--tools`, `--no-tools`, and `--no-builtin-tools` override this setting; `--exclude-tools` filters the resulting list. A project `defaultTools` array replaces the global array.
+An empty array starts with no built-in tools while preserving extension and SDK custom tools. `--tools` replaces this behavior with a strict allowlist for all tools, `--no-tools` disables all tools, and `--no-builtin-tools` disables the built-in defaults. `--exclude-tools` filters the resulting list. A project `defaultTools` array replaces the global array.
 
 ### Sessions
 

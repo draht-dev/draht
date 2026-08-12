@@ -97,4 +97,21 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 
 		expect(runGate().exitCode).toBe(0);
 	});
+
+	test("boundary packages reject relative imports that escape the package into the kernel", () => {
+		// `import "../../coding-agent/src/index.js"` names no @draht/* specifier,
+		// yet lands in the kernel all the same — a hard boundary that only
+		// pattern-matches npm scopes is not hard. Any relative import resolving
+		// outside its own package root must fail the gate.
+		expect(runGate().exitCode).toBe(0);
+
+		const file = join(REPO_ROOT, "packages", "geist-core", "src", "__boundary-mutation__.ts");
+		withInjected(file, 'import "../../coding-agent/src/index.js";\n', () => {
+			const { exitCode, stderr } = runGate();
+			expect({ exitCode }).toEqual({ exitCode: 1 });
+			expect(stderr).toContain("__boundary-mutation__.ts");
+		});
+
+		expect(runGate().exitCode).toBe(0);
+	});
 });

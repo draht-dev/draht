@@ -334,7 +334,7 @@ export class Engine {
 				plan: plan.actions,
 				signal: this.deps.signal,
 
-				materialize: async (action, stagingComponentDir): Promise<MaterializedComponent> => {
+				materialize: async (action, stagingComponentDir, transaction): Promise<MaterializedComponent> => {
 					onEvent?.({ event: "action-start", componentId: action.componentId, type: action.type });
 					const component = this.componentById(action.componentId);
 					const adapter = adapterFor(action.kind);
@@ -351,6 +351,9 @@ export class Engine {
 						// Deregistration happens here — before the payload is backed up
 						// or deleted — so a host that still holds a reference blocks the
 						// removal instead of being left pointing at deleted files.
+						transaction.noteExternalEffect(
+							`host deregistration for ${action.componentId} may have changed and was NOT rolled back: inspect and reconcile its host before retrying`,
+						);
 						const outcome = await adapter.deregister(
 							this.adapterContext(),
 							this.adapterComponent(component),

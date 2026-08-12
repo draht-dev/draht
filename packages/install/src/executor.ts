@@ -66,7 +66,11 @@ export interface ApplyPlanOptions {
 	root: string;
 	plan: PlanAction[];
 	/** Writes a component's payload into `stagingComponentDir` and reports where it ultimately belongs. */
-	materialize: (action: PlanAction, stagingComponentDir: string) => Promise<MaterializedComponent>;
+	materialize: (
+		action: PlanAction,
+		stagingComponentDir: string,
+		context: { noteExternalEffect: (description: string) => void },
+	) => Promise<MaterializedComponent>;
 	/**
 	 * Runs once a component's payload is in place at `targetDir` (e.g. wiring it
 	 * into a host's config). May report how the change takes effect; anything it
@@ -257,7 +261,6 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 				if (!delegate) {
 					throw new Error(`plan contains "${action.type}" but no delegate callback was provided`);
 				}
-				const delegated = await delegate(action);
 				const entry: ActionProgress = {
 					action,
 					stagingComponentDir: join(stagingDir(root, tx), action.componentId),
@@ -265,15 +268,20 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 					swapped: false,
 					// Only an install leaves an external artifact behind; an uninstall
 					// that already succeeded has nothing to un-remove.
-					delegated: action.type === "delegate-install" ? delegated.delegated : undefined,
-					externalEffects:
-						action.type === "delegate-uninstall"
-							? [
-									`${delegated.delegated.packageName} was uninstalled by ${delegated.delegated.method} and was NOT restored: reconcile the external package manager before retrying`,
-								]
-							: [],
+					externalEffects: [
+						`external package-manager ${action.type} for ${action.componentId} may have changed the machine and was NOT rolled back: inspect and reconcile it before retrying`,
+					],
 				};
 				progress.push(entry);
+				const delegated = await delegate(action);
+				if (action.type === "delegate-install") {
+					entry.delegated = delegated.delegated;
+					entry.externalEffects = [];
+				} else {
+					entry.externalEffects = [
+						`${delegated.delegated.packageName} was uninstalled by ${delegated.delegated.method} and was NOT restored: reconcile the external package manager before retrying`,
+					];
+				}
 				record("registered", {
 					componentId: action.componentId,
 					type: action.type,
@@ -295,7 +303,9 @@ export async function applyPlan(opts: ApplyPlanOptions): Promise<ApplyPlanResult
 			};
 			progress.push(entry);
 
-			const materialized = await materialize(action, stagingComponentDir);
+			const materialized = await materialize(action, stagingComponentDir, {
+				noteExternalEffect: (description) => entry.externalEffects.push(description),
+			});
 			entry.targetDir = materialized.targetDir;
 			record("staged", { componentId: action.componentId, type: action.type, targetDir: materialized.targetDir });
 			checkpoint?.("after-stage", action);

@@ -267,6 +267,46 @@ describe("applyPlan fault injection", () => {
 		expect(rolledBack?.event).toBe("rolled-back");
 		expect(rolledBack?.detail).toMatchObject({ unrolledEffects: applyError.unrolledEffects });
 	});
+
+	it("records external effects before materialization or delegation can mutate and throw", async () => {
+		const install: PlanAction = {
+			type: "install",
+			componentId: "alpha",
+			kind: "claude-plugin",
+			toVersion: "1.0.0",
+			source: sourceFor("alpha", "1.0.0"),
+		};
+		await expect(
+			applyPlan({
+				root,
+				plan: [install],
+				materialize: async (_action, _staging, transaction) => {
+					transaction.noteExternalEffect("host deregistration for alpha may have changed; reconcile it");
+					throw new Error("host mutated then failed");
+				},
+			}),
+		).rejects.toMatchObject({
+			unrolledEffects: [expect.stringMatching(/host deregistration for alpha.*reconcile/i)],
+		});
+
+		const delegated: PlanAction = {
+			type: "delegate-install",
+			componentId: "installer",
+			kind: "global-cli",
+		};
+		await expect(
+			applyPlan({
+				root,
+				plan: [delegated],
+				materialize: makeMaterialize({}),
+				delegate: async () => {
+					throw new Error("npm mutated then failed");
+				},
+			}),
+		).rejects.toMatchObject({
+			unrolledEffects: [expect.stringMatching(/package-manager delegate-install for installer.*reconcile/i)],
+		});
+	});
 });
 
 describe("applyPlan idempotence", () => {

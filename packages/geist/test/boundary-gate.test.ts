@@ -69,4 +69,32 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 		// The mutations above were all cleaned up: the tree is green again.
 		expect(runGate().exitCode).toBe(0);
 	});
+
+	test("quest/ rejects every @draht/* reference in any file, even inside comments", () => {
+		// R31-FOUND.7's separate quest mutation: quest/ is Kotlin — the boundary
+		// holds only if the gate reads every file as text, not just JS-shaped
+		// import specifiers. A comment reference is enough to smuggle coupling
+		// into review, so a comment reference is enough to fail the gate.
+		expect(runGate().exitCode).toBe(0);
+
+		const mutations = [
+			{
+				file: join(REPO_ROOT, "quest", "app", "__BoundaryMutation.kt"),
+				content: "// mirrors @draht/geist-protocol FleetStateMessage by hand\n",
+			},
+			{
+				file: join(REPO_ROOT, "quest", "__boundary-mutation__.gradle.kts"),
+				content: 'val forbidden = "@draht/geist-core"\n',
+			},
+		];
+		for (const { file, content } of mutations) {
+			withInjected(file, content, () => {
+				const { exitCode, stderr } = runGate();
+				expect({ file, exitCode }).toEqual({ file, exitCode: 1 });
+				expect(stderr).toContain("@draht/");
+			});
+		}
+
+		expect(runGate().exitCode).toBe(0);
+	});
 });

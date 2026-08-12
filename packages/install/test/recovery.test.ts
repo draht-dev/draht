@@ -241,7 +241,7 @@ describe("crash assessment", () => {
 			const journal = join(h.root, "journal.jsonl");
 			writeFileSync(
 				journal,
-				`${readFileSync(journal, "utf8")}{"tx":"${tx}","seq":3,"at":"2026-01-01T00:00:02.000Z","event":"committed","detail":{"pid":`,
+				`${readFileSync(journal, "utf8")}{"tx":"${tx}","seq":3,"at":"2026-01-01T00:00:02.000Z","event":"committed"`,
 			);
 
 			const result = recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
@@ -295,6 +295,43 @@ describe("crash assessment", () => {
 
 			expect(assessment.recoverable).toBe(false);
 			expect(assessment.blockers.join(" ")).toMatch(/torn|incomplete/i);
+		} finally {
+			h.dispose();
+		}
+	});
+
+	it.each([
+		[
+			"duplicate event",
+			(tx: string) =>
+				`{"tx":"${tx}","event":"comment","seq":3,"at":"2026-01-01T00:00:02.000Z","event":"committed","detail":`,
+		],
+		[
+			"duplicate transaction",
+			(tx: string) =>
+				`{"tx":"${tx}","tx":"tx-foreign","seq":3,"at":"2026-01-01T00:00:02.000Z","event":"committed","detail":`,
+		],
+		[
+			"inserted field",
+			(tx: string) =>
+				`{"tx":"${tx}","extra":true,"seq":3,"at":"2026-01-01T00:00:02.000Z","event":"committed","detail":`,
+		],
+	])("refuses a noncanonical torn tail with %s", (_label, makeTail) => {
+		const h = harness();
+		try {
+			const tx = "tx-committed-noncanonical";
+			const state = createDefaultState();
+			state.lastTx = tx;
+			saveState(h.root, state);
+			appendJournal(h.root, { tx, seq: 1, at: "2026-01-01T00:00:00.000Z", event: "planned" });
+			const journal = join(h.root, "journal.jsonl");
+			const tail = makeTail(tx);
+			writeFileSync(journal, `${readFileSync(journal, "utf8")}${tail}`);
+
+			const assessment = assessCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+
+			expect(assessment.recoverable).toBe(false);
+			expect(readFileSync(journal, "utf8")).toContain(tail);
 		} finally {
 			h.dispose();
 		}

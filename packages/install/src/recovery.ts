@@ -90,6 +90,14 @@ function listSubdirNames(dir: string): string[] {
 		.map((entry) => entry.name);
 }
 
+function isCanonicalTornCommittedTail(tail: string | undefined, tx: string): boolean {
+	if (tail === undefined) return false;
+	const encodedTx = JSON.stringify(tx).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(
+		`^\\{"tx":${encodedTx},"seq":(?:0|[1-9]\\d*),"at":"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z","event":"committed"\\}?$`,
+	).test(tail);
+}
+
 /**
  * Decides, from durable evidence only, whether every interrupted transaction
  * can be undone automatically.
@@ -153,10 +161,7 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 	const transactions = [...new Set([...openInJournal, ...leftoverStaging, ...leftoverBackups])]
 		.filter((tx) => tx !== committedTx)
 		.sort();
-	const expectedCommittedTail =
-		committedTx !== undefined &&
-		tornTail?.startsWith(`{"tx":${JSON.stringify(committedTx)},`) === true &&
-		/,"seq":\d+,"at":"[^"]+","event":"committed"(?:,|})/.test(tornTail);
+	const expectedCommittedTail = committedTx !== undefined && isCanonicalTornCommittedTail(tornTail, committedTx);
 	if (torn && !(finalizeCommitted.length === 1 && transactions.length === 0 && expectedCommittedTail)) {
 		blockers.push(
 			"the transaction journal has a torn final line, so the last recorded step is incomplete and automatic recovery is refused",

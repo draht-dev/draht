@@ -39,6 +39,10 @@ function rootTransaction(): Transaction {
 	};
 }
 
+function commitSession(session: Session, transaction: Transaction) {
+	return session.mutate("main", (mutator) => mutator.commit(transaction));
+}
+
 function expectedLaneWrites(name: string, at: string | null, value: LaneConfiguration): Transaction["writes"] {
 	return [
 		{ kind: "register", op: "set", namespace: "lane.config", key: name, value },
@@ -99,7 +103,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("atomically creates configured lane views at an entry or at the root", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		storage.clearCommitAttempts();
 
 		const rooted = await session.createLane("rooted", ROOT_ID, configuration);
@@ -121,7 +125,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("passes configuration directly to storage", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		storage.clearCommitAttempts();
 		const supplied = {
 			model: { ...configuration.model },
@@ -141,7 +145,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("rejects invalid lane names before storage admission with a classifiable validation error", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		storage.clearCommitAttempts();
 
 		await expect(session.createLane("", ROOT_ID, configuration)).rejects.toMatchObject({
@@ -155,7 +159,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("rejects existing configured lanes and fresh unconfigured main without writing", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		await session.createLane("existing", ROOT_ID, configuration);
 		storage.clearCommitAttempts();
 
@@ -172,7 +176,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("rejects unknown non-null anchors without writing", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		storage.clearCommitAttempts();
 
 		await expect(session.createLane("missing-target", MISSING_ID, configuration)).rejects.toMatchObject({
@@ -207,7 +211,7 @@ describe("StorageBackedSession.createLane", () => {
 			if (hasAllRequiredRegisters) continue;
 			const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 			const session = new StorageBackedSession(metadata, storage);
-			await session.commit({ writes: partialWrites.filter((_, index) => (mask & (1 << index)) !== 0) });
+			await commitSession(session, { writes: partialWrites.filter((_, index) => (mask & (1 << index)) !== 0) });
 			storage.clearCommitAttempts();
 
 			await expect(session.createLane("broken", null, configuration)).rejects.toBeInstanceOf(SessionInvariantError);
@@ -219,7 +223,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("serializes concurrent duplicate creation so exactly one transaction wins", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		storage.clearCommitAttempts();
 
 		const results = await Promise.allSettled([
@@ -240,7 +244,7 @@ describe("StorageBackedSession.createLane", () => {
 
 	it("orders lane creation with appends submitted through the prospective view", async () => {
 		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 
 		const creating = session.createLane("created-first", ROOT_ID, configuration);
 		const appended = session.view("created-first").appendCustomEntry("note");
@@ -260,7 +264,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("propagates commit failure without publishing partial lane state", async () => {
 		const storage = new RejectingCommitStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		const rejection = new Error("commit failed");
 		storage.rejection = rejection;
 
@@ -275,7 +279,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("drains creation after its commit is admitted to storage and rejects creation after close", async () => {
 		const storage = new BlockingCommitStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		storage.block = true;
 
 		const creation = session.createLane("admitted", ROOT_ID, configuration);
@@ -291,7 +295,7 @@ describe("StorageBackedSession.createLane", () => {
 	it("rejects queued duplicate creation when close seals the lane mutation line", async () => {
 		const storage = new BlockingCommitStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit(rootTransaction());
+		await commitSession(session, rootTransaction());
 		storage.block = true;
 
 		const admitted = session.createLane("queued", ROOT_ID, configuration);

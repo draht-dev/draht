@@ -3,7 +3,15 @@ import { LaneMutationLine } from "../../src/harness/session/lane-mutations.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { SessionInvariantError, StorageBackedSession } from "../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../src/harness/session/testing/index.ts";
-import type { LaneState, NewEntry, Operation, RunState, SessionMetadata } from "../../src/harness/session/types.ts";
+import type {
+	LaneState,
+	NewEntry,
+	Operation,
+	RunState,
+	Session,
+	SessionMetadata,
+	Transaction,
+} from "../../src/harness/session/types.ts";
 
 const NOW = 1_700_000_000_000;
 const ROOT_ID = "00000000-0000-7000-8000-000000000001";
@@ -47,6 +55,10 @@ const runState = {
 	latestAssistantEntryId: null,
 } satisfies RunState;
 
+function commitSession(session: Session, transaction: Transaction) {
+	return session.mutate("main", (mutator) => mutator.commit(transaction));
+}
+
 function laneWrites(leafId: string | null, state: LaneState = idleLaneState) {
 	return [
 		{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: leafId },
@@ -56,7 +68,7 @@ function laneWrites(leafId: string | null, state: LaneState = idleLaneState) {
 
 async function createTreeSession(): Promise<StorageBackedSession> {
 	const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
-	await session.commit({
+	await commitSession(session, {
 		writes: [
 			{ kind: "entry", entry: customEntry(ROOT_ID, null, "root") },
 			{
@@ -225,7 +237,7 @@ describe("StorageBackedSession SessionTree", () => {
 
 	it("returns an empty default branch for a lane at the root", async () => {
 		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
-		await session.commit({
+		await commitSession(session, {
 			writes: [{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null }],
 		});
 
@@ -237,7 +249,7 @@ describe("StorageBackedSession SessionTree", () => {
 	it("atomically appends messages and custom entries to the bound lane", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit({
+		await commitSession(session, {
 			writes: [
 				...laneWrites(null),
 				{ kind: "register", op: "set", namespace: "lane.leaf", key: "other", value: null },
@@ -309,7 +321,7 @@ describe("StorageBackedSession SessionTree", () => {
 	it("defers appends into an active run without moving the lane leaf", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit({
+		await commitSession(session, {
 			writes: [
 				{ kind: "entry", entry: customEntry(ROOT_ID, null) },
 				...laneWrites(ROOT_ID, { currentOperationId: OPERATION_ID, pendingNextRun: [] }),
@@ -347,7 +359,7 @@ describe("StorageBackedSession SessionTree", () => {
 			control: { status: "running" },
 			structural: { taskId: CHILD_ID, status: "deciding" },
 		} as const;
-		await session.commit({
+		await commitSession(session, {
 			writes: [
 				{ kind: "entry", entry: customEntry(ROOT_ID, null) },
 				...laneWrites(ROOT_ID, { currentOperationId: OPERATION_ID, pendingNextRun: [] }),
@@ -372,7 +384,7 @@ describe("StorageBackedSession SessionTree", () => {
 
 	it("serializes concurrent appends into one linear lane branch", async () => {
 		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
-		await session.commit({
+		await commitSession(session, {
 			writes: [{ kind: "entry", entry: customEntry(ROOT_ID, null) }, ...laneWrites(ROOT_ID)],
 		});
 
@@ -389,9 +401,10 @@ describe("StorageBackedSession SessionTree", () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const laneMutationLine = new CountingLaneMutationLine();
 		const session = new StorageBackedSession(metadata, storage, { laneMutationLine });
-		await session.commit({ writes: [...laneWrites(null)] });
+		await commitSession(session, { writes: [...laneWrites(null)] });
 		storage.clearCommitAttempts();
 		const data = { nested: ["original"] };
+		const runCountBeforeAppends = laneMutationLine.runCount;
 
 		const id = await session.appendCustomEntry("note", data);
 		const entry = await session.getEntry(id);
@@ -403,14 +416,14 @@ describe("StorageBackedSession SessionTree", () => {
 		const messageEntry = await session.getEntry(messageId);
 		if (messageEntry?.type !== "message") throw new Error("Expected message entry");
 		expect(messageEntry.message).toBe(message);
-		expect(laneMutationLine.runCount).toBe(2);
+		expect(laneMutationLine.runCount - runCountBeforeAppends).toBe(2);
 		await session.close();
 	});
 
 	it("fails fast when active operation registers are inconsistent", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit({
+		await commitSession(session, {
 			writes: [...laneWrites(null, { currentOperationId: OPERATION_ID, pendingNextRun: [] })],
 		});
 		storage.clearCommitAttempts();
@@ -441,7 +454,7 @@ describe("StorageBackedSession SessionTree", () => {
 	it("drains an append whose storage commit was admitted before close", async () => {
 		const storage = new BlockingCommitStorage({ now: () => NOW });
 		const session = new StorageBackedSession(metadata, storage);
-		await session.commit({ writes: [...laneWrites(null)] });
+		await commitSession(session, { writes: [...laneWrites(null)] });
 		storage.block = true;
 
 		const append = session.appendCustomEntry("admitted");

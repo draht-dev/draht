@@ -231,92 +231,94 @@ export function createSessionRepoConformance(
 			"forks one configured branch with scoped facts and a zero ledger",
 			async ({ repo }) => {
 				const source = await repo.create({ id: "source" });
-				await source.commit({
-					writes: [
-						{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-						{
-							kind: "entry",
-							entry: {
-								id: CHILD_ID,
-								parentId: ROOT_ID,
-								type: "message",
-								message: { role: "user", content: "child", timestamp: 1 },
+				await source.mutate("main", (mutator) =>
+					mutator.commit({
+						writes: [
+							{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
+							{
+								kind: "entry",
+								entry: {
+									id: CHILD_ID,
+									parentId: ROOT_ID,
+									type: "message",
+									message: { role: "user", content: "child", timestamp: 1 },
+								},
 							},
-						},
-						{
-							kind: "entry",
-							entry: { id: SIBLING_ID, parentId: ROOT_ID, type: "custom", customType: "sibling" },
-						},
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-						{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
-						{
-							kind: "register",
-							op: "set",
-							namespace: "lane.state",
-							key: "main",
-							value: { currentOperationId: OPERATION_ID, pendingNextRun: [PENDING_ID] },
-						},
-						{ kind: "register", op: "set", namespace: "fact.name", key: "", value: "source name" },
-						{ kind: "register", op: "set", namespace: "fact.custom", key: "custom", value: { copied: true } },
-						{ kind: "register", op: "set", namespace: "fact.label", key: ROOT_ID, value: "root label" },
-						{ kind: "register", op: "set", namespace: "fact.label", key: SIBLING_ID, value: "sibling label" },
-						{
-							kind: "register",
-							op: "set",
-							namespace: "pending.entry",
-							key: PENDING_ID,
-							value: { type: "custom", customType: "pending" },
-						},
-						{
-							kind: "register",
-							op: "set",
-							namespace: "op.meta",
-							key: OPERATION_ID,
-							value: {
-								operationId: OPERATION_ID,
-								lane: "main",
-								sourceLeafId: CHILD_ID,
-								startedAt: 1,
-								intent: { kind: "compaction" },
+							{
+								kind: "entry",
+								entry: { id: SIBLING_ID, parentId: ROOT_ID, type: "custom", customType: "sibling" },
 							},
-						},
-						{
-							kind: "register",
-							op: "set",
-							namespace: "op.state",
-							key: OPERATION_ID,
-							value: {
-								kind: "compaction",
-								control: { status: "running" },
-								structural: { taskId: OPERATION_ID, status: "deciding" },
+							{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
+							{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
+							{
+								kind: "register",
+								op: "set",
+								namespace: "lane.state",
+								key: "main",
+								value: { currentOperationId: OPERATION_ID, pendingNextRun: [PENDING_ID] },
 							},
-						},
-						{
-							kind: "register",
-							op: "set",
-							namespace: "op.tool_args",
-							key: `${OPERATION_ID}:${ROOT_ID}:0`,
-							value: { argument: true },
-						},
-						{
-							kind: "register",
-							op: "set",
-							namespace: "op.preparation",
-							key: `${OPERATION_ID}:${OPERATION_ID}`,
-							value: {
-								kind: "compaction",
-								messagesToSummarize: [],
-								turnPrefixMessages: [],
-								retainedTail: [],
-								isSplitTurn: false,
-								tokensBefore: 0,
-								fileOps: { read: [], written: [], edited: [] },
-								settings: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+							{ kind: "register", op: "set", namespace: "fact.name", key: "", value: "source name" },
+							{ kind: "register", op: "set", namespace: "fact.custom", key: "custom", value: { copied: true } },
+							{ kind: "register", op: "set", namespace: "fact.label", key: ROOT_ID, value: "root label" },
+							{ kind: "register", op: "set", namespace: "fact.label", key: SIBLING_ID, value: "sibling label" },
+							{
+								kind: "register",
+								op: "set",
+								namespace: "pending.entry",
+								key: PENDING_ID,
+								value: { type: "custom", customType: "pending" },
 							},
-						},
-						{ kind: "usage", row: usageRow() },
-					],
-				});
+							{
+								kind: "register",
+								op: "set",
+								namespace: "op.meta",
+								key: OPERATION_ID,
+								value: {
+									operationId: OPERATION_ID,
+									lane: "main",
+									sourceLeafId: CHILD_ID,
+									startedAt: 1,
+									intent: { kind: "compaction" },
+								},
+							},
+							{
+								kind: "register",
+								op: "set",
+								namespace: "op.state",
+								key: OPERATION_ID,
+								value: {
+									kind: "compaction",
+									control: { status: "running" },
+									structural: { taskId: OPERATION_ID, status: "deciding" },
+								},
+							},
+							{
+								kind: "register",
+								op: "set",
+								namespace: "op.tool_args",
+								key: `${OPERATION_ID}:${ROOT_ID}:0`,
+								value: { argument: true },
+							},
+							{
+								kind: "register",
+								op: "set",
+								namespace: "op.preparation",
+								key: `${OPERATION_ID}:${OPERATION_ID}`,
+								value: {
+									kind: "compaction",
+									messagesToSummarize: [],
+									turnPrefixMessages: [],
+									retainedTail: [],
+									isSplitTurn: false,
+									tokensBefore: 0,
+									fileOps: { read: [], written: [], edited: [] },
+									settings: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+								},
+							},
+							{ kind: "usage", row: usageRow() },
+						],
+					}),
+				);
 
 				const fork = await repo.fork(source.metadata, { id: "fork", entryId: CHILD_ID, position: "at" });
 
@@ -356,16 +358,18 @@ export function createSessionRepoConformance(
 			"supports before placement and rejects unknown fork points atomically",
 			async ({ repo }) => {
 				const source = await repo.create({ id: "source" });
-				await source.commit({
-					writes: [
-						{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-						{
-							kind: "entry",
-							entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" },
-						},
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-					],
-				});
+				await source.mutate("main", (mutator) =>
+					mutator.commit({
+						writes: [
+							{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
+							{
+								kind: "entry",
+								entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" },
+							},
+							{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
+						],
+					}),
+				);
 
 				const before = await repo.fork(source.metadata, { id: "before", entryId: CHILD_ID, position: "before" });
 				strictEqual(await before.getLeafId(), ROOT_ID);
@@ -380,12 +384,14 @@ export function createSessionRepoConformance(
 		),
 		createCase(factory, "forks", "forks a closed source session", async ({ repo }) => {
 			const source = await repo.create({ id: "source" });
-			await source.commit({
-				writes: [
-					{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
-				],
-			});
+			await source.mutate("main", (mutator) =>
+				mutator.commit({
+					writes: [
+						{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
+						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
+					],
+				}),
+			);
 			await source.close();
 
 			const fork = await repo.fork(source.metadata, { id: "fork" });
@@ -395,24 +401,26 @@ export function createSessionRepoConformance(
 
 		createCase(factory, "forks", "forks the whole configured tree with fresh lane state", async ({ repo }) => {
 			const source = await repo.create({ id: "source" });
-			await source.commit({
-				writes: [
-					{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-					{
-						kind: "entry",
-						entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" },
-					},
-					{
-						kind: "entry",
-						entry: { id: SIBLING_ID, parentId: ROOT_ID, type: "custom", customType: "sibling" },
-					},
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-					{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: "review", value: SIBLING_ID },
-					{ kind: "register", op: "set", namespace: "lane.config", key: "review", value: configuration },
-					{ kind: "register", op: "set", namespace: "lane.state", key: "review", value: idleLaneState },
-				],
-			});
+			await source.mutate("main", (mutator) =>
+				mutator.commit({
+					writes: [
+						{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
+						{
+							kind: "entry",
+							entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" },
+						},
+						{
+							kind: "entry",
+							entry: { id: SIBLING_ID, parentId: ROOT_ID, type: "custom", customType: "sibling" },
+						},
+						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
+						{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
+						{ kind: "register", op: "set", namespace: "lane.leaf", key: "review", value: SIBLING_ID },
+						{ kind: "register", op: "set", namespace: "lane.config", key: "review", value: configuration },
+						{ kind: "register", op: "set", namespace: "lane.state", key: "review", value: idleLaneState },
+					],
+				}),
+			);
 
 			const fork = await repo.fork(source.metadata, { id: "fork", scope: "tree" });
 
@@ -428,22 +436,26 @@ export function createSessionRepoConformance(
 		}),
 		createCase(factory, "forks", "captures one coherent boundary between source commits", async ({ repo }) => {
 			const source = await repo.create({ id: "source" });
-			const firstCommit = source.commit({
-				writes: [
-					{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "first" } },
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
-				],
-			});
+			const firstCommit = source.mutate("main", (mutator) =>
+				mutator.commit({
+					writes: [
+						{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "first" } },
+						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
+					],
+				}),
+			);
 			const fork = repo.fork(source.metadata, { id: "fork" });
-			const secondCommit = source.commit({
-				writes: [
-					{
-						kind: "entry",
-						entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "second" },
-					},
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-				],
-			});
+			const secondCommit = source.mutate("main", (mutator) =>
+				mutator.commit({
+					writes: [
+						{
+							kind: "entry",
+							entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "second" },
+						},
+						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
+					],
+				}),
+			);
 
 			const [, forked] = await Promise.all([firstCommit, fork]);
 			await secondCommit;

@@ -18,6 +18,7 @@ import type {
 	Session,
 	SessionCreateOptions,
 	SessionMetadata,
+	SessionMutator,
 	SessionRepo,
 	SessionStats,
 	SessionTree,
@@ -319,8 +320,8 @@ class MemorySessionFacade implements Session {
 		this.onClose = onClose;
 	}
 
-	commit(transaction: Transaction): Promise<CommitResult> {
-		return this.admit(() => this.session.commit(transaction));
+	async mutate<T>(lane: string, mutation: (mutator: SessionMutator) => T | Promise<T>): Promise<T> {
+		return this.admit(() => this.session.mutate(lane, mutation));
 	}
 
 	getEntries(ids: string[]): Promise<Map<string, Entry>> {
@@ -481,18 +482,20 @@ export class MemorySessionRepo implements SessionRepo {
 		const storage = new MemoryStorage({ now: this.now });
 		const session = new StorageBackedSession(metadata, storage);
 		try {
-			await session.commit({
-				writes: [
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
-					{
-						kind: "register",
-						op: "set",
-						namespace: "lane.state",
-						key: "main",
-						value: { currentOperationId: null, pendingNextRun: [] },
-					},
-				],
-			});
+			await session.mutate("main", (mutator) =>
+				mutator.commit({
+					writes: [
+						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
+						{
+							kind: "register",
+							op: "set",
+							namespace: "lane.state",
+							key: "main",
+							value: { currentOperationId: null, pendingNextRun: [] },
+						},
+					],
+				}),
+			);
 			const record: MemorySessionRecord = { metadata, storage, session, open: true };
 			this.sessions.set(id, record);
 			return this.openRecord(record);

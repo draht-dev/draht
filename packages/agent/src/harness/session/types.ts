@@ -479,6 +479,25 @@ export interface EntryQuery {
 	cursor?: EntryCursor;
 }
 
+export interface SessionReader {
+	getEntries(ids: string[]): Promise<Map<string, Entry>>;
+	getRegister<TNamespace extends RegisterNamespace>(
+		namespace: TNamespace,
+		key: string,
+	): Promise<Register<TNamespace> | undefined>;
+	listRegisters<TNamespace extends RegisterNamespace>(
+		namespace: TNamespace,
+		keyPrefix?: string,
+	): Promise<Register<TNamespace>[]>;
+}
+
+/** Callback-scoped write capability bound to one lane. */
+export interface SessionMutator extends SessionReader {
+	readonly lane: string;
+	/** The mutation callback's sole commit. A second attempt rejects. */
+	commit(transaction: Transaction): Promise<CommitResult>;
+}
+
 export interface SessionTree {
 	getLeafId(): Promise<string | null>;
 	getEntry(id: string): Promise<Entry | undefined>;
@@ -497,21 +516,12 @@ export interface SessionTree {
 	appendCustomEntry(customType: string, data?: JsonValue): Promise<string>;
 }
 
-export interface Session<TMetadata extends SessionMetadata = SessionMetadata> extends SessionTree {
+export interface Session<TMetadata extends SessionMetadata = SessionMetadata> extends SessionTree, SessionReader {
 	readonly metadata: TMetadata;
 	readonly idGenerator: IdGenerator;
 	view(lane: string): SessionTree;
+	mutate<T>(lane: string, mutation: (mutator: SessionMutator) => T | Promise<T>): Promise<T>;
 	createLane(name: string, at: string | null, configuration: LaneConfiguration): Promise<SessionTree>;
-	commit(transaction: Transaction): Promise<CommitResult>;
-	getEntries(ids: string[]): Promise<Map<string, Entry>>;
-	getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Promise<Register<TNamespace> | undefined>;
-	listRegisters<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		keyPrefix?: string,
-	): Promise<Register<TNamespace>[]>;
 	close(): Promise<void>;
 }
 

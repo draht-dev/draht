@@ -31,7 +31,7 @@ describe("LaneMutationLine", () => {
 			return "second";
 		});
 
-		expect(order).toEqual([]);
+		expect(order).toEqual(["first:start"]);
 		gate.resolve();
 		await expect(first).resolves.toBe("first");
 		await expect(second).resolves.toBe("second");

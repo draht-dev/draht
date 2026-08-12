@@ -710,7 +710,7 @@ interface LaneConfiguration {
 
 - A lane's leaf moves in exactly two ways: the lane appends an entry (leaf becomes that entry), or the lane navigates (leaf jumps to an existing entry).
 - `LaneConfiguration` is **total**. A setter overwrites the whole register; it is never a patch and never a tree entry.
-- `Session.createLane(name, at, configuration)` is the primitive that creates a lane. It validates the permanent lane name, rejects an existing lane or unknown non-null anchor, and commits all three registers atomically. The supplied configuration is a total seed; it is not inferred from the anchor or another lane. The method returns the new lane's `SessionTree` view.
+- `Session.createLane(name, at, configuration)` is the primitive that creates a lane. It internally opens a mutation on the new lane, validates the permanent lane name, rejects an existing lane or unknown non-null anchor, and consumes that mutator's sole commit to write all three registers atomically. The supplied configuration is a total seed; it is not inferred from the anchor or another lane. The method returns the new lane's `SessionTree` view.
 - Creating a lane copies no tree content, no history, and no configuration from its anchor:
 
 ```
@@ -719,7 +719,7 @@ TX[ upsert lane.config/{name} = <supplied configuration>,
     upsert lane.state/{name}  = { currentOperationId: null, pendingNextRun: [] } ]
 ```
 
-- `AgentHarness.createLane()` invokes this primitive on the lane mutation line with the harness's immutable captured seed, then publishes the harness event. Session-level callers use the same primitive directly when they need tree and lane management without runtime orchestration.
+- `AgentHarness.createLane()` invokes this primitive with the harness's immutable captured seed, then publishes the harness event. `Session.createLane()` owns its mutation-line admission; callers must not wrap it in another mutation. Session-level callers use the same primitive directly when they need tree and lane management without runtime orchestration.
 - Lanes are never deleted or renamed. Names are permanent application keys.
 - `main` exists in every session.
 - Two lanes at the same leaf simply diverge on their next append.
@@ -843,30 +843,50 @@ interface SessionRepo<M extends SessionMetadata = SessionMetadata,
   fork(source: M, options: ForkOptions & C): Promise<Session<M>>;
 }
 
-interface Session<M extends SessionMetadata = SessionMetadata> extends SessionTree {
-  readonly metadata: M;
-  /** Mints UUIDv7 ids; a supplied timestamp mints a follower id (§1.2). */
-  readonly idGenerator: { next(timestampMs?: number): string };
-  view(lane: string): SessionTree;
-  /** Atomically creates a configured lane and returns its lane-bound tree view (§2.3). */
-  createLane(name: string, at: string | null,
-             configuration: LaneConfiguration): Promise<SessionTree>;
-
-  /** Package-internal harness storage surface; delegates typed values directly. */
-  commit(tx: Transaction): Promise<CommitResult>;
+interface SessionReader {
   getEntries(ids: string[]): Promise<Map<string, Entry>>;
   getRegister<N extends RegisterNamespace>(namespace: N, key: string):
     Promise<Register<N> | undefined>;
   listRegisters<N extends RegisterNamespace>(namespace: N, keyPrefix?: string):
     Promise<Register<N>[]>;
+}
+
+/** Callback-scoped write capability bound to one lane. */
+interface SessionMutator extends SessionReader {
+  readonly lane: string;
+
+  /** The callback's sole commit. A second call rejects, including after a
+      failed first attempt. */
+  commit(tx: Transaction): Promise<CommitResult>;
+}
+
+interface Session<M extends SessionMetadata = SessionMetadata>
+    extends SessionTree, SessionReader {
+  readonly metadata: M;
+  /** Mints UUIDv7 ids; a supplied timestamp mints a follower id (§1.2). */
+  readonly idGenerator: { next(timestampMs?: number): string };
+  view(lane: string): SessionTree;
+
+  /** Serializes one complete read/decide/commit job on the named lane. */
+  mutate<T>(lane: string,
+            mutation: (mutator: SessionMutator) => T | Promise<T>): Promise<T>;
+
+  createLane(name: string, at: string | null,
+             configuration: LaneConfiguration): Promise<SessionTree>;
 
   close(): Promise<void>;
 }
 ```
 
+`Session.mutate` is the only raw session write surface. It queues the complete callback on the named lane's mutation line and supplies a lane-bound `SessionMutator`. The mutator is valid only until that callback returns or throws. Reads do not consume it. Its first `commit()` attempt consumes its commit capability before awaiting storage, so a second attempt rejects even when the first failed. The callback may return without committing. It must not retain the mutator, invoke another mutating `Session`/`SessionTree` method, wait for lane idleness, or perform provider, tool, hook, or timer effects; those operations either reacquire the same line or hold it across work that must remain concurrent. Separate durable transitions use separate `mutate` calls.
+
+The high-level mutating methods on `SessionTree` and `Session` — fact setters, appends, and `createLane` — acquire the appropriate mutation line themselves and consume one private mutator commit. Callers invoke them directly rather than wrapping them in `mutate`. Reads remain available directly on `Session`, `SessionTree`, and `SessionMutator`.
+
 Declaration-merged custom `AgentMessage` variants are trusted in-process types like other internal values; extensions that violate them are defective. A new repository session creates `main` with null leaf and an empty `LaneState`, but no configuration; first harness attachment writes its seed configuration. Every additional lane is created through `Session.createLane()` with a total configuration.
 
 `open()` compares the stored `storageVersion` with the binary's: equal proceeds; older runs chained migrations under the writer lease before returning (Part 7); newer refuses to open. Old coding-agent v3 JSONL sessions open through the same repository and normalize on load (Appendix B — "v3" there names the legacy JSONL session format, not this document).
+
+A repository must not open the same session twice concurrently. `create()` and `fork()` return their destination session already open; another `open()` for that session rejects until that returned `Session` finishes `close()`. Once close resolves, a later `open()` returns a new session instance over the same durable data. This is one open owner per session id, not a shared-handle or reference-counting contract.
 
 Repository implementations resolve `fork(source, ...)` to the source's serialized snapshot boundary: an active Memory/JSONL storage queues the snapshot with commits; an inactive JSONL file is read as one immutable prefix; SQLite uses one read snapshot of the session's file. Repositories may keep an active-storage registry by session id for this purpose. This is repository coordination, not part of the one-session `Storage` contract.
 
@@ -1787,7 +1807,7 @@ A fresh operation drive starts with zero deferred permits; `resume()` starts wit
 
 ## 4.2 The effects boundary
 
-Every operation-procedure commit, provider request, tool invocation, hook call, and timer crosses exactly one injected `Effects` (`fx`) method. Procedures receive `fx`, their telemetry context, and a read-only runtime view — never `Session`, `Models`, the tool registry, or the hook runner directly. Ungated lane-surface commits—acceptance, queue/configuration calls, facts, and idle writes—use the same lane mutation line and typed `Session` transaction API directly. Harness lane creation runs on that line and delegates its atomic register creation to `Session.createLane()`.
+Every operation-procedure commit, provider request, tool invocation, hook call, and timer crosses exactly one injected `Effects` (`fx`) method. Procedures receive `fx`, their telemetry context, and a read-only runtime view — never `Session`, `Models`, the tool registry, or the hook runner directly. Ungated lane-surface commits—acceptance, queue/configuration calls, facts, and idle writes—use `Session.mutate` or the high-level `SessionTree` methods, which share the same lane mutation line. Harness lane creation delegates its atomic register creation directly to `Session.createLane()`.
 
 ```ts
 type SummaryRequestOutput =
@@ -1849,9 +1869,9 @@ Enforced by construction and by a test: an operation driven in manual mode perfo
 
 ## 4.3 The lane mutation line
 
-Every state-dependent mutation on a lane is linearized: validate, at most one atomic commit, and the in-memory update complete before the next mutation starts. Provider, tool, hook, and retry work never occupies the line.
+Every state-dependent mutation on a lane is linearized by `Session.mutate`: validate, at most one atomic commit, and complete the in-memory update before the next mutation starts. Provider, tool, hook, and retry work never occupies the line. The callback-scoped `SessionMutator` enforces the one-commit limit; a high-level `SessionTree` write uses the same mechanism internally.
 
-What serializes here: operation acceptance, queue enqueue and cancel, queue consumption, deferred-write acceptance and application, abort, lane-configuration setters, finish, lane creation. Harness-global stream/retry/compaction/queue settings use a second mutation line with a monotonically increasing process revision. Operation acceptance and generation/summary starts snapshot settings by taking the settings line before the lane line and conditionally committing both expected tokens; global setters take only the settings line. No code acquires them in the reverse order.
+What serializes here: operation acceptance, queue enqueue and cancel, queue consumption, deferred-write acceptance and application, abort, lane-configuration setters, finish, lane creation. Harness-global stream/retry/compaction/queue settings use a second mutation line with a monotonically increasing process revision. Operation acceptance and generation/summary starts snapshot settings by taking the settings line before calling `Session.mutate` and conditionally committing both expected tokens; global setters take only the settings line. No code acquires them in the reverse order.
 
 Consequence: every race between two public calls has exactly **two** possible durable histories, and both must be tested (Part 9).
 
@@ -2840,8 +2860,7 @@ Each slice implements its named behavior end to end and adds focused tests for i
 
 | # | Slice | Implement | Required focused tests |
 |---|---|---|---|
-| 1 | **Types** (complete) | The complete shared type surface, behavior-free: `Entry`/`Register`/`UsageRow` and `RegisterValues` including the full Part 3 state tree, `Write`/`Transaction`/`Storage`/`Session`/`SessionTree`/`SessionRepo`, scans, the id-generator, the search interfaces from §2.8, `storageVersion`, and the Part 5 surface types (results, errors, events, snapshots, hooks). Delete `packages/agent/src/harness/**` and its tests outright; patch remaining consumers. The repo may not compile mid-slice; it compiles again — `npm run check` clean — at the end. | Type-level only; no behavior. |
-| 2 | **Session layer, Memory, conformance** | Entry materialization with inline payloads, atomic configured lane creation, lane/config/state registers, facts, branch/global queries, context projection, `SessionTree`/views, UUIDv7 generator with follower minting, stats projection, the Memory backend with repository lifecycle/forks and the `storageVersion` gate at open, the backend conformance suite, and the instrumented-storage decorator (Part 9). Internal values pass directly between Session and Storage without codecs, cloning, or runtime shape validation. | Rollback, sequence order, duplicate ids, register set/delete/recreate, delete-of-absent-key no-op, atomic lane creation and duplicate/name/anchor rejection, fact deletion vs JSON `null`, stats-equals-ledger, follower minting, placement, divergence, filters/cursors/stops, custom entries with and without data, context projection, fork before first attachment, configured fork snapshots/facts/zero ledger, close. |
+| 1 | **Types** (complete) | The complete shared type surface, behavior-free: `Entry`/`Register`/`UsageRow` and `RegisterValues` including the full Part 3 state tree, `Write`/`Transaction`/`Storage`/`SessionReader`/`SessionMutator`/`Session`/`SessionTree`/`SessionRepo`, scans, the id-generator, the search interfaces from §2.8, `storageVersion`, and the Part 5 surface types (results, errors, events, snapshots, hooks). Delete `packages/agent/src/harness/**` and its tests outright; patch remaining consumers. The repo may not compile mid-slice; it compiles again — `npm run check` clean — at the end. | Type-level only; no behavior. || 2 | **Session layer, Memory, conformance** | Entry materialization with inline payloads, atomic configured lane creation, lane/config/state registers, facts, branch/global queries, context projection, `SessionTree`/views, UUIDv7 generator with follower minting, stats projection, the Memory backend with repository lifecycle/forks and the `storageVersion` gate at open, the backend conformance suite, and the instrumented-storage decorator (Part 9). Internal values pass directly between Session and Storage without codecs, cloning, or runtime shape validation. | Rollback, sequence order, duplicate ids, register set/delete/recreate, delete-of-absent-key no-op, atomic lane creation and duplicate/name/anchor rejection, fact deletion vs JSON `null`, stats-equals-ledger, follower minting, placement, divergence, filters/cursors/stops, custom entries with and without data, context projection, fork before first attachment, configured fork snapshots/facts/zero ledger, close. |
 | S1 | **JSONL** | Format 4: single-item/array transaction lines, register set/delete replay, header `storageVersion`, torn-tail handling, snapshot compaction (GC keep-predicate), the file-based repository, format-3 read normalization and first-write temp/rename conversion with id re-minting (Appendix B). Replace the unfinished current v4 without migration. | Backend conformance, corrupt interior/final lines, whole-array tear, compaction logical-equivalence, every format-3 rule including id re-minting and reference remapping, resolved/unresolved parent paths, aggregate imported usage adjustment. |
 | S2 | **SQLite** | One database file per session: entries/registers/usage-ledger tables, one-row session/lease rows, transactions, `storageVersion`, the file-based repository, segmented branch cache, `VACUUM INTO`-based rewrite/fork, and explicit repair. No values table, no `slot_history`, no `getLog`, no search projection, no migration. | Shared conformance, `BEGIN IMMEDIATE`, fencing, query plans, segment-chain soundness, register upsert/delete, forks/stats/repair. |
 | S3 | **Search** | The standalone `SessionSearchService` plus repo catch-up utilities (§2.8): core entry search as `SessionSearch<T>`, session-level ranked results, optional `searchEntries?: SessionSearch<TEntryHit>`, `remove()`, the `SessionSearchSyncTarget` cursor/index-batch contract, sync enumeration and catch-up outside the service contract, debounced notify as a utility, `(sessionId, storeGeneration)` cursor keys, and the reference SQLite FTS5 implementation working over any backend's repository through the sync utility. | Cursor catch-up from empty against existing sessions, idempotent re-index after crash mid-batch, notify-utility/sweep equivalence, sessions-vs-entries queries and ranking, removal and reconciliation, shared-index multi-process discipline. |

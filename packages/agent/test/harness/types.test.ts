@@ -33,6 +33,7 @@ import type {
 	Session,
 	SessionCreateOptions,
 	SessionMetadata,
+	SessionMutator,
 	SessionRepo,
 	SessionSearchHit,
 	SessionSearchService,
@@ -354,6 +355,12 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 	expectTypeOf<Parameters<Storage["scanBranch"]>[0]["start"]>().toEqualTypeOf<string>();
 	expectTypeOf<BranchScan["start"]>().toEqualTypeOf<string | undefined>();
 	expectTypeOf<Storage["commit"]>().toEqualTypeOf<
+		(transactionToCommit: Transaction) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
+	>();
+	expectTypeOf<Session["mutate"]>().toEqualTypeOf<
+		<T>(lane: string, mutation: (mutator: SessionMutator) => T | Promise<T>) => Promise<T>
+	>();
+	expectTypeOf<SessionMutator["commit"]>().toEqualTypeOf<
 		(transactionToCommit: Transaction) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
 	>();
 	expectTypeOf<Session["createLane"]>().toEqualTypeOf<

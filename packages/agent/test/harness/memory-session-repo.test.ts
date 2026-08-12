@@ -61,13 +61,15 @@ describe("MemorySessionRepo metadata", () => {
 		const source = await repo.create({ id: "source" });
 		const rootId = "00000000-0000-7000-8000-000000000001";
 		const childId = "00000000-0000-7000-8000-000000000002";
-		const commit = source.commit({
-			writes: [
-				{ kind: "entry", entry: { id: rootId, parentId: null, type: "custom", customType: "root" } },
-				{ kind: "entry", entry: { id: childId, parentId: rootId, type: "custom", customType: "child" } },
-				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: childId },
-			],
-		});
+		const commit = source.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{ kind: "entry", entry: { id: rootId, parentId: null, type: "custom", customType: "root" } },
+					{ kind: "entry", entry: { id: childId, parentId: rootId, type: "custom", customType: "child" } },
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: childId },
+				],
+			}),
+		);
 		const options = { id: "fork", entryId: childId, position: "before" as "before" | "at" };
 		const fork = repo.fork(source.metadata, options);
 		options.entryId = rootId;

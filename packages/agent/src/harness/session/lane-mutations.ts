@@ -5,17 +5,29 @@ export class LaneMutationLine {
 
 	run<T>(lane: string, operation: () => T | Promise<T>): Promise<T> {
 		if (this.sealedError !== undefined) return Promise.reject(this.sealedError);
-		const result = (this.tails.get(lane) ?? Promise.resolve()).then(() => {
-			if (this.sealedError !== undefined) throw this.sealedError;
-			return operation();
-		});
-		this.tails.set(
-			lane,
-			result.then(
-				() => undefined,
-				() => undefined,
-			),
+		const previous = this.tails.get(lane);
+		let result: Promise<T>;
+		if (previous === undefined) {
+			try {
+				result = Promise.resolve(operation());
+			} catch (error) {
+				result = Promise.reject(error);
+			}
+		} else {
+			result = previous.then(() => {
+				if (this.sealedError !== undefined) throw this.sealedError;
+				return operation();
+			});
+		}
+
+		const tail = result.then(
+			() => undefined,
+			() => undefined,
 		);
+		this.tails.set(lane, tail);
+		void tail.then(() => {
+			if (this.tails.get(lane) === tail) this.tails.delete(lane);
+		});
 		return result;
 	}
 

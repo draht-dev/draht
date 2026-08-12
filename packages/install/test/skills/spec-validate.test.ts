@@ -18,8 +18,8 @@ function isFlatStringMap(value: unknown): boolean {
 describe("spec-validate: skills/*/SKILL.md frontmatter", () => {
 	const skills = listCanonicalSkills();
 
-	it("discovers exactly 27 canonical skills (9 disciplines + 17 commands + draht)", () => {
-		expect(skills.length).toBe(27);
+	it("discovers exactly 28 canonical skills (10 disciplines + 17 commands + draht)", () => {
+		expect(skills.length).toBe(28);
 	});
 
 	for (const skill of skills) {

@@ -50,6 +50,12 @@ const TRAVERSAL_ALLOWLIST: Array<{ relPath: string; snippet: string; reason: str
 		reason:
 			"pedagogical anti-pattern example (a hypothetical illegal cross-context import) inside inline code — not a real relative reference, and not resolved against anything.",
 	},
+	{
+		relPath: "saga-spawner/SKILL.md",
+		snippet: "npx tsx ../../node_modules/vitest/dist/cli.js",
+		reason:
+			"example beat `check` command inside the saga-graph YAML sample — a shell command resolved against a package root at beat-execution time, not a reference relative to the skill directory. Counts as 2 occurrences (../..).",
+	},
 ];
 
 function countOccurrences(haystack: string, needle: string): number {

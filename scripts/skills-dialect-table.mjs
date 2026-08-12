@@ -27,10 +27,13 @@ export const PLUGIN_ROOT_RENDER = {
 	codex: "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}",
 };
 
-// ── 9 discipline skills — line-scoped dialect spans ─────────────────────────
-// Only 4 of the 9 discipline skills have any host-specific span; the other 5
+// ── 10 discipline skills — line-scoped dialect spans ────────────────────────
+// Only 5 of the 10 discipline skills have any host-specific span; the other 5
 // (brainstorming, ddd-workflow, loop-workflow, model-tiering, tdd-workflow)
-// render identically for every host and have no entry here.
+// render identically for every host and have no entry here. saga-spawner
+// carries the table's one asymmetric pair: the canonical "strongest tier"
+// line renders with a Claude model example on the claude side but a generic
+// "strongest available Codex reasoning tier" on the codex side.
 export const DISCIPLINE_DIALECT = {
 	"atomic-reasoning": [
 		{
@@ -55,6 +58,36 @@ export const DISCIPLINE_DIALECT = {
 			canonical: "The plugin distributions ship workflow hooks under the plugin root's `scripts/` directory:",
 			claude: "The plugin ships workflow hooks under `${CLAUDE_PLUGIN_ROOT}/scripts/`:",
 			codex: "The plugin ships workflow hooks under `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/`:",
+		},
+	],
+	"saga-spawner": [
+		{
+			canonical:
+				"description: The saga graph reconciliation loop — unattended repo advancement as a cloud routine. The saga is a repository's long-running arc of work; a beat is its smallest independently shippable quantum, and the saga graph is a DAG of beats. The spawner is a stateless controller that diffs the graph (desired state) against merged PRs (actual state) and dispatches /orchestrate-style subagent teams to advance the saga one beat at a time. Use when the user mentions the saga graph, beats, spawner, routines, unattended or autonomous repo work, \"work the backlog overnight\", a self-optimizing repository, reconciliation runs, or when a cloud routine session must decide what to work on next. Also consult before designing any always-on or scheduled agent workflow for a draht repo.",
+			claude:
+				"description: The saga graph reconciliation loop — unattended repo advancement as a Claude Code cloud routine. The saga is a repository's long-running arc of work; a beat is its smallest independently shippable quantum, and the saga graph is a DAG of beats. The spawner is a stateless controller that diffs the graph (desired state) against merged PRs (actual state) and dispatches /orchestrate-style subagent teams to advance the saga one beat at a time. Use when the user mentions the saga graph, beats, spawner, routines, unattended or autonomous repo work, \"work the backlog overnight\", a self-optimizing repository, reconciliation runs, or when a cloud routine session must decide what to work on next. Also consult before designing any always-on or scheduled agent workflow for a draht repo.",
+			codex: "description: The saga graph reconciliation loop — unattended repo advancement as a Codex cloud routine. The saga is a repository's long-running arc of work; a beat is its smallest independently shippable quantum, and the saga graph is a DAG of beats. The spawner is a stateless controller that diffs the graph (desired state) against merged PRs (actual state) and dispatches /orchestrate-style subagent teams to advance the saga one beat at a time. Use when the user mentions the saga graph, beats, spawner, routines, unattended or autonomous repo work, \"work the backlog overnight\", a self-optimizing repository, reconciliation runs, or when a cloud routine session must decide what to work on next. Also consult before designing any always-on or scheduled agent workflow for a draht repo.",
+		},
+		{
+			canonical:
+				"The **saga** is a repository's whole long-running arc of advancement — episodic, spanning many sessions, no author present. A **beat** is the smallest independently shippable quantum of that saga. The **saga graph** is a DAG of beats in `.planning/saga-graph.yaml`. The **spawner** is one reconciliation iteration over that graph, designed to run as a cloud routine: fresh session, fresh clone, no memory of the last run. It advances the saga one beat at a time.",
+			claude:
+				"The **saga** is a repository's whole long-running arc of advancement — episodic, spanning many sessions, no author present. A **beat** is the smallest independently shippable quantum of that saga. The **saga graph** is a DAG of beats in `.planning/saga-graph.yaml`. The **spawner** is one reconciliation iteration over that graph, designed to run as a Claude Code cloud routine: fresh session, fresh clone, no memory of the last run. It advances the saga one beat at a time.",
+			codex: "The **saga** is a repository's whole long-running arc of advancement — episodic, spanning many sessions, no author present. A **beat** is the smallest independently shippable quantum of that saga. The **saga graph** is a DAG of beats in `.planning/saga-graph.yaml`. The **spawner** is one reconciliation iteration over that graph, designed to run as a Codex cloud routine: fresh session, fresh clone, no memory of the last run. It advances the saga one beat at a time.",
+		},
+		{
+			canonical:
+				"4. **Spawn** — per selected beat: acquire the lease, then drive the inner cycle on the branch with your host's subagent mechanism, `/orchestrate` discipline throughout:",
+			claude:
+				"4. **Spawn** — per selected beat: acquire the lease, then drive the inner cycle on the branch with the Task tool, `/orchestrate` discipline throughout:",
+			codex: "4. **Spawn** — per selected beat: acquire the lease, then drive the inner cycle on the branch through Codex subagents with `spawn_agent`, `/orchestrate` discipline throughout:",
+		},
+		{
+			canonical:
+				"Run this command's session on the strongest tier and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).",
+			claude:
+				"Run this command's session on the strongest tier (e.g. Claude Fable 5) and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).",
+			codex: "Run this command's session on the strongest available Codex reasoning tier and let workers execute on the executor tier — the spawner is pure steering, its tokens are the ones that decide where all the volume tokens go (`model-tiering`).",
 		},
 	],
 	"verification-gate": [

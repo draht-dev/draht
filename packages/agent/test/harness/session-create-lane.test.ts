@@ -4,7 +4,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { SessionInvariantError, StorageBackedSession } from "../../src/harness/session/session.ts";
-import { InstrumentedStorage } from "../../src/harness/session/testing/index.ts";
+import { InstrumentedStorage, StorageDecorator } from "../../src/harness/session/testing/index.ts";
 import type {
 	Entry,
 	LaneConfiguration,
@@ -61,7 +61,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	};
 }
 
-class RejectingCommitStorage extends MemoryStorage {
+class RejectingCommitStorage extends StorageDecorator {
 	rejection: Error | undefined;
 
 	override commit(transaction: Transaction) {
@@ -69,7 +69,7 @@ class RejectingCommitStorage extends MemoryStorage {
 	}
 }
 
-class BlockingCommitStorage extends MemoryStorage {
+class BlockingCommitStorage extends StorageDecorator {
 	block = false;
 	private readonly admittedGate = deferred();
 	private readonly releaseGate = deferred();
@@ -258,7 +258,7 @@ describe("StorageBackedSession.createLane", () => {
 	});
 
 	it("propagates commit failure without publishing partial lane state", async () => {
-		const storage = new RejectingCommitStorage({ now: () => NOW });
+		const storage = new RejectingCommitStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
 		await session.commit(rootTransaction());
 		const rejection = new Error("commit failed");
@@ -273,7 +273,7 @@ describe("StorageBackedSession.createLane", () => {
 	});
 
 	it("drains creation after its commit is admitted to storage and rejects creation after close", async () => {
-		const storage = new BlockingCommitStorage({ now: () => NOW });
+		const storage = new BlockingCommitStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
 		await session.commit(rootTransaction());
 		storage.block = true;
@@ -289,7 +289,7 @@ describe("StorageBackedSession.createLane", () => {
 	});
 
 	it("rejects queued duplicate creation when close seals the lane mutation line", async () => {
-		const storage = new BlockingCommitStorage({ now: () => NOW });
+		const storage = new BlockingCommitStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
 		await session.commit(rootTransaction());
 		storage.block = true;

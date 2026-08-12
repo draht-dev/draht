@@ -1,7 +1,15 @@
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert/strict";
 import type { Usage } from "@draht/ai";
-import type { CompactionEntry, CustomEntry, Entry, MessageEntry, NewEntry, Register, Transaction } from "../types.ts";
-import type { StorageConformanceCase, StorageFixture, StorageFixtureFactory } from "./types.ts";
+import type {
+	CompactionEntry,
+	CustomEntry,
+	Entry,
+	MessageEntry,
+	NewEntry,
+	Register,
+	Transaction,
+} from "../../types.ts";
+import type { StorageConformanceCase, StorageFixture, StorageFixtureFactory } from "../types.ts";
 
 const MESSAGE_TIMESTAMP = 1_650_000_000_000;
 

@@ -1,7 +1,8 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CliError } from "./errors.ts";
-import { appendJournal, openTransactions, readJournal } from "./journal.ts";
+import { appendJournal, discardTornJournalTail, openTransactions, readJournal } from "./journal.ts";
 import { backupsDir, backupsRootDir, stagingDir, stagingRootDir } from "./paths.ts";
 import { assertNoSymlinkPivot, assertSafeComponentId, assertSafeTarget, type TargetBounds } from "./safety.ts";
 import { loadState, StateCorruptError } from "./state.ts";
@@ -105,10 +106,12 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 
 	let journalEntries: JournalEntry[] = [];
 	let torn = false;
+	let tornTail: string | undefined;
 	try {
 		const read = readJournal(root);
 		journalEntries = read.entries;
 		torn = read.torn;
+		tornTail = read.tornTail;
 	} catch (error) {
 		return {
 			recoverable: false,
@@ -118,12 +121,6 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 			blockers: [`the transaction journal cannot be read: ${(error as Error).message}`],
 		};
 	}
-	if (torn) {
-		blockers.push(
-			"the transaction journal has a torn final line, so the last recorded step is incomplete and automatic recovery is refused",
-		);
-	}
-
 	let committedTx: string | undefined;
 	try {
 		committedTx = loadState(root).lastTx;
@@ -156,6 +153,15 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 	const transactions = [...new Set([...openInJournal, ...leftoverStaging, ...leftoverBackups])]
 		.filter((tx) => tx !== committedTx)
 		.sort();
+	const expectedCommittedTail =
+		committedTx !== undefined &&
+		tornTail?.includes(`"tx":"${committedTx}"`) === true &&
+		/"event"\s*:\s*"comm/.test(tornTail);
+	if (torn && !(finalizeCommitted.length === 1 && transactions.length === 0 && expectedCommittedTail)) {
+		blockers.push(
+			"the transaction journal has a torn final line, so the last recorded step is incomplete and automatic recovery is refused",
+		);
+	}
 
 	for (const tx of transactions) {
 		const components = perTx.get(tx);
@@ -175,6 +181,17 @@ export function assessCrashedTransactions(root: string, bounds: TargetBounds): R
 
 			const backupPath = join(backupsDir(root, tx), info.componentId);
 			const hasBackup = existsSync(backupPath);
+			if (hasBackup) {
+				try {
+					assertNoSymlinkPivot(backupPath, bounds.home);
+					if (!lstatSync(backupPath).isDirectory()) throw new Error("backup artifact is not a directory");
+				} catch (error) {
+					blockers.push(
+						`transaction ${tx} backup for "${info.componentId}" is unsafe: ${(error as Error).message}`,
+					);
+					continue;
+				}
+			}
 
 			if (!info.swapped && !info.swapIntended && !hasBackup) {
 				entries.push({ tx, componentId: info.componentId, targetDir: info.targetDir ?? "", action: "none" });
@@ -248,6 +265,7 @@ export function recoverCrashedTransactions(root: string, bounds: TargetBounds): 
 	for (const tx of assessment.finalizeCommitted) {
 		rmSync(stagingDir(root, tx), { recursive: true, force: true });
 		rmSync(backupsDir(root, tx), { recursive: true, force: true });
+		discardTornJournalTail(root);
 		appendJournal(root, {
 			tx,
 			seq: Number.MAX_SAFE_INTEGER,
@@ -266,10 +284,19 @@ export function recoverCrashedTransactions(root: string, bounds: TargetBounds): 
 		}
 		if (entry.action === "restore-backup") {
 			const backupPath = join(backupsDir(root, entry.tx), entry.componentId);
+			assertNoSymlinkPivot(backupPath, bounds.home);
+			if (!lstatSync(backupPath).isDirectory()) throw new Error(`unsafe recovery backup for ${entry.componentId}`);
+			const claimedBackup = `${backupPath}.recover-${process.pid}-${randomBytes(8).toString("hex")}`;
+			renameSync(backupPath, claimedBackup);
+			assertNoSymlinkPivot(claimedBackup, bounds.home);
+			if (!lstatSync(claimedBackup).isDirectory())
+				throw new Error(`unsafe claimed recovery backup for ${entry.componentId}`);
+			assertSafeTarget(entry.targetDir, bounds);
+			assertNoSymlinkPivot(entry.targetDir, bounds.home);
 			rmSync(entry.targetDir, { recursive: true, force: true });
 			assertSafeTarget(entry.targetDir, bounds);
 			assertNoSymlinkPivot(entry.targetDir, bounds.home);
-			moveDir(backupPath, entry.targetDir);
+			moveDir(claimedBackup, entry.targetDir);
 			notes.push(`restored ${entry.componentId} from the backup transaction ${entry.tx} left behind`);
 		} else if (entry.action === "remove-target") {
 			rmSync(entry.targetDir, { recursive: true, force: true });

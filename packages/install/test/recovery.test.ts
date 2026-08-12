@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyPlan, type MaterializedComponent } from "../src/executor.ts";
@@ -120,6 +120,45 @@ describe("crash assessment", () => {
 		}
 	});
 
+	it("refuses a symlink backup rather than restoring it as the live payload", () => {
+		const h = harness();
+		try {
+			const tx = "tx-link";
+			const unrelated = join(h.home, "unrelated", "payload");
+			mkdirSync(unrelated, { recursive: true });
+			writeFileSync(join(unrelated, "secret.txt"), "UNRELATED");
+			appendJournal(h.root, { tx, seq: 1, at: "2026-01-01T00:00:00.000Z", event: "planned" });
+			appendJournal(h.root, {
+				tx,
+				seq: 2,
+				at: "2026-01-01T00:00:01.000Z",
+				event: "staged",
+				detail: { componentId: "alpha", type: "update", targetDir: h.target },
+			});
+			appendJournal(h.root, {
+				tx,
+				seq: 3,
+				at: "2026-01-01T00:00:02.000Z",
+				event: "swapped",
+				detail: { componentId: "alpha" },
+			});
+			mkdirSync(backupsDir(h.root, tx), { recursive: true });
+			symlinkSync(unrelated, join(backupsDir(h.root, tx), "alpha"), "dir");
+
+			const assessment = assessCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+
+			expect(assessment.recoverable).toBe(false);
+			expect(assessment.blockers.join(" ")).toMatch(/backup.*symbolic link|symlink/i);
+			expect(() => recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root })).toThrow(
+				/symlink|symbolic link/i,
+			);
+			expect(lstatSync(join(backupsDir(h.root, tx), "alpha")).isSymbolicLink()).toBe(true);
+			expect(existsSync(h.target)).toBe(false);
+		} finally {
+			h.dispose();
+		}
+	});
+
 	it("refuses automatic recovery when a crash may have changed an external host", () => {
 		const h = harness();
 		try {
@@ -175,6 +214,64 @@ describe("crash assessment", () => {
 			expect(existsSync(backupsDir(h.root, "tx-committed"))).toBe(false);
 			expect(openTransactions(readJournal(h.root).entries)).not.toContain("tx-committed");
 			expect(recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root }).transactions).toEqual([]);
+		} finally {
+			h.dispose();
+		}
+	});
+
+	it("finalizes a state-confirmed commit when its terminal journal append tore", () => {
+		const h = harness();
+		try {
+			const tx = "tx-committed-torn";
+			const state = createDefaultState();
+			state.lastTx = tx;
+			saveState(h.root, state);
+			appendJournal(h.root, { tx, seq: 1, at: "2026-01-01T00:00:00.000Z", event: "planned" });
+			appendJournal(h.root, {
+				tx,
+				seq: 2,
+				at: "2026-01-01T00:00:01.000Z",
+				event: "swapped",
+				detail: { componentId: "alpha" },
+			});
+			mkdirSync(join(stagingDir(h.root, tx), "alpha"), { recursive: true });
+			mkdirSync(join(backupsDir(h.root, tx), "alpha"), { recursive: true });
+			mkdirSync(h.target, { recursive: true });
+			writeFileSync(join(h.target, "payload.txt"), "COMMITTED");
+			const journal = join(h.root, "journal.jsonl");
+			writeFileSync(journal, `${readFileSync(journal, "utf8")}{"tx":"${tx}","event":"comm`);
+
+			const result = recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+
+			expect(result.transactions).toEqual([tx]);
+			expect(readFileSync(join(h.target, "payload.txt"), "utf8")).toBe("COMMITTED");
+			expect(existsSync(stagingDir(h.root, tx))).toBe(false);
+			expect(existsSync(backupsDir(h.root, tx))).toBe(false);
+			expect(readJournal(h.root).torn).toBe(false);
+			expect(openTransactions(readJournal(h.root).entries)).not.toContain(tx);
+		} finally {
+			h.dispose();
+		}
+	});
+
+	it("refuses a torn tail for another transaction despite a state-confirmed commit", () => {
+		const h = harness();
+		try {
+			const tx = "tx-committed-before-foreign-tail";
+			const state = createDefaultState();
+			state.lastTx = tx;
+			saveState(h.root, state);
+			appendJournal(h.root, { tx, seq: 1, at: "2026-01-01T00:00:00.000Z", event: "planned" });
+			const journal = join(h.root, "journal.jsonl");
+			writeFileSync(journal, `${readFileSync(journal, "utf8")}{"tx":"tx-other","seq":1`);
+
+			const assessment = assessCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+
+			expect(assessment.recoverable).toBe(false);
+			expect(assessment.blockers.join(" ")).toMatch(/torn|incomplete/i);
+			expect(() => recoverCrashedTransactions(h.root, { home: h.home, installRoot: h.root })).toThrow(
+				/torn|incomplete/i,
+			);
 		} finally {
 			h.dispose();
 		}

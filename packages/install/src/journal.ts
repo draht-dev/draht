@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, ftruncateSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { journalPath } from "./paths.ts";
 import { type InstallState, type JournalEntry, JournalEntrySchema } from "./types.ts";
 
@@ -6,6 +6,8 @@ import { type InstallState, type JournalEntry, JournalEntrySchema } from "./type
 export interface ReadJournalResult {
 	entries: JournalEntry[];
 	torn: boolean;
+	/** Unterminated final bytes, retained only so recovery can bind a torn terminal append to durable state. */
+	tornTail?: string;
 }
 
 /**
@@ -52,10 +54,11 @@ export function readJournal(root: string): ReadJournalResult {
 	const endsWithNewline = raw.endsWith("\n");
 	const lines = raw.split("\n");
 	let torn = false;
+	let tornTail: string | undefined;
 	if (endsWithNewline) {
 		lines.pop(); // trailing "" left by split() after the final "\n"
 	} else {
-		lines.pop(); // unterminated tail from an interrupted append
+		tornTail = lines.pop(); // unterminated tail from an interrupted append
 		torn = true;
 	}
 
@@ -66,7 +69,23 @@ export function readJournal(root: string): ReadJournalResult {
 		entries.push(parseJournalLine(line, path, i + 1));
 	}
 
-	return { entries, torn };
+	return { entries, torn, tornTail };
+}
+
+/** Removes only an unterminated crash tail, preserving and fsyncing every complete JSONL record. */
+export function discardTornJournalTail(root: string): void {
+	const path = journalPath(root);
+	if (!existsSync(path)) return;
+	const raw = readFileSync(path);
+	if (raw.length === 0 || raw[raw.length - 1] === 0x0a) return;
+	const lastNewline = raw.lastIndexOf(0x0a);
+	const fd = openSync(path, "r+");
+	try {
+		ftruncateSync(fd, lastNewline + 1);
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
 }
 
 function parseJournalLine(line: string, path: string, lineNumber: number): JournalEntry {

@@ -71,11 +71,9 @@ export function sessionEntryToContextMessages(
 export function buildSessionContext(
 	pathEntries: readonly Entry[],
 	options: SessionContextBuildOptions = {},
-): SessionContext {
+): AgentMessage[] {
 	const contextEntries = buildContextEntries(pathEntries, options);
-	return {
-		messages: contextEntries.flatMap((entry, index) =>
-			sessionEntryToContextMessages(entry, index, contextEntries, options),
-		),
-	};
+	return contextEntries.flatMap((entry, index) =>
+		sessionEntryToContextMessages(entry, index, contextEntries, options),
+	);
 }

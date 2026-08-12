@@ -334,9 +334,9 @@ describe("harness compaction", () => {
 		const u3 = createMessageEntry(createUserMessage("3"), compaction.id);
 		const a3 = createMessageEntry(createAssistantMessage("c"), u3.id);
 		const loaded = buildSessionContext([u1, a1, u2, a2, compaction, u3, a3]);
-		expect(loaded.messages).toHaveLength(5);
-		expect(loaded.messages[0]?.role).toBe("compactionSummary");
-		expect(loaded.messages.map((message) => message.role)).toEqual([
+		expect(loaded).toHaveLength(5);
+		expect(loaded[0]?.role).toBe("compactionSummary");
+		expect(loaded.map((message) => message.role)).toEqual([
 			"compactionSummary",
 			"user",
 			"assistant",
@@ -349,7 +349,7 @@ describe("harness compaction", () => {
 		const user = createMessageEntry(createUserMessage("1"));
 		const failed = createMessageEntry({ ...createAssistantMessage("failed"), stopReason: "error" }, user.id);
 		const loaded = buildSessionContext([user, failed]);
-		expect(loaded.messages).toEqual([user.message]);
+		expect(loaded).toEqual([user.message]);
 	});
 
 	it("prepares compaction using the latest compaction summary as previousSummary", () => {
@@ -365,7 +365,7 @@ describe("harness compaction", () => {
 		expect(preparation).toBeDefined();
 		expect(preparation?.previousSummary).toBe("First summary");
 		expect(preparation?.retainedTail.length).toBeGreaterThan(0);
-		expect(preparation?.tokensBefore).toBe(estimateContextTokens(buildSessionContext(pathEntries).messages).tokens);
+		expect(preparation?.tokensBefore).toBe(estimateContextTokens(buildSessionContext(pathEntries)).tokens);
 	});
 
 	it("carries a previous compaction's retained tail into the next preparation", () => {

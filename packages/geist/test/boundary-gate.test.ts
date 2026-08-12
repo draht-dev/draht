@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -189,5 +189,52 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 		} finally {
 			rmSync(tmpRoot, { recursive: true, force: true });
 		}
+	});
+
+	test("quest/ stays out of npm workspaces: a package.json there fails the gate and no workspace glob reaches it", () => {
+		// R31-FOUND.2: quest/ is Kotlin and must never become an npm workspace.
+		// Enforced twice — the gate rejects any package.json under quest/, and
+		// the root manifest's workspace globs must not be able to match quest/.
+		expect(runGate().exitCode).toBe(0);
+
+		const file = join(REPO_ROOT, "quest", "package.json");
+		withInjected(file, JSON.stringify({ name: "quest", private: true }), () => {
+			const { exitCode, stderr } = runGate();
+			expect({ exitCode }).toEqual({ exitCode: 1 });
+			expect(stderr).toContain("quest/ must NOT be an npm workspace");
+		});
+
+		const rootManifest = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf-8")) as {
+			workspaces: string[];
+		};
+		expect(rootManifest.workspaces.length).toBeGreaterThan(0);
+		for (const glob of rootManifest.workspaces) {
+			expect({ glob, reachesQuest: glob === "quest" || glob.startsWith("quest/") }).toEqual({
+				glob,
+				reachesQuest: false,
+			});
+		}
+
+		expect(runGate().exitCode).toBe(0);
+	});
+
+	test("both geist gates stay wired into the repository check (R31-FOUND.5)", () => {
+		// The beat's contract: mirror and boundary gates REMAIN wired into
+		// `npm run check`. Pin the wiring so removing either script from the
+		// root check chain fails a test, not just a reviewer's memory.
+		const rootManifest = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf-8")) as {
+			scripts: Record<string, string>;
+		};
+		expect(rootManifest.scripts.check).toContain("check:geist-boundary");
+		expect(rootManifest.scripts.check).toContain("check:geist-mirrors");
+		expect(rootManifest.scripts["check:geist-boundary"]).toBe("node scripts/check-geist-boundary.mjs");
+		expect(rootManifest.scripts["check:geist-mirrors"]).toBe("node scripts/check-geist-mirrors.mjs");
+
+		// Both gates must actually run clean from the repo root right now.
+		expect(runGate().exitCode).toBe(0);
+		const mirrors = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "check-geist-mirrors.mjs")], {
+			encoding: "utf-8",
+		});
+		expect(mirrors.status).toBe(0);
 	});
 });

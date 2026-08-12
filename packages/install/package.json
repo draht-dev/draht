@@ -1,6 +1,7 @@
 {
 	"name": "@draht/install",
 	"version": "2026.7.30",
+	"private": true,
 	"description": "Draht unified installer — transactional plan/install/status/doctor/update/uninstall for Draht components (Claude/Codex plugin payloads, coding agent, the installer itself) over hash-manifested state",
 	"type": "module",
 	"main": "./dist/index.js",

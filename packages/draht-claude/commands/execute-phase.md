@@ -70,10 +70,10 @@ Before executing, decompose this phase execution into atomic reasoning units:
    Once the implementer is DONE, dispatch a Task with `subagent_type: "spec-reviewer"` and a prompt of the form:
    ```
    Review the diff for task <task-name> in plan <plan-file> against the spec below. ONLY check spec compliance — does the diff implement exactly what the spec asked for, no more, no less?
-   
+
    Task spec:
    <paste the <task>...</task> XML>
-   
+
    Diff to review:
    <run `git diff <range>` and paste, or instruct the agent to run it>
    ```
@@ -85,7 +85,7 @@ Before executing, decompose this phase execution into atomic reasoning units:
    Once spec compliance is ✅, dispatch a Task with `subagent_type: "reviewer"` and a prompt of the form:
    ```
    Code-quality review of the diff for task <task-name>. Focus on correctness, type safety, conventions, maintainability, and domain language compliance. Spec compliance has already been confirmed — do NOT re-check spec.
-   
+
    Diff to review:
    <run `git diff <range>` and paste, or instruct the agent to run it>
    ```

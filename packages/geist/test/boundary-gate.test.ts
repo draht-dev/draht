@@ -124,6 +124,17 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 		expect(runGate().exitCode).toBe(0);
 	});
 
+	test("multiline dynamic imports cannot evade the boundary scan", () => {
+		expect(runGate().exitCode).toBe(0);
+		const file = join(REPO_ROOT, "packages", "geist-core", "src", "__boundary-mutation__.ts");
+		withInjected(file, 'const forbidden = import(\n  "@draht/coding-agent"\n);\n', () => {
+			const { exitCode, stderr } = runGate();
+			expect(exitCode).toBe(1);
+			expect(stderr).toContain("@draht/coding-agent");
+		});
+		expect(runGate().exitCode).toBe(0);
+	});
+
 	test("geist package manifests reject kernel and shim dependencies, nested fixtures included", () => {
 		// A package.json dependency is the doorway a forbidden import walks
 		// through later — the gate must fail on the declaration, not wait for
@@ -151,6 +162,27 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 			}
 		}
 
+		expect(runGate().exitCode).toBe(0);
+	});
+
+	test("manifest aliases cannot redirect neutral names to forbidden Draht packages", () => {
+		expect(runGate().exitCode).toBe(0);
+		const dir = join(REPO_ROOT, "packages", "geist-picker", "test", "__manifest-alias-mutation__");
+		mkdirSync(dir, { recursive: true });
+		try {
+			const manifestPath = join(dir, "package.json");
+			for (const manifest of [
+				{ dependencies: { neutral: "npm:@draht/coding-agent@2026.7.30" } },
+				{ imports: { "#kernel": "@draht/coding-agent" } },
+			]) {
+				writeFileSync(manifestPath, JSON.stringify({ name: "boundary-alias-fixture", ...manifest }));
+				const { exitCode, stderr } = runGate();
+				expect(exitCode).toBe(1);
+				expect(stderr).toContain("@draht/coding-agent");
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 		expect(runGate().exitCode).toBe(0);
 	});
 

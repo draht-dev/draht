@@ -76,9 +76,10 @@ const QUEST_DIR = join(ROOT, "quest");
 const CODE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".gradle", ".git", ".idea"]);
 
-// Import/require specifier extractors. The string literal of an import is always
-// on a single line even when the import statement spans several, so a per-line
-// scan is sufficient and avoids a full parser.
+// Import/require specifier extractors. Scan whole-file text: valid dynamic
+// imports and requires may place whitespace/newlines between the call and its
+// literal. These patterns deliberately cover only static string specifiers;
+// computed imports are handled by review rather than guessed here.
 const SPECIFIER_PATTERNS = [
 	/\bfrom\s+["']([^"']+)["']/g, //            import x from "y" | export * from "y"
 	/\bimport\s+["']([^"']+)["']/g, //          import "y"  (side-effect)
@@ -101,23 +102,20 @@ function walk(dir, exts) {
 	return out;
 }
 
-function extractSpecifiers(line) {
+function extractSpecifiers(text) {
 	const specs = [];
 	for (const re of SPECIFIER_PATTERNS) {
 		re.lastIndex = 0;
 		let m;
-		while ((m = re.exec(line)) !== null) specs.push(m[1]);
+		while ((m = re.exec(text)) !== null) {
+			specs.push({ line: text.slice(0, m.index).split("\n").length, specifier: m[1] });
+		}
 	}
 	return specs;
 }
 
 function scanImports(file) {
-	const hits = [];
-	const lines = readFileSync(file, "utf-8").split("\n");
-	lines.forEach((line, idx) => {
-		for (const specifier of extractSpecifiers(line)) hits.push({ line: idx + 1, specifier });
-	});
-	return hits;
+	return extractSpecifiers(readFileSync(file, "utf-8"));
 }
 
 function packageNameOf(specifier) {
@@ -171,6 +169,12 @@ for (const dir of BOUNDARY_PACKAGES) {
 // package root's, and an unparseable manifest fails loudly instead of passing
 // silently.
 const DEP_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+function forbiddenDrahtTarget(value) {
+	if (typeof value !== "string") return null;
+	const npmTarget = value.startsWith("npm:") ? value.slice(4) : value;
+	const target = npmTarget.startsWith("@") ? npmTarget.slice(0, npmTarget.indexOf("@", 1) === -1 ? undefined : npmTarget.indexOf("@", 1)) : npmTarget;
+	return /^@draht\//.test(target) && !GEIST_FAMILY.has(packageNameOf(target)) ? target : null;
+}
 for (const dir of BOUNDARY_PACKAGES) {
 	for (const file of walk(dir, ["package.json"])) {
 		if (basename(file) !== "package.json") continue;
@@ -182,12 +186,22 @@ for (const dir of BOUNDARY_PACKAGES) {
 			continue;
 		}
 		for (const field of DEP_FIELDS) {
-			for (const dep of Object.keys(manifest[field] ?? {})) {
-				if (/^@draht\//.test(dep) && !GEIST_FAMILY.has(dep)) {
+			for (const [dep, version] of Object.entries(manifest[field] ?? {})) {
+				const forbidden =
+					(/^@draht\//.test(dep) && !GEIST_FAMILY.has(dep) && dep) || forbiddenDrahtTarget(version);
+				if (forbidden) {
 					violations.push(
-						`${rel(file)}  ${field} on "${dep}" (outside the non-privileged geist family)`,
+						`${rel(file)}  ${field} "${dep}" targets "${forbidden}" (outside the non-privileged geist family)`,
 					);
 				}
+			}
+		}
+		for (const [alias, target] of Object.entries(manifest.imports ?? {})) {
+			const forbidden = forbiddenDrahtTarget(target);
+			if (forbidden) {
+				violations.push(
+					`${rel(file)}  imports alias "${alias}" targets "${forbidden}" (outside the non-privileged geist family)`,
+				);
 			}
 		}
 	}

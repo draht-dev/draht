@@ -42,7 +42,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -131,10 +131,21 @@ function rel(file) {
 
 const violations = [];
 
-// ── 1. geist packages: only non-privileged intra-family @draht/* imports ──────
+// ── 1. geist packages: only non-privileged intra-family @draht/* imports, ─────
+//      and no path imports escaping the package root (a relative import into
+//      packages/coding-agent is the same breach without the npm scope).
 for (const dir of BOUNDARY_PACKAGES) {
 	for (const file of walk(dir, CODE_EXTS)) {
 		for (const { line, specifier } of scanImports(file)) {
+			if (specifier.startsWith(".") || specifier.startsWith("/")) {
+				const resolved = resolve(dirname(file), specifier);
+				if (resolved !== dir && !resolved.startsWith(dir + sep)) {
+					violations.push(
+						`${rel(file)}:${line}  imports "${specifier}" (path import escapes ${rel(dir)})`,
+					);
+				}
+				continue;
+			}
 			if (!/^@draht\//.test(specifier)) continue;
 			if (GEIST_FAMILY.has(packageNameOf(specifier))) continue;
 			violations.push(`${rel(file)}:${line}  imports "${specifier}" (outside the non-privileged geist family)`);

@@ -99,14 +99,22 @@ describe("check-geist-boundary.mjs (R31-FOUND.7 mutations)", () => {
 	});
 
 	test("boundary packages reject relative imports that escape the package into the kernel", () => {
-		// `import "../../coding-agent/src/index.js"` names no @draht/* specifier,
-		// yet lands in the kernel all the same — a hard boundary that only
-		// pattern-matches npm scopes is not hard. Any relative import resolving
-		// outside its own package root must fail the gate.
+		// A relative specifier of ../../coding-agent/src/index.js names no
+		// @draht/* scope, yet lands in the kernel all the same — a hard boundary
+		// that only pattern-matches npm scopes is not hard. Any relative import
+		// resolving outside its own package root must fail the gate.
+		//
+		// The fixture is assembled from parts because this test file itself lives
+		// inside a boundary package: written as one plain string literal, the
+		// gate's line scanner would (correctly) flag the fixture text as an
+		// import-shaped escape. The injected file's bytes are identical.
+		const escapeSpecifier = ["..", "..", "coding-agent", "src", "index.js"].join("/");
+		const escapeImport = `import ${JSON.stringify(escapeSpecifier)};\n`;
+
 		expect(runGate().exitCode).toBe(0);
 
 		const file = join(REPO_ROOT, "packages", "geist-core", "src", "__boundary-mutation__.ts");
-		withInjected(file, 'import "../../coding-agent/src/index.js";\n', () => {
+		withInjected(file, escapeImport, () => {
 			const { exitCode, stderr } = runGate();
 			expect({ exitCode }).toEqual({ exitCode: 1 });
 			expect(stderr).toContain("__boundary-mutation__.ts");

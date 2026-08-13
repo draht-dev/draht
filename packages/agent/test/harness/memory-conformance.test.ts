@@ -5,12 +5,10 @@ import {
 	type ConformanceCase,
 	createSessionRepoConformance,
 	createStorageConformance,
-	type SessionRepoFixture,
 	type StorageFixture,
 } from "../../src/harness/session/testing/index.ts";
 
 const NOW = 1_700_000_000_000;
-const STORAGE_VERSION = 1;
 
 function registerConformance(name: string, cases: readonly ConformanceCase[]): void {
 	describe(name, () => {
@@ -35,14 +33,14 @@ registerConformance(
 	}),
 );
 
+let memoryRepo: MemorySessionRepo;
 registerConformance(
 	"MemorySessionRepo conformance",
-	createSessionRepoConformance(() => {
-		const repo = new MemorySessionRepo({ now: () => NOW });
-		return Promise.resolve<SessionRepoFixture>({
-			repo,
-			storageVersion: STORAGE_VERSION,
-			[Symbol.asyncDispose]: () => repo.close(),
-		});
-	}),
+	createSessionRepoConformance(
+		() => {
+			memoryRepo = new MemorySessionRepo({ now: () => NOW });
+			return Promise.resolve(memoryRepo);
+		},
+		() => memoryRepo.close(),
+	),
 );

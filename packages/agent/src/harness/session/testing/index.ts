@@ -9,8 +9,4 @@ export { createSessionRepoConformance } from "./conformance/session-repo.ts";
 export { createStorageConformance } from "./conformance/storage.ts";
 export { InstrumentedStorage } from "./instrumented-storage.ts";
 export { StorageDecorator } from "./storage-decorator.ts";
-export type {
-	ConformanceCase,
-	SessionRepoFixture,
-	StorageFixture,
-} from "./types.ts";
+export type { ConformanceCase, StorageFixture } from "./types.ts";

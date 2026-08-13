@@ -1,7 +1,7 @@
 import { deepStrictEqual, rejects, strictEqual } from "node:assert/strict";
 import type { AssistantMessage, StopReason } from "@draht/ai";
-import type { LaneConfiguration, LaneState, UsageRow } from "../../types.ts";
-import type { ConformanceCase, SessionRepoFixture } from "../types.ts";
+import type { LaneConfiguration, LaneState, SessionMetadata, SessionRepo, UsageRow } from "../../types.ts";
+import type { ConformanceCase } from "../types.ts";
 
 const ROOT_ID = "00000000-0000-7000-8000-000000000001";
 const CHILD_ID = "00000000-0000-7000-8000-000000000002";
@@ -57,37 +57,39 @@ function usageRow(): Omit<UsageRow, "seq"> {
 	};
 }
 
-function createCase(
-	factory: () => Promise<SessionRepoFixture>,
-	group: string,
-	name: string,
-	test: (fixture: SessionRepoFixture) => Promise<void>,
-): ConformanceCase {
-	return {
+/** Creates fresh, runner-independent cases for the SessionRepo contract. */
+export function createSessionRepoConformance<TMetadata extends SessionMetadata>(
+	factory: () => Promise<SessionRepo<TMetadata>>,
+	onClose?: () => void | Promise<void>,
+): readonly ConformanceCase[] {
+	const createCase = (
+		caseFactory: () => Promise<SessionRepo<TMetadata>>,
+		group: string,
+		name: string,
+		test: (context: { repo: SessionRepo<TMetadata> }) => Promise<void>,
+	): ConformanceCase => ({
 		group,
 		name,
 		async run() {
-			await using fixture = await factory();
-			await test(fixture);
+			const repo = await caseFactory();
+			try {
+				await test({ repo });
+			} finally {
+				await onClose?.();
+			}
 		},
-	};
-}
-
-/** Creates fresh, runner-independent cases for the SessionRepo contract. */
-export function createSessionRepoConformance(factory: () => Promise<SessionRepoFixture>): readonly ConformanceCase[] {
+	});
 	return [
 		createCase(
 			factory,
 			"lifecycle",
 			"creates an unconfigured main lane and rejects duplicate ids",
-			async ({ repo, storageVersion }) => {
+			async ({ repo }) => {
 				const session = await repo.create({ id: "session" });
 
-				deepStrictEqual(session.metadata, {
-					id: "session",
-					createdAt: session.metadata.createdAt,
-					storageVersion,
-				});
+				strictEqual(session.metadata.id, "session");
+				strictEqual(Number.isSafeInteger(session.metadata.createdAt), true);
+				strictEqual(session.metadata.storageVersion, 1);
 				strictEqual(await session.getLeafId(), null);
 				deepStrictEqual((await session.getRegister("lane.state", "main"))?.value, {
 					currentOperationId: null,

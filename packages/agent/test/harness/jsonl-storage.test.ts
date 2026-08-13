@@ -130,3 +130,122 @@ describe("JsonlStorage persistence", () => {
 		await reopened.close();
 	});
 });
+
+describe("JsonlStorage torn tail", () => {
+	function entryWrite(id: string) {
+		return {
+			kind: "entry" as const,
+			entry: {
+				id,
+				parentId: null,
+				type: "message" as const,
+				message: { role: "user" as const, content: id, timestamp: 1 },
+			},
+		};
+	}
+
+	async function seed() {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const options = { fileSystem, path: "session.jsonl" as const, now: () => NOW };
+		const storage = await JsonlStorage.create(options, header("torn"));
+		await storage.commit({ writes: [entryWrite("kept")] });
+		await storage.close();
+		const prefix = getOrThrow(await fileSystem.readTextFile("session.jsonl"));
+		return { fileSystem, options, prefix };
+	}
+
+	it("discards an unterminated final object line and truncates before admitting writes", async () => {
+		const { fileSystem, options, prefix } = await seed();
+		await fileSystem.appendFile(
+			"session.jsonl",
+			JSON.stringify({
+				kind: "entry",
+				id: "torn",
+				parentId: null,
+				type: "message",
+				message: { role: "user", content: "torn", timestamp: 1 },
+				seq: 2,
+				timestamp: NOW,
+			}),
+		);
+
+		const reopened = await JsonlStorage.open(options);
+		expect((await reopened.getEntries(["kept", "torn"])).has("torn")).toBe(false);
+		expect((await reopened.getEntries(["kept"])).get("kept")?.id).toBe("kept");
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(prefix);
+		expect(getOrThrow(await fileSystem.exists("session.jsonl.tmp"))).toBe(false);
+
+		const next = await reopened.commit({ writes: [entryWrite("after")] });
+		expect(next.firstSeq).toBe(2);
+		expect((await reopened.getEntries(["after"])).get("after")?.seq).toBe(2);
+		await reopened.close();
+	});
+
+	it("discards a torn array line wholly", async () => {
+		const { fileSystem, options, prefix } = await seed();
+		await fileSystem.appendFile(
+			"session.jsonl",
+			JSON.stringify([
+				{
+					kind: "entry",
+					id: "torn-a",
+					parentId: null,
+					type: "message",
+					message: { role: "user", content: "torn-a", timestamp: 1 },
+					seq: 2,
+					timestamp: NOW,
+				},
+				{ kind: "register", op: "set", seq: 3, namespace: "fact.name", key: "", value: "lost" },
+			]),
+		);
+
+		const reopened = await JsonlStorage.open(options);
+		expect((await reopened.getEntries(["torn-a"])).has("torn-a")).toBe(false);
+		expect(await reopened.getRegister("fact.name", "")).toBeUndefined();
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(prefix);
+		await reopened.close();
+	});
+
+	it("rejects a malformed interior line without rewriting", async () => {
+		const { fileSystem, options, prefix } = await seed();
+		const corrupted = `${prefix}not-json\n${JSON.stringify({
+			kind: "register",
+			op: "set",
+			seq: 2,
+			namespace: "fact.name",
+			key: "",
+			value: "after",
+		})}\n`;
+		await fileSystem.writeFile("session.jsonl", corrupted);
+
+		await expect(JsonlStorage.open(options)).rejects.toThrow(/line 3/);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(corrupted);
+		expect(getOrThrow(await fileSystem.exists("session.jsonl.tmp"))).toBe(false);
+	});
+
+	it("rejects a complete malformed final line without rewriting", async () => {
+		const { fileSystem, options, prefix } = await seed();
+		const corrupted = `${prefix}not-json\n`;
+		await fileSystem.writeFile("session.jsonl", corrupted);
+
+		await expect(JsonlStorage.open(options)).rejects.toThrow(/line 3/);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(corrupted);
+	});
+
+	it("rejects a complete final line with invalid transaction framing", async () => {
+		const { fileSystem, options, prefix } = await seed();
+		const corrupted = `${prefix}${JSON.stringify({ kind: "nope", seq: 2 })}\n`;
+		await fileSystem.writeFile("session.jsonl", corrupted);
+
+		await expect(JsonlStorage.open(options)).rejects.toThrow(/line 3/);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(corrupted);
+	});
+
+	it("rejects an unterminated header", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const options = { fileSystem, path: "session.jsonl", now: () => NOW };
+		await fileSystem.writeFile("session.jsonl", JSON.stringify(header("torn")).slice(0, -4));
+
+		await expect(JsonlStorage.open(options)).rejects.toThrow(/missing header/);
+	});
+});

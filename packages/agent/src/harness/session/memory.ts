@@ -1,7 +1,7 @@
 import { type Usage, uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../types.ts";
-import { addUsage } from "../utils/usage.ts";
 import { StorageBackedSession } from "./session.ts";
+import { StorageState, type StorageStateSnapshot } from "./storage-state.ts";
 import type {
 	BranchScan,
 	CommitResult,
@@ -54,12 +54,7 @@ function emptyUsage(): Usage {
 
 export class MemoryStorage implements Storage {
 	private readonly now: () => number;
-	private entries = new Map<string, Entry>();
-	private entriesBySeq: Entry[] = [];
-	private registers = new Map<string, Register>();
-	private usage = new Map<string, UsageRow>();
-	private stats: SessionStats = { messageCount: 0, usage: emptyUsage() };
-	private nextSeq = 1;
+	private storageState = new StorageState();
 	private commitQueue: Promise<void> = Promise.resolve();
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
@@ -70,7 +65,11 @@ export class MemoryStorage implements Storage {
 
 	async commit(transaction: Transaction): Promise<CommitResult> {
 		if (this.state !== "open") throw new Error("MemoryStorage is closed");
-		const result = this.commitQueue.then(() => this.applyCommit(transaction));
+		const result = this.commitQueue.then(() => {
+			const prepared = this.storageState.prepareCommit(transaction, this.now());
+			this.storageState.applyValidated(prepared.writes);
+			return prepared.result;
+		});
 		this.commitQueue = result.then(
 			() => undefined,
 			() => undefined,
@@ -78,89 +77,9 @@ export class MemoryStorage implements Storage {
 		return result;
 	}
 
-	private applyCommit(committedTransaction: Transaction): CommitResult {
-		const transactionIds = new Set<string>();
-		const transactionEntryIds = new Set<string>();
-		for (const write of committedTransaction.writes) {
-			if (write.kind !== "entry" && write.kind !== "usage") continue;
-			const id = write.kind === "entry" ? write.entry.id : write.row.id;
-			if (this.entries.has(id) || this.usage.has(id) || transactionIds.has(id)) {
-				throw new Error(`Duplicate entry or usage id: ${id}`);
-			}
-			if (
-				write.kind === "entry" &&
-				write.entry.parentId !== null &&
-				!this.entries.has(write.entry.parentId) &&
-				!transactionEntryIds.has(write.entry.parentId)
-			) {
-				throw new Error(`Missing parent entry: ${write.entry.parentId}`);
-			}
-			transactionIds.add(id);
-			if (write.kind === "entry") transactionEntryIds.add(id);
-		}
-
-		const timestamp = this.now();
-		const entries: Entry[] = [];
-		const registers = new Map<string, Register | undefined>();
-		const usage: UsageRow[] = [];
-		let stats: SessionStats | undefined;
-		let nextSeq = this.nextSeq;
-		const firstSeq = nextSeq;
-		const seqs: number[] = [];
-
-		for (const write of committedTransaction.writes) {
-			const seq = nextSeq++;
-			seqs.push(seq);
-			switch (write.kind) {
-				case "entry":
-					stats ??= { messageCount: this.stats.messageCount, usage: this.stats.usage };
-					entries.push({ ...write.entry, seq, timestamp } as Entry);
-					if (write.entry.type === "message") stats.messageCount++;
-					break;
-				case "usage":
-					stats ??= { messageCount: this.stats.messageCount, usage: this.stats.usage };
-					usage.push({ ...write.row, seq });
-					stats.usage = addUsage(stats.usage, write.row.usage);
-					break;
-				case "register": {
-					const key = registerKey(write.namespace, write.key);
-					if (write.op === "delete") {
-						registers.set(key, undefined);
-					} else {
-						registers.set(key, {
-							namespace: write.namespace,
-							key: write.key,
-							value: write.value,
-							seq,
-						});
-					}
-					break;
-				}
-			}
-		}
-
-		for (const entry of entries) {
-			this.entries.set(entry.id, entry);
-			this.entriesBySeq.push(entry);
-		}
-		for (const [key, register] of registers) {
-			if (register === undefined) this.registers.delete(key);
-			else this.registers.set(key, register);
-		}
-		for (const row of usage) this.usage.set(row.id, row);
-		if (stats !== undefined) this.stats = stats;
-		this.nextSeq = nextSeq;
-		return { firstSeq, seqs, timestamp };
-	}
-
 	getEntries(ids: string[]): Promise<Map<string, Entry>> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		const found = new Map<string, Entry>();
-		for (const id of ids) {
-			const entry = this.entries.get(id);
-			if (entry !== undefined) found.set(id, entry);
-		}
-		return Promise.resolve(found);
+		return Promise.resolve(this.storageState.getEntries(ids));
 	}
 
 	getRegister<TNamespace extends RegisterNamespace>(
@@ -168,8 +87,7 @@ export class MemoryStorage implements Storage {
 		key: string,
 	): Promise<Register<TNamespace> | undefined> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		const register = this.registers.get(registerKey(namespace, key));
-		return Promise.resolve(register as Register<TNamespace> | undefined);
+		return Promise.resolve(this.storageState.getRegister(namespace, key));
 	}
 
 	listRegisters<TNamespace extends RegisterNamespace>(
@@ -177,101 +95,44 @@ export class MemoryStorage implements Storage {
 		keyPrefix = "",
 	): Promise<Register<TNamespace>[]> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		const registers = [...this.registers.values()]
-			.filter((register) => register.namespace === namespace && register.key.startsWith(keyPrefix))
-			.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
-		return Promise.resolve(registers as Register<TNamespace>[]);
-	}
-
-	private scanBranchEntries(query: StorageBranchScan): Entry[] {
-		const start = this.entries.get(query.start);
-		if (start === undefined) throw new Error(`Unknown branch start: ${query.start}`);
-
-		const path: Entry[] = [];
-		let entry: Entry | undefined = start;
-		while (entry !== undefined) {
-			path.push(entry);
-			if (entry.parentId === null) break;
-			entry = this.entries.get(entry.parentId);
-			if (entry === undefined) throw new Error("Corrupt branch: missing parent");
-		}
-		if (query.order === "oldestFirst") path.reverse();
-
-		const stopped: Entry[] = [];
-		for (const candidate of path) {
-			stopped.push(candidate);
-			if (candidate.id === query.stopAtId || candidate.type === query.stopAtType) break;
-		}
-		const filtered = stopped
-			.filter((candidate) => query.type === undefined || candidate.type === query.type)
-			.filter((candidate) => query.customType === undefined || candidate.customType === query.customType)
-			.filter(
-				(candidate) =>
-					query.cursor === undefined ||
-					(query.order === "oldestFirst" ? candidate.seq > query.cursor.seq : candidate.seq < query.cursor.seq),
-			);
-		return query.limit === undefined ? filtered : filtered.slice(0, Math.max(0, query.limit));
+		return Promise.resolve(this.storageState.listRegisters(namespace, keyPrefix));
 	}
 
 	async scanBranch(query: StorageBranchScan): Promise<Entry[]> {
 		if (this.state !== "open") throw new Error("MemoryStorage is closed");
-		return this.scanBranchEntries(query);
+		return this.storageState.scanBranch(query);
 	}
 
 	async scanBranchStructure(query: StorageBranchScan): Promise<EntryStructure[]> {
 		if (this.state !== "open") throw new Error("MemoryStorage is closed");
-		return this.scanBranchEntries(query).map((entry) => ({
-			id: entry.id,
-			parentId: entry.parentId,
-			seq: entry.seq,
-			timestamp: entry.timestamp,
-			type: entry.type,
-			...(entry.customType === undefined ? {} : { customType: entry.customType }),
-		}));
+		return this.storageState.scanBranchStructure(query);
 	}
 
 	scanEntries(query: EntryScan): Promise<Entry[]> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		const limit = query.limit === undefined ? Number.POSITIVE_INFINITY : Math.max(0, Math.trunc(query.limit));
-		const entries: Entry[] = [];
-		const descending = query.order === "desc";
-		let index = descending ? this.entriesBySeq.length - 1 : 0;
-		while (index >= 0 && index < this.entriesBySeq.length && entries.length < limit) {
-			const entry = this.entriesBySeq[index]!;
-			if (
-				(query.type === undefined || entry.type === query.type) &&
-				(query.customType === undefined || entry.customType === query.customType) &&
-				(query.fromSeq === undefined || entry.seq >= query.fromSeq) &&
-				(query.toSeq === undefined || entry.seq <= query.toSeq)
-			) {
-				entries.push(entry);
-			}
-			index += descending ? -1 : 1;
-		}
-		return Promise.resolve(entries);
+		return Promise.resolve(this.storageState.scanEntries(query));
 	}
 
 	scanUsage(query: UsageScan): Promise<UsageRow[]> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		const rows = [...this.usage.values()]
-			.filter((row) => query.fromSeq === undefined || row.seq >= query.fromSeq)
-			.filter((row) => query.toSeq === undefined || row.seq <= query.toSeq)
-			.sort((left, right) => (query.order === "desc" ? right.seq - left.seq : left.seq - right.seq));
-		return Promise.resolve(query.limit === undefined ? rows : rows.slice(0, Math.max(0, query.limit)));
+		return Promise.resolve(this.storageState.scanUsage(query));
 	}
 
 	getStats(): Promise<SessionStats> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		return Promise.resolve(this.stats);
+		return Promise.resolve(this.storageState.getStats());
 	}
 
 	/** Capture the current stores at one serialized boundary between commits. */
 	snapshot(): Promise<{ entries: Entry[]; registers: Register[] }> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		const result = this.commitQueue.then(() => ({
-			entries: [...this.entriesBySeq],
-			registers: [...this.registers.values()],
-		}));
+		const result = this.commitQueue.then(() => {
+			const snapshot = this.storageState.snapshot();
+			return {
+				entries: [...snapshot.entries.values()].sort((left, right) => left.seq - right.seq),
+				registers: [...snapshot.registers.values()],
+			};
+		});
 		this.commitQueue = result.then(
 			() => undefined,
 			() => undefined,
@@ -288,23 +149,9 @@ export class MemoryStorage implements Storage {
 		return this.closePromise;
 	}
 
-	static fromSnapshot(
-		options: MemoryStorageOptions,
-		snapshot: {
-			entries: Map<string, Entry>;
-			registers: Map<string, Register>;
-			usage: Map<string, UsageRow>;
-			stats: SessionStats;
-			nextSeq: number;
-		},
-	): MemoryStorage {
+	static fromSnapshot(options: MemoryStorageOptions, snapshot: StorageStateSnapshot): MemoryStorage {
 		const storage = new MemoryStorage(options);
-		storage.entries = snapshot.entries;
-		storage.entriesBySeq = [...snapshot.entries.values()].sort((left, right) => left.seq - right.seq);
-		storage.registers = snapshot.registers;
-		storage.usage = snapshot.usage;
-		storage.stats = snapshot.stats;
-		storage.nextSeq = snapshot.nextSeq;
+		storage.storageState = new StorageState(snapshot);
 		return storage;
 	}
 }

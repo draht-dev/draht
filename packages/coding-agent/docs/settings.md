@@ -187,6 +187,20 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 | `shellCommandPrefix` | string | - | Prefix for every bash command (e.g., `"shopt -s expand_aliases"`) |
 | `npmCommand` | string[] | - | Command argv used for npm package lookup/install operations (e.g., `["mise", "exec", "node@20", "--", "npm"]`) |
 
+Windows paths in JSON must use forward slashes or escaped backslashes:
+
+```json
+{
+  "shellPath": "C:/Program Files/Git/bin/bash.exe"
+}
+```
+
+```json
+{
+  "shellPath": "C:\\Program Files\\Git\\bin\\bash.exe"
+}
+```
+
 ```json
 {
   "npmCommand": ["mise", "exec", "node@20", "--", "npm"]

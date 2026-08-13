@@ -122,7 +122,7 @@ import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
-import { ensureTool } from "../../utils/tools-manager.ts";
+import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
@@ -451,6 +451,7 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
+	private managedToolStatusStarted = false;
 
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
@@ -885,11 +886,6 @@ export class InteractiveMode {
 		// Load changelog (only show new entries, skip for resumed sessions)
 		this.changelogMarkdown = this.getChangelogForDisplay();
 
-		// Ensure fd and rg are available (downloads if missing, adds to PATH via getBinDir)
-		// Both are needed: fd for autocomplete, rg for grep tool and bash commands
-		const [fdPath] = await Promise.all([ensureTool("fd"), ensureTool("rg")]);
-		this.fdPath = fdPath;
-
 		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
 			const modelList = this.session.scopedModels
 				.map((sm) => {
@@ -935,10 +931,11 @@ export class InteractiveMode {
 			this.widgetContainerBelow,
 			this.footerContainer,
 		]);
+		// Accept text while startup completes, but only enable interrupt, exit, and submission feedback.
+		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
+		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
+		this.defaultEditor.onSubmit = (text) => this.handleStartupSubmit(text);
 		this.ui.setFocus(this.editor);
-
-		this.setupKeyHandlers();
-		this.setupEditorSubmitHandler();
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
@@ -1022,6 +1019,20 @@ export class InteractiveMode {
 			this.builtInHeader = new Text("", 0, 0);
 			this.headerContainer.addChild(this.builtInHeader);
 		}
+		this.ui.requestRender();
+
+		// Ensure fd and rg are available after mounting the TUI (downloads if missing, adds to PATH via getBinDir)
+		// so slow downloads do not make startup appear frozen.
+		// Both are needed: fd for autocomplete, rg for grep tool and bash commands.
+		const [fdPath] = await Promise.all([
+			ensureTool("fd", (status) => this.showManagedToolStatus(status)),
+			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
+		]);
+		this.fdPath = fdPath;
+
+		// Enable the remaining input handlers only after managed-tool setup completes.
+		this.setupKeyHandlers();
+		this.setupEditorSubmitHandler();
 		this.ui.requestRender();
 
 		// Initialize extensions first so resources are shown before messages
@@ -3127,6 +3138,11 @@ export class InteractiveMode {
 		}
 	}
 
+	private handleStartupSubmit(text: string): void {
+		this.editor.setText(text);
+		this.showStatus("Startup is still in progress");
+	}
+
 	private setupEditorSubmitHandler(): void {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
@@ -3681,6 +3697,20 @@ export class InteractiveMode {
 				? [{ type: "text", text: message.content }]
 				: message.content.filter((c: { type: string }) => c.type === "text");
 		return textBlocks.map((c) => (c as { text: string }).text).join("");
+	}
+
+	/** Show a managed-tool status update in the chat. */
+	private showManagedToolStatus(status: ToolStatus): void {
+		if (!this.managedToolStatusStarted) {
+			this.chatContainer.addChild(new Spacer(1));
+			this.managedToolStatusStarted = true;
+		}
+		const message = status.type === "warning" ? `Warning: ${status.message}` : status.message;
+		const color = status.type === "warning" ? "warning" : "dim";
+		this.chatContainer.addChild(new Text(theme.fg(color, message), 1, 0));
+		this.lastStatusSpacer = undefined;
+		this.lastStatusText = undefined;
+		this.ui.requestRender();
 	}
 
 	/**

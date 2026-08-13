@@ -9,18 +9,18 @@ import type {
 	Register,
 	Transaction,
 } from "../../types.ts";
-import type { StorageConformanceCase, StorageFixture, StorageFixtureFactory } from "../types.ts";
+import type { ConformanceCase, StorageFixture } from "../types.ts";
 
 const MESSAGE_TIMESTAMP = 1_650_000_000_000;
 
 type ConformanceTest = (fixture: StorageFixture) => Promise<void>;
 
 function createCase(
-	factory: StorageFixtureFactory,
+	factory: () => Promise<StorageFixture>,
 	group: string,
 	name: string,
 	test: ConformanceTest,
-): StorageConformanceCase {
+): ConformanceCase {
 	return {
 		group,
 		name,
@@ -110,7 +110,7 @@ function sortRegisters(registers: Register[]): Register[] {
 }
 
 /** Creates fresh, runner-independent cases for the durable Storage contract. */
-export function createStorageConformance(factory: StorageFixtureFactory): readonly StorageConformanceCase[] {
+export function createStorageConformance(factory: () => Promise<StorageFixture>): readonly ConformanceCase[] {
 	return [
 		createCase(factory, "transactions", "commits mixed writes atomically in write order", async ({ storage }) => {
 			const result = await storage.commit({

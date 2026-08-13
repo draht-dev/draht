@@ -55,6 +55,7 @@ function emptyUsage(): Usage {
 export class MemoryStorage implements Storage {
 	private readonly now: () => number;
 	private entries = new Map<string, Entry>();
+	private entriesBySeq: Entry[] = [];
 	private registers = new Map<string, Register>();
 	private usage = new Map<string, UsageRow>();
 	private stats: SessionStats = { messageCount: 0, usage: emptyUsage() };
@@ -138,7 +139,10 @@ export class MemoryStorage implements Storage {
 			}
 		}
 
-		for (const entry of entries) this.entries.set(entry.id, entry);
+		for (const entry of entries) {
+			this.entries.set(entry.id, entry);
+			this.entriesBySeq.push(entry);
+		}
 		for (const [key, register] of registers) {
 			if (register === undefined) this.registers.delete(key);
 			else this.registers.set(key, register);
@@ -228,13 +232,23 @@ export class MemoryStorage implements Storage {
 
 	scanEntries(query: EntryScan): Promise<Entry[]> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		const entries = [...this.entries.values()]
-			.filter((entry) => query.type === undefined || entry.type === query.type)
-			.filter((entry) => query.customType === undefined || entry.customType === query.customType)
-			.filter((entry) => query.fromSeq === undefined || entry.seq >= query.fromSeq)
-			.filter((entry) => query.toSeq === undefined || entry.seq <= query.toSeq)
-			.sort((left, right) => (query.order === "desc" ? right.seq - left.seq : left.seq - right.seq));
-		return Promise.resolve(query.limit === undefined ? entries : entries.slice(0, Math.max(0, query.limit)));
+		const limit = query.limit === undefined ? Number.POSITIVE_INFINITY : Math.max(0, Math.trunc(query.limit));
+		const entries: Entry[] = [];
+		const descending = query.order === "desc";
+		let index = descending ? this.entriesBySeq.length - 1 : 0;
+		while (index >= 0 && index < this.entriesBySeq.length && entries.length < limit) {
+			const entry = this.entriesBySeq[index]!;
+			if (
+				(query.type === undefined || entry.type === query.type) &&
+				(query.customType === undefined || entry.customType === query.customType) &&
+				(query.fromSeq === undefined || entry.seq >= query.fromSeq) &&
+				(query.toSeq === undefined || entry.seq <= query.toSeq)
+			) {
+				entries.push(entry);
+			}
+			index += descending ? -1 : 1;
+		}
+		return Promise.resolve(entries);
 	}
 
 	scanUsage(query: UsageScan): Promise<UsageRow[]> {
@@ -255,7 +269,7 @@ export class MemoryStorage implements Storage {
 	snapshot(): Promise<{ entries: Entry[]; registers: Register[] }> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
 		const result = this.commitQueue.then(() => ({
-			entries: [...this.entries.values()],
+			entries: [...this.entriesBySeq],
 			registers: [...this.registers.values()],
 		}));
 		this.commitQueue = result.then(
@@ -286,6 +300,7 @@ export class MemoryStorage implements Storage {
 	): MemoryStorage {
 		const storage = new MemoryStorage(options);
 		storage.entries = snapshot.entries;
+		storage.entriesBySeq = [...snapshot.entries.values()].sort((left, right) => left.seq - right.seq);
 		storage.registers = snapshot.registers;
 		storage.usage = snapshot.usage;
 		storage.stats = snapshot.stats;

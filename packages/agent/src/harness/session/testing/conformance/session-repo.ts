@@ -1,7 +1,7 @@
 import { deepStrictEqual, rejects, strictEqual } from "node:assert/strict";
 import type { AssistantMessage, StopReason } from "@draht/ai";
 import type { LaneConfiguration, LaneState, UsageRow } from "../../types.ts";
-import type { SessionRepoConformanceCase, SessionRepoFixture, SessionRepoFixtureFactory } from "../types.ts";
+import type { ConformanceCase, SessionRepoFixture } from "../types.ts";
 
 const ROOT_ID = "00000000-0000-7000-8000-000000000001";
 const CHILD_ID = "00000000-0000-7000-8000-000000000002";
@@ -58,11 +58,11 @@ function usageRow(): Omit<UsageRow, "seq"> {
 }
 
 function createCase(
-	factory: SessionRepoFixtureFactory,
+	factory: () => Promise<SessionRepoFixture>,
 	group: string,
 	name: string,
 	test: (fixture: SessionRepoFixture) => Promise<void>,
-): SessionRepoConformanceCase {
+): ConformanceCase {
 	return {
 		group,
 		name,
@@ -74,9 +74,7 @@ function createCase(
 }
 
 /** Creates fresh, runner-independent cases for the SessionRepo contract. */
-export function createSessionRepoConformance(
-	factory: SessionRepoFixtureFactory,
-): readonly SessionRepoConformanceCase[] {
+export function createSessionRepoConformance(factory: () => Promise<SessionRepoFixture>): readonly ConformanceCase[] {
 	return [
 		createCase(
 			factory,

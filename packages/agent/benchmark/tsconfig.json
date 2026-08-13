@@ -1,0 +1,12 @@
+{
+	"extends": "../../../tsconfig.base.json",
+	"compilerOptions": {
+		"baseUrl": "../../..",
+		"noEmit": true,
+		"paths": {
+			"@draht/ai": ["packages/ai/src/index.ts"],
+			"@draht/ai/*": ["packages/ai/src/*"]
+		}
+	},
+	"include": ["./**/*.ts", "../src/**/*.ts"]
+}

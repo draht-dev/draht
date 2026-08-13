@@ -30,7 +30,13 @@
 		"check:telemetry-docs": "npx tsx scripts/generate-telemetry-docs.ts --check",
 		"build": "tsc -p tsconfig.build.json",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+		"bench:session:timing": "vitest bench --config vitest.benchmark.config.ts",
+		"bench:session:memory": "npx tsx --tsconfig benchmark/tsconfig.json benchmark/session/loaded-footprint.ts",
+		"bench:session:allocations": "npx tsx --tsconfig benchmark/tsconfig.json benchmark/session/allocation-profile.ts",
 		"test": "vitest --run",
+		"test:harness": "vitest --run --config vitest.harness.config.ts",
+		"test:session:conformance": "vitest --run --config vitest.harness.config.ts test/harness/memory-conformance.test.ts",
+		"coverage:harness": "vitest --run --config vitest.harness.config.ts --coverage",
 		"prepublishOnly": "bun run clean && bun run build"
 	},
 	"dependencies": {

@@ -1,29 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemorySessionRepo } from "../../src/harness/session/index.ts";
-import { createSessionRepoConformance, type SessionRepoFixture } from "../../src/harness/session/testing/index.ts";
 
 const NOW = 1_700_000_000_000;
-const STORAGE_VERSION = 1;
-
-const conformance = createSessionRepoConformance(() => {
-	const repo = new MemorySessionRepo({ now: () => NOW });
-	return Promise.resolve<SessionRepoFixture>({
-		repo,
-		storageVersion: STORAGE_VERSION,
-		[Symbol.asyncDispose]: () => repo.close(),
-	});
-});
-
-describe("MemorySessionRepo conformance", () => {
-	for (const group of new Set(conformance.map((testCase) => testCase.group))) {
-		describe(group, () => {
-			for (const testCase of conformance.filter((candidate) => candidate.group === group)) {
-				it(testCase.name, () => testCase.run());
-			}
-		});
-	}
-});
-
 function uuidTimestamp(id: string): number {
 	return Number.parseInt(id.replaceAll("-", "").slice(0, 12), 16);
 }

@@ -1,4 +1,4 @@
-import type { FileError, FileSystem, Result } from "../types.ts";
+import type { FileError, FileSystem, Result } from "../../types.ts";
 import {
 	type CommittedEntryWrite,
 	type CommittedRegisterDeleteWrite,
@@ -6,7 +6,7 @@ import {
 	type CommittedUsageWrite,
 	type CommittedWrite,
 	StorageState,
-} from "./storage-state.ts";
+} from "../storage-state.ts";
 import type {
 	CommitResult,
 	Entry,
@@ -20,7 +20,7 @@ import type {
 	Transaction,
 	UsageRow,
 	UsageScan,
-} from "./types.ts";
+} from "../types.ts";
 
 export const JSONL_FORMAT_VERSION = 4;
 

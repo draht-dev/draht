@@ -1,6 +1,7 @@
 import { NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import type { EffectGate } from "../../src/harness/execution/effect-gate.ts";
 import {
 	applyBeforeToolDecision,
 	createToolResultMessage,
@@ -49,6 +50,10 @@ function clearPrepared(callToClear: ReturnType<typeof prepareToolCall>) {
 	const cleared = applyBeforeToolDecision(callToClear, undefined);
 	if (isImmediate(cleared)) throw new Error("expected cleared call");
 	return cleared;
+}
+
+function effectGate(signal = new AbortController().signal): EffectGate {
+	return { signal, assertOpen() {} };
 }
 
 describe("tool execution primitives", () => {
@@ -117,7 +122,7 @@ describe("tool execution primitives", () => {
 
 		const result = await executeToolCall(
 			cleared,
-			controller.signal,
+			effectGate(controller.signal),
 			(update) => updates.push(update),
 			NOOP_TELEMETRY_CONTEXT,
 		);
@@ -130,21 +135,41 @@ describe("tool execution primitives", () => {
 		expect(text(updates[0])).toBe("partial");
 	});
 
-	it("converts expected tool throws to error output", async () => {
-		const cleared = clearPrepared(
-			prepareToolCall(call(), [
-				tool({
-					async execute() {
-						throw new Error("tool failed");
-					},
-				}),
-			]),
-		);
+	it.each([
+		[
+			"synchronous",
+			() => {
+				throw new Error("tool failed");
+			},
+		],
+		[
+			"asynchronous",
+			async () => {
+				throw new Error("tool failed");
+			},
+		],
+	])("converts %s tool throws to error output", async (_kind, execute) => {
+		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
 
-		const result = await executeToolCall(cleared, new AbortController().signal, () => {}, NOOP_TELEMETRY_CONTEXT);
+		const result = await executeToolCall(cleared, effectGate(), () => {}, NOOP_TELEMETRY_CONTEXT);
 
 		expect(result.isError).toBe(true);
 		expect(text(result.result)).toBe("tool failed");
+	});
+
+	it("lets effect-gate refusal escape without invoking the tool", async () => {
+		const execute = vi.fn(tool().execute);
+		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
+		const refusal = new Error("effect start refused");
+		const gate: EffectGate = {
+			signal: new AbortController().signal,
+			assertOpen() {
+				throw refusal;
+			},
+		};
+
+		await expect(executeToolCall(cleared, gate, () => {}, NOOP_TELEMETRY_CONTEXT)).rejects.toBe(refusal);
+		expect(execute).not.toHaveBeenCalled();
 	});
 
 	it("applies patches field by field and constructs the tool-result message", () => {

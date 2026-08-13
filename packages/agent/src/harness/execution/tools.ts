@@ -2,6 +2,7 @@ import { type ToolResultMessage, validateToolArguments } from "@draht/ai";
 import type { TelemetryContext } from "@draht/telemetry";
 import type { AgentTool, AgentToolCall, AgentToolResult } from "../../types.ts";
 import type { JsonValue } from "../session/types.ts";
+import type { EffectGate } from "./effect-gate.ts";
 
 /** A tool call whose tool exists and whose prepared arguments passed validation. */
 export interface PreparedToolCall {
@@ -119,13 +120,14 @@ export function applyBeforeToolDecision(
 /** Execute one cleared external tool effect, converting expected tool throws to error output. */
 export async function executeToolCall(
 	call: ClearedToolCall,
-	signal: AbortSignal,
+	effectGate: EffectGate,
 	onUpdate: (partial: AgentToolResult<unknown>) => void,
 	_telemetryContext: TelemetryContext,
 ): Promise<ExecutedToolCall> {
 	let acceptingUpdates = true;
+	effectGate.assertOpen();
 	try {
-		const result = await call.tool.execute(call.toolCall.id, call.args, signal, (partial) => {
+		const result = await call.tool.execute(call.toolCall.id, call.args, effectGate.signal, (partial) => {
 			if (acceptingUpdates) onUpdate(partial);
 		});
 		return { result, isError: false };

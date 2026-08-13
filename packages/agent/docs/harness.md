@@ -1233,7 +1233,7 @@ type NavigationState =
 
 Structural preparation is built from the reserved source leaf and settings snapshot, normalized (`Set<string>` file-operation fields become sorted arrays), and written once to the `op.preparation/{operationId}:{taskId}` register before the decision hook, in the same transaction as the `deciding` state (§3.9). State carries only `taskId`; the deterministic key locates the register, and hooks/generators hydrate arrays back to the source preparation types. Reopen never rebuilds it from current settings, so the provider sees the same summary input the hook approved.
 
-One structural attempt may make one or two sequential provider requests using the existing compaction implementation. Its request callback first commits `request:{index,usageId}`, reaches the provider-request breakpoint, invokes that request through the low-level EffectGate integration, then atomically writes usage and clears/advances the request field. Intermediate content remains process-local; any activated orphaned `effect_pending` attempt is treated as wholly uncertain and starts a later attempt under the captured policy rather than continuing request two. A durable `generating` decision prevents its decision hook from rerunning.
+One structural attempt may make one or two sequential provider requests using the existing compaction implementation. Its request callback first commits `request:{index,usageId}`, reaches the provider-request breakpoint, synchronously checks `EffectGate.assertOpen()` immediately before invoking that request, then atomically writes usage and clears/advances the request field. Intermediate content remains process-local; any activated orphaned `effect_pending` attempt is treated as wholly uncertain and starts a later attempt under the captured policy rather than continuing request two. A durable `generating` decision prevents its decision hook from rerunning.
 
 ## 3.3 Lane state and current-state validity
 
@@ -1769,8 +1769,8 @@ type EffectGateState =
 interface EffectGate {
   /** The operation-owned cooperative signal. */
   readonly signal: AbortSignal;
-  /** Synchronously checks the gate and invokes callback without yielding. */
-  start<T>(callback: (signal: AbortSignal) => T): T;
+  /** Synchronously throws when ordinary work may no longer start. */
+  assertOpen(): void;
   /** Synchronously closes ordinary starts and stores the durable-marker promise. */
   beginAbort(cancellation: Promise<void>): void;
   /** Pull the controller only after the cancellation commit succeeds. */
@@ -1779,14 +1779,13 @@ interface EffectGate {
 }
 ```
 
-The gate privately owns the corresponding `AbortController`. `abort()` creates a deferred abort-mutation promise, calls `beginAbort(promise)` synchronously, and performs the lane mutation. If the marker commits, it resolves the promise and calls `signalAbort()`. If a terminal transaction already won, it resolves the promise, closes the gate with `OperationEnded`, and returns `NoActiveOperation`. A commit fault rejects the promise and closes the gate with `HarnessFault`. Its `start()` method is deliberately synchronous:
+The gate privately owns the corresponding `AbortController`. `abort()` creates a deferred abort-mutation promise, calls `beginAbort(promise)` synchronously, and performs the lane mutation. If the marker commits, it resolves the promise and calls `signalAbort()`. If a terminal transaction already won, it resolves the promise, closes the gate with `OperationEnded`, and returns `NoActiveOperation`. A commit fault rejects the promise and closes the gate with `HarnessFault`. `assertOpen()` is a synchronous check:
 
 ```ts
-start<T>(callback: (signal: AbortSignal) => T): T {
+assertOpen(): void {
   if (state.status === "aborting")
     throw new AbortRequested(state.cancellation);
   if (state.status === "closed") throw state.error;
-  return callback(controller.signal); // no await before invocation
 }
 ```
 
@@ -1794,42 +1793,75 @@ start<T>(callback: (signal: AbortSignal) => T): T {
 
 For an accepted operation, the gate applies to starting ordinary hooks, provider requests/fetches, real tools, and retry timers. It does not wrap commits: dependent commits use `Session.mutate`. Pre-acceptance `before_run` is the one hook without an operation gate because no operation exists for `abort()` to cancel; it uses the harness close/fault admission check immediately around pipeline invocation instead. If acceptance later loses the lane race, its result is discarded as specified in §3.6. Best-effort `cancelDeferred` is cancellation cleanup, not ordinary work; it runs only after durable cancellation and uses a close-only signal.
 
-**The admitted-operation boundary is load-bearing.** `start()` must synchronously invoke the function that admits the complete ordinary operation. Code before that point is preparation and must remain outside the gate; asynchronous work after admission belongs to the started operation and must honor the supplied signal.
+**The admitted-operation boundary is load-bearing.** Preparation must finish first. Then `assertOpen()` and the operation invocation must be adjacent synchronous statements:
 
 ```ts
-// WRONG: transformation may await before Models is even asked to start.
-effectGate.start(signal => prepareAndRunAssistant(signal));
+// WRONG: abort may close the gate while this preparation awaits.
+effectGate.assertOpen();
+await prepareRequest();
+models.streamSimple(model, context, { ...options, signal: effectGate.signal });
 
-// Correct: prepared values are complete; this synchronously starts Models'
-// lazy stream operation, whose auth/lazy/provider work owns the same signal.
-effectGate.start(signal =>
-  models.streamSimple(model, context, { ...options, signal }),
-);
+// Correct: JavaScript cannot interleave another task between these statements.
+effectGate.assertOpen();
+models.streamSimple(model, context, { ...options, signal: effectGate.signal });
 ```
 
 The boundary is the public invocation of the operation, not necessarily the eventual SDK/network syscall. `Models.streamSimple()` synchronously returns and starts a lazy stream; its later auth resolution and provider-module loading are part of that admitted request. If abort wins before the call, Models is never invoked. If start wins, abort later pulls the signal and the admitted setup/provider path must stop cooperatively. The same definition applies to a hook aggregate: the complete registered pipeline is one operation admitted by invoking the aggregate runner.
 
-To contain the footgun, ordinary operation procedures do not call `EffectGate.start()` themselves. The few lowest-level integrations own it:
+To contain the footgun, the following catalog is complete. Only these low-level integrations own an adjacent `assertOpen()`/invocation pair.
 
-- the hook runner around aggregate-runner invocation;
-- the assistant/summary/deferred request adapter around the `Models` operation invocation;
-- the tool execution block around `tool.execute`;
-- the retry timer around timer creation.
+**Accepted-operation hook aggregates:**
 
-Each integration has abort-first/start-first tests. For a provider operation, abort-first means `Models` is never called; start-first means the complete `Models` request—including its later auth resolution, lazy loading, and provider delegation—is already admitted and owns the supplied signal. Those later stages are not new effect starts. The assistant block receives `effectGate.signal` for signal-aware preparation. Best-effort cancellation cleanup uses an analogous close-only gate.
+- `before_resume`;
+- `before_run_end`;
+- `transform_context`;
+- `before_request`;
+- `before_payload`;
+- `after_response`;
+- `before_tool`;
+- `after_tool`;
+- `before_compaction`;
+- `before_navigation`.
+
+Each item means one check before invoking the complete registered pipeline, not one check per handler. Once admitted, that aggregate finishes under the hook isolation rules. `before_run` is excluded because it runs before an operation exists; it uses the harness close/fault admission check instead.
+
+**Provider operations:**
+
+- an assistant `Models.streamSimple(...)` operation;
+- each sequential provider operation inside a structural summary attempt;
+- one `Models.fetchDeferred(...)` operation for an explicit poll.
+
+Request preparation, identity preflight, context transformation, and option composition finish before the provider check. Abort-first means `Models` is never called; admission-first means the complete Models request—including later auth resolution, lazy loading, and provider delegation—is already admitted and owns `effectGate.signal`. Those later stages are not new effect starts. Best-effort `Models.cancelDeferred(...)` is cancellation cleanup and uses the separate close-only gate/signal, not the operation gate.
+
+**Other ordinary operations:**
+
+- one real `tool.execute(...)` invocation; unknown, invalid, blocked, and other immediate tool outcomes do not check the gate because they start no tool;
+- timer creation for every assistant or structural `retry_wait` sleep.
+
+No other code calls `assertOpen()`. In particular, it is not used for:
+
+- `Session.mutate` or any public queue/configuration/fact/tree mutation;
+- pure classification, transaction construction, or synthetic settlement;
+- `prepareArguments`, `systemPrompt`, `toolContext`, `toProviderMessages`, or entry projectors;
+- awaiting a provider/tool promise that was already admitted;
+- cancellation reconciliation, except its separate close-only deferred-cancellation cleanup;
+- passive event listeners;
+- pre-acceptance `before_run`.
+
+Each listed integration has abort-first/admission-first tests. The assistant block receives `effectGate.signal` for signal-aware preparation even though preparation itself does not call `assertOpen()`.
 
 Abort starts by synchronously changing the live gate to `aborting` and installing the abort-mutation promise. It then attempts to commit `cancel_requested`; only after that commit succeeds does it pull the controller. Thus the only orders are:
 
 ```text
 operation admission first
-→ gate check and operation invocation happen synchronously
+→ assertOpen and operation invocation happen synchronously
 → abort closes gate
 → abort commit becomes durable
 → controller signals the already-started effect
 
 abort first
 → gate becomes aborting synchronously
-→ later start throws AbortRequested
+→ later assertOpen throws AbortRequested
 → no operation invocation occurs
 → task waits for the abort commit and reconciles
 ```
@@ -1945,9 +1977,9 @@ A phase-aware `resume()` precheck returns `Err(MissingIdentities)` only when its
 
 ## 4.5 Activation and crash recovery
 
-Recovery begins only when an open operation has no `ActiveOperation` and an explicit call activates it. `AgentHarness.create()` never activates. Fresh acceptance starts at an ordinary state and skips orphan recovery. `resume()` installs a task with one deferred-poll permit, runs `before_resume`, then executes the activation prelude. `abort()` with no task installs a task directly in cancellation reconciliation after making cancellation durable.
+Recovery begins only when an open operation has no `ActiveOperation` and an explicit call activates it. `AgentHarness.create()` never activates. Fresh acceptance starts at an ordinary state and skips orphan recovery. `resume()` installs a task with one deferred-poll permit, then begins its activation prelude. `abort()` with no task installs a task directly in cancellation reconciliation after making cancellation durable.
 
-The prelude first checks durable cancellation. If cancellation is requested, it performs no ordinary recovery and enters §4.6. Identity preflight is phase-aware: it never blocks a synthetic recovery that needs no external registration. Otherwise the prelude handles only pending effects whose JavaScript continuations are necessarily gone:
+The prelude first reloads durable control. If cancellation is requested, it does **not** run `before_resume`; it performs no ordinary recovery and enters §4.6. Under running control it reaches the `before_resume` breakpoint, calls `effectGate.assertOpen()`, and immediately invokes that hook aggregate. Abort racing this boundary is therefore ordered by the same gate as every other accepted-operation hook. After the hook, identity preflight is phase-aware: it never blocks a synthetic recovery that needs no external registration. The prelude then handles only pending effects whose JavaScript continuations are necessarily gone:
 
 | Orphaned restart point | Activation recovery |
 |---|---|
@@ -1974,7 +2006,7 @@ Retry waits are ordinary restartable procedures:
 ```text
 retry_wait
 → breakpoint
-→ start retry timer through EffectGate
+→ assert EffectGate open and immediately start retry timer
 → deadline: Session.mutate verifies the same wait and commits ready
 → abort: timer wakes after durable cancellation and reconciliation runs
 → close: local task rejects; no durable write
@@ -2677,7 +2709,7 @@ Uniform semantics:
 - Durable hook outputs commit before execution continues. A return alone is not durable; a pre-commit crash may rerun the hook.
 - Events expose post-hook values. Passive listeners cannot transform them.
 
-One accepted-operation hook invocation reaches one breakpoint and starts the complete registered pipeline through one `EffectGate` start; individual handlers are not separate breakpoints or gate starts. The complete pipeline is the admitted effect, so once it starts, abort does not prevent later handlers in that pipeline from running. Pre-acceptance `before_run` uses the same breakpoint/pipeline but only the harness close/fault admission check because no cancellable operation exists yet (§4.2). The runner still isolates and telemetry-wraps each handler internally. Aggregation is deterministic:
+One accepted-operation hook invocation reaches one breakpoint, calls `EffectGate.assertOpen()`, then immediately invokes the complete registered pipeline; individual handlers are not separate breakpoints or gate checks. The complete pipeline is the admitted effect, so once it starts, abort does not prevent later handlers in that pipeline from running. Pre-acceptance `before_run` uses the same breakpoint/pipeline but only the harness close/fault admission check because no cancellable operation exists yet (§4.2). The runner still isolates and telemetry-wraps each handler internally. Aggregation is deterministic:
 
 - `before_run` appends messages and lets the latest defined system prompt replace the prior one; resume data is stored under each handler id.
 - context/request/payload/response and `after_tool` transformations run in registration order, each seeing the prior transformed value; option/result patches merge field by field.
@@ -2688,7 +2720,7 @@ One accepted-operation hook invocation reaches one breakpoint and starts the com
 | Hook | When | Event | Result |
 |---|---|---|---|
 | `before_run` | once, before acceptance, outside the mutation line | `{ prompt, systemPrompt, resources }` | `{ messages?, systemPrompt?, resumeData? }` |
-| `before_resume` | on `resume()`, before any effect; must be idempotent | `BeforeResumePrepared + { lane, runId, resumeData? }` | `void` |
+| `before_resume` | on `resume()`, after durable control is confirmed running and before recovery/ordinary work; must be idempotent | `BeforeResumePrepared + { lane, runId, resumeData? }` | `void` |
 | `before_run_end` | at a normal finish boundary | `{ runId, messages }` | `{ followUp? }` |
 | `transform_context` | per request, `AgentMessage` level, before `toProviderMessages` | `{ messages }` | `{ messages }` |
 | `before_request` | per request, provider-neutral options | `{ model, step, attempt, streamOptions }` | `{ streamOptions? }` |
@@ -2722,7 +2754,7 @@ The harness owns purpose-built execution blocks under `packages/agent/src/harnes
 
 ### Assistant streaming
 
-`assistant.ts` owns one already-approved provider request. Before the request intent commits, the assistant procedure verifies that the captured durable `{ provider, modelId }` resolves in the harness's `Models` registry and runs `before_request`. After that commit, the supplied request adapter resolves the same pair at the operation-admission boundary and invokes `Models` through `EffectGate.start()`. The block itself receives only executable values:
+`assistant.ts` owns one already-approved provider request. Before the request intent commits, the assistant procedure verifies that the captured durable `{ provider, modelId }` resolves in the harness's `Models` registry and runs `before_request`. After that commit, the supplied request adapter resolves the same pair, calls `EffectGate.assertOpen()`, and immediately invokes `Models` with `EffectGate.signal`. The block itself receives only executable values:
 
 ```ts
 interface AssistantResponseMetadata {
@@ -2752,8 +2784,8 @@ interface HarnessAssistantStreamConfig {
   afterResponse?: (message: SettledAssistantMessage,
                    metadata: AssistantResponseMetadata) =>
     Promise<SettledAssistantMessage>;
-  /** Models-backed adapter. It resolves the captured identity and synchronously
-      admits the Models operation through EffectGate (§4.2). */
+  /** Models-backed adapter. It resolves the captured identity, synchronously
+      checks EffectGate, then immediately invokes Models (§4.2). */
   request(context: Context, options: SimpleStreamOptions):
     AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
   observer: AssistantStreamObserver;
@@ -2788,12 +2820,14 @@ It never mutates `messages`. If the stream terminates without a start event, it 
 The request function, not this block, owns registry dispatch, auth, and operation admission:
 
 ```ts
-(context, options) => effectGate.start((signal) =>
-  models.streamSimple(resolveCapturedModel(), context, { ...options, signal }),
-)
+(context, options) => {
+  const model = resolveCapturedModel();
+  effectGate.assertOpen();
+  return models.streamSimple(model, context, { ...options, signal: effectGate.signal });
+}
 ```
 
-There is no yield between the gate check and `Models.streamSimple()`. Its asynchronous auth/lazy/provider work is part of the admitted request and owns the same signal (§4.2). A captured identity that disappears after intent becomes an in-band provider error; an identity missing at the earlier safe preflight suspends without burning an attempt (§4.4). Existing summary helpers keep their separate `Models`-based generation logic, but gate their `Models` operation invocation the same way.
+There is no yield between `assertOpen()` and `Models.streamSimple()`. Its asynchronous auth/lazy/provider work is part of the admitted request and owns the same signal (§4.2). A captured identity that disappears after intent becomes an in-band provider error; an identity missing at the earlier safe preflight suspends without burning an attempt (§4.4). Existing summary helpers keep their separate `Models`-based generation logic, but gate their `Models` operation invocation the same way.
 
 ### Tool phases
 
@@ -2873,7 +2907,7 @@ planned call
 → commit result entry + usage + next state
 ```
 
-Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. At `tool.execute` operation admission, `executeToolCall` synchronously enters the supplied `EffectGate`; it also converts expected tool throws to an error result, stops accepting updates after settlement, and emits the required raw tool-effect telemetry. `finalizeToolCall` applies the documented field-by-field patch semantics.
+Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. At `tool.execute` operation admission, `executeToolCall` calls `EffectGate.assertOpen()` immediately before `tool.execute` and passes `EffectGate.signal`; it also converts expected tool throws to an error result, stops accepting updates after settlement, and emits the required raw tool-effect telemetry. `finalizeToolCall` applies the documented field-by-field patch semantics.
 
 Before starting any call in a live batch, the tool-batch procedure resolves `toolContext` once and binds the complete captured active-tool set into ordinary `AgentTool` adapters retained in a procedure-local snapshot. A missing captured active tool therefore suspends before any call starts; provider calls to names outside that active snapshot still become ordinary unknown-tool results. Every call in the batch observes the same context. Safe replay after restart creates one new snapshot. `AgentTool.replay` defaults to `"never"` when omitted.
 
@@ -2997,7 +3031,7 @@ Each slice implements its named behavior end to end and adds focused tests for i
 | S2 | **SQLite** | One database file per session: entries/registers/usage-ledger tables, one-row session/lease rows, transactions, `storageVersion`, the file-based repository, segmented branch cache, `VACUUM INTO`-based rewrite/fork, and explicit repair. No values table, no `slot_history`, no `getLog`, no search projection, no migration. | Shared conformance, `BEGIN IMMEDIATE`, fencing, query plans, segment-chain soundness, register upsert/delete, forks/stats/repair. |
 | S3 | **Search** | The standalone `SessionSearchService` plus repo catch-up utilities (§2.8): core entry search as `SessionSearch<T>`, session-level ranked results, optional `searchEntries?: SessionSearch<TEntryHit>`, `remove()`, the `SessionSearchSyncTarget` cursor/index-batch contract, sync enumeration and catch-up outside the service contract, debounced notify as a utility, `(sessionId, storeGeneration)` cursor keys, and the reference SQLite FTS5 implementation working over any backend's repository through the sync utility. | Cursor catch-up from empty against existing sessions, idempotent re-index after crash mid-batch, notify-utility/sweep equivalence, sessions-vs-entries queries and ranking, removal and reconciliation, shared-index multi-process discipline. |
 | S4 | **Dev TUI and Client** | A minimal `AgentClient` over one lane — `LaneSnapshot` plus `watch()` events, `prompt`/`steer`/`followUp`/`abort`/`resume`/`cancelQueued`, `lane.lastResult` read — and a throwaway alt-screen TUI on `packages/tui`: transcript from snapshot and events, input box, status/queue display, abort key. Built first against a scripted fake client on the slice-1 types; binds to the real harness as Track R lands. Not final. | Compiles; fake-client smoke test. No durability obligations. |
-| R1 | **Runtime shell and execution primitives** | Lane/settings mutation lines; one `ActiveOperation` slot per lane; `ActionInfo` breakpoint barrier; `EffectGate` and its internal abort control flow; total-state validation (idle lanes included); hook/event primitives; restore inventory (five register reads plus bounded hydration); dispatch-time identity resolution; fault/close plumbing. Also implement the independently testable behavior-only blocks under `packages/agent/src/harness/execution/` from §5.7: assistant context/options/stream observation/response transformation and tool preparation/execution/finalization. They know nothing about durable operation state, lanes, retries, queues, or storage; `agent-loop.ts` remains unchanged. Public operations may still report not implemented. | Breakpoint publication/release, stable `ActionInfo.kind` and JSON-safe details for R1 boundaries, automatic/manual barrier equivalence, nested barriers, abort interrupting a parked ordinary barrier, zero work while parked, single task installation/removal, hook aggregation, event buffering, restore without history reads, idle-lane validation. Direct assistant/tool block tests from §5.7. Abort-first/start-first at every accepted-operation R1 `EffectGate` integration (hook aggregate, Models operation, `tool.execute`): abort-first never invokes it, while start-first passes the operation signal to the complete admitted work. Close-first/start-first covers pre-acceptance `before_run`. |
+| R1 | **Runtime shell and execution primitives** | Lane/settings mutation lines; one `ActiveOperation` slot per lane; `ActionInfo` breakpoint barrier; `EffectGate` and its internal abort control flow; total-state validation (idle lanes included); hook/event primitives; restore inventory (five register reads plus bounded hydration); dispatch-time identity resolution; fault/close plumbing. Also implement the independently testable behavior-only blocks under `packages/agent/src/harness/execution/` from §5.7: assistant context/options/stream observation/response transformation and tool preparation/execution/finalization. They know nothing about durable operation state, lanes, retries, queues, or storage; `agent-loop.ts` remains unchanged. Public operations may still report not implemented. | Breakpoint publication/release, stable `ActionInfo.kind` and JSON-safe details for R1 boundaries, automatic/manual barrier equivalence, nested barriers, abort interrupting a parked ordinary barrier, zero work while parked, single task installation/removal, hook aggregation, event buffering, restore without history reads, idle-lane validation. Direct assistant/tool block tests from §5.7. Abort-first/start-first at every accepted-operation R1 `EffectGate` integration (hook aggregate, Models operation, `tool.execute`): `assertOpen()` is immediately adjacent to invocation, abort-first invokes nothing, and start-first passes the gate signal to the admitted work. Close-first/start-first covers pre-acceptance `before_run`. |
 | R2 | **Minimal no-tool run** | Compose R1's assistant block with prompt expansion, `before_run`, atomic acceptance plus `ActiveOperation` installation, pending-capture placement, captured request options/thinking inline, payload/response hooks, one generation intent/effect/settlement, usage, the terminal transaction (register cleanup plus `lane.lastResult`), results, basic events/telemetry. Define the stable `ActionInfo.kind`/details catalog for every boundary introduced here. | Successful run with final assistant fields, caller rejection and adapter-reported provider failures, exact breakpoint/transaction/event order around the assistant block, stable JSON-safe breakpoint descriptors, terminal cleanup completeness and `lastResult`, automatic/manual identical state, close at every boundary. |
 | R3 | **Generation recovery and retry** | Retry waits, activation-only unknown-effect recovery, synthetic cap settlement, ordinary stop/error/deferred classification, provider-compliant `aborted`, and failure-drain foundation. Define the stable breakpoint descriptors for retry timers and recovery commits. Overflow classification remains explicitly unimplemented until R9. | Every generation state before/after reopen, caps/backoff, timer abort-first/start-first, stable breakpoint descriptors, stop/error/aborted/deferred classification, missing identities. |
 | R4 | **Tools** | Compose R1's tool phases with bound `AgentHarnessTool` context, durable complete plans, `op.tool_args/{opId}:{stepId}:{i}` registers with batch-completion deletion, activation recovery/replay, sequential/parallel procedure-local promises, blocked terminate, genuine-length results, tool events/hooks/usage. Define the stable breakpoint descriptors for tool boundaries. | A built-in context-bound tool, operation integration for model-supplied and hook-replacement argument failures, stable breakpoint descriptors, every planned/pending/completed state, tool-args register lifecycle including crash-leak prefix cleanup, safe/unsafe replay, source-ordered start/settlement passes, termination, abort-ready planned states. |
@@ -3053,7 +3087,7 @@ Operations:
 20. Current-state semantic checks (§3.3) run on every latest lane/operation state before execution — idle lanes included (§4.4). `lane.lastResult` never determines an open operation's next procedure.
 21. At most one terminal transaction ever commits per operation. A task mutation that finds its operation's registers absent raises internal `OperationEnded`; the task stops without writing and resolves from `lane.lastResult` (§4.9).
 22. At most one `ActiveOperation` exists per lane. Fresh acceptance, resume, and abort-without-a-task install it before releasing the lane mutation line. Every task's outer `finally` removes it in a no-write lane job only after final local observation; external finalization retains and signals it until that path runs.
-23. `EffectGate.start()` is used only at low-level integrations and synchronously admits the complete hook/provider/tool/timer operation. Preparation stays before it; admitted asynchronous provider setup and delegation are continuations of the same operation and own the same signal (§4.2).
+23. The §4.2 `assertOpen()` catalog is complete. Every listed hook/provider/tool/timer integration checks immediately before invocation with no yield between them; no unlisted code checks the operation gate. Preparation stays before the check, and admitted asynchronous provider setup/delegation are continuations of the same operation owning `EffectGate.signal`.
 
 ## 9.2 Race catalog
 
@@ -3093,7 +3127,7 @@ One corruption assertion constructs an `aborted` response with running control d
 - **Backend conformance.** One suite, three backends, identical results — identical query results, register states, and stats after every scenario, including register set/delete/recreate semantics and torn-transaction handling. Internal values are not cloned or shape-validated. Write-order assertions use the instrumented decorator, never a durable log.
 - **Drive equivalence.** The same scenario in automatic and manual drive must produce byte-identical durable state.
 - **Breakpoint catalog.** Each runtime slice specifies and tests the stable `ActionInfo.kind` values and JSON-safe details for the boundaries it introduces. A parked operation performs no following procedure work; abort rejects interruptible ordinary barriers into reconciliation but leaves cancellation barriers parked; close/fault rejects every barrier.
-- **Effect-start gate.** At hook/provider/tool/timer integrations, force both orders of abort versus operation admission. Abort-first invokes nothing; start-first admits the complete operation with its signal. Provider tests assert that request preparation precedes the gate, abort-first never calls `Models`, and start-first passes the same signal through Models auth/lazy/provider work. Hook tests treat the aggregate pipeline as one admitted unit.
+- **Effect-start gate.** Cover every item in §4.2's complete catalog and assert that no other path calls `assertOpen()`. At each listed integration, force both orders of abort versus operation admission: the check and invocation are adjacent, abort-first invokes nothing, and admission-first gives the complete operation `EffectGate.signal`. Provider tests assert that request preparation precedes the check and that the same signal reaches Models auth/lazy/provider work. Hook tests treat each aggregate pipeline as one admitted unit. A cancelled activation must enter reconciliation without invoking `before_resume`.
 - **Signal ownership.** No public surface accepts a signal; a `before_request` patch carrying one has it stripped. Assert by type and by test.
 - **Ledger completeness.** Every settled attempt commits its response and its usage. Failed structural attempts retain their cost. `getStats()` equals the ledger sum after every commit. A fork starts at zero.
 - **Query-plan guards.** `EXPLAIN QUERY PLAN` for `scanBranch` matches §1.7 exactly — no `entries` scan or temporary ordering b-tree. Segment tests assert copied rows are bounded by the newest compaction interval.

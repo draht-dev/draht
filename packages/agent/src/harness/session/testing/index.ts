@@ -5,7 +5,12 @@ export {
 	STORAGE_WRITE_BENCHMARK_SCENARIOS,
 	seedStorageBenchmark,
 } from "./benchmark/storage.ts";
-export { createSessionRepoConformance } from "./conformance/session-repo.ts";
+export {
+	createSessionRepoConformance,
+	createSessionRepoForkConformance,
+	createSessionRepoLifecycleConformance,
+	createSessionRepoMessageConformance,
+} from "./conformance/session-repo.ts";
 export { createStorageConformance } from "./conformance/storage.ts";
 export { InstrumentedStorage } from "./instrumented-storage.ts";
 export { StorageDecorator } from "./storage-decorator.ts";

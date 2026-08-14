@@ -232,7 +232,7 @@
 >
 > **Design spec:** `.planning/specs/2026-07-12-rewind-checkpoint-design.md`. All work in `packages/coding-agent`; no new package.
 
-## Phase 41: Checkpoint Capture & Storage — `pending`
+## Phase 41: Checkpoint Capture & Storage — `complete`
 **Goal:** A `CheckpointManager` in `packages/coding-agent/src/core/checkpoints/` captures a git snapshot of the working tree at every `turn_start`, keyed to the initiating session entry id, GC-proof and invisible to the user's git workflow, with sidecar metadata that survives fork/clone and a prune policy.
 **Requirements:** R41-CKP.1, R41-CKP.2, R41-CKP.3, R41-CKP.4, R41-CKP.5, R41-CKP.6, R41-CKP.7
 **Acceptance:** Integration tests on fixture repos prove: a turn in a dirty repo (tracked edits + untracked file) yields a commit reachable from `refs/draht/checkpoints/<session-id>/<entry-id>` containing both; `git stash list`, the user's index, `HEAD`, and reflog are byte-identical before/after capture; a read-only turn creates no new ref (tree-hash dedup); ignored files are absent from snapshots; sidecar records for preserved entry ids are copied on `/fork` and `/clone`; non-git cwd disables capture with a one-time notice and no errors; `draht checkpoint prune` removes refs per the retention policy; the manager is wired via `core/builtins/` and loads in a real from-scratch session (same empirical-loading proof class as Phases 23/29).

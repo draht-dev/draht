@@ -32,6 +32,7 @@ import {
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
+import { handleCheckpointCommand } from "./core/checkpoints/checkpoint-cli.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
@@ -556,6 +557,11 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (await handleRlmCommand(args)) {
+		process.exit(process.exitCode ?? 0);
+		return;
+	}
+
+	if (await handleCheckpointCommand(args)) {
 		process.exit(process.exitCode ?? 0);
 		return;
 	}

@@ -119,6 +119,13 @@ Set `PI_SKIP_VERSION_CHECK=1` to disable the Pi version update check. Use `--off
 | `branchSummary.reserveTokens` | number | `16384` | Tokens reserved for branch summarization |
 | `branchSummary.skipPrompt` | boolean | `false` | Skip "Summarize branch?" prompt on `/tree` navigation (defaults to no summary) |
 
+### Checkpoints
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `checkpoints.retentionDays` | number | `30` | Delete checkpoint snapshots older than this on `draht checkpoint prune` |
+| `checkpoints.maxPerSession` | number | unlimited | Keep at most this many newest snapshots per session |
+
 ### Retry
 
 | Setting | Type | Default | Description |

@@ -19,6 +19,11 @@ export interface BranchSummarySettings {
 	skipPrompt?: boolean; // default: false - when true, skips "Summarize branch?" prompt and defaults to no summary
 }
 
+export interface CheckpointSettings {
+	retentionDays?: number; // default: 30 - delete checkpoint refs whose snapshot is older than this
+	maxPerSession?: number; // default: unlimited - keep at most this many newest refs per session
+}
+
 export interface ProviderRetrySettings {
 	timeoutMs?: number; // SDK/provider request timeout in milliseconds
 	maxRetries?: number; // SDK/provider retry attempts
@@ -91,6 +96,7 @@ export interface Settings {
 	theme?: string;
 	compaction?: CompactionSettings;
 	branchSummary?: BranchSummarySettings;
+	checkpoints?: CheckpointSettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses
@@ -783,6 +789,13 @@ export class SettingsManager {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+		};
+	}
+
+	getCheckpointSettings(): { retentionDays: number; maxPerSession: number | undefined } {
+		return {
+			retentionDays: this.settings.checkpoints?.retentionDays ?? 30,
+			maxPerSession: this.settings.checkpoints?.maxPerSession,
 		};
 	}
 

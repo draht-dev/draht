@@ -176,6 +176,38 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 			},
 		),
 
+		createCase(
+			factory,
+			"transactions",
+			"preserves overwritten and deleted registers when a transaction fails",
+			async ({ storage }) => {
+				await storage.commit({
+					writes: [
+						{ kind: "register", op: "set", namespace: "fact.custom", key: "overwritten", value: "original" },
+						{ kind: "register", op: "set", namespace: "fact.custom", key: "deleted", value: { kept: true } },
+						{ kind: "entry", entry: userEntry("taken") },
+					],
+				});
+				const overwrittenBefore = await storage.getRegister("fact.custom", "overwritten");
+				const deletedBefore = await storage.getRegister("fact.custom", "deleted");
+
+				await rejects(
+					storage.commit({
+						writes: [
+							{ kind: "register", op: "set", namespace: "fact.custom", key: "overwritten", value: "transient" },
+							{ kind: "register", op: "delete", namespace: "fact.custom", key: "deleted" },
+							{ kind: "entry", entry: customEntry("transient", "taken") },
+							{ kind: "entry", entry: customEntry("taken", null) },
+						],
+					}),
+				);
+
+				deepStrictEqual(await storage.getRegister("fact.custom", "overwritten"), overwrittenBefore);
+				deepStrictEqual(await storage.getRegister("fact.custom", "deleted"), deletedBefore);
+				strictEqual((await storage.getEntries(["transient"])).has("transient"), false);
+			},
+		),
+
 		createCase(factory, "transactions", "enforces one shared entry and usage id namespace", async ({ storage }) => {
 			await storage.commit({
 				writes: [

@@ -21,23 +21,8 @@ import type {
 	UsageRow,
 	UsageScan,
 } from "../types.ts";
-
-export const JSONL_FORMAT_VERSION = 4;
-
-export interface JsonlStorageHeader {
-	v: typeof JSONL_FORMAT_VERSION;
-	kind: "header";
-	id: string;
-	storageVersion: number;
-	createdAt: number;
-	cwd?: string;
-}
-
-export interface JsonlStorageOptions {
-	fileSystem: FileSystem;
-	path: string;
-	now?: () => number;
-}
+import { parseJsonlStorageHeader } from "./codec.ts";
+import type { JsonlStorageHeader, JsonlStorageOptions } from "./types.ts";
 
 function fileValue<T>(result: Result<T, FileError>, action: string): T {
 	if (!result.ok) throw new Error(`${action}: ${result.error.message}`, { cause: result.error });
@@ -50,20 +35,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function requireSafeInteger(value: unknown, field: string, minimum: number): void {
 	if (!Number.isSafeInteger(value) || (value as number) < minimum) throw new Error(`Invalid JSONL ${field}`);
-}
-
-// TODO(S1): Move header decoding into a shared codec when JsonlSessionRepo consumes metadata and storageVersion.
-function parseHeader(line: string): void {
-	let value: unknown;
-	try {
-		value = JSON.parse(line);
-	} catch (error) {
-		throw new Error("Invalid JSONL header: not valid JSON", { cause: error });
-	}
-	if (!isRecord(value) || value.kind !== "header" || value.v !== JSONL_FORMAT_VERSION) {
-		throw new Error("Invalid JSONL header");
-	}
-	requireSafeInteger(value.createdAt, "createdAt", 0);
 }
 
 function parseCommittedWrite(value: unknown): CommittedWrite {
@@ -120,15 +91,17 @@ export class JsonlStorage implements Storage {
 	private readonly fileSystem: FileSystem;
 	private readonly path: string;
 	private readonly now: () => number;
+	readonly header: JsonlStorageHeader;
 	private readonly storageState = new StorageState();
 	private commitQueue: Promise<void> = Promise.resolve();
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
 
-	private constructor(options: JsonlStorageOptions) {
+	private constructor(options: JsonlStorageOptions, header: JsonlStorageHeader) {
 		this.fileSystem = options.fileSystem;
 		this.path = options.path;
 		this.now = options.now ?? Date.now;
+		this.header = header;
 	}
 
 	static async create(options: JsonlStorageOptions, header: JsonlStorageHeader): Promise<JsonlStorage> {
@@ -136,7 +109,7 @@ export class JsonlStorage implements Storage {
 			await options.fileSystem.writeFile(options.path, `${JSON.stringify(header)}\n`),
 			`Failed to create JSONL storage ${options.path}`,
 		);
-		return new JsonlStorage(options);
+		return new JsonlStorage(options, header);
 	}
 
 	static async open(options: JsonlStorageOptions): Promise<JsonlStorage> {
@@ -148,8 +121,8 @@ export class JsonlStorage implements Storage {
 		if (lines[0] === undefined || lines[0] === "") {
 			throw new Error(`Invalid JSONL storage ${options.path}: missing header`);
 		}
-		parseHeader(lines[0]);
-		const storage = new JsonlStorage(options);
+		const header = parseJsonlStorageHeader(lines[0]);
+		const storage = new JsonlStorage(options, header);
 		for (let index = 1; index < lines.length; index++) {
 			const line = lines[index]!;
 			try {

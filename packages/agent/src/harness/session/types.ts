@@ -533,7 +533,9 @@ export interface SessionCreateOptions {
 	parentSessionId?: string;
 }
 
-export type ForkOptions = { scope?: "branch"; entryId?: string; position?: "before" | "at" } | { scope: "tree" };
+export type ForkOptions =
+	| { scope?: "branch"; entryId?: string; position?: "before" | "at"; id?: string }
+	| { scope: "tree"; id?: string };
 
 export interface SessionRepo<
 	TMetadata extends SessionMetadata = SessionMetadata,
@@ -544,5 +546,5 @@ export interface SessionRepo<
 	open(metadata: TMetadata): Promise<Session<TMetadata>>;
 	list(options?: TListOptions): Promise<TMetadata[]>;
 	delete(metadata: TMetadata): Promise<void>;
-	fork(source: TMetadata, options: ForkOptions & TCreateOptions): Promise<Session<TMetadata>>;
+	fork(source: TMetadata, options: ForkOptions): Promise<Session<TMetadata>>;
 }

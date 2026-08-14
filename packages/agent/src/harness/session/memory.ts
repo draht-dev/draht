@@ -394,7 +394,7 @@ export class MemorySessionRepo implements SessionRepo {
 		this.sessions.delete(metadata.id);
 	}
 
-	async fork(source: SessionMetadata, options: ForkOptions & SessionCreateOptions): Promise<Session> {
+	async fork(source: SessionMetadata, options: ForkOptions): Promise<Session> {
 		this.assertOpen();
 		const sourceRecord = this.sessions.get(source.id);
 		if (sourceRecord === undefined) throw new Error(`Unknown session: ${source.id}`);

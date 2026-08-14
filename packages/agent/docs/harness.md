@@ -802,8 +802,8 @@ A fork is a repository operation over one coherent source-session snapshot. It c
 
 ```ts
 type ForkOptions =
-  | { scope?: "branch"; entryId?: string; position?: "before" | "at" }
-  | { scope: "tree" };
+  | { scope?: "branch"; entryId?: string; position?: "before" | "at"; id?: string }
+  | { scope: "tree"; id?: string };
 ```
 
 - Memory and JSONL obtain the snapshot as one job on the source storage queue. SQLite uses one read transaction.
@@ -812,7 +812,8 @@ type ForkOptions =
 - Facts follow the selected scope: name/custom facts always copy; labels copy only when their target copies unless tree scope copies all targets.
 - Any message may be the fork point. Request construction heals orphaned tool calls.
 - Copied entries keep their ids.
-- The destination metadata records `parentSessionId`.
+- `id` optionally supplies the destination session id.
+- The destination metadata records `parentSessionId` as the source session id; callers cannot override it through fork options.
 
 A source with only fresh/unconfigured `main`—new format 4 or read-only normalized v3—may have no configuration. Either fork scope then creates one unconfigured destination `main`, which first harness attachment seeds normally. Every configured format-4 lane copied by a fork keeps its current total configuration.
 
@@ -840,7 +841,7 @@ interface SessionRepo<M extends SessionMetadata = SessionMetadata,
   open(metadata: M): Promise<Session<M>>;
   list(options?: L): Promise<M[]>;
   delete(metadata: M): Promise<void>;
-  fork(source: M, options: ForkOptions & C): Promise<Session<M>>;
+  fork(source: M, options: ForkOptions): Promise<Session<M>>;
 }
 
 interface SessionReader {

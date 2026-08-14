@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI } from "@draht/tui";
+import { Text, type TUI, type TuiMouseEvent } from "@draht/tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
@@ -427,6 +427,42 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = component.render(120).join("\n");
 		expect(stripAnsi(rendered)).toContain(error);
 		expect(rendered).toContain(theme.fg("toolOutput", error));
+	});
+
+	test("expands a collapsed tool result when clicked", () => {
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-click-expand",
+			{ path: "notes.txt" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: "hidden content" }], details: undefined, isError: false },
+			false,
+		);
+		const width = 120;
+		const lines = component.render(width);
+		const resultRow = lines.findIndex((line) => stripAnsi(line).includes("notes.txt"));
+		expect(resultRow).toBeGreaterThanOrEqual(0);
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 2,
+			y: resultRow,
+			screenX: 2,
+			screenY: resultRow,
+			width,
+			height: lines.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+		expect(component.handleMouse(event)?.handled).toBe(true);
+		expect(stripAnsi(component.render(width).join("\n"))).toContain("hidden content");
 	});
 
 	test("collapses ordinary read results until expanded", () => {

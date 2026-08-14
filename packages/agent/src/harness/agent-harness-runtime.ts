@@ -9,6 +9,7 @@ import type {
 	Model,
 	RetryPolicy,
 	SimpleStreamOptions,
+	ToolResultMessage,
 	Usage,
 } from "@draht/ai";
 import {
@@ -18,7 +19,7 @@ import {
 	isRetryableAssistantError,
 } from "@draht/ai";
 import { NOOP_TELEMETRY_CONTEXT, type TelemetryContext } from "@draht/telemetry";
-import type { AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.ts";
+import type { AgentMessage, AgentTool, AgentToolCall, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
 import {
 	type AbortRequestResult,
 	type AbortResult,
@@ -68,6 +69,20 @@ import { HarnessEventBus } from "./events.ts";
 import { streamHarnessAssistant } from "./execution/assistant.ts";
 import { BreakpointBarrier } from "./execution/breakpoint.ts";
 import { OperationEffectGate } from "./execution/effect-gate.ts";
+import {
+	type AfterToolPatch,
+	applyBeforeToolDecision,
+	type BeforeToolDecision,
+	type ClearedToolCall,
+	createToolResultMessage,
+	type ExecutedToolCall,
+	executeToolCall,
+	type FinalizedToolCall,
+	finalizeToolCall,
+	type ImmediateToolOutcome,
+	type PreparedToolCall,
+	prepareToolCall,
+} from "./execution/tools.ts";
 import { applyStreamOptionsPatch, HookRegistry } from "./hooks.ts";
 import { convertToLlm } from "./messages.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
@@ -83,6 +98,7 @@ import {
 	SessionUnknownTargetError,
 } from "./session/session.ts";
 import type {
+	ToolCall as DurableToolCall,
 	Entry,
 	EntryProjector,
 	JsonValue,
@@ -97,10 +113,17 @@ import type {
 	SessionMutator,
 	SessionTree,
 	SettledAssistantMessage,
+	ToolBatch,
+	UsageRow,
 } from "./session/types.ts";
 import { formatSkillInvocation } from "./skills.ts";
 import { startHarnessSpan } from "./telemetry.ts";
-import type { AgentHarnessStreamOptions, AgentHarnessTool, AgentHarnessToolContextSource } from "./types.ts";
+import type {
+	AgentHarnessStreamOptions,
+	AgentHarnessTool,
+	AgentHarnessToolContextSource,
+	AgentHarnessToolInvocation,
+} from "./types.ts";
 
 const DEFAULT_RETRY_POLICY: RetryPolicy = { enabled: true, maxRetries: 3, baseDelayMs: 1_000 };
 
@@ -178,6 +201,7 @@ interface CommittedAssistantSettlement {
 		| { kind: "completed" }
 		| { kind: "aborted" }
 		| { kind: "deferred"; handle: DeferredHandle }
+		| { kind: "tools"; genuineLength: boolean }
 		| { kind: "retry"; nextAttempt: number; delayMs: number; notBefore: number; errorMessage: string }
 		| { kind: "failed"; error: OperationError };
 }
@@ -186,6 +210,32 @@ type AssistantExecutionResult =
 	| { kind: "advanced" }
 	| { kind: "yielded" }
 	| { kind: "missing_identities"; missing: { tools: string[]; models: string[] } };
+
+type ToolBatchExecutionResult = AssistantExecutionResult;
+
+type StartedToolCall =
+	| {
+			kind: "immediate";
+			sourceIndex: number;
+			finalized: FinalizedToolCall;
+			recovery: boolean;
+			durableStatus: "planned" | "effect_pending";
+	  }
+	| {
+			kind: "running";
+			sourceIndex: number;
+			cleared: ClearedToolCall;
+			execution: Promise<ExecutedToolCall>;
+			recovery: boolean;
+	  };
+
+interface CommittedToolSettlement {
+	entry: Entry;
+	message: ToolResultMessage;
+	row?: UsageRow;
+	totals?: Usage;
+	batchCompleted: boolean;
+}
 
 const ZERO_USAGE: Usage = {
 	input: 0,
@@ -267,6 +317,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		this.entryProjectors = options.entryProjectors ?? {};
 		this.telemetryContext = options.telemetryContext ?? NOOP_TELEMETRY_CONTEXT;
 		const tools = [...(options.tools ?? [])];
+		validateToolNames(tools);
 		this.seed = {
 			model: { provider: options.model.provider, modelId: options.model.id },
 			thinkingLevel: options.thinkingLevel ?? "off",
@@ -381,6 +432,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 	}
 
 	setTools(tools: AgentHarnessTool<TContext>[]): Promise<void> {
+		validateToolNames(tools);
 		return this.writeSettings((settings) => ({ ...settings, tools: [...tools] }), {
 			type: "config_update",
 			property: "tools",
@@ -754,15 +806,13 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		this.hooks.close(error);
 		this.events.close(error);
 		for (const lane of this.laneRuntimes.values()) lane.breakpoint.close(error);
-		for (const active of this.activeOperations.values()) {
+		for (const [lane, active] of this.activeOperations) {
 			active.effectGate.close(error);
 			active.reject(error);
+			this.activeOperations.delete(lane);
 		}
 		this.closePromise = (async () => {
 			await this.settingsLine.seal(error);
-			await Promise.allSettled(
-				[...this.activeOperations.values()].flatMap((active) => (active.task === undefined ? [] : [active.task])),
-			);
 			await this.sessionStorage.close();
 			this.state = "closed";
 		})();
@@ -983,6 +1033,10 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				return { ...base, reason: "crash", missing };
 			}
 		}
+		if (current.state.kind === "run" && current.state.phase.kind === "tools") {
+			const missing = this.missingToolIdentities(current.state.phase.batch.configuration, this.settings);
+			if (missing.length !== 0) return { ...base, reason: "crash", missing: { tools: missing, models: [] } };
+		}
 		return { ...base, reason: "crash" };
 	}
 
@@ -1024,17 +1078,19 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		return this.isOpen() ? undefined : this.closedError();
 	}
 
-	fault(cause: unknown): HarnessFault {
+	fault(cause: unknown): HarnessFault | HarnessClosed {
 		if (this.faultError !== undefined) return this.faultError;
+		if (this.state === "closing" || this.state === "closed") return new HarnessClosed();
 		const normalized = cause instanceof Error ? cause : new Error(String(cause));
 		const fault = new HarnessFault("AgentHarness storage or invariant fault", normalized);
 		this.faultError = fault;
 		this.state = "faulted";
 		this.hooks.close(fault);
 		for (const lane of this.laneRuntimes.values()) lane.breakpoint.close(fault);
-		for (const active of this.activeOperations.values()) {
+		for (const [lane, active] of this.activeOperations) {
 			active.effectGate.close(fault);
 			active.reject(fault);
+			this.activeOperations.delete(lane);
 		}
 		void this.events.emit({ type: "fault", code: "harness_fault", message: fault.message });
 		this.events.close(fault);
@@ -1180,6 +1236,11 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		};
 	}
 
+	private missingToolIdentities(configuration: LaneConfiguration, settings: RuntimeSettings<TContext>): string[] {
+		const availableTools = new Set(settings.tools.map((tool) => tool.name));
+		return configuration.activeToolNames.filter((name) => !availableTools.has(name));
+	}
+
 	private busy(lane: string, owner: Pick<AdmissionReservation, "operationId" | "operationKind">): LaneBusy {
 		return new LaneBusy({
 			lane,
@@ -1305,12 +1366,13 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		}
 
 		const recovery = !this.attachedOperationIds.has(active.operationId);
-		const assistantOrphanAtStart =
+		const recoveryPreludeRequired =
 			initial.current.state.kind === "run" &&
-			initial.current.state.phase.kind === "assistant" &&
-			initial.current.state.phase.generation.status === "effect_pending";
+			((initial.current.state.phase.kind === "assistant" &&
+				initial.current.state.phase.generation.status === "effect_pending") ||
+				initial.current.state.phase.kind === "tools");
 		const recoveryLifecycle =
-			recovery && (!this.resumeEventOperationIds.has(active.operationId) || assistantOrphanAtStart);
+			recovery && (!this.resumeEventOperationIds.has(active.operationId) || recoveryPreludeRequired);
 		return startHarnessSpan(
 			this.telemetryContext,
 			"pi.harness.run",
@@ -1336,14 +1398,25 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 						this.resumedOperationIds.add(active.operationId);
 					}
 					if (deadlineReached(options)) {
-						if (!assistantOrphanAtStart) {
+						if (!recoveryPreludeRequired) {
 							this.attachedOperationIds.add(active.operationId);
 							this.restoredSuspensions.delete(lane.name);
 						}
 						return resultAtRunDeadline();
 					}
 					const recovered = await this.recoverRunAtActivation(lane, active, runSpan, options);
-					if (!recovered) return Result.ok({ kind: "yielded", operationId: active.operationId });
+					if (recovered.kind === "yielded") {
+						return Result.ok({ kind: "yielded", operationId: active.operationId });
+					}
+					if (recovered.kind === "missing_identities") {
+						runSpan.setAttributes({ "pi.operation.outcome": "suspended" });
+						return Result.ok({
+							kind: "waiting",
+							operationId: active.operationId,
+							reason: "missing_identities",
+							missing: recovered.missing,
+						});
+					}
 					this.attachedOperationIds.add(active.operationId);
 					this.restoredSuspensions.delete(lane.name);
 				}
@@ -1408,6 +1481,41 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 							runSpan,
 							options,
 							recoveryLifecycle,
+						);
+						if (result.kind === "yielded") {
+							return Result.ok({ kind: "yielded", operationId: active.operationId });
+						}
+						if (result.kind === "missing_identities") {
+							runSpan.setAttributes({ "pi.operation.outcome": "suspended" });
+							return Result.ok({
+								kind: "waiting",
+								operationId: active.operationId,
+								reason: "missing_identities",
+								missing: result.missing,
+							});
+						}
+						continue;
+					}
+					if (state.phase.kind === "tools") {
+						const result = await startHarnessSpan(
+							runSpan,
+							"pi.harness.turn",
+							{
+								"pi.lane.name": lane.name,
+								"pi.operation.id": active.operationId,
+								"pi.turn.id": state.phase.batch.turnId,
+							},
+							(turnSpan) =>
+								this.executeToolBatch(
+									lane,
+									active,
+									restored,
+									state,
+									turnSpan,
+									options,
+									false,
+									recoveryLifecycle,
+								),
 						);
 						if (result.kind === "yielded") {
 							return Result.ok({ kind: "yielded", operationId: active.operationId });
@@ -1523,13 +1631,28 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		active: ActiveOperation,
 		runTelemetry: TelemetryContext,
 		options: DriveOptions,
-	): Promise<boolean> {
+	): Promise<ToolBatchExecutionResult> {
 		const restored = await this.loadExpected(lane.name, active.operationId, true);
 		const current = restored.current;
-		if (current === undefined || current.state.kind !== "run") return true;
-		if (current.state.control.status !== "running") return true;
-		const phase = current.state.phase;
-		if (phase.kind !== "assistant" || phase.generation.status !== "effect_pending") return true;
+		if (current === undefined || current.state.kind !== "run") return { kind: "advanced" };
+		const runState = current.state;
+		if (runState.control.status !== "running") return { kind: "advanced" };
+		const phase = runState.phase;
+		if (phase.kind === "tools") {
+			return startHarnessSpan(
+				runTelemetry,
+				"pi.harness.turn",
+				{
+					"pi.lane.name": lane.name,
+					"pi.operation.id": active.operationId,
+					"pi.turn.id": phase.batch.turnId,
+				},
+				(turnSpan) => this.executeToolBatch(lane, active, restored, runState, turnSpan, options, true, true),
+			);
+		}
+		if (phase.kind !== "assistant" || phase.generation.status !== "effect_pending") {
+			return { kind: "advanced" };
+		}
 		const pending = phase.generation;
 		const context = pending.context;
 		if (pending.attempt < context.retryPolicy.maxAttempts) {
@@ -1543,7 +1666,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 					nextAttempt: pending.attempt + 1,
 				},
 			});
-			if (deadlineReached(options)) return false;
+			if (deadlineReached(options)) return { kind: "yielded" };
 			try {
 				this.assertOpen();
 				await this.sessionStorage.mutate(lane.name, async (mutator) => {
@@ -1584,7 +1707,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				if (error instanceof HarnessClosed || error instanceof HarnessFault) throw error;
 				throw this.fault(error);
 			}
-			return true;
+			return { kind: "advanced" };
 		}
 
 		const resolvedModel = this.models.getModel(
@@ -1633,7 +1756,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			description: "Settle an uncertain final assistant request",
 			details: { operationId: active.operationId, stepId: context.stepId, attempt: pending.attempt },
 		});
-		if (deadlineReached(options)) return false;
+		if (deadlineReached(options)) return { kind: "yielded" };
 		const committed = await startHarnessSpan(
 			runTelemetry,
 			"pi.harness.turn",
@@ -1682,7 +1805,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				recovery: true,
 			});
 		}
-		return true;
+		return { kind: "advanced" };
 	}
 
 	private async commitSyntheticAssistantRecovery(
@@ -2159,7 +2282,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		const providerTools = context.configuration.activeToolNames.map(
 			(name) => settings.tools.find((tool) => tool.name === name)! as unknown as AgentTool,
 		);
-		const message = await startHarnessSpan(
+		return startHarnessSpan(
 			runTelemetry,
 			"pi.harness.turn",
 			{
@@ -2167,8 +2290,8 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				"pi.operation.id": active.operationId,
 				"pi.turn.id": context.stepId,
 			},
-			(turnSpan) =>
-				startHarnessSpan(
+			async (turnSpan) => {
+				const message = await startHarnessSpan(
 					turnSpan,
 					"pi.harness.step",
 					{
@@ -2300,63 +2423,89 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 						if (outcome === "retry" || outcome === "failed") stepSpan.setStatus({ status: "error" });
 						return settled;
 					},
-				),
+				);
+				if (message.role !== "assistant") {
+					throw this.fault(new SessionInvariantError("after_response returned an invalid assistant message"));
+				}
+				this.assertOpen();
+				await lane.breakpoint.hit({
+					kind: "assistant.settlement",
+					description: "Commit assistant response",
+					details: { operationId: active.operationId, stepId: context.stepId, attempt: ready.nextAttempt },
+				});
+				const settled = await this.commitAssistantSettlement(
+					lane.name,
+					active.operationId,
+					context.stepId,
+					responseEntryId,
+					usageId,
+					model.api,
+					message,
+				);
+				await this.events.emit({ type: "entry_added", entry: settled.entry, lane: lane.name });
+				await this.events.emit({ type: "usage", lane: lane.name, row: settled.row, totals: settled.totals });
+				if (settled.outcome.kind !== "tools") {
+					await this.events.emit({
+						type: "turn_end",
+						runId: active.operationId,
+						turnId: context.stepId,
+						message: settled.message,
+						toolResults: [],
+						lane: lane.name,
+						...(recovery ? { recovery: true as const } : {}),
+					});
+				}
+				if (settled.outcome.kind === "retry") {
+					await this.events.emit({
+						type: "retry_scheduled",
+						runId: active.operationId,
+						step: context.stepId,
+						attempt: settled.outcome.nextAttempt,
+						maxAttempts: context.retryPolicy.maxAttempts,
+						delayMs: settled.outcome.delayMs,
+						errorMessage: settled.outcome.errorMessage,
+						lane: lane.name,
+						...(recovery ? { recovery: true as const } : {}),
+					});
+				} else if (ready.nextAttempt > 1) {
+					const success =
+						settled.outcome.kind === "completed" ||
+						settled.outcome.kind === "deferred" ||
+						settled.outcome.kind === "tools";
+					await this.events.emit({
+						type: "retry_end",
+						runId: active.operationId,
+						step: context.stepId,
+						attempt: ready.nextAttempt,
+						success,
+						...(success || settled.outcome.kind !== "failed"
+							? {}
+							: { finalError: settled.outcome.error.message }),
+						lane: lane.name,
+						...(recovery ? { recovery: true as const } : {}),
+					});
+				}
+				if (settled.outcome.kind === "tools") {
+					const toolState = await this.loadExpected(lane.name, active.operationId, false);
+					const current = toolState.current;
+					if (current?.state.kind !== "run" || current.state.phase.kind !== "tools") {
+						throw this.fault(new SessionInvariantError("Assistant tool settlement lost its durable batch"));
+					}
+					return this.executeToolBatch(
+						lane,
+						active,
+						toolState,
+						current.state,
+						turnSpan,
+						options,
+						false,
+						recovery,
+						true,
+					);
+				}
+				return { kind: "advanced" };
+			},
 		);
-		if (message.role !== "assistant") {
-			throw this.fault(new SessionInvariantError("after_response returned an invalid assistant message"));
-		}
-		this.assertOpen();
-		await lane.breakpoint.hit({
-			kind: "assistant.settlement",
-			description: "Commit assistant response",
-			details: { operationId: active.operationId, stepId: context.stepId, attempt: ready.nextAttempt },
-		});
-		const settled = await this.commitAssistantSettlement(
-			lane.name,
-			active.operationId,
-			context.stepId,
-			responseEntryId,
-			usageId,
-			model.api,
-			message,
-		);
-		await this.events.emit({ type: "entry_added", entry: settled.entry, lane: lane.name });
-		await this.events.emit({ type: "usage", lane: lane.name, row: settled.row, totals: settled.totals });
-		await this.events.emit({
-			type: "turn_end",
-			runId: active.operationId,
-			turnId: context.stepId,
-			message: settled.message,
-			toolResults: [],
-			lane: lane.name,
-			...(recovery ? { recovery: true as const } : {}),
-		});
-		if (settled.outcome.kind === "retry") {
-			await this.events.emit({
-				type: "retry_scheduled",
-				runId: active.operationId,
-				step: context.stepId,
-				attempt: settled.outcome.nextAttempt,
-				maxAttempts: context.retryPolicy.maxAttempts,
-				delayMs: settled.outcome.delayMs,
-				errorMessage: settled.outcome.errorMessage,
-				lane: lane.name,
-				...(recovery ? { recovery: true as const } : {}),
-			});
-		} else if (ready.nextAttempt > 1) {
-			const success = settled.outcome.kind === "completed" || settled.outcome.kind === "deferred";
-			await this.events.emit({
-				type: "retry_end",
-				runId: active.operationId,
-				step: context.stepId,
-				attempt: ready.nextAttempt,
-				success,
-				...(success || settled.outcome.kind !== "failed" ? {} : { finalError: settled.outcome.error.message }),
-				lane: lane.name,
-				...(recovery ? { recovery: true as const } : {}),
-			});
-		}
-		return { kind: "advanced" };
 	}
 
 	private async commitAssistantSettlement(
@@ -2370,6 +2519,9 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 	): Promise<CommittedAssistantSettlement> {
 		try {
 			this.assertOpen();
+			const sourceCalls = assistantToolCalls(message);
+			const followerTimestamp = uuidV7Timestamp(responseEntryId);
+			const resultEntryIds = sourceCalls.map(() => this.sessionStorage.idGenerator.next(followerTimestamp));
 			const committed = await this.sessionStorage.mutate(lane, async (mutator) => {
 				const restored = await restoreLane(mutator, lane);
 				const current = restored.current;
@@ -2397,6 +2549,8 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 					responseEntryId,
 					requestApi,
 					Date.now(),
+					sourceCalls,
+					resultEntryIds,
 				);
 				const result = await mutator.commit({
 					writes: [
@@ -2460,6 +2614,965 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		}
 	}
 
+	private async executeToolBatch(
+		lane: AgentLaneRuntime<TContext>,
+		active: ActiveOperation,
+		restored: RestoredLane,
+		state: RunState,
+		turnTelemetry: TelemetryContext,
+		options: DriveOptions,
+		recoverPending: boolean,
+		recoveryEvents: boolean,
+		turnAlreadyStarted = false,
+	): Promise<ToolBatchExecutionResult> {
+		if (state.phase.kind !== "tools") throw new SessionInvariantError("Tool batch is not current");
+		const batch = state.phase.batch;
+		const assistantEntry = restored.current?.entries.get(batch.assistantEntryId);
+		if (assistantEntry?.type !== "message" || assistantEntry.message.role !== "assistant") {
+			throw new SessionInvariantError("Tool batch assistant is missing");
+		}
+		if (assistantEntry.message.stopReason === "pending") {
+			throw new SessionInvariantError("Tool batch assistant is still pending");
+		}
+		const assistantMessage = assistantEntry.message as SettledAssistantMessage;
+		const sourceCalls = assistantToolCalls(assistantMessage);
+		if (sourceCalls.length !== batch.calls.length) {
+			throw new SessionInvariantError("Tool batch source calls changed");
+		}
+
+		const settings = await this.snapshotSettings();
+		const toolsByName = new Map(settings.tools.map((tool) => [tool.name, tool]));
+		const sequential =
+			state.settings.toolExecution === "sequential" ||
+			sourceCalls.some(
+				(source) =>
+					batch.configuration.activeToolNames.includes(source.name) &&
+					toolsByName.get(source.name)?.executionMode === "sequential",
+			);
+		const hasPlanned = batch.calls.some((call) => call.status === "planned");
+		const genuineLength = assistantMessage.stopReason === "length";
+		const plannedMissingTools = new Set<string>();
+		const replayMissingTools = new Set<string>();
+		if (!genuineLength && hasPlanned) {
+			for (const name of batch.configuration.activeToolNames) {
+				if (!toolsByName.has(name)) plannedMissingTools.add(name);
+			}
+		}
+		if (recoverPending) {
+			for (const durableCall of batch.calls) {
+				if (durableCall.status !== "effect_pending" || durableCall.replay !== "safe") continue;
+				const source = sourceCalls[durableCall.sourceIndex]!;
+				if (!batch.configuration.activeToolNames.includes(source.name)) {
+					throw new SessionInvariantError("Pending tool effect is outside the captured active-tool set");
+				}
+				if (!toolsByName.has(source.name)) replayMissingTools.add(source.name);
+			}
+		}
+		const missingTools = new Set([...replayMissingTools, ...plannedMissingTools]);
+		const toolResults: ToolResultMessage[] = [];
+		for (const durableCall of batch.calls) {
+			if (durableCall.status !== "completed") break;
+			const entry = restored.current?.entries.get(durableCall.resultEntryId);
+			if (entry?.type !== "message" || entry.message.role !== "toolResult") {
+				throw new SessionInvariantError("Completed tool result is missing");
+			}
+			toolResults.push(entry.message);
+		}
+		if (recoverPending) {
+			const pendingPrefix = batch.calls.filter(
+				(call, index): call is Extract<DurableToolCall, { status: "effect_pending" }> => {
+					if (call.status === "completed") return false;
+					return (
+						batch.calls.slice(0, index).every((prior) => prior.status !== "planned") &&
+						call.status === "effect_pending"
+					);
+				},
+			);
+			const identityFreePrefix: typeof pendingPrefix = [];
+			for (const durableCall of pendingPrefix) {
+				const currentTool = toolsByName.get(sourceCalls[durableCall.sourceIndex]!.name);
+				if (durableCall.replay === "safe" && (currentTool === undefined || currentTool.replay === "safe")) break;
+				identityFreePrefix.push(durableCall);
+			}
+			if (identityFreePrefix.length !== 0) {
+				if (!turnAlreadyStarted) {
+					await this.events.emit({
+						type: "turn_start",
+						runId: active.operationId,
+						turnId: batch.turnId,
+						lane: lane.name,
+						recovery: true,
+					});
+					turnAlreadyStarted = true;
+				}
+				let batchCompleted = false;
+				for (const durableCall of identityFreePrefix) {
+					const started = await this.startToolCall(
+						lane,
+						active,
+						batch,
+						durableCall,
+						sourceCalls[durableCall.sourceIndex]!,
+						batch.configuration.activeToolNames,
+						toolsByName,
+						undefined as TContext,
+						turnTelemetry,
+						options,
+						true,
+						true,
+						false,
+					);
+					if (started === "yielded") {
+						await this.events.emit({
+							type: "turn_end",
+							runId: active.operationId,
+							turnId: batch.turnId,
+							message: assistantMessage,
+							toolResults,
+							lane: lane.name,
+							recovery: true,
+						});
+						return { kind: "yielded" };
+					}
+					const committed = await this.settleStartedToolCall(lane, active, batch, started, turnTelemetry, true);
+					toolResults.push(committed.message);
+					batchCompleted = committed.batchCompleted;
+				}
+				if (batchCompleted) {
+					await this.events.emit({
+						type: "turn_end",
+						runId: active.operationId,
+						turnId: batch.turnId,
+						message: assistantMessage,
+						toolResults,
+						lane: lane.name,
+						recovery: true,
+					});
+					return { kind: "advanced" };
+				}
+				const next = await this.loadExpected(lane.name, active.operationId, false);
+				const nextCurrent = next.current;
+				if (nextCurrent?.state.kind !== "run" || nextCurrent.state.phase.kind !== "tools") {
+					throw new SessionInvariantError("Interrupted tool prefix lost its durable batch");
+				}
+				return this.executeToolBatch(
+					lane,
+					active,
+					next,
+					nextCurrent.state,
+					turnTelemetry,
+					options,
+					true,
+					true,
+					true,
+				);
+			}
+		}
+		if (missingTools.size !== 0) {
+			if (recoverPending) {
+				const pendingPrefix = batch.calls.filter(
+					(call, index): call is Extract<DurableToolCall, { status: "effect_pending" }> => {
+						if (call.status === "completed") return false;
+						return (
+							batch.calls.slice(0, index).every((prior) => prior.status !== "planned") &&
+							call.status === "effect_pending"
+						);
+					},
+				);
+				const executablePendingPrefix: typeof pendingPrefix = [];
+				for (const durableCall of pendingPrefix) {
+					const source = sourceCalls[durableCall.sourceIndex]!;
+					if (durableCall.replay === "safe" && toolsByName.get(source.name) === undefined) break;
+					executablePendingPrefix.push(durableCall);
+				}
+				const replayNeedsContext = executablePendingPrefix.some((durableCall) => {
+					const currentTool = toolsByName.get(sourceCalls[durableCall.sourceIndex]!.name);
+					return durableCall.replay === "safe" && currentTool?.replay === "safe";
+				});
+				const recoveryContext = replayNeedsContext ? await this.resolveToolContext() : undefined;
+				const startedPrefix: StartedToolCall[] = [];
+				let recoveryTurnStarted = turnAlreadyStarted;
+				let yielded = false;
+				for (const durableCall of executablePendingPrefix) {
+					const source = sourceCalls[durableCall.sourceIndex]!;
+					if (!recoveryTurnStarted) {
+						await this.events.emit({
+							type: "turn_start",
+							runId: active.operationId,
+							turnId: batch.turnId,
+							lane: lane.name,
+							recovery: true,
+						});
+						recoveryTurnStarted = true;
+					}
+					const started = await this.startToolCall(
+						lane,
+						active,
+						batch,
+						durableCall,
+						source,
+						batch.configuration.activeToolNames,
+						toolsByName,
+						recoveryContext as TContext,
+						turnTelemetry,
+						options,
+						true,
+						true,
+						false,
+					);
+					if (started === "yielded") {
+						yielded = true;
+						break;
+					}
+					if (sequential) {
+						const committed = await this.settleStartedToolCall(lane, active, batch, started, turnTelemetry, true);
+						toolResults.push(committed.message);
+					} else {
+						startedPrefix.push(started);
+					}
+				}
+				for (const started of startedPrefix) {
+					const committed = await this.settleStartedToolCall(lane, active, batch, started, turnTelemetry, true);
+					toolResults.push(committed.message);
+				}
+				if (recoveryTurnStarted) {
+					await this.events.emit({
+						type: "turn_end",
+						runId: active.operationId,
+						turnId: batch.turnId,
+						message: assistantMessage,
+						toolResults,
+						lane: lane.name,
+						recovery: true,
+					});
+				}
+				if (yielded) return { kind: "yielded" };
+			}
+			return this.suspendToolBatchForMissingIdentities(lane, active, restored, [...missingTools], recoveryEvents);
+		}
+
+		const needsContext =
+			!genuineLength &&
+			batch.calls.some((durableCall) => {
+				if (durableCall.status === "planned") return true;
+				if (durableCall.status !== "effect_pending" || durableCall.replay !== "safe") return false;
+				return toolsByName.get(sourceCalls[durableCall.sourceIndex]!.name)?.replay === "safe";
+			});
+		const context = needsContext ? await this.resolveToolContext() : undefined;
+		const opensRecoveryTurn = recoveryEvents && !turnAlreadyStarted;
+		if (opensRecoveryTurn) {
+			await this.events.emit({
+				type: "turn_start",
+				runId: active.operationId,
+				turnId: batch.turnId,
+				lane: lane.name,
+				recovery: true,
+			});
+		}
+		const closeRecoveryTurn = async (): Promise<void> => {
+			if (!recoveryEvents) return;
+			await this.events.emit({
+				type: "turn_end",
+				runId: active.operationId,
+				turnId: batch.turnId,
+				message: assistantMessage,
+				toolResults,
+				lane: lane.name,
+				recovery: true,
+			});
+		};
+
+		let progressed = false;
+		let batchCompleted = false;
+		if (sequential) {
+			for (const durableCall of batch.calls) {
+				if (durableCall.status === "completed") continue;
+				if (deadlineReached(options)) {
+					await closeRecoveryTurn();
+					return recoverPending || !progressed ? { kind: "yielded" } : { kind: "advanced" };
+				}
+				const started = await this.startToolCall(
+					lane,
+					active,
+					batch,
+					durableCall,
+					sourceCalls[durableCall.sourceIndex]!,
+					batch.configuration.activeToolNames,
+					toolsByName,
+					context as TContext,
+					turnTelemetry,
+					options,
+					recoverPending,
+					recoveryEvents,
+					genuineLength,
+				);
+				if (started === "yielded") {
+					await closeRecoveryTurn();
+					return recoverPending || !progressed ? { kind: "yielded" } : { kind: "advanced" };
+				}
+				const committed = await this.settleStartedToolCall(
+					lane,
+					active,
+					batch,
+					started,
+					turnTelemetry,
+					recoveryEvents,
+				);
+				toolResults.push(committed.message);
+				progressed = true;
+				batchCompleted = committed.batchCompleted;
+			}
+		} else {
+			const started = new Map<number, StartedToolCall>();
+			for (const durableCall of batch.calls) {
+				if (durableCall.status === "completed") continue;
+				if (deadlineReached(options)) break;
+				const local = await this.startToolCall(
+					lane,
+					active,
+					batch,
+					durableCall,
+					sourceCalls[durableCall.sourceIndex]!,
+					batch.configuration.activeToolNames,
+					toolsByName,
+					context as TContext,
+					turnTelemetry,
+					options,
+					recoverPending,
+					recoveryEvents,
+					genuineLength,
+				);
+				if (local === "yielded") break;
+				started.set(durableCall.sourceIndex, local);
+			}
+			for (const durableCall of batch.calls) {
+				if (durableCall.status === "completed") continue;
+				const local = started.get(durableCall.sourceIndex);
+				if (local === undefined) break;
+				const committed = await this.settleStartedToolCall(
+					lane,
+					active,
+					batch,
+					local,
+					turnTelemetry,
+					recoveryEvents,
+				);
+				toolResults.push(committed.message);
+				progressed = true;
+				batchCompleted = committed.batchCompleted;
+			}
+			if (
+				recoverPending &&
+				batch.calls.some((call) => call.status === "effect_pending" && !started.has(call.sourceIndex))
+			) {
+				await closeRecoveryTurn();
+				return { kind: "yielded" };
+			}
+		}
+
+		if (batchCompleted) {
+			await this.events.emit({
+				type: "turn_end",
+				runId: active.operationId,
+				turnId: batch.turnId,
+				message: assistantMessage,
+				toolResults,
+				lane: lane.name,
+				...(recoveryEvents ? { recovery: true as const } : {}),
+			});
+		} else {
+			await closeRecoveryTurn();
+			if (recoverPending) return { kind: "yielded" };
+		}
+		return progressed ? { kind: "advanced" } : { kind: "yielded" };
+	}
+
+	private async startToolCall(
+		lane: AgentLaneRuntime<TContext>,
+		active: ActiveOperation,
+		batch: ToolBatch,
+		durableCall: DurableToolCall,
+		sourceCall: AgentToolCall,
+		activeToolNames: string[],
+		toolsByName: Map<string, AgentHarnessTool<TContext>>,
+		context: TContext,
+		turnTelemetry: TelemetryContext,
+		options: DriveOptions,
+		recoverPending: boolean,
+		recoveryEvents: boolean,
+		genuineLength: boolean,
+	): Promise<StartedToolCall | "yielded"> {
+		if (genuineLength) {
+			if (durableCall.status !== "planned") {
+				throw new SessionInvariantError("Genuine-length tool batch has a non-planned call");
+			}
+			return {
+				kind: "immediate",
+				sourceIndex: durableCall.sourceIndex,
+				finalized: createSyntheticFinalizedToolCall(
+					sourceCall,
+					`Tool call "${sourceCall.name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`,
+				),
+				recovery: recoveryEvents,
+				durableStatus: "planned",
+			};
+		}
+		if (durableCall.status === "effect_pending") {
+			if (!recoverPending) throw new SessionInvariantError("Ordinary dispatch reached an orphaned tool effect");
+			const currentTool = toolsByName.get(sourceCall.name);
+			if (durableCall.replay !== "safe" || currentTool?.replay !== "safe") {
+				await lane.breakpoint.hit({
+					kind: "tool.recover_interruption",
+					description: "Interrupt an uncertain tool effect",
+					details: {
+						operationId: active.operationId,
+						turnId: batch.turnId,
+						sourceIndex: durableCall.sourceIndex,
+						toolCallId: sourceCall.id,
+						toolName: sourceCall.name,
+					},
+				});
+				if (deadlineReached(options)) return "yielded";
+				return {
+					kind: "immediate",
+					sourceIndex: durableCall.sourceIndex,
+					finalized: createSyntheticFinalizedToolCall(
+						sourceCall,
+						`Tool ${sourceCall.name} was interrupted before its result became durable and is not safe to replay`,
+					),
+					recovery: true,
+					durableStatus: "effect_pending",
+				};
+			}
+			const args = (await this.loadExpected(lane.name, active.operationId, false)).current?.toolArguments.get(
+				toolArgumentsKey(active.operationId, batch.turnId, durableCall.sourceIndex),
+			);
+			if (args === undefined) throw new SessionInvariantError("Pending tool arguments are missing");
+			const cleared: ClearedToolCall = {
+				toolCall: sourceCall,
+				tool: this.bindTool(currentTool, context, {
+					invocationId: durableCall.resultEntryId,
+					operationId: active.operationId,
+					turnId: batch.turnId,
+				}),
+				args,
+			};
+			return this.startRealToolCall(lane, active, batch, durableCall, cleared, turnTelemetry, true);
+		}
+		if (durableCall.status !== "planned") throw new SessionInvariantError("Completed tool call was restarted");
+		const applicationTool = activeToolNames.includes(sourceCall.name) ? toolsByName.get(sourceCall.name) : undefined;
+		const invocation: AgentHarnessToolInvocation = {
+			invocationId: durableCall.resultEntryId,
+			operationId: active.operationId,
+			turnId: batch.turnId,
+		};
+		const prepared = prepareToolCall(
+			sourceCall,
+			applicationTool === undefined ? [] : [this.bindTool(applicationTool, context, invocation)],
+		);
+		if (isImmediateToolOutcome(prepared)) {
+			return {
+				kind: "immediate",
+				sourceIndex: durableCall.sourceIndex,
+				finalized: finalizeImmediateToolOutcome(prepared),
+				recovery: recoveryEvents,
+				durableStatus: "planned",
+			};
+		}
+		let decision: BeforeToolDecision | undefined;
+		if (this.hooks.has("before_tool")) {
+			await lane.breakpoint.hit({
+				kind: "hook.before_tool",
+				description: "Run tool clearance hooks",
+				details: {
+					operationId: active.operationId,
+					turnId: batch.turnId,
+					sourceIndex: durableCall.sourceIndex,
+					toolCallId: sourceCall.id,
+					toolName: sourceCall.name,
+				},
+			});
+			if (deadlineReached(options)) return "yielded";
+			decision = await this.hooks.runToolWithGate(
+				"before_tool",
+				{
+					lane: lane.name,
+					runId: active.operationId,
+					toolCallId: sourceCall.id,
+					toolName: sourceCall.name,
+					args: prepared.args,
+				},
+				active.effectGate,
+				turnTelemetry,
+			);
+			if (deadlineReached(options)) return "yielded";
+		}
+		const cleared = applyBeforeToolDecision(prepared, decision);
+		if (isImmediateToolOutcome(cleared)) {
+			return {
+				kind: "immediate",
+				sourceIndex: durableCall.sourceIndex,
+				finalized: finalizeImmediateToolOutcome(cleared),
+				recovery: recoveryEvents,
+				durableStatus: "planned",
+			};
+		}
+		await lane.breakpoint.hit({
+			kind: "tool.intent",
+			description: "Commit tool execution intent",
+			details: {
+				operationId: active.operationId,
+				turnId: batch.turnId,
+				sourceIndex: durableCall.sourceIndex,
+				toolCallId: sourceCall.id,
+				toolName: sourceCall.name,
+			},
+		});
+		if (deadlineReached(options)) return "yielded";
+		const intent = await this.commitToolIntent(lane.name, active.operationId, batch, durableCall, cleared);
+		if (intent === "cancelled") {
+			return {
+				kind: "immediate",
+				sourceIndex: durableCall.sourceIndex,
+				finalized: createSyntheticFinalizedToolCall(sourceCall, "Operation aborted before tool execution"),
+				recovery: recoveryEvents,
+				durableStatus: "planned",
+			};
+		}
+		return this.startRealToolCall(lane, active, batch, durableCall, cleared, turnTelemetry, recoveryEvents);
+	}
+
+	private async startRealToolCall(
+		lane: AgentLaneRuntime<TContext>,
+		active: ActiveOperation,
+		batch: ToolBatch,
+		durableCall: Exclude<DurableToolCall, { status: "completed" }>,
+		cleared: ClearedToolCall,
+		turnTelemetry: TelemetryContext,
+		recovery: boolean,
+	): Promise<StartedToolCall> {
+		await this.events.emit({
+			type: "tool_start",
+			runId: active.operationId,
+			turnId: batch.turnId,
+			toolCallId: cleared.toolCall.id,
+			toolName: cleared.toolCall.name,
+			args: cleared.args,
+			lane: lane.name,
+			...(recovery ? { recovery: true as const } : {}),
+		});
+		await lane.breakpoint.hit({
+			kind: "tool.execute",
+			description: "Execute tool",
+			details: {
+				operationId: active.operationId,
+				turnId: batch.turnId,
+				sourceIndex: durableCall.sourceIndex,
+				toolCallId: cleared.toolCall.id,
+				toolName: cleared.toolCall.name,
+				recovery,
+			},
+		});
+		const updateDeliveries: Promise<void>[] = [];
+		active.effectGate.signal.addEventListener("abort", () => updateDeliveries.splice(0), { once: true });
+		const replay = cleared.tool.replay ?? "never";
+		const instrumented: ClearedToolCall = {
+			...cleared,
+			tool: {
+				...cleared.tool,
+				execute: (toolCallId, args, signal, onUpdate) =>
+					startHarnessSpan(
+						turnTelemetry,
+						"pi.harness.tool",
+						{
+							"pi.lane.name": lane.name,
+							"pi.operation.id": active.operationId,
+							"pi.turn.id": batch.turnId,
+							"pi.tool.name": cleared.toolCall.name,
+							"pi.tool.call_id": cleared.toolCall.id,
+							"pi.tool.replay": replay,
+							"pi.tool.recovery": recovery,
+						},
+						async (toolSpan) => {
+							try {
+								const result = await cleared.tool.execute(toolCallId, args, signal, onUpdate);
+								toolSpan.setAttributes({ "pi.tool.is_error": false });
+								return result;
+							} catch (error) {
+								toolSpan.setAttributes({ "pi.tool.is_error": true });
+								toolSpan.setStatus({ status: "error" });
+								throw error;
+							}
+						},
+					),
+			},
+		};
+		const execution = (async () => {
+			const executed = await executeToolCall(
+				instrumented,
+				active.effectGate,
+				(partialResult) => {
+					if (!this.isOpen() || active.effectGate.signal.aborted) return;
+					const delivery = this.events.emit({
+						type: "tool_update",
+						runId: active.operationId,
+						turnId: batch.turnId,
+						toolCallId: cleared.toolCall.id,
+						toolName: cleared.toolCall.name,
+						partialResult,
+						lane: lane.name,
+						...(recovery ? { recovery: true as const } : {}),
+					});
+					void delivery.catch(() => {});
+					updateDeliveries.push(delivery);
+				},
+				turnTelemetry,
+			);
+			await Promise.all(updateDeliveries);
+			return executed;
+		})();
+		void execution.catch(() => {});
+		return { kind: "running", sourceIndex: durableCall.sourceIndex, cleared, execution, recovery };
+	}
+
+	private async commitToolIntent(
+		lane: string,
+		operationId: string,
+		batch: ToolBatch,
+		durableCall: Extract<DurableToolCall, { status: "planned" }>,
+		cleared: ClearedToolCall,
+	): Promise<"committed" | "cancelled"> {
+		this.assertOpen();
+		try {
+			return await this.sessionStorage.mutate(lane, async (mutator) => {
+				const restored = await restoreLane(mutator, lane);
+				const state = restored.current?.state;
+				if (restored.current?.operation.operationId !== operationId || state?.kind !== "run") {
+					throw new SessionInvariantError("Tool intent lost run ownership");
+				}
+				const latest = requireMatchingToolBatch(state, batch);
+				if (state.control.status !== "running") return "cancelled";
+				const call = latest.calls[durableCall.sourceIndex];
+				if (
+					call?.status !== "planned" ||
+					call.resultEntryId !== durableCall.resultEntryId ||
+					call.sourceIndex !== durableCall.sourceIndex
+				) {
+					throw new SessionInvariantError("Tool intent found another call restart point");
+				}
+				const calls = [...latest.calls];
+				calls[durableCall.sourceIndex] = {
+					status: "effect_pending",
+					sourceIndex: durableCall.sourceIndex,
+					resultEntryId: durableCall.resultEntryId,
+					replay: cleared.tool.replay ?? "never",
+				};
+				await mutator.commit({
+					writes: [
+						{
+							kind: "register",
+							op: "set",
+							namespace: "op.tool_args",
+							key: toolArgumentsKey(operationId, batch.turnId, durableCall.sourceIndex),
+							value: cleared.args,
+						},
+						{
+							kind: "register",
+							op: "set",
+							namespace: "op.state",
+							key: operationId,
+							value: { ...state, phase: { kind: "tools", batch: { ...latest, calls } } },
+						},
+					],
+				});
+				return "committed";
+			});
+		} catch (error) {
+			if (
+				error instanceof RuntimeSliceNotImplemented ||
+				error instanceof HarnessClosed ||
+				error instanceof HarnessFault
+			) {
+				throw error;
+			}
+			throw this.fault(error);
+		}
+	}
+
+	private async settleStartedToolCall(
+		lane: AgentLaneRuntime<TContext>,
+		active: ActiveOperation,
+		batch: ToolBatch,
+		started: StartedToolCall,
+		turnTelemetry: TelemetryContext,
+		recoveryEvents: boolean,
+	): Promise<CommittedToolSettlement> {
+		let finalized: FinalizedToolCall;
+		if (started.kind === "immediate") {
+			finalized = started.finalized;
+		} else {
+			const executed = await started.execution;
+			let patch: AfterToolPatch | undefined;
+			if (this.hooks.has("after_tool")) {
+				await lane.breakpoint.hit({
+					kind: "hook.after_tool",
+					description: "Run tool result hooks",
+					details: {
+						operationId: active.operationId,
+						turnId: batch.turnId,
+						sourceIndex: started.sourceIndex,
+						toolCallId: started.cleared.toolCall.id,
+						toolName: started.cleared.toolCall.name,
+						recovery: started.recovery,
+					},
+				});
+				patch = await this.hooks.runToolWithGate(
+					"after_tool",
+					{
+						lane: lane.name,
+						runId: active.operationId,
+						toolCallId: started.cleared.toolCall.id,
+						toolName: started.cleared.toolCall.name,
+						args: started.cleared.args,
+						content: executed.result.content,
+						details: executed.result.details as JsonValue | undefined,
+						isError: executed.isError,
+						...(executed.result.usage === undefined ? {} : { usage: executed.result.usage }),
+					},
+					active.effectGate,
+					turnTelemetry,
+				);
+			}
+			finalized = finalizeToolCall(started.cleared, executed, patch);
+			await this.events.emit({
+				type: "tool_end",
+				runId: active.operationId,
+				turnId: batch.turnId,
+				toolCallId: finalized.toolCall.id,
+				toolName: finalized.toolCall.name,
+				result: finalized.result,
+				isError: finalized.isError,
+				terminate: finalized.terminate,
+				lane: lane.name,
+				...(started.recovery ? { recovery: true as const } : {}),
+			});
+		}
+		const message = createToolResultMessage(finalized);
+		await this.events.emit({
+			type: "message_start",
+			runId: active.operationId,
+			message,
+			lane: lane.name,
+			...(recoveryEvents ? { recovery: true as const } : {}),
+		});
+		await this.events.emit({
+			type: "message_end",
+			runId: active.operationId,
+			message,
+			entryId: batch.calls[started.sourceIndex]!.resultEntryId,
+			lane: lane.name,
+			...(recoveryEvents ? { recovery: true as const } : {}),
+		});
+		await lane.breakpoint.hit({
+			kind: "tool.settlement",
+			description: "Commit tool result",
+			details: {
+				operationId: active.operationId,
+				turnId: batch.turnId,
+				sourceIndex: started.sourceIndex,
+				toolCallId: finalized.toolCall.id,
+				toolName: finalized.toolCall.name,
+				recovery: started.recovery,
+			},
+		});
+		const committed = await this.commitToolSettlement(
+			lane.name,
+			active.operationId,
+			batch,
+			started,
+			finalized,
+			message,
+		);
+		await this.events.emit({ type: "entry_added", entry: committed.entry, lane: lane.name });
+		if (committed.row !== undefined && committed.totals !== undefined) {
+			await this.events.emit({ type: "usage", lane: lane.name, row: committed.row, totals: committed.totals });
+		}
+		return committed;
+	}
+
+	private async commitToolSettlement(
+		lane: string,
+		operationId: string,
+		batch: ToolBatch,
+		started: StartedToolCall,
+		finalized: FinalizedToolCall,
+		message: ToolResultMessage,
+	): Promise<CommittedToolSettlement> {
+		this.assertOpen();
+		try {
+			const usageId = finalized.result.usage === undefined ? undefined : this.sessionStorage.idGenerator.next();
+			const committed = await this.sessionStorage.mutate(lane, async (mutator) => {
+				const restored = await restoreLane(mutator, lane);
+				const state = restored.current?.state;
+				if (restored.current?.operation.operationId !== operationId || state?.kind !== "run") {
+					throw new SessionInvariantError("Tool settlement lost run ownership");
+				}
+				const latest = requireMatchingToolBatch(state, batch);
+				const call = latest.calls[started.sourceIndex];
+				const expectedStatus = started.kind === "running" ? "effect_pending" : started.durableStatus;
+				if (
+					call?.status !== expectedStatus ||
+					call.resultEntryId !== batch.calls[started.sourceIndex]!.resultEntryId ||
+					call.sourceIndex !== started.sourceIndex
+				) {
+					throw new SessionInvariantError("Tool settlement found another call restart point");
+				}
+				if (latest.calls.slice(0, started.sourceIndex).some((candidate) => candidate.status !== "completed")) {
+					throw new SessionInvariantError("Tool settlement would overtake an earlier call");
+				}
+				const terminate = state.control.status === "running" ? finalized.terminate : false;
+				const calls = [...latest.calls];
+				calls[started.sourceIndex] = {
+					status: "completed",
+					sourceIndex: started.sourceIndex,
+					resultEntryId: call.resultEntryId,
+					terminate,
+				};
+				const batchCompleted = calls.every((candidate) => candidate.status === "completed");
+				const toolArgumentRegisters = batchCompleted
+					? await mutator.listRegisters("op.tool_args", `${operationId}:${latest.turnId}:`)
+					: [];
+				const nextPhase: RunState["phase"] = batchCompleted
+					? {
+							kind: "checkpoint",
+							continuation: calls.every((candidate) => candidate.status === "completed" && candidate.terminate)
+								? { kind: "may_finish", includeFinalAssistant: false }
+								: { kind: "need_assistant", overflowRecoveryUsed: false },
+							triggerEntryId: call.resultEntryId,
+						}
+					: { kind: "tools", batch: { ...latest, calls } };
+				const writes = [
+					{
+						kind: "entry" as const,
+						entry: {
+							id: call.resultEntryId,
+							parentId: restored.leafId,
+							type: "message" as const,
+							message,
+							...(terminate ? { terminate: true as const } : {}),
+						},
+					},
+					{
+						kind: "register" as const,
+						op: "set" as const,
+						namespace: "lane.leaf" as const,
+						key: lane,
+						value: call.resultEntryId,
+					},
+					...(usageId === undefined || finalized.result.usage === undefined
+						? []
+						: [
+								{
+									kind: "usage" as const,
+									row: {
+										id: usageId,
+										usage: finalized.result.usage,
+										entryId: call.resultEntryId,
+										adjustment: false,
+									},
+								},
+							]),
+					...toolArgumentRegisters.map((register) => ({
+						kind: "register" as const,
+						op: "delete" as const,
+						namespace: "op.tool_args" as const,
+						key: register.key,
+					})),
+					{
+						kind: "register" as const,
+						op: "set" as const,
+						namespace: "op.state" as const,
+						key: operationId,
+						value: { ...state, phase: nextPhase },
+					},
+				];
+				const result = await mutator.commit({ writes });
+				const entry = (await mutator.getEntries([call.resultEntryId])).get(call.resultEntryId);
+				if (entry === undefined) throw new SessionInvariantError("Committed tool result is missing");
+				const usageIndex = usageId === undefined ? -1 : 2;
+				return {
+					entry,
+					message,
+					batchCompleted,
+					...(usageId === undefined || finalized.result.usage === undefined
+						? {}
+						: {
+								row: {
+									id: usageId,
+									seq: result.seqs[usageIndex]!,
+									usage: finalized.result.usage,
+									entryId: call.resultEntryId,
+									adjustment: false,
+								},
+							}),
+				};
+			});
+			return committed.row === undefined
+				? committed
+				: { ...committed, totals: (await this.sessionStorage.getStats()).usage };
+		} catch (error) {
+			if (
+				error instanceof RuntimeSliceNotImplemented ||
+				error instanceof HarnessClosed ||
+				error instanceof HarnessFault
+			) {
+				throw error;
+			}
+			throw this.fault(error);
+		}
+	}
+
+	private async suspendToolBatchForMissingIdentities(
+		lane: AgentLaneRuntime<TContext>,
+		active: ActiveOperation,
+		restored: RestoredLane,
+		tools: string[],
+		recovery: boolean,
+	): Promise<ToolBatchExecutionResult> {
+		const missing = { tools, models: [] };
+		this.restoredSuspensions.set(lane.name, {
+			...this.suspensionBase(restored),
+			reason: "missing_identities",
+			missing,
+		});
+		await this.events.emit({
+			type: "run_suspend",
+			runId: active.operationId,
+			reason: "missing_identities",
+			missing,
+			lane: lane.name,
+			...(recovery ? { recovery: true as const } : {}),
+		});
+		return { kind: "missing_identities", missing };
+	}
+
+	private async resolveToolContext(): Promise<TContext> {
+		const source = this.toolContext;
+		return (typeof source === "function" ? await source() : source) as TContext;
+	}
+
+	private bindTool(
+		tool: AgentHarnessTool<TContext>,
+		context: TContext,
+		invocation: AgentHarnessToolInvocation,
+	): AgentTool {
+		return {
+			...tool,
+			execute: (toolCallId, params, signal, onUpdate) =>
+				tool.execute(toolCallId, params, signal, onUpdate, context, invocation),
+		};
+	}
+
 	private async finishRun(
 		lane: AgentLaneRuntime<TContext>,
 		active: ActiveOperation,
@@ -2503,7 +3616,12 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 					throw new SessionInvariantError("Failed run is not at failure drain");
 				}
 				if (restored.leafId === null) throw new SessionInvariantError("Run cannot finish at the root");
-				const finalAssistantEntryId = current.state.latestAssistantEntryId ?? undefined;
+				const latestAssistantEntryId = current.state.latestAssistantEntryId ?? undefined;
+				const includeFinalAssistant =
+					error === undefined &&
+					current.state.phase.kind === "checkpoint" &&
+					current.state.phase.continuation.kind === "may_finish" &&
+					current.state.phase.continuation.includeFinalAssistant;
 				const result: LaneLastResult =
 					error === undefined
 						? {
@@ -2511,8 +3629,10 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 								kind: "run",
 								outcome: "completed",
 								leafId: restored.leafId,
-								runCompletion: "assistant",
-								...(finalAssistantEntryId === undefined ? {} : { finalAssistantEntryId }),
+								runCompletion: includeFinalAssistant ? "assistant" : "terminated_tools",
+								...(includeFinalAssistant && latestAssistantEntryId !== undefined
+									? { finalAssistantEntryId: latestAssistantEntryId }
+									: {}),
 							}
 						: {
 								operationId: active.operationId,
@@ -2520,7 +3640,9 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 								outcome: "failed",
 								leafId: restored.leafId,
 								error,
-								...(finalAssistantEntryId === undefined ? {} : { finalAssistantEntryId }),
+								...(latestAssistantEntryId === undefined
+									? {}
+									: { finalAssistantEntryId: latestAssistantEntryId }),
 							};
 				const [toolArgs, preparations] = await Promise.all([
 					mutator.listRegisters("op.tool_args", `${active.operationId}:`),
@@ -2931,6 +4053,62 @@ class AgentLaneRuntime<TContext extends object | undefined> implements AgentLane
 	}
 }
 
+function assistantToolCalls(message: SettledAssistantMessage): AgentToolCall[] {
+	return message.content.filter((block): block is AgentToolCall => block.type === "toolCall");
+}
+
+function uuidV7Timestamp(id: string): number {
+	const timestamp = Number.parseInt(`${id.slice(0, 8)}${id.slice(9, 13)}`, 16);
+	if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
+		throw new SessionInvariantError(`Invalid UUIDv7 id: ${id}`);
+	}
+	return timestamp;
+}
+
+function toolArgumentsKey(operationId: string, turnId: string, sourceIndex: number): string {
+	return `${operationId}:${turnId}:${sourceIndex}`;
+}
+
+function requireMatchingToolBatch(state: RunState, expected: ToolBatch): ToolBatch {
+	if (
+		state.phase.kind !== "tools" ||
+		state.phase.batch.assistantEntryId !== expected.assistantEntryId ||
+		state.phase.batch.turnId !== expected.turnId ||
+		state.phase.batch.calls.length !== expected.calls.length
+	) {
+		throw new SessionInvariantError("Tool operation found another batch restart point");
+	}
+	return state.phase.batch;
+}
+
+function isImmediateToolOutcome(
+	value: PreparedToolCall | ClearedToolCall | ImmediateToolOutcome,
+): value is ImmediateToolOutcome {
+	return "kind" in value && value.kind === "immediate";
+}
+
+function finalizeImmediateToolOutcome(outcome: ImmediateToolOutcome): FinalizedToolCall {
+	return {
+		toolCall: outcome.toolCall,
+		result: outcome.result,
+		isError: true,
+		terminate: outcome.terminate,
+	};
+}
+
+function createSyntheticFinalizedToolCall(
+	toolCall: AgentToolCall,
+	message: string,
+	terminate = false,
+): FinalizedToolCall {
+	const result: AgentToolResult<unknown> = {
+		content: [{ type: "text", text: message }],
+		details: {},
+		...(terminate ? { terminate: true } : {}),
+	};
+	return { toolCall, result, isError: true, terminate };
+}
+
 function classifyAssistantSettlement(
 	message: SettledAssistantMessage,
 	pending: Extract<RunState["phase"], { kind: "assistant" }>["generation"] & { status: "effect_pending" },
@@ -2938,6 +4116,8 @@ function classifyAssistantSettlement(
 	responseEntryId: string,
 	requestApi: Api,
 	now: number,
+	sourceCalls: AgentToolCall[],
+	resultEntryIds: string[],
 ): AssistantSettlementDecision {
 	if (controlStatus === "cancel_requested") {
 		const normalized: SettledAssistantMessage = {
@@ -3015,8 +4195,30 @@ function classifyAssistantSettlement(
 			outcome: { kind: "failed", error },
 		};
 	}
-	if (message.stopReason === "toolUse" || message.content.some((block) => block.type === "toolCall")) {
-		throw new RuntimeSliceNotImplemented("assistant settlement(toolUse)");
+	if (message.stopReason === "toolUse" || sourceCalls.length !== 0) {
+		if (sourceCalls.length === 0) {
+			throw new SessionInvariantError("Assistant tool-use response contains no tool calls");
+		}
+		if (sourceCalls.length !== resultEntryIds.length) {
+			throw new SessionInvariantError("Assistant tool plan reservation is incomplete");
+		}
+		return {
+			message,
+			phase: {
+				kind: "tools",
+				batch: {
+					assistantEntryId: responseEntryId,
+					configuration: cloneConfiguration(pending.context.configuration),
+					turnId: pending.context.stepId,
+					calls: sourceCalls.map((_call, sourceIndex) => ({
+						status: "planned",
+						sourceIndex,
+						resultEntryId: resultEntryIds[sourceIndex]!,
+					})),
+				},
+			},
+			outcome: { kind: "tools", genuineLength: message.stopReason === "length" },
+		};
 	}
 	return {
 		message,
@@ -3059,19 +4261,22 @@ function predictAssistantStepOutcome(
 	context: Extract<RunState["phase"], { kind: "assistant" }>["generation"]["context"],
 	requestApi: Api,
 ): "succeeded" | "retry" | "failed" | "aborted" | "deferred" {
-	if (message.stopReason === "stop" || message.stopReason === "length") return "succeeded";
 	if (message.stopReason === "deferred") {
 		return normalizeInvalidDeferredResponse(message, context.configuration, requestApi).stopReason === "deferred"
 			? "deferred"
 			: "failed";
 	}
 	if (message.stopReason === "aborted") return "aborted";
+	if (message.stopReason === "error") {
+		return attempt < context.retryPolicy.maxAttempts && isRetryableAssistantError(message) ? "retry" : "failed";
+	}
 	if (
-		message.stopReason === "error" &&
-		attempt < context.retryPolicy.maxAttempts &&
-		isRetryableAssistantError(message)
+		message.stopReason === "stop" ||
+		message.stopReason === "length" ||
+		message.stopReason === "toolUse" ||
+		message.content.some((block) => block.type === "toolCall")
 	) {
-		return "retry";
+		return "succeeded";
 	}
 	return "failed";
 }
@@ -3123,6 +4328,14 @@ function cloneUsage(usage: Usage): Usage {
 
 function cloneConfiguration(configuration: LaneConfiguration): LaneConfiguration {
 	return { ...configuration, model: { ...configuration.model }, activeToolNames: [...configuration.activeToolNames] };
+}
+
+function validateToolNames(tools: readonly { name: string }[]): void {
+	const names = new Set<string>();
+	for (const tool of tools) {
+		if (names.has(tool.name)) throw new TypeError(`Duplicate tool name: ${JSON.stringify(tool.name)}`);
+		names.add(tool.name);
+	}
 }
 
 function validateRetryPolicy(policy: RetryPolicy): void {

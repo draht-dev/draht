@@ -1,6 +1,8 @@
+import type { TelemetryContext } from "@draht/telemetry";
 import type { BeforeResumePrepared, HookHandler, HookInvocation, HookMap, HookName, Hooks } from "./agent-harness.ts";
 import type { EffectGate } from "./execution/effect-gate.ts";
 import type { JsonValue } from "./session/types.ts";
+import { startHarnessSpan } from "./telemetry.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch } from "./types.ts";
 
 interface HookRegistration {
@@ -58,6 +60,21 @@ export class HookRegistry implements Hooks {
 	): Promise<HookMap[TName]["result"]> {
 		effectGate.assertOpen();
 		return this.runAdmitted(name, event);
+	}
+
+	/** Invoke a tool-hook aggregate with one telemetry span per registered handler. */
+	runToolWithGate<TName extends "before_tool" | "after_tool">(
+		name: TName,
+		event: HookInvocation<TName>,
+		effectGate: EffectGate,
+		telemetryContext: TelemetryContext,
+	): Promise<HookMap[TName]["result"]> {
+		effectGate.assertOpen();
+		return (
+			name === "before_tool"
+				? this.beforeTool(event as HookInvocation<"before_tool">, telemetryContext)
+				: this.afterTool(event as HookInvocation<"after_tool">, telemetryContext)
+		) as Promise<HookMap[TName]["result"]>;
 	}
 
 	/** Preserve each before_run handler's restart data under its stable id. */
@@ -182,12 +199,20 @@ export class HookRegistry implements Hooks {
 		}
 	}
 
-	private async beforeTool(event: HookInvocation<"before_tool">): Promise<HookMap["before_tool"]["result"]> {
+	private async beforeTool(
+		event: HookInvocation<"before_tool">,
+		telemetryContext?: TelemetryContext,
+	): Promise<HookMap["before_tool"]["result"]> {
 		let args = event.args;
 		let block: { reason: string; terminate?: boolean } | undefined;
 		for (const registration of this.registrationsFor("before_tool")) {
 			try {
-				const result = (await registration.handler({ ...event, args })) as HookMap["before_tool"]["result"];
+				const result = (await this.invokeToolRegistration(
+					"before_tool",
+					registration,
+					{ ...event, args },
+					telemetryContext,
+				)) as HookMap["before_tool"]["result"];
 				if (result?.args !== undefined) args = result.args;
 				if (result?.block !== undefined) {
 					block = result.block;
@@ -286,7 +311,10 @@ export class HookRegistry implements Hooks {
 		return { message };
 	}
 
-	private async afterTool(event: HookInvocation<"after_tool">): Promise<HookMap["after_tool"]["result"]> {
+	private async afterTool(
+		event: HookInvocation<"after_tool">,
+		telemetryContext?: TelemetryContext,
+	): Promise<HookMap["after_tool"]["result"]> {
 		let current = {
 			content: event.content,
 			details: event.details,
@@ -296,7 +324,12 @@ export class HookRegistry implements Hooks {
 		const aggregate: NonNullable<HookMap["after_tool"]["result"]> = {};
 		for (const registration of this.registrationsFor("after_tool")) {
 			try {
-				const result = (await registration.handler({ ...event, ...current })) as HookMap["after_tool"]["result"];
+				const result = (await this.invokeToolRegistration(
+					"after_tool",
+					registration,
+					{ ...event, ...current },
+					telemetryContext,
+				)) as HookMap["after_tool"]["result"];
 				if (result === undefined) continue;
 				if (result.content !== undefined) aggregate.content = result.content;
 				if (result.details !== undefined) aggregate.details = result.details;
@@ -340,6 +373,42 @@ export class HookRegistry implements Hooks {
 			}
 		}
 		return undefined;
+	}
+
+	private invokeToolRegistration(
+		name: "before_tool" | "after_tool",
+		registration: HookRegistration,
+		event: HookInvocation<"before_tool"> | HookInvocation<"after_tool">,
+		telemetryContext: TelemetryContext | undefined,
+	): Promise<unknown> {
+		if (telemetryContext === undefined) return Promise.resolve(registration.handler(event));
+		return startHarnessSpan(
+			telemetryContext,
+			"pi.harness.hook",
+			{
+				"pi.lane.name": event.lane,
+				"pi.operation.id": event.runId,
+				"pi.hook.name": name,
+				...(registration.id === undefined ? {} : { "pi.hook.registration_id": registration.id }),
+			},
+			async (span) => {
+				try {
+					const result = await registration.handler(event);
+					const blocked =
+						name === "before_tool" &&
+						result !== null &&
+						typeof result === "object" &&
+						"block" in result &&
+						result.block !== undefined;
+					span.setAttributes({ "pi.hook.outcome": blocked ? "blocked" : "completed" });
+					return result;
+				} catch (error) {
+					span.setAttributes({ "pi.hook.outcome": "failed" });
+					span.setStatus({ status: "error" });
+					throw error;
+				}
+			},
+		);
 	}
 
 	private registrationsFor(name: HookName): HookRegistration[] {

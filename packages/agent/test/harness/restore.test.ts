@@ -97,6 +97,69 @@ async function installRun(session: Session): Promise<{
 	return { operationId, promptEntryId, operation, state };
 }
 
+async function installToolBatch(
+	session: Session,
+	stopReason: "toolUse" | "stop" | "length" | "error" | "deferred" | "aborted" = "toolUse",
+) {
+	const installed = await installRun(session);
+	if (installed.state.kind !== "run") throw new Error("expected run state");
+	const assistantEntryId = session.idGenerator.next();
+	const timestamp = Number.parseInt(`${assistantEntryId.slice(0, 8)}${assistantEntryId.slice(9, 13)}`, 16);
+	const resultEntryIds = [session.idGenerator.next(timestamp), session.idGenerator.next(timestamp)];
+	const assistant = {
+		role: "assistant" as const,
+		content: [
+			{ type: "toolCall" as const, id: "call-one", name: "echo", arguments: { value: "one" } },
+			{ type: "toolCall" as const, id: "call-two", name: "echo", arguments: { value: "two" } },
+		],
+		api: "test",
+		provider: "test",
+		model: "model",
+		usage: zeroUsage,
+		stopReason,
+		timestamp: 2,
+	};
+	const state: OperationState = {
+		...installed.state,
+		latestAssistantEntryId: assistantEntryId,
+		phase: {
+			kind: "tools",
+			batch: {
+				assistantEntryId,
+				configuration: {
+					model: { provider: "test", modelId: "model" },
+					thinkingLevel: "off",
+					activeToolNames: ["echo"],
+				},
+				turnId: session.idGenerator.next(),
+				calls: resultEntryIds.map((resultEntryId, sourceIndex) => ({
+					status: "planned" as const,
+					sourceIndex,
+					resultEntryId,
+				})),
+			},
+		},
+	};
+	await session.mutate("main", (mutator) =>
+		mutator.commit({
+			writes: [
+				{
+					kind: "entry",
+					entry: {
+						id: assistantEntryId,
+						parentId: installed.promptEntryId,
+						type: "message",
+						message: assistant,
+					},
+				},
+				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: assistantEntryId },
+				{ kind: "register", op: "set", namespace: "op.state", key: installed.operationId, value: state },
+			],
+		}),
+	);
+	return { ...installed, assistantEntryId, resultEntryIds, assistant, state };
+}
+
 afterEach(async () => {
 	for (const repo of repos.splice(0)) await repo.close();
 });
@@ -164,6 +227,16 @@ describe("restoreLane base validation", () => {
 
 		await writeState({
 			...state,
+			phase: {
+				kind: "checkpoint",
+				continuation: { kind: "may_finish", includeFinalAssistant: false },
+				triggerEntryId: promptEntryId,
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(/finish checkpoint has no latest assistant/);
+
+		await writeState({
+			...state,
 			latestAssistantEntryId: promptEntryId,
 			phase: {
 				kind: "checkpoint",
@@ -172,6 +245,74 @@ describe("restoreLane base validation", () => {
 			},
 		});
 		await expect(restoreLane(session, "main")).rejects.toThrow(`entry ${promptEntryId} is not an assistant message`);
+
+		const finalAssistantEntryId = session.idGenerator.next();
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "entry",
+						entry: {
+							id: finalAssistantEntryId,
+							parentId: promptEntryId,
+							type: "message",
+							message: {
+								role: "assistant",
+								content: [{ type: "text", text: "not a tool result" }],
+								api: "test",
+								provider: "test",
+								model: "model",
+								usage: zeroUsage,
+								stopReason: "stop",
+								timestamp: 2,
+							},
+						},
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: finalAssistantEntryId },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: operationId,
+						value: {
+							...state,
+							latestAssistantEntryId: finalAssistantEntryId,
+							phase: {
+								kind: "checkpoint",
+								continuation: { kind: "may_finish", includeFinalAssistant: false },
+								triggerEntryId: finalAssistantEntryId,
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(
+			/terminated-tools checkpoint trigger is the latest assistant/,
+		);
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: promptEntryId },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: operationId,
+						value: {
+							...state,
+							latestAssistantEntryId: finalAssistantEntryId,
+							phase: {
+								kind: "checkpoint",
+								continuation: { kind: "may_finish", includeFinalAssistant: false },
+								triggerEntryId: promptEntryId,
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(`entry ${promptEntryId} is not a tool result`);
 
 		const responseEntryId = session.idGenerator.next();
 		await writeState({
@@ -566,6 +707,436 @@ describe("restoreLane base validation", () => {
 			}),
 		);
 		await expect(restoreLane(session, "main")).rejects.toThrow(/running operation references an aborted/);
+	});
+
+	it("rejects classification-incompatible active and terminated tool provenance", async () => {
+		const invalidSession = await createConfiguredSession();
+		await installToolBatch(invalidSession, "error");
+		await expect(restoreLane(invalidSession, "main")).rejects.toThrow(/incompatible stop reason/);
+
+		const lengthSession = await createConfiguredSession();
+		const installed = await installToolBatch(lengthSession, "length");
+		if (installed.state.kind !== "run") throw new Error("expected run state");
+		const [firstResultId, secondResultId] = installed.resultEntryIds;
+		if (firstResultId === undefined || secondResultId === undefined) throw new Error("expected result ids");
+		await lengthSession.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "entry",
+						entry: {
+							id: firstResultId,
+							parentId: installed.assistantEntryId,
+							type: "message",
+							message: {
+								role: "toolResult",
+								toolCallId: "call-one",
+								toolName: "echo",
+								content: [{ type: "text", text: "one" }],
+								isError: true,
+								timestamp: 3,
+							},
+							terminate: true,
+						},
+					},
+					{
+						kind: "entry",
+						entry: {
+							id: secondResultId,
+							parentId: firstResultId,
+							type: "message",
+							message: {
+								role: "toolResult",
+								toolCallId: "call-two",
+								toolName: "echo",
+								content: [{ type: "text", text: "two" }],
+								isError: true,
+								timestamp: 4,
+							},
+							terminate: true,
+						},
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: secondResultId },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: installed.operationId,
+						value: {
+							...installed.state,
+							phase: {
+								kind: "checkpoint",
+								continuation: { kind: "may_finish", includeFinalAssistant: false },
+								triggerEntryId: secondResultId,
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(lengthSession, "main")).rejects.toThrow(
+			/terminated-tools checkpoint assistant has an incompatible stop reason/,
+		);
+	});
+
+	it("validates the complete terminated-tools result chain", async () => {
+		const session = await createConfiguredSession();
+		const installed = await installToolBatch(session);
+		if (installed.state.kind !== "run") throw new Error("expected run state");
+		const [firstResultId, secondResultId] = installed.resultEntryIds;
+		if (firstResultId === undefined || secondResultId === undefined) throw new Error("expected result ids");
+		const checkpointPhase = {
+			kind: "checkpoint" as const,
+			continuation: { kind: "may_finish" as const, includeFinalAssistant: false },
+			triggerEntryId: secondResultId,
+		};
+		const checkpointState: OperationState = { ...installed.state, phase: checkpointPhase };
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "entry",
+						entry: {
+							id: firstResultId,
+							parentId: installed.assistantEntryId,
+							type: "message",
+							message: {
+								role: "toolResult",
+								toolCallId: "call-one",
+								toolName: "echo",
+								content: [{ type: "text", text: "one" }],
+								isError: false,
+								timestamp: 3,
+							},
+							terminate: true,
+						},
+					},
+					{
+						kind: "entry",
+						entry: {
+							id: secondResultId,
+							parentId: firstResultId,
+							type: "message",
+							message: {
+								role: "toolResult",
+								toolCallId: "call-two",
+								toolName: "echo",
+								content: [{ type: "text", text: "two" }],
+								isError: false,
+								timestamp: 4,
+							},
+							terminate: true,
+						},
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: secondResultId },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: installed.operationId,
+						value: checkpointState,
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).resolves.toMatchObject({
+			current: { state: { phase: { continuation: { includeFinalAssistant: false } } } },
+		});
+
+		const unrelatedResultId = session.idGenerator.next();
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "entry",
+						entry: {
+							id: unrelatedResultId,
+							parentId: installed.assistantEntryId,
+							type: "message",
+							message: {
+								role: "toolResult",
+								toolCallId: "call-two",
+								toolName: "echo",
+								content: [{ type: "text", text: "unrelated" }],
+								isError: false,
+								timestamp: 5,
+							},
+							terminate: true,
+						},
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: unrelatedResultId },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: installed.operationId,
+						value: {
+							...checkpointState,
+							phase: { ...checkpointPhase, triggerEntryId: unrelatedResultId },
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/terminated-tools result 0 is invalid/);
+
+		const nonTerminatingResultId = session.idGenerator.next();
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "entry",
+						entry: {
+							id: nonTerminatingResultId,
+							parentId: firstResultId,
+							type: "message",
+							message: {
+								role: "toolResult",
+								toolCallId: "call-two",
+								toolName: "echo",
+								content: [{ type: "text", text: "not terminating" }],
+								isError: false,
+								timestamp: 6,
+							},
+						},
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: nonTerminatingResultId },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: installed.operationId,
+						value: {
+							...checkpointState,
+							phase: { ...checkpointPhase, triggerEntryId: nonTerminatingResultId },
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/terminated-tools result 1 is invalid/);
+	});
+
+	it("validates planned tool batches and rejects invalid indices, ids, and materialized reservations", async () => {
+		const session = await createConfiguredSession();
+		const installed = await installToolBatch(session);
+		if (installed.state.kind !== "run" || installed.state.phase.kind !== "tools") {
+			throw new Error("expected tool state");
+		}
+		const batch = installed.state.phase.batch;
+		const writeCalls = (calls: typeof batch.calls) =>
+			session.mutate("main", (mutator) =>
+				mutator.commit({
+					writes: [
+						{
+							kind: "register",
+							op: "set",
+							namespace: "op.state",
+							key: installed.operationId,
+							value: { ...installed.state, phase: { kind: "tools", batch: { ...batch, calls } } },
+						},
+					],
+				}),
+			);
+
+		await expect(restoreLane(session, "main")).resolves.toMatchObject({
+			current: { state: { phase: { kind: "tools" } } },
+		});
+		await writeCalls([{ ...batch.calls[0]!, sourceIndex: 1 }, batch.calls[1]!]);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/source indices are not complete/);
+		await writeCalls([batch.calls[0]!, { ...batch.calls[1]!, resultEntryId: batch.calls[0]!.resultEntryId }]);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/tool result id.*duplicated/);
+		await writeCalls([batch.calls[0]!, { ...batch.calls[1]!, resultEntryId: session.idGenerator.next(1) }]);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/not a follower/);
+		await writeCalls(batch.calls);
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "pending.entry",
+						key: batch.calls[0]!.resultEntryId,
+						value: { type: "message", payload: { role: "user", content: "unowned", timestamp: 3 } },
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/reserved settlement id.*pending entry/);
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "delete",
+						namespace: "pending.entry",
+						key: batch.calls[0]!.resultEntryId,
+					},
+					{
+						kind: "entry",
+						entry: {
+							id: batch.calls[0]!.resultEntryId,
+							parentId: installed.assistantEntryId,
+							type: "message",
+							message: {
+								role: "toolResult",
+								toolCallId: "call-one",
+								toolName: "echo",
+								content: [],
+								isError: true,
+								timestamp: 3,
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/reserved entry.*already exists/);
+	});
+
+	it("hydrates exact pending tool arguments and validates completed result chains", async () => {
+		const session = await createConfiguredSession();
+		const installed = await installToolBatch(session);
+		if (installed.state.kind !== "run" || installed.state.phase.kind !== "tools") {
+			throw new Error("expected tool state");
+		}
+		const batch = installed.state.phase.batch;
+		const pendingState: OperationState = {
+			...installed.state,
+			phase: {
+				kind: "tools",
+				batch: {
+					...batch,
+					calls: [{ ...batch.calls[0]!, status: "effect_pending", replay: "safe" }, batch.calls[1]!],
+				},
+			},
+		};
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{ kind: "register", op: "set", namespace: "op.state", key: installed.operationId, value: pendingState },
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/missing tool arguments/);
+		const argsKey = `${installed.operationId}:${batch.turnId}:0`;
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.tool_args",
+						key: argsKey,
+						value: { value: "effective" },
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).resolves.toMatchObject({
+			current: { toolArguments: expect.any(Map) },
+		});
+
+		const completedEntry = {
+			id: batch.calls[0]!.resultEntryId,
+			parentId: installed.assistantEntryId,
+			type: "message" as const,
+			message: {
+				role: "toolResult" as const,
+				toolCallId: "call-one",
+				toolName: "echo",
+				content: [],
+				isError: false,
+				timestamp: 3,
+			},
+		};
+		const completedState: OperationState = {
+			...installed.state,
+			phase: {
+				kind: "tools",
+				batch: {
+					...batch,
+					calls: [{ ...batch.calls[0]!, status: "completed", terminate: false }, batch.calls[1]!],
+				},
+			},
+		};
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{ kind: "entry", entry: completedEntry },
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: completedEntry.id },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: installed.operationId,
+						value: completedState,
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).resolves.toMatchObject({
+			current: { state: { phase: { batch: { calls: [{ status: "completed" }, { status: "planned" }] } } } },
+		});
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: installed.operationId,
+						value: {
+							...completedState,
+							phase: {
+								kind: "tools",
+								batch: {
+									...batch,
+									calls: [{ ...batch.calls[0]!, status: "completed", terminate: true }, batch.calls[1]!],
+								},
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/terminate mismatch/);
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: installed.operationId,
+						value: completedState,
+					},
+				],
+			}),
+		);
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: installed.operationId,
+						value: {
+							...completedState,
+							phase: {
+								kind: "tools",
+								batch: {
+									...batch,
+									calls: [batch.calls[0]!, { ...batch.calls[1]!, status: "completed", terminate: false }],
+								},
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/completed tool calls do not form a prefix/);
 	});
 
 	it("rejects missing operation registers and invalid base references", async () => {

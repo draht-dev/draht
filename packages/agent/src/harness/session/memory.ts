@@ -453,30 +453,7 @@ export class MemorySessionRepo implements SessionRepo {
 		const sourceLeaves = snapshot.registers.filter((register) => isRegisterNamespace(register, "lane.leaf"));
 		this.validateForkSourceSnapshot(snapshot, sourceEntries, sourceRegisters, sourceLeaves);
 
-		const copiedEntryIds = new Set<string>();
-		const destinationLeaves = new Map<string, string | null>();
-		if (options.scope === "tree") {
-			for (const id of sourceEntries.keys()) copiedEntryIds.add(id);
-			for (const register of sourceLeaves) destinationLeaves.set(register.key, register.value);
-		} else {
-			const mainLeaf = sourceRegisters.get(registerKey("lane.leaf", "main"));
-			if (mainLeaf === undefined) throw new Error("Source session is missing main lane");
-			const requested = options.entryId ?? (mainLeaf.value as string | null);
-			let leaf = requested;
-			if (requested !== null) {
-				const target = sourceEntries.get(requested);
-				if (target === undefined) throw new Error(`Unknown fork entry: ${requested}`);
-				if (options.position === "before") leaf = target.parentId;
-			}
-			let entryId = leaf;
-			while (entryId !== null) {
-				const entry = sourceEntries.get(entryId);
-				if (entry === undefined) throw new Error(`Corrupt source branch: missing parent ${entryId}`);
-				copiedEntryIds.add(entryId);
-				entryId = entry.parentId;
-			}
-			destinationLeaves.set("main", leaf);
-		}
+		const { copiedEntryIds, destinationLeaves } = this.selectForkContents(sourceEntries, sourceLeaves, options);
 
 		const entries = new Map<string, Entry>();
 		for (const id of copiedEntryIds) entries.set(id, sourceEntries.get(id)!);
@@ -515,11 +492,44 @@ export class MemorySessionRepo implements SessionRepo {
 		);
 	}
 
+	private selectForkContents(
+		sourceEntries: Map<string, Entry>,
+		sourceLeaves: Register<"lane.leaf">[],
+		options: ForkOptions,
+	): { copiedEntryIds: Set<string>; destinationLeaves: Map<string, string | null> } {
+		const copiedEntryIds = new Set<string>();
+		const destinationLeaves = new Map<string, string | null>();
+		if (options.scope === "tree") {
+			for (const id of sourceEntries.keys()) copiedEntryIds.add(id);
+			for (const register of sourceLeaves) destinationLeaves.set(register.key, register.value);
+		} else {
+			const mainLeaf = sourceLeaves.find((register) => register.key === "main");
+			if (mainLeaf === undefined) throw new Error("Source session is missing main lane");
+			const requested = options.entryId ?? mainLeaf.value;
+			let leaf = requested;
+			if (requested !== null) {
+				const target = sourceEntries.get(requested);
+				if (target === undefined) throw new Error(`Unknown fork entry: ${requested}`);
+				if (options.position === "before") leaf = target.parentId;
+			}
+
+			let entryId = leaf;
+			while (entryId !== null) {
+				const entry = sourceEntries.get(entryId);
+				if (entry === undefined) throw new Error(`Corrupt source branch: missing parent ${entryId}`);
+				copiedEntryIds.add(entryId);
+				entryId = entry.parentId;
+			}
+			destinationLeaves.set("main", leaf);
+		}
+		return { copiedEntryIds, destinationLeaves };
+	}
+
 	private validateForkSourceSnapshot(
 		snapshot: { entries: Entry[]; registers: Register[] },
 		sourceEntries: Map<string, Entry>,
 		sourceRegisters: Map<string, Register>,
-		sourceLeaves: Register[],
+		sourceLeaves: Register<"lane.leaf">[],
 	): void {
 		const sourceLeafKeys = new Set(sourceLeaves.map((register) => register.key));
 
@@ -542,7 +552,7 @@ export class MemorySessionRepo implements SessionRepo {
 			if (leaf.key !== "main" && !sourceRegisters.has(registerKey("lane.config", leaf.key))) {
 				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.config`);
 			}
-			if (leaf.value !== null && !sourceEntries.has(leaf.value as string)) {
+			if (leaf.value !== null && !sourceEntries.has(leaf.value)) {
 				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} has an unknown leaf`);
 			}
 		}

@@ -41,6 +41,13 @@ function registerKey(namespace: RegisterNamespace, key: string): string {
 	return `${namespace}\u0000${key}`;
 }
 
+function isRegisterNamespace<TNamespace extends RegisterNamespace>(
+	register: Register,
+	namespace: TNamespace,
+): register is Register<TNamespace> {
+	return register.namespace === namespace;
+}
+
 function emptyUsage(): Usage {
 	return {
 		input: 0,
@@ -443,14 +450,14 @@ export class MemorySessionRepo implements SessionRepo {
 		const sourceRegisters = new Map(
 			snapshot.registers.map((register) => [registerKey(register.namespace, register.key), register]),
 		);
-		const sourceLeaves = snapshot.registers.filter((register) => register.namespace === "lane.leaf");
+		const sourceLeaves = snapshot.registers.filter((register) => isRegisterNamespace(register, "lane.leaf"));
 		this.validateForkSourceSnapshot(snapshot, sourceEntries, sourceRegisters, sourceLeaves);
 
 		const copiedEntryIds = new Set<string>();
 		const destinationLeaves = new Map<string, string | null>();
 		if (options.scope === "tree") {
 			for (const id of sourceEntries.keys()) copiedEntryIds.add(id);
-			for (const register of sourceLeaves) destinationLeaves.set(register.key, register.value as string | null);
+			for (const register of sourceLeaves) destinationLeaves.set(register.key, register.value);
 		} else {
 			const mainLeaf = sourceRegisters.get(registerKey("lane.leaf", "main"));
 			if (mainLeaf === undefined) throw new Error("Source session is missing main lane");

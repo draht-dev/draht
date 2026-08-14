@@ -1,5 +1,12 @@
 export { STORAGE_BENCHMARK_DATASETS } from "./benchmark/datasets.ts";
 export {
+	SESSION_REPO_CATALOG_BENCHMARK_DATASETS,
+	SESSION_REPO_CATALOG_READ_BENCHMARK_SCENARIOS,
+	type SessionRepoCatalogBenchmarkDataset,
+	seedSessionRepoCatalogBenchmark,
+	sessionRepoBenchmarkSessionId,
+} from "./benchmark/session-repo.ts";
+export {
 	generateStorageBenchmarkSeedTransactions,
 	STORAGE_READ_BENCHMARK_SCENARIOS,
 	STORAGE_WRITE_BENCHMARK_SCENARIOS,

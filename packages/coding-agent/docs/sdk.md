@@ -88,8 +88,8 @@ interface AgentSession {
   sessionId: string;
 
   // Model control
-  setModel(model: Model): Promise<void>;
-  setThinkingLevel(level: ThinkingLevel): void;
+  setModel(model: Model, options?: { persistDefault?: boolean }): Promise<void>;
+  setThinkingLevel(level: ThinkingLevel, options?: { persistDefault?: boolean }): void;
   cycleModel(): Promise<ModelCycleResult | undefined>;
   cycleThinkingLevel(): ThinkingLevel | undefined;
 

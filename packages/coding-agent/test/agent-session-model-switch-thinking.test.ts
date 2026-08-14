@@ -63,6 +63,24 @@ async function createSession({
 }
 
 describe("AgentSession model switching", () => {
+	it("supports session-scoped model and thinking changes without replacing global defaults", async () => {
+		const { session, sessionManager, settingsManager } = await createSession();
+
+		try {
+			await session.setModel(nonReasoningModel, { persistDefault: false });
+			session.setThinkingLevel("off", { persistDefault: false });
+
+			expect(session.model).toBe(nonReasoningModel);
+			expect(session.thinkingLevel).toBe("off");
+			expect(settingsManager.getDefaultModel()).toBeUndefined();
+			expect(settingsManager.getDefaultProvider()).toBeUndefined();
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("high");
+			expect(sessionManager.getEntries().some((entry) => entry.type === "model_change")).toBe(true);
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("preserves the saved thinking preference through non-reasoning models", async () => {
 		const { session, sessionManager, settingsManager } = await createSession({
 			scopedModels: [{ model: reasoningModel }, { model: nonReasoningModel }],

@@ -13,7 +13,7 @@
 
 Draht is a minimal terminal coding harness. Adapt draht to your workflows, not the other way around, without having to fork and modify draht internals. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Put your extensions, skills, prompt templates, and themes in [Draht Packages](#draht-packages) and share them with others via npm or git.
 
-Draht ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask draht to build what you want or install a third party draht package that matches your workflow.
+Draht ships with powerful defaults, including multi-agent delegation and duet mode, while features such as plan mode remain extension-defined. You can ask draht to build or install a package for workflows that do not belong in the core.
 
 Draht runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
 
@@ -21,6 +21,7 @@ Draht runs in four modes: interactive, print or JSON, RPC for process integratio
 
 - [Quick Start](#quick-start)
 - [Providers & Models](#providers--models)
+- [Duet Mode](#duet-mode)
 - [Interactive Mode](#interactive-mode)
   - [Editor](#editor)
   - [Commands](#commands)
@@ -106,6 +107,22 @@ See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 
 ---
 
+## Duet Mode
+
+Use two or more authenticated models in one session:
+
+```text
+/duet turns implementer=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8
+/duet triage lead=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8
+/duet off
+```
+
+`turns` alternates the active model across user prompts while sharing the complete session history. `triage` makes the first model the lead and lets it distribute parallel, read-only investigations to the other named roles through `duet_delegate`; the lead then integrates the results and performs edits.
+
+Omit the model list to use models selected by `/scoped-models`. See [docs/duet.md](docs/duet.md) for CLI flags, role syntax, persistence, safety, and cost behavior.
+
+---
+
 ## Interactive Mode
 
 <p align="center"><img src="docs/images/interactive-mode.png" alt="Interactive Mode" width="600"></p>
@@ -140,6 +157,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/login`, `/logout` | OAuth authentication |
 | `/model` | Switch models |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
+| `/duet [turns\|triage] [models]` | Configure multi-model collaboration |
 | `/settings` | Thinking level, theme, message delivery, transport |
 | `/resume` | Pick from previous sessions |
 | `/new` | Start a new session |
@@ -415,7 +433,7 @@ Draht is aggressively extensible so it doesn't have to dictate your workflow. Fe
 
 **No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. [Why?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
 
-**No sub-agents.** There's many ways to do this. Spawn draht instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
+**Multi-agent work is explicit.** Use built-in `subagent` delegation or [duet mode](#duet-mode); use extensions when your orchestration policy needs different isolation, permissions, or UI.
 
 **No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions) inline with your environment and security requirements.
 
@@ -471,6 +489,8 @@ cat README.md | draht -p "Summarize this text"
 | `--api-key <key>` | API key (overrides env vars) |
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
+| `--duet <models>` | Comma-separated `[role=]provider/model[:thinking]` participants |
+| `--duet-strategy <strategy>` | Duet strategy: `turns` or `triage` (default) |
 | `--list-models [search]` | List available models |
 
 ### Session Options
@@ -551,6 +571,9 @@ draht --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
 draht --models "claude-*,gpt-4o"
+
+# Start a triage duet
+draht --duet "lead=openai-codex/gpt-5.5,reviewer=anthropic/claude-opus-4-8"
 
 # Read-only mode
 draht --tools read,grep,find,ls -p "Review the code"

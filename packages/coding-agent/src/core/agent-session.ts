@@ -77,11 +77,13 @@ import {
 	type MessageEndEvent,
 	type MessageStartEvent,
 	type MessageUpdateEvent,
+	type ModelSelectionOptions,
 	type ReplacedSessionContext,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
 	type SessionStartEvent,
 	type ShutdownHandler,
+	type ThinkingLevelSelectionOptions,
 	type ToolDefinition,
 	type ToolExecutionEndEvent,
 	type ToolExecutionStartEvent,
@@ -1574,10 +1576,10 @@ export class AgentSession {
 
 	/**
 	 * Set model directly.
-	 * Validates that auth is configured, saves to session and settings.
+	 * Validates that auth is configured and saves to the session. Updates settings unless `persistDefault` is false.
 	 * @throws Error if no auth is configured for the model
 	 */
-	async setModel(model: Model<any>): Promise<void> {
+	async setModel(model: Model<any>, options: ModelSelectionOptions = {}): Promise<void> {
 		if (!(await this._modelRuntime.checkAuth(model.provider))) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
@@ -1586,10 +1588,12 @@ export class AgentSession {
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.state.model = model;
 		this.sessionManager.appendModelChange(model.provider, model.id, model.contextWindow);
-		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+		if (options.persistDefault !== false) {
+			this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+		}
 
 		// Re-clamp thinking level for new model's capabilities
-		this.setThinkingLevel(thinkingLevel);
+		this.setThinkingLevel(thinkingLevel, options);
 
 		await this._emitModelSelect(model, previousModel, "set");
 	}
@@ -1720,9 +1724,9 @@ export class AgentSession {
 	/**
 	 * Set thinking level.
 	 * Clamps to model capabilities based on available thinking levels.
-	 * Saves to session and settings only if the level actually changes.
+	 * Saves changes to the session and updates settings unless `persistDefault` is false.
 	 */
-	setThinkingLevel(level: ThinkingLevel): void {
+	setThinkingLevel(level: ThinkingLevel, options: ThinkingLevelSelectionOptions = {}): void {
 		const availableLevels = this.getAvailableThinkingLevels();
 		const effectiveLevel = availableLevels.includes(level) ? level : this._clampThinkingLevel(level, availableLevels);
 
@@ -1734,7 +1738,7 @@ export class AgentSession {
 
 		if (isChanging) {
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel);
-			if (this.supportsThinking() || effectiveLevel !== "off") {
+			if (options.persistDefault !== false && (this.supportsThinking() || effectiveLevel !== "off")) {
 				this.settingsManager.setDefaultThinkingLevel(effectiveLevel);
 			}
 			this._emit({ type: "thinking_level_changed", level: effectiveLevel });
@@ -2443,13 +2447,13 @@ export class AgentSession {
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
-				setModel: async (model) => {
+				setModel: async (model, options) => {
 					if (!this._modelRuntime.hasConfiguredAuth(model.provider)) return false;
-					await this.setModel(model);
+					await this.setModel(model, options);
 					return true;
 				},
 				getThinkingLevel: () => this.thinkingLevel,
-				setThinkingLevel: (level) => this.setThinkingLevel(level),
+				setThinkingLevel: (level, options) => this.setThinkingLevel(level, options),
 			},
 			{
 				getModel: () => this.model,

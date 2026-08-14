@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@draht/ai";
+import type { Message, Usage } from "@draht/ai";
 import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import { getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
@@ -81,6 +81,8 @@ export interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
+	/** Disable user and project extensions in the child process. Core builtins still load. */
+	disableExtensions?: boolean;
 	systemPrompt: string;
 	source: "user" | "project";
 }
@@ -158,6 +160,7 @@ export interface RunResult {
 	exitCode: number;
 	output: string;
 	stderr: string;
+	usage?: Usage;
 	step?: number;
 }
 
@@ -177,6 +180,14 @@ function cleanTemp(file: string, dir: string) {
 	} catch {}
 }
 
+function getFinalAssistant(messages: Message[]): Extract<Message, { role: "assistant" }> | undefined {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message.role === "assistant") return message;
+	}
+	return undefined;
+}
+
 function getFinalText(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
@@ -187,6 +198,34 @@ function getFinalText(messages: Message[]): string {
 		}
 	}
 	return "";
+}
+
+function getCombinedUsage(messages: Message[]): Usage | undefined {
+	const usages = messages
+		.filter((message) => message.role === "assistant")
+		.map((message) => message.usage)
+		.filter((usage) => usage !== undefined);
+	if (usages.length === 0) return undefined;
+	return usages.reduce((total, usage) => ({
+		input: total.input + usage.input,
+		output: total.output + usage.output,
+		cacheRead: total.cacheRead + usage.cacheRead,
+		cacheWrite: total.cacheWrite + usage.cacheWrite,
+		...(total.cacheWrite1h !== undefined || usage.cacheWrite1h !== undefined
+			? { cacheWrite1h: (total.cacheWrite1h ?? 0) + (usage.cacheWrite1h ?? 0) }
+			: {}),
+		...(total.reasoning !== undefined || usage.reasoning !== undefined
+			? { reasoning: (total.reasoning ?? 0) + (usage.reasoning ?? 0) }
+			: {}),
+		totalTokens: total.totalTokens + usage.totalTokens,
+		cost: {
+			input: total.cost.input + usage.cost.input,
+			output: total.cost.output + usage.cost.output,
+			cacheRead: total.cost.cacheRead + usage.cost.cacheRead,
+			cacheWrite: total.cost.cacheWrite + usage.cost.cacheWrite,
+			total: total.cost.total + usage.cost.total,
+		},
+	}));
 }
 
 type ProgressFn = (activity: string) => void;
@@ -202,6 +241,7 @@ async function runAgent(
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	if (agent.model) args.push("--model", agent.model);
 	if (agent.tools?.length) args.push("--tools", agent.tools.join(","));
+	if (agent.disableExtensions) args.push("--no-extensions");
 
 	let tmpFile: string | null = null;
 	let tmpDir: string | null = null;
@@ -213,18 +253,19 @@ async function runAgent(
 		args.push("--append-system-prompt", tmpFile);
 	}
 
-	args.push(`Task: ${task}`);
-
 	const messages: Message[] = [];
 	let stderr = "";
 
 	try {
-		const exitCode = await new Promise<number>((resolve) => {
+		const processExitCode = await new Promise<number>((resolve) => {
+			let closed = false;
 			const proc = spawn(DRAHT_BIN, [...DRAHT_ARGS_PREFIX, ...args], {
 				cwd,
 				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: ["pipe", "pipe", "pipe"],
 			});
+			proc.stdin.on("error", () => {});
+			proc.stdin.end(`Task: ${task}`);
 			let buf = "";
 
 			const processLine = (line: string) => {
@@ -265,8 +306,9 @@ async function runAgent(
 				stderr += d.toString();
 			});
 			proc.on("close", (code) => {
+				closed = true;
 				if (buf.trim()) processLine(buf);
-				resolve(code ?? 0);
+				resolve(code ?? 1);
 			});
 			proc.on("error", () => resolve(1));
 
@@ -274,15 +316,25 @@ async function runAgent(
 				const kill = () => {
 					proc.kill("SIGTERM");
 					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
+						if (!closed) proc.kill("SIGKILL");
+					}, 5000).unref();
 				};
 				if (signal.aborted) kill();
 				else signal.addEventListener("abort", kill, { once: true });
 			}
 		});
 
-		return { agent: agent.name, task, exitCode, output: getFinalText(messages), stderr, step };
+		const finalAssistant = getFinalAssistant(messages);
+		const failedResponse = finalAssistant?.stopReason === "error" || finalAssistant?.stopReason === "aborted";
+		return {
+			agent: agent.name,
+			task,
+			exitCode: processExitCode === 0 && !failedResponse ? 0 : 1,
+			output: getFinalText(messages),
+			stderr: stderr || (failedResponse ? (finalAssistant.errorMessage ?? finalAssistant.stopReason) : ""),
+			usage: getCombinedUsage(messages),
+			step,
+		};
 	} finally {
 		if (tmpFile && tmpDir) cleanTemp(tmpFile, tmpDir);
 	}
@@ -429,9 +481,9 @@ export interface RunParallelTasksOptions {
 
 /**
  * Parallel-mode orchestration: every task is posted to the shared TaskBoard
- * up front (with `{ agentType: agent.name }` requirements), then each worker
- * self-assigns (claims) its task before running — atomically, via the board —
- * so the board tracks every assignment made this call.
+ * up front (with `{ agentType: agent.name }` requirements), then atomically
+ * assigned to its corresponding worker. Direct assignment keeps concurrent
+ * orchestration calls from claiming one another's same-role tasks.
  */
 export async function runParallelTasks(
 	cwd: string,
@@ -444,8 +496,9 @@ export async function runParallelTasks(
 
 	return runParallel(items, MAX_CONCURRENCY, async (item, i) => {
 		const workerId = `parallel-${i}-${randomUUID()}`;
-		const claimed = taskBoard.claim(workerId, { agentType: item.agent.name });
-		const taskId = claimed?.id ?? postedIds[i];
+		const taskId = postedIds[i];
+		const assignment = taskBoard.assign(taskId, workerId);
+		if (!assignment.ok) throw new Error(assignment.error);
 
 		const result = await runAgentWithLifecycle(cwd, item.agent, item.task, {
 			signal: opts.signal,

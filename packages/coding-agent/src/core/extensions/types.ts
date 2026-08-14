@@ -1333,13 +1333,13 @@ export interface ExtensionAPI {
 	// =========================================================================
 
 	/** Set the current model. Returns false if no API key available. */
-	setModel(model: Model<any>): Promise<boolean>;
+	setModel(model: Model<any>, options?: ModelSelectionOptions): Promise<boolean>;
 
 	/** Get current thinking level. */
 	getThinkingLevel(): ThinkingLevel;
 
 	/** Set thinking level (clamped to model capabilities). */
-	setThinkingLevel(level: ThinkingLevel): void;
+	setThinkingLevel(level: ThinkingLevel, options?: ThinkingLevelSelectionOptions): void;
 
 	// =========================================================================
 	// Provider Registration
@@ -1561,11 +1561,21 @@ export type SetActiveToolsHandler = (toolNames: string[]) => void;
 
 export type RefreshToolsHandler = () => void;
 
-export type SetModelHandler = (model: Model<any>) => Promise<boolean>;
+export interface ModelSelectionOptions {
+	/** Whether to update the global default model. Defaults to true. */
+	persistDefault?: boolean;
+}
+
+export interface ThinkingLevelSelectionOptions {
+	/** Whether to update the global default thinking level. Defaults to true. */
+	persistDefault?: boolean;
+}
+
+export type SetModelHandler = (model: Model<any>, options?: ModelSelectionOptions) => Promise<boolean>;
 
 export type GetThinkingLevelHandler = () => ThinkingLevel;
 
-export type SetThinkingLevelHandler = (level: ThinkingLevel) => void;
+export type SetThinkingLevelHandler = (level: ThinkingLevel, options?: ThinkingLevelSelectionOptions) => void;
 
 export type SetLabelHandler = (entryId: string, label: string | undefined) => void;
 

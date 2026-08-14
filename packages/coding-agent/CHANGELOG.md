@@ -4,6 +4,7 @@
 
 ### Added
 
+- duet mode for shared-session model turn-taking and lead/teammate triage with parallel read-only delegation
 - bundled `draht-tools.cjs` now dispatches `map-graph`/`graph-*`/`map-codebase` to a prebuilt Go `draht-graph` binary when one resolves (`~/.draht/bin`, `$DRAHT_GRAPH_BIN`, or `$PATH`; `DRAHT_GRAPH_ENGINE=auto|go|js`), falling back to the existing JS engine otherwise — install the binary via `npx draht-claude install-graph-engine` or `npx draht-codex install-graph-engine`; see `go/README.md`
 
 ## [2026.7.30] - 2026-07-30

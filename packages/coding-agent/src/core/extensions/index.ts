@@ -102,6 +102,7 @@ export type {
 	MessageStartEvent,
 	MessageUpdateEvent,
 	ModelSelectEvent,
+	ModelSelectionOptions,
 	ModelSelectSource,
 	ProjectTrustContext,
 	ProjectTrustEvent,
@@ -143,6 +144,7 @@ export type {
 	SetModelHandler,
 	SetThinkingLevelHandler,
 	TerminalInputHandler,
+	ThinkingLevelSelectionOptions,
 	// Events - Tool
 	ToolCallEvent,
 	ToolCallEventResult,

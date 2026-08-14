@@ -100,9 +100,10 @@ const PATH_SCOPED_TOOLS = new Set(["read", "write", "edit"]);
 const READ_ONLY_PATH_TOOLS = new Set(["grep", "find", "ls"]);
 /**
  * Tools that are safe to run without confirmation because the call itself
- * touches nothing: `subagent` only delegates — the spawned child process runs
- * this same gate over every tool call it actually makes. Explicit rules can
- * still `deny`/`approve` these.
+ * only delegates: spawned child processes run this same gate over every tool
+ * call they actually make. Explicit rules can still `deny`/`approve` these.
+ * Duet delegation is deliberately not included because it fans out paid model
+ * requests; unmatched duet batches require explicit approval.
  */
 const DEFAULT_ALLOWED_TOOLS = new Set(["subagent"]);
 

@@ -1,4 +1,5 @@
 import type { InlineExtension } from "../extensions/types.ts";
+import duetBuiltin from "./duet.ts";
 import subagentBuiltin from "./subagent.ts";
 
 /**
@@ -9,4 +10,7 @@ import subagentBuiltin from "./subagent.ts";
  * regardless of settings, `--no-extensions`, or project trust — the same way
  * the core bash/read/write/edit tools are always available.
  */
-export const CORE_BUILTIN_EXTENSIONS: InlineExtension[] = [{ name: "multi-agent", factory: subagentBuiltin }];
+export const CORE_BUILTIN_EXTENSIONS: InlineExtension[] = [
+	{ name: "multi-agent", factory: subagentBuiltin },
+	{ name: "duet", factory: duetBuiltin },
+];

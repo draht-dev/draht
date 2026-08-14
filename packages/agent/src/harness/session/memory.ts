@@ -444,29 +444,7 @@ export class MemorySessionRepo implements SessionRepo {
 			snapshot.registers.map((register) => [registerKey(register.namespace, register.key), register]),
 		);
 		const sourceLeaves = snapshot.registers.filter((register) => register.namespace === "lane.leaf");
-		const sourceLeafKeys = new Set(sourceLeaves.map((register) => register.key));
-		if (!sourceLeafKeys.has("main")) throw new Error("Source session is missing main lane");
-		for (const register of snapshot.registers) {
-			if (
-				(register.namespace === "lane.config" ||
-					register.namespace === "lane.state" ||
-					register.namespace === "lane.lastResult") &&
-				!sourceLeafKeys.has(register.key)
-			) {
-				throw new Error(`Source session lane ${JSON.stringify(register.key)} is missing lane.leaf`);
-			}
-		}
-		for (const leaf of sourceLeaves) {
-			if (!sourceRegisters.has(registerKey("lane.state", leaf.key))) {
-				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.state`);
-			}
-			if (leaf.key !== "main" && !sourceRegisters.has(registerKey("lane.config", leaf.key))) {
-				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.config`);
-			}
-			if (leaf.value !== null && !sourceEntries.has(leaf.value as string)) {
-				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} has an unknown leaf`);
-			}
-		}
+		this.validateForkSourceSnapshot(snapshot, sourceEntries, sourceRegisters, sourceLeaves);
 
 		const copiedEntryIds = new Set<string>();
 		const destinationLeaves = new Map<string, string | null>();
@@ -528,6 +506,39 @@ export class MemorySessionRepo implements SessionRepo {
 				nextSeq,
 			},
 		);
+	}
+
+	private validateForkSourceSnapshot(
+		snapshot: { entries: Entry[]; registers: Register[] },
+		sourceEntries: Map<string, Entry>,
+		sourceRegisters: Map<string, Register>,
+		sourceLeaves: Register[],
+	): void {
+		const sourceLeafKeys = new Set(sourceLeaves.map((register) => register.key));
+
+		// TODO: do all these validations need to happen here? maybe somewhere else when the source session is loaded?
+		if (!sourceLeafKeys.has("main")) throw new Error("Source session is missing main lane");
+		for (const register of snapshot.registers) {
+			if (
+				(register.namespace === "lane.config" ||
+					register.namespace === "lane.state" ||
+					register.namespace === "lane.lastResult") &&
+				!sourceLeafKeys.has(register.key)
+			) {
+				throw new Error(`Source session lane ${JSON.stringify(register.key)} is missing lane.leaf`);
+			}
+		}
+		for (const leaf of sourceLeaves) {
+			if (!sourceRegisters.has(registerKey("lane.state", leaf.key))) {
+				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.state`);
+			}
+			if (leaf.key !== "main" && !sourceRegisters.has(registerKey("lane.config", leaf.key))) {
+				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.config`);
+			}
+			if (leaf.value !== null && !sourceEntries.has(leaf.value as string)) {
+				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} has an unknown leaf`);
+			}
+		}
 	}
 
 	private reserveId(id: string): void {

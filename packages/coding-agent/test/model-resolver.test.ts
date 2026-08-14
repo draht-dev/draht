@@ -1,4 +1,5 @@
 import type { Model } from "@draht/ai";
+import { getBuiltinModels, getBuiltinProviders } from "@draht/ai/providers/all";
 import { describe, expect, test, vi } from "vitest";
 import {
 	defaultModelPerProvider,
@@ -700,11 +701,22 @@ describe("default model selection", () => {
 	});
 
 	test("zai, minimax, cerebras, and ant-ling defaults track current models", () => {
-		expect(defaultModelPerProvider.zai).toBe("glm-5.1");
+		expect(defaultModelPerProvider.zai).toBe("glm-5.3");
+		expect(defaultModelPerProvider["zai-coding-cn"]).toBe("glm-5.3");
 		expect(defaultModelPerProvider.minimax).toBe("MiniMax-M2.7");
 		expect(defaultModelPerProvider["minimax-cn"]).toBe("MiniMax-M2.7");
 		expect(defaultModelPerProvider.cerebras).toBe("zai-glm-4.7");
 		expect(defaultModelPerProvider["ant-ling"]).toBe("Ring-2.6-1T");
+	});
+
+	test("built-in defaults exist in generated provider catalogs", () => {
+		for (const provider of getBuiltinProviders()) {
+			const defaultId = defaultModelPerProvider[provider];
+			expect(
+				getBuiltinModels(provider).some((model) => model.id === defaultId),
+				`${provider} default ${defaultId} should exist in its generated catalog`,
+			).toBe(true);
+		}
 	});
 
 	test("ai-gateway default tracks current model", () => {

@@ -93,9 +93,14 @@ function listSubdirNames(dir: string): string[] {
 function isCanonicalTornCommittedTail(tail: string | undefined, tx: string): boolean {
 	if (tail === undefined) return false;
 	const encodedTx = JSON.stringify(tx).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	return new RegExp(
-		`^\\{"tx":${encodedTx},"seq":(?:0|[1-9]\\d*),"at":"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z","event":"committed"\\}?$`,
-	).test(tail);
+	const match = new RegExp(
+		`^\\{"tx":${encodedTx},"seq":([1-9]\\d*),"at":"(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z)","event":"committed"\\}?$`,
+	).exec(tail);
+	if (!match) return false;
+	const seq = Number(match[1]);
+	if (!Number.isSafeInteger(seq) || seq < 1) return false;
+	const at = new Date(match[2]);
+	return !Number.isNaN(at.getTime()) && at.toISOString() === match[2];
 }
 
 /**

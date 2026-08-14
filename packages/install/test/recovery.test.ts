@@ -336,6 +336,38 @@ describe("crash assessment", () => {
 			h.dispose();
 		}
 	});
+
+	it.each([
+		["zero sequence", "0", "2026-01-01T00:00:02.000Z"],
+		["unsafe sequence", "9007199254740992", "2026-01-01T00:00:02.000Z"],
+		["400-digit sequence", "1".repeat(400), "2026-01-01T00:00:02.000Z"],
+		["invalid month", "3", "2026-99-01T00:00:02.000Z"],
+		["invalid calendar day", "3", "2026-02-31T00:00:02.000Z"],
+		["invalid hour", "3", "2026-01-01T29:00:02.000Z"],
+	])("refuses a canonical-looking torn tail with %s", (_label, seq, at) => {
+		const h = harness();
+		try {
+			const tx = "tx-committed-invalid-scalars";
+			const state = createDefaultState();
+			state.lastTx = tx;
+			saveState(h.root, state);
+			appendJournal(h.root, { tx, seq: 1, at: "2026-01-01T00:00:00.000Z", event: "planned" });
+			mkdirSync(join(stagingDir(h.root, tx), "alpha"), { recursive: true });
+			mkdirSync(join(backupsDir(h.root, tx), "alpha"), { recursive: true });
+			const journal = join(h.root, "journal.jsonl");
+			const tail = `{"tx":"${tx}","seq":${seq},"at":"${at}","event":"committed"`;
+			writeFileSync(journal, `${readFileSync(journal, "utf8")}${tail}`);
+
+			const assessment = assessCrashedTransactions(h.root, { home: h.home, installRoot: h.root });
+
+			expect(assessment.recoverable).toBe(false);
+			expect(readFileSync(journal, "utf8")).toContain(tail);
+			expect(existsSync(stagingDir(h.root, tx))).toBe(true);
+			expect(existsSync(backupsDir(h.root, tx))).toBe(true);
+		} finally {
+			h.dispose();
+		}
+	});
 });
 
 describe("crash recovery after a real SIGKILL", () => {

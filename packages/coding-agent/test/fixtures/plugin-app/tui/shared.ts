@@ -1,5 +1,6 @@
 import type { Component } from "@draht/tui";
-import type { CodingAgentSnapshot, WireView } from "../protocol.ts";
+import type { AppKeybinding } from "../../../../src/core/keybindings.ts";
+import type { Service } from "../kernel.ts";
 
 const style =
 	(open: number, close: number) =>
@@ -14,22 +15,33 @@ export const warning = style(33, 39);
 export const errorStyle = style(31, 39);
 export const border = (text: string): string => `\x1b[38;5;240m${text}\x1b[39m`;
 
+export interface TuiCommand {
+	name: string;
+	description: string;
+	argumentHint?: string;
+	run(args: string): void | Promise<void>;
+}
+
 export interface RenderedView {
 	component: Component;
 	focus: Component;
 }
 
-export interface ViewRendererContext {
-	app: CodingAgentSnapshot;
+export interface LocalViewContext {
+	close(): void;
 	query: string;
-	onQueryChange(query: string): void;
-	send(message: unknown): Promise<void>;
-	view: WireView;
+	setQuery(query: string): void;
 }
 
-export type ViewRenderer = (context: ViewRendererContext) => RenderedView;
+export type ViewRenderer = (context: LocalViewContext) => RenderedView;
 
-export interface TuiPlugin {
-	id: string;
-	setup(renderers: Map<string, ViewRenderer>): void;
+export interface TuiContext {
+	actions: { register(id: AppKeybinding, handler: () => void | Promise<void>): void };
+	commands: { register(command: TuiCommand): void };
+	use<T>(service: Service<T>): T;
+	views: {
+		close(): void;
+		open(component: string, query?: string): void;
+		register(component: string, renderer: ViewRenderer): void;
+	};
 }

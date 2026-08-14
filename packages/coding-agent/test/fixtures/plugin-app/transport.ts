@@ -76,6 +76,7 @@ export class SessionTcpServer {
 	private accept(socket: Socket): void {
 		this.sockets.add(socket);
 		const peer = new JsonLineSocket<ClientWireMessage, ServerWireMessage>(socket);
+		const requests = new Map<number, AbortController>();
 		let clientId: string | undefined;
 		let disconnect: (() => void) | undefined;
 		peer.onMessage((message) => {
@@ -89,17 +90,28 @@ export class SessionTcpServer {
 				peer.send({ type: "response", id: message.id, error: "Client has not sent hello" });
 				return;
 			}
-			void this.driver.request(clientId, message.request).then(
-				() => peer.send({ type: "response", id: message.id }),
-				(error: unknown) =>
-					peer.send({
-						type: "response",
-						id: message.id,
-						error: error instanceof Error ? error.message : String(error),
-					}),
-			);
+			if (message.type === "cancel") {
+				requests.get(message.id)?.abort();
+				return;
+			}
+			const controller = new AbortController();
+			requests.set(message.id, controller);
+			void this.driver
+				.request(clientId, message.request, controller.signal)
+				.then(
+					(result) => peer.send({ type: "response", id: message.id, result }),
+					(error: unknown) =>
+						peer.send({
+							type: "response",
+							id: message.id,
+							error: error instanceof Error ? error.message : String(error),
+						}),
+				)
+				.finally(() => requests.delete(message.id));
 		});
 		socket.once("close", () => {
+			for (const controller of requests.values()) controller.abort();
+			requests.clear();
 			disconnect?.();
 			this.sockets.delete(socket);
 		});
@@ -109,7 +121,10 @@ export class SessionTcpServer {
 export class TcpClientTransport implements ClientTransport {
 	private readonly buffered: ServerWireMessage[] = [];
 	private readonly peer: JsonLineSocket<ServerWireMessage, ClientWireMessage>;
-	private readonly pending = new Map<number, { resolve(): void; reject(error: Error): void }>();
+	private readonly pending = new Map<
+		number,
+		{ resolve(value: unknown): void; reject(error: unknown): void; stopAbort(): void }
+	>();
 	private readonly socket: Socket;
 	private listener: ((message: ServerWireMessage) => void) | undefined;
 	private nextRequestId = 1;
@@ -122,8 +137,9 @@ export class TcpClientTransport implements ClientTransport {
 				const pending = this.pending.get(message.id);
 				if (!pending) return;
 				this.pending.delete(message.id);
+				pending.stopAbort();
 				if (message.error) pending.reject(new Error(message.error));
-				else pending.resolve();
+				else pending.resolve(message.result);
 			} else if (this.listener) {
 				this.listener(message);
 			} else {
@@ -131,7 +147,10 @@ export class TcpClientTransport implements ClientTransport {
 			}
 		});
 		socket.once("close", () => {
-			for (const pending of this.pending.values()) pending.reject(new Error("Session connection closed"));
+			for (const pending of this.pending.values()) {
+				pending.stopAbort();
+				pending.reject(new Error("Session connection closed"));
+			}
 			this.pending.clear();
 		});
 		this.peer.send({ type: "hello", clientId });
@@ -151,10 +170,18 @@ export class TcpClientTransport implements ClientTransport {
 		for (const message of this.buffered.splice(0)) listener(message);
 	}
 
-	request(request: SessionRequest): Promise<void> {
+	request(request: SessionRequest, signal?: AbortSignal): Promise<unknown> {
+		if (signal?.aborted) return Promise.reject(signal.reason);
 		const id = this.nextRequestId++;
-		return new Promise<void>((resolve, reject) => {
-			this.pending.set(id, { resolve, reject });
+		return new Promise<unknown>((resolve, reject) => {
+			const abort = () => {
+				if (!this.pending.delete(id)) return;
+				this.peer.send({ type: "cancel", id });
+				reject(signal?.reason ?? new Error("RPC aborted"));
+			};
+			const stopAbort = () => signal?.removeEventListener("abort", abort);
+			this.pending.set(id, { resolve, reject, stopAbort });
+			signal?.addEventListener("abort", abort, { once: true });
 			this.peer.send({ type: "request", id, request });
 		});
 	}
@@ -165,6 +192,7 @@ export class TcpClientTransport implements ClientTransport {
 }
 
 export class LoopbackTransport implements ClientTransport {
+	private readonly active = new Set<AbortController>();
 	private readonly buffered: ServerWireMessage[] = [];
 	private readonly disconnect: () => void;
 	private readonly driver: SessionDriver;
@@ -185,11 +213,34 @@ export class LoopbackTransport implements ClientTransport {
 		for (const message of this.buffered.splice(0)) listener(message);
 	}
 
-	request(request: SessionRequest): Promise<void> {
-		return this.driver.request(this.clientId, request);
+	request(request: SessionRequest, signal?: AbortSignal): Promise<unknown> {
+		if (signal?.aborted) return Promise.reject(signal.reason);
+		const controller = new AbortController();
+		this.active.add(controller);
+		return new Promise<unknown>((resolve, reject) => {
+			let settled = false;
+			const finish = (settle: () => void) => {
+				if (settled) return;
+				settled = true;
+				signal?.removeEventListener("abort", abort);
+				this.active.delete(controller);
+				settle();
+			};
+			const abort = () => {
+				controller.abort(signal?.reason);
+				finish(() => reject(signal?.reason ?? new Error("RPC aborted")));
+			};
+			signal?.addEventListener("abort", abort, { once: true });
+			void this.driver.request(this.clientId, request, controller.signal).then(
+				(value) => finish(() => resolve(value)),
+				(error: unknown) => finish(() => reject(error)),
+			);
+		});
 	}
 
 	close(): void {
+		for (const controller of this.active) controller.abort();
+		this.active.clear();
 		this.disconnect();
 	}
 }

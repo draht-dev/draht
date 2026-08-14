@@ -1,4 +1,4 @@
-import type { AppKeybinding } from "../../../src/core/keybindings.ts";
+import { defineService, type RemoteState, type RpcOptions } from "./kernel.ts";
 
 export type ThinkingLevel = "off" | "low" | "high";
 
@@ -23,50 +23,43 @@ export interface ProviderSnapshot {
 	models: readonly ModelSpec[];
 }
 
-export interface CodingAgentSnapshot {
-	actions: ReadonlyArray<{ id: AppKeybinding; description: string }>;
-	commands: ReadonlyArray<{ name: string; description: string; argumentHint?: string }>;
+export type RefreshState =
+	| { status: "idle" }
+	| { status: "refreshing" }
+	| { status: "done" }
+	| { status: "warning"; errors: Readonly<Record<string, string>> };
+
+export interface ModelsState {
+	catalog: ProviderSnapshot;
 	configuration: LaneConfiguration;
-	providers: ProviderSnapshot;
+	refresh: RefreshState;
 }
 
-export type CodingAgentEvent =
-	| { type: "config_update"; previous: LaneConfiguration; value: LaneConfiguration }
-	| { type: "providers_changed"; providers: ProviderSnapshot };
-
-export interface ModelSelectorState {
-	schema: 1;
-	query: string;
-	catalogRevision: number;
-	refresh:
-		| { status: "refreshing" }
-		| { status: "done" }
-		| { status: "warning"; errors: Readonly<Record<string, string>> };
+export interface ModelsService {
+	state: RemoteState<ModelsState>;
+	cycleThinking(): Promise<void>;
+	refresh(options?: RpcOptions): Promise<void>;
+	select(model: ModelRef): Promise<void>;
 }
 
-export interface WireView {
-	id: string;
-	component: string;
-	state: unknown;
-}
+export const Models = defineService<ModelsService>("models");
 
-export interface ClientSnapshot {
-	app: CodingAgentSnapshot;
-	views: readonly WireView[];
-}
+export type StateSnapshot = Record<string, Record<string, unknown>>;
 
-export type SessionRequest =
-	| { type: "submit"; input: string }
-	| { type: "invoke_action"; id: AppKeybinding }
-	| { type: "view_message"; viewId: string; message: unknown };
+export type SessionRequest = {
+	type: "rpc";
+	service: string;
+	method: string;
+	args: unknown[];
+	rpcOptions?: true;
+};
 
 export type ClientWireMessage =
 	| { type: "hello"; clientId: string }
-	| { type: "request"; id: number; request: SessionRequest };
+	| { type: "request"; id: number; request: SessionRequest }
+	| { type: "cancel"; id: number };
 
 export type ServerWireMessage =
-	| { type: "snapshot"; snapshot: ClientSnapshot }
-	| { type: "event"; event: CodingAgentEvent }
-	| { type: "view_updated"; view: WireView }
-	| { type: "view_closed"; viewId: string }
-	| { type: "response"; id: number; error?: string };
+	| { type: "snapshot"; states: StateSnapshot }
+	| { type: "state_update"; service: string; property: string; value: unknown }
+	| { type: "response"; id: number; result?: unknown; error?: string };

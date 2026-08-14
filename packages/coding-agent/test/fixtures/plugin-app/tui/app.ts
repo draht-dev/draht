@@ -8,34 +8,61 @@ import {
 	TuiAltScreen,
 	VStack,
 } from "@draht/tui";
-import { KeybindingsManager } from "../../../../src/core/keybindings.ts";
+import { type AppKeybinding, KeybindingsManager } from "../../../../src/core/keybindings.ts";
 import { CustomEditor } from "../../../../src/modes/interactive/components/custom-editor.ts";
 import type { SessionClient } from "../client.ts";
-import type { CodingAgentEvent } from "../protocol.ts";
+import type { CodingAgentPlugin } from "../plugins.ts";
+import { type LaneConfiguration, Models, type ModelsService } from "../protocol.ts";
 import { PluginFooter } from "./footer.ts";
-import { accent, bold, border, dim, errorStyle, type TuiPlugin, type ViewRenderer } from "./shared.ts";
+import {
+	accent,
+	bold,
+	border,
+	dim,
+	errorStyle,
+	type TuiCommand,
+	type TuiContext,
+	type ViewRenderer,
+} from "./shared.ts";
 
-/** Alternate-screen projection of the remote client store. */
+/** Alternate-screen client whose commands and views are supplied by plugins. */
 export class MinimalCodingAgentTui {
 	readonly done: Promise<void>;
 	readonly tui: TuiAltScreen;
+	private readonly actions = new Map<AppKeybinding, () => void | Promise<void>>();
 	private readonly client: SessionClient;
+	private readonly commands = new Map<string, TuiCommand>();
 	private readonly editor: CustomEditor;
 	private readonly editorContainer = new Container();
+	private readonly models: ModelsService;
 	private readonly renderers = new Map<string, ViewRenderer>();
 	private readonly resolveDone: () => void;
 	private readonly root: VStack;
 	private readonly statusContainer = new Container();
 	private readonly transcript = new Container();
-	private eventIndex = 0;
+	private activeView: string | undefined;
 	private lastClearTime = 0;
+	private lastConfiguration: LaneConfiguration;
 	private query = "";
 	private stopped = false;
 	private unsubscribe: (() => void) | undefined;
 
-	constructor(terminal: Terminal, client: SessionClient, plugins: readonly TuiPlugin[]) {
+	constructor(terminal: Terminal, client: SessionClient, plugins: readonly CodingAgentPlugin[]) {
 		this.client = client;
-		for (const plugin of plugins) plugin.setup(this.renderers);
+		this.models = client.use(Models);
+		this.lastConfiguration = structuredClone(this.models.state.value.configuration);
+		const context: TuiContext = {
+			actions: { register: (id, handler) => this.actions.set(id, handler) },
+			commands: { register: (command) => this.commands.set(command.name, command) },
+			use: (service) => client.use(service),
+			views: {
+				close: () => this.closeView(),
+				open: (component, query = "") => this.openView(component, query),
+				register: (component, renderer) => this.renderers.set(component, renderer),
+			},
+		};
+		for (const plugin of plugins) plugin.client?.(context);
+
 		this.tui = new TuiAltScreen(terminal);
 		this.editor = new CustomEditor(
 			this.tui,
@@ -52,20 +79,38 @@ export class MinimalCodingAgentTui {
 			new KeybindingsManager(),
 			{ paddingX: 1 },
 		);
+		for (const [id, handler] of this.actions) {
+			this.editor.onAction(
+				id,
+				() => void Promise.resolve(handler()).catch((error: unknown) => this.showError(error)),
+			);
+		}
 		this.editor.onAction("app.clear", () => this.handleClear());
 		this.editor.onSubmit = (value) => {
 			this.editor.addToHistory(value);
 			this.submit(value);
 		};
+		this.editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider(
+				[
+					...[...this.commands.values()].map(({ name, description, argumentHint }) => ({
+						name,
+						description,
+						argumentHint,
+					})),
+					{ name: "quit", description: "Exit the plugin application" },
+				],
+				process.cwd(),
+			),
+		);
 		this.editorContainer.addChild(this.editor);
 		this.transcript.addChild(new Text(`${bold(accent("pi"))}${dim(" plugin application")}`, 1, 0));
 		this.transcript.addChild(new Spacer(1));
 		this.transcript.addChild(new Text("Remote session connected. Type /model to select a model.", 1, 0));
-
 		const dock = new VStack([
 			{ component: this.statusContainer, shrink: 1, minSize: 0 },
 			{ component: this.editorContainer, shrink: 1, minSize: 3 },
-			{ component: new PluginFooter(client.store), basis: 2, shrink: 0 },
+			{ component: new PluginFooter(this.models.state, () => client.store.updates), basis: 2, shrink: 0 },
 		]);
 		this.root = new VStack([
 			{
@@ -82,7 +127,6 @@ export class MinimalCodingAgentTui {
 			},
 			{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
 		]);
-
 		let settleDone!: () => void;
 		this.done = new Promise<void>((resolve) => {
 			settleDone = resolve;
@@ -92,19 +136,8 @@ export class MinimalCodingAgentTui {
 
 	start(): void {
 		if (this.unsubscribe || this.stopped) return;
-		for (const action of this.client.store.app.actions) {
-			this.editor.onAction(action.id, () => {
-				void this.client.invokeAction(action.id).catch((error: unknown) => this.showError(error));
-			});
-		}
-		this.editor.setAutocompleteProvider(
-			new CombinedAutocompleteProvider(
-				[...this.client.store.app.commands, { name: "quit", description: "Exit the plugin application" }],
-				process.cwd(),
-			),
-		);
 		this.unsubscribe = this.client.store.subscribe(() => {
-			this.reduceEvents();
+			this.applyConfiguration();
 			this.renderView();
 			this.updateEditorBorder();
 			this.tui.requestRender();
@@ -115,18 +148,29 @@ export class MinimalCodingAgentTui {
 	}
 
 	submit(input: string): void {
-		const command = input.trim();
-		if (!command) return;
-		if (command === "/quit" || command === "quit") {
+		const value = input.trim();
+		if (!value) return;
+		if (value === "/quit" || value === "quit") {
 			this.stop();
 			return;
 		}
-		if (command !== "/model") {
-			this.transcript.addChild(new Spacer(1));
-			this.transcript.addChild(new Text(`${accent(">")} ${command}`, 1, 0));
-			this.showStatus(`Running ${command}`);
+		if (!value.startsWith("/")) {
+			this.showError(new Error("Only slash commands are supported by this test app"));
+			return;
 		}
-		void this.client.submit(command).catch((error: unknown) => this.showError(error));
+		const separator = value.indexOf(" ");
+		const name = value.slice(1, separator < 0 ? undefined : separator);
+		const args = separator < 0 ? "" : value.slice(separator + 1).trim();
+		const command = this.commands.get(name);
+		if (!command) {
+			this.showError(new Error(`Unknown command: ${name}`));
+			return;
+		}
+		if (name !== "model") {
+			this.transcript.addChild(new Spacer(1));
+			this.transcript.addChild(new Text(`${accent("> ")}${value}`, 1, 0));
+		}
+		void Promise.resolve(command.run(args)).catch((error: unknown) => this.showError(error));
 		this.tui.requestRender();
 	}
 
@@ -140,47 +184,52 @@ export class MinimalCodingAgentTui {
 		this.resolveDone();
 	}
 
-	private reduceEvents(): void {
-		while (this.eventIndex < this.client.store.events.length) {
-			this.applyEvent(this.client.store.events[this.eventIndex++]!);
+	private applyConfiguration(): void {
+		const current = this.models.state.value.configuration;
+		if (
+			this.lastConfiguration.model?.provider !== current.model?.provider ||
+			this.lastConfiguration.model?.modelId !== current.model?.modelId
+		) {
+			this.showStatus(current.model ? `Model: ${current.model.modelId}` : "Model cleared");
+		} else if (this.lastConfiguration.thinkingLevel !== current.thinkingLevel) {
+			this.showStatus(`Thinking level: ${current.thinkingLevel}`);
 		}
+		this.lastConfiguration = structuredClone(current);
 	}
 
-	private applyEvent(event: CodingAgentEvent): void {
-		if (event.type !== "config_update") return;
-		if (
-			event.previous.model?.provider !== event.value.model?.provider ||
-			event.previous.model?.modelId !== event.value.model?.modelId
-		) {
-			this.showStatus(event.value.model ? `Model: ${event.value.model.modelId}` : "Model cleared");
-		} else if (event.previous.thinkingLevel !== event.value.thinkingLevel) {
-			this.showStatus(`Thinking level: ${event.value.thinkingLevel}`);
-		}
+	private openView(component: string, query: string): void {
+		this.activeView = component;
+		this.query = query;
+		this.renderView();
+		this.tui.requestRender();
+	}
+
+	private closeView(): void {
+		this.activeView = undefined;
+		this.query = "";
+		this.renderView();
+		this.tui.requestRender();
 	}
 
 	private renderView(): void {
 		this.editorContainer.clear();
-		const view = this.client.store.views[0];
-		if (!view) {
-			this.query = "";
+		if (!this.activeView) {
 			this.editorContainer.addChild(this.editor);
 			this.tui.setFocus(this.editor);
 			return;
 		}
-		const renderer = this.renderers.get(view.component);
+		const renderer = this.renderers.get(this.activeView);
 		if (!renderer) {
-			this.editorContainer.addChild(new Text(dim(`No TUI renderer for ${view.component}`), 1, 0));
+			this.editorContainer.addChild(new Text(dim(`No TUI renderer for ${this.activeView}`), 1, 0));
 			this.tui.setFocus(null);
 			return;
 		}
 		const rendered = renderer({
-			app: this.client.store.app,
+			close: () => this.closeView(),
 			query: this.query,
-			onQueryChange: (query) => {
+			setQuery: (query) => {
 				this.query = query;
 			},
-			send: (message) => this.client.sendView(view.id, message),
-			view,
 		});
 		this.editorContainer.addChild(rendered.component);
 		this.tui.setFocus(rendered.focus);
@@ -209,13 +258,13 @@ export class MinimalCodingAgentTui {
 	}
 
 	private updateEditorBorder(): void {
-		const snapshot = this.client.store.app;
-		const current = snapshot.configuration.model;
-		const currentSpec = current
-			? snapshot.providers.availableModels.find(
+		const state = this.models.state.value;
+		const current = state.configuration.model;
+		const selected = current
+			? state.catalog.availableModels.find(
 					(model) => model.provider === current.provider && model.modelId === current.modelId,
 				)
 			: undefined;
-		this.editor.borderColor = currentSpec?.reasoning ? accent : border;
+		this.editor.borderColor = selected?.reasoning ? accent : border;
 	}
 }

@@ -1,8 +1,8 @@
 import { ProcessTerminal } from "@draht/tui";
 import { SessionClient } from "./client.ts";
+import { createCodingAgentPlugins } from "./plugins.ts";
 import { TcpClientTransport } from "./transport.ts";
 import { MinimalCodingAgentTui } from "./tui/app.ts";
-import { modelSelectorTui } from "./tui/model-selector.ts";
 
 async function main(): Promise<void> {
 	const host = process.argv[2] ?? "127.0.0.1";
@@ -10,7 +10,11 @@ async function main(): Promise<void> {
 	const transport = await TcpClientTransport.connect({ host, port, clientId: "tui" });
 	const client = new SessionClient(transport);
 	await client.ready;
-	const app = new MinimalCodingAgentTui(new ProcessTerminal(), client, [modelSelectorTui]);
+	const app = new MinimalCodingAgentTui(
+		new ProcessTerminal(),
+		client,
+		createCodingAgentPlugins(async () => []),
+	);
 	const stop = () => app.stop();
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);

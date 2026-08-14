@@ -1,48 +1,50 @@
-/** Minimal session-side plugin lifecycle. The app owns every service and registry. */
+/**
+ * Shared tokens and two-sided plugin shape.
+ * Remote state values and ordinary remote method arguments/results must be JSON-serializable.
+ * RpcOptions are recognized by the proxy and sent through the transport control plane.
+ */
 
-export interface AppPlugin<Api> {
+export interface Service<T> {
+	readonly id: string;
+	readonly _type?: T;
+}
+
+export function defineService<T>(id: string): Service<T> {
+	return { id };
+}
+
+const rpcOptionsMarker = Symbol("rpc-options");
+
+export interface RpcOptions {
+	readonly signal?: AbortSignal;
+	readonly [rpcOptionsMarker]: true;
+}
+
+export function rpcOptions(options: { signal?: AbortSignal } = {}): RpcOptions {
+	return { ...options, [rpcOptionsMarker]: true };
+}
+
+export function isRpcOptions(value: unknown): value is RpcOptions {
+	return typeof value === "object" && value !== null && rpcOptionsMarker in value;
+}
+
+export interface RemoteState<T> {
+	readonly value: T;
+	subscribe(listener: (value: T) => void): () => void;
+}
+
+export interface MutableRemoteState<T> extends RemoteState<T> {
+	set(value: T): void;
+}
+
+export interface AppPlugin<SessionContext, ClientContext> {
 	id: string;
-	setup(api: Api): void | Promise<void>;
+	session?(context: SessionContext): void | Promise<void>;
+	client?(context: ClientContext): void | Promise<void>;
 }
 
-export interface AppInstance<Api, Driver> {
-	readonly driver: Driver;
-	activate(): void | Promise<void>;
-	api(owner: string): Api;
-	close(): void;
-}
-
-export interface AppDefinition<Api, Driver> {
-	id: string;
-	create(): AppInstance<Api, Driver>;
-	plugins: readonly AppPlugin<Api>[];
-}
-
-export function defineApp<Api, Driver>(definition: AppDefinition<Api, Driver>): AppDefinition<Api, Driver> {
-	return definition;
-}
-
-export function definePlugin<Api>(plugin: AppPlugin<Api>): AppPlugin<Api> {
+export function definePlugin<SessionContext, ClientContext>(
+	plugin: AppPlugin<SessionContext, ClientContext>,
+): AppPlugin<SessionContext, ClientContext> {
 	return plugin;
-}
-
-export class TestAppRuntime<Api, Driver> {
-	readonly definition: AppDefinition<Api, Driver>;
-	readonly driver: Driver;
-	private readonly instance: AppInstance<Api, Driver>;
-
-	constructor(definition: AppDefinition<Api, Driver>) {
-		this.definition = definition;
-		this.instance = definition.create();
-		this.driver = this.instance.driver;
-	}
-
-	async start(): Promise<void> {
-		for (const plugin of this.definition.plugins) await plugin.setup(this.instance.api(plugin.id));
-		await this.instance.activate();
-	}
-
-	close(): void {
-		this.instance.close();
-	}
 }

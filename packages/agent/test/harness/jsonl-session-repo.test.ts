@@ -8,6 +8,7 @@ import {
 import {
 	type ConformanceCase,
 	createSessionRepoLifecycleConformance,
+	createSessionRepoMessageConformance,
 } from "../../src/harness/session/testing/index.ts";
 import { getOrThrow } from "../../src/harness/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
@@ -28,22 +29,22 @@ function registerConformance(name: string, cases: readonly ConformanceCase[]): v
 }
 
 let jsonlRepo: JsonlSessionRepo;
-registerConformance(
-	"JsonlSessionRepo lifecycle conformance",
-	createSessionRepoLifecycleConformance<JsonlSessionMetadata>(
-		async () => {
-			const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
-			jsonlRepo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
-			return {
-				create: (options) => jsonlRepo.create({ ...options, cwd: CONFORMANCE_CWD }),
-				open: (metadata) => jsonlRepo.open(metadata),
-				list: () => jsonlRepo.list({ cwd: CONFORMANCE_CWD }),
-				delete: (metadata) => jsonlRepo.delete(metadata),
-			};
-		},
-		() => jsonlRepo.close(),
-	),
-);
+async function createConformanceRepo() {
+	const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+	jsonlRepo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
+	return {
+		create: (options: { id?: string; parentSessionId?: string }) =>
+			jsonlRepo.create({ ...options, cwd: CONFORMANCE_CWD }),
+		open: (metadata: JsonlSessionMetadata) => jsonlRepo.open(metadata),
+		list: () => jsonlRepo.list({ cwd: CONFORMANCE_CWD }),
+		delete: (metadata: JsonlSessionMetadata) => jsonlRepo.delete(metadata),
+	};
+}
+
+registerConformance("JsonlSessionRepo conformance", [
+	...createSessionRepoLifecycleConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
+	...createSessionRepoMessageConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
+]);
 
 describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 	it("persists metadata and filters discovery by cwd", async () => {

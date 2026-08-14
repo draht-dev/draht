@@ -3,6 +3,7 @@ import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
 	Context,
+	DeferredHandle,
 	ImageContent,
 	Message,
 	Model,
@@ -10,7 +11,12 @@ import type {
 	SimpleStreamOptions,
 	Usage,
 } from "@draht/ai";
-import { createAssistantMessageEventStream } from "@draht/ai";
+import {
+	createAssistantMessageEventStream,
+	isContextOverflow,
+	isRecoverableLength,
+	isRetryableAssistantError,
+} from "@draht/ai";
 import { NOOP_TELEMETRY_CONTEXT, type TelemetryContext } from "@draht/telemetry";
 import type { AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.ts";
 import {
@@ -90,6 +96,7 @@ import type {
 	Session,
 	SessionMutator,
 	SessionTree,
+	SettledAssistantMessage,
 } from "./session/types.ts";
 import { formatSkillInvocation } from "./skills.ts";
 import { startHarnessSpan } from "./telemetry.ts";
@@ -156,6 +163,40 @@ interface AcceptancePublication {
 	capturedNextRun: boolean;
 }
 
+interface AssistantSettlementDecision {
+	message: SettledAssistantMessage;
+	phase: RunState["phase"];
+	outcome: CommittedAssistantSettlement["outcome"];
+}
+
+interface CommittedAssistantSettlement {
+	entry: Entry;
+	row: { id: string; seq: number; usage: Usage; entryId: string; adjustment: false };
+	totals: Usage;
+	message: SettledAssistantMessage;
+	outcome:
+		| { kind: "completed" }
+		| { kind: "aborted" }
+		| { kind: "deferred"; handle: DeferredHandle }
+		| { kind: "retry"; nextAttempt: number; delayMs: number; notBefore: number; errorMessage: string }
+		| { kind: "failed"; error: OperationError };
+}
+
+type AssistantExecutionResult =
+	| { kind: "advanced" }
+	| { kind: "yielded" }
+	| { kind: "missing_identities"; missing: { tools: string[]; models: string[] } };
+
+const ZERO_USAGE: Usage = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 function deferredValue<T>(): DeferredValue<T> {
 	let resolvePromise: ((value: T) => void) | undefined;
 	let rejectPromise: ((error: unknown) => void) | undefined;
@@ -205,6 +246,8 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 	readonly activeOperations = new Map<string, ActiveOperation>();
 	readonly admissionReservations = new Map<string, AdmissionReservation>();
 	readonly attachedOperationIds = new Set<string>();
+	readonly resumedOperationIds = new Set<string>();
+	readonly resumeEventOperationIds = new Set<string>();
 	readonly restoredSuspensions = new Map<string, SuspendedOperation>();
 	settings: RuntimeSettings<TContext>;
 	settingsRevision = 0;
@@ -536,7 +579,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 								}),
 					);
 				}
-				const missing = await this.missingIdentities(restored.configuration, settings);
+				const missing = this.missingIdentities(restored.configuration, settings);
 				if (missing.tools.length !== 0 || missing.models.length !== 0) {
 					return Result.err(
 						new MissingIdentities({
@@ -922,12 +965,35 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 	describeSuspension(restored: RestoredLane): SuspendedOperation {
 		const current = restored.current;
 		if (current === undefined) throw new SessionInvariantError(`Lane ${restored.lane} is not suspended`);
+		const base = this.suspensionBase(restored);
+		if (current.state.kind === "run" && current.state.phase.kind === "deferred") {
+			const entry = current.entries.get(current.state.phase.deferred.sourceEntryId);
+			if (entry?.type !== "message" || entry.message.role !== "assistant" || entry.message.deferred === undefined) {
+				throw new SessionInvariantError("Deferred suspension source is invalid");
+			}
+			return { ...base, reason: "deferred", deferred: entry.message.deferred };
+		}
+		if (
+			current.state.kind === "run" &&
+			current.state.phase.kind === "assistant" &&
+			current.state.phase.generation.status === "ready"
+		) {
+			const missing = this.missingIdentities(current.state.phase.generation.context.configuration, this.settings);
+			if (missing.tools.length !== 0 || missing.models.length !== 0) {
+				return { ...base, reason: "crash", missing };
+			}
+		}
+		return { ...base, reason: "crash" };
+	}
+
+	private suspensionBase(restored: RestoredLane): Omit<SuspendedOperation, "reason" | "deferred" | "missing"> {
+		const current = restored.current;
+		if (current === undefined) throw new SessionInvariantError(`Lane ${restored.lane} is not suspended`);
 		return {
 			lane: restored.lane,
 			operationId: current.operation.operationId,
 			kind: current.operation.intent.kind,
 			startedAt: current.operation.startedAt,
-			reason: "crash",
 			...(current.operation.intent.kind !== "run"
 				? {}
 				: {
@@ -1102,10 +1168,10 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		}));
 	}
 
-	private async missingIdentities(
+	private missingIdentities(
 		configuration: LaneConfiguration,
 		settings: RuntimeSettings<TContext>,
-	): Promise<{ tools: string[]; models: string[] }> {
+	): { tools: string[]; models: string[] } {
 		const model = this.models.getModel(configuration.model.provider, configuration.model.modelId);
 		const availableTools = new Set(settings.tools.map((tool) => tool.name));
 		return {
@@ -1192,19 +1258,59 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 	): Promise<DriveResult> {
 		const initial = await this.loadExpected(lane.name, active.operationId, false);
 		if (initial.current === undefined) return this.settledOrMismatch(lane.name, active.operationId, initial);
-		if (deadlineReached(options)) return Result.ok({ kind: "yielded", operationId: active.operationId });
+		const resultAtDeadline = (): DriveResult => {
+			const current = initial.current;
+			const state = current?.state;
+			if (
+				state?.kind === "run" &&
+				state.phase.kind === "assistant" &&
+				state.phase.generation.status === "retry_wait" &&
+				Date.now() < state.phase.generation.notBefore
+			) {
+				return Result.ok({
+					kind: "waiting",
+					operationId: active.operationId,
+					reason: "retry",
+					notBefore: state.phase.generation.notBefore,
+				});
+			}
+			if (state?.kind === "run" && state.phase.kind === "deferred" && state.phase.deferred.status === "suspended") {
+				const source = current?.entries.get(state.phase.deferred.sourceEntryId);
+				if (
+					source?.type !== "message" ||
+					source.message.role !== "assistant" ||
+					source.message.deferred === undefined
+				) {
+					throw new SessionInvariantError("Deferred suspension source is invalid");
+				}
+				return Result.ok({
+					kind: "waiting",
+					operationId: active.operationId,
+					reason: "deferred",
+					deferred: source.message.deferred,
+				});
+			}
+			return Result.ok({ kind: "yielded", operationId: active.operationId });
+		};
+		if (deadlineReached(options)) return resultAtDeadline();
 
 		await lane.breakpoint.hit({
 			kind: "runtime.dispatch",
 			description: "Advance durable operation",
 			details: { operationId: active.operationId, operationKind: initial.current.state.kind },
 		});
-		if (deadlineReached(options)) return Result.ok({ kind: "yielded", operationId: active.operationId });
+		if (deadlineReached(options)) return resultAtDeadline();
 		if (initial.current.state.kind !== "run") {
 			throw new RuntimeSliceNotImplemented(`drive(${initial.current.state.kind})`);
 		}
 
 		const recovery = !this.attachedOperationIds.has(active.operationId);
+		const assistantOrphanAtStart =
+			initial.current.state.kind === "run" &&
+			initial.current.state.phase.kind === "assistant" &&
+			initial.current.state.phase.generation.status === "effect_pending";
+		const recoveryLifecycle =
+			recovery && (!this.resumeEventOperationIds.has(active.operationId) || assistantOrphanAtStart);
 		return startHarnessSpan(
 			this.telemetryContext,
 			"pi.harness.run",
@@ -1212,21 +1318,46 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				"pi.session.id": this.sessionStorage.metadata.id,
 				"pi.lane.name": lane.name,
 				"pi.operation.id": active.operationId,
-				"pi.operation.recovery": recovery,
+				"pi.operation.recovery": recoveryLifecycle,
 				"pi.operation.kind": "run",
 			},
 			async (runSpan) => {
+				const resultAtRunDeadline = (): DriveResult => {
+					const result = resultAtDeadline();
+					if (result.ok && result.value.kind === "waiting") {
+						runSpan.setAttributes({ "pi.operation.outcome": "suspended" });
+					}
+					return result;
+				};
 				if (recovery) {
-					const resumed = await this.resumeRun(lane, active, initial, options);
-					if (!resumed) return Result.ok({ kind: "yielded", operationId: active.operationId });
+					if (!this.resumedOperationIds.has(active.operationId)) {
+						const resumed = await this.resumeRun(lane, active, initial, options);
+						if (!resumed) return resultAtRunDeadline();
+						this.resumedOperationIds.add(active.operationId);
+					}
+					if (deadlineReached(options)) {
+						if (!assistantOrphanAtStart) {
+							this.attachedOperationIds.add(active.operationId);
+							this.restoredSuspensions.delete(lane.name);
+						}
+						return resultAtRunDeadline();
+					}
+					const recovered = await this.recoverRunAtActivation(lane, active, runSpan, options);
+					if (!recovered) return Result.ok({ kind: "yielded", operationId: active.operationId });
 					this.attachedOperationIds.add(active.operationId);
+					this.restoredSuspensions.delete(lane.name);
 				}
 				while (true) {
 					const restored = await this.loadExpected(lane.name, active.operationId, true);
 					if (restored.current === undefined) {
 						const terminal = await this.settledOrMismatch(lane.name, active.operationId, restored);
 						if (terminal.ok && terminal.value.kind === "settled" && terminal.value.outcome.operation === "run") {
-							runSpan.setAttributes({ "pi.operation.outcome": terminal.value.outcome.kind });
+							const outcome = terminal.value.outcome;
+							runSpan.setAttributes({
+								"pi.operation.outcome": outcome.kind,
+								...(outcome.kind === "failed" ? { "pi.error.code": outcome.error.code } : {}),
+							});
+							if (outcome.kind === "failed") runSpan.setStatus({ status: "error" });
 						}
 						return terminal;
 					}
@@ -1235,6 +1366,24 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 					if (state.control.status !== "running") {
 						throw new RuntimeSliceNotImplemented("drive(cancel_requested)");
 					}
+					if (state.phase.kind === "assistant" && state.phase.generation.status === "retry_wait") {
+						const retry = await this.driveAssistantRetryWait(lane, active, state, runSpan, options);
+						if (retry !== "advanced") {
+							if (retry.ok && retry.value.kind === "waiting") {
+								runSpan.setAttributes({ "pi.operation.outcome": "suspended" });
+							}
+							return retry;
+						}
+						continue;
+					}
+					if (state.phase.kind === "deferred") {
+						if (state.phase.deferred.status !== "suspended") {
+							throw new RuntimeSliceNotImplemented("drive(deferred.effect_pending)");
+						}
+						const waiting = await this.waitForDeferred(lane, active, restored, state, recoveryLifecycle);
+						runSpan.setAttributes({ "pi.operation.outcome": "suspended" });
+						return waiting;
+					}
 					if (deadlineReached(options)) return Result.ok({ kind: "yielded", operationId: active.operationId });
 					if (state.phase.kind === "checkpoint") {
 						if (state.phase.continuation.kind === "need_assistant") {
@@ -1242,30 +1391,53 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 							if (!advanced) return Result.ok({ kind: "yielded", operationId: active.operationId });
 							continue;
 						}
-						const finished = await this.finishRun(lane, active, undefined, options);
+						const finished = await this.finishRun(lane, active, undefined, options, recoveryLifecycle);
 						if (finished === undefined) return Result.ok({ kind: "yielded", operationId: active.operationId });
 						runSpan.setAttributes({ "pi.operation.outcome": "completed" });
 						return Result.ok({ kind: "settled", operationId: active.operationId, outcome: finished });
 					}
 					if (state.phase.kind === "assistant") {
 						if (state.phase.generation.status !== "ready") {
-							throw new RuntimeSliceNotImplemented(`drive(assistant.${state.phase.generation.status})`);
+							throw new SessionInvariantError("Ordinary dispatch reached an unowned assistant effect");
 						}
-						const settled = await this.executeAssistantGeneration(
+						const result = await this.executeAssistantGeneration(
 							lane,
 							active,
 							restored,
 							state,
 							runSpan,
 							options,
+							recoveryLifecycle,
 						);
-						if (!settled) return Result.ok({ kind: "yielded", operationId: active.operationId });
+						if (result.kind === "yielded") {
+							return Result.ok({ kind: "yielded", operationId: active.operationId });
+						}
+						if (result.kind === "missing_identities") {
+							runSpan.setAttributes({ "pi.operation.outcome": "suspended" });
+							return Result.ok({
+								kind: "waiting",
+								operationId: active.operationId,
+								reason: "missing_identities",
+								missing: result.missing,
+							});
+						}
 						continue;
 					}
 					if (state.phase.kind === "failure_drain") {
-						const finished = await this.finishRun(lane, active, state.phase.error, options);
+						const failure = state.phase.error;
+						const finished = await startHarnessSpan(
+							runSpan,
+							"pi.harness.checkpoint",
+							{
+								"pi.lane.name": lane.name,
+								"pi.operation.id": active.operationId,
+								"pi.checkpoint.kind": "failure_drain",
+							},
+							() => this.finishRun(lane, active, failure, options, recoveryLifecycle),
+						);
 						if (finished === undefined) return Result.ok({ kind: "yielded", operationId: active.operationId });
-						runSpan.setAttributes({ "pi.operation.outcome": "failed", "pi.error.code": state.phase.error.code });
+						runSpan.setAttributes({ "pi.operation.outcome": "failed", "pi.error.code": failure.code });
+						runSpan.setStatus({ status: "error" });
 						return Result.ok({ kind: "settled", operationId: active.operationId, outcome: finished });
 					}
 					throw new RuntimeSliceNotImplemented(`drive(run.${state.phase.kind})`);
@@ -1314,7 +1486,10 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		if (current === undefined || current.operation.intent.kind !== "run") {
 			throw new SessionInvariantError("Run resume is missing run metadata");
 		}
-		await this.events.emit({ type: "run_resume", runId: active.operationId, lane: lane.name, recovery: true });
+		if (!this.resumeEventOperationIds.has(active.operationId)) {
+			await this.events.emit({ type: "run_resume", runId: active.operationId, lane: lane.name, recovery: true });
+			this.resumeEventOperationIds.add(active.operationId);
+		}
 		if (!this.hooks.has("before_resume")) return true;
 		await lane.breakpoint.hit({
 			kind: "hook.before_resume",
@@ -1341,6 +1516,415 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			active.effectGate,
 		);
 		return true;
+	}
+
+	private async recoverRunAtActivation(
+		lane: AgentLaneRuntime<TContext>,
+		active: ActiveOperation,
+		runTelemetry: TelemetryContext,
+		options: DriveOptions,
+	): Promise<boolean> {
+		const restored = await this.loadExpected(lane.name, active.operationId, true);
+		const current = restored.current;
+		if (current === undefined || current.state.kind !== "run") return true;
+		if (current.state.control.status !== "running") return true;
+		const phase = current.state.phase;
+		if (phase.kind !== "assistant" || phase.generation.status !== "effect_pending") return true;
+		const pending = phase.generation;
+		const context = pending.context;
+		if (pending.attempt < context.retryPolicy.maxAttempts) {
+			await lane.breakpoint.hit({
+				kind: "assistant.recover_retry",
+				description: "Recover an uncertain assistant request with a later attempt",
+				details: {
+					operationId: active.operationId,
+					stepId: context.stepId,
+					attempt: pending.attempt,
+					nextAttempt: pending.attempt + 1,
+				},
+			});
+			if (deadlineReached(options)) return false;
+			try {
+				this.assertOpen();
+				await this.sessionStorage.mutate(lane.name, async (mutator) => {
+					const latest = await restoreLane(mutator, lane.name);
+					const state = latest.current?.state;
+					if (
+						latest.current?.operation.operationId !== active.operationId ||
+						state?.kind !== "run" ||
+						state.control.status !== "running" ||
+						state.phase.kind !== "assistant" ||
+						state.phase.generation.status !== "effect_pending" ||
+						state.phase.generation.context.stepId !== context.stepId ||
+						state.phase.generation.attempt !== pending.attempt ||
+						state.phase.generation.responseEntryId !== pending.responseEntryId ||
+						state.phase.generation.usageId !== pending.usageId
+					) {
+						throw new SessionInvariantError("Assistant recovery found another restart point");
+					}
+					await mutator.commit({
+						writes: [
+							{
+								kind: "register",
+								op: "set",
+								namespace: "op.state",
+								key: active.operationId,
+								value: {
+									...state,
+									phase: {
+										kind: "assistant",
+										generation: { status: "ready", context, nextAttempt: pending.attempt + 1 },
+									},
+								},
+							},
+						],
+					});
+				});
+			} catch (error) {
+				if (error instanceof HarnessClosed || error instanceof HarnessFault) throw error;
+				throw this.fault(error);
+			}
+			return true;
+		}
+
+		const resolvedModel = this.models.getModel(
+			context.configuration.model.provider,
+			context.configuration.model.modelId,
+		);
+		const error: OperationError = {
+			code: "assistant_error",
+			message: `Assistant request outcome is unknown after interruption at attempt ${pending.attempt}`,
+		};
+		const message: SettledAssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: resolvedModel?.api ?? "unknown",
+			provider: context.configuration.model.provider,
+			model: context.configuration.model.modelId,
+			usage: cloneUsage(ZERO_USAGE),
+			stopReason: "error",
+			errorMessage: error.message,
+			timestamp: Date.now(),
+		};
+		await this.events.emit({
+			type: "turn_start",
+			runId: active.operationId,
+			turnId: context.stepId,
+			lane: lane.name,
+			recovery: true,
+		});
+		await this.events.emit({
+			type: "message_start",
+			runId: active.operationId,
+			message,
+			lane: lane.name,
+			recovery: true,
+		});
+		await this.events.emit({
+			type: "message_end",
+			runId: active.operationId,
+			message,
+			entryId: pending.responseEntryId,
+			lane: lane.name,
+			recovery: true,
+		});
+		await lane.breakpoint.hit({
+			kind: "assistant.recover_settlement",
+			description: "Settle an uncertain final assistant request",
+			details: { operationId: active.operationId, stepId: context.stepId, attempt: pending.attempt },
+		});
+		if (deadlineReached(options)) return false;
+		const committed = await startHarnessSpan(
+			runTelemetry,
+			"pi.harness.turn",
+			{
+				"pi.lane.name": lane.name,
+				"pi.operation.id": active.operationId,
+				"pi.turn.id": context.stepId,
+			},
+			(turnSpan) =>
+				startHarnessSpan(
+					turnSpan,
+					"pi.harness.step",
+					{
+						"pi.lane.name": lane.name,
+						"pi.operation.id": active.operationId,
+						"pi.step.kind": "assistant",
+						"pi.step.attempt": pending.attempt,
+					},
+					async (stepSpan) => {
+						stepSpan.setAttributes({ "pi.step.outcome": "failed" });
+						stepSpan.setStatus({ status: "error" });
+						return this.commitSyntheticAssistantRecovery(lane.name, active.operationId, pending, message, error);
+					},
+				),
+		);
+		await this.events.emit({ type: "entry_added", entry: committed.entry, lane: lane.name });
+		await this.events.emit({ type: "usage", lane: lane.name, row: committed.row, totals: committed.totals });
+		await this.events.emit({
+			type: "turn_end",
+			runId: active.operationId,
+			turnId: context.stepId,
+			message,
+			toolResults: [],
+			lane: lane.name,
+			recovery: true,
+		});
+		if (pending.attempt > 1) {
+			await this.events.emit({
+				type: "retry_end",
+				runId: active.operationId,
+				step: context.stepId,
+				attempt: pending.attempt,
+				success: false,
+				finalError: error.message,
+				lane: lane.name,
+				recovery: true,
+			});
+		}
+		return true;
+	}
+
+	private async commitSyntheticAssistantRecovery(
+		lane: string,
+		operationId: string,
+		pending: Extract<RunState["phase"], { kind: "assistant" }>["generation"] & { status: "effect_pending" },
+		message: SettledAssistantMessage,
+		error: OperationError,
+	): Promise<Pick<CommittedAssistantSettlement, "entry" | "row" | "totals">> {
+		try {
+			this.assertOpen();
+			const committed = await this.sessionStorage.mutate(lane, async (mutator) => {
+				const restored = await restoreLane(mutator, lane);
+				const state = restored.current?.state;
+				if (
+					restored.current?.operation.operationId !== operationId ||
+					state?.kind !== "run" ||
+					state.control.status !== "running" ||
+					state.phase.kind !== "assistant" ||
+					state.phase.generation.status !== "effect_pending" ||
+					state.phase.generation.context.stepId !== pending.context.stepId ||
+					state.phase.generation.attempt !== pending.attempt ||
+					state.phase.generation.responseEntryId !== pending.responseEntryId ||
+					state.phase.generation.usageId !== pending.usageId
+				) {
+					throw new SessionInvariantError("Synthetic assistant recovery found another restart point");
+				}
+				const result = await mutator.commit({
+					writes: [
+						{
+							kind: "entry",
+							entry: { id: pending.responseEntryId, parentId: restored.leafId, type: "message", message },
+						},
+						{ kind: "register", op: "set", namespace: "lane.leaf", key: lane, value: pending.responseEntryId },
+						{
+							kind: "usage",
+							row: {
+								id: pending.usageId,
+								usage: message.usage,
+								entryId: pending.responseEntryId,
+								adjustment: false,
+							},
+						},
+						{
+							kind: "register",
+							op: "set",
+							namespace: "op.state",
+							key: operationId,
+							value: {
+								...state,
+								latestAssistantEntryId: pending.responseEntryId,
+								phase: {
+									kind: "failure_drain",
+									error,
+									provenance: { kind: "response", entryId: pending.responseEntryId },
+								},
+							},
+						},
+					],
+				});
+				const entry = (await mutator.getEntries([pending.responseEntryId])).get(pending.responseEntryId);
+				if (entry === undefined) throw new SessionInvariantError("Synthetic assistant response is missing");
+				return {
+					entry,
+					row: {
+						id: pending.usageId,
+						seq: result.seqs[2]!,
+						usage: message.usage,
+						entryId: pending.responseEntryId,
+						adjustment: false as const,
+					},
+				};
+			});
+			return { ...committed, totals: (await this.sessionStorage.getStats()).usage };
+		} catch (caught) {
+			if (caught instanceof HarnessClosed || caught instanceof HarnessFault) throw caught;
+			throw this.fault(caught);
+		}
+	}
+
+	private async driveAssistantRetryWait(
+		lane: AgentLaneRuntime<TContext>,
+		active: ActiveOperation,
+		state: RunState,
+		runTelemetry: TelemetryContext,
+		options: DriveOptions,
+	): Promise<"advanced" | DriveResult> {
+		if (state.phase.kind !== "assistant" || state.phase.generation.status !== "retry_wait") {
+			throw new SessionInvariantError("Assistant retry wait is not current");
+		}
+		const wait = state.phase.generation;
+		const now = Date.now();
+		const alreadyDue = now >= wait.notBefore;
+		let timerAdmitted = false;
+		if (!alreadyDue) {
+			if (options.waitForRetry !== true || (options.deadline !== undefined && options.deadline < wait.notBefore)) {
+				return Result.ok({
+					kind: "waiting",
+					operationId: active.operationId,
+					reason: "retry",
+					notBefore: wait.notBefore,
+				});
+			}
+			await lane.breakpoint.hit({
+				kind: "assistant.retry_wait",
+				description: "Wait for an assistant retry",
+				details: {
+					operationId: active.operationId,
+					stepId: wait.context.stepId,
+					attempt: wait.nextAttempt,
+					notBefore: wait.notBefore,
+				},
+			});
+			if (options.deadline !== undefined && options.deadline < wait.notBefore) {
+				return Result.ok({
+					kind: "waiting",
+					operationId: active.operationId,
+					reason: "retry",
+					notBefore: wait.notBefore,
+				});
+			}
+			if (deadlineReached(options)) {
+				return Result.ok({ kind: "yielded", operationId: active.operationId });
+			}
+			timerAdmitted = await startHarnessSpan(
+				runTelemetry,
+				"pi.harness.sleep",
+				{
+					"pi.operation.id": active.operationId,
+					"pi.sleep.delay_ms": Math.max(0, wait.notBefore - Date.now()),
+				},
+				async (sleepSpan) => {
+					if (deadlineReached(options)) return false;
+					try {
+						active.effectGate.assertOpen();
+						await waitUntil(wait.notBefore, active.effectGate.signal);
+						sleepSpan.setAttributes({ "pi.sleep.outcome": "elapsed" });
+						return true;
+					} catch (error) {
+						sleepSpan.setAttributes({ "pi.sleep.outcome": "aborted" });
+						throw error;
+					}
+				},
+			);
+			if (!timerAdmitted) return Result.ok({ kind: "yielded", operationId: active.operationId });
+		}
+		if (!timerAdmitted && deadlineReached(options)) {
+			return Result.ok({ kind: "yielded", operationId: active.operationId });
+		}
+		await lane.breakpoint.hit({
+			kind: "assistant.retry_ready",
+			description: "Make an assistant retry ready",
+			details: {
+				operationId: active.operationId,
+				stepId: wait.context.stepId,
+				attempt: wait.nextAttempt,
+			},
+		});
+		if (!timerAdmitted && deadlineReached(options)) {
+			return Result.ok({ kind: "yielded", operationId: active.operationId });
+		}
+		try {
+			this.assertOpen();
+			await this.sessionStorage.mutate(lane.name, async (mutator) => {
+				const restored = await restoreLane(mutator, lane.name);
+				const latest = restored.current?.state;
+				if (
+					restored.current?.operation.operationId !== active.operationId ||
+					latest?.kind !== "run" ||
+					latest.control.status !== "running" ||
+					latest.phase.kind !== "assistant" ||
+					latest.phase.generation.status !== "retry_wait" ||
+					latest.phase.generation.context.stepId !== wait.context.stepId ||
+					latest.phase.generation.nextAttempt !== wait.nextAttempt ||
+					latest.phase.generation.notBefore !== wait.notBefore ||
+					latest.phase.generation.errorMessage !== wait.errorMessage
+				) {
+					throw new SessionInvariantError("Assistant retry found another wait");
+				}
+				await mutator.commit({
+					writes: [
+						{
+							kind: "register",
+							op: "set",
+							namespace: "op.state",
+							key: active.operationId,
+							value: {
+								...latest,
+								phase: {
+									kind: "assistant",
+									generation: {
+										status: "ready",
+										context: wait.context,
+										nextAttempt: wait.nextAttempt,
+									},
+								},
+							},
+						},
+					],
+				});
+			});
+		} catch (error) {
+			if (error instanceof HarnessClosed || error instanceof HarnessFault) throw error;
+			throw this.fault(error);
+		}
+		return "advanced";
+	}
+
+	private async waitForDeferred(
+		lane: AgentLaneRuntime<TContext>,
+		active: ActiveOperation,
+		restored: RestoredLane,
+		state: RunState,
+		recovery: boolean,
+	): Promise<DriveResult> {
+		if (state.phase.kind !== "deferred" || state.phase.deferred.status !== "suspended") {
+			throw new SessionInvariantError("Deferred response is not suspended");
+		}
+		const source = restored.current?.entries.get(state.phase.deferred.sourceEntryId);
+		if (source?.type !== "message" || source.message.role !== "assistant" || source.message.deferred === undefined) {
+			throw new SessionInvariantError("Deferred source response is invalid");
+		}
+		const descriptor: SuspendedOperation = {
+			...this.suspensionBase(restored),
+			reason: "deferred",
+			deferred: source.message.deferred,
+		};
+		this.restoredSuspensions.set(lane.name, descriptor);
+		await this.events.emit({
+			type: "run_suspend",
+			runId: active.operationId,
+			reason: "deferred",
+			deferred: source.message.deferred,
+			lane: lane.name,
+			...(recovery ? { recovery: true as const } : {}),
+		});
+		return Result.ok({
+			kind: "waiting",
+			operationId: active.operationId,
+			reason: "deferred",
+			deferred: source.message.deferred,
+		});
 	}
 
 	private async startGeneration(
@@ -1372,6 +1956,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			},
 			async () => {
 				try {
+					this.assertOpen();
 					await this.sessionStorage.mutate(lane.name, async (mutator) => {
 						const restored = await restoreLane(mutator, lane.name);
 						const current = restored.current;
@@ -1430,19 +2015,38 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		state: RunState,
 		runTelemetry: TelemetryContext,
 		options: DriveOptions,
-	): Promise<boolean> {
+		recovery: boolean,
+	): Promise<AssistantExecutionResult> {
 		if (state.phase.kind !== "assistant" || state.phase.generation.status !== "ready") {
 			throw new SessionInvariantError("Assistant generation is not ready");
 		}
 		const ready = state.phase.generation;
 		const context = ready.context;
-		const model = this.models.getModel(context.configuration.model.provider, context.configuration.model.modelId);
-		if (model === undefined) throw new RuntimeSliceNotImplemented("drive(missing model suspension)");
 		const settings = await this.snapshotSettings();
-		const missingTools = context.configuration.activeToolNames.filter(
-			(name) => !settings.tools.some((tool) => tool.name === name),
-		);
-		if (missingTools.length !== 0) throw new RuntimeSliceNotImplemented("drive(missing tool suspension)");
+		const missing = this.missingIdentities(context.configuration, settings);
+		if (missing.tools.length !== 0 || missing.models.length !== 0) {
+			const descriptor: SuspendedOperation = {
+				...this.suspensionBase(restored),
+				reason: "missing_identities",
+				missing,
+			};
+			this.restoredSuspensions.set(lane.name, descriptor);
+			await this.events.emit({
+				type: "run_suspend",
+				runId: active.operationId,
+				reason: "missing_identities",
+				missing,
+				lane: lane.name,
+				...(recovery ? { recovery: true as const } : {}),
+			});
+			return { kind: "missing_identities", missing };
+		}
+		this.restoredSuspensions.delete(lane.name);
+		const model = this.models.getModel(context.configuration.model.provider, context.configuration.model.modelId);
+		const providerRegistration = this.models.getProvider(context.configuration.model.provider);
+		if (model === undefined || providerRegistration === undefined) {
+			throw new SessionInvariantError("Assistant model disappeared during identity preflight");
+		}
 
 		let streamOptions = { ...context.streamOptions };
 		if (this.hooks.has("before_request")) {
@@ -1451,7 +2055,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				description: "Transform assistant request options",
 				details: { operationId: active.operationId, attempt: ready.nextAttempt },
 			});
-			if (deadlineReached(options)) return false;
+			if (deadlineReached(options)) return { kind: "yielded" };
 			const result = await this.hooks.runWithGate(
 				"before_request",
 				{
@@ -1467,7 +2071,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			if (result?.streamOptions !== undefined) {
 				streamOptions = applyStreamOptionsPatch(streamOptions, result.streamOptions);
 			}
-			if (deadlineReached(options)) return false;
+			if (deadlineReached(options)) return { kind: "yielded" };
 		}
 		const operation = restored.current?.operation;
 		if (operation?.intent.kind !== "run")
@@ -1480,8 +2084,9 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			description: "Commit assistant request intent",
 			details: { operationId: active.operationId, stepId: context.stepId, attempt: ready.nextAttempt },
 		});
-		if (deadlineReached(options)) return false;
+		if (deadlineReached(options)) return { kind: "yielded" };
 		try {
+			this.assertOpen();
 			await this.sessionStorage.mutate(lane.name, async (mutator) => {
 				const latest = await restoreLane(mutator, lane.name);
 				const current = latest.current;
@@ -1531,6 +2136,16 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			if (error instanceof HarnessClosed || error instanceof HarnessFault) throw error;
 			throw this.fault(error);
 		}
+		if (ready.nextAttempt > 1) {
+			await this.events.emit({
+				type: "retry_start",
+				runId: active.operationId,
+				step: context.stepId,
+				attempt: ready.nextAttempt,
+				lane: lane.name,
+				...(recovery ? { recovery: true as const } : {}),
+			});
+		}
 
 		const newestFirst = await lane.session.findEntriesOnBranch({ order: "newestFirst", stopAtType: "compaction" });
 		const messages = await buildSessionContext([...newestFirst].reverse(), { entryProjectors: this.entryProjectors });
@@ -1539,6 +2154,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			runId: active.operationId,
 			turnId: context.stepId,
 			lane: lane.name,
+			...(recovery ? { recovery: true as const } : {}),
 		});
 		const providerTools = context.configuration.activeToolNames.map(
 			(name) => settings.tools.find((tool) => tool.name === name)! as unknown as AgentTool,
@@ -1600,26 +2216,29 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 										)?.payload;
 									}
 								: undefined,
-							afterResponse: this.hooks.has("after_response")
-								? async (settledMessage, metadata) => {
-										await lane.breakpoint.hit({
-											kind: "hook.after_response",
-											description: "Transform assistant response",
-											details: { operationId: active.operationId, stepId: context.stepId },
-										});
-										const result = await this.hooks.runWithGate(
-											"after_response",
-											{
-												lane: lane.name,
-												runId: active.operationId,
-												...metadata,
-												message: settledMessage,
-											},
-											active.effectGate,
-										);
-										return result?.message ?? settledMessage;
-									}
-								: undefined,
+							afterResponse: async (settledMessage, metadata) => {
+								let transformed = settledMessage;
+								if (this.hooks.has("after_response")) {
+									await lane.breakpoint.hit({
+										kind: "hook.after_response",
+										description: "Transform assistant response",
+										details: { operationId: active.operationId, stepId: context.stepId },
+									});
+									const result = await this.hooks.runWithGate(
+										"after_response",
+										{
+											lane: lane.name,
+											runId: active.operationId,
+											...metadata,
+											message: transformed,
+										},
+										active.effectGate,
+									);
+									transformed = result?.message ?? transformed;
+								}
+								return normalizeInvalidDeferredResponse(transformed, context.configuration, model.api);
+							},
+
 							request: async (
 								providerContext: Context,
 								providerOptions: SimpleStreamOptions,
@@ -1637,10 +2256,13 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 									context.configuration.model.provider,
 									context.configuration.model.modelId,
 								);
+								const requestProvider = this.models.getProvider(context.configuration.model.provider);
+								if (requestModel !== model || requestProvider !== providerRegistration) {
+									active.effectGate.assertOpen();
+									return createMissingModelStream(model);
+								}
 								active.effectGate.assertOpen();
-								return requestModel === undefined
-									? createMissingModelStream(model)
-									: this.models.streamSimple(requestModel, providerContext, providerOptions);
+								return this.models.streamSimple(requestModel, providerContext, providerOptions);
 							},
 							observer: {
 								start: (draft) =>
@@ -1649,6 +2271,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 										runId: active.operationId,
 										message: draft,
 										lane: lane.name,
+										...(recovery ? { recovery: true as const } : {}),
 									}),
 								update: (draft, event) =>
 									this.events.emit({
@@ -1657,6 +2280,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 										message: draft,
 										event,
 										lane: lane.name,
+										...(recovery ? { recovery: true as const } : {}),
 									}),
 								end: (finalMessage) =>
 									this.events.emit({
@@ -1665,15 +2289,15 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 										message: finalMessage,
 										entryId: responseEntryId,
 										lane: lane.name,
+										...(recovery ? { recovery: true as const } : {}),
 									}),
 							},
 							telemetryContext: stepSpan,
 							signal: active.effectGate.signal,
 						});
-						stepSpan.setAttributes({
-							"pi.step.outcome":
-								settled.stopReason === "stop" || settled.stopReason === "length" ? "succeeded" : "failed",
-						});
+						const outcome = predictAssistantStepOutcome(settled, ready.nextAttempt, context, model.api);
+						stepSpan.setAttributes({ "pi.step.outcome": outcome });
+						if (outcome === "retry" || outcome === "failed") stepSpan.setStatus({ status: "error" });
 						return settled;
 					},
 				),
@@ -1693,6 +2317,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			context.stepId,
 			responseEntryId,
 			usageId,
+			model.api,
 			message,
 		);
 		await this.events.emit({ type: "entry_added", entry: settled.entry, lane: lane.name });
@@ -1701,11 +2326,37 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			type: "turn_end",
 			runId: active.operationId,
 			turnId: context.stepId,
-			message,
+			message: settled.message,
 			toolResults: [],
 			lane: lane.name,
+			...(recovery ? { recovery: true as const } : {}),
 		});
-		return true;
+		if (settled.outcome.kind === "retry") {
+			await this.events.emit({
+				type: "retry_scheduled",
+				runId: active.operationId,
+				step: context.stepId,
+				attempt: settled.outcome.nextAttempt,
+				maxAttempts: context.retryPolicy.maxAttempts,
+				delayMs: settled.outcome.delayMs,
+				errorMessage: settled.outcome.errorMessage,
+				lane: lane.name,
+				...(recovery ? { recovery: true as const } : {}),
+			});
+		} else if (ready.nextAttempt > 1) {
+			const success = settled.outcome.kind === "completed" || settled.outcome.kind === "deferred";
+			await this.events.emit({
+				type: "retry_end",
+				runId: active.operationId,
+				step: context.stepId,
+				attempt: ready.nextAttempt,
+				success,
+				...(success || settled.outcome.kind !== "failed" ? {} : { finalError: settled.outcome.error.message }),
+				lane: lane.name,
+				...(recovery ? { recovery: true as const } : {}),
+			});
+		}
+		return { kind: "advanced" };
 	}
 
 	private async commitAssistantSettlement(
@@ -1714,13 +2365,11 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		stepId: string,
 		responseEntryId: string,
 		usageId: string,
-		message: AssistantMessage,
-	): Promise<{
-		entry: Entry;
-		row: { id: string; seq: number; usage: Usage; entryId: string; adjustment: false };
-		totals: Usage;
-	}> {
+		requestApi: Api,
+		message: SettledAssistantMessage,
+	): Promise<CommittedAssistantSettlement> {
 		try {
+			this.assertOpen();
 			const committed = await this.sessionStorage.mutate(lane, async (mutator) => {
 				const restored = await restoreLane(mutator, lane);
 				const current = restored.current;
@@ -1741,38 +2390,45 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				) {
 					throw new SessionInvariantError("Assistant settlement found another pending request");
 				}
-				if (message.stopReason === "aborted" && current.state.control.status === "running") {
-					throw new SessionInvariantError("Assistant response is aborted without durable cancellation");
-				}
-				const successful = message.stopReason === "stop" || message.stopReason === "length";
-				const error: OperationError = {
-					code: "assistant_error",
-					message: message.errorMessage ?? `Unsupported assistant stop reason: ${message.stopReason}`,
-				};
-				const nextPhase: RunState["phase"] = successful
-					? {
-							kind: "checkpoint",
-							continuation: { kind: "may_finish", includeFinalAssistant: true },
-							triggerEntryId: responseEntryId,
-						}
-					: { kind: "failure_drain", error, provenance: { kind: "response", entryId: responseEntryId } };
+				const decision = classifyAssistantSettlement(
+					message,
+					phase.generation,
+					current.state.control.status,
+					responseEntryId,
+					requestApi,
+					Date.now(),
+				);
 				const result = await mutator.commit({
 					writes: [
 						{
 							kind: "entry",
-							entry: { id: responseEntryId, parentId: restored.leafId, type: "message", message },
+							entry: {
+								id: responseEntryId,
+								parentId: restored.leafId,
+								type: "message",
+								message: decision.message,
+							},
 						},
 						{ kind: "register", op: "set", namespace: "lane.leaf", key: lane, value: responseEntryId },
 						{
 							kind: "usage",
-							row: { id: usageId, usage: message.usage, entryId: responseEntryId, adjustment: false },
+							row: {
+								id: usageId,
+								usage: decision.message.usage,
+								entryId: responseEntryId,
+								adjustment: false,
+							},
 						},
 						{
 							kind: "register",
 							op: "set",
 							namespace: "op.state",
 							key: operationId,
-							value: { ...current.state, latestAssistantEntryId: responseEntryId, phase: nextPhase },
+							value: {
+								...current.state,
+								latestAssistantEntryId: responseEntryId,
+								phase: decision.phase,
+							},
 						},
 					],
 				});
@@ -1780,10 +2436,12 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				if (entry === undefined) throw new SessionInvariantError("Committed assistant response is missing");
 				return {
 					entry,
+					message: decision.message,
+					outcome: decision.outcome,
 					row: {
 						id: usageId,
 						seq: result.seqs[2]!,
-						usage: message.usage,
+						usage: decision.message.usage,
 						entryId: responseEntryId,
 						adjustment: false as const,
 					},
@@ -1791,7 +2449,13 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			});
 			return { ...committed, totals: (await this.sessionStorage.getStats()).usage };
 		} catch (error) {
-			if (error instanceof HarnessClosed || error instanceof HarnessFault) throw error;
+			if (
+				error instanceof RuntimeSliceNotImplemented ||
+				error instanceof HarnessClosed ||
+				error instanceof HarnessFault
+			) {
+				throw error;
+			}
 			throw this.fault(error);
 		}
 	}
@@ -1801,6 +2465,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		active: ActiveOperation,
 		error: OperationError | undefined,
 		options: DriveOptions,
+		recovery: boolean,
 	): Promise<TerminalOperationOutcome | undefined> {
 		await lane.breakpoint.hit({
 			kind: "run.finish",
@@ -1809,6 +2474,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 		});
 		if (deadlineReached(options)) return undefined;
 		try {
+			this.assertOpen();
 			const lastResult = await this.sessionStorage.mutate(lane.name, async (mutator) => {
 				const restored = await restoreLane(mutator, lane.name);
 				const current = restored.current;
@@ -1901,6 +2567,8 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			if (outcome.operation !== "run")
 				throw new SessionInvariantError("Run terminal result hydrated as another kind");
 			this.attachedOperationIds.delete(active.operationId);
+			this.resumedOperationIds.delete(active.operationId);
+			this.resumeEventOperationIds.delete(active.operationId);
 			this.restoredSuspensions.delete(lane.name);
 			const finalFields =
 				outcome.finalEntryId === undefined
@@ -1915,6 +2583,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 					error: outcome.error,
 					...finalFields,
 					lane: lane.name,
+					...(recovery ? { recovery: true as const } : {}),
 				});
 			} else {
 				await this.events.emit({
@@ -1924,6 +2593,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 					leafId: outcome.leafId,
 					...finalFields,
 					lane: lane.name,
+					...(recovery ? { recovery: true as const } : {}),
 				});
 			}
 			return outcome;
@@ -2207,16 +2877,26 @@ class AgentLaneRuntime<TContext extends object | undefined> implements AgentLane
 			}
 			if (driven.value.kind === "yielded") continue;
 			if (driven.value.kind !== "settled") {
+				if (driven.value.reason === "retry") continue;
+				const leafId = await this.getLeafId();
+				if (leafId === null) throw new SessionInvariantError("A suspended run cannot be at the root");
 				if (driven.value.reason === "missing_identities") {
 					return Result.ok({
 						runId: admission.value.operationId,
 						kind: "suspended",
 						reason: "missing_identities",
 						missing: driven.value.missing,
-						leafId: await this.getLeafId().then((leaf) => leaf ?? ""),
+						leafId,
 					});
 				}
-				throw new RuntimeSliceNotImplemented(`convenience wait(${driven.value.reason})`);
+				return Result.ok({
+					runId: admission.value.operationId,
+					kind: "suspended",
+					reason: "deferred",
+					leafId,
+					finalEntryId: leafId,
+					deferred: driven.value.deferred,
+				});
 			}
 			const outcome = driven.value.outcome;
 			if (outcome.operation !== "run")
@@ -2249,6 +2929,196 @@ class AgentLaneRuntime<TContext extends object | undefined> implements AgentLane
 		this.harness.assertOpen();
 		throw new RuntimeSliceNotImplemented(operation);
 	}
+}
+
+function classifyAssistantSettlement(
+	message: SettledAssistantMessage,
+	pending: Extract<RunState["phase"], { kind: "assistant" }>["generation"] & { status: "effect_pending" },
+	controlStatus: RunState["control"]["status"],
+	responseEntryId: string,
+	requestApi: Api,
+	now: number,
+): AssistantSettlementDecision {
+	if (controlStatus === "cancel_requested") {
+		const normalized: SettledAssistantMessage = {
+			...message,
+			stopReason: "aborted",
+			errorMessage: message.errorMessage ?? "Assistant request was cancelled",
+		};
+		return {
+			message: normalized,
+			phase: {
+				kind: "checkpoint",
+				continuation: { kind: "may_finish", includeFinalAssistant: true },
+				triggerEntryId: responseEntryId,
+			},
+			outcome: { kind: "aborted" },
+		};
+	}
+	if (message.stopReason === "aborted") {
+		throw new SessionInvariantError("Assistant response is aborted without durable cancellation");
+	}
+	if (isContextOverflow(message, pending.contextWindow) || isRecoverableLength(message, pending.intendedOutputLimit)) {
+		throw new RuntimeSliceNotImplemented("assistant settlement(overflow)");
+	}
+	if (message.stopReason === "deferred") {
+		const normalized = normalizeInvalidDeferredResponse(message, pending.context.configuration, requestApi);
+		if (normalized.stopReason === "deferred" && normalized.deferred !== undefined) {
+			return {
+				message: normalized,
+				phase: {
+					kind: "deferred",
+					deferred: {
+						status: "suspended",
+						stepId: pending.context.stepId,
+						sourceEntryId: responseEntryId,
+						poll: 0,
+						configuration: cloneConfiguration(pending.context.configuration),
+						streamOptions: { ...pending.context.streamOptions },
+					},
+				},
+				outcome: { kind: "deferred", handle: normalized.deferred },
+			};
+		}
+		const errorMessage = normalized.errorMessage ?? "Invalid deferred response handle for the captured model";
+		const error = { code: "assistant_error", message: errorMessage };
+		return {
+			message: normalized,
+			phase: { kind: "failure_drain", error, provenance: { kind: "response", entryId: responseEntryId } },
+			outcome: { kind: "failed", error },
+		};
+	}
+	if (message.stopReason === "error") {
+		const errorMessage = message.errorMessage ?? "Assistant request failed";
+		if (pending.attempt < pending.context.retryPolicy.maxAttempts && isRetryableAssistantError(message)) {
+			const delayMs = calculateRetryDelay(pending.context.retryPolicy.baseDelayMs, pending.attempt);
+			const notBefore = saturatingAdd(now, delayMs);
+			return {
+				message,
+				phase: {
+					kind: "assistant",
+					generation: {
+						status: "retry_wait",
+						context: pending.context,
+						nextAttempt: pending.attempt + 1,
+						notBefore,
+						errorMessage,
+					},
+				},
+				outcome: { kind: "retry", nextAttempt: pending.attempt + 1, delayMs, notBefore, errorMessage },
+			};
+		}
+		const error = { code: "assistant_error", message: errorMessage };
+		return {
+			message,
+			phase: { kind: "failure_drain", error, provenance: { kind: "response", entryId: responseEntryId } },
+			outcome: { kind: "failed", error },
+		};
+	}
+	if (message.stopReason === "toolUse" || message.content.some((block) => block.type === "toolCall")) {
+		throw new RuntimeSliceNotImplemented("assistant settlement(toolUse)");
+	}
+	return {
+		message,
+		phase: {
+			kind: "checkpoint",
+			continuation: { kind: "may_finish", includeFinalAssistant: true },
+			triggerEntryId: responseEntryId,
+		},
+		outcome: { kind: "completed" },
+	};
+}
+
+function normalizeInvalidDeferredResponse(
+	message: SettledAssistantMessage,
+	configuration: LaneConfiguration,
+	requestApi: Api,
+): SettledAssistantMessage {
+	if (message.stopReason !== "deferred") return message;
+	const handle = message.deferred;
+	if (
+		handle !== undefined &&
+		handle.id.length !== 0 &&
+		handle.provider === configuration.model.provider &&
+		handle.modelId === configuration.model.modelId &&
+		handle.api === requestApi
+	) {
+		return message;
+	}
+	const { deferred: _invalidHandle, ...rest } = message;
+	return {
+		...rest,
+		stopReason: "error",
+		errorMessage: "Invalid deferred response handle for the captured model",
+	};
+}
+
+function predictAssistantStepOutcome(
+	message: SettledAssistantMessage,
+	attempt: number,
+	context: Extract<RunState["phase"], { kind: "assistant" }>["generation"]["context"],
+	requestApi: Api,
+): "succeeded" | "retry" | "failed" | "aborted" | "deferred" {
+	if (message.stopReason === "stop" || message.stopReason === "length") return "succeeded";
+	if (message.stopReason === "deferred") {
+		return normalizeInvalidDeferredResponse(message, context.configuration, requestApi).stopReason === "deferred"
+			? "deferred"
+			: "failed";
+	}
+	if (message.stopReason === "aborted") return "aborted";
+	if (
+		message.stopReason === "error" &&
+		attempt < context.retryPolicy.maxAttempts &&
+		isRetryableAssistantError(message)
+	) {
+		return "retry";
+	}
+	return "failed";
+}
+
+function calculateRetryDelay(baseDelayMs: number, failedAttempt: number): number {
+	if (baseDelayMs === 0) return 0;
+	const exponent = failedAttempt - 1;
+	if (exponent >= 53) return Number.MAX_SAFE_INTEGER;
+	const multiplier = 2 ** exponent;
+	return baseDelayMs > Number.MAX_SAFE_INTEGER / multiplier ? Number.MAX_SAFE_INTEGER : baseDelayMs * multiplier;
+}
+
+function saturatingAdd(left: number, right: number): number {
+	return left >= Number.MAX_SAFE_INTEGER - right ? Number.MAX_SAFE_INTEGER : left + right;
+}
+
+function waitUntil(notBefore: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const cleanup = () => {
+			if (timer !== undefined) clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+		};
+		const onAbort = () => {
+			cleanup();
+			reject(signal.reason instanceof Error ? signal.reason : new Error("Retry wait was aborted"));
+		};
+		const schedule = () => {
+			if (signal.aborted) {
+				onAbort();
+				return;
+			}
+			const remaining = notBefore - Date.now();
+			if (remaining <= 0) {
+				cleanup();
+				resolve();
+				return;
+			}
+			timer = setTimeout(schedule, Math.min(remaining, MAX_TIMER_DELAY_MS));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		schedule();
+	});
+}
+
+function cloneUsage(usage: Usage): Usage {
+	return { ...usage, cost: { ...usage.cost } };
 }
 
 function cloneConfiguration(configuration: LaneConfiguration): LaneConfiguration {

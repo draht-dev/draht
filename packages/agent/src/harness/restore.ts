@@ -1,3 +1,4 @@
+import { isRetryableAssistantError } from "@draht/ai";
 import { SessionInvariantError } from "./session/session.ts";
 import type {
 	Entry,
@@ -91,6 +92,9 @@ export async function restoreLane(
 		}
 	}
 
+	for (const id of forbiddenEntries) {
+		if (pendingExpectations.has(id)) invariant(lane, `reserved settlement id ${id} is also a pending entry`);
+	}
 	const entryIds = [...new Set([...expectations.keys(), ...forbiddenEntries, ...pendingExpectations.keys()])];
 	const [entries, pendingRegisters] = await Promise.all([
 		reader.getEntries(entryIds),
@@ -111,23 +115,7 @@ export async function restoreLane(
 		}
 	}
 	if (operationState?.value.kind === "run") {
-		const state = operationState.value;
-		if (
-			state.control.status === "running" &&
-			state.phase.kind === "checkpoint" &&
-			state.phase.continuation.kind === "may_finish" &&
-			state.phase.continuation.includeFinalAssistant &&
-			state.latestAssistantEntryId !== null
-		) {
-			const latest = entries.get(state.latestAssistantEntryId);
-			if (
-				latest?.type !== "message" ||
-				latest.message.role !== "assistant" ||
-				(latest.message.stopReason !== "stop" && latest.message.stopReason !== "length")
-			) {
-				invariant(lane, "finish checkpoint latest assistant has an invalid stop reason");
-			}
-		}
+		validateRunEntries(operationState.value, entries, leaf.value, lane);
 	}
 	for (const id of forbiddenEntries) {
 		if (entries.has(id)) invariant(lane, `reserved entry ${id} already exists`);
@@ -208,7 +196,13 @@ function validateRunState(
 		}
 		if (generation.status === "retry_wait") {
 			validatePositiveInteger(generation.nextAttempt, lane, "generation nextAttempt");
+			if (generation.nextAttempt <= 1) invariant(lane, "generation retry nextAttempt is not later");
+			if (generation.nextAttempt > generation.context.retryPolicy.maxAttempts) {
+				invariant(lane, "generation retry nextAttempt exceeds maxAttempts");
+			}
 			validateNonNegativeInteger(generation.notBefore, lane, "generation notBefore");
+			if (generation.errorMessage.length === 0) invariant(lane, "generation retry errorMessage is empty");
+			if (state.latestAssistantEntryId === null) invariant(lane, "generation retry has no latest assistant");
 			return;
 		}
 		validatePositiveInteger(generation.attempt, lane, "generation attempt");
@@ -223,6 +217,19 @@ function validateRunState(
 		if (generation.responseEntryId === generation.usageId)
 			invariant(lane, "generation response and usage ids collide");
 		forbiddenEntries.add(generation.responseEntryId);
+		forbiddenEntries.add(generation.usageId);
+		return;
+	}
+	if (phase.kind === "deferred") {
+		validateNonNegativeInteger(phase.deferred.poll, lane, "deferred poll");
+		addEntryExpectation(expectations, phase.deferred.sourceEntryId, "assistant");
+		if (phase.deferred.status === "effect_pending") {
+			if (phase.deferred.responseEntryId === phase.deferred.usageId) {
+				invariant(lane, "deferred response and usage ids collide");
+			}
+			forbiddenEntries.add(phase.deferred.responseEntryId);
+			forbiddenEntries.add(phase.deferred.usageId);
+		}
 		return;
 	}
 	if (phase.kind === "failure_drain" && phase.provenance.kind === "response") {
@@ -230,6 +237,132 @@ function validateRunState(
 		if (state.latestAssistantEntryId !== phase.provenance.entryId) {
 			invariant(lane, "response failure provenance is not the latest assistant");
 		}
+	}
+}
+
+function validateRunEntries(state: RunState, entries: Map<string, Entry>, leafId: string | null, lane: string): void {
+	const phase = state.phase;
+	if (state.control.status === "running" && state.latestAssistantEntryId !== null) {
+		const latest = entries.get(state.latestAssistantEntryId);
+		if (
+			latest?.type === "message" &&
+			latest.message.role === "assistant" &&
+			latest.message.stopReason === "aborted"
+		) {
+			invariant(lane, "running operation references an aborted assistant response");
+		}
+	}
+	if (phase.kind === "assistant") {
+		const generation = phase.generation;
+		const attempt = generation.status === "effect_pending" ? generation.attempt : generation.nextAttempt;
+		if (attempt > 1) {
+			validateLaterGenerationOrigin(
+				state,
+				generation.context.triggerEntryId,
+				entries,
+				leafId,
+				generation.status !== "retry_wait",
+				generation.status !== "retry_wait",
+				lane,
+			);
+		}
+	}
+	if (
+		state.control.status === "running" &&
+		phase.kind === "checkpoint" &&
+		phase.continuation.kind === "may_finish" &&
+		phase.continuation.includeFinalAssistant &&
+		state.latestAssistantEntryId !== null
+	) {
+		const latest = entries.get(state.latestAssistantEntryId);
+		if (
+			latest?.type !== "message" ||
+			latest.message.role !== "assistant" ||
+			(latest.message.stopReason !== "stop" && latest.message.stopReason !== "length")
+		) {
+			invariant(lane, "finish checkpoint latest assistant has an invalid stop reason");
+		}
+	}
+	if (phase.kind === "assistant" && phase.generation.status === "retry_wait") {
+		const latestId = state.latestAssistantEntryId;
+		const latest = latestId === null ? undefined : entries.get(latestId);
+		if (latestId === null || leafId !== latestId) invariant(lane, "generation retry response is not the lane leaf");
+		if (latest?.type !== "message" || latest.message.role !== "assistant" || latest.message.stopReason !== "error") {
+			invariant(lane, "generation retry latest assistant is not an error response");
+		}
+		if (latest.message.errorMessage !== phase.generation.errorMessage) {
+			invariant(lane, "generation retry error does not match its response");
+		}
+		if (!isRetryableAssistantError(latest.message)) {
+			invariant(lane, "generation retry latest assistant is not retryable");
+		}
+	}
+	if (phase.kind === "deferred") {
+		const sourceId = phase.deferred.sourceEntryId;
+		const source = entries.get(sourceId);
+		if (state.latestAssistantEntryId !== sourceId) invariant(lane, "deferred source is not the latest assistant");
+		if (leafId !== sourceId) invariant(lane, "deferred source is not the lane leaf");
+		if (source?.type !== "message" || source.message.role !== "assistant") {
+			invariant(lane, "deferred source is not an assistant response");
+		}
+		const message = source.message;
+		const handle = message.deferred;
+		if (message.stopReason !== "deferred" || handle === undefined || handle.id.length === 0) {
+			invariant(lane, "deferred source has no valid handle");
+		}
+		if (
+			handle.provider !== phase.deferred.configuration.model.provider ||
+			handle.modelId !== phase.deferred.configuration.model.modelId
+		) {
+			invariant(lane, "deferred source identity does not match its captured model");
+		}
+	}
+	if (phase.kind === "failure_drain" && phase.provenance.kind === "response") {
+		const response = entries.get(phase.provenance.entryId);
+		if (
+			response?.type !== "message" ||
+			response.message.role !== "assistant" ||
+			(state.control.status === "running" && response.message.stopReason !== "error")
+		) {
+			invariant(lane, "response failure provenance is not an assistant error");
+		}
+	}
+}
+
+function validateLaterGenerationOrigin(
+	state: RunState,
+	triggerEntryId: string,
+	entries: Map<string, Entry>,
+	leafId: string | null,
+	allowUnknownEffectOrigin: boolean,
+	validateRetryableOrigin: boolean,
+	lane: string,
+): void {
+	const trigger = entries.get(triggerEntryId);
+	if (trigger === undefined) invariant(lane, "later generation trigger is missing");
+	const latestId = state.latestAssistantEntryId;
+	if (allowUnknownEffectOrigin && leafId === triggerEntryId) {
+		const latest = latestId === null ? undefined : entries.get(latestId);
+		if (latest !== undefined && latest.seq > trigger.seq) {
+			invariant(lane, "uncertain later generation has a post-trigger assistant response");
+		}
+		return;
+	}
+	if (latestId === null || leafId !== latestId) {
+		invariant(lane, "later generation has neither an uncertain trigger nor a settled retry response");
+	}
+	const latest = entries.get(latestId);
+	if (latest === undefined || latest.seq <= trigger.seq) {
+		invariant(lane, "later generation retry response is not later than its trigger");
+	}
+	if (
+		validateRetryableOrigin &&
+		(latest.type !== "message" ||
+			latest.message.role !== "assistant" ||
+			latest.message.stopReason !== "error" ||
+			!isRetryableAssistantError(latest.message))
+	) {
+		invariant(lane, "later generation retry origin is not a retryable assistant error");
 	}
 }
 

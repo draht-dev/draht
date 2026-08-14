@@ -11,6 +11,15 @@ import {
 
 const repos: MemorySessionRepo[] = [];
 
+const zeroUsage = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
 async function createConfiguredSession(): Promise<Session> {
 	const repo = new MemorySessionRepo();
 	repos.push(repo);
@@ -220,6 +229,343 @@ describe("restoreLane base validation", () => {
 			},
 		});
 		await expect(restoreLane(session, "main")).rejects.toThrow(`reserved entry ${promptEntryId} already exists`);
+	});
+
+	it("validates R3 retry waits and their settled error relationship", async () => {
+		const session = await createConfiguredSession();
+		const { operationId, promptEntryId, state } = await installRun(session);
+		if (state.kind !== "run") throw new Error("expected run state");
+		const responseEntryId = session.idGenerator.next();
+		const context = {
+			stepId: session.idGenerator.next(),
+			triggerEntryId: promptEntryId,
+			configuration: {
+				model: { provider: "test", modelId: "model" },
+				thinkingLevel: "off" as const,
+				activeToolNames: [],
+			},
+			streamOptions: {},
+			retryPolicy: { maxAttempts: 2, baseDelayMs: 10 },
+			overflowRecoveryUsed: false,
+		};
+		const response = {
+			role: "assistant" as const,
+			content: [],
+			api: "test",
+			provider: "test",
+			model: "model",
+			usage: zeroUsage,
+			stopReason: "error" as const,
+			errorMessage: "503 unavailable",
+			timestamp: 2,
+		};
+		const retryState: OperationState = {
+			...state,
+			latestAssistantEntryId: responseEntryId,
+			phase: {
+				kind: "assistant",
+				generation: {
+					status: "retry_wait",
+					context,
+					nextAttempt: 2,
+					notBefore: 100,
+					errorMessage: response.errorMessage,
+				},
+			},
+		};
+		if (retryState.kind !== "run" || retryState.phase.kind !== "assistant") {
+			throw new Error("expected assistant retry state");
+		}
+		const retryGeneration = retryState.phase.generation;
+		if (retryGeneration.status !== "retry_wait") throw new Error("expected retry wait");
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "entry",
+						entry: { id: responseEntryId, parentId: promptEntryId, type: "message", message: response },
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: responseEntryId },
+					{ kind: "register", op: "set", namespace: "op.state", key: operationId, value: retryState },
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).resolves.toMatchObject({
+			current: { state: { phase: { generation: { status: "retry_wait" } } } },
+		});
+		const writeState = (value: OperationState) =>
+			session.mutate("main", (mutator) =>
+				mutator.commit({
+					writes: [{ kind: "register", op: "set", namespace: "op.state", key: operationId, value }],
+				}),
+			);
+
+		await writeState({
+			...retryState,
+			phase: {
+				kind: "assistant",
+				generation: {
+					...retryGeneration,
+					context: { ...retryGeneration.context, triggerEntryId: responseEntryId },
+				},
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(/retry response is not later than its trigger/);
+
+		await writeState({
+			...retryState,
+			phase: {
+				kind: "assistant",
+				generation: { ...retryGeneration, nextAttempt: 1 },
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(/retry nextAttempt is not later/);
+
+		await writeState({
+			...retryState,
+			phase: {
+				kind: "assistant",
+				generation: { ...retryGeneration, nextAttempt: 3 },
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(/nextAttempt exceeds maxAttempts/);
+
+		await writeState({
+			...retryState,
+			phase: {
+				kind: "assistant",
+				generation: { ...retryGeneration, errorMessage: "different" },
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(/error does not match its response/);
+
+		const nonRetryableId = session.idGenerator.next();
+		const nonRetryableMessage = "authentication failed";
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "entry",
+						entry: {
+							id: nonRetryableId,
+							parentId: responseEntryId,
+							type: "message",
+							message: { ...response, errorMessage: nonRetryableMessage },
+						},
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: nonRetryableId },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: operationId,
+						value: {
+							...retryState,
+							latestAssistantEntryId: nonRetryableId,
+							phase: {
+								kind: "assistant",
+								generation: { ...retryGeneration, errorMessage: nonRetryableMessage },
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/latest assistant is not retryable/);
+	});
+
+	it("validates R3 deferred source identity and handle semantics", async () => {
+		const session = await createConfiguredSession();
+		const { operationId, promptEntryId, state } = await installRun(session);
+		if (state.kind !== "run") throw new Error("expected run state");
+		const responseEntryId = session.idGenerator.next();
+		const configuration: LaneConfiguration = {
+			model: { provider: "test", modelId: "model" },
+			thinkingLevel: "off",
+			activeToolNames: [],
+		};
+		const response = {
+			role: "assistant" as const,
+			content: [],
+			api: "test-api",
+			provider: "test",
+			model: "model",
+			usage: zeroUsage,
+			stopReason: "deferred" as const,
+			deferred: { provider: "test", modelId: "model", api: "test-api", id: "handle" },
+			timestamp: 2,
+		};
+		const deferredState: OperationState = {
+			...state,
+			latestAssistantEntryId: responseEntryId,
+			phase: {
+				kind: "deferred",
+				deferred: {
+					status: "suspended",
+					stepId: session.idGenerator.next(),
+					sourceEntryId: responseEntryId,
+					poll: 0,
+					configuration,
+					streamOptions: {},
+				},
+			},
+		};
+		if (deferredState.kind !== "run" || deferredState.phase.kind !== "deferred") {
+			throw new Error("expected deferred run state");
+		}
+		const deferred = deferredState.phase.deferred;
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "entry",
+						entry: { id: responseEntryId, parentId: promptEntryId, type: "message", message: response },
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: responseEntryId },
+					{ kind: "register", op: "set", namespace: "op.state", key: operationId, value: deferredState },
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).resolves.toMatchObject({
+			current: { state: { phase: { kind: "deferred" } } },
+		});
+
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: operationId,
+						value: {
+							...deferredState,
+							phase: {
+								kind: "deferred",
+								deferred: {
+									...deferred,
+									configuration: { ...configuration, model: { provider: "other", modelId: "model" } },
+								},
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/identity does not match/);
+	});
+
+	it("rejects R3 reservation collisions and aborted latest assistants under running control", async () => {
+		const session = await createConfiguredSession();
+		const { operationId, promptEntryId, state } = await installRun(session);
+		if (state.kind !== "run") throw new Error("expected run state");
+		const pendingId = session.idGenerator.next();
+		const context = {
+			stepId: session.idGenerator.next(),
+			triggerEntryId: promptEntryId,
+			configuration: {
+				model: { provider: "test", modelId: "model" },
+				thinkingLevel: "off" as const,
+				activeToolNames: [],
+			},
+			streamOptions: {},
+			retryPolicy: { maxAttempts: 2, baseDelayMs: 0 },
+			overflowRecoveryUsed: false,
+		};
+		await session.mutate("main", async (mutator) => {
+			const laneState = await mutator.getRegister("lane.state", "main");
+			if (laneState === undefined) throw new Error("missing lane state");
+			await mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "pending.entry",
+						key: pendingId,
+						value: { type: "message", payload: { role: "user", content: "next", timestamp: 2 } },
+					},
+					{
+						kind: "register",
+						op: "set",
+						namespace: "lane.state",
+						key: "main",
+						value: { ...laneState.value, pendingNextRun: [pendingId] },
+					},
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: operationId,
+						value: {
+							...state,
+							phase: {
+								kind: "assistant",
+								generation: {
+									status: "effect_pending",
+									context,
+									attempt: 1,
+									responseEntryId: pendingId,
+									usageId: session.idGenerator.next(),
+									intendedOutputLimit: 1,
+									contextWindow: 1,
+								},
+							},
+						},
+					},
+				],
+			});
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(/reserved settlement id.*pending entry/);
+
+		const abortedId = session.idGenerator.next();
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{ kind: "register", op: "delete", namespace: "pending.entry", key: pendingId },
+					{
+						kind: "entry",
+						entry: {
+							id: abortedId,
+							parentId: promptEntryId,
+							type: "message",
+							message: {
+								role: "assistant",
+								content: [],
+								api: "test",
+								provider: "test",
+								model: "model",
+								usage: zeroUsage,
+								stopReason: "aborted",
+								timestamp: 2,
+							},
+						},
+					},
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: abortedId },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "lane.state",
+						key: "main",
+						value: { currentOperationId: operationId, pendingNextRun: [] },
+					},
+					{
+						kind: "register",
+						op: "set",
+						namespace: "op.state",
+						key: operationId,
+						value: {
+							...state,
+							latestAssistantEntryId: abortedId,
+							phase: {
+								kind: "assistant",
+								generation: { status: "ready", context, nextAttempt: 2 },
+							},
+						},
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(/running operation references an aborted/);
 	});
 
 	it("rejects missing operation registers and invalid base references", async () => {

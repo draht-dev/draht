@@ -1,7 +1,8 @@
 import { uuidv7 } from "@draht/ai";
 import type { FileError, FileSystem, Result } from "../../types.ts";
+import { createForkSnapshot } from "../fork.ts";
 import { StorageBackedSession } from "../session.ts";
-import type { Session, SessionRepo } from "../types.ts";
+import type { ForkOptions, Session, SessionRepo } from "../types.ts";
 import { parseJsonlStorageHeader } from "./codec.ts";
 import { JsonlStorage } from "./storage.ts";
 import {
@@ -43,13 +44,10 @@ function sessionFileName(createdAt: number, id: string): string {
 	return `${timestamp}_${encodeURIComponent(id)}.jsonl`;
 }
 
-type JsonlSessionLifecycleRepo = Pick<
-	SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>,
-	"create" | "open" | "list" | "delete"
->;
-
 /** File-backed format-4 session repository lifecycle. */
-export class JsonlSessionRepo implements JsonlSessionLifecycleRepo {
+export class JsonlSessionRepo
+	implements SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>
+{
 	private readonly fileSystem: FileSystem;
 	private readonly sessionsRootInput: string;
 	private readonly now: () => number;
@@ -139,6 +137,41 @@ export class JsonlSessionRepo implements JsonlSessionLifecycleRepo {
 			throw new Error(`Session file does not exist: ${metadata.path}`);
 		}
 		fileValue(await this.fileSystem.remove(metadata.path), `Failed to delete session ${metadata.path}`);
+	}
+
+	async fork(source: JsonlSessionMetadata, options: ForkOptions): Promise<Session<JsonlSessionMetadata>> {
+		this.assertOpen();
+		const createdAt = this.now();
+		const id = options.id ?? uuidv7(createdAt);
+		if (await this.sessionIdExists(source.cwd, id)) throw new Error(`Session already exists: ${id}`);
+
+		const sourceStorage = await this.loadStorage(source);
+		const sourceSnapshot = await sourceStorage.snapshot().finally(() => sourceStorage.close());
+		const snapshot = createForkSnapshot(sourceSnapshot, options);
+		const path = await this.createPath(source.cwd, createdAt, id);
+		const header: JsonlStorageHeader = {
+			v: JSONL_FORMAT_VERSION,
+			kind: "header",
+			id,
+			storageVersion: JSONL_STORAGE_VERSION,
+			createdAt,
+			cwd: source.cwd,
+			parentSessionId: source.id,
+		};
+		let storage: JsonlStorage | undefined;
+		try {
+			storage = await JsonlStorage.createFromSnapshot(
+				{ fileSystem: this.fileSystem, path, now: this.now },
+				header,
+				snapshot,
+			);
+			const info = fileValue(await this.fileSystem.fileInfo(path), `Failed to read session ${path}`);
+			return new StorageBackedSession(metadataFromHeader(header, path, info.mtimeMs), storage);
+		} catch (error) {
+			await storage?.close().catch(() => undefined);
+			await this.fileSystem.remove(path, { force: true });
+			throw error;
+		}
 	}
 
 	close(): Promise<void> {

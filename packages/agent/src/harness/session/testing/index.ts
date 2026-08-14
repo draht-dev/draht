@@ -18,7 +18,9 @@ export {
 } from "./benchmark/storage.ts";
 export {
 	createSessionRepoConformance,
+	createSessionRepoForkBehaviorConformance,
 	createSessionRepoForkConformance,
+	createSessionRepoForkCoordinationConformance,
 	createSessionRepoLifecycleConformance,
 	createSessionRepoMessageConformance,
 	createSessionRepoOwnershipConformance,

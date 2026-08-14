@@ -231,45 +231,13 @@ export function createSessionRepoMessageConformance<TMetadata extends SessionMet
 	];
 }
 
-/** Creates fork cases for repositories that support creation, discovery, and forks. */
-export function createSessionRepoForkConformance<TMetadata extends SessionMetadata>(
+/** Creates fork-content cases that do not require concurrent repository coordination. */
+export function createSessionRepoForkBehaviorConformance<TMetadata extends SessionMetadata>(
 	backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "list" | "fork">>,
 	onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
 	const factory = prepareRepoCaseFactory(backendFactory, onClose);
 	return [
-		createCase(
-			factory,
-			"forks",
-			"publishes create when it reserves a shared destination id first",
-			async ({ repo }) => {
-				const source = await repo.create({ id: "source" });
-				const results = await Promise.allSettled([
-					repo.create({ id: "destination" }),
-					repo.fork(source.metadata, { id: "destination" }),
-				]);
-				strictEqual(results[0].status, "fulfilled");
-				strictEqual(results[1].status, "rejected");
-				if (results[0].status === "fulfilled") await results[0].value.close();
-				await source.close();
-			},
-		),
-		createCase(
-			factory,
-			"forks",
-			"publishes fork when it reserves a shared destination id first",
-			async ({ repo }) => {
-				const source = await repo.create({ id: "source" });
-				const results = await Promise.allSettled([
-					repo.fork(source.metadata, { id: "destination" }),
-					repo.create({ id: "destination" }),
-				]);
-				strictEqual(results[0].status, "fulfilled");
-				strictEqual(results[1].status, "rejected");
-				if (results[0].status === "fulfilled") await results[0].value.close();
-				await source.close();
-			},
-		),
 		createCase(factory, "forks", "forks a fresh session before first attachment", async ({ repo }) => {
 			const source = await repo.create({ id: "source" });
 			const fork = await repo.fork(source.metadata, { id: "fork" });
@@ -505,38 +473,96 @@ export function createSessionRepoForkConformance<TMetadata extends SessionMetada
 			deepStrictEqual((await fork.getRegister("lane.state", "review"))?.value, idleLaneState);
 			await Promise.all([source.close(), fork.close()]);
 		}),
-		createCase(factory, "forks", "captures one coherent boundary between source commits", async ({ repo }) => {
-			const source = await repo.create({ id: "source" });
-			const firstCommit = source.mutate("main", (mutator) =>
-				mutator.commit({
-					writes: [
-						{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "first" } },
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
-					],
-				}),
-			);
-			const fork = repo.fork(source.metadata, { id: "fork" });
-			const secondCommit = source.mutate("main", (mutator) =>
-				mutator.commit({
-					writes: [
-						{
-							kind: "entry",
-							entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "second" },
-						},
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-					],
-				}),
-			);
+	];
+}
 
-			const [, forked] = await Promise.all([firstCommit, fork]);
-			await secondCommit;
-			strictEqual(await forked.getLeafId(), ROOT_ID);
-			deepStrictEqual(
-				(await forked.findEntries({ order: "asc" })).map(({ id }) => id),
-				[ROOT_ID],
-			);
-			await Promise.all([source.close(), forked.close()]);
-		}),
+/** Creates fork cases that require destination reservation or active-source snapshot coordination. */
+export function createSessionRepoForkCoordinationConformance<TMetadata extends SessionMetadata>(
+	backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
+	onClose?: () => void | Promise<void>,
+): readonly ConformanceCase[] {
+	const factory = prepareRepoCaseFactory(backendFactory, onClose);
+	return [
+		createCase(
+			factory,
+			"fork coordination",
+			"publishes create when it reserves a shared destination id first",
+			async ({ repo }) => {
+				const source = await repo.create({ id: "source" });
+				const results = await Promise.allSettled([
+					repo.create({ id: "destination" }),
+					repo.fork(source.metadata, { id: "destination" }),
+				]);
+				strictEqual(results[0].status, "fulfilled");
+				strictEqual(results[1].status, "rejected");
+				if (results[0].status === "fulfilled") await results[0].value.close();
+				await source.close();
+			},
+		),
+		createCase(
+			factory,
+			"fork coordination",
+			"publishes fork when it reserves a shared destination id first",
+			async ({ repo }) => {
+				const source = await repo.create({ id: "source" });
+				const results = await Promise.allSettled([
+					repo.fork(source.metadata, { id: "destination" }),
+					repo.create({ id: "destination" }),
+				]);
+				strictEqual(results[0].status, "fulfilled");
+				strictEqual(results[1].status, "rejected");
+				if (results[0].status === "fulfilled") await results[0].value.close();
+				await source.close();
+			},
+		),
+		createCase(
+			factory,
+			"fork coordination",
+			"captures one coherent boundary between source commits",
+			async ({ repo }) => {
+				const source = await repo.create({ id: "source" });
+				const firstCommit = source.mutate("main", (mutator) =>
+					mutator.commit({
+						writes: [
+							{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "first" } },
+							{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
+						],
+					}),
+				);
+				const fork = repo.fork(source.metadata, { id: "fork" });
+				const secondCommit = source.mutate("main", (mutator) =>
+					mutator.commit({
+						writes: [
+							{
+								kind: "entry",
+								entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "second" },
+							},
+							{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
+						],
+					}),
+				);
+
+				const [, forked] = await Promise.all([firstCommit, fork]);
+				await secondCommit;
+				strictEqual(await forked.getLeafId(), ROOT_ID);
+				deepStrictEqual(
+					(await forked.findEntries({ order: "asc" })).map(({ id }) => id),
+					[ROOT_ID],
+				);
+				await Promise.all([source.close(), forked.close()]);
+			},
+		),
+	];
+}
+
+/** Creates every fork conformance case. */
+export function createSessionRepoForkConformance<TMetadata extends SessionMetadata>(
+	backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "list" | "fork">>,
+	onClose?: () => void | Promise<void>,
+): readonly ConformanceCase[] {
+	return [
+		...createSessionRepoForkBehaviorConformance(backendFactory, onClose),
+		...createSessionRepoForkCoordinationConformance(backendFactory, onClose),
 	];
 }
 

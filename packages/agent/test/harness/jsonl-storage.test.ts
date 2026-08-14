@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { JSONL_FORMAT_VERSION, JsonlStorage, type JsonlStorageHeader } from "../../src/harness/session/jsonl/index.ts";
+import type { StorageStateSnapshot } from "../../src/harness/session/storage-state.ts";
 import { getOrThrow } from "../../src/harness/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
@@ -16,6 +17,84 @@ function header(id: string): JsonlStorageHeader {
 		cwd: "/workspace",
 	};
 }
+
+function preparedSnapshot(): Pick<StorageStateSnapshot, "entries" | "registers"> {
+	return {
+		entries: new Map([
+			[
+				"root",
+				{
+					id: "root",
+					parentId: null,
+					type: "message",
+					message: { role: "user", content: "hello", timestamp: 1 },
+					seq: 1,
+					timestamp: NOW,
+				},
+			],
+		]),
+		registers: [
+			{ namespace: "lane.leaf", key: "main", value: "root", seq: 2 },
+			{ namespace: "lane.state", key: "main", value: { currentOperationId: null, pendingNextRun: [] }, seq: 3 },
+			{ namespace: "fact.name", key: "", value: "forked", seq: 4 },
+		],
+	};
+}
+
+describe("JsonlStorage snapshot creation", () => {
+	it("atomically publishes and opens a prepared snapshot", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const options = { fileSystem, path: "fork.jsonl", now: () => NOW };
+		const storage = await JsonlStorage.createFromSnapshot(options, header("fork"), preparedSnapshot());
+
+		const lines = getOrThrow(await fileSystem.readTextFile("fork.jsonl"))
+			.trimEnd()
+			.split("\n");
+		expect(lines.slice(1).every((line) => !Array.isArray(JSON.parse(line)))).toBe(true);
+		expect((await storage.getEntries(["root"])).get("root")?.timestamp).toBe(NOW);
+		expect((await storage.getRegister("lane.leaf", "main"))?.value).toBe("root");
+		expect((await storage.getRegister("lane.state", "main"))?.value).toEqual({
+			currentOperationId: null,
+			pendingNextRun: [],
+		});
+		expect((await storage.getRegister("fact.name", ""))?.value).toBe("forked");
+		expect(await storage.getStats()).toEqual({
+			messageCount: 1,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		});
+		expect(await storage.scanUsage({ order: "asc" })).toEqual([]);
+		expect((await storage.commit({ writes: [] })).firstSeq).toBe(5);
+		expect(getOrThrow(await fileSystem.exists("fork.jsonl.tmp"))).toBe(false);
+		await storage.close();
+
+		const reopened = await JsonlStorage.open(options);
+		expect((await reopened.getEntries(["root"])).has("root")).toBe(true);
+		expect((await reopened.getRegister("fact.name", ""))?.value).toBe("forked");
+		await reopened.close();
+	});
+
+	it("removes the temporary file when publication fails", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		getOrThrow(await fileSystem.createDir("blocked.jsonl"));
+
+		await expect(
+			JsonlStorage.createFromSnapshot(
+				{ fileSystem, path: "blocked.jsonl", now: () => NOW },
+				header("blocked"),
+				preparedSnapshot(),
+			),
+		).rejects.toThrow("Failed to publish JSONL storage");
+		expect(getOrThrow(await fileSystem.exists("blocked.jsonl.tmp"))).toBe(false);
+		expect(getOrThrow(await fileSystem.fileInfo("blocked.jsonl"))).toMatchObject({ kind: "directory" });
+	});
+});
 
 describe("JsonlStorage persistence", () => {
 	it("writes one line per transaction and replays stamped state", async () => {
@@ -96,6 +175,40 @@ describe("JsonlStorage persistence", () => {
 		const next = await reopened.commit({ writes: [] });
 		expect(next.firstSeq).toBe(5);
 		await reopened.close();
+	});
+});
+
+describe("JsonlStorage snapshots", () => {
+	it("captures one serialized boundary between commits", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const options = { fileSystem, path: "session.jsonl", now: () => NOW };
+		const storage = await JsonlStorage.create(options, header("snapshot"));
+
+		const firstCommit = storage.commit({
+			writes: [
+				{ kind: "entry", entry: { id: "root", parentId: null, type: "custom", customType: "root" } },
+				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: "root" },
+			],
+		});
+		const snapshot = storage.snapshot();
+		const secondCommit = storage.commit({
+			writes: [
+				{ kind: "entry", entry: { id: "child", parentId: "root", type: "custom", customType: "child" } },
+				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: "child" },
+			],
+		});
+
+		await firstCommit;
+		const captured = await snapshot;
+		await secondCommit;
+
+		expect(captured.entries.map(({ id }) => id)).toEqual(["root"]);
+		expect(captured.registers.find(({ namespace, key }) => namespace === "lane.leaf" && key === "main")?.value).toBe(
+			"root",
+		);
+		expect((await storage.getEntries(["child"])).has("child")).toBe(true);
+		expect((await storage.getRegister("lane.leaf", "main"))?.value).toBe("child");
+		await storage.close();
 	});
 });
 

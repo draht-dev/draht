@@ -3,9 +3,11 @@ import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { type JsonlSessionMetadata, JsonlSessionRepo } from "../../src/harness/session/jsonl/index.ts";
 import {
 	type ConformanceCase,
+	createSessionRepoForkBehaviorConformance,
 	createSessionRepoLifecycleConformance,
 	createSessionRepoMessageConformance,
 } from "../../src/harness/session/testing/index.ts";
+import type { ForkOptions } from "../../src/harness/session/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
 const NOW = 1_700_000_000_000;
@@ -33,10 +35,12 @@ async function createConformanceRepo() {
 		open: (metadata: JsonlSessionMetadata) => jsonlRepo.open(metadata),
 		list: () => jsonlRepo.list({ cwd: CONFORMANCE_CWD }),
 		delete: (metadata: JsonlSessionMetadata) => jsonlRepo.delete(metadata),
+		fork: (source: JsonlSessionMetadata, options: ForkOptions) => jsonlRepo.fork(source, options),
 	};
 }
 
 registerConformance("JsonlSessionRepo conformance", [
 	...createSessionRepoLifecycleConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
 	...createSessionRepoMessageConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
+	...createSessionRepoForkBehaviorConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
 ]);

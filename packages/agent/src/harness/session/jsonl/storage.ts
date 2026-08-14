@@ -6,6 +6,7 @@ import {
 	type CommittedUsageWrite,
 	type CommittedWrite,
 	StorageState,
+	type StorageStateSnapshot,
 } from "../storage-state.ts";
 import type {
 	CommitResult,
@@ -72,6 +73,15 @@ function splitCompleteLines(content: string): { lines: string[]; torn: boolean }
 	return { lines: content.slice(0, lastNewline).split("\n"), torn: true };
 }
 
+type JsonlSnapshotContents = Pick<StorageStateSnapshot, "entries" | "registers">;
+
+function snapshotWrites(snapshot: JsonlSnapshotContents): CommittedWrite[] {
+	const writes: CommittedWrite[] = [];
+	for (const entry of snapshot.entries.values()) writes.push({ kind: "entry", ...entry });
+	for (const register of snapshot.registers) writes.push({ kind: "register", op: "set", ...register });
+	return writes.sort((left, right) => left.seq - right.seq);
+}
+
 async function publishFileAtomically(fileSystem: FileSystem, destinationPath: string, content: string): Promise<void> {
 	const tempPath = `${destinationPath}.tmp`;
 	try {
@@ -110,6 +120,18 @@ export class JsonlStorage implements Storage {
 			`Failed to create JSONL storage ${options.path}`,
 		);
 		return new JsonlStorage(options, header);
+	}
+
+	/** Atomically create storage from a complete prepared snapshot. */
+	static async createFromSnapshot(
+		options: JsonlStorageOptions,
+		header: JsonlStorageHeader,
+		snapshot: JsonlSnapshotContents,
+	): Promise<JsonlStorage> {
+		const writes = snapshotWrites(snapshot);
+		const content = `${[JSON.stringify(header), ...writes.map((write) => JSON.stringify(write))].join("\n")}\n`;
+		await publishFileAtomically(options.fileSystem, options.path, content);
+		return JsonlStorage.open(options);
 	}
 
 	static async open(options: JsonlStorageOptions): Promise<JsonlStorage> {
@@ -204,6 +226,23 @@ export class JsonlStorage implements Storage {
 	getStats(): Promise<SessionStats> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
 		return Promise.resolve(this.storageState.getStats());
+	}
+
+	/** Capture the current entries and registers at one serialized boundary between commits. */
+	snapshot(): Promise<{ entries: Entry[]; registers: Register[] }> {
+		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
+		const result = this.commitQueue.then(() => {
+			const snapshot = this.storageState.snapshot();
+			return {
+				entries: [...snapshot.entries.values()].sort((left, right) => left.seq - right.seq),
+				registers: snapshot.registers,
+			};
+		});
+		this.commitQueue = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
 	}
 
 	close(): Promise<void> {

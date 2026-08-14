@@ -534,8 +534,34 @@ export interface SessionCreateOptions {
 }
 
 export type ForkOptions =
-	| { scope?: "branch"; entryId?: string; position?: "before" | "at"; id?: string }
-	| { scope: "tree"; id?: string };
+	| {
+			/**
+			 * Copy one branch path into the destination session's main lane. This is
+			 * the default scope. The destination starts idle with a fresh lane state,
+			 * no operation registers, no pending entries, no last result, and an empty
+			 * usage ledger.
+			 */
+			scope?: "branch";
+			/** Entry to fork from. Defaults to the source main lane's current leaf. */
+			entryId?: string;
+			/**
+			 * Whether the fork includes the selected entry or stops at its parent.
+			 * Defaults to including the selected entry.
+			 */
+			position?: "before" | "at";
+			/** Optional destination session id. */
+			id?: string;
+	  }
+	| {
+			/**
+			 * Copy the whole conversation tree and every lane leaf/configuration. The
+			 * destination starts idle with fresh lane states, no operation registers,
+			 * no pending entries, no last results, and an empty usage ledger.
+			 */
+			scope: "tree";
+			/** Optional destination session id. */
+			id?: string;
+	  };
 
 export interface SessionRepo<
 	TMetadata extends SessionMetadata = SessionMetadata,

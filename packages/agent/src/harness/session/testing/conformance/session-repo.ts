@@ -91,6 +91,7 @@ function createCase<TRepo>(
 
 /** Creates lifecycle cases for repositories that support creation, discovery, open, and deletion. */
 export function createSessionRepoLifecycleConformance<TMetadata extends SessionMetadata>(
+	// Require only the methods this group exercises so partial backends can run it independently.
 	backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "open" | "list" | "delete">>,
 	onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
@@ -237,19 +238,38 @@ export function createSessionRepoForkConformance<TMetadata extends SessionMetada
 ): readonly ConformanceCase[] {
 	const factory = prepareRepoCaseFactory(backendFactory, onClose);
 	return [
-		createCase(factory, "forks", "reserves destination ids across concurrent publication", async ({ repo }) => {
-			const source = await repo.create({ id: "source" });
-			const results = await Promise.allSettled([
-				repo.create({ id: "destination" }),
-				repo.fork(source.metadata, { id: "destination" }),
-			]);
-			strictEqual(results.filter((result) => result.status === "fulfilled").length, 1);
-			strictEqual(results.filter((result) => result.status === "rejected").length, 1);
-			for (const result of results) {
-				if (result.status === "fulfilled") await result.value.close();
-			}
-			await source.close();
-		}),
+		createCase(
+			factory,
+			"forks",
+			"publishes create when it reserves a shared destination id first",
+			async ({ repo }) => {
+				const source = await repo.create({ id: "source" });
+				const results = await Promise.allSettled([
+					repo.create({ id: "destination" }),
+					repo.fork(source.metadata, { id: "destination" }),
+				]);
+				strictEqual(results[0].status, "fulfilled");
+				strictEqual(results[1].status, "rejected");
+				if (results[0].status === "fulfilled") await results[0].value.close();
+				await source.close();
+			},
+		),
+		createCase(
+			factory,
+			"forks",
+			"publishes fork when it reserves a shared destination id first",
+			async ({ repo }) => {
+				const source = await repo.create({ id: "source" });
+				const results = await Promise.allSettled([
+					repo.fork(source.metadata, { id: "destination" }),
+					repo.create({ id: "destination" }),
+				]);
+				strictEqual(results[0].status, "fulfilled");
+				strictEqual(results[1].status, "rejected");
+				if (results[0].status === "fulfilled") await results[0].value.close();
+				await source.close();
+			},
+		),
 		createCase(factory, "forks", "forks a fresh session before first attachment", async ({ repo }) => {
 			const source = await repo.create({ id: "source" });
 			const fork = await repo.fork(source.metadata, { id: "fork" });

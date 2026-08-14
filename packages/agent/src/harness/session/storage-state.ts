@@ -26,13 +26,13 @@ import type {
 
 export interface StorageStateSnapshot {
 	entries: Map<string, Entry>;
-	registers: Map<string, Register>;
+	registers: Register[];
 	usage: Map<string, UsageRow>;
 	stats: SessionStats;
 	nextSeq: number;
 }
 
-export function registerKey(namespace: RegisterNamespace, key: string): string {
+function registerKey(namespace: RegisterNamespace, key: string): string {
 	return `${namespace}\u0000${key}`;
 }
 
@@ -59,7 +59,9 @@ export class StorageState {
 	constructor(snapshot?: StorageStateSnapshot) {
 		this.entries = snapshot?.entries ?? new Map();
 		this.entriesBySeq = [...this.entries.values()].sort((left, right) => left.seq - right.seq);
-		this.registers = snapshot?.registers ?? new Map();
+		this.registers = new Map(
+			(snapshot?.registers ?? []).map((register) => [registerKey(register.namespace, register.key), register]),
+		);
 		this.usage = snapshot?.usage ?? new Map();
 		this.stats = snapshot?.stats ?? { messageCount: 0, usage: emptyUsage() };
 		this.nextSeq = snapshot?.nextSeq ?? 1;
@@ -212,7 +214,7 @@ export class StorageState {
 	snapshot(): StorageStateSnapshot {
 		return {
 			entries: this.entries,
-			registers: this.registers,
+			registers: [...this.registers.values()],
 			usage: this.usage,
 			stats: this.stats,
 			nextSeq: this.nextSeq,

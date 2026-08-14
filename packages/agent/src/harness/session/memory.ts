@@ -1,7 +1,7 @@
 import { type Usage, uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../types.ts";
 import { StorageBackedSession } from "./session.ts";
-import { registerKey, StorageState, type StorageStateSnapshot } from "./storage-state.ts";
+import { StorageState, type StorageStateSnapshot } from "./storage-state.ts";
 import type {
 	BranchScan,
 	CommitResult,
@@ -133,7 +133,7 @@ export class MemoryStorage implements Storage {
 			const snapshot = this.storageState.snapshot();
 			return {
 				entries: [...snapshot.entries.values()].sort((left, right) => left.seq - right.seq),
-				registers: [...snapshot.registers.values()],
+				registers: snapshot.registers,
 			};
 		});
 		this.commitQueue = result.then(
@@ -443,23 +443,22 @@ export class MemorySessionRepo implements SessionRepo {
 		options: ForkOptions,
 	): MemoryStorage {
 		const sourceEntries = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
-		const sourceRegisters = new Map(
-			snapshot.registers.map((register) => [registerKey(register.namespace, register.key), register]),
-		);
 		const sourceLeaves = snapshot.registers.filter((register) => isRegisterNamespace(register, "lane.leaf"));
-		this.validateForkSourceSnapshot(snapshot, sourceEntries, sourceRegisters, sourceLeaves);
+		this.validateForkSourceSnapshot(snapshot, sourceEntries, sourceLeaves);
 
-		const { copiedEntryIds, destinationLeaves } = this.selectForkContents(sourceEntries, sourceLeaves, options);
+		const { entryIds, laneToLeafId } = this.selectForkContents(sourceEntries, sourceLeaves, options);
 
 		const entries = new Map<string, Entry>();
-		for (const id of copiedEntryIds) entries.set(id, sourceEntries.get(id)!);
-		const registers = new Map<string, Register>();
+		for (const id of entryIds) entries.set(id, sourceEntries.get(id)!);
+		const registers: Register[] = [];
 		let nextSeq = Math.max(0, ...[...entries.values()].map((entry) => entry.seq)) + 1;
 		const setRegister = (namespace: RegisterNamespace, key: string, value: Register["value"]): void => {
-			registers.set(registerKey(namespace, key), { namespace, key, value, seq: nextSeq++ } as Register);
+			registers.push({ namespace, key, value, seq: nextSeq++ } as Register);
 		};
-		for (const [lane, leaf] of destinationLeaves) {
-			const configuration = sourceRegisters.get(registerKey("lane.config", lane));
+		for (const [lane, leaf] of laneToLeafId) {
+			const configuration = snapshot.registers.find(
+				(register) => register.namespace === "lane.config" && register.key === lane,
+			);
 			if (configuration !== undefined) setRegister("lane.config", lane, configuration.value);
 			setRegister("lane.leaf", lane, leaf);
 			setRegister("lane.state", lane, { currentOperationId: null, pendingNextRun: [] });
@@ -468,7 +467,7 @@ export class MemorySessionRepo implements SessionRepo {
 			if (
 				register.namespace === "fact.name" ||
 				register.namespace === "fact.custom" ||
-				(register.namespace === "fact.label" && copiedEntryIds.has(register.key))
+				(register.namespace === "fact.label" && entryIds.has(register.key))
 			) {
 				setRegister(register.namespace, register.key, register.value);
 			}
@@ -492,12 +491,12 @@ export class MemorySessionRepo implements SessionRepo {
 		sourceEntries: Map<string, Entry>,
 		sourceLeaves: Register<"lane.leaf">[],
 		options: ForkOptions,
-	): { copiedEntryIds: Set<string>; destinationLeaves: Map<string, string | null> } {
-		const copiedEntryIds = new Set<string>();
-		const destinationLeaves = new Map<string, string | null>();
+	): { entryIds: Set<string>; laneToLeafId: Map<string, string | null> } {
+		const entryIds = new Set<string>();
+		const laneToLeafId = new Map<string, string | null>();
 		if (options.scope === "tree") {
-			for (const id of sourceEntries.keys()) copiedEntryIds.add(id);
-			for (const register of sourceLeaves) destinationLeaves.set(register.key, register.value);
+			for (const id of sourceEntries.keys()) entryIds.add(id);
+			for (const register of sourceLeaves) laneToLeafId.set(register.key, register.value);
 		} else {
 			const mainLeaf = sourceLeaves.find((register) => register.key === "main");
 			if (mainLeaf === undefined) throw new Error("Source session is missing main lane");
@@ -513,18 +512,17 @@ export class MemorySessionRepo implements SessionRepo {
 			while (entryId !== null) {
 				const entry = sourceEntries.get(entryId);
 				if (entry === undefined) throw new Error(`Corrupt source branch: missing parent ${entryId}`);
-				copiedEntryIds.add(entryId);
+				entryIds.add(entryId);
 				entryId = entry.parentId;
 			}
-			destinationLeaves.set("main", leaf);
+			laneToLeafId.set("main", leaf);
 		}
-		return { copiedEntryIds, destinationLeaves };
+		return { entryIds, laneToLeafId };
 	}
 
 	private validateForkSourceSnapshot(
 		snapshot: { entries: Entry[]; registers: Register[] },
 		sourceEntries: Map<string, Entry>,
-		sourceRegisters: Map<string, Register>,
 		sourceLeaves: Register<"lane.leaf">[],
 	): void {
 		const sourceLeafKeys = new Set(sourceLeaves.map((register) => register.key));
@@ -542,16 +540,20 @@ export class MemorySessionRepo implements SessionRepo {
 			}
 		}
 		for (const leaf of sourceLeaves) {
-			if (!sourceRegisters.has(registerKey("lane.state", leaf.key))) {
+			if (!this.hasRegister(snapshot.registers, "lane.state", leaf.key)) {
 				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.state`);
 			}
-			if (leaf.key !== "main" && !sourceRegisters.has(registerKey("lane.config", leaf.key))) {
+			if (leaf.key !== "main" && !this.hasRegister(snapshot.registers, "lane.config", leaf.key)) {
 				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.config`);
 			}
 			if (leaf.value !== null && !sourceEntries.has(leaf.value)) {
 				throw new Error(`Source session lane ${JSON.stringify(leaf.key)} has an unknown leaf`);
 			}
 		}
+	}
+
+	private hasRegister(registers: Register[], namespace: RegisterNamespace, key: string): boolean {
+		return registers.some((register) => register.namespace === namespace && register.key === key);
 	}
 
 	private reserveId(id: string): void {

@@ -1,13 +1,9 @@
 import { MemorySessionRepo } from "../../src/harness/session/index.ts";
 import type { SessionRepo } from "../../src/harness/session/types.ts";
+import type { BenchmarkTarget } from "./benchmark.ts";
 
 export interface SessionRepoBenchmarkFixture extends AsyncDisposable {
 	readonly repo: SessionRepo;
-}
-
-interface SessionRepoBenchmarkTarget {
-	readonly name: string;
-	createFixture(): Promise<SessionRepoBenchmarkFixture>;
 }
 
 const NOW = 1_700_000_000_000;
@@ -23,4 +19,4 @@ export const sessionRepoBenchmarkTargets = [
 			});
 		},
 	},
-] satisfies readonly SessionRepoBenchmarkTarget[];
+] satisfies readonly BenchmarkTarget<SessionRepoBenchmarkFixture>[];

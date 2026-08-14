@@ -7,18 +7,13 @@ import {
 	seedStorageBenchmark,
 	type StorageFixture,
 } from "../../src/harness/session/testing/index.ts";
+import {
+	registerReadBenchmarks,
+	WRITE_BENCHMARK_ITERATIONS,
+	WRITE_BENCHMARK_OPTIONS,
+	WRITE_BENCHMARK_WARMUP_ITERATIONS,
+} from "./benchmark.ts";
 import { storageBenchmarkTargets } from "./storage-targets.ts";
-
-const BENCHMARK_TIME_MS = 500;
-const BENCHMARK_WARMUP_TIME_MS = 100;
-const WRITE_ITERATIONS = 30;
-const WRITE_WARMUP_ITERATIONS = 5;
-
-interface PreparedReadFixture {
-	readonly datasetName: string;
-	readonly targetName: string;
-	readonly fixture: StorageFixture;
-}
 
 interface PreparedWriteFixtures {
 	readonly scenarioName: string;
@@ -26,31 +21,28 @@ interface PreparedWriteFixtures {
 	readonly pendingFixtures: StorageFixture[];
 }
 
-let benchmarkSink = 0;
 const allFixtures: StorageFixture[] = [];
-const readFixtures: PreparedReadFixture[] = [];
 const writeFixtures: PreparedWriteFixtures[] = [];
 
-process.once("beforeExit", () => {
-	void Promise.all(allFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
+process.once("beforeExit", async () => {
+	await Promise.all(allFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
+});
+
+await registerReadBenchmarks({
+	datasets: STORAGE_BENCHMARK_DATASETS,
+	targets: storageBenchmarkTargets,
+	scenarios: STORAGE_READ_BENCHMARK_SCENARIOS,
+	prepare(fixture, dataset) {
+		return seedStorageBenchmark(fixture.storage, dataset);
+	},
+	getSubject(fixture) {
+		return fixture.storage;
+	},
 });
 
 // Vitest 4's benchmark runner does not execute normal test lifecycle hooks.
-// Prepare read fixtures and one write fixture per warmup/measured iteration
-// before registration. Vitest 5 can express the same lifecycle with each
-// registration's beforeAll/beforeEach/afterEach/afterAll hooks.
-for (const dataset of STORAGE_BENCHMARK_DATASETS) {
-	for (const target of storageBenchmarkTargets) {
-		const fixture = await target.createFixture();
-		allFixtures.push(fixture);
-		await seedStorageBenchmark(fixture.storage, dataset);
-		for (const scenario of STORAGE_READ_BENCHMARK_SCENARIOS) {
-			strictEqual(await scenario.run(fixture.storage, dataset), scenario.expectedResult(dataset));
-		}
-		readFixtures.push({ datasetName: dataset.name, targetName: target.name, fixture });
-	}
-}
-
+// Prepare one write fixture per warmup/measured iteration before registration.
+// Vitest 5 can express the same lifecycle with each registration's hooks.
 for (const scenario of STORAGE_WRITE_BENCHMARK_SCENARIOS) {
 	for (const target of storageBenchmarkTargets) {
 		const validationFixture = await target.createFixture();
@@ -59,39 +51,17 @@ for (const scenario of STORAGE_WRITE_BENCHMARK_SCENARIOS) {
 		strictEqual(await scenario.run(validationFixture.storage), scenario.writeCount);
 
 		const pendingFixtures: StorageFixture[] = [];
-		for (let index = 0; index < WRITE_WARMUP_ITERATIONS + WRITE_ITERATIONS; index++) {
+		for (
+			let index = 0;
+			index < WRITE_BENCHMARK_WARMUP_ITERATIONS + WRITE_BENCHMARK_ITERATIONS;
+			index++
+		) {
 			const fixture = await target.createFixture();
 			allFixtures.push(fixture);
 			await scenario.prepare?.(fixture.storage);
 			pendingFixtures.push(fixture);
 		}
 		writeFixtures.push({ scenarioName: scenario.name, targetName: target.name, pendingFixtures });
-	}
-}
-
-for (const dataset of STORAGE_BENCHMARK_DATASETS) {
-	for (const scenario of STORAGE_READ_BENCHMARK_SCENARIOS) {
-		describe(`${scenario.name} (${dataset.name})`, () => {
-			for (const target of storageBenchmarkTargets) {
-				const prepared = readFixtures.find(
-					(candidate) => candidate.datasetName === dataset.name && candidate.targetName === target.name,
-				);
-				if (prepared === undefined) throw new Error("Benchmark fixture was not initialized");
-
-				bench(
-					target.name,
-					async () => {
-						benchmarkSink = await scenario.run(prepared.fixture.storage, dataset);
-					},
-					{
-						time: BENCHMARK_TIME_MS,
-						iterations: 10,
-						warmupTime: BENCHMARK_WARMUP_TIME_MS,
-						warmupIterations: 5,
-					},
-				);
-			}
-		});
 	}
 }
 
@@ -108,17 +78,10 @@ for (const scenario of STORAGE_WRITE_BENCHMARK_SCENARIOS) {
 				async () => {
 					const fixture = prepared.pendingFixtures.shift();
 					if (fixture === undefined) throw new Error("Benchmark fixture pool was exhausted");
-					benchmarkSink = await scenario.run(fixture.storage);
+					await scenario.run(fixture.storage);
 				},
-				{
-					time: 0,
-					iterations: WRITE_ITERATIONS,
-					warmupTime: 0,
-					warmupIterations: WRITE_WARMUP_ITERATIONS,
-				},
+				WRITE_BENCHMARK_OPTIONS,
 			);
 		}
 	});
 }
-
-void benchmarkSink;

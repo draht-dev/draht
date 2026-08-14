@@ -1,10 +1,6 @@
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import type { StorageFixture } from "../../src/harness/session/testing/index.ts";
-
-interface StorageBenchmarkTarget {
-	readonly name: string;
-	createFixture(): Promise<StorageFixture>;
-}
+import type { BenchmarkTarget } from "./benchmark.ts";
 
 const NOW = 1_700_000_000_000;
 
@@ -19,4 +15,4 @@ export const storageBenchmarkTargets = [
 			});
 		},
 	},
-] satisfies readonly StorageBenchmarkTarget[];
+] satisfies readonly BenchmarkTarget<StorageFixture>[];

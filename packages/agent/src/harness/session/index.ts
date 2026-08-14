@@ -4,9 +4,10 @@ export type {
 	CommittedRegisterSetWrite,
 	CommittedUsageWrite,
 	CommittedWrite,
+	CommitValidationState,
 	PreparedCommit,
 } from "./commit.ts";
-export { commitWrite, prepareStorageCommit } from "./commit.ts";
+export { commitWrite, prepareStorageCommit, validateCommittedWrites } from "./commit.ts";
 export {
 	JSONL_STORAGE_VERSION,
 	type JsonlSessionCreateOptions,

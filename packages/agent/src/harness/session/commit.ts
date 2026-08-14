@@ -28,6 +28,11 @@ export interface PreparedCommit {
 	result: CommitResult;
 }
 
+export interface CommitValidationState {
+	hasEntryOrUsageId(id: string): boolean;
+	hasEntryId(id: string): boolean;
+}
+
 export function commitWrite(write: Write, seq: number, timestamp: number): CommittedWrite {
 	switch (write.kind) {
 		case "entry":
@@ -44,4 +49,32 @@ export function commitWrite(write: Write, seq: number, timestamp: number): Commi
 export function prepareStorageCommit(transaction: Transaction, firstSeq: number, timestamp: number): PreparedCommit {
 	const writes = transaction.writes.map((write, index) => commitWrite(write, firstSeq + index, timestamp));
 	return { writes, result: { firstSeq, seqs: writes.map((write) => write.seq), timestamp } };
+}
+
+export function validateCommittedWrites(
+	writes: readonly CommittedWrite[],
+	firstSeq: number,
+	state: CommitValidationState,
+): void {
+	let previousSeq = firstSeq - 1;
+	const transactionIds = new Set<string>();
+	const transactionEntryIds = new Set<string>();
+	for (const write of writes) {
+		if (write.seq <= previousSeq) throw new Error(`Non-monotonic storage sequence: ${write.seq}`);
+		previousSeq = write.seq;
+		if (write.kind !== "entry" && write.kind !== "usage") continue;
+		if (state.hasEntryOrUsageId(write.id) || transactionIds.has(write.id)) {
+			throw new Error(`Duplicate entry or usage id: ${write.id}`);
+		}
+		if (
+			write.kind === "entry" &&
+			write.parentId !== null &&
+			!state.hasEntryId(write.parentId) &&
+			!transactionEntryIds.has(write.parentId)
+		) {
+			throw new Error(`Missing parent entry: ${write.parentId}`);
+		}
+		transactionIds.add(write.id);
+		if (write.kind === "entry") transactionEntryIds.add(write.id);
+	}
 }

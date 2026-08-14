@@ -1,6 +1,6 @@
 import type { Usage } from "@draht/ai";
 import { addUsage } from "../utils/usage.ts";
-import { type CommittedWrite, type PreparedCommit, prepareStorageCommit } from "./commit.ts";
+import { type CommittedWrite, type PreparedCommit, prepareStorageCommit, validateCommittedWrites } from "./commit.ts";
 
 export type {
 	CommittedEntryWrite,
@@ -72,27 +72,10 @@ export class StorageState {
 	}
 
 	validateCommitted(writes: readonly CommittedWrite[]): void {
-		let previousSeq = this.nextSeq - 1;
-		const transactionIds = new Set<string>();
-		const transactionEntryIds = new Set<string>();
-		for (const write of writes) {
-			if (write.seq <= previousSeq) throw new Error(`Non-monotonic storage sequence: ${write.seq}`);
-			previousSeq = write.seq;
-			if (write.kind !== "entry" && write.kind !== "usage") continue;
-			if (this.entries.has(write.id) || this.usage.has(write.id) || transactionIds.has(write.id)) {
-				throw new Error(`Duplicate entry or usage id: ${write.id}`);
-			}
-			if (
-				write.kind === "entry" &&
-				write.parentId !== null &&
-				!this.entries.has(write.parentId) &&
-				!transactionEntryIds.has(write.parentId)
-			) {
-				throw new Error(`Missing parent entry: ${write.parentId}`);
-			}
-			transactionIds.add(write.id);
-			if (write.kind === "entry") transactionEntryIds.add(write.id);
-		}
+		validateCommittedWrites(writes, this.nextSeq, {
+			hasEntryOrUsageId: (id) => this.entries.has(id) || this.usage.has(id),
+			hasEntryId: (id) => this.entries.has(id),
+		});
 	}
 
 	/** Apply writes already accepted by validateCommitted(). */

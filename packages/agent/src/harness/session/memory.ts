@@ -1,7 +1,7 @@
 import { type Usage, uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../types.ts";
 import { StorageBackedSession } from "./session.ts";
-import { StorageState, type StorageStateSnapshot } from "./storage-state.ts";
+import { registerKey, StorageState, type StorageStateSnapshot } from "./storage-state.ts";
 import type {
 	BranchScan,
 	CommitResult,
@@ -35,10 +35,6 @@ export interface MemoryStorageOptions {
 
 export interface MemorySessionRepoOptions {
 	now?: () => number;
-}
-
-function registerKey(namespace: RegisterNamespace, key: string): string {
-	return `${namespace}\u0000${key}`;
 }
 
 function isRegisterNamespace<TNamespace extends RegisterNamespace>(

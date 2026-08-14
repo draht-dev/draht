@@ -32,7 +32,7 @@ export interface StorageStateSnapshot {
 	nextSeq: number;
 }
 
-function registerKey(namespace: RegisterNamespace, key: string): string {
+export function registerKey(namespace: RegisterNamespace, key: string): string {
 	return `${namespace}\u0000${key}`;
 }
 

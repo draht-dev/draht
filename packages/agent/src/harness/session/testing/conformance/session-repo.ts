@@ -136,13 +136,11 @@ export function createSessionRepoLifecycleConformance<TMetadata extends SessionM
 						{ id: "second", parentSessionId: "parent" },
 					],
 				);
-				await rejects(repo.open(first.metadata));
 				await first.close();
 				await rejects(first.getName());
 				const reopened = await repo.open(first.metadata);
 				strictEqual(reopened === first, false);
 				strictEqual(await reopened.getName(), "preserved");
-				await rejects(repo.open(first.metadata));
 				await reopened.close();
 			},
 		),
@@ -158,6 +156,25 @@ export function createSessionRepoLifecycleConformance<TMetadata extends SessionM
 			);
 			await rejects(repo.open(removed.metadata));
 			await rejects(repo.delete(removed.metadata));
+		}),
+	];
+}
+
+/** Creates exclusive-open cases for repositories that own active session handles. */
+export function createSessionRepoOwnershipConformance<TMetadata extends SessionMetadata>(
+	backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "open">>,
+	onClose?: () => void | Promise<void>,
+): readonly ConformanceCase[] {
+	const factory = prepareRepoCaseFactory(backendFactory, onClose);
+	return [
+		createCase(factory, "ownership", "rejects opening an already-open session", async ({ repo }) => {
+			const session = await repo.create({ id: "session" });
+			await rejects(repo.open(session.metadata));
+			await session.close();
+
+			const reopened = await repo.open(session.metadata);
+			await rejects(repo.open(session.metadata));
+			await reopened.close();
 		}),
 	];
 }
@@ -510,6 +527,7 @@ export function createSessionRepoConformance<TMetadata extends SessionMetadata>(
 ): readonly ConformanceCase[] {
 	return [
 		...createSessionRepoLifecycleConformance(factory, onClose),
+		...createSessionRepoOwnershipConformance(factory, onClose),
 		...createSessionRepoMessageConformance(factory, onClose),
 		...createSessionRepoForkConformance(factory, onClose),
 	];

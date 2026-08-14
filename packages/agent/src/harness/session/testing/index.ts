@@ -10,6 +10,7 @@ export {
 	createSessionRepoForkConformance,
 	createSessionRepoLifecycleConformance,
 	createSessionRepoMessageConformance,
+	createSessionRepoOwnershipConformance,
 } from "./conformance/session-repo.ts";
 export { createStorageConformance } from "./conformance/storage.ts";
 export { InstrumentedStorage } from "./instrumented-storage.ts";

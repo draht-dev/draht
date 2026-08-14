@@ -1,4 +1,6 @@
 import type { SessionMetadata, SessionRepo } from "../../types.ts";
+import { STORAGE_BENCHMARK_DATASETS, type StorageBenchmarkDataset } from "./datasets.ts";
+import { generateStorageBenchmarkSeedTransactions } from "./storage.ts";
 
 export interface SessionRepoCatalogBenchmarkDataset {
 	readonly name: string;
@@ -11,10 +13,19 @@ interface SessionRepoCatalogReadBenchmarkScenario {
 	run(repo: SessionRepo): Promise<number>;
 }
 
+interface SessionRepoForkWriteBenchmarkScenario {
+	readonly name: string;
+	expectedResult(dataset: StorageBenchmarkDataset): number;
+	run(repo: SessionRepo, source: SessionMetadata, dataset: StorageBenchmarkDataset): Promise<number>;
+}
+
 /** Package-internal deterministic session id shared by repository benchmark workloads. */
 export function sessionRepoBenchmarkSessionId(index: number): string {
 	return `benchmark-session-${index.toString().padStart(8, "0")}`;
 }
+
+const FORK_SOURCE_SESSION_ID = sessionRepoBenchmarkSessionId(0);
+const FORK_DESTINATION_SESSION_ID = sessionRepoBenchmarkSessionId(1);
 
 function createCatalogDataset(scale: string, sessionCount: number): SessionRepoCatalogBenchmarkDataset {
 	return {
@@ -53,6 +64,45 @@ export const SESSION_REPO_CATALOG_READ_BENCHMARK_SCENARIOS: readonly SessionRepo
 		},
 		async run(repo) {
 			return (await repo.list()).length;
+		},
+	},
+];
+
+/** Initial fork timing uses a bounded source because each iteration owns an equivalent seeded repository. */
+export const SESSION_REPO_FORK_BENCHMARK_DATASETS: readonly StorageBenchmarkDataset[] = [
+	STORAGE_BENCHMARK_DATASETS[0]!,
+	STORAGE_BENCHMARK_DATASETS[1]!,
+];
+
+/** Seeds one deterministic open source session with a linear main branch. */
+export async function seedSessionRepoForkBenchmark(
+	repo: SessionRepo,
+	dataset: StorageBenchmarkDataset,
+): Promise<SessionMetadata> {
+	const session = await repo.create({ id: FORK_SOURCE_SESSION_ID });
+	for (const transaction of generateStorageBenchmarkSeedTransactions(dataset)) {
+		await session.mutate("main", (mutator) => mutator.commit(transaction));
+	}
+	await session.mutate("main", (mutator) =>
+		mutator.commit({
+			writes: [{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: dataset.leafId }],
+		}),
+	);
+	return session.metadata;
+}
+
+/** Shared fork writes. Every invocation receives an equivalent source repository. */
+export const SESSION_REPO_FORK_WRITE_BENCHMARK_SCENARIOS: readonly SessionRepoForkWriteBenchmarkScenario[] = [
+	{
+		name: "fork open current branch",
+		expectedResult(dataset) {
+			return dataset.entryCount;
+		},
+		async run(repo, source, dataset) {
+			const fork = await repo.fork(source, { id: FORK_DESTINATION_SESSION_ID });
+			return fork.metadata.id === FORK_DESTINATION_SESSION_ID && fork.metadata.parentSessionId === source.id
+				? dataset.entryCount
+				: 0;
 		},
 	},
 ];

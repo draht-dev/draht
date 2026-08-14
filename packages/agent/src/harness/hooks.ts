@@ -46,6 +46,10 @@ export class HookRegistry implements Hooks {
 		};
 	}
 
+	has(name: HookName): boolean {
+		return (this.registrations.get(name)?.length ?? 0) !== 0;
+	}
+
 	/** Invoke one accepted-operation aggregate after synchronously passing its effect gate. */
 	runWithGate<TName extends HookName>(
 		name: TName,
@@ -357,7 +361,7 @@ export class HookRegistry implements Hooks {
 	}
 }
 
-function applyStreamOptionsPatch(
+export function applyStreamOptionsPatch(
 	base: AgentHarnessStreamOptions,
 	patch: AgentHarnessStreamOptionsPatch,
 ): AgentHarnessStreamOptions {

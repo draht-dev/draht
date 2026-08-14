@@ -199,16 +199,15 @@ describe("AgentHarness runtime shell", () => {
 		expect((await harness.inspectExecution()).current?.status).toBe("running");
 		const second = harness.drive({ operationId: current.operationId, deadline: 0 });
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		await harness.executeAction();
+		await harness.close();
 
 		const [left, right] = await Promise.allSettled([first, second]);
 		expect(left.status).toBe("rejected");
 		expect(right.status).toBe("rejected");
 		if (left.status === "rejected" && right.status === "rejected") {
 			expect(left.reason).toBe(right.reason);
-			expect(left.reason).toMatchObject({ name: "RuntimeSliceNotImplemented" });
+			expect(left.reason).toBeInstanceOf(HarnessClosed);
 		}
-		expect((await harness.inspectExecution()).current?.status).toBe("suspended");
 	});
 
 	it("faults inspection when process and durable operation ownership disagree", async () => {

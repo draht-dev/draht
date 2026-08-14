@@ -112,6 +112,116 @@ describe("restoreLane base validation", () => {
 		await expect(restoreLane(session, "main")).rejects.toThrow(`missing entry ${missingId}`);
 	});
 
+	it("rejects missing pending-next-run payloads", async () => {
+		const session = await createConfiguredSession();
+		const pendingId = session.idGenerator.next();
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{
+						kind: "register",
+						op: "set",
+						namespace: "lane.state",
+						key: "main",
+						value: { currentOperationId: null, pendingNextRun: [pendingId] },
+					},
+				],
+			}),
+		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(`missing pending entry ${pendingId}`);
+	});
+
+	it("rejects invalid R2 checkpoint and generation relationships", async () => {
+		const session = await createConfiguredSession();
+		const { operationId, promptEntryId, state } = await installRun(session);
+		if (state.kind !== "run") throw new Error("expected run state");
+		const writeState = (value: OperationState) =>
+			session.mutate("main", (mutator) =>
+				mutator.commit({
+					writes: [{ kind: "register", op: "set", namespace: "op.state", key: operationId, value }],
+				}),
+			);
+
+		await writeState({
+			...state,
+			latestAssistantEntryId: null,
+			phase: {
+				kind: "checkpoint",
+				continuation: { kind: "may_finish", includeFinalAssistant: true },
+				triggerEntryId: promptEntryId,
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(/finish checkpoint has no latest assistant/);
+
+		await writeState({
+			...state,
+			latestAssistantEntryId: promptEntryId,
+			phase: {
+				kind: "checkpoint",
+				continuation: { kind: "may_finish", includeFinalAssistant: true },
+				triggerEntryId: promptEntryId,
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(`entry ${promptEntryId} is not an assistant message`);
+
+		const responseEntryId = session.idGenerator.next();
+		await writeState({
+			...state,
+			phase: {
+				kind: "assistant",
+				generation: {
+					status: "effect_pending",
+					context: {
+						stepId: session.idGenerator.next(),
+						triggerEntryId: promptEntryId,
+						configuration: {
+							model: { provider: "test", modelId: "model" },
+							thinkingLevel: "off",
+							activeToolNames: [],
+						},
+						streamOptions: {},
+						retryPolicy: { maxAttempts: 1, baseDelayMs: 0 },
+						overflowRecoveryUsed: false,
+					},
+					attempt: 1,
+					responseEntryId,
+					usageId: responseEntryId,
+					intendedOutputLimit: 1,
+					contextWindow: 1,
+				},
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(/response and usage ids collide/);
+
+		await writeState({
+			...state,
+			phase: {
+				kind: "assistant",
+				generation: {
+					status: "effect_pending",
+					context: {
+						stepId: session.idGenerator.next(),
+						triggerEntryId: promptEntryId,
+						configuration: {
+							model: { provider: "test", modelId: "model" },
+							thinkingLevel: "off",
+							activeToolNames: [],
+						},
+						streamOptions: {},
+						retryPolicy: { maxAttempts: 1, baseDelayMs: 0 },
+						overflowRecoveryUsed: false,
+					},
+					attempt: 1,
+					responseEntryId: promptEntryId,
+					usageId: session.idGenerator.next(),
+					intendedOutputLimit: 1,
+					contextWindow: 1,
+				},
+			},
+		});
+		await expect(restoreLane(session, "main")).rejects.toThrow(`reserved entry ${promptEntryId} already exists`);
+	});
+
 	it("rejects missing operation registers and invalid base references", async () => {
 		const session = await createConfiguredSession();
 		const { operationId, operation, state } = await installRun(session);

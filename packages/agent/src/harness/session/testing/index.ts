@@ -21,6 +21,8 @@ export {
 	createSessionRepoForkBehaviorConformance,
 	createSessionRepoForkConformance,
 	createSessionRepoForkCoordinationConformance,
+	createSessionRepoForkDestinationReservationConformance,
+	createSessionRepoForkSourceSnapshotConformance,
 	createSessionRepoLifecycleConformance,
 	createSessionRepoMessageConformance,
 	createSessionRepoOwnershipConformance,

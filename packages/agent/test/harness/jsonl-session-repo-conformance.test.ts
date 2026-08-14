@@ -4,6 +4,7 @@ import { type JsonlSessionMetadata, JsonlSessionRepo } from "../../src/harness/s
 import {
 	type ConformanceCase,
 	createSessionRepoForkBehaviorConformance,
+	createSessionRepoForkDestinationReservationConformance,
 	createSessionRepoLifecycleConformance,
 	createSessionRepoMessageConformance,
 } from "../../src/harness/session/testing/index.ts";
@@ -43,4 +44,7 @@ registerConformance("JsonlSessionRepo conformance", [
 	...createSessionRepoLifecycleConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
 	...createSessionRepoMessageConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
 	...createSessionRepoForkBehaviorConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
+	...createSessionRepoForkDestinationReservationConformance<JsonlSessionMetadata>(createConformanceRepo, () =>
+		jsonlRepo.close(),
+	),
 ]);

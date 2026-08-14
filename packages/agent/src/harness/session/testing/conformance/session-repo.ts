@@ -476,8 +476,8 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 	];
 }
 
-/** Creates fork cases that require destination reservation or active-source snapshot coordination. */
-export function createSessionRepoForkCoordinationConformance<TMetadata extends SessionMetadata>(
+/** Creates fork cases that require destination reservation across create and fork. */
+export function createSessionRepoForkDestinationReservationConformance<TMetadata extends SessionMetadata>(
 	backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
 	onClose?: () => void | Promise<void>,
 ): readonly ConformanceCase[] {
@@ -515,6 +515,16 @@ export function createSessionRepoForkCoordinationConformance<TMetadata extends S
 				await source.close();
 			},
 		),
+	];
+}
+
+/** Creates fork cases that require a snapshot boundary on an active source storage queue. */
+export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends SessionMetadata>(
+	backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
+	onClose?: () => void | Promise<void>,
+): readonly ConformanceCase[] {
+	const factory = prepareRepoCaseFactory(backendFactory, onClose);
+	return [
 		createCase(
 			factory,
 			"fork coordination",
@@ -552,6 +562,17 @@ export function createSessionRepoForkCoordinationConformance<TMetadata extends S
 				await Promise.all([source.close(), forked.close()]);
 			},
 		),
+	];
+}
+
+/** Creates every fork coordination case. */
+export function createSessionRepoForkCoordinationConformance<TMetadata extends SessionMetadata>(
+	backendFactory: () => Promise<Pick<SessionRepo<TMetadata>, "create" | "fork">>,
+	onClose?: () => void | Promise<void>,
+): readonly ConformanceCase[] {
+	return [
+		...createSessionRepoForkDestinationReservationConformance(backendFactory, onClose),
+		...createSessionRepoForkSourceSnapshotConformance(backendFactory, onClose),
 	];
 }
 

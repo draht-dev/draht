@@ -1625,7 +1625,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 								providerOptions: SimpleStreamOptions,
 							): Promise<AssistantMessageEventStream> => {
 								await lane.breakpoint.hit({
-									kind: "assistant_request",
+									kind: "assistant.request",
 									description: "Request assistant response",
 									details: {
 										operationId: active.operationId,

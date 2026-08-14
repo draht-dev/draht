@@ -373,7 +373,7 @@ describe("AgentHarness R2 minimal run", () => {
 			"runtime.dispatch",
 			"run.generation_ready",
 			"assistant.intent",
-			"assistant_request",
+			"assistant.request",
 			"assistant.settlement",
 			"run.finish",
 		]);
@@ -390,7 +390,7 @@ describe("AgentHarness R2 minimal run", () => {
 			expect((await harness.executeAction())?.kind).toBe(expected);
 		}
 		await waitForAction(harness);
-		expect(await harness.peekAction()).toMatchObject({ kind: "assistant_request" });
+		expect(await harness.peekAction()).toMatchObject({ kind: "assistant.request" });
 		models.deleteProvider(faux.provider.id);
 		await harness.executeAction();
 		await harness.runToCompletion();
@@ -412,7 +412,7 @@ describe("AgentHarness R2 minimal run", () => {
 			expect((await fixture.harness.executeAction())?.kind).toBe(expected);
 		}
 		await waitForAction(fixture.harness);
-		expect(await fixture.harness.peekAction()).toMatchObject({ kind: "assistant_request" });
+		expect(await fixture.harness.peekAction()).toMatchObject({ kind: "assistant.request" });
 		await fixture.harness.close();
 		await expect(drive).rejects.toMatchObject({ name: "HarnessClosed" });
 		expect(fixture.faux.state.callCount).toBe(0);

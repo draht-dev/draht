@@ -1747,7 +1747,7 @@ A breakpoint is only an execution barrier placed immediately before code whose b
 
 ```ts
 await breakpoint({
-  kind: "assistant_request",
+  kind: "assistant.request",
   description: "Request assistant response",
   details: { attempt: 1 },
 });

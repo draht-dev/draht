@@ -398,14 +398,13 @@ export class MemorySessionRepo implements SessionRepo {
 		this.assertOpen();
 		const sourceRecord = this.sessions.get(source.id);
 		if (sourceRecord === undefined) throw new Error(`Unknown session: ${source.id}`);
-		const capturedOptions = { ...options };
 		const createdAt = this.now();
-		const id = capturedOptions.id ?? uuidv7(createdAt);
+		const id = options.id ?? uuidv7(createdAt);
 		this.reserveId(id);
 
 		try {
 			const snapshot = await sourceRecord.storage.snapshot();
-			const storage = this.createForkStorage(snapshot, capturedOptions);
+			const storage = this.createForkStorage(snapshot, options);
 			const metadata: SessionMetadata = {
 				id,
 				createdAt,

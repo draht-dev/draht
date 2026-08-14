@@ -13,6 +13,16 @@ interface SessionRepoCatalogReadBenchmarkScenario {
 	run(repo: SessionRepo): Promise<number>;
 }
 
+interface SessionRepoCatalogWriteBenchmarkOperation {
+	run(): Promise<number>;
+}
+
+interface SessionRepoCatalogWriteBenchmarkScenario {
+	readonly name: string;
+	readonly expectedResult: number;
+	prepare(repo: SessionRepo): Promise<SessionRepoCatalogWriteBenchmarkOperation>;
+}
+
 interface SessionRepoForkWriteBenchmarkScenario {
 	readonly name: string;
 	expectedResult(dataset: StorageBenchmarkDataset): number;
@@ -24,7 +34,7 @@ export function sessionRepoBenchmarkSessionId(index: number): string {
 	return `benchmark-session-${index.toString().padStart(8, "0")}`;
 }
 
-const FORK_SOURCE_SESSION_ID = sessionRepoBenchmarkSessionId(0);
+const BENCHMARK_SESSION_ID = sessionRepoBenchmarkSessionId(0);
 const FORK_DESTINATION_SESSION_ID = sessionRepoBenchmarkSessionId(1);
 
 function createCatalogDataset(scale: string, sessionCount: number): SessionRepoCatalogBenchmarkDataset {
@@ -68,6 +78,52 @@ export const SESSION_REPO_CATALOG_READ_BENCHMARK_SCENARIOS: readonly SessionRepo
 	},
 ];
 
+/** Shared catalog writes. Every invocation receives an equivalent independently prepared repository. */
+export const SESSION_REPO_CATALOG_WRITE_BENCHMARK_SCENARIOS: readonly SessionRepoCatalogWriteBenchmarkScenario[] = [
+	{
+		name: "create empty session",
+		expectedResult: 1,
+		prepare(repo) {
+			return Promise.resolve({
+				async run() {
+					const session = await repo.create({ id: BENCHMARK_SESSION_ID });
+					return session.metadata.id === BENCHMARK_SESSION_ID ? 1 : 0;
+				},
+			});
+		},
+	},
+	{
+		name: "open closed empty session",
+		expectedResult: 1,
+		async prepare(repo) {
+			const session = await repo.create({ id: BENCHMARK_SESSION_ID });
+			const { metadata } = session;
+			await session.close();
+			return {
+				async run() {
+					const reopened = await repo.open(metadata);
+					return reopened.metadata.id === metadata.id ? 1 : 0;
+				},
+			};
+		},
+	},
+	{
+		name: "delete closed empty session",
+		expectedResult: 1,
+		async prepare(repo) {
+			const session = await repo.create({ id: BENCHMARK_SESSION_ID });
+			const { metadata } = session;
+			await session.close();
+			return {
+				async run() {
+					await repo.delete(metadata);
+					return 1;
+				},
+			};
+		},
+	},
+];
+
 /** Initial fork timing uses a bounded source because each iteration owns an equivalent seeded repository. */
 export const SESSION_REPO_FORK_BENCHMARK_DATASETS: readonly StorageBenchmarkDataset[] = [
 	STORAGE_BENCHMARK_DATASETS[0]!,
@@ -79,7 +135,7 @@ export async function seedSessionRepoForkBenchmark(
 	repo: SessionRepo,
 	dataset: StorageBenchmarkDataset,
 ): Promise<SessionMetadata> {
-	const session = await repo.create({ id: FORK_SOURCE_SESSION_ID });
+	const session = await repo.create({ id: BENCHMARK_SESSION_ID });
 	for (const transaction of generateStorageBenchmarkSeedTransactions(dataset)) {
 		await session.mutate("main", (mutator) => mutator.commit(transaction));
 	}

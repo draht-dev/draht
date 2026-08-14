@@ -1,6 +1,7 @@
 import {
 	SESSION_REPO_CATALOG_BENCHMARK_DATASETS,
 	SESSION_REPO_CATALOG_READ_BENCHMARK_SCENARIOS,
+	SESSION_REPO_CATALOG_WRITE_BENCHMARK_SCENARIOS,
 	SESSION_REPO_FORK_BENCHMARK_DATASETS,
 	SESSION_REPO_FORK_WRITE_BENCHMARK_SCENARIOS,
 	seedSessionRepoCatalogBenchmark,
@@ -18,6 +19,20 @@ await registerReadBenchmarks({
 	},
 	getSubject(fixture) {
 		return fixture.repo;
+	},
+});
+
+await registerWriteBenchmarks({
+	targets: sessionRepoBenchmarkTargets,
+	scenarios: SESSION_REPO_CATALOG_WRITE_BENCHMARK_SCENARIOS,
+	prepare(fixture, scenario) {
+		return scenario.prepare(fixture.repo);
+	},
+	expectedResult(scenario) {
+		return scenario.expectedResult;
+	},
+	run(operation) {
+		return operation.run();
 	},
 });
 

@@ -108,6 +108,7 @@ export {
 	type AgentHarnessStreamOptionsPatch,
 	type AgentHarnessTool,
 	type AgentHarnessToolContextSource,
+	type AgentHarnessToolInvocation,
 	BranchSummaryError,
 	type BranchSummaryErrorCode,
 	CompactionError,

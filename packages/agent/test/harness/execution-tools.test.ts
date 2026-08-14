@@ -1,7 +1,7 @@
 import { NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import type { EffectGate } from "../../src/harness/execution/effect-gate.ts";
+import { AbortRequested, OperationEffectGate } from "../../src/harness/execution/effect-gate.ts";
 import {
 	applyBeforeToolDecision,
 	createToolResultMessage,
@@ -52,8 +52,8 @@ function clearPrepared(callToClear: ReturnType<typeof prepareToolCall>) {
 	return cleared;
 }
 
-function effectGate(signal = new AbortController().signal): EffectGate {
-	return { signal, assertOpen() {} };
+function effectGate(): OperationEffectGate {
+	return new OperationEffectGate();
 }
 
 describe("tool execution primitives", () => {
@@ -107,11 +107,11 @@ describe("tool execution primitives", () => {
 	});
 
 	it("executes with updates, passes the signal, and ignores late updates", async () => {
-		const controller = new AbortController();
+		const gate = effectGate();
 		let lateUpdate: ((partial: AgentToolResult<{ value: string }>) => void) | undefined;
 		const execute: AgentTool<typeof parameters, { value: string }>["execute"] = vi.fn(
 			async (_id, args, signal, onUpdate) => {
-				expect(signal).toBe(controller.signal);
+				expect(signal).toBe(gate.signal);
 				onUpdate?.({ content: [{ type: "text", text: "partial" }], details: { value: args.value } });
 				lateUpdate = onUpdate;
 				return { content: [{ type: "text" as const, text: "done" }], details: { value: args.value } };
@@ -120,12 +120,7 @@ describe("tool execution primitives", () => {
 		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
 		const updates: AgentToolResult<unknown>[] = [];
 
-		const result = await executeToolCall(
-			cleared,
-			effectGate(controller.signal),
-			(update) => updates.push(update),
-			NOOP_TELEMETRY_CONTEXT,
-		);
+		const result = await executeToolCall(cleared, gate, (update) => updates.push(update), NOOP_TELEMETRY_CONTEXT);
 		lateUpdate?.({ content: [{ type: "text", text: "late" }], details: { value: "late" } });
 
 		expect(vi.mocked(execute)).toHaveBeenCalledOnce();
@@ -157,18 +152,15 @@ describe("tool execution primitives", () => {
 		expect(text(result.result)).toBe("tool failed");
 	});
 
-	it("lets effect-gate refusal escape without invoking the tool", async () => {
+	it("lets abort-first gate refusal escape without invoking the tool", async () => {
 		const execute = vi.fn(tool().execute);
 		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
-		const refusal = new Error("effect start refused");
-		const gate: EffectGate = {
-			signal: new AbortController().signal,
-			assertOpen() {
-				throw refusal;
-			},
-		};
+		const gate = effectGate();
+		gate.beginAbort(Promise.resolve());
 
-		await expect(executeToolCall(cleared, gate, () => {}, NOOP_TELEMETRY_CONTEXT)).rejects.toBe(refusal);
+		await expect(executeToolCall(cleared, gate, () => {}, NOOP_TELEMETRY_CONTEXT)).rejects.toBeInstanceOf(
+			AbortRequested,
+		);
 		expect(execute).not.toHaveBeenCalled();
 	});
 

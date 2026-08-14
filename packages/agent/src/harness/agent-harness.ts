@@ -13,6 +13,7 @@ import type {
 } from "@draht/ai";
 import type { TelemetryContext } from "@draht/telemetry";
 import type { AgentMessage, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
+import { createAgentHarness } from "./agent-harness-runtime.ts";
 import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
 import { type Result, TaggedError } from "./result.ts";
@@ -43,6 +44,13 @@ export class LaneBusy extends TaggedError("LaneBusy")<{
 	lane: string;
 	operationId: string;
 	operationKind: "run" | "compaction" | "navigation";
+	message: string;
+}> {}
+export class OperationMismatch extends TaggedError("OperationMismatch")<{
+	lane: string;
+	expectedOperationId: string;
+	currentOperationId?: string;
+	lastOperationId?: string;
 	message: string;
 }> {}
 export class MissingIdentities extends TaggedError("MissingIdentities")<{
@@ -150,7 +158,7 @@ export type NavigationResult = Result<
 	{ runId: string } & NavigationOutcome,
 	LaneBusy | MissingIdentities | InvalidNavigation | UnknownTarget | Closed
 >;
-export type ResumeResult = Result<ResumeOutcome, LaneBusy | NothingToResume | MissingIdentities | Closed>;
+export type ResumeResult = Result<ResumeOutcome, NothingToResume | MissingIdentities | Closed>;
 export type QueueResult = Result<{ entryId: string }, NoActiveRun | InvalidMessage | Closed>;
 export type NextRunResult = Result<{ entryId: string }, InvalidMessage | Closed>;
 export type CancelQueuedResult = Result<{ kind: "cancelled" | "already_consumed" | "not_found" }, Closed>;
@@ -166,6 +174,82 @@ export interface NavigateOptions {
 	label?: string;
 	customInstructions?: string;
 }
+
+export type OperationRequest =
+	| { kind: "prompt"; operationId?: string; prompt: string; images?: ImageContent[] }
+	| { kind: "prompt"; operationId?: string; prompt: AgentMessage | AgentMessage[]; images?: never }
+	| { kind: "skill"; operationId?: string; name: string; additionalInstructions?: string }
+	| { kind: "prompt_template"; operationId?: string; name: string; args?: string[] }
+	| { kind: "compaction"; operationId?: string; customInstructions?: string }
+	| { kind: "navigation"; operationId?: string; targetId: string | null; options?: NavigateOptions };
+
+export interface OperationAdmission {
+	operationId: string;
+	kind: "run" | "compaction" | "navigation";
+	startedAt: number;
+}
+
+export type OperationAdmissionError =
+	| LaneBusy
+	| MissingIdentities
+	| InvalidMessage
+	| UnknownSkill
+	| UnknownTemplate
+	| NothingToCompact
+	| InvalidNavigation
+	| UnknownTarget
+	| Closed;
+export type OperationAdmissionResult = Result<OperationAdmission, OperationAdmissionError>;
+
+export interface DriveOptions {
+	operationId: string;
+	deadline?: number;
+	waitForRetry?: boolean;
+	pollDeferred?: boolean;
+}
+
+export interface CurrentOperationInfo {
+	id: string;
+	kind: "run" | "compaction" | "navigation";
+	status: "running" | "suspended" | "aborting";
+	startedAt: number;
+	suspended?: SuspendedOperation;
+}
+
+export interface LaneExecutionInfo {
+	lane: string;
+	leafId: string | null;
+	current: CurrentOperationInfo | null;
+	lastResult?: LaneLastResult;
+}
+
+export type TerminalOperationOutcome =
+	| ({ operation: "run"; runId: string } & Exclude<RunOutcome, { kind: "suspended" }>)
+	| ({ operation: "compaction"; runId: string } & Exclude<CompactionOutcome, { kind: "suspended" }>)
+	| ({ operation: "navigation"; runId: string } & Exclude<NavigationOutcome, { kind: "suspended" }>);
+
+export type DriveOutcome =
+	| { kind: "settled"; operationId: string; outcome: TerminalOperationOutcome }
+	| { kind: "waiting"; operationId: string; reason: "retry"; notBefore: number }
+	| { kind: "waiting"; operationId: string; reason: "deferred"; deferred: DeferredHandle }
+	| {
+			kind: "waiting";
+			operationId: string;
+			reason: "missing_identities";
+			missing: { tools: string[]; models: string[] };
+	  }
+	| { kind: "yielded"; operationId: string };
+export type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
+
+export type AbortRequestResult = Result<
+	{
+		operationId: string;
+		newlyRequested: boolean;
+		steer: AgentMessage[];
+		followUp: AgentMessage[];
+	},
+	OperationMismatch | Closed
+>;
 
 export interface ActionInfo {
 	kind: string;
@@ -189,17 +273,26 @@ export interface LaneInfo {
 	};
 }
 
-export interface SuspendedOperation {
+export type SuspendedOperation = {
 	lane: string;
 	operationId: string;
 	kind: "run" | "compaction" | "navigation";
-	reason: "crash" | "deferred" | "missing_identities";
 	startedAt: number;
 	prompt?: AgentMessage[];
-	deferred?: DeferredHandle;
 	aborting?: { steer: AgentMessage[]; followUp: AgentMessage[] };
-	missing: { tools: string[]; models: string[] };
-}
+} & (
+	| { reason: "deferred"; deferred: DeferredHandle; missing?: never }
+	| {
+			reason: "missing_identities";
+			missing: { tools: string[]; models: string[] };
+			deferred?: never;
+	  }
+	| {
+			reason: "crash";
+			deferred?: DeferredHandle;
+			missing?: { tools: string[]; models: string[] };
+	  }
+);
 
 export interface QueuedItem {
 	entryId: string;
@@ -247,6 +340,18 @@ export type HarnessEventPayload =
 	| { type: "run_suspend"; runId: string; reason: "deferred"; deferred: DeferredHandle }
 	| {
 			type: "run_suspend";
+			runId: string;
+			reason: "missing_identities";
+			missing: { tools: string[]; models: string[] };
+	  }
+	| {
+			type: "compaction_suspend";
+			runId: string;
+			reason: "missing_identities";
+			missing: { tools: string[]; models: string[] };
+	  }
+	| {
+			type: "navigation_suspend";
 			runId: string;
 			reason: "missing_identities";
 			missing: { tools: string[]; models: string[] };
@@ -531,6 +636,10 @@ export interface AgentLane {
 	readonly name: string;
 	getLeafId(): Promise<string | null>;
 	getLastResult(): Promise<LaneLastResult | undefined>;
+	accept(request: OperationRequest): Promise<OperationAdmissionResult>;
+	drive(options: DriveOptions): Promise<DriveResult>;
+	requestAbort(operationId: string): Promise<AbortRequestResult>;
+	inspectExecution(): Promise<LaneExecutionInfo>;
 	prompt(text: string, images?: ImageContent[]): Promise<RunResult>;
 	prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
 	skill(name: string, additionalInstructions?: string): Promise<RunResult>;
@@ -588,3 +697,6 @@ export interface AgentHarnessConstructor {
 		options: AgentHarnessOptions<TContext>,
 	): Promise<{ harness: AgentHarness<TContext>; suspended: SuspendedOperation[] }>;
 }
+
+/** Runtime constructor for attaching the durable harness to one open session. */
+export const AgentHarness: AgentHarnessConstructor = { create: createAgentHarness };

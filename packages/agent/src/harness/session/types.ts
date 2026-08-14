@@ -292,20 +292,47 @@ export interface LaneState {
 	pendingNextRun: string[];
 }
 
-export type LaneLastResult = {
-	operationId: string;
-	kind: "run" | "compaction" | "navigation";
-	leafId: string | null;
-	finalAssistantEntryId?: string;
-} & (
-	| { outcome: "failed"; error: OperationError; runCompletion?: never }
-	| {
-			outcome: "completed";
-			error?: never;
-			runCompletion?: "assistant" | "terminated_tools";
-	  }
-	| { outcome: "declined" | "aborted"; error?: never; runCompletion?: never }
-);
+type FailedLaneLastResult = { outcome: "failed"; error: OperationError; runCompletion?: never };
+type AbortedLaneLastResult = { outcome: "aborted"; error?: never; runCompletion?: never };
+type StructuralLaneLastResultOutcome =
+	| FailedLaneLastResult
+	| AbortedLaneLastResult
+	| { outcome: "declined"; error?: never; runCompletion?: never }
+	| { outcome: "completed"; error?: never; runCompletion?: never };
+
+export type LaneLastResult =
+	| ({
+			operationId: string;
+			kind: "run";
+			leafId: string;
+			finalAssistantEntryId?: string;
+	  } & (
+			| FailedLaneLastResult
+			| AbortedLaneLastResult
+			| {
+					outcome: "completed";
+					error?: never;
+					runCompletion: "assistant" | "terminated_tools";
+			  }
+	  ))
+	| ({
+			operationId: string;
+			kind: "compaction";
+			leafId: string;
+			finalAssistantEntryId?: never;
+	  } & StructuralLaneLastResultOutcome)
+	| ({
+			operationId: string;
+			kind: "navigation";
+			leafId: string | null;
+			oldLeafId: string | null;
+			finalAssistantEntryId?: never;
+	  } & (
+			| FailedLaneLastResult
+			| AbortedLaneLastResult
+			| { outcome: "declined"; error?: never; runCompletion?: never; summaryEntryId?: never }
+			| { outcome: "completed"; error?: never; runCompletion?: never; summaryEntryId?: string }
+	  ));
 
 export type PendingEntry =
 	| { type: "message"; payload: AgentMessage }

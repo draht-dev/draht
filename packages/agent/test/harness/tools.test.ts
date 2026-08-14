@@ -103,6 +103,7 @@ class LateOutputExecutionEnv extends NodeExecutionEnv {
 }
 
 const TRUNCATED_OUTPUT_LINES = DEFAULT_MAX_LINES + 1;
+const invocation = { invocationId: "test-result", operationId: "test-operation", turnId: "test-turn" };
 
 class TimeoutOutputExecutionEnv extends NodeExecutionEnv {
 	override async exec(
@@ -148,6 +149,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 			const output = textOutput(result);
 
@@ -167,7 +169,14 @@ describe("AgentHarness tools", () => {
 				),
 			);
 
-			const result = await createReadTool().execute("read-2", { path: "large.txt" }, undefined, undefined, context);
+			const result = await createReadTool().execute(
+				"read-2",
+				{ path: "large.txt" },
+				undefined,
+				undefined,
+				context,
+				invocation,
+			);
 
 			expect(textOutput(result)).toContain("[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]");
 			expect(result.details?.truncation).toMatchObject({
@@ -190,6 +199,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 
 			expect(result.details).toBeUndefined();
@@ -201,7 +211,14 @@ describe("AgentHarness tools", () => {
 			getOrThrow(await context.env.writeFile("short.txt", "one\ntwo\nthree"));
 
 			await expect(
-				createReadTool().execute("read-3", { path: "short.txt", offset: 100 }, undefined, undefined, context),
+				createReadTool().execute(
+					"read-3",
+					{ path: "short.txt", offset: 100 },
+					undefined,
+					undefined,
+					context,
+					invocation,
+				),
 			).rejects.toThrow("Offset 100 is beyond end of file (3 lines total)");
 		});
 
@@ -215,7 +232,14 @@ describe("AgentHarness tools", () => {
 			);
 			getOrThrow(await context.env.writeFile("image.txt", png));
 
-			const result = await createReadTool().execute("read-4", { path: "image.txt" }, undefined, undefined, context);
+			const result = await createReadTool().execute(
+				"read-4",
+				{ path: "image.txt" },
+				undefined,
+				undefined,
+				context,
+				invocation,
+			);
 
 			expect(textOutput(result)).toContain("Read image file [image/png]");
 			expect(result.content).toContainEqual({
@@ -243,7 +267,14 @@ describe("AgentHarness tools", () => {
 				},
 			});
 
-			const result = await tool.execute("read-bmp", { path: "image.bmp" }, undefined, undefined, context);
+			const result = await tool.execute(
+				"read-bmp",
+				{ path: "image.bmp" },
+				undefined,
+				undefined,
+				context,
+				invocation,
+			);
 
 			expect(received).toMatchObject({ mimeType: "image/bmp", autoResizeImages: false });
 			expect(Array.from(received?.bytes ?? [])).toEqual(Array.from(bmp));
@@ -261,6 +292,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 
 			expect(textOutput(result)).toBe("Successfully wrote 5 bytes to nested/dir/file.txt");
@@ -279,6 +311,7 @@ describe("AgentHarness tools", () => {
 				{
 					env,
 				},
+				invocation,
 			);
 			await env.firstWriteStarted.promise;
 			controller.abort();
@@ -288,6 +321,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				{ env },
+				invocation,
 			);
 
 			await delay(20);
@@ -317,6 +351,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 
 			expect(textOutput(result)).toBe("Successfully replaced 2 block(s) in edit.txt.");
@@ -343,6 +378,7 @@ describe("AgentHarness tools", () => {
 					undefined,
 					undefined,
 					context,
+					invocation,
 				),
 			).rejects.toThrow(/overlap/);
 			expect(getOrThrow(await context.env.readTextFile("edit.txt"))).toBe("one\ntwo\nthree\n");
@@ -360,6 +396,7 @@ describe("AgentHarness tools", () => {
 					undefined,
 					undefined,
 					context,
+					invocation,
 				),
 			).rejects.toThrow(/Could not find the exact text/);
 			await expect(
@@ -369,6 +406,7 @@ describe("AgentHarness tools", () => {
 					undefined,
 					undefined,
 					context,
+					invocation,
 				),
 			).rejects.toThrow(/Found 3 occurrences/);
 		});
@@ -384,6 +422,7 @@ describe("AgentHarness tools", () => {
 				controller.signal,
 				undefined,
 				{ env },
+				invocation,
 			);
 			await env.firstEditWriteStarted.promise;
 			controller.abort();
@@ -393,6 +432,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				{ env },
+				invocation,
 			);
 
 			await delay(20);
@@ -417,6 +457,7 @@ describe("AgentHarness tools", () => {
 					undefined,
 					undefined,
 					{ env },
+					invocation,
 				),
 				tool.execute(
 					"edit-link",
@@ -424,6 +465,7 @@ describe("AgentHarness tools", () => {
 					undefined,
 					undefined,
 					{ env },
+					invocation,
 				),
 			]);
 
@@ -441,6 +483,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 
 			expect(getOrThrow(await context.env.readTextFile("target.txt"))).toBe("after\n");
@@ -456,6 +499,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 
 			expect(getOrThrow(await context.env.readTextFile("edit.txt"))).toBe("\uFEFFone\r\nTWO\r\n");
@@ -471,6 +515,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 
 			expect(textOutput(result)).toContain("out");
@@ -482,10 +527,10 @@ describe("AgentHarness tools", () => {
 			const tool = createBashTool();
 
 			await expect(
-				tool.execute("bash-2", { command: "printf failed; exit 7" }, undefined, undefined, context),
+				tool.execute("bash-2", { command: "printf failed; exit 7" }, undefined, undefined, context, invocation),
 			).rejects.toThrow(/failed[\s\S]*Command exited with code 7/);
 			await expect(
-				tool.execute("bash-3", { command: "sleep 2", timeout: 0.01 }, undefined, undefined, context),
+				tool.execute("bash-3", { command: "sleep 2", timeout: 0.01 }, undefined, undefined, context, invocation),
 			).rejects.toThrow(/Command timed out after 0.01 seconds/);
 		});
 
@@ -499,6 +544,7 @@ describe("AgentHarness tools", () => {
 					undefined,
 					undefined,
 					context,
+					invocation,
 				);
 			} catch (cause) {
 				error = cause;
@@ -523,6 +569,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				(update) => updates.push(textOutput(update)),
 				{ env },
+				invocation,
 			);
 			await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -538,6 +585,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 
 			expect(textOutput(result)).toMatch(/Showing last 50\.0KB of line 1 \(line is 58\.6KB\)\. Full output:/);
@@ -565,7 +613,14 @@ describe("AgentHarness tools", () => {
 				},
 			});
 
-			const result = await tool.execute("bash-prepare", { command: ":" }, controller.signal, undefined, context);
+			const result = await tool.execute(
+				"bash-prepare",
+				{ command: ":" },
+				controller.signal,
+				undefined,
+				context,
+				invocation,
+			);
 
 			expect(receivedContext).toBe(context);
 			expect(receivedSignal).toBe(controller.signal);
@@ -580,6 +635,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				undefined,
 				context,
+				invocation,
 			);
 
 			expect(textOutput(result)).toBe("hello");
@@ -597,6 +653,7 @@ describe("AgentHarness tools", () => {
 				undefined,
 				(update) => updates.push(update),
 				context,
+				invocation,
 			);
 
 			expect(updates.length).toBeLessThan(25);

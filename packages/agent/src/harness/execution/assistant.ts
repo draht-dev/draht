@@ -12,6 +12,7 @@ import type { TelemetryContext } from "@draht/telemetry";
 import type { AgentMessage, AgentTool, ThinkingLevel } from "../../types.ts";
 import type { SettledAssistantMessage } from "../session/types.ts";
 import type { AgentHarnessStreamOptions } from "../types.ts";
+import { AbortRequested } from "./effect-gate.ts";
 
 /** HTTP response metadata captured before the provider response body is consumed. */
 export interface AssistantResponseMetadata {
@@ -118,7 +119,15 @@ export async function streamHarnessAssistant(
 	if (!started) {
 		await config.observer.start({ ...settled });
 	}
-	const finalMessage = config.afterResponse ? await config.afterResponse(settled, metadata) : settled;
+	let finalMessage = settled;
+	if (config.afterResponse) {
+		try {
+			finalMessage = await config.afterResponse(settled, metadata);
+		} catch (error) {
+			if (!(error instanceof AbortRequested)) throw error;
+			await error.cancellation;
+		}
+	}
 	await config.observer.end(finalMessage);
 	return finalMessage;
 }

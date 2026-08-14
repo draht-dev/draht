@@ -77,6 +77,14 @@ export interface AgentHarnessResources<
 	skills?: TSkill[];
 }
 
+/** Stable harness identity for one logical tool call, unchanged during safe replay. */
+export interface AgentHarnessToolInvocation {
+	/** Opaque session-unique id equal to the call's reserved result-entry id. */
+	invocationId: string;
+	operationId: string;
+	turnId: string;
+}
+
 /** Tool definition executed by an {@link AgentHarness} with an application-defined context. */
 export type AgentHarnessTool<
 	TContext extends object | undefined,
@@ -90,6 +98,7 @@ export type AgentHarnessTool<
 		signal: AbortSignal | undefined,
 		onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
 		context: TContext,
+		invocation: AgentHarnessToolInvocation,
 	): Promise<AgentToolResult<TDetails>>;
 };
 

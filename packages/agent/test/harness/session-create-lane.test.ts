@@ -199,8 +199,9 @@ describe("StorageBackedSession.createLane", () => {
 				key: "broken",
 				value: {
 					operationId: ROOT_ID,
-					kind: "compaction",
+					kind: "navigation",
 					leafId: null,
+					oldLeafId: ROOT_ID,
 					outcome: "completed",
 				},
 			},

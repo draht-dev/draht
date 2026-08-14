@@ -12,6 +12,7 @@ import {
 import { NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
 import { describe, expect, it } from "vitest";
 import { type AssistantResponseMetadata, streamHarnessAssistant } from "../../src/harness/execution/assistant.ts";
+import { AbortRequested } from "../../src/harness/execution/effect-gate.ts";
 import type { AgentMessage } from "../../src/types.ts";
 
 function usage() {
@@ -266,6 +267,37 @@ describe("streamHarnessAssistant", () => {
 		expect(result).toBe(final);
 		expect(events).toEqual(["start:stop", "end:stop"]);
 		expect(options).not.toHaveProperty("reasoning");
+	});
+
+	it("keeps the raw settlement when cancellation interrupts after_response", async () => {
+		const final = assistant("raw");
+		const ended: AssistantMessage[] = [];
+		const result = await streamHarnessAssistant([user("prompt")], {
+			model: model(),
+			thinkingLevel: "off",
+			streamOptions: {},
+			toProviderMessages,
+			request: () => {
+				const stream = createAssistantMessageEventStream();
+				queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: final }));
+				return stream;
+			},
+			afterResponse: async () => {
+				throw new AbortRequested(Promise.resolve());
+			},
+			observer: {
+				start() {},
+				update() {},
+				end(message) {
+					ended.push(message);
+				},
+			},
+			telemetryContext: NOOP_TELEMETRY_CONTEXT,
+			signal: new AbortController().signal,
+		});
+
+		expect(result).toBe(final);
+		expect(ended).toEqual([final]);
 	});
 
 	it("returns provider error settlements through the same lifecycle", async () => {

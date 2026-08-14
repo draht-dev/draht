@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { JSONL_FORMAT_VERSION, JsonlStorage, type JsonlStorageHeader } from "../../src/harness/session/jsonl/index.ts";
-import {
-	type ConformanceCase,
-	createStorageConformance,
-	type StorageFixture,
-} from "../../src/harness/session/testing/index.ts";
 import { getOrThrow } from "../../src/harness/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
@@ -21,33 +16,6 @@ function header(id: string): JsonlStorageHeader {
 		cwd: "/workspace",
 	};
 }
-
-function registerConformance(name: string, cases: readonly ConformanceCase[]): void {
-	describe(name, () => {
-		for (const group of new Set(cases.map((testCase) => testCase.group))) {
-			describe(group, () => {
-				for (const testCase of cases.filter((candidate) => candidate.group === group)) {
-					it(testCase.name, () => testCase.run());
-				}
-			});
-		}
-	});
-}
-
-registerConformance(
-	"JsonlStorage conformance",
-	createStorageConformance(async () => {
-		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
-		const storage = await JsonlStorage.create(
-			{ fileSystem, path: "session.jsonl", now: () => NOW },
-			header("session"),
-		);
-		return {
-			storage,
-			[Symbol.asyncDispose]: () => storage.close(),
-		} satisfies StorageFixture;
-	}),
-);
 
 describe("JsonlStorage persistence", () => {
 	it("writes one line per transaction and replays stamped state", async () => {

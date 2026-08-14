@@ -1,10 +1,10 @@
 // Minimal real-provider AgentHarness example.
-// Run from packages/agent: node test/harness/scratch.ts
+// Run from packages/agent: node test/harness/scratch/r2.ts
 // Requires ANTHROPIC_API_KEY.
 
-import { createModels } from "../../../ai/src/models.ts";
-import { anthropicProvider } from "../../../ai/src/providers/anthropic.ts";
-import { AgentHarness, MemorySessionRepo } from "../../src/index.ts";
+import { createModels } from "../../../../ai/src/models.ts";
+import { anthropicProvider } from "../../../../ai/src/providers/anthropic.ts";
+import { AgentHarness, MemorySessionRepo } from "../../../src/index.ts";
 
 const models = createModels();
 models.setProvider(anthropicProvider());

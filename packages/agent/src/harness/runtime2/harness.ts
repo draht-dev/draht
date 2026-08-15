@@ -13,7 +13,6 @@ import type { LaneState } from "./types.ts";
 export class Harness<TContext extends object | undefined> extends Lane implements AgentHarness<TContext> {
 	readonly hooks: HookRegistry;
 	readonly events: HarnessEventBus;
-	readonly session: Session;
 	readonly seed: LaneConfiguration;
 	readonly lanesByName = new Map<string, Lane>();
 	closePromise: Promise<void> | undefined;
@@ -23,7 +22,6 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		const main = restored.get("main");
 		if (main === undefined) throw new SessionInvariantError("Session is missing main lane");
 		super("main", options.session, options.models, main, (cause) => this.fault(cause));
-		this.session = options.session;
 		this.seed = seed;
 		this.events = new HarnessEventBus();
 		this.hooks = new HookRegistry((error, hook, lane) =>
@@ -159,7 +157,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		 * finish, and close waits for it. A successful commit must always publish its in-memory candidate and resolve
 		 * without another open check; otherwise close racing the commit would make durable and in-memory state
 		 * diverge. An admitted effect is signalled and allowed to unwind, but its settlement is a new durable unit and
-		 * cannot commit after close. Every later transition, settlement, or effect must pass admission again.
+		 * cannot commit after close. Every later command, settlement, or effect must pass admission again.
 		 *
 		 * Session.close() is the final mutation barrier: it rejects later session jobs, drains active callbacks and
 		 * commits, then closes storage. Close itself writes no cancellation or terminal state.

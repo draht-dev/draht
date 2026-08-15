@@ -78,10 +78,11 @@ function setThinkingLevel(
 	thinkingLevel: LaneConfiguration["thinkingLevel"],
 	observed?: LaneConfiguration["thinkingLevel"][],
 ): Promise<LaneConfiguration["thinkingLevel"]> {
-	return lane.transition((state) => {
+	return lane.command((state) => {
 		observed?.push(state.configuration.thinkingLevel);
 		const next = { ...state, configuration: { ...state.configuration, thinkingLevel } };
 		return {
+			kind: "commit",
 			transaction: {
 				writes: [
 					{
@@ -103,7 +104,7 @@ afterEach(async () => {
 	for (const session of sessions.splice(0)) await session.close();
 });
 
-describe("runtime2 Lane transitions", () => {
+describe("runtime2 Lane commands", () => {
 	it("reads and replaces configuration from owned state", async () => {
 		const { lane, model, session } = await createLane();
 		const activeToolNames = ["read"];
@@ -144,16 +145,42 @@ describe("runtime2 Lane transitions", () => {
 		});
 	});
 
-	it("passes bounded reads and commit metadata through the serialized transition", async () => {
+	it("returns a promise value without holding the lane line", async () => {
+		const { lane } = await createLane();
+		const completion = deferred();
+		let completed = false;
+		const joined = lane
+			.command(() => ({ kind: "return", result: completion.promise }))
+			.then(() => {
+				completed = true;
+			});
+
+		await lane.setThinkingLevel("high");
+		expect(completed).toBe(false);
+		completion.resolve();
+		await joined;
+	});
+
+	it("returns an expected rejection without faulting the lane", async () => {
+		const { lane } = await createLane();
+		const rejection = new Error("declined");
+
+		await expect(lane.command(() => ({ kind: "reject", error: rejection }))).rejects.toBe(rejection);
+		expect(await lane.getLeafId()).toBeNull();
+		await lane.setThinkingLevel("high");
+	});
+
+	it("passes bounded reads and commit metadata through the serialized command", async () => {
 		const { lane } = await createLane();
 		let storedConfiguration: LaneConfiguration | undefined;
 		let memoryPublished = false;
 
-		const commit = await lane.transition(async (state, reader) => {
+		const commit = await lane.command(async (state, reader) => {
 			storedConfiguration = (await reader.getRegister("lane.config", "main"))?.value;
 			const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
 			const next = { ...state, configuration };
 			return {
+				kind: "commit",
 				transaction: {
 					writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration }],
 				},
@@ -171,26 +198,25 @@ describe("runtime2 Lane transitions", () => {
 		expect(commit.timestamp).toEqual(expect.any(Number));
 	});
 
-	it("keeps committed memory when materialization fails", async () => {
+	it("rejects thenable materialization after publishing committed memory", async () => {
 		const { lane, session } = await createLane();
-		const failure = new Error("materialization failed");
 
 		await expect(
-			lane.transition((state) => {
+			// @ts-expect-error Exercise the runtime guard against untyped callers.
+			lane.command((state) => {
 				const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
 				return {
+					kind: "commit",
 					transaction: {
 						writes: [
 							{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
 						],
 					},
 					next: { ...state, configuration },
-					materialize: () => {
-						throw failure;
-					},
+					materialize: async () => undefined,
 				};
 			}),
-		).rejects.toBe(failure);
+		).rejects.toThrow("Lane command materialize() must be synchronous");
 
 		expect(lane.state.configuration.thinkingLevel).toBe("high");
 		expect((await session.getRegister("lane.config", "main"))?.value.thinkingLevel).toBe("high");
@@ -226,12 +252,12 @@ describe("runtime2 Lane transitions", () => {
 			await releaseCommit.promise;
 		};
 
-		const transition = setThinkingLevel(lane, "high");
+		const command = setThinkingLevel(lane, "high");
 		await commitStarted.promise;
 
 		expect(lane.state.configuration.thinkingLevel).toBe("off");
 		releaseCommit.resolve();
-		expect(await transition).toBe("high");
+		expect(await command).toBe("high");
 		expect(lane.state.configuration.thinkingLevel).toBe("high");
 		expect((await session.getRegister("lane.config", "main"))?.value.thinkingLevel).toBe("high");
 	});
@@ -249,7 +275,7 @@ describe("runtime2 Lane transitions", () => {
 		expect((await session.getRegister("lane.config", "main"))?.value.thinkingLevel).toBe("off");
 	});
 
-	it("plans queued transitions from the latest committed memory", async () => {
+	it("plans queued commands from the latest committed memory", async () => {
 		const { lane, storage } = await createLane();
 		const commitStarted = deferred();
 		const releaseCommit = deferred();

@@ -9,6 +9,7 @@ import { MemorySessionRepo, MemoryStorage } from "../../../src/harness/session/m
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type {
 	LaneConfiguration,
+	NavigationState,
 	OperationMeta,
 	RunState,
 	Session,
@@ -19,7 +20,9 @@ class FailingMemoryStorage extends MemoryStorage {
 	failure: Error | undefined;
 
 	override commit(transaction: Transaction) {
-		return this.failure === undefined ? super.commit(transaction) : Promise.reject(this.failure);
+		const failure = this.failure;
+		this.failure = undefined;
+		return failure === undefined ? super.commit(transaction) : Promise.reject(failure);
 	}
 }
 
@@ -115,6 +118,19 @@ describe("runtime2 AgentHarness", () => {
 		});
 	});
 
+	it("appends idle entries through owned lane state", async () => {
+		const session = await createSession();
+		const { harness } = await createAgentHarness(modelOptions(session));
+
+		const entryId = await harness.sessionTree.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+
+		expect(await harness.getLeafId()).toBe(entryId);
+		expect((await session.getRegister("lane.leaf", "main"))?.value).toBe(entryId);
+		expect(await harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" })).toMatchObject([
+			{ id: entryId, parentId: null, message: { role: "user", content: "hello" } },
+		]);
+	});
+
 	it("restores every configured lane without replacing its configuration", async () => {
 		const session = await createSession();
 		const workerConfiguration: LaneConfiguration = {
@@ -179,6 +195,17 @@ describe("runtime2 AgentHarness", () => {
 		expect(await harness.lanes()).toEqual([
 			{ name: "main", leafId: null, operation: { id: operationId, kind: "run", status: "suspended" } },
 		]);
+		const pendingId = await harness.sessionTree.appendCustomEntry("note", { text: "queued" });
+		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		const updatedState = harness.state.operation?.state;
+		if (updatedState?.kind !== "run") throw new Error("missing updated run state");
+		expect(updatedState.inbox.writes).toEqual([pendingId]);
+		expect((await session.getRegister("pending.entry", pendingId))?.value).toEqual({
+			type: "custom",
+			customType: "note",
+			payload: { text: "queued" },
+		});
+		expect((await session.getRegister("lane.leaf", "main"))?.value).toBeNull();
 		await expect(harness.inspectExecution()).rejects.toBeInstanceOf(RuntimeSliceNotImplemented);
 
 		const closing = harness.close();
@@ -188,7 +215,7 @@ describe("runtime2 AgentHarness", () => {
 		const reopened = await repo.open(session.metadata);
 		expect((await reopened.getRegister("lane.state", "main"))?.value.currentOperationId).toBe(operationId);
 		expect((await reopened.getRegister("op.meta", operationId))?.value).toEqual(meta);
-		expect((await reopened.getRegister("op.state", operationId))?.value).toEqual(state);
+		expect((await reopened.getRegister("op.state", operationId))?.value).toEqual(updatedState);
 	});
 
 	it("uses owned state after creation and starts no option callbacks", async () => {
@@ -218,7 +245,53 @@ describe("runtime2 AgentHarness", () => {
 		await expect(harness.getTools()).rejects.toBeInstanceOf(RuntimeSliceNotImplemented);
 	});
 
-	it("faults every lane when an admitted commit fails", async () => {
+	it("rejects append during a structural operation without faulting", async () => {
+		const session = await createSession();
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuredMain }],
+			}),
+		);
+		const operationId = session.idGenerator.next();
+		const meta: OperationMeta = {
+			operationId,
+			lane: "main",
+			sourceLeafId: null,
+			startedAt: 1,
+			intent: { kind: "navigation", targetId: null, summarize: false },
+		};
+		const state: NavigationState = {
+			kind: "navigation",
+			control: { status: "running" },
+			targetId: null,
+			summarize: false,
+			phase: { kind: "ready_to_commit" },
+		};
+		await session.mutate("main", (mutator) =>
+			mutator.commit({
+				writes: [
+					{ kind: "register", op: "set", namespace: "op.meta", key: operationId, value: meta },
+					{ kind: "register", op: "set", namespace: "op.state", key: operationId, value: state },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "lane.state",
+						key: "main",
+						value: { currentOperationId: operationId, pendingNextRun: [] },
+					},
+				],
+			}),
+		);
+		const { harness } = await createAgentHarness(modelOptions(session));
+
+		await expect(harness.sessionTree.appendMessage({ role: "user", content: "later", timestamp: 2 })).rejects.toThrow(
+			`Cannot append while structural operation ${operationId} is active`,
+		);
+		expect(await harness.lanes()).toHaveLength(1);
+		await harness.setThinkingLevel("high");
+	});
+
+	it("faults queued lane work before releasing a failed mutation", async () => {
 		const { session, storage } = await createFailingSession();
 		await session.createLane("worker", null, configuredMain);
 		const { harness } = await createAgentHarness(modelOptions(session));
@@ -227,10 +300,12 @@ describe("runtime2 AgentHarness", () => {
 		if (!(worker instanceof Lane)) throw new Error("missing runtime2 worker lane");
 		const failure = new Error("commit failed");
 		storage.failure = failure;
+		const failed = worker.setThinkingLevel("high");
+		const queued = worker.setActiveTools(["read"]);
 
 		let rejected: unknown;
 		try {
-			await worker.setThinkingLevel("high");
+			await failed;
 		} catch (error) {
 			rejected = error;
 		}
@@ -238,6 +313,7 @@ describe("runtime2 AgentHarness", () => {
 		expect(rejected).toBeInstanceOf(HarnessFault);
 		if (!(rejected instanceof HarnessFault)) throw new Error("missing harness fault");
 		expect(rejected.cause).toBe(failure);
+		await expect(queued).rejects.toBe(rejected);
 		await expect(harness.getLeafId()).rejects.toBe(rejected);
 		await expect(worker.getThinkingLevel()).rejects.toBe(rejected);
 		expect(harness.fault(new Error("later"))).toBe(rejected);

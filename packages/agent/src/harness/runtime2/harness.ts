@@ -131,6 +131,8 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 
 	close(): Promise<void> {
 		if (this.closePromise !== undefined) return this.closePromise;
+		// Seal synchronously before awaiting anything. Work admitted before this point may finish and is drained by
+		// Session.close(); later work rejects. Never recheck openness after a successful commit.
 		const error = new HarnessClosed();
 		for (const lane of this.lanesByName.values()) lane.seal(error);
 		this.hooks.close(error);

@@ -64,7 +64,9 @@ async function createLane(): Promise<{
 	const models = createModels();
 	models.setProvider(faux.provider);
 	return {
-		lane: new Lane("main", session, models, await restoreLane(session, "main")),
+		lane: new Lane("main", session, models, await restoreLane(session, "main"), (cause) =>
+			cause instanceof Error ? cause : new Error(String(cause)),
+		),
 		model: faux.getModel(),
 		session,
 		storage,

@@ -5,6 +5,8 @@ import { RuntimeSliceNotImplemented } from "../runtime/types.ts";
 import type { Session, SessionTree, Transaction } from "../session/types.ts";
 import type { LaneState } from "./types.ts";
 
+type FaultHandler = (cause: unknown) => Error;
+
 interface LaneTransition<TResult> {
 	transaction: Transaction;
 	next: LaneState;
@@ -17,15 +19,17 @@ export class Lane implements AgentLane {
 	readonly sessionTree: SessionTree;
 	readonly session: Session;
 	readonly models: Models;
+	readonly onFault: FaultHandler;
 	state: LaneState;
 	closedError: Error | undefined;
 
-	constructor(name: string, session: Session, models: Models, state: LaneState) {
+	constructor(name: string, session: Session, models: Models, state: LaneState, onFault: FaultHandler) {
 		this.session = session;
 		this.models = models;
 		this.name = name;
 		this.sessionTree = session.view(name);
 		this.state = state;
+		this.onFault = onFault;
 	}
 
 	async getLeafId(): Promise<string | null> {
@@ -40,12 +44,17 @@ export class Lane implements AgentLane {
 
 	async transition<TResult>(plan: (state: LaneState) => LaneTransition<TResult>): Promise<TResult> {
 		this.assertOpen();
-		return this.session.mutate(this.name, async (mutator) => {
-			const transition = plan(this.state);
-			await mutator.commit(transition.transaction);
-			this.state = transition.next;
-			return transition.result;
-		});
+		try {
+			return await this.session.mutate(this.name, async (mutator) => {
+				const transition = plan(this.state);
+				await mutator.commit(transition.transaction);
+				this.state = transition.next;
+				return transition.result;
+			});
+		} catch (error) {
+			if (this.closedError !== undefined) throw this.closedError;
+			throw this.onFault(error);
+		}
 	}
 
 	async accept(): Promise<never> {

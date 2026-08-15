@@ -17,11 +17,12 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 	readonly seed: LaneConfiguration;
 	readonly lanesByName = new Map<string, Lane>();
 	closePromise: Promise<void> | undefined;
+	faultError: HarnessFault | undefined;
 
 	constructor(options: AgentHarnessOptions<TContext>, seed: LaneConfiguration, restored: Map<string, LaneState>) {
 		const main = restored.get("main");
 		if (main === undefined) throw new SessionInvariantError("Session is missing main lane");
-		super("main", options.session, options.models, main);
+		super("main", options.session, options.models, main, (cause) => this.fault(cause));
 		this.session = options.session;
 		this.seed = seed;
 		this.events = new HarnessEventBus();
@@ -37,7 +38,12 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		);
 		this.lanesByName.set("main", this);
 		for (const [name, state] of restored) {
-			if (name !== "main") this.lanesByName.set(name, new Lane(name, options.session, options.models, state));
+			if (name !== "main") {
+				this.lanesByName.set(
+					name,
+					new Lane(name, options.session, options.models, state, (cause) => this.fault(cause)),
+				);
+			}
 		}
 	}
 
@@ -127,6 +133,18 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 
 	async watchSession(): Promise<never> {
 		throw new RuntimeSliceNotImplemented("watchSession");
+	}
+
+	fault(cause: unknown): Error {
+		if (this.faultError !== undefined) return this.faultError;
+		if (this.closedError !== undefined) return this.closedError;
+		const normalized = cause instanceof Error ? cause : new Error(String(cause));
+		const fault = new HarnessFault("AgentHarness storage or invariant fault", normalized);
+		this.faultError = fault;
+		for (const lane of this.lanesByName.values()) lane.seal(fault);
+		this.hooks.close(fault);
+		this.events.close(fault);
+		return fault;
 	}
 
 	close(): Promise<void> {

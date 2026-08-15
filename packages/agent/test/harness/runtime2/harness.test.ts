@@ -5,10 +5,26 @@ import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/com
 import { RuntimeSliceNotImplemented } from "../../../src/harness/runtime/types.ts";
 import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
-import { MemorySessionRepo } from "../../../src/harness/session/memory.ts";
-import type { LaneConfiguration, OperationMeta, RunState, Session } from "../../../src/harness/session/types.ts";
+import { MemorySessionRepo, MemoryStorage } from "../../../src/harness/session/memory.ts";
+import { StorageBackedSession } from "../../../src/harness/session/session.ts";
+import type {
+	LaneConfiguration,
+	OperationMeta,
+	RunState,
+	Session,
+	Transaction,
+} from "../../../src/harness/session/types.ts";
+
+class FailingMemoryStorage extends MemoryStorage {
+	failure: Error | undefined;
+
+	override commit(transaction: Transaction) {
+		return this.failure === undefined ? super.commit(transaction) : Promise.reject(this.failure);
+	}
+}
 
 const repos: MemorySessionRepo[] = [];
+const standaloneSessions: Session[] = [];
 const configuredMain: LaneConfiguration = {
 	model: { provider: "configured", modelId: "main" },
 	thinkingLevel: "low",
@@ -19,6 +35,30 @@ async function createSession(): Promise<Session> {
 	const repo = new MemorySessionRepo();
 	repos.push(repo);
 	return repo.create({});
+}
+
+async function createFailingSession(): Promise<{ session: Session; storage: FailingMemoryStorage }> {
+	const storage = new FailingMemoryStorage();
+	const session = new StorageBackedSession(
+		{ id: `runtime2-fault-${standaloneSessions.length}`, createdAt: 1, storageVersion: 1 },
+		storage,
+	);
+	standaloneSessions.push(session);
+	await session.mutate("main", (mutator) =>
+		mutator.commit({
+			writes: [
+				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
+				{
+					kind: "register",
+					op: "set",
+					namespace: "lane.state",
+					key: "main",
+					value: { currentOperationId: null, pendingNextRun: [] },
+				},
+			],
+		}),
+	);
+	return { session, storage };
 }
 
 function modelOptions(session: Session) {
@@ -50,6 +90,7 @@ function runState(triggerEntryId: string): RunState {
 
 afterEach(async () => {
 	for (const repo of repos.splice(0)) await repo.close();
+	for (const session of standaloneSessions.splice(0)) await session.close();
 });
 
 describe("runtime2 AgentHarness", () => {
@@ -175,6 +216,34 @@ describe("runtime2 AgentHarness", () => {
 		expect(getRegister).not.toHaveBeenCalled();
 		expect(listRegisters).not.toHaveBeenCalled();
 		await expect(harness.getTools()).rejects.toBeInstanceOf(RuntimeSliceNotImplemented);
+	});
+
+	it("faults every lane when an admitted commit fails", async () => {
+		const { session, storage } = await createFailingSession();
+		await session.createLane("worker", null, configuredMain);
+		const { harness } = await createAgentHarness(modelOptions(session));
+		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		const worker = await harness.lane("worker");
+		if (!(worker instanceof Lane)) throw new Error("missing runtime2 worker lane");
+		const failure = new Error("commit failed");
+		storage.failure = failure;
+
+		let rejected: unknown;
+		try {
+			await worker.setThinkingLevel("high");
+		} catch (error) {
+			rejected = error;
+		}
+
+		expect(rejected).toBeInstanceOf(HarnessFault);
+		if (!(rejected instanceof HarnessFault)) throw new Error("missing harness fault");
+		expect(rejected.cause).toBe(failure);
+		await expect(harness.getLeafId()).rejects.toBe(rejected);
+		await expect(worker.getThinkingLevel()).rejects.toBe(rejected);
+		expect(harness.fault(new Error("later"))).toBe(rejected);
+		expect(worker.state.configuration).toEqual(configuredMain);
+		expect((await session.getRegister("lane.config", "worker"))?.value).toEqual(configuredMain);
+		await harness.close();
 	});
 
 	it("wraps initialization invariant failures as harness faults", async () => {

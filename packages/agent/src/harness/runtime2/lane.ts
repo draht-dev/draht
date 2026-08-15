@@ -41,7 +41,7 @@ export class Lane implements AgentLane {
 	readonly sessionTree: SessionTree;
 	private readonly sessionView: SessionTree;
 	protected readonly session: Session;
-	private readonly models: Models;
+	protected readonly models: Models;
 	private readonly onFault: FaultHandler;
 	state: LaneState;
 	closedError: Error | undefined;

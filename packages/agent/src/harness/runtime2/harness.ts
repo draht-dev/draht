@@ -1,9 +1,22 @@
-import type { AgentHarness, AgentHarnessOptions, AgentLane, LaneInfo, SuspendedOperation } from "../agent-harness.ts";
-import { HarnessClosed, HarnessFault } from "../agent-harness.ts";
+import type {
+	AgentHarness,
+	AgentHarnessOptions,
+	AgentLane,
+	CreateLaneResult,
+	LaneInfo,
+	SuspendedOperation,
+} from "../agent-harness.ts";
+import { Closed, HarnessClosed, HarnessFault, InvalidLane, LaneExists, UnknownTarget } from "../agent-harness.ts";
 import { HarnessEventBus } from "../events.ts";
 import { HookRegistry } from "../hooks.ts";
+import { Result } from "../result.ts";
 import { RuntimeSliceNotImplemented } from "../runtime/types.ts";
-import { SessionInvariantError } from "../session/session.ts";
+import {
+	SessionInvalidLaneError,
+	SessionInvariantError,
+	SessionLaneExistsError,
+	SessionUnknownTargetError,
+} from "../session/session.ts";
 import type { LaneConfiguration, Session } from "../session/types.ts";
 import { Lane } from "./lane.ts";
 import { restoreSession } from "./restore.ts";
@@ -69,8 +82,38 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		});
 	}
 
-	async createLane(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("createLane");
+	async createLane(name: string, at: string | null): Promise<CreateLaneResult> {
+		// Public Result errors are expected caller/lifecycle outcomes. Harness faults reject every API call because the
+		// owned state can no longer advance safely; they are intentionally not members of CreateLaneResult.
+		if (this.faultError !== undefined) throw this.faultError;
+		if (this.closedError !== undefined) return Result.err(new Closed({ message: this.closedError.message }));
+		const state: LaneState = {
+			leafId: at,
+			configuration: this.seed,
+			pendingNextRun: [],
+			operation: null,
+		};
+		try {
+			await this.session.createLane(name, at, this.seed);
+			const lane = new Lane(name, this.session, this.models, state, (cause) => this.fault(cause));
+			if (this.closedError !== undefined) lane.seal(this.closedError);
+			this.lanesByName.set(name, lane);
+			await this.events.emit({ type: "lane_created", lane: name, at });
+			return Result.ok(lane);
+		} catch (error) {
+			// Session has no Result layer, so its expected validation failures are thrown. Translate only those failures
+			// to the public tagged Result contract; storage and invariant failures fault the harness below.
+			if (error instanceof SessionLaneExistsError) {
+				return Result.err(new LaneExists({ lane: error.lane, message: error.message }));
+			}
+			if (error instanceof SessionInvalidLaneError) {
+				return Result.err(new InvalidLane({ lane: error.lane, reason: error.reason, message: error.message }));
+			}
+			if (error instanceof SessionUnknownTargetError) {
+				return Result.err(new UnknownTarget({ targetId: error.targetId, message: error.message }));
+			}
+			throw this.fault(error);
+		}
 	}
 
 	async getTools(): Promise<never> {

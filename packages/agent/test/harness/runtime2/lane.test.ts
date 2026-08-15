@@ -3,20 +3,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { HarnessClosed } from "../../../src/harness/agent-harness.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
-import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
-import type { CommitResult, LaneConfiguration, Session, Transaction } from "../../../src/harness/session/types.ts";
-
-class ControlledMemoryStorage extends MemoryStorage {
-	beforeNextCommit: (() => Promise<void>) | undefined;
-
-	override async commit(transaction: Transaction): Promise<CommitResult> {
-		const beforeCommit = this.beforeNextCommit;
-		this.beforeNextCommit = undefined;
-		await beforeCommit?.();
-		return super.commit(transaction);
-	}
-}
+import type { LaneConfiguration, Session } from "../../../src/harness/session/types.ts";
+import { ControlledMemoryStorage, deferred } from "./test-utils.ts";
 
 const sessions: Session[] = [];
 const configuration: LaneConfiguration = {
@@ -24,14 +13,6 @@ const configuration: LaneConfiguration = {
 	thinkingLevel: "off",
 	activeToolNames: [],
 };
-
-function deferred(): { promise: Promise<void>; resolve(): void } {
-	let resolvePromise: (() => void) | undefined;
-	const promise = new Promise<void>((resolve) => {
-		resolvePromise = resolve;
-	});
-	return { promise, resolve: () => resolvePromise?.() };
-}
 
 async function createLane(): Promise<{
 	lane: Lane;

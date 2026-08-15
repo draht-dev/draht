@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HarnessClosed, HarnessFault } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
+import type { Result } from "../../../src/harness/result.ts";
 import { RuntimeSliceNotImplemented } from "../../../src/harness/runtime/types.ts";
 import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
@@ -17,6 +18,7 @@ import type {
 	Transaction,
 } from "../../../src/harness/session/types.ts";
 import type { AgentHarnessTool } from "../../../src/harness/types.ts";
+import { ControlledMemoryStorage, deferred } from "./test-utils.ts";
 
 class FailingMemoryStorage extends MemoryStorage {
 	failure: Error | undefined;
@@ -42,10 +44,9 @@ async function createSession(): Promise<Session> {
 	return repo.create({});
 }
 
-async function createFailingSession(): Promise<{ session: Session; storage: FailingMemoryStorage }> {
-	const storage = new FailingMemoryStorage();
+async function createStorageSession(storage: MemoryStorage): Promise<Session> {
 	const session = new StorageBackedSession(
-		{ id: `runtime2-fault-${standaloneSessions.length}`, createdAt: 1, storageVersion: 1 },
+		{ id: `runtime2-storage-${standaloneSessions.length}`, createdAt: 1, storageVersion: 1 },
 		storage,
 	);
 	standaloneSessions.push(session);
@@ -63,7 +64,17 @@ async function createFailingSession(): Promise<{ session: Session; storage: Fail
 			],
 		}),
 	);
-	return { session, storage };
+	return session;
+}
+
+async function createFailingSession(): Promise<{ session: Session; storage: FailingMemoryStorage }> {
+	const storage = new FailingMemoryStorage();
+	return { session: await createStorageSession(storage), storage };
+}
+
+function unwrap<T>(result: Result<T, unknown>): T {
+	if (!result.ok) throw result.error;
+	return result.value;
 }
 
 function modelOptions(session: Session) {
@@ -172,6 +183,119 @@ describe("runtime2 AgentHarness", () => {
 		expect(await worker?.getLeafId()).toBeNull();
 		expect((await harness.lanes()).map((lane) => lane.name).sort()).toEqual(["main", "worker"]);
 		expect(await session.listRegisters("lane.config")).toEqual(before);
+	});
+
+	it("creates a lane from the captured seed and publishes it after commit", async () => {
+		const session = await createSession();
+		const options = modelOptions(session);
+		const { harness } = await createAgentHarness({
+			...options,
+			thinkingLevel: "high",
+			activeToolNames: ["read"],
+		});
+		const anchor = await harness.sessionTree.appendCustomEntry("anchor");
+		await harness.setThinkingLevel("low");
+		let durableConfigurationAtEvent: LaneConfiguration | undefined;
+		let laneVisibleAtEvent = false;
+		harness.events.on("lane_created", async () => {
+			durableConfigurationAtEvent = (await session.getRegister("lane.config", "worker"))?.value;
+			laneVisibleAtEvent = (await harness.lane("worker")) !== undefined;
+		});
+
+		const worker = unwrap(await harness.createLane("worker", anchor));
+
+		expect(await harness.lane("worker")).toBe(worker);
+		expect(await worker.getLeafId()).toBe(anchor);
+		expect(await worker.getThinkingLevel()).toBe("high");
+		expect(await worker.getActiveTools()).toEqual(["read"]);
+		expect(durableConfigurationAtEvent).toEqual({
+			model: { provider: options.model.provider, modelId: options.model.id },
+			thinkingLevel: "high",
+			activeToolNames: ["read"],
+		});
+		expect(laneVisibleAtEvent).toBe(true);
+		expect((await session.getRegister("lane.state", "worker"))?.value).toEqual({
+			currentOperationId: null,
+			pendingNextRun: [],
+		});
+	});
+
+	it("maps expected lane creation failures without faulting", async () => {
+		const session = await createSession();
+		const { harness } = await createAgentHarness(modelOptions(session));
+		unwrap(await harness.createLane("worker", null));
+
+		expect(await harness.createLane("worker", null)).toMatchObject({
+			ok: false,
+			error: { _tag: "LaneExists", lane: "worker" },
+		});
+		expect(await harness.createLane("", null)).toMatchObject({
+			ok: false,
+			error: { _tag: "InvalidLane", lane: "", reason: "lane name must not be empty" },
+		});
+		expect(await harness.createLane("missing", "unknown-entry")).toMatchObject({
+			ok: false,
+			error: { _tag: "UnknownTarget", targetId: "unknown-entry" },
+		});
+		expect((await harness.lanes()).map((lane) => lane.name).sort()).toEqual(["main", "worker"]);
+	});
+
+	it("faults without publishing a lane when creation commit fails", async () => {
+		const { session, storage } = await createFailingSession();
+		const { harness } = await createAgentHarness(modelOptions(session));
+		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		const failure = new Error("create lane failed");
+		storage.failure = failure;
+
+		let rejected: unknown;
+		try {
+			await harness.createLane("worker", null);
+		} catch (error) {
+			rejected = error;
+		}
+
+		expect(rejected).toBeInstanceOf(HarnessFault);
+		if (!(rejected instanceof HarnessFault)) throw new Error("missing harness fault");
+		expect(rejected.cause).toBe(failure);
+		await expect(harness.createLane("later", null)).rejects.toBe(rejected);
+		expect(harness.lanesByName.has("worker")).toBe(false);
+		expect(await session.getRegister("lane.config", "worker")).toBeUndefined();
+		expect(await session.getRegister("lane.leaf", "worker")).toBeUndefined();
+		expect(await session.getRegister("lane.state", "worker")).toBeUndefined();
+	});
+
+	it("returns Closed when lane creation starts after close", async () => {
+		const session = await createSession();
+		const { harness } = await createAgentHarness(modelOptions(session));
+		await harness.close();
+
+		expect(await harness.createLane("late", null)).toMatchObject({
+			ok: false,
+			error: { _tag: "Closed" },
+		});
+	});
+
+	it("publishes an admitted lane creation before close finishes", async () => {
+		const storage = new ControlledMemoryStorage();
+		const session = await createStorageSession(storage);
+		const { harness } = await createAgentHarness(modelOptions(session));
+		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		const commitStarted = deferred();
+		const releaseCommit = deferred();
+		storage.beforeNextCommit = async () => {
+			commitStarted.resolve();
+			await releaseCommit.promise;
+		};
+		const creating = harness.createLane("worker", null);
+		await commitStarted.promise;
+		const closing = harness.close();
+		releaseCommit.resolve();
+
+		const worker = unwrap(await creating);
+		await closing;
+
+		expect(harness.lanesByName.get("worker")).toBe(worker);
+		await expect(worker.getLeafId()).rejects.toBeInstanceOf(HarnessClosed);
 	});
 
 	it("reports restored open operations without activating them", async () => {
@@ -312,12 +436,13 @@ describe("runtime2 AgentHarness", () => {
 
 	it("faults queued lane work before releasing a failed mutation", async () => {
 		const { session, storage } = await createFailingSession();
-		await session.createLane("worker", null, configuredMain);
 		const { harness } = await createAgentHarness(modelOptions(session));
 		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		unwrap(await harness.createLane("worker", null));
+		const worker = harness.lanesByName.get("worker");
+		if (worker === undefined) throw new Error("missing runtime2 worker lane");
+		const initialConfiguration = worker.state.configuration;
 		const faultEvent = new Promise<unknown>((resolve) => harness.events.on("fault", resolve));
-		const worker = await harness.lane("worker");
-		if (!(worker instanceof Lane)) throw new Error("missing runtime2 worker lane");
 		const failure = new Error("commit failed");
 		storage.failure = failure;
 		const failed = worker.setThinkingLevel("high");
@@ -338,8 +463,8 @@ describe("runtime2 AgentHarness", () => {
 		await expect(harness.getLeafId()).rejects.toBe(rejected);
 		await expect(worker.getThinkingLevel()).rejects.toBe(rejected);
 		expect(harness.fault(new Error("later"))).toBe(rejected);
-		expect(worker.state.configuration).toEqual(configuredMain);
-		expect((await session.getRegister("lane.config", "worker"))?.value).toEqual(configuredMain);
+		expect(worker.state.configuration).toBe(initialConfiguration);
+		expect((await session.getRegister("lane.config", "worker"))?.value).toEqual(initialConfiguration);
 		await harness.close();
 	});
 

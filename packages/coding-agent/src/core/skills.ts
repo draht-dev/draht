@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import ignore from "ignore";
 import { basename, dirname, join, relative, resolve, sep } from "path";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { CONFIG_DIR_NAME, getAgentDir, getShippedSkillsDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
@@ -135,6 +135,12 @@ export interface LoadSkillsFromDirOptions {
 
 function createSkillSourceInfo(filePath: string, baseDir: string, source: string): SourceInfo {
 	switch (source) {
+		case "builtin":
+			return createSyntheticSourceInfo(filePath, {
+				source: "builtin",
+				scope: "user",
+				baseDir,
+			});
 		case "user":
 			return createSyntheticSourceInfo(filePath, {
 				source: "local",
@@ -378,6 +384,8 @@ export interface LoadSkillsOptions {
 	skillPaths: string[];
 	/** Include default skills directories. */
 	includeDefaults: boolean;
+	/** Include skills shipped with the package (builtin skills). */
+	includeShipped?: boolean;
 }
 
 /**
@@ -385,7 +393,7 @@ export interface LoadSkillsOptions {
  * Returns skills and any validation diagnostics.
  */
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
-	const { agentDir, skillPaths, includeDefaults } = options;
+	const { agentDir, skillPaths, includeDefaults, includeShipped } = options;
 
 	// Resolve agentDir - if not provided, use default from config
 	const resolvedCwd = resolvePath(options.cwd);
@@ -478,6 +486,11 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 			const message = error instanceof Error ? error.message : "failed to read skill path";
 			allDiagnostics.push({ type: "warning", message, path: resolvedPath });
 		}
+	}
+
+	// Shipped (builtin) skills load last so user/project/CLI skills win name collisions.
+	if (includeShipped) {
+		addSkills(loadSkillsFromDirInternal(getShippedSkillsDir(), "builtin", false));
 	}
 
 	return {

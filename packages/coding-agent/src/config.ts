@@ -579,6 +579,11 @@ export function getShippedPromptsDir(): string {
 	return join(getPackageDir(), "prompts");
 }
 
+/** Get path to shipped skills directory (bundled with the package). */
+export function getShippedSkillsDir(): string {
+	return join(getPackageDir(), "skills");
+}
+
 /** Get path to sessions directory */
 export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");

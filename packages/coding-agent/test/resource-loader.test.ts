@@ -40,6 +40,18 @@ describe("DefaultResourceLoader", () => {
 			expect(loader.getThemes().themes).toEqual([]);
 		});
 
+		it("should load shipped (builtin) skills by default and drop them with noSkills", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+			const hexagon = loader.getSkills().skills.find((s) => s.name === "hexagon-animation");
+			expect(hexagon).toBeDefined();
+			expect(hexagon?.sourceInfo.source).toBe("builtin");
+
+			const noSkillsLoader = new DefaultResourceLoader({ cwd, agentDir, noSkills: true });
+			await noSkillsLoader.reload();
+			expect(noSkillsLoader.getSkills().skills).toEqual([]);
+		});
+
 		it("should discover skills from agentDir", async () => {
 			const skillsDir = join(agentDir, "skills");
 			mkdirSync(skillsDir, { recursive: true });

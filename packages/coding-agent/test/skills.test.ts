@@ -1,6 +1,7 @@
-import { homedir } from "os";
+import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
 import { join, resolve } from "path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.ts";
 import { formatSkillsForPrompt, loadSkills, loadSkillsFromDir, type Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
@@ -387,6 +388,68 @@ describe("skills", () => {
 				includeDefaults: true,
 			});
 			expect(withTilde.length).toBe(withoutTilde.length);
+		});
+	});
+
+	describe("shipped skills", () => {
+		const emptyAgentDir = resolve(__dirname, "fixtures/empty-agent");
+		const emptyCwd = resolve(__dirname, "fixtures/empty-cwd");
+		let tempDir: string;
+
+		beforeEach(() => {
+			tempDir = join(tmpdir(), `shipped-skills-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+			mkdirSync(tempDir, { recursive: true });
+		});
+
+		afterEach(() => {
+			rmSync(tempDir, { recursive: true, force: true });
+		});
+
+		it("should not load shipped skills by default", () => {
+			const { skills } = loadSkills({
+				agentDir: emptyAgentDir,
+				cwd: emptyCwd,
+				skillPaths: [],
+				includeDefaults: false,
+			});
+			expect(skills).toHaveLength(0);
+		});
+
+		it("should load shipped skills with includeShipped", () => {
+			const { skills, diagnostics } = loadSkills({
+				agentDir: emptyAgentDir,
+				cwd: emptyCwd,
+				skillPaths: [],
+				includeDefaults: false,
+				includeShipped: true,
+			});
+			const hexagon = skills.find((s) => s.name === "hexagon-animation");
+			expect(hexagon).toBeDefined();
+			expect(hexagon?.sourceInfo.source).toBe("builtin");
+			expect(diagnostics.filter((d) => d.type !== "collision")).toHaveLength(0);
+		});
+
+		it("should let user skills win name collisions against shipped skills", () => {
+			const userSkillDir = join(tempDir, "hexagon-animation");
+			mkdirSync(userSkillDir, { recursive: true });
+			writeFileSync(
+				join(userSkillDir, "SKILL.md"),
+				`---\nname: hexagon-animation\ndescription: User override of the shipped skill.\n---\nOverride content.\n`,
+			);
+
+			const { skills, diagnostics } = loadSkills({
+				agentDir: emptyAgentDir,
+				cwd: emptyCwd,
+				skillPaths: [tempDir],
+				includeDefaults: false,
+				includeShipped: true,
+			});
+			const hexagon = skills.filter((s) => s.name === "hexagon-animation");
+			expect(hexagon).toHaveLength(1);
+			expect(hexagon[0].description).toBe("User override of the shipped skill.");
+			expect(diagnostics.some((d) => d.type === "collision" && d.collision?.name === "hexagon-animation")).toBe(
+				true,
+			);
 		});
 	});
 

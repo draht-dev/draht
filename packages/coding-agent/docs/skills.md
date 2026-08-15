@@ -23,6 +23,7 @@ Pi implements the [Agent Skills standard](https://agentskills.io/specification),
 
 Pi loads skills from:
 
+- Shipped: a `skills/` directory bundled with the package (builtin skills such as `hexagon-animation`). Disabled by `--no-skills`; a user or project skill with the same name overrides a shipped skill.
 - Global:
   - `~/.pi/agent/skills/`
   - `~/.agents/skills/`

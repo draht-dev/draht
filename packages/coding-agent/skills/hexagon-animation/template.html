@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>hexagon flow</title>
+<style>
+	html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+	canvas { display: block; width: 100vw; height: 100vh; }
+	#hud {
+		position: fixed; left: 12px; bottom: 10px;
+		font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		color: rgba(255, 255, 255, 0.35); user-select: none; pointer-events: none;
+		letter-spacing: 0.04em;
+	}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+"use strict";
+
+// Config baked in by generate.mjs. Any field may be omitted; URL params win over
+// baked values, and everything left unset is randomized per page load.
+// Fields: { seed, palette, radius, speed }
+const BAKED_CONFIG = /*__CONFIG__*/ null /*__END_CONFIG__*/;
+
+// ── seeded rng ──────────────────────────────────────────────────────────────
+function mulberry32(a) {
+	return function () {
+		a |= 0;
+		a = (a + 0x6d2b79f5) | 0;
+		let t = Math.imul(a ^ (a >>> 15), 1 | a);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+// ── palettes ────────────────────────────────────────────────────────────────
+const PALETTES = [
+	{ name: "abyss",  bg0: "#04060c", bg1: "#0a1226", low: "#122c4d", high: "#6ee7ff", glow: "#aef4ff" },
+	{ name: "magma",  bg0: "#0a0404", bg1: "#1c0909", low: "#43110e", high: "#ffab4a", glow: "#ffd9a0" },
+	{ name: "acid",   bg0: "#040805", bg1: "#0a1a0f", low: "#12381f", high: "#a8ff6b", glow: "#dcffb8" },
+	{ name: "synth",  bg0: "#0a0512", bg1: "#180b2e", low: "#3a1560", high: "#ff6ec7", glow: "#ffb3e2" },
+	{ name: "royal",  bg0: "#04050f", bg1: "#0b0f2b", low: "#1a2470", high: "#93a6ff", glow: "#ccd6ff" },
+	{ name: "ember",  bg0: "#080505", bg1: "#170d08", low: "#3c1a08", high: "#ff5c3d", glow: "#ffb59e" },
+	{ name: "mono",   bg0: "#050505", bg1: "#101010", low: "#232323", high: "#f2f2f2", glow: "#ffffff" },
+	{ name: "teal",   bg0: "#030808", bg1: "#082020", low: "#0d4242", high: "#4affd0", glow: "#c2ffee" },
+];
+
+function hexToRgb(h) {
+	const n = parseInt(h.slice(1), 16);
+	return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function lerpRgb(a, b, t) {
+	return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+function shade(c, f) {
+	return [c[0] * f, c[1] * f, c[2] * f];
+}
+function css(c, alpha) {
+	return "rgba(" + (c[0] | 0) + "," + (c[1] | 0) + "," + (c[2] | 0) + "," + (alpha === undefined ? 1 : alpha) + ")";
+}
+
+// ── parameters (baked config < url params, everything else from seed) ───────
+const params = new URLSearchParams(location.search);
+function pick(key) {
+	const raw = params.get(key);
+	if (raw !== null && raw !== "" && Number.isFinite(Number(raw))) return Number(raw);
+	if (BAKED_CONFIG && Number.isFinite(BAKED_CONFIG[key])) return BAKED_CONFIG[key];
+	return undefined;
+}
+
+let seed = pick("seed");
+if (seed === undefined) seed = (Math.random() * 0xffffffff) >>> 0;
+seed = seed >>> 0;
+
+let world = null;
+
+function buildWorld() {
+	const rng = mulberry32(seed);
+
+	const paletteIndex =
+		pick("palette") !== undefined
+			? ((pick("palette") | 0) % PALETTES.length + PALETTES.length) % PALETTES.length
+			: (rng() * PALETTES.length) | 0;
+
+	const radius = Math.max(3, Math.min(16, pick("radius") !== undefined ? pick("radius") | 0 : 6 + ((rng() * 5) | 0)));
+	const speedScale = pick("speed") !== undefined ? pick("speed") : 0.75 + rng() * 0.7;
+
+	// hex grid, flat-top axial coordinates
+	const cells = [];
+	for (let q = -radius; q <= radius; q++) {
+		for (let r = -radius; r <= radius; r++) {
+			if (Math.abs(q + r) > radius) continue;
+			const x = 1.5 * q;
+			const y = Math.sqrt(3) * (r + q / 2);
+			cells.push({ q, r, x, y });
+		}
+	}
+
+	const w = {
+		rng,
+		radius,
+		cells,
+		palette: PALETTES[paletteIndex],
+		paletteIndex,
+		// camera
+		theta0: rng() * Math.PI * 2,
+		rotSpeed: (rng() * 2 - 1) * 0.045 * speedScale,
+		// geometry
+		gap: 0.86 + rng() * 0.1,
+		zFactor: 0.9,
+		baseH: 0.55 + rng() * 0.4,
+		amp: 1.4 + rng() * 1.9,
+		// noise field
+		noiseFreq: 0.3 + rng() * 0.35,
+		noiseSpeed: (0.28 + rng() * 0.45) * speedScale,
+		noiseMix: 0.55 + rng() * 0.3,
+		// traveling wave
+		waveAngle: rng() * Math.PI * 2,
+		waveK: 0.35 + rng() * 0.6,
+		waveSpeed: (0.7 + rng() * 1.1) * speedScale,
+		// light
+		lightAngle: rng() * Math.PI * 2,
+	};
+	w.waveMix = 1 - w.noiseMix;
+	w.lo = hexToRgb(w.palette.low);
+	w.hi = hexToRgb(w.palette.high);
+	w.glow = hexToRgb(w.palette.glow);
+	w.light = [Math.cos(w.lightAngle) * 0.8, Math.sin(w.lightAngle) * 0.8, 0.6];
+	const ll = Math.hypot(w.light[0], w.light[1], w.light[2]);
+	w.light = w.light.map((v) => v / ll);
+	// max center distance from origin, used to fit the grid on screen at any rotation
+	w.extent = radius * Math.sqrt(3) + 2;
+	return w;
+}
+
+// ── value noise (3d, seeded) ────────────────────────────────────────────────
+function hash3(ix, iy, iz) {
+	let h = (ix * 374761393 + iy * 668265263 + iz * 1440662683 + (seed | 0) * 974711) | 0;
+	h = Math.imul(h ^ (h >>> 13), 1274126177);
+	h ^= h >>> 16;
+	return (h >>> 0) / 4294967295;
+}
+function smooth(t) {
+	return t * t * (3 - 2 * t);
+}
+function noise3(x, y, z) {
+	const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+	const fx = smooth(x - ix), fy = smooth(y - iy), fz = smooth(z - iz);
+	let v = 0;
+	for (let dz = 0; dz <= 1; dz++) {
+		for (let dy = 0; dy <= 1; dy++) {
+			for (let dx = 0; dx <= 1; dx++) {
+				const wgt =
+					(dx ? fx : 1 - fx) * (dy ? fy : 1 - fy) * (dz ? fz : 1 - fz);
+				v += wgt * hash3(ix + dx, iy + dy, iz + dz);
+			}
+		}
+	}
+	return v;
+}
+function fbm3(x, y, z) {
+	let v = 0, a = 0.55, f = 1, sum = 0;
+	for (let i = 0; i < 3; i++) {
+		v += a * noise3(x * f, y * f, z * f);
+		sum += a;
+		a *= 0.5;
+		f *= 2.03;
+	}
+	return v / sum;
+}
+
+// ── rendering ───────────────────────────────────────────────────────────────
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const hud = document.getElementById("hud");
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+	DPR = Math.min(2, window.devicePixelRatio || 1);
+	W = window.innerWidth;
+	H = window.innerHeight;
+	canvas.width = Math.round(W * DPR);
+	canvas.height = Math.round(H * DPR);
+}
+window.addEventListener("resize", resize);
+resize();
+
+const ISO_X = Math.cos(Math.PI / 6); // 0.866
+const ISO_Y = 0.5;
+
+function heightAt(w, x, y, t) {
+	const n = fbm3(x * w.noiseFreq, y * w.noiseFreq, t * w.noiseSpeed);
+	const wave =
+		0.5 + 0.5 * Math.sin((x * Math.cos(w.waveAngle) + y * Math.sin(w.waveAngle)) * w.waveK - t * w.waveSpeed);
+	return w.baseH + w.amp * (n * w.noiseMix + wave * w.waveMix);
+}
+
+let t = 0;
+let last = performance.now();
+let paused = false;
+
+function frame(now) {
+	const dt = Math.min(0.05, (now - last) / 1000);
+	last = now;
+	if (!paused) t += dt;
+
+	const w = world;
+	const theta = w.theta0 + w.rotSpeed * t;
+	const cosT = Math.cos(theta), sinT = Math.sin(theta);
+
+	// fit grid to screen for any rotation angle
+	const maxH = w.baseH + w.amp;
+	const S = Math.min(
+		(W * 0.92) / (2 * Math.SQRT2 * ISO_X * w.extent),
+		(H * 0.88) / (Math.SQRT2 * w.extent + maxH * w.zFactor),
+	);
+	const zS = S * w.zFactor;
+	const cx = W / 2;
+	const cy = H * 0.55;
+
+	ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+	// background
+	const bg = ctx.createRadialGradient(cx, cy * 0.8, 0, cx, cy * 0.8, Math.max(W, H) * 0.75);
+	bg.addColorStop(0, w.palette.bg1);
+	bg.addColorStop(1, w.palette.bg0);
+	ctx.fillStyle = bg;
+	ctx.fillRect(0, 0, W, H);
+
+	// shared rotated corner directions (flat-top hexagon) + screen offsets
+	const corners = [];
+	for (let i = 0; i < 6; i++) {
+		const a = (Math.PI / 3) * i;
+		const dx = Math.cos(a) * w.gap, dy = Math.sin(a) * w.gap;
+		const rx = dx * cosT - dy * sinT;
+		const ry = dx * sinT + dy * cosT;
+		corners.push({
+			sx: (rx - ry) * ISO_X * S,
+			sy: (rx + ry) * ISO_Y * S,
+			normalAngle: a + Math.PI / 6, // outward normal of edge i -> i+1, before rotation
+		});
+	}
+
+	// polygon centroid is 0,0; outward screen normal of edge i is away from origin
+	const edges = [];
+	for (let i = 0; i < 6; i++) {
+		const a = corners[i], b = corners[(i + 1) % 6];
+		const ex = b.sx - a.sx, ey = b.sy - a.sy;
+		let nx = ey, ny = -ex;
+		const mx = (a.sx + b.sx) / 2, my = (a.sy + b.sy) / 2;
+		if (nx * mx + ny * my < 0) { nx = -nx; ny = -ny; }
+		const na = a.normalAngle + theta;
+		const n3 = [Math.cos(na), Math.sin(na), 0];
+		const lambert = Math.max(0, n3[0] * w.light[0] + n3[1] * w.light[1]);
+		edges.push({ i, visible: ny > 0, shade: 0.22 + 0.5 * lambert });
+	}
+
+	// project and depth sort
+	const drawList = [];
+	for (const cell of w.cells) {
+		const rx = cell.x * cosT - cell.y * sinT;
+		const ry = cell.x * sinT + cell.y * cosT;
+		const h = heightAt(w, cell.x, cell.y, t);
+		drawList.push({
+			sx: cx + (rx - ry) * ISO_X * S,
+			sy: cy + (rx + ry) * ISO_Y * S,
+			depth: rx + ry,
+			h,
+		});
+	}
+	drawList.sort((a, b) => a.depth - b.depth);
+
+	const hRange = w.amp;
+	for (const d of drawList) {
+		const topY = d.sy - d.h * zS;
+		const hNorm = Math.max(0, Math.min(1, (d.h - w.baseH) / hRange));
+		const topColor = lerpRgb(w.lo, w.hi, hNorm);
+
+		// side faces (screen extrusion is straight down, so only "downward" edges show)
+		for (const e of edges) {
+			if (!e.visible) continue;
+			const a = corners[e.i], b = corners[(e.i + 1) % 6];
+			ctx.beginPath();
+			ctx.moveTo(d.sx + a.sx, topY + a.sy);
+			ctx.lineTo(d.sx + b.sx, topY + b.sy);
+			ctx.lineTo(d.sx + b.sx, d.sy + b.sy);
+			ctx.lineTo(d.sx + a.sx, d.sy + a.sy);
+			ctx.closePath();
+			ctx.fillStyle = css(shade(topColor, e.shade));
+			ctx.fill();
+		}
+
+		// top face
+		ctx.beginPath();
+		ctx.moveTo(d.sx + corners[0].sx, topY + corners[0].sy);
+		for (let i = 1; i < 6; i++) ctx.lineTo(d.sx + corners[i].sx, topY + corners[i].sy);
+		ctx.closePath();
+		ctx.fillStyle = css(shade(topColor, 0.9 + 0.35 * hNorm));
+		ctx.fill();
+
+		// glow rim on the tallest cells
+		if (hNorm > 0.62) {
+			ctx.strokeStyle = css(w.glow, (hNorm - 0.62) * 1.6);
+			ctx.lineWidth = 1;
+			ctx.lineJoin = "round";
+			ctx.stroke();
+		}
+	}
+
+	requestAnimationFrame(frame);
+}
+
+// ── controls ────────────────────────────────────────────────────────────────
+function updateHud() {
+	hud.textContent =
+		"seed " + seed + " \u00b7 " + world.palette.name + " \u00b7 [r]eseed [p]alette [space] pause";
+}
+
+function setUrl() {
+	const u = new URLSearchParams(location.search);
+	u.set("seed", String(seed));
+	u.set("palette", String(world.paletteIndex));
+	history.replaceState(null, "", "?" + u.toString());
+}
+
+function reseed() {
+	seed = (Math.random() * 0xffffffff) >>> 0;
+	params.delete("palette");
+	if (BAKED_CONFIG) delete BAKED_CONFIG.palette;
+	params.delete("seed");
+	if (BAKED_CONFIG) delete BAKED_CONFIG.seed;
+	world = buildWorld();
+	setUrl();
+	updateHud();
+}
+
+window.addEventListener("keydown", (ev) => {
+	if (ev.key === "r" || ev.key === "R") reseed();
+	else if (ev.key === "p" || ev.key === "P") {
+		params.set("palette", String((world.paletteIndex + 1) % PALETTES.length));
+		world = buildWorld();
+		setUrl();
+		updateHud();
+	} else if (ev.key === " ") {
+		paused = !paused;
+		ev.preventDefault();
+	}
+});
+canvas.addEventListener("pointerdown", reseed);
+
+world = buildWorld();
+setUrl();
+updateHud();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

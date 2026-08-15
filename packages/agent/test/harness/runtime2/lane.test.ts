@@ -1,5 +1,6 @@
 import { type Api, createModels, fauxProvider, type Model } from "@draht/ai";
 import { afterEach, describe, expect, it } from "vitest";
+import { HarnessClosed } from "../../../src/harness/agent-harness.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
@@ -117,6 +118,27 @@ describe("runtime2 Lane transitions", () => {
 			thinkingLevel: "high",
 			activeToolNames,
 		});
+	});
+
+	it("rejects work after sealing while an admitted commit finishes", async () => {
+		const { lane, storage } = await createLane();
+		const commitStarted = deferred();
+		const releaseCommit = deferred();
+		storage.beforeNextCommit = async () => {
+			commitStarted.resolve();
+			await releaseCommit.promise;
+		};
+
+		const admitted = setThinkingLevel(lane, "high");
+		await commitStarted.promise;
+		const closed = new HarnessClosed();
+		lane.seal(closed);
+
+		await expect(lane.getLeafId()).rejects.toBe(closed);
+		await expect(lane.setThinkingLevel("low")).rejects.toBe(closed);
+		releaseCommit.resolve();
+		await admitted;
+		expect(lane.state.configuration.thinkingLevel).toBe("high");
 	});
 
 	it("publishes memory only after the durable commit succeeds", async () => {

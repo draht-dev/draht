@@ -42,10 +42,12 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 	}
 
 	async lane(name: string): Promise<AgentLane | undefined> {
+		this.assertOpen();
 		return this.lanesByName.get(name);
 	}
 
 	async lanes(): Promise<LaneInfo[]> {
+		this.assertOpen();
 		return [...this.lanesByName.values()].map((lane) => {
 			const operation = lane.state.operation;
 			return {
@@ -128,12 +130,12 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 	}
 
 	close(): Promise<void> {
-		this.closePromise ??= (async () => {
-			const error = new HarnessClosed();
-			this.hooks.close(error);
-			this.events.close(error);
-			await this.session.close();
-		})();
+		if (this.closePromise !== undefined) return this.closePromise;
+		const error = new HarnessClosed();
+		for (const lane of this.lanesByName.values()) lane.seal(error);
+		this.hooks.close(error);
+		this.events.close(error);
+		this.closePromise = this.session.close();
 		return this.closePromise;
 	}
 }

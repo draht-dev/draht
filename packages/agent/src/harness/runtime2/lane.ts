@@ -18,6 +18,7 @@ export class Lane implements AgentLane {
 	readonly session: Session;
 	readonly models: Models;
 	state: LaneState;
+	closedError: Error | undefined;
 
 	constructor(name: string, session: Session, models: Models, state: LaneState) {
 		this.session = session;
@@ -28,14 +29,17 @@ export class Lane implements AgentLane {
 	}
 
 	async getLeafId(): Promise<string | null> {
+		this.assertOpen();
 		return this.state.leafId;
 	}
 
 	async getLastResult() {
+		this.assertOpen();
 		return this.state.lastResult;
 	}
 
-	transition<TResult>(plan: (state: LaneState) => LaneTransition<TResult>): Promise<TResult> {
+	async transition<TResult>(plan: (state: LaneState) => LaneTransition<TResult>): Promise<TResult> {
+		this.assertOpen();
 		return this.session.mutate(this.name, async (mutator) => {
 			const transition = plan(this.state);
 			await mutator.commit(transition.transaction);
@@ -129,6 +133,7 @@ export class Lane implements AgentLane {
 	}
 
 	async getModel(): Promise<Model<Api> | undefined> {
+		this.assertOpen();
 		return this.models.getModel(this.state.configuration.model.provider, this.state.configuration.model.modelId);
 	}
 
@@ -140,6 +145,7 @@ export class Lane implements AgentLane {
 	}
 
 	async getThinkingLevel(): Promise<ThinkingLevel> {
+		this.assertOpen();
 		return this.state.configuration.thinkingLevel;
 	}
 
@@ -148,6 +154,7 @@ export class Lane implements AgentLane {
 	}
 
 	async getActiveTools(): Promise<string[]> {
+		this.assertOpen();
 		return this.state.configuration.activeToolNames;
 	}
 
@@ -167,5 +174,13 @@ export class Lane implements AgentLane {
 			next: { ...state, configuration },
 			result: undefined,
 		}));
+	}
+
+	seal(error: Error): void {
+		this.closedError ??= error;
+	}
+
+	assertOpen(): void {
+		if (this.closedError !== undefined) throw this.closedError;
 	}
 }

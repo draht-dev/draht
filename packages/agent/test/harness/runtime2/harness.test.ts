@@ -1,6 +1,6 @@
 import { createModels, fauxProvider } from "@draht/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HarnessFault } from "../../../src/harness/agent-harness.ts";
+import { HarnessClosed, HarnessFault } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { RuntimeSliceNotImplemented } from "../../../src/harness/runtime/types.ts";
 import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
@@ -99,7 +99,9 @@ describe("runtime2 AgentHarness", () => {
 	});
 
 	it("reports restored open operations without activating them", async () => {
-		const session = await createSession();
+		const repo = new MemorySessionRepo();
+		repos.push(repo);
+		const session = await repo.create({});
 		await session.mutate("main", (mutator) =>
 			mutator.commit({
 				writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuredMain }],
@@ -137,6 +139,15 @@ describe("runtime2 AgentHarness", () => {
 			{ name: "main", leafId: null, operation: { id: operationId, kind: "run", status: "suspended" } },
 		]);
 		await expect(harness.inspectExecution()).rejects.toBeInstanceOf(RuntimeSliceNotImplemented);
+
+		const closing = harness.close();
+		expect(harness.close()).toBe(closing);
+		await closing;
+		await expect(harness.lanes()).rejects.toBeInstanceOf(HarnessClosed);
+		const reopened = await repo.open(session.metadata);
+		expect((await reopened.getRegister("lane.state", "main"))?.value.currentOperationId).toBe(operationId);
+		expect((await reopened.getRegister("op.meta", operationId))?.value).toEqual(meta);
+		expect((await reopened.getRegister("op.state", operationId))?.value).toEqual(state);
 	});
 
 	it("uses owned state after creation and starts no option callbacks", async () => {

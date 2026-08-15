@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { type Component, truncateToWidth, visibleWidth } from "@draht/tui";
-import type { RemoteState } from "../kernel.ts";
-import type { ModelsState } from "../protocol.ts";
+import type { RemoteState } from "../../lib/index.ts";
+import type { ModelsState } from "../services.ts";
 import { dim } from "./shared.ts";
 
 export class PluginFooter implements Component {

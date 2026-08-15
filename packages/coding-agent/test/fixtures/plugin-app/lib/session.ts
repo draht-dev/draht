@@ -1,4 +1,4 @@
-import { type AppPlugin, type MutableRemoteState, rpcOptions, type Service } from "./kernel.ts";
+import { type AppPlugin, type MutableRemoteState, rpcOptions, type Service } from "./api.ts";
 import type { ServerWireMessage, SessionRequest, StateSnapshot } from "./protocol.ts";
 
 class SessionRemoteState<T> implements MutableRemoteState<T> {
@@ -51,9 +51,11 @@ class ClientHub {
 
 export interface SessionContext {
 	onActivate(callback: () => void | Promise<void>): void;
+	onClientConnect(callback: (clientId: string) => void): void;
+	onClientDisconnect(callback: (clientId: string) => void): void;
 	onClose(callback: () => void): void;
 	provide<T>(service: Service<T>, implementation: T): void;
-	state<T>(initial: T): MutableRemoteState<T>;
+	remoteState<T>(initial: T): MutableRemoteState<T>;
 	use<T>(service: Service<T>): T;
 }
 
@@ -67,6 +69,8 @@ export interface SessionDriver {
 export class SessionRuntime<ClientContext> {
 	readonly driver: SessionDriver;
 	private readonly activateCallbacks: Array<() => void | Promise<void>> = [];
+	private readonly clientConnectCallbacks: Array<(clientId: string) => void> = [];
+	private readonly clientDisconnectCallbacks: Array<(clientId: string) => void> = [];
 	private readonly closeCallbacks: Array<() => void> = [];
 	private readonly hub = new ClientHub();
 	private readonly plugins: readonly AppPlugin<SessionContext, ClientContext>[];
@@ -77,13 +81,23 @@ export class SessionRuntime<ClientContext> {
 		this.plugins = plugins;
 		this.driver = {
 			trace: this.trace,
-			connect: (clientId, send) => this.hub.connect(clientId, () => this.snapshot(), send),
-			request: async (_clientId, request, signal) => {
+			connect: (clientId, send) => {
+				const disconnect = this.hub.connect(clientId, () => this.snapshot(), send);
+				for (const callback of this.clientConnectCallbacks) callback(clientId);
+				let connected = true;
+				return () => {
+					if (!connected) return;
+					connected = false;
+					disconnect();
+					for (const callback of this.clientDisconnectCallbacks) callback(clientId);
+				};
+			},
+			request: async (clientId, request, signal) => {
 				const service = this.services.get(request.service) as Record<string, unknown> | undefined;
 				const method = service?.[request.method];
 				if (typeof method !== "function") throw new Error(`Unknown RPC: ${request.service}.${request.method}`);
 				this.trace.push(`rpc:${request.service}.${request.method}`);
-				const args = request.rpcOptions ? [...request.args, rpcOptions({ signal })] : request.args;
+				const args = request.rpcOptions ? [...request.args, rpcOptions({ clientId, signal })] : request.args;
 				return Reflect.apply(method, service, args);
 			},
 			use: (service) => this.use(service),
@@ -93,9 +107,11 @@ export class SessionRuntime<ClientContext> {
 	async start(): Promise<void> {
 		const context: SessionContext = {
 			onActivate: (callback) => this.activateCallbacks.push(callback),
+			onClientConnect: (callback) => this.clientConnectCallbacks.push(callback),
+			onClientDisconnect: (callback) => this.clientDisconnectCallbacks.push(callback),
 			onClose: (callback) => this.closeCallbacks.push(callback),
 			provide: (service, implementation) => this.provide(service, implementation),
-			state: (initial) => new SessionRemoteState(initial),
+			remoteState: (initial) => new SessionRemoteState(initial),
 			use: (service) => this.use(service),
 		};
 		for (const plugin of this.plugins) await plugin.session?.(context);

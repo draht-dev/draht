@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
-import { SessionClient } from "./fixtures/plugin-app/client.ts";
-import { createCodingAgentPlugins, Settings } from "./fixtures/plugin-app/plugins.ts";
-import { type ModelSpec, Models } from "./fixtures/plugin-app/protocol.ts";
-import { SessionRuntime } from "./fixtures/plugin-app/session.ts";
-import { LoopbackTransport } from "./fixtures/plugin-app/transport.ts";
-import { MinimalCodingAgentTui } from "./fixtures/plugin-app/tui/app.ts";
+import { LoopbackTransport, SessionClient, SessionRuntime } from "./fixtures/plugin-app/lib/index.ts";
+import { createCodingAgentPlugins, Settings } from "./fixtures/plugin-app/model-app/plugins.ts";
+import { type ModelSpec, Models } from "./fixtures/plugin-app/model-app/services.ts";
+import { MinimalCodingAgentTui } from "./fixtures/plugin-app/model-app/tui/app.ts";
 
 interface Deferred<T> {
 	promise: Promise<T>;

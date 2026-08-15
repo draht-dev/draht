@@ -1,4 +1,4 @@
-import type { ModelSpec, ProviderSnapshot } from "./protocol.ts";
+import type { ModelSpec, ProviderSnapshot } from "./services.ts";
 
 type Contribution<D> = (draft: D, owner: string) => void;
 

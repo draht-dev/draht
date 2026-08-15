@@ -1,11 +1,16 @@
-import { isRpcOptions, type RemoteState, type Service } from "./kernel.ts";
+import { isRpcOptions, type RemoteState, type Service } from "./api.ts";
 import type { ServerWireMessage, SessionRequest, StateSnapshot } from "./protocol.ts";
 
 export interface ClientTransport {
 	close(): void;
 	request(request: SessionRequest, signal?: AbortSignal): Promise<unknown>;
-	start(listener: (message: ServerWireMessage) => void): void;
+	start(listener: (message: ServerWireMessage) => void, onDisconnect: (error?: Error) => void): void;
 }
+
+export type ConnectionState =
+	| { status: "connecting" }
+	| { status: "connected" }
+	| { status: "disconnected"; reason: string };
 
 class ClientRemoteState<T> implements RemoteState<T> {
 	private readonly listeners = new Set<(value: T) => void>();
@@ -32,6 +37,7 @@ class ClientRemoteState<T> implements RemoteState<T> {
 }
 
 export class ClientStateStore {
+	readonly connection = new ClientRemoteState<ConnectionState>({ status: "connecting" });
 	updates = 0;
 	private readonly listeners = new Set<() => void>();
 	private readonly states = new Map<string, ClientRemoteState<unknown>>();
@@ -40,7 +46,17 @@ export class ClientStateStore {
 		if (message.type === "response") return;
 		if (message.type === "snapshot") this.replace(message.states);
 		else this.update(message.service, message.property, message.value);
-		for (const listener of this.listeners) listener();
+		this.notify();
+	}
+
+	connected(): void {
+		this.connection.set({ status: "connected" });
+		this.notify();
+	}
+
+	disconnected(error?: Error): void {
+		this.connection.set({ status: "disconnected", reason: error?.message ?? "Connection closed" });
+		this.notify();
 	}
 
 	get<T>(service: string, property: string): RemoteState<T> {
@@ -53,6 +69,10 @@ export class ClientStateStore {
 		this.listeners.add(listener);
 		listener();
 		return () => this.listeners.delete(listener);
+	}
+
+	private notify(): void {
+		for (const listener of this.listeners) listener();
 	}
 
 	private replace(snapshot: StateSnapshot): void {
@@ -74,6 +94,7 @@ export class SessionClient {
 	readonly ready: Promise<void>;
 	readonly store = new ClientStateStore();
 	private readonly proxies = new Map<string, object>();
+	private readonly rejectReady: (error: Error) => void;
 	private readonly resolveReady: () => void;
 	private readonly transport: ClientTransport;
 	private receivedSnapshot = false;
@@ -81,17 +102,27 @@ export class SessionClient {
 	constructor(transport: ClientTransport) {
 		this.transport = transport;
 		let settleReady!: () => void;
-		this.ready = new Promise<void>((resolve) => {
+		let failReady!: (error: Error) => void;
+		this.ready = new Promise<void>((resolve, reject) => {
 			settleReady = resolve;
+			failReady = reject;
 		});
+		this.rejectReady = failReady;
 		this.resolveReady = settleReady;
-		transport.start((message) => {
-			this.store.apply(message);
-			if (message.type === "snapshot" && !this.receivedSnapshot) {
-				this.receivedSnapshot = true;
-				this.resolveReady();
-			}
-		});
+		transport.start(
+			(message) => {
+				this.store.apply(message);
+				if (message.type === "snapshot" && !this.receivedSnapshot) {
+					this.receivedSnapshot = true;
+					this.store.connected();
+					this.resolveReady();
+				}
+			},
+			(error) => {
+				this.store.disconnected(error);
+				if (!this.receivedSnapshot) this.rejectReady(error ?? new Error("Session disconnected before snapshot"));
+			},
+		);
 	}
 
 	close(): void {

@@ -126,6 +126,9 @@ export class TcpClientTransport implements ClientTransport {
 		{ resolve(value: unknown): void; reject(error: unknown): void; stopAbort(): void }
 	>();
 	private readonly socket: Socket;
+	private closed = false;
+	private disconnectError: Error | undefined;
+	private disconnectListener: ((error?: Error) => void) | undefined;
 	private listener: ((message: ServerWireMessage) => void) | undefined;
 	private nextRequestId = 1;
 
@@ -146,12 +149,18 @@ export class TcpClientTransport implements ClientTransport {
 				this.buffered.push(message);
 			}
 		});
+		socket.on("error", (error) => {
+			this.disconnectError = error;
+		});
 		socket.once("close", () => {
+			this.closed = true;
+			const error = this.disconnectError ?? new Error("Session connection closed");
 			for (const pending of this.pending.values()) {
 				pending.stopAbort();
-				pending.reject(new Error("Session connection closed"));
+				pending.reject(error);
 			}
 			this.pending.clear();
+			this.disconnectListener?.(error);
 		});
 		this.peer.send({ type: "hello", clientId });
 	}
@@ -165,12 +174,15 @@ export class TcpClientTransport implements ClientTransport {
 		return new TcpClientTransport(socket, options.clientId);
 	}
 
-	start(listener: (message: ServerWireMessage) => void): void {
+	start(listener: (message: ServerWireMessage) => void, onDisconnect: (error?: Error) => void): void {
 		this.listener = listener;
+		this.disconnectListener = onDisconnect;
 		for (const message of this.buffered.splice(0)) listener(message);
+		if (this.closed) onDisconnect(this.disconnectError ?? new Error("Session connection closed"));
 	}
 
 	request(request: SessionRequest, signal?: AbortSignal): Promise<unknown> {
+		if (this.closed) return Promise.reject(this.disconnectError ?? new Error("Session connection closed"));
 		if (signal?.aborted) return Promise.reject(signal.reason);
 		const id = this.nextRequestId++;
 		return new Promise<unknown>((resolve, reject) => {
@@ -187,7 +199,7 @@ export class TcpClientTransport implements ClientTransport {
 	}
 
 	close(): void {
-		this.socket.destroy();
+		if (!this.closed) this.socket.destroy();
 	}
 }
 
@@ -197,6 +209,8 @@ export class LoopbackTransport implements ClientTransport {
 	private readonly disconnect: () => void;
 	private readonly driver: SessionDriver;
 	private readonly clientId: string;
+	private closed = false;
+	private disconnectListener: ((error?: Error) => void) | undefined;
 	private listener: ((message: ServerWireMessage) => void) | undefined;
 
 	constructor(driver: SessionDriver, clientId: string) {
@@ -208,12 +222,15 @@ export class LoopbackTransport implements ClientTransport {
 		});
 	}
 
-	start(listener: (message: ServerWireMessage) => void): void {
+	start(listener: (message: ServerWireMessage) => void, onDisconnect: (error?: Error) => void): void {
 		this.listener = listener;
+		this.disconnectListener = onDisconnect;
 		for (const message of this.buffered.splice(0)) listener(message);
+		if (this.closed) onDisconnect(new Error("Session connection closed"));
 	}
 
 	request(request: SessionRequest, signal?: AbortSignal): Promise<unknown> {
+		if (this.closed) return Promise.reject(new Error("Session connection closed"));
 		if (signal?.aborted) return Promise.reject(signal.reason);
 		const controller = new AbortController();
 		this.active.add(controller);
@@ -239,8 +256,11 @@ export class LoopbackTransport implements ClientTransport {
 	}
 
 	close(): void {
+		if (this.closed) return;
+		this.closed = true;
 		for (const controller of this.active) controller.abort();
 		this.active.clear();
 		this.disconnect();
+		this.disconnectListener?.(new Error("Session connection closed"));
 	}
 }

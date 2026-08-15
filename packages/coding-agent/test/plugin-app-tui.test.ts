@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
-import { SessionClient } from "./fixtures/plugin-app/client.ts";
-import { createCodingAgentPlugins } from "./fixtures/plugin-app/plugins.ts";
-import { type ModelSpec, Models } from "./fixtures/plugin-app/protocol.ts";
-import { SessionRuntime } from "./fixtures/plugin-app/session.ts";
-import { LoopbackTransport, SessionTcpServer, TcpClientTransport } from "./fixtures/plugin-app/transport.ts";
-import { MinimalCodingAgentTui } from "./fixtures/plugin-app/tui/app.ts";
+import {
+	definePlugin,
+	LoopbackTransport,
+	SessionClient,
+	SessionRuntime,
+	SessionTcpServer,
+	TcpClientTransport,
+} from "./fixtures/plugin-app/lib/index.ts";
+import { type CodingAgentPlugin, createCodingAgentPlugins } from "./fixtures/plugin-app/model-app/plugins.ts";
+import { type ModelSpec, Models } from "./fixtures/plugin-app/model-app/services.ts";
+import { MinimalCodingAgentTui } from "./fixtures/plugin-app/model-app/tui/app.ts";
 
 interface Deferred<T> {
 	promise: Promise<T>;
@@ -145,6 +150,32 @@ describe("remote plugin app TUI", () => {
 			await server.close();
 			runtime.close();
 		}
+	});
+
+	it("reports session disconnects to both sides", async () => {
+		let disconnectedClient: string | undefined;
+		const lifecycle: CodingAgentPlugin = definePlugin({
+			id: "lifecycle-test",
+			session(context) {
+				context.onClientDisconnect((clientId) => {
+					disconnectedClient = clientId;
+				});
+			},
+		});
+		const runtime = new SessionRuntime([...createCodingAgentPlugins(async () => []), lifecycle]);
+		await runtime.start();
+		const server = new SessionTcpServer(runtime.driver, { host: "127.0.0.1", port: 0 });
+		const address = await server.start();
+		const client = new SessionClient(await TcpClientTransport.connect({ ...address, clientId: "disconnect-test" }));
+		await client.ready;
+		const models = client.use(Models);
+
+		await server.close();
+		await vi.waitFor(() => expect(client.store.connection.value.status).toBe("disconnected"));
+		await vi.waitFor(() => expect(disconnectedClient).toBe("disconnect-test"));
+		await expect(models.cycleThinking()).rejects.toThrow("Session connection closed");
+		client.close();
+		runtime.close();
 	});
 
 	it("applies state updates buffered after the connection snapshot", async () => {

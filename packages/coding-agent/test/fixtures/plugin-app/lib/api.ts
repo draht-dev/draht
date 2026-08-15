@@ -16,11 +16,13 @@ export function defineService<T>(id: string): Service<T> {
 const rpcOptionsMarker = Symbol("rpc-options");
 
 export interface RpcOptions {
+	/** Set by the session runtime. Client callers cannot override it. */
+	readonly clientId?: string;
 	readonly signal?: AbortSignal;
 	readonly [rpcOptionsMarker]: true;
 }
 
-export function rpcOptions(options: { signal?: AbortSignal } = {}): RpcOptions {
+export function rpcOptions(options: { clientId?: string; signal?: AbortSignal } = {}): RpcOptions {
 	return { ...options, [rpcOptionsMarker]: true };
 }
 

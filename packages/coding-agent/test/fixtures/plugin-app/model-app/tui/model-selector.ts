@@ -1,6 +1,6 @@
 import { type Component, Container, type Focusable, getKeybindings, Input, Spacer, Text } from "@draht/tui";
-import { rpcOptions } from "../kernel.ts";
-import type { ModelSpec, ModelsService, ModelsState } from "../protocol.ts";
+import { rpcOptions } from "../../lib/index.ts";
+import type { ModelSpec, ModelsService, ModelsState } from "../services.ts";
 import { accent, border, dim, success, type TuiContext, warning } from "./shared.ts";
 
 class Rule implements Component {

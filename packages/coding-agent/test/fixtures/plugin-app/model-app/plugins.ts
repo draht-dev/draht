@@ -1,7 +1,6 @@
-import { type AppPlugin, definePlugin, defineService } from "./kernel.ts";
-import { type ModelSpec, Models, type ModelsService, type ModelsState, type ThinkingLevel } from "./protocol.ts";
+import { type AppPlugin, definePlugin, defineService, type SessionContext } from "../lib/index.ts";
 import { ProviderRegistry } from "./providers.ts";
-import type { SessionContext } from "./session.ts";
+import { type ModelSpec, Models, type ModelsService, type ModelsState, type ThinkingLevel } from "./services.ts";
 import { registerModelTui } from "./tui/model-selector.ts";
 import type { TuiContext } from "./tui/shared.ts";
 
@@ -24,7 +23,7 @@ export const providersBuiltin = definePlugin<SessionContext, TuiContext>({
 				values.set(key, structuredClone(value));
 			},
 		};
-		const state = context.state<ModelsState>({
+		const state = context.remoteState<ModelsState>({
 			catalog: providers.snapshot(),
 			configuration: { model: undefined, thinkingLevel: "high" },
 			refresh: { status: "idle" },

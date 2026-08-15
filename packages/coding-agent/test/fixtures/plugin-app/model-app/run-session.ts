@@ -1,6 +1,5 @@
+import { SessionRuntime, SessionTcpServer } from "../lib/index.ts";
 import { createCodingAgentPlugins } from "./plugins.ts";
-import { SessionRuntime } from "./session.ts";
-import { SessionTcpServer } from "./transport.ts";
 
 async function main(): Promise<void> {
 	const host = process.argv[2] ?? "127.0.0.1";

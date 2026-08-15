@@ -8,11 +8,11 @@ import {
 	TuiAltScreen,
 	VStack,
 } from "@draht/tui";
-import { type AppKeybinding, KeybindingsManager } from "../../../../src/core/keybindings.ts";
-import { CustomEditor } from "../../../../src/modes/interactive/components/custom-editor.ts";
-import type { SessionClient } from "../client.ts";
+import { type AppKeybinding, KeybindingsManager } from "../../../../../src/core/keybindings.ts";
+import { CustomEditor } from "../../../../../src/modes/interactive/components/custom-editor.ts";
+import type { SessionClient } from "../../lib/index.ts";
 import type { CodingAgentPlugin } from "../plugins.ts";
-import { type LaneConfiguration, Models, type ModelsService } from "../protocol.ts";
+import { type LaneConfiguration, Models, type ModelsService } from "../services.ts";
 import { PluginFooter } from "./footer.ts";
 import {
 	accent,
@@ -137,6 +137,8 @@ export class MinimalCodingAgentTui {
 	start(): void {
 		if (this.unsubscribe || this.stopped) return;
 		this.unsubscribe = this.client.store.subscribe(() => {
+			const connection = this.client.store.connection.value;
+			if (connection.status === "disconnected") this.showStatus(`Disconnected: ${connection.reason}`, true);
 			this.applyConfiguration();
 			this.renderView();
 			this.updateEditorBorder();

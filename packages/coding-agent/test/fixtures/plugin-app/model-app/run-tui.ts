@@ -1,7 +1,6 @@
 import { ProcessTerminal } from "@draht/tui";
-import { SessionClient } from "./client.ts";
+import { SessionClient, TcpClientTransport } from "../lib/index.ts";
 import { createCodingAgentPlugins } from "./plugins.ts";
-import { TcpClientTransport } from "./transport.ts";
 import { MinimalCodingAgentTui } from "./tui/app.ts";
 
 async function main(): Promise<void> {

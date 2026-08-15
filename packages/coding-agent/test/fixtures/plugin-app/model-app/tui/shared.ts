@@ -1,6 +1,6 @@
 import type { Component } from "@draht/tui";
-import type { AppKeybinding } from "../../../../src/core/keybindings.ts";
-import type { Service } from "../kernel.ts";
+import type { AppKeybinding } from "../../../../../src/core/keybindings.ts";
+import type { Service } from "../../lib/index.ts";
 
 const style =
 	(open: number, close: number) =>

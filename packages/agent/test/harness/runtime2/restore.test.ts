@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_COMPACTION_SETTINGS } from "../../src/harness/compaction/compaction.ts";
-import { restoreLane, restoreSession } from "../../src/harness/runtime2/restore.ts";
-import { MemorySessionRepo } from "../../src/harness/session/memory.ts";
-import type { LaneConfiguration, OperationMeta, RunState, Session } from "../../src/harness/session/types.ts";
+import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
+import { restoreLane, restoreSession } from "../../../src/harness/runtime2/restore.ts";
+import { MemorySessionRepo } from "../../../src/harness/session/memory.ts";
+import type { LaneConfiguration, OperationMeta, RunState, Session } from "../../../src/harness/session/types.ts";
 
 const repos: MemorySessionRepo[] = [];
 const configuration: LaneConfiguration = {
@@ -71,7 +71,7 @@ describe("runtime2 lane restore", () => {
 			}),
 		);
 
-		const lane = await session.mutate("main", (reader) => restoreLane(reader, "main"));
+		const lane = await restoreLane(session, "main");
 
 		expect(lane.name).toBe("main");
 		expect(lane.state).toEqual({
@@ -111,7 +111,7 @@ describe("runtime2 lane restore", () => {
 			}),
 		);
 
-		const lane = await session.mutate("main", (reader) => restoreLane(reader, "main"));
+		const lane = await restoreLane(session, "main");
 
 		expect(lane.state.operation).toEqual({ meta, state });
 	});
@@ -122,9 +122,7 @@ describe("runtime2 lane restore", () => {
 			mutator.commit({ writes: [{ kind: "register", op: "delete", namespace, key: "main" }] }),
 		);
 
-		await expect(session.mutate("main", (reader) => restoreLane(reader, "main"))).rejects.toThrow(
-			`missing ${namespace}`,
-		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(`missing ${namespace}`);
 	});
 
 	it.each(["op.meta", "op.state"] as const)("requires %s for the current operation", async (namespace) => {
@@ -174,9 +172,7 @@ describe("runtime2 lane restore", () => {
 			}),
 		);
 
-		await expect(session.mutate("main", (reader) => restoreLane(reader, "main"))).rejects.toThrow(
-			`missing ${namespace}`,
-		);
+		await expect(restoreLane(session, "main")).rejects.toThrow(`missing ${namespace}`);
 	});
 
 	it("restores every configured lane exactly once without writing", async () => {

@@ -7,14 +7,16 @@ import type { LaneState } from "./types.ts";
 export async function restoreSession(session: Session): Promise<Map<string, Lane>> {
 	const lanes = await session.listRegisters("lane.leaf");
 	if (!lanes.some((lane) => lane.key === "main")) throw new SessionInvariantError("Session is missing main lane");
-	const restored = await Promise.all(
-		lanes.map(({ key }) => session.mutate(key, (reader) => restoreLane(reader, key))),
-	);
+	const restored = await Promise.all(lanes.map(({ key }) => restoreLane(session, key)));
 	return new Map(restored.map((lane) => [lane.name, lane]));
 }
 
 /** Restore one configured lane without starting work or interpreting its state. */
-export async function restoreLane(reader: SessionReader, lane: string): Promise<Lane> {
+export function restoreLane(session: Session, lane: string): Promise<Lane> {
+	return session.mutate(lane, async (reader) => new Lane(session, lane, await restoreLaneState(reader, lane)));
+}
+
+async function restoreLaneState(reader: SessionReader, lane: string): Promise<LaneState> {
 	const [leaf, configuration, laneState, lastResult] = await Promise.all([
 		reader.getRegister("lane.leaf", lane),
 		reader.getRegister("lane.config", lane),
@@ -38,11 +40,11 @@ export async function restoreLane(reader: SessionReader, lane: string): Promise<
 		operation = { meta: meta.value, state: state.value };
 	}
 
-	return new Lane(lane, {
+	return {
 		leafId: leaf.value,
 		configuration: configuration.value,
 		pendingNextRun: laneState.value.pendingNextRun,
 		...(lastResult === undefined ? {} : { lastResult: lastResult.value }),
 		operation,
-	});
+	};
 }

@@ -131,8 +131,21 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 
 	close(): Promise<void> {
 		if (this.closePromise !== undefined) return this.closePromise;
-		// Seal synchronously before awaiting anything. Work admitted before this point may finish and is drained by
-		// Session.close(); later work rejects. Never recheck openness after a successful commit.
+		/*
+		 * Close is a process-local admission boundary, not an abort. Public lane work checks Lane.assertOpen() at
+		 * entry. Durable work then enters Session.mutate(), whose mutation line is the final write-admission gate.
+		 * External effects check their EffectGate immediately before invocation. Closing seals all applicable gates
+		 * before awaiting anything.
+		 *
+		 * If close wins, new work and queued mutation callbacks that have not started reject. An active mutation may
+		 * finish, and close waits for it. A successful commit must always publish its in-memory candidate and resolve
+		 * without another open check; otherwise close racing the commit would make durable and in-memory state
+		 * diverge. An admitted effect is signalled and allowed to unwind, but its settlement is a new durable unit and
+		 * cannot commit after close. Every later transition, settlement, or effect must pass admission again.
+		 *
+		 * Session.close() is the final mutation barrier: it rejects later session jobs, drains active callbacks and
+		 * commits, then closes storage. Close itself writes no cancellation or terminal state.
+		 */
 		const error = new HarnessClosed();
 		for (const lane of this.lanesByName.values()) lane.seal(error);
 		this.hooks.close(error);

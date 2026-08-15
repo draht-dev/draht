@@ -71,10 +71,9 @@ describe("runtime2 lane restore", () => {
 			}),
 		);
 
-		const lane = await restoreLane(session, "main");
+		const state = await restoreLane(session, "main");
 
-		expect(lane.name).toBe("main");
-		expect(lane.state).toEqual({
+		expect(state).toEqual({
 			leafId: null,
 			configuration,
 			pendingNextRun: [],
@@ -111,9 +110,9 @@ describe("runtime2 lane restore", () => {
 			}),
 		);
 
-		const lane = await restoreLane(session, "main");
+		const restored = await restoreLane(session, "main");
 
-		expect(lane.state.operation).toEqual({ meta, state });
+		expect(restored.operation).toEqual({ meta, state });
 	});
 
 	it.each(["lane.leaf", "lane.config", "lane.state"] as const)("requires %s", async (namespace) => {
@@ -217,8 +216,8 @@ describe("runtime2 lane restore", () => {
 		const lanes = await restoreSession(session);
 
 		expect([...lanes.keys()].sort()).toEqual(["main", "worker"]);
-		expect(lanes.get("main")?.state.configuration).toEqual(configuration);
-		expect(lanes.get("worker")?.state).toMatchObject({
+		expect(lanes.get("main")?.configuration).toEqual(configuration);
+		expect(lanes.get("worker")).toMatchObject({
 			configuration: workerConfiguration,
 			operation: { meta, state },
 		});

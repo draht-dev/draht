@@ -569,20 +569,20 @@ function suspensionForInspection<TContext extends object | undefined>(
 
 export class AgentLaneRuntime<TContext extends object | undefined> implements AgentLane {
 	readonly name: string;
-	readonly session: SessionTree;
+	readonly sessionTree: SessionTree;
 	readonly breakpoint: BreakpointBarrier;
 	private readonly harness: LaneRuntimeContext<TContext>;
 
 	constructor(harness: LaneRuntimeContext<TContext>, name: string) {
 		this.harness = harness;
 		this.name = name;
-		this.session = createPublicSessionView(harness, name);
+		this.sessionTree = createPublicSessionView(harness, name);
 		this.breakpoint = new BreakpointBarrier(harness.driveMode);
 	}
 
 	async getLeafId(): Promise<string | null> {
 		this.harness.assertOpen();
-		return this.session.getLeafId();
+		return this.sessionTree.getLeafId();
 	}
 
 	async getLastResult(): Promise<LaneLastResult | undefined> {

@@ -92,7 +92,7 @@ export async function createAgentHarness<TContext extends object | undefined = o
 
 class AgentHarnessRuntime<TContext extends object | undefined> implements AgentHarness<TContext> {
 	readonly name = "main";
-	readonly session: SessionTree;
+	readonly sessionTree: SessionTree;
 	readonly hooks: HookRegistry;
 	readonly events: HarnessEventBus;
 	readonly sessionStorage: Session;
@@ -157,7 +157,7 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 				lane,
 			}),
 		);
-		this.session = createPublicSessionView(this, "main");
+		this.sessionTree = createPublicSessionView(this, "main");
 	}
 
 	async initialize(): Promise<SuspendedOperation[]> {

@@ -241,7 +241,7 @@ describe("AgentHarness R4 tools", () => {
 			operationId: result.ok ? result.value.runId : "",
 		});
 		expect(invocations[0]?.turnId).toEqual(expect.any(String));
-		const branch = await fixture.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const branch = await fixture.harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" });
 		const toolResult = branch.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
 		expect(toolResult?.id).toBe(plannedResultId);
 		const assistant = branch.find(
@@ -345,7 +345,7 @@ describe("AgentHarness R4 tools", () => {
 		]);
 
 		expect(await fixture.harness.prompt("patch")).toMatchObject({ ok: true, value: { kind: "completed" } });
-		const resultEntry = (await fixture.harness.session.findEntriesOnBranch({ order: "oldestFirst" })).find(
+		const resultEntry = (await fixture.harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" })).find(
 			(entry) => entry.type === "message" && entry.message.role === "toolResult",
 		);
 		expect(resultEntry).toMatchObject({
@@ -518,13 +518,13 @@ describe("AgentHarness R4 tools", () => {
 		third.resolve({ content: [{ type: "text", text: "third" }], details: {} });
 		await waitForTick();
 		expect(
-			(await fixture.harness.session.findEntriesOnBranch({ order: "oldestFirst" })).filter(
+			(await fixture.harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" })).filter(
 				(entry) => entry.type === "message" && entry.message.role === "toolResult",
 			),
 		).toHaveLength(0);
 		first.resolve({ content: [{ type: "text", text: "first" }], details: {} });
 		expect(await result).toMatchObject({ ok: true, value: { kind: "completed" } });
-		const resultEntries = (await fixture.harness.session.findEntriesOnBranch({ order: "oldestFirst" })).filter(
+		const resultEntries = (await fixture.harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" })).filter(
 			(entry) => entry.type === "message" && entry.message.role === "toolResult",
 		);
 		expect(
@@ -769,7 +769,7 @@ describe("AgentHarness R4 tools", () => {
 		await fixture.harness.executeAction();
 		await expect(drive).rejects.toThrow(/drive\(cancel_requested\).*later AgentHarness runtime slice/);
 		expect(executions).toBe(0);
-		const branch = await fixture.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const branch = await fixture.harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" });
 		expect(branch.find((entry) => entry.type === "message" && entry.message.role === "toolResult")).toMatchObject({
 			message: { toolCallId: "call-cancelled", isError: true },
 		});
@@ -811,7 +811,7 @@ describe("AgentHarness R4 tools", () => {
 			value: { kind: "waiting", reason: "missing_identities", missing: { tools: ["echo"], models: [] } },
 		});
 		expect(executions).toBe(1);
-		const branch = await reopened.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const branch = await reopened.harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" });
 		const interrupted = branch.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
 		expect(interrupted).toMatchObject({
 			type: "message",
@@ -855,7 +855,7 @@ describe("AgentHarness R4 tools", () => {
 			value: { kind: "settled", outcome: { kind: "completed" } },
 		});
 		expect(executions).toBe(1);
-		const results = (await reopened.harness.session.findEntriesOnBranch({ order: "oldestFirst" })).filter(
+		const results = (await reopened.harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" })).filter(
 			(entry) => entry.type === "message" && entry.message.role === "toolResult",
 		);
 		expect(results[0]).toMatchObject({

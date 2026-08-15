@@ -1,7 +1,10 @@
 import { createModels, fauxProvider } from "@draht/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HarnessFault } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
-import { createRuntime } from "../../../src/harness/runtime2/runtime.ts";
+import { RuntimeSliceNotImplemented } from "../../../src/harness/runtime/types.ts";
+import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
+import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { MemorySessionRepo } from "../../../src/harness/session/memory.ts";
 import type { LaneConfiguration, OperationMeta, RunState, Session } from "../../../src/harness/session/types.ts";
 
@@ -49,34 +52,31 @@ afterEach(async () => {
 	for (const repo of repos.splice(0)) await repo.close();
 });
 
-describe("runtime2 shell", () => {
-	it("seeds an unconfigured main before restoring it", async () => {
+describe("runtime2 AgentHarness", () => {
+	it("seeds main and returns the concrete harness as its main lane", async () => {
 		const session = await createSession();
+		const options = modelOptions(session);
 
-		const runtime = await createRuntime({
-			...modelOptions(session),
+		const { harness, suspended } = await createAgentHarness({
+			...options,
 			thinkingLevel: "high",
 			activeToolNames: ["read"],
 		});
 
-		const expected: LaneConfiguration = {
-			model: {
-				provider: runtime.seed.model.provider,
-				modelId: runtime.seed.model.modelId,
-			},
+		expect(harness).toBeInstanceOf(Harness);
+		expect(await harness.lane("main")).toBe(harness);
+		expect(await harness.getLeafId()).toBeNull();
+		expect(suspended).toEqual([]);
+		expect((await session.getRegister("lane.config", "main"))?.value).toEqual({
+			model: { provider: options.model.provider, modelId: options.model.id },
 			thinkingLevel: "high",
 			activeToolNames: ["read"],
-		};
-		expect((await session.getRegister("lane.config", "main"))?.value).toEqual(expected);
-		expect(runtime.lanes.get("main")?.state).toMatchObject({
-			configuration: expected,
-			operation: null,
 		});
 	});
 
-	it("does not overwrite configured lanes with the seed", async () => {
+	it("restores every configured lane without replacing its configuration", async () => {
 		const session = await createSession();
-		const worker: LaneConfiguration = {
+		const workerConfiguration: LaneConfiguration = {
 			model: { provider: "configured", modelId: "worker" },
 			thinkingLevel: "medium",
 			activeToolNames: [],
@@ -86,53 +86,35 @@ describe("runtime2 shell", () => {
 				writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuredMain }],
 			}),
 		);
-		await session.createLane("worker", null, worker);
+		await session.createLane("worker", null, workerConfiguration);
 		const before = await session.listRegisters("lane.config");
 
-		const runtime = await createRuntime({
-			...modelOptions(session),
-			thinkingLevel: "high",
-			activeToolNames: ["seed-only"],
-		});
+		const { harness } = await createAgentHarness(modelOptions(session));
+		const worker = await harness.lane("worker");
 
+		expect(worker).toBeInstanceOf(Lane);
+		expect(await worker?.getLeafId()).toBeNull();
+		expect((await harness.lanes()).map((lane) => lane.name).sort()).toEqual(["main", "worker"]);
 		expect(await session.listRegisters("lane.config")).toEqual(before);
-		expect(runtime.lanes.get("main")?.state.configuration).toEqual(configuredMain);
-		expect(runtime.lanes.get("worker")?.state.configuration).toEqual(worker);
 	});
 
-	it("owns restored idle and open lanes without activating them", async () => {
+	it("reports restored open operations without activating them", async () => {
 		const session = await createSession();
 		await session.mutate("main", (mutator) =>
 			mutator.commit({
-				writes: [
-					{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuredMain },
-					{
-						kind: "register",
-						op: "set",
-						namespace: "lane.lastResult",
-						key: "main",
-						value: {
-							operationId: session.idGenerator.next(),
-							kind: "navigation",
-							outcome: "completed",
-							oldLeafId: null,
-							leafId: null,
-						},
-					},
-				],
+				writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuredMain }],
 			}),
 		);
-		await session.createLane("worker", null, configuredMain);
 		const operationId = session.idGenerator.next();
 		const meta: OperationMeta = {
 			operationId,
-			lane: "worker",
+			lane: "main",
 			sourceLeafId: null,
 			startedAt: 1,
 			intent: { kind: "run", promptEntryIds: [] },
 		};
 		const state = runState(session.idGenerator.next());
-		await session.mutate("worker", (mutator) =>
+		await session.mutate("main", (mutator) =>
 			mutator.commit({
 				writes: [
 					{ kind: "register", op: "set", namespace: "op.meta", key: operationId, value: meta },
@@ -141,26 +123,28 @@ describe("runtime2 shell", () => {
 						kind: "register",
 						op: "set",
 						namespace: "lane.state",
-						key: "worker",
+						key: "main",
 						value: { currentOperationId: operationId, pendingNextRun: [] },
 					},
 				],
 			}),
 		);
 
-		const runtime = await createRuntime(modelOptions(session));
+		const { harness, suspended } = await createAgentHarness(modelOptions(session));
 
-		expect([...runtime.lanes.keys()].sort()).toEqual(["main", "worker"]);
-		expect(runtime.lanes.get("main")?.state.lastResult?.outcome).toBe("completed");
-		expect(runtime.lanes.get("worker")?.state.operation).toEqual({ meta, state });
+		expect(suspended).toEqual([{ lane: "main", operationId, kind: "run", startedAt: 1, reason: "crash" }]);
+		expect(await harness.lanes()).toEqual([
+			{ name: "main", leafId: null, operation: { id: operationId, kind: "run", status: "suspended" } },
+		]);
+		await expect(harness.inspectExecution()).rejects.toBeInstanceOf(RuntimeSliceNotImplemented);
 	});
 
-	it("does not invoke effectful options or restore again after construction", async () => {
+	it("uses owned state after creation and starts no option callbacks", async () => {
 		const session = await createSession();
 		const forbidden = vi.fn(() => {
 			throw new Error("effect started");
 		});
-		const runtime = await createRuntime({
+		const { harness } = await createAgentHarness({
 			...modelOptions(session),
 			toolContext: forbidden,
 			systemPrompt: forbidden,
@@ -168,16 +152,21 @@ describe("runtime2 shell", () => {
 			entryProjectors: { forbidden },
 		});
 		const mutate = vi.spyOn(session, "mutate");
+		const getRegister = vi.spyOn(session, "getRegister");
 		const listRegisters = vi.spyOn(session, "listRegisters");
 
-		for (const lane of runtime.lanes.values()) void lane.state;
-
+		expect(await harness.lane("main")).toBe(harness);
+		expect(await harness.lanes()).toHaveLength(1);
+		expect(await harness.getLeafId()).toBeNull();
+		expect(await harness.getLastResult()).toBeUndefined();
 		expect(forbidden).not.toHaveBeenCalled();
 		expect(mutate).not.toHaveBeenCalled();
+		expect(getRegister).not.toHaveBeenCalled();
 		expect(listRegisters).not.toHaveBeenCalled();
+		await expect(harness.getTools()).rejects.toBeInstanceOf(RuntimeSliceNotImplemented);
 	});
 
-	it("rejects historical or active main state without configuration", async () => {
+	it("wraps initialization invariant failures as harness faults", async () => {
 		const session = await createSession();
 		await session.mutate("main", (mutator) =>
 			mutator.commit({
@@ -193,8 +182,6 @@ describe("runtime2 shell", () => {
 			}),
 		);
 
-		await expect(createRuntime(modelOptions(session))).rejects.toThrow(
-			"Configured or active main lane is missing lane.config",
-		);
+		await expect(createAgentHarness(modelOptions(session))).rejects.toBeInstanceOf(HarnessFault);
 	});
 });

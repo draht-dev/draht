@@ -183,7 +183,7 @@ describe("AgentHarness R2 minimal run", () => {
 		const skill = await harness.accept({ kind: "skill", name: "review", additionalInstructions: "carefully" });
 		expect(skill.ok).toBe(true);
 		if (skill.ok) {
-			const meta = await harness.session.getEntry((await harness.getLeafId())!);
+			const meta = await harness.sessionTree.getEntry((await harness.getLeafId())!);
 			expect(meta).toMatchObject({ type: "message", message: { content: expect.stringContaining("carefully") } });
 			await harness.close();
 		}
@@ -192,7 +192,7 @@ describe("AgentHarness R2 minimal run", () => {
 		await second.harness.setResources({ promptTemplates: [{ name: "hello", content: "Hello $1" }] });
 		const template = await second.harness.accept({ kind: "prompt_template", name: "hello", args: ["Ada"] });
 		expect(template.ok).toBe(true);
-		expect(await second.harness.session.getEntry((await second.harness.getLeafId())!)).toMatchObject({
+		expect(await second.harness.sessionTree.getEntry((await second.harness.getLeafId())!)).toMatchObject({
 			message: { content: "Hello Ada" },
 		});
 
@@ -229,7 +229,7 @@ describe("AgentHarness R2 minimal run", () => {
 		});
 		if (operation?.value.intent.kind !== "run") throw new Error("missing run operation");
 		expect(operation.value.intent.promptEntryIds).toHaveLength(1);
-		const branch = await harness.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const branch = await harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" });
 		expect(branch).toHaveLength(2);
 		expect(branch[1]).toMatchObject({ message: { content: "hook" } });
 	});
@@ -292,7 +292,7 @@ describe("AgentHarness R2 minimal run", () => {
 		);
 		const acceptance = harness.accept({ kind: "prompt", prompt: "accepted" });
 		await waitForTick();
-		const append = harness.session.appendMessage({ role: "user", content: "later", timestamp: 3 });
+		const append = harness.sessionTree.appendMessage({ role: "user", content: "later", timestamp: 3 });
 		await waitForTick();
 		expect((await session.getRegister("lane.leaf", "main"))?.value).toBeNull();
 		gate.resolve();
@@ -336,7 +336,7 @@ describe("AgentHarness R2 minimal run", () => {
 
 		const accepted = await harness.accept({ kind: "prompt", prompt: "caller" });
 		expect(accepted.ok).toBe(true);
-		const branch = await harness.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const branch = await harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" });
 		expect(
 			branch.map((entry) =>
 				entry.type === "message" && entry.message.role === "user" ? entry.message.content : "custom",

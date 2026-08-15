@@ -687,7 +687,7 @@ export async function executeAssistantGeneration<TContext extends object | undef
 		});
 	}
 
-	const newestFirst = await lane.session.findEntriesOnBranch({ order: "newestFirst", stopAtType: "compaction" });
+	const newestFirst = await lane.sessionTree.findEntriesOnBranch({ order: "newestFirst", stopAtType: "compaction" });
 	const messages = await buildSessionContext([...newestFirst].reverse(), { entryProjectors: runtime.entryProjectors });
 	await runtime.events.emit({
 		type: "turn_start",

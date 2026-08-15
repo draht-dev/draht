@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { Lane } from "../../../src/harness/runtime2/lane.ts";
+import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
@@ -53,7 +53,7 @@ async function createLane(): Promise<{ lane: Lane; session: Session; storage: Co
 			],
 		}),
 	);
-	return { lane: await restoreLane(session, "main"), session, storage };
+	return { lane: new Lane("main", session, await restoreLane(session, "main")), session, storage };
 }
 
 function setThinkingLevel(

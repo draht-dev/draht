@@ -142,7 +142,7 @@ export interface CommittedToolSettlement {
 
 export interface RuntimeLane {
 	readonly name: string;
-	readonly session: SessionTree;
+	readonly sessionTree: SessionTree;
 	readonly breakpoint: BreakpointBarrier;
 }
 

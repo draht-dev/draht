@@ -983,7 +983,7 @@ describe("AgentHarness R3 generation recovery and retry", () => {
 		});
 		const leaf = await fixture.harness.getLeafId();
 		if (leaf === null) throw new Error("missing failed response");
-		expect(await fixture.harness.session.getEntry(leaf)).toMatchObject({
+		expect(await fixture.harness.sessionTree.getEntry(leaf)).toMatchObject({
 			message: { stopReason: "error", errorMessage: expect.stringContaining("Invalid deferred") },
 		});
 	});

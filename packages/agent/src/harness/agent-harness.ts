@@ -664,7 +664,7 @@ export interface AgentLane {
 	setThinkingLevel(level: ThinkingLevel): Promise<void>;
 	getActiveTools(): Promise<string[]>;
 	setActiveTools(names: string[]): Promise<void>;
-	readonly session: SessionTree;
+	readonly sessionTree: SessionTree;
 	watch(): Promise<WatchHandle<LaneSnapshot>>;
 }
 

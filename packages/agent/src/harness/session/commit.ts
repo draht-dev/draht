@@ -1,4 +1,13 @@
-import type { CommitResult, Entry, RegisterNamespace, RegisterValues, Transaction, UsageRow, Write } from "./types.ts";
+import type {
+	CommitResult,
+	Entry,
+	NewEntry,
+	RegisterNamespace,
+	RegisterValues,
+	Transaction,
+	UsageRow,
+	Write,
+} from "./types.ts";
 
 export type CommittedEntryWrite = Entry & { kind: "entry" };
 export type CommittedUsageWrite = UsageRow & { kind: "usage" };
@@ -44,6 +53,10 @@ export function commitWrite(write: Write, seq: number, timestamp: number): Commi
 				? { kind: "register", op: "set", seq, namespace: write.namespace, key: write.key, value: write.value }
 				: { kind: "register", op: "delete", seq, namespace: write.namespace, key: write.key };
 	}
+}
+
+export function materializeCommittedEntry(entry: NewEntry, seq: number, timestamp: number): Entry {
+	return { ...entry, seq, timestamp } as Entry;
 }
 
 export function prepareStorageCommit(transaction: Transaction, firstSeq: number, timestamp: number): PreparedCommit {

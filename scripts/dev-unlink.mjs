@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Remove the .dev marker and unlink draht, draht-claude, and draht-codex.
+ * Remove the .dev marker and unlink draht, draht-claude, draht-codex, and x-markdown.
  * Run: bun run dev:unlink
  */
 import { execSync } from "node:child_process";
@@ -11,6 +11,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const CODING_AGENT = resolve(ROOT, "packages/coding-agent");
 const DRAHT_CLAUDE = resolve(ROOT, "packages/draht-claude");
 const DRAHT_CODEX = resolve(ROOT, "packages/draht-codex");
+const X_MARKDOWN = resolve(ROOT, "packages/x-markdown");
 
 const run = (cmd, cwd) => {
 	console.log(`$ ${cmd}`);
@@ -33,5 +34,6 @@ try {
 run("bun unlink", CODING_AGENT);
 run("bun unlink", DRAHT_CLAUDE);
 run("bun unlink", DRAHT_CODEX);
+run("bun unlink", X_MARKDOWN);
 
-console.log("\nUnlinked draht, draht-claude, and draht-codex.");
+console.log("\nUnlinked draht, draht-claude, draht-codex, and x-markdown.");

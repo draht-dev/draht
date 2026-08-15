@@ -4,6 +4,9 @@
 	"private": true,
 	"description": "Cloudflare Worker and draht extension for converting X posts into agent-readable Markdown",
 	"type": "module",
+	"bin": {
+		"x-markdown": "./src/cli.ts"
+	},
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"exports": {

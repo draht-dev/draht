@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Build coding-agent from local source and link it globally as "draht" with version "dev".
- * Also links draht-claude and draht-codex globally so their installers use local sources.
+ * Also links draht-claude, draht-codex, and x-markdown globally so their CLIs use local sources.
  * Run: bun run dev:link
  * Undo: bun run dev:unlink
  */
@@ -13,6 +13,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const CODING_AGENT = resolve(ROOT, "packages/coding-agent");
 const DRAHT_CLAUDE = resolve(ROOT, "packages/draht-claude");
 const DRAHT_CODEX = resolve(ROOT, "packages/draht-codex");
+const X_MARKDOWN = resolve(ROOT, "packages/x-markdown");
 
 const run = (cmd, cwd = ROOT) => {
 	console.log(`$ ${cmd}`);
@@ -38,9 +39,13 @@ run("bun link", CODING_AGENT);
 run("bun link", DRAHT_CLAUDE);
 run("bun link", DRAHT_CODEX);
 
+// 5. Link x-markdown CLI globally; no build needed, cli.ts runs from source via bun
+run("bun link", X_MARKDOWN);
+
 console.log("\ndraht is now linked globally with version 'dev'.");
-console.log("draht-claude and draht-codex are now linked globally (install from local plugin sources).");
+console.log("draht-claude, draht-codex, and x-markdown are now linked globally (run from local sources).");
 console.log("Run: draht --version");
 console.log("Run: draht-claude --help");
 console.log("Run: draht-codex --help");
+console.log("Run: x-markdown --help");
 console.log("Undo: bun run dev:unlink");

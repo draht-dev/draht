@@ -3,6 +3,7 @@
  */
 
 import { GITHUB_COPILOT_MODELS } from "../../providers/github-copilot.models.ts";
+import { sleep } from "../../utils/sleep.ts";
 import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
 
@@ -16,6 +17,8 @@ const COPILOT_HEADERS = {
 	"Copilot-Integration-Id": "vscode-chat",
 } as const;
 const COPILOT_API_VERSION = "2026-06-01";
+const MAX_RETRY_AFTER_MS = 10_000;
+const DEFAULT_RETRY_AFTER_MS = 1_000;
 
 type DeviceCodeResponse = {
 	device_code: string;
@@ -112,21 +115,43 @@ function parseAvailableCopilotModelIds(raw: unknown, allowPolicyFallback: boolea
 	return pickerIds.length > 0 || !allowPolicyFallback ? pickerIds : policyEnabledIds;
 }
 
-async function fetchAvailableGitHubCopilotModelIds(copilotToken: string, enterpriseDomain?: string): Promise<string[]> {
+async function fetchAvailableGitHubCopilotModelIds(
+	copilotToken: string,
+	enterpriseDomain?: string,
+	signal?: AbortSignal,
+): Promise<string[]> {
 	const baseUrl = getGitHubCopilotBaseUrl(copilotToken, enterpriseDomain);
 	// Some Individual accounts return false for every picker flag despite explicit enabled policies.
 	// Limit the fallback to that endpoint so other account types keep strict picker semantics.
 	const allowPolicyFallback = baseUrl === "https://api.individual.githubcopilot.com";
-	const raw = await fetchJson(`${baseUrl}/models`, {
-		headers: {
-			Accept: "application/json",
-			Authorization: `Bearer ${copilotToken}`,
-			...COPILOT_HEADERS,
-			"X-GitHub-Api-Version": COPILOT_API_VERSION,
-		},
-		signal: AbortSignal.timeout(5000),
-	});
-	return parseAvailableCopilotModelIds(raw, allowPolicyFallback);
+	const request = () =>
+		fetch(`${baseUrl}/models`, {
+			headers: {
+				Accept: "application/json",
+				Authorization: `Bearer ${copilotToken}`,
+				...COPILOT_HEADERS,
+				"X-GitHub-Api-Version": COPILOT_API_VERSION,
+			},
+			signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000),
+		});
+
+	// The login-time policy updates can drain the Copilot API rate-limit bucket, in which case
+	// this request is rejected with 429. Honor Retry-After and retry once instead of failing.
+	let response = await request();
+	if (response.status === 429) {
+		const retryAfterSeconds = Number(response.headers.get("retry-after"));
+		const waitMs =
+			Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+				? Math.min(retryAfterSeconds * 1000, MAX_RETRY_AFTER_MS)
+				: DEFAULT_RETRY_AFTER_MS;
+		await sleep(waitMs, signal);
+		response = await request();
+	}
+	if (!response.ok) {
+		const text = await response.text();
+		throw new Error(`${response.status} ${response.statusText}: ${text}`);
+	}
+	return parseAvailableCopilotModelIds(await response.json(), allowPolicyFallback);
 }
 
 async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
@@ -281,11 +306,15 @@ async function refreshGitHubCopilotAccessToken(
 /**
  * Refresh GitHub Copilot token
  */
-async function refreshGitHubCopilotToken(refreshToken: string, enterpriseDomain?: string): Promise<OAuthCredential> {
+async function refreshGitHubCopilotToken(
+	refreshToken: string,
+	enterpriseDomain?: string,
+	signal?: AbortSignal,
+): Promise<OAuthCredential> {
 	const credentials = await refreshGitHubCopilotAccessToken(refreshToken, enterpriseDomain);
 	return {
 		...credentials,
-		availableModelIds: await fetchAvailableGitHubCopilotModelIds(credentials.access, enterpriseDomain),
+		availableModelIds: await fetchAvailableGitHubCopilotModelIds(credentials.access, enterpriseDomain, signal),
 	};
 }
 
@@ -353,7 +382,11 @@ async function loginGitHubCopilot(interaction: AuthInteraction): Promise<OAuthCr
 	await enableAllGitHubCopilotModels(credentials.access, enterpriseDomain ?? undefined);
 	return {
 		...credentials,
-		availableModelIds: await fetchAvailableGitHubCopilotModelIds(credentials.access, enterpriseDomain ?? undefined),
+		availableModelIds: await fetchAvailableGitHubCopilotModelIds(
+			credentials.access,
+			enterpriseDomain ?? undefined,
+			interaction.signal,
+		),
 	};
 }
 
@@ -366,7 +399,8 @@ function copilotEnterpriseDomain(credential: OAuthCredential): string | undefine
 export const githubCopilotOAuth: OAuthAuth = {
 	name: "GitHub Copilot",
 	login: loginGitHubCopilot,
-	refresh: (credential) => refreshGitHubCopilotToken(credential.refresh, copilotEnterpriseDomain(credential)),
+	refresh: (credential, signal) =>
+		refreshGitHubCopilotToken(credential.refresh, copilotEnterpriseDomain(credential), signal),
 
 	/** Derive the credential-specific proxy endpoint for each request. */
 	async toAuth(credential) {

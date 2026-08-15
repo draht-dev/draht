@@ -145,6 +145,10 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		 *
 		 * Session.close() is the final mutation barrier: it rejects later session jobs, drains active callbacks and
 		 * commits, then closes storage. Close itself writes no cancellation or terminal state.
+		 *
+		 * HarnessClosed is a process-local control signal. Lower procedures let it propagate, using only finally blocks
+		 * for cleanup. The outer drive owner catches it to remove live task state and reject the caller; it must not turn
+		 * close into a durable failure, abort settlement, or harness fault. Calls with no drive owner reject directly.
 		 */
 		const error = new HarnessClosed();
 		for (const lane of this.lanesByName.values()) lane.seal(error);

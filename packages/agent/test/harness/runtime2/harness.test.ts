@@ -1,4 +1,5 @@
 import { createModels, fauxProvider } from "@draht/ai";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HarnessClosed, HarnessFault } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
@@ -15,6 +16,7 @@ import type {
 	Session,
 	Transaction,
 } from "../../../src/harness/session/types.ts";
+import type { AgentHarnessTool } from "../../../src/harness/types.ts";
 
 class FailingMemoryStorage extends MemoryStorage {
 	failure: Error | undefined;
@@ -97,6 +99,23 @@ afterEach(async () => {
 });
 
 describe("runtime2 AgentHarness", () => {
+	it("rejects duplicate tool names as caller input", async () => {
+		const session = await createSession();
+		const parameters = Type.Object({});
+		const tool: AgentHarnessTool<undefined, typeof parameters> = {
+			name: "duplicate",
+			label: "Duplicate",
+			description: "Duplicate",
+			parameters,
+			replay: "safe",
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: {} }),
+		};
+
+		await expect(createAgentHarness({ ...modelOptions(session), tools: [tool, tool] })).rejects.toBeInstanceOf(
+			TypeError,
+		);
+	});
+
 	it("seeds main and returns the concrete harness as its main lane", async () => {
 		const session = await createSession();
 		const options = modelOptions(session);
@@ -296,6 +315,7 @@ describe("runtime2 AgentHarness", () => {
 		await session.createLane("worker", null, configuredMain);
 		const { harness } = await createAgentHarness(modelOptions(session));
 		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		const faultEvent = new Promise<unknown>((resolve) => harness.events.on("fault", resolve));
 		const worker = await harness.lane("worker");
 		if (!(worker instanceof Lane)) throw new Error("missing runtime2 worker lane");
 		const failure = new Error("commit failed");
@@ -313,6 +333,7 @@ describe("runtime2 AgentHarness", () => {
 		expect(rejected).toBeInstanceOf(HarnessFault);
 		if (!(rejected instanceof HarnessFault)) throw new Error("missing harness fault");
 		expect(rejected.cause).toBe(failure);
+		expect(await faultEvent).toMatchObject({ type: "fault", code: "harness_fault" });
 		await expect(queued).rejects.toBe(rejected);
 		await expect(harness.getLeafId()).rejects.toBe(rejected);
 		await expect(worker.getThinkingLevel()).rejects.toBe(rejected);

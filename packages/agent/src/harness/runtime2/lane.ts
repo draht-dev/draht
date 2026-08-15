@@ -40,9 +40,9 @@ export class Lane implements AgentLane {
 	readonly name: string;
 	readonly sessionTree: SessionTree;
 	private readonly sessionView: SessionTree;
-	readonly session: Session;
-	readonly models: Models;
-	readonly onFault: FaultHandler;
+	protected readonly session: Session;
+	private readonly models: Models;
+	private readonly onFault: FaultHandler;
 	state: LaneState;
 	closedError: Error | undefined;
 
@@ -76,8 +76,9 @@ export class Lane implements AgentLane {
 
 	/**
 	 * Run one effect-free command on this lane's serialized mutation line. Owned `state` is authoritative; the
-	 * planner receives that state plus a read-only reader for bounded payload lookups. State-independent input
-	 * validation belongs before `command()`, while every state-dependent decision belongs inside its planner.
+	 * planner receives that state plus a read-only reader for bounded payload lookups. Committed values and owned
+	 * state are immutable snapshots: update them by replacement, never in place. State-independent input validation
+	 * belongs before `command()`, while every state-dependent decision belongs inside its planner.
 	 *
 	 * A planner may choose exactly one outcome:
 	 * - `commit` commits once, publishes `next`, then synchronously materializes the caller result from

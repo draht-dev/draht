@@ -141,6 +141,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		this.faultError = fault;
 		for (const lane of this.lanesByName.values()) lane.seal(fault);
 		this.hooks.close(fault);
+		void this.events.emit({ type: "fault", code: "harness_fault", message: fault.message });
 		this.events.close(fault);
 		return fault;
 	}
@@ -179,18 +180,18 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 export async function createAgentHarness<TContext extends object | undefined = object | undefined>(
 	options: AgentHarnessOptions<TContext>,
 ): Promise<{ harness: AgentHarness<TContext>; suspended: SuspendedOperation[] }> {
+	const tools = options.tools ?? [];
+	const toolNames = new Set<string>();
+	for (const tool of tools) {
+		if (toolNames.has(tool.name)) throw new TypeError(`Duplicate tool name: ${JSON.stringify(tool.name)}`);
+		toolNames.add(tool.name);
+	}
+	const seed: LaneConfiguration = {
+		model: { provider: options.model.provider, modelId: options.model.id },
+		thinkingLevel: options.thinkingLevel ?? "off",
+		activeToolNames: options.activeToolNames ?? tools.map((tool) => tool.name),
+	};
 	try {
-		const tools = options.tools ?? [];
-		const toolNames = new Set<string>();
-		for (const tool of tools) {
-			if (toolNames.has(tool.name)) throw new TypeError(`Duplicate tool name: ${JSON.stringify(tool.name)}`);
-			toolNames.add(tool.name);
-		}
-		const seed: LaneConfiguration = {
-			model: { provider: options.model.provider, modelId: options.model.id },
-			thinkingLevel: options.thinkingLevel ?? "off",
-			activeToolNames: options.activeToolNames ?? tools.map((tool) => tool.name),
-		};
 		await seedMain(options.session, seed);
 		const restored = await restoreSession(options.session);
 		const harness = new Harness(options, seed, restored);

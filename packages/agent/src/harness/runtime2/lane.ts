@@ -2,7 +2,7 @@ import type { Api, Model, Models } from "@draht/ai";
 import type { ThinkingLevel } from "../../types.ts";
 import type { AgentLane } from "../agent-harness.ts";
 import { RuntimeSliceNotImplemented } from "../runtime/types.ts";
-import type { Session, SessionTree, Transaction } from "../session/types.ts";
+import type { CommitResult, Session, SessionReader, SessionTree, Transaction } from "../session/types.ts";
 import type { LaneState } from "./types.ts";
 
 type FaultHandler = (cause: unknown) => Error;
@@ -10,7 +10,7 @@ type FaultHandler = (cause: unknown) => Error;
 interface LaneTransition<TResult> {
 	transaction: Transaction;
 	next: LaneState;
-	result: TResult;
+	materialize(commit: CommitResult): TResult;
 }
 
 /** Runtime2 implementation of one configured lane. */
@@ -42,14 +42,16 @@ export class Lane implements AgentLane {
 		return this.state.lastResult;
 	}
 
-	async transition<TResult>(plan: (state: LaneState) => LaneTransition<TResult>): Promise<TResult> {
+	async transition<TResult>(
+		plan: (state: LaneState, reader: SessionReader) => LaneTransition<TResult> | Promise<LaneTransition<TResult>>,
+	): Promise<TResult> {
 		this.assertOpen();
 		try {
 			return await this.session.mutate(this.name, async (mutator) => {
-				const transition = plan(this.state);
-				await mutator.commit(transition.transaction);
+				const transition = await plan(this.state, mutator);
+				const commit = await mutator.commit(transition.transaction);
 				this.state = transition.next;
-				return transition.result;
+				return transition.materialize(commit);
 			});
 		} catch (error) {
 			if (this.closedError !== undefined) throw this.closedError;
@@ -147,10 +149,10 @@ export class Lane implements AgentLane {
 	}
 
 	setModel(model: Model<Api>): Promise<void> {
-		return this.setConfiguration({
-			...this.state.configuration,
+		return this.setConfiguration((configuration) => ({
+			...configuration,
 			model: { provider: model.provider, modelId: model.id },
-		});
+		}));
 	}
 
 	async getThinkingLevel(): Promise<ThinkingLevel> {
@@ -159,7 +161,7 @@ export class Lane implements AgentLane {
 	}
 
 	setThinkingLevel(thinkingLevel: ThinkingLevel): Promise<void> {
-		return this.setConfiguration({ ...this.state.configuration, thinkingLevel });
+		return this.setConfiguration((configuration) => ({ ...configuration, thinkingLevel }));
 	}
 
 	async getActiveTools(): Promise<string[]> {
@@ -168,21 +170,26 @@ export class Lane implements AgentLane {
 	}
 
 	setActiveTools(activeToolNames: string[]): Promise<void> {
-		return this.setConfiguration({ ...this.state.configuration, activeToolNames });
+		return this.setConfiguration((configuration) => ({ ...configuration, activeToolNames }));
 	}
 
 	async watch(): Promise<never> {
 		throw new RuntimeSliceNotImplemented("watch");
 	}
 
-	setConfiguration(configuration: LaneState["configuration"]): Promise<void> {
-		return this.transition((state) => ({
-			transaction: {
-				writes: [{ kind: "register", op: "set", namespace: "lane.config", key: this.name, value: configuration }],
-			},
-			next: { ...state, configuration },
-			result: undefined,
-		}));
+	setConfiguration(update: (configuration: LaneState["configuration"]) => LaneState["configuration"]): Promise<void> {
+		return this.transition((state) => {
+			const configuration = update(state.configuration);
+			return {
+				transaction: {
+					writes: [
+						{ kind: "register", op: "set", namespace: "lane.config", key: this.name, value: configuration },
+					],
+				},
+				next: { ...state, configuration },
+				materialize: () => undefined,
+			};
+		});
 	}
 
 	seal(error: Error): void {

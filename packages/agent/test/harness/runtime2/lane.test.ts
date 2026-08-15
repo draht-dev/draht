@@ -94,7 +94,7 @@ function setThinkingLevel(
 				],
 			},
 			next,
-			result: thinkingLevel,
+			materialize: () => thinkingLevel,
 		};
 	});
 }
@@ -120,6 +120,80 @@ describe("runtime2 Lane transitions", () => {
 			thinkingLevel: "high",
 			activeToolNames,
 		});
+	});
+
+	it("derives queued configuration updates from the latest committed state", async () => {
+		const { lane, model, storage } = await createLane();
+		const commitStarted = deferred();
+		const releaseCommit = deferred();
+		storage.beforeNextCommit = async () => {
+			commitStarted.resolve();
+			await releaseCommit.promise;
+		};
+
+		const modelUpdate = lane.setModel(model);
+		await commitStarted.promise;
+		const thinkingUpdate = lane.setThinkingLevel("high");
+		releaseCommit.resolve();
+		await Promise.all([modelUpdate, thinkingUpdate]);
+
+		expect(lane.state.configuration).toEqual({
+			model: { provider: model.provider, modelId: model.id },
+			thinkingLevel: "high",
+			activeToolNames: [],
+		});
+	});
+
+	it("passes bounded reads and commit metadata through the serialized transition", async () => {
+		const { lane } = await createLane();
+		let storedConfiguration: LaneConfiguration | undefined;
+		let memoryPublished = false;
+
+		const commit = await lane.transition(async (state, reader) => {
+			storedConfiguration = (await reader.getRegister("lane.config", "main"))?.value;
+			const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
+			const next = { ...state, configuration };
+			return {
+				transaction: {
+					writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration }],
+				},
+				next,
+				materialize: (commit) => {
+					memoryPublished = lane.state === next;
+					return commit;
+				},
+			};
+		});
+
+		expect(storedConfiguration).toEqual(configuration);
+		expect(memoryPublished).toBe(true);
+		expect(commit.seqs).toHaveLength(1);
+		expect(commit.timestamp).toEqual(expect.any(Number));
+	});
+
+	it("keeps committed memory when materialization fails", async () => {
+		const { lane, session } = await createLane();
+		const failure = new Error("materialization failed");
+
+		await expect(
+			lane.transition((state) => {
+				const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
+				return {
+					transaction: {
+						writes: [
+							{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
+						],
+					},
+					next: { ...state, configuration },
+					materialize: () => {
+						throw failure;
+					},
+				};
+			}),
+		).rejects.toBe(failure);
+
+		expect(lane.state.configuration.thinkingLevel).toBe("high");
+		expect((await session.getRegister("lane.config", "main"))?.value.thinkingLevel).toBe("high");
 	});
 
 	it("rejects work after sealing while an admitted commit finishes", async () => {

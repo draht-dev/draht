@@ -38,6 +38,7 @@ import {
 	type WatchHandle,
 } from "../agent-harness.ts";
 import { type CompactionSettings, DEFAULT_COMPACTION_SETTINGS } from "../compaction/compaction.ts";
+import { DEFAULT_RETRY_POLICY, validateCompactionSettings, validateRetryPolicy, validateToolNames } from "../config.ts";
 import { HarnessEventBus } from "../events.ts";
 import { HookRegistry } from "../hooks.ts";
 import { convertToLlm } from "../messages.ts";
@@ -60,23 +61,13 @@ import type {
 } from "../session/types.ts";
 import type { AgentHarnessTool, AgentHarnessToolContextSource } from "../types.ts";
 import { AgentLaneRuntime, createPublicSessionView } from "./lane-runtime.ts";
-import {
-	cloneConfiguration,
-	missingIdentities,
-	missingToolIdentities,
-	suspensionBase,
-	validateCompactionSettings,
-	validateRetryPolicy,
-	validateToolNames,
-} from "./transitions.ts";
+import { cloneConfiguration, missingIdentities, missingToolIdentities, suspensionBase } from "./transitions.ts";
 import {
 	type ActiveOperation,
 	type AdmissionReservation,
 	type RuntimeSettings,
 	RuntimeSliceNotImplemented,
 } from "./types.ts";
-
-const DEFAULT_RETRY_POLICY: RetryPolicy = { enabled: true, maxRetries: 3, baseDelayMs: 1_000 };
 
 export async function createAgentHarness<TContext extends object | undefined = object | undefined>(
 	options: AgentHarnessOptions<TContext>,

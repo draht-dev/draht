@@ -2,7 +2,6 @@ import type { Api, AssistantMessage, Models, RetryPolicy, Usage } from "@draht/a
 import { isContextOverflow, isRecoverableLength, isRetryableAssistantError } from "@draht/ai";
 import type { AgentMessage, AgentToolCall } from "../../types.ts";
 import type { DriveOptions, SuspendedOperation, TerminalOperationOutcome } from "../agent-harness.ts";
-import type { CompactionSettings } from "../compaction/compaction.ts";
 import type { RestoredLane } from "../restore.ts";
 import { SessionInvariantError } from "../session/session.ts";
 import type {
@@ -254,37 +253,6 @@ export function cloneUsage(usage: Usage): Usage {
 
 export function cloneConfiguration(configuration: LaneConfiguration): LaneConfiguration {
 	return { ...configuration, model: { ...configuration.model }, activeToolNames: [...configuration.activeToolNames] };
-}
-
-export function validateToolNames(tools: readonly { name: string }[]): void {
-	const names = new Set<string>();
-	for (const tool of tools) {
-		if (names.has(tool.name)) throw new TypeError(`Duplicate tool name: ${JSON.stringify(tool.name)}`);
-		names.add(tool.name);
-	}
-}
-
-export function validateRetryPolicy(policy: RetryPolicy): void {
-	if (
-		!Number.isSafeInteger(policy.maxRetries) ||
-		policy.maxRetries < 0 ||
-		policy.maxRetries === Number.MAX_SAFE_INTEGER ||
-		!Number.isSafeInteger(policy.baseDelayMs) ||
-		policy.baseDelayMs < 0
-	) {
-		throw new RangeError("Retry policy values must be finite non-negative safe integers");
-	}
-}
-
-export function validateCompactionSettings(settings: CompactionSettings): void {
-	if (
-		!Number.isSafeInteger(settings.reserveTokens) ||
-		settings.reserveTokens < 0 ||
-		!Number.isSafeInteger(settings.keepRecentTokens) ||
-		settings.keepRecentTokens < 0
-	) {
-		throw new RangeError("Compaction token counts must be finite non-negative safe integers");
-	}
 }
 
 export function deadlineReached(options: DriveOptions): boolean {

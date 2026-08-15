@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HarnessClosed, HarnessFault } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import type { Result } from "../../../src/harness/result.ts";
-import { RuntimeSliceNotImplemented } from "../../../src/harness/runtime/types.ts";
 import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
+import { SliceNotImplemented } from "../../../src/harness/runtime2/types.ts";
 import { MemorySessionRepo, MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type {
@@ -37,6 +37,18 @@ const configuredMain: LaneConfiguration = {
 	thinkingLevel: "low",
 	activeToolNames: ["configured-tool"],
 };
+const toolParameters = Type.Object({});
+
+function tool(name: string): AgentHarnessTool<undefined, typeof toolParameters> {
+	return {
+		name,
+		label: name,
+		description: name,
+		parameters: toolParameters,
+		replay: "safe",
+		execute: async () => ({ content: [{ type: "text", text: "unused" }], details: {} }),
+	};
+}
 
 async function createSession(): Promise<Session> {
 	const repo = new MemorySessionRepo();
@@ -112,19 +124,150 @@ afterEach(async () => {
 describe("runtime2 AgentHarness", () => {
 	it("rejects duplicate tool names as caller input", async () => {
 		const session = await createSession();
-		const parameters = Type.Object({});
-		const tool: AgentHarnessTool<undefined, typeof parameters> = {
-			name: "duplicate",
-			label: "Duplicate",
-			description: "Duplicate",
-			parameters,
-			replay: "safe",
-			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: {} }),
-		};
+		const duplicate = tool("duplicate");
 
-		await expect(createAgentHarness({ ...modelOptions(session), tools: [tool, tool] })).rejects.toBeInstanceOf(
-			TypeError,
+		await expect(
+			createAgentHarness({ ...modelOptions(session), tools: [duplicate, duplicate] }),
+		).rejects.toBeInstanceOf(TypeError);
+	});
+
+	it("owns initial config and publishes replacements before ordered events", async () => {
+		const session = await createSession();
+		const initialTools = [tool("initial")];
+		const initialResources = { skills: [] };
+		const initialStreamOptions = { timeoutMs: 10 };
+		const initialRetry = { enabled: true, maxRetries: 2, baseDelayMs: 20 };
+		const initialCompaction = { enabled: false, reserveTokens: 100, keepRecentTokens: 200 };
+		const { harness } = await createAgentHarness({
+			...modelOptions(session),
+			tools: initialTools,
+			resources: initialResources,
+			streamOptions: initialStreamOptions,
+			retry: initialRetry,
+			compaction: initialCompaction,
+			steeringMode: "one-at-a-time",
+			followUpMode: "one-at-a-time",
+			toolExecution: "sequential",
+		});
+
+		expect(await harness.getTools()).toBe(initialTools);
+		expect(await harness.getResources()).toBe(initialResources);
+		expect(await harness.getStreamOptions()).toBe(initialStreamOptions);
+		expect(await harness.getRetryPolicy()).toBe(initialRetry);
+		expect(await harness.getCompactionSettings()).toBe(initialCompaction);
+		expect(await harness.getSteeringMode()).toBe("one-at-a-time");
+		expect(await harness.getFollowUpMode()).toBe("one-at-a-time");
+
+		const events: string[] = [];
+		let retryAtEvent: typeof initialRetry | undefined;
+		harness.events.on("config_update", async (event) => {
+			events.push(event.property);
+			if (event.property === "retryPolicy") retryAtEvent = await harness.getRetryPolicy();
+		});
+		const nextTools = [tool("next")];
+		const nextResources = { promptTemplates: [] };
+		const nextStreamOptions = { maxRetries: 4 };
+		const nextRetry = { enabled: false, maxRetries: 0, baseDelayMs: 0 };
+		const nextCompaction = { enabled: true, reserveTokens: 300, keepRecentTokens: 400 };
+
+		await harness.setTools(nextTools);
+		await harness.setResources(nextResources);
+		await harness.setStreamOptions(nextStreamOptions);
+		await harness.setRetryPolicy(nextRetry);
+		await harness.setCompactionSettings(nextCompaction);
+		await harness.setSteeringMode("all");
+		await harness.setFollowUpMode("all");
+
+		expect(await harness.getTools()).toBe(nextTools);
+		expect(await harness.getResources()).toBe(nextResources);
+		expect(await harness.getStreamOptions()).toBe(nextStreamOptions);
+		expect(await harness.getRetryPolicy()).toBe(nextRetry);
+		expect(await harness.getCompactionSettings()).toBe(nextCompaction);
+		expect(await harness.getSteeringMode()).toBe("all");
+		expect(await harness.getFollowUpMode()).toBe("all");
+		expect(retryAtEvent).toBe(nextRetry);
+		expect(events).toEqual([
+			"tools",
+			"resources",
+			"streamOptions",
+			"retryPolicy",
+			"compactionSettings",
+			"steeringMode",
+			"followUpMode",
+		]);
+
+		const penultimateResources = { skills: [] };
+		const finalResources = { promptTemplates: [] };
+		await Promise.all([harness.setResources(penultimateResources), harness.setResources(finalResources)]);
+		expect(await harness.getResources()).toBe(finalResources);
+		expect(events.slice(-2)).toEqual(["resources", "resources"]);
+	});
+
+	it("emits lane config changes after committed memory publication", async () => {
+		const session = await createSession();
+		const options = modelOptions(session);
+		const { harness } = await createAgentHarness(options);
+		const events: unknown[] = [];
+		let thinkingAtEvent: string | undefined;
+		harness.events.on("config_update", async (event) => {
+			events.push(event);
+			if (event.property === "thinkingLevel") thinkingAtEvent = await harness.getThinkingLevel();
+		});
+
+		await harness.setModel(options.model);
+		await harness.setThinkingLevel("high");
+		await harness.setActiveTools(["read"]);
+
+		const model = { provider: options.model.provider, modelId: options.model.id };
+		expect(events).toEqual([
+			{ type: "config_update", property: "model", previous: model, value: model, lane: "main" },
+			{ type: "config_update", property: "thinkingLevel", previous: "off", value: "high", lane: "main" },
+			{ type: "config_update", property: "activeTools", previous: [], value: ["read"], lane: "main" },
+		]);
+		expect(thinkingAtEvent).toBe("high");
+	});
+
+	it("rejects invalid config without publication or fault", async () => {
+		const session = await createSession();
+		const initialTools = [tool("initial")];
+		const { harness } = await createAgentHarness({ ...modelOptions(session), tools: initialTools });
+		const events: string[] = [];
+		harness.events.on("config_update", (event) => {
+			events.push(event.property);
+		});
+		const duplicate = tool("duplicate");
+
+		expect(() => harness.setTools([duplicate, duplicate])).toThrow(TypeError);
+		expect(() => harness.setRetryPolicy({ enabled: true, maxRetries: -1, baseDelayMs: 0 })).toThrow(RangeError);
+		expect(() => harness.setCompactionSettings({ enabled: true, reserveTokens: -1, keepRecentTokens: 0 })).toThrow(
+			RangeError,
 		);
+
+		expect(await harness.getTools()).toBe(initialTools);
+		expect(await harness.getRetryPolicy()).toEqual({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 });
+		expect(await harness.getCompactionSettings()).toBe(DEFAULT_COMPACTION_SETTINGS);
+		expect(events).toEqual([]);
+		expect(await harness.lanes()).toHaveLength(1);
+	});
+
+	it("validates initial config before writing durable state", async () => {
+		const invalidRetrySession = await createSession();
+		await expect(
+			createAgentHarness({
+				...modelOptions(invalidRetrySession),
+				retry: { enabled: true, maxRetries: -1, baseDelayMs: 0 },
+			}),
+		).rejects.toBeInstanceOf(RangeError);
+		expect(await invalidRetrySession.getRegister("lane.config", "main")).toBeUndefined();
+
+		const invalidCompactionSession = await createSession();
+		await expect(
+			createAgentHarness({
+				...modelOptions(invalidCompactionSession),
+				compaction: { enabled: true, reserveTokens: -1, keepRecentTokens: 0 },
+			}),
+		).rejects.toBeInstanceOf(RangeError);
+		expect(await invalidCompactionSession.getRegister("lane.config", "main")).toBeUndefined();
 	});
 
 	it("seeds main and returns the concrete harness as its main lane", async () => {
@@ -273,6 +416,8 @@ describe("runtime2 AgentHarness", () => {
 			ok: false,
 			error: { _tag: "Closed" },
 		});
+		await expect(harness.getTools()).rejects.toBeInstanceOf(HarnessClosed);
+		await expect(harness.setResources({})).rejects.toBeInstanceOf(HarnessClosed);
 	});
 
 	it("publishes an admitted lane creation before close finishes", async () => {
@@ -349,7 +494,7 @@ describe("runtime2 AgentHarness", () => {
 			payload: { text: "queued" },
 		});
 		expect((await session.getRegister("lane.leaf", "main"))?.value).toBeNull();
-		await expect(harness.inspectExecution()).rejects.toBeInstanceOf(RuntimeSliceNotImplemented);
+		await expect(harness.inspectExecution()).rejects.toBeInstanceOf(SliceNotImplemented);
 
 		const closing = harness.close();
 		expect(harness.close()).toBe(closing);
@@ -385,7 +530,13 @@ describe("runtime2 AgentHarness", () => {
 		expect(mutate).not.toHaveBeenCalled();
 		expect(getRegister).not.toHaveBeenCalled();
 		expect(listRegisters).not.toHaveBeenCalled();
-		await expect(harness.getTools()).rejects.toBeInstanceOf(RuntimeSliceNotImplemented);
+		expect(await harness.getTools()).toEqual([]);
+		expect(await harness.getResources()).toEqual({});
+		expect(await harness.getStreamOptions()).toEqual({});
+		expect(await harness.getRetryPolicy()).toEqual({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 });
+		expect(await harness.getCompactionSettings()).toBe(DEFAULT_COMPACTION_SETTINGS);
+		expect(await harness.getSteeringMode()).toBe("all");
+		expect(await harness.getFollowUpMode()).toBe("all");
 	});
 
 	it("rejects append during a structural operation without faulting", async () => {
@@ -443,6 +594,8 @@ describe("runtime2 AgentHarness", () => {
 		if (worker === undefined) throw new Error("missing runtime2 worker lane");
 		const initialConfiguration = worker.state.configuration;
 		const faultEvent = new Promise<unknown>((resolve) => harness.events.on("fault", resolve));
+		const configUpdate = vi.fn();
+		harness.events.on("config_update", configUpdate);
 		const failure = new Error("commit failed");
 		storage.failure = failure;
 		const failed = worker.setThinkingLevel("high");
@@ -459,9 +612,12 @@ describe("runtime2 AgentHarness", () => {
 		if (!(rejected instanceof HarnessFault)) throw new Error("missing harness fault");
 		expect(rejected.cause).toBe(failure);
 		expect(await faultEvent).toMatchObject({ type: "fault", code: "harness_fault" });
+		expect(configUpdate).not.toHaveBeenCalled();
 		await expect(queued).rejects.toBe(rejected);
 		await expect(harness.getLeafId()).rejects.toBe(rejected);
 		await expect(worker.getThinkingLevel()).rejects.toBe(rejected);
+		await expect(harness.getTools()).rejects.toBe(rejected);
+		await expect(harness.setResources({})).rejects.toBe(rejected);
 		expect(harness.fault(new Error("later"))).toBe(rejected);
 		expect(worker.state.configuration).toBe(initialConfiguration);
 		expect((await session.getRegister("lane.config", "worker"))?.value).toEqual(initialConfiguration);

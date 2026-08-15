@@ -1,16 +1,23 @@
+import type { RetryPolicy } from "@draht/ai";
+import { NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
+import type { QueueMode } from "../../types.ts";
 import type {
 	AgentHarness,
 	AgentHarnessOptions,
 	AgentLane,
 	CreateLaneResult,
+	GlobalConfigEventPayload,
 	LaneInfo,
+	Resources,
 	SuspendedOperation,
 } from "../agent-harness.ts";
 import { Closed, HarnessClosed, HarnessFault, InvalidLane, LaneExists, UnknownTarget } from "../agent-harness.ts";
+import { type CompactionSettings, DEFAULT_COMPACTION_SETTINGS } from "../compaction/compaction.ts";
+import { DEFAULT_RETRY_POLICY, validateCompactionSettings, validateRetryPolicy, validateToolNames } from "../config.ts";
 import { HarnessEventBus } from "../events.ts";
 import { HookRegistry } from "../hooks.ts";
+import { convertToLlm } from "../messages.ts";
 import { Result } from "../result.ts";
-import { RuntimeSliceNotImplemented } from "../runtime/types.ts";
 import {
 	SessionInvalidLaneError,
 	SessionInvariantError,
@@ -18,9 +25,12 @@ import {
 	SessionUnknownTargetError,
 } from "../session/session.ts";
 import type { LaneConfiguration, Session } from "../session/types.ts";
+import type { AgentHarnessStreamOptions, AgentHarnessTool } from "../types.ts";
 import { Lane } from "./lane.ts";
 import { restoreSession } from "./restore.ts";
-import type { LaneState } from "./types.ts";
+import { type Config, type LaneState, SliceNotImplemented } from "./types.ts";
+
+type GlobalConfigProperty = GlobalConfigEventPayload["property"];
 
 /** Runtime2 implementation of AgentHarness. The harness is the main lane. */
 export class Harness<TContext extends object | undefined> extends Lane implements AgentHarness<TContext> {
@@ -28,14 +38,38 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 	readonly events: HarnessEventBus;
 	readonly seed: LaneConfiguration;
 	readonly lanesByName = new Map<string, Lane>();
+	private config: Config<TContext>;
 	closePromise: Promise<void> | undefined;
 	faultError: HarnessFault | undefined;
 
 	constructor(options: AgentHarnessOptions<TContext>, seed: LaneConfiguration, restored: Map<string, LaneState>) {
 		const main = restored.get("main");
 		if (main === undefined) throw new SessionInvariantError("Session is missing main lane");
-		super("main", options.session, options.models, main, (cause) => this.fault(cause));
+		super(
+			"main",
+			options.session,
+			options.models,
+			main,
+			(cause) => this.fault(cause),
+			(event) => this.events.emit(event),
+		);
 		this.seed = seed;
+		this.config = {
+			tools: options.tools ?? [],
+			resources: options.resources ?? {},
+			streamOptions: options.streamOptions ?? {},
+			retryPolicy: options.retry ?? DEFAULT_RETRY_POLICY,
+			compaction: options.compaction ?? DEFAULT_COMPACTION_SETTINGS,
+			steeringMode: options.steeringMode ?? "all",
+			followUpMode: options.followUpMode ?? "all",
+			toolExecution: options.toolExecution ?? "parallel",
+			drive: options.drive ?? "automatic",
+			toolContext: options.toolContext,
+			systemPrompt: options.systemPrompt,
+			toProviderMessages: options.toProviderMessages ?? convertToLlm,
+			entryProjectors: options.entryProjectors ?? {},
+			telemetryContext: options.telemetryContext ?? NOOP_TELEMETRY_CONTEXT,
+		};
 		this.events = new HarnessEventBus();
 		this.hooks = new HookRegistry((error, hook, lane) =>
 			this.events.emit({
@@ -49,12 +83,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		);
 		this.lanesByName.set("main", this);
 		for (const [name, state] of restored) {
-			if (name !== "main") {
-				this.lanesByName.set(
-					name,
-					new Lane(name, options.session, options.models, state, (cause) => this.fault(cause)),
-				);
-			}
+			if (name !== "main") this.lanesByName.set(name, this.buildLane(name, state));
 		}
 	}
 
@@ -95,7 +124,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		};
 		try {
 			await this.session.createLane(name, at, this.seed);
-			const lane = new Lane(name, this.session, this.models, state, (cause) => this.fault(cause));
+			const lane = this.buildLane(name, state);
 			if (this.closedError !== undefined) lane.seal(this.closedError);
 			this.lanesByName.set(name, lane);
 			await this.events.emit({ type: "lane_created", lane: name, at });
@@ -116,64 +145,93 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		}
 	}
 
-	async getTools(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getTools");
+	getTools(): Promise<AgentHarnessTool<TContext>[]> {
+		return this.getConfig("tools");
 	}
 
-	async setTools(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setTools");
+	setTools(tools: AgentHarnessTool<TContext>[]): Promise<void> {
+		validateToolNames(tools);
+		return this.setConfig("tools", tools, "tools");
 	}
 
-	async getResources(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getResources");
+	getResources(): Promise<Resources> {
+		return this.getConfig("resources");
 	}
 
-	async setResources(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setResources");
+	setResources(resources: Resources): Promise<void> {
+		return this.setConfig("resources", resources, "resources");
 	}
 
-	async getStreamOptions(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getStreamOptions");
+	getStreamOptions(): Promise<AgentHarnessStreamOptions> {
+		return this.getConfig("streamOptions");
 	}
 
-	async setStreamOptions(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setStreamOptions");
+	setStreamOptions(options: AgentHarnessStreamOptions): Promise<void> {
+		return this.setConfig("streamOptions", options, "streamOptions");
 	}
 
-	async getRetryPolicy(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getRetryPolicy");
+	getRetryPolicy(): Promise<RetryPolicy> {
+		return this.getConfig("retryPolicy");
 	}
 
-	async setRetryPolicy(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setRetryPolicy");
+	setRetryPolicy(policy: RetryPolicy): Promise<void> {
+		validateRetryPolicy(policy);
+		return this.setConfig("retryPolicy", policy, "retryPolicy");
 	}
 
-	async getCompactionSettings(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getCompactionSettings");
+	getCompactionSettings(): Promise<CompactionSettings> {
+		return this.getConfig("compaction");
 	}
 
-	async setCompactionSettings(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setCompactionSettings");
+	setCompactionSettings(compaction: CompactionSettings): Promise<void> {
+		validateCompactionSettings(compaction);
+		return this.setConfig("compaction", compaction, "compactionSettings");
 	}
 
-	async getSteeringMode(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getSteeringMode");
+	getSteeringMode(): Promise<QueueMode> {
+		return this.getConfig("steeringMode");
 	}
 
-	async setSteeringMode(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setSteeringMode");
+	setSteeringMode(steeringMode: QueueMode): Promise<void> {
+		return this.setConfig("steeringMode", steeringMode, "steeringMode");
 	}
 
-	async getFollowUpMode(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getFollowUpMode");
+	getFollowUpMode(): Promise<QueueMode> {
+		return this.getConfig("followUpMode");
 	}
 
-	async setFollowUpMode(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setFollowUpMode");
+	setFollowUpMode(followUpMode: QueueMode): Promise<void> {
+		return this.setConfig("followUpMode", followUpMode, "followUpMode");
 	}
 
 	async watchSession(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("watchSession");
+		throw new SliceNotImplemented("watchSession");
+	}
+
+	private buildLane(name: string, state: LaneState): Lane {
+		return new Lane(
+			name,
+			this.session,
+			this.models,
+			state,
+			(cause) => this.fault(cause),
+			(event) => this.events.emit(event),
+		);
+	}
+
+	private async getConfig<TKey extends keyof Config<TContext>>(key: TKey): Promise<Config<TContext>[TKey]> {
+		this.assertOpen();
+		return this.config[key];
+	}
+
+	private async setConfig<TKey extends keyof Config<TContext>>(
+		key: TKey,
+		value: Config<TContext>[TKey],
+		property: GlobalConfigProperty,
+	): Promise<void> {
+		this.assertOpen();
+		this.config = { ...this.config, [key]: value };
+		await this.events.emit({ type: "config_update", property });
 	}
 
 	fault(cause: unknown): Error {
@@ -224,11 +282,9 @@ export async function createAgentHarness<TContext extends object | undefined = o
 	options: AgentHarnessOptions<TContext>,
 ): Promise<{ harness: AgentHarness<TContext>; suspended: SuspendedOperation[] }> {
 	const tools = options.tools ?? [];
-	const toolNames = new Set<string>();
-	for (const tool of tools) {
-		if (toolNames.has(tool.name)) throw new TypeError(`Duplicate tool name: ${JSON.stringify(tool.name)}`);
-		toolNames.add(tool.name);
-	}
+	validateToolNames(tools);
+	validateRetryPolicy(options.retry ?? DEFAULT_RETRY_POLICY);
+	validateCompactionSettings(options.compaction ?? DEFAULT_COMPACTION_SETTINGS);
 	const seed: LaneConfiguration = {
 		model: { provider: options.model.provider, modelId: options.model.id },
 		thinkingLevel: options.thinkingLevel ?? "off",

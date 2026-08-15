@@ -1,7 +1,6 @@
 import type { Api, Model, Models } from "@draht/ai";
 import type { ThinkingLevel } from "../../types.ts";
-import type { AgentLane } from "../agent-harness.ts";
-import { RuntimeSliceNotImplemented } from "../runtime/types.ts";
+import type { AgentLane, HarnessEvent, LaneConfigEventPayload } from "../agent-harness.ts";
 import { SessionPendingAssistantMessageError } from "../session/session.ts";
 import type {
 	BranchScan,
@@ -13,8 +12,9 @@ import type {
 	SessionTree,
 	Transaction,
 } from "../session/types.ts";
-import type { LaneState } from "./types.ts";
+import { type LaneState, SliceNotImplemented } from "./types.ts";
 
+type EventHandler = (event: HarnessEvent) => Promise<void>;
 type FaultHandler = (cause: unknown) => Error;
 type Synchronous<TResult> = TResult extends PromiseLike<unknown> ? never : TResult;
 
@@ -43,10 +43,18 @@ export class Lane implements AgentLane {
 	protected readonly session: Session;
 	protected readonly models: Models;
 	private readonly onFault: FaultHandler;
+	private readonly onEvent: EventHandler;
 	state: LaneState;
 	closedError: Error | undefined;
 
-	constructor(name: string, session: Session, models: Models, state: LaneState, onFault: FaultHandler) {
+	constructor(
+		name: string,
+		session: Session,
+		models: Models,
+		state: LaneState,
+		onFault: FaultHandler,
+		onEvent: EventHandler,
+	) {
 		this.session = session;
 		this.models = models;
 		this.name = name;
@@ -62,6 +70,7 @@ export class Lane implements AgentLane {
 		};
 		this.state = state;
 		this.onFault = onFault;
+		this.onEvent = onEvent;
 	}
 
 	async getLeafId(): Promise<string | null> {
@@ -128,87 +137,87 @@ export class Lane implements AgentLane {
 	}
 
 	async accept(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("accept");
+		throw new SliceNotImplemented("accept");
 	}
 
 	async drive(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("drive");
+		throw new SliceNotImplemented("drive");
 	}
 
 	async requestAbort(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("requestAbort");
+		throw new SliceNotImplemented("requestAbort");
 	}
 
 	async inspectExecution(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("inspectExecution");
+		throw new SliceNotImplemented("inspectExecution");
 	}
 
 	async prompt(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("prompt");
+		throw new SliceNotImplemented("prompt");
 	}
 
 	async skill(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("skill");
+		throw new SliceNotImplemented("skill");
 	}
 
 	async promptFromTemplate(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("promptFromTemplate");
+		throw new SliceNotImplemented("promptFromTemplate");
 	}
 
 	async compact(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("compact");
+		throw new SliceNotImplemented("compact");
 	}
 
 	async navigateTree(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("navigateTree");
+		throw new SliceNotImplemented("navigateTree");
 	}
 
 	async resume(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("resume");
+		throw new SliceNotImplemented("resume");
 	}
 
 	async abort(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("abort");
+		throw new SliceNotImplemented("abort");
 	}
 
 	async steer(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("steer");
+		throw new SliceNotImplemented("steer");
 	}
 
 	async followUp(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("followUp");
+		throw new SliceNotImplemented("followUp");
 	}
 
 	async nextRun(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("nextRun");
+		throw new SliceNotImplemented("nextRun");
 	}
 
 	async cancelQueued(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("cancelQueued");
+		throw new SliceNotImplemented("cancelQueued");
 	}
 
 	async recordUsage(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("recordUsage");
+		throw new SliceNotImplemented("recordUsage");
 	}
 
 	async waitForIdle(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("waitForIdle");
+		throw new SliceNotImplemented("waitForIdle");
 	}
 
 	async runWhenIdle(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("runWhenIdle");
+		throw new SliceNotImplemented("runWhenIdle");
 	}
 
 	async peekAction(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("peekAction");
+		throw new SliceNotImplemented("peekAction");
 	}
 
 	async executeAction(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("executeAction");
+		throw new SliceNotImplemented("executeAction");
 	}
 
 	async runToCompletion(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("runToCompletion");
+		throw new SliceNotImplemented("runToCompletion");
 	}
 
 	async getModel(): Promise<Model<Api> | undefined> {
@@ -217,10 +226,18 @@ export class Lane implements AgentLane {
 	}
 
 	setModel(model: Model<Api>): Promise<void> {
-		return this.setConfiguration((configuration) => ({
-			...configuration,
-			model: { provider: model.provider, modelId: model.id },
-		}));
+		return this.setConfiguration(
+			(configuration) => ({
+				...configuration,
+				model: { provider: model.provider, modelId: model.id },
+			}),
+			(previous, value) => ({
+				type: "config_update",
+				property: "model",
+				previous: previous.model,
+				value: value.model,
+			}),
+		);
 	}
 
 	async getThinkingLevel(): Promise<ThinkingLevel> {
@@ -229,7 +246,15 @@ export class Lane implements AgentLane {
 	}
 
 	setThinkingLevel(thinkingLevel: ThinkingLevel): Promise<void> {
-		return this.setConfiguration((configuration) => ({ ...configuration, thinkingLevel }));
+		return this.setConfiguration(
+			(configuration) => ({ ...configuration, thinkingLevel }),
+			(previous, value) => ({
+				type: "config_update",
+				property: "thinkingLevel",
+				previous: previous.thinkingLevel,
+				value: value.thinkingLevel,
+			}),
+		);
 	}
 
 	async getActiveTools(): Promise<string[]> {
@@ -238,17 +263,26 @@ export class Lane implements AgentLane {
 	}
 
 	setActiveTools(activeToolNames: string[]): Promise<void> {
-		return this.setConfiguration((configuration) => ({ ...configuration, activeToolNames }));
+		return this.setConfiguration(
+			(configuration) => ({ ...configuration, activeToolNames }),
+			(previous, value) => ({
+				type: "config_update",
+				property: "activeTools",
+				previous: previous.activeToolNames,
+				value: value.activeToolNames,
+			}),
+		);
 	}
 
 	async watch(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("watch");
+		throw new SliceNotImplemented("watch");
 	}
 
-	private setConfiguration(
+	private async setConfiguration(
 		update: (configuration: LaneState["configuration"]) => LaneState["configuration"],
+		event: (previous: LaneState["configuration"], value: LaneState["configuration"]) => LaneConfigEventPayload,
 	): Promise<void> {
-		return this.command((state) => {
+		const payload = await this.command((state) => {
 			const configuration = update(state.configuration);
 			return {
 				kind: "commit",
@@ -258,9 +292,10 @@ export class Lane implements AgentLane {
 					],
 				},
 				next: { ...state, configuration },
-				materialize: () => undefined,
+				materialize: () => event(state.configuration, configuration),
 			};
 		});
+		await this.onEvent({ ...payload, lane: this.name });
 	}
 
 	private async findEntriesOnBranch(query: BranchScan = {}): Promise<Entry[]> {

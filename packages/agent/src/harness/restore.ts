@@ -6,7 +6,7 @@ import type {
 	LaneConfiguration,
 	LaneLastResult,
 	LaneState,
-	Operation,
+	OperationMeta,
 	OperationState,
 	RunState,
 	SessionReader,
@@ -14,7 +14,7 @@ import type {
 } from "./session/types.ts";
 
 export interface RestoredOperation {
-	operation: Operation;
+	operation: OperationMeta;
 	state: OperationState;
 	entries: Map<string, Entry>;
 	toolArguments: Map<string, Record<string, JsonValue>>;

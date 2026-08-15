@@ -4,7 +4,7 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	type LaneConfiguration,
 	MemorySessionRepo,
-	type Operation,
+	type OperationMeta,
 	type OperationState,
 	type Session,
 } from "../../src/index.ts";
@@ -40,12 +40,12 @@ async function createConfiguredSession(): Promise<Session> {
 async function installRun(session: Session): Promise<{
 	operationId: string;
 	promptEntryId: string;
-	operation: Operation;
+	operation: OperationMeta;
 	state: OperationState;
 }> {
 	const operationId = session.idGenerator.next();
 	const promptEntryId = session.idGenerator.next();
-	const operation: Operation = {
+	const operation: OperationMeta = {
 		operationId,
 		lane: "main",
 		sourceLeafId: null,
@@ -1142,7 +1142,7 @@ describe("restoreLane base validation", () => {
 	it("rejects missing operation registers and invalid base references", async () => {
 		const session = await createConfiguredSession();
 		const { operationId, operation, state } = await installRun(session);
-		const writeOperation = (value: Operation) =>
+		const writeOperation = (value: OperationMeta) =>
 			session.mutate("main", (mutator) =>
 				mutator.commit({
 					writes: [{ kind: "register", op: "set", namespace: "op.meta", key: operationId, value }],

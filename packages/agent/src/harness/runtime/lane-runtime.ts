@@ -43,7 +43,7 @@ import type {
 	LaneConfiguration,
 	LaneLastResult,
 	NewEntry,
-	Operation,
+	OperationMeta,
 	PendingEntry,
 	RunState,
 	SessionTree,
@@ -259,7 +259,7 @@ export async function acceptLane<TContext extends object | undefined>(
 				parentId = placement.id;
 			}
 			const triggerEntryId = parentId!;
-			const operation: Operation = {
+			const operation: OperationMeta = {
 				operationId: provisional.operationId,
 				lane: lane.name,
 				sourceLeafId: restored.leafId,

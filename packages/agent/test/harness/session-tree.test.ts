@@ -6,7 +6,7 @@ import { InstrumentedStorage } from "../../src/harness/session/testing/index.ts"
 import type {
 	LaneState,
 	NewEntry,
-	Operation,
+	OperationMeta,
 	RunState,
 	Session,
 	SessionMetadata,
@@ -36,7 +36,7 @@ const operation = {
 	sourceLeafId: ROOT_ID,
 	startedAt: NOW,
 	intent: { kind: "run", promptEntryIds: [] },
-} satisfies Operation;
+} satisfies OperationMeta;
 const runState = {
 	kind: "run",
 	control: { status: "running" },

@@ -30,8 +30,8 @@ import type {
 	LaneSnapshot,
 	NavigationState,
 	NewEntry,
-	Operation,
 	OperationAdmissionResult,
+	OperationMeta,
 	OperationRequest,
 	OperationState,
 	RegisterSetWrite,
@@ -224,7 +224,7 @@ const operations = [
 		startedAt: 3,
 		intent: { kind: "navigation", targetId: "target", summarize: true, label: "target" },
 	},
-] satisfies Operation[];
+] satisfies OperationMeta[];
 
 const lastResult = {
 	operationId: "run",
@@ -323,7 +323,7 @@ it("covers the complete durable storage and Part 3 discriminants", () => {
 		| "fact.label"
 		| "fact.custom"
 	>();
-	expectTypeOf<Operation["intent"]["kind"]>().toEqualTypeOf<"run" | "compaction" | "navigation">();
+	expectTypeOf<OperationMeta["intent"]["kind"]>().toEqualTypeOf<"run" | "compaction" | "navigation">();
 	expectTypeOf<Control["status"]>().toEqualTypeOf<"running" | "cancel_requested">();
 	expectTypeOf<Generation["status"]>().toEqualTypeOf<"ready" | "effect_pending" | "retry_wait">();
 	expectTypeOf<ToolCall["status"]>().toEqualTypeOf<"planned" | "effect_pending" | "completed">();

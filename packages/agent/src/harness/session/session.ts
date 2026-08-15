@@ -9,7 +9,7 @@ import type {
 	IdGenerator,
 	JsonValue,
 	LaneConfiguration,
-	Operation,
+	OperationMeta,
 	OperationState,
 	PendingEntry,
 	Register,
@@ -520,7 +520,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		});
 	}
 
-	private validateCurrentOperation(lane: string, operation: Operation, state: OperationState): void {
+	private validateCurrentOperation(lane: string, operation: OperationMeta, state: OperationState): void {
 		if (operation.lane !== lane) {
 			throw new SessionInvariantError(
 				`Active operation ${operation.operationId} belongs to lane ${JSON.stringify(operation.lane)}, not ${JSON.stringify(lane)}`,

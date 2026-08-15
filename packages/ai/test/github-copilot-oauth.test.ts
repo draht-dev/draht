@@ -239,7 +239,7 @@ describe("GitHub Copilot OAuth device flow", () => {
 		await loginPromise;
 	});
 
-	it("limits concurrent model policy updates during login", async () => {
+	it("enables model policies sequentially during login", async () => {
 		vi.useFakeTimers();
 
 		let activePolicyRequests = 0;
@@ -297,8 +297,8 @@ describe("GitHub Copilot OAuth device flow", () => {
 		await vi.advanceTimersByTimeAsync(1000);
 		await loginPromise;
 
-		expect(policyRequestCount).toBeGreaterThan(4);
-		expect(maxActivePolicyRequests).toBe(4);
+		expect(policyRequestCount).toBeGreaterThan(1);
+		expect(maxActivePolicyRequests).toBe(1);
 	});
 
 	it("rejects a non-http(s) verification_uri before it reaches onDeviceCode", async () => {

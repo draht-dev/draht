@@ -1,3 +1,5 @@
+import type { Api, Model, Models } from "@draht/ai";
+import type { ThinkingLevel } from "../../types.ts";
 import type { AgentLane } from "../agent-harness.ts";
 import { RuntimeSliceNotImplemented } from "../runtime/types.ts";
 import type { Session, SessionTree, Transaction } from "../session/types.ts";
@@ -14,10 +16,12 @@ export class Lane implements AgentLane {
 	readonly name: string;
 	readonly sessionTree: SessionTree;
 	readonly session: Session;
+	readonly models: Models;
 	state: LaneState;
 
-	constructor(name: string, session: Session, state: LaneState) {
+	constructor(name: string, session: Session, models: Models, state: LaneState) {
 		this.session = session;
+		this.models = models;
 		this.name = name;
 		this.sessionTree = session.view(name);
 		this.state = state;
@@ -124,31 +128,44 @@ export class Lane implements AgentLane {
 		throw new RuntimeSliceNotImplemented("runToCompletion");
 	}
 
-	async getModel(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getModel");
+	async getModel(): Promise<Model<Api> | undefined> {
+		return this.models.getModel(this.state.configuration.model.provider, this.state.configuration.model.modelId);
 	}
 
-	async setModel(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setModel");
+	setModel(model: Model<Api>): Promise<void> {
+		return this.setConfiguration({
+			...this.state.configuration,
+			model: { provider: model.provider, modelId: model.id },
+		});
 	}
 
-	async getThinkingLevel(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getThinkingLevel");
+	async getThinkingLevel(): Promise<ThinkingLevel> {
+		return this.state.configuration.thinkingLevel;
 	}
 
-	async setThinkingLevel(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setThinkingLevel");
+	setThinkingLevel(thinkingLevel: ThinkingLevel): Promise<void> {
+		return this.setConfiguration({ ...this.state.configuration, thinkingLevel });
 	}
 
-	async getActiveTools(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("getActiveTools");
+	async getActiveTools(): Promise<string[]> {
+		return this.state.configuration.activeToolNames;
 	}
 
-	async setActiveTools(): Promise<never> {
-		throw new RuntimeSliceNotImplemented("setActiveTools");
+	setActiveTools(activeToolNames: string[]): Promise<void> {
+		return this.setConfiguration({ ...this.state.configuration, activeToolNames });
 	}
 
 	async watch(): Promise<never> {
 		throw new RuntimeSliceNotImplemented("watch");
+	}
+
+	setConfiguration(configuration: LaneState["configuration"]): Promise<void> {
+		return this.transition((state) => ({
+			transaction: {
+				writes: [{ kind: "register", op: "set", namespace: "lane.config", key: this.name, value: configuration }],
+			},
+			next: { ...state, configuration },
+			result: undefined,
+		}));
 	}
 }

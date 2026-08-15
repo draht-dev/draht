@@ -1,3 +1,4 @@
+import { type Api, createModels, fauxProvider, type Model } from "@draht/ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
@@ -31,7 +32,12 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
 	return { promise, resolve: () => resolvePromise?.() };
 }
 
-async function createLane(): Promise<{ lane: Lane; session: Session; storage: ControlledMemoryStorage }> {
+async function createLane(): Promise<{
+	lane: Lane;
+	model: Model<Api>;
+	session: Session;
+	storage: ControlledMemoryStorage;
+}> {
 	const storage = new ControlledMemoryStorage();
 	const session = new StorageBackedSession(
 		{ id: `runtime2-lane-${sessions.length}`, createdAt: 1, storageVersion: 1 },
@@ -53,7 +59,15 @@ async function createLane(): Promise<{ lane: Lane; session: Session; storage: Co
 			],
 		}),
 	);
-	return { lane: new Lane("main", session, await restoreLane(session, "main")), session, storage };
+	const faux = fauxProvider();
+	const models = createModels();
+	models.setProvider(faux.provider);
+	return {
+		lane: new Lane("main", session, models, await restoreLane(session, "main")),
+		model: faux.getModel(),
+		session,
+		storage,
+	};
 }
 
 function setThinkingLevel(
@@ -87,6 +101,24 @@ afterEach(async () => {
 });
 
 describe("runtime2 Lane transitions", () => {
+	it("reads and replaces configuration from owned state", async () => {
+		const { lane, model, session } = await createLane();
+		const activeToolNames = ["read"];
+
+		await lane.setModel(model);
+		await lane.setThinkingLevel("high");
+		await lane.setActiveTools(activeToolNames);
+
+		expect(await lane.getModel()).toBe(model);
+		expect(await lane.getThinkingLevel()).toBe("high");
+		expect(await lane.getActiveTools()).toBe(activeToolNames);
+		expect((await session.getRegister("lane.config", "main"))?.value).toEqual({
+			model: { provider: model.provider, modelId: model.id },
+			thinkingLevel: "high",
+			activeToolNames,
+		});
+	});
+
 	it("publishes memory only after the durable commit succeeds", async () => {
 		const { lane, session, storage } = await createLane();
 		const commitStarted = deferred();

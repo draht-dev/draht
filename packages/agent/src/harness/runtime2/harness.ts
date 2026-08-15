@@ -21,7 +21,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 	constructor(options: AgentHarnessOptions<TContext>, seed: LaneConfiguration, restored: Map<string, LaneState>) {
 		const main = restored.get("main");
 		if (main === undefined) throw new SessionInvariantError("Session is missing main lane");
-		super("main", options.session, main);
+		super("main", options.session, options.models, main);
 		this.session = options.session;
 		this.seed = seed;
 		this.events = new HarnessEventBus();
@@ -37,7 +37,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		);
 		this.lanesByName.set("main", this);
 		for (const [name, state] of restored) {
-			if (name !== "main") this.lanesByName.set(name, new Lane(name, options.session, state));
+			if (name !== "main") this.lanesByName.set(name, new Lane(name, options.session, options.models, state));
 		}
 	}
 

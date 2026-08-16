@@ -107,7 +107,7 @@ An **operation** is one accepted unit of lane work: a run, compaction, or naviga
 
 ### Storage
 
-Below the session and harness, `Storage` exposes atomic transactions and queries over three durable forms: immutable entries, mutable registers, and append-only usage rows. Registers form a mutable, namespaced key-value store. Facts live there; internal harness namespaces durably store pending content and lane and operation state needed for crash recovery. In particular, `op.meta` is written once with an operation's metadata, while `op.state` is replaced after each transition with its complete current state. The terminal transaction deletes both and writes `lane.lastResult`. No partial transaction is visible.
+Below the session and harness, `Storage` exposes atomic transactions and queries over three durable forms: immutable entries, mutable registers, and append-only usage rows. Registers form a mutable, namespaced key-value store. Facts live there; internal harness namespaces durably store pending content and lane and operation state needed for crash recovery. In particular, `op.meta` is written once with an operation's metadata, while `op.state` is replaced after each transition with its complete current state. A tool may also request occasional durable replacement checkpoints of its bounded live progress; those checkpoints remain auxiliary and never prove effect completion. The terminal transaction deletes operation-owned registers and writes `lane.lastResult`. No partial transaction is visible.
 
 ## 0.3 The three stores
 
@@ -121,7 +121,7 @@ registers      current mutable state — namespaced typed cells, overwrite or de
 usage ledger   cost history — append-only rows
 ```
 
-*Every payload is in an entry, a register, or the ledger; there is no third place.* An entry is the complete conversation record — placement and payload in one row. A register holds its current typed value directly; overwriting discards the old value, and deletion removes the key. Content that durably exists before it has a place in the tree (queued input, deferred writes) waits in a `pending.entry` register and becomes an entry in the transaction that places it. Per-backend projections — branch index, full-text search, stats — are rebuildable from the three stores and carry no authority.
+*Every payload is in an entry, a register, or the ledger; there is no third place.* An entry is the complete conversation record — placement and payload in one row. A register holds its current typed value directly; overwriting discards the old value, and deletion removes the key. Complete content that durably exists before tree placement—queued input, deferred writes, finalized out-of-order tool results—waits in `pending.entry` and becomes an entry in the transaction that places it. Auxiliary tool progress may occupy `pending.tool_output` only while its effect is uncertain. Per-backend projections — branch index, full-text search, stats — are rebuildable from the three stores and carry no authority.
 
 **2. Atomic transactions.** A transaction is a set of entry inserts, usage inserts, and register writes (set or delete), committed all-or-none with strictly increasing sequence numbers. There is no crash state inside a transaction. This is the only write primitive.
 
@@ -132,7 +132,8 @@ usage ledger   cost history — append-only rows
 ```
 commit:  "about to do X; its output will use ids R and U"     ← intent
          do X                                                  ← the uncertain part
-commit:  output + usage + next state                           ← settlement
+commit:  complete output + next state                          ← settlement
+         materialize staged output in tree order               ← tools only, when needed
 ```
 
 Hooks follow their replay contract instead: a result becomes durable in the transaction that consumes it, and a crash before that transaction may rerun the hook. Thus every external effect can still happen without durable settlement. Provider/tool intents make that uncertainty explicit where replay policy depends on it; idempotent hooks accept it as a non-goal.
@@ -152,7 +153,7 @@ What happens, in order:
 2. **Intent.** After an internal ready-state commit, it commits the request intent: *"I am about to make a provider request. The response will be entry `0195c8d1-53a0-7c44-…` and the usage row will be `0195c8d1-53a0-7d18-…`."* Both ids are minted now; nothing has been sent yet.
 3. **The request.** Streaming happens. This is the only part that is not durable.
 4. **Settlement.** One transaction commits the response entry, its usage row, and the next state: *"the response has tool calls; here is the batch plan, with result ids already assigned."*
-5. Tool calls follow the same intent → effect → settlement shape, one pair of commits each.
+5. Tool calls follow intent → effect → outcome settlement. A finalized outcome becomes durable immediately, then materializes as a tree entry in assistant source order. This distinction matters only when parallel calls finish out of order.
 6. When the model stops without tool calls, a terminal transaction deletes the operation's registers, records the outcome in `lane.lastResult`, and leaves the lane idle.
 
 As a trace (ids abbreviated; every `TX[...]` is one atomic commit, in normative write order):
@@ -167,8 +168,11 @@ TX[ upsert op.state/O = effect_pending (reserves response n2, usage u1) ]
 TX[ insert entry n2, upsert lane.leaf = n2, insert usage u1,
     upsert op.state/O = tools (result id n3 reserved) ]
 TX[ upsert op.tool_args/O:s1:0, upsert op.state/O = call 0 effect_pending ]
-… tool runs …
-TX[ insert entry n3, upsert lane.leaf = n3, upsert op.state/O = checkpoint ]
+… tool runs; selected bounded updates may replace pending.tool_output/O:n3 …
+TX[ upsert pending.entry/n3 = finalized tool result,
+    delete pending.tool_output/O:n3, upsert op.state/O = call 0 outcome_ready ]
+TX[ insert entry n3, delete pending.entry/n3, upsert lane.leaf = n3,
+    upsert op.state/O = checkpoint ]
 … second turn: ready · intent · stream · settle (n4, u2) …
 TX[ delete op.meta/O, op.state/O, op.tool_args/O:*,
     upsert lane.lastResult = { O, completed, n4 },
@@ -185,24 +189,29 @@ Meanwhile a second thread in the same channel is running its own lane, over the 
 lane.prompt("delete the stale migrations and run the test suite")
 ```
 
-The model returns two tool calls. The harness commits the batch plan, then commits `call 0 is about to execute, with these exact arguments, and it declares itself unsafe to replay`. The tool starts deleting files. The process is killed.
+The model returns two tool calls. The harness commits the batch plan, then commits `call 0 is about to execute, with these exact arguments, and it declares itself unsafe to replay`. The tool starts deleting files. It emits bounded progress snapshots every 100 ms for live UI observation and requests a durable checkpoint every two seconds. The process is killed after one checkpoint commits.
 
 ```text
 TX[ insert entry n2 (assistant, 2 calls), insert usage u1, upsert lane.leaf = n2,
     upsert op.state/O = tools (result ids n3, n4 reserved) ]
 TX[ upsert op.tool_args/O:s1:0, upsert op.state/O = call 0 effect_pending,
                                                     replay: "never" ]
-… tool deletes files …  ← CRASH
+… tool deletes files; live updates u1 … u19 …
+TX[ upsert pending.tool_output/O:n3 = bounded update u1 ]
+… live updates u2 … u19 …  ← CRASH
 ```
 
-On restart the harness performs the bounded restore reads from §4.4; `op.state` is the decisive restart point and says `calls[0].status = "effect_pending", replay = "never"`. It does not re-run the deletion. It appends a synthetic error result under the result id that was reserved before the effect started, marks the call complete, and continues to call 1:
+On restart the harness performs the bounded restore reads from §4.4; `op.state` is the decisive restart point and says `calls[0].status = "effect_pending", replay = "never"`. It does not re-run the deletion. When activation reconciles the orphan, it uses the latest durable checkpoint when present, appends an explicit warning that newer live output may be missing and the external outcome is unknown, and stages the synthetic error result under the reserved result id:
 
 ```text
-TX[ insert entry n3 (synthetic "interrupted" result), upsert lane.leaf = n3,
+TX[ upsert pending.entry/n3 = synthetic interrupted result containing u1,
+    delete pending.tool_output/O:n3,
+    upsert op.state/O = call 0 outcome_ready ]
+TX[ insert entry n3, delete pending.entry/n3, upsert lane.leaf = n3,
     upsert op.state/O = call 0 completed ]
 ```
 
-The conversation stays coherent — every tool call has a result — and nothing ran twice.
+The conversation stays coherent — every tool call has a result — and nothing ran twice. If no checkpoint committed before the crash, the result contains only the interruption warning.
 
 Had the tool declared `replay: "safe"` (a read, a query), the harness would have re-executed it with the persisted arguments instead.
 
@@ -226,7 +235,7 @@ Had the tool declared `replay: "safe"` (a read, a query), the harness would have
 Source type provenance:
 
 - `AgentMessage`, `AgentTool`, `AgentToolResult`, `QueueMode`, and `ThinkingLevel`: `packages/agent/src/types.ts`.
-- `Skill`, `PromptTemplate`, `AgentHarnessResources` (`Resources` below), `AgentHarnessTool`, `AgentHarnessToolInvocation`, `AgentHarnessStreamOptions`, and `AgentHarnessStreamOptionsPatch`: `packages/agent/src/harness/types.ts`.
+- `Skill`, `PromptTemplate`, `AgentHarnessResources` (`Resources` below), `AgentHarnessTool`, `AgentHarnessToolInvocation`, `AgentHarnessToolUpdateCallback`, `AgentHarnessToolUpdateOptions`, `AgentHarnessStreamOptions`, and `AgentHarnessStreamOptionsPatch`: `packages/agent/src/harness/types.ts`.
 - `Model`, `Models`, `Usage`, `RetryPolicy`, `StopReason`, `AssistantMessage`, `ImageContent`, provider messages, stream options, and deferred handles: `packages/ai`.
 - `CompactionSettings`, `CompactionPreparation`, `CompactResult`, `BranchPreparation`, and `BranchSummaryResult`: `packages/agent/src/harness/compaction/`. Existing preparation and split-turn algorithms remain the implementation starting point unless this document explicitly changes them.
 - `TelemetryContext` and typed schema helpers: `packages/telemetry`; the agent-owned schemas remain in `packages/agent/src/harness/telemetry.ts`.
@@ -320,8 +329,10 @@ interface RegisterValues {
   "op.meta":         Operation;                    // §3.1
   "op.state":        OperationState;               // §3.2 — durable restart point
   "op.tool_args":    Record<string, JsonValue>;    // effective tool arguments (§3.8)
+  "op.tool_fact":    JsonValue;                    // invocation-scoped durable memo (§3.8)
   "op.preparation":  DurableStructuralPreparation; // §3.9
-  "pending.entry":   PendingEntry;                 // §2.2
+  "pending.entry":   PendingEntry;                 // unplaced complete content (§2.2)
+  "pending.tool_output": AgentToolResult<unknown>; // bounded progress checkpoint (§3.8)
   "fact.name":       string;
   "fact.label":      string;
   "fact.custom":     JsonValue;                    // JSON null is a legal value
@@ -356,8 +367,10 @@ type DurableStructuralPreparation =
 | `op.meta` | operation id | `Operation` (§3.1) | acceptance data; written once, never overwritten |
 | `op.state` | operation id | `OperationState` (§3.2) | total operation state — the **durable restart point** |
 | `op.tool_args` | `{opId}:{stepId}:{sourceIndex}` | effective arguments | written once at tool clearance (§3.8) |
+| `op.tool_fact` | `{opId}:{invocationId}:{factName}` | `JsonValue` | invocation-scoped durable memo; only while the call is effect-pending (§3.8) |
 | `op.preparation` | `{opId}:{taskId}` | `DurableStructuralPreparation` | written once before the decision hook (§3.9) |
-| `pending.entry` | reserved entry id | `PendingEntry` | queued content awaiting placement (§2.2) |
+| `pending.entry` | reserved entry id | `PendingEntry` | complete content awaiting placement, including outcome-ready tool results (§2.2, §3.8) |
+| `pending.tool_output` | `{opId}:{invocationId}` | `AgentToolResult<unknown>` | latest tool-requested bounded progress checkpoint (§3.8) |
 | `fact.name` | `""` | string | session name |
 | `fact.label` | entry id | string | entry label |
 | `fact.custom` | application key | `JsonValue` | application state |
@@ -366,12 +379,14 @@ That is the complete set. Two lifetimes are visible in the key shape:
 
 ```text
 lane.*  fact.*     session-lived; facts are deleted only by explicit application action
-op.*               operation-lived; deleted by the terminal transaction (§3.13)
-pending.entry      lives until its content is placed or cancelled
+op.*               operation-lived; deleted no later than the terminal transaction (§3.13)
+pending.entry      lives until its content is placed, cancelled, or terminally discarded
+pending.tool_output exists only while its call is effect-pending
 ```
 
-- `op.meta` and `op.preparation` keys are written exactly once; `op.tool_args` keys are written once per key, keyed by the producing step so batches never collide. All are deleted no later than the terminal transaction; only `op.state` is overwritten during the operation.
-- Operation-owned `pending.entry` registers still unconsumed at the end (remaining inbox items and abort-drained items) are deleted by the terminal transaction — a consumed item's register dies in its placement transaction; lane-owned ones (`pendingNextRun`) outlive operations and die when consumed or cancelled (§3.11).
+- `op.meta` and `op.preparation` keys are written exactly once; `op.tool_args` keys are written once per call. `op.tool_fact` keys are invocation-scoped current values used for durable memoization and die when the invocation reaches `outcome_ready`. Every `op.*` key is deleted no later than the terminal transaction.
+- Operation-owned `pending.entry` registers still unconsumed at the end include remaining inbox/drained items and any staged tool outcomes; the terminal transaction deletes them. A pending item's register normally dies in its placement transaction. Lane-owned `pendingNextRun` values outlive operations and die only when consumed or cancelled (§3.11).
+- `pending.tool_output` is optional auxiliary state. A tool selects bounded complete updates with `checkpoint:true`; the harness replaces the scalar under invocation fencing. Outcome settlement deletes it atomically. Safe replay deletes it before re-execution; unsafe recovery may consume it into an interrupted result.
 - `lane.lastResult` is written only by terminal transactions and overwritten by the next one on its lane — one bounded register per lane, forever. Recovery never reads it; it exists so an application that accepted an operation, crashed, and reopened can still learn its outcome (§3.13).
 - Deleting a fact removes its register. Storing JSON `null` in `fact.custom` is a different, legal state; there are no tombstones.
 - Cancellations leave no trace: `cancelQueued` triages as pending → `cancelled`, entry exists → `already_consumed`, else → `not_found` (§3.11). A client retrying a lost cancel treats `not_found` as success.
@@ -512,7 +527,7 @@ before compaction:  ~10 transaction lines, ~27 writes — op.state revisions,
 after compaction:   header + 4 entry lines + 2 usage lines + 4 lane register lines
 ```
 
-When to compact: on open when the dead-bytes ratio crosses a threshold; optionally after terminal transactions; always after a schema migration (Part 7). Between compactions, normal operation is append-only and O(1) per commit. One consequence worth stating: deleted pending payloads and superseded state revisions **linger as bytes** until compaction — logical deletion is immediate, physical deletion is deferred. A deployment that needs prompt physical removal of sensitive cancelled content compacts eagerly at terminal boundaries.
+When to compact: on open when the dead-bytes ratio crosses a threshold; after a terminal or outcome-staging deletion when tool checkpoint rewrites pushed the file across that threshold; always after a schema migration (Part 7). Between compactions, normal operation is append-only and O(1) per commit. Deleted pending payloads, superseded state revisions, and superseded `pending.tool_output` checkpoints **linger as bytes** until compaction — logical deletion is immediate, physical deletion is deferred. Tool authors therefore own bounded checkpoint values, cadence, and duplicate suppression; bash emits live updates at 100 ms but requests distinct durable checkpoints at most every two seconds. At 50 KiB per checkpoint, continuously changing output can add approximately 15 MiB per ten minutes before compaction. A deployment that needs prompt physical removal of sensitive cancelled content compacts eagerly at terminal boundaries.
 
 ### SQLite
 
@@ -616,7 +631,7 @@ Because the file is the session, the precise rewrite (§2.9) and forks are file 
 - **Cleanup is deletion, not collection.** A 30-turn run overwrites one `op.state` register ~30 times and then deletes it. What remains is exactly the conversation, the ledger, and a handful of lane and fact registers — no dead state values, no history rows, nothing to garbage-collect. (JSONL defers *physical* reclamation to snapshot compaction; the logical state is identical.)
 - **No repair-by-rewrite.** Recovery appends entries and overwrites only the registers it owns, with the same transitions normal execution would commit; interrupt it and rerun it and you get the same result.
 - **Concurrency is trivial.** Readers never see partial state; there is nothing to lock.
-- **The one deliberate double-write.** Queued content is serialized twice: into its `pending.entry` register at enqueue and into its entry at placement. Only queued items pay it — assistant and tool settlements, the hot path, write their entries once. In exchange every queue item is one id, cancellation deletes content outright, and no payload ever exists without an owner.
+- **Deliberate staging writes.** Queued content is serialized into `pending.entry` at enqueue and again into its immutable entry at placement. Finalized tool outcomes also stage in `pending.entry` before source-ordered materialization, which prevents a completed parallel effect from replaying after a crash. Assistant settlements remain born placed. In every case, staging has one owner and dies atomically with placement or cleanup.
 
 ---
 
@@ -658,16 +673,16 @@ The tree's central rule:
 
 > An **entry** is created, complete, when placement happens. Content that is durable *before* placement is current mutable state and waits in a `pending.entry` register; the placement transaction writes the entry and deletes the register. Neither is ever modified after that.
 
-Three cases, all mechanical:
+The cases are mechanical:
 
-**Born placed** — assistant responses, tool results, direct appends to an idle lane. Content and placement arrive together; one transaction:
+**Born placed** — assistant responses and direct appends to an idle lane. Content and placement arrive together; one transaction:
 
 ```
 TX[ insert e_a4 = { parent: e_q1, type: "message", message: <assistant response> },
     upsert lane.leaf/main = "e_a4" ]
 ```
 
-**Content first, placement later** — queued input (`steer`, `followUp`, `nextRun`) and deferred tree writes. The entry id is minted at enqueue and doubles as the register key; queue state references content by that one id. Two transactions, possibly far apart:
+**Content first, placement later — queued input.** `steer`, `followUp`, `nextRun`, and deferred tree writes mint the entry id at enqueue and use it as the register key. Queue state references content by that id. Two transactions may be far apart:
 
 ```
 t0  TX[ upsert pending.entry/e_q1 = { type: "message", payload: <200KB message> },
@@ -679,17 +694,29 @@ t1  TX[ insert e_q1 = { parent: e_a3, type: "message", message: <from the regist
         S(next){ ...inbox.steer -= "e_q1" } ]
 ```
 
-The register dies in the transaction that places the entry. Crash before `t1`: the item is still queued. Crash after: it is placed and the register is gone. **There is no third state** — until placement or cancellation, exactly one of register and entry exists at every commit boundary, never both and never neither. Cancellation is the other exit: `cancelQueued` deletes the register, and the content is simply gone, never having touched the tree (§3.11).
+Crash before `t1`: the item is still queued. Crash after: it is placed and the register is gone. Until placement or cancellation, exactly one of register and entry exists. Cancellation deletes the register and the content never enters the tree (§3.11).
 
-**Id reserved before content exists** — assistant responses and tool results. The reserved id is a plain minted string inside `op.state`; no register and no row exist until settlement inserts the complete entry. Reserving costs nothing.
+**Content first, placement later — finalized parallel tool outcomes.** A tool result id begins as a plain reserved string in `op.state`. When execution and `after_tool` finish, the complete final `ToolResultMessage` is staged in `pending.entry/{resultEntryId}` and the call becomes `outcome_ready`. It enters the tree only when every earlier source position is ready:
 
-These are the **two reservation regimes**: settlement-family ids (responses, tool results, usage rows) are strings in operation state; queued-content ids are `pending.entry` registers. "A reserved id is just a string" is true only of the first family.
+```
+t0  TX[ upsert pending.entry/e_r2 = finalized result,
+        S(call 1 = outcome_ready) ]
+
+t1  TX[ insert e_r2 after the earlier result,
+        delete pending.entry/e_r2,
+        S(call 1 = completed) ]
+```
+
+This lets effects settle in completion order while entries materialize in assistant source order. Crash before `t0` leaves an uncertain effect; crash after `t0` never re-executes it; crash after `t1` sees the immutable entry.
+
+**Id reserved before content exists.** Assistant response, tool-result, and usage ids are minted as strings in operation state. Assistant settlement places its result directly. Tool settlement may pass through `pending.entry` as described above.
 
 Consequences to rely on:
 
-- A pending item is **invisible to tree queries** (no entry) but **visible in snapshots**: the owning state lists its id, and the payload is dereferenced from its register.
-- "Has this been placed yet?" is answered by the owning queue list and the register's existence — never by the absence of an entry.
-- The double write is the model's one deliberate redundancy (§1.8). SQLite and Postgres can implement placement as `INSERT … SELECT` from the register row inside the placement transaction; in JSONL both copies persist as bytes until snapshot compaction (§1.7). Only queued items pay it; settlement never does.
+- A queued or outcome-ready item is invisible to tree queries but visible through its owning state and `pending.entry` payload.
+- Queue placement/cancellation and outcome-ready materialization delete `pending.entry` atomically with their state change.
+- A reserved tool-result id moves through `string only → pending.entry → immutable entry`; no two representations coexist at a commit boundary.
+- Queued input still pays the deliberate content double-write (§1.8). Finalized tool outcomes also stage once before placement when source ordering requires it; this additional write is what prevents completed parallel effects from replaying after a crash.
 
 ## 2.3 Lanes
 
@@ -799,7 +826,7 @@ Tests assert these invariants and the required query plans. No wall-clock thresh
 
 ## 2.7 Forks
 
-A fork is a repository operation over one coherent source-session snapshot. It copies selected entries, latest facts, lane leaves, and total configuration; it never copies `op.*`, `pending.entry`, or `lane.lastResult` registers or ledger rows — destination lanes start with a fresh empty `LaneState`.
+A fork is a repository operation over one coherent source-session snapshot. It copies selected entries, latest facts, lane leaves, and total configuration; it never copies `op.*`, `pending.entry`, `pending.tool_output`, or `lane.lastResult` registers or ledger rows — destination lanes start with a fresh empty `LaneState`.
 
 ```ts
 type ForkOptions =
@@ -1157,13 +1184,15 @@ type ToolCall =
   | { status: "planned"; sourceIndex: number; resultEntryId: string }
   | { status: "effect_pending"; sourceIndex: number; resultEntryId: string;
       replay: "never" | "safe" }
+  | { status: "outcome_ready"; sourceIndex: number; resultEntryId: string;
+      terminate: boolean }
   | { status: "completed"; sourceIndex: number; resultEntryId: string;
       terminate: boolean };
 ```
 
-The source call comes from `assistantEntryId` plus `sourceIndex`; large effective arguments live once in the `op.tool_args/{operationId}:{stepId}:{sourceIndex}` register — the producing generation's `stepId` disambiguates batches across turns — written at clearance (§3.8) and located by that deterministic key — the state carries no per-call argument reference. Persist them unconditionally because `prepareArguments`, not only `before_tool`, may change them. Parallel calls may be effect-pending together; result entries commit in source order.
+The source call comes from `assistantEntryId` plus `sourceIndex`; large effective arguments live once in the `op.tool_args/{operationId}:{stepId}:{sourceIndex}` register — the producing generation's `stepId` disambiguates batches across turns — written at clearance (§3.8) and located by that deterministic key. Persist them unconditionally because `prepareArguments`, not only `before_tool`, may change them.
 
-Completed calls always form a source-ordered prefix. In sequential mode, the uncompleted suffix contains at most one `effect_pending` call, followed by `planned` calls. In parallel mode, the uncompleted suffix may mix `planned` and `effect_pending`: an immediate result is retained process-locally as a `planned` position while a later real call commits intent and starts. For example, `[effect_pending, planned, effect_pending]` is a valid parallel restart point. No extra durable status records a computed immediate outcome.
+`outcome_ready` means execution and post-effect hooks are finished and the complete finalized result is durable in `pending.entry/{resultEntryId}`, but an earlier source call prevents tree placement. Such a call never executes again. Completed calls form a source-ordered prefix. In parallel mode, the suffix may mix `planned`, `effect_pending`, and `outcome_ready`; source-ordered materialization alone extends the completed prefix. In sequential mode, the suffix contains at most one `effect_pending` or `outcome_ready` call before planned calls.
 
 ### Deferred
 
@@ -1253,8 +1282,8 @@ Restore checks only semantic consistency of the current lane and operation regis
 
 - `lane.state/{lane}` holds a `LaneState`; when it names operation O, `op.meta/O` holds an `Operation` for that lane, and `op.state/O` holds an `OperationState` compatible with O's intent kind;
 - every entry id the current state or `op.meta` names — trigger, latest assistant, batch assistant, deferred source, completed results, prompt entries, a non-null `sourceLeafId`, a navigation intent's non-null `targetId`, the lane leaf — resolves to an existing entry of the expected type;
-- every id in `inbox.*`, `control.drained*`, and `pendingNextRun` has its `pending.entry` register; `pendingNextRun`, steer, follow-up, and drained queue items are messages; every effect-pending call has its `op.tool_args` register; every structural decision has its `op.preparation` register;
-- tool source indices are complete, ordered, unique, in range, and use unique result ids; completed result entries match their source calls;
+- every id in `inbox.*`, `control.drained*`, and `pendingNextRun` has its `pending.entry` register; `pendingNextRun`, steer, follow-up, and drained queue items are messages; every effect-pending call has its `op.tool_args` register; every outcome-ready call has a matching tool-result `pending.entry`; every structural decision has its `op.preparation` register;
+- tool source indices are complete, ordered, unique, in range, and use unique result ids; completed result entries and outcome-ready pending values match their source calls; completed calls form a source-ordered prefix, while only the parallel suffix may freely mix planned, effect-pending, and outcome-ready states;
 - a cancelled run has empty steer/follow-up inboxes, structural operations have no drained run queues, and a current operation may reference an `aborted` assistant response only under cancelled control;
 - cancellation, navigation source/target, and structural-source combinations satisfy the state discriminants.
 
@@ -1332,7 +1361,7 @@ A declined summarized navigation moves nothing: the leaf stays at the source, an
 | idle lane | unsummarized navigation request after validation | `TX[ upsert op.meta/O, S(navigation{ready_to_commit}), L ]` |
 | reserved idle lane | summarized navigation request with preparation | `TX[ upsert op.preparation/O:{taskId} = P, upsert op.meta/O, S(navigation{summary.deciding, taskId}), L ]` |
 
-Captured `nextRun` items already have their payloads in `pending.entry` registers; acceptance inserts their entries from those payloads, deletes the registers, and removes the ids from `pendingNextRun` — the placement half of the one deliberate double write (§1.8). A late-captured item keeps its enqueue-minted id (§1.2).
+Captured `nextRun` items already have their payloads in `pending.entry` registers; acceptance inserts their entries from those payloads, deletes the registers, and removes the ids from `pendingNextRun` — the placement half of queued-content staging (§1.8). A late-captured item keeps its enqueue-minted id (§1.2).
 
 Compaction first chooses its supplied-or-minted operation id and takes a process-local lane admission reservation, then reads preparation. Summarized navigation uses the same reservation while collecting/building branch preparation; unsummarized navigation needs none because validation and acceptance share one lane-line job. While reserved, competing operation requests receive `LaneBusy` naming that provisional id/kind and idle tree writes wait; `nextRun` and configuration changes may still commit because they do not move the leaf. Empty compaction preparation releases the reservation and returns `NothingToCompact` with no operation write. Non-empty preparation is accepted only against the unchanged reserved source leaf. Process death drops the reservation and leaves the lane idle.
 
@@ -1389,28 +1418,35 @@ An overflow classification never produces a tool plan. A *genuine* `length` that
 
 ## 3.8 Tools
 
+Tool execution separates effect completion from source-ordered tree placement:
+
 | From | Trigger | Transaction | To |
 |---|---|---|---|
 | call *i* `planned` | clearance passed (`before_tool`, lookup, arg validation) | `TX[ upsert op.tool_args/O:{stepId}:{i} = effective args, S(call i = effect_pending, replay) ]` | dispatch |
-| call *i* `effect_pending` | effect settled, `after_tool` applied | `TX[ insert result entry, upsert lane.leaf, insert tool usage row (if reported), S(call i = completed, terminate) ]` | tools or checkpoint |
-| call *i* `planned` | unknown tool / invalid args / `before_tool` blocks or throws / control cancelled | `TX[ insert synthetic error result entry, upsert lane.leaf, S(call i = completed, terminate from an intentional block, otherwise false) ]` | tools |
-| all calls completed | — | folded into the last settlement, which also deletes the batch's `op.tool_args/{O}:{stepId}:*` registers | checkpoint |
+| call *i* `effect_pending` | tool calls `onUpdate(partial, { checkpoint:true })` | `TX[ upsert pending.tool_output/O:{resultEntryId} = partial ]` after invocation fencing; state unchanged | `effect_pending` |
+| call *i* `effect_pending` | effect settled, update delivery awaited, `after_tool` applied, and `tool_end` emitted | `TX[ upsert pending.entry/{resultEntryId} = finalized result, delete pending.tool_output/O:{resultEntryId}, delete op.tool_fact/O:{resultEntryId}:*, S(call i = outcome_ready, terminate) ]` | `outcome_ready` |
+| call *i* `planned` | unknown tool / invalid args / `before_tool` blocks or throws / control cancelled | stage the complete synthetic result in `pending.entry` and write `outcome_ready` without effect intent | `outcome_ready` |
+| source-ready prefix | first non-completed calls are `outcome_ready` | `TX[ insert result entries in source order, delete their pending.entry values, insert reported usage, upsert lane.leaf, S(calls = completed / next checkpoint) ]` | `completed` or checkpoint |
 
-The batch's completion transition is:
+Every `onUpdate` remains a process-local `tool_update` observation. The synchronous callback calls `events.emit(tool_update)` and retains the latest delivery promise internally; tools neither receive nor await that promise. `checkpoint:true` additionally requests replacement of the invocation's bounded durable progress snapshot. Tools own bounding, cadence, and duplicate suppression; this first API imposes no generic byte cap or truncation on trusted in-process values. Checkpoint requests are drop-coalesced to one active commit and one latest waiting value: the synchronous request path immediately enqueues an active lane-line mutation or replaces the in-memory waiting value. When the tool promise settles, the harness stops accepting updates, closes checkpoint admission, and drops the waiting snapshot. An active checkpoint is already ordered before outcome staging on the lane mutation line; staging later deletes it. A failed active commit follows the ordinary storage-fault path and prevents staging. Before `after_tool`, the procedure awaits the latest update-delivery promise, which implies delivery of every earlier update. The built-in bash tool emits bounded live snapshots every 100 ms and requests a distinct checkpoint at most every two seconds.
 
-- **every** completed call set `terminate: true` → `checkpoint{may_finish, includeFinalAssistant: false}`
-- otherwise → `checkpoint{need_assistant(overflowRecoveryUsed: false)}`
+Outcome staging is the point after which the tool can never replay. After `after_tool`, the procedure constructs the complete canonical final result—bounded independently of progress snapshots—emits and awaits `tool_end` for a real execution, then stages its `ToolResultMessage`; the state carries only `terminate` and the reserved id. Tool-reported usage remains inside that staged message until materialization, where its ledger row commits atomically with the immutable entry. Added tool names likewise become active from the materialized transcript point, never from invisible staging.
 
-`terminate` exists so a tool can end the run without another provider turn. The motivating case is a "submit final result" tool used in place of structured output: the model calls it, the harness commits the result, and the run finishes with those tool results as its final entries — `run_end` then carries no `finalMessage`. Without this, every such run would pay for one more model turn whose only job is to stop.
+After any outcome stages, the procedure materializes the contiguous `outcome_ready` prefix beginning at the first non-completed source position. Several results may enter the tree in one transaction, each parented to the previous inserted result. When the final call materializes, that same state write deletes the batch's `op.tool_args/{O}:{stepId}:*` keys and chooses:
+
+- **every** completed call set `terminate: true` → `checkpoint{may_finish, includeFinalAssistant: false}`;
+- otherwise → `checkpoint{need_assistant(overflowRecoveryUsed: false)}`.
+
+`terminate` exists so a tool can end the run without another provider turn. The motivating case is a "submit final result" tool used in place of structured output: the run finishes with those tool results and `run_end` carries no `finalMessage`.
 
 Modes:
 
-- **Sequential** (option, or any called tool declares `executionMode: "sequential"`): clear → intent → execute → finalize → commit, one call at a time.
-- **Parallel** (default): clearance and intent commits happen in source order; dispatch does not await earlier calls; effects settle concurrently; phase 3, result-message lifecycle, and result commits are awaited and finalized in source order.
+- **Sequential:** clear → intent → execute → finalize → stage → materialize, one call at a time.
+- **Parallel:** clearance and intent happen in source order; effects and post-effect hooks settle independently; each complete outcome stages immediately in completion order; tree materialization remains source ordered.
 
-Blocked and invalid calls skip the intent commit and the effect, but still commit a result at their source position. Their `op.tool_args` register is never written. In a parallel start pass, such an immediate result remains process-local and its durable call stays `planned` until the source-ordered settlement pass reaches it. A crash before that commit discards the immediate value; recovery reruns ordinary clearance, including `before_tool` when applicable. The hook may return a different decision, just as after any crash between a hook return and the transaction that consumes it. This follows the hook replay contract (§5.6): no tool intent or effect existed, and only the eventual result or intent transaction makes the decision durable.
+Blocked and invalid calls skip intent/execution but still stage a synthetic outcome. A crash before staging reruns ordinary clearance, including `before_tool` under its replay contract. A crash after staging never reruns the hook or tool.
 
-Calls are tracked internally by `sourceIndex`. Hooks and events see the provider `toolCallId` and tool name — never the index. Tool execution additionally receives `AgentHarnessToolInvocation`: its opaque `invocationId` is the call's reserved `resultEntryId`, so it is session-unique and unchanged during safe replay; `operationId` and `turnId` provide correlation. A hosting/tool layer may key durable substeps by `invocationId` without making substeps a harness concept.
+Calls are tracked internally by `sourceIndex`. Hooks and events see provider `toolCallId` and tool name. `AgentHarnessToolInvocation.invocationId` equals the reserved `resultEntryId`, remains stable across safe replay, and scopes durable facts under `op.tool_fact/O:{invocationId}:*`. Fact names must be non-empty and contain no `:`; `setFact(name, undefined)` deletes. Fact operations synchronously enqueue on the lane mutation line before returning their promises, and tools must await writes. Each job verifies the same effect-pending invocation when it executes, protecting against authorized external finalization. A pre-return write is FIFO-ordered before staging and then deleted by staging; a post-return call rejects after capability expiry. No separate write drain exists. Flue-style `step.do(name, effect)` awaits these operations: a committed value returns on replay, while a crash before its fact commit may rerun the effect. There is no nested per-step replay state and no exactly-once external-effect promise.
 
 ## 3.9 Summary generation — compaction and navigation summaries
 
@@ -1596,14 +1632,16 @@ TX[ <result-publication writes, when the terminal transition also publishes
     delete op.tool_args/{O}:*        defensive prefix scan — listRegisters with
                                      keyPrefix (§1.5); batch completion already
                                      deletes these atomically (§3.8),
+    delete op.tool_fact/{O}:*        defensive cleanup of invocation memos,
     delete op.preparation/{O}:*      prefix scan; in-run compactions leave their
                                      preparation after resume,
+    delete pending.tool_output/{O}:* defensive cleanup of progress checkpoints,
     delete pending.entry/{id}        for every operation-owned pending id,
     upsert lane.lastResult/{lane} = <computed result>,
     L({ currentOperationId: null }) ]
 ```
 
-Operation-owned pending ids are the remaining `inbox.steer ∪ inbox.followUp ∪ inbox.writes` plus `control.drainedSteer ∪ control.drainedFollowUp` — registers that survived an abort drain die here (§3.11). **Never `lane.state.pendingNextRun`**: those registers are lane-owned, outlive operations, and die only when consumed or cancelled. Ledger rows are never deleted (§1.6). The `L` write rereads the latest `LaneState` on the lane mutation line and clears only `currentOperationId`, preserving concurrently accepted `pendingNextRun` (§3.4).
+Operation-owned pending ids are the remaining `inbox.steer ∪ inbox.followUp ∪ inbox.writes`, `control.drainedSteer ∪ control.drainedFollowUp`, and every staged `outcome_ready` result not already materialized. **Never `lane.state.pendingNextRun`**: those registers are lane-owned, outlive operations, and die only when consumed or cancelled. Ledger rows are never deleted (§1.6). The `L` write rereads the latest `LaneState` on the lane mutation line and clears only `currentOperationId`, preserving concurrently accepted `pendingNextRun` (§3.4).
 
 For the completed run of §0.4's shape — prompt `e_50`, tool call `e_51`/`e_52`, final answer `e_53`:
 
@@ -1618,11 +1656,11 @@ TX[ delete op.meta/op_9,
     upsert lane.state/main = { currentOperationId: null, pendingNextRun: [] } ]
 ```
 
-After it, the session holds exactly the conversation entries, the ledger rows, and the lane's registers (`lane.leaf`, `lane.config`, `lane.state`, `lane.lastResult`). The run's ~10 `op.state` revisions, its tool-args register, and any pending payloads existed only as register overwrites and are gone — nothing to collect (§1.8).
+After it, the session holds exactly the conversation entries, the ledger rows, and the lane's registers (`lane.leaf`, `lane.config`, `lane.state`, `lane.lastResult`). The run's `op.state` revisions, tool arguments, invocation facts, tool progress checkpoints, and pending payloads are gone logically. JSONL reclaims their superseded bytes through snapshot compaction (§1.7).
 
 **The observation contract.** A terminal outcome is observable once through the live caller's promise (and the corresponding `run_end`/`compaction_end`/`navigation_end` event), which carries the full in-memory result, and thereafter through `lane.lastResult` until the next terminal transaction on the same lane overwrites it. `lane.lastResult` is written only by terminal transactions — one bounded register per lane, forever. Recovery never reads it: restore treats a lane with `currentOperationId: null` as idle regardless of the register's content. It exists so an application that accepted an operation, lost its process, and reopened can still answer "what happened to `op_9`?" — including outcomes the tree alone cannot reconstruct: a structural failure's error, `declined`, and the `aborted`-versus-`completed` ambiguity of a leaf that moved.
 
-The invariant this section carries (restated in Part 9): `op.*` registers and operation-owned `pending.entry` registers exist **iff** their operation is open, because the terminal transaction deletes them atomically with clearing `currentOperationId`. There is no partial-cleanup state to observe or repair.
+The invariant this section carries (restated in Part 9): operation-owned `op.*`, `pending.entry`, and `pending.tool_output` registers may exist only while their operation is open, because the terminal transaction deletes them atomically with clearing `currentOperationId`. There is no partial-cleanup state to observe or repair.
 
 # Part 4 — Execution, recovery, abort, close
 
@@ -1705,7 +1743,7 @@ async function executeDrivePass(operationId: string,
 }
 ```
 
-The pseudo-code shows ownership and catch boundaries, not required helper names. A deadline is cooperative: it prevents the next transition or external effect only at an effect-free safe boundary; an admitted provider, tool, or hook may finish after it. `waitForRetry: false` returns the durable `notBefore`; `true` starts the existing abort-aware retry timer only when the deadline does not require an earlier return. `pollDeferred: true` grants at most the existing one-poll permit. `AbortRequested` is the one internal control-flow signal used when cancellation interrupts a parked breakpoint or wins the effect gate. A scope holding live local results catches it before the outer boundary when those values affect reconciliation. In particular, the parallel-tool procedure retains its promise map and settles started calls in source order; an assistant procedure parked after receiving a response retains that response long enough to settle it under cancelled control.
+The pseudo-code shows ownership and catch boundaries, not required helper names. A deadline is cooperative: it prevents the next transition or external effect only at an effect-free safe boundary; an admitted provider, tool, or hook may finish after it. `waitForRetry: false` returns the durable `notBefore`; `true` starts the existing abort-aware retry timer only when the deadline does not require an earlier return. `pollDeferred: true` grants at most the existing one-poll permit. `AbortRequested` is the one internal control-flow signal used when cancellation interrupts a parked breakpoint or wins the effect gate. A scope holding live local results catches it before the outer boundary when those values affect reconciliation. In particular, the parallel-tool procedure retains its promise map, stages each finalized started call as it settles, and materializes only the source-ready prefix; an assistant procedure parked after receiving a response retains that response long enough to settle it under cancelled control.
 
 Ordinary procedures are straight-line across their own durable restart points. Assistant generation is representative:
 
@@ -1716,9 +1754,9 @@ run before_request
 → commit response + usage + next state
 ```
 
-The procedure does not return to a dispatcher after its intent commit. Structural requests and deferred polls use the same shape. Parallel tool execution retains its own local promises until every started call has been finalized and committed in source order.
+The procedure does not return to a dispatcher after its intent commit. Structural requests and deferred polls use the same shape. Parallel tool execution retains its local promises until every started call has either staged a finalized outcome or lost ownership; a separate lane-line transition materializes ready outcomes in source order.
 
-Normal execution handles checkpoints, ready/retry states, planned or locally owned tools, structural decisions, deferred suspension, failure drain, and navigation commit. An unowned `effect_pending` state must not reach it. Such a state is handled only by activation recovery (§4.5); reaching it from ordinary dispatch is an invariant defect.
+Normal execution handles checkpoints, ready/retry states, planned or locally owned tools, outcome-ready materialization, structural decisions, deferred suspension, failure drain, and navigation commit. An unowned `effect_pending` state must not reach it. Such a state is handled only by activation recovery (§4.5); reaching it from ordinary dispatch is an invariant defect.
 
 ### Task installation, joining, and removal
 
@@ -1919,7 +1957,7 @@ An operation transition rereads the latest `lane.state`, `op.state`, leaf, and a
 
 Settlement therefore cannot overwrite steer/write acceptance or cancellation with a stale snapshot. It rereads the latest state, verifies that the same request or tool call remains pending, and merges the output while preserving newer inbox/control fields.
 
-What serializes on the lane line: operation acceptance, drive installation/join/removal, execution inspection, queue enqueue and cancel, queue consumption, deferred-write acceptance and application, cancellation requests, lane-configuration setters, finish, and lane creation. All durable races consequently have the two orders listed in Part 9. The effect gate is needed only because the synchronous start of an external call is not a durable mutation.
+What serializes on the lane line: operation acceptance, drive installation/join/removal, execution inspection, queue enqueue/cancel/consumption, deferred writes, cancellation requests, tool progress checkpoints, invocation fact access, outcome staging, source-ordered outcome materialization, lane-configuration setters, finish, and lane creation. All durable races consequently have the orders listed in Part 9. The effect gate is needed only because synchronous external-call admission is not a durable mutation.
 
 Harness-global settings use a second process-local mutation line with a monotonically increasing revision. Run acceptance snapshots compaction, queue modes, and tool execution into `RunState.settings`. A generation or structural-generation start snapshots only current stream options and retry policy, then reads lane configuration on its `Session.mutate` job and commits those values with the ready state. Global setters take only the settings line; lane setters take only the lane line. Snapshot procedures take the settings line before the lane line, and no code acquires them in reverse order. This gives setter-first or step-start-first ordering without holding either line across external work.
 
@@ -1973,9 +2011,9 @@ Five register point-lookups: three lane registers, then—only when an operation
 **Bounded hydration and semantic checks.** From the loaded state, collect what it names directly and fetch it in one batch:
 
 - **entries:** `triggerEntryId`, `latestAssistantEntryId`, `batch.assistantEntryId`, deferred `sourceEntryId`, completed `resultEntryId`s, the lane leaf, and from `op.meta`—`promptEntryIds`, a non-null `sourceLeafId`, and a navigation intent's non-null `targetId`;
-- **registers:** `op.tool_args/…` for effect-pending calls, `op.preparation/…` for structural work, and `pending.entry/…` for every `inbox.*`, `control.drained*`, and `pendingNextRun` id.
+- **registers:** `op.tool_args/…` and optional `pending.tool_output/…` for effect-pending calls, required `pending.entry/…` for outcome-ready calls, `op.preparation/…` for structural work, and `pending.entry/…` for every `inbox.*`, `control.drained*`, and `pendingNextRun` id.
 
-Then run §3.3's bounded semantic checks over exactly that set. Every named committed object exists and has the expected identity and relationship; tool indices are complete and unique. Completed tool calls form a source-ordered prefix. When the captured run setting is sequential, the uncompleted suffix has at most one `effect_pending` call before its `planned` calls; when that setting is parallel, the suffix may mix `planned` and `effect_pending` because process-local immediate outcomes can sit before later admitted effects (§3.8). A declaration-level sequential override also produces the stricter shape during execution, but restore does not resolve current tool code merely to audit that historical choice. Unmaterialized settlement-family ids are reservations in state. Restore performs exact-id entry and `pending.entry` lookups for current reservations to reject collisions between the two reservation regimes; it never infers progress from absence or scans for unreferenced content. Storage uniqueness and atomic settlement transitions prevent valid pending state from coexisting with materialized content under those ids. Configuration, stream options, and retry policy need no recovery lookup when they are captured inline.
+Then run §3.3's bounded semantic checks over exactly that set. Every required named object exists and has the expected identity and relationship; an absent tool-output checkpoint is legal and never invalidates an effect-pending call. Completed tool calls form a source-ordered prefix. In sequential mode the suffix has at most one effect-pending or outcome-ready call before planned calls; in parallel mode it may mix planned, effect-pending, and outcome-ready calls. Restore does not resolve current tool code merely to audit historical choices. A tool result progresses through reserved string, outcome-ready `pending.entry`, then immutable entry; restore rejects collisions between those representations. Invocation facts are not scanned during base restore—they are read only by resumed application code and defensively cleaned by invocation/operation prefix. Configuration, stream options, and retry policy need no recovery lookup when captured inline.
 
 Restore never reads register history, folds anything, scans tables, builds provider context, audits completed operations, or infers a transition from an absent planned value. It installs no `ActiveOperation` and invokes no breakpoint. The application or serving layer explicitly activates an open operation with `drive({ operationId })`; `resume()` is the convenience composition that inspects and drives the current operation with one deferred-poll permit. Cancellation is durably admitted through `requestAbort(operationId)` or its `abort()` convenience wrapper.
 
@@ -2008,7 +2046,7 @@ op.state/op_9   -> { phase: assistant effect_pending, attempt: 1,
 Admission resolves configured identities and returns `Err(MissingIdentities)` before writing when any are absent. After acceptance, identity handling depends on the restart point:
 
 - At assistant/summary `ready`, before any request intent, an unavailable captured model may suspend with state unchanged.
-- At a planned tool batch, resolve the complete bound tool snapshot before starting any call. If a captured active tool is unavailable, suspend before any batch effect starts. Provider calls to unknown or inactive names still receive their ordinary synthetic unknown-tool results.
+- At a planned tool batch, resolve the complete bound tool snapshot before starting any call. If a captured active tool is unavailable, suspend before any batch effect starts. Outcome-ready materialization and unsafe interruption synthesis require no tool identity. Provider calls to unknown or inactive names still receive ordinary synthetic unknown-tool results.
 - Never suspend between structural requests of one attempt: earlier summary text is process-local. A missing identity there fails that attempt in-band so it can retry/fail under the captured policy.
 - Orphaned `effect_pending` first performs unknown-outcome recovery even when registrations are missing. Synthetic assistant settlement, unsafe-tool interruption, queue application, and finish require no identity. A safe-tool replay or a later `ready` request preflights only the identity that it would actually invoke.
 
@@ -2024,10 +2062,10 @@ The resume prelude first reloads durable control. If cancellation is requested, 
 |---|---|
 | assistant generation `effect_pending` | If the captured retry policy permits, commit a later numbered `ready` attempt. Otherwise commit a synthetic error response and zero usage under the reserved ids, then continue through failure drain. |
 | structural generation `effect_pending` | Treat the entire attempt as uncertain, including any completed first split-turn request whose intermediate text was process-local. Advance to a later `ready` attempt under the captured policy or fail at the cap. Already committed request-usage rows remain in the ledger. |
-| tool call `effect_pending` | Re-execute persisted arguments only when both the stored and current declarations say `safe`; otherwise commit a synthetic interrupted result. During safe replay the activation procedure owns the new promise exactly like a fresh tool procedure. |
+| tool call `effect_pending` | If both stored and current declarations say `safe`, delete any old progress checkpoint and re-execute persisted arguments with the same invocation facts/id. Otherwise preserve checkpoint content/details/usage when present, ignore its added-tool/termination hints, append an explicit latest-durable/newer-live-may-be-missing/unknown-outcome warning, and stage a non-terminating synthetic error without `after_tool`. |
 | deferred poll `effect_pending` | The activation's single explicit poll permit replaces the unknown poll with fresh response/usage ids at the same poll number and fetches once. Without a permit it remains suspended. There is no cap. |
 
-After this prelude removes or takes live ownership of every orphaned pending effect, the same ordinary procedures used by fresh execution continue. Recovery is not a second end-to-end driver.
+After this prelude removes or takes live ownership of every orphaned pending effect, the same ordinary procedures used by fresh execution continue. Calls already in `outcome_ready` require no identity or effect recovery; ordinary source-order materialization places their staged results. Recovery is not a second end-to-end driver.
 
 Atomic transactions have no internal prefix, so every repeat-sensitive effect still has the same four durable crash positions:
 
@@ -2100,9 +2138,10 @@ Cancellation reconciliation is separate from ordinary dispatch. It never starts 
 
 - an intended assistant/fetch that really started settles under its reserved ids as `aborted`, retaining reported usage;
 - an intended assistant/fetch with no live result settles synthetically as `aborted` with zero usage;
-- planned, unstarted tools receive aborted synthetic results;
-- restored effect-pending tools receive interrupted results and are never replayed;
-- live started tools keep their raw/finalized result with `terminate:false`, regardless of whether the abort marker or result commit wins the lane line;
+- planned, unstarted tools stage aborted synthetic outcomes;
+- restored effect-pending tools stage interrupted outcomes, including the latest durable progress checkpoint when present, and are never replayed;
+- live started tools keep their raw/finalized result with `terminate:false`, regardless of whether the abort marker or outcome-staging commit wins the lane line;
+- already outcome-ready tools keep their staged complete results and materialize in source order;
 - structural work not already atomically published is discarded;
 - accepted deferred writes are still appended in order;
 - operation-owned pending and drained registers are deleted by the aborted terminal transaction.
@@ -2130,7 +2169,7 @@ seal harness admission
 → close storage and release the writer lease
 ```
 
-A harness-wide admission barrier orders close against every operation and public commit. A commit admitted first may finish and close waits for it; close first prevents admission. A provider/tool result produced after sealing cannot commit. Durable state therefore stops at the last committed restart point, often `effect_pending`, exactly as after process death.
+A harness-wide admission barrier orders close against every operation and public commit. A commit admitted first may finish and close waits for it; close first prevents admission. A provider/tool result produced after sealing cannot commit. A tool checkpoint already admitted may drain; a merely requested/waiting checkpoint may be lost. Durable state therefore stops at the last committed restart point, often `effect_pending` with zero or one bounded checkpoint, exactly as after process death.
 
 Reopening reports the open operation. A later matching `drive()`—direct or through `resume()`—applies activation recovery. No close-specific recovery path exists, and the durable aborted-implies-cancelled invariant remains true because close admits no locally aborted settlement under running control.
 
@@ -2453,7 +2492,21 @@ interface AgentHarnessToolInvocation {
   invocationId: string;
   operationId: string;
   turnId: string;
+
+  /** Invocation-scoped durable values. `undefined` deletes. */
+  getFact(key: string): Promise<JsonValue | undefined>;
+  setFact(key: string, value: JsonValue | undefined): Promise<void>;
 }
+
+interface AgentHarnessToolUpdateOptions {
+  /** Request replacement of this invocation's durable recovery checkpoint. */
+  checkpoint?: true;
+}
+
+type AgentHarnessToolUpdateCallback<TDetails> = (
+  partialResult: AgentToolResult<TDetails>,
+  options?: AgentHarnessToolUpdateOptions,
+) => void;
 
 type AgentHarnessTool<TContext extends object | undefined,
                       TParameters extends TSchema = TSchema,
@@ -2461,7 +2514,7 @@ type AgentHarnessTool<TContext extends object | undefined,
   Omit<AgentTool<TParameters, TDetails>, "execute"> & {
     execute(toolCallId: string, params: Static<TParameters>,
             signal: AbortSignal | undefined,
-            onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
+            onUpdate: AgentHarnessToolUpdateCallback<TDetails>,
             context: TContext,
             invocation: AgentHarnessToolInvocation):
       Promise<AgentToolResult<TDetails>>;
@@ -2510,7 +2563,7 @@ type EntryProjector = (entry: CustomEntry) =>
 
 Initial, replacement, and hook-patched stream options are trusted typed internal values. Patch deletion semantics are applied before publication; extensions that return values outside the declared types are defective rather than runtime-validated by the harness.
 
-`systemPrompt`, `toolContext`, `toProviderMessages`, and `entryProjectors` are deterministic/idempotent computation callbacks and may repeat after a crash; effectful interception belongs in hooks. `before_run` receives one preview evaluation of `systemPrompt`. A hook override is fixed in `Operation`; without one, the callback is evaluated again per provider request. `toolContext` is still resolved once per live batch; each bound tool call additionally receives its own stable `AgentHarnessToolInvocation`. A wrapper may declare `replay: "safe"` and use `invocationId` to memoize durable substeps in an application-owned store; the harness neither names nor stores those substeps.
+`systemPrompt`, `toolContext`, `toProviderMessages`, and `entryProjectors` are deterministic/idempotent computation callbacks and may repeat after a crash; effectful interception belongs in hooks. `before_run` receives one preview evaluation of `systemPrompt`. A hook override is fixed in `Operation`; without one, the callback is evaluated again per provider request. `toolContext` is resolved once per live batch; each bound tool call receives its stable `AgentHarnessToolInvocation` and a required synchronous update callback even when no live listener exists. A `replay:"safe"` tool may implement Flue-style durable memoization over `getFact`/`setFact`; committed values survive replay until the call reaches `outcome_ready`. Tools must await fact writes. These methods are invocation-scoped capabilities, not raw register access.
 
 ## 5.3 SessionTree
 
@@ -2581,6 +2634,7 @@ interface LaneSnapshot {
     suspended?: SuspendedOperation;
     streamingMessage?: AssistantMessage;     // message_start until entry commit
     runningTools: { toolCallId: string; toolName: string; args: unknown;
+                    /** Latest process-local update, or restored durable checkpoint. */
                     partialResult?: AgentToolResult<unknown> }[];
     retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
   };
@@ -2597,7 +2651,7 @@ interface SessionSnapshot {
 }
 ```
 
-`operation.status` derives from durable state plus process-local drive ownership: `suspended` whenever an open operation has no `ActiveOperation` (including accepted-but-undriven, hosted retry wait, safe yield, deferred, restored, or missing-identity state); `aborting` when `control.status === "cancel_requested"`; otherwise `running`. `suspended` details are present when the existing `SuspendedOperation` vocabulary can describe the reason; a transient accepted/yielded state needs no invented durable descriptor. The missing-identity marker stores the exact `SuspendedOperation`, survives until a successful drive/resume attempt or cancellation in this process, and is reconstructed as `reason:"crash"` after reopen. It changes snapshots but never durable recovery state. `queues` and `pendingWrites` derive from `inbox` and `pendingNextRun`, with content dereferenced from each id's `pending.entry` register; abort-drained items are exposed only through `AbortResult` and `SuspendedOperation.aborting`, never as still-queued. `streamingMessage` and `runningTools` are process-local extras layered on top.
+`operation.status` derives from durable state plus process-local drive ownership: `suspended` whenever an open operation has no `ActiveOperation` (including accepted-but-undriven, hosted retry wait, safe yield, deferred, restored, or missing-identity state); `aborting` when `control.status === "cancel_requested"`; otherwise `running`. `suspended` details are present when the existing `SuspendedOperation` vocabulary can describe the reason; a transient accepted/yielded state needs no invented durable descriptor. The missing-identity marker stores the exact `SuspendedOperation`, survives until a successful drive/resume attempt or cancellation in this process, and is reconstructed as `reason:"crash"` after reopen. It changes snapshots but never durable recovery state. `queues` and `pendingWrites` derive from `inbox` and `pendingNextRun`, with content dereferenced from each id's `pending.entry` register; abort-drained items are exposed only through `AbortResult` and `SuspendedOperation.aborting`, never as still-queued. `streamingMessage` is process-local. A running tool's `partialResult` prefers its latest process-local update and falls back to the optional `pending.tool_output` checkpoint after reopen. Outcome-ready calls are settled, not running, and do not appear in `runningTools` while awaiting source-ordered placement.
 
 Rules:
 
@@ -2605,7 +2659,7 @@ Rules:
 - `streamingMessage` is not part of `transcript`. `message_end` replaces it with the final post-hook value but does not clear it; the matching `entry_added` confirms the append, adds the entry to `transcript`, and clears the draft.
 - Direct messages and finalized tool results use the same immediate `message_start` → `message_end` lifecycle and enter `transcript` only on `entry_added`. They never populate `streamingMessage`.
 - An `aborting` snapshot reports only state that actually exists. It never synthesizes a streaming assistant message.
-- Reconnect means a new `watch()`. Only process death loses stream state; a restored harness shows the suspended operation instead. Every entry in the durable transcript is complete — a lost draft was never an entry.
+- Reconnect means a new `watch()`. Process loss discards assistant drafts and tool updates newer than the latest committed checkpoint. A restored effect-pending tool may expose that checkpoint as `partialResult`; after unsafe activation the same checkpoint is incorporated into the interrupted result entry. Every transcript entry remains complete.
 - A lane watcher receives events whose `lane` matches, plus events with no lane. The harness-global `usage` event is the explicit exception: it carries its originating lane but reaches every watcher, because its totals are session-wide.
 
 ## 5.5 Events
@@ -2737,7 +2791,9 @@ optional reserved id) → atomic response + usage + classified-state commit
 → entry_added → usage
 ```
 
-Only `entry_added` proves durability. Classification is computed before the transaction and becomes durable with it; it is not a separate event. Abort and overflow classification may normalize the committed response after `message_end`, so `entry_added` is authoritative for those two cases. A synthetic settlement performs no provider effect, update, or response hook: `message_start → message_end → atomic commit → entry_added → usage`.
+Only `entry_added` proves message durability. Classification is computed before the transaction and becomes durable with it; it is not a separate event. Abort and overflow classification may normalize the committed response after `message_end`, so `entry_added` is authoritative for those two cases. A synthetic settlement performs no provider effect, update, or response hook: `message_start → message_end → atomic commit → entry_added → usage`.
+
+`tool_update` is always an immediate process-local event, including when its originating callback also requests `checkpoint:true`; no second public event announces checkpoint commit. The synchronous callback retains the latest asynchronous delivery promise, and tool-promise settlement awaits it before `after_tool`, preserving the existing listener order without backpressuring each update. Reconnect snapshots reveal only the latest committed checkpoint. For a real effect, `tool_end` follows finalization but precedes the `outcome_ready` staging commit, in completion order; it is observation, not proof of durability. Finalized result-message lifecycle and `entry_added` occur later in source order when ready values materialize. Synthetic blocked and unsafe-recovery outcomes emit no tool-effect lifecycle. A crash after `tool_end` but before staging may recover or safely replay the still-uncertain call. Historical events are not replayed, though a safely replayed execution emits its own recovery-tagged lifecycle.
 
 Nesting:
 
@@ -2747,9 +2803,8 @@ run_start
   turn_start
     message_start / message_update* / message_end    assistant stream finished
     entry_added                                     response committed
-    tool_start / tool_update* / tool_end             per real call
-    message_start / message_end                      tool results, source order
-    entry_added                                     each result committed
+    tool_start / tool_update* / tool_end             real effects, completion order
+    message_start / message_end / entry_added         staged results, source order
   turn_end
   compaction_start … entry_added … compaction_end   auto, at a checkpoint
   turn_start … turn_end                              until nothing is pending
@@ -2876,7 +2931,7 @@ One accepted-operation hook invocation reaches one breakpoint, calls `EffectGate
 | `before_payload` | per request, provider-specific wire payload | `{ model, payload }` | `{ payload }` |
 | `after_response` | per response, after streaming settles, before `message_end` and the commit | `{ status, headers, message }` | `{ message? }` (must keep role) |
 | `before_tool` | after validation, before execution | `{ toolCallId, toolName, args }` | `{ args?, block?: { reason: string; terminate?: boolean } }` |
-| `after_tool` | after execution, before the result commits; patch semantics | `{ toolCallId, toolName, args, content, details, isError, usage? }` | `{ content?, details?, isError?, usage?, terminate? }` |
+| `after_tool` | after execution, before outcome staging; patch semantics | `{ toolCallId, toolName, args, content, details, isError, usage? }` | `{ content?, details?, isError?, usage?, terminate? }` |
 | `before_compaction` | in `deciding` | `{ reason, preparation, customInstructions? }` | `{ decline?, compaction? }` |
 | `before_navigation` | in `deciding` | `{ targetId, preparation, customInstructions? }` | `{ decline?, summary? }` |
 
@@ -3034,7 +3089,7 @@ function applyBeforeToolDecision(prepared: PreparedToolCall,
                                  decision: BeforeToolDecision | undefined):
   ClearedToolCall | ImmediateToolOutcome;
 function executeToolCall(call: ClearedToolCall, effectGate: EffectGate,
-                         onUpdate: (partial: AgentToolResult<unknown>) => void,
+                         onUpdate: AgentHarnessToolUpdateCallback<unknown>,
                          telemetryContext: TelemetryContext):
   Promise<ExecutedToolCall>;
 function finalizeToolCall(call: ClearedToolCall, executed: ExecutedToolCall,
@@ -3050,21 +3105,25 @@ planned call
 → before_tool hook effect
 → applyBeforeToolDecision            block or validate replacement arguments
 → commit op.tool_args + effect_pending intent
-→ executeToolCall                    the uncertain external effect
+→ executeToolCall                    effect + live updates + checkpoint requests
+→ stop updates; expire fact capability; close checkpoint admission; drop waiting checkpoint
+→ await latest tool_update delivery
 → after_tool hook effect
 → finalizeToolCall
-→ commit result entry + usage + next state
+→ emit and await tool_end
+→ commit pending.entry + outcome_ready + invocation cleanup
+→ materialize source-ready outcomes as entries + usage
 ```
 
-Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. At `tool.execute` operation admission, `executeToolCall` calls `EffectGate.assertOpen()` immediately before `tool.execute` and passes `EffectGate.signal`; it also converts expected tool throws to an error result, stops accepting updates after settlement, and emits the required raw tool-effect telemetry. `finalizeToolCall` applies the documented field-by-field patch semantics.
+Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution before staging a synthetic `outcome_ready` result. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. At `tool.execute` operation admission, `executeToolCall` calls `EffectGate.assertOpen()` immediately before `tool.execute` and passes `EffectGate.signal`; it converts expected tool throws to an error result, stops accepting updates when the tool promise settles, and emits raw tool-effect telemetry. Every update emits live observation; `checkpoint:true` additionally enters the invocation-fenced drop-coalescing path for `pending.tool_output`. The procedure retains only the latest event-delivery promise because the event bus serializes delivery, closes checkpoint admission at tool-promise settlement, and drops the waiting checkpoint. `finalizeToolCall` applies the documented field-by-field patch semantics before `tool_end` and outcome staging.
 
-Before starting any call in a live batch, the tool-batch procedure resolves `toolContext` once and binds the complete captured active-tool set into ordinary `AgentTool` adapters retained in a procedure-local snapshot. Each adapter also binds `AgentHarnessToolInvocation { invocationId: resultEntryId, operationId, turnId }` for its call. A missing captured active tool therefore suspends before any call starts; provider calls to names outside that active snapshot still become ordinary unknown-tool results. Every call in the batch observes the same application context and its own stable invocation identity. Safe replay after restart creates one new snapshot and passes the same `invocationId`. `AgentTool.replay` defaults to `"never"` when omitted.
+Before starting any call in a live batch, the tool-batch procedure resolves `toolContext` once and binds the complete captured active-tool set into ordinary `AgentTool` adapters retained in a procedure-local snapshot. Each adapter also binds `AgentHarnessToolInvocation { invocationId: resultEntryId, operationId, turnId, getFact, setFact }` and the harness-specific update callback. A missing captured active tool therefore suspends before any call starts; provider calls to names outside that active snapshot still become ordinary unknown-tool results. Every call in the batch observes the same application context and its own stable invocation identity. Safe replay creates a new code/context snapshot but passes the same invocation id/facts after deleting the stale progress checkpoint. `AgentTool.replay` defaults to `"never"` when omitted.
 
-There is deliberately no harness `executeToolBatch`. In parallel mode the direct procedure makes one source-ordered start pass. Each position either starts a real promise or records an immediate prepared/blocked/invalid outcome locally. It does not await an earlier real promise before clearing and starting later positions. It then makes one source-ordered settlement pass: await/finalize/commit a real result or commit the retained immediate outcome at each position. Thus a later immediate outcome never commits ahead of an earlier running call, but it also does not prevent still-later calls from starting. Durably, completed calls form a prefix while the remaining parallel suffix may mix `planned` and `effect_pending`; `[effect_pending, planned, effect_pending]` is valid when the middle position has a retained immediate result. A crash discards promises and immediate outcomes. Recovery safely replays or interrupts orphaned pending effects and reruns ordinary clearance for positions still `planned`, including the documented possible replay of `before_tool`; source-ordered settlement prevents either from overtaking an earlier position. The same procedure owns cancellation and durable batch completion. Genuine-`length` calls bypass these phases and receive their specified synthetic results (§3.7).
+There is deliberately no harness `executeToolBatch`. In parallel mode the direct procedure makes one source-ordered start pass. Each position either starts a real promise or retains an immediate outcome until it can be staged. Effects/finalization then settle independently: each complete real or synthetic result commits `outcome_ready` immediately in completion order. A separate lane-line job materializes the contiguous ready prefix in source order. Durably, completed calls form a prefix while the remaining suffix may mix `planned`, `effect_pending`, and `outcome_ready`; for example `[effect_pending, outcome_ready, effect_pending]` is valid after the completed prefix. A crash discards only unstaged process-local outcomes. Recovery safely replays or interrupts orphaned effects, materializes already-ready outcomes without resolving tool code, and reruns ordinary clearance for planned positions. The same procedure owns cancellation and durable batch completion. Genuine-`length` calls bypass effects but stage their specified synthetic outcomes (§3.7).
 
 R4's stable tool breakpoint names are `hook.before_tool`, `tool.intent`, `tool.execute`, `hook.after_tool`, `tool.settlement`, and `tool.recover_interruption`. Their JSON-safe details identify the operation, turn, source index, provider tool-call id, and tool name; execution/result content is excluded. The recovery-interruption boundary precedes creation of the process-local synthetic outcome, and every outcome still reaches the common settlement boundary before its commit.
 
-The legacy agent loop remains useful behavioral evidence for ordinary provider streaming and tool execution. Harness differences are deliberate: `before_tool` returns explicit replacement arguments that are revalidated, hooks have explicit breakpoint/gate boundaries, and parallel results finalize and commit in source order.
+The legacy agent loop remains useful behavioral evidence for ordinary provider streaming and tool execution. Harness differences are deliberate: `before_tool` returns explicit replacement arguments that are revalidated, hooks have explicit breakpoint/gate boundaries, parallel outcomes stage in completion order, and their entries materialize in source order.
 
 Remote protocol adapters validate untrusted wire data before returning typed provider values. The harness trusts those typed values and all in-process tool, hook, and extension values; violations are defects in the adapter or extension, not storage validation cases. Expected provider failures still become assistant `error` settlements, tool preparation/argument failures still become synthetic tool results, throwing hooks retain their documented handling, and invalid public caller operations still return their declared errors before acceptance.
 
@@ -3083,7 +3142,7 @@ pi.ai.request
 
 Operation, step, tool, hook, event, and write parents follow the actual async procedure nesting. Sleep spans permit run, compaction, navigation, turn, and checkpoint parents. `stepId`/`taskId` correlate retries and recovery. Every provider request/fetch/cancel uses `pi.ai.request`; each real or safely replayed phase-two tool effect uses one tool span.
 
-Every storage transaction uses one `pi.session.write`. Its start attributes include `pi.session.item_count` and `pi.session.item_kinds` (`entry`, `usage`, `register`). A calling procedure may supply its lane/operation ids; storage never infers them from payloads. End attributes include first and last committed sequence. Update the existing schema from old single-mutation vocabulary to this transaction shape; no span is emitted when a mutation returns without committing. Synthetic settlements and blocked/invalid tools emit no provider/tool-effect span.
+Every storage transaction uses one `pi.session.write`. Its start attributes include `pi.session.item_count` and `pi.session.item_kinds` (`entry`, `usage`, `register`). A calling procedure may supply its lane/operation ids; storage never infers them from payloads. End attributes include first and last committed sequence. Tool checkpoint and invocation-fact commits are ordinary register writes under this span and emit no additional tool-effect span; snapshot content never enters telemetry. No span is emitted when a mutation returns without committing. Synthetic settlements and blocked/invalid tools emit no provider/tool-effect span.
 
 Telemetry attributes may contain declared ids, names, counts, durations, statuses, and usage. They must never contain prompts, completions, tool arguments/results, file contents, provider payloads, headers, handles, or credentials. Events and hooks may contain such content. The existing generated schema document and adapter/runtime conformance tests remain authoritative; implementation slices extend instrumentation only through those schemas.
 
@@ -3115,8 +3174,8 @@ what exists at upgrade time            migration burden
 entries, usage rows (years)            cannot rewrite — must stay read-compatible
 lane/fact registers (a few per lane)   trivial: a for-loop at open
 op.* registers                         only for OPEN operations — usually zero
-pending.entry registers                open-operation inbox items plus
-                                       lane-owned queued nextRun items
+pending.entry registers                queued items plus staged tool outcomes
+pending.tool_output registers          optional open-call checkpoints only
 ```
 
 Because no history is retained, the entire mutable surface is a few dozen current registers — which is what makes migrate-on-open tractable at all. And the fenced single-writer lease (§1.7) means the opening process owns the session exclusively — migration has no concurrency story to solve.
@@ -3143,7 +3202,7 @@ Legacy coding-agent format 3 predates `storageVersion` entirely; it normalizes t
 
 ## 7.4 Migrations are total
 
-Register conversion is a field mapping; a state-machine shape change is more. If the next version removes `failure_drain`, or restructures the tool-batch lifecycle, an old `op.state` sitting mid-`failure_drain` has no field-by-field equivalent in the new machine. The rule: **migrations are total.** A vN→vN+1 migration translates every register value — lane and fact registers, `pending.entry` payloads, and open operations' `op.meta` and `op.state` included. The author of a state-machine change writes the mapping that carries every reachable old state into a well-defined new one, in the same change, reviewed and tested with it. A state with no natural successor maps to an explicit choice — typically the nearest safe pre-intent state, from which ordinary recovery (§4.5) proceeds. There is no force-settle path and no partial escape hatch.
+Register conversion is a field mapping; a state-machine shape change is more. If the next version removes `failure_drain`, or restructures the tool-batch lifecycle, an old `op.state` sitting mid-phase has no field-by-field equivalent in the new machine. The rule: **migrations are total.** A vN→vN+1 migration translates every register value — lane/fact registers, `pending.entry`, optional `pending.tool_output`, invocation facts, and open operations' `op.meta`/`op.state` included. In particular, the migration adding `outcome_ready` must distinguish staged finalized tool results from still-uncertain effects. The author of a state-machine change writes the mapping for every reachable old state in the same change. A state with no natural successor maps to an explicit safe choice; there is no force-settle path or silent partial escape hatch.
 
 This is tractable for the same reason migrate-on-open is tractable at all (§7.2): the entire mutable surface is a few dozen current registers, and migration runs at open under the writer lease, so it sees **quiescent** registers — no operation task is running, no effect is in flight, and every `op.state` is exactly the total state some transaction committed. A migration is a pure function over a small, fully enumerable, fully typed set of values.
 
@@ -3183,18 +3242,18 @@ Each slice implements its named behavior end to end and adds focused tests for i
 | S2 | **SQLite** | One database file per session: entries/registers/usage-ledger tables, one-row session/lease rows, transactions, `storageVersion`, the file-based repository, segmented branch cache, `VACUUM INTO`-based rewrite/fork, and explicit repair. No values table, no `slot_history`, no `getLog`, no search projection, no migration. | Shared conformance, `BEGIN IMMEDIATE`, fencing, query plans, segment-chain soundness, register upsert/delete, forks/stats/repair. |
 | S3 | **Search** | The standalone `SessionSearchService` plus repo catch-up utilities (§2.8): core entry search as `SessionSearch<T>`, session-level ranked results, optional `searchEntries?: SessionSearch<TEntryHit>`, `remove()`, the `SessionSearchSyncTarget` cursor/index-batch contract, sync enumeration and catch-up outside the service contract, debounced notify as a utility, `(sessionId, storeGeneration)` cursor keys, and the reference SQLite FTS5 implementation working over any backend's repository through the sync utility. | Cursor catch-up from empty against existing sessions, idempotent re-index after crash mid-batch, notify-utility/sweep equivalence, sessions-vs-entries queries and ranking, removal and reconciliation, shared-index multi-process discipline. |
 | S4 | **Dev TUI and Client** | A minimal `AgentClient` over one lane — `LaneSnapshot` plus `watch()` events, `prompt`/`steer`/`followUp`/`abort`/`resume`/`cancelQueued`, `lane.lastResult` read — and a throwaway alt-screen TUI on `packages/tui`: transcript from snapshot and events, input box, status/queue display, abort key. Built first against a scripted fake client on the slice-1 types; binds to the real harness as Track R lands. Not final. | Compiles; fake-client smoke test. No durability obligations. |
-| R1 | **Runtime shell and execution primitives** | Extend the public types with `OperationRequest`, admission/drive/cancellation/inspection results, `OperationMismatch`, and `AgentHarnessToolInvocation`. Implement lane/settings mutation lines; one drive-pass `ActiveOperation` slot per lane; expected-id fencing, same-operation drive joining, coherent `inspectExecution`, safe deadline-yield plumbing, `ActionInfo` breakpoint barrier, `EffectGate` and its internal abort control flow, base current-state validation (lane completeness, operation ownership, and intent/state kind), hook/event primitives, restore inventory (five register reads plus bounded base hydration), registry lookup plumbing, and fault/close plumbing. Also implement the independently testable behavior-only blocks under `packages/agent/src/harness/execution/` from §5.7; they know nothing about durable operation state, lanes, retries, queues, or storage, and `agent-loop.ts` remains unchanged. Operation-kind acceptance and ordinary driving may still report not implemented. | Type surface clean; coherent inspection; expected-id mismatch and latest-result settlement lookup; one same-id pass installed and joined; stale-id drive never touches a newer operation; safe yield starts no following work; breakpoint publication/release; stable `ActionInfo.kind` and JSON-safe details; automatic/manual barrier equivalence; nested barriers; cancellation interrupting a parked ordinary barrier; zero work while parked; task installation/removal; hook aggregation; ordered passive event buffering; restore without history reads; base idle/open-lane validation. Direct assistant/tool block tests from §5.7. Abort-first/start-first at every accepted-operation R1 `EffectGate` integration: `assertOpen()` is immediately adjacent to invocation, abort-first invokes nothing, and start-first passes the gate signal to the admitted work. Close-first/start-first covers pre-acceptance `before_run`. |
+| R1 | **Runtime shell and execution primitives** | Extend the public types with `OperationRequest`, admission/drive/cancellation/inspection results, `OperationMismatch`, `AgentHarnessToolInvocation`, and harness-specific tool-update checkpoint options. Implement lane/settings mutation lines; one drive-pass `ActiveOperation` slot per lane; expected-id fencing, same-operation drive joining, coherent `inspectExecution`, safe deadline-yield plumbing, `ActionInfo` breakpoint barrier, `EffectGate` and its internal abort control flow, base current-state validation, hook/event primitives, restore inventory, registry lookup plumbing, and fault/close plumbing. Also implement the independently testable behavior-only blocks under `packages/agent/src/harness/execution/` from §5.7; `agent-loop.ts` remains unchanged. | Type surface clean; coherent inspection; expected-id mismatch/latest-result lookup; one same-id pass installed/joined; stale-id drive isolation; safe yield; breakpoint and effect-gate coverage; task lifecycle; hook aggregation; ordered passive event buffering; restore without history reads; base lane validation; direct assistant/tool block tests; old `AgentToolUpdateCallback` remains unchanged while the harness callback carries `checkpoint:true`. |
 | R2 | **Minimal no-tool run** | Compose R1's assistant block with generic prompt `accept`, optional caller-supplied operation id, prompt expansion, `before_run`, the acceptance transaction without task installation, pending-capture placement, fresh `drive`, and `prompt` as `accept`+`drive`; add run/checkpoint/generation semantic restore checks, captured request options/thinking and model preflight, payload/response hooks, one generation intent/effect/settlement, usage, terminal cleanup plus `lane.lastResult`, results, basic events/telemetry, and stable breakpoint descriptors. | Acceptance returns before any drive work; crash between accept and drive resumes the initial state; prompt convenience and explicit accept+drive produce byte-identical writes/events; supplied operation id reaches `op.meta`/events/result; successful run with final assistant fields; caller rejection and adapter-reported failures; exact ordering; terminal cleanup; same-id drive join during the accept/drive gap; close at every boundary; invalid run/checkpoint/generation references. |
 | R3 | **Generation recovery and retry** | Activation-only unknown-effect recovery, synthetic cap settlement, ordinary stop/error/deferred classification, provider-compliant `aborted`, failure-drain foundation, and both retry-wait policies: explicit drive returns `waiting/notBefore`, while convenience drive may own the abort-aware timer. Define stable breakpoint descriptors for retry timers and recovery commits. Overflow classification remains explicitly unimplemented until R9. | Every generation state before/after reopen; accept/close/reopen/drive; caps/backoff; no timer under `waitForRetry:false`; due and future `notBefore`; deadline before retry; convenience/explicit-drive durable equivalence; timer abort-first/start-first; stable descriptors; stop/error/aborted/deferred classification; missing identities. |
-| R4 | **Tools** | Compose R1's tool phases with bound `AgentHarnessTool` context and per-call `AgentHarnessToolInvocation { invocationId: resultEntryId, operationId, turnId }`, durable complete plans, tool-batch semantic restore checks and tool identity preflight, `op.tool_args/{opId}:{stepId}:{i}` registers with batch-completion deletion, activation recovery/replay, sequential/parallel procedure-local promises, blocked terminate, genuine-length results, tool events/hooks/usage, and stable breakpoint descriptors. | A built-in context-bound tool; stable invocation id unique across calls and unchanged on safe replay; operation integration for model-supplied and hook-replacement argument failures; every planned/pending/completed state; invalid source/result/argument-register relationships; tool-args lifecycle including crash-leak cleanup; safe/unsafe replay; source-ordered passes; termination; abort-ready planned states. |
+| R4 | **Tools** | Compose R1's tool phases with bound context, invocation-scoped facts, `op.tool_args`, scalar `pending.tool_output` checkpoints, `outcome_ready` staging in `pending.entry`, completion-order outcome durability, source-ordered materialization, activation recovery/replay, sequential/parallel promises, blocked/genuine-length outcomes, hooks/events/usage, and stable descriptors. The built-in bash tool emits live updates at 100 ms and requests distinct checkpoints at most every two seconds. | Stable invocation id/facts across safe replay; every planned/effect-pending/outcome-ready/completed state; parallel out-of-order staging without replay; synchronous update callback with delivery awaited before `after_tool`; `tool_end` before staging; checkpoint one-active/one-waiting coalescing with waiting-drop at tool settlement and late-write fencing; JSONL checkpoint growth/compaction; safe replay deletes old checkpoint; unsafe recovery with/without checkpoint; source-ordered materialization; termination and abort-ready states. |
 | R5 | **Inbox, configuration, and writes** | `nextRun`/steer/follow-up via `pending.entry` registers, pending-payload and queue semantic restore checks, `cancelQueued` triage (`not_found`), durable drain markers, checkpoint consumption with register deletion, immediate total config setters, deferred tree writes, adjustments, and stable breakpoint descriptors for the checkpoint boundaries introduced here. | Capture/cancel/consume races, repeated cancellation answering `not_found`, invalid queue payload kinds and missing pending registers, one-at-a-time crash after one drain, register/entry exclusivity at every boundary, custom-write continuation, config-step race, writes surviving reopen. |
-| R6 | **Abort, close, and failure drain** | Add expected-id `requestAbort` as commit/signalling only: it never installs a task when none exists. Compose `abort()` from inspection, `requestAbort`, and ensuring a same-id drive pass. Implement orthogonal control and cancellation semantic restore checks, drained ids with surviving pending registers, per-phase reconciliation, best-effort deferred cancellation, waiters/run-when-idle, controlled-crash close, terminal deletion, external-finalization stop on absent registers (§4.9), and stable cancellation/failure descriptors. | Request cancellation with and without a live pass; same-id idempotency; stale-id mismatch; convenience/primitive durable equivalence; invalid cancelled queue/control combinations and aborted responses under running control; abort at every state; parked-breakpoint interruption; deferred cancellation; live/restored tool outcomes; writes before finish; drained-register survival/deletion; close races; externally finalized task stop/result; failure revived only by projecting input. |
+| R6 | **Abort, close, and failure drain** | Add expected-id `requestAbort` as commit/signalling only. Compose `abort()` from inspection, marker, and same-id drive. Implement orthogonal control, per-phase reconciliation including planned/effect-pending/outcome-ready tools, best-effort deferred cancellation, waiters/run-when-idle, controlled-crash close, complete terminal deletion of facts/checkpoints/staged outcomes, external-finalization stop, and stable descriptors. | Cancellation with/without live pass; idempotency/fencing; abort at every tool state; restored interruption incorporates latest checkpoint without replay; outcome-ready values survive and materialize; checkpoint/fact cleanup; parked barriers; deferred cancellation; close races; external finalization; failure drain. |
 | R7 | **Deferred provider redemption** | One poll per drive pass carrying `pollDeferred:true`; `resume()` composes inspection and that drive option. Add deferred-state semantic restore checks and provider identity preflight. Preserve copied configuration/options, per-poll hooks, exact source lineage/equality, fresh intent after unknown poll, mismatch-to-error, ready tools, advancement of R6 cancellation, and stable poll descriptors. | `pollDeferred:false` returns waiting without work; one permit performs at most one poll; invalid/missing/mismatched durable handles; repeated pending, ready/error/aborted/mismatch, crash positions, convenience/primitive equivalence, no cap/backoff/loop, newest-handle cancellation. |
 | R8 | **Manual compaction** | Add compaction `OperationRequest` acceptance without task installation and compose `compact()` from accept+drive. Implement reserved-lane preparation, `op.preparation/{opId}:{taskId}`, total structural state and its semantic restore checks, structural model preflight, hook/generated sources, nested request intents/usage, retained tail, retry/recovery/abort, and stable structural descriptors. | Explicit accept+drive versus convenience equivalence; empty/reservation race; accept/close/reopen/drive; invalid task/preparation/source relationships; hook decline/result; crash after request one of split-turn generation; every state/crash; no public summary-stream messages. |
 | R9 | **Threshold and overflow compaction** | In-run structural decision, durable once-per-trigger threshold marker, continuation preservation, all overflow predicates, atomic response/preparation publication, specified normalization/projection, one overflow recovery flag, bounded second failure, and stable breakpoint descriptors for added boundaries. | Threshold decline/empty across reopen, all overflow classifier/preparation inputs, no overflow tool plan, genuine length, crash/reopen at every transition. |
 | R10 | **Navigation** | Add navigation `OperationRequest` acceptance without task installation and compose `navigateTree()` from accept+drive. Implement navigation source/target/summary semantic restore checks, validation, summarized decision/generation, one final transaction combining move/summary/leaf/label with terminal writes, summary-only navigation hook, and stable descriptors. | Explicit accept+drive versus convenience equivalence; root/current/unknown rejection; invalid durable source/target/summary combinations; accept/close/reopen/drive; summarized/unsummarized paths; final leaf at summary; abort race; exact atomic publication including cleanup. |
-| R11 | **Schema version and migrations** | Chained migrate-on-open under the writer lease, migration registry with total register mappings — open operations' `op.meta`/`op.state` included (§7.4), JSONL lenient old-shape replay and mandatory post-migration compaction, refuse-newer. | Version gate (equal/older/newer), chained idempotent migrations across crash, an open-operation state mapped across a state-machine change and resuming correctly, lenient replay of superseded shapes, compaction retiring old bytes. |
-| R12 | **Surface completion** | Complete snapshots/watch, event catalog/order/filtering, telemetry instrumentation/schema freshness, public exports, backend parity, hosted-control/convenience surface documentation, and remove remaining scaffold code — including the S4 fake client. | Snapshot/event gap; attach during accepted-undriven, active, waiting, yielded, and terminal states; stale-wake fencing; convenience/primitive equivalence across all operation kinds; sensitive-event/content-free telemetry; full race/crash matrix on all backends. |
+| R11 | **Schema version and migrations** | Chained migrate-on-open under the writer lease, with total mappings for open `op.state` including `outcome_ready`, staged `pending.entry` results, invocation facts, and optional progress checkpoints; JSONL lenient old-shape replay, mandatory post-migration compaction, refuse-newer. | Version gate; chained crash-idempotent migration; planned/effect-pending/outcome-ready tool states mapped safely; staged result/checkpoint/fact mappings; resumed operation correctness; old bytes retired. |
+| R12 | **Surface completion** | Complete snapshots/watch including restored tool checkpoints and outcome-ready visibility, event catalog/order/filtering, telemetry, public exports, backend parity, hosted-control/convenience documentation, and remove scaffold code including the S4 fake client. | Snapshot/event gap; attach during active effect with live/checkpoint divergence, restored effect-pending, outcome-ready, waiting/yielded/terminal states; no replay of old tool lifecycle; stale-wake fencing; sensitive-event/content-free telemetry; full race/crash matrix on all backends. |
 | P1 | **Protocol schemas** | Future work after the internal harness is complete: define shared TypeBox schemas for serializable pi-ai and harness protocol data, derive the corresponding TypeScript types from those schemas, and reuse them across client/server protocol boundaries. Validation runs only on untrusted wire input and never inside Session, Storage, operation procedures, or in-process extensions. | Schema/type parity, accepted and rejected client/server payloads, protocol round trips, and no validators or schema construction on internal storage paths. |
 
 Existing source guidance:
@@ -3221,7 +3280,7 @@ Tree:
 
 6. An entry's parent chain never changes. Branches share prefixes; nothing is copied.
 7. Entries are trusted typed internal values. Only a custom entry may omit payload data; external shape corruption is unsupported rather than revalidated on internal reads.
-8. Configuration and orchestration never enter the tree. Deleting every `op.*` and `pending.entry` register must leave a complete, valid conversation and ledger.
+8. Configuration and orchestration never enter the tree. Deleting every operation-owned `op.*`, `pending.entry`, and `pending.tool_output` register must leave a complete, valid conversation and ledger.
 9. A lane's leaf moves only by append or navigation.
 10. A branch segment chain, followed to its end, yields the full root path (§2.6).
 11. A missing parent is corruption — always (§1.2).
@@ -3229,9 +3288,9 @@ Tree:
 Operations:
 
 12. `lane.state/{lane}` confers lane ownership, and `op.state/{operationId}` confers operation-state ownership. An open lane names operation O, `op.meta/O` holds that lane's compatible `Operation`, and `op.state/O` holds an `OperationState` compatible with O's intent kind; state values carry no duplicate owner metadata.
-13. `op.*` registers and operation-owned `pending.entry` registers exist **iff** their operation is open: the terminal transaction deletes them atomically with clearing `currentOperationId` (§3.13). Lane-owned `pendingNextRun` registers are never deleted by it.
+13. Operation-owned `op.*`, `pending.entry`, and `pending.tool_output` registers may exist only while their operation is open: the terminal transaction deletes them atomically with clearing `currentOperationId` (§3.13). Lane-owned `pendingNextRun` registers are never deleted by it.
 14. Acceptance must observe `currentOperationId === null`, commits no `ActiveOperation`, and returns before any post-acceptance hook/provider/tool/timer work begins. A supplied operation id obeys §1.2 and is the exact id written to `op.meta`, events, and `lane.lastResult`.
-15. A reserved id may exist only with the content its intent named. There are exactly two reservation regimes (§2.2): settlement-family ids are strings in `op.state`; queued-content ids are `pending.entry` registers — until placement or cancellation, exactly one of register and entry exists.
+15. A reserved id may exist only with the content its intent named. Queued-content ids begin in `pending.entry`; settlement-family ids begin as strings in `op.state`. A tool-result id may then move through `string only → outcome-ready pending.entry → immutable entry`; no two representations coexist at a commit boundary (§2.2).
 16. Only terminal transitions construct a `LaneLastResult`. A terminal outcome is observable once through the live promise and thereafter through `lane.lastResult` until the next terminal transaction on that lane; recovery never reads it.
 17. At most one operation is open per lane. Two is corruption.
 18. `overflowRecoveryUsed` is `true` only after overflow compaction. A transition that adds projecting conversational input or tool results and requires an assistant writes `false`; an unprojected custom write preserves it.
@@ -3243,8 +3302,10 @@ Operations:
 24. `drive` and `requestAbort` are fenced by expected operation id. They may affect only that current operation; `drive` may also return its matching latest terminal result. A stale wake for A cannot drive or cancel B.
 25. `drive` returns `yielded` only at an effect-free safe boundary. It starts no following transition, hook, provider, tool, or timer after deciding to yield. An already-admitted effect may outlive the caller's deadline and must settle normally or be recovered after task loss.
 26. Convenience operations and their explicit primitive compositions produce the same durable writes, events, results, and recovery behavior. Their only difference is process-local waiting/scheduling policy.
-27. Each logical tool call's public `invocationId` is its reserved `resultEntryId`: unique within the session and unchanged across safe replay.
-28. Completed tool calls form a source-ordered prefix. A batch whose captured run setting is sequential permits at most one pending effect before the remaining planned calls; a batch whose setting is parallel permits any `planned`/`effect_pending` mixture after that prefix, and source-ordered settlement is the only operation that extends the completed prefix. A declaration-level sequential override also follows the stricter shape while that live procedure owns it.
+27. Each logical tool call's public `invocationId` is its reserved `resultEntryId`: unique within the session and unchanged across safe replay. Tools must await invocation-fact writes. Such writes synchronously enqueue, verify effect-pending ownership on the lane line, and are deleted with outcome staging.
+28. Completed tool calls form a source-ordered prefix. A sequential suffix permits at most one effect-pending or outcome-ready call before planned calls; a parallel suffix may mix `planned`, `effect_pending`, and `outcome_ready`. Completion-order outcome staging never extends the prefix; source-ordered materialization does.
+29. Every outcome-ready call has exactly one matching finalized `pending.entry`, no immutable result entry, no invocation facts, and no tool-output checkpoint. Outcome-ready and completed calls never execute again.
+30. A tool progress checkpoint is an optional bounded complete `AgentToolResult` snapshot, selected with `checkpoint:true`. It never proves completion. At most one checkpoint commit and one latest waiting request exist per invocation; tool-promise settlement drops the waiting request, while staging or terminal cleanup deletes an active value and prevents late recreation.
 
 ## 9.2 Race catalog
 
@@ -3257,7 +3318,10 @@ Each durable mutation race has exactly two durable histories. Process-local owne
 | `drive(A)` vs `drive(A)` | one installs the pass; the other joins exactly that pass and may drive again after its outcome |
 | stale `drive(A)`/`requestAbort(A)` vs current B | expected-id mismatch; B is untouched |
 | `requestAbort` vs response settlement | marker first → normalized `aborted`; response first → stop reason preserved |
-| `abort` vs started tool result commit | abort first → real result settles under cancelled control; result first → real result commits normally before cancellation |
+| `abort` vs started tool outcome staging | abort first → real result stages under cancelled control; outcome first → finalized result is preserved and later materializes |
+| checkpoint vs tool settlement | active checkpoint was enqueued first and is later deleted by staging; waiting checkpoint is dropped when the tool promise settles; a late update is ignored |
+| external finalization vs fact/checkpoint mutation | mutation first → terminal cleanup deletes it; finalization first → durable ownership check rejects the mutation |
+| later tool B settles vs earlier tool A | B stages outcome-ready immediately; tree placement waits for A |
 | `abort` vs `before_run_end` follow-up | follow-up dropped; or committed and the run continues |
 | `cancelQueued` vs checkpoint consumption | `cancelled`; or `already_consumed` |
 | `setModel` vs generation step start | old snapshot used; or new snapshot used |
@@ -3273,19 +3337,19 @@ Each durable mutation race has exactly two durable histories. Process-local owne
 
 ## 9.3 Test tiers
 
-**Tier A — state and drive.** For every state in Part 3, construct it durably, close, reopen, drive its expected operation id, and assert the next breakpoint, wait, yield, or terminal result. Coverage must include: restore with no branch walk and no re-resolution of captured step configuration; assistant intent with no settlement, below and at the retry cap; settlement followed by each classification branch; every settled stop reason surviving except the two deliberate normalizations; a self-contained deferred step with copied configuration, consecutive polls, repeated equal-handle pending responses, ready and terminal responses, and handle-mismatch normalization into durable failure; every tool state including planned, effect_pending safe and unsafe, and completed; a batch where every call sets `terminate` finishing the run with no further request; genuine-`length` batches proving no execution and one explanatory result per call; every overflow crash position, including that the compacted `retainedTail` omits the normalized-`error` response by the ordinary projection rule; every navigation state with no post-move generation; abort at every position; missing identities on accept and on resume; every terminal transaction proving complete register deletion (including tool-args prefix-scan cleanup of crash-leaked keys), `lane.lastResult` correctness, and preserved `pendingNextRun`; register/entry exclusivity for every queued id at every crash boundary; and every half-completed recovery prefix.
+**Tier A — state and drive.** For every state in Part 3, construct it durably, close, reopen, drive its expected operation id, and assert the next breakpoint, wait, yield, or terminal result. Coverage must include: restore with no branch walk and no re-resolution of captured step configuration; assistant intent with no settlement, below and at the retry cap; settlement followed by each classification branch; every settled stop reason surviving except the two deliberate normalizations; a self-contained deferred step with copied configuration, consecutive polls, repeated equal-handle pending responses, ready and terminal responses, and handle-mismatch normalization into durable failure; every tool state including planned, effect-pending safe/unsafe with and without a checkpoint, outcome-ready, and completed; parallel B/C outcomes staged before A and never replayed after reopen; source-ordered materialization; invocation facts surviving safe replay and dying at outcome staging; a batch where every call terminates; genuine-length synthetic outcomes; every overflow crash position; every navigation state; abort at every position; missing identities; every terminal transaction proving deletion of tool args, facts, checkpoints, staged outcomes, and pending payloads; `lane.lastResult`; preserved `pendingNextRun`; representation exclusivity for every reserved id; and every half-completed recovery prefix.
 
 For each recovery prefix: close, reopen, drive, and compare against uninterrupted recovery. Invoking recovery twice from the initial prefix is **not** sufficient. Every operation kind also covers accept → close before first drive → reopen → drive.
 
 One corruption assertion constructs an `aborted` response with running control directly and requires load rejection. Provider conformance separately proves implementations emit `aborted` only for the supplied signal.
 
-**Tier B — writer conformance.** Run the public harness against the instrumented-storage decorator: a spy wrapping `Storage.commit()` that records every transaction's writes in order. Assert exact write order and content against the Part 3 transaction tables and the §5.5 ordering rules. There is no durable log to compare against; the decorator is the oracle. Faux provider/tool/hook spies interleave their start events with the decorator's commit record, so effect timing is observable. This tier catches the critical regression classes: an effect starting before its intent commit, a response omitted for one stop reason, execution of a classified next phase starting before response+usage settlement is durable, a result id reserved after clearance began, or a terminal transaction leaking a register.
+**Tier B — writer conformance.** Run the public harness against the instrumented-storage decorator: a spy wrapping `Storage.commit()` that records every transaction's writes in order. Assert exact write order and content against the Part 3 transaction tables and §5.5 ordering. Faux provider/tool/hook spies interleave starts/events with commits. This tier catches: effects before intent; failure to await the latest update delivery before `after_tool`; `tool_end` emitted after rather than before outcome staging; missing response/usage settlement; checkpoint writes after ownership loss; outcomes not staged before replay becomes impossible; out-of-order tree placement; result ids reserved late; invocation facts or staged/checkpoint registers leaked by outcome/terminal cleanup.
 
 **Tier C — deterministic interleavings.** Every race in §9.2, both orders, using the manual breakpoint barrier. Every introduced breakpoint kind and JSON-safe details shape is asserted explicitly.
 
 **Cross-cutting:**
 
-- **Backend conformance.** One suite, three backends, identical results — identical query results, register states, and stats after every scenario, including register set/delete/recreate semantics and torn-transaction handling. Internal values are not cloned or shape-validated. Write-order assertions use the instrumented decorator, never a durable log.
+- **Backend conformance.** One suite, three backends, identical results — including checkpoint scalar set/replace/delete and torn-transaction handling. Memory/SQLite retain one current checkpoint; JSONL may retain superseded bytes physically but compaction produces identical logical state. Internal values are not cloned or shape-validated. Write-order assertions use the instrumented decorator, never a durable log.
 - **Drive equivalence.** The same scenario in automatic and manual breakpoint mode must produce byte-identical durable state. Convenience calls and explicit `accept`/`drive`/`requestAbort` compositions must likewise produce byte-identical durable state and equivalent events/results.
 - **Breakpoint catalog.** Each runtime slice specifies and tests the stable `ActionInfo.kind` values and JSON-safe details for the boundaries it introduces. A parked operation performs no following procedure work; abort rejects interruptible ordinary barriers into reconciliation but leaves cancellation barriers parked; close/fault rejects every barrier.
 - **Effect-start gate.** Cover every item in §4.2's complete catalog and assert that no other path calls `assertOpen()`. At each listed integration, force both orders of abort versus operation admission: the check and invocation are adjacent, abort-first invokes nothing, and admission-first gives the complete operation `EffectGate.signal`. Provider tests assert that request preparation precedes the check and that the same signal reaches Models auth/lazy/provider work. Hook tests treat each aggregate pipeline as one admitted unit. A cancelled activation must enter reconciliation without invoking `before_resume`.
@@ -3304,7 +3368,7 @@ One corruption assertion constructs an `aborted` response with running control d
 | **Entry** | Write-once conversation record: placement and payload in one row. Its id is the public entry id. |
 | **Register** | Namespaced mutable cell holding its current typed value directly. Overwrite replaces; delete removes the key. |
 | **Usage row** | Append-only cost ledger row. Never modified, never deleted. |
-| **Pending entry** | Unplaced content in a `pending.entry` register keyed by its reserved entry id, until placement or cancellation. |
+| **Pending entry** | Complete unplaced content in `pending.entry`, including queued input and finalized outcome-ready tool results, until placement/cancellation/cleanup. |
 | **Session** | One conversation: tree, facts, ledger, lanes. |
 | **Lane** | Named cursor into the tree with its own config, queues, and one operation. |
 | **Operation** | One accepted unit of work: run, compaction, or navigation. |
@@ -3316,12 +3380,15 @@ One corruption assertion constructs an `aborted` response with running control d
 | **Active operation** | The one process-local async task for the lane's current drive pass, with its completion promise and `EffectGate`. |
 | **Breakpoint** | A manual-drive barrier described by `ActionInfo`; it parks before ordinary code but does not execute that code. |
 | **Effect gate** | Process-local synchronous arbitration of ordinary operation admission against a cancellation request, paired with the operation's cooperative signal. |
-| **Reserved id** | An id minted before its content exists: a string in `op.state` (settlement family) or a `pending.entry` key (queued content). |
+| **Reserved id** | An id minted before content exists. Tool-result ids progress from a string in state to staged pending content to an immutable entry. |
 | **Follower id** | An id minted with its leader's 48-bit timestamp so a call/result group shares one time prefix (§1.2). |
 | **Lane mutation line** | Per-lane serialization point where all state-dependent mutations queue. |
 | **Control** | Orthogonal cancellation flag: `running` or `cancel_requested`. |
 | **Checkpoint** | The state between turns where queues, writes, and finishing are decided. |
 | **Continuation** | Durable answer to "does this run still owe an assistant turn?" |
+| **Tool checkpoint** | Optional bounded complete live-update snapshot selected by a tool and stored as the current `pending.tool_output` value; auxiliary, never completion authority. |
+| **Outcome ready** | Tool call whose complete finalized result is durable in `pending.entry` and will never execute again, but awaits source-ordered tree placement. |
+| **Invocation fact** | Tool-invocation-scoped durable current value used for replay-safe memoization; valid only while the call is effect-pending. |
 | **Terminal transaction** | The commit that deletes an operation's registers, writes `lane.lastResult`, and clears `currentOperationId`. |
 | **Segment** | A branch-index range that references an older branch instead of copying it. |
 | **External finalization** | A terminal transaction committed from outside the live task; the task detects absent registers, stops without writing, and resolves from `lane.lastResult` (§4.9). |

@@ -7,6 +7,7 @@ import type {
 	DriveResult,
 	HarnessClosed,
 	HarnessFault,
+	MissingIdentityInfo,
 	Resources,
 	SuspendedOperation,
 } from "../agent-harness.ts";
@@ -112,7 +113,7 @@ export interface CommittedAssistantSettlement {
 export type AssistantExecutionResult =
 	| { kind: "advanced" }
 	| { kind: "yielded" }
-	| { kind: "missing_identities"; missing: { tools: string[]; models: string[] } };
+	| { kind: "missing_identities"; missing: MissingIdentityInfo };
 
 export type ToolBatchExecutionResult = AssistantExecutionResult;
 

@@ -32,6 +32,7 @@ import {
 	UnknownTemplate,
 	type WatchHandle,
 } from "../agent-harness.ts";
+import { hasMissingIdentities, missingIdentities } from "../config.ts";
 import { BreakpointBarrier } from "../execution/breakpoint.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
 import { type RestoredLane, restoreLane } from "../restore.ts";
@@ -50,7 +51,7 @@ import type {
 } from "../session/types.ts";
 import { formatSkillInvocation } from "../skills.ts";
 import { deferredValue, driveLane } from "./operation-task.ts";
-import { isPendingAssistant, missingIdentities } from "./transitions.ts";
+import { isPendingAssistant } from "./transitions.ts";
 import type {
 	AcceptancePublication,
 	AdmissionReservation,
@@ -186,8 +187,8 @@ export async function acceptLane<TContext extends object | undefined>(
 							}),
 				);
 			}
-			const missing = missingIdentities(runtime.models, restored.configuration, settings);
-			if (missing.tools.length !== 0 || missing.models.length !== 0) {
+			const missing = missingIdentities(runtime.models, restored.configuration, settings.tools);
+			if (hasMissingIdentities(missing)) {
 				return Result.err(
 					new MissingIdentities({
 						lane: lane.name,

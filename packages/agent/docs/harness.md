@@ -1979,6 +1979,8 @@ Then run §3.3's bounded semantic checks over exactly that set. Every named comm
 
 Restore never reads register history, folds anything, scans tables, builds provider context, audits completed operations, or infers a transition from an absent planned value. It installs no `ActiveOperation` and invokes no breakpoint. The application or serving layer explicitly activates an open operation with `drive({ operationId })`; `resume()` is the convenience composition that inspects and drives the current operation with one deferred-poll permit. Cancellation is durably admitted through `requestAbort(operationId)` or its `abort()` convenience wrapper.
 
+Harness creation does not write a durable `suspended` state. An open operation remains at its committed phase with control `running` or `cancel_requested`. `suspended` is the public observation that no process-local `drive()` call currently owns that operation. A matching `drive({ operationId })` installs the local owner and dispatches from the committed phase; process loss removes the owner without changing durable control or phase.
+
 ### Worked example — crash in the uncertain window
 
 The process died after committing an assistant intent:
@@ -2274,7 +2276,7 @@ type OptionalFinalAssistant =
 
 type MissingIdentitySuspension = {
   kind: "suspended"; reason: "missing_identities";
-  missing: { tools: string[]; models: string[] };
+  missing: { tools: string[]; model?: string };
 };
 
 type RunOutcome =
@@ -2312,7 +2314,7 @@ Expected errors use the existing `TaggedError` implementation in `harness/result
 |---|---|
 | `LaneBusy` | `lane`, `operationId`, `operationKind` |
 | `OperationMismatch` | `lane`, `expectedOperationId`, optional `currentOperationId` and `lastOperationId` |
-| `MissingIdentities` | `lane`, `tools`, `models` |
+| `MissingIdentities` | `lane`, `tools`, `model` |
 | `NoActiveRun`, `NoActiveOperation`, `NothingToResume`, `NothingToCompact` | `lane` |
 | `InvalidMessage`, `InvalidNavigation` | `lane`, `reason` |
 | `UnknownSkill`, `UnknownTemplate` | `name` |
@@ -2339,7 +2341,7 @@ type DriveOutcome =
   | { kind: "waiting"; operationId: string; reason: "deferred";
       deferred: DeferredHandle }
   | { kind: "waiting"; operationId: string; reason: "missing_identities";
-      missing: { tools: string[]; models: string[] } }
+      missing: { tools: string[]; model?: string } }
   | { kind: "yielded"; operationId: string };
 type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
 
@@ -2435,9 +2437,9 @@ type SuspendedOperation = {
 } & (
   | { reason: "deferred"; deferred: DeferredHandle; missing?: never }
   | { reason: "missing_identities";
-      missing: { tools: string[]; models: string[] }; deferred?: never }
+      missing: { tools: string[]; model?: string }; deferred?: never }
   | { reason: "crash"; deferred?: DeferredHandle;
-      missing?: { tools: string[]; models: string[] } }
+      missing?: { tools: string[]; model?: string } }
 );
 
 // QueueMode, RetryPolicy, and CompactionSettings use the source types named in §0.7.
@@ -2620,11 +2622,11 @@ type HarnessEventPayload =
   | { type: "run_suspend"; runId: string; reason: "deferred";
       deferred: DeferredHandle }
   | { type: "run_suspend"; runId: string; reason: "missing_identities";
-      missing: { tools: string[]; models: string[] } }
+      missing: { tools: string[]; model?: string } }
   | { type: "compaction_suspend"; runId: string; reason: "missing_identities";
-      missing: { tools: string[]; models: string[] } }
+      missing: { tools: string[]; model?: string } }
   | { type: "navigation_suspend"; runId: string; reason: "missing_identities";
-      missing: { tools: string[]; models: string[] } }
+      missing: { tools: string[]; model?: string } }
   | { type: "run_abort"; runId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
   | ({ type: "run_end"; runId: string; leafId: string | null } & (
       | ({ outcome: "completed" | "aborted" } & OptionalFinalAssistant)

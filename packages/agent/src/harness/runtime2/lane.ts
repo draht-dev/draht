@@ -1,11 +1,18 @@
 import type { Api, Model, Models } from "@draht/ai";
 import type { ThinkingLevel } from "../../types.ts";
-import type { AgentLane, HarnessEvent, LaneConfigEventPayload } from "../agent-harness.ts";
+import type {
+	AgentLane,
+	HarnessEvent,
+	LaneConfigEventPayload,
+	LaneExecutionInfo,
+	SuspendedOperation,
+} from "../agent-harness.ts";
 import { SessionPendingAssistantMessageError } from "../session/session.ts";
 import type {
 	BranchScan,
 	CommitResult,
 	Entry,
+	LaneLastResult,
 	PendingEntry,
 	Session,
 	SessionReader,
@@ -44,6 +51,7 @@ export class Lane implements AgentLane {
 	protected readonly models: Models;
 	private readonly onFault: FaultHandler;
 	private readonly onEvent: EventHandler;
+	private suspension: SuspendedOperation | undefined;
 	state: LaneState;
 	closedError: Error | undefined;
 
@@ -54,6 +62,7 @@ export class Lane implements AgentLane {
 		state: LaneState,
 		onFault: FaultHandler,
 		onEvent: EventHandler,
+		suspension?: SuspendedOperation,
 	) {
 		this.session = session;
 		this.models = models;
@@ -71,6 +80,7 @@ export class Lane implements AgentLane {
 		this.state = state;
 		this.onFault = onFault;
 		this.onEvent = onEvent;
+		this.suspension = suspension;
 	}
 
 	async getLeafId(): Promise<string | null> {
@@ -78,7 +88,7 @@ export class Lane implements AgentLane {
 		return this.state.leafId;
 	}
 
-	async getLastResult() {
+	async getLastResult(): Promise<LaneLastResult | undefined> {
 		this.assertOpen();
 		return this.state.lastResult;
 	}
@@ -118,6 +128,9 @@ export class Lane implements AgentLane {
 						case "commit": {
 							const commit = await mutator.commit(decision.transaction);
 							this.state = decision.next;
+							if (this.suspension?.operationId !== decision.next.operation?.meta.operationId) {
+								this.suspension = undefined;
+							}
 							const result = decision.materialize(commit);
 							if (isPromiseLike(result)) throw new TypeError("Lane command materialize() must be synchronous");
 							return { kind: "return", result };
@@ -148,8 +161,34 @@ export class Lane implements AgentLane {
 		throw new SliceNotImplemented("requestAbort");
 	}
 
-	async inspectExecution(): Promise<never> {
-		throw new SliceNotImplemented("inspectExecution");
+	async inspectExecution(): Promise<LaneExecutionInfo> {
+		this.assertOpen();
+		const operation = this.state.operation;
+		if (operation === null) {
+			return {
+				lane: this.name,
+				leafId: this.state.leafId,
+				current: null,
+				...(this.state.lastResult === undefined ? {} : { lastResult: this.state.lastResult }),
+			};
+		}
+		const status = operation.state.control.status === "cancel_requested" ? "aborting" : "suspended";
+		const suspended =
+			status === "suspended" && this.suspension?.operationId === operation.meta.operationId
+				? this.suspension
+				: undefined;
+		return {
+			lane: this.name,
+			leafId: this.state.leafId,
+			current: {
+				id: operation.meta.operationId,
+				kind: operation.meta.intent.kind,
+				status,
+				startedAt: operation.meta.startedAt,
+				...(suspended === undefined ? {} : { suspended }),
+			},
+			...(this.state.lastResult === undefined ? {} : { lastResult: this.state.lastResult }),
+		};
 	}
 
 	async prompt(): Promise<never> {

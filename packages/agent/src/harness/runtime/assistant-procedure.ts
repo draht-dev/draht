@@ -16,6 +16,7 @@ import {
 	HarnessFault,
 	type SuspendedOperation,
 } from "../agent-harness.ts";
+import { hasMissingIdentities, missingIdentities } from "../config.ts";
 import { streamHarnessAssistant } from "../execution/assistant.ts";
 import { applyStreamOptionsPatch } from "../hooks.ts";
 import { type RestoredLane, restoreLane } from "../restore.ts";
@@ -32,7 +33,6 @@ import {
 	cloneConfiguration,
 	cloneUsage,
 	deadlineReached,
-	missingIdentities,
 	normalizeInvalidDeferredResponse,
 	normalizeRetryPolicy,
 	predictAssistantStepOutcome,
@@ -563,8 +563,8 @@ export async function executeAssistantGeneration<TContext extends object | undef
 	const ready = state.phase.generation;
 	const context = ready.context;
 	const settings = await runtime.snapshotSettings();
-	const missing = missingIdentities(runtime.models, context.configuration, settings);
-	if (missing.tools.length !== 0 || missing.models.length !== 0) {
+	const missing = missingIdentities(runtime.models, context.configuration, settings.tools);
+	if (hasMissingIdentities(missing)) {
 		const descriptor: SuspendedOperation = {
 			...suspensionBase(restored),
 			reason: "missing_identities",

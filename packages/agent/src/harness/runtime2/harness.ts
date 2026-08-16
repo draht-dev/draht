@@ -1,4 +1,4 @@
-import type { RetryPolicy } from "@draht/ai";
+import type { Models, RetryPolicy } from "@draht/ai";
 import { NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
 import type { QueueMode } from "../../types.ts";
 import type {
@@ -13,7 +13,15 @@ import type {
 } from "../agent-harness.ts";
 import { Closed, HarnessClosed, HarnessFault, InvalidLane, LaneExists, UnknownTarget } from "../agent-harness.ts";
 import { type CompactionSettings, DEFAULT_COMPACTION_SETTINGS } from "../compaction/compaction.ts";
-import { DEFAULT_RETRY_POLICY, validateCompactionSettings, validateRetryPolicy, validateToolNames } from "../config.ts";
+import {
+	DEFAULT_RETRY_POLICY,
+	hasMissingIdentities,
+	missingIdentities,
+	missingToolIdentities,
+	validateCompactionSettings,
+	validateRetryPolicy,
+	validateToolNames,
+} from "../config.ts";
 import { HarnessEventBus } from "../events.ts";
 import { HookRegistry } from "../hooks.ts";
 import { convertToLlm } from "../messages.ts";
@@ -42,7 +50,12 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 	closePromise: Promise<void> | undefined;
 	faultError: HarnessFault | undefined;
 
-	constructor(options: AgentHarnessOptions<TContext>, seed: LaneConfiguration, restored: Map<string, LaneState>) {
+	constructor(
+		options: AgentHarnessOptions<TContext>,
+		seed: LaneConfiguration,
+		restored: Map<string, LaneState>,
+		suspensionsByLane: Map<string, SuspendedOperation>,
+	) {
 		const main = restored.get("main");
 		if (main === undefined) throw new SessionInvariantError("Session is missing main lane");
 		super(
@@ -52,6 +65,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 			main,
 			(cause) => this.fault(cause),
 			(event) => this.events.emit(event),
+			suspensionsByLane.get("main"),
 		);
 		this.seed = seed;
 		this.config = {
@@ -83,7 +97,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		);
 		this.lanesByName.set("main", this);
 		for (const [name, state] of restored) {
-			if (name !== "main") this.lanesByName.set(name, this.buildLane(name, state));
+			if (name !== "main") this.lanesByName.set(name, this.buildLane(name, state, suspensionsByLane.get(name)));
 		}
 	}
 
@@ -94,21 +108,19 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 
 	async lanes(): Promise<LaneInfo[]> {
 		this.assertOpen();
-		return [...this.lanesByName.values()].map((lane) => {
-			const operation = lane.state.operation;
-			return {
-				name: lane.name,
-				leafId: lane.state.leafId,
-				operation:
-					operation === null
-						? null
-						: {
-								id: operation.meta.operationId,
-								kind: operation.meta.intent.kind,
-								status: operation.state.control.status === "cancel_requested" ? "aborting" : "suspended",
-							},
-			};
-		});
+		const executions = await Promise.all([...this.lanesByName.values()].map((lane) => lane.inspectExecution()));
+		return executions.map((execution) => ({
+			name: execution.lane,
+			leafId: execution.leafId,
+			operation:
+				execution.current === null
+					? null
+					: {
+							id: execution.current.id,
+							kind: execution.current.kind,
+							status: execution.current.status,
+						},
+		}));
 	}
 
 	async createLane(name: string, at: string | null): Promise<CreateLaneResult> {
@@ -208,7 +220,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		throw new SliceNotImplemented("watchSession");
 	}
 
-	private buildLane(name: string, state: LaneState): Lane {
+	private buildLane(name: string, state: LaneState, suspension?: SuspendedOperation): Lane {
 		return new Lane(
 			name,
 			this.session,
@@ -216,6 +228,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 			state,
 			(cause) => this.fault(cause),
 			(event) => this.events.emit(event),
+			suspension,
 		);
 	}
 
@@ -293,23 +306,72 @@ export async function createAgentHarness<TContext extends object | undefined = o
 	try {
 		await seedMain(options.session, seed);
 		const restored = await restoreSession(options.session);
-		const harness = new Harness(options, seed, restored);
 		const suspended: SuspendedOperation[] = [];
 		for (const [lane, state] of restored) {
-			const operation = state.operation;
-			if (operation === null) continue;
-			suspended.push({
-				lane,
-				operationId: operation.meta.operationId,
-				kind: operation.meta.intent.kind,
-				startedAt: operation.meta.startedAt,
-				reason: "crash",
-			});
+			if (state.operation !== null) {
+				suspended.push(await describeSuspension(options.session, options.models, tools, lane, state));
+			}
 		}
-		return { harness, suspended };
+		const suspensionsByLane = new Map(suspended.map((descriptor) => [descriptor.lane, descriptor]));
+		return { harness: new Harness(options, seed, restored, suspensionsByLane), suspended };
 	} catch (error) {
 		throw new HarnessFault("AgentHarness storage or invariant fault", error);
 	}
+}
+
+async function describeSuspension(
+	session: Session,
+	models: Models,
+	tools: readonly { name: string }[],
+	lane: string,
+	state: LaneState,
+): Promise<SuspendedOperation> {
+	const operation = state.operation;
+	if (operation === null) throw new SessionInvariantError(`Lane ${JSON.stringify(lane)} is not suspended`);
+	const promptIds = operation.meta.intent.kind === "run" ? operation.meta.intent.promptEntryIds : [];
+	const deferredSourceId =
+		operation.state.kind === "run" && operation.state.phase.kind === "deferred"
+			? operation.state.phase.deferred.sourceEntryId
+			: undefined;
+	const entries = await session.getEntries([
+		...new Set([...promptIds, ...(deferredSourceId === undefined ? [] : [deferredSourceId])]),
+	]);
+	const prompt = promptIds.map((id) => {
+		const entry = entries.get(id);
+		if (entry?.type !== "message") throw new SessionInvariantError(`Prompt entry ${id} is missing`);
+		return entry.message;
+	});
+	const base = {
+		lane,
+		operationId: operation.meta.operationId,
+		kind: operation.meta.intent.kind,
+		startedAt: operation.meta.startedAt,
+		...(operation.meta.intent.kind === "run" ? { prompt } : {}),
+	};
+	if (deferredSourceId !== undefined) {
+		const entry = entries.get(deferredSourceId);
+		if (entry?.type !== "message" || entry.message.role !== "assistant" || entry.message.deferred === undefined) {
+			throw new SessionInvariantError("Deferred suspension source is invalid");
+		}
+		return { ...base, reason: "deferred", deferred: entry.message.deferred };
+	}
+	if (
+		operation.state.kind === "run" &&
+		operation.state.phase.kind === "assistant" &&
+		operation.state.phase.generation.status === "ready"
+	) {
+		const missing = missingIdentities(models, operation.state.phase.generation.context.configuration, tools);
+		if (hasMissingIdentities(missing)) {
+			return { ...base, reason: "crash", missing };
+		}
+	}
+	if (operation.state.kind === "run" && operation.state.phase.kind === "tools") {
+		const missing = missingToolIdentities(operation.state.phase.batch.configuration, tools);
+		if (missing.length !== 0) {
+			return { ...base, reason: "crash", missing: { tools: missing } };
+		}
+	}
+	return { ...base, reason: "crash" };
 }
 
 async function seedMain(session: Session, seed: LaneConfiguration): Promise<void> {

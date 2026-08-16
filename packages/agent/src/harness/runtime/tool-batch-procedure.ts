@@ -1000,7 +1000,7 @@ async function suspendToolBatchForMissingIdentities<TContext extends object | un
 	tools: string[],
 	eventOrigin: ToolEventOrigin,
 ): Promise<ToolBatchExecutionResult> {
-	const missing = { tools, models: [] };
+	const missing = { tools };
 	runtime.restoredSuspensions.set(lane.name, {
 		...suspensionBase(restored),
 		reason: "missing_identities",

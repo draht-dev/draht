@@ -53,12 +53,14 @@ export class OperationMismatch extends TaggedError("OperationMismatch")<{
 	lastOperationId?: string;
 	message: string;
 }> {}
-export class MissingIdentities extends TaggedError("MissingIdentities")<{
-	lane: string;
+export interface MissingIdentityInfo {
 	tools: string[];
-	models: string[];
-	message: string;
-}> {}
+	model?: string;
+}
+
+export class MissingIdentities extends TaggedError("MissingIdentities")<
+	{ lane: string; message: string } & MissingIdentityInfo
+> {}
 export class NoActiveRun extends TaggedError("NoActiveRun")<{ lane: string; message: string }> {}
 export class NoActiveOperation extends TaggedError("NoActiveOperation")<{ lane: string; message: string }> {}
 export class NothingToResume extends TaggedError("NothingToResume")<{ lane: string; message: string }> {}
@@ -108,7 +110,7 @@ export type OptionalFinalAssistant =
 export type MissingIdentitySuspension = {
 	kind: "suspended";
 	reason: "missing_identities";
-	missing: { tools: string[]; models: string[] };
+	missing: MissingIdentityInfo;
 };
 
 export type RunOutcome =
@@ -236,7 +238,7 @@ export type DriveOutcome =
 			kind: "waiting";
 			operationId: string;
 			reason: "missing_identities";
-			missing: { tools: string[]; models: string[] };
+			missing: MissingIdentityInfo;
 	  }
 	| { kind: "yielded"; operationId: string };
 export type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
@@ -284,13 +286,13 @@ export type SuspendedOperation = {
 	| { reason: "deferred"; deferred: DeferredHandle; missing?: never }
 	| {
 			reason: "missing_identities";
-			missing: { tools: string[]; models: string[] };
+			missing: MissingIdentityInfo;
 			deferred?: never;
 	  }
 	| {
 			reason: "crash";
 			deferred?: DeferredHandle;
-			missing?: { tools: string[]; models: string[] };
+			missing?: MissingIdentityInfo;
 	  }
 );
 
@@ -342,19 +344,19 @@ export type HarnessEventPayload =
 			type: "run_suspend";
 			runId: string;
 			reason: "missing_identities";
-			missing: { tools: string[]; models: string[] };
+			missing: MissingIdentityInfo;
 	  }
 	| {
 			type: "compaction_suspend";
 			runId: string;
 			reason: "missing_identities";
-			missing: { tools: string[]; models: string[] };
+			missing: MissingIdentityInfo;
 	  }
 	| {
 			type: "navigation_suspend";
 			runId: string;
 			reason: "missing_identities";
-			missing: { tools: string[]; models: string[] };
+			missing: MissingIdentityInfo;
 	  }
 	| { type: "run_abort"; runId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
 	| ({ type: "run_end"; runId: string; leafId: string | null } & (

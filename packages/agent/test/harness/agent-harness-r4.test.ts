@@ -470,7 +470,7 @@ describe("AgentHarness R4 tools", () => {
 		await fixture.harness.executeAction();
 		expect(await firstDrive).toMatchObject({
 			ok: true,
-			value: { kind: "waiting", reason: "missing_identities", missing: { tools: ["echo"], models: [] } },
+			value: { kind: "waiting", reason: "missing_identities", missing: { tools: ["echo"] } },
 		});
 		expect(executions).toBe(0);
 		expect((await fixture.session.getRegister("op.state", accepted.value.operationId))?.value).toMatchObject({
@@ -808,7 +808,7 @@ describe("AgentHarness R4 tools", () => {
 
 		expect(await reopened.harness.drive({ operationId: accepted.value.operationId })).toMatchObject({
 			ok: true,
-			value: { kind: "waiting", reason: "missing_identities", missing: { tools: ["echo"], models: [] } },
+			value: { kind: "waiting", reason: "missing_identities", missing: { tools: ["echo"] } },
 		});
 		expect(executions).toBe(1);
 		const branch = await reopened.harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" });
@@ -1272,7 +1272,7 @@ describe("AgentHarness R4 tools", () => {
 
 		expect(await reopened.harness.drive({ operationId: accepted.value.operationId })).toMatchObject({
 			ok: true,
-			value: { kind: "waiting", reason: "missing_identities", missing: { tools: ["echo"], models: [] } },
+			value: { kind: "waiting", reason: "missing_identities", missing: { tools: ["echo"] } },
 		});
 		expect((await reopened.fixture.session.getRegister("op.state", accepted.value.operationId))?.value).toEqual(
 			before,

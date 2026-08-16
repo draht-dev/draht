@@ -239,7 +239,7 @@ describe("AgentHarness R2 minimal run", () => {
 		await modelFixture.harness.setModel({ ...modelFixture.faux.getModel(), id: "missing-model" });
 		expect(await modelFixture.harness.accept({ kind: "prompt", prompt: "hello" })).toMatchObject({
 			ok: false,
-			error: { _tag: "MissingIdentities", models: [expect.stringContaining("missing-model")], tools: [] },
+			error: { _tag: "MissingIdentities", model: expect.stringContaining("missing-model"), tools: [] },
 		});
 		expect((await modelFixture.harness.inspectExecution()).current).toBeNull();
 
@@ -247,7 +247,7 @@ describe("AgentHarness R2 minimal run", () => {
 		await toolFixture.harness.setActiveTools(["missing-tool"]);
 		expect(await toolFixture.harness.accept({ kind: "prompt", prompt: "hello" })).toMatchObject({
 			ok: false,
-			error: { _tag: "MissingIdentities", models: [], tools: ["missing-tool"] },
+			error: { _tag: "MissingIdentities", tools: ["missing-tool"] },
 		});
 		expect((await toolFixture.harness.inspectExecution()).current).toBeNull();
 	});

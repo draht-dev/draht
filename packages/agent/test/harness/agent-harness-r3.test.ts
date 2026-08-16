@@ -772,7 +772,7 @@ describe("AgentHarness R3 generation recovery and retry", () => {
 			value: {
 				kind: "waiting",
 				reason: "missing_identities",
-				missing: { models: [expect.stringContaining("faux-1")], tools: ["echo"] },
+				missing: { model: expect.stringContaining("faux-1"), tools: ["echo"] },
 			},
 		});
 		expect(fixture.faux.state.callCount).toBe(0);

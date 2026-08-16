@@ -38,7 +38,15 @@ import {
 	type WatchHandle,
 } from "../agent-harness.ts";
 import { type CompactionSettings, DEFAULT_COMPACTION_SETTINGS } from "../compaction/compaction.ts";
-import { DEFAULT_RETRY_POLICY, validateCompactionSettings, validateRetryPolicy, validateToolNames } from "../config.ts";
+import {
+	DEFAULT_RETRY_POLICY,
+	hasMissingIdentities,
+	missingIdentities,
+	missingToolIdentities,
+	validateCompactionSettings,
+	validateRetryPolicy,
+	validateToolNames,
+} from "../config.ts";
 import { HarnessEventBus } from "../events.ts";
 import { HookRegistry } from "../hooks.ts";
 import { convertToLlm } from "../messages.ts";
@@ -61,7 +69,7 @@ import type {
 } from "../session/types.ts";
 import type { AgentHarnessTool, AgentHarnessToolContextSource } from "../types.ts";
 import { AgentLaneRuntime, createPublicSessionView } from "./lane-runtime.ts";
-import { cloneConfiguration, missingIdentities, missingToolIdentities, suspensionBase } from "./transitions.ts";
+import { cloneConfiguration, suspensionBase } from "./transitions.ts";
 import {
 	type ActiveOperation,
 	type AdmissionReservation,
@@ -448,15 +456,15 @@ class AgentHarnessRuntime<TContext extends object | undefined> implements AgentH
 			const missing = missingIdentities(
 				this.models,
 				current.state.phase.generation.context.configuration,
-				this.settings,
+				this.settings.tools,
 			);
-			if (missing.tools.length !== 0 || missing.models.length !== 0) {
+			if (hasMissingIdentities(missing)) {
 				return { ...base, reason: "crash", missing };
 			}
 		}
 		if (current.state.kind === "run" && current.state.phase.kind === "tools") {
-			const missing = missingToolIdentities(current.state.phase.batch.configuration, this.settings);
-			if (missing.length !== 0) return { ...base, reason: "crash", missing: { tools: missing, models: [] } };
+			const missing = missingToolIdentities(current.state.phase.batch.configuration, this.settings.tools);
+			if (missing.length !== 0) return { ...base, reason: "crash", missing: { tools: missing } };
 		}
 		return { ...base, reason: "crash" };
 	}

@@ -1,4 +1,4 @@
-import type { Api, AssistantMessage, Models, RetryPolicy, Usage } from "@draht/ai";
+import type { Api, AssistantMessage, RetryPolicy, Usage } from "@draht/ai";
 import { isContextOverflow, isRecoverableLength, isRetryableAssistantError } from "@draht/ai";
 import type { AgentMessage, AgentToolCall } from "../../types.ts";
 import type { DriveOptions, SuspendedOperation, TerminalOperationOutcome } from "../agent-harness.ts";
@@ -11,7 +11,7 @@ import type {
 	SessionMutator,
 	SettledAssistantMessage,
 } from "../session/types.ts";
-import type { AssistantSettlementDecision, RuntimeSettings } from "./types.ts";
+import type { AssistantSettlementDecision } from "./types.ts";
 import { RuntimeSliceNotImplemented } from "./types.ts";
 
 export function uuidV7Timestamp(id: string): number {
@@ -224,27 +224,6 @@ export function suspensionBase(restored: RestoredLane): Omit<SuspendedOperation,
 					}),
 				}),
 	};
-}
-
-export function missingIdentities<TContext extends object | undefined>(
-	models: Models,
-	configuration: LaneConfiguration,
-	settings: RuntimeSettings<TContext>,
-): { tools: string[]; models: string[] } {
-	const model = models.getModel(configuration.model.provider, configuration.model.modelId);
-	const availableTools = new Set(settings.tools.map((tool) => tool.name));
-	return {
-		tools: configuration.activeToolNames.filter((name) => !availableTools.has(name)),
-		models: model === undefined ? [`${configuration.model.provider}/${configuration.model.modelId}`] : [],
-	};
-}
-
-export function missingToolIdentities<TContext extends object | undefined>(
-	configuration: LaneConfiguration,
-	settings: RuntimeSettings<TContext>,
-): string[] {
-	const availableTools = new Set(settings.tools.map((tool) => tool.name));
-	return configuration.activeToolNames.filter((name) => !availableTools.has(name));
 }
 
 export function cloneUsage(usage: Usage): Usage {

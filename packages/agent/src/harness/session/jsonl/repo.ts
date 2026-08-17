@@ -3,6 +3,7 @@ import type { FileError, FileSystem, Result } from "../../types.ts";
 import { createForkSnapshot, type ForkSourceSnapshot } from "../fork.ts";
 import { StorageBackedSession } from "../session.ts";
 import type { ForkOptions, Session, SessionRepo } from "../types.ts";
+import { laneLeaf, laneState, setValue } from "../values.ts";
 import { parseJsonlStorageHeader } from "./codec.ts";
 import { JsonlStorage } from "./storage.ts";
 import {
@@ -85,18 +86,10 @@ export class JsonlSessionRepo
 			};
 			// TODO: do we want to make session creation atomic?
 			storage = await JsonlStorage.create({ fileSystem: this.fileSystem, path, now: this.now }, header);
-			await storage.commit({
-				writes: [
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
-					{
-						kind: "register",
-						op: "set",
-						namespace: "lane.state",
-						key: "main",
-						value: { currentOperationId: null, pendingNextRun: [] },
-					},
-				],
-			});
+			await storage.commit([
+				setValue(laneLeaf("main"), null),
+				setValue(laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
+			]);
 			const info = fileValue(await this.fileSystem.fileInfo(path), `Failed to read session ${path}`);
 			return this.publishOpenSession(metadataFromHeader(header, path, info.mtimeMs), storage, key);
 		} catch (error) {

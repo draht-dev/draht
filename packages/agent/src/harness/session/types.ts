@@ -3,6 +3,7 @@ import type { AgentMessage, QueueMode, ThinkingLevel } from "../../types.ts";
 import type { BranchPreparation } from "../compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings } from "../compaction/compaction.ts";
 import type { AgentHarnessStreamOptions } from "../types.ts";
+import type { ListElement, ListReadOptions, ListWrite, StoredValue, Value, ValueList, ValueWrite } from "./values.ts";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -360,30 +361,6 @@ export type DurableStructuralPreparation =
 			totalTokens: number;
 	  };
 
-export interface RegisterValues {
-	"lane.leaf": string | null;
-	"lane.config": LaneConfiguration;
-	"lane.state": LaneState;
-	"lane.lastResult": LaneLastResult;
-	"op.meta": OperationMeta;
-	"op.state": OperationState;
-	"op.tool_args": Record<string, JsonValue>;
-	"op.preparation": DurableStructuralPreparation;
-	"pending.entry": PendingEntry;
-	"fact.name": string;
-	"fact.label": string;
-	"fact.custom": JsonValue;
-}
-
-export type RegisterNamespace = keyof RegisterValues;
-
-export interface Register<TNamespace extends RegisterNamespace = RegisterNamespace> {
-	namespace: TNamespace;
-	key: string;
-	value: RegisterValues[TNamespace];
-	seq: number;
-}
-
 export interface UsageRow {
 	id: string;
 	seq: number;
@@ -393,25 +370,17 @@ export interface UsageRow {
 	details?: JsonValue;
 }
 
-export type RegisterSetWrite = {
-	[TNamespace in RegisterNamespace]: {
-		kind: "register";
-		op: "set";
-		namespace: TNamespace;
-		key: string;
-		value: RegisterValues[TNamespace];
-	};
-}[RegisterNamespace];
-
-export type Write =
-	| { kind: "entry"; entry: NewEntry }
-	| { kind: "usage"; row: Omit<UsageRow, "seq"> }
-	| RegisterSetWrite
-	| { kind: "register"; op: "delete"; namespace: RegisterNamespace; key: string };
-
-export interface Transaction {
-	writes: Write[];
+export interface EntryWrite {
+	kind: "entry";
+	entry: NewEntry;
 }
+
+export interface UsageWrite {
+	kind: "usage";
+	row: Omit<UsageRow, "seq">;
+}
+
+export type Write = EntryWrite | UsageWrite | ValueWrite | ListWrite;
 
 export interface CommitResult {
 	firstSeq: number;
@@ -467,16 +436,11 @@ export interface SessionStats {
 }
 
 export interface Storage {
-	commit(transaction: Transaction): Promise<CommitResult>;
+	commit(writes: Write[]): Promise<CommitResult>;
 	getEntries(ids: string[]): Promise<Map<string, Entry>>;
-	getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Promise<Register<TNamespace> | undefined>;
-	listRegisters<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		keyPrefix?: string,
-	): Promise<Register<TNamespace>[]>;
+	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined>;
+	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]>;
+	readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]>;
 	scanBranch(query: StorageBranchScan): Promise<Entry[]>;
 	scanBranchStructure(query: StorageBranchScan): Promise<EntryStructure[]>;
 	scanEntries(query: EntryScan): Promise<Entry[]>;
@@ -508,33 +472,33 @@ export interface EntryQuery {
 
 export interface SessionReader {
 	getEntries(ids: string[]): Promise<Map<string, Entry>>;
-	getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Promise<Register<TNamespace> | undefined>;
-	listRegisters<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		keyPrefix?: string,
-	): Promise<Register<TNamespace>[]>;
+	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined>;
+	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]>;
+	readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]>;
 }
 
 /** Callback-scoped write capability bound to one lane. */
 export interface SessionMutator extends SessionReader {
 	readonly lane: string;
 	/** The mutation callback's sole commit. A second attempt rejects. */
-	commit(transaction: Transaction): Promise<CommitResult>;
+	commit(writes: Write[]): Promise<CommitResult>;
 }
 
 export interface SessionTree {
 	getLeafId(): Promise<string | null>;
 	getEntry(id: string): Promise<Entry | undefined>;
 	getStats(): Promise<SessionStats>;
+	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined>;
+	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]>;
+	readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]>;
+	setValue<T>(address: Value<T>, next: NoInfer<T>): Promise<void>;
+	deleteValue<T>(address: Value<T>): Promise<void>;
+	appendList<T>(address: ValueList<T>, element: NoInfer<T>): Promise<void>;
+	deleteList<T>(address: ValueList<T>): Promise<void>;
 	getName(): Promise<string | undefined>;
 	setName(name: string | undefined): Promise<void>;
 	getLabel(targetId: string): Promise<string | undefined>;
 	setLabel(targetId: string, label: string | undefined): Promise<void>;
-	getCustomFact(key: string): Promise<JsonValue | undefined>;
-	setCustomFact(key: string, value: JsonValue | undefined): Promise<void>;
 	findEntries(query?: EntryQuery): Promise<Entry[]>;
 	findEntry(query?: EntryQuery): Promise<Entry | undefined>;
 	findEntriesOnBranch(query?: BranchScan): Promise<Entry[]>;
@@ -562,7 +526,7 @@ export type ForkOptions =
 			/**
 			 * Copy one branch path into the destination session's main lane. This is
 			 * the default scope. The destination starts idle with a fresh lane state,
-			 * no operation registers, no pending entries, no last result, and an empty
+			 * no operation values, no pending entries, no last result, and an empty
 			 * usage ledger.
 			 */
 			scope?: "branch";
@@ -579,7 +543,7 @@ export type ForkOptions =
 	| {
 			/**
 			 * Copy the whole conversation tree and every lane leaf/configuration. The
-			 * destination starts idle with fresh lane states, no operation registers,
+			 * destination starts idle with fresh lane states, no operation values,
 			 * no pending entries, no last results, and an empty usage ledger.
 			 */
 			scope: "tree";

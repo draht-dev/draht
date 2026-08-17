@@ -2,6 +2,7 @@
 // Full state validation is R1; harness-wide close admission is R6.
 
 import { describe, expect, expectTypeOf, it } from "vitest";
+import * as sessionWrites from "../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { SessionInvariantError, StorageBackedSession } from "../../src/harness/session/session.ts";
 import { InstrumentedStorage, StorageDecorator } from "../../src/harness/session/testing/index.ts";
@@ -11,8 +12,9 @@ import type {
 	LaneState,
 	Session,
 	SessionMetadata,
-	Transaction,
+	Write,
 } from "../../src/harness/session/types.ts";
+import * as storedValues from "../../src/harness/session/values.ts";
 
 const NOW = 1_700_000_000_000;
 const ROOT_ID = "00000000-0000-7000-8000-000000000001";
@@ -29,25 +31,23 @@ const configuration = {
 } satisfies LaneConfiguration;
 const idleLaneState = { currentOperationId: null, pendingNextRun: [] } satisfies LaneState;
 
-function rootTransaction(): Transaction {
-	return {
-		writes: [
-			{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-			{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
-			{ kind: "register", op: "set", namespace: "lane.state", key: "main", value: idleLaneState },
-		],
-	};
+function rootTransaction(): Write[] {
+	return [
+		sessionWrites.insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+		storedValues.setValue(storedValues.laneLeaf("main"), ROOT_ID),
+		storedValues.setValue(storedValues.laneState("main"), idleLaneState),
+	];
 }
 
-function commitSession(session: Session, transaction: Transaction) {
+function commitSession(session: Session, transaction: Write[]) {
 	return session.mutate("main", (mutator) => mutator.commit(transaction));
 }
 
-function expectedLaneWrites(name: string, at: string | null, value: LaneConfiguration): Transaction["writes"] {
+function expectedLaneWrites(name: string, at: string | null, value: LaneConfiguration): Write[] {
 	return [
-		{ kind: "register", op: "set", namespace: "lane.config", key: name, value },
-		{ kind: "register", op: "set", namespace: "lane.leaf", key: name, value: at },
-		{ kind: "register", op: "set", namespace: "lane.state", key: name, value: idleLaneState },
+		storedValues.setValue(storedValues.laneConfig(name), value),
+		storedValues.setValue(storedValues.laneLeaf(name), at),
+		storedValues.setValue(storedValues.laneState(name), idleLaneState),
 	];
 }
 
@@ -68,7 +68,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 class RejectingCommitStorage extends StorageDecorator {
 	rejection: Error | undefined;
 
-	override commit(transaction: Transaction) {
+	override commit(transaction: Write[]) {
 		return this.rejection === undefined ? super.commit(transaction) : Promise.reject(this.rejection);
 	}
 }
@@ -82,7 +82,7 @@ class BlockingCommitStorage extends StorageDecorator {
 		return this.admittedGate.promise;
 	}
 
-	override async commit(transaction: Transaction) {
+	override async commit(transaction: Write[]) {
 		if (this.block) {
 			this.admittedGate.resolve();
 			await this.releaseGate.promise;
@@ -109,7 +109,7 @@ describe("StorageBackedSession.createLane", () => {
 		const rooted = await session.createLane("rooted", ROOT_ID, configuration);
 		const empty = await session.createLane("empty", null, configuration);
 
-		expect(storage.getCommitAttempts().map((attempt) => attempt.writes)).toEqual([
+		expect(storage.getCommitAttempts()).toEqual([
 			expectedLaneWrites("rooted", ROOT_ID, configuration),
 			expectedLaneWrites("empty", null, configuration),
 		]);
@@ -117,8 +117,8 @@ describe("StorageBackedSession.createLane", () => {
 		expect((await rooted.findEntriesOnBranch()).map((entry: Entry) => entry.id)).toEqual([ROOT_ID]);
 		expect(await empty.getLeafId()).toBeNull();
 		expect(await empty.findEntriesOnBranch()).toEqual([]);
-		expect(await session.getRegister("lane.config", "rooted")).toMatchObject({ value: configuration });
-		expect(await session.getRegister("lane.state", "rooted")).toMatchObject({ value: idleLaneState });
+		expect(await session.getValue(storedValues.laneConfig("rooted"))).toMatchObject({ value: configuration });
+		expect(await session.getValue(storedValues.laneState("rooted"))).toMatchObject({ value: idleLaneState });
 		await session.close();
 	});
 
@@ -135,7 +135,7 @@ describe("StorageBackedSession.createLane", () => {
 
 		await session.createLane("captured", ROOT_ID, supplied);
 
-		expect((await session.getRegister("lane.config", "captured"))?.value).toBe(supplied);
+		expect((await session.getValue(storedValues.laneConfig("captured")))?.value).toBe(supplied);
 		expect(storage.getCommitAttempts()).toHaveLength(1);
 		await session.close();
 	});
@@ -188,23 +188,17 @@ describe("StorageBackedSession.createLane", () => {
 	});
 
 	it("fails fast on every partial lane-register combination instead of repairing it", async () => {
-		const partialWrites: Transaction["writes"] = [
-			{ kind: "register", op: "set", namespace: "lane.config", key: "broken", value: configuration },
-			{ kind: "register", op: "set", namespace: "lane.leaf", key: "broken", value: null },
-			{ kind: "register", op: "set", namespace: "lane.state", key: "broken", value: idleLaneState },
-			{
-				kind: "register",
-				op: "set",
-				namespace: "lane.lastResult",
-				key: "broken",
-				value: {
-					operationId: ROOT_ID,
-					kind: "navigation",
-					leafId: null,
-					oldLeafId: ROOT_ID,
-					outcome: "completed",
-				},
-			},
+		const partialWrites: Write[] = [
+			storedValues.setValue(storedValues.laneConfig("broken"), configuration),
+			storedValues.setValue(storedValues.laneLeaf("broken"), null),
+			storedValues.setValue(storedValues.laneState("broken"), idleLaneState),
+			storedValues.setValue(storedValues.laneLastResult("broken"), {
+				operationId: ROOT_ID,
+				kind: "navigation",
+				leafId: null,
+				oldLeafId: ROOT_ID,
+				outcome: "completed",
+			}),
 		];
 
 		for (let mask = 1; mask < 1 << partialWrites.length; mask++) {
@@ -212,7 +206,10 @@ describe("StorageBackedSession.createLane", () => {
 			if (hasAllRequiredRegisters) continue;
 			const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 			const session = new StorageBackedSession(metadata, storage);
-			await commitSession(session, { writes: partialWrites.filter((_, index) => (mask & (1 << index)) !== 0) });
+			await commitSession(
+				session,
+				partialWrites.filter((_, index) => (mask & (1 << index)) !== 0),
+			);
 			storage.clearCommitAttempts();
 
 			await expect(session.createLane("broken", null, configuration)).rejects.toBeInstanceOf(SessionInvariantError);
@@ -271,9 +268,9 @@ describe("StorageBackedSession.createLane", () => {
 
 		await expect(session.createLane("failed", ROOT_ID, configuration)).rejects.toBe(rejection);
 		storage.rejection = undefined;
-		expect(await session.getRegister("lane.config", "failed")).toBeUndefined();
-		expect(await session.getRegister("lane.leaf", "failed")).toBeUndefined();
-		expect(await session.getRegister("lane.state", "failed")).toBeUndefined();
+		expect(await session.getValue(storedValues.laneConfig("failed"))).toBeUndefined();
+		expect(await session.getValue(storedValues.laneLeaf("failed"))).toBeUndefined();
+		expect(await session.getValue(storedValues.laneState("failed"))).toBeUndefined();
 		await session.close();
 	});
 

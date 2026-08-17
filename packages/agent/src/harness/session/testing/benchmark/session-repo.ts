@@ -1,4 +1,5 @@
 import type { SessionMetadata, SessionRepo } from "../../types.ts";
+import { laneLeaf, setValue } from "../../values.ts";
 import { STORAGE_BENCHMARK_DATASETS, type StorageBenchmarkDataset } from "./datasets.ts";
 import { generateStorageBenchmarkSeedTransactions } from "./storage.ts";
 
@@ -139,11 +140,7 @@ export async function seedSessionRepoForkBenchmark(
 	for (const transaction of generateStorageBenchmarkSeedTransactions(dataset)) {
 		await session.mutate("main", (mutator) => mutator.commit(transaction));
 	}
-	await session.mutate("main", (mutator) =>
-		mutator.commit({
-			writes: [{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: dataset.leafId }],
-		}),
-	);
+	await session.mutate("main", (mutator) => mutator.commit([setValue(laneLeaf("main"), dataset.leafId)]));
 	return session.metadata;
 }
 

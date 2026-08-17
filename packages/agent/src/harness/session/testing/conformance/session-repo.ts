@@ -1,6 +1,24 @@
 import { deepStrictEqual, rejects, strictEqual } from "node:assert/strict";
 import type { AssistantMessage, StopReason } from "@draht/ai";
-import type { LaneConfiguration, LaneState, SessionMetadata, SessionRepo, UsageRow } from "../../types.ts";
+import { insertEntry, insertUsage } from "../../commit.ts";
+import type { JsonValue, LaneConfiguration, LaneState, SessionMetadata, SessionRepo, UsageRow } from "../../types.ts";
+import {
+	appendList,
+	entryLabel,
+	laneConfig,
+	laneLastResult,
+	laneLeaf,
+	laneState,
+	list,
+	operationMeta,
+	operationPreparation,
+	operationState,
+	operationToolArgs,
+	pendingEntry,
+	sessionName,
+	setValue,
+	value,
+} from "../../values.ts";
 import type { ConformanceCase } from "../types.ts";
 
 const ROOT_ID = "00000000-0000-7000-8000-000000000001";
@@ -10,6 +28,8 @@ const USAGE_ID = "00000000-0000-7000-8000-000000000004";
 const OPERATION_ID = "00000000-0000-7000-8000-000000000005";
 const PENDING_ID = "00000000-0000-7000-8000-000000000006";
 const idleLaneState = { currentOperationId: null, pendingNextRun: [] } satisfies LaneState;
+const applicationValue = value<JsonValue>("test.application.value");
+const applicationList = list<JsonValue>("test.application.list");
 const configuration = {
 	model: { provider: "provider", modelId: "model" },
 	thinkingLevel: "off",
@@ -108,11 +128,11 @@ export function createSessionRepoLifecycleConformance<TMetadata extends SessionM
 				strictEqual(Number.isSafeInteger(session.metadata.createdAt), true);
 				strictEqual(session.metadata.storageVersion, 1);
 				strictEqual(await session.getLeafId(), null);
-				deepStrictEqual((await session.getRegister("lane.state", "main"))?.value, {
+				deepStrictEqual((await session.getValue(laneState("main")))?.value, {
 					currentOperationId: null,
 					pendingNextRun: [],
 				});
-				strictEqual(await session.getRegister("lane.config", "main"), undefined);
+				strictEqual(await session.getValue(laneConfig("main")), undefined);
 				await rejects(repo.create({ id: "session" }));
 				await session.close();
 			},
@@ -245,8 +265,8 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 			strictEqual(fork.metadata.id, "fork");
 			strictEqual(fork.metadata.parentSessionId, "source");
 			strictEqual(await fork.getLeafId(), null);
-			strictEqual(await fork.getRegister("lane.config", "main"), undefined);
-			deepStrictEqual((await fork.getRegister("lane.state", "main"))?.value, {
+			strictEqual(await fork.getValue(laneConfig("main")), undefined);
+			deepStrictEqual((await fork.getValue(laneState("main")))?.value, {
 				currentOperationId: null,
 				pendingNextRun: [],
 			});
@@ -267,96 +287,68 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 		createCase(
 			factory,
 			"forks",
-			"forks one configured branch with scoped facts and a zero ledger",
+			"forks one configured branch with scoped values and a zero ledger",
 			async ({ repo }) => {
 				const source = await repo.create({ id: "source" });
 				await source.mutate("main", (mutator) =>
-					mutator.commit({
-						writes: [
-							{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-							{
-								kind: "entry",
-								entry: {
-									id: CHILD_ID,
-									parentId: ROOT_ID,
-									type: "message",
-									message: { role: "user", content: "child", timestamp: 1 },
-								},
-							},
-							{
-								kind: "entry",
-								entry: { id: SIBLING_ID, parentId: ROOT_ID, type: "custom", customType: "sibling" },
-							},
-							{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-							{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
-							{
-								kind: "register",
-								op: "set",
-								namespace: "lane.state",
-								key: "main",
-								value: { currentOperationId: OPERATION_ID, pendingNextRun: [PENDING_ID] },
-							},
-							{ kind: "register", op: "set", namespace: "fact.name", key: "", value: "source name" },
-							{ kind: "register", op: "set", namespace: "fact.custom", key: "custom", value: { copied: true } },
-							{ kind: "register", op: "set", namespace: "fact.label", key: ROOT_ID, value: "root label" },
-							{ kind: "register", op: "set", namespace: "fact.label", key: SIBLING_ID, value: "sibling label" },
-							{
-								kind: "register",
-								op: "set",
-								namespace: "pending.entry",
-								key: PENDING_ID,
-								value: { type: "custom", customType: "pending" },
-							},
-							{
-								kind: "register",
-								op: "set",
-								namespace: "op.meta",
-								key: OPERATION_ID,
-								value: {
-									operationId: OPERATION_ID,
-									lane: "main",
-									sourceLeafId: CHILD_ID,
-									startedAt: 1,
-									intent: { kind: "compaction" },
-								},
-							},
-							{
-								kind: "register",
-								op: "set",
-								namespace: "op.state",
-								key: OPERATION_ID,
-								value: {
-									kind: "compaction",
-									control: { status: "running" },
-									structural: { taskId: OPERATION_ID, status: "deciding" },
-								},
-							},
-							{
-								kind: "register",
-								op: "set",
-								namespace: "op.tool_args",
-								key: `${OPERATION_ID}:${ROOT_ID}:0`,
-								value: { argument: true },
-							},
-							{
-								kind: "register",
-								op: "set",
-								namespace: "op.preparation",
-								key: `${OPERATION_ID}:${OPERATION_ID}`,
-								value: {
-									kind: "compaction",
-									messagesToSummarize: [],
-									turnPrefixMessages: [],
-									retainedTail: [],
-									isSplitTurn: false,
-									tokensBefore: 0,
-									fileOps: { read: [], written: [], edited: [] },
-									settings: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
-								},
-							},
-							{ kind: "usage", row: usageRow() },
-						],
-					}),
+					mutator.commit([
+						insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+						insertEntry({
+							id: CHILD_ID,
+							parentId: ROOT_ID,
+							type: "message",
+							message: { role: "user", content: "child", timestamp: 1 },
+						}),
+						insertEntry({
+							id: SIBLING_ID,
+							parentId: ROOT_ID,
+							type: "custom",
+							customType: "sibling",
+						}),
+						setValue(laneLeaf("main"), CHILD_ID),
+						setValue(laneConfig("main"), configuration),
+						setValue(laneState("main"), {
+							currentOperationId: OPERATION_ID,
+							pendingNextRun: [PENDING_ID],
+						}),
+						setValue(laneLastResult("main"), {
+							operationId: "previous",
+							kind: "navigation",
+							leafId: CHILD_ID,
+							oldLeafId: ROOT_ID,
+							outcome: "completed",
+						}),
+						setValue(sessionName, "source name"),
+						setValue(applicationValue, { copied: false }),
+						appendList(applicationList, { copied: false }),
+						setValue(entryLabel(ROOT_ID), "root label"),
+						setValue(entryLabel(SIBLING_ID), "sibling label"),
+						setValue(pendingEntry(PENDING_ID), { type: "custom", customType: "pending" }),
+						setValue(operationMeta(OPERATION_ID), {
+							operationId: OPERATION_ID,
+							lane: "main",
+							sourceLeafId: CHILD_ID,
+							startedAt: 1,
+							intent: { kind: "compaction" },
+						}),
+						setValue(operationState(OPERATION_ID), {
+							kind: "compaction",
+							control: { status: "running" },
+							structural: { taskId: OPERATION_ID, status: "deciding" },
+						}),
+						setValue(operationToolArgs(OPERATION_ID, ROOT_ID, 0), { argument: true }),
+						setValue(operationPreparation(OPERATION_ID, OPERATION_ID), {
+							kind: "compaction",
+							messagesToSummarize: [],
+							turnPrefixMessages: [],
+							retainedTail: [],
+							isSplitTurn: false,
+							tokensBefore: 0,
+							fileOps: { read: [], written: [], edited: [] },
+							settings: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+						}),
+						insertUsage(usageRow()),
+					]),
 				);
 
 				const fork = await repo.fork(source.metadata, { id: "fork", entryId: CHILD_ID, position: "at" });
@@ -366,18 +358,19 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 					[ROOT_ID, CHILD_ID],
 				);
 				strictEqual(await fork.getLeafId(), CHILD_ID);
-				deepStrictEqual((await fork.getRegister("lane.config", "main"))?.value, configuration);
-				deepStrictEqual((await fork.getRegister("lane.state", "main"))?.value, idleLaneState);
+				deepStrictEqual((await fork.getValue(laneConfig("main")))?.value, configuration);
+				deepStrictEqual((await fork.getValue(laneState("main")))?.value, idleLaneState);
 				strictEqual(await fork.getName(), "source name");
-				deepStrictEqual(await fork.getCustomFact("custom"), { copied: true });
+				strictEqual(await fork.getValue(applicationValue), undefined);
+				deepStrictEqual(await fork.readList(applicationList), []);
 				strictEqual(await fork.getLabel(ROOT_ID), "root label");
 				strictEqual(await fork.getLabel(SIBLING_ID), undefined);
-				strictEqual(await fork.getRegister("lane.lastResult", "main"), undefined);
-				strictEqual(await fork.getRegister("pending.entry", PENDING_ID), undefined);
-				strictEqual(await fork.getRegister("op.meta", OPERATION_ID), undefined);
-				strictEqual(await fork.getRegister("op.state", OPERATION_ID), undefined);
-				strictEqual(await fork.getRegister("op.tool_args", `${OPERATION_ID}:${ROOT_ID}:0`), undefined);
-				strictEqual(await fork.getRegister("op.preparation", `${OPERATION_ID}:${OPERATION_ID}`), undefined);
+				strictEqual(await fork.getValue(laneLastResult("main")), undefined);
+				strictEqual(await fork.getValue(pendingEntry(PENDING_ID)), undefined);
+				strictEqual(await fork.getValue(operationMeta(OPERATION_ID)), undefined);
+				strictEqual(await fork.getValue(operationState(OPERATION_ID)), undefined);
+				strictEqual(await fork.getValue(operationToolArgs(OPERATION_ID, ROOT_ID, 0)), undefined);
+				strictEqual(await fork.getValue(operationPreparation(OPERATION_ID, OPERATION_ID)), undefined);
 				const stats = await fork.getStats();
 				strictEqual(stats.messageCount, 1);
 				deepStrictEqual(stats.usage, {
@@ -398,16 +391,16 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 			async ({ repo }) => {
 				const source = await repo.create({ id: "source" });
 				await source.mutate("main", (mutator) =>
-					mutator.commit({
-						writes: [
-							{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-							{
-								kind: "entry",
-								entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" },
-							},
-							{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-						],
-					}),
+					mutator.commit([
+						insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+						insertEntry({
+							id: CHILD_ID,
+							parentId: ROOT_ID,
+							type: "custom",
+							customType: "child",
+						}),
+						setValue(laneLeaf("main"), CHILD_ID),
+					]),
 				);
 
 				const before = await repo.fork(source.metadata, { id: "before", entryId: CHILD_ID, position: "before" });
@@ -424,41 +417,40 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 		createCase(factory, "forks", "forks a closed source session", async ({ repo }) => {
 			const source = await repo.create({ id: "source" });
 			await source.mutate("main", (mutator) =>
-				mutator.commit({
-					writes: [
-						{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
-					],
-				}),
+				mutator.commit([
+					insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+					setValue(laneLeaf("main"), ROOT_ID),
+					setValue(applicationValue, "excluded"),
+					appendList(applicationList, "excluded"),
+				]),
 			);
 			await source.close();
 
 			const fork = await repo.fork(source.metadata, { id: "fork" });
 			strictEqual(await fork.getLeafId(), ROOT_ID);
+			strictEqual(await fork.getValue(applicationValue), undefined);
+			deepStrictEqual(await fork.readList(applicationList), []);
 			await fork.close();
 		}),
 
 		createCase(factory, "forks", "forks the whole configured tree with fresh lane state", async ({ repo }) => {
 			const source = await repo.create({ id: "source" });
 			await source.mutate("main", (mutator) =>
-				mutator.commit({
-					writes: [
-						{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "root" } },
-						{
-							kind: "entry",
-							entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" },
-						},
-						{
-							kind: "entry",
-							entry: { id: SIBLING_ID, parentId: ROOT_ID, type: "custom", customType: "sibling" },
-						},
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-						{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "review", value: SIBLING_ID },
-						{ kind: "register", op: "set", namespace: "lane.config", key: "review", value: configuration },
-						{ kind: "register", op: "set", namespace: "lane.state", key: "review", value: idleLaneState },
-					],
-				}),
+				mutator.commit([
+					insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+					insertEntry({ id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" }),
+					insertEntry({
+						id: SIBLING_ID,
+						parentId: ROOT_ID,
+						type: "custom",
+						customType: "sibling",
+					}),
+					setValue(laneLeaf("main"), CHILD_ID),
+					setValue(laneConfig("main"), configuration),
+					setValue(laneLeaf("review"), SIBLING_ID),
+					setValue(laneConfig("review"), configuration),
+					setValue(laneState("review"), idleLaneState),
+				]),
 			);
 
 			const fork = await repo.fork(source.metadata, { id: "fork", scope: "tree" });
@@ -469,8 +461,8 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 			);
 			strictEqual(await fork.getLeafId(), CHILD_ID);
 			strictEqual(await fork.view("review").getLeafId(), SIBLING_ID);
-			deepStrictEqual((await fork.getRegister("lane.config", "review"))?.value, configuration);
-			deepStrictEqual((await fork.getRegister("lane.state", "review"))?.value, idleLaneState);
+			deepStrictEqual((await fork.getValue(laneConfig("review")))?.value, configuration);
+			deepStrictEqual((await fork.getValue(laneState("review")))?.value, idleLaneState);
 			await Promise.all([source.close(), fork.close()]);
 		}),
 	];
@@ -532,24 +524,22 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 			async ({ repo }) => {
 				const source = await repo.create({ id: "source" });
 				const firstCommit = source.mutate("main", (mutator) =>
-					mutator.commit({
-						writes: [
-							{ kind: "entry", entry: { id: ROOT_ID, parentId: null, type: "custom", customType: "first" } },
-							{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: ROOT_ID },
-						],
-					}),
+					mutator.commit([
+						insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "first" }),
+						setValue(laneLeaf("main"), ROOT_ID),
+					]),
 				);
 				const fork = repo.fork(source.metadata, { id: "fork" });
 				const secondCommit = source.mutate("main", (mutator) =>
-					mutator.commit({
-						writes: [
-							{
-								kind: "entry",
-								entry: { id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "second" },
-							},
-							{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CHILD_ID },
-						],
-					}),
+					mutator.commit([
+						insertEntry({
+							id: CHILD_ID,
+							parentId: ROOT_ID,
+							type: "custom",
+							customType: "second",
+						}),
+						setValue(laneLeaf("main"), CHILD_ID),
+					]),
 				);
 
 				const [, forked] = await Promise.all([firstCommit, fork]);

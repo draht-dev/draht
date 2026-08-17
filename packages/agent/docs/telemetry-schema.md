@@ -336,7 +336,7 @@ One passive event listener invocation
 
 | Name | Type | Required | Values | Notes | Description |
 |---|---|---:|---|---|---|
-| `pi.event.type` | `string` | yes | run_start, run_resume, run_suspend, run_abort, run_end, fault, handler_error, turn_start, turn_end, retry_scheduled, retry_start, retry_end, message_start, message_update, message_end, tool_start, tool_update, tool_end, entry_added, write_pending, queue_update, fact_update, config_update, compaction_start, compaction_end, navigation_start, navigation_end, lane_created, usage | low cardinality | Delivered harness event type |
+| `pi.event.type` | `string` | yes | run_start, run_resume, run_suspend, run_abort, run_end, fault, handler_error, turn_start, turn_end, retry_scheduled, retry_start, retry_end, message_start, message_update, message_end, tool_start, tool_update, tool_end, entry_added, write_pending, queue_update, value_update, config_update, compaction_start, compaction_end, navigation_start, navigation_end, lane_created, usage | low cardinality | Delivered harness event type |
 | `pi.lane.name` | `string` | no |  | high cardinality | Lane name for lane-scoped events |
 
 #### End attributes
@@ -367,7 +367,7 @@ One committed session transaction
 | `pi.lane.name` | `string` | no |  | high cardinality | Lane name when supplied by the caller |
 | `pi.operation.id` | `string` | no |  | high cardinality | Durable operation id when supplied by the caller |
 | `pi.session.item_count` | `number` | yes |  |  | Number of writes in the transaction |
-| `pi.session.item_kinds` | `string[]` | yes | elements: entry, usage, register |  | Distinct write kinds in the transaction |
+| `pi.session.item_kinds` | `string[]` | yes | elements: entry, usage, value, list |  | Distinct write kinds in the transaction |
 
 #### End attributes
 

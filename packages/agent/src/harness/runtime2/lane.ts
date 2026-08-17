@@ -7,6 +7,7 @@ import type {
 	LaneExecutionInfo,
 	SuspendedOperation,
 } from "../agent-harness.ts";
+import { insertEntry } from "../session/commit.ts";
 import { SessionPendingAssistantMessageError } from "../session/session.ts";
 import type {
 	BranchScan,
@@ -17,8 +18,15 @@ import type {
 	Session,
 	SessionReader,
 	SessionTree,
-	Transaction,
+	Write,
 } from "../session/types.ts";
+import {
+	laneConfig,
+	laneLeaf,
+	operationState as operationStateValue,
+	pendingEntry,
+	setValue,
+} from "../session/values.ts";
 import { type LaneState, SliceNotImplemented } from "./types.ts";
 
 type EventHandler = (event: HarnessEvent) => Promise<void>;
@@ -28,7 +36,7 @@ type Synchronous<TResult> = TResult extends PromiseLike<unknown> ? never : TResu
 type LaneCommand<TResult> =
 	| {
 			kind: "commit";
-			transaction: Transaction;
+			writes: Write[];
 			next: LaneState;
 			materialize(commit: CommitResult): Synchronous<TResult>;
 	  }
@@ -71,6 +79,8 @@ export class Lane implements AgentLane {
 		this.sessionTree = {
 			...this.sessionView,
 			getLeafId: () => this.getLeafId(),
+			setName: (name) => this.setName(name),
+			setLabel: (targetId, label) => this.setLabel(targetId, label),
 			findEntriesOnBranch: (query) => this.findEntriesOnBranch(query),
 			findEntryOnBranch: (query) => this.findEntryOnBranch(query),
 			appendMessage: (message) => this.append({ type: "message", payload: message }),
@@ -126,7 +136,7 @@ export class Lane implements AgentLane {
 						case "reject":
 							return { kind: "reject", error: decision.error };
 						case "commit": {
-							const commit = await mutator.commit(decision.transaction);
+							const commit = await mutator.commit(decision.writes);
 							this.state = decision.next;
 							if (this.suspension?.operationId !== decision.next.operation?.meta.operationId) {
 								this.suspension = undefined;
@@ -325,16 +335,22 @@ export class Lane implements AgentLane {
 			const configuration = update(state.configuration);
 			return {
 				kind: "commit",
-				transaction: {
-					writes: [
-						{ kind: "register", op: "set", namespace: "lane.config", key: this.name, value: configuration },
-					],
-				},
+				writes: [setValue(laneConfig(this.name), configuration)],
 				next: { ...state, configuration },
 				materialize: () => event(state.configuration, configuration),
 			};
 		});
 		await this.onEvent({ ...payload, lane: this.name });
+	}
+
+	private async setName(name: string | undefined): Promise<void> {
+		await this.sessionView.setName(name);
+		await this.onEvent({ type: "value_update", value: "session_name", name });
+	}
+
+	private async setLabel(targetId: string, label: string | undefined): Promise<void> {
+		await this.sessionView.setLabel(targetId, label);
+		await this.onEvent({ type: "value_update", value: "entry_label", targetId, label });
 	}
 
 	private async findEntriesOnBranch(query: BranchScan = {}): Promise<Entry[]> {
@@ -361,24 +377,20 @@ export class Lane implements AgentLane {
 			if (state.operation === null) {
 				return {
 					kind: "commit",
-					transaction: {
-						writes: [
-							{
-								kind: "entry",
-								entry:
-									pending.type === "message"
-										? { id, parentId: state.leafId, type: "message", message: pending.payload }
-										: {
-												id,
-												parentId: state.leafId,
-												type: "custom",
-												customType: pending.customType,
-												...(pending.payload === undefined ? {} : { data: pending.payload }),
-											},
-							},
-							{ kind: "register", op: "set", namespace: "lane.leaf", key: this.name, value: id },
-						],
-					},
+					writes: [
+						insertEntry(
+							pending.type === "message"
+								? { id, parentId: state.leafId, type: "message", message: pending.payload }
+								: {
+										id,
+										parentId: state.leafId,
+										type: "custom",
+										customType: pending.customType,
+										...(pending.payload === undefined ? {} : { data: pending.payload }),
+									},
+						),
+						setValue(laneLeaf(this.name), id),
+					],
 					next: { ...state, leafId: id },
 					materialize: () => id,
 				};
@@ -401,18 +413,10 @@ export class Lane implements AgentLane {
 			};
 			return {
 				kind: "commit",
-				transaction: {
-					writes: [
-						{ kind: "register", op: "set", namespace: "pending.entry", key: id, value: pending },
-						{
-							kind: "register",
-							op: "set",
-							namespace: "op.state",
-							key: state.operation.meta.operationId,
-							value: operationState,
-						},
-					],
-				},
+				writes: [
+					setValue(pendingEntry(id), pending),
+					setValue(operationStateValue(state.operation.meta.operationId), operationState),
+				],
 				next: { ...state, operation: { meta: state.operation.meta, state: operationState } },
 				materialize: () => id,
 			};

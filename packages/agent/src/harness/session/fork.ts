@@ -1,17 +1,34 @@
 import type { Usage } from "@draht/ai";
 import type { StorageStateSnapshot } from "./storage-state.ts";
-import type { Entry, ForkOptions, Register, RegisterNamespace } from "./types.ts";
+import type { Entry, ForkOptions } from "./types.ts";
+import {
+	entryLabel,
+	laneConfig,
+	laneLastResult,
+	laneLeaf,
+	laneState,
+	type StoredValue,
+	sessionName,
+	type Value,
+	value,
+} from "./values.ts";
 
 export interface ForkSourceSnapshot {
 	entries: Entry[];
-	registers: Register[];
+	scalarValues: StoredValue<unknown>[];
+	listValues: StorageStateSnapshot["listValues"];
+	/** False when a backend supplied only the requested branch rather than the full tree. */
+	entriesComplete?: boolean;
 }
 
-function isRegisterNamespace<TNamespace extends RegisterNamespace>(
-	register: Register,
-	namespace: TNamespace,
-): register is Register<TNamespace> {
-	return register.namespace === namespace;
+function storedValuesInNamespace<T>(values: readonly StoredValue<unknown>[], address: Value<T>): StoredValue<T>[] {
+	return values.filter((stored) => stored.address.namespace === address.namespace) as StoredValue<T>[];
+}
+
+function findStoredValue<T>(values: readonly StoredValue<unknown>[], address: Value<T>): StoredValue<T> | undefined {
+	return values.find(
+		(stored) => stored.address.namespace === address.namespace && stored.address.key === address.key,
+	) as StoredValue<T> | undefined;
 }
 
 function emptyUsage(): Usage {
@@ -28,39 +45,39 @@ function emptyUsage(): Usage {
 /** Build the complete logical state for a forked destination session. */
 export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOptions): StorageStateSnapshot {
 	const sourceEntries = new Map(source.entries.map((entry) => [entry.id, entry]));
-	const sourceLeaves = source.registers.filter((register) => isRegisterNamespace(register, "lane.leaf"));
-	validateForkSourceSnapshot(source, sourceEntries, sourceLeaves);
+	const sourceLeaves = storedValuesInNamespace(source.scalarValues, laneLeaf(""));
+	validateForkSourceSnapshot(source, sourceEntries, sourceLeaves, options);
 
 	const { entryIds, laneToLeafId } = selectForkContents(sourceEntries, sourceLeaves, options);
 	const entries = new Map<string, Entry>();
 	for (const id of entryIds) entries.set(id, sourceEntries.get(id)!);
 
-	const registers: Register[] = [];
+	const scalarValues: StoredValue<unknown>[] = [];
 	let nextSeq = Math.max(0, ...[...entries.values()].map((entry) => entry.seq)) + 1;
-	const setRegister = (namespace: RegisterNamespace, key: string, value: Register["value"]): void => {
-		registers.push({ namespace, key, value, seq: nextSeq++ } as Register);
+	const store = <T>(address: Value<T>, storedValue: T): void => {
+		scalarValues.push({
+			address: value<unknown>(address.namespace, address.key),
+			value: storedValue,
+			seq: nextSeq++,
+		});
 	};
 	for (const [lane, leaf] of laneToLeafId) {
-		const configuration = source.registers.find(
-			(register) => register.namespace === "lane.config" && register.key === lane,
-		);
-		if (configuration !== undefined) setRegister("lane.config", lane, configuration.value);
-		setRegister("lane.leaf", lane, leaf);
-		setRegister("lane.state", lane, { currentOperationId: null, pendingNextRun: [] });
+		const configuration = findStoredValue(source.scalarValues, laneConfig(lane));
+		if (configuration !== undefined) store(laneConfig(lane), configuration.value);
+		store(laneLeaf(lane), leaf);
+		store(laneState(lane), { currentOperationId: null, pendingNextRun: [] });
 	}
-	for (const register of source.registers) {
-		if (
-			register.namespace === "fact.name" ||
-			register.namespace === "fact.custom" ||
-			(register.namespace === "fact.label" && entryIds.has(register.key))
-		) {
-			setRegister(register.namespace, register.key, register.value);
-		}
+	const name = findStoredValue(source.scalarValues, sessionName);
+	if (name !== undefined) store(sessionName, name.value);
+	for (const entryId of entryIds) {
+		const label = findStoredValue(source.scalarValues, entryLabel(entryId));
+		if (label !== undefined) store(entryLabel(entryId), label.value);
 	}
 
 	return {
 		entries,
-		registers,
+		scalarValues,
+		listValues: [],
 		usage: new Map(),
 		stats: {
 			messageCount: [...entries.values()].filter((entry) => entry.type === "message").length,
@@ -72,16 +89,16 @@ export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOpti
 
 function selectForkContents(
 	sourceEntries: Map<string, Entry>,
-	sourceLeaves: Register<"lane.leaf">[],
+	sourceLeaves: StoredValue<string | null>[],
 	options: ForkOptions,
 ): { entryIds: Set<string>; laneToLeafId: Map<string, string | null> } {
 	const entryIds = new Set<string>();
 	const laneToLeafId = new Map<string, string | null>();
 	if (options.scope === "tree") {
 		for (const id of sourceEntries.keys()) entryIds.add(id);
-		for (const register of sourceLeaves) laneToLeafId.set(register.key, register.value);
+		for (const stored of sourceLeaves) laneToLeafId.set(stored.address.key, stored.value);
 	} else {
-		const mainLeaf = sourceLeaves.find((register) => register.key === "main");
+		const mainLeaf = sourceLeaves.find((stored) => stored.address.key === "main");
 		if (mainLeaf === undefined) throw new Error("Source session is missing main lane");
 		const requested = options.entryId ?? mainLeaf.value;
 		let leaf = requested;
@@ -106,35 +123,38 @@ function selectForkContents(
 function validateForkSourceSnapshot(
 	source: ForkSourceSnapshot,
 	sourceEntries: Map<string, Entry>,
-	sourceLeaves: Register<"lane.leaf">[],
+	sourceLeaves: StoredValue<string | null>[],
+	options: ForkOptions,
 ): void {
-	const sourceLeafKeys = new Set(sourceLeaves.map((register) => register.key));
+	const sourceLeafKeys = new Set(sourceLeaves.map((stored) => stored.address.key));
 
-	// TODO: do all these validations need to happen here? maybe somewhere else when the source session is loaded?
 	if (!sourceLeafKeys.has("main")) throw new Error("Source session is missing main lane");
-	for (const register of source.registers) {
+	for (const stored of source.scalarValues) {
 		if (
-			(register.namespace === "lane.config" ||
-				register.namespace === "lane.state" ||
-				register.namespace === "lane.lastResult") &&
-			!sourceLeafKeys.has(register.key)
+			(stored.address.namespace === laneConfig("").namespace ||
+				stored.address.namespace === laneState("").namespace ||
+				stored.address.namespace === laneLastResult("").namespace) &&
+			!sourceLeafKeys.has(stored.address.key)
 		) {
-			throw new Error(`Source session lane ${JSON.stringify(register.key)} is missing lane.leaf`);
+			throw new Error(`Source session lane ${JSON.stringify(stored.address.key)} is missing lane.leaf`);
 		}
 	}
 	for (const leaf of sourceLeaves) {
-		if (!hasRegister(source.registers, "lane.state", leaf.key)) {
-			throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.state`);
+		if (findStoredValue(source.scalarValues, laneState(leaf.address.key)) === undefined) {
+			throw new Error(`Source session lane ${JSON.stringify(leaf.address.key)} is missing lane.state`);
 		}
-		if (leaf.key !== "main" && !hasRegister(source.registers, "lane.config", leaf.key)) {
-			throw new Error(`Source session lane ${JSON.stringify(leaf.key)} is missing lane.config`);
+		if (
+			leaf.address.key !== "main" &&
+			findStoredValue(source.scalarValues, laneConfig(leaf.address.key)) === undefined
+		) {
+			throw new Error(`Source session lane ${JSON.stringify(leaf.address.key)} is missing lane.config`);
 		}
-		if (leaf.value !== null && !sourceEntries.has(leaf.value)) {
-			throw new Error(`Source session lane ${JSON.stringify(leaf.key)} has an unknown leaf`);
+		if (
+			(source.entriesComplete !== false || options.scope === "tree") &&
+			leaf.value !== null &&
+			!sourceEntries.has(leaf.value)
+		) {
+			throw new Error(`Source session lane ${JSON.stringify(leaf.address.key)} has an unknown leaf`);
 		}
 	}
-}
-
-function hasRegister(registers: Register[], namespace: RegisterNamespace, key: string): boolean {
-	return registers.some((register) => register.namespace === namespace && register.key === key);
 }

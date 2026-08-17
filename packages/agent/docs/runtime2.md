@@ -66,7 +66,7 @@ Read:
 - `harness.md`: §§1.4, 3.4, 4.3, 4.7–4.8, and invariants 2, 21–23;
 - completed runtime2 restore/session-loader files;
 - `packages/agent/src/harness/session/lane-mutations.ts`;
-- `SessionMutator`, `Transaction`, and `CommitResult` definitions in `session/types.ts`;
+- `SessionMutator`, `Write`, and `CommitResult` definitions in `session/types.ts`;
 - focused mutation-line and instrumented-storage tests only when needed for test helpers.
 
 Do not read provider, assistant, tool, or full harness-facade implementations.

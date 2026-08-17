@@ -303,13 +303,23 @@ interface SessionTree extends ValueReader {
 
 Purpose-specific helpers such as `getName()`, `setName()`, `getLabel()`, and `setLabel()` may remain thin wrappers over built-in addresses. Applications define and use their own scalar/list addresses directly.
 
-`SessionMutator` remains a read capability plus one atomic `commit()`. It does not expose direct `setValue()`/`appendList()` methods that would consume its only transaction separately; callers construct typed writes and include them in that commit.
+`SessionMutator` remains a read capability plus one atomic `commit(writes)`. It does not expose direct `setValue()`/`appendList()` methods that would consume its only commit separately; callers construct a typed write array and commit it together.
 
 ## Typed transaction writes
 
-Writes are constructed from bound addresses. Erasure happens only after the helper has checked the address/value type relationship:
+Writes are constructed through typed helpers. Entry and usage constructors hide their storage discriminants; value/list erasure happens only after the helper has checked the address/value type relationship:
 
 ```ts
+interface EntryWrite {
+  kind: "entry";
+  entry: NewEntry;
+}
+
+interface UsageWrite {
+  kind: "usage";
+  row: Omit<UsageRow, "seq">;
+}
+
 interface ValueSetWrite {
   kind: "value";
   op: "set";
@@ -340,6 +350,8 @@ interface ListDeleteWrite {
   key: string;
 }
 
+export function insertEntry(entry: NewEntry): EntryWrite;
+export function insertUsage(row: Omit<UsageRow, "seq">): UsageWrite;
 export function setValue<T>(address: Value<T>, next: NoInfer<T>): ValueSetWrite;
 export function deleteValue<T>(address: Value<T>): ValueDeleteWrite;
 export function appendList<T>(address: ValueList<T>, element: NoInfer<T>): ListAppendWrite;
@@ -348,7 +360,7 @@ export function deleteList<T>(address: ValueList<T>): ListDeleteWrite;
 
 `NoInfer<T>` makes the address authoritative. TypeScript must not infer a wider `T` from an incompatible write value.
 
-`Write` includes these four erased representations alongside entry and usage writes. One transaction may mix every write kind atomically. Harness and application code use the helpers rather than manually constructing erased writes.
+`Write` includes all six helper return types. One transaction may mix every write kind atomically. Harness and application code use the helpers rather than manually constructing storage write shapes.
 
 The direct Session methods and transaction helpers intentionally use the same operation names. One performs and commits a single Session mutation; the other constructs a write for an explicitly composed transaction.
 
@@ -562,7 +574,7 @@ A transaction remains one physical JSONL line, using an array for multiple write
 
 Compaction writes every surviving list element with its original `seq`, merged in sequence order with surviving entries, scalar values, and usage rows. Do not collapse one live list into a synthetic element or assign new sequence numbers; either change breaks cursors and backend equivalence.
 
-Deleted lists produce no snapshot records. Preserve the sequence high-water mark so dropping the latest delete cannot permit sequence reuse.
+Deleted lists produce no snapshot records. Snapshot rewrites persist `nextSeq` in the format-4 header so dropping the latest delete cannot permit sequence reuse; ordinary append-only files may omit that field and derive it from replayed writes.
 
 ## Forks and rewrites
 

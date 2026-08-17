@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@draht/ai";
 import { describe, expect, it } from "vitest";
 import type { CustomMessage } from "../../src/harness/messages.ts";
+import * as sessionWrites from "../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../src/harness/session/testing/index.ts";
@@ -10,8 +11,9 @@ import type {
 	Session,
 	SessionMetadata,
 	SessionMutator,
-	Transaction,
+	Write,
 } from "../../src/harness/session/types.ts";
+import * as storedValues from "../../src/harness/session/values.ts";
 
 const NOW = 1_700_000_000_000;
 const ENTRY_ID = "00000000-0000-7000-8000-000000000001";
@@ -22,7 +24,7 @@ const metadata = {
 	cwd: "/workspace",
 } satisfies SessionMetadata;
 
-function commitSession(session: Session, transaction: Transaction) {
+function commitSession(session: Session, transaction: Write[]) {
 	return session.mutate("main", (mutator) => mutator.commit(transaction));
 }
 
@@ -31,12 +33,10 @@ describe("StorageBackedSession", () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
 		const data = { nested: ["original"] };
-		const transaction: Transaction = {
-			writes: [
-				{ kind: "entry", entry: { id: ENTRY_ID, parentId: null, type: "custom", customType: "note", data } },
-				{ kind: "register", op: "set", namespace: "fact.custom", key: "state", value: data },
-			],
-		};
+		const transaction: Write[] = [
+			sessionWrites.insertEntry({ id: ENTRY_ID, parentId: null, type: "custom", customType: "note", data }),
+			storedValues.setValue(storedValues.value<unknown>("test.value", "state"), data),
+		];
 
 		const result = await commitSession(session, transaction);
 
@@ -45,7 +45,40 @@ describe("StorageBackedSession", () => {
 		expect(entry).toMatchObject({ seq: result.seqs[0], timestamp: NOW });
 		if (entry?.type !== "custom") throw new Error("Expected custom entry");
 		expect(entry.data).toBe(data);
-		expect((await session.getRegister("fact.custom", "state"))?.value).toBe(data);
+		expect((await session.getValue(storedValues.value<unknown>("test.value", "state")))?.value).toBe(data);
+		await session.close();
+	});
+
+	it("composes bound values and lists atomically with entries and usage", async () => {
+		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
+		const session = new StorageBackedSession(metadata, storage);
+		const scalar = storedValues.value<string>("test.application.scalar");
+		const events = storedValues.list<string>("test.application.events");
+
+		const result = await session.mutate("main", (mutator) =>
+			mutator.commit([
+				sessionWrites.insertEntry({ id: ENTRY_ID, parentId: null, type: "custom", customType: "note" }),
+				storedValues.setValue(scalar, "state"),
+				storedValues.appendList(events, "event"),
+				sessionWrites.insertUsage({
+					id: "usage",
+					adjustment: false,
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				}),
+			]),
+		);
+
+		expect(result.seqs).toHaveLength(4);
+		expect((await session.getValue(scalar))?.seq).toBe(result.seqs[1]);
+		expect(await session.readList(events)).toEqual([{ seq: result.seqs[2], value: "event" }]);
+		expect(storage.getCommitAttempts()).toHaveLength(1);
 		await session.close();
 	});
 
@@ -71,9 +104,9 @@ describe("StorageBackedSession", () => {
 		};
 
 		await expect(
-			commitSession(session, {
-				writes: [{ kind: "entry", entry: { id: ENTRY_ID, parentId: null, type: "message", message: pending } }],
-			}),
+			commitSession(session, [
+				sessionWrites.insertEntry({ id: ENTRY_ID, parentId: null, type: "message", message: pending }),
+			]),
 		).rejects.toThrow("Cannot persist a pending assistant message");
 		expect(storage.getCommitAttempts()).toEqual([]);
 		expect(await session.getEntries([ENTRY_ID])).toEqual(new Map());
@@ -92,7 +125,7 @@ describe("StorageBackedSession", () => {
 		};
 		const entry: NewEntry<MessageEntry> = { id: ENTRY_ID, parentId: null, type: "message", message };
 
-		const result = await commitSession(session, { writes: [{ kind: "entry", entry }] });
+		const result = await commitSession(session, [sessionWrites.insertEntry(entry)]);
 
 		expect((await session.getEntries([ENTRY_ID])).get(ENTRY_ID)).toEqual({
 			...entry,
@@ -110,11 +143,9 @@ describe("StorageBackedSession", () => {
 		await session.mutate("review", async (mutator) => {
 			captured = mutator;
 			expect(mutator.lane).toBe("review");
-			expect(await mutator.getRegister("fact.name", "")).toBeUndefined();
-			await mutator.commit({
-				writes: [{ kind: "register", op: "set", namespace: "fact.name", key: "", value: "committed" }],
-			});
-			await expect(mutator.commit({ writes: [] })).rejects.toThrow("commit already attempted");
+			expect(await mutator.getValue(storedValues.sessionName)).toBeUndefined();
+			await mutator.commit([storedValues.setValue(storedValues.sessionName, "committed")]);
+			await expect(mutator.commit([])).rejects.toThrow("commit already attempted");
 		});
 
 		expect(storage.getCommitAttempts()).toHaveLength(1);
@@ -128,14 +159,14 @@ describe("StorageBackedSession", () => {
 	it("consumes the commit guard when the first commit fails", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		const transaction = {
-			writes: [{ kind: "entry", entry: { id: ENTRY_ID, parentId: "missing", type: "custom", customType: "note" } }],
-		} satisfies Transaction;
+		const transaction = [
+			sessionWrites.insertEntry({ id: ENTRY_ID, parentId: "missing", type: "custom", customType: "note" }),
+		] satisfies Write[];
 
 		await expect(
 			session.mutate("main", async (mutator) => {
 				await expect(mutator.commit(transaction)).rejects.toThrow("Missing parent entry");
-				await expect(mutator.commit({ writes: [] })).rejects.toThrow("commit already attempted");
+				await expect(mutator.commit([])).rejects.toThrow("commit already attempted");
 			}),
 		).resolves.toBeUndefined();
 		expect(storage.getCommitAttempts()).toHaveLength(1);
@@ -172,7 +203,7 @@ describe("StorageBackedSession", () => {
 		await Promise.all([session.close(), session.close()]);
 		await expect(session.mutate("main", () => undefined)).rejects.toThrow("Session is closed");
 		await expect(session.getEntries([])).rejects.toThrow("Session is closed");
-		await expect(session.getRegister("fact.name", "")).rejects.toThrow("Session is closed");
-		await expect(session.listRegisters("fact.name")).rejects.toThrow("Session is closed");
+		await expect(session.getValue(storedValues.sessionName)).rejects.toThrow("Session is closed");
+		await expect(session.scanValues(storedValues.sessionName)).rejects.toThrow("Session is closed");
 	});
 });

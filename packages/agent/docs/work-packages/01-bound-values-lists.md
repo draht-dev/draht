@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementation-ready after WP00; implementation not started. `harness.md` is normative. [`values.md`](../values.md) supplies the detailed address, backend, and conformance design. Start only on explicit instruction.
+Complete. `harness.md` is normative. [`values.md`](../values.md) supplies the detailed address, backend, and conformance design.
 
 ## Goal
 
@@ -54,7 +54,7 @@ appendList<T>(address: ValueList<T>, element: NoInfer<T>): Promise<void>;
 deleteList<T>(address: ValueList<T>): Promise<void>;
 ```
 
-`SessionMutator` retains one explicit `commit()` and does not gain direct committing methods. Explicit transactions compose helper-constructed value/list writes with entries and usage.
+`SessionMutator` retains one explicit `commit(writes)` and does not gain direct committing methods. Each write array composes helper-constructed value/list writes with entries and usage.
 
 Keep `getName` / `setName` and `getLabel` / `setLabel` as wrappers over `sessionName` and `entryLabel(id)`. Delete `getCustomFact` / `setCustomFact`. Rename the public passive metadata event from `fact_update` to the `value_update` shape already specified by `harness.md`; it covers only session-name and entry-label wrappers, not arbitrary application writes.
 

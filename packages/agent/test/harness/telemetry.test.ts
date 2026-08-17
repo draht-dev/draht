@@ -128,7 +128,7 @@ describe("agent telemetry schemas", () => {
 		const writeStart = {
 			"pi.session.id": "session",
 			"pi.session.item_count": 2,
-			"pi.session.item_kinds": ["entry", "register"],
+			"pi.session.item_kinds": ["entry", "value", "list"],
 		} satisfies WriteStart;
 		const writeEnd = {
 			"pi.session.first_seq": 1,

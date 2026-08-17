@@ -3,15 +3,14 @@ import type {
 	Entry,
 	EntryScan,
 	EntryStructure,
-	Register,
-	RegisterNamespace,
 	SessionStats,
 	Storage,
 	StorageBranchScan,
-	Transaction,
 	UsageRow,
 	UsageScan,
+	Write,
 } from "../types.ts";
+import type { ListElement, ListReadOptions, StoredValue, Value, ValueList } from "../values.ts";
 
 /** Test-only forwarding base for decorators that alter one part of Storage behavior. */
 export class StorageDecorator implements Storage {
@@ -21,26 +20,24 @@ export class StorageDecorator implements Storage {
 		this.delegate = delegate;
 	}
 
-	commit(transaction: Transaction): Promise<CommitResult> {
-		return this.delegate.commit(transaction);
+	commit(writes: Write[]): Promise<CommitResult> {
+		return this.delegate.commit(writes);
 	}
 
 	getEntries(ids: string[]): Promise<Map<string, Entry>> {
 		return this.delegate.getEntries(ids);
 	}
 
-	getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Promise<Register<TNamespace> | undefined> {
-		return this.delegate.getRegister(namespace, key);
+	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined> {
+		return this.delegate.getValue(address);
 	}
 
-	listRegisters<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		keyPrefix?: string,
-	): Promise<Register<TNamespace>[]> {
-		return this.delegate.listRegisters(namespace, keyPrefix);
+	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]> {
+		return this.delegate.scanValues(prefix);
+	}
+
+	readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]> {
+		return this.delegate.readList(address, options);
 	}
 
 	scanBranch(query: StorageBranchScan): Promise<Entry[]> {

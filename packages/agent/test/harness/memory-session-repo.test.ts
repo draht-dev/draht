@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import * as sessionWrites from "../../src/harness/session/commit.ts";
 import { MemorySessionRepo } from "../../src/harness/session/index.ts";
+import * as storedValues from "../../src/harness/session/values.ts";
 
 const NOW = 1_700_000_000_000;
 function uuidTimestamp(id: string): number {
@@ -40,13 +42,11 @@ describe("MemorySessionRepo metadata", () => {
 		const rootId = "00000000-0000-7000-8000-000000000001";
 		const childId = "00000000-0000-7000-8000-000000000002";
 		const commit = source.mutate("main", (mutator) =>
-			mutator.commit({
-				writes: [
-					{ kind: "entry", entry: { id: rootId, parentId: null, type: "custom", customType: "root" } },
-					{ kind: "entry", entry: { id: childId, parentId: rootId, type: "custom", customType: "child" } },
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: childId },
-				],
-			}),
+			mutator.commit([
+				sessionWrites.insertEntry({ id: rootId, parentId: null, type: "custom", customType: "root" }),
+				sessionWrites.insertEntry({ id: childId, parentId: rootId, type: "custom", customType: "child" }),
+				storedValues.setValue(storedValues.laneLeaf("main"), childId),
+			]),
 		);
 		const options = { id: "fork", entryId: childId, position: "before" as "before" | "at" };
 		const fork = repo.fork(source.metadata, options);

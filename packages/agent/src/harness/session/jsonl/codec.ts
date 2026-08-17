@@ -22,5 +22,6 @@ export function parseJsonlStorageHeader(line: string): JsonlStorageHeader {
 	if (typeof value.cwd !== "string") throw new Error("Invalid JSONL cwd");
 	requireSafeInteger(value.storageVersion, "storageVersion", 1);
 	requireSafeInteger(value.createdAt, "createdAt", 0);
+	if (value.nextSeq !== undefined) requireSafeInteger(value.nextSeq, "nextSeq", 1);
 	return value as unknown as JsonlStorageHeader;
 }

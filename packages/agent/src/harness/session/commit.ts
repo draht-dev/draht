@@ -1,36 +1,44 @@
-import type {
-	CommitResult,
-	Entry,
-	NewEntry,
-	RegisterNamespace,
-	RegisterValues,
-	Transaction,
-	UsageRow,
-	Write,
-} from "./types.ts";
+import type { CommitResult, Entry, EntryWrite, NewEntry, UsageRow, UsageWrite, Write } from "./types.ts";
 
 export type CommittedEntryWrite = Entry & { kind: "entry" };
 export type CommittedUsageWrite = UsageRow & { kind: "usage" };
-export type CommittedRegisterSetWrite = {
-	kind: "register";
+export interface CommittedValueSetWrite {
+	kind: "value";
 	op: "set";
 	seq: number;
-	namespace: RegisterNamespace;
+	namespace: string;
 	key: string;
-	value: RegisterValues[RegisterNamespace];
-};
-export type CommittedRegisterDeleteWrite = {
-	kind: "register";
+	value: unknown;
+}
+export interface CommittedValueDeleteWrite {
+	kind: "value";
 	op: "delete";
 	seq: number;
-	namespace: RegisterNamespace;
+	namespace: string;
 	key: string;
-};
+}
+export interface CommittedListAppendWrite {
+	kind: "list";
+	op: "append";
+	seq: number;
+	namespace: string;
+	key: string;
+	value: unknown;
+}
+export interface CommittedListDeleteWrite {
+	kind: "list";
+	op: "delete";
+	seq: number;
+	namespace: string;
+	key: string;
+}
 export type CommittedWrite =
 	| CommittedEntryWrite
 	| CommittedUsageWrite
-	| CommittedRegisterSetWrite
-	| CommittedRegisterDeleteWrite;
+	| CommittedValueSetWrite
+	| CommittedValueDeleteWrite
+	| CommittedListAppendWrite
+	| CommittedListDeleteWrite;
 
 export interface PreparedCommit {
 	writes: CommittedWrite[];
@@ -42,26 +50,41 @@ export interface CommitValidationState {
 	hasEntryId(id: string): boolean;
 }
 
+export function insertEntry(entry: NewEntry): EntryWrite {
+	return { kind: "entry", entry };
+}
+
+export function insertUsage(row: Omit<UsageRow, "seq">): UsageWrite {
+	return { kind: "usage", row };
+}
+
 export function commitWrite(write: Write, seq: number, timestamp: number): CommittedWrite {
 	switch (write.kind) {
 		case "entry":
-			return { kind: "entry", ...write.entry, seq, timestamp } as CommittedEntryWrite;
+			return { kind: "entry", ...write.entry, seq, timestamp };
 		case "usage":
 			return { kind: "usage", ...write.row, seq };
-		case "register":
+		case "value":
 			return write.op === "set"
-				? { kind: "register", op: "set", seq, namespace: write.namespace, key: write.key, value: write.value }
-				: { kind: "register", op: "delete", seq, namespace: write.namespace, key: write.key };
+				? { kind: "value", op: "set", seq, namespace: write.namespace, key: write.key, value: write.value }
+				: { kind: "value", op: "delete", seq, namespace: write.namespace, key: write.key };
+		case "list":
+			return write.op === "append"
+				? { kind: "list", op: "append", seq, namespace: write.namespace, key: write.key, value: write.value }
+				: { kind: "list", op: "delete", seq, namespace: write.namespace, key: write.key };
 	}
 }
 
 export function materializeCommittedEntry(entry: NewEntry, seq: number, timestamp: number): Entry {
-	return { ...entry, seq, timestamp } as Entry;
+	return { ...entry, seq, timestamp };
 }
 
-export function prepareStorageCommit(transaction: Transaction, firstSeq: number, timestamp: number): PreparedCommit {
-	const writes = transaction.writes.map((write, index) => commitWrite(write, firstSeq + index, timestamp));
-	return { writes, result: { firstSeq, seqs: writes.map((write) => write.seq), timestamp } };
+export function prepareStorageCommit(writes: Write[], firstSeq: number, timestamp: number): PreparedCommit {
+	const committedWrites = writes.map((write, index) => commitWrite(write, firstSeq + index, timestamp));
+	return {
+		writes: committedWrites,
+		result: { firstSeq, seqs: committedWrites.map((write) => write.seq), timestamp },
+	};
 }
 
 export function validateCommittedWrites(

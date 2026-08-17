@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as sessionWrites from "../../src/harness/session/commit.ts";
 import { LaneMutationLine } from "../../src/harness/session/lane-mutations.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { SessionInvariantError, StorageBackedSession } from "../../src/harness/session/session.ts";
@@ -10,8 +11,9 @@ import type {
 	RunState,
 	Session,
 	SessionMetadata,
-	Transaction,
+	Write,
 } from "../../src/harness/session/types.ts";
+import * as storedValues from "../../src/harness/session/values.ts";
 
 const NOW = 1_700_000_000_000;
 const ROOT_ID = "00000000-0000-7000-8000-000000000001";
@@ -19,6 +21,8 @@ const CHILD_ID = "00000000-0000-7000-8000-000000000002";
 const CUSTOM_ID = "00000000-0000-7000-8000-000000000003";
 const OTHER_ID = "00000000-0000-7000-8000-000000000004";
 const OPERATION_ID = "00000000-0000-7000-8000-000000000005";
+const applicationState = storedValues.value<unknown>("test.application.state");
+const objectApplicationState = storedValues.value<{ nested: string[] }>("test.application.object");
 const metadata = {
 	id: "session",
 	createdAt: NOW,
@@ -55,37 +59,32 @@ const runState = {
 	latestAssistantEntryId: null,
 } satisfies RunState;
 
-function commitSession(session: Session, transaction: Transaction) {
+function commitSession(session: Session, transaction: Write[]) {
 	return session.mutate("main", (mutator) => mutator.commit(transaction));
 }
 
 function laneWrites(leafId: string | null, state: LaneState = idleLaneState) {
 	return [
-		{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: leafId },
-		{ kind: "register", op: "set", namespace: "lane.state", key: "main", value: state },
+		storedValues.setValue(storedValues.laneLeaf("main"), leafId),
+		storedValues.setValue(storedValues.laneState("main"), state),
 	] as const;
 }
 
 async function createTreeSession(): Promise<StorageBackedSession> {
 	const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
-	await commitSession(session, {
-		writes: [
-			{ kind: "entry", entry: customEntry(ROOT_ID, null, "root") },
-			{
-				kind: "entry",
-				entry: {
-					id: CHILD_ID,
-					parentId: ROOT_ID,
-					type: "message",
-					message: { role: "user", content: "child", timestamp: NOW },
-				},
-			},
-			{ kind: "entry", entry: customEntry(CUSTOM_ID, CHILD_ID) },
-			{ kind: "entry", entry: customEntry(OTHER_ID, ROOT_ID, "other") },
-			{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: CUSTOM_ID },
-			{ kind: "register", op: "set", namespace: "lane.leaf", key: "other", value: OTHER_ID },
-		],
-	});
+	await commitSession(session, [
+		sessionWrites.insertEntry(customEntry(ROOT_ID, null, "root")),
+		sessionWrites.insertEntry({
+			id: CHILD_ID,
+			parentId: ROOT_ID,
+			type: "message",
+			message: { role: "user", content: "child", timestamp: NOW },
+		}),
+		sessionWrites.insertEntry(customEntry(CUSTOM_ID, CHILD_ID)),
+		sessionWrites.insertEntry(customEntry(OTHER_ID, ROOT_ID, "other")),
+		storedValues.setValue(storedValues.laneLeaf("main"), CUSTOM_ID),
+		storedValues.setValue(storedValues.laneLeaf("other"), OTHER_ID),
+	]);
 	return session;
 }
 
@@ -128,7 +127,7 @@ class BlockingCommitStorage extends MemoryStorage {
 }
 
 describe("StorageBackedSession SessionTree", () => {
-	it("creates lane-bound views over shared entries, facts, and stats", async () => {
+	it("creates lane-bound views over shared entries, values, and stats", async () => {
 		const session = await createTreeSession();
 		const other = session.view("other");
 
@@ -150,36 +149,65 @@ describe("StorageBackedSession SessionTree", () => {
 		await session.close();
 	});
 
-	it("reads, sets, and deletes global facts while preserving JSON null", async () => {
+	it("reads, sets, and deletes global values while preserving JSON null", async () => {
 		const session = await createTreeSession();
 		const other = session.view("other");
 
 		expect(await session.getName()).toBeUndefined();
 		expect(await session.getLabel(ROOT_ID)).toBeUndefined();
-		expect(await session.getCustomFact("state")).toBeUndefined();
+		expect(await session.getValue(applicationState)).toBeUndefined();
 
 		await session.setName("name");
 		await other.setLabel(ROOT_ID, "root label");
-		await session.setCustomFact("state", null);
+		await session.setValue(applicationState, null);
 		expect(await other.getName()).toBe("name");
 		expect(await session.getLabel(ROOT_ID)).toBe("root label");
-		expect(await other.getCustomFact("state")).toBeNull();
+		expect((await other.getValue(applicationState))?.value).toBeNull();
 
 		await other.setName(undefined);
 		await session.setLabel(ROOT_ID, undefined);
-		await other.setCustomFact("state", undefined);
+		await other.deleteValue(applicationState);
 		expect(await session.getName()).toBeUndefined();
 		expect(await other.getLabel(ROOT_ID)).toBeUndefined();
-		expect(await session.getCustomFact("state")).toBeUndefined();
+		expect(await session.getValue(applicationState)).toBeUndefined();
 		await session.close();
 	});
 
-	it("passes fact values directly to storage", async () => {
+	it("passes application values directly to storage", async () => {
 		const session = await createTreeSession();
 		const value = { nested: ["original"] };
 
-		await session.setCustomFact("state", value);
-		expect(await session.getCustomFact("state")).toBe(value);
+		await session.setValue(objectApplicationState, value);
+		expect((await session.getValue(objectApplicationState))?.value).toBe(value);
+		await session.close();
+	});
+
+	it("exposes bound application values and lists through every lane view", async () => {
+		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
+		const session = new StorageBackedSession(metadata, storage);
+		await commitSession(session, [...laneWrites(null)]);
+		storage.clearCommitAttempts();
+		const scalar = storedValues.value<{ count: number }>("test.application.scalar");
+		const events = (workspace: string) => storedValues.list<string>("test.application.events", workspace);
+		const workspaceEvents = events("workspace");
+		const other = session.view("main");
+
+		await session.setValue(scalar, { count: 1 });
+		await other.appendList(workspaceEvents, "first");
+		await session.appendList(workspaceEvents, "second");
+		expect((await other.getValue(scalar))?.value).toEqual({ count: 1 });
+		expect((await session.readList(workspaceEvents, { limit: 1 })).map(({ value }) => value)).toEqual(["first"]);
+		expect(storage.getCommitAttempts()).toHaveLength(3);
+		expect(storage.getCommitAttempts().map((writes) => writes.map(({ kind }) => kind))).toEqual([
+			["value"],
+			["list"],
+			["list"],
+		]);
+
+		await other.deleteList(workspaceEvents);
+		await session.deleteValue(scalar);
+		expect(await session.readList(workspaceEvents)).toEqual([]);
+		expect(await session.getValue(scalar)).toBeUndefined();
 		await session.close();
 	});
 
@@ -237,9 +265,7 @@ describe("StorageBackedSession SessionTree", () => {
 
 	it("returns an empty default branch for a lane at the root", async () => {
 		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
-		await commitSession(session, {
-			writes: [{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null }],
-		});
+		await commitSession(session, [storedValues.setValue(storedValues.laneLeaf("main"), null)]);
 
 		expect(await session.findEntriesOnBranch()).toEqual([]);
 		expect(await session.findEntryOnBranch()).toBeUndefined();
@@ -249,56 +275,45 @@ describe("StorageBackedSession SessionTree", () => {
 	it("atomically appends messages and custom entries to the bound lane", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await commitSession(session, {
-			writes: [
-				...laneWrites(null),
-				{ kind: "register", op: "set", namespace: "lane.leaf", key: "other", value: null },
-				{ kind: "register", op: "set", namespace: "lane.state", key: "other", value: idleLaneState },
-			],
-		});
+		await commitSession(session, [
+			...laneWrites(null),
+			storedValues.setValue(storedValues.laneLeaf("other"), null),
+			storedValues.setValue(storedValues.laneState("other"), idleLaneState),
+		]);
 		storage.clearCommitAttempts();
 
 		const messageId = await session.appendMessage({ role: "user", content: "hello", timestamp: NOW });
 		const customId = await session.appendCustomEntry("note", { nested: ["value"] });
 		const withoutDataId = await session.view("other").appendCustomEntry("marker");
 
-		expect(storage.getCommitAttempts().map((attempt) => attempt.writes)).toEqual([
+		expect(storage.getCommitAttempts()).toEqual([
 			[
-				{
-					kind: "entry",
-					entry: {
-						id: messageId,
-						parentId: null,
-						type: "message",
-						message: { role: "user", content: "hello", timestamp: NOW },
-					},
-				},
-				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: messageId },
+				sessionWrites.insertEntry({
+					id: messageId,
+					parentId: null,
+					type: "message",
+					message: { role: "user", content: "hello", timestamp: NOW },
+				}),
+				storedValues.setValue(storedValues.laneLeaf("main"), messageId),
 			],
 			[
-				{
-					kind: "entry",
-					entry: {
-						id: customId,
-						parentId: messageId,
-						type: "custom",
-						customType: "note",
-						data: { nested: ["value"] },
-					},
-				},
-				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: customId },
+				sessionWrites.insertEntry({
+					id: customId,
+					parentId: messageId,
+					type: "custom",
+					customType: "note",
+					data: { nested: ["value"] },
+				}),
+				storedValues.setValue(storedValues.laneLeaf("main"), customId),
 			],
 			[
-				{
-					kind: "entry",
-					entry: {
-						id: withoutDataId,
-						parentId: null,
-						type: "custom",
-						customType: "marker",
-					},
-				},
-				{ kind: "register", op: "set", namespace: "lane.leaf", key: "other", value: withoutDataId },
+				sessionWrites.insertEntry({
+					id: withoutDataId,
+					parentId: null,
+					type: "custom",
+					customType: "marker",
+				}),
+				storedValues.setValue(storedValues.laneLeaf("other"), withoutDataId),
 			],
 		]);
 		expect(await session.getLeafId()).toBe(customId);
@@ -321,14 +336,12 @@ describe("StorageBackedSession SessionTree", () => {
 	it("defers appends into an active run without moving the lane leaf", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await commitSession(session, {
-			writes: [
-				{ kind: "entry", entry: customEntry(ROOT_ID, null) },
-				...laneWrites(ROOT_ID, { currentOperationId: OPERATION_ID, pendingNextRun: [] }),
-				{ kind: "register", op: "set", namespace: "op.meta", key: OPERATION_ID, value: operation },
-				{ kind: "register", op: "set", namespace: "op.state", key: OPERATION_ID, value: runState },
-			],
-		});
+		await commitSession(session, [
+			sessionWrites.insertEntry(customEntry(ROOT_ID, null)),
+			...laneWrites(ROOT_ID, { currentOperationId: OPERATION_ID, pendingNextRun: [] }),
+			storedValues.setValue(storedValues.operationMeta(OPERATION_ID), operation),
+			storedValues.setValue(storedValues.operationState(OPERATION_ID), runState),
+		]);
 		storage.clearCommitAttempts();
 
 		const [customId, messageId] = await Promise.all([
@@ -338,13 +351,13 @@ describe("StorageBackedSession SessionTree", () => {
 
 		expect(await session.getLeafId()).toBe(ROOT_ID);
 		expect(await session.getEntries([customId, messageId])).toEqual(new Map());
-		expect(await session.getRegister("pending.entry", customId)).toMatchObject({
+		expect(await session.getValue(storedValues.pendingEntry(customId))).toMatchObject({
 			value: { type: "custom", customType: "note", payload: { deferred: true } },
 		});
-		expect(await session.getRegister("pending.entry", messageId)).toMatchObject({
+		expect(await session.getValue(storedValues.pendingEntry(messageId))).toMatchObject({
 			value: { type: "message", payload: { role: "user", content: "later", timestamp: NOW } },
 		});
-		expect(await session.getRegister("op.state", OPERATION_ID)).toMatchObject({
+		expect(await session.getValue(storedValues.operationState(OPERATION_ID))).toMatchObject({
 			value: { inbox: { writes: [customId, messageId] } },
 		});
 		expect(storage.getCommitAttempts()).toHaveLength(2);
@@ -359,20 +372,15 @@ describe("StorageBackedSession SessionTree", () => {
 			control: { status: "running" },
 			structural: { taskId: CHILD_ID, status: "deciding" },
 		} as const;
-		await commitSession(session, {
-			writes: [
-				{ kind: "entry", entry: customEntry(ROOT_ID, null) },
-				...laneWrites(ROOT_ID, { currentOperationId: OPERATION_ID, pendingNextRun: [] }),
-				{
-					kind: "register",
-					op: "set",
-					namespace: "op.meta",
-					key: OPERATION_ID,
-					value: { ...operation, intent: { kind: "compaction" } },
-				},
-				{ kind: "register", op: "set", namespace: "op.state", key: OPERATION_ID, value: structuralState },
-			],
-		});
+		await commitSession(session, [
+			sessionWrites.insertEntry(customEntry(ROOT_ID, null)),
+			...laneWrites(ROOT_ID, { currentOperationId: OPERATION_ID, pendingNextRun: [] }),
+			storedValues.setValue(storedValues.operationMeta(OPERATION_ID), {
+				...operation,
+				intent: { kind: "compaction" },
+			}),
+			storedValues.setValue(storedValues.operationState(OPERATION_ID), structuralState),
+		]);
 
 		storage.clearCommitAttempts();
 		const append = session.appendCustomEntry("during-structural");
@@ -384,9 +392,7 @@ describe("StorageBackedSession SessionTree", () => {
 
 	it("diverges lanes that append from the same shared leaf", async () => {
 		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
-		await commitSession(session, {
-			writes: [{ kind: "entry", entry: customEntry(ROOT_ID, null) }, ...laneWrites(ROOT_ID)],
-		});
+		await commitSession(session, [sessionWrites.insertEntry(customEntry(ROOT_ID, null)), ...laneWrites(ROOT_ID)]);
 		const configuration = {
 			model: { provider: "provider", modelId: "model" },
 			thinkingLevel: "off" as const,
@@ -408,9 +414,7 @@ describe("StorageBackedSession SessionTree", () => {
 
 	it("serializes concurrent appends into one linear lane branch", async () => {
 		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }));
-		await commitSession(session, {
-			writes: [{ kind: "entry", entry: customEntry(ROOT_ID, null) }, ...laneWrites(ROOT_ID)],
-		});
+		await commitSession(session, [sessionWrites.insertEntry(customEntry(ROOT_ID, null)), ...laneWrites(ROOT_ID)]);
 
 		const [firstId, secondId] = await Promise.all([
 			session.appendCustomEntry("first"),
@@ -425,7 +429,7 @@ describe("StorageBackedSession SessionTree", () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const laneMutationLine = new CountingLaneMutationLine();
 		const session = new StorageBackedSession(metadata, storage, { laneMutationLine });
-		await commitSession(session, { writes: [...laneWrites(null)] });
+		await commitSession(session, [...laneWrites(null)]);
 		storage.clearCommitAttempts();
 		const data = { nested: ["original"] };
 		const runCountBeforeAppends = laneMutationLine.runCount;
@@ -447,9 +451,7 @@ describe("StorageBackedSession SessionTree", () => {
 	it("fails fast when active operation registers are inconsistent", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
-		await commitSession(session, {
-			writes: [...laneWrites(null, { currentOperationId: OPERATION_ID, pendingNextRun: [] })],
-		});
+		await commitSession(session, [...laneWrites(null, { currentOperationId: OPERATION_ID, pendingNextRun: [] })]);
 		storage.clearCommitAttempts();
 
 		const append = session.appendCustomEntry("note");
@@ -461,9 +463,7 @@ describe("StorageBackedSession SessionTree", () => {
 
 	it("propagates append storage failures without moving the leaf", async () => {
 		const storage = new RejectingCommitStorage({ now: () => NOW });
-		await storage.commit({
-			writes: [{ kind: "entry", entry: customEntry(ROOT_ID, null) }, ...laneWrites(ROOT_ID)],
-		});
+		await storage.commit([sessionWrites.insertEntry(customEntry(ROOT_ID, null)), ...laneWrites(ROOT_ID)]);
 		const session = new StorageBackedSession(metadata, storage);
 		const rejection = new Error("commit failed");
 		storage.rejection = rejection;
@@ -478,7 +478,7 @@ describe("StorageBackedSession SessionTree", () => {
 	it("drains an append whose storage commit was admitted before close", async () => {
 		const storage = new BlockingCommitStorage({ now: () => NOW });
 		const session = new StorageBackedSession(metadata, storage);
-		await commitSession(session, { writes: [...laneWrites(null)] });
+		await commitSession(session, [...laneWrites(null)]);
 		storage.block = true;
 
 		const append = session.appendCustomEntry("admitted");

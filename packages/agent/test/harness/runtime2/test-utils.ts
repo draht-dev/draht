@@ -1,24 +1,24 @@
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
-import type { CommitResult, Transaction } from "../../../src/harness/session/types.ts";
+import type { CommitResult, Write } from "../../../src/harness/session/types.ts";
 
 export class FailingMemoryStorage extends MemoryStorage {
 	failure: Error | undefined;
 
-	override commit(transaction: Transaction) {
+	override commit(writes: Write[]) {
 		const failure = this.failure;
 		this.failure = undefined;
-		return failure === undefined ? super.commit(transaction) : Promise.reject(failure);
+		return failure === undefined ? super.commit(writes) : Promise.reject(failure);
 	}
 }
 
 export class ControlledMemoryStorage extends MemoryStorage {
 	beforeNextCommit: (() => Promise<void>) | undefined;
 
-	override async commit(transaction: Transaction): Promise<CommitResult> {
+	override async commit(writes: Write[]): Promise<CommitResult> {
 		const beforeCommit = this.beforeNextCommit;
 		this.beforeNextCommit = undefined;
 		await beforeCommit?.();
-		return super.commit(transaction);
+		return super.commit(writes);
 	}
 }
 

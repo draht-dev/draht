@@ -1,11 +1,11 @@
-import type { CommitResult, Transaction } from "../types.ts";
+import type { CommitResult, Write } from "../types.ts";
 import { StorageDecorator } from "./storage-decorator.ts";
 
 /** Test-only transparent Storage decorator that records commit admission. */
 export class InstrumentedStorage extends StorageDecorator {
-	private readonly commitAttempts: Transaction[] = [];
+	private readonly commitAttempts: Write[][] = [];
 
-	getCommitAttempts(): readonly Transaction[] {
+	getCommitAttempts(): readonly Write[][] {
 		return this.commitAttempts.slice();
 	}
 
@@ -13,8 +13,8 @@ export class InstrumentedStorage extends StorageDecorator {
 		this.commitAttempts.length = 0;
 	}
 
-	override commit(transaction: Transaction): Promise<CommitResult> {
-		this.commitAttempts.push(transaction);
-		return this.delegate.commit(transaction);
+	override commit(writes: Write[]): Promise<CommitResult> {
+		this.commitAttempts.push(writes);
+		return this.delegate.commit(writes);
 	}
 }

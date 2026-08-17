@@ -13,6 +13,8 @@ export interface JsonlStorageHeader {
 	cwd: string;
 	parentSessionId?: string;
 	legacyParentSessionPath?: string;
+	/** Sequence high-water mark written by snapshot rewrites. */
+	nextSeq?: number;
 }
 
 export interface JsonlStorageOptions {

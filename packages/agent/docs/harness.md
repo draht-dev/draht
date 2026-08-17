@@ -530,8 +530,6 @@ function deleteValue<T>(address: Value<T>): Write;
 function appendList<T>(address: ValueList<T>, element: NoInfer<T>): Write;
 function deleteList<T>(address: ValueList<T>): Write;
 
-interface Transaction { writes: Write[] }
-
 interface CommitResult { firstSeq: number; seqs: number[]; timestamp: number }
 ```
 
@@ -556,7 +554,7 @@ One `Storage` instance serves one session. Repository discovery and lifecycle ar
 
 ```ts
 interface Storage {
-  commit(tx: Transaction): Promise<CommitResult>;
+  commit(writes: Write[]): Promise<CommitResult>;
 
   getEntries(ids: string[]): Promise<Map<string, Entry>>;
 
@@ -1048,7 +1046,7 @@ interface SessionMutator extends SessionReader {
 
   /** The callback's sole commit. A second call rejects, including after a
       failed first attempt. */
-  commit(tx: Transaction): Promise<CommitResult>;
+  commit(writes: Write[]): Promise<CommitResult>;
 }
 
 interface Session<M extends SessionMetadata = SessionMetadata>

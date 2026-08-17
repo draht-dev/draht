@@ -33,6 +33,7 @@ import {
 	SessionUnknownTargetError,
 } from "../session/session.ts";
 import type { LaneConfiguration, Session } from "../session/types.ts";
+import { laneConfig, laneLastResult, laneLeaf, laneState, setValue } from "../session/values.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessTool } from "../types.ts";
 import { Lane } from "./lane.ts";
 import { restoreSession } from "./restore.ts";
@@ -377,10 +378,10 @@ async function describeSuspension(
 async function seedMain(session: Session, seed: LaneConfiguration): Promise<void> {
 	await session.mutate("main", async (mutator) => {
 		const [leaf, state, configuration, lastResult] = await Promise.all([
-			mutator.getRegister("lane.leaf", "main"),
-			mutator.getRegister("lane.state", "main"),
-			mutator.getRegister("lane.config", "main"),
-			mutator.getRegister("lane.lastResult", "main"),
+			mutator.getValue(laneLeaf("main")),
+			mutator.getValue(laneState("main")),
+			mutator.getValue(laneConfig("main")),
+			mutator.getValue(laneLastResult("main")),
 		]);
 		if (leaf === undefined || state === undefined) {
 			throw new SessionInvariantError("Session main lane has incomplete durable state");
@@ -389,8 +390,6 @@ async function seedMain(session: Session, seed: LaneConfiguration): Promise<void
 		if (state.value.currentOperationId !== null || lastResult !== undefined) {
 			throw new SessionInvariantError("Configured or active main lane is missing lane.config");
 		}
-		await mutator.commit({
-			writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: seed }],
-		});
+		await mutator.commit([setValue(laneConfig("main"), seed)]);
 	});
 }

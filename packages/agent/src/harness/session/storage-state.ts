@@ -4,9 +4,11 @@ import { type CommittedWrite, type PreparedCommit, prepareStorageCommit, validat
 
 export type {
 	CommittedEntryWrite,
-	CommittedRegisterDeleteWrite,
-	CommittedRegisterSetWrite,
+	CommittedListAppendWrite,
+	CommittedListDeleteWrite,
 	CommittedUsageWrite,
+	CommittedValueDeleteWrite,
+	CommittedValueSetWrite,
 	CommittedWrite,
 	PreparedCommit,
 } from "./commit.ts";
@@ -15,25 +17,50 @@ import type {
 	Entry,
 	EntryScan,
 	EntryStructure,
-	Register,
-	RegisterNamespace,
 	SessionStats,
 	StorageBranchScan,
-	Transaction,
 	UsageRow,
 	UsageScan,
+	Write,
 } from "./types.ts";
+import {
+	type ListElement,
+	type ListReadOptions,
+	list,
+	resolveListReadOptions,
+	type StoredValue,
+	type Value,
+	type ValueList,
+	value,
+} from "./values.ts";
+
+export interface StoredListSnapshot {
+	address: ValueList<unknown>;
+	elements: ListElement<unknown>[];
+}
 
 export interface StorageStateSnapshot {
 	entries: Map<string, Entry>;
-	registers: Register[];
+	scalarValues: StoredValue<unknown>[];
+	listValues: StoredListSnapshot[];
 	usage: Map<string, UsageRow>;
 	stats: SessionStats;
 	nextSeq: number;
 }
 
-function registerKey(namespace: RegisterNamespace, key: string): string {
+function physicalKey(namespace: string, key: string): string {
 	return `${namespace}\u0000${key}`;
+}
+
+function compareKeys(left: string, right: string): number {
+	const leftCodePoints = Array.from(left, (character) => character.codePointAt(0)!);
+	const rightCodePoints = Array.from(right, (character) => character.codePointAt(0)!);
+	const length = Math.min(leftCodePoints.length, rightCodePoints.length);
+	for (let index = 0; index < length; index++) {
+		const difference = leftCodePoints[index]! - rightCodePoints[index]!;
+		if (difference !== 0) return difference;
+	}
+	return leftCodePoints.length - rightCodePoints.length;
 }
 
 function emptyUsage(): Usage {
@@ -51,7 +78,8 @@ function emptyUsage(): Usage {
 export class StorageState {
 	private readonly entries: Map<string, Entry>;
 	private readonly entriesBySeq: Entry[];
-	private readonly registers: Map<string, Register>;
+	private readonly scalarValues: Map<string, StoredValue<unknown>>;
+	private readonly listValues: Map<string, StoredListSnapshot>;
 	private readonly usage: Map<string, UsageRow>;
 	private stats: SessionStats;
 	private nextSeq: number;
@@ -59,16 +87,25 @@ export class StorageState {
 	constructor(snapshot?: StorageStateSnapshot) {
 		this.entries = snapshot?.entries ?? new Map();
 		this.entriesBySeq = [...this.entries.values()].sort((left, right) => left.seq - right.seq);
-		this.registers = new Map(
-			(snapshot?.registers ?? []).map((register) => [registerKey(register.namespace, register.key), register]),
+		this.scalarValues = new Map(
+			(snapshot?.scalarValues ?? []).map((stored) => [
+				physicalKey(stored.address.namespace, stored.address.key),
+				stored,
+			]),
+		);
+		this.listValues = new Map(
+			(snapshot?.listValues ?? []).map((stored) => [
+				physicalKey(stored.address.namespace, stored.address.key),
+				stored,
+			]),
 		);
 		this.usage = snapshot?.usage ?? new Map();
 		this.stats = snapshot?.stats ?? { messageCount: 0, usage: emptyUsage() };
 		this.nextSeq = snapshot?.nextSeq ?? 1;
 	}
 
-	prepareCommit(transaction: Transaction, timestamp: number): PreparedCommit {
-		const prepared = prepareStorageCommit(transaction, this.nextSeq, timestamp);
+	prepareCommit(writes: Write[], timestamp: number): PreparedCommit {
+		const prepared = prepareStorageCommit(writes, this.nextSeq, timestamp);
 		this.validateCommitted(prepared.writes);
 		return prepared;
 	}
@@ -97,23 +134,47 @@ export class StorageState {
 					this.stats = { ...this.stats, usage: addUsage(this.stats.usage, row.usage) };
 					break;
 				}
-				case "register": {
-					const key = registerKey(write.namespace, write.key);
+				case "value": {
+					const key = physicalKey(write.namespace, write.key);
 					if (write.op === "delete") {
-						this.registers.delete(key);
+						this.scalarValues.delete(key);
 					} else {
-						this.registers.set(key, {
-							namespace: write.namespace,
-							key: write.key,
+						this.scalarValues.set(key, {
+							address: value<unknown>(write.namespace, write.key),
 							value: write.value,
 							seq: write.seq,
-						} as Register);
+						});
+					}
+					break;
+				}
+				case "list": {
+					const key = physicalKey(write.namespace, write.key);
+					if (write.op === "delete") {
+						this.listValues.delete(key);
+					} else {
+						const stored = this.listValues.get(key);
+						const element = { seq: write.seq, value: write.value };
+						if (stored === undefined) {
+							this.listValues.set(key, {
+								address: list<unknown>(write.namespace, write.key),
+								elements: [element],
+							});
+						} else {
+							stored.elements.push(element);
+						}
 					}
 					break;
 				}
 			}
 			this.nextSeq = write.seq + 1;
 		}
+	}
+
+	advanceNextSeq(nextSeq: number): void {
+		if (!Number.isSafeInteger(nextSeq) || nextSeq < 1) {
+			throw new Error(`Invalid storage sequence high-water mark: ${nextSeq}`);
+		}
+		this.nextSeq = Math.max(this.nextSeq, nextSeq);
 	}
 
 	getEntries(ids: readonly string[]): Map<string, Entry> {
@@ -125,17 +186,25 @@ export class StorageState {
 		return found;
 	}
 
-	getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Register<TNamespace> | undefined {
-		return this.registers.get(registerKey(namespace, key)) as Register<TNamespace> | undefined;
+	getValue<T>(address: Value<T>): StoredValue<T> | undefined {
+		return this.scalarValues.get(physicalKey(address.namespace, address.key)) as StoredValue<T> | undefined;
 	}
 
-	listRegisters<TNamespace extends RegisterNamespace>(namespace: TNamespace, keyPrefix = ""): Register<TNamespace>[] {
-		return [...this.registers.values()]
-			.filter((register) => register.namespace === namespace && register.key.startsWith(keyPrefix))
-			.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0)) as Register<TNamespace>[];
+	scanValues<T>(prefix: Value<T>): StoredValue<T>[] {
+		return [...this.scalarValues.values()]
+			.filter((stored) => stored.address.namespace === prefix.namespace && stored.address.key.startsWith(prefix.key))
+			.sort((left, right) => compareKeys(left.address.key, right.address.key)) as StoredValue<T>[];
+	}
+
+	readList<T>(address: ValueList<T>, options?: ListReadOptions): ListElement<T>[] {
+		const resolved = resolveListReadOptions(options);
+		const elements = this.listValues.get(physicalKey(address.namespace, address.key))?.elements ?? [];
+		const filtered = elements.filter((element) => {
+			if (resolved.cursor === undefined) return true;
+			return resolved.order === "asc" ? element.seq > resolved.cursor.seq : element.seq < resolved.cursor.seq;
+		});
+		const ordered = resolved.order === "asc" ? filtered : [...filtered].reverse();
+		return ordered.slice(0, resolved.limit) as ListElement<T>[];
 	}
 
 	scanBranch(query: StorageBranchScan): Entry[] {
@@ -213,9 +282,13 @@ export class StorageState {
 
 	snapshot(): StorageStateSnapshot {
 		return {
-			entries: this.entries,
-			registers: [...this.registers.values()],
-			usage: this.usage,
+			entries: new Map(this.entries),
+			scalarValues: [...this.scalarValues.values()],
+			listValues: [...this.listValues.values()].map(({ address, elements }) => ({
+				address,
+				elements: elements.slice(),
+			})),
+			usage: new Map(this.usage),
 			stats: this.stats,
 			nextSeq: this.nextSeq,
 		};

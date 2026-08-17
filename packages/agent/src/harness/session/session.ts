@@ -1,5 +1,6 @@
 import { uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../types.ts";
+import { insertEntry } from "./commit.ts";
 import { LaneMutationLine } from "./lane-mutations.ts";
 import type {
 	BranchScan,
@@ -12,16 +13,34 @@ import type {
 	OperationMeta,
 	OperationState,
 	PendingEntry,
-	Register,
-	RegisterNamespace,
 	Session,
 	SessionMetadata,
 	SessionMutator,
 	SessionStats,
 	SessionTree,
 	Storage,
-	Transaction,
+	Write,
 } from "./types.ts";
+import {
+	appendList as appendListWrite,
+	deleteList as deleteListWrite,
+	deleteValue as deleteValueWrite,
+	entryLabel,
+	type ListElement,
+	type ListReadOptions,
+	laneConfig,
+	laneLastResult,
+	laneLeaf,
+	laneState,
+	operationMeta,
+	operationState,
+	pendingEntry,
+	type StoredValue,
+	sessionName,
+	setValue as setValueWrite,
+	type Value,
+	type ValueList,
+} from "./values.ts";
 
 interface StorageBackedSessionOptions {
 	laneMutationLine?: LaneMutationLine;
@@ -90,11 +109,11 @@ class StorageBackedSessionMutator implements SessionMutator {
 		this.storage = storage;
 	}
 
-	commit(transaction: Transaction): Promise<CommitResult> {
+	commit(writes: Write[]): Promise<CommitResult> {
 		this.assertActive();
 		if (this.commitResult !== undefined) return Promise.reject(new Error("SessionMutator commit already attempted"));
 		try {
-			for (const write of transaction.writes) {
+			for (const write of writes) {
 				if (
 					write.kind === "entry" &&
 					write.entry.type === "message" &&
@@ -104,7 +123,7 @@ class StorageBackedSessionMutator implements SessionMutator {
 					throw new SessionPendingAssistantMessageError();
 				}
 			}
-			this.commitResult = this.storage.commit(transaction);
+			this.commitResult = this.storage.commit(writes);
 		} catch (error) {
 			this.commitResult = Promise.reject(error);
 		}
@@ -116,20 +135,19 @@ class StorageBackedSessionMutator implements SessionMutator {
 		return this.storage.getEntries(ids);
 	}
 
-	getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Promise<Register<TNamespace> | undefined> {
+	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined> {
 		this.assertActive();
-		return this.storage.getRegister(namespace, key);
+		return this.storage.getValue(address);
 	}
 
-	listRegisters<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		keyPrefix?: string,
-	): Promise<Register<TNamespace>[]> {
+	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]> {
 		this.assertActive();
-		return this.storage.listRegisters(namespace, keyPrefix);
+		return this.storage.scanValues(prefix);
+	}
+
+	readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]> {
+		this.assertActive();
+		return this.storage.readList(address, options);
 	}
 
 	settle(): Promise<void> {
@@ -189,20 +207,19 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		return this.storage.getEntries(ids);
 	}
 
-	async getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Promise<Register<TNamespace> | undefined> {
+	async getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined> {
 		this.assertOpen();
-		return this.storage.getRegister(namespace, key);
+		return this.storage.getValue(address);
 	}
 
-	async listRegisters<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		keyPrefix?: string,
-	): Promise<Register<TNamespace>[]> {
+	async scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]> {
 		this.assertOpen();
-		return this.storage.listRegisters(namespace, keyPrefix);
+		return this.storage.scanValues(prefix);
+	}
+
+	async readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]> {
+		this.assertOpen();
+		return this.storage.readList(address, options);
 	}
 
 	view(lane: string): SessionTree {
@@ -210,12 +227,17 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 			getLeafId: () => this.getLeafIdForLane(lane),
 			getEntry: (id) => this.getEntry(id),
 			getStats: () => this.getStats(),
+			getValue: (address) => this.getValue(address),
+			scanValues: (prefix) => this.scanValues(prefix),
+			readList: (address, options) => this.readList(address, options),
+			setValue: (address, next) => this.setValueForLane(lane, address, next),
+			deleteValue: (address) => this.deleteValueForLane(lane, address),
+			appendList: (address, element) => this.appendListForLane(lane, address, element),
+			deleteList: (address) => this.deleteListForLane(lane, address),
 			getName: () => this.getName(),
 			setName: (name) => this.setNameForLane(lane, name),
 			getLabel: (targetId) => this.getLabel(targetId),
 			setLabel: (targetId, label) => this.setLabelForLane(lane, targetId, label),
-			getCustomFact: (key) => this.getCustomFact(key),
-			setCustomFact: (key, value) => this.setCustomFactForLane(lane, key, value),
 			findEntries: (query) => this.findEntries(query),
 			findEntry: (query) => this.findEntry(query),
 			findEntriesOnBranch: (query) => this.findEntriesOnBranchForLane(lane, query),
@@ -231,18 +253,18 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		return this.mutate(name, async (mutator) => {
 			// R1 owns complete idle-lane and current-state validation. Slice 2 only
 			// distinguishes valid existing lane shapes from partial durable lane state.
-			const [leaf, storedConfiguration, laneState, lastResult] = await Promise.all([
-				mutator.getRegister("lane.leaf", name),
-				mutator.getRegister("lane.config", name),
-				mutator.getRegister("lane.state", name),
-				mutator.getRegister("lane.lastResult", name),
+			const [leaf, storedConfiguration, storedLaneState, lastResult] = await Promise.all([
+				mutator.getValue(laneLeaf(name)),
+				mutator.getValue(laneConfig(name)),
+				mutator.getValue(laneState(name)),
+				mutator.getValue(laneLastResult(name)),
 			]);
-			const presentCount = [leaf, storedConfiguration, laneState, lastResult].filter(
-				(register) => register !== undefined,
+			const presentCount = [leaf, storedConfiguration, storedLaneState, lastResult].filter(
+				(stored) => stored !== undefined,
 			).length;
 			if (
 				leaf !== undefined &&
-				laneState !== undefined &&
+				storedLaneState !== undefined &&
 				(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
 			) {
 				throw new SessionLaneExistsError(name);
@@ -254,19 +276,11 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 
 			// R6 adds the harness-wide admission barrier. Until then, close may reject
 			// this lane job before Storage.commit admits it; admitted commits still drain.
-			await mutator.commit({
-				writes: [
-					{ kind: "register", op: "set", namespace: "lane.config", key: name, value: configuration },
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: name, value: at },
-					{
-						kind: "register",
-						op: "set",
-						namespace: "lane.state",
-						key: name,
-						value: { currentOperationId: null, pendingNextRun: [] },
-					},
-				],
-			});
+			await mutator.commit([
+				setValueWrite(laneConfig(name), configuration),
+				setValueWrite(laneLeaf(name), at),
+				setValueWrite(laneState(name), { currentOperationId: null, pendingNextRun: [] }),
+			]);
 			return this.view(name);
 		});
 	}
@@ -284,8 +298,24 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		return this.storage.getStats();
 	}
 
+	setValue<T>(address: Value<T>, next: NoInfer<T>): Promise<void> {
+		return this.setValueForLane("main", address, next);
+	}
+
+	deleteValue<T>(address: Value<T>): Promise<void> {
+		return this.deleteValueForLane("main", address);
+	}
+
+	appendList<T>(address: ValueList<T>, element: NoInfer<T>): Promise<void> {
+		return this.appendListForLane("main", address, element);
+	}
+
+	deleteList<T>(address: ValueList<T>): Promise<void> {
+		return this.deleteListForLane("main", address);
+	}
+
 	async getName(): Promise<string | undefined> {
-		return (await this.getRegister("fact.name", ""))?.value;
+		return (await this.getValue(sessionName))?.value;
 	}
 
 	setName(name: string | undefined): Promise<void> {
@@ -293,19 +323,11 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 	}
 
 	async getLabel(targetId: string): Promise<string | undefined> {
-		return (await this.getRegister("fact.label", targetId))?.value;
+		return (await this.getValue(entryLabel(targetId)))?.value;
 	}
 
 	setLabel(targetId: string, label: string | undefined): Promise<void> {
 		return this.setLabelForLane("main", targetId, label);
-	}
-
-	async getCustomFact(key: string): Promise<JsonValue | undefined> {
-		return (await this.getRegister("fact.custom", key))?.value;
-	}
-
-	setCustomFact(key: string, value: JsonValue | undefined): Promise<void> {
-		return this.setCustomFactForLane("main", key, value);
 	}
 
 	async findEntries(query: EntryQuery = {}): Promise<Entry[]> {
@@ -370,7 +392,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 	}
 
 	private async getLeafIdForLane(lane: string): Promise<string | null> {
-		const leaf = await this.getRegister("lane.leaf", lane);
+		const leaf = await this.getValue(laneLeaf(lane));
 		if (leaf === undefined) throw new Error(`Unknown lane: ${lane}`);
 		return leaf.value;
 	}
@@ -390,40 +412,39 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		return entries[0];
 	}
 
-	private setNameForLane(lane: string, name: string | undefined): Promise<void> {
+	private setValueForLane<T>(lane: string, address: Value<T>, next: NoInfer<T>): Promise<void> {
 		return this.mutate(lane, async (mutator) => {
-			await mutator.commit({
-				writes: [
-					name === undefined
-						? { kind: "register", op: "delete", namespace: "fact.name", key: "" }
-						: { kind: "register", op: "set", namespace: "fact.name", key: "", value: name },
-				],
-			});
+			await mutator.commit([setValueWrite(address, next)]);
 		});
+	}
+
+	private deleteValueForLane<T>(lane: string, address: Value<T>): Promise<void> {
+		return this.mutate(lane, async (mutator) => {
+			await mutator.commit([deleteValueWrite(address)]);
+		});
+	}
+
+	private appendListForLane<T>(lane: string, address: ValueList<T>, element: NoInfer<T>): Promise<void> {
+		return this.mutate(lane, async (mutator) => {
+			await mutator.commit([appendListWrite(address, element)]);
+		});
+	}
+
+	private deleteListForLane<T>(lane: string, address: ValueList<T>): Promise<void> {
+		return this.mutate(lane, async (mutator) => {
+			await mutator.commit([deleteListWrite(address)]);
+		});
+	}
+
+	private setNameForLane(lane: string, name: string | undefined): Promise<void> {
+		return name === undefined
+			? this.deleteValueForLane(lane, sessionName)
+			: this.setValueForLane(lane, sessionName, name);
 	}
 
 	private setLabelForLane(lane: string, targetId: string, label: string | undefined): Promise<void> {
-		return this.mutate(lane, async (mutator) => {
-			await mutator.commit({
-				writes: [
-					label === undefined
-						? { kind: "register", op: "delete", namespace: "fact.label", key: targetId }
-						: { kind: "register", op: "set", namespace: "fact.label", key: targetId, value: label },
-				],
-			});
-		});
-	}
-
-	private setCustomFactForLane(lane: string, key: string, value: JsonValue | undefined): Promise<void> {
-		return this.mutate(lane, async (mutator) => {
-			await mutator.commit({
-				writes: [
-					value === undefined
-						? { kind: "register", op: "delete", namespace: "fact.custom", key }
-						: { kind: "register", op: "set", namespace: "fact.custom", key, value },
-				],
-			});
-		});
+		const address = entryLabel(targetId);
+		return label === undefined ? this.deleteValueForLane(lane, address) : this.setValueForLane(lane, address, label);
 	}
 
 	private appendMessageForLane(lane: string, message: AgentMessage): Promise<string> {
@@ -457,71 +478,59 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 
 	private async appendCapturedIfReady(mutator: SessionMutator, id: string, pending: PendingEntry): Promise<void> {
 		const { lane } = mutator;
-		const [leaf, laneState] = await Promise.all([
-			mutator.getRegister("lane.leaf", lane),
-			mutator.getRegister("lane.state", lane),
+		const [leaf, storedLaneState] = await Promise.all([
+			mutator.getValue(laneLeaf(lane)),
+			mutator.getValue(laneState(lane)),
 		]);
 		if (leaf === undefined) throw new SessionInvariantError(`Unknown lane: ${lane}`);
-		if (laneState === undefined)
+		if (storedLaneState === undefined)
 			throw new SessionInvariantError(`Lane ${JSON.stringify(lane)} is missing lane.state`);
-		const operationId = laneState.value.currentOperationId;
+		const operationId = storedLaneState.value.currentOperationId;
 		if (operationId === null) {
-			await mutator.commit({
-				writes: [
-					{
-						kind: "entry",
-						entry:
-							pending.type === "message"
-								? { id, parentId: leaf.value, type: "message", message: pending.payload }
-								: {
-										id,
-										parentId: leaf.value,
-										type: "custom",
-										customType: pending.customType,
-										...(pending.payload === undefined ? {} : { data: pending.payload }),
-									},
-					},
-					{ kind: "register", op: "set", namespace: "lane.leaf", key: lane, value: id },
-				],
-			});
+			await mutator.commit([
+				insertEntry(
+					pending.type === "message"
+						? { id, parentId: leaf.value, type: "message", message: pending.payload }
+						: {
+								id,
+								parentId: leaf.value,
+								type: "custom",
+								customType: pending.customType,
+								...(pending.payload === undefined ? {} : { data: pending.payload }),
+							},
+				),
+				setValueWrite(laneLeaf(lane), id),
+			]);
 			return;
 		}
 
-		const [operation, operationState] = await Promise.all([
-			mutator.getRegister("op.meta", operationId),
-			mutator.getRegister("op.state", operationId),
+		const [operation, storedOperationState] = await Promise.all([
+			mutator.getValue(operationMeta(operationId)),
+			mutator.getValue(operationState(operationId)),
 		]);
 		if (operation === undefined) {
 			throw new SessionInvariantError(`Active operation ${operationId} is missing op.meta`);
 		}
-		if (operationState === undefined) {
+		if (storedOperationState === undefined) {
 			throw new SessionInvariantError(`Active operation ${operationId} is missing op.state`);
 		}
-		this.validateCurrentOperation(lane, operation.value, operationState.value);
-		if (operationState.value.kind !== "run") {
+		this.validateCurrentOperation(lane, operation.value, storedOperationState.value);
+		if (storedOperationState.value.kind !== "run") {
 			// TODO: Tree writes during structural operations must wait for the operation to finish,
 			// then re-evaluate the lane state. That coordination is not yet implemented.
 			throw new Error(`Cannot append while structural operation ${operationId} is active`);
 		}
 
-		await mutator.commit({
-			writes: [
-				{ kind: "register", op: "set", namespace: "pending.entry", key: id, value: pending },
-				{
-					kind: "register",
-					op: "set",
-					namespace: "op.state",
-					key: operationId,
-					value: {
-						...operationState.value,
-						inbox: {
-							...operationState.value.inbox,
-							writes: [...operationState.value.inbox.writes, id],
-						},
-					},
+		await mutator.commit([
+			setValueWrite(pendingEntry(id), pending),
+			setValueWrite(operationState(operationId), {
+				...storedOperationState.value,
+				inbox: {
+					...storedOperationState.value.inbox,
+					writes: [...storedOperationState.value.inbox.writes, id],
 				},
-			],
-		});
+			}),
+		]);
 	}
 
 	private validateCurrentOperation(lane: string, operation: OperationMeta, state: OperationState): void {

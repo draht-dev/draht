@@ -5,6 +5,7 @@ import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type { LaneConfiguration, Session } from "../../../src/harness/session/types.ts";
+import * as storedValues from "../../../src/harness/session/values.ts";
 import { ControlledMemoryStorage, deferred } from "./test-utils.ts";
 
 const sessions: Session[] = [];
@@ -27,19 +28,11 @@ async function createLane(): Promise<{
 	);
 	sessions.push(session);
 	await session.mutate("main", (mutator) =>
-		mutator.commit({
-			writes: [
-				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
-				{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
-				{
-					kind: "register",
-					op: "set",
-					namespace: "lane.state",
-					key: "main",
-					value: { currentOperationId: null, pendingNextRun: [] },
-				},
-			],
-		}),
+		mutator.commit([
+			storedValues.setValue(storedValues.laneLeaf("main"), null),
+			storedValues.setValue(storedValues.laneConfig("main"), configuration),
+			storedValues.setValue(storedValues.laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
+		]),
 	);
 	const faux = fauxProvider();
 	const models = createModels();
@@ -69,17 +62,7 @@ function setThinkingLevel(
 		const next = { ...state, configuration: { ...state.configuration, thinkingLevel } };
 		return {
 			kind: "commit",
-			transaction: {
-				writes: [
-					{
-						kind: "register",
-						op: "set",
-						namespace: "lane.config",
-						key: lane.name,
-						value: next.configuration,
-					},
-				],
-			},
+			writes: [storedValues.setValue(storedValues.laneConfig(lane.name), next.configuration)],
 			next,
 			materialize: () => thinkingLevel,
 		};
@@ -102,7 +85,7 @@ describe("runtime2 Lane commands", () => {
 		expect(await lane.getModel()).toBe(model);
 		expect(await lane.getThinkingLevel()).toBe("high");
 		expect(await lane.getActiveTools()).toBe(activeToolNames);
-		expect((await session.getRegister("lane.config", "main"))?.value).toEqual({
+		expect((await session.getValue(storedValues.laneConfig("main")))?.value).toEqual({
 			model: { provider: model.provider, modelId: model.id },
 			thinkingLevel: "high",
 			activeToolNames,
@@ -162,14 +145,12 @@ describe("runtime2 Lane commands", () => {
 		let memoryPublished = false;
 
 		const commit = await lane.command(async (state, reader) => {
-			storedConfiguration = (await reader.getRegister("lane.config", "main"))?.value;
+			storedConfiguration = (await reader.getValue(storedValues.laneConfig("main")))?.value;
 			const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
 			const next = { ...state, configuration };
 			return {
 				kind: "commit",
-				transaction: {
-					writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration }],
-				},
+				writes: [storedValues.setValue(storedValues.laneConfig("main"), configuration)],
 				next,
 				materialize: (commit) => {
 					memoryPublished = lane.state === next;
@@ -193,11 +174,7 @@ describe("runtime2 Lane commands", () => {
 				const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
 				return {
 					kind: "commit",
-					transaction: {
-						writes: [
-							{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration },
-						],
-					},
+					writes: [storedValues.setValue(storedValues.laneConfig("main"), configuration)],
 					next: { ...state, configuration },
 					materialize: async () => undefined,
 				};
@@ -205,7 +182,7 @@ describe("runtime2 Lane commands", () => {
 		).rejects.toThrow("Lane command materialize() must be synchronous");
 
 		expect(lane.state.configuration.thinkingLevel).toBe("high");
-		expect((await session.getRegister("lane.config", "main"))?.value.thinkingLevel).toBe("high");
+		expect((await session.getValue(storedValues.laneConfig("main")))?.value.thinkingLevel).toBe("high");
 	});
 
 	it("rejects work after sealing while an admitted commit finishes", async () => {
@@ -245,7 +222,7 @@ describe("runtime2 Lane commands", () => {
 		releaseCommit.resolve();
 		expect(await command).toBe("high");
 		expect(lane.state.configuration.thinkingLevel).toBe("high");
-		expect((await session.getRegister("lane.config", "main"))?.value.thinkingLevel).toBe("high");
+		expect((await session.getValue(storedValues.laneConfig("main")))?.value.thinkingLevel).toBe("high");
 	});
 
 	it("preserves memory when the durable commit fails", async () => {
@@ -258,7 +235,7 @@ describe("runtime2 Lane commands", () => {
 		await expect(setThinkingLevel(lane, "high")).rejects.toBe(failure);
 
 		expect(lane.state.configuration.thinkingLevel).toBe("off");
-		expect((await session.getRegister("lane.config", "main"))?.value.thinkingLevel).toBe("off");
+		expect((await session.getValue(storedValues.laneConfig("main")))?.value.thinkingLevel).toBe("off");
 	});
 
 	it("plans queued commands from the latest committed memory", async () => {

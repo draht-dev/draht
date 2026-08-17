@@ -16,6 +16,7 @@ import type {
 	RunState,
 	Session,
 } from "../../../src/harness/session/types.ts";
+import * as storedValues from "../../../src/harness/session/values.ts";
 import type { AgentHarnessTool } from "../../../src/harness/types.ts";
 import { ControlledMemoryStorage, deferred, FailingMemoryStorage } from "./test-utils.ts";
 
@@ -27,6 +28,7 @@ const configuredMain: LaneConfiguration = {
 	activeToolNames: ["configured-tool"],
 };
 const toolParameters = Type.Object({});
+const applicationValue = storedValues.value<{ durable: boolean }>("test.application.value");
 
 function tool(name: string): AgentHarnessTool<undefined, typeof toolParameters> {
 	return {
@@ -47,9 +49,7 @@ async function createSession(): Promise<Session> {
 
 async function configureMain(session: Session, configuration: LaneConfiguration = configuredMain): Promise<void> {
 	await session.mutate("main", (mutator) =>
-		mutator.commit({
-			writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuration }],
-		}),
+		mutator.commit([storedValues.setValue(storedValues.laneConfig("main"), configuration)]),
 	);
 }
 
@@ -60,18 +60,10 @@ async function createStorageSession(storage: MemoryStorage): Promise<Session> {
 	);
 	standaloneSessions.push(session);
 	await session.mutate("main", (mutator) =>
-		mutator.commit({
-			writes: [
-				{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
-				{
-					kind: "register",
-					op: "set",
-					namespace: "lane.state",
-					key: "main",
-					value: { currentOperationId: null, pendingNextRun: [] },
-				},
-			],
-		}),
+		mutator.commit([
+			storedValues.setValue(storedValues.laneLeaf("main"), null),
+			storedValues.setValue(storedValues.laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
+		]),
 	);
 	return session;
 }
@@ -99,19 +91,14 @@ function operationMeta(session: Session, intent: OperationMeta["intent"], starte
 
 async function installOperation(session: Session, meta: OperationMeta, state: OperationState): Promise<void> {
 	await session.mutate(meta.lane, (mutator) =>
-		mutator.commit({
-			writes: [
-				{ kind: "register", op: "set", namespace: "op.meta", key: meta.operationId, value: meta },
-				{ kind: "register", op: "set", namespace: "op.state", key: meta.operationId, value: state },
-				{
-					kind: "register",
-					op: "set",
-					namespace: "lane.state",
-					key: meta.lane,
-					value: { currentOperationId: meta.operationId, pendingNextRun: [] },
-				},
-			],
-		}),
+		mutator.commit([
+			storedValues.setValue(storedValues.operationMeta(meta.operationId), meta),
+			storedValues.setValue(storedValues.operationState(meta.operationId), state),
+			storedValues.setValue(storedValues.laneState(meta.lane), {
+				currentOperationId: meta.operationId,
+				pendingNextRun: [],
+			}),
+		]),
 	);
 }
 
@@ -285,7 +272,7 @@ describe("runtime2 AgentHarness", () => {
 				retry: { enabled: true, maxRetries: -1, baseDelayMs: 0 },
 			}),
 		).rejects.toBeInstanceOf(RangeError);
-		expect(await invalidRetrySession.getRegister("lane.config", "main")).toBeUndefined();
+		expect(await invalidRetrySession.getValue(storedValues.laneConfig("main"))).toBeUndefined();
 
 		const invalidCompactionSession = await createSession();
 		await expect(
@@ -294,7 +281,7 @@ describe("runtime2 AgentHarness", () => {
 				compaction: { enabled: true, reserveTokens: -1, keepRecentTokens: 0 },
 			}),
 		).rejects.toBeInstanceOf(RangeError);
-		expect(await invalidCompactionSession.getRegister("lane.config", "main")).toBeUndefined();
+		expect(await invalidCompactionSession.getValue(storedValues.laneConfig("main"))).toBeUndefined();
 	});
 
 	it("seeds main and returns the concrete harness as its main lane", async () => {
@@ -311,7 +298,7 @@ describe("runtime2 AgentHarness", () => {
 		expect(await harness.lane("main")).toBe(harness);
 		expect(await harness.getLeafId()).toBeNull();
 		expect(suspended).toEqual([]);
-		expect((await session.getRegister("lane.config", "main"))?.value).toEqual({
+		expect((await session.getValue(storedValues.laneConfig("main")))?.value).toEqual({
 			model: { provider: options.model.provider, modelId: options.model.id },
 			thinkingLevel: "high",
 			activeToolNames: ["read"],
@@ -325,7 +312,7 @@ describe("runtime2 AgentHarness", () => {
 		const entryId = await harness.sessionTree.appendMessage({ role: "user", content: "hello", timestamp: 1 });
 
 		expect(await harness.getLeafId()).toBe(entryId);
-		expect((await session.getRegister("lane.leaf", "main"))?.value).toBe(entryId);
+		expect((await session.getValue(storedValues.laneLeaf("main")))?.value).toBe(entryId);
 		expect(await harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" })).toMatchObject([
 			{ id: entryId, parentId: null, message: { role: "user", content: "hello" } },
 		]);
@@ -339,12 +326,13 @@ describe("runtime2 AgentHarness", () => {
 			activeToolNames: [],
 		};
 		await session.mutate("main", (mutator) =>
-			mutator.commit({
-				writes: [{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuredMain }],
-			}),
+			mutator.commit([storedValues.setValue(storedValues.laneConfig("main"), configuredMain)]),
 		);
 		await session.createLane("worker", null, workerConfiguration);
-		const before = await session.listRegisters("lane.config");
+		const before = await Promise.all([
+			session.getValue(storedValues.laneConfig("main")),
+			session.getValue(storedValues.laneConfig("worker")),
+		]);
 
 		const { harness } = await createAgentHarness(modelOptions(session));
 		const worker = await harness.lane("worker");
@@ -352,7 +340,12 @@ describe("runtime2 AgentHarness", () => {
 		expect(worker).toBeInstanceOf(Lane);
 		expect(await worker?.getLeafId()).toBeNull();
 		expect((await harness.lanes()).map((lane) => lane.name).sort()).toEqual(["main", "worker"]);
-		expect(await session.listRegisters("lane.config")).toEqual(before);
+		expect(
+			await Promise.all([
+				session.getValue(storedValues.laneConfig("main")),
+				session.getValue(storedValues.laneConfig("worker")),
+			]),
+		).toEqual(before);
 	});
 
 	it("creates a lane from the captured seed and publishes it after commit", async () => {
@@ -368,7 +361,7 @@ describe("runtime2 AgentHarness", () => {
 		let durableConfigurationAtEvent: LaneConfiguration | undefined;
 		let laneVisibleAtEvent = false;
 		harness.events.on("lane_created", async () => {
-			durableConfigurationAtEvent = (await session.getRegister("lane.config", "worker"))?.value;
+			durableConfigurationAtEvent = (await session.getValue(storedValues.laneConfig("worker")))?.value;
 			laneVisibleAtEvent = (await harness.lane("worker")) !== undefined;
 		});
 
@@ -384,7 +377,7 @@ describe("runtime2 AgentHarness", () => {
 			activeToolNames: ["read"],
 		});
 		expect(laneVisibleAtEvent).toBe(true);
-		expect((await session.getRegister("lane.state", "worker"))?.value).toEqual({
+		expect((await session.getValue(storedValues.laneState("worker")))?.value).toEqual({
 			currentOperationId: null,
 			pendingNextRun: [],
 		});
@@ -429,9 +422,9 @@ describe("runtime2 AgentHarness", () => {
 		expect(rejected.cause).toBe(failure);
 		await expect(harness.createLane("later", null)).rejects.toBe(rejected);
 		expect(harness.lanesByName.has("worker")).toBe(false);
-		expect(await session.getRegister("lane.config", "worker")).toBeUndefined();
-		expect(await session.getRegister("lane.leaf", "worker")).toBeUndefined();
-		expect(await session.getRegister("lane.state", "worker")).toBeUndefined();
+		expect(await session.getValue(storedValues.laneConfig("worker"))).toBeUndefined();
+		expect(await session.getValue(storedValues.laneLeaf("worker"))).toBeUndefined();
+		expect(await session.getValue(storedValues.laneState("worker"))).toBeUndefined();
 	});
 
 	it("returns Closed when lane creation starts after close", async () => {
@@ -675,19 +668,17 @@ describe("runtime2 AgentHarness", () => {
 			leafId: null,
 		};
 		await session.mutate("main", (mutator) =>
-			mutator.commit({
-				writes: [
-					{ kind: "register", op: "set", namespace: "lane.config", key: "main", value: configuredMain },
-					{ kind: "register", op: "set", namespace: "lane.lastResult", key: "main", value: lastResult },
-				],
-			}),
+			mutator.commit([
+				storedValues.setValue(storedValues.laneConfig("main"), configuredMain),
+				storedValues.setValue(storedValues.laneLastResult("main"), lastResult),
+			]),
 		);
 		const { harness } = await createAgentHarness(modelOptions(session));
 
 		expect(await harness.inspectExecution()).toEqual({ lane: "main", leafId: null, current: null, lastResult });
 	});
 
-	it("persists custom facts through idle and active lane facades", async () => {
+	it("persists application values through idle and active lane facades", async () => {
 		const session = await createSession();
 		await configureMain(session);
 		const meta = operationMeta(session, { kind: "run", promptEntryIds: [] });
@@ -695,15 +686,24 @@ describe("runtime2 AgentHarness", () => {
 		await installOperation(session, meta, runState(session.idGenerator.next()));
 		const { harness } = await createAgentHarness(modelOptions(session));
 		const worker = unwrap(await harness.createLane("worker", null));
+		const updates: unknown[] = [];
+		harness.events.on("value_update", (event) => {
+			updates.push(event);
+		});
 
 		await worker.sessionTree.setName("idle-worker");
 		await harness.sessionTree.setName("active-main");
 		await harness.sessionTree.setLabel("target", "label");
-		await harness.sessionTree.setCustomFact("key", { durable: true });
+		await harness.sessionTree.setValue(applicationValue, { durable: true });
 
 		expect(await session.getName()).toBe("active-main");
 		expect(await session.getLabel("target")).toBe("label");
-		expect(await session.getCustomFact("key")).toEqual({ durable: true });
+		expect((await session.getValue(applicationValue))?.value).toEqual({ durable: true });
+		expect(updates).toEqual([
+			{ type: "value_update", value: "session_name", name: "idle-worker" },
+			{ type: "value_update", value: "session_name", name: "active-main" },
+			{ type: "value_update", value: "entry_label", targetId: "target", label: "label" },
+		]);
 		expect((await harness.inspectExecution()).current?.id).toBe(operationId);
 	});
 
@@ -735,12 +735,12 @@ describe("runtime2 AgentHarness", () => {
 		const updatedState = harness.state.operation?.state;
 		if (updatedState?.kind !== "run") throw new Error("missing updated run state");
 		expect(updatedState.inbox.writes).toEqual([pendingId]);
-		expect((await session.getRegister("pending.entry", pendingId))?.value).toEqual({
+		expect((await session.getValue(storedValues.pendingEntry(pendingId)))?.value).toEqual({
 			type: "custom",
 			customType: "note",
 			payload: { text: "queued" },
 		});
-		expect((await session.getRegister("lane.leaf", "main"))?.value).toBeNull();
+		expect((await session.getValue(storedValues.laneLeaf("main")))?.value).toBeNull();
 
 		const closing = harness.close();
 		expect(harness.close()).toBe(closing);
@@ -748,9 +748,9 @@ describe("runtime2 AgentHarness", () => {
 		await expect(harness.lanes()).rejects.toBeInstanceOf(HarnessClosed);
 		await expect(harness.inspectExecution()).rejects.toBeInstanceOf(HarnessClosed);
 		const reopened = await repo.open(session.metadata);
-		expect((await reopened.getRegister("lane.state", "main"))?.value.currentOperationId).toBe(operationId);
-		expect((await reopened.getRegister("op.meta", operationId))?.value).toEqual(meta);
-		expect((await reopened.getRegister("op.state", operationId))?.value).toEqual(updatedState);
+		expect((await reopened.getValue(storedValues.laneState("main")))?.value.currentOperationId).toBe(operationId);
+		expect((await reopened.getValue(storedValues.operationMeta(operationId)))?.value).toEqual(meta);
+		expect((await reopened.getValue(storedValues.operationState(operationId)))?.value).toEqual(updatedState);
 	});
 
 	it("uses owned state after creation and starts no option callbacks", async () => {
@@ -766,8 +766,9 @@ describe("runtime2 AgentHarness", () => {
 			entryProjectors: { forbidden },
 		});
 		const mutate = vi.spyOn(session, "mutate");
-		const getRegister = vi.spyOn(session, "getRegister");
-		const listRegisters = vi.spyOn(session, "listRegisters");
+		const getValue = vi.spyOn(session, "getValue");
+		const scanValues = vi.spyOn(session, "scanValues");
+		const readList = vi.spyOn(session, "readList");
 
 		expect(await harness.lane("main")).toBe(harness);
 		expect(await harness.lanes()).toHaveLength(1);
@@ -775,8 +776,9 @@ describe("runtime2 AgentHarness", () => {
 		expect(await harness.getLastResult()).toBeUndefined();
 		expect(forbidden).not.toHaveBeenCalled();
 		expect(mutate).not.toHaveBeenCalled();
-		expect(getRegister).not.toHaveBeenCalled();
-		expect(listRegisters).not.toHaveBeenCalled();
+		expect(getValue).not.toHaveBeenCalled();
+		expect(scanValues).not.toHaveBeenCalled();
+		expect(readList).not.toHaveBeenCalled();
 		expect(await harness.getTools()).toEqual([]);
 		expect(await harness.getResources()).toEqual({});
 		expect(await harness.getStreamOptions()).toEqual({});
@@ -845,24 +847,19 @@ describe("runtime2 AgentHarness", () => {
 		await expect(harness.setResources({})).rejects.toBe(rejected);
 		expect(harness.fault(new Error("later"))).toBe(rejected);
 		expect(worker.state.configuration).toBe(initialConfiguration);
-		expect((await session.getRegister("lane.config", "worker"))?.value).toEqual(initialConfiguration);
+		expect((await session.getValue(storedValues.laneConfig("worker")))?.value).toEqual(initialConfiguration);
 		await harness.close();
 	});
 
 	it("wraps initialization invariant failures as harness faults", async () => {
 		const session = await createSession();
 		await session.mutate("main", (mutator) =>
-			mutator.commit({
-				writes: [
-					{
-						kind: "register",
-						op: "set",
-						namespace: "lane.state",
-						key: "main",
-						value: { currentOperationId: session.idGenerator.next(), pendingNextRun: [] },
-					},
-				],
-			}),
+			mutator.commit([
+				storedValues.setValue(storedValues.laneState("main"), {
+					currentOperationId: session.idGenerator.next(),
+					pendingNextRun: [],
+				}),
+			]),
 		);
 
 		await expect(createAgentHarness(modelOptions(session))).rejects.toBeInstanceOf(HarnessFault);

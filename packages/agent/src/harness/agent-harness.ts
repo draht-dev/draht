@@ -431,10 +431,9 @@ export type HarnessEventPayload =
 	| { type: "entry_added"; entry: Entry }
 	| { type: "write_pending"; runId: string; entryId: string; entryType: EntryType }
 	| { type: "queue_update"; steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] }
-	| ({ type: "fact_update" } & (
-			| { fact: "name"; name: string | undefined }
-			| { fact: "label"; targetId: string; label: string | undefined }
-			| { fact: "custom"; key: string; value: JsonValue | undefined }
+	| ({ type: "value_update" } & (
+			| { value: "session_name"; name: string | undefined }
+			| { value: "entry_label"; targetId: string; label: string | undefined }
 	  ))
 	| ({ type: "config_update" } & (
 			| {
@@ -477,7 +476,7 @@ export type HarnessEventPayload =
 
 export type SpecialEventPayload = Extract<
 	HarnessEventPayload,
-	{ type: "fault" | "fact_update" | "usage" | "config_update" | "handler_error" }
+	{ type: "fault" | "value_update" | "usage" | "config_update" | "handler_error" }
 >;
 export type LaneEventPayload = Exclude<HarnessEventPayload, SpecialEventPayload>;
 export type ConfigEventPayload = Extract<HarnessEventPayload, { type: "config_update" }>;
@@ -491,7 +490,7 @@ export type HandlerErrorPayload = Extract<HarnessEventPayload, { type: "handler_
 export type HarnessEvent =
 	| (LaneEventPayload & { lane: string; recovery?: true })
 	| (LaneConfigEventPayload & { lane: string; recovery?: true })
-	| (Extract<HarnessEventPayload, { type: "fault" | "fact_update" }> & {
+	| (Extract<HarnessEventPayload, { type: "fault" | "value_update" }> & {
 			lane?: never;
 			recovery?: never;
 	  })

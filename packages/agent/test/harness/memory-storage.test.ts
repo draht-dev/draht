@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import * as sessionWrites from "../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
+import * as storedValues from "../../src/harness/session/values.ts";
 
 const NOW = 1_700_000_000_000;
 
@@ -8,23 +10,16 @@ describe("MemoryStorage", () => {
 		let timestamp = NOW;
 		const storage = new MemoryStorage({ now: () => timestamp++ });
 
-		const first = await storage.commit({
-			writes: [
-				{
-					kind: "entry",
-					entry: {
-						id: "first",
-						parentId: null,
-						type: "custom",
-						customType: "note",
-					},
-				},
-				{ kind: "register", op: "set", namespace: "fact.name", key: "", value: "first" },
-			],
-		});
-		const second = await storage.commit({
-			writes: [{ kind: "register", op: "set", namespace: "fact.name", key: "", value: "second" }],
-		});
+		const first = await storage.commit([
+			sessionWrites.insertEntry({
+				id: "first",
+				parentId: null,
+				type: "custom",
+				customType: "note",
+			}),
+			storedValues.setValue(storedValues.sessionName, "first"),
+		]);
+		const second = await storage.commit([storedValues.setValue(storedValues.sessionName, "second")]);
 
 		expect(first.timestamp).toBe(NOW);
 		expect(second.timestamp).toBe(NOW + 1);

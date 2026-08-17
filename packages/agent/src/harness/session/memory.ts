@@ -14,8 +14,6 @@ import type {
 	IdGenerator,
 	JsonValue,
 	LaneConfiguration,
-	Register,
-	RegisterNamespace,
 	Session,
 	SessionCreateOptions,
 	SessionMetadata,
@@ -25,10 +23,20 @@ import type {
 	SessionTree,
 	Storage,
 	StorageBranchScan,
-	Transaction,
 	UsageRow,
 	UsageScan,
+	Write,
 } from "./types.ts";
+import {
+	type ListElement,
+	type ListReadOptions,
+	laneLeaf,
+	laneState,
+	type StoredValue,
+	setValue as setValueWrite,
+	type Value,
+	type ValueList,
+} from "./values.ts";
 
 export interface MemoryStorageOptions {
 	now?: () => number;
@@ -49,10 +57,10 @@ export class MemoryStorage implements Storage {
 		this.now = options.now ?? Date.now;
 	}
 
-	async commit(transaction: Transaction): Promise<CommitResult> {
+	async commit(writes: Write[]): Promise<CommitResult> {
 		if (this.state !== "open") throw new Error("MemoryStorage is closed");
 		const result = this.commitQueue.then(() => {
-			const prepared = this.storageState.prepareCommit(transaction, this.now());
+			const prepared = this.storageState.prepareCommit(writes, this.now());
 			this.storageState.applyValidated(prepared.writes);
 			return prepared.result;
 		});
@@ -68,20 +76,19 @@ export class MemoryStorage implements Storage {
 		return Promise.resolve(this.storageState.getEntries(ids));
 	}
 
-	getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Promise<Register<TNamespace> | undefined> {
+	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		return Promise.resolve(this.storageState.getRegister(namespace, key));
+		return Promise.resolve(this.storageState.getValue(address));
 	}
 
-	listRegisters<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		keyPrefix = "",
-	): Promise<Register<TNamespace>[]> {
+	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		return Promise.resolve(this.storageState.listRegisters(namespace, keyPrefix));
+		return Promise.resolve(this.storageState.scanValues(prefix));
+	}
+
+	async readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]> {
+		if (this.state !== "open") throw new Error("MemoryStorage is closed");
+		return this.storageState.readList(address, options);
 	}
 
 	async scanBranch(query: StorageBranchScan): Promise<Entry[]> {
@@ -110,13 +117,18 @@ export class MemoryStorage implements Storage {
 	}
 
 	/** Capture the current stores at one serialized boundary between commits. */
-	snapshot(): Promise<{ entries: Entry[]; registers: Register[] }> {
+	snapshot(): Promise<{
+		entries: Entry[];
+		scalarValues: StoredValue<unknown>[];
+		listValues: StorageStateSnapshot["listValues"];
+	}> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
 		const result = this.commitQueue.then(() => {
 			const snapshot = this.storageState.snapshot();
 			return {
 				entries: [...snapshot.entries.values()].sort((left, right) => left.seq - right.seq),
-				registers: snapshot.registers,
+				scalarValues: snapshot.scalarValues,
+				listValues: snapshot.listValues,
 			};
 		});
 		this.commitQueue = result.then(
@@ -176,18 +188,16 @@ class MemorySessionFacade implements Session {
 		return this.admit(() => this.session.getEntries(ids));
 	}
 
-	getRegister<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		key: string,
-	): Promise<Register<TNamespace> | undefined> {
-		return this.admit(() => this.session.getRegister(namespace, key));
+	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined> {
+		return this.admit(() => this.session.getValue(address));
 	}
 
-	listRegisters<TNamespace extends RegisterNamespace>(
-		namespace: TNamespace,
-		keyPrefix?: string,
-	): Promise<Register<TNamespace>[]> {
-		return this.admit(() => this.session.listRegisters(namespace, keyPrefix));
+	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]> {
+		return this.admit(() => this.session.scanValues(prefix));
+	}
+
+	readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]> {
+		return this.admit(() => this.session.readList(address, options));
 	}
 
 	view(lane: string): SessionTree {
@@ -196,12 +206,17 @@ class MemorySessionFacade implements Session {
 			getLeafId: () => this.admit(() => view.getLeafId()),
 			getEntry: (id) => this.admit(() => view.getEntry(id)),
 			getStats: () => this.admit(() => view.getStats()),
+			getValue: (address) => this.admit(() => view.getValue(address)),
+			scanValues: (prefix) => this.admit(() => view.scanValues(prefix)),
+			readList: (address, options) => this.admit(() => view.readList(address, options)),
+			setValue: (address, next) => this.admit(() => view.setValue(address, next)),
+			deleteValue: (address) => this.admit(() => view.deleteValue(address)),
+			appendList: (address, element) => this.admit(() => view.appendList(address, element)),
+			deleteList: (address) => this.admit(() => view.deleteList(address)),
 			getName: () => this.admit(() => view.getName()),
 			setName: (name) => this.admit(() => view.setName(name)),
 			getLabel: (targetId) => this.admit(() => view.getLabel(targetId)),
 			setLabel: (targetId, label) => this.admit(() => view.setLabel(targetId, label)),
-			getCustomFact: (key) => this.admit(() => view.getCustomFact(key)),
-			setCustomFact: (key, value) => this.admit(() => view.setCustomFact(key, value)),
 			findEntries: (query) => this.admit(() => view.findEntries(query)),
 			findEntry: (query) => this.admit(() => view.findEntry(query)),
 			findEntriesOnBranch: (query) => this.admit(() => view.findEntriesOnBranch(query)),
@@ -230,6 +245,22 @@ class MemorySessionFacade implements Session {
 		return this.admit(() => this.session.getStats());
 	}
 
+	setValue<T>(address: Value<T>, next: NoInfer<T>): Promise<void> {
+		return this.admit(() => this.session.setValue(address, next));
+	}
+
+	deleteValue<T>(address: Value<T>): Promise<void> {
+		return this.admit(() => this.session.deleteValue(address));
+	}
+
+	appendList<T>(address: ValueList<T>, element: NoInfer<T>): Promise<void> {
+		return this.admit(() => this.session.appendList(address, element));
+	}
+
+	deleteList<T>(address: ValueList<T>): Promise<void> {
+		return this.admit(() => this.session.deleteList(address));
+	}
+
 	getName(): Promise<string | undefined> {
 		return this.admit(() => this.session.getName());
 	}
@@ -244,14 +275,6 @@ class MemorySessionFacade implements Session {
 
 	setLabel(targetId: string, label: string | undefined): Promise<void> {
 		return this.admit(() => this.session.setLabel(targetId, label));
-	}
-
-	getCustomFact(key: string): Promise<JsonValue | undefined> {
-		return this.admit(() => this.session.getCustomFact(key));
-	}
-
-	setCustomFact(key: string, value: JsonValue | undefined): Promise<void> {
-		return this.admit(() => this.session.setCustomFact(key, value));
 	}
 
 	findEntries(query?: EntryQuery): Promise<Entry[]> {
@@ -331,18 +354,10 @@ export class MemorySessionRepo implements SessionRepo {
 		const session = new StorageBackedSession(metadata, storage);
 		try {
 			await session.mutate("main", (mutator) =>
-				mutator.commit({
-					writes: [
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
-						{
-							kind: "register",
-							op: "set",
-							namespace: "lane.state",
-							key: "main",
-							value: { currentOperationId: null, pendingNextRun: [] },
-						},
-					],
-				}),
+				mutator.commit([
+					setValueWrite(laneLeaf("main"), null),
+					setValueWrite(laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
+				]),
 			);
 			const record: MemorySessionRecord = { metadata, storage, session, open: true };
 			this.sessions.set(id, record);

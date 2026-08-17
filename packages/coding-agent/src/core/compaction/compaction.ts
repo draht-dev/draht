@@ -26,6 +26,17 @@ import {
 	serializeConversation,
 } from "./utils.ts";
 
+function getAnthropicSummarizationFallback(model: Model<any>): readonly { model: string }[] | undefined {
+	if (model.provider !== "anthropic" || model.api !== "anthropic-messages") {
+		return undefined;
+	}
+
+	const allowedFallbackModels = (model as Model<"anthropic-messages">).compat?.allowedFallbackModels;
+	// Use the primary permitted fallback for now. If future Anthropic models expose
+	// broader fallback behavior, this can become a user/config pick or a full chain.
+	return allowedFallbackModels && allowedFallbackModels.length > 0 ? [{ model: allowedFallbackModels[0] }] : undefined;
+}
+
 // ============================================================================
 // File Operation Tracking
 // ============================================================================
@@ -547,6 +558,10 @@ function createSummarizationOptions(
 	sessionId: string | undefined,
 ): SimpleStreamOptions {
 	const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers, env, sessionId };
+	const refusalFallbacks = getAnthropicSummarizationFallback(model);
+	if (refusalFallbacks) {
+		options.refusalFallbacks = refusalFallbacks;
+	}
 	if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
 		options.reasoning = thinkingLevel;
 	}

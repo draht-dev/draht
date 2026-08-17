@@ -21,7 +21,11 @@ vi.mock("@draht/ai/compat", async (importOriginal) => {
 	};
 });
 
-function createModel(reasoning: boolean, maxTokens = 8192): Model<"anthropic-messages"> {
+function createModel(
+	reasoning: boolean,
+	maxTokens = 8192,
+	compat?: Model<"anthropic-messages">["compat"],
+): Model<"anthropic-messages"> {
 	return {
 		id: reasoning ? "reasoning-model" : "non-reasoning-model",
 		name: reasoning ? "Reasoning Model" : "Non-reasoning Model",
@@ -33,6 +37,7 @@ function createModel(reasoning: boolean, maxTokens = 8192): Model<"anthropic-mes
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200000,
 		maxTokens,
+		...(compat ? { compat } : {}),
 	};
 }
 
@@ -154,6 +159,27 @@ describe("generateSummary reasoning options", () => {
 			apiKey: "test-key",
 		});
 		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("reasoning");
+	});
+
+	it("sets Anthropic refusal fallback from model metadata", async () => {
+		await generateSummary(
+			messages,
+			createModel(true, 8192, { allowedFallbackModels: ["claude-opus-4-8", "claude-opus-5"] }),
+			2000,
+			"test-key",
+		);
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
+			refusalFallbacks: [{ model: "claude-opus-4-8" }],
+		});
+	});
+
+	it("does not set Anthropic refusal fallback for models without allowed fallback targets", async () => {
+		await generateSummary(messages, createModel(true), 2000, "test-key");
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("refusalFallbacks");
 	});
 
 	it("clamps compaction summary maxTokens to the model output cap", async () => {

@@ -40,6 +40,47 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		await repo.close();
 	});
 
+	it("discovers legacy v3 session files without rewriting them", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
+		const directory = getOrThrow(await fileSystem.joinPath(["sessions", "--workspace--"]));
+		getOrThrow(await fileSystem.createDir(directory));
+		const path = getOrThrow(
+			await fileSystem.absolutePath(getOrThrow(await fileSystem.joinPath([directory, "legacy.jsonl"]))),
+		);
+		const content = `${JSON.stringify({
+			type: "session",
+			version: 3,
+			id: "legacy",
+			timestamp: new Date(NOW).toISOString(),
+			cwd: "/workspace",
+			parentSession: "/old-session.jsonl",
+		})}\n${JSON.stringify({
+			type: "message",
+			id: "message-1",
+			parentId: null,
+			timestamp: new Date(NOW + 1).toISOString(),
+			message: { role: "user", content: [{ type: "text", text: "hello" }] },
+		})}\n`;
+		getOrThrow(await fileSystem.writeFile(path, content));
+
+		const before = getOrThrow(await fileSystem.readTextFile(path));
+		const [metadata] = await repo.list({ cwd: "/workspace" });
+		const after = getOrThrow(await fileSystem.readTextFile(path));
+
+		expect(metadata).toMatchObject({
+			id: "legacy",
+			createdAt: NOW,
+			storageVersion: JSONL_STORAGE_VERSION,
+			cwd: "/workspace",
+			path,
+			legacyParentSessionPath: "/old-session.jsonl",
+		});
+		expect(Number.isFinite(metadata?.modifiedAt)).toBe(true);
+		expect(after).toBe(before);
+		await repo.close();
+	});
+
 	it("keeps fork destinations claimed until close and rejects deleting open sessions", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });

@@ -4,7 +4,8 @@ import { createForkSnapshot, type ForkSourceSnapshot } from "../fork.ts";
 import { StorageBackedSession } from "../session.ts";
 import type { ForkOptions, Session, SessionRepo } from "../types.ts";
 import { laneLeaf, laneState, setValue } from "../values.ts";
-import { parseJsonlStorageHeader } from "./codec.ts";
+import { type JsonlParsedSessionHeader, parseJsonlSessionHeader } from "./codec.ts";
+import { metadataFromLegacyV3Header } from "./legacy-v3.ts";
 import { JsonlStorage } from "./storage.ts";
 import {
 	JSONL_FORMAT_VERSION,
@@ -34,6 +35,15 @@ function metadataFromHeader(header: JsonlStorageHeader, path: string, modifiedAt
 			? {}
 			: { legacyParentSessionPath: header.legacyParentSessionPath }),
 	};
+}
+
+function metadataFromParsedHeader(
+	parsed: JsonlParsedSessionHeader,
+	path: string,
+	modifiedAt: number,
+): JsonlSessionMetadata {
+	if (parsed.format === "v3-legacy") return metadataFromLegacyV3Header(parsed.header, path, modifiedAt);
+	return metadataFromHeader(parsed.header, path, modifiedAt);
 }
 
 function sessionDirectoryName(cwd: string): string {
@@ -222,14 +232,11 @@ export class JsonlSessionRepo
 				`Failed to read session header ${file.path}`,
 			);
 			if (lines[0] === undefined) continue;
-			try {
-				const discovered = metadataFromHeader(parseJsonlStorageHeader(lines[0]), file.path, file.mtimeMs);
-				// Directory encoding is lossy: /a/b and /a-b both map to --a-b--.
-				if (cwd === undefined || discovered.cwd === cwd) metadata.push(discovered);
-			} catch {
-				// Discovery ignores files that are not supported session headers. Opening
-				// an explicitly supplied metadata record still reports the corruption.
-			}
+			const header = parseJsonlSessionHeader(lines[0]);
+			if (!header.ok) continue;
+			const discovered = metadataFromParsedHeader(header.value, file.path, file.mtimeMs);
+			// Directory encoding is lossy: /a/b and /a-b both map to --a-b--.
+			if (cwd === undefined || discovered.cwd === cwd) metadata.push(discovered);
 		}
 		return metadata;
 	}
@@ -298,6 +305,7 @@ export class JsonlSessionRepo
 	}
 
 	private async loadStorage(metadata: JsonlSessionMetadata): Promise<JsonlStorage> {
+		// TODO: normalize discovered legacy v3 sessions on open instead of rejecting them here.
 		if (!fileValue(await this.fileSystem.exists(metadata.path), `Failed to check session ${metadata.path}`)) {
 			throw new Error(`Session file does not exist: ${metadata.path}`);
 		}

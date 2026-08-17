@@ -1,6 +1,6 @@
 # Invocation Context and Telemetry Design Notes
 
-> **Status:** Design input, not a normative contract or implementation handoff. After the invocation-context interface migration lands, reconcile these notes with the actual types, resolve the open decisions, and fold the accepted design into `harness.md`. `telemetry-schema.md` remains the generated reference for span names and attributes.
+> **Status:** Design input, not a normative contract or implementation handoff. The context primitives described here match `src/harness/context.ts`; propagation through the harness and the remaining runtime decisions are still design work. Fold the accepted design into `harness.md` when that work lands. `telemetry-schema.md` remains the generated reference for span names and attributes.
 
 ## Goal
 
@@ -9,39 +9,49 @@
 The invocation context must solve two related problems without `AsyncLocalStorage`:
 
 1. preserve correct telemetry parentage through concurrent asynchronous work;
-2. carry the `AbortSignal` that an RPC adapter can map to request cancellation.
+2. carry an `AbortSignal`, when one exists, that an RPC adapter can map to request cancellation.
 
 This work must reuse `@draht/telemetry`. It must not introduce another span abstraction.
 
-## Target context model
+## Context model
 
-The final names still need reconciliation with the interface migration. The intended semantics are:
+The implemented public types are:
 
 ```ts
-interface InvocationContext {
-	readonly signal: AbortSignal;
-	readonly telemetry: TelemetryContext;
+interface ContextKey<T> {
+	readonly token: symbol;
+	readonly valueType?: (value: T) => T;
+}
+
+interface Context {
+	readonly abortSignal: AbortSignal | undefined;
+	readonly telemetryContext: TelemetryContext;
 	value<T>(key: ContextKey<T>): T | undefined;
+	toString(): string;
 }
 ```
 
-A context is immutable. Derivation creates a parent-linked layer:
+`valueType` is a type-only marker. Runtime lookup uses the key's symbol token. `createContextKey<T>(description)` creates and freezes a key with a unique token.
+
+A context is immutable. Derivation creates a parent-linked, copy-on-write layer. Helper arguments put the value first and parent context last:
 
 ```ts
-const requestContext = withSignal(parentContext, requestSignal);
-const spanContext = withTelemetry(requestContext, span);
-const tenantContext = withContextValue(spanContext, tenantKey, tenantId);
+const requestContext = withAbortSignal(requestSignal, parentContext);
+const spanContext = withTelemetryContext(span, requestContext);
+const tenantContext = withContextValue(tenantKey, tenantId, spanContext);
 ```
 
-Required properties:
+The implemented behavior is:
 
-- `signal` is always present. The background context uses a never-aborted signal rather than `undefined`.
-- `telemetry` is always present. The background context uses `NOOP_TELEMETRY_CONTEXT`.
-- typed values use symbol identity and immutable copy-on-write layers;
-- context values are cross-cutting request metadata, not business dependencies;
-- contexts, signals, telemetry objects, and backend-native span objects are never durable data.
+- `BACKGROUND_CONTEXT` and `TODO_CONTEXT` are distinct empty roots whose `abortSignal` is `undefined`;
+- `telemetryContext` is always available and falls back to `NOOP_TELEMETRY_CONTEXT` when no telemetry value has been installed;
+- `withAbortSignal(signal, context)` preserves the supplied signal when the parent has none and otherwise combines it with the parent signal using `AbortSignal.any()`;
+- `withCancel(context)` returns an independently cancellable child context and a `cancel(reason?)` function; parent cancellation still reaches the child;
+- typed values use symbol identity and immutable copy-on-write layers, and a newer value for the same key shadows its parent value;
+- the built-in abort-signal and telemetry keys are private; callers use the named properties instead of retrieving those values by key;
+- `toString()` is diagnostic and records the root plus each layered key description.
 
-Suitable typed values include request IDs, authenticated principals, tenant IDs, and diagnostic metadata. Storage, models, tools, durable state, and business payloads do not belong in the context.
+Context values are cross-cutting request metadata, not business dependencies. Suitable typed values include request IDs, authenticated principals, tenant IDs, and diagnostic metadata. Storage, models, tools, durable state, and business payloads do not belong in the context. Contexts, signals, telemetry objects, and backend-native span objects are never durable data.
 
 ## Receiver ownership
 
@@ -75,11 +85,11 @@ Starting a harness span must derive the invocation context passed to lower work:
 
 ```ts
 return startHarnessSpan(
-	context.telemetry,
+	context.telemetryContext,
 	"pi.harness.run",
 	attributes,
 	async (span) => {
-		const runContext = withTelemetry(context, span);
+		const runContext = withTelemetryContext(span, context);
 		return runDrive(runContext);
 	},
 );
@@ -94,8 +104,8 @@ Do not mutate a context to install an active span. Do not use a process-global o
 Explicit propagation supports concurrent sibling calls:
 
 ```ts
-await parent.telemetry.startSpan({ name: "caller" }, async (callerSpan) => {
-	const callerContext = withTelemetry(parent, callerSpan);
+await parent.telemetryContext.startSpan({ name: "caller" }, async (callerSpan) => {
+	const callerContext = withTelemetryContext(callerSpan, parent);
 	await Promise.all([
 		laneA.drive(callerContext, optionsA),
 		laneB.drive(callerContext, optionsB),
@@ -151,11 +161,13 @@ Distributed traces permit an execution span to outlive the installer RPC span. P
 An aborted invocation signal is process-local control. It does not mean that durable cancellation was requested.
 
 ```text
-context.signal aborts
+context.abortSignal is present and aborts
 → stop or detach process-local waiting/work according to drive ownership policy
 → do not write cancel_requested
 → preserve a valid durable restart point
 ```
+
+An undefined `abortSignal`, as exposed by both empty roots, means that the invocation has no cancellation signal.
 
 Only `requestAbort()`/`abort()` writes durable `cancel_requested` and permits durable aborted settlement.
 
@@ -224,8 +236,9 @@ This migration can make the repository compile before semantics are implemented.
 
 ## Required tests for the later handoff
 
-- immutable typed-value layering and key isolation;
-- never-aborted background signal;
+- immutable typed-value layering, shadowing, and key isolation;
+- empty roots expose an undefined abort signal and no-op telemetry;
+- parent/child abort composition and sibling cancellation isolation;
 - crossed concurrent telemetry branches on one shared receiver;
 - nested hook, tool, event-handler, and session-write parentage;
 - buffered events retain their emitting context;
@@ -242,9 +255,7 @@ This migration can make the repository compile before semantics are implemented.
 
 ## Open decisions before `harness.md`
 
-- final type and field names;
-- context argument position;
-- runtime brand and public visibility;
+- context argument position on receiver methods;
 - installer-owned, lease-owned, or harness-owned drive execution;
 - whether telemetry links are required for joiners;
 - trace-carrier adapter ownership and shape;

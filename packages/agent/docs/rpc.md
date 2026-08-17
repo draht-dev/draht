@@ -1,6 +1,6 @@
 # Harness RPC Design Notes
 
-> **Status:** Design input, not a normative contract or implementation handoff. After the invocation-context interface migration lands, reconcile these notes with the actual interfaces, resolve the open decisions, and fold the accepted behavior into `harness.md` before creating a work package.
+> **Status:** Design input, not a normative contract or implementation handoff. The context references here match `src/harness/context.ts`; RPC integration and context propagation through the harness remain design work. Resolve the open decisions and fold the accepted behavior into `harness.md` before creating a work package.
 
 ## Goal
 
@@ -21,16 +21,16 @@ AgentHarness / AgentLane / Session / SessionTree
 Invocation context kills two integration problems at the boundary:
 
 - the adapter reconstructs the telemetry parent for the server invocation;
-- the adapter maps request cancellation/disconnect to `context.signal`.
+- the adapter maps request cancellation/disconnect to `context.abortSignal`.
 
-The core sees only an ordinary explicit invocation context.
+The core sees only an ordinary explicit `Context`.
 
 ## Non-goals
 
 Do not:
 
 - add RPC methods, reference types, request IDs, or transport state to real harness/session implementations;
-- serialize `InvocationContext`, `AbortSignal`, `TelemetryContext`, hooks, tools, or callbacks;
+- serialize `Context`, `AbortSignal`, `TelemetryContext`, hooks, tools, or callbacks;
 - make the core depend on one transport or telemetry backend;
 - use `AsyncLocalStorage` for parent discovery;
 - hide durable cancellation behind an RPC disconnect;
@@ -53,7 +53,7 @@ Current examples requiring review include `SessionReader.getEntries()`, which re
 
 ## Context position
 
-A generic proxy can support context first, context last, or no context by using a runtime brand or method metadata. Position does not solve method discovery by itself.
+The implemented `Context` has no runtime brand, so a generic proxy must use trusted method metadata to distinguish context first, context last, and no-context methods. Position does not solve method discovery by itself.
 
 Context first is preferable under a strict JSON argument contract:
 
@@ -96,13 +96,13 @@ Conceptually, the client proxy performs:
 
 ```text
 method invocation
-→ find and remove branded InvocationContext
+→ use method metadata to remove Context from its declared position, if present
 → validate remaining arguments as JSON
 → start rpc.client span
 → inject trace carrier
 → allocate request ID
 → send target + method + arguments + trace carrier
-→ on context.signal abort, send cancel(request ID)
+→ if context.abortSignal exists, send cancel(request ID) when it aborts
 → decode JSON result or remote protocol envelope
 ```
 
@@ -131,10 +131,10 @@ The server performs:
 receive request
 → validate target, method, and JSON arguments
 → allocate request-local AbortController
+→ derive cancellation context with withAbortSignal(controller.signal, BACKGROUND_CONTEXT)
 → extract trace carrier into local TelemetryContext
-→ construct fresh local InvocationContext
 → start rpc.server span
-→ derive context containing rpc.server span
+→ derive Context with withTelemetryContext(serverSpan, cancellationContext)
 → insert context at declared position
 → invoke exposed real method or adapter override
 → validate result
@@ -272,7 +272,7 @@ type EventFrame =
 
 The server adapts host-local `events.on()` into this protocol. The real event bus remains unaware of RPC.
 
-Each event frame carries trace metadata from the context that emitted the event. The client reconstructs a fresh event-delivery context and invokes local listeners under that parent. It does not receive the server's `InvocationContext` object or arbitrary context values.
+Each event frame carries trace metadata from the context that emitted the event. The client reconstructs a fresh event-delivery context and invokes local listeners under that parent. It does not receive the server's `Context` object or arbitrary context values.
 
 Subscriptions are ongoing invocation-scoped resources. They may retain their creation context and own cancellation controller; ordinary harness/session proxies may not. Aborting the subscription context or disconnecting sends/unconditionally performs unsubscribe.
 
@@ -294,16 +294,16 @@ A future client facade may reconstruct the familiar local `Events`/`WatchHandle`
 
 ## Request cancellation
 
-The adapter maps each invocation signal to one request ID:
+The adapter maps each invocation's `abortSignal`, when present, to one request ID:
 
 ```text
-client signal abort
+client context.abortSignal aborts
 → cancel(request ID)
 → server request AbortController aborts
-→ reconstructed context.signal aborts
+→ reconstructed context.abortSignal aborts
 ```
 
-Pre-aborted calls must not start server work. Disconnect aborts all active request controllers for that connection.
+An undefined client `abortSignal` means that the call has no client-side cancellation signal. Pre-aborted calls must not start server work. Disconnect aborts all active request controllers for that connection.
 
 This is process-local invocation cancellation. It must not call `requestAbort()` or write durable `cancel_requested` automatically.
 
@@ -311,7 +311,7 @@ This is process-local invocation cancellation. It must not call `requestAbort()`
 
 RPC does not decide whether a `drive()` caller installs execution or joins an existing process-local owner. The core lane arbitration decides that after receiving the reconstructed context.
 
-Every concurrent RPC has an independent signal and telemetry parent. Never combine every joiner's signal into the active execution signal. A canceled joiner must cancel only its own wait.
+Every concurrent RPC has an independent `abortSignal` and telemetry parent. Never combine every joiner's signal into the active execution signal. A canceled joiner must cancel only its own wait.
 
 The runtime must choose one execution ownership policy:
 
@@ -385,7 +385,7 @@ Because the superseded harness implementation has been removed, all eventual sem
 
 ## Open decisions before `harness.md`
 
-- final context type, field names, brand, and argument position;
+- context argument position on receiver methods;
 - whether all ordinary results must be JSON-compatible or some interfaces need RPC projections;
 - static contract-checking API and test location;
 - object-reference ownership, lifetime, and nested result encoding;

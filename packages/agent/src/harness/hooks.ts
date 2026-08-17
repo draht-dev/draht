@@ -1,7 +1,6 @@
 import type { TelemetryContext } from "@draht/telemetry";
-import type { BeforeResumePrepared, HookHandler, HookInvocation, HookMap, HookName, Hooks } from "./agent-harness.ts";
+import type { HookHandler, HookInvocation, HookMap, HookName, Hooks } from "./agent-harness.ts";
 import type { EffectGate } from "./execution/effect-gate.ts";
-import type { JsonValue } from "./session/types.ts";
 import { startHarnessSpan } from "./telemetry.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch } from "./types.ts";
 
@@ -11,11 +10,6 @@ interface HookRegistration {
 }
 
 type HookErrorReporter = (error: Error, hook: HookName, lane: string) => void | Promise<void>;
-
-export interface BeforeRunAggregate {
-	result: HookMap["before_run"]["result"];
-	resumeData: Record<string, JsonValue>;
-}
 
 /** Ordered harness hook registry and aggregate runner. */
 export class HookRegistry implements Hooks {
@@ -29,13 +23,7 @@ export class HookRegistry implements Hooks {
 
 	on<TName extends HookName>(name: TName, handler: HookHandler<TName>, options: { id?: string } = {}): () => void {
 		if (this.closedError !== undefined) throw this.closedError;
-		if ((name === "before_run" || name === "before_resume") && options.id === undefined) {
-			throw new Error(`${name} hooks require a stable id`);
-		}
 		const registrations = this.registrations.get(name) ?? [];
-		if (options.id !== undefined && registrations.some((registration) => registration.id === options.id)) {
-			throw new Error(`Duplicate ${name} hook id: ${options.id}`);
-		}
 		const registration: HookRegistration = {
 			...(options.id === undefined ? {} : { id: options.id }),
 			handler: (event) => handler(event as HookInvocation<TName>),
@@ -77,25 +65,6 @@ export class HookRegistry implements Hooks {
 		) as Promise<HookMap[TName]["result"]>;
 	}
 
-	/** Preserve each before_run handler's restart data under its stable id. */
-	runBeforeAcceptanceWithResumeData(
-		event: HookInvocation<"before_run">,
-		assertHarnessOpen: () => void,
-	): Promise<BeforeRunAggregate> {
-		assertHarnessOpen();
-		return this.beforeRunAggregate(event);
-	}
-
-	/** Give each before_resume handler only the restart data written by its matching before_run id. */
-	runBeforeResumeWithGate(
-		event: BeforeResumePrepared & { lane: string; runId: string },
-		resumeData: Readonly<Record<string, JsonValue>>,
-		effectGate: EffectGate,
-	): Promise<void> {
-		effectGate.assertOpen();
-		return this.beforeResumeAdmitted(event, resumeData);
-	}
-
 	close(error: Error): void {
 		this.closedError ??= error;
 	}
@@ -112,9 +81,9 @@ export class HookRegistry implements Hooks {
 	private async aggregate(name: HookName, event: HookInvocation<HookName>): Promise<unknown> {
 		switch (name) {
 			case "before_run":
-				return (await this.beforeRunAggregate(event as HookInvocation<"before_run">)).result;
-			case "before_resume":
-				await this.invokeAll(name, event, () => {});
+				return this.beforeRun(event as HookInvocation<"before_run">);
+			case "before_drive":
+				await this.invokeAllFailClosed(name, event as HookInvocation<"before_drive">);
 				return undefined;
 			case "before_run_end": {
 				let followUp: string | undefined;
@@ -143,60 +112,21 @@ export class HookRegistry implements Hooks {
 		}
 	}
 
-	private async beforeRunAggregate(event: HookInvocation<"before_run">): Promise<BeforeRunAggregate> {
+	private async beforeRun(event: HookInvocation<"before_run">): Promise<HookMap["before_run"]["result"]> {
 		let prompt = event.prompt;
-		let systemPrompt = event.systemPrompt;
 		let injected: HookMap["before_run"]["event"]["prompt"] = [];
-		const resumeData = Object.create(null) as Record<string, JsonValue>;
 		for (const registration of this.registrationsFor("before_run")) {
 			try {
-				const result = (await registration.handler({
-					...event,
-					prompt,
-					systemPrompt,
-				})) as HookMap["before_run"]["result"];
+				const result = (await registration.handler({ ...event, prompt })) as HookMap["before_run"]["result"];
 				if (result?.messages !== undefined) {
 					injected = [...injected, ...result.messages];
 					prompt = [...prompt, ...result.messages];
 				}
-				if (result?.systemPrompt !== undefined) systemPrompt = result.systemPrompt;
-				if (result?.resumeData !== undefined) resumeData[registration.id!] = result.resumeData;
 			} catch (error) {
 				await this.reportError(error instanceof Error ? error : new Error(String(error)), "before_run", event.lane);
 			}
 		}
-		return {
-			result: {
-				...(injected.length === 0 ? {} : { messages: injected }),
-				...(systemPrompt === event.systemPrompt ? {} : { systemPrompt }),
-			},
-			resumeData,
-		};
-	}
-
-	private async beforeResumeAdmitted(
-		event: BeforeResumePrepared & { lane: string; runId: string },
-		resumeData: Readonly<Record<string, JsonValue>>,
-	): Promise<void> {
-		if (this.closedError !== undefined) throw this.closedError;
-		for (const registration of this.registrationsFor("before_resume")) {
-			try {
-				const data =
-					registration.id !== undefined && Object.hasOwn(resumeData, registration.id)
-						? resumeData[registration.id]
-						: undefined;
-				await registration.handler({
-					...event,
-					...(data === undefined ? {} : { resumeData: data }),
-				});
-			} catch (error) {
-				await this.reportError(
-					error instanceof Error ? error : new Error(String(error)),
-					"before_resume",
-					event.lane,
-				);
-			}
-		}
+		return injected.length === 0 ? undefined : { messages: injected };
 	}
 
 	private async beforeTool(
@@ -235,13 +165,16 @@ export class HookRegistry implements Hooks {
 		event: HookInvocation<"transform_context">,
 	): Promise<HookMap["transform_context"]["result"]> {
 		let messages = event.messages;
+		let systemPrompt = event.systemPrompt;
 		for (const registration of this.registrationsFor("transform_context")) {
 			try {
 				const result = (await registration.handler({
 					...event,
 					messages,
+					systemPrompt,
 				})) as HookMap["transform_context"]["result"];
 				if (result?.messages !== undefined) messages = result.messages;
+				if (result?.systemPrompt !== undefined) systemPrompt = result.systemPrompt;
 			} catch (error) {
 				await this.reportError(
 					error instanceof Error ? error : new Error(String(error)),
@@ -250,7 +183,7 @@ export class HookRegistry implements Hooks {
 				);
 			}
 		}
-		return { messages };
+		return { messages, systemPrompt };
 	}
 
 	private async beforeRequest(event: HookInvocation<"before_request">): Promise<HookMap["before_request"]["result"]> {
@@ -413,6 +346,18 @@ export class HookRegistry implements Hooks {
 
 	private registrationsFor(name: HookName): HookRegistration[] {
 		return [...(this.registrations.get(name) ?? [])];
+	}
+
+	private async invokeAllFailClosed(name: "before_drive", event: HookInvocation<"before_drive">): Promise<void> {
+		for (const registration of this.registrationsFor(name)) {
+			try {
+				await registration.handler(event);
+			} catch (error) {
+				const normalized = error instanceof Error ? error : new Error(String(error));
+				await this.reportError(normalized, name, event.lane);
+				throw normalized;
+			}
+		}
 	}
 
 	private async invokeAll(

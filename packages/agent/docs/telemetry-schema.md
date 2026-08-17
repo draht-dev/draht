@@ -282,8 +282,8 @@ One registered hook handler invocation
 |---|---|---:|---|---|---|
 | `pi.lane.name` | `string` | yes |  | high cardinality | Lane name |
 | `pi.operation.id` | `string` | no |  | high cardinality | Durable operation id when accepted |
-| `pi.hook.name` | `string` | yes | before_run, before_resume, before_run_end, transform_context, before_request, before_payload, after_response, before_tool, after_tool, before_compaction, before_navigation |  | Hook name |
-| `pi.hook.registration_id` | `string` | no |  |  | Stable hook registration id |
+| `pi.hook.name` | `string` | yes | before_run, before_drive, before_run_end, transform_context, before_request, before_payload, after_response, before_tool, after_tool, before_compaction, before_navigation |  | Hook name |
+| `pi.hook.registration_id` | `string` | no |  |  | Optional hook registration metadata |
 
 #### End attributes
 

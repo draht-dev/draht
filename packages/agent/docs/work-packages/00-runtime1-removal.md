@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved; implementation not started. No tag. Do not release while the public runtime2 execution path is incomplete.
+Complete. No tag. Runtime2 is the sole public implementation. Do not release while its execution path is incomplete.
 
 ## Goal
 
@@ -20,7 +20,7 @@ Make runtime2 the sole public harness implementation, delete runtime1 and its ob
 3. **Remove runtime1-only public members.** Delete `before_resume`, `BeforeResumePrepared`, `resumeData`, `systemPromptOverride`, and stable hook-ID routing. Add the approved `before_drive` and `transform_context` shapes. Update telemetry schema source and regenerate its document. Do not implement `starting` or acceptance behavior here.
 4. **Switch the factory.** Add `packages/agent/src/harness/runtime2/index.ts`, point `agent-harness.ts` at it, and add a constructor-selection regression. Verify the experimental coding-agent worker still creates the harness, subscribes to events, and closes it.
 5. **Delete runtime1 source and tests** listed below.
-6. **Update `[Unreleased]`** for the public breaking removals and temporarily incomplete factory.
+6. **Update `[Unreleased]` on `main` or a pull-request branch** for the public breaking removals and temporarily incomplete factory. Repository policy forbids changelog edits on `dev`, so WP00 records but does not perform that release-facing step here.
 7. Run the retained tests and checks. Fix every failure; do not restore compatibility shims.
 
 ## Delete
@@ -57,11 +57,19 @@ Do not parameterize obsolete runtime1 suites against runtime2 and do not keep a 
 - Runtime2 creation, events, inspection, close, and fault tests pass.
 - These coding-agent tests pass:
   - `experimental-remote-runtime.test.ts`
-  - `experimental-session-worker.test.ts`
+  - `experimental-session-worker-manager.test.ts` (the upstream replacement for the removed `experimental-session-worker.test.ts`)
   - `experimental-session-worker-lifecycle.test.ts`
 - Every modified test passes individually.
 - Agent and root TypeScript pass.
 - `git diff --check` and `npm run check` pass.
+
+## Outcome
+
+- The accepted hook/drive contract is normative in `harness.md`; stale acceptance/resume contracts are absent.
+- Runtime1 source, validating restore, obsolete suites, and R1–R4 scratch scenarios are deleted.
+- `AgentHarness.create()` resolves through `runtime2/index.ts`; a constructor-selection regression proves it.
+- The scenario harvest added missing tool-close, identity-preflight, recovery-ordering, turn-bracket, and telemetry cases to future rows.
+- Upstream added two real remote prompt tests after this handoff was drafted. They remain present but skipped with an R2 re-enable requirement because runtime2 execution is intentionally incomplete. Worker creation, attachment, lifecycle, operation correlation, and close coverage passes.
 
 ## Non-goals
 

@@ -146,6 +146,7 @@ const structuralDecisions = [
 ] satisfies StructuralDecision[];
 
 const runPhases = [
+	{ kind: "starting" },
 	checkpoint,
 	{ kind: "assistant", generation: generations[0] },
 	{
@@ -208,7 +209,7 @@ const operations = [
 		lane: "main",
 		sourceLeafId: null,
 		startedAt: 1,
-		intent: { kind: "run", promptEntryIds: ["prompt"], resumeData: { extension: null } },
+		intent: { kind: "run", promptEntryIds: ["prompt"] },
 	},
 	{
 		operationId: "compaction",
@@ -331,7 +332,7 @@ it("covers the complete durable storage and Part 3 discriminants", () => {
 	expectTypeOf<SummaryGeneration["status"]>().toEqualTypeOf<"ready" | "effect_pending" | "retry_wait">();
 	expectTypeOf<StructuralDecision["status"]>().toEqualTypeOf<"deciding" | "generating">();
 	expectTypeOf<RunPhase["kind"]>().toEqualTypeOf<
-		"checkpoint" | "assistant" | "tools" | "compaction" | "deferred" | "failure_drain"
+		"starting" | "checkpoint" | "assistant" | "tools" | "compaction" | "deferred" | "failure_drain"
 	>();
 	expectTypeOf<OperationState["kind"]>().toEqualTypeOf<"run" | "compaction" | "navigation">();
 	expectTypeOf<NavigationState["summarize"]>().toEqualTypeOf<boolean>();
@@ -425,7 +426,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	>();
 	expectTypeOf<HookName>().toEqualTypeOf<
 		| "before_run"
-		| "before_resume"
+		| "before_drive"
 		| "before_run_end"
 		| "transform_context"
 		| "before_request"
@@ -436,8 +437,12 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 		| "before_compaction"
 		| "before_navigation"
 	>();
-	expectTypeOf<HookMap["before_resume"]["result"]>().toEqualTypeOf<void>();
-	expectTypeOf<HookHandler<"before_resume">>().returns.toEqualTypeOf<void | Promise<void>>();
+	expectTypeOf<HookMap["before_drive"]["result"]>().toEqualTypeOf<void>();
+	expectTypeOf<HookHandler<"before_drive">>().returns.toEqualTypeOf<void | Promise<void>>();
+	expectTypeOf<HookMap["transform_context"]["event"]>().toEqualTypeOf<{
+		messages: AgentMessage[];
+		systemPrompt: string;
+	}>();
 	expectTypeOf<LaneSnapshot["operation"]>().not.toEqualTypeOf<SessionSnapshot>();
 	expectTypeOf<AgentLane["getLastResult"]>().returns.toEqualTypeOf<Promise<LaneLastResult | undefined>>();
 	expectTypeOf<AgentLane["accept"]>().returns.toEqualTypeOf<Promise<OperationAdmissionResult>>();

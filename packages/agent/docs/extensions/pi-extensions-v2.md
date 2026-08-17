@@ -794,11 +794,12 @@ Also: `extensionProviders` is already an instance field, so pi-server.md's
   rather than silently dropping it. Better than anything the other four have.
 - **Settings snapshotted at operation acceptance** — a rebuild mid-run cannot
   corrupt an in-flight generation.
-- **Hook `resumeData` keyed by stable id** — durable per-run plugin state for
-  free. Key it on `manifest.id`, which makes the id immutable across versions.
+- **Extension-owned bound values/lists** — durable per-run plugin state is
+  explicit and keyed by lane/operation id. Hooks may replay before their
+  consuming commit, so extensions own idempotency and cleanup.
 - **Events passive by construction** — an observer cannot accidentally intercept.
-- **`before_tool` fails closed** — wrap plugin handlers so a throw degrades to
-  skip rather than blocking tool execution.
+- **`before_tool` fails closed** — a throwing plugin handler blocks that tool
+  invocation instead of allowing an unreviewed effect to run.
 
 ---
 

@@ -1,7 +1,7 @@
 import { createModels, fauxAssistantMessage, fauxProvider } from "@draht/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HarnessClosed, HarnessFault } from "../../../src/harness/agent-harness.ts";
+import { AgentHarness, HarnessClosed, HarnessFault } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import type { Result } from "../../../src/harness/result.ts";
 import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
@@ -141,6 +141,14 @@ afterEach(async () => {
 });
 
 describe("runtime2 AgentHarness", () => {
+	it("is selected by the public AgentHarness constructor", async () => {
+		const session = await createSession();
+
+		const { harness } = await AgentHarness.create(modelOptions(session));
+
+		expect(harness).toBeInstanceOf(Harness);
+	});
+
 	it("rejects duplicate tool names as caller input", async () => {
 		const session = await createSession();
 		const duplicate = tool("duplicate");

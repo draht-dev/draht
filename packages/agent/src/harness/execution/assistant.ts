@@ -30,11 +30,14 @@ export interface AssistantStreamObserver {
 /** Executable inputs for one already-approved assistant provider request. */
 export interface HarnessAssistantStreamConfig {
 	model: Model<Api>;
-	systemPrompt?: string;
+	systemPrompt: string;
 	tools?: AgentTool[];
 	thinkingLevel: ThinkingLevel;
 	streamOptions: AgentHarnessStreamOptions;
-	transformContext?: (messages: AgentMessage[], signal: AbortSignal) => Promise<AgentMessage[]>;
+	transformContext?: (
+		context: { messages: AgentMessage[]; systemPrompt: string },
+		signal: AbortSignal,
+	) => Promise<{ messages: AgentMessage[]; systemPrompt: string }>;
 	toProviderMessages: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	beforePayload?: (payload: unknown, model: Model<Api>) => unknown | undefined | Promise<unknown | undefined>;
 	afterResponse?: (
@@ -85,14 +88,14 @@ export async function streamHarnessAssistant(
 	messages: AgentMessage[],
 	config: HarnessAssistantStreamConfig,
 ): Promise<SettledAssistantMessage> {
-	let requestMessages = messages.slice();
+	let requestContext = { messages: messages.slice(), systemPrompt: config.systemPrompt };
 	if (config.transformContext) {
-		requestMessages = await config.transformContext(requestMessages, config.signal);
+		requestContext = await config.transformContext(requestContext, config.signal);
 	}
 
-	const providerMessages = await config.toProviderMessages(requestMessages);
+	const providerMessages = await config.toProviderMessages(requestContext.messages);
 	const context: Context = {
-		systemPrompt: config.systemPrompt,
+		systemPrompt: requestContext.systemPrompt,
 		messages: providerMessages,
 		tools: config.tools,
 	};

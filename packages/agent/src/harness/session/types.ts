@@ -72,12 +72,7 @@ export interface OperationMeta {
 	sourceLeafId: string | null;
 	startedAt: number;
 	intent:
-		| {
-				kind: "run";
-				promptEntryIds: string[];
-				systemPromptOverride?: string;
-				resumeData?: Record<string, JsonValue>;
-		  }
+		| { kind: "run"; promptEntryIds: string[] }
 		| { kind: "compaction"; customInstructions?: string }
 		| {
 				kind: "navigation";
@@ -229,6 +224,7 @@ export type StructuralDecision = { taskId: string } & (
 );
 
 export type RunPhase =
+	| { kind: "starting" }
 	| CheckpointPhase
 	| { kind: "assistant"; generation: Generation }
 	| { kind: "tools"; batch: ToolBatch }

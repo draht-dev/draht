@@ -16,7 +16,7 @@ import type { AgentMessage, AgentToolResult, QueueMode, ThinkingLevel } from "..
 import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
 import { type Result, TaggedError } from "./result.ts";
-import { createAgentHarness } from "./runtime/agent-harness-runtime.ts";
+import { createAgentHarness } from "./runtime2/index.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -511,27 +511,15 @@ export interface Events {
 
 export type Resources = AgentHarnessResources<Skill, PromptTemplate>;
 
-export type BeforeResumePrepared =
-	| { kind: "run"; prompt: AgentMessage[]; systemPromptOverride?: string }
-	| { kind: "compaction"; sourceLeafId: string | null; customInstructions?: string }
-	| {
-			kind: "navigation";
-			sourceLeafId: string | null;
-			targetId: string | null;
-			summarize: boolean;
-			label?: string;
-			customInstructions?: string;
-	  };
-
 type VoidHookResult = ReturnType<() => void>;
 
 export interface HookMap {
 	before_run: {
-		event: { prompt: AgentMessage[]; systemPrompt: string; resources: Resources };
-		result: { messages?: AgentMessage[]; systemPrompt?: string; resumeData?: JsonValue } | undefined;
+		event: { prompt: AgentMessage[]; resources: Resources };
+		result: { messages?: AgentMessage[] } | undefined;
 	};
-	before_resume: {
-		event: BeforeResumePrepared & { resumeData?: JsonValue };
+	before_drive: {
+		event: { operation: "run" | "compaction" | "navigation" };
 		result: VoidHookResult;
 	};
 	before_run_end: {
@@ -539,8 +527,8 @@ export interface HookMap {
 		result: { followUp?: string } | undefined;
 	};
 	transform_context: {
-		event: { messages: AgentMessage[] };
-		result: { messages: AgentMessage[] } | undefined;
+		event: { messages: AgentMessage[]; systemPrompt: string };
+		result: { messages?: AgentMessage[]; systemPrompt?: string } | undefined;
 	};
 	before_request: {
 		event: {

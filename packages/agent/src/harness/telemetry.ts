@@ -146,7 +146,7 @@ export function startAiSpan<Name extends AiSpanName, const Attributes extends Ai
 
 const HOOK_NAMES = [
 	"before_run",
-	"before_resume",
+	"before_drive",
 	"before_run_end",
 	"transform_context",
 	"before_request",
@@ -474,7 +474,7 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 				"pi.hook.registration_id": {
 					type: "string",
 					required: false,
-					description: "Stable hook registration id",
+					description: "Optional hook registration metadata",
 				},
 			},
 			endAttributes: {

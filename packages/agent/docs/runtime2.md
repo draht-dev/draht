@@ -1,49 +1,12 @@
-# AgentHarness `runtime2/` implementation status
+# AgentHarness `runtime2/` historical implementation notes
 
-## Goal
+> **Archived after WP00.** Do not maintain this file as status, contract, or roadmap. `harness.md` is normative and `work-packages/*.md` are the only executable plans. These notes preserve implementation history and rejected-design lessons until R12 renames `runtime2/` to `runtime/` and deletes this file.
 
-Build a second AgentHarness runtime from the bottom up under:
+## Original goal
 
-```text
-packages/agent/src/harness/runtime2/
-```
+The runtime2 experiment built a replacement AgentHarness under `packages/agent/src/harness/runtime2/` to test whether a lane-owned in-memory model could make the complete runtime materially smaller and easier to trace than runtime1. WP00 selected it as the public factory and deleted runtime1 before execution behavior was complete.
 
-It must eventually export:
-
-```ts
-export async function createAgentHarness<
-  TContext extends object | undefined = object | undefined,
->(
-  options: AgentHarnessOptions<TContext>,
-): Promise<{
-  harness: AgentHarness<TContext>;
-  suspended: SuspendedOperation[];
-}>;
-```
-
-Runtime2 replaces runtime1 through [WP00](work-packages/00-runtime1-removal.md), before further execution behavior is added. [WP01](work-packages/01-bound-values-lists.md) then converts the retained Session/storage surface across all existing backends. Do not release while the public runtime2 execution path is incomplete.
-
-`harness.md` Part 8 and concrete `work-packages/*.md` files are the only active package plan. The R2.x sections below record historical checkpoints and design evidence; they are not executable work packages and must not override a handoff.
-
-## Current baseline
-
-Current pushed `dev` head:
-
-```text
-03f576f54 feat(agent): inspect restored runtime2 operations
-├── 5030a5f53 feat(agent): add runtime2 harness config
-├── d5d656d4e feat(agent): add runtime2 lane creation
-├── 0697589ac fix(agent): tighten runtime2 harness boundaries
-└── earlier runtime2 restore/facade/close commits
-```
-
-Runtime2 currently consists only of concrete `Harness` and `Lane` implementations plus restore/types. There is no separate runtime/controller abstraction. The oversized R2.4 acceptance/drive attempt was deliberately reverted in full; no TypeScript or test changes from that attempt remain. The focused runtime2 suite is back to the committed 44 tests across:
-
-- `runtime2/restore.test.ts`
-- `runtime2/lane.test.ts`
-- `runtime2/harness.test.ts`
-
-Current invariants:
+## Retained architecture lessons
 
 - one restore constructs authoritative owned `LaneState`;
 - all lane-control writes route through `Lane.command()` and `Session.mutate()`;
@@ -53,19 +16,18 @@ Current invariants:
 - providers, tools, hooks, timers, events, and task waits stay outside the lane line;
 - the Lane-backed `sessionTree` routes leaf/branch reads and idle/run appends through owned state;
 - close/fault seal lanes before queued work can proceed, while admitted successful commits still publish;
-- harness creation never writes durable suspension; `suspension` is process-local inspection metadata and clears when committed ownership moves to another operation or idle;
-- durable control `running` means open/permitted; public `running` will mean a real process-local drive owns an actual continuation;
-- do not install a process owner, join promise, or `running` status around an effect-free classification shell; ownership lands with the first real drive procedure;
-- missing identity payloads are `{ tools: string[]; model?: string }`; one lane configuration can reference only one model;
-- runtime1 remains production-selected only until WP00 switches the factory and deletes it.
+- harness creation never writes durable suspension; `suspension` is process-local inspection metadata;
+- durable control `running` means open/permitted; public `running` requires a real process-local drive owning an actual continuation;
+- do not install a process owner, join promise, or `running` status around an effect-free classification shell;
+- missing identity payloads are `{ tools: string[]; model?: string }`; one lane configuration references only one model;
+- no separate runtime/controller abstraction is necessary;
+- the rejected acceptance/drive attempt recreated runtime1-style orchestration through provisional ownership, `OperationHost`, `OperationLocalState`, and a fake owner pass; it was reverted completely.
 
-Latest committed validation before the reverted experiment: 44 focused runtime2 tests, 156 focused tests, full TypeScript, `git diff --check`, and `npm run check` passed. Revalidate after implementing the redesigned contract below.
-
-## Slice completeness rule
+## Historical slice completeness rule
 
 A slice must close the entire named concern at parity, not only its immediately callable methods. Before editing, inventory all related constructor inputs, owned state, defaults, validation, public accessors, events, lifecycle behavior, recovery implications, and tests. Do not defer adjacent behavior merely because no current procedure consumes it yet. If scope must be deferred, name that boundary before implementation and get explicit agreement.
 
-## Reading policy
+## Historical reading policy
 
 `packages/agent/docs/harness.md` is the normative source. Until their designs are folded into it, `registers.md`, `tool-durability.md`, and `assistant-durability.md` are binding handoffs for bound typed value/list addresses, tool outcomes/checkpoints/memos, and assistant frames. Runtime1 is implementation inspiration only: do not preserve its abstractions, internal bookkeeping, or accidental behavior unless the normative contract independently requires them. For each slice, read its listed sections completely. If any handoff or `harness.md` changed since the previous slice, inspect that diff and reread affected sections.
 
@@ -73,7 +35,7 @@ Read a source or test file completely before editing that file. For dependencies
 
 Do **not** pre-read later runtime phases. In particular, R2.0 must not load assistant procedures, tool procedures, or the complete R2–R4 behavioral suites. The purpose of the slices is to keep both implementation and reasoning local.
 
-This plan is implementation guidance, not source authority. `harness.md` remains normative; correct this file whenever it disagrees with committed behavior or that contract.
+This archived plan is not source authority. If it disagrees with `harness.md`, a work-package handoff, or committed behavior, ignore this file; do not update it.
 
 ### R2.0 — Restore one lane
 
@@ -136,8 +98,8 @@ Do not read operation execution procedures.
 
 Read completely before editing:
 
-- this document's “Superseding hook and execution design” and R2.4 section;
-- the current diff of `harness.md`, then §§3.1–3.6, 4.1–4.4, 5.1–5.3, 5.5–5.6, build rows R1–R2, and matching invariants/races; these sections still contain superseded hook semantics and must be reconciled first;
+- `harness.md` §§3.1–3.6, 4.1–4.5, and 5.5–5.6 plus this document's historical R2.4 notes;
+- the current diff of `harness.md`, then §§3.1–3.6, 4.1–4.4, 5.1–5.3, 5.5–5.6, build rows R1–R2, and matching invariants/races; those sections contained the superseded hook semantics that WP00 later reconciled;
 - current `runtime2/harness.ts`, `lane.ts`, `types.ts`, `restore.ts`, and all focused runtime2 tests;
 - public request/result/event/hook types in `agent-harness.ts`;
 - neutral `hooks.ts`, `skills.ts`, `prompt-templates.ts`, bound value/list addresses and transaction helpers, and pending-entry reads;
@@ -304,48 +266,9 @@ runtime2/
 
 Merge modules when that is easier to read. Do not create helper files solely to reduce line counts.
 
-## Public/test switching strategy
+## Historical switch outcome
 
-Runtime2 currently exports `createAgentHarness()` from `runtime2/harness.ts`. Add `runtime2/index.ts` only when constructor aliasing/test-selection work begins, then make it the stable runtime2 export. Until then, unimplemented runtime2 methods use the local `SliceNotImplemented` frontier from `runtime2/types.ts`.
-
-Do not change the production import in:
-
-```text
-packages/agent/src/harness/agent-harness.ts
-```
-
-until parity.
-
-### Preferred test selection
-
-Add a runtime2 Vitest config or test alias that redirects only:
-
-```text
-./runtime/agent-harness-runtime.ts
-```
-
-as imported by `agent-harness.ts`, to:
-
-```text
-./runtime2/harness.ts
-```
-
-This allows existing tests to continue importing public `AgentHarness` unchanged. First prove the alias with a tiny constructor-selection test; do not trust an unverified Vite alias.
-
-If exact aliasing is unreliable, use a test-only constructor:
-
-```ts
-import type { AgentHarnessConstructor } from "../../src/harness/agent-harness.ts";
-import { createAgentHarness } from "../../src/harness/runtime2/harness.ts";
-
-const Runtime2AgentHarness: AgentHarnessConstructor = {
-  create: createAgentHarness,
-};
-```
-
-Then parameterize only the scenarios runtime2 currently supports. Do not add a mutable production-global runtime selector.
-
-When constructor aliasing begins, add `runtime2/index.ts`, point tests at that stable export, and verify selection with a tiny constructor test. At final parity, switch the one production import to `runtime2/index.ts`, run every existing test unchanged, then remove runtime1 in a separate reviewed change.
+WP00 added `runtime2/index.ts`, switched the one public factory import, proved constructor selection directly, and deleted runtime1. No mutable runtime selector or dual-runtime parity harness was retained.
 
 ## Size and readability gates
 
@@ -549,86 +472,15 @@ None. Watch surfaces have no runtime1 implementation and remain a later separate
 
 Harness-owned lane/tree/operation writes route through `Lane.command()`. Application value/list reads and writes remain direct Session operations because they do not mutate lane control state.
 
-## Superseding hook and execution design
+## Accepted hook and execution design
 
-The earlier R2.4 plan above was wrong. It put `before_run` inside acceptance, which forced an admission reservation, waiting appends, provisional ownership, two acceptance commands, and close/fault races before any durable operation existed. The rejected implementation then rebuilt runtime1's context/procedure shape through `OperationHost`, `OperationLocalState`, arbitration unions, and a fake `ActiveDrive` around a command that had no work. All of that code was reverted.
-
-### Contract decisions
-
-1. **`accept()` is one atomic lane command.** It normalizes and validates state-independent input outside the line, then under `Lane.command()` checks `state.operation`, captures current `pendingNextRun`, preflights identities, and commits caller/captured entries, leaf, `pi.op.meta`, `pi.op.state`, and `pi.lane.state`. There is no hook, provider, timer, process reservation, or process owner in acceptance. Concurrent accepts serialize naturally; the loser sees the committed operation and returns `LaneBusy`. An empty caller request with no captured entry still rejects; a later hook cannot rescue it.
-2. **A run is accepted in durable `{ kind: "starting" }` phase.** This payload-free phase is the only applied-once marker for initial durable extension context. It replaces acceptance-time hook output and avoids another stored value/flag.
-3. **`before_run` moves to the driver and returns only durable messages.** On the first real drive of `starting`, after ownership and deadline/cancellation checks, run the hook outside the line. Its consuming command appends returned messages and commits `starting → checkpoint` atomically. Crash before that commit may rerun the hook; crash after it cannot. Hook invocation is at-least-once, while its core-interpreted durable output is applied once. Injected messages become a stable conversation prefix and preserve provider KV-cache ordering.
-4. **Add `before_drive` as a pass prerequisite.** It runs once per newly installed real drive owner before recovery or ordinary effects; same-operation joiners do not rerun it. It runs again after yield, retry wait, deferred/missing-identity suspension, and process restart. Under `cancel_requested`, reconciliation wins and ordinary prerequisites do not run. A prerequisite failure rejects that drive pass without faulting the harness or writing durable progress; close/abort must interrupt or win through the normal gate.
-5. **Delete `before_resume`.** Extensions should not depend on process-origin categories. Durable phase decides dispatch/recovery. There is no public or internal `fresh | continue | restore` taxonomy. An unowned `effect_pending` phase is orphaned by construction once real owners span every admitted effect.
-6. **Delete `resumeData` and stable hook-ID routing.** Extension-private durable state belongs in extension-owned bound value/list addresses or audited custom entries keyed by lane/operation ID. Such writes are separate transactions and may orphan/replay; extensions own idempotency and cleanup, matching the exactly-once non-goal. Do not add transactional hook value writes until extension namespace, lane/session scope, version, and fork policy are designed explicitly.
-7. **Delete hook-produced durable `systemPromptOverride`.** Remove it from `before_run`, `BeforeResumePrepared`, and `OperationMeta`. Widen request-time `transform_context` to receive/return `{ messages, systemPrompt }`. Repeating the same effective system prompt preserves its cache key; changing it or earlier messages invalidates the prefix by design. Use `before_run` for durable message injection, not per-request `transform_context`.
-8. **Install a process owner only around real asynchronous work.** `before_drive`/`before_run` are real work, so the slice that implements them may install one simple Lane-owned work promise before invoking them. The model is direct: `accept()` checks durable `state.operation`; `drive()` joins the matching promise or installs one promise and starts actual work after the line. Do not add a controller, host adapter, local-state wrapper, action interpreter, or fake frontier pass.
-
-### Hook API target
-
-```ts
-before_run: {
-  event: { prompt: AgentMessage[]; resources: Resources };
-  result: { messages?: AgentMessage[] } | undefined;
-};
-before_drive: {
-  event: { operation: "run" | "compaction" | "navigation" };
-  result: void;
-};
-transform_context: {
-  event: { messages: AgentMessage[]; systemPrompt: string };
-  result: { messages?: AgentMessage[]; systemPrompt?: string } | undefined;
-};
-```
-
-`HookInvocation` continues to add `lane` and `runId`. `before_run` is an at-least-once durable-settlement hook. `before_drive` is a fail-closed pass prerequisite. `transform_context` is request-local and replayed per provider request. Stable registration IDs are optional metadata only, not a durability protocol.
-
-### Durable transitions
-
-```text
-idle accept
-→ TX[ captured nextRun entries, caller entries, pending deletes,
-      pi.lane.leaf, pi.op.meta(run prompt ids only),
-      pi.op.state(run starting, running control, captured run settings, empty inbox),
-      pi.lane.state(currentOperationId, captured ids removed) ]
-
-starting + running control
-→ before_drive
-→ before_run
-→ TX[ injected message entries, pi.lane.leaf when injected,
-      pi.op.state(checkpoint need_assistant(false), trigger=newest entry,
-               skipInboxOnce=true, preserve concurrent inbox/control) ]
-
-starting + cancel_requested
-→ cancellation reconciliation and aborted terminal transaction;
-  invoke neither before_drive nor before_run
-```
-
-Restoring `starting` reports the open run with caller prompt only and starts nothing. Public appends after acceptance already see an active run and enter its inbox; there is no pre-acceptance waiting window.
-
-### Request reconstruction and cache discipline
-
-DeepSeek Harness's useful precedent is that model-visible injected context becomes durable before dispatch, dynamic context snapshots are appended only when changed, and effective request headers can reconstruct requests. Pi should not copy Cordis or event sourcing, but R2.5 must decide before implementation whether to persist the effective model identity, stream options, system prompt, transformed message ordering, and tool schema identity before provider dispatch, or explicitly require deterministic/idempotent request transforms and accept weaker reconstruction. Do not casually use `transform_context` for timestamps, workspace notices, policy state, or other durable run context; place those through `before_run`.
-
-### Broader hook audit to resolve before later slices
-
-- Keep `before_request` for provider-neutral request options.
-- Reconsider `before_payload`: provider-specific wire mutation likely belongs in provider-adapter middleware.
-- Split tool policy from mutation: a monotonic allow/deny/ask guard cannot be overridden by listener order; an around-tool seam owns timeout/retry/tracing/cache/signal lifetime; a result transform precedes commit; a passive final-result event follows normalization and commit.
-- Reconsider `before_tool.args`: rewritten effective arguments currently disappear when operation-owned values are cleaned while the assistant entry retains original arguments, weakening auditability. Either remove rewriting or preserve effective arguments durably.
-- Prefer one configured compaction service and one branch-summary service over first-result-wins provider hooks; retain separate veto policy only if needed.
-- Replace latest-follow-up-wins `before_run_end` with an explicit `before_finish` continuation contract if multiple handlers can contribute.
-- Extension registrations eventually need scoped install/dispose and namespaced values/lists, but do not import a DI/plugin framework.
-
-### Exactly-once statement
-
-No external hook is globally exactly once. Core guarantees only that a hook's interpreted output commits before dependent durable progress. A crash before the consuming transaction may repeat the hook. External side effects require extension-owned idempotency keyed by stable operation/invocation IDs. `before_drive` is intentionally repeated per owned pass.
+The rejected acceptance/drive attempt put hooks inside acceptance and recreated runtime1-style orchestration through provisional ownership and wrapper abstractions. It was reverted completely. The accepted replacement is now normative in `harness.md` §§3.1–3.6, 4.1–4.5, 5.5–5.6, and Parts 8–9: hook-free atomic acceptance into durable `starting`, real drive ownership, `before_drive`, driver-owned `before_run`, phase-based orphan recovery, and request-local context/system-prompt transformation. This archived note retains only that implementation lesson; it does not restate the contract.
 
 ## R2.4 — Contract reconciliation and atomic run acceptance
 
 ### Required preparation
 
-The current `harness.md`, shared `HookMap`, `OperationMeta`, runtime1 behavior, and parity tests still describe the superseded pre-acceptance hook/resumeData/systemPromptOverride contract. Reconcile the normative document and public type strategy before implementation. This is a real contract change. Because runtime1 remains production-selected and shares the public types, explicitly decide whether to update runtime1 to the new contract, isolate the experimental runtime2 contract temporarily, or move the production switch earlier. Do not silently preserve compatibility shims.
+The normative contract has been reconciled in `harness.md`. WP00 removes the obsolete shared members and runtime1 before this historical implementation concern becomes actionable. Do not preserve compatibility shims.
 
 ### Goal
 
@@ -750,11 +602,11 @@ Target total ≤ 3,000 lines; stretch ≤ 2,500. If runtime2 approaches runtime1
 
 ## Superseded parity/switch roadmap
 
-The former R2.8 parity-first switch plan was superseded by the approved deletion strategy. Execute [WP00 — Runtime1 removal](work-packages/00-runtime1-removal.md), then [WP01 — Bound values and lists](work-packages/01-bound-values-lists.md). Those handoffs are the sole source for deletion lists, retained tests, validation, non-goals, and stop conditions. Do not recreate a dual-runtime parity gate or legacy smoke suite.
+The former R2.8 parity-first switch plan was superseded by [WP00 — Runtime1 removal](work-packages/00-runtime1-removal.md). Active work proceeds only from `harness.md` Part 8 and its linked handoffs; do not execute work from this archive or recreate a dual-runtime parity gate.
 
 # Comparison discipline
 
-The target contract and transaction tables in `harness.md`, plus the scoped redesign in this document until it is folded back, are the authority. Compare runtime2 behavior against those documents:
+The target contract and transaction tables in `harness.md` are the authority. The historical comparison dimensions were:
 
 - transaction write arrays and durable value/entry state;
 - events and ordering;
@@ -763,7 +615,7 @@ The target contract and transaction tables in `harness.md`, plus the scoped rede
 - public results/errors and suspended descriptors;
 - storage read counts and source line counts.
 
-Do not require parity with runtime1 on redesigned acceptance, hooks, FSM, restore validation, bound value/list storage, assistant partial durability, or tool durability. Until deletion, compare it only for scenarios whose documented contract is explicitly unchanged. After deletion, use the harvested scenario inventory and ordinary git history for archaeology; do not recreate a dual-runtime harness.
+Do not require parity with deleted runtime1 on redesigned acceptance, hooks, FSM, restore validation, bound value/list storage, assistant partial durability, or tool durability. Use the harvested scenario inventory and ordinary git history for archaeology; do not recreate a dual-runtime harness.
 
 # Coding rules
 
@@ -777,16 +629,6 @@ Do not require parity with runtime1 on redesigned acceptance, hooks, FSM, restor
 - No full restore in live procedures.
 - Inline one-use helpers.
 - Check external API types from source/node_modules.
-- Do not modify runtime1 except as required by WP00 deletion; never change the target contract to preserve it.
+- Do not recreate runtime1 or change the target contract to preserve it.
 - Do not touch unrelated coding-agent worktree files.
 - Do not commit unless the user asks.
-
-# Validation
-
-Use the active work-package handoff; it owns the exact test list. Every code package also runs agent/root TypeScript, `git diff --check`, and `npm run check`. Never run unrestricted Vitest, `npm test`, or paid-provider tests.
-
-# Next assignment only
-
-Execute [WP00 — Runtime1 removal](work-packages/00-runtime1-removal.md) and stop at its boundary. Then execute [WP01 — Bound values and lists](work-packages/01-bound-values-lists.md) as a separate package. Do not resume the historical R2.4–R2.8 sequence or begin provider execution without a new concrete handoff linked from `harness.md` Part 8.
-
-The completed Fable and DeepSeek reviews are summarized in this document; no subagent session or temporary review checkout is expected to survive compaction.

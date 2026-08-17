@@ -105,39 +105,30 @@ describe("OperationEffectGate", () => {
 });
 
 describe("HookRegistry", () => {
-	it("aggregates in registration order with each handler seeing prior output", async () => {
+	it("aggregates before_run messages in registration order with each handler seeing prior output", async () => {
 		const errors: Error[] = [];
 		const hooks = new HookRegistry((error) => {
 			errors.push(error);
 		});
-		const second = vi.fn((event: { prompt: Array<{ role: string }>; systemPrompt: string }) => {
+		const second = vi.fn((event: { prompt: Array<{ role: string }> }) => {
 			expect(event.prompt).toHaveLength(2);
-			expect(event.systemPrompt).toBe("first");
 			return { messages: [{ role: "user" as const, content: "second", timestamp: 3 }] };
 		});
-		hooks.on(
-			"before_run",
-			() => ({
-				messages: [{ role: "user", content: "first", timestamp: 2 }],
-				systemPrompt: "first",
-			}),
-			{ id: "first" },
-		);
-		hooks.on("before_run", second, { id: "second" });
+		hooks.on("before_run", () => ({ messages: [{ role: "user", content: "first", timestamp: 2 }] }));
+		hooks.on("before_run", second);
 
-		const { result } = await hooks.runBeforeAcceptanceWithResumeData(
+		const result = await hooks.runWithGate(
+			"before_run",
 			{
 				lane: "main",
 				runId: "run",
 				prompt: [{ role: "user", content: "prompt", timestamp: 1 }],
-				systemPrompt: "base",
 				resources: {},
 			},
-			() => {},
+			new OperationEffectGate(),
 		);
 
 		expect(result).toMatchObject({
-			systemPrompt: "first",
 			messages: [
 				{ role: "user", content: "first" },
 				{ role: "user", content: "second" },
@@ -147,83 +138,94 @@ describe("HookRegistry", () => {
 		expect(errors).toEqual([]);
 	});
 
-	it("checks harness admission immediately before the complete before_run pipeline", async () => {
+	it("checks the effect gate immediately before the complete before_run pipeline", async () => {
 		const hooks = new HookRegistry(() => {});
 		const calls: string[] = [];
 		const release = deferred();
-		hooks.on(
-			"before_run",
-			async () => {
-				calls.push("first:start");
-				await release.promise;
-				calls.push("first:end");
-				return undefined;
-			},
-			{ id: "first" },
-		);
-		hooks.on(
-			"before_run",
-			() => {
-				calls.push("second");
-				return undefined;
-			},
-			{ id: "second" },
-		);
-		const event = { lane: "main", runId: "run", prompt: [], systemPrompt: "", resources: {} };
+		hooks.on("before_run", async () => {
+			calls.push("first:start");
+			await release.promise;
+			calls.push("first:end");
+			return undefined;
+		});
+		hooks.on("before_run", () => {
+			calls.push("second");
+			return undefined;
+		});
+		const event = { lane: "main", runId: "run", prompt: [], resources: {} };
 		const closed = new Error("closed");
-		expect(() =>
-			hooks.runBeforeAcceptanceWithResumeData(event, () => {
-				throw closed;
-			}),
-		).toThrow(closed);
+		const closedGate = new OperationEffectGate();
+		closedGate.close(closed);
+		expect(() => hooks.runWithGate("before_run", event, closedGate)).toThrow(closed);
 		expect(calls).toEqual([]);
 
-		const running = hooks.runBeforeAcceptanceWithResumeData(event, () => {});
+		const running = hooks.runWithGate("before_run", event, new OperationEffectGate());
 		expect(calls).toEqual(["first:start"]);
-		hooks.on(
-			"before_run",
-			() => {
-				calls.push("late");
-				return undefined;
-			},
-			{ id: "late" },
-		);
+		hooks.on("before_run", () => {
+			calls.push("late");
+			return undefined;
+		});
 		hooks.close(closed);
 		release.resolve();
 		await running;
 		expect(calls).toEqual(["first:start", "first:end", "second"]);
 	});
 
-	it("routes persisted resume data by stable hook id", async () => {
-		const hooks = new HookRegistry(() => {});
-		hooks.on("before_run", () => ({ resumeData: { owner: "proto" } }), { id: "__proto__" });
-		hooks.on("before_run", () => ({ resumeData: { owner: "constructor" } }), { id: "constructor" });
-		const seen: unknown[] = [];
+	it("treats registration ids as optional metadata and fails before_drive closed", async () => {
+		const errors: Error[] = [];
+		const hooks = new HookRegistry((error) => {
+			errors.push(error);
+		});
+		const failure = new Error("prerequisite failed");
+		const later = vi.fn();
 		hooks.on(
-			"before_resume",
-			(event) => {
-				seen.push(event.resumeData);
+			"before_drive",
+			() => {
+				throw failure;
 			},
-			{ id: "__proto__" },
+			{ id: "duplicate" },
 		);
-		hooks.on(
-			"before_resume",
-			(event) => {
-				seen.push(event.resumeData);
-			},
-			{ id: "constructor" },
-		);
-		const accepted = await hooks.runBeforeAcceptanceWithResumeData(
-			{ lane: "main", runId: "run", prompt: [], systemPrompt: "", resources: {} },
-			() => {},
-		);
+		hooks.on("before_drive", later, { id: "duplicate" });
 
-		await hooks.runBeforeResumeWithGate(
-			{ lane: "main", runId: "run", kind: "run", prompt: [] },
-			accepted.resumeData,
+		await expect(
+			hooks.runWithGate("before_drive", { lane: "main", runId: "run", operation: "run" }, new OperationEffectGate()),
+		).rejects.toBe(failure);
+		expect(later).not.toHaveBeenCalled();
+		expect(errors).toEqual([failure]);
+	});
+
+	it("chains transform_context output and isolates handler failures", async () => {
+		const errors: Error[] = [];
+		const hooks = new HookRegistry((error) => {
+			errors.push(error);
+		});
+		const messages = [{ role: "user" as const, content: "transformed", timestamp: 2 }];
+		hooks.on("transform_context", () => ({ messages, systemPrompt: "first" }));
+		hooks.on("transform_context", (event) => {
+			expect(event.messages).toBe(messages);
+			expect(event.systemPrompt).toBe("first");
+			throw new Error("ignored transform failure");
+		});
+		hooks.on("transform_context", (event) => {
+			expect(event.messages).toBe(messages);
+			expect(event.systemPrompt).toBe("first");
+			return { systemPrompt: "final" };
+		});
+
+		const result = await hooks.runWithGate(
+			"transform_context",
+			{
+				lane: "main",
+				runId: "run",
+				messages: [{ role: "user", content: "original", timestamp: 1 }],
+				systemPrompt: "base",
+			},
 			new OperationEffectGate(),
 		);
-		expect(seen).toEqual([{ owner: "proto" }, { owner: "constructor" }]);
+
+		expect(result).toEqual({ messages, systemPrompt: "final" });
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toBe("ignored transform failure");
 	});
 
 	it("preserves clear-all before_request patches across later handlers", async () => {
@@ -303,41 +305,28 @@ describe("HookRegistry", () => {
 		expect(errors[0].message).toMatch(/cannot return both decline and summary/);
 	});
 
-	it("checks the effect gate immediately before admitting the complete pipeline", async () => {
+	it("admits the complete before_drive pipeline as one gated effect", async () => {
 		const hooks = new HookRegistry(() => {});
 		const calls: string[] = [];
 		const release = deferred();
-		hooks.on(
-			"before_resume",
-			async () => {
-				calls.push("first:start");
-				await release.promise;
-				calls.push("first:end");
-			},
-			{ id: "first" },
-		);
-		hooks.on(
-			"before_resume",
-			() => {
-				calls.push("second");
-			},
-			{ id: "second" },
-		);
-		const event = {
-			kind: "run" as const,
-			prompt: [],
-			lane: "main",
-			runId: "run",
-		};
+		hooks.on("before_drive", async () => {
+			calls.push("first:start");
+			await release.promise;
+			calls.push("first:end");
+		});
+		hooks.on("before_drive", () => {
+			calls.push("second");
+		});
+		const event = { operation: "run" as const, lane: "main", runId: "run" };
 
 		const abortFirstGate = new OperationEffectGate();
 		const cancellation = Promise.resolve();
 		abortFirstGate.beginAbort(cancellation);
-		expect(() => hooks.runBeforeResumeWithGate(event, {}, abortFirstGate)).toThrow(AbortRequested);
+		expect(() => hooks.runWithGate("before_drive", event, abortFirstGate)).toThrow(AbortRequested);
 		expect(calls).toEqual([]);
 
 		const startFirstGate = new OperationEffectGate();
-		const running = hooks.runBeforeResumeWithGate(event, {}, startFirstGate);
+		const running = hooks.runWithGate("before_drive", event, startFirstGate);
 		expect(calls).toEqual(["first:start"]);
 		startFirstGate.beginAbort(cancellation);
 		startFirstGate.signalAbort();

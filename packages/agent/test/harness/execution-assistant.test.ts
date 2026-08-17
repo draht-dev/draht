@@ -100,11 +100,11 @@ describe("streamHarnessAssistant", () => {
 				cacheRetention: "long",
 				deferred: { window: "1h" },
 			},
-			transformContext: async (messages) => {
+			transformContext: async (context) => {
 				order.push("transform_context");
-				transformedInputWasCopy = messages !== originalArray;
-				messages.push(user("injected"));
-				return messages;
+				transformedInputWasCopy = context.messages !== originalArray;
+				context.messages.push(user("injected"));
+				return { messages: context.messages, systemPrompt: "transformed system" };
 			},
 			toProviderMessages: (messages) => {
 				order.push("to_provider_messages");
@@ -162,7 +162,7 @@ describe("streamHarnessAssistant", () => {
 		expect(transformedInputWasCopy).toBe(true);
 		expect(convertedMessages).toEqual([user("original"), user("injected")]);
 		expect(receivedContext).toMatchObject({
-			systemPrompt: "system",
+			systemPrompt: "transformed system",
 			messages: [user("original"), user("injected")],
 		});
 		expect(requestContext).toEqual({ original: true });
@@ -205,6 +205,7 @@ describe("streamHarnessAssistant", () => {
 
 		const result = await streamHarnessAssistant([user("prompt")], {
 			model: faux.getModel(),
+			systemPrompt: "system",
 			thinkingLevel: "off",
 			streamOptions: {},
 			toProviderMessages,
@@ -240,6 +241,7 @@ describe("streamHarnessAssistant", () => {
 		let options: SimpleStreamOptions | undefined;
 		const result = await streamHarnessAssistant([user("prompt")], {
 			model: model(),
+			systemPrompt: "system",
 			thinkingLevel: "off",
 			streamOptions: {},
 			toProviderMessages,
@@ -274,6 +276,7 @@ describe("streamHarnessAssistant", () => {
 		const ended: AssistantMessage[] = [];
 		const result = await streamHarnessAssistant([user("prompt")], {
 			model: model(),
+			systemPrompt: "system",
 			thinkingLevel: "off",
 			streamOptions: {},
 			toProviderMessages,
@@ -305,6 +308,7 @@ describe("streamHarnessAssistant", () => {
 		const events: string[] = [];
 		const result = await streamHarnessAssistant([user("prompt")], {
 			model: model(),
+			systemPrompt: "system",
 			thinkingLevel: "off",
 			streamOptions: {},
 			toProviderMessages,

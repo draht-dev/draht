@@ -167,14 +167,14 @@ Decision:
 
 - every current public harness/lane operation receives one explicit trailing `context: Context`;
 - `context.telemetryContext` supplies the invocation parent for harness/session spans, and derived child contexts preserve parentage across concurrent asynchronous branches without ambient state;
-- remove `AgentHarnessOptions.telemetryContext`: a receiver-level parent cannot represent concurrent callers, and runtime configuration must not grow a replacement fallback;
+- the current baseline has removed `AgentHarnessOptions.telemetryContext`: a receiver-level parent cannot represent concurrent callers, and runtime configuration must not grow a replacement fallback;
 - `context.abortSignal` is the explicit process-local invocation-cancellation channel used by local callers and reconstructed by RPC adapters from per-request cancel/disconnect control; it never implies durable `cancel_requested` and must not call `requestAbort()` implicitly;
 - each RPC request has an independent server `AbortController`; canceling one request or drive joiner must not abort unrelated callers or shared execution owned under a different policy;
 - shared harness, lane, Session, and SessionTree receivers never retain a caller context;
 - acceptance passes its invocation context to Session reads/mutation/commit, faults, and emitted events; buffered events retain `{ event, context }` so delayed local handlers and future RPC event frames preserve the source telemetry lineage;
 - RPC adapters remove Context from serialized business arguments, carry required trace/cancellation data as control-plane metadata, and reconstruct a fresh local Context at the receiving boundary; the Context object, `AbortSignal`, and `TelemetryContext` are never serialized as business arguments or stored durably;
 - whether specific adapter-managed typed values may cross as control-plane metadata remains an open RPC design decision;
-- WP02 documents and preserves that boundary but does not implement RPC transport, carrier encoding, distributed cancellation, new telemetry spans, or final RPC parameter-position policy.
+- WP02 documents and preserves that boundary but does not implement generic RPC transport, carrier encoding, distributed cancellation, or new telemetry spans; required trailing Context position is already the resolved receiver contract.
 
 ### 9. Rejected alternatives
 
@@ -448,8 +448,9 @@ This phase is mandatory and has its own review stop. Do not edit runtime source 
 - Specify the RPC boundary principle: the client maps `context.abortSignal` to `cancel(requestId)`; the server owns one `AbortController` per request, aborts it on matching cancellation or connection loss, and uses `withAbortSignal` plus extracted telemetry to construct a fresh local Context. The adapter strips/inserts Context outside serialized business arguments and never serializes the Context object, `AbortSignal`, or `TelemetryContext` as business arguments. Whether specific adapter-managed typed values cross as control-plane metadata remains open in `rpc.md`.
 - Require pre-aborted RPC calls to start no server work, while leaving that rejection in the adapter rather than the core harness.
 - Distinguish `context.abortSignal` from durable abort: invocation or RPC cancellation must not call `requestAbort()` or write `cancel_requested`; one canceled request/joiner must not cancel unrelated callers.
-- Remove `AgentHarnessOptions.telemetryContext`. The explicit invocation Context is the sole telemetry parent because a harness-level default cannot represent concurrent callers; do not add a replacement receiver-level fallback to runtime configuration.
-- Keep trailing parameter position and propagation behavior aligned with current source for WP02. Broader RPC transport, carrier encoding, and any future context-position migration remain open in non-normative `rpc.md` and are not decided by WP02.
+- Document that the baseline has removed `AgentHarnessOptions.telemetryContext`. The explicit invocation Context is the sole telemetry parent because a harness-level default cannot represent concurrent callers; do not add a replacement receiver-level fallback to runtime configuration.
+- Align §5.2 and §5.7 tool/assistant execution signatures with the baseline's context-threaded capabilities: no standalone signal or telemetry-parent parameters where Context now carries them, and invocation callbacks receive trailing Context.
+- Keep required trailing parameter position and propagation behavior aligned with current source for WP02. Generic RPC transport, optional-argument normalization, carrier encoding, and cancellation remain separate work in non-normative `rpc.md`; context position is no longer open.
 
 ### §3.3 — Restore validation
 
@@ -573,7 +574,7 @@ Modify `packages/agent/src/harness/agent-harness.ts`:
 - add `DriveOutcome.action_required`;
 - change `executeAction(context)` and `runToCompletion(context)` result signatures;
 - preserve every existing trailing `context: Context` parameter, including expected-id primitives, and do not persist `Context`;
-- remove `telemetryContext` from `AgentHarnessOptions`.
+- keep `AgentHarnessOptions.telemetryContext` absent and do not add a receiver-level replacement.
 
 Update public type tests before runtime code.
 
@@ -593,9 +594,9 @@ Add focused modules rather than growing `lane.ts` into a generic reducer:
 
 Modify:
 
-- `runtime2/types.ts` to hold the complete owned hydrated lane projection and remove `Config.telemetryContext`;
+- `runtime2/types.ts` to hold the complete owned hydrated lane projection without a receiver-level telemetry field;
 - `runtime2/restore.ts` to keep projection restoration direct and separate from public hydration;
-- `runtime2/harness.ts` to hydrate all lanes before constructing/publishing the harness, return `open`, and remove the receiver-level telemetry assignment/import;
+- `runtime2/harness.ts` to hydrate all lanes before constructing/publishing the harness and return `open` without reintroducing receiver-level telemetry;
 - `runtime2/lane.ts` to implement acceptance, memory-only inspection, and memory-only `watch(context)`;
 - `runtime2/index.ts` exports only as needed.
 
@@ -807,7 +808,7 @@ npm run check
 
 If subprocess tests fail only because ignored workspace `dist` artifacts are stale, obtain explicit user authorization before `npm run build`, then rerun `./test.sh`.
 
-Report runtime2 source line counts. The rebased clean pre-WP02 baseline is 970 lines; treat growth above 1,900 runtime2 source lines as a design review trigger, not a compression target.
+Report runtime2 source line counts. The synchronized clean pre-WP02 baseline is 967 lines; treat growth above 1,900 runtime2 source lines as a design review trigger, not a compression target.
 
 ## Review checkpoints
 

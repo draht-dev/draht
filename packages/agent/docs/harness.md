@@ -244,8 +244,8 @@ Had the tool declared `replay: "safe"` (a read, a query), the harness would have
 Source type provenance:
 
 - `AgentMessage`, `AgentTool`, `AgentToolResult`, `QueueMode`, and `ThinkingLevel`: `packages/agent/src/types.ts`.
-- `Skill`, `PromptTemplate`, `AgentHarnessResources` (`Resources` below), `AgentHarnessTool`, `AgentHarnessToolInvocation`, `AgentHarnessToolUpdateCallback`, `AgentHarnessToolUpdateOptions`, `AgentHarnessStreamOptions`, and `AgentHarnessStreamOptionsPatch`: `packages/agent/src/harness/types.ts`.
-- `Model`, `Models`, `Usage`, `RetryPolicy`, `StopReason`, `AssistantMessage`, `ImageContent`, provider messages, stream options, and deferred handles: `packages/ai`.
+- `Skill`, `PromptTemplate`, `AgentHarnessResources` (`Resources` below), `AgentHarnessTool`, `AgentHarnessToolContextSource`, `AgentHarnessToolInvocation`, `AgentHarnessToolUpdateCallback`, `AgentHarnessToolUpdateOptions`, `AgentHarnessStreamOptions`, and `AgentHarnessStreamOptionsPatch`: `packages/agent/src/harness/types.ts`.
+- `Model`, `Models`, `Usage`, `RetryPolicy`, `StopReason`, `AssistantMessage`, `ImageContent`, provider messages, stream options, and deferred handles: `packages/ai`. `AiContext` below aliases pi-ai's provider request `Context` to distinguish it from the harness invocation `Context`.
 - `AssistantMessageFrame`, `assistantMessageEventToFrame`, and `reduceAssistantMessageFrames`: `packages/ai` (`@draht/ai`), `src/utils/assistant-message-frame.ts`. The harness defines no second frame codec or reducer.
 - `CompactionSettings`, `CompactionPreparation`, `CompactResult`, `BranchPreparation`, and `BranchSummaryResult`: `packages/agent/src/harness/compaction/`. Existing preparation and split-turn algorithms remain the implementation starting point unless this document explicitly changes them.
 - `TelemetryContext` and typed schema helpers: `packages/telemetry`; the agent-owned schemas remain in `packages/agent/src/harness/telemetry.ts`.
@@ -2097,12 +2097,24 @@ For a driven operation, the gate applies to starting ordinary hooks, provider re
 ```ts
 // WRONG: abort may close the gate while this preparation awaits.
 effectGate.assertOpen();
+const staleAdmittedContext = withAbortSignal(effectGate.signal, context);
 await prepareRequest();
-models.streamSimple(model, context, { ...options, signal: effectGate.signal });
+models.streamSimple(model, aiContext, {
+  ...options,
+  signal: staleAdmittedContext.abortSignal,
+  telemetryContext: staleAdmittedContext.telemetryContext,
+});
 
 // Correct: JavaScript cannot interleave another task between these statements.
+await prepareRequest();
 effectGate.assertOpen();
-models.streamSimple(model, context, { ...options, signal: effectGate.signal });
+const admittedContext = withAbortSignal(effectGate.signal, context);
+admittedContext.abortSignal?.throwIfAborted();
+models.streamSimple(model, aiContext, {
+  ...options,
+  signal: admittedContext.abortSignal,
+  telemetryContext: admittedContext.telemetryContext,
+});
 ```
 
 The boundary is the public invocation of the operation, not necessarily the eventual SDK/network syscall. `Models.streamSimple()` synchronously returns and starts a lazy stream; its later auth resolution and provider-module loading are part of that admitted request. If abort wins before the call, Models is never invoked. If start wins, abort later pulls the signal and the admitted setup/provider path must stop cooperatively. The same definition applies to a hook aggregate: the complete registered pipeline is one operation admitted by invoking the aggregate runner.
@@ -2131,7 +2143,7 @@ Each item means one check before invoking the complete registered pipeline, not 
 - each sequential provider operation inside a structural summary attempt;
 - one `Models.fetchDeferred(...)` operation for an explicit poll.
 
-Request preparation, identity preflight, context transformation, and option composition finish before the provider check. Abort-first means `Models` is never called; admission-first means the complete Models request—including later auth resolution, lazy loading, and provider delegation—is already admitted and owns `effectGate.signal`. Those later stages are not new effect starts. Best-effort `Models.cancelDeferred(...)` is cancellation cleanup and uses the separate close-only gate/signal, not the operation gate.
+Request preparation, identity preflight, context transformation, and option composition finish before the provider check. Abort-first means `Models` is never called; admission-first means the complete Models request—including later auth resolution, lazy loading, and provider delegation—is already admitted and owns `admittedContext.abortSignal`, which composes the invocation and effect-gate signals. Those later stages are not new effect starts. Best-effort `Models.cancelDeferred(...)` is cancellation cleanup and uses the separate close-only gate/signal, not the operation gate.
 
 **Other ordinary operations:**
 
@@ -2147,7 +2159,7 @@ No other code calls `assertOpen()`. In particular, it is not used for:
 - cancellation reconciliation, except its separate close-only deferred-cancellation cleanup;
 - passive event listeners;
 
-Each listed integration has abort-first/admission-first tests. The assistant block receives `effectGate.signal` for signal-aware preparation even though preparation itself does not call `assertOpen()`.
+Each listed integration has abort-first/admission-first tests. The assistant block receives the invocation Context for signal-aware preparation; only the admitted request adapter synchronously composes `effectGate.signal` into a child Context immediately before Models invocation.
 
 `requestAbort` starts by synchronously changing a matching live gate to `aborting` and installing the abort-mutation promise. It then attempts to commit `cancel_requested`; only after that commit succeeds does it pull the controller. Thus the only orders are:
 
@@ -2785,12 +2797,15 @@ type AgentHarnessTool<TContext extends object | undefined,
                       TDetails = unknown> =
   Omit<AgentTool<TParameters, TDetails>, "execute"> & {
     execute(toolCallId: string, params: Static<TParameters>,
-            signal: AbortSignal | undefined,
             onUpdate: AgentHarnessToolUpdateCallback<TDetails>,
-            context: TContext,
-            invocation: AgentHarnessToolInvocation):
-      Promise<AgentToolResult<TDetails>>;
+            toolContext: TContext,
+            invocation: AgentHarnessToolInvocation,
+            context: Context): Promise<AgentToolResult<TDetails>>;
   };
+
+type AgentHarnessToolContextSource<TContext extends object | undefined> =
+  | TContext
+  | ((context: Context) => TContext | Promise<TContext>);
 
 /** AgentHarnessStreamOptions is the curated source type from §0.7. It excludes
     signal and provider lifecycle callbacks, which the harness owns. */
@@ -2806,7 +2821,7 @@ interface AgentHarnessOptions<TContext extends object | undefined = object | und
   activeToolNames?: string[];             // default: initial tool names
 
   tools?: AgentHarnessTool<TContext>[];
-  toolContext?: TContext | ((context: Context) => TContext | Promise<TContext>);
+  toolContext?: AgentHarnessToolContextSource<TContext>;
   systemPrompt?: string | ((ctx: TContext, context: Context) =>
     string | Promise<string>);             // per request
   resources?: Resources;                  // skills, prompt templates
@@ -3270,7 +3285,7 @@ The harness owns purpose-built execution blocks under `packages/agent/src/harnes
 
 ### Assistant streaming
 
-`assistant.ts` owns one already-approved provider request. Before the request intent commits, the assistant procedure verifies that the captured durable `{ provider, modelId }` resolves in the harness's `Models` registry and runs `before_request`. After that commit, the supplied request adapter resolves the same pair, calls `EffectGate.assertOpen()`, and immediately invokes `Models` with `EffectGate.signal`. The block itself receives only executable values:
+`assistant.ts` owns one already-approved provider request. Before the request intent commits, the assistant procedure verifies that the captured durable `{ provider, modelId }` resolves in the harness's `Models` registry and runs `before_request`. After that commit, the supplied request adapter resolves the same pair, calls `EffectGate.assertOpen()`, derives the admitted Context synchronously, and immediately invokes `Models` under its composed abort signal and telemetry parent. The block itself receives only executable values:
 
 ```ts
 interface AssistantResponseMetadata {
@@ -3279,72 +3294,82 @@ interface AssistantResponseMetadata {
 }
 
 interface AssistantStreamObserver {
-  start(message: AssistantMessage): void | Promise<void>;
-  update(message: AssistantMessage, event: AssistantMessageEvent): void | Promise<void>;
-  end(message: SettledAssistantMessage): void | Promise<void>;
+  start(message: AssistantMessage, context: Context): void | Promise<void>;
+  update(message: AssistantMessage, event: AssistantMessageEvent,
+         context: Context): void | Promise<void>;
+  end(message: SettledAssistantMessage, context: Context): void | Promise<void>;
 }
 
 interface HarnessAssistantStreamConfig {
   model: Model;
-  systemPrompt?: string;
+  systemPrompt: string;
   tools?: AgentTool[];
   thinkingLevel: ThinkingLevel;
   streamOptions: AgentHarnessStreamOptions;
-  transformContext?: (messages: AgentMessage[], signal: AbortSignal) =>
-    Promise<AgentMessage[]>;
-  toProviderMessages: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+  transformContext?: (
+    requestContext: { messages: AgentMessage[]; systemPrompt: string },
+    context: Context,
+  ) => Promise<{ messages: AgentMessage[]; systemPrompt: string }>;
+  toProviderMessages: (messages: AgentMessage[], context: Context) =>
+    Message[] | Promise<Message[]>;
   /** Adapter for the before_payload hook; undefined keeps the payload. */
-  beforePayload?: (payload: unknown, model: Model) =>
+  beforePayload?: (payload: unknown, model: Model, context: Context) =>
     unknown | undefined | Promise<unknown | undefined>;
   /** Always-installed harness adapter. It drains accepted frame writes, then
       runs the optional after_response hook pipeline, before observer.end. */
   afterResponse: (message: SettledAssistantMessage,
-                  metadata: AssistantResponseMetadata) =>
-    Promise<SettledAssistantMessage>;
+                  metadata: AssistantResponseMetadata,
+                  context: Context) => Promise<SettledAssistantMessage>;
   /** Models-backed adapter. It resolves the captured identity, synchronously
       checks EffectGate, then immediately invokes Models (§4.2). */
-  request(context: Context, options: SimpleStreamOptions):
+  request(aiContext: AiContext, options: SimpleStreamOptions,
+          context: Context):
     AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
   observer: AssistantStreamObserver;
-  telemetryContext: TelemetryContext;
-  signal: AbortSignal;
 }
 
 function streamHarnessAssistant(messages: AgentMessage[],
-                                config: HarnessAssistantStreamConfig):
+                                config: HarnessAssistantStreamConfig,
+                                context: Context):
   Promise<SettledAssistantMessage>;
 ```
 
 The block does, in order:
 
 ```text
-transformContext
-→ toProviderMessages
-→ construct provider Context
+transformContext(requestContext, context)
+→ toProviderMessages(messages, context)
+→ construct provider AiContext
 → map curated stream options + thinking level to SimpleStreamOptions
-→ install signal, telemetry context, beforePayload, and response-metadata capture
-→ request
-→ observer.start
-→ observer.update*
+→ install context.abortSignal, context.telemetryContext, beforePayload, and metadata capture
+→ request(aiContext, options, context)
+→ observer.start(message, context)
+→ observer.update(message, event, context)*
 → settle the stream completely
-→ afterResponse(settled message, captured metadata)
-→ observer.end
+→ afterResponse(settled message, captured metadata, context)
+→ observer.end(message, context)
 → return the final settled message
 ```
 
-It never mutates `messages`. The harness-supplied observer converts each streamed event with `assistantMessageEventToFrame` and synchronously enqueues its invocation-fenced frame append without awaiting storage (§3.7); `afterResponse` is always installed, even with no hook listeners, because it first stops frame admission and awaits the latest frame-write promise before invoking the optional `after_response` pipeline. If the stream terminates without a start event, it emits `observer.start` for the final message before `observer.end`, matching the harness lifecycle contract; this synthesized lifecycle start occurs after stream consumption and is not converted into or appended as a durable frame. If abort interrupts the parked `afterResponse` adapter, the block awaits the carried abort-mutation promise, skips that hook, emits `observer.end` with the raw settled message, and returns it so the caller can commit it under the now-current cancellation control. `beforePayload` maps to pi-ai's payload callback. Response metadata capture maps to pi-ai's `onResponse`; it is distinct from `afterResponse`, because `onResponse` runs before the response body is consumed while the harness hook transforms the settled assistant message afterward. The harness exposes neither callback through `AgentHarnessStreamOptions`.
+It never mutates `messages`. Every callback receives the same explicit invocation Context unless its adapter deliberately derives a child span Context. The harness-supplied observer converts each streamed event with `assistantMessageEventToFrame` and synchronously enqueues its invocation-fenced frame append without awaiting storage (§3.7); `afterResponse` is always installed, even with no hook listeners, because it first stops frame admission and awaits the latest frame-write promise before invoking the optional `after_response` pipeline. If the stream terminates without a start event, it emits `observer.start` for the final message before `observer.end`, matching the harness lifecycle contract; this synthesized lifecycle start occurs after stream consumption and is not converted into or appended as a durable frame. If abort interrupts the parked `afterResponse` adapter, the block awaits the carried abort-mutation promise, skips that hook, emits `observer.end` with the raw settled message, and returns it so the caller can commit it under the now-current cancellation control. `beforePayload` maps to pi-ai's payload callback. Response metadata capture maps to pi-ai's `onResponse`; it is distinct from `afterResponse`, because `onResponse` runs before the response body is consumed while the harness hook transforms the settled assistant message afterward. The harness exposes neither callback through `AgentHarnessStreamOptions`.
 
 The request function, not this block, owns registry dispatch, auth, and operation admission:
 
 ```ts
-(context, options) => {
+(aiContext, options, context) => {
   const model = resolveCapturedModel();
   effectGate.assertOpen();
-  return models.streamSimple(model, context, { ...options, signal: effectGate.signal });
+  const admittedContext = withAbortSignal(effectGate.signal, context);
+  admittedContext.abortSignal?.throwIfAborted();
+  return models.streamSimple(model, aiContext, {
+    ...options,
+    signal: admittedContext.abortSignal,
+    telemetryContext: admittedContext.telemetryContext,
+  });
 }
 ```
 
-There is no yield between `assertOpen()` and `Models.streamSimple()`. Its asynchronous auth/lazy/provider work is part of the admitted request and owns the same signal (§4.2). A captured identity that disappears after intent becomes an in-band provider error; an identity missing at the earlier safe preflight suspends without burning an attempt (§4.4). Existing summary helpers keep their separate `Models`-based generation logic, but gate their `Models` operation invocation the same way.
+There is no yield between `assertOpen()`, synchronous admitted-Context derivation, and `Models.streamSimple()`. Its asynchronous auth/lazy/provider work is part of the admitted request and owns `admittedContext.abortSignal` (§4.2). A captured identity that disappears after intent becomes an in-band provider error; an identity missing at the earlier safe preflight suspends without burning an attempt (§4.4). Existing summary helpers keep their separate `Models`-based generation logic, but gate their `Models` operation invocation the same way.
 
 ### Tool phases
 
@@ -3403,8 +3428,7 @@ function applyBeforeToolDecision(prepared: PreparedToolCall,
   ClearedToolCall | ImmediateToolOutcome;
 function executeToolCall(call: ClearedToolCall, effectGate: EffectGate,
                          onUpdate: AgentHarnessToolUpdateCallback<unknown>,
-                         telemetryContext: TelemetryContext):
-  Promise<ExecutedToolCall>;
+                         context: Context): Promise<ExecutedToolCall>;
 function finalizeToolCall(call: ClearedToolCall, executed: ExecutedToolCall,
                           patch: AfterToolPatch | undefined): FinalizedToolCall;
 function createToolResultMessage(call: FinalizedToolCall): ToolResultMessage;
@@ -3428,9 +3452,9 @@ planned call
 → materialize source-ready outcomes as entries + usage
 ```
 
-Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution before staging a synthetic `outcome_ready` result. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. At `tool.execute` operation admission, `executeToolCall` calls `EffectGate.assertOpen()` immediately before `tool.execute` and passes `EffectGate.signal`; it converts expected tool throws to an error result, stops accepting updates when the tool promise settles, and emits raw tool-effect telemetry. Every update emits live observation; `checkpoint:true` additionally enqueues one invocation-fenced `pi.pending.tool_output` replacement and replaces only the latest checkpoint-write promise reference (§3.8). The procedure retains only the latest event-delivery promise because the event bus serializes delivery, and only the latest checkpoint-write promise because the lane line is FIFO; it closes checkpoint admission at tool-promise settlement and awaits both before `after_tool`. `finalizeToolCall` applies the documented field-by-field patch semantics before `tool_end` and outcome staging.
+Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution before staging a synthetic `outcome_ready` result. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. At `tool.execute` operation admission, `executeToolCall` calls `EffectGate.assertOpen()`, synchronously derives `withAbortSignal(effectGate.signal, context)`, checks that admitted signal, and immediately invokes the neutral `AgentTool` adapter with it. The bound harness adapter passes that admitted Context to `AgentHarnessTool.execute` in its trailing position. The block converts expected tool throws to an error result, stops accepting updates when the tool promise settles, and emits raw tool-effect telemetry. Every update emits live observation; `checkpoint:true` additionally enqueues one invocation-fenced `pi.pending.tool_output` replacement and replaces only the latest checkpoint-write promise reference (§3.8). The procedure retains only the latest event-delivery promise because the event bus serializes delivery, and only the latest checkpoint-write promise because the lane line is FIFO; it closes checkpoint admission at tool-promise settlement and awaits both before `after_tool`. `finalizeToolCall` applies the documented field-by-field patch semantics before `tool_end` and outcome staging.
 
-Before starting any call in a live batch, the tool-batch procedure resolves `toolContext` once and binds the complete captured active-tool set into ordinary `AgentTool` adapters retained in a procedure-local snapshot. Each adapter also binds `AgentHarnessToolInvocation { invocationId: resultEntryId, operationId, turnId, getMemo, setMemo }` and the harness-specific update callback. A missing captured active tool therefore suspends before any call starts; provider calls to names outside that active snapshot still become ordinary unknown-tool results. Every call in the batch observes the same application context and its own stable invocation identity. Safe replay creates a new code/context snapshot but passes the same invocation id and memos after deleting the stale progress checkpoint. `AgentTool.replay` defaults to `"never"` when omitted.
+Before starting any call in a live batch, the tool-batch procedure resolves `toolContext` once and binds the complete captured active-tool set into ordinary `AgentTool` adapters retained in a procedure-local snapshot. Each adapter also binds `AgentHarnessToolInvocation { invocationId: resultEntryId, operationId, turnId, getMemo, setMemo }`, the harness-specific update callback, and the current invocation Context. A missing captured active tool therefore suspends before any call starts; provider calls to names outside that active snapshot still become ordinary unknown-tool results. Every call in the batch observes the same application context and its own stable invocation identity. Safe replay creates a new code/context snapshot but passes the same invocation id and memos after deleting the stale progress checkpoint. `AgentTool.replay` defaults to `"never"` when omitted.
 
 There is deliberately no harness `executeToolBatch`. In parallel mode the direct procedure makes one source-ordered start pass. Each position either starts a real promise or retains an immediate outcome until it can be staged. Effects/finalization then settle independently: each complete real or synthetic result commits `outcome_ready` immediately in completion order. A separate lane-line job materializes the contiguous ready prefix in source order. Durably, completed calls form a prefix while the remaining suffix may mix `planned`, `effect_pending`, and `outcome_ready`; for example `[effect_pending, outcome_ready, effect_pending]` is valid after the completed prefix. A crash discards only unstaged process-local outcomes. Recovery safely replays or interrupts orphaned effects, materializes already-ready outcomes without resolving tool code, and reruns ordinary clearance for planned positions. The same procedure owns cancellation and durable batch completion. Genuine-`length` calls bypass effects but stage their specified synthetic outcomes (§3.7).
 
@@ -3450,7 +3474,7 @@ Invocation cancellation is not durable cancellation. An aborted `context.abortSi
 
 Shared `AgentHarness`, `AgentLane`, `Session`, and `SessionTree` receivers retain no caller Context and expose no receiver-level telemetry default. Process-local objects representing one invocation, such as a drive pass or event subscription, may retain their derived Context for that invocation only. Buffered events retain `{ event, context }` and bind recipients at enqueue so delayed local handlers and RPC event frames preserve source lineage.
 
-WP02 preserves this propagation boundary but introduces no new telemetry spans, RPC transport, trace-carrier codec, distributed cancellation implementation, drive-ownership policy, or final RPC context-position policy.
+WP02 preserves this propagation boundary but introduces no new telemetry spans, generic RPC transport, trace-carrier codec, distributed cancellation implementation, or drive-ownership policy. Required trailing Context position is already the resolved receiver contract; adapter normalization of omitted optional business arguments remains separate RPC work.
 
 Required spans remain:
 

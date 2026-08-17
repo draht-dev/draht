@@ -1,224 +1,260 @@
-# Typed scalar and list registers — implementation handoff
+# Typed values and lists — implementation handoff
 
-This document specifies the register storage primitive used by the harness.
+This document specifies the mutable storage primitive used by Session, the harness, and applications.
 
-Registers are identified by ordinary typed token values rather than a global `RegisterValues` or `ListRegisterValues` namespace map:
+The public abstraction is a **bound typed address**:
 
-- **scalar register:** one current value per `(token, key)`; set replaces it;
-- **list register:** immutable values appended under `(token, key)` and read in bounded sequence pages.
+- `value<T>(namespace, key?)` names one replaceable durable value;
+- `list<T>(namespace, key?)` names one append-only durable list whose elements have type `T`.
 
-Built-in tokens live together in `packages/agent/src/harness/session/registers.ts` and are imported directly by their consumers. There is no `HarnessRegisters` bundle, runtime catalog, declaration merging, or raw register access from tools.
+The namespace/key pair is bound once when the address is constructed. Every later operation receives only that address. Application code therefore writes:
+
+```ts
+const state = value<ApplicationState>("my-app.state");
+const events = list<ApplicationEvent>("my-app.events");
+
+await session.getValue(state);
+await session.setValue(state, nextState);
+await session.readList(events, { limit: 100 });
+await session.appendList(events, event);
+```
+
+It does **not** repeatedly pass a second unexplained key:
+
+```ts
+// Not the API.
+await session.readList(events, "another-key", { limit: 100 });
+```
+
+When an application genuinely has keyed instances, it constructs the address for that instance:
+
+```ts
+const workspaceEvents = (workspaceId: string) =>
+  list<ApplicationEvent>("my-app.events", workspaceId);
+
+await session.readList(workspaceEvents("pi"), { limit: 100 });
+```
+
+Storage may physically index the address as `(kind, namespace, key)`, but that representation does not leak into each read or write call. Storage, Session, harness code, and applications use the same address vocabulary. There is no global value-type map, dynamic registry, token catalog, or separate application-state storage mechanism.
 
 ## Goals
 
-1. Keep persisted register IDs stable while moving their value types onto tokens.
-2. Allow built-in and future application register definitions without editing a global type map.
-3. Preserve type inference through reads, writes, scans, and list appends.
-4. Preserve existing scalar replacement semantics.
-5. Append a list element without reading or rewriting existing elements.
-6. Use the existing transaction sequence as list order and cursor.
-7. Produce identical logical behavior on Memory, JSONL, and SQLite.
-8. Keep list reads bounded and explicit.
-9. Commit scalar/list writes atomically with entries and usage.
+1. Give one exact durable address one compile-time value type.
+2. Let applications define scalar values and lists without declaration merging or editing a core type map.
+3. Use the same typed addresses and operation names from Storage through Session.
+4. Preserve current scalar replacement semantics.
+5. Append one list element without reading or rewriting existing elements.
+6. Give every list element its own existing session-global transaction `seq`, used for ordering and pagination.
+7. Commit values and list elements atomically with entries and usage.
+8. Produce identical logical behavior on Memory, JSONL, and SQLite.
+9. Keep list reads bounded and explicit.
+10. Keep scalar operation state authoritative; auxiliary lists never select a recovery state.
 
 ## Non-goals
 
 This slice does not define:
 
 - assistant-frame contents or reduction semantics;
-- tool progress semantics;
-- per-token runtime value validation;
-- per-element or per-key byte limits;
+- tool-progress semantics;
+- runtime validation of trusted in-process values;
+- per-element or per-list byte limits;
 - list truncation or per-element deletion;
-- a generic event log or operation-state reducer;
-- dynamic registration, token catalogs, or dependency-injected built-in token bundles.
+- a generic event log, journal, stream-resumption protocol, or operation reducer;
+- globally registering address objects;
+- exposing raw Session or transaction access to tools.
 
-Consumers own key grammar, content limits, cleanup points, and restore hydration policy. Values remain trusted typed in-process data under the validation boundary in `harness.md`.
+Consumers own address construction, content limits, cleanup points, fork policy, migration policy, and consumption-time hydration. `assistant-durability.md` defines the first list consumer.
 
-## Token model
-
-A token carries its register kind, stable persisted ID, and compile-time value type:
+## Bound address model
 
 ```ts
-declare const registerValueType: unique symbol;
+declare const storedValueType: unique symbol;
 
-interface RegisterTokenBase {
-  readonly id: string;
-  readonly kind: "scalar" | "list";
+interface StoredAddressBase {
+  /** Stable persisted grouping name. */
+  readonly namespace: string;
+  /** Exact member inside that grouping. Empty is legal. */
+  readonly key: string;
+  readonly kind: "value" | "list";
 }
 
-export interface ScalarRegisterToken<T> extends RegisterTokenBase {
-  readonly kind: "scalar";
-  /** Compile-time only; makes the value type part of the token. */
-  readonly [registerValueType]?: (value: T) => T;
+export interface Value<T> extends StoredAddressBase {
+  readonly kind: "value";
+  /** Compile-time only and invariant in T. */
+  readonly [storedValueType]?: (value: T) => T;
 }
 
-export interface ListRegisterToken<T> extends RegisterTokenBase {
+export interface ValueList<T> extends StoredAddressBase {
   readonly kind: "list";
-  /** Compile-time only; T is one element, not the whole list. */
-  readonly [registerValueType]?: (value: T) => T;
+  /** T is one element, not the whole list. */
+  readonly [storedValueType]?: (value: T) => T;
 }
 
-export function scalarRegister<T>(id: string): ScalarRegisterToken<T> {
-  validateRegisterId(id);
-  return Object.freeze({ id, kind: "scalar" });
+export function value<T>(namespace: string, key = ""): Value<T> {
+  validateAddress(namespace, key);
+  return Object.freeze({ namespace, key, kind: "value" });
 }
 
-export function listRegister<T>(id: string): ListRegisterToken<T> {
-  validateRegisterId(id);
-  return Object.freeze({ id, kind: "list" });
+export function list<T>(namespace: string, key = ""): ValueList<T> {
+  validateAddress(namespace, key);
+  return Object.freeze({ namespace, key, kind: "list" });
 }
 ```
 
-The phantom function keeps the type invariant: a token for one value type cannot silently widen to a token for another. It has no runtime field.
+The phantom function makes `T` invariant: an address for one type cannot silently widen to another. It has no runtime field.
 
-A register ID must be non-empty and must not contain the internal Memory-map separator (`\u0000`). It is serialized into JSONL and SQLite and therefore remains stable across reopen. Changing an ID or changing its scalar/list kind requires a storage migration.
+Rules:
 
-Token object identity carries no durability meaning. Storage addresses a register by `(kind, token.id, key)`.
+- `namespace` must be non-empty;
+- namespace `pi` and every `pi.*` namespace are reserved for built-ins by contract;
+- applications that construct a reserved address are defective trusted in-process code; no runtime privilege split, registry, or catalog exists;
+- neither component may contain the Memory backend's internal separator (`\u0000`);
+- an empty key is valid and is the natural address for one application-wide value or list;
+- object identity has no durable meaning;
+- separately constructed addresses with the same `(kind, namespace, key)` identify the same durable location;
+- constructing the same durable location with incompatible TypeScript types is a trusted-programming defect;
+- scalar and list addresses may not share the same `(namespace, key)` in one storage version;
+- changing an address's namespace, key, kind, or incompatible value shape requires migration.
+
+The two components remain separate rather than concatenated. Dynamic application keys and operation IDs therefore require no escaping convention beyond the storage separator rule.
+
+### Exact addresses, not families
+
+An address names one value or one list. Internal code uses small constructors when it has dynamic keys:
+
+```ts
+export const laneLeaf = (lane: string) =>
+  value<string | null>("pi.lane.leaf", lane);
+
+export const operationState = (operationId: string) =>
+  value<OperationState>("pi.op.state", operationId);
+
+export const operationToolArgs = (
+  operationId: string,
+  stepId: string,
+  sourceIndex: number,
+) => value<Record<string, JsonValue>>(
+  "pi.op.tool_args",
+  `${operationId}:${stepId}:${sourceIndex}`,
+);
+
+export const pendingAssistantFrames = (
+  operationId: string,
+  responseEntryId: string,
+) => list<AssistantMessageFrame>(
+  "pi.pending.assistant_frame",
+  `${operationId}:${responseEntryId}`,
+);
+```
+
+This encapsulates each key grammar at its owner. Call sites receive an already-bound typed address:
+
+```ts
+await reader.getValue(operationState(operationId));
+await reader.readList(pendingAssistantFrames(operationId, responseEntryId), options);
+```
 
 ### No global value map
 
-Delete these shapes:
+Delete the existing global namespace-to-type maps:
 
 ```ts
-interface RegisterValues { /* namespace → value */ }
-interface ListRegisterValues { /* namespace → element */ }
-
-type RegisterNamespace = keyof RegisterValues;
-type ListRegisterNamespace = keyof ListRegisterValues;
+interface RegisterValues { /* delete */ }
+interface ListRegisterValues { /* delete */ }
+type RegisterNamespace = keyof RegisterValues; // delete
 ```
 
-A type belongs to its token regardless of where the token is defined:
+A type belongs to an address constructor instead:
 
 ```ts
-export const laneLeaf = scalarRegister<string | null>("lane.leaf");
-export const applicationState = scalarRegister<MyApplicationState>("my-app.state");
+export const applicationState = value<MyApplicationState>("my-app.state");
+export const applicationEvents = list<MyApplicationEvent>("my-app.events");
 ```
 
-The storage API does not need to know either type centrally.
+Applications should use a stable, collision-resistant namespace prefix. Namespace `pi` and the complete `pi.*` prefix are reserved for built-ins by contract; similar-looking names such as `pi2` remain legal. The same `value()` and `list()` constructors serve core and application code. Tests assert that every built-in address uses its reserved prefix. There is no runtime privilege split, registry, or catalog.
 
-## Built-in tokens
+## Built-in addresses
 
-Define built-ins directly in `packages/agent/src/harness/session/registers.ts`:
+Built-in constructors live together in `packages/agent/src/harness/session/values.ts` and are imported directly by consumers. Representative definitions:
 
 ```ts
-export const laneLeaf = scalarRegister<string | null>("lane.leaf");
-export const laneConfig = scalarRegister<LaneConfiguration>("lane.config");
-export const laneState = scalarRegister<LaneState>("lane.state");
-export const laneLastResult = scalarRegister<LaneLastResult>("lane.lastResult");
+export const laneLeaf = (lane: string) => value<string | null>("pi.lane.leaf", lane);
+export const laneConfig = (lane: string) => value<LaneConfiguration>("pi.lane.config", lane);
+export const laneState = (lane: string) => value<LaneState>("pi.lane.state", lane);
+export const laneLastResult = (lane: string) =>
+  value<LaneLastResult>("pi.lane.lastResult", lane);
 
-export const operationMeta = scalarRegister<Operation>("op.meta");
-export const operationState = scalarRegister<OperationState>("op.state");
-export const operationToolArgs =
-  scalarRegister<Record<string, JsonValue>>("op.tool_args");
-export const operationToolFact = scalarRegister<JsonValue>("op.tool_fact");
-export const operationPreparation =
-  scalarRegister<DurableStructuralPreparation>("op.preparation");
+/** Used only by scanValues() to enumerate configured lane names. */
+export const laneLeafInventoryPrefix = () => value<string | null>("pi.lane.leaf");
 
-export const pendingEntry = scalarRegister<PendingEntry>("pending.entry");
-export const pendingToolOutput =
-  scalarRegister<AgentToolResult<unknown>>("pending.tool_output");
+export const operationMeta = (operationId: string) =>
+  value<Operation>("pi.op.meta", operationId);
+export const operationState = (operationId: string) =>
+  value<OperationState>("pi.op.state", operationId);
+export const operationToolArgs = (operationId: string, stepId: string, sourceIndex: number) =>
+  value<Record<string, JsonValue>>(
+    "pi.op.tool_args",
+    `${operationId}:${stepId}:${sourceIndex}`,
+  );
+export const operationToolMemo = (operationId: string, invocationId: string, name: string) =>
+  value<JsonValue>("pi.op.tool_memo", `${operationId}:${invocationId}:${name}`);
+export const operationPreparation = (operationId: string, taskId: string) =>
+  value<DurableStructuralPreparation>(
+    "pi.op.preparation",
+    `${operationId}:${taskId}`,
+  );
 
-/** Compact frames defined by the assistant-partial durability slice. */
-export const pendingAssistantFrames =
-  listRegister<DurableAssistantFrame>("pending.assistant_frame");
+/** Prefix addresses are exported only for namespace-scoped scanValues(). */
+export const operationToolArgsPrefix = (operationId: string, stepId?: string) =>
+  value<Record<string, JsonValue>>(
+    "pi.op.tool_args",
+    stepId === undefined ? `${operationId}:` : `${operationId}:${stepId}:`,
+  );
+export const operationToolMemoPrefix = (operationId: string, invocationId?: string) =>
+  value<JsonValue>(
+    "pi.op.tool_memo",
+    invocationId === undefined ? `${operationId}:` : `${operationId}:${invocationId}:`,
+  );
+export const operationPreparationPrefix = (operationId: string) =>
+  value<DurableStructuralPreparation>("pi.op.preparation", `${operationId}:`);
 
-export const factName = scalarRegister<string>("fact.name");
-export const factLabel = scalarRegister<string>("fact.label");
-export const factCustom = scalarRegister<JsonValue>("fact.custom");
+export const pendingEntry = (entryId: string) =>
+  value<PendingEntry>("pi.pending.entry", entryId);
+export const pendingToolOutput = (operationId: string, invocationId: string) =>
+  value<AgentToolResult<unknown>>(
+    "pi.pending.tool_output",
+    `${operationId}:${invocationId}`,
+  );
+export const pendingAssistantFrames = (operationId: string, responseEntryId: string) =>
+  list<AssistantMessageFrame>(
+    "pi.pending.assistant_frame",
+    `${operationId}:${responseEntryId}`,
+  );
+export const pendingToolOutputPrefix = (operationId: string) =>
+  value<AgentToolResult<unknown>>("pi.pending.tool_output", `${operationId}:`);
+
+export const sessionName = value<string>("pi.session.name");
+export const entryLabel = (entryId: string) => value<string>("pi.entry.label", entryId);
 ```
 
-These are normal constants, not a configuration object. Harness code imports the token it uses:
+The five exported scan-prefix constructors are `laneLeafInventoryPrefix`, `operationToolArgsPrefix`, `operationToolMemoPrefix`, `operationPreparationPrefix`, and `pendingToolOutputPrefix`. Their addresses are consumed only by `scanValues()`.
+
+Applications define their own `value()` and `list()` addresses directly; there is no built-in custom application-state namespace or custom-state API. `AgentHarnessToolInvocation.getMemo()` and `setMemo()` are invocation-fenced capabilities over `operationToolMemo(...)`, not raw Session access. Invocation memos remain operation-owned and are deleted when their tool outcome becomes durable.
+
+Tests assert that built-in constructors produce the documented kind, namespace, and key grammar. Because constructors may be dynamic, there is no runtime catalog that tries to enumerate every possible address.
+
+## Shared read API
+
+Storage, Session, SessionReader, and SessionMutator use the same read signatures:
 
 ```ts
-await reader.getRegister(operationState, operationId);
-await reader.readList(pendingAssistantFrames, frameKey, options);
-```
-
-A future application token may be defined in the application's own `registers.ts`. Persisted IDs must be globally unique within a session. Defining two tokens with the same `(kind, id)` but different TypeScript value types is a trusted-programming defect. Defining scalar and list tokens with the same ID is also a defect.
-
-Tests assert that all built-in exported tokens have unique IDs and fixed kinds.
-
-## Typed scalar API
-
-```ts
-export interface ScalarRegisterValue<T> {
-  key: string;
+export interface StoredValue<T> {
+  address: Value<T>;
   value: T;
   seq: number;
 }
 
-interface SessionReader {
-  getRegister<T>(
-    register: ScalarRegisterToken<T>,
-    key: string,
-  ): Promise<ScalarRegisterValue<T> | undefined>;
-
-  listRegisters<T>(
-    register: ScalarRegisterToken<T>,
-    keyPrefix?: string,
-  ): Promise<ScalarRegisterValue<T>[]>;
-}
-```
-
-`listRegisters` lists scalar keys under one token; it is unrelated to list-register element reads. It retains its existing bounded-use contract: harness callers use exact operation-owned prefixes, and no public API exposes an unrestricted session dump.
-
-Register writes are created through typed helpers. The stored transaction representation is erased only after the helper checks the token/value relationship:
-
-```ts
-interface RegisterSetWrite {
-  kind: "register";
-  op: "set";
-  namespace: string;
-  key: string;
-  value: unknown;
-}
-
-interface RegisterDeleteWrite {
-  kind: "register";
-  op: "delete";
-  namespace: string;
-  key: string;
-}
-
-export function setRegister<T>(
-  register: ScalarRegisterToken<T>,
-  key: string,
-  value: NoInfer<T>,
-): RegisterSetWrite {
-  return {
-    kind: "register",
-    op: "set",
-    namespace: register.id,
-    key,
-    value,
-  };
-}
-
-export function deleteRegister<T>(
-  register: ScalarRegisterToken<T>,
-  key: string,
-): RegisterDeleteWrite {
-  if (register.kind !== "scalar") throw new Error("Expected scalar register");
-  return {
-    kind: "register",
-    op: "delete",
-    namespace: register.id,
-    key,
-  };
-}
-```
-
-`NoInfer<T>` makes the token authoritative. TypeScript must not widen `T` from an incompatible value argument.
-
-The raw write interfaces are storage internals. Harness and application code use `setRegister()` and `deleteRegister()` rather than manually constructing erased writes.
-
-## Typed list API
-
-A list token's `T` is one immutable element:
-
-```ts
-export interface ListRegisterElement<T> {
+export interface ListElement<T> {
   /** Global transaction-write sequence assigned by storage. */
   seq: number;
   value: T;
@@ -231,97 +267,129 @@ export interface ListCursor {
 export interface ListReadOptions {
   /** Exclusive cursor. */
   cursor?: ListCursor;
-  /** Default: `asc`. */
+  /** Default: asc. */
   order?: "asc" | "desc";
   /** Default: 1,000. Maximum: 10,000. */
   limit?: number;
 }
 
-interface SessionReader {
+interface ValueReader {
+  getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined>;
+
+  /** Internal bounded-prefix operation. The address key is interpreted as a prefix. */
+  scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]>;
+
   readList<T>(
-    register: ListRegisterToken<T>,
-    key: string,
+    address: ValueList<T>,
     options?: ListReadOptions,
-  ): Promise<ListRegisterElement<T>[]>;
+  ): Promise<ListElement<T>[]>;
 }
 ```
 
-List writes also use typed helpers:
+`scanValues(prefixAddress)` scans scalar addresses with exactly that namespace and keys beginning with the bound key. Core call sites use only the exported prefix constructors above so raw namespace/key grammar stays in `session/values.ts`. Prefix addresses are passed only to `scanValues()`, never to exact get/set/delete operations. There is no unrestricted cross-namespace dump. Ordinary application reads use exact addresses.
+
+`SessionTree` exposes direct one-transition writes using the same addresses:
 
 ```ts
-interface ListRegisterAppendWrite {
-  kind: "list-register";
+interface SessionTree extends ValueReader {
+  setValue<T>(address: Value<T>, next: NoInfer<T>): Promise<void>;
+  deleteValue<T>(address: Value<T>): Promise<void>;
+  appendList<T>(address: ValueList<T>, element: NoInfer<T>): Promise<void>;
+  deleteList<T>(address: ValueList<T>): Promise<void>;
+}
+```
+
+Purpose-specific helpers such as `getName()`, `setName()`, `getLabel()`, and `setLabel()` may remain thin wrappers over built-in addresses. Applications define and use their own scalar/list addresses directly.
+
+`SessionMutator` remains a read capability plus one atomic `commit()`. It does not expose direct `setValue()`/`appendList()` methods that would consume its only transaction separately; callers construct typed writes and include them in that commit.
+
+## Typed transaction writes
+
+Writes are constructed from bound addresses. Erasure happens only after the helper has checked the address/value type relationship:
+
+```ts
+interface ValueSetWrite {
+  kind: "value";
+  op: "set";
+  namespace: string;
+  key: string;
+  value: unknown;
+}
+
+interface ValueDeleteWrite {
+  kind: "value";
+  op: "delete";
+  namespace: string;
+  key: string;
+}
+
+interface ListAppendWrite {
+  kind: "list";
   op: "append";
   namespace: string;
   key: string;
   value: unknown;
 }
 
-interface ListRegisterDeleteWrite {
-  kind: "list-register";
+interface ListDeleteWrite {
+  kind: "list";
   op: "delete";
   namespace: string;
   key: string;
 }
 
-export function appendList<T>(
-  register: ListRegisterToken<T>,
-  key: string,
-  value: NoInfer<T>,
-): ListRegisterAppendWrite {
-  return {
-    kind: "list-register",
-    op: "append",
-    namespace: register.id,
-    key,
-    value,
-  };
-}
-
-export function deleteList<T>(
-  register: ListRegisterToken<T>,
-  key: string,
-): ListRegisterDeleteWrite {
-  if (register.kind !== "list") throw new Error("Expected list register");
-  return {
-    kind: "list-register",
-    op: "delete",
-    namespace: register.id,
-    key,
-  };
-}
+export function setValue<T>(address: Value<T>, next: NoInfer<T>): ValueSetWrite;
+export function deleteValue<T>(address: Value<T>): ValueDeleteWrite;
+export function appendList<T>(address: ValueList<T>, element: NoInfer<T>): ListAppendWrite;
+export function deleteList<T>(address: ValueList<T>): ListDeleteWrite;
 ```
 
-`Write` adds the four erased scalar/list write representations alongside entries and usage. A transaction may mix every write kind atomically.
+`NoInfer<T>` makes the address authoritative. TypeScript must not infer a wider `T` from an incompatible write value.
 
-## List write semantics
+`Write` includes these four erased representations alongside entry and usage writes. One transaction may mix every write kind atomically. Harness and application code use the helpers rather than manually constructing erased writes.
 
-One append write carries one element. A transaction appending several elements contains several append writes. Every write receives its existing globally increasing transaction sequence:
+The direct Session methods and transaction helpers intentionally use the same operation names. One performs and commits a single Session mutation; the other constructs a write for an explicitly composed transaction.
+
+## Scalar semantics
+
+For one `Value<T>` address:
+
+- `setValue` replaces the current value;
+- `deleteValue` removes it;
+- deleting an absent value is a no-op;
+- set after delete recreates it;
+- there is no retained value history;
+- the current value records the `seq` of its latest set;
+- a failed transaction exposes neither the scalar write nor any sibling write.
+
+## List semantics
+
+One append write carries one immutable element. A transaction appending several elements contains several append writes. Every write receives its existing globally increasing transaction sequence:
 
 ```text
 TX[
-  append pendingAssistantFrames/O:R = A,  // seq 41
-  set operationState/O = X,               // seq 42
-  append pendingAssistantFrames/O:R = B   // seq 43
+  appendList(frames, A),       // seq 41
+  setValue(operationState, X), // seq 42
+  appendList(frames, B),       // seq 43
 ]
 ```
 
-Elements under list key `O:R` are ordered `A, B` by sequence. Gaps caused by unrelated writes are irrelevant.
+Reading `frames` returns `A`, then `B`. Gaps from unrelated writes are expected. A list element's `seq` is session-global and unique to that committed write; it is an ordering/cursor identity, not an application domain ID. Applications that need domain identity include it in `T`.
 
 Rules:
 
 - append never reads existing elements;
 - an element is immutable after commit;
-- whole-key delete removes every element under `(token.id, key)`;
-- delete of an absent list is a no-op;
+- `deleteList(address)` removes every element at that exact address;
+- deleting an absent list is a no-op;
 - delete followed by append in one transaction creates a fresh list atomically;
 - there is no per-element update, delete, insertion, or truncation;
-- all validation and serialization needed to admit a transaction completes before Memory state changes;
+- all validation and serialization required to admit a transaction completes before Memory state changes;
 - a failed transaction exposes none of its list or non-list writes.
 
-“Append-only” describes elements while the key exists. Whole-key deletion is lifecycle cleanup, not element mutation.
+“Append-only” describes elements while the list exists. Whole-list deletion is lifecycle cleanup, not element mutation.
 
-## List read semantics
+### List reads
 
 - ascending reads return `seq > cursor.seq`;
 - descending reads return `seq < cursor.seq`;
@@ -334,110 +402,112 @@ Rules:
 ```ts
 let cursor: ListCursor | undefined;
 while (true) {
-  const page = await reader.readList(pendingAssistantFrames, frameKey, {
-    cursor,
-    order: "asc",
-    limit: 100,
-  });
+  const page = await reader.readList(events, { cursor, order: "asc", limit: 100 });
   if (page.length === 0) break;
   consume(page);
   cursor = { seq: page[page.length - 1]!.seq };
 }
 ```
 
-A cursor is a sequence filter, not a snapshot or key-incarnation token. Concurrent later appends may appear on later ascending pages. A whole-key delete may make a cursor stale; reads simply apply its sequence comparison to the currently surviving elements.
+A cursor is a sequence filter, not a snapshot or list-incarnation token. Concurrent later appends may appear on later ascending pages. Whole-list deletion may make a cursor stale; reads simply apply its sequence comparison to currently surviving elements.
 
 Do not add an unbounded “read the whole list” helper.
 
 ## Assistant partial frames
 
-Assistant partial durability is the first list consumer:
+Assistant partial durability is the first built-in list consumer:
 
-```text
-register: pendingAssistantFrames
-key:      {operationId}:{responseEntryId}
-value:    one bounded DurableAssistantFrame
+```ts
+const frames = pendingAssistantFrames(operationId, responseEntryId);
 ```
 
-The frame type is finalized with the assistant-stream design, not by storage. It must be a compact incremental frame. Do not append raw `AssistantMessageEvent`: update events contain a growing `partial` message and would reintroduce write amplification inside the list elements.
+`AssistantMessageFrame`, `assistantMessageEventToFrame()`, and `reduceAssistantMessageFrames()` come from `@draht/ai`. Do not define a second frame codec or reducer.
 
-The assistant procedure may batch several frame appends into one transaction, but each frame remains an independently sequenced list element. Its scalar `effect_pending` state remains authoritative.
+For every convertible non-terminal provider event, the assistant procedure:
 
-On restore:
+```text
+convert event to frame
+→ synchronously enqueue appendList(frames, frame) on the lane mutation line
+→ attach the ordinary harness-fault observer to that returned promise
+→ replace the process-local latestFrameWrite reference
+→ emit and await the existing message event
+→ consume the next provider event
+```
 
-1. restore and validate scalar lane/operation state;
-2. derive the exact frame key from the valid assistant effect-pending state;
-3. read bounded pages from `pendingAssistantFrames`;
-4. reduce frames into the latest durable partial assistant message.
+The provider loop does not await storage for every frame. Synchronous enqueue preserves provider-event order. Replacing the latest-promise reference never leaves an earlier rejection unobserved because every promise receives the fault observer. Bounded output bounds queued work. On stream settlement, the procedure stops frame admission and awaits the latest append promise before `after_response`; lane-line FIFO means that completion implies every earlier append completed. There is no timer, batcher, coalescer, or flush API.
 
-A missing frame list is valid and means no partial frame committed. Frames never prove provider completion and never select a restart state.
+Scalar assistant `effect_pending` remains authoritative. Each append verifies that the same operation, attempt, and response ID still own the lane when its mutation executes. Frames never prove request admission, completion, success, or failure.
 
-Final assistant settlement atomically commits the complete immutable assistant entry and deletes the whole frame-list key:
+Final or synthetic assistant settlement deletes the exact list atomically with its immutable response, usage, leaf, and next scalar state:
 
 ```text
 TX[
   insert final assistant entry,
   insert usage,
-  deleteList(pendingAssistantFrames, O:R),
-  set operationState/O = next state
+  deleteList(frames),
+  setValue(operationState(operationId), nextState),
 ]
 ```
 
-Unknown-effect recovery may reduce the latest durable frames into its synthetic interrupted assistant response, but that policy belongs in the assistant durability specification.
+`assistant-durability.md` defines frame conversion, unknown-outcome synthesis, cancellation, deferred polling, snapshots, and event ordering.
 
 ## Restore policy
 
-Scalar state remains authoritative for every list consumer:
+Scalar operation state remains the sole restart authority:
 
-1. restore scalar lane and operation registers;
-2. perform current-state semantic validation;
-3. derive auxiliary list keys from valid scalar state;
-4. optionally hydrate bounded list pages for snapshots, diagnostics, or activation.
+1. construct the trusted lane/operation projection from required scalar values;
+2. trust committed typed values rather than auditing every referenced payload or phase relationship;
+3. when a procedure or snapshot consumes auxiliary state, derive its exact bound address from current typed scalar state;
+4. hydrate only the bounded scalar values or list pages that consumer requires.
 
-A missing list never invalidates an otherwise valid operation. List contents never prove that an external effect completed.
+A missing auxiliary list is legal unless its consumer explicitly requires an element. List contents never prove that an external effect completed. Live mutations still verify current operation, phase, attempt, and reserved identity as concurrency fencing; that is not restore validation.
 
-Each concrete list consumer defines:
+Base restore does not enumerate lists. For assistant frames, snapshot or recovery derives `pendingAssistantFrames(operationId, responseEntryId)` only while consuming a typed assistant/deferred `effect_pending` state.
 
-- key grammar;
-- element and total byte bounds;
+Each list consumer defines:
+
+- address grammar;
+- element and total-byte bounds;
 - page/hydration budget;
 - cleanup transitions;
 - fork and migration policy.
 
 ## Memory backend
 
-Keep scalar registers in the existing map, now addressed by token ID:
+Memory may keep separate maps for current values and list elements:
 
 ```ts
-const scalars = new Map<string, ScalarRegisterValue<unknown>>();
-// map key: `${register.id}\u0000${key}`
+const scalarValues = new Map<string, StoredValue<unknown>>();
+const listValues = new Map<string, ListElement<unknown>[]>();
+
+function physicalKey(address: StoredAddressBase): string {
+  return `${address.namespace}\u0000${address.key}`;
+}
 ```
 
-Add list storage:
-
-```ts
-type StoredListElement = { seq: number; value: unknown };
-const lists = new Map<string, StoredListElement[]>();
-// map key: `${register.id}\u0000${key}`
-```
-
-- scalar set replaces the map value;
+- scalar set replaces one map value;
 - scalar delete removes it;
 - list append pushes the already-sequenced element;
 - list delete removes the complete array;
 - list read filters by exclusive cursor and slices to the validated limit;
-- transaction preparation completes before entries, scalar registers, lists, usage, or stats mutate.
+- transaction preparation completes before entries, values, lists, usage, or stats mutate.
 
 Storage snapshots used by JSONL/fork tooling include current scalar values and surviving list elements with original sequence numbers.
 
 ## SQLite backend
 
-The existing scalar register table continues to store `token.id` in its namespace column. No scalar schema change is required.
-
-Add a schema migration for lists rather than modifying an applied migration:
+The logical schema has one current-value table and one list-element table:
 
 ```sql
-CREATE TABLE list_registers (
+CREATE TABLE scalar_values (
+  namespace TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  value     TEXT NOT NULL,
+  PRIMARY KEY (namespace, key)
+) WITHOUT ROWID;
+
+CREATE TABLE list_values (
   namespace TEXT    NOT NULL,
   key       TEXT    NOT NULL,
   seq       INTEGER NOT NULL,
@@ -446,182 +516,194 @@ CREATE TABLE list_registers (
 ) WITHOUT ROWID;
 ```
 
-Operations:
+An implementation may retain an already-applied physical table name while exposing this logical API; do not rewrite an applied migration solely for terminology. Adding list storage uses a new migration when required by the backend's existing schema history.
+
+List operations:
 
 ```sql
-INSERT INTO list_registers(namespace, key, seq, value)
-VALUES (?, ?, ?, ?);
+INSERT INTO list_values(namespace, key, seq, value) VALUES (?, ?, ?, ?);
 
-SELECT seq, value
-FROM list_registers
+SELECT seq, value FROM list_values
 WHERE namespace = ? AND key = ? AND seq > ?
-ORDER BY seq ASC
-LIMIT ?;
+ORDER BY seq ASC LIMIT ?;
 
-SELECT seq, value
-FROM list_registers
+SELECT seq, value FROM list_values
 WHERE namespace = ? AND key = ? AND seq < ?
-ORDER BY seq DESC
-LIMIT ?;
+ORDER BY seq DESC LIMIT ?;
 
-DELETE FROM list_registers
-WHERE namespace = ? AND key = ?;
+DELETE FROM list_values WHERE namespace = ? AND key = ?;
 ```
 
-For a missing cursor, omit the sequence predicate. All writes run in the existing `BEGIN IMMEDIATE` transaction under the writer lease. No marker table, counter row, connection, or new lock order is needed.
-
-Assert with `EXPLAIN QUERY PLAN` that paging uses the primary key and no temporary sort.
+For a missing cursor, omit the sequence predicate. Every write participates in the existing `BEGIN IMMEDIATE` transaction under the writer lease. Assert with `EXPLAIN QUERY PLAN` that paging uses the primary key and no temporary sort.
 
 ## JSONL backend
 
-Scalar records retain their current persisted namespace string. Typed tokens are an API change, not a JSONL format rewrite.
-
-List records use the token ID as `namespace`:
+Logical records carry the bound address's physical components:
 
 ```jsonl
-{"kind":"list-register","op":"append","seq":41,"namespace":"pending.assistant_frame","key":"O:R","value":{"type":"text_delta","contentIndex":0,"delta":"hi"}}
-{"kind":"list-register","op":"delete","seq":52,"namespace":"pending.assistant_frame","key":"O:R"}
+{"kind":"list","op":"append","seq":41,"namespace":"pi.pending.assistant_frame","key":"O:R","value":{"type":"text_delta","contentIndex":0,"delta":"hi"}}
+{"kind":"list","op":"delete","seq":52,"namespace":"pi.pending.assistant_frame","key":"O:R"}
 ```
 
-Replay folds records into the Memory list map:
+Scalar records use `kind:"value"` with `op:"set"|"delete"`. An implementation may retain an old physical record spelling while decoding it into the new logical API when compatibility requires it.
 
-- append adds `{ seq, value }`;
-- delete removes the complete list key.
+Replay folds records into the Memory state:
+
+- scalar set replaces the current address;
+- scalar delete removes it;
+- list append adds `{ seq, value }`;
+- list delete removes the complete list.
 
 A transaction remains one physical JSONL line, using an array for multiple writes. Torn-tail handling therefore remains atomic without new framing.
 
 ### Snapshot compaction
 
-Compaction preserves list cursors. Write every surviving element as an append record carrying its original `seq`, merged in sequence order with surviving entries, scalar registers, and usage rows.
+Compaction writes every surviving list element with its original `seq`, merged in sequence order with surviving entries, scalar values, and usage rows. Do not collapse one live list into a synthetic element or assign new sequence numbers; either change breaks cursors and backend equivalence.
 
-Do not collapse a live list into one synthetic append or assign new sequence numbers. Either changes cursors and backend ordering.
-
-Deleted lists produce no snapshot records. Preserve the storage sequence high-water mark through the existing mechanism so dropping the latest delete cannot permit sequence reuse.
+Deleted lists produce no snapshot records. Preserve the sequence high-water mark so dropping the latest delete cannot permit sequence reuse.
 
 ## Forks and rewrites
 
-Fork and precise-rewrite code decides policy per concrete token, using token identity in source code and the stable ID in storage.
+Fork and precise-rewrite code decides policy per concrete address grammar:
 
-Operation-owned tokens are not copied into an idle fork:
+- operation-owned `pi.op.*` scalar values are not copied into an idle fork;
+- `pi.pending.entry`, `pi.pending.tool_output`, and `pi.pending.assistant_frame` values/lists are not copied;
+- lane and semantic session values follow their existing scope rules;
+- application-defined values/lists require an explicit policy when their consuming feature is added.
 
-- `operationMeta` and other `op.*` scalar tokens;
-- `pendingEntry` and `pendingToolOutput`;
-- `pendingAssistantFrames`.
-
-Application-defined persistent tokens may define a different policy when their consuming feature is added.
-
-A precise rewrite retaining a list element preserves its sequence cursor unless the rewrite explicitly remaps the entire destination sequence space.
+A precise rewrite retaining list elements preserves their `seq` values unless it explicitly remaps the entire destination sequence space.
 
 ## Schema evolution
 
-A token's persisted ID and kind are static for one storage version.
+A bound address's namespace, key grammar, kind, and value type are durable schema:
 
-- changing an ID requires an explicit old-ID to new-ID migration;
-- changing scalar to list or list to scalar requires an explicit migration;
-- storage never infers or coerces a kind change from observed records;
-- changing only the TypeScript value type requires a total value migration when old stored values are not already valid under the new type.
+- changing namespace or key grammar requires explicit address migration;
+- changing scalar to list or list to scalar requires explicit migration;
+- storage never infers or coerces kind from observed records;
+- changing TypeScript value shape requires total value migration when old stored values are incompatible;
+- a list migration pages elements in sequence order and either maps them while preserving `seq` or deletes the complete list;
+- a migration must not load an unbounded logical list at once.
 
-A list migration pages current elements in sequence order and either maps values while preserving `seq` or deletes the whole key/token. It must not load an unbounded logical list at once.
+Adding generic list storage is a backend schema change. Constructing a new application address with no persisted value requires no migration.
 
-Adding the generic SQLite list table is a storage schema migration. Adding a new token with no stored values does not rewrite existing sessions.
+## Instrumentation and telemetry
 
-## Instrumentation
+The instrumented storage decorator exposes the address-based read API and records committed erased writes in exact transaction order.
 
-The instrumented storage decorator exposes token-based scalar/list reads and records committed erased writes in exact transaction order.
+Telemetry session-write item kinds distinguish scalar-value writes from list writes. Namespace/key names may be attributes when the telemetry schema permits them, but values, assistant frames, prompts, and tool output never enter telemetry.
 
-Telemetry session-write item kinds include `list-register` explicitly; list appends/deletes are not reported as scalar writes. Token IDs may be attributes, but values and assistant-frame contents never enter telemetry.
-
-Append-path tests prove no `readList` call occurred before commit.
+Append-path tests prove that no `readList` call occurs before append commit. Frame-persistence promises always receive the harness fault observer, even when an earlier promise is no longer the latest settlement-order reference.
 
 ## Invariants
 
-1. Every token has one stable persisted ID and one static kind in a storage version.
-2. Built-in token IDs are unique.
-3. Token-based reads and helper-constructed writes preserve the token's value type.
-4. A scalar helper cannot target a list token; a list helper cannot target a scalar token.
-5. Every list element is immutable and addressed by its globally unique write `seq`.
-6. Elements under one list key are returned in sequence order on every backend.
-7. Append performs no read of the target list.
-8. Scalar/list writes are atomic with entries and usage in the same transaction.
-9. Whole-key list delete leaves no elements under that key.
-10. Missing and empty lists both read as `[]`.
-11. Scalar restore and validation never depend on list contents.
-12. JSONL compaction preserves surviving element sequences.
-13. Deleting operation-owned scalar and list state at terminal cleanup leaves no recoverable partial assistant content.
+1. One bound address has one stable namespace/key/kind and one trusted value type in a storage version.
+2. Address object identity has no durable meaning.
+3. Namespace `pi` and every `pi.*` are reserved by contract; every built-in namespace starts with `pi.`, and application use is a trusted-programming defect.
+4. Exactly five built-in prefix constructors encapsulate lane inventory and operation cleanup grammar; their results are consumed only by namespace-scoped `scanValues()`.
+5. Scalar and list addresses cannot occupy the same physical location.
+6. Typed reads and helper-constructed writes preserve `T`.
+7. Scalar helpers reject list addresses; list helpers reject scalar addresses.
+8. A Session/Storage operation never requires a second key after address construction.
+9. Every list element is immutable and carries its globally unique committed write `seq`.
+10. Elements at one list address are returned in sequence order on every backend.
+11. Append performs no read of the target list.
+12. Scalar/list writes are atomic with entries and usage in the same transaction.
+13. Whole-list delete leaves no elements at that address.
+14. Missing and empty lists both read as `[]`.
+15. Base restore depends only on required scalar state and never enumerates auxiliary lists.
+16. Auxiliary lists never establish effect completion or select a restart state.
+17. JSONL compaction preserves surviving element sequences.
+18. Terminal cleanup leaves no operation-owned scalar values or lists.
 
 ## Required tests
 
-### Token typing and identity
+### Address typing and identity
 
-- scalar reads infer the token's value type;
-- list reads infer the token's element type;
-- `setRegister` rejects an incompatible value at compile time;
+- `value<T>()` and `list<T>()` preserve their declared `T` invariantly;
+- scalar reads infer the bound address's value type;
+- list reads infer its element type;
+- `setValue` rejects an incompatible value at compile time;
 - `appendList` rejects an incompatible element at compile time;
-- scalar helpers reject list tokens and list helpers reject scalar tokens;
-- independently defined application tokens work without declaration merging;
-- built-in IDs are non-empty, separator-free, unique, and have fixed kinds;
-- token IDs round-trip through Memory, JSONL, and SQLite;
-- two differently typed definitions using one persisted ID are documented/tested as a programming defect rather than supported aliasing.
+- scalar helpers reject list addresses and list helpers reject scalar addresses;
+- independently constructed equal addresses access the same durable location;
+- incompatible definitions of one physical address are documented/tested as a programming defect;
+- empty keys work, while empty namespaces and separator-containing components reject;
+- core and application code use the same `value()` and `list()` constructors, with no private constructor, privilege token, registry, or catalog;
+- built-in address constructors produce exact `pi.lane.*`, `pi.op.*`, `pi.pending.*`, `pi.session.name`, and `pi.entry.label` namespace/key/kind triples;
+- every built-in namespace starts with `pi.`, while application fixtures use non-reserved namespaces;
+- `laneLeafInventoryPrefix()` binds the empty-key `pi.lane.leaf` inventory prefix and is used only to enumerate lanes through `scanValues`;
+- tool-args prefixes cover one operation and optionally one step, tool-memo prefixes cover one operation and optionally one invocation, preparation and tool-output prefixes cover exactly one operation;
+- each prefix constructor result is used only by `scanValues`, and no inventory or cleanup call constructs a raw reserved namespace;
+- application addresses work without declaration merging or core catalogs;
+- no Storage or Session operation accepts an additional key argument.
 
 ### Scalar regression
 
-- existing scalar set/get/list/delete/recreate behavior is unchanged;
-- replacement retains only the latest logical value;
-- token-based helpers preserve mixed transaction write order;
-- existing scalar JSONL and SQLite files open without a format rewrite.
+- set/get/delete/recreate behavior is unchanged;
+- replacement retains only the latest logical value and latest set `seq`;
+- typed write helpers preserve mixed transaction order;
+- prefix scans interpret the bound address key as a prefix and remain namespace-scoped;
+- existing scalar JSONL/SQLite data opens through the compatibility policy chosen by those backends.
 
 ### List conformance
 
 Extend the shared backend conformance suite:
 
 - append one element and page it;
-- multiple appends to one key in one transaction;
-- appends separated by unrelated writes preserve per-key order;
+- multiple appends to one address in one transaction;
+- appends separated by unrelated writes preserve per-list order;
+- every element receives its own global write `seq`;
 - ascending and descending exclusive cursors;
 - default, explicit, invalid, and capped limits;
-- absent key returns `[]`;
-- whole-key delete and delete of absent key;
+- absent list returns `[]`;
+- whole-list delete and delete of absent list;
 - delete followed by append in one transaction;
 - rollback when a later write is invalid;
 - atomic list + entry + usage + scalar transaction;
-- identical pages and sequence cursors on Memory, JSONL, and SQLite;
+- identical pages and cursors on Memory, JSONL, and SQLite;
 - JSONL torn multi-write transaction exposes no list element;
-- JSONL replay and snapshot compaction preserve cursors;
-- SQLite paging query plans use the primary key;
-- append path performs no list read;
-- restore validation succeeds without reading lists, followed by bounded hydration;
-- close rejects later list reads and honors already-admitted list commits.
+- JSONL replay and compaction preserve cursors;
+- SQLite paging uses the primary key without temporary sorting;
+- append performs no list read;
+- base restore constructs trusted scalar projection without list reads, followed by bounded consumption-time hydration;
+- close rejects later reads and honors already-admitted commits.
+
+### Application surface
+
+- an application-wide scalar value requires no extra key at get/set;
+- an application-wide list requires no extra key at read/append;
+- an application can construct dynamic per-workspace addresses explicitly;
+- Storage and Session accept the same address objects and infer the same types;
+- direct Session writes serialize and commit once;
+- explicit `Session.mutate()` can atomically combine typed value/list writes with entries and usage.
 
 ### Assistant-frame integration
 
-- compact frames append under the exact effect-pending response key;
-- raw events with growing `partial` snapshots are never persisted;
-- frame pages reduce to the same partial message as uninterrupted streaming;
-- missing/empty frame list restores as no durable partial;
-- final assistant settlement atomically deletes the frame list;
-- unknown-effect recovery reads only the bounded list named by scalar state;
-- external finalization deletes the operation-owned frame list;
-- idle forks contain no assistant-frame list;
-- backend byte-growth tests show append-linear rather than repeated-snapshot growth.
+- every converted non-terminal frame appends under the exact bound effect-pending response address;
+- terminal `done`/`error` events append nothing;
+- appends enqueue synchronously without provider backpressure;
+- every frame-write promise has an observed fault path;
+- only the latest promise reference is retained for settlement ordering;
+- awaiting the latest promise implies every earlier append completed;
+- reduced pages reconstruct the same partial message as uninterrupted streaming;
+- missing list restores as no durable partial;
+- final/synthetic settlement atomically deletes the frame list;
+- unknown-effect recovery reads only the bounded list derived from current scalar state;
+- external finalization deletes the operation-owned list;
+- idle forks contain no frame list;
+- backend byte growth is append-linear rather than repeated-snapshot growth.
 
 ## Implementation map
 
-Primary files expected to change:
+Expected primary changes:
 
-- new `packages/agent/src/harness/session/registers.ts` for token types, factories, helpers, and built-in constants;
-- `packages/agent/src/harness/session/types.ts` to remove global value maps and expose token-based reader methods;
-- `packages/agent/src/harness/session/storage-state.ts`;
-- `packages/agent/src/harness/session/memory.ts`;
-- `packages/agent/src/harness/session/session.ts`;
-- `packages/agent/src/harness/session/jsonl/codec.ts`;
-- `packages/agent/src/harness/session/jsonl/storage.ts`;
-- `packages/agent/src/harness/session/testing/storage-decorator.ts`;
-- `packages/agent/src/harness/session/testing/instrumented-storage.ts`;
-- `packages/agent/src/harness/session/testing/conformance/storage.ts`;
-- `packages/session-backends/sqlite-node/src/sqlite/migrations.ts`;
-- a new SQLite migration for `list_registers`;
-- `packages/session-backends/sqlite-node/src/sqlite/session.ts`;
-- `packages/session-backends/sqlite-node/src/sqlite/storage.ts`;
-- focused SQLite list paging and query-plan tests.
+- replace `session/registers.ts` with `packages/agent/src/harness/session/values.ts` containing addresses, constructors, typed write helpers, and built-in address constructors;
+- remove `RegisterValues`, namespace unions, register token types, and raw namespace/key read signatures from `session/types.ts`;
+- expose `ValueReader` through Storage, SessionReader, SessionMutator, Session, and SessionTree;
+- add direct application scalar/list methods to SessionTree using bound addresses;
+- update Memory state, JSONL codec/storage, snapshots, fork/rewrite code, instrumentation, and conformance suites;
+- add SQLite list storage and address-based adapters without rewriting applied migrations solely for terminology;
+- update assistant execution, deferred polling, recovery, snapshots, and cleanup to use `pendingAssistantFrames(operationId, responseEntryId)`;
+- update telemetry schema sources and regenerate `telemetry-schema.md`; do not edit that generated file manually.
 
-After implementation, update `harness.md` to use imported tokens rather than namespace-string/type-map examples and add the concrete assistant-frame lifecycle.
+`assistant-durability.md` specifies the consuming lifecycle. `harness.md` must replace raw namespace/key examples and global register maps with this bound-address model before implementation.

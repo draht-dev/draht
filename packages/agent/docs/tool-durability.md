@@ -28,7 +28,7 @@ The solution separates two orders:
 1. **outcome durability:** actual completion order;
 2. **entry materialization:** assistant source order.
 
-A complete finalized result becomes durable immediately in `pending.entry`; the call becomes `outcome_ready`; placement happens later when every earlier source position is complete or ready.
+A complete finalized result becomes durable immediately in `pi.pending.entry`; the call becomes `outcome_ready`; placement happens later when every earlier source position is complete or ready.
 
 ## Goals
 
@@ -46,7 +46,7 @@ A complete finalized result becomes durable immediately in `pending.entry`; the 
 - A nested durable state machine for each `step.do` call.
 - Inferring tool completion from progress output.
 - Treating partial output as the canonical final result.
-- Giving tools raw `Session`, `SessionMutator`, scalar-register, or list-register access.
+- Giving tools raw `Session`, `SessionMutator`, or bound storage-address access.
 - Finalizing the public harness-native tool type in this document.
 
 ## Durable identities
@@ -69,55 +69,52 @@ The surrounding operation state continues to provide:
 
 ## Storage
 
-### Existing scalar namespaces
-
-```text
-op.tool_args/{operationId}:{turnId}:{sourceIndex}
-    Effective validated arguments, persisted before effect admission.
-
-pending.entry/{resultEntryId}
-    Complete finalized ToolResultMessage while outcome_ready awaits placement.
-```
-
-### Invocation facts
-
-Add an operation-owned scalar namespace:
+### Existing bound values
 
 ```ts
-interface RegisterValues {
-  "op.tool_fact": JsonValue;
-}
+operationToolArgs(operationId, turnId, sourceIndex)
+// Effective validated arguments, persisted before effect admission.
+
+pendingEntry(resultEntryId)
+// Complete finalized ToolResultMessage while outcome_ready awaits placement.
 ```
 
-Physical key:
+### Invocation memos
 
-```text
-{operationId}:{invocationId}:{factName}
+Define the operation-owned address constructor in `session/values.ts`:
+
+```ts
+export const operationToolMemo = (
+  operationId: string,
+  invocationId: string,
+  memoName: string,
+) => value<JsonValue>(
+  "pi.op.tool_memo",
+  `${operationId}:${invocationId}:${memoName}`,
+);
 ```
 
-`factName` must be non-empty and contain no `:`. Names may use dots or slashes for application-local grouping. `setFact(name, undefined)` deletes the physical register.
+`memoName` must be non-empty and contain no `:`. Names may use dots or slashes for application-local grouping. `setMemo(name, undefined)` deletes the exact bound value.
 
-The operation prefix permits defensive terminal cleanup. The invocation prefix permits atomic cleanup when one outcome becomes ready.
+`scanValues(operationToolMemoPrefix(operationId))` permits defensive operation cleanup. `scanValues(operationToolMemoPrefix(operationId, invocationId))` permits atomic invocation cleanup when one outcome becomes ready. Core cleanup uses these owner-defined prefix constructors rather than repeating raw reserved namespace/key grammar.
 
 ### Partial tool output
 
-The durable recovery value is the latest complete bounded progress snapshot selected by the tool. That is total current state, so use a scalar namespace:
+The durable recovery value is the latest complete bounded progress snapshot selected by the tool. That is total current state, so use one bound value address:
 
 ```ts
-interface RegisterValues {
-  "pending.tool_output": AgentToolResult<unknown>;
-}
-```
-
-Physical key:
-
-```text
-{operationId}:{invocationId}
+export const pendingToolOutput = (
+  operationId: string,
+  invocationId: string,
+) => value<AgentToolResult<unknown>>(
+  "pi.pending.tool_output",
+  `${operationId}:${invocationId}`,
+);
 ```
 
 This is auxiliary observation data. It never proves the effect succeeded or completed. The stored value has exactly the same content/details/usage shape as the live `partialResult`; recovery does not need a tool-specific progress codec.
 
-The tool owns snapshot bounding, cadence, and duplicate suppression. The harness owns persistence, drop-coalescing, invocation fencing, and cleanup. The first API has no generic byte cap and does not truncate or reinterpret typed tool data; in-process tools are trusted to honor the bounded-snapshot contract. There is no tool-visible `flush()` method and no durable list of progress updates.
+The tool owns snapshot bounding, checkpoint cadence, and duplicate suppression. The harness owns synchronous enqueue, promise tracking, invocation fencing, and cleanup. The first API has no generic byte cap and does not truncate or reinterpret typed tool data; in-process tools are trusted to honor the bounded-snapshot contract. There is no tool-visible `flush()` method and no durable list of progress updates.
 
 A crash may lose live updates newer than the latest committed checkpoint. JSONL physical growth is proportional to the size and frequency of distinct requested checkpoints until compaction; Memory and SQLite retain one current value. At 50 KiB every two seconds, JSONL's uncompacted worst case is approximately 15 MiB per ten minutes of continuously changing output.
 
@@ -141,14 +138,15 @@ export type AgentHarnessToolUpdateCallback<TDetails> = (
 
 Every callback invocation remains an immediate live update. The callback is synchronous and returns `void`; `checkpoint: true` additionally requests persistence of that complete snapshot. It is not a durability acknowledgement. Internally, the harness retains the latest `events.emit(tool_update)` promise so existing listener delivery completes before `after_tool`; tools do not await or receive that promise.
 
-Checkpoint requests are drop-coalesced. The synchronous request path either immediately enqueues the active lane-line mutation or replaces the in-memory waiting value:
+Every `checkpoint:true` call synchronously enqueues one scalar replacement on the lane mutation line, attaches the ordinary harness-fault observer to that promise, and replaces the process-local `latestCheckpointWrite` reference. Writes themselves are neither dropped nor coalesced, and replacing the reference never leaves an earlier rejection unobserved:
 
-- at most one checkpoint commit is active per invocation;
-- at most one newer requested snapshot waits;
-- a newer requested snapshot replaces the waiting one;
-- an admitted commit verifies the same call remains `effect_pending`;
-- tool-promise settlement closes checkpoint admission and drops the waiting, not-yet-enqueued snapshot; an active checkpoint is already ordered on the lane mutation line before outcome staging;
-- a failed admitted commit faults the harness under the ordinary storage-fault rule.
+- lane-line FIFO preserves request order;
+- each mutation verifies the same call remains `effect_pending`;
+- completion of the latest promise implies completion of every earlier checkpoint write;
+- tool-promise settlement stops accepting updates and awaits that latest promise before `after_tool`;
+- a failed checkpoint commit faults the harness under the ordinary storage-fault rule.
+
+A tool that requests checkpoints faster than storage can queue work in memory. Under the trusted-tool contract, cadence is the tool's responsibility. The built-in bash policy bounds this queue in ordinary use.
 
 Tools should compare against their last requested checkpoint when duplicate suppression matters. Storage does not read and deep-compare the current scalar as part of every checkpoint.
 
@@ -197,8 +195,8 @@ type ToolCall =
 `outcome_ready` means:
 
 - execution, error normalization, and `after_tool` have finished, or the harness has constructed a final synthetic result;
-- the complete final `ToolResultMessage` exists in `pending.entry/{resultEntryId}`;
-- invocation facts and partial-output storage are gone;
+- the complete final `ToolResultMessage` exists at `pendingEntry(resultEntryId)`;
+- invocation memos and partial-output storage are gone;
 - the tool must never execute again;
 - the immutable result entry may not exist yet because an earlier call has not materialized.
 
@@ -232,7 +230,7 @@ Unchanged effect sandwich:
 planned
 → prepare arguments, run before_tool, validate replacements
 → TX[
-     set op.tool_args,
+     set pi.op.tool_args,
      set call = effect_pending(replay)
    ]
 → admit tool execution
@@ -246,11 +244,11 @@ Every `onUpdate(partialResult, options)` publishes the live update through the e
 
 ```text
 TX[
-  set pending.tool_output/{operationId}:{invocationId} = partialResult
+  setValue(pendingToolOutput(operationId, invocationId), partialResult)
 ]
 ```
 
-The mutation verifies the same operation, turn, source position, and invocation remain `effect_pending`. It does not rewrite `op.state`. A late checkpoint after settlement returns without committing.
+The mutation verifies the same operation, turn, source position, and invocation remain `effect_pending`. It does not rewrite `pi.op.state`. A late checkpoint after settlement returns without committing.
 
 The tool must checkpoint bounded complete snapshots, not growing unbounded values. Bash uses the same bounded `ShellCaptureProgress` snapshot it already sends live. Clients may render and locally retain live updates newer than the durable checkpoint, but those updates are explicitly process-local.
 
@@ -258,25 +256,27 @@ The tool must checkpoint bounded complete snapshots, not growing unbounded value
 
 When the tool promise settles:
 
-1. synchronously stop accepting updates, expire the invocation capability, and close checkpoint admission;
-2. drop the waiting checkpoint; any active checkpoint or pre-return fact mutation is already ahead of staging on the lane mutation line;
-3. await the latest tracked `tool_update` delivery, which implies delivery of every earlier update;
-4. run `after_tool` when this is a real fresh or safely replayed result and cancellation did not prevent the hook;
-5. construct the complete final `ToolResultMessage`;
-6. emit and await `tool_end` for a real execution;
-7. commit the result as `outcome_ready`.
+1. synchronously stop accepting updates and expire the invocation capability;
+2. await the latest tracked `tool_update` delivery and latest checkpoint-write promise; each implies completion of its preceding queue;
+3. run `after_tool` when this is a real fresh or safely replayed result and cancellation did not prevent the hook;
+4. construct the complete final `ToolResultMessage`;
+5. emit and await `tool_end` for a real execution;
+6. commit the result as `outcome_ready`.
 
-`setFact()` returns a promise and tools must await it; `step.do` always does. An unawaited pre-return mutation is still enqueued before staging and is deleted by staging. Calls begun after capability expiry reject. No separate invocation-write drain exists.
+`setMemo()` returns a promise and tools must await it; `step.do` always does. An unawaited pre-return mutation is still enqueued before staging and is deleted by staging. Calls begun after capability expiry reject. No separate invocation-write drain exists.
 
 Transaction:
 
 ```text
 TX[
-  set pending.entry/{resultEntryId}
-      = { type: "message", payload: finalizedToolResultMessage },
-  delete pending.tool_output/{operationId}:{invocationId},
-  delete op.tool_fact/{operationId}:{invocationId}:*,
-  set op.state call = outcome_ready(terminate)
+  setValue(
+    pendingEntry(resultEntryId),
+    { type: "message", payload: finalizedToolResultMessage },
+  ),
+  deleteValue(pendingToolOutput(operationId, invocationId)),
+  deleteValue(memo.address) for every memo returned before commit by
+    scanValues(operationToolMemoPrefix(operationId, invocationId)),
+  setValue(operationState(operationId), call = outcome_ready(terminate))
 ]
 ```
 
@@ -309,17 +309,17 @@ Before the placement transaction, emit and await each finalized result's `messag
 
 ```text
 TX[
-  insert result entry i from pending.entry/i,
-  delete pending.entry/i,
+  insert result entry i from pendingEntry(i),
+  deleteValue(pendingEntry(i)),
   insert tool usage row i if reported,
 
   insert result entry i+1 with parent = result i,
-  delete pending.entry/i+1,
+  deleteValue(pendingEntry(i+1)),
   insert tool usage row i+1 if reported,
 
-  set lane.leaf = newest result,
-  set calls i..i+1 = completed,
-  set next checkpoint in the same state write when the whole batch completed
+  setValue(laneLeaf(lane), newest result),
+  setValue(operationState(operationId),
+           calls i..i+1 = completed and, when complete, next checkpoint)
 ]
 ```
 
@@ -327,7 +327,7 @@ Each inserted entry uses its already-reserved `resultEntryId`. Writes construct 
 
 Tool-reported usage remains durable in the staged message until placement. The initial implementation writes its ledger row atomically with entry materialization, matching the current entry/usage ordering and avoiding a ledger row that references an entry not yet present. No usage ID reservation is needed because a failed placement transaction writes neither row nor completed state.
 
-When the final call materializes, the same transaction deletes the batch's `op.tool_args` keys and transitions to the correct checkpoint:
+When the final call materializes, the same transaction calls `scanValues(operationToolArgsPrefix(operationId, turnId))` and deletes every returned address, and transitions to the correct checkpoint:
 
 - every result terminates → `may_finish`, no final assistant required;
 - otherwise → `need_assistant(false)`.
@@ -360,13 +360,13 @@ The durable invariant changes from “completed calls form a source-ordered pref
 - after that prefix, parallel calls may be `planned`, `effect_pending`, or `outcome_ready` in any mixture;
 - only source-ordered materialization extends the completed prefix.
 
-Sequential execution normally has at most one non-planned call after the completed prefix, but restore should validate this from the captured execution mode as it does today.
+Sequential execution constructs at most one non-planned call after the completed prefix. Committed call state is trusted on restore; the owning procedure enforces this shape while creating and consuming transitions rather than through a broad restore audit.
 
 ## Unsafe recovery with partial output
 
 For orphaned `effect_pending` with `replay: "never"`:
 
-1. read `pending.tool_output/{operationId}:{invocationId}` when present;
+1. read `pendingToolOutput(operationId, invocationId)` when present;
 2. preserve its bounded content and serializable details;
 3. append a mandatory human-readable interruption marker;
 4. construct a harness-owned `ToolResultMessage` with `isError: true`;
@@ -385,16 +385,16 @@ Rules:
 - do not run `after_tool` for this synthetic result;
 - preserve checkpoint `usage` when present, but ignore checkpoint `addedToolNames` and `terminate` because progress never has final-result authority;
 - set `terminate: false` and add no tools;
-- no partial register is also valid and yields only the interruption result;
+- an absent checkpoint value is also valid and yields only the interruption result;
 - never infer completion from an apparent success line in partial output;
-- cleanup of partial output and invocation facts is atomic with staging the synthetic result.
+- cleanup of partial output and invocation memos is atomic with staging the synthetic result.
 
 ## Safe recovery
 
 For orphaned `effect_pending` where both the stored and current declarations are `replay: "safe"`:
 
-1. retain invocation facts;
-2. atomically delete the previous `pending.tool_output` key;
+1. retain invocation memos;
+2. atomically delete `pendingToolOutput(operationId, invocationId)`;
 3. emit/reset process-local progress observation as needed;
 4. rerun the tool with persisted arguments and the same `invocationId`;
 5. completed `step.do` calls return their memoized values;
@@ -405,7 +405,7 @@ Deleting old progress prevents duplicate chunks when replayed code emits progres
 
 If the current tool declaration is missing, suspend before replay. If it is present but no longer safe, use unsafe interruption recovery.
 
-## Invocation facts
+## Invocation memos
 
 The harness-native tool call receives a purpose-built invocation capability conceptually equivalent to:
 
@@ -415,37 +415,37 @@ interface AgentHarnessToolInvocation {
   readonly operationId: string;
   readonly turnId: string;
 
-  getFact(key: string): Promise<JsonValue | undefined>;
-  setFact(key: string, value: JsonValue | undefined): Promise<void>;
+  getMemo(key: string): Promise<JsonValue | undefined>;
+  setMemo(key: string, value: JsonValue | undefined): Promise<void>;
 }
 ```
 
 Each operation:
 
-1. validates the fact name and checks process-local capability expiry;
+1. validates the memo name and checks process-local capability expiry;
 2. synchronously enqueues work on the lane mutation line before returning its promise;
 3. verifies the operation, turn, source position, and invocation are still the same `effect_pending` call when that job executes;
-4. reads or writes only the invocation's physical prefix;
+4. constructs and reads or writes only `operationToolMemo(operationId, invocationId, name)`;
 5. rejects after capability expiry or durable ownership loss.
 
-The durable check matters for authorized external finalization. In ordinary execution, a fact mutation initiated before the tool returns is FIFO-ordered before outcome staging; one initiated afterward fails the expired-capability check.
+The durable check matters for authorized external finalization. In ordinary execution, a memo mutation initiated before the tool returns is FIFO-ordered before outcome staging; one initiated afterward fails the expired-capability check.
 
-A late zombie callback can neither recreate facts after `outcome_ready` nor write into a later operation.
+A late zombie callback can neither recreate memos after `outcome_ready` nor write into a later operation.
 
-Facts are immediate durable memo state, not application-visible settlement state. They survive close/crash while the call remains `effect_pending` and are deleted when any real or synthetic outcome becomes ready.
+Memos are immediate durable replay state, not application-visible settlement state. They survive close/crash while the call remains `effect_pending` and are deleted when any real or synthetic outcome becomes ready.
 
-Terminal cleanup defensively deletes:
+Terminal cleanup defensively scans and deletes the operation-owned families:
 
-```text
-op.tool_fact/{operationId}:*
-pending.tool_output/{operationId}:*
+```ts
+scanValues(operationToolMemoPrefix(operationId))
+scanValues(pendingToolOutputPrefix(operationId))
 ```
 
-in addition to existing operation-owned registers.
+in addition to other operation-owned addresses. Each returned `StoredValue` supplies its exact bound address for `deleteValue`; no later operation receives a raw key.
 
 ## Flue-style `step.do`
 
-Build `step.do` over invocation facts; it does not need its own harness state union:
+Build `step.do` over invocation memos; it does not need its own harness state union:
 
 ```ts
 interface ToolSteps {
@@ -460,10 +460,10 @@ Algorithm:
 
 ```text
 validate deterministic unique name
-→ getFact("step/" + name)
+→ getMemo("step/" + name)
 → present: return stored value
 → absent: run effect
-→ setFact("step/" + name, value)
+→ setMemo("step/" + name, value)
 → await durability
 → return value
 ```
@@ -487,9 +487,9 @@ Within one live execution, calling the same step name twice is an invariant erro
 
 ## Application persistent state
 
-Flue-style application state is distinct from invocation facts.
+Flue-style application state is distinct from invocation memos.
 
-Invocation fact:
+Invocation memo:
 
 ```text
 step completed → memo becomes visible immediately
@@ -503,14 +503,14 @@ tool stages state change
 → outcome_ready: state and finalized result become visible together
 ```
 
-Do not implement application state by calling public `setCustomFact()` directly during execution.
+Do not implement application state by calling `Session.setValue()` directly during execution.
 
 Two valid implementation stages:
 
 1. Flue keeps its state externally and atomically stores application state plus a full result memo keyed by `invocationId`.
-2. A later harness API accepts staged application fact writes and promotes them in the `outcome_ready` transaction.
+2. A later harness API accepts staged application value writes and promotes them in the `outcome_ready` transaction.
 
-The second option is required only if Flue's `usePersistentState` moves into harness-owned session facts. Its public typing and conflict semantics remain an open design item for the harness-native tool discussion.
+The second option is required only if Flue's `usePersistentState` moves into harness-owned session values. Its public typing and conflict semantics remain an open design item for the harness-native tool discussion.
 
 ## Cancellation
 
@@ -520,7 +520,7 @@ Cancellation reconciliation never replays a restored tool.
 - a live started call may finalize its real local result under cancelled control, then become `outcome_ready` with `terminate: false`;
 - restored `effect_pending` calls use an interrupted synthetic result, optionally including partial output, regardless of safe replay declaration;
 - existing `outcome_ready` calls are preserved and materialized in source order;
-- invocation facts and partial output are deleted with each staged cancellation outcome;
+- invocation memos and partial output are deleted with each staged cancellation outcome;
 - no `before_tool` or `after_tool` starts during restored synthetic reconciliation.
 
 The aborted terminal transaction runs only after every call outcome has materialized and accepted deferred writes have drained under the existing cancellation rules.
@@ -529,45 +529,36 @@ The aborted terminal transaction runs only after every call outcome has material
 
 Close is still a controlled crash:
 
-- fact/checkpoint mutations already enqueued under the admission barrier may finish;
+- memo/checkpoint mutations already enqueued under the admission barrier may finish;
 - live output newer than the latest committed tool-requested checkpoint may be lost;
 - no synthetic outcome or cancellation marker is written;
 - durable state remains at `effect_pending` or `outcome_ready`.
 
-External finalization deletes operation-owned arguments, invocation facts, partial output, staged pending outcomes, and other pending entries in its terminal transaction. A live task that later tries to stage an outcome fails the ownership fence and stops through `OperationEnded`.
+External finalization deletes operation-owned arguments, invocation memos, partial output, staged pending outcomes, and other pending entries in its terminal transaction. A live task that later tries to stage an outcome fails the ownership fence and stops through `OperationEnded`.
 
-## Restore and validation
+## Restore and consumption-time reads
 
-Scalar restore remains authoritative. Extend direct hydration and semantic checks:
+Base restore constructs the trusted lane/operation projection from required owner values. It does not hydrate or semantically audit tool arguments, invocation memos, progress checkpoints, staged outcomes, completed entries, completed-prefix shape, or captured execution-mode relationships.
+
+The procedure responsible for the current typed state performs only its exact consumption-time reads:
 
 ### `planned`
 
-- result ID is reserved but has no entry or `pending.entry`;
-- no `op.tool_args` is required;
-- no partial output or invocation facts are required.
+Clearance needs no auxiliary restore read. It prepares the call and writes arguments before effect admission.
 
 ### `effect_pending`
 
-- matching `op.tool_args` exists;
-- result entry and `pending.entry/{resultEntryId}` do not exist;
-- invocation facts may exist but are not required for base validation;
-- a partial-output scalar may exist but is auxiliary and must satisfy the trusted tool's bounded-snapshot contract.
+Activation reads `operationToolArgs(operationId, turnId, sourceIndex)` and optionally reads `pendingToolOutput(operationId, invocationId)`. Missing required arguments are an invariant defect at consumption. Invocation memos are read only through the scoped capability. Safe replay, unsafe interruption, and snapshots use no broad prefix scan.
 
 ### `outcome_ready`
 
-- `pending.entry/{resultEntryId}` exists;
-- it contains a `ToolResultMessage` matching the source call's provider call ID and tool name;
-- immutable result entry does not yet exist;
-- invocation facts and partial output should be absent after the atomic staging transaction;
-- no tool identity is needed to materialize it.
+Materialization reads `pendingEntry(resultEntryId)`. Its absence or wrong trusted message relationship is an invariant defect when materialization consumes it. No tool identity or effect recovery is needed.
 
 ### `completed`
 
-- immutable result entry exists and matches the source call;
-- no staged pending entry exists;
-- no invocation facts or partial output exist.
+Ordinary dispatch performs no restore-time entry audit. Context/tree reads later consume the immutable entry through their normal typed paths.
 
-Restore validates the completed-prefix and execution-mode shape described above. Partial output does not participate in semantic validation. Activation or snapshot hydration may read the exact scalar afterward.
+Every live mutation still verifies current operation, turn, source position, invocation, and status on the lane line. Those checks fence concurrent settlement, cancellation, and external finalization; they are not historical restore validation. Terminal prefix cleanup remains defensive and does not make orphan scans part of restore.
 
 ## Snapshots and reconnect
 
@@ -596,43 +587,44 @@ Instrumented-storage tests assert this ordering. A crash after `tool_end` but be
 
 | Race | Required result |
 |---|---|
-| checkpoint vs tool settlement | an active checkpoint was enqueued first and staging later deletes it; the waiting checkpoint is dropped when the tool promise settles; a late update is ignored |
-| fact write vs `outcome_ready` | an awaited or pre-return-enqueued write precedes staging and is then deleted; a post-return call rejects; external finalization first causes the durable ownership check to reject |
+| checkpoint vs tool settlement | every accepted checkpoint was enqueued first; settlement awaits the latest promise, then staging deletes the checkpoint value; a late update is ignored |
+| memo write vs `outcome_ready` | an awaited or pre-return-enqueued write precedes staging and is then deleted; a post-return call rejects; external finalization first causes the durable ownership check to reject |
 | B outcome vs earlier A settlement | B stages independently; placement waits for A |
 | crash after outcome staging | tool never replays; pending result later materializes |
 | crash during source-prefix placement | transaction exposes either none or all of that placement prefix |
-| safe replay vs old partial output | old key is deleted before replay emits new progress |
+| safe replay vs old partial output | the old bound checkpoint value is deleted before replay emits new progress |
 | cancellation vs real settlement | lane-line order chooses real cancelled-control result or synthetic reconciliation; at most one outcome stages |
 | terminal finalization vs late result | terminal ownership wins or outcome stages first; late task never recreates operation data |
-| external finalization vs fact/checkpoint mutation | mutation first is removed by terminal cleanup; finalization first makes the mutation's durable ownership check reject |
+| external finalization vs memo/checkpoint mutation | mutation first is removed by terminal cleanup; finalization first makes the mutation's durable ownership check reject |
 
 ## Invariants
 
 1. `invocationId` equals the reserved result entry ID and is stable across safe replay.
 2. A call in `outcome_ready` or `completed` never executes again.
-3. Every `outcome_ready` call has exactly one complete matching `pending.entry` value.
+3. Every `outcome_ready` call has exactly one complete matching `pi.pending.entry` value.
 4. Completed calls form a source-ordered prefix.
 5. Only source-ordered materialization extends that prefix.
 6. Parallel calls after the completed prefix may mix planned, effect-pending, and outcome-ready states.
-7. Invocation facts exist only while their call is `effect_pending`.
+7. Invocation memos exist only while their call is `effect_pending`.
 8. Partial output is auxiliary and never establishes effect completion.
 9. Unsafe synthetic results explicitly state that captured output is incomplete and the external outcome is unknown.
-10. Staging an outcome atomically deletes its invocation facts and partial output.
+10. Staging an outcome atomically deletes its invocation memos and partial output.
 11. Materialization atomically inserts the immutable entry and deletes its staged pending value.
 12. A late invocation capability cannot write after outcome settlement or operation loss.
-13. `step.do` values are memoized only after their fact write commits; effects remain at-least-once.
-14. Operation terminal cleanup leaves no tool args, invocation facts, partial output, or staged outcomes.
+13. `step.do` values are memoized only after their memo write commits; effects remain at-least-once.
+14. Operation terminal cleanup leaves no tool args, invocation memos, partial output, or staged outcomes.
 
 ## Required tests
 
 ### State and restore
 
-- every planned/effect-pending/outcome-ready/completed state;
-- missing or mismatched pending result for `outcome_ready`;
-- pending result incorrectly coexisting with completed entry;
-- invocation facts and partial output absent after staging;
-- restore validates without reading partial output;
-- activation then hydrates the exact bounded scalar when needed.
+- every trusted planned/effect-pending/outcome-ready/completed projection restores without auxiliary reads;
+- base restore does not audit completed-prefix or execution-mode relationships;
+- effect-pending consumption reads exact required arguments and optional bounded checkpoint;
+- outcome-ready consumption reads the exact staged result;
+- missing required arguments or staged result fails at the consuming procedure, not base restore;
+- invocation memos and partial output are absent after staging;
+- snapshot/activation hydrate only the exact bounded checkpoint value when needed.
 
 ### Parallel ordering
 
@@ -646,23 +638,23 @@ Instrumented-storage tests assert this ordering. A crash after `tool_end` but be
 ### Replay and interruption
 
 - safe replay uses persisted arguments and the same invocation ID;
-- safe replay preserves step facts but clears old partial output;
+- safe replay preserves step memos but clears old partial output;
 - current declaration downgrade from safe to never interrupts;
 - unsafe recovery with no checkpoint and with a complete bounded checkpoint;
 - synthetic result is error/incomplete/unknown and never runs `after_tool`;
 - cancellation never safely replays a restored call.
 
-### Invocation facts and `step.do`
+### Invocation memos and `step.do`
 
-- set/get/delete fact with physical invocation scoping;
+- set/get/delete memo with invocation-address scoping;
 - completed step skips effect after reopen;
 - crash before memo commit reruns effect;
 - crash after memo commit returns memo;
 - several completed steps followed by one interrupted step;
 - duplicate live step names reject;
-- fact write racing outcome staging;
+- memo write racing outcome staging;
 - capability write after expiry, cancellation outcome staging, and external finalization rejects;
-- terminal cleanup removes crash-leaked facts.
+- terminal cleanup removes crash-leaked memos.
 
 ### Partial output
 
@@ -670,8 +662,8 @@ Instrumented-storage tests assert this ordering. A crash after `tool_end` but be
 - `checkpoint: true` writes the complete bounded snapshot;
 - tool-selected checkpoint cadence and duplicate suppression;
 - bash emits live snapshots at 100 ms and requests distinct checkpoints at most every two seconds;
-- drop-coalescing permits at most one active and one waiting checkpoint, and tool-promise settlement drops the waiting value;
-- a checkpoint after outcome staging cannot recreate the key;
+- every selected checkpoint enqueues one write, and awaiting the latest promise at tool settlement implies all earlier writes completed;
+- a checkpoint after outcome staging cannot recreate the address's value;
 - Memory, JSONL, and SQLite restore the same checkpoint value;
 - JSONL growth follows checkpoint cadence rather than raw bash output volume;
 - terminal compaction reclaims superseded/deleted checkpoint snapshots according to the existing dead-byte policy.
@@ -679,7 +671,7 @@ Instrumented-storage tests assert this ordering. A crash after `tool_end` but be
 ### Atomicity and instrumentation
 
 - exact intent, synchronous update acceptance, asynchronous update-delivery, `after_tool`, `tool_end`, outcome-ready, source-ordered message lifecycle, and materialization order;
-- outcome staging is atomic with fact/output cleanup;
+- outcome staging is atomic with memo/output cleanup;
 - materialization is atomic with pending deletion, usage, leaf, and state;
 - crash at every boundary;
 - no effect starts before intent;
@@ -691,20 +683,20 @@ Instrumented-storage tests assert this ordering. A crash after `tool_end` but be
 Expected runtime areas:
 
 - operation-state types in `packages/agent/src/harness/session/types.ts`;
-- restore key collection and semantic validation;
+- trusted restore projection and exact consumption-time address reads;
 - tool-batch procedure and source-ordered materialization;
 - terminal cleanup and cancellation reconciliation;
 - harness-specific update options, snapshots, and events;
 - invocation-scoped capability implementation on the lane mutation line;
-- backend conformance through the already-implemented scalar/list register APIs;
+- backend conformance through the bound value/list APIs;
 - instrumented-storage transaction assertions.
 
-Concrete namespace additions:
+Concrete built-in address constructors in `session/values.ts`:
 
 ```text
-scalar: op.tool_fact
-scalar: pending.tool_output
-existing scalar staging: pending.entry
+operationToolMemo(operationId, invocationId, name) → value("pi.op.tool_memo", ...)
+pendingToolOutput(operationId, invocationId)      → value("pi.pending.tool_output", ...)
+pendingEntry(resultEntryId)                       → value("pi.pending.entry", ...)
 ```
 
-Implement `outcome_ready` and invocation facts before progress checkpoints. The state solves incorrect parallel replay by itself; checkpoints improve reconnect observation and unsafe interruption diagnostics without becoming completion authority.
+Implement `outcome_ready` and invocation memos before progress checkpoints. The state solves incorrect parallel replay by itself; checkpoints improve reconnect observation and unsafe interruption diagnostics without becoming completion authority.

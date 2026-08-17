@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementation-ready; Phase A not started. `harness.md` remains normative, but its current attachment, suspension, snapshot, and manual-progress sections must be revised by Phase A of this package before implementation begins.
+Implementation-ready; Phase A complete and awaiting user approval. `harness.md` is normative and contains the reviewed attachment, status, snapshot, context, and manual-progress contract. Runtime implementation has not started.
 
 This handoff expects a clean implementation baseline: all discarded pre-handoff WP02 source and test changes have been explicitly removed. If a future session finds that implementation still present, stop before Phase A and restore these exact tracked paths to `HEAD`:
 
@@ -167,6 +167,7 @@ Decision:
 
 - every current public harness/lane operation receives one explicit trailing `context: Context`;
 - `context.telemetryContext` supplies the invocation parent for harness/session spans, and derived child contexts preserve parentage across concurrent asynchronous branches without ambient state;
+- remove `AgentHarnessOptions.telemetryContext`: a receiver-level parent cannot represent concurrent callers, and runtime configuration must not grow a replacement fallback;
 - `context.abortSignal` is the explicit process-local invocation-cancellation channel used by local callers and reconstructed by RPC adapters from per-request cancel/disconnect control; it never implies durable `cancel_requested` and must not call `requestAbort()` implicitly;
 - each RPC request has an independent server `AbortController`; canceling one request or drive joiner must not abort unrelated callers or shared execution owned under a different policy;
 - shared harness, lane, Session, and SessionTree receivers never retain a caller context;
@@ -346,6 +347,7 @@ export interface LaneSnapshot {
   lane: string;
   transcript: Entry[];
   leafId: string | null;
+  lastResult?: LaneLastResult;
   operation: null | {
     id: string;
     kind: "run" | "compaction" | "navigation";
@@ -379,6 +381,7 @@ export interface LaneSnapshot {
 Snapshot rules:
 
 - `transcript` contains committed entries only;
+- `lastResult` is the latest hydrated terminal result and is never a recovery input;
 - `streamingMessage` is a display projection, not a committed transcript entry;
 - `runningTools[].partialResult` is a display projection from live state or durable checkpoint;
 - live partials take precedence over attachment fallback;
@@ -445,7 +448,7 @@ This phase is mandatory and has its own review stop. Do not edit runtime source 
 - Specify the RPC boundary principle: the client maps `context.abortSignal` to `cancel(requestId)`; the server owns one `AbortController` per request, aborts it on matching cancellation or connection loss, and uses `withAbortSignal` plus extracted telemetry to construct a fresh local Context. The adapter strips/inserts Context outside serialized business arguments and never serializes the Context object, `AbortSignal`, or `TelemetryContext` as business arguments. Whether specific adapter-managed typed values cross as control-plane metadata remains open in `rpc.md`.
 - Require pre-aborted RPC calls to start no server work, while leaving that rejection in the adapter rather than the core harness.
 - Distinguish `context.abortSignal` from durable abort: invocation or RPC cancellation must not call `requestAbort()` or write `cancel_requested`; one canceled request/joiner must not cancel unrelated callers.
-- Keep the existing `AgentHarnessOptions.telemetryContext` option unchanged in WP02, but do not describe it as the invocation span parent; its removal belongs to the pending context/telemetry design.
+- Remove `AgentHarnessOptions.telemetryContext`. The explicit invocation Context is the sole telemetry parent because a harness-level default cannot represent concurrent callers; do not add a replacement receiver-level fallback to runtime configuration.
 - Keep trailing parameter position and propagation behavior aligned with current source for WP02. Broader RPC transport, carrier encoding, and any future context-position migration remain open in non-normative `rpc.md` and are not decided by WP02.
 
 ### §3.3 — Restore validation
@@ -516,7 +519,7 @@ Apply the exact operation-outcome and action-required types above. Ensure conven
 - Require `watch(context)` to capture owned memory and start buffering atomically, with no storage read.
 - Specify one lane-local observation gate ordering state publication plus synchronous event-batch enqueue against watcher registration plus synchronous memory capture. Event-bus enqueue binds each event's invocation context together with its recipient set immediately rather than consulting later listeners at delivery time. Therefore a watcher is either registered before publication and receives the `(event, context)` batch after an old snapshot, or registers after publication/enqueue and receives a new snapshot without that old batch.
 - Explain why the pair is required: local event handlers derive telemetry from the emitting invocation, while an RPC subscription injects that same source lineage into each event frame and reconstructs a fresh client-side delivery context. Subscription-establishment context must not replace event-source context.
-- Specify transcript, partial-message, checkpoint, queue, drained, retry, deferred, action, and live-over-durable precedence.
+- Specify transcript, last-result, partial-message, checkpoint, queue, drained, retry, deferred, action, and live-over-durable precedence.
 - Remove restored crash descriptors and lifecycle replay implications.
 
 ### Part 8 roadmap
@@ -569,7 +572,8 @@ Modify `packages/agent/src/harness/agent-harness.ts`:
 - remove post-acceptance `MissingIdentities` from `ResumeResult` errors;
 - add `DriveOutcome.action_required`;
 - change `executeAction(context)` and `runToCompletion(context)` result signatures;
-- preserve every existing trailing `context: Context` parameter, including expected-id primitives, and do not persist `Context`.
+- preserve every existing trailing `context: Context` parameter, including expected-id primitives, and do not persist `Context`;
+- remove `telemetryContext` from `AgentHarnessOptions`.
 
 Update public type tests before runtime code.
 
@@ -589,9 +593,9 @@ Add focused modules rather than growing `lane.ts` into a generic reducer:
 
 Modify:
 
-- `runtime2/types.ts` to hold the complete owned hydrated lane projection;
+- `runtime2/types.ts` to hold the complete owned hydrated lane projection and remove `Config.telemetryContext`;
 - `runtime2/restore.ts` to keep projection restoration direct and separate from public hydration;
-- `runtime2/harness.ts` to hydrate all lanes before constructing/publishing the harness and return `open`;
+- `runtime2/harness.ts` to hydrate all lanes before constructing/publishing the harness, return `open`, and remove the receiver-level telemetry assignment/import;
 - `runtime2/lane.ts` to implement acceptance, memory-only inspection, and memory-only `watch(context)`;
 - `runtime2/index.ts` exports only as needed.
 
@@ -676,6 +680,7 @@ All runtime2 tests use `BACKGROUND_CONTEXT` by default and pass it explicitly to
 - `action_required` narrows across run/compaction/navigation and drive outcomes.
 - `executeAction(context)`/`runToCompletion(context)` signatures match the normative contract.
 - prompt overloads have the exact trailing-Context tuple shapes; `Context` is not assignable to the images or message positions.
+- `AgentHarnessOptions` has no `telemetryContext` key.
 
 ### Atomic acceptance
 

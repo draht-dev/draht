@@ -46,7 +46,7 @@
   - [4.1 The live operation task](#41-the-live-operation-task)
   - [4.2 Breakpoint barrier and effect gate](#42-breakpoint-barrier-and-effect-gate)
   - [4.3 The lane mutation line](#43-the-lane-mutation-line)
-  - [4.4 Restore](#44-restore)
+  - [4.4 Attachment, public hydration, and open-operation status](#44-attachment-public-hydration-and-open-operation-status)
   - [4.5 Driving and crash recovery](#45-driving-and-crash-recovery)
   - [4.6 Abort and cancellation reconciliation](#46-abort-and-cancellation-reconciliation)
   - [4.7 Close — a controlled crash](#47-close--a-controlled-crash)
@@ -102,6 +102,8 @@ A session groups related work and has four parts:
 ### Harness and operations
 
 The session layer manages durable data and exposes typed tree views. The harness drives lanes through four general primitives: `accept` durably creates an operation, `drive` advances an expected operation, `requestAbort` durably requests cancellation, and `inspectExecution` atomically reports current and latest-terminal execution. Convenience methods such as `prompt`, `resume`, and `abort` compose those same primitives with process-local waiting policy. A serving layer may instead schedule `drive` calls through alarms, jobs, or another host runtime. The harness also owns harness-wide registries of available tools and prompt resources, hooks that intercept and transform execution, passive events that report activity and durable changes, and runtime configuration.
+
+Every asynchronous public harness/lane operation and every Session, SessionTree, repository, and storage I/O method receives an explicit trailing `Context`. Synchronous capability/registration operations such as `Session.view()`, `events.on()`, and `hooks.on()` remain contextless; hooks and listeners receive Context when invoked. Context exists for two reasons: concurrent asynchronous calls need independent telemetry parentage, and an RPC adapter needs to carry one request's cancellation into the core as `context.abortSignal`. Shared receivers never retain a caller context or discover one through `AsyncLocalStorage`. At an RPC boundary, the client maps its signal to `cancel(requestId)` and injects trace metadata; the server allocates one request `AbortController`, extracts a local telemetry parent, derives a fresh local Context with both `withAbortSignal` and `withTelemetryContext` before invocation, and aborts that controller on matching cancellation or disconnect. Context is process-local invocation authority, never durable operation data: aborting it does not call `requestAbort()` or write `cancel_requested`.
 
 An **operation** is one accepted unit of lane work: a run, compaction, or navigation. Its immutable metadata records its identity, intent, and starting point; its total current state records its phase, control, queues, and recovery data. Each durable transition replaces the current state. Acceptance and execution ownership are separate: an accepted operation may have no process-local driver. Completion removes the operation state and records the lane's result.
 
@@ -247,6 +249,7 @@ Source type provenance:
 - `AssistantMessageFrame`, `assistantMessageEventToFrame`, and `reduceAssistantMessageFrames`: `packages/ai` (`@draht/ai`), `src/utils/assistant-message-frame.ts`. The harness defines no second frame codec or reducer.
 - `CompactionSettings`, `CompactionPreparation`, `CompactResult`, `BranchPreparation`, and `BranchSummaryResult`: `packages/agent/src/harness/compaction/`. Existing preparation and split-turn algorithms remain the implementation starting point unless this document explicitly changes them.
 - `TelemetryContext` and typed schema helpers: `packages/telemetry`; the agent-owned schemas remain in `packages/agent/src/harness/telemetry.ts`.
+- `Context`, `ContextKey`, `BACKGROUND_CONTEXT`, and the immutable derivation helpers: `packages/agent/src/harness/context.ts`. Context is invocation-scoped propagation and authority, not a durable payload or receiver default.
 
 The public `QueueMode` remains `"all" | "one-at-a-time"`. Public `RetryPolicy` remains the pi-ai shape `{ enabled, maxRetries, baseDelayMs }`; operation state stores its normalized `{ maxAttempts, baseDelayMs }` equivalent. `maxRetries` and `baseDelayMs` must be finite non-negative safe integers and `maxRetries + 1` must remain safe; disabled retry normalizes to one attempt. Exponential delay and `notBefore` arithmetic saturate at `Number.MAX_SAFE_INTEGER`. Public `CompactionSettings` remains `{ enabled, reserveTokens, keepRecentTokens }`; both token counts must be finite non-negative safe integers. Constructors and setters reject invalid settings before publication. This design adds `deferred?: boolean | { window?: "15m" | "1h" | "24h" }` to `AgentHarnessStreamOptions` and its patch type; structural requests always force it to false.
 
@@ -265,6 +268,8 @@ type SettledAssistantMessage = AssistantMessage & {
 Internal pi objects are trusted typed values. Session, storage, operation procedures, and in-process extensions do not runtime-validate object shapes or defensively clone values on reads or writes. Storage still enforces its operational invariants, such as atomicity, sequence allocation, unique ids, and parent existence. Backends serialize and parse their representations as needed; externally edited or shape-corrupt storage is unsupported.
 
 Runtime schema validation belongs at untrusted wire boundaries, before remote input enters business logic. A future protocol-schema slice defines shared TypeBox schemas for serializable pi-ai and harness data and derives their TypeScript types from those schemas; it does not add validation back to internal session or storage paths.
+
+Attachment still validates the relationships needed to publish coherent public state. It does not schema-validate trusted objects, but it must verify that every required state-directed reference exists at the expected bound address, has the expected pending/entry discriminant and message role, and is compatible with the public projection being constructed (§3.3, §4.4). Optional assistant-frame lists and tool checkpoints may be absent. Drive-only references remain consumption-time checks.
 
 ---
 
@@ -355,10 +360,10 @@ The public storage abstraction is a **bound typed address**. `value<T>(namespace
 const state = value<ApplicationState>("my-app.state");
 const events = list<ApplicationEvent>("my-app.events");
 
-await session.getValue(state);
-await session.setValue(state, nextState);
-await session.readList(events, { limit: 100 });
-await session.appendList(events, event);
+await session.getValue(state, context);
+await session.setValue(state, nextState, context);
+await session.readList(events, { limit: 100 }, context);
+await session.appendList(events, event, context);
 ```
 
 Dynamic locations use small owner-defined address constructors. Core and applications use the same universal `value()` and `list()` constructors. Namespace `pi` and every `pi.*` namespace are reserved for built-ins by contract; application misuse is a trusted-programming defect, and constructors perform no namespace-ownership check:
@@ -554,23 +559,23 @@ One `Storage` instance serves one session. Repository discovery and lifecycle ar
 
 ```ts
 interface Storage {
-  commit(writes: Write[]): Promise<CommitResult>;
+  commit(writes: Write[], context: Context): Promise<CommitResult>;
 
-  getEntries(ids: string[]): Promise<Map<string, Entry>>;
+  getEntries(ids: string[], context: Context): Promise<Map<string, Entry>>;
 
-  getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined>;
+  getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined>;
   /** Internal namespace-scoped prefix scan. The bound address key is the prefix. */
-  scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]>;
-  readList<T>(address: ValueList<T>, options?: ListReadOptions):
-    Promise<ListElement<T>[]>;
+  scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]>;
+  readList<T>(address: ValueList<T>, options: ListReadOptions | undefined,
+              context: Context): Promise<ListElement<T>[]>;
 
-  scanBranch(q: BranchScan): Promise<Entry[]>;            // §2.5
-  scanBranchStructure(q: BranchScan): Promise<EntryStructure[]>;
-  scanEntries(q: EntryScan): Promise<Entry[]>;            // session-wide tree inventory
-  scanUsage(q: UsageScan): Promise<UsageRow[]>;           // seq-ranged ledger read (§1.6)
-  getStats(): Promise<SessionStats>;                      // maintained projection (§1.6)
+  scanBranch(q: BranchScan, context: Context): Promise<Entry[]>; // §2.5
+  scanBranchStructure(q: BranchScan, context: Context): Promise<EntryStructure[]>;
+  scanEntries(q: EntryScan, context: Context): Promise<Entry[]>; // session-wide inventory
+  scanUsage(q: UsageScan, context: Context): Promise<UsageRow[]>; // ledger read (§1.6)
+  getStats(context: Context): Promise<SessionStats>;             // maintained projection
 
-  close(): Promise<void>;
+  close(context: Context): Promise<void>;
 }
 
 /** Placement metadata without payload fields. */
@@ -778,7 +783,7 @@ Because the file is the session, the precise rewrite (§2.9) and forks are file 
 
 ## 1.8 Why write-once plus values and lists
 
-- **Recovery is a read.** Five value point-lookups per lane (§4.4); procedures dereference exact ids and keys as they consume them. The only reducer on any durable path is pi-ai's frame reducer, applied to one bounded list a consumer explicitly names (§3.7).
+- **Attachment is bounded.** Fixed projection point reads per lane are followed by one compaction-bounded transcript scan and exact state-directed hydration for public inspection (§4.4). Drive-only procedures still dereference exact ids/addresses as they consume them. The only reducer on any durable path is pi-ai's frame reducer, applied to one exact bounded list a consumer explicitly names (§3.7).
 - **Crash states are enumerable.** Between transactions, never inside one.
 - **Cleanup is deletion, not collection.** A 30-turn run replaces one `operationState(operationId)` value ~30 times and then deletes it. What remains is exactly the conversation, the ledger, and a handful of lane and semantic session values — no dead state values, no history rows, nothing to garbage-collect. (JSONL defers *physical* reclamation to snapshot compaction; the logical state is identical.)
 - **No repair-by-rewrite.** Recovery appends entries and replaces only the values it owns, with the same transitions normal execution would commit; interrupt it and rerun it and you get the same result.
@@ -890,7 +895,7 @@ interface LaneConfiguration {
 
 - A lane's leaf moves in exactly two ways: the lane appends an entry (leaf becomes that entry), or the lane navigates (leaf jumps to an existing entry).
 - `LaneConfiguration` is **total**. A setter replaces the whole value; it is never a patch and never a tree entry.
-- `Session.createLane(name, at, configuration)` is the primitive that creates a lane. It internally opens a mutation on the new lane, validates the permanent lane name, rejects an existing lane or unknown non-null anchor, and consumes that mutator's sole commit to write all three values atomically. The supplied configuration is a total seed; it is not inferred from the anchor or another lane. The method returns the new lane's `SessionTree` view.
+- `Session.createLane(name, at, configuration, context)` is the primitive that creates a lane. It internally opens a mutation on the new lane, validates the permanent lane name, rejects an existing lane or unknown non-null anchor, and consumes that mutator's sole commit to write all three values atomically. The supplied configuration is a total seed; it is not inferred from the anchor or another lane. The method returns the new lane's `SessionTree` view.
 - Creating a lane copies no tree content, no history, and no configuration from its anchor:
 
 ```
@@ -899,7 +904,7 @@ TX[ upsert pi.lane.config/{name} = <supplied configuration>,
     upsert pi.lane.state/{name}  = { currentOperationId: null, pendingNextRun: [] } ]
 ```
 
-- `AgentHarness.createLane()` invokes this primitive with the harness's immutable captured seed, then publishes the harness event. `Session.createLane()` owns its mutation-line admission; callers must not wrap it in another mutation. Session-level callers use the same primitive directly when they need tree and lane management without runtime orchestration.
+- `AgentHarness.createLane(name, at, context)` invokes this primitive with the harness's immutable captured seed, then publishes the harness event. `Session.createLane(name, at, configuration, context)` owns its mutation-line admission; callers must not wrap it in another mutation. Session-level callers use the same primitive directly when they need tree and lane management without runtime orchestration.
 - Lanes are never deleted or renamed. Names are permanent application keys.
 - `main` exists in every session.
 - Two lanes at the same leaf simply diverge on their next append.
@@ -1025,19 +1030,19 @@ interface SessionRepo<M extends SessionMetadata = SessionMetadata,
                       C extends { id?: string; parentSessionId?: string } =
                         { id?: string; parentSessionId?: string },
                       L = void> {
-  create(options: C): Promise<Session<M>>;
-  open(metadata: M): Promise<Session<M>>;
-  list(options?: L): Promise<M[]>;
-  delete(metadata: M): Promise<void>;
-  fork(source: M, options: ForkOptions): Promise<Session<M>>;
+  create(options: C, context: Context): Promise<Session<M>>;
+  open(metadata: M, context: Context): Promise<Session<M>>;
+  list(options: L | undefined, context: Context): Promise<M[]>;
+  delete(metadata: M, context: Context): Promise<void>;
+  fork(source: M, options: ForkOptions, context: Context): Promise<Session<M>>;
 }
 
 interface SessionReader {
-  getEntries(ids: string[]): Promise<Map<string, Entry>>;
-  getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined>;
-  scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]>;
-  readList<T>(address: ValueList<T>, options?: ListReadOptions):
-    Promise<ListElement<T>[]>;
+  getEntries(ids: string[], context: Context): Promise<Map<string, Entry>>;
+  getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined>;
+  scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]>;
+  readList<T>(address: ValueList<T>, options: ListReadOptions | undefined,
+              context: Context): Promise<ListElement<T>[]>;
 }
 
 /** Callback-scoped write capability bound to one lane. */
@@ -1046,7 +1051,7 @@ interface SessionMutator extends SessionReader {
 
   /** The callback's sole commit. A second call rejects, including after a
       failed first attempt. */
-  commit(writes: Write[]): Promise<CommitResult>;
+  commit(writes: Write[], context: Context): Promise<CommitResult>;
 }
 
 interface Session<M extends SessionMetadata = SessionMetadata>
@@ -1058,16 +1063,17 @@ interface Session<M extends SessionMetadata = SessionMetadata>
 
   /** Serializes one complete read/decide/commit job on the named lane. */
   mutate<T>(lane: string,
-            mutation: (mutator: SessionMutator) => T | Promise<T>): Promise<T>;
+            mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
+            context: Context): Promise<T>;
 
-  createLane(name: string, at: string | null,
-             configuration: LaneConfiguration): Promise<SessionTree>;
+  createLane(name: string, at: string | null, configuration: LaneConfiguration,
+             context: Context): Promise<SessionTree>;
 
-  close(): Promise<void>;
+  close(context: Context): Promise<void>;
 }
 ```
 
-`Session.mutate` is the only raw session write surface. It queues the complete callback on the named lane's mutation line and supplies a lane-bound `SessionMutator`. The mutator is valid only until that callback returns or throws. Reads do not consume it. Its first `commit()` attempt consumes its commit capability before awaiting storage, so a second attempt rejects even when the first failed. The callback may return without committing. It must not retain the mutator, invoke another mutating `Session`/`SessionTree` method, wait for lane idleness, or perform provider, tool, hook, or timer effects; those operations either reacquire the same line or hold it across work that must remain concurrent. Separate durable transitions use separate `mutate` calls.
+`Session.mutate` is the only raw session write surface. It queues the complete callback on the named lane's mutation line and supplies a lane-bound `SessionMutator` plus the same invocation Context. The mutator is valid only until that callback returns or throws. Reads do not consume it. Its first `commit()` attempt consumes its commit capability before awaiting storage, so a second attempt rejects even when the first failed. The callback may return without committing. Every read and the sole commit receive that invocation Context unless the callback deliberately derives a child. It must not retain the mutator or Context as a receiver default, invoke another mutating `Session`/`SessionTree` method, wait for lane idleness, or perform provider, tool, hook, or timer effects; those operations either reacquire the same line or hold it across work that must remain concurrent. Separate durable transitions use separate `mutate` calls.
 
 The high-level mutating methods on `SessionTree` and `Session` — value setters, appends, and `createLane` — acquire the appropriate mutation line themselves and consume one private mutator commit. Callers invoke them directly rather than wrapping them in `mutate`. Reads remain available directly on `Session`, `SessionTree`, and `SessionMutator`.
 
@@ -1371,7 +1377,7 @@ type Deferred =
       configuration: LaneConfiguration; streamOptions: AgentHarnessStreamOptions };
 ```
 
-One `drive({ pollDeferred: true })` performs at most one `fetchDeferred(handle, { wait: 0 })`; `resume()` is the convenience call that supplies that permit. Suspended `poll` is the number of completed polls; a fresh intent uses `poll + 1`, and that 1-based value is `before_request.attempt` and the poll turn-id suffix. A poll starts from the original generation's copied base stream options, forces `deferred:false`, runs `before_request`, mounts `before_payload`/`after_response`, then commits its fresh intent and dispatches like assistant generation. Current global stream settings do not affect it. There is no polling retry cap, backoff, or internal loop. A `deferred` response has a valid handle only when `message.deferred` exists, its id is non-empty, and its `{ provider, modelId, api }` equals the captured request model identity/API. An invalid initial handle is normalized to a durable `error` response and response-provenance `failure_drain`. A later pending response must carry a handle completely equal to its source handle and becomes the next source; a mismatch is normalized the same way. Response, usage, `latestAssistantEntryId`, and failure state commit atomically.
+One `drive({ pollDeferred: true }, context)` performs at most one `fetchDeferred(handle, { wait: 0 })`; `resume(context)` is the convenience call that supplies that permit. Suspended `poll` is the number of completed polls; a fresh intent uses `poll + 1`, and that 1-based value is `before_request.attempt` and the poll turn-id suffix. A poll starts from the original generation's copied base stream options, forces `deferred:false`, runs `before_request`, mounts `before_payload`/`after_response`, then commits its fresh intent and dispatches like assistant generation. Current global stream settings do not affect it. There is no polling retry cap, backoff, or internal loop. A `deferred` response has a valid handle only when `message.deferred` exists, its id is non-empty, and its `{ provider, modelId, api }` equals the captured request model identity/API. An invalid initial handle is normalized to a durable `error` response and response-provenance `failure_drain`. A later pending response must carry a handle completely equal to its source handle and becomes the next source; a mismatch is normalized the same way. Response, usage, `latestAssistantEntryId`, and failure state commit atomically.
 
 A deferred poll that returns an event stream persists frames exactly like assistant generation, at `pendingAssistantFrames(operationId, responseEntryId)` for the poll's reserved response id (§3.7). Every row below that inserts a response entry additionally deletes that response's frame list in the same transaction. Frames never change deferred-handle equality or poll-number rules.
 
@@ -1434,7 +1440,7 @@ type NavigationState =
 
 Structural preparation is built from an observed source leaf and settings snapshot, normalized (`Set<string>` file-operation fields become sorted arrays), and written once to the `operationPreparation(operationId, taskId)` value before the decision hook, in the same transaction as the `deciding` state (§3.9). State carries only `taskId`; the deterministic constructor locates the value, and hooks/generators hydrate arrays back to the source preparation types. Reopen never rebuilds it from current settings, so the provider sees the same summary input the hook approved.
 
-One structural attempt may make one or two sequential provider requests using the existing compaction implementation. Its request callback first commits `request:{index,usageId}`, reaches the provider-request breakpoint, synchronously checks `EffectGate.assertOpen()` immediately before invoking that request, then atomically writes usage and clears/advances the request field. Intermediate content remains process-local; any activated orphaned `effect_pending` attempt is treated as wholly uncertain and starts a later attempt under the captured policy rather than continuing request two. A durable `generating` decision prevents its decision hook from rerunning.
+One structural attempt may make one or two sequential provider requests using the existing compaction implementation. Its request callback first commits `request:{index,usageId}`, reaches the provider-request breakpoint, synchronously checks `EffectGate.assertOpen()` immediately before invoking that request, then atomically writes usage and clears/advances the request field. Intermediate content remains process-local; any activated orphaned `effect_pending` attempt is treated as wholly uncertain and starts a later attempt under the captured policy rather than continuing request two. Never suspend between two requests of one live structural attempt: if its captured model identity disappears after request one, fail the attempt in-band so retry/failure follows the captured policy and no process-local intermediate text is parked as resumable state. A durable `generating` decision prevents its decision hook from rerunning.
 
 ## 3.3 Lane state and the restore projection
 
@@ -1446,11 +1452,14 @@ interface LaneState {
 }
 ```
 
-Restore trusts committed internal values (§0.8) and checks only that the values required to construct the lane projection exist: `laneState(lane)` holds a `LaneState`, and when it names operation O, `operationMeta(O)` and `operationState(O)` exist. Nothing else is audited at restore — no referenced-entry existence, pending-payload presence, tool-call shape, or state-discriminant relationships.
+Attachment has two explicit read layers:
 
-Everything the state names — trigger and result entries, pending payloads, tool arguments, preparations, staged outcomes, optional checkpoints, frame lists — is dereferenced and checked by the procedure that consumes it, at the moment it is consumed. A required value found missing or mismatched there is an invariant defect raised at consumption, not a restore failure. Live operation/phase/effect-identity checks on the lane mutation line remain required when asynchronous work settles; they are concurrency fences (§3.4, §4.3), not restore validation.
+1. **Projection restore** reads the lane's `laneLeaf`, `laneConfig`, `laneState`, optional `laneLastResult`, and, when `currentOperationId` names O, `operationMeta(O)` plus `operationState(O)`. These values construct the owned lane/operation projection. `laneLastResult` supports public inspection but is never a recovery input (§3.13).
+2. **Public-state hydration** performs the bounded, state-directed reads required to publish coherent `open`, `inspectExecution(context)`, and the first `watch(context)` snapshot. It scans the current compaction-bounded transcript branch; dereferences every pending queue, pending-write, and abort-drained `pendingEntry(id)` represented publicly; reads the deferred source message; reads the assistant entry and persisted arguments needed to represent running tool calls; and reads exact optional assistant-frame pages and tool checkpoints.
 
-`pi.lane.lastResult` is never a recovery input (§3.13).
+Committed internal objects remain trusted typed values (§0.8): attachment performs no general schema validation or broad reference audit. It does validate every relationship needed to construct public state—required value existence, bound-address and pending-kind discriminants, required entry type/message role, owner/lineage compatibility, and impossible typed relationships. A missing or mismatched required public-state reference faults attachment once and no harness is returned. A valid empty/missing assistant-frame list or absent tool checkpoint is legal and omits that display fallback.
+
+Preparation values, invocation memos, staged outcomes, and other references used only by a later drive procedure are not hydrated unless a public snapshot field directly represents them. Their consuming procedure validates them at transition time. Live operation/phase/effect-identity checks on the lane mutation line remain concurrency fences (§3.4, §4.3), not attachment validation.
 
 ## 3.4 The atomic transition rule
 
@@ -1516,18 +1525,18 @@ A declined summarized navigation moves nothing: the leaf stays at the source, an
 
 ## 3.6 Acceptance
 
-`accept(request)` is the only operation-acceptance primitive. It performs state-independent normalization outside the lane line, then commits exactly one acceptance transaction through `Lane.command()`. The command checks the current operation, captures current `pendingNextRun`, preflights identities, and validates every state-dependent input. It invokes no hook, provider, tool, timer, process reservation, or process owner. It returns `OperationAdmission` after the commit; only a later `drive({ operationId })` may own asynchronous work.
+`accept(request, context)` is the only operation-acceptance primitive. It performs state-independent normalization outside the lane line, then commits exactly one acceptance transaction through `Lane.command(plan, context)`. The command checks the current operation, captures current `pendingNextRun`, preflights identities, and validates every state-dependent input. It passes the invocation Context through `Session.mutate`, every read/commit, fault handling, and post-commit event publication; Context is never added to operation metadata or the write set. It invokes no hook, provider, tool, timer, process reservation, or process owner. It returns `OperationAdmission` after the commit; only a later `drive({ operationId }, context)` may own asynchronous work.
 
 | From | Request | Transaction |
 |---|---|---|
-| idle lane | normalized prompt, skill, or prompt-template request | `TX[ insert entries for captured nextRun items (payloads from their pending values), insert caller entries, delete the captured pending values, upsert pi.lane.leaf = newest entry, upsert pi.op.meta/O, S(run{captured settings, starting, empty inbox}), L({currentOperationId: O, captured ids removed from pendingNextRun}) ]` |
+| idle lane | normalized prompt, skill, or prompt-template request | `TX[ insert entries for captured nextRun items (payloads from their pending values), insert request prompt entries, delete the captured pending values, upsert pi.lane.leaf = newest entry, upsert pi.op.meta/O, S(run{captured settings, starting, empty inbox}), L({currentOperationId: O, captured ids removed from pendingNextRun}) ]` |
 | idle lane | compaction request with non-empty preparation | `TX[ upsert pi.op.preparation/O:{taskId} = P, upsert pi.op.meta/O, S(compaction{deciding, taskId}), L({currentOperationId: O}) ]` |
 | idle lane | unsummarized navigation request after validation | `TX[ upsert pi.op.meta/O, S(navigation{ready_to_commit}), L ]` |
 | idle lane | summarized navigation request with preparation | `TX[ upsert pi.op.preparation/O:{taskId} = P, upsert pi.op.meta/O, S(navigation{summary.deciding, taskId}), L ]` |
 
-Captured `nextRun` items already have their payloads in `pendingEntry(id)` values; the command inserts their entries before caller entries, deletes their values, and removes their ids from `pendingNextRun` — the placement half of queued-content staging (§1.8). A late item keeps its enqueue-minted id and remains queued for the next run. The run's immutable `promptEntryIds` name only the caller's normalized prompt entries; hook-injected messages are not acceptance metadata.
+Captured `nextRun` items already have their payloads in `pendingEntry(id)` values; the command inserts their entries before request prompt entries, deletes their values, and removes their ids from `pendingNextRun` — the placement half of queued-content staging (§1.8). A late item keeps its enqueue-minted id and remains queued for the next run. The run's immutable `promptEntryIds` name only the request's normalized prompt entries; hook-injected messages are not acceptance metadata.
 
-A run is accepted in payload-free `starting`. Its first real drive, after cancellation/deadline checks and `before_drive`, invokes `before_run` outside the lane line. The consuming command appends returned messages and atomically replaces `starting` with `checkpoint{need_assistant(false)}`, using the newest injected entry as trigger or otherwise the newest accepted entry. It preserves concurrent inbox and control changes. A crash before that commit may rerun the hook; a crash after it cannot. Under `cancel_requested`, reconciliation invokes neither prerequisite.
+A run is accepted in payload-free `starting`. An accepted-but-undriven `starting` operation is `resumable`, not blocked: its immediate `before_run` consumption and checkpoint commit are identity-free durable progress. Its first real drive, after cancellation/deadline checks and `before_drive`, invokes `before_run` outside the lane line. The consuming command appends returned messages and atomically replaces `starting` with `checkpoint{need_assistant(false)}`, using the newest injected entry as trigger or otherwise the newest accepted entry. It preserves concurrent inbox and control changes. A crash before that commit may rerun the hook; a crash after it cannot. Under `cancel_requested`, reconciliation invokes neither prerequisite.
 
 Structural preparation may be computed outside the lane line against an observed source leaf and settings snapshot, but it grants no ownership and blocks no lane work. Its final command must revalidate that the lane is idle and that every state-dependent source still matches; stale preparation is discarded and recomputed. A concurrent accepted operation returns `LaneBusy`. Unsummarized navigation performs validation in its one command.
 
@@ -1602,7 +1611,7 @@ Because the committed response is `error`, §2.5 rule 3 drops it from context au
 
 Overflow is checked before retryable error, so an oversized request compacts rather than retrying unchanged.
 
-**`aborted` is not a classification input.** It means the harness's own abort signal fired (§4.6), and `abort()` commits `control` before signalling — so a settled `aborted` response always has `control.status === "cancel_requested"` and is caught by the first row. An `aborted` response with `control.status === "running"` is unreachable and is corruption (Part 9).
+**`aborted` is not a classification input.** It means the harness's own abort signal fired (§4.6), and `abort(context)` commits `control` before signalling — so a settled `aborted` response always has `control.status === "cancel_requested"` and is caught by the first row. An `aborted` response with `control.status === "running"` is unreachable and is corruption (Part 9).
 
 An overflow classification never produces a tool plan. A *genuine* `length` that carries tool calls does produce the full plan, executes nothing, and appends one `isError: true` result per call explaining that truncation may have corrupted the arguments — those results then require another assistant turn.
 
@@ -1746,12 +1755,12 @@ Every queued admission mints the item's entry id (§1.2) and writes its payload 
 | tree write, structural op open | — | wait for the operation to end, then re-evaluate |
 | `cancelQueued(id)` | item still pending | `TX[ S or L with the id removed, delete pi.pending.entry/{id} ]` |
 | checkpoint consumes input | eligible | `TX[ insert entries from pending values, delete those values, upsert pi.lane.leaf, S(ids removed, continuation → need_assistant(false), triggerEntryId = newest entry, skipInboxOnce = true) ]` |
-| first `abort()` | run active | `TX[ S(control = cancel_requested, requestedAt, drainedSteer, drainedFollowUp, steer/followUp emptied) ]` — drained pending values are **not** deleted |
+| first `abort(context)` | run active | `TX[ S(control = cancel_requested, requestedAt, drainedSteer, drainedFollowUp, steer/followUp emptied) ]` — drained pending values are **not** deleted |
 | finish | inbox empty, no required continuation | the terminal transaction (§3.13) |
 
 `cancelQueued` triage, in order: the id is still pending in a queue list → remove it and delete its `pendingEntry(id)` value in one transaction; the content is gone, never having touched the tree, and the call returns `cancelled`. An entry under that id exists → `already_consumed`. Neither → `not_found` — previously cancelled, cleared by abort, or never existed. A client retrying a lost cancel treats `not_found` as success. There are no disposition values, and nothing here is ever a recovery input.
 
-The first `abort()` moves steer/follow-up ids into `control.drainedSteer`/`control.drainedFollowUp` but deletes none of their `pendingEntry(id)` values: `AbortResult` and a post-crash `SuspendedOperation.aborting` dereference the drained payloads from those values. They die in the terminal transaction (§3.13), never earlier. Deferred writes stay in `inbox.writes` and are applied during reconciliation.
+The first `abort(context)` moves steer/follow-up ids into `control.drainedSteer`/`control.drainedFollowUp` but deletes none of their `pendingEntry(id)` values: `AbortResult` and `LaneSnapshot.operation.drained` dereference the drained payloads from those values, including after attachment. They die in the terminal transaction (§3.13), never earlier. Deferred writes stay in `inbox.writes` and are applied during reconciliation.
 
 Because acceptance, cancellation, consumption, abort, and finish all serialize on the lane mutation line, every race has exactly two possible histories, and **no item can be both pending and applied** in durable state: at every commit boundary a queued id has its pending value (pending or drained), its entry (consumed), or neither (cancelled) — never both.
 
@@ -1862,9 +1871,17 @@ The invariant this section carries (restated in Part 9): operation-owned values 
 
 ## 4.1 The live operation task
 
-An open operation has durable state whether or not this process is executing it. A **live operation task** is only the process-local async continuation currently executing that operation. It is recorded because durable state cannot answer three process-local questions: whether this process already owns execution, whether an `effect_pending` state still has a live continuation, and what `abort()` should signal.
+An open operation has durable state whether or not this process is executing it. A **live operation task** is only the process-local async continuation currently executing that operation. It is recorded because durable state cannot answer three process-local questions: whether this process already owns execution, whether an `effect_pending` state still has a live continuation, and what `abort(context)` should signal.
 
-There is at most one process-local record per lane. It owns one `drive` pass, not the durable operation's whole lifetime: a pass may settle, reach a durable wait, or yield safely for its caller's budget.
+Public operation status is a process-relative observation, not durable recovery truth:
+
+- `running`: this process has a live drive owner;
+- `resumable`: no local owner exists and normal `resume(context)` can make identity-free durable progress or own the next wait;
+- `blocked`: no local owner exists and the immediate next durable transition requires a currently missing model/tool identity;
+- `aborting`: durable control is `cancel_requested` and cancellation reconciliation is next;
+- idle: `current: null`; it is not an open-operation status.
+
+There is at most one process-local record per lane. It owns one `drive` pass, not the durable operation's whole lifetime: a pass may settle, reach a durable wait, yield safely for its caller's budget, or return `action_required` at a manual breakpoint. Durable operation phase and control remain the recovery authority; registry changes may alter advisory `blocked`/`resumable` status without a write.
 
 ```ts
 interface ActiveOperation {
@@ -1884,7 +1901,7 @@ class AbortRequested extends Error {
 class OperationEnded extends Error {}
 ```
 
-The lane implementation also has one breakpoint barrier used by `peekAction()`/`executeAction()`. It is a lane field, not another operation/task record.
+The lane implementation also has one breakpoint barrier used by `peekAction(context)`/`executeAction(context)`. It is a lane field, not another operation/task record. In manual mode a pass reaching that barrier returns `action_required` instead of leaving a public drive or convenience promise unresolved. Same-operation callers observe the same current action without releasing it. `executeAction(context)` releases exactly one action and returns the next action or non-action `ResumeResult`; `runToCompletion(context)` repeatedly releases actions and cannot return `action_required`. Automatic mode crosses barriers and never returns `action_required`.
 
 This is not another state machine. `completion` is the ordinary promise returned by the async operation procedure. `effectGate` owns only abort-versus-start arbitration and the operation's cooperative signal (§4.2). Current state, retry data, responses awaiting settlement, structural intermediate content, and parallel tool promises remain ordinary procedure-local variables. Streaming drafts and running-tool display values are ordinary lane fields used only for snapshots.
 
@@ -1967,7 +1984,7 @@ Normal execution handles checkpoints, ready/retry states, planned or locally own
 
 ### Task installation, joining, and removal
 
-`accept` commits the first durable state and returns without installing `ActiveOperation`. A durably accepted but locally unowned operation is ordinary. `drive({ operationId })` owns one pass. On the lane mutation line it reads current ownership and `pi.lane.lastResult`, then applies exactly one rule:
+`accept` commits the first durable state and returns without installing `ActiveOperation`. A durably accepted but locally unowned operation is ordinary. `drive({ operationId }, context)` owns one pass. On the lane mutation line it reads current ownership and `pi.lane.lastResult`, then applies exactly one rule:
 
 - current operation absent and `pi.lane.lastResult.operationId === operationId`: return its already-settled outcome;
 - current operation absent with another/no last id, or current operation has another id: return `OperationMismatch` without starting work;
@@ -1980,9 +1997,9 @@ A newly installed real pass checks cancellation and its deadline, then invokes `
 
 Every task has one outer `finally` path: after its last durable commit, wait/yield decision, or terminal observation and after publishing its final local events, it performs a no-write lane job that verifies it still owns the slot and removes its `ActiveOperation`; only then does `completion` resolve/reject. Missing-identity suspension records its process-local descriptor in that same job. Close/fault removes records under the harness admission barrier. This keeps a lane locally busy until the old continuation and observations are actually done, even when its terminal transaction already made the durable lane idle. External finalization uses the same eventual `finally` removal after signalling the task (§4.9).
 
-Convenience methods add policy, not another execution path. `prompt`/`skill`/`compact`/`navigateTree` call `accept` and then drive the returned id; they wait locally through retry waits and return on terminal or semantic suspension. `resume()` inspects the current id and drives it with one deferred-poll permit. `abort()` calls `requestAbort`, then ensures cancellation reconciliation has a drive pass; it still returns once cancellation is durable. A scheduler calls the primitives directly and may persist the admission, set an alarm from `waiting.notBefore`, or resume immediately after `yielded`.
+Convenience methods add policy, not another execution path. `prompt`/`skill`/`compact`/`navigateTree` call `accept` and then drive the returned id; they wait locally through retry waits and return on terminal, semantic suspension, or `action_required`. `resume(context)` inspects the current id and drives it with one deferred-poll permit. `abort(context)` calls `requestAbort`, then ensures cancellation reconciliation has a drive pass; it still returns once cancellation is durable. A scheduler calls the expected-id primitives directly and may persist the admission, set an alarm from `waiting.notBefore`, or resume immediately after `yielded`. Normal applications do not manage operation ids when resuming.
 
-`AgentHarness.create()` restores and reports open operations but installs no tasks and starts no hooks, providers, tools, or timers.
+`AgentHarness.create(options, context)` restores, hydrates, and reports open operations but installs no tasks and starts no hooks, providers, tools, timers, breakpoints, or application callbacks.
 
 ## 4.2 Breakpoint barrier and effect gate
 
@@ -2021,7 +2038,7 @@ interface BreakpointBarrier {
 
 There is no second breakpoint-name or breakpoint-data type. `peekAction()` returns the currently parked `ActionInfo`; `executeAction()` releases exactly that barrier. Each runtime slice defines and tests the stable `kind` values and safe `details` fields for the boundaries it adds.
 
-In automatic mode `breakpoint(info)` returns immediately. In manual mode it publishes `info` and parks until released. Ordinary barriers default to `interruptOnAbort:true`; cancellation-reconciliation barriers pass `false`, so a repeated abort reports the same durable marker without skipping reconciliation work. Breakpoints precede operation-procedure commits, hook aggregates, provider requests, real tool invocations, and retry sleeps. Nested boundaries are legal: `before_payload` and `after_response` may park while the enclosing assistant procedure awaits them. Waiting for a provider/tool promise that already started is not another breakpoint.
+In automatic mode `breakpoint(info)` returns immediately and no public outcome is `action_required`. In manual mode it publishes `info`, parks the ordinary continuation, and reports `{ kind: "action_required", action: info }` from the current drive/convenience call. The continuation remains owned but no public promise is left invisibly pending. Same-operation calls report the same action without releasing it. `executeAction(context)` attaches to that continuation, releases exactly this barrier, and returns when it next parks or reaches another resume outcome; `runToCompletion(context)` repeats that operation internally. Ordinary barriers default to `interruptOnAbort:true`; cancellation-reconciliation barriers pass `false`, so a repeated abort reports the same durable marker without skipping reconciliation work. Breakpoints precede operation-procedure commits, hook aggregates, provider requests, real tool invocations, and retry sleeps. Nested boundaries are legal: `before_payload` and `after_response` may become the next reported action while the enclosing assistant procedure awaits them. Waiting for a provider/tool promise that already started is not another breakpoint.
 
 The breakpoint performs no commit, callback invocation, telemetry, classification, or state transition. The ordinary statement following it does the work. Procedure code and tests can therefore be read in the same order:
 
@@ -2032,7 +2049,7 @@ breakpoint
 → operation code
 ```
 
-Public lane calls—acceptance, `steer`, `followUp`, `nextRun`, `cancelQueued`, `requestAbort`/`abort`, configuration and value setters, and tree writes—do not wait at this barrier. They remain able to race a parked drive pass through `Session.mutate`. In manual mode a registered `before_run` hook parks before acceptance; without one, acceptance commits immediately and the first operation breakpoint follows when `drive` claims it.
+Public lane calls—acceptance, `steer`, `followUp`, `nextRun`, `cancelQueued`, `requestAbort`/`abort`, configuration and value setters, and tree writes—do not wait at this barrier. They remain able to race a parked drive pass through `Session.mutate`. Acceptance always commits immediately without a breakpoint; the first operation breakpoint can occur only after a later `drive` claims the accepted operation.
 
 Abort rejects an ordinary parked breakpoint with `AbortRequested` instead of requiring another `executeAction()`. The signal carries the abort-mutation promise; the task waits for it, reloads durable ownership/control, and either enters cancellation reconciliation or observes that the operation already ended, without executing the ordinary statement after the interrupted barrier. Reconciliation's own commits and cleanup effects still park at their documented breakpoints. Close/fault rejects a parked barrier without executing the following code. An operation performs zero procedure writes and starts zero hooks/providers/tools/timers while parked.
 
@@ -2061,7 +2078,7 @@ interface EffectGate {
 }
 ```
 
-The gate privately owns the corresponding `AbortController`. `requestAbort(operationId)` is the cancellation primitive. When the expected operation has a live pass, it creates a deferred abort-mutation promise and calls `beginAbort(promise)` synchronously before performing the lane mutation. If the marker commits, it resolves the promise and calls `signalAbort()`. If the expected operation no longer owns the lane, it resolves the promise, closes the gate with `OperationEnded`, and returns `OperationMismatch`. With no live pass it commits or observes the same durable marker but installs no task; a later `drive` performs reconciliation. A commit fault rejects the promise and closes the gate with `HarnessFault`. `assertOpen()` is a synchronous check:
+The gate privately owns the corresponding `AbortController`. `requestAbort(operationId, context)` is the cancellation primitive. When the expected operation has a live pass, it creates a deferred abort-mutation promise and calls `beginAbort(promise)` synchronously before performing the lane mutation. If the marker commits, it resolves the promise and calls `signalAbort()`. If the expected operation no longer owns the lane, it resolves the promise, closes the gate with `OperationEnded`, and returns `OperationMismatch`. With no live pass it commits or observes the same durable marker but installs no task; a later `drive` performs reconciliation. A commit fault rejects the promise and closes the gate with `HarnessFault`. `assertOpen()` is a synchronous check:
 
 ```ts
 assertOpen(): void {
@@ -2168,95 +2185,115 @@ What serializes on the lane line: operation acceptance, drive installation/join/
 
 Harness-global settings use a second process-local mutation line with a monotonically increasing revision. Run acceptance snapshots compaction, queue modes, and tool execution into `RunState.settings`. A generation or structural-generation start snapshots only current stream options and retry policy, then reads lane configuration on its `Session.mutate` job and commits those values with the ready state. Global setters take only the settings line; lane setters take only the lane line. Snapshot procedures take the settings line before the lane line, and no code acquires them in reverse order. This gives setter-first or step-start-first ordering without holding either line across external work.
 
-## 4.4 Restore
+## 4.4 Attachment, public hydration, and open-operation status
 
-Recovery is point lookups against bound values. No history, no folding, no journal replay, no tree walk, no reference audit. Session restore first calls `scanValues(laneLeafInventoryPrefix())`; the returned keys are the trusted configured-lane inventory, and `main` is required. It then restores each listed lane exactly once. Per lane:
-
-```ts
-interface CurrentOperation {
-  operation: Operation;
-  laneState: LaneState;
-  leafId: string | null;
-  configuration: LaneConfiguration;
-}
-
-async function restore(lane: string): Promise<
-  { kind: "idle"; lane: string } | { kind: "suspended"; current: CurrentOperation }
-> {
-  const config = await storage.getValue(laneConfig(lane));
-  const state  = await storage.getValue(laneState(lane));
-  const leaf   = await storage.getValue(laneLeaf(lane));
-
-  // Projection existence only (§3.3). Committed internal values are trusted;
-  // nothing they reference is dereferenced here.
-  if (!config || !state || !leaf) {
-    throw new Error(`Invariant defect: incomplete lane projection for ${lane}`);
-  }
-
-  const opId = state.value.currentOperationId;
-  if (!opId) return { kind: "idle", lane };
-
-  const meta = await storage.getValue(operationMeta(opId));
-  const opState = await storage.getValue(operationState(opId));
-  if (!meta || !opState) {
-    throw new Error(`Invariant defect: incomplete operation projection for ${opId}`);
-  }
-
-  return { kind: "suspended", current: {
-    operation: { meta: meta.value, state: opState.value },
-    laneState: state.value,
-    leafId: leaf.value,
-    configuration: config.value,
-  } };
-}
-```
-
-Five value point-lookups: three lane values, then—only when an operation is open—operation metadata and state. The restart point contains or directly names everything the next drive needs.
-
-**Trusted projection, deferred dereference.** Committed internal values are trusted (§0.8, §3.3). Restore hydrates nothing beyond the five values above and audits no relationships. Every id the state names — trigger and result entries, prompt entries, pending payloads, tool arguments, preparations, staged outcomes, optional tool-output checkpoints, frame lists — is dereferenced by the procedure that consumes it, through the bounded exact address that procedure constructs; a required value found missing or mismatched there is an invariant defect raised at consumption. Absent auxiliary values — a `pendingToolOutput(operationId, invocationId)` checkpoint or a `pendingAssistantFrames(operationId, responseEntryId)` list — are always legal and never invalidate an effect-pending state. Invocation memos are read only by resumed application code and defensively cleaned by invocation/operation prefix. Configuration, stream options, and retry policy need no recovery lookup when captured inline.
-
-Restore never reads value history, folds anything, scans tables, reads lists, builds provider context, audits completed operations, or infers a transition from an absent planned value. It installs no `ActiveOperation` and invokes no breakpoint. The application or serving layer explicitly activates an open operation with `drive({ operationId })`; `resume()` is the convenience composition that inspects and drives the current operation with one deferred-poll permit. Cancellation is durably admitted through `requestAbort(operationId)` or its `abort()` convenience wrapper.
-
-Harness creation does not write a durable `suspended` state. An open operation remains at its committed phase with control `running` or `cancel_requested`. `suspended` is the public observation that no process-local `drive()` call currently owns that operation. A matching `drive({ operationId })` installs the local owner and dispatches from the committed phase; process loss removes the owner without changing durable control or phase.
-
-### Worked example — crash in the uncertain window
-
-The process died after committing an assistant intent:
+Attachment is an observation boundary, not a drive pass:
 
 ```text
-pi.lane.state/main -> { currentOperationId: "op_9" }
-pi.op.meta/op_9    -> { intent: run, sourceLeafId: "e_41" }
-pi.op.state/op_9   -> { phase: assistant effect_pending, attempt: 1,
-                     responseEntryId: "e_51", usageId: "u_7",
-                     context: { configuration: { model: {...}, ... },
-                                retryPolicy: { maxAttempts: 3, ... } } }
-
+lane inventory
+→ projection restore
+→ bounded public-state hydration and validation
+→ phase-aware status classification
+→ publish complete harness + open[]
 ```
 
-`create()` reports the suspended operation and does nothing else. On the next matching `drive()`—whether called directly by a scheduler or through `resume()`—the newly installed pass sees the unowned `effect_pending` restart point and applies §4.5.
+`AgentHarness.create(options, context)` performs every attachment read and any missing-main-configuration seed commit under the supplied invocation Context. It attaches every lane completely before publishing the harness. A failure rejects with one `HarnessFault`; no partially hydrated harness, lane, `open` result, hook, provider, tool, timer, breakpoint, drive owner, or application callback escapes.
+
+### Projection restore
+
+Session attachment first calls `scanValues(laneLeafInventoryPrefix(), context)`; the returned keys are the trusted lane inventory, and `main` is required. After seeding an unconfigured fresh/normalized-v3 main when necessary, each lane reads:
+
+1. `laneLeaf(lane)`;
+2. `laneConfig(lane)`;
+3. `laneState(lane)`;
+4. optional `laneLastResult(lane)` for public latest-result inspection;
+5. when the lane names operation O, `operationMeta(O)`;
+6. when the lane names operation O, `operationState(O)`.
+
+The first three lane values and both open-operation values are required. The optional last result is not a recovery input. Projection restore validates lane/operation ownership and intent-kind compatibility needed to construct `Operation`; it installs no `ActiveOperation`.
+
+### Public-state hydration
+
+Projection restore is followed by bounded reads for the state that `open`, `inspectExecution(context)`, and an immediate `watch(context)` must expose:
+
+| Public data | Required attachment read |
+|---|---|
+| transcript | one compaction-bounded branch scan from the current leaf |
+| pending queues | every `pendingEntry(id)` named by `pendingNextRun` and run inbox steer/follow-up |
+| pending writes | every `pendingEntry(id)` named by run inbox writes |
+| abort drain | every `pendingEntry(id)` named by drained steer/follow-up |
+| deferred display | the exact deferred source message carrying its handle |
+| running-tool display | the batch assistant entry and exact persisted arguments for each represented `effect_pending` call |
+
+Required message positions must contain the expected message role/state. Required pending values must have the expected pending kind. Duplicate/missing lineage, impossible owner relationships, missing required tool arguments, and other contradictions needed to build public state fault attachment.
+
+Two auxiliary reads are optional:
+
+| Public fallback | Optional attachment read |
+|---|---|
+| interrupted assistant partial | bounded pages from the exact `pendingAssistantFrames(operationId, responseEntryId)` list |
+| running tool partial | exact `pendingToolOutput(operationId, invocationId)` value |
+
+An absent/empty frame list or absent tool checkpoint is legal and omits that fallback. A read failure still faults. Frames are reduced with pi-ai's exported reducer. Planned calls have not started; outcome-ready/completed calls are not running and do not appear in `runningTools`.
+
+Attachment does not read preparation values, invocation memos, staged outcomes, usage history, or other drive-only references unless a public snapshot field directly represents them. Their consuming procedure validates them later. It performs no history-wide value scan, provider-context construction, identity effect, hook, tool, timer, or callback. Per lane, work is fixed projection point reads, one compaction-bounded transcript scan, O(ids named by the current lane/operation) exact dereferences, bounded frame pages, and exact optional checkpoints.
+
+Hydrated values become owned immutable process-local presentation memory. They are authoritative for memory-only inspection and snapshot publication, but never for a durable transition. Every drive pass still enters the lane mutation line, rereads and fences current durable state/ownership, dereferences its own transition inputs, and checks current identities.
+
+### Phase-aware identity classification
+
+`nextResumeIdentityRequirement(operation, now)` is a pure exhaustive classifier for normal `resume(context)`, which owns one deferred-poll permit:
+
+```ts
+type IdentityRequirement =
+  | { kind: "model"; provider: string; modelId: string }
+  | { kind: "tools"; names: string[] }
+  | null;
+
+function nextResumeIdentityRequirement(
+  operation: Operation,
+  now: number,
+): IdentityRequirement;
+```
+
+| Current durable state | Immediate requirement |
+|---|---|
+| `control.cancel_requested` | none; status is `aborting` |
+| run `starting` | none |
+| checkpoint with steer/follow-up/writes to apply | none |
+| checkpoint `need_assistant` after inbox is empty | current lane model |
+| checkpoint `may_finish` after inbox is empty | none |
+| assistant/summary generation `ready` | captured model |
+| retry wait with `notBefore > now` | none; `resume(context)` may own the timer |
+| retry wait with `notBefore <= now` | captured model |
+| unowned assistant/summary `effect_pending` | none; unknown-effect recovery is first |
+| deferred suspended or deferred `effect_pending` | captured model; one poll/replacement-fetch permit |
+| planned tool batch before any call starts | captured active tools |
+| safe tool replay immediately requiring one tool | that captured tool |
+| unsafe orphan synthesis, outcome materialization, failure drain | none |
+| structural deciding and navigation ready-to-commit | none |
+
+The classifier exhausts every `OperationState` variant and checks the captured batch subset actually required next, not the lane's complete active-tool list. Low-level `drive(options, context)` performs its own options-aware preflight; attachment status describes ordinary `resume(context)` only.
+
+Status derivation is process-relative. Durable `cancel_requested` reports `aborting`; otherwise a local drive owner reports `running`; without an owner, a missing immediate requirement reports `blocked`, and every other open operation reports `resumable`. `blocked` therefore means calling `resume(context)` now cannot commit identity-free durable progress before needing the missing registration. Registry replacement may change later inspection without a durable write, but registering missing pieces never auto-starts a task. Attachment cannot report `running` because it installs no owner.
+
+The returned `open` array contains exactly one `OpenOperation` per lane with a current durable operation and omits idle lanes. It is an observation, not a scheduler reservation, and may become stale immediately. Applications render `open`/the first watch snapshot, repair registries for `blocked` lanes, and call `resume(context)` for `resumable` or `aborting` lanes without managing operation ids. Hosted schedulers retain expected-id `drive`/`requestAbort` fencing.
+
+### Crash in an uncertain window
+
+If the process died in assistant `effect_pending`, attachment reconstructs the committed transcript and optional reduced frame fallback, reports the operation `resumable`, and starts nothing. A later drive independently rereads that durable state and applies §4.5's unknown-outcome recovery. The hydrated draft is display state, not settlement input.
 
 ### Per backend
 
-- **Memory:** the maps are the state; nothing to decode.
-- **JSONL:** replay the file into current maps; that is storage decoding, not operation recovery. A torn final transaction line is discarded whole.
-- **SQLite** (and future Postgres): perform the point lookups above.
-
-### Missing identities
-
-Admission resolves configured identities and returns `Err(MissingIdentities)` before writing when any are absent. After acceptance, identity handling depends on the restart point:
-
-- At assistant/summary `ready`, before any request intent, an unavailable captured model may suspend with state unchanged.
-- At a planned tool batch, resolve the complete bound tool snapshot before starting any call. If a captured active tool is unavailable, suspend before any batch effect starts. Outcome-ready materialization and unsafe interruption synthesis require no tool identity. Provider calls to unknown or inactive names still receive ordinary synthetic unknown-tool results.
-- Never suspend between structural requests of one attempt: earlier summary text is process-local. A missing identity there fails that attempt in-band so it can retry/fail under the captured policy.
-- Orphaned `effect_pending` first performs unknown-outcome recovery even when registrations are missing. Synthetic assistant settlement, unsafe-tool interruption, queue application, and finish require no identity. A safe-tool replay or a later `ready` request preflights only the identity that it would actually invoke.
-
-A phase-aware `drive()` precheck returns a `waiting/missing_identities` result only when its next work would need a missing registration; it does not block identity-free recovery. The `resume()` convenience maps that wait to `Err(MissingIdentities)` as before. Registering missing pieces never auto-starts a task.
+- **Memory:** maps already contain current values/lists; attachment still performs the same bounded logical reads.
+- **JSONL:** replay builds current maps before attachment; replay is decoding, not recovery.
+- **SQLite:** attachment performs the indexed point, branch, and exact-list reads above.
 
 ## 4.5 Driving and crash recovery
 
-Recovery begins only when an open operation has no `ActiveOperation` and a matching `drive({ operationId })` installs a real pass owner. `AgentHarness.create()` never drives. The `resume()` convenience requests the same drive with one deferred-poll permit. `requestAbort()` with no task commits cancellation but installs nothing; the next drive enters cancellation reconciliation directly.
+Recovery begins only when an open operation has no `ActiveOperation` and a matching `drive({ operationId }, context)` installs a real pass owner. `AgentHarness.create(options, context)` never drives. `resume(context)` inspects and drives the current operation without exposing its id and grants the same pass one deferred-poll permit. `requestAbort(operationId, context)` with no task commits cancellation but installs nothing; the next drive enters cancellation reconciliation directly.
 
-The pass first reloads durable control. If cancellation is requested, it invokes neither `before_drive` nor `before_run` and enters §4.6. At an effect-free deadline boundary it yields before invoking either prerequisite. Otherwise it gates and invokes `before_drive`; failure rejects this pass without faulting the harness or writing durable progress. Identity preflight is phase-aware and never blocks synthetic recovery that needs no external registration. Durable phase then decides the work: `starting` runs and settles `before_run` as §3.6 specifies; an unowned pending effect is orphaned by construction and follows the table below; all other phases continue ordinarily.
+The pass first reloads durable control. If cancellation is requested, it invokes neither `before_drive` nor `before_run` and enters §4.6. At an effect-free deadline boundary it yields before invoking either prerequisite. Otherwise it gates and invokes `before_drive`; failure rejects this pass without faulting the harness or writing durable progress. Identity preflight is phase-aware and never blocks synthetic recovery that needs no external registration. Durable phase then decides the work: `starting` runs and settles `before_run` as §3.6 specifies; an unowned pending effect is orphaned by construction and follows the table below; all other phases continue ordinarily. In manual mode, reaching a breakpoint returns `action_required` with the parked `ActionInfo`; automatic mode crosses it. A later `executeAction(context)` releases one barrier, while `runToCompletion(context)` continues across action branches until it reaches a non-action result.
 
 | Orphaned restart point | Activation recovery |
 |---|---|
@@ -2297,7 +2334,7 @@ If a drive deadline precedes `notBefore`, it returns `waiting` even when `waitFo
 
 ## 4.6 Abort and cancellation reconciliation
 
-Cancellation is durable control plus process-local prevention/signalling. It is not another operation phase. `requestAbort(operationId)` is the primitive; `abort()` inspects the current id, invokes that primitive, and ensures a cancellation drive pass exists.
+Cancellation is durable control plus process-local prevention/signalling. It is not another operation phase. `requestAbort(operationId, context)` is the primitive; `abort(context)` inspects the current id, invokes that primitive, and ensures a cancellation drive pass exists.
 
 ### Live task
 
@@ -2318,7 +2355,7 @@ For a live operation, the first matching `requestAbort()` performs this order:
    when the fence failed; a matching live pass continues reconciliation.
 ```
 
-The cancellation mutation leaves the current phase untouched. A later `requestAbort()` for the same operation while it remains open reuses the same durable marker and drained payloads and reports `newlyRequested: false`. If the terminal transaction or another operation won first, the expected-id fence returns `OperationMismatch`. The `abort()` convenience maps an idle lane to its existing `NoActiveOperation` error.
+The cancellation mutation leaves the current phase untouched. A later `requestAbort(operationId, context)` for the same operation while it remains open reuses the same durable marker and drained payloads and reports `newlyRequested: false`. If the terminal transaction or another operation won first, the expected-id fence returns `OperationMismatch`. The `abort(context)` convenience maps an idle lane to its existing `NoActiveOperation` error.
 
 The effect gate orders only whether external work started. The lane mutation line separately orders cancellation against settlement:
 
@@ -2330,7 +2367,7 @@ With queued steer/follow-up, successful abort removes their ids from the inbox, 
 
 ### No live task
 
-After reopen, safe yield, or suspension there may be no gate to close or work to signal. `requestAbort()` then writes or observes `cancel_requested` and returns without installing `ActiveOperation`. A scheduler sets a wake and later calls `drive`. The `abort()` convenience ensures a same-id drive pass is claimed after the marker; in manual mode that pass parks at its first cancellation breakpoint, and in automatic mode it proceeds immediately. A crash between the marker and that claim is harmless because the next drive observes durable cancellation first.
+After reopen, safe yield, or suspension there may be no gate to close or work to signal. `requestAbort(operationId, context)` then writes or observes `cancel_requested` and returns without installing `ActiveOperation`. A scheduler sets a wake and later calls `drive`. The `abort(context)` convenience ensures a same-id drive pass is claimed after the marker; in manual mode that pass parks at its first cancellation breakpoint, and in automatic mode it proceeds immediately. A crash between the marker and that claim is harmless because the next drive observes durable cancellation first.
 
 ### Reconciliation
 
@@ -2371,7 +2408,7 @@ seal harness admission
 
 A harness-wide admission barrier orders close against every operation and public commit. A commit admitted first may finish and close waits for it; close first prevents admission. A provider/tool result produced after sealing cannot commit. Tool checkpoint replacements and assistant frame appends already enqueued are ordinary admitted session work and may drain under the barrier; a request after sealing cannot commit, and live output newer than the last committed checkpoint or frame may be lost. Durable state therefore stops at the last committed restart point, often `effect_pending` with a committed frame prefix or bounded checkpoint, exactly as after process death. No synthetic response or cancellation marker is written.
 
-Reopening reports the open operation. A later matching `drive()`—direct or through `resume()`—applies orphan recovery when the durable phase requires it. No close-specific recovery path exists, and the durable aborted-implies-cancelled invariant remains true because close admits no locally aborted settlement under running control.
+Reopening reports the open operation. A later matching `drive(options, context)`—direct or through `resume(context)`—applies orphan recovery when the durable phase requires it. No close-specific recovery path exists, and the durable aborted-implies-cancelled invariant remains true because close admits no locally aborted settlement under running control.
 
 ## 4.8 Faults
 
@@ -2383,7 +2420,7 @@ Close rejects active drive and convenience-operation promises with `HarnessClose
 
 An authorized administrative operation may commit the terminal transaction while a task still exists. It uses the same lane mutation line. This specification adds no public `forceFinalize()` method: authorization, SLA policy, and initiation belong to repository or hosting administration, while the terminal-transaction helper and live-task notification remain package-internal. The next task mutation rereads current values and finds that its operation is no longer current; the mutation raises the internal `OperationEnded` signal rather than returning a normal stale boolean.
 
-The task then stops, closes its effect gate, discards process-local results without writing, emits end observation, and resolves from the matching `pi.lane.lastResult` written by the terminal transaction. It never recreates operation values/lists or commits a competing terminal result. Scalar and list invocation writes are fenced the same way: invocation memo writes, tool checkpoint replacements, and assistant frame appends each verify durable ownership when their lane job executes, so a write enqueued before finalization is deleted by the terminal cleanup (which removes all operation-owned values/lists) and a write after it rejects without recreating state. An unowned operation needs no task to stop; a later matching `drive()` returns the settled result from `pi.lane.lastResult`, while `resume()` sees an idle lane and returns `NothingToResume`.
+The task then stops, closes its effect gate, discards process-local results without writing, emits end observation, and resolves from the matching `pi.lane.lastResult` written by the terminal transaction. It never recreates operation values/lists or commits a competing terminal result. Scalar and list invocation writes are fenced the same way: invocation memo writes, tool checkpoint replacements, and assistant frame appends each verify durable ownership when their lane job executes, so a write enqueued before finalization is deleted by the terminal cleanup (which removes all operation-owned values/lists) and a write after it rejects without recreating state. An unowned operation needs no task to stop; a later matching `drive()` returns the settled result from `pi.lane.lastResult`, while `resume(context)` sees an idle lane and returns `NothingToResume`.
 
 At most one terminal transaction commits because every candidate rereads ownership on the lane line before writing. An in-process finalizer publishes the terminal events, records the matching result on the `ActiveOperation`, closes any parked breakpoint and its gate with `OperationEnded` immediately after the terminal commit, and pulls the controller so cooperative provider/tool work stops. The task then resolves without publishing a duplicate terminal event once its current awaited work returns; its outer `finally` removes the record. A new operation therefore waits/gets `LaneBusy` during that cleanup even though durable state is already idle. A replacement-process finalizer first acquires ownership after close/crash, so no live task exists to notify.
 
@@ -2391,7 +2428,7 @@ At most one terminal transaction commits because every candidate rereads ownersh
 
 ## 5.1 The lane surface
 
-Expected rejection returns `Result.err`. `accept` resolves only after durable operation acceptance; `drive` resolves after one owned pass settles, waits, or yields. Convenience operations return `Result.ok` for completed, failed, aborted, and suspended outcomes. Storage faults, close during active work, and invariant defects reject the promise.
+Expected rejection returns `Result.err`. `accept` resolves only after durable operation acceptance; `drive` resolves after one owned pass settles, waits, yields, or reports a manual action. Convenience operations return `Result.ok` for completed, failed, aborted, suspended, and `action_required` outcomes. Storage faults, close during active work, and invariant defects reject the promise.
 
 ```ts
 interface NavigateOptions { summarize?: boolean; label?: string; customInstructions?: string }
@@ -2424,13 +2461,21 @@ interface DriveOptions {
   pollDeferred?: boolean;
 }
 
-interface CurrentOperationInfo {
+interface MissingIdentityInfo {
+  tools: string[];
+  model?: string;
+}
+
+type OperationStatus = "running" | "resumable" | "blocked" | "aborting";
+
+type CurrentOperationInfo = {
   id: string;
   kind: "run" | "compaction" | "navigation";
-  status: "running" | "suspended" | "aborting";
   startedAt: number;
-  suspended?: SuspendedOperation;
-}
+} & (
+  | { status: "running" | "resumable" | "aborting"; missing?: never }
+  | { status: "blocked"; missing: MissingIdentityInfo }
+);
 
 interface LaneExecutionInfo {
   lane: string;
@@ -2441,66 +2486,77 @@ interface LaneExecutionInfo {
 
 interface AgentLane {
   readonly name: string;
-  getLeafId(): Promise<string | null>;
+  getLeafId(context: Context): Promise<string | null>;
   /** The lane's most recent terminal outcome (§3.13); undefined before the
       first terminal transaction. Never consulted by recovery. */
-  getLastResult(): Promise<LaneLastResult | undefined>;
+  getLastResult(context: Context): Promise<LaneLastResult | undefined>;
 
   // General execution primitives. Convenience methods below compose these.
-  accept(request: OperationRequest): Promise<OperationAdmissionResult>;
-  drive(options: DriveOptions): Promise<DriveResult>;
-  requestAbort(operationId: string): Promise<AbortRequestResult>;
-  /** Coherent current + latest-terminal read on the lane mutation line. */
-  inspectExecution(): Promise<LaneExecutionInfo>;
+  accept(request: OperationRequest, context: Context): Promise<OperationAdmissionResult>;
+  drive(options: DriveOptions, context: Context): Promise<DriveResult>;
+  requestAbort(operationId: string, context: Context): Promise<AbortRequestResult>;
+  /** Coherent owned-memory current + latest-terminal inspection. */
+  inspectExecution(context: Context): Promise<LaneExecutionInfo>;
 
-  prompt(text: string, images?: ImageContent[]): Promise<RunResult>;
-  prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
-  skill(name: string, additionalInstructions?: string): Promise<RunResult>;
-  promptFromTemplate(name: string, args?: string[]): Promise<RunResult>;
-  compact(options?: { customInstructions?: string }): Promise<CompactionResult>;
-  navigateTree(targetId: string | null, options?: NavigateOptions): Promise<NavigationResult>;
-  resume(): Promise<ResumeResult>;
-  abort(): Promise<AbortResult>;
+  prompt(text: string, images: ImageContent[] | undefined, context: Context): Promise<RunResult>;
+  prompt(message: AgentMessage | AgentMessage[], context: Context): Promise<RunResult>;
+  skill(name: string, additionalInstructions: string | undefined,
+        context: Context): Promise<RunResult>;
+  promptFromTemplate(name: string, args: string[] | undefined,
+                     context: Context): Promise<RunResult>;
+  compact(options: { customInstructions?: string } | undefined,
+          context: Context): Promise<CompactionResult>;
+  navigateTree(targetId: string | null, options: NavigateOptions | undefined,
+               context: Context): Promise<NavigationResult>;
+  resume(context: Context): Promise<ResumeResult>;
+  abort(context: Context): Promise<AbortResult>;
 
-  steer(message: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult>;
-  followUp(message: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult>;
-  nextRun(message: string | AgentMessage, images?: ImageContent[]): Promise<NextRunResult>;
-  cancelQueued(entryId: string): Promise<CancelQueuedResult>;
+  steer(message: string | AgentMessage, images: ImageContent[] | undefined,
+        context: Context): Promise<QueueResult>;
+  followUp(message: string | AgentMessage, images: ImageContent[] | undefined,
+           context: Context): Promise<QueueResult>;
+  nextRun(message: string | AgentMessage, images: ImageContent[] | undefined,
+          context: Context): Promise<NextRunResult>;
+  cancelQueued(entryId: string, context: Context): Promise<CancelQueuedResult>;
 
-  recordUsage(usage: Usage, options?: { entryId?: string; details?: JsonValue }):
-    Promise<RecordUsageResult>;
-  waitForIdle(): Promise<void>;
-  runWhenIdle(callback: () => void | Promise<void>): Promise<void>;
+  recordUsage(usage: Usage, options: { entryId?: string; details?: JsonValue } | undefined,
+              context: Context): Promise<RecordUsageResult>;
+  waitForIdle(context: Context): Promise<void>;
+  runWhenIdle(callback: (context: Context) => void | Promise<void>,
+              context: Context): Promise<void>;
 
-  peekAction(): Promise<ActionInfo | undefined>;
-  executeAction(): Promise<ActionInfo | undefined>;
-  runToCompletion(): Promise<void>;
+  peekAction(context: Context): Promise<ActionInfo | undefined>;
+  executeAction(context: Context): Promise<ResumeResult>;
+  runToCompletion(context: Context):
+    Promise<Result<SettledResumeOutcome, NothingToResume | Closed>>;
 
   /** Undefined when the durable provider/model identity is not registered. */
-  getModel(): Promise<Model | undefined>;
-  setModel(model: Model): Promise<void>;
-  getThinkingLevel(): Promise<ThinkingLevel>; setThinkingLevel(l: ThinkingLevel): Promise<void>;
-  getActiveTools(): Promise<string[]>;        setActiveTools(names: string[]): Promise<void>;
+  getModel(context: Context): Promise<Model | undefined>;
+  setModel(model: Model, context: Context): Promise<void>;
+  getThinkingLevel(context: Context): Promise<ThinkingLevel>;
+  setThinkingLevel(level: ThinkingLevel, context: Context): Promise<void>;
+  getActiveTools(context: Context): Promise<string[]>;
+  setActiveTools(names: string[], context: Context): Promise<void>;
 
-  readonly session: SessionTree;
-  watch(): Promise<WatchHandle<LaneSnapshot>>;
+  readonly sessionTree: SessionTree;
+  watch(context: Context): Promise<WatchHandle<LaneSnapshot>>;
 }
 
 interface ActionInfo { kind: string; description: string; details?: JsonValue }
 interface WatchHandle<T> { snapshot: T; start(listener: EventListener): void; unsubscribe(): void }
 ```
 
-`accept` starts no driver. Omitted operation ids are minted before the acceptance command; supplied ids follow §1.2. A supplied id is correlation, not an unbounded idempotency index: a scheduler first calls `inspectExecution`, drives when that id is current, settles its own receipt when that id is latest-terminal, and calls `accept` only when neither is true. Skill/template expansion precedes storage. Prompt intent names only normalized caller messages, excluding captured `nextRun` and hook injections.
+`accept(request, context)` starts no driver. Omitted operation ids are minted before the acceptance command; supplied ids follow §1.2. A supplied id is correlation, not an unbounded idempotency index: a scheduler first calls `inspectExecution(context)`, drives when that id is current, settles its own receipt when that id is latest-terminal, and calls `accept` only when neither is true. Skill/template expansion precedes storage. Prompt intent names only normalized request prompt messages, excluding captured `nextRun` and hook injections.
 
-`drive` is fenced by `operationId`. If that id is current and unowned, it claims one pass; if the same pass is already active, it joins; if it is the latest terminal id, it returns the hydrated settled outcome; otherwise it returns `OperationMismatch`. A deadline can prevent the next effect but cannot preempt one already admitted. Same-operation joiners receive the installed pass's outcome and may call `drive` again if their policy requires more progress.
+`drive(options, context)` is fenced by `operationId`. If that id is current and unowned, it claims one pass; if the same pass is already active, it joins; if it is the latest terminal id, it returns the hydrated settled outcome; otherwise it returns `OperationMismatch`. A deadline can prevent the next effect but cannot preempt one already admitted. Same-operation joiners receive the installed pass's outcome or current manual action and may call `drive` again if their policy requires more progress. Each invocation retains its own Context; a joiner never reparents execution or combines its abort signal into another caller's execution signal.
 
-The convenience surface adds only caller-lifetime policy: `prompt`/`skill`/`compact`/`navigateTree` call `accept` then drive the returned id with local retry waiting; `resume` inspects and drives the current id with one deferred-poll permit; `abort` requests cancellation and ensures reconciliation is driven. A serving layer may instead store `OperationAdmission`, return to its caller, schedule from `waiting.notBefore`, and invoke the same primitives later.
+The convenience surface adds only invocation-lifetime policy: `prompt`/`skill`/`compact`/`navigateTree` call `accept` then drive the returned id with local retry waiting; `resume(context)` inspects and drives the current id with one deferred-poll permit; `abort(context)` requests durable cancellation and ensures reconciliation is driven. In manual mode these methods return `action_required`; applications continue with `executeAction(context)` or `runToCompletion(context)`. A serving layer may instead store `OperationAdmission`, return to its client, schedule from `waiting.notBefore`, and invoke the expected-id primitives later.
 
-`getLastResult()` is the post-crash reconciliation path: an application that accepted an operation, lost its process, and reopened reads `laneLastResult(lane)` for the outcome its promise never delivered (§3.13). `inspectExecution()` reads current ownership and that latest result coherently, which lets a scheduler reconcile its own durable submission without an accept/settle race. `pi.lane.lastResult` is still overwritten by the next terminal operation; permanent per-submission receipts remain a serving-layer concern. It is also how a caller learns the outcome of an operation finalized externally (§4.9).
+`getLastResult(context)` is the post-crash reconciliation path: an application that accepted an operation, lost its process, and reopened reads the hydrated `laneLastResult(lane)` for the outcome its promise never delivered (§3.13). `inspectExecution(context)` reads owned memory only and reports current status plus that latest result coherently, which lets a scheduler reconcile its own durable submission without an accept/settle race. Every state publication into that memory is serialized with the committing lane mutation. `pi.lane.lastResult` is still overwritten by the next terminal operation; permanent per-submission receipts remain a serving-layer concern. It is also how a caller learns the outcome of an operation finalized externally (§4.9).
 
-`waitForIdle()` registers on the lane mutation line and resolves when all earlier admitted lane jobs have settled, `currentOperationId` is null, and no process-local idle callback owns the lane. Later operations may start immediately after it resolves. Multiple waiters resolve together; close/fault rejects pending waiters.
+`waitForIdle(context)` registers on the lane mutation line and resolves when all earlier admitted lane jobs have settled, `currentOperationId` is null, and no process-local idle callback owns the lane. Later operations may start immediately after it resolves. Multiple waiters resolve together; close/fault rejects pending waiters.
 
-`runWhenIdle(callback)` waits by the same rule, then installs a process-local idle-callback owner. The owner is removed on return or throw; callback rejection propagates. The callback must not invoke a state-mutating method on the same lane, which would deadlock behind its own idle-callback ownership. Close rejects callbacks not yet started and waits for an already-running callback, which cannot be forcibly interrupted.
+`runWhenIdle(callback, context)` waits by the same rule, then installs a process-local idle-callback owner. The owner is removed on return or throw; callback rejection propagates. The callback must not invoke a state-mutating method on the same lane, which would deadlock behind its own idle-callback ownership. Close rejects callbacks not yet started and waits for an already-running callback, which cannot be forcibly interrupted.
 
 ### Results and errors
 
@@ -2515,8 +2571,13 @@ type OptionalFinalAssistant =
 
 type MissingIdentitySuspension = {
   kind: "suspended"; reason: "missing_identities";
-  missing: { tools: string[]; model?: string };
+  missing: MissingIdentityInfo;
 };
+
+interface ActionRequired {
+  kind: "action_required";
+  action: ActionInfo;
+}
 
 type RunOutcome =
   | ({ kind: "completed"; leafId: string } & OptionalFinalAssistant)
@@ -2524,28 +2585,39 @@ type RunOutcome =
   | ({ kind: "failed"; leafId: string; error: OperationError } & OptionalFinalAssistant)
   | { kind: "suspended"; reason: "deferred"; leafId: string;
       finalEntryId: string; deferred: DeferredHandle }
-  | (MissingIdentitySuspension & { leafId: string });
+  | (MissingIdentitySuspension & { leafId: string })
+  | ActionRequired;
 
 type CompactionOutcome =
   | { kind: "completed"; leafId: string; entry: CompactionEntry }
   | { kind: "declined" | "aborted"; leafId: string }
   | { kind: "failed"; leafId: string; error: OperationError }
-  | (MissingIdentitySuspension & { leafId: string });
+  | (MissingIdentitySuspension & { leafId: string })
+  | ActionRequired;
 
 type NavigationOutcome =
   | { kind: "completed"; oldLeafId: string | null; newLeafId: string | null;
       summaryEntry?: BranchSummaryEntry }
   | { kind: "declined" | "aborted"; leafId: string | null }
   | { kind: "failed"; leafId: string | null; error: OperationError }
-  | (MissingIdentitySuspension & { leafId: string | null });
+  | (MissingIdentitySuspension & { leafId: string | null })
+  | ActionRequired;
+
+type RunOperationOutcome = { operation: "run"; runId: string } & RunOutcome;
+type CompactionOperationOutcome =
+  { operation: "compaction"; runId: string } & CompactionOutcome;
+type NavigationOperationOutcome =
+  { operation: "navigation"; runId: string } & NavigationOutcome;
 
 type ResumeOutcome =
-  | ({ operation: "run"; runId: string } & RunOutcome)
-  | ({ operation: "compaction"; runId: string } & CompactionOutcome)
-  | ({ operation: "navigation"; runId: string } & NavigationOutcome);
+  | RunOperationOutcome
+  | CompactionOperationOutcome
+  | NavigationOperationOutcome;
+
+type SettledResumeOutcome = Exclude<ResumeOutcome, { kind: "action_required" }>;
 ```
 
-A completed run may omit final assistant fields when every finalized tool result terminates. The two fields are always both present or both absent.
+A completed run may omit final assistant fields when every finalized tool result terminates. The two fields are always both present or both absent. `MissingIdentities` is an acceptance error only; after acceptance, a missing identity uses the existing suspended/waiting outcome branch, including through `resume(context)`. `action_required` is an `ok` progress outcome and carries the same operation-tagged shape across convenience and resume methods, so `executeAction(context)` needs no conversion helper. Automatic mode never produces it.
 
 Expected errors use the existing `TaggedError` implementation in `harness/result.ts`:
 
@@ -2568,11 +2640,12 @@ type OperationAdmissionError =
 type OperationAdmissionResult = Result<OperationAdmission, OperationAdmissionError>;
 
 type TerminalOperationOutcome =
-  | ({ operation: "run"; runId: string } & Exclude<RunOutcome, { kind: "suspended" }>)
+  | ({ operation: "run"; runId: string } &
+      Exclude<RunOutcome, { kind: "suspended" } | ActionRequired>)
   | ({ operation: "compaction"; runId: string } &
-      Exclude<CompactionOutcome, { kind: "suspended" }>)
+      Exclude<CompactionOutcome, { kind: "suspended" } | ActionRequired>)
   | ({ operation: "navigation"; runId: string } &
-      Exclude<NavigationOutcome, { kind: "suspended" }>);
+      Exclude<NavigationOutcome, { kind: "suspended" } | ActionRequired>);
 
 type DriveOutcome =
   | { kind: "settled"; operationId: string; outcome: TerminalOperationOutcome }
@@ -2580,8 +2653,9 @@ type DriveOutcome =
   | { kind: "waiting"; operationId: string; reason: "deferred";
       deferred: DeferredHandle }
   | { kind: "waiting"; operationId: string; reason: "missing_identities";
-      missing: { tools: string[]; model?: string } }
-  | { kind: "yielded"; operationId: string };
+      missing: MissingIdentityInfo }
+  | { kind: "yielded"; operationId: string }
+  | { kind: "action_required"; operationId: string; action: ActionInfo };
 type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
 
 type AbortRequestResult = Result<{
@@ -2591,14 +2665,13 @@ type AbortRequestResult = Result<{
   followUp: AgentMessage[];
 }, OperationMismatch | Closed>;
 
-type RunResult = Result<{ runId: string } & RunOutcome,
+type RunResult = Result<RunOperationOutcome,
   LaneBusy | MissingIdentities | InvalidMessage | UnknownSkill | UnknownTemplate | Closed>;
-type CompactionResult = Result<{ runId: string } & CompactionOutcome,
+type CompactionResult = Result<CompactionOperationOutcome,
   LaneBusy | MissingIdentities | NothingToCompact | Closed>;
-type NavigationResult = Result<{ runId: string } & NavigationOutcome,
+type NavigationResult = Result<NavigationOperationOutcome,
   LaneBusy | MissingIdentities | InvalidNavigation | UnknownTarget | Closed>;
-type ResumeResult = Result<ResumeOutcome,
-  NothingToResume | MissingIdentities | Closed>;
+type ResumeResult = Result<ResumeOutcome, NothingToResume | Closed>;
 type QueueResult = Result<{ entryId: string }, NoActiveRun | InvalidMessage | Closed>;
 type NextRunResult = Result<{ entryId: string }, InvalidMessage | Closed>;
 type CancelQueuedResult = Result<
@@ -2621,68 +2694,67 @@ class HarnessClosed extends Error {}
 ## 5.2 The harness
 
 ```ts
-class AgentHarness<TContext extends object | undefined = object | undefined>
-  implements AgentLane {
-  /** Initializes an unconfigured main when needed, then restores every lane
-      without starting provider, tool, hook, or timer effects. One suspension
-      descriptor per lane with an open operation. */
-  static create<TContext extends object | undefined>(options: AgentHarnessOptions<TContext>): Promise<{
-    harness: AgentHarness<TContext>;
-    suspended: SuspendedOperation[];
-  }>;
-
-  lane(name: string): Promise<AgentLane | undefined>;      // lookup, never creates
-  createLane(name: string, at: string | null): Promise<Result<AgentLane, LaneExists | InvalidLane | UnknownTarget | Closed>>;
-  lanes(): Promise<LaneInfo[]>;                            // always includes "main"
+interface AgentHarness<TContext extends object | undefined = object | undefined>
+    extends AgentLane {
+  lane(name: string, context: Context): Promise<AgentLane | undefined>;
+  createLane(name: string, at: string | null,
+             context: Context): Promise<Result<AgentLane,
+               LaneExists | InvalidLane | UnknownTarget | Closed>>;
+  lanes(context: Context): Promise<LaneInfo[]>; // always includes main
 
   // Harness-global. Tool implementations are code and cannot persist; active
   // names live in each lane's configuration. setTools replaces only the registry.
-  getTools(): Promise<AgentHarnessTool<TContext>[]>;
-  setTools(t: AgentHarnessTool<TContext>[]): Promise<void>;
-  getResources(): Promise<Resources>;            setResources(r: Resources): Promise<void>;
-  getStreamOptions(): Promise<AgentHarnessStreamOptions>;
-  setStreamOptions(o: AgentHarnessStreamOptions): Promise<void>;
-  getRetryPolicy(): Promise<RetryPolicy>;        setRetryPolicy(p: RetryPolicy): Promise<void>;
-  getCompactionSettings(): Promise<CompactionSettings>;
-                                                 setCompactionSettings(s: CompactionSettings): Promise<void>;
-  getSteeringMode(): Promise<QueueMode>;         setSteeringMode(m: QueueMode): Promise<void>;
-  getFollowUpMode(): Promise<QueueMode>;         setFollowUpMode(m: QueueMode): Promise<void>;
+  getTools(context: Context): Promise<AgentHarnessTool<TContext>[]>;
+  setTools(tools: AgentHarnessTool<TContext>[], context: Context): Promise<void>;
+  getResources(context: Context): Promise<Resources>;
+  setResources(resources: Resources, context: Context): Promise<void>;
+  getStreamOptions(context: Context): Promise<AgentHarnessStreamOptions>;
+  setStreamOptions(options: AgentHarnessStreamOptions, context: Context): Promise<void>;
+  getRetryPolicy(context: Context): Promise<RetryPolicy>;
+  setRetryPolicy(policy: RetryPolicy, context: Context): Promise<void>;
+  getCompactionSettings(context: Context): Promise<CompactionSettings>;
+  setCompactionSettings(settings: CompactionSettings, context: Context): Promise<void>;
+  getSteeringMode(context: Context): Promise<QueueMode>;
+  setSteeringMode(mode: QueueMode, context: Context): Promise<void>;
+  getFollowUpMode(context: Context): Promise<QueueMode>;
+  setFollowUpMode(mode: QueueMode, context: Context): Promise<void>;
 
-  watchSession(): Promise<{ snapshot: SessionSnapshot;
-                            start: (l: EventListener) => void; unsubscribe: () => void }>;
+  watchSession(context: Context): Promise<WatchHandle<SessionSnapshot>>;
 
   readonly hooks: Hooks;
   readonly events: Events;
 
   /** Detach cleanly (§4.7). Open operations stay resumable. */
-  close(): Promise<void>;
+  close(context: Context): Promise<void>;
 }
+
+interface AgentHarnessConstructor {
+  create<TContext extends object | undefined = object | undefined>(
+    options: AgentHarnessOptions<TContext>,
+    context: Context,
+  ): Promise<{ harness: AgentHarness<TContext>; open: OpenOperation[] }>;
+}
+
+type OpenOperation = {
+  lane: string;
+  operationId: string;
+  kind: "run" | "compaction" | "navigation";
+  startedAt: number;
+} & (
+  | { status: "resumable" | "aborting"; missing?: never }
+  | { status: "blocked"; missing: MissingIdentityInfo }
+);
 
 interface LaneInfo {
   name: string;
   leafId: string | null;
-  operation: null | { id: string; kind: "run" | "compaction" | "navigation";
-                      status: "running" | "suspended" | "aborting" };
+  operation: CurrentOperationInfo | null;
 }
-
-type SuspendedOperation = {
-  lane: string; operationId: string;
-  kind: "run" | "compaction" | "navigation";
-  startedAt: number;
-  prompt?: AgentMessage[];
-  /** Payloads dereferenced from the drained items' surviving
-      `pendingEntry(id)` values (§4.6). */
-  aborting?: { steer: AgentMessage[]; followUp: AgentMessage[] };
-} & (
-  | { reason: "deferred"; deferred: DeferredHandle; missing?: never }
-  | { reason: "missing_identities";
-      missing: { tools: string[]; model?: string }; deferred?: never }
-  | { reason: "crash"; deferred?: DeferredHandle;
-      missing?: { tools: string[]; model?: string } }
-);
 
 // QueueMode, RetryPolicy, and CompactionSettings use the source types named in §0.7.
 ```
+
+`create(options, context)` initializes an unconfigured main when needed, then completes projection restore and bounded public hydration for every lane under that Context before returning. `open` contains exactly one item per lane with a durable current operation and omits idle lanes. Attachment never reports `running`; `missing` is present exactly for `blocked`. The array is an observation and may become stale after return, not a reservation or drive claim. `inspectExecution(context)` and snapshots derive status again from owned state and current registries.
 
 ### Options
 
@@ -2734,8 +2806,9 @@ interface AgentHarnessOptions<TContext extends object | undefined = object | und
   activeToolNames?: string[];             // default: initial tool names
 
   tools?: AgentHarnessTool<TContext>[];
-  toolContext?: TContext | (() => TContext | Promise<TContext>);
-  systemPrompt?: string | ((ctx: TContext) => string | Promise<string>);  // per request
+  toolContext?: TContext | ((context: Context) => TContext | Promise<TContext>);
+  systemPrompt?: string | ((ctx: TContext, context: Context) =>
+    string | Promise<string>);             // per request
   resources?: Resources;                  // skills, prompt templates
 
   streamOptions?: AgentHarnessStreamOptions;
@@ -2746,61 +2819,63 @@ interface AgentHarnessOptions<TContext extends object | undefined = object | und
   toolExecution?: "sequential" | "parallel";   // default parallel
   drive?: "automatic" | "manual";              // breakpoint mode; default automatic
 
-  toProviderMessages?: (m: AgentMessage[]) => Message[] | Promise<Message[]>;
+  toProviderMessages?: (m: AgentMessage[], context: Context) =>
+    Message[] | Promise<Message[]>;
   entryProjectors?: Record<string, EntryProjector>;
-  /** Existing typed telemetry contract; defaults to no-op. */
-  telemetryContext?: TelemetryContext;
 }
 
 type Resources = AgentHarnessResources<Skill, PromptTemplate>;
-type EntryProjector = (entry: CustomEntry) =>
+type EntryProjector = (entry: CustomEntry, context: Context) =>
   AgentMessage[] | undefined | Promise<AgentMessage[] | undefined>;
 ```
 
-`create()` copies the three seed fields into one immutable `LaneConfiguration`, storing the model as `{ provider, modelId }`. Before restore, it commits that seed as the first `pi.lane.config` for a fresh or normalized-v3 `main`. Existing lanes use only their current config; the seed never overrides them. A configuration-less lane in a format-4 session is corrupt.
+There is no harness-level telemetry default. The same shared harness may serve concurrent callers, so each method and callback uses only its explicit invocation Context and `context.telemetryContext` is always the telemetry parent. Runtime configuration must not reintroduce a receiver-level fallback.
 
-`createLane(name, at)` calls `Session.createLane(name, at, capturedSeed)` on the lane mutation line, regardless of later changes to existing lanes. It maps session validation failures to `LaneExists`, `InvalidLane`, or `UnknownTarget`, and emits `lane_created` only after the session transaction commits. Setters replace only their lane's bound value. Reopen options can seed new lanes but cannot alter existing ones without a setter. Applications opt into deferred generation through `setStreamOptions({ deferred: ... })` or initial `streamOptions`; `before_request` may patch the same curated field per attempt.
+`create(options, context)` copies the three seed fields into one immutable `LaneConfiguration`, storing the model as `{ provider, modelId }`. Before projection restore, it commits that seed as the first `pi.lane.config` for a fresh or normalized-v3 `main`, using the create invocation Context for every read and the seed commit. Existing lanes use only their current config; the seed never overrides them. A configuration-less lane in a format-4 session is corrupt.
+
+`createLane(name, at, context)` calls `Session.createLane(name, at, capturedSeed, context)` on the lane mutation line, regardless of later changes to existing lanes. It maps session validation failures to `LaneExists`, `InvalidLane`, or `UnknownTarget`, and emits `lane_created` with the same invocation Context only after the session transaction commits. Setters replace only their lane's bound value. Reopen options can seed new lanes but cannot alter existing ones without a setter. Applications opt into deferred generation through `setStreamOptions({ deferred: ... }, context)` or initial `streamOptions`; `before_request` may patch the same curated field per attempt.
 
 Initial, replacement, and hook-patched stream options are trusted typed internal values. Patch deletion semantics are applied before publication; extensions that return values outside the declared types are defective rather than runtime-validated by the harness.
 
-`systemPrompt`, `toolContext`, `toProviderMessages`, and `entryProjectors` are deterministic/idempotent computation callbacks and may repeat after a crash; effectful interception belongs in hooks. `systemPrompt` is evaluated per provider request, then `transform_context` receives and may request-locally transform both messages and that prompt. Durable run context belongs in `before_run` message injection, not request-local transformation. `toolContext` is resolved once per live batch; each bound tool call receives its stable `AgentHarnessToolInvocation` and a required synchronous update callback even when no live listener exists. A `replay:"safe"` tool may implement Flue-style durable memoization over `getMemo`/`setMemo`; committed values survive replay until the call reaches `outcome_ready`. Tools must await memo writes. These methods are invocation-scoped capabilities, not raw Session access.
+`systemPrompt`, `toolContext`, `toProviderMessages`, and `entryProjectors` are deterministic/idempotent computation callbacks, receive the current invocation Context, and may repeat after a crash; effectful interception belongs in hooks. `systemPrompt` is evaluated per provider request, then `transform_context` receives and may request-locally transform both messages and that prompt. Durable run context belongs in `before_run` message injection, not request-local transformation. `toolContext` is resolved once per live batch; each bound tool call receives its stable `AgentHarnessToolInvocation` and a required synchronous update callback even when no live listener exists. A `replay:"safe"` tool may implement Flue-style durable memoization over `getMemo`/`setMemo`; committed values survive replay until the call reaches `outcome_ready`. Tools must await memo writes. These methods are invocation-scoped capabilities, not raw Session access.
 
 ## 5.3 SessionTree
 
 ```ts
 interface SessionTree {
-  getLeafId(): Promise<string | null>;
-  getEntry(id: string): Promise<Entry | undefined>;
-  getStats(): Promise<SessionStats>;
+  getLeafId(context: Context): Promise<string | null>;
+  getEntry(id: string, context: Context): Promise<Entry | undefined>;
+  getStats(context: Context): Promise<SessionStats>;
 
   // Bound application values and lists. The address already contains its key.
-  getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined>;
-  scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]>;
-  readList<T>(address: ValueList<T>, options?: ListReadOptions):
-    Promise<ListElement<T>[]>;
-  setValue<T>(address: Value<T>, next: NoInfer<T>): Promise<void>;
-  deleteValue<T>(address: Value<T>): Promise<void>;
-  appendList<T>(address: ValueList<T>, element: NoInfer<T>): Promise<void>;
-  deleteList<T>(address: ValueList<T>): Promise<void>;
+  getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined>;
+  scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]>;
+  readList<T>(address: ValueList<T>, options: ListReadOptions | undefined,
+              context: Context): Promise<ListElement<T>[]>;
+  setValue<T>(address: Value<T>, next: NoInfer<T>, context: Context): Promise<void>;
+  deleteValue<T>(address: Value<T>, context: Context): Promise<void>;
+  appendList<T>(address: ValueList<T>, element: NoInfer<T>, context: Context): Promise<void>;
+  deleteList<T>(address: ValueList<T>, context: Context): Promise<void>;
 
   // Purpose-specific wrappers for session metadata. Latest wins and is not
   // branch-scoped. undefined deletes the bound value.
-  getName(): Promise<string | undefined>;
-  setName(name: string | undefined): Promise<void>;
-  getLabel(targetId: string): Promise<string | undefined>;
-  setLabel(targetId: string, label: string | undefined): Promise<void>;
+  getName(context: Context): Promise<string | undefined>;
+  setName(name: string | undefined, context: Context): Promise<void>;
+  getLabel(targetId: string, context: Context): Promise<string | undefined>;
+  setLabel(targetId: string, label: string | undefined, context: Context): Promise<void>;
   /** Session-wide, all branches, sequence order. */
-  findEntries(query?: EntryQuery): Promise<Entry[]>;
-  findEntry(query?: EntryQuery): Promise<Entry | undefined>;
+  findEntries(query: EntryQuery | undefined, context: Context): Promise<Entry[]>;
+  findEntry(query: EntryQuery | undefined, context: Context): Promise<Entry | undefined>;
 
   /** Branch-scoped: the path from start toward root (§2.5). */
-  findEntriesOnBranch(query?: BranchScan): Promise<Entry[]>;
-  findEntryOnBranch(query?: BranchScan): Promise<Entry | undefined>;
+  findEntriesOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry[]>;
+  findEntryOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry | undefined>;
 
   // Writes resolve on durable acceptance; the returned id is the entry id,
   // reserved when the write defers.
-  appendMessage(message: AgentMessage): Promise<string>;
-  appendCustomEntry(customType: string, data?: JsonValue): Promise<string>;
+  appendMessage(message: AgentMessage, context: Context): Promise<string>;
+  appendCustomEntry(customType: string, data: JsonValue | undefined,
+                    context: Context): Promise<string>;
 }
 
 interface EntryQuery { type?: EntryType; customType?: string;
@@ -2816,63 +2891,90 @@ Useful patterns: effective extension state is `findEntryOnBranch({ type: "custom
 
 ## 5.4 Snapshots and subscription
 
+`watch(context)` is a memory-only observation boundary. Attachment already performed every durable read needed to populate owned state. The call synchronously registers a buffering watcher and captures an immutable clone of that state under one lane-local observation gate; it performs no Session/storage read.
+
 ```ts
-const { snapshot, start, unsubscribe } = await lane.watch();
-await send(client, { kind: "snapshot", snapshot });   // snapshot on the wire first
-start((event) => send(client, event));                // flush buffer in order, then live
+const watch = await lane.watch(context);
+await send(client, { kind: "snapshot", snapshot: watch.snapshot });
+watch.start((event, eventContext) => send(client, { event, eventContext }));
 ```
 
-`watch()` atomically snapshots and begins buffering. `start(listener)` flushes in order, then delivers live; each event arrives once, in order, without sequence numbers or registration races. `unsubscribe()` drops the watcher and its buffer. A never-started watcher buffers without bound.
+`start(listener)` flushes buffered events in order, then delivers live. `unsubscribe()` drops the watcher and its buffer. A never-started watcher buffers without bound. Event delivery always supplies the Context that emitted that event; the Context passed to `watch` or `start` never replaces it.
 
 ```ts
 interface QueuedItem { entryId: string; message: AgentMessage }
 
 interface LaneSnapshot {
   lane: string;
-  transcript: Entry[];       // this lane's context window plus its compaction entry
+  transcript: Entry[];
   leafId: string | null;
-
+  lastResult?: LaneLastResult;
   operation: null | {
     id: string;
     kind: "run" | "compaction" | "navigation";
-    status: "running" | "suspended" | "aborting";
     startedAt: number;
-    suspended?: SuspendedOperation;
-    streamingMessage?: AssistantMessage;     // live partial, or restored frame reduction (§3.7)
-    runningTools: { toolCallId: string; toolName: string; args: unknown;
-                    /** Latest process-local update, or restored durable checkpoint. */
-                    partialResult?: AgentToolResult<unknown> }[];
+    status: OperationStatus;
+    missing?: MissingIdentityInfo;
+    action?: ActionInfo;
     retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
+    deferred?: { handle: DeferredHandle; poll: number };
+    drained?: { steer: QueuedItem[]; followUp: QueuedItem[] };
+    streamingMessage?: AssistantMessage;
+    runningTools: {
+      toolCallId: string;
+      toolName: string;
+      args: unknown;
+      partialResult?: AgentToolResult<unknown>;
+    }[];
   };
-
   queues: { steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] };
-  pendingWrites: { entryId: string; type: EntryType; customType?: string;
-                   message?: AgentMessage; data?: JsonValue }[];
+  pendingWrites: {
+    entryId: string;
+    type: EntryType;
+    customType?: string;
+    message?: AgentMessage;
+    data?: JsonValue;
+  }[];
   faulted: boolean;
 }
 
 interface SessionSnapshot {
-  lanes: (LaneInfo & { suspended?: SuspendedOperation })[];
+  lanes: LaneInfo[];
   faulted: boolean;
 }
 ```
 
-`operation.status` derives from durable state plus process-local drive ownership: `suspended` whenever an open operation has no `ActiveOperation` (including accepted-but-undriven, hosted retry wait, safe yield, deferred, restored, or missing-identity state); `aborting` when `control.status === "cancel_requested"`; otherwise `running`. `suspended` details are present when the existing `SuspendedOperation` vocabulary can describe the reason; a transient accepted/yielded state needs no invented durable descriptor. The missing-identity marker stores the exact `SuspendedOperation`, survives until a successful drive/resume attempt or cancellation in this process, and is reconstructed as `reason:"crash"` after reopen. It changes snapshots but never durable recovery state. `queues` and `pendingWrites` derive from `inbox` and `pendingNextRun`, with content dereferenced from each id's `pendingEntry(id)` value; abort-drained items are exposed only through `AbortResult` and `SuspendedOperation.aborting`, never as still-queued. `streamingMessage` means the latest observed partial assistant message, not proof that a stream is attached. Precedence: the newest process-local partial while a live stream is owned; otherwise, for assistant/deferred `effect_pending`, the value reduced from committed `pendingAssistantFrames(operationId, responseEntryId)` pages; otherwise absent. A restored lane may therefore be `suspended` with a non-undefined `streamingMessage`. Snapshot hydration constructs the exact bound frame address from current typed state and stays within the assistant consumer's page budget; it never scans arbitrary lists. A running tool's `partialResult` prefers its latest process-local update and falls back to the optional `pendingToolOutput(operationId, invocationId)` checkpoint after reopen. Outcome-ready calls are settled, not running, and do not appear in `runningTools` while awaiting source-ordered placement.
+The first snapshot is immediately renderable and coherent:
 
-Rules:
+- `transcript` contains committed entries only, from the current compaction-bounded branch scan performed during attachment;
+- `streamingMessage` is an uncommitted display projection; a live partial replaces the durable frame-reduction fallback;
+- `runningTools[].partialResult` is a display projection; a live update replaces the durable checkpoint fallback;
+- planned calls have not started, and outcome-ready/materialized calls are not reported as running;
+- `queues`, `pendingWrites`, and `drained` contain the payloads dereferenced during attachment or later state publication;
+- `retry`, `deferred`, and `drained` are descriptive details, not scheduling instructions;
+- `action` exists only while a live manual breakpoint is parked;
+- `lastResult` is the latest hydrated terminal result and remains unrelated to recovery;
+- `missing` exists exactly when status is `blocked`;
+- configuration remains outside snapshots; getters are authoritative and `config_update` tells observers when to reread.
 
-- Configuration is **not** in snapshots. Getters return current values; `config_update` events tell a UI when to re-read. One source of truth.
-- `streamingMessage` is not part of `transcript`. `message_end` replaces it with the final post-hook value but does not clear it; the matching `entry_added` confirms the append, adds the entry to `transcript`, and clears the draft.
-- Direct messages and finalized tool results use the same immediate `message_start` → `message_end` lifecycle and enter `transcript` only on `entry_added`. They never populate `streamingMessage`.
-- An `aborting` snapshot reports only state that actually exists. It never synthesizes a streaming assistant message.
-- Reconnect means a new `watch()`. Process loss discards live output newer than the latest committed assistant frame or tool checkpoint. A restored effect-pending generation exposes its reduced frames as `streamingMessage`; a restored effect-pending tool may expose its checkpoint as `partialResult`; after unknown-outcome or unsafe orphan recovery the same values are incorporated into the synthetic interrupted response or result entry. Reconnect replays no historical `message_start`/`message_update` or `tool_update` events — the snapshot carries the durable partial, and recovery later emits its own recovery-tagged lifecycle for what it actually settles. Every transcript entry remains complete.
-- A lane watcher receives events whose `lane` matches, plus events with no lane. The harness-global `usage` event is the explicit exception: it carries its originating lane but reaches every watcher, because its totals are session-wide.
+State publication, watcher installation, and event enqueue obey one gap-free protocol. The lane-local observation gate serializes:
+
+1. synchronous publication of a new owned-state clone plus synchronous enqueue of its complete event batch; and
+2. synchronous watcher registration plus synchronous capture of the current owned-memory clone.
+
+Event enqueue snapshots both the current recipient set and each event's invocation Context immediately. Delivery occurs later, outside the lane/storage mutation line. Therefore a watcher either registers first and receives snapshot-before plus the complete later `(event, context)` batch, or publication/enqueue wins and it receives snapshot-after without that old batch. It cannot miss or duplicate the transition, and listeners registered after enqueue cannot observe historical events.
+
+Binding event and Context is required for telemetry and RPC. A local event handler derives its telemetry from the emitting invocation. An RPC subscription injects that source lineage into the event frame and reconstructs a fresh client-side delivery Context; subscription-establishment Context is not the event parent. Buffered watchers retain `{ event, context }`, not only event payloads.
+
+Snapshot/event payloads are isolated from owned state and other listeners. Caller mutation cannot alter later inspection. Reconnect creates a new watcher and never replays pre-attachment `message_start`, `message_update`, `tool_update`, or other lifecycle events. Durable partials appear only in the initial snapshot; later recovery emits lifecycle only for work it actually performs.
+
+A lane watcher receives events whose `lane` matches, plus events with no lane. The harness-global `usage` event is the explicit exception: it carries its originating lane but reaches every watcher because its totals are session-wide. Full `watchSession(context)` behavior remains a later package; its public snapshot types land now.
 
 ## 5.5 Events
 
-One flat stream. `events.on(type, listener)` matches across the harness; lane watchers filter as above. Events are **passive**: listeners cannot transform the in-flight procedure, payloads are isolated from procedure state and from other listeners, and a throw produces `handler_error` plus telemetry without affecting execution. Listeners run in registration order and delivery awaits each one. A listener may read harness state and perform external observational effects, but must not call state-mutating harness methods; interception belongs in hooks, and new operations belong to an external caller after listener delivery. This avoids reentrant mutation and event-delivery deadlocks.
+One flat stream. `events.on(type, listener)` matches across the harness; lane watchers filter as above. Events are **passive**: listeners cannot transform the in-flight procedure, payloads are isolated from procedure state and from other listeners, and a throw produces `handler_error` plus telemetry without affecting execution. Listeners run in registration order and delivery awaits each one. Each listener receives `(event, context)`, where Context is the invocation that emitted the event, retained with buffered events and bound to the recipient set at enqueue. A listener may read harness state and perform external observational effects under that Context, but must not call state-mutating harness methods; interception belongs in hooks, and new operations belong to an external caller after listener delivery. This avoids reentrant mutation and event-delivery deadlocks.
 
-Durable tree and session-metadata events fire **after** commit — `entry_added` means queryable. Multi-write events wait for full success, then follow mutation order. `run_start`, standalone `compaction_start`, and `navigation_start` publish after their acceptance transaction and before `accept` resolves; no post-acceptance work has started yet. Explicit accept+drive and their convenience composition publish the same lifecycle once. Process-local lifecycle events need not be durable: `message_end` precedes the entry insert.
+Durable tree and session-metadata events fire **after** commit — `entry_added` means queryable. Multi-write events wait for full success, then follow mutation order. Run acceptance publishes `run_start`, then `message_start` → `message_end` → `entry_added` for every placed captured-next-run and request-prompt message in placement order, then `queue_update` when next-run items were captured. Standalone `compaction_start` and `navigation_start` likewise publish after their acceptance transaction and before `accept` resolves. Every acceptance event carries the accepting Context; no post-acceptance work has started yet. Explicit accept+drive and their convenience composition publish the same lifecycle once. Process-local lifecycle events need not be durable: `message_end` precedes the entry insert.
 
 ```ts
 type HarnessEventPayload =
@@ -2976,7 +3078,7 @@ type HarnessEvent =
 
 type HarnessEventType = HarnessEvent["type"];
 type EventListener<E extends HarnessEvent = HarnessEvent> =
-  (event: E) => void | Promise<void>;
+  (event: E, context: Context) => void | Promise<void>;
 
 interface Events {
   on<T extends HarnessEventType>(
@@ -3022,7 +3124,7 @@ Deferred and recovery brackets are deterministic:
 
 - initial assistant generation uses `turnId = stepId`; a durable deferred response ends that turn, then emits `run_suspend`;
 - missing-identity suspension emits the operation-specific `run_suspend`, `compaction_suspend`, or `navigation_suspend`; no end event fires until that open operation later completes;
-- every application `resume()` emits `run_resume`; direct `drive` does not imply a process-origin lifecycle category. `recovery:true` marks lifecycle emitted for actual orphan recovery or replay, as determined from durable phase and current ownership, not from a fresh/continue/restore flag;
+- every application `resume(context)` emits `run_resume`; direct `drive` does not imply a process-origin lifecycle category. `recovery:true` marks lifecycle emitted for actual orphan recovery or replay, as determined from durable phase and current ownership, not from a fresh/continue/restore flag;
 - one deferred poll opens a turn whose durable id is `${stepId}:poll:${poll}`. Pending/error/ready settlement and any ready tool batch complete inside that turn, followed by `turn_end` and then suspend/failure/checkpoint;
 - restored unresolved tools re-open their persisted `ToolBatch.turnId` with `recovery:true`, emit only new replay/interruption tool lifecycle, then close that recovery turn. Existing message/entry events are never replayed;
 - resumed structural work re-emits its structural start with `recovery:true`; structural streams emit no message lifecycle and their typed result alone emits `entry_added`.
@@ -3097,13 +3199,16 @@ type HookInvocation<K extends HookName> = HookMap[K]["event"] & {
   runId: string;
 };
 type HookHandler<K extends HookName> =
-  (event: HookInvocation<K>) => Promise<HookMap[K]["result"]> | HookMap[K]["result"];
+  (event: HookInvocation<K>, context: Context) =>
+    Promise<HookMap[K]["result"]> | HookMap[K]["result"];
 
 interface Hooks {
   on<K extends HookName>(name: K, handler: HookHandler<K>,
                          options?: { id?: string }): () => void;
 }
 ```
+
+Hook registration is host-local configuration and retains no caller Context. Each invocation supplies the current operation Context as the handler's final argument; nested work must derive from that invocation rather than a harness default.
 
 A registration `id` is optional observability metadata only. It does not establish uniqueness, persisted routing, replay identity, or a durability protocol. Extension-private durable state belongs in extension-owned bound values/lists or audited custom entries keyed by lane/operation id; the extension owns replay, cleanup, and idempotency.
 
@@ -3337,7 +3442,15 @@ Remote protocol adapters validate untrusted wire data before returning typed pro
 
 ## 5.8 Telemetry
 
-Use the existing callback-based `TelemetryContext`, no-op/reference implementations, typed schema machinery, and agent-owned schemas. Do not invent a second contract. Context is passed explicitly; no core `AsyncLocalStorage` or global active span.
+Use the existing callback-based `TelemetryContext`, no-op/reference implementations, typed schema machinery, and agent-owned schemas. Do not invent a second contract. Invocation Context is passed explicitly as the trailing argument on the current harness/session surfaces; no core `AsyncLocalStorage`, global active span, or mutable receiver default is permitted.
+
+Context solves two separate propagation problems. `context.telemetryContext` is the parent for this invocation's harness/session spans, and child work derives a new immutable Context when it starts a child span. `context.abortSignal` is the process-local cancellation channel for this invocation. At an RPC boundary the client maps that signal to `cancel(requestId)` and injects trace metadata; the server allocates one request `AbortController`, extracts the incoming trace parent into a local `TelemetryContext`, and derives a fresh Context with `withAbortSignal` plus `withTelemetryContext` before invoking the core. Matching cancellation or connection loss aborts that controller. A pre-aborted request starts no server work at the adapter boundary. One request or drive joiner cannot cancel another caller.
+
+Invocation cancellation is not durable cancellation. An aborted `context.abortSignal` must not call `requestAbort()`, write `cancel_requested`, or commit a durable aborted operation result while control remains running. Only explicit `requestAbort(operationId, context)`/`abort(context)` owns that transition. Context objects, signals, telemetry objects, and arbitrary backend-native span objects are never stored durably or serialized as business arguments. RPC carries required trace/cancellation control-plane metadata and reconstructs a fresh local Context; whether selected adapter-managed typed values may also cross remains an RPC design decision.
+
+Shared `AgentHarness`, `AgentLane`, `Session`, and `SessionTree` receivers retain no caller Context and expose no receiver-level telemetry default. Process-local objects representing one invocation, such as a drive pass or event subscription, may retain their derived Context for that invocation only. Buffered events retain `{ event, context }` and bind recipients at enqueue so delayed local handlers and RPC event frames preserve source lineage.
+
+WP02 preserves this propagation boundary but introduces no new telemetry spans, RPC transport, trace-carrier codec, distributed cancellation implementation, drive-ownership policy, or final RPC context-position policy.
 
 Required spans remain:
 
@@ -3465,7 +3578,7 @@ Every package implements its named concern end to end and tests its normal path,
 |---|---|---|---|
 | WP00 (complete) | Reconciled acceptance/hooks, harvested runtime1 scenarios, switched the public factory, and deleted runtime1 without adding execution behavior. | Approved redesign and durability handoffs were present. | [Runtime1 removal](work-packages/00-runtime1-removal.md) |
 | WP01 (complete) | Replaced retained register/custom-state APIs with bound values/lists across Session, Memory, JSONL, SQLite, instrumentation, conformance, and public application access. | WP00 | [Bound values and lists](work-packages/01-bound-values-lists.md) |
-| WP02 | Implement atomic prompt/skill/template acceptance plus coherent attachment, phase-aware open-operation status, fully hydrated owned inspection state, and gap-free lane watch snapshots without starting execution. | WP01 | [Atomic acceptance and coherent attachment](work-packages/02-atomic-run-acceptance.md) |
+| WP02 (in progress) | Implement atomic prompt/skill/template acceptance plus coherent attachment, phase-aware open-operation status, fully hydrated owned inspection state, and gap-free lane watch snapshots without starting execution. | WP01 | [Atomic acceptance and coherent attachment](work-packages/02-atomic-run-acceptance.md) |
 
 The old Types, Session/Memory, JSONL, and SQLite rows described work already present in the repository. Their remaining cross-backend delta was WP01; they are not separate future packages.
 
@@ -3479,7 +3592,7 @@ These rows preserve requirements, not frozen package boundaries. Create their ha
 |---|---|---|---|
 | S3 | **Search** | The standalone `SessionSearchService` plus repo catch-up utilities (§2.8): core entry search as `SessionSearch<T>`, session-level ranked results, optional `searchEntries?: SessionSearch<TEntryHit>`, `remove()`, the `SessionSearchSyncTarget` cursor/index-batch contract, sync enumeration and catch-up outside the service contract, debounced notify as a utility, `(sessionId, storeGeneration)` cursor keys, and the reference SQLite FTS5 implementation working over any backend's repository through the sync utility. | Cursor catch-up from empty against existing sessions, idempotent re-index after crash mid-batch, notify-utility/sweep equivalence, sessions-vs-entries queries and ranking, removal and reconciliation, shared-index multi-process discipline. |
 | S4 | **Dev TUI and Client** | A minimal `AgentClient` over one lane — `LaneSnapshot` plus `watch()` events, `prompt`/`steer`/`followUp`/`abort`/`resume`/`cancelQueued`, `pi.lane.lastResult` read — and a throwaway alt-screen TUI on `packages/tui`: transcript from snapshot and events, input box, status/queue display, abort key. Built first against a scripted fake client on the shared types; binds to the real harness as runtime packages land. Not final. | Compiles; fake-client smoke test. No durability obligations. |
-| R2 | **Minimal no-tool drive** | Starting from WP02's durable `starting` operation, add the first real lane-owned `ActiveOperation` pass with expected-id fencing, same-id joining, latest-result lookup, safe deadline yields, stable `ActionInfo` breakpoints, and `EffectGate`; run driver-owned `before_drive`/`before_run`, make `prompt`/`skill`/`promptFromTemplate` compose `accept`+`drive`, and execute one assistant generation through captured context/options, payload/response hooks, intent/effect/settlement, synchronous per-event frame appends with latest-promise fencing, atomic frame-list deletion, usage, terminal cleanup plus `pi.lane.lastResult`, results, events, and telemetry. | Accepted `starting` close/reopen/drive; prompt convenience and explicit accept+drive produce byte-identical writes/events; one same-id pass installed/joined and stale ids isolated; safe yields and stable descriptors; successful run with final assistant fields; one frame append per convertible event with no per-frame storage await and only the latest promise retained; settlement awaits the latest frame write and deletes the list atomically; frame-append failure faults before `after_response`; caller rejection and adapter-reported failures; exact ordering; supplied operation id propagates through `run_end` and `pi.lane.lastResult`; terminal cleanup; close at every boundary; invalid references rejected at consumption; re-enable coding-agent's one-shot and worker-owned Harness prompt tests. |
+| R2 | **Minimal no-tool drive** | Starting from WP02's durable `starting` operation, add the first real lane-owned `ActiveOperation` pass with expected-id fencing, same-id joining, latest-result lookup, safe deadline yields, stable `ActionInfo` breakpoints, real `action_required` pass behavior, `executeAction`, `runToCompletion`, and `EffectGate`; run driver-owned `before_drive`/`before_run`, make `prompt`/`skill`/`promptFromTemplate` compose `accept`+`drive`, and execute one assistant generation through captured context/options, payload/response hooks, intent/effect/settlement, synchronous per-event frame appends with latest-promise fencing, atomic frame-list deletion, usage, terminal cleanup plus `pi.lane.lastResult`, results, events, and telemetry. | Accepted `starting` close/reopen/drive; prompt convenience and explicit accept+drive produce byte-identical writes/events; one same-id pass installed/joined and stale ids isolated; safe yields and stable descriptors; successful run with final assistant fields; one frame append per convertible event with no per-frame storage await and only the latest promise retained; settlement awaits the latest frame write and deletes the list atomically; frame-append failure faults before `after_response`; caller rejection and adapter-reported failures; exact ordering; supplied operation id propagates through `run_end` and `pi.lane.lastResult`; terminal cleanup; close at every boundary; invalid references rejected at consumption; re-enable coding-agent's one-shot and worker-owned Harness prompt tests. |
 | R3 | **Generation recovery and retry** | Activation-only unknown-effect recovery that reduces committed frames into the synthetic zero-usage partial error under the reserved ids and then classifies ordinarily (retry or failure drain), ordinary stop/error/deferred classification, provider-compliant `aborted`, failure-drain foundation, and both retry-wait policies: explicit drive returns `waiting/notBefore`, while convenience drive may own the abort-aware timer. Define stable breakpoint descriptors for retry timers and recovery commits. Overflow classification remains explicitly unimplemented until R9. | Every generation state before/after reopen; accept/close/reopen/drive; recovery with no frames, partial frames, and authoritative end-frame content; synthetic settlement always commits under reserved ids with the interruption warning and deletes the frame list; interrupted partial tool calls never execute; `after_response` never runs for synthetic settlement; caps/backoff; no timer under `waitForRetry:false`; due and future `notBefore`; deadline before retry; convenience/explicit-drive durable equivalence; timer abort-first/start-first; stable descriptors; stop/error/aborted/deferred classification; missing identities. |
 | R4 | **Tools** | Add the harness-specific tool-update checkpoint options/callback while leaving pi-ai's `AgentToolUpdateCallback` unchanged, then compose §5.7's neutral tool phases with bound context, invocation-scoped memos, `pi.op.tool_args`, scalar `pendingToolOutput(operationId, invocationId)` checkpoints, `outcome_ready` staging in `pi.pending.entry`, completion-order outcome durability, source-ordered materialization, orphan recovery/replay, sequential/parallel promises, blocked/genuine-length outcomes, hooks/events/usage, and stable descriptors. The built-in bash tool emits live updates at 100 ms and requests distinct checkpoints at most every two seconds. | Stable invocation id/memos across safe replay; every planned/effect-pending/outcome-ready/completed state; parallel out-of-order staging without replay; synchronous update callback with the latest delivery and latest checkpoint write awaited before `after_tool`; `tool_end` before staging; every requested checkpoint enqueued synchronously with only the latest promise reference retained and no write dropped or coalesced; tool-selected cadence/duplicate suppression; late-write fencing after settlement; JSONL checkpoint growth/compaction; safe replay deletes old checkpoint; unsafe recovery with/without checkpoint; batch-wide identity preflight starts no effect when any captured tool is missing; identity-free unsafe orphan settlement precedes later context resolution; a missing first safe orphan starts/resolves nothing later; current sequential override serializes recovered calls before later identity suspension; source-ordered materialization; termination and abort-ready states. |
 | R5 | **Inbox, configuration, and writes** | `nextRun`/steer/follow-up via `pendingEntry(id)` values, pending-payload consumption-time dereference, `cancelQueued` triage (`not_found`), durable drain markers, checkpoint consumption with pending-value deletion, immediate total config setters, deferred tree writes, adjustments, and stable breakpoint descriptors for the checkpoint boundaries introduced here. | Capture/cancel/consume races, repeated cancellation answering `not_found`, invalid queue payload kinds and missing pending values rejected at consumption, one-at-a-time crash after one drain, pending-value/entry exclusivity at every boundary, custom-write continuation, config-step race, writes surviving reopen. |
@@ -3489,7 +3602,7 @@ These rows preserve requirements, not frozen package boundaries. Create their ha
 | R9 | **Threshold and overflow compaction** | In-run structural decision, durable once-per-trigger threshold marker, continuation preservation, all overflow predicates, atomic response/preparation publication, specified normalization/projection, one overflow recovery flag, bounded second failure, and stable breakpoint descriptors for added boundaries. | Threshold decline/empty across reopen, all overflow classifier/preparation inputs, no overflow tool plan, genuine length, crash/reopen at every transition. |
 | R10 | **Navigation** | Add navigation `OperationRequest` acceptance without task installation and compose `navigateTree()` from accept+drive. Implement navigation source/target/summary consumption-time dereference, validation, summarized decision/generation, one final transaction combining move/summary/leaf/label with terminal writes, summary-only navigation hook, and stable descriptors. | Explicit accept+drive versus convenience equivalence; root/current/unknown rejection; invalid durable source/target/summary combinations; accept/close/reopen/drive; summarized/unsummarized paths; final leaf at summary; abort race; exact atomic publication including cleanup. |
 | R11 | **Schema version and migrations** | Chained migrate-on-open under the writer lease, with total mappings for open `pi.op.state` including `outcome_ready`, staged `pi.pending.entry` results, invocation memos, optional progress checkpoints, and assistant frame lists (paged in sequence order, mapped preserving `seq` or deleted whole-key); address namespace/key/kind migrations; JSONL lenient old-shape replay, mandatory post-migration compaction, refuse-newer. | Version gate; chained crash-idempotent migration; planned/effect-pending/outcome-ready tool states mapped safely; staged result/checkpoint/memo mappings; every legacy frame mapped or the whole list explicitly discarded with no completion inference; resumed operation correctness; old bytes retired. |
-| R12 | **Surface completion** | Complete snapshots/watch including restored tool checkpoints, restored `streamingMessage` reduced from frames, and outcome-ready visibility, event catalog/order/filtering, telemetry, public exports, backend parity, hosted-control/convenience documentation, remove scaffold code including the S4 fake client, rename the sole implementation from `runtime2/` to `runtime/`, update imports/tests, and delete `runtime2.md`. | Snapshot/event gap; attach during active effect with live/durable divergence for both frames and checkpoints; restored effect-pending exposing reduced `streamingMessage`; live partial precedence over durable reduction; outcome-ready, waiting/yielded/terminal states; no replay of old message or tool lifecycle; recovered turn brackets balanced by turn id across deadline yields and reopened on the next pass; close before tool-effect admission creates no raw `pi.harness.tool` span; stale-wake fencing; sensitive-event/content-free telemetry; full race/crash matrix on all backends. |
+| R12 | **Surface completion** | Complete full-session watch, remaining live execution snapshot updates and outcome-ready visibility, event catalog/order/filtering, telemetry, public exports, backend parity, hosted-control/convenience documentation, remove scaffold code including the S4 fake client, rename the sole implementation from `runtime2/` to `runtime/`, update imports/tests, and delete `runtime2.md`. | Snapshot/event gap; attach during active effect with live/durable divergence for both frames and checkpoints; restored effect-pending exposing reduced `streamingMessage`; live partial precedence over durable reduction; outcome-ready, waiting/yielded/terminal states; no replay of old message or tool lifecycle; recovered turn brackets balanced by turn id across deadline yields and reopened on the next pass; close before tool-effect admission creates no raw `pi.harness.tool` span; stale-wake fencing; sensitive-event/content-free telemetry; full race/crash matrix on all backends. |
 | P1 | **Protocol schemas** | Future work after the internal harness is complete: define shared TypeBox schemas for serializable pi-ai and harness protocol data, derive the corresponding TypeScript types from those schemas, and reuse them across client/server protocol boundaries. Validation runs only on untrusted wire input and never inside Session, Storage, operation procedures, or in-process extensions. | Schema/type parity, accepted and rejected client/server payloads, protocol round trips, and no validators or schema construction on internal storage paths. |
 
 # Part 9 — Invariants and tests
@@ -3523,7 +3636,7 @@ Operations:
 17. At most one operation is open per lane. Two is corruption.
 18. `overflowRecoveryUsed` is `true` only after overflow compaction. A transition that adds projecting conversational input or tool results and requires an assistant writes `false`; an unprojected custom write preserves it.
 19. **The settlement transaction that commits a response with `stopReason: "aborted"` must, in that same transaction, write an operation state with `control.status === "cancel_requested"`.** The invariant is scoped to the committing transaction — later terminal cleanup or forks may remove the state without violating it. Providers must comply with the harness-owned signal contract; violation is corruption.
-20. Restore checks only projection-value existence (§3.3, §4.4); committed internal values are trusted, and every other named value is dereferenced and checked by the procedure that consumes it. Live phase/effect-identity checks on the lane line remain concurrency fences. `pi.lane.lastResult` never determines an open operation's next procedure.
+20. Attachment separates projection restore, public-state hydration, and drive consumption (§3.3, §4.4). Committed internal objects are trusted, but every required reference represented publicly must exist with the expected address/kind/entry-role relationship before a harness is returned. Optional frame/checkpoint absence is legal. Drive-only references remain consumption-time checks. Live phase/effect-identity checks on the lane line remain concurrency fences. `pi.lane.lastResult` never determines an open operation's next procedure.
 21. At most one terminal transaction ever commits per operation. A task mutation that finds its operation values absent raises internal `OperationEnded`; the task stops without writing and resolves from `pi.lane.lastResult` (§4.9).
 22. At most one `ActiveOperation` drive pass exists per lane. Acceptance and taskless `requestAbort` never install one. A matching `drive` installs it before releasing the lane mutation line; another matching drive joins that pass, and a stale id starts nothing. Every pass's outer `finally` removes it in a no-write lane job only after final local observation; external finalization retains and signals it until that path runs. Each newly installed pass invokes `before_drive` once after cancellation/deadline checks; joiners do not. `starting + cancel_requested` invokes neither `before_drive` nor `before_run`.
 23. The §4.2 `assertOpen()` catalog is complete. Every listed hook/provider/tool/timer integration checks immediately before invocation with no yield between them; no unlisted code checks the operation gate. Preparation stays before the check, and admitted asynchronous provider setup/delegation are continuations of the same operation owning `EffectGate.signal`.
@@ -3537,6 +3650,10 @@ Operations:
 31. Scalar assistant/deferred state is the sole restart authority for streamed partials. One effect-pending response id constructs exactly one `pendingAssistantFrames(operationId, responseEntryId)` address; every element is an exported pi-ai `AssistantMessageFrame`; frame order equals provider event order; terminal `done`/`error` events are never stored; frames never establish provider completion or suppress unknown-outcome recovery.
 32. Every final or synthetic response settlement — normal, recovery, cancellation, or external finalization — atomically deletes its exact frame list. Idle forks contain no frame lists. A restored partial may appear in `streamingMessage` but never in `transcript` before settlement.
 33. The provider loop never awaits storage per frame; frame appends are enqueued synchronously in provider-event order, and awaiting the latest frame-write promise at stream settlement implies every accepted append completed.
+34. Successful attachment publishes no incomplete lane. `open` and snapshot status are advisory observations; a later drive rereads and fences durable state. `blocked` is phase-aware and never prevents identity-free progress. Attachment never reports `running`.
+35. A first lane-watch snapshot plus its buffered events has no gap or duplicate and replays no pre-attachment lifecycle. Event enqueue binds the recipient set and emitting Context immediately; a delayed watcher receives the object-identical source Context, never its start Context.
+36. Shared harness/lane/Session/SessionTree receivers retain no invocation Context and expose no receiver-level telemetry default. Concurrent calls preserve independent telemetry and cancellation lineage. Context and its values are neither durable operation data nor serialized business arguments. RPC cancel/disconnect reaches only the matching invocation through `context.abortSignal` and never becomes durable cancellation.
+37. Automatic mode never returns `action_required`. Manual mode leaves no public execution promise invisibly parked: it reports the current action, same-operation observers see that action without releasing it, and only `executeAction(context)`/`runToCompletion(context)` advance it.
 
 ## 9.2 Race catalog
 
@@ -3568,11 +3685,17 @@ Each durable mutation race has exactly two durable histories. Process-local owne
 | `requestAbort` vs parked ordinary breakpoint | cancellation rejects the interruptible barrier with `AbortRequested`; the ordinary statement after it does not run, and reconciliation proceeds after the lane mutation |
 | drive deadline vs next ordinary effect | yield decision first → no effect starts; effect admission first → it may finish after the deadline before the pass can return |
 | `close` vs parked manual action | action rejected unexecuted; durable state is the committed prefix |
+| attachment vs concurrent resume | attachment owns the session before publication; after return, resume rereads durable state and stale `open` remains harmless |
+| watcher registration vs state publication | old snapshot plus the complete buffered event batch; or new snapshot without that old batch |
+| close vs attachment | create completes and publishes a fully open harness; or close/fault rejects attachment without a partial harness |
+| snapshot capture vs resume | capture first yields pre-resume snapshot plus events; resume publication first yields post-transition snapshot |
+| external finalization vs attachment/inspection | finalization is visible as idle/latest result; or attachment sees the still-open operation and later inspection observes publication—no hydrated display state can recreate it |
+| concurrent invocation contexts | each call/event/session write retains its own telemetry parent and abort signal; canceling one does not affect the other or write durable cancellation |
 | `close` vs settlement | settlement abandoned, state stays `effect_pending`; or it committed before the flag was set |
 
 ## 9.3 Test tiers
 
-**Tier A — state and drive.** For every state in Part 3, construct it durably, close, reopen, drive its expected operation id, and assert the next breakpoint, wait, yield, or terminal result. Coverage must include: accepted and restored `starting` with hook output applied once by its consuming transaction; projection-only restore with no branch walk, no list reads, no reference audit, and no re-resolution of captured step configuration — missing referenced values are detected at consumption; assistant intent with no settlement — with no frames, partial frames, and authoritative end-frame content — recovered into synthetic partial settlements below and at the retry cap; settlement followed by each classification branch; every settled stop reason surviving except the two deliberate normalizations; a self-contained deferred step with copied configuration, consecutive polls, repeated equal-handle pending responses, ready and terminal responses, and handle-mismatch normalization into durable failure; every tool state including planned, effect-pending safe/unsafe with and without a checkpoint, outcome-ready, and completed; parallel B/C outcomes staged before A and never replayed after reopen; source-ordered materialization; invocation memos surviving safe replay and dying at outcome staging; a batch where every call terminates; genuine-length synthetic outcomes; every overflow crash position; every navigation state; abort at every position; missing identities; every terminal transaction proving deletion of tool args, memos, checkpoints, frame lists, staged outcomes, and pending payloads; `pi.lane.lastResult`; preserved `pendingNextRun`; representation exclusivity for every reserved id; and every half-completed recovery prefix.
+**Tier A — state and drive.** For every state in Part 3, construct it durably, close, reopen, drive its expected operation id, and assert the next breakpoint, wait, yield, or terminal result. Coverage must include: accepted and restored `starting` with hook output applied once by its consuming transaction; projection restore followed by one compaction-bounded transcript scan and state-directed public hydration, with required public references faulting attachment and optional frame/checkpoint absence remaining legal; drive-only references are still detected at consumption and captured step configuration is not re-resolved; assistant intent with no settlement — with no frames, partial frames, and authoritative end-frame content — recovered into synthetic partial settlements below and at the retry cap; settlement followed by each classification branch; every settled stop reason surviving except the two deliberate normalizations; a self-contained deferred step with copied configuration, consecutive polls, repeated equal-handle pending responses, ready and terminal responses, and handle-mismatch normalization into durable failure; every tool state including planned, effect-pending safe/unsafe with and without a checkpoint, outcome-ready, and completed; parallel B/C outcomes staged before A and never replayed after reopen; source-ordered materialization; invocation memos surviving safe replay and dying at outcome staging; a batch where every call terminates; genuine-length synthetic outcomes; every overflow crash position; every navigation state; abort at every position; missing identities; every terminal transaction proving deletion of tool args, memos, checkpoints, frame lists, staged outcomes, and pending payloads; `pi.lane.lastResult`; preserved `pendingNextRun`; representation exclusivity for every reserved id; and every half-completed recovery prefix.
 
 For each recovery prefix: close, reopen, drive, and compare against uninterrupted recovery. Invoking recovery twice from the initial prefix is **not** sufficient. Every operation kind also covers accept → close before first drive → reopen → drive.
 
@@ -3585,10 +3708,12 @@ One corruption assertion constructs an `aborted` response with running control d
 **Cross-cutting:**
 
 - **Backend conformance.** One suite, three backends, identical results — including checkpoint scalar set/replace/delete, list append/page/whole-key-delete with identical sequence cursors and reduced frame sequences, and torn-transaction handling exposing no list element. Memory/SQLite retain one current checkpoint; JSONL may retain superseded bytes physically but compaction produces identical logical state, including preserved list cursors. Internal values are not cloned or shape-validated. Write-order assertions use the instrumented decorator, never a durable log.
-- **Drive equivalence.** The same scenario in automatic and manual breakpoint mode must produce byte-identical durable state. Convenience calls and explicit `accept`/`drive`/`requestAbort` compositions must likewise produce byte-identical durable state and equivalent events/results.
+- **Attachment and watch.** Construct every durable phase directly and assert advisory `resumable`/`blocked`/`aborting` classification, exact required/optional hydration, no partial harness on corruption, no attachment effects, memory-only inspection/watch, complete first snapshots, live-over-durable partial precedence, no historical lifecycle replay, and both registration/publication orders without gaps or duplicates.
+- **Drive equivalence.** The same scenario in automatic and manual breakpoint mode must produce byte-identical durable state. Convenience calls and explicit `accept`/`drive`/`requestAbort` compositions must likewise produce byte-identical durable state and equivalent events/results. Manual calls report `action_required`; `executeAction(context)` advances one barrier and `runToCompletion(context)` consumes action branches.
 - **Breakpoint catalog.** Each runtime slice specifies and tests the stable `ActionInfo.kind` values and JSON-safe details for the boundaries it introduces. A parked operation performs no following procedure work; abort rejects interruptible ordinary barriers into reconciliation but leaves cancellation barriers parked; close/fault rejects every barrier.
 - **Effect-start gate.** Cover every item in §4.2's complete catalog and assert that no other path calls `assertOpen()`. At each listed integration, force both orders of abort versus operation admission: the check and invocation are adjacent, abort-first invokes nothing, and admission-first gives the complete operation `EffectGate.signal`. Provider tests assert that request preparation precedes the check and that the same signal reaches Models auth/lazy/provider work. Hook tests treat each aggregate pipeline as one admitted unit. A cancelled drive must enter reconciliation without invoking `before_drive` or `before_run`.
-- **Signal ownership.** No public surface accepts a signal; a `before_request` patch carrying one has it stripped. Assert by type and by test.
+- **Invocation context.** Public operations receive trailing Context; hooks/listeners/callbacks and Session reads/writes preserve it. Cross concurrent calls on one shared receiver and assert independent telemetry/cancellation lineage. Buffered delivery retains the object-identical emitting Context. Context is never written durably. An RPC cancel/disconnect aborts only its reconstructed request signal, and invocation cancellation never writes `cancel_requested`.
+- **Signal ownership.** No public surface accepts a standalone operation signal; invocation cancellation arrives through `Context.abortSignal`, while operation-owned effect signals remain harness-controlled. A `before_request` patch carrying a signal has it stripped. Assert by type and by test.
 - **Ledger completeness.** Every settled attempt commits its response and its usage. Failed structural attempts retain their cost. `getStats()` equals the ledger sum after every commit. A fork starts at zero.
 - **Query-plan guards.** `EXPLAIN QUERY PLAN` for `scanBranch` matches §1.7 exactly — no `entries` scan or temporary ordering b-tree. Segment tests assert copied rows are bounded by the newest compaction interval.
 - **Transaction discipline.** Assert every SQLite transaction opens with `BEGIN IMMEDIATE`. Add a regression test that reads, lets a second connection commit, then writes — it must succeed, and would fail with `database is locked` under a deferred `BEGIN`.
@@ -3608,8 +3733,12 @@ One corruption assertion constructs an `aborted` response with running control d
 | **Session** | One conversation: tree, values/lists, ledger, lanes. |
 | **Lane** | Named cursor into the tree with its own config, queues, and one operation. |
 | **Operation** | One accepted unit of work: run, compaction, or navigation. |
+| **Operation status** | Process-relative observation: `running`, `resumable`, `blocked`, or `aborting`; idle is represented by no current operation. Durable phase/control remains recovery truth. |
+| **Open operation** | One attachment observation for a lane with durable current work. It never reports `running` and is not a reservation. |
+| **Attachment** | Projection restore plus bounded public-state hydration and status classification; it starts no execution. |
+| **Invocation Context** | Immutable explicit telemetry/cancellation lineage for one call. It is never durable state or a shared receiver default. |
 | **Acceptance** | The atomic creation of one durable operation by `accept`; it starts no driver. |
-| **Drive pass** | One process-local ownership span created or joined by `drive`, ending at settlement, a durable wait, or safe yield. |
+| **Drive pass** | One process-local ownership span created or joined by `drive`, ending at settlement, a durable wait, safe yield, or a reported manual action whose continuation remains owned until released. |
 | **Effect** | Anything not pure computation: commit, provider request, tool, hook, timer. |
 | **Repeat-sensitive effect** | One whose repetition is observable outside the harness. |
 | **Operation state** | The complete durable state of one open operation — the `operationState(operationId)` value and restart point after task loss. |

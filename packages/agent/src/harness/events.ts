@@ -33,6 +33,36 @@ export class HarnessEventBus implements Events {
 
 	watch<T>(snapshot: T, filter: (event: HarnessEvent) => boolean): WatchHandle<T> {
 		if (this.closedError !== undefined) throw this.closedError;
+		return this.installWatcher(snapshot, filter);
+	}
+
+	async watchFromSnapshot<T>(
+		capture: () => Promise<T>,
+		filter: (event: HarnessEvent) => boolean,
+	): Promise<WatchHandle<T>> {
+		if (this.closedError !== undefined) throw this.closedError;
+		const watcher = this.installWatcher<T>(undefined, filter);
+		try {
+			watcher.setSnapshot(await capture());
+			return watcher;
+		} catch (error) {
+			watcher.unsubscribe();
+			throw error;
+		}
+	}
+
+	close(error: Error): void {
+		this.closedError ??= error;
+		void this.deliveryTail.finally(() => {
+			this.listeners.clear();
+			this.watchListeners.clear();
+		});
+	}
+
+	private installWatcher<T>(
+		snapshot: T | undefined,
+		filter: (event: HarnessEvent) => boolean,
+	): BufferedEventWatcher<T> {
 		const watcher = new BufferedEventWatcher(snapshot, async (error, event) => {
 			if (event.type === "handler_error") return;
 			const normalized = error instanceof Error ? error : new Error(String(error));
@@ -52,14 +82,6 @@ export class HarnessEventBus implements Events {
 		this.watchListeners.add(watchListener);
 		watcher.setUnsubscribe(() => this.watchListeners.delete(watchListener));
 		return watcher;
-	}
-
-	close(error: Error): void {
-		this.closedError ??= error;
-		void this.deliveryTail.finally(() => {
-			this.listeners.clear();
-			this.watchListeners.clear();
-		});
 	}
 
 	private async deliver(event: HarnessEvent, reportErrors: boolean): Promise<void> {
@@ -86,7 +108,7 @@ export class HarnessEventBus implements Events {
 }
 
 class BufferedEventWatcher<T> implements WatchHandle<T> {
-	readonly snapshot: T;
+	snapshot: T;
 	private readonly onError: (error: unknown, event: HarnessEvent) => void | Promise<void>;
 	private buffer: HarnessEvent[] = [];
 	private listener: EventListener | undefined;
@@ -94,9 +116,13 @@ class BufferedEventWatcher<T> implements WatchHandle<T> {
 	private deliveryTail: Promise<void> = Promise.resolve();
 	private state: "buffering" | "started" | "unsubscribed" = "buffering";
 
-	constructor(snapshot: T, onError: (error: unknown, event: HarnessEvent) => void | Promise<void>) {
-		this.snapshot = snapshot;
+	constructor(snapshot: T | undefined, onError: (error: unknown, event: HarnessEvent) => void | Promise<void>) {
+		this.snapshot = snapshot as T;
 		this.onError = onError;
+	}
+
+	setSnapshot(snapshot: T): void {
+		this.snapshot = snapshot;
 	}
 
 	start(listener: EventListener): void {

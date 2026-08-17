@@ -1,10 +1,10 @@
 # Invocation Context and Telemetry Design Notes
 
-> **Status:** Design input, not a normative contract or implementation handoff. The context primitives described here match `src/harness/context.ts`; propagation through the harness and the remaining runtime decisions are still design work. Fold the accepted design into `harness.md` when that work lands. `telemetry-schema.md` remains the generated reference for span names and attributes.
+> **Status:** Design input, not a normative contract. The context primitives and required trailing `Context` parameters have landed across the harness, sessions, execution capabilities, and hosted-harness adapters. Local propagation is scaffolding rather than proof of complete cancellation or telemetry semantics: most runtime spans, drive ownership, RPC cancellation, and cross-process trace propagation remain design or implementation work. Fold accepted final behavior into `harness.md`. `telemetry-schema.md` remains the generated reference for span names and attributes.
 
 ## Goal
 
-`Session`, `SessionTree`, `AgentLane`, and `AgentHarness` must receive invocation-scoped control data explicitly. The same receiver may serve concurrent local callers or RPC clients, so it cannot retain a mutable or default caller context.
+`Session`, `SessionTree`, `AgentLane`, and `AgentHarness` receive invocation-scoped control data explicitly through a required trailing `Context` parameter. The same receiver may serve concurrent local callers or RPC clients, so it cannot retain a mutable or default caller context.
 
 The invocation context must solve two related problems without `AsyncLocalStorage`:
 
@@ -68,7 +68,7 @@ Every invocation supplies its own context. This prevents concurrent callers from
 
 A process-local object representing one ongoing invocation may retain its derived context. Examples are an active drive task or an event subscription. This is different from storing a default context on the shared harness or session receiver.
 
-`AgentHarnessOptions.telemetryContext` must disappear. A harness-level default cannot represent two concurrent callers with different parents.
+`AgentHarnessOptions.telemetryContext` has been removed. A harness-level default cannot represent two concurrent callers with different parents.
 
 ## Existing typed telemetry remains authoritative
 
@@ -81,21 +81,20 @@ The design retains:
 - `startAiSpan()`, `startHarnessSpan()`, and `createTypedSpanStarter()`;
 - adapter conformance behavior.
 
-Starting a harness span must derive the invocation context passed to lower work:
+`startAiSpan()` and `startHarnessSpan()` package span derivation by giving their callbacks both the typed span and a derived invocation context:
 
 ```ts
 return startHarnessSpan(
-	context.telemetryContext,
 	"pi.harness.run",
 	attributes,
-	async (span) => {
-		const runContext = withTelemetryContext(span, context);
+	async (span, runContext) => {
 		return runDrive(runContext);
 	},
+	context,
 );
 ```
 
-A helper may package this pattern by giving its callback both the typed span and the derived invocation context. It still delegates to the existing `TelemetryContext.startSpan()` contract.
+The helpers delegate to `context.telemetryContext.startSpan()` and install the callback-owned span in a child context with `withTelemetryContext(span, context)`. Lower work must receive that child context rather than the parent invocation context.
 
 Do not mutate a context to install an active span. Do not use a process-global or receiver-global current span.
 
@@ -107,8 +106,8 @@ Explicit propagation supports concurrent sibling calls:
 await parent.telemetryContext.startSpan({ name: "caller" }, async (callerSpan) => {
 	const callerContext = withTelemetryContext(callerSpan, parent);
 	await Promise.all([
-		laneA.drive(callerContext, optionsA),
-		laneB.drive(callerContext, optionsB),
+		laneA.drive(optionsA, callerContext),
+		laneB.drive(optionsB, callerContext),
 	]);
 });
 ```
@@ -119,21 +118,19 @@ Tests must cross concurrent branches deliberately so accidental receiver-level c
 
 ## Callbacks, hooks, and events
 
-Host-local callbacks invoked as part of an operation receive the current invocation context:
+Host-local callbacks invoked as part of an operation receive the current invocation context in their declared trailing position:
 
 ```ts
 handler(event, context);
-tool.execute(context, invocation, arguments);
+tool.execute(toolCallId, params, onUpdate, toolContext, invocation, context);
 mutation(mutator, context);
 ```
 
-A hook span derives a child context before invoking the hook. Hook-triggered lower work therefore remains under `pi.harness.hook`.
+Current propagation preserves context through callbacks and gives `before_tool` and `after_tool` handlers a child context derived from `pi.harness.hook`. Extending that span behavior to every hook type remains work; handlers without an installed hook span currently receive the operation context directly.
 
-Events preserve the context that caused each event. A buffered event watcher must buffer `{ event, context }`, not only `event`; otherwise delayed delivery is parented to the wrong caller. Each listener invocation starts `pi.harness.event_handler` from the event context and passes the resulting child context to the listener.
+Within the harness process, events preserve the context that caused each event, and buffered event watchers store `{ event, context }` rather than only `event`. Starting `pi.harness.event_handler` from that event context and passing its child context to each listener remains work. Event registration itself is host-local configuration and has no operation parent.
 
-Event registration itself is host-local configuration and has no operation parent. Event delivery has the operation parent.
-
-Session commits similarly start `pi.session.write` from the invocation that issued the transaction. The mutation callback and its sole commit continue to use the same explicit invocation lineage unless they deliberately derive child spans.
+Session mutation callbacks and commits receive the same explicit invocation context. Starting `pi.session.write` from the committing invocation and passing its child context through the storage commit remains work.
 
 ## Drive execution and joiners
 
@@ -223,25 +220,19 @@ RPC cancellation and telemetry propagation are independent control-plane channel
 
 ## Interface migration scaffolding
 
-`TODO_CONTEXT` is a temporary migration marker, not a semantic root. Use it where a caller has not yet been taught which context to propagate. `BACKGROUND_CONTEXT` means intentionally start without a caller.
+Receiver methods now use a required trailing `Context`. Concrete implementations, calls, callback adapters, and object-literal façades have been migrated rather than relying only on interface assignability.
 
-TypeScript permits an implementation method to accept fewer parameters than its interface. Therefore changing public interfaces alone does not find every implementation or concrete-class call. The migration must:
+`TODO_CONTEXT` remains a temporary migration marker, not a semantic root. Current uses cluster at unresolved transport and worker boundaries that cannot yet reconstruct a caller context, notably Pi protocol request ingress and worker RPC ingress. `BACKGROUND_CONTEXT` means intentionally start without a caller.
 
-- update concrete method signatures explicitly, even when they temporarily ignore `_context`;
-- inventory concrete calls, callback adapters, and object-literal façades;
-- grep or check `TODO_CONTEXT` separately;
-- eventually remove every unapproved `TODO_CONTEXT` use.
-
-This migration can make the repository compile before semantics are implemented. Compilation does not prove telemetry or cancellation correctness.
+Continue to inventory `TODO_CONTEXT` separately. Replace each transport-boundary use only when the boundary can construct a request-local cancellation context and telemetry parent; substituting `BACKGROUND_CONTEXT` would hide unfinished propagation. Compilation still does not prove telemetry or cancellation correctness.
 
 ## Required tests for the later handoff
 
-- immutable typed-value layering, shadowing, and key isolation;
-- empty roots expose an undefined abort signal and no-op telemetry;
-- parent/child abort composition and sibling cancellation isolation;
+Current tests cover immutable typed-value layering and shadowing, distinct empty roots, parent/child abort composition, sibling cancellation isolation, and tool-hook child parentage. Remaining handoff coverage includes:
+
 - crossed concurrent telemetry branches on one shared receiver;
-- nested hook, tool, event-handler, and session-write parentage;
-- buffered events retain their emitting context;
+- every hook type, tools, event handlers, and session writes receive the intended child context;
+- buffered events retain their emitting context under delayed delivery;
 - no receiver-level telemetry default;
 - pre-aborted invocation starts no external effect;
 - installer and joiner cancellation isolation;
@@ -253,9 +244,14 @@ This migration can make the repository compile before semantics are implemented.
 - event delivery reconstructs source trace metadata;
 - missing/malformed trace carriers degrade to no-op/root telemetry without affecting business behavior.
 
+## Resolved migration decisions
+
+- Receiver methods use one required trailing `Context`.
+- Shared harness, lane, session, and tree receivers retain no default invocation context.
+- `Context`, `AbortSignal`, and `TelemetryContext` objects are never serialized across RPC boundaries.
+
 ## Open decisions before `harness.md`
 
-- context argument position on receiver methods;
 - installer-owned, lease-owned, or harness-owned drive execution;
 - whether telemetry links are required for joiners;
 - trace-carrier adapter ownership and shape;

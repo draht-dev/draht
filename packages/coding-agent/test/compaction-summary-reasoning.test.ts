@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type CompactionPreparation,
 	compact,
+	completeSummarization,
 	generateSummary,
 	generateSummaryWithUsage,
 } from "../src/core/compaction/index.ts";
@@ -100,6 +101,19 @@ describe("generateSummary reasoning options", () => {
 
 		const sessionIds = requestOptions.map((options) => options?.sessionId);
 		expect(sessionIds[0]).not.toBe(sessionIds[1]);
+	});
+
+	it("honors a caller-supplied routing session without prompt caching", async () => {
+		await completeSummarization(
+			createModel(false),
+			{ systemPrompt: "Summarize", messages: [] },
+			{ sessionId: "current-routing-session", cacheRetention: "long" },
+		);
+
+		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
+			sessionId: "current-routing-session",
+			cacheRetention: "none",
+		});
 	});
 
 	it("does not set reasoning when thinking is off", async () => {

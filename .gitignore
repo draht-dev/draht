@@ -47,6 +47,7 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+packages/agent/docs/extensions/pi-server-artifact/index.md
 
 # draht-tools living codebase map (regenerated on demand by `draht-tools map-graph` / `map-serve`)
 .planning/codebase/MAP.json

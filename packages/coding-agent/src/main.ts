@@ -8,7 +8,7 @@
 import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual, supportsMax, supportsXhigh } from "@draht/ai";
 import chalk from "chalk";
-import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
+import { type Args, type Mode, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
 import { runAttachMode } from "./cli/attach-mode.ts";
 import {
 	type AuthCheckResult,
@@ -450,7 +450,7 @@ function forkSessionOrExit(sourcePath: string, cwd: string, sessionDir?: string,
 	}
 }
 
-async function createSessionManager(
+export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	sessionDir: string | undefined,
@@ -810,8 +810,8 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 	}
 	if (parsed.name !== undefined) {
-		const name = parsed.name.trim();
-		if (!name) {
+		const name = normalizeSessionName(parsed.name);
+		if (name === undefined) {
 			console.error(chalk.red("Error: --name requires a non-empty value"));
 			process.exit(1);
 		}

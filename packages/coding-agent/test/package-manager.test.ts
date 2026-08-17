@@ -2244,6 +2244,25 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(runCommandSpy).not.toHaveBeenCalled();
 		});
 
+		it("should skip npm updates when the installed version is newer than the registry version", async () => {
+			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			mkdirSync(installedPath, { recursive: true });
+			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "2.0.0" }));
+			settingsManager.setProjectPackages(["npm:example"]);
+
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.9.0"');
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.update("npm:example");
+
+			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
+				"npm",
+				["view", "example", "version", "--json"],
+				expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+			);
+			expect(runCommandSpy).not.toHaveBeenCalled();
+		});
+
 		it("should migrate legacy user npm installs into the managed npm root during update", async () => {
 			const legacyRoot = join(tempDir, "legacy-global", "node_modules");
 			const legacyPath = join(legacyRoot, "legacy-pkg");
@@ -2502,6 +2521,18 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 					scope: "project",
 				},
 			]);
+		});
+
+		it("should not report npm updates when the installed version is newer than the registry version", async () => {
+			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			mkdirSync(installedPath, { recursive: true });
+			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "2.0.0" }));
+			settingsManager.setProjectPackages(["npm:example"]);
+
+			vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.9.0"');
+
+			const updates = await packageManager.checkForAvailableUpdates();
+			expect(updates).toEqual([]);
 		});
 
 		it("should skip pinned packages when checking for updates", async () => {

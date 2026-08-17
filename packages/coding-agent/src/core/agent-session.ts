@@ -1863,7 +1863,17 @@ export class AgentSession {
 
 	/**
 	 * Manually compact the session context.
-	 * Aborts current agent operation first.
+	 *
+	 * This is the manual entry point used by `/compact`, RPC, and extensions. It is
+	 * separate from automatic threshold/overflow compaction, which enters through
+	 * `_checkCompaction()` and `_runAutoCompaction()`. After preparation and the
+	 * `session_before_compact` hook, both paths call the lower-level `compact()`
+	 * function imported from `./compaction/index.ts`, unless the hook cancels or
+	 * supplies a custom result.
+	 *
+	 * Aborts the current agent operation first. Manual compaction never retries or
+	 * continues the interrupted agent turn.
+	 *
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
@@ -1929,7 +1939,7 @@ export class AgentSession {
 				usage = extensionCompaction.usage;
 				details = extensionCompaction.details;
 			} else {
-				// Generate compaction result
+				// Shared default summary generator, also used by automatic compaction.
 				const result = await compact(
 					preparation,
 					requestModel,
@@ -2027,16 +2037,25 @@ export class AgentSession {
 	}
 
 	/**
-	 * Check if compaction is needed and run it.
-	 * Called after agent_end and before prompt submission.
+	 * Dispatch automatic compaction after `agent_end` or before prompt submission.
+	 * Manual compaction does not call this method; it enters through `compact()`.
 	 *
-	 * Two cases:
-	 * 1. Recoverable failure: LLM returned context overflow or stopped below its desired output limit;
-	 *    remove the assistant message, compact, and auto-retry once
-	 * 2. Threshold: Context over threshold, compact, NO auto-retry (user continues manually)
+	 * Automatic cases:
+	 * 1. Overflow with retry: a context-overflow error or recoverable length stop;
+	 *    remove the failed assistant message, compact, and retry the turn once.
+	 * 2. Overflow without retry: a successful response exceeded the configured
+	 *    context window; compact but preserve the completed response.
+	 * 3. Threshold without retry: valid or estimated context usage crossed the
+	 *    configured threshold; compact without retrying the completed response.
+	 *
+	 * Each case calls `_runAutoCompaction()`. After preparation and the
+	 * `session_before_compact` hook, that method calls the lower-level `compact()`
+	 * function imported from `./compaction/index.ts`, unless the hook cancels or
+	 * supplies a custom result.
 	 *
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
+	 * @returns Whether the post-run loop should call `agent.continue()` for overflow recovery or queued messages
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
@@ -2064,15 +2083,15 @@ export class AgentSession {
 			return false;
 		}
 
-		// Case 1: Recoverable failure. Explicit/silent context overflow still uses context metadata.
+		// Automatic cases 1 and 2: context overflow.
 		// A length stop is recoverable when output ended below the model's original desired limit,
 		// independent of the configured context size or any context-clamped provider request limit.
-		// A successful response over the configured window should compact but must not retry: the
-		// assistant answer already completed and agent.continue() cannot continue from an assistant.
 		const recoverableLength = sameModel && isRecoverableLength(assistantMessage, this.model?.maxTokens ?? 0);
 		if (sameModel && (isContextOverflow(assistantMessage, contextWindow) || recoverableLength)) {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
+			// Case 2: the response completed successfully. Compact, but do not retry because
+			// agent.continue() cannot continue from a completed assistant response.
 			if (!willRetry) {
 				return await this._runAutoCompaction("overflow", false);
 			}
@@ -2090,9 +2109,9 @@ export class AgentSession {
 				return false;
 			}
 
+			// Case 1: remove the failed or truncated message from agent state, compact, and
+			// retry once. The message remains in session history but is excluded from retry context.
 			this._overflowRecoveryAttempted = true;
-			// Remove the failed or truncated message from agent state. It remains in session history,
-			// but must not be included in the compact-and-retry context.
 			const messages = this.agent.state.messages;
 			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 				this.agent.state.messages = messages.slice(0, -1);
@@ -2100,7 +2119,7 @@ export class AgentSession {
 			return await this._runAutoCompaction("overflow", willRetry);
 		}
 
-		// Case 2: Threshold - context is getting large
+		// Case 3: threshold compaction without retry.
 		// For error messages or all-zero usage messages, estimate from the last valid response.
 		// This ensures sessions that hit persistent API errors (e.g. 529) or malformed zero-usage
 		// responses can still compact and do not reset context accounting.
@@ -2132,7 +2151,14 @@ export class AgentSession {
 	}
 
 	/**
-	 * Internal: Run auto-compaction with events.
+	 * Execute threshold or overflow compaction. Manual compaction uses
+	 * `AgentSession.compact()` instead. Both paths call the lower-level `compact()`
+	 * function imported from `./compaction/index.ts` after preparation and extension
+	 * interception.
+	 *
+	 * @param reason Automatic trigger selected by `_checkCompaction()`
+	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
+	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
@@ -2201,7 +2227,7 @@ export class AgentSession {
 				usage = extensionCompaction.usage;
 				details = extensionCompaction.details;
 			} else {
-				// Generate compaction result
+				// Shared default summary generator, also used by manual compaction.
 				const compactResult = await compact(
 					preparation,
 					requestModel,

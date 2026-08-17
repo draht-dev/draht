@@ -1,4 +1,5 @@
 import { type Static, Type } from "typebox";
+import type { Context } from "../context.ts";
 import type { AgentHarnessTool } from "../types.ts";
 import { getOrThrow } from "../types.ts";
 import { executeShellWithCapture, type ShellCaptureProgress } from "../utils/shell-output.ts";
@@ -29,8 +30,8 @@ export interface BashExecution {
 
 export type BashPrepare<TContext extends ExecutionToolContext = ExecutionToolContext> = (
 	execution: BashExecution,
-	context: TContext,
-	signal?: AbortSignal,
+	toolContext: TContext,
+	context: Context,
 ) => void | Promise<void>;
 
 export interface BashToolOptions<TContext extends ExecutionToolContext = ExecutionToolContext> {
@@ -56,16 +57,16 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
 		label: "bash",
 		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
 		parameters: bashSchema,
-		async execute(_toolCallId, { command, timeout }, signal, onUpdate, context) {
+		async execute(_toolCallId, { command, timeout }, onUpdate, toolContext, _invocation, context) {
 			validateTimeout(timeout);
-			const { env } = context;
+			const { env } = toolContext;
 			const execution: BashExecution = {
 				command: options?.commandPrefix ? `${options.commandPrefix}\n${command}` : command,
 				cwd: env.cwd,
 				env: {},
 				inheritEnv: true,
 			};
-			await options?.prepare?.(execution, context, signal);
+			await options?.prepare?.(execution, toolContext, context);
 			let getLatestProgress: (() => ShellCaptureProgress) | undefined;
 			let updateTimer: ReturnType<typeof setTimeout> | undefined;
 			let updateDirty = false;
@@ -107,18 +108,22 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
 			onUpdate?.({ content: [], details: undefined });
 			try {
 				const capture = getOrThrow(
-					await executeShellWithCapture(env, execution.command, {
-						cwd: execution.cwd,
-						env: execution.env,
-						inheritEnv: execution.inheritEnv,
-						timeout,
-						abortSignal: signal,
-						returnExecutionErrors: true,
-						onChunk: (_chunk, getProgress) => {
-							getLatestProgress = getProgress;
-							scheduleOutputUpdate();
+					await executeShellWithCapture(
+						env,
+						execution.command,
+						{
+							cwd: execution.cwd,
+							env: execution.env,
+							inheritEnv: execution.inheritEnv,
+							timeout,
+							returnExecutionErrors: true,
+							onChunk: (_chunk, getProgress) => {
+								getLatestProgress = getProgress;
+								scheduleOutputUpdate();
+							},
 						},
-					}),
+						context,
+					),
 				);
 				clearUpdateTimer();
 				getLatestProgress = () => capture;

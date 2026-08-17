@@ -11,7 +11,6 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "@draht/ai";
-import type { TelemetryContext } from "@draht/telemetry";
 import type { AgentMessage, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
 import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
@@ -623,7 +622,6 @@ export interface AgentHarnessOptions<TContext extends object | undefined = objec
 	drive?: "automatic" | "manual";
 	toProviderMessages?: (messages: AgentMessage[], context: Context) => Message[] | Promise<Message[]>;
 	entryProjectors?: Record<string, EntryProjector>;
-	telemetryContext?: TelemetryContext;
 }
 
 export interface AgentLane {

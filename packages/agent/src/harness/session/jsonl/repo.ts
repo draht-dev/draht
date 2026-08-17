@@ -103,11 +103,11 @@ export class JsonlSessionRepo
 				],
 				context,
 			);
-			const info = fileValue(await this.fileSystem.fileInfo(path), `Failed to read session ${path}`);
+			const info = fileValue(await this.fileSystem.fileInfo(path, context), `Failed to read session ${path}`);
 			return this.publishOpenSession(metadataFromHeader(header, path, info.mtimeMs), storage, key);
 		} catch (error) {
 			await storage?.close(context).catch(() => undefined);
-			if (path !== undefined) await this.fileSystem.remove(path, { force: true });
+			if (path !== undefined) await this.fileSystem.remove(path, { force: true }, context);
 			throw error;
 		} finally {
 			this.pendingCreates.delete(key);
@@ -135,29 +135,34 @@ export class JsonlSessionRepo
 			options.cwd === undefined
 				? undefined
 				: fileValue(
-						await this.fileSystem.absolutePath(options.cwd),
+						await this.fileSystem.absolutePath(options.cwd, context),
 						`Failed to resolve session cwd ${options.cwd}`,
 					);
 		const root = await this.root(context);
-		if (!fileValue(await this.fileSystem.exists(root), `Failed to check sessions root ${root}`)) return [];
+		if (!fileValue(await this.fileSystem.exists(root, context), `Failed to check sessions root ${root}`)) return [];
 		const directories =
-			cwd === undefined ? await this.sessionDirectories(root) : [await this.sessionDirectory(cwd, context)];
+			cwd === undefined ? await this.sessionDirectories(root, context) : [await this.sessionDirectory(cwd, context)];
 		const metadata: JsonlSessionMetadata[] = [];
-		for (const directory of directories) metadata.push(...(await this.listDirectory(directory, cwd)));
+		for (const directory of directories) metadata.push(...(await this.listDirectory(directory, cwd, context)));
 		return metadata.sort(
 			(left, right) =>
 				right.createdAt - left.createdAt || left.id.localeCompare(right.id) || left.cwd.localeCompare(right.cwd),
 		);
 	}
 
-	async delete(metadata: JsonlSessionMetadata, _context: Context): Promise<void> {
+	async delete(metadata: JsonlSessionMetadata, context: Context): Promise<void> {
 		this.assertOpen();
 		const key = this.sessionKey(metadata.cwd, metadata.id);
 		if (this.openSessions.has(key)) throw new Error(`Session is open: ${metadata.id}`);
-		if (!fileValue(await this.fileSystem.exists(metadata.path), `Failed to check session ${metadata.path}`)) {
+		if (
+			!fileValue(await this.fileSystem.exists(metadata.path, context), `Failed to check session ${metadata.path}`)
+		) {
 			throw new Error(`Session file does not exist: ${metadata.path}`);
 		}
-		fileValue(await this.fileSystem.remove(metadata.path), `Failed to delete session ${metadata.path}`);
+		fileValue(
+			await this.fileSystem.remove(metadata.path, undefined, context),
+			`Failed to delete session ${metadata.path}`,
+		);
 	}
 
 	async fork(
@@ -198,11 +203,11 @@ export class JsonlSessionRepo
 				snapshot,
 				context,
 			);
-			const info = fileValue(await this.fileSystem.fileInfo(path), `Failed to read session ${path}`);
+			const info = fileValue(await this.fileSystem.fileInfo(path, context), `Failed to read session ${path}`);
 			return this.publishOpenSession(metadataFromHeader(header, path, info.mtimeMs), storage, destinationKey);
 		} catch (error) {
 			await storage?.close(context).catch(() => undefined);
-			if (path !== undefined) await this.fileSystem.remove(path, { force: true });
+			if (path !== undefined) await this.fileSystem.remove(path, { force: true }, context);
 			throw error;
 		} finally {
 			this.pendingCreates.delete(destinationKey);
@@ -221,25 +226,34 @@ export class JsonlSessionRepo
 		cwdInput: string,
 		id: string | undefined,
 		createdAt: number,
-		_context: Context,
+		context: Context,
 	): Promise<{ cwd: string; id: string }> {
 		const destinationId = id ?? uuidv7(createdAt);
-		const cwd = fileValue(await this.fileSystem.absolutePath(cwdInput), `Failed to resolve session cwd ${cwdInput}`);
+		const cwd = fileValue(
+			await this.fileSystem.absolutePath(cwdInput, context),
+			`Failed to resolve session cwd ${cwdInput}`,
+		);
 		return { cwd, id: destinationId };
 	}
 
-	private async listDirectory(directory: string, cwd?: string): Promise<JsonlSessionMetadata[]> {
-		if (!fileValue(await this.fileSystem.exists(directory), `Failed to check sessions directory ${directory}`)) {
+	private async listDirectory(
+		directory: string,
+		cwd: string | undefined,
+		context: Context,
+	): Promise<JsonlSessionMetadata[]> {
+		if (
+			!fileValue(await this.fileSystem.exists(directory, context), `Failed to check sessions directory ${directory}`)
+		) {
 			return [];
 		}
 		const files = fileValue(
-			await this.fileSystem.listDir(directory),
+			await this.fileSystem.listDir(directory, context),
 			`Failed to list sessions directory ${directory}`,
 		).filter((file) => file.kind !== "directory" && file.name.endsWith(".jsonl"));
 		const metadata: JsonlSessionMetadata[] = [];
 		for (const file of files) {
 			const lines = fileValue(
-				await this.fileSystem.readTextLines(file.path, { maxLines: 1 }),
+				await this.fileSystem.readTextLines(file.path, { maxLines: 1 }, context),
 				`Failed to read session header ${file.path}`,
 			);
 			if (lines[0] === undefined) continue;
@@ -252,36 +266,41 @@ export class JsonlSessionRepo
 		return metadata;
 	}
 
-	private async sessionDirectories(root: string): Promise<string[]> {
-		return fileValue(await this.fileSystem.listDir(root), `Failed to list sessions root ${root}`)
+	private async sessionDirectories(root: string, context: Context): Promise<string[]> {
+		return fileValue(await this.fileSystem.listDir(root, context), `Failed to list sessions root ${root}`)
 			.filter((entry) => entry.kind === "directory")
 			.map((entry) => entry.path);
 	}
 
 	private async sessionDirectory(cwd: string, context: Context): Promise<string> {
 		return fileValue(
-			await this.fileSystem.joinPath([await this.root(context), sessionDirectoryName(cwd)]),
+			await this.fileSystem.joinPath([await this.root(context), sessionDirectoryName(cwd)], context),
 			`Failed to resolve sessions directory for ${cwd}`,
 		);
 	}
 
 	private async resolveNewSessionPath(cwd: string, createdAt: number, id: string, context: Context): Promise<string> {
 		const directory = await this.sessionDirectory(cwd, context);
-		await this.assertSessionIdAvailable(directory, id);
-		fileValue(await this.fileSystem.createDir(directory), `Failed to create sessions directory ${directory}`);
+		await this.assertSessionIdAvailable(directory, id, context);
+		fileValue(
+			await this.fileSystem.createDir(directory, undefined, context),
+			`Failed to create sessions directory ${directory}`,
+		);
 		return fileValue(
-			await this.fileSystem.joinPath([directory, sessionFileName(createdAt, id)]),
+			await this.fileSystem.joinPath([directory, sessionFileName(createdAt, id)], context),
 			`Failed to resolve path for session ${id}`,
 		);
 	}
 
-	private async assertSessionIdAvailable(directory: string, id: string): Promise<void> {
-		if (!fileValue(await this.fileSystem.exists(directory), `Failed to check sessions directory ${directory}`))
+	private async assertSessionIdAvailable(directory: string, id: string, context: Context): Promise<void> {
+		if (
+			!fileValue(await this.fileSystem.exists(directory, context), `Failed to check sessions directory ${directory}`)
+		)
 			return;
 
 		const suffix = `_${encodeURIComponent(id)}.jsonl`;
 		const idExists = fileValue(
-			await this.fileSystem.listDir(directory),
+			await this.fileSystem.listDir(directory, context),
 			`Failed to list sessions directory ${directory}`,
 		).some((entry) => entry.kind !== "directory" && entry.name.endsWith(suffix));
 		if (idExists) throw new Error(`Session already exists: ${id}`);
@@ -320,7 +339,9 @@ export class JsonlSessionRepo
 
 	private async loadStorage(metadata: JsonlSessionMetadata, context: Context): Promise<JsonlStorage> {
 		// TODO: normalize discovered legacy v3 sessions on open instead of rejecting them here.
-		if (!fileValue(await this.fileSystem.exists(metadata.path), `Failed to check session ${metadata.path}`)) {
+		if (
+			!fileValue(await this.fileSystem.exists(metadata.path, context), `Failed to check session ${metadata.path}`)
+		) {
 			throw new Error(`Session file does not exist: ${metadata.path}`);
 		}
 		const storage = await JsonlStorage.open(
@@ -345,9 +366,9 @@ export class JsonlSessionRepo
 		}
 	}
 
-	private root(_context: Context): Promise<string> {
+	private root(context: Context): Promise<string> {
 		return this.fileSystem
-			.absolutePath(this.sessionsRootInput)
+			.absolutePath(this.sessionsRootInput, context)
 			.then((result) => fileValue(result, `Failed to resolve sessions root ${this.sessionsRootInput}`));
 	}
 

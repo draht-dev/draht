@@ -31,7 +31,9 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 
 		expect(await repo.list({ cwd: "/other" }, BACKGROUND_CONTEXT)).toEqual([]);
 		expect(await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT)).toEqual([metadata]);
-		const firstLine = getOrThrow(await fileSystem.readTextLines(metadata.path, { maxLines: 1 }))[0];
+		const firstLine = getOrThrow(
+			await fileSystem.readTextLines(metadata.path, { maxLines: 1 }, BACKGROUND_CONTEXT),
+		)[0];
 		expect(JSON.parse(firstLine!)).toEqual({
 			v: 4,
 			kind: "header",
@@ -47,10 +49,13 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 	it("discovers legacy v3 session files without rewriting them", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
-		const directory = getOrThrow(await fileSystem.joinPath(["sessions", "--workspace--"]));
-		getOrThrow(await fileSystem.createDir(directory));
+		const directory = getOrThrow(await fileSystem.joinPath(["sessions", "--workspace--"], BACKGROUND_CONTEXT));
+		getOrThrow(await fileSystem.createDir(directory, undefined, BACKGROUND_CONTEXT));
 		const path = getOrThrow(
-			await fileSystem.absolutePath(getOrThrow(await fileSystem.joinPath([directory, "legacy.jsonl"]))),
+			await fileSystem.absolutePath(
+				getOrThrow(await fileSystem.joinPath([directory, "legacy.jsonl"], BACKGROUND_CONTEXT)),
+				BACKGROUND_CONTEXT,
+			),
 		);
 		const content = `${JSON.stringify({
 			type: "session",
@@ -66,11 +71,11 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 			timestamp: new Date(NOW + 1).toISOString(),
 			message: { role: "user", content: [{ type: "text", text: "hello" }] },
 		})}\n`;
-		getOrThrow(await fileSystem.writeFile(path, content));
+		getOrThrow(await fileSystem.writeFile(path, content, BACKGROUND_CONTEXT));
 
-		const before = getOrThrow(await fileSystem.readTextFile(path));
+		const before = getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT));
 		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
-		const after = getOrThrow(await fileSystem.readTextFile(path));
+		const after = getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT));
 
 		expect(metadata).toMatchObject({
 			id: "legacy",

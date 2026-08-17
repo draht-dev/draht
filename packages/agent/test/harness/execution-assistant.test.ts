@@ -11,6 +11,7 @@ import {
 } from "@draht/ai";
 import { NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
 import { describe, expect, it } from "vitest";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "../../src/harness/context.ts";
 import { type AssistantResponseMetadata, streamHarnessAssistant } from "../../src/harness/execution/assistant.ts";
 import { AbortRequested } from "../../src/harness/execution/effect-gate.ts";
 import type { AgentMessage } from "../../src/types.ts";
@@ -86,77 +87,79 @@ describe("streamHarnessAssistant", () => {
 		let receivedOptions: SimpleStreamOptions | undefined;
 		let responseMetadata: AssistantResponseMetadata | undefined;
 
-		const result = await streamHarnessAssistant(input, {
-			model: requestModel,
-			systemPrompt: "system",
-			thinkingLevel: "high",
-			streamOptions: {
-				transport: "websocket",
-				timeoutMs: 123,
-				maxRetries: 2,
-				maxRetryDelayMs: 456,
-				headers: { authorization: "test" },
-				metadata: { tenant: "one" },
-				cacheRetention: "long",
-				deferred: { window: "1h" },
-			},
-			transformContext: async (context) => {
-				order.push("transform_context");
-				transformedInputWasCopy = context.messages !== originalArray;
-				context.messages.push(user("injected"));
-				return { messages: context.messages, systemPrompt: "transformed system" };
-			},
-			toProviderMessages: (messages) => {
-				order.push("to_provider_messages");
-				convertedMessages = messages;
-				return toProviderMessages(messages);
-			},
-			beforePayload: (payload, seenModel) => {
-				order.push("before_payload");
-				expect(seenModel.id).toBe("resolved");
-				requestContext = payload;
-				return { replaced: true };
-			},
-			afterResponse: async (message, metadata) => {
-				order.push("after_response");
-				responseMetadata = metadata;
-				return { ...message, content: [{ type: "text", text: "transformed" }] };
-			},
-			request: async (context, options) => {
-				order.push("request");
-				receivedContext = context;
-				receivedOptions = options;
-				expect(await options.onPayload?.({ original: true }, { ...requestModel, id: "resolved" })).toEqual({
-					replaced: true,
-				});
-				await options.onResponse?.({ status: 201, headers: { "request-id": "r1" } }, requestModel);
-				const stream = createAssistantMessageEventStream();
-				queueMicrotask(() => {
-					const initial = { ...assistant(""), stopReason: "pending" as const };
-					const partial = { ...initial, content: [{ type: "text" as const, text: "raw" }] };
-					stream.push({ type: "start", partial: initial });
-					stream.push({ type: "text_delta", contentIndex: 0, delta: "raw", partial });
-					stream.push({ type: "done", reason: "stop", message: assistant("raw") });
-				});
-				return stream;
-			},
-			observer: {
-				start(message) {
-					order.push("observer_start");
-					starts.push(message);
+		const result = await streamHarnessAssistant(
+			input,
+			{
+				model: requestModel,
+				systemPrompt: "system",
+				thinkingLevel: "high",
+				streamOptions: {
+					transport: "websocket",
+					timeoutMs: 123,
+					maxRetries: 2,
+					maxRetryDelayMs: 456,
+					headers: { authorization: "test" },
+					metadata: { tenant: "one" },
+					cacheRetention: "long",
+					deferred: { window: "1h" },
 				},
-				update(message) {
-					order.push("observer_update");
-					updates.push(message);
+				transformContext: async (context) => {
+					order.push("transform_context");
+					transformedInputWasCopy = context.messages !== originalArray;
+					context.messages.push(user("injected"));
+					return { messages: context.messages, systemPrompt: "transformed system" };
 				},
-				end(message) {
-					order.push("observer_end");
-					ends.push(message);
+				toProviderMessages: (messages) => {
+					order.push("to_provider_messages");
+					convertedMessages = messages;
+					return toProviderMessages(messages);
+				},
+				beforePayload: (payload, seenModel) => {
+					order.push("before_payload");
+					expect(seenModel.id).toBe("resolved");
+					requestContext = payload;
+					return { replaced: true };
+				},
+				afterResponse: async (message, metadata) => {
+					order.push("after_response");
+					responseMetadata = metadata;
+					return { ...message, content: [{ type: "text", text: "transformed" }] };
+				},
+				request: async (context, options) => {
+					order.push("request");
+					receivedContext = context;
+					receivedOptions = options;
+					expect(await options.onPayload?.({ original: true }, { ...requestModel, id: "resolved" })).toEqual({
+						replaced: true,
+					});
+					await options.onResponse?.({ status: 201, headers: { "request-id": "r1" } }, requestModel);
+					const stream = createAssistantMessageEventStream();
+					queueMicrotask(() => {
+						const initial = { ...assistant(""), stopReason: "pending" as const };
+						const partial = { ...initial, content: [{ type: "text" as const, text: "raw" }] };
+						stream.push({ type: "start", partial: initial });
+						stream.push({ type: "text_delta", contentIndex: 0, delta: "raw", partial });
+						stream.push({ type: "done", reason: "stop", message: assistant("raw") });
+					});
+					return stream;
+				},
+				observer: {
+					start(message) {
+						order.push("observer_start");
+						starts.push(message);
+					},
+					update(message) {
+						order.push("observer_update");
+						updates.push(message);
+					},
+					end(message) {
+						order.push("observer_end");
+						ends.push(message);
+					},
 				},
 			},
-			telemetryContext: NOOP_TELEMETRY_CONTEXT,
-			signal: controller.signal,
-		});
+			withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
+		);
 
 		expect(input).toEqual([user("original")]);
 		expect(transformedInputWasCopy).toBe(true);
@@ -203,30 +206,32 @@ describe("streamHarnessAssistant", () => {
 		const lifecycle: string[] = [];
 		let seenContext: Message[] = [];
 
-		const result = await streamHarnessAssistant([user("prompt")], {
-			model: faux.getModel(),
-			systemPrompt: "system",
-			thinkingLevel: "off",
-			streamOptions: {},
-			toProviderMessages,
-			request: (context, options) => {
-				seenContext = context.messages;
-				return faux.provider.streamSimple(faux.getModel(), context, options);
+		const result = await streamHarnessAssistant(
+			[user("prompt")],
+			{
+				model: faux.getModel(),
+				systemPrompt: "system",
+				thinkingLevel: "off",
+				streamOptions: {},
+				toProviderMessages,
+				request: (context, options) => {
+					seenContext = context.messages;
+					return faux.provider.streamSimple(faux.getModel(), context, options);
+				},
+				observer: {
+					start() {
+						lifecycle.push("start");
+					},
+					update() {
+						lifecycle.push("update");
+					},
+					end() {
+						lifecycle.push("end");
+					},
+				},
 			},
-			observer: {
-				start() {
-					lifecycle.push("start");
-				},
-				update() {
-					lifecycle.push("update");
-				},
-				end() {
-					lifecycle.push("end");
-				},
-			},
-			telemetryContext: NOOP_TELEMETRY_CONTEXT,
-			signal: new AbortController().signal,
-		});
+			BACKGROUND_CONTEXT,
+		);
 
 		expect(seenContext).toEqual([user("prompt")]);
 		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
@@ -239,32 +244,34 @@ describe("streamHarnessAssistant", () => {
 		const events: string[] = [];
 		const final = assistant("complete");
 		let options: SimpleStreamOptions | undefined;
-		const result = await streamHarnessAssistant([user("prompt")], {
-			model: model(),
-			systemPrompt: "system",
-			thinkingLevel: "off",
-			streamOptions: {},
-			toProviderMessages,
-			request: (_context, requestOptions) => {
-				options = requestOptions;
-				const stream = createAssistantMessageEventStream();
-				queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: final }));
-				return stream;
+		const result = await streamHarnessAssistant(
+			[user("prompt")],
+			{
+				model: model(),
+				systemPrompt: "system",
+				thinkingLevel: "off",
+				streamOptions: {},
+				toProviderMessages,
+				request: (_context, requestOptions) => {
+					options = requestOptions;
+					const stream = createAssistantMessageEventStream();
+					queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: final }));
+					return stream;
+				},
+				observer: {
+					start(message) {
+						events.push(`start:${message.stopReason}`);
+					},
+					update() {
+						events.push("update");
+					},
+					end(message) {
+						events.push(`end:${message.stopReason}`);
+					},
+				},
 			},
-			observer: {
-				start(message) {
-					events.push(`start:${message.stopReason}`);
-				},
-				update() {
-					events.push("update");
-				},
-				end(message) {
-					events.push(`end:${message.stopReason}`);
-				},
-			},
-			telemetryContext: NOOP_TELEMETRY_CONTEXT,
-			signal: new AbortController().signal,
-		});
+			BACKGROUND_CONTEXT,
+		);
 
 		expect(result).toBe(final);
 		expect(events).toEqual(["start:stop", "end:stop"]);
@@ -274,30 +281,32 @@ describe("streamHarnessAssistant", () => {
 	it("keeps the raw settlement when cancellation interrupts after_response", async () => {
 		const final = assistant("raw");
 		const ended: AssistantMessage[] = [];
-		const result = await streamHarnessAssistant([user("prompt")], {
-			model: model(),
-			systemPrompt: "system",
-			thinkingLevel: "off",
-			streamOptions: {},
-			toProviderMessages,
-			request: () => {
-				const stream = createAssistantMessageEventStream();
-				queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: final }));
-				return stream;
-			},
-			afterResponse: async () => {
-				throw new AbortRequested(Promise.resolve());
-			},
-			observer: {
-				start() {},
-				update() {},
-				end(message) {
-					ended.push(message);
+		const result = await streamHarnessAssistant(
+			[user("prompt")],
+			{
+				model: model(),
+				systemPrompt: "system",
+				thinkingLevel: "off",
+				streamOptions: {},
+				toProviderMessages,
+				request: () => {
+					const stream = createAssistantMessageEventStream();
+					queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: final }));
+					return stream;
+				},
+				afterResponse: async () => {
+					throw new AbortRequested(Promise.resolve());
+				},
+				observer: {
+					start() {},
+					update() {},
+					end(message) {
+						ended.push(message);
+					},
 				},
 			},
-			telemetryContext: NOOP_TELEMETRY_CONTEXT,
-			signal: new AbortController().signal,
-		});
+			BACKGROUND_CONTEXT,
+		);
 
 		expect(result).toBe(final);
 		expect(ended).toEqual([final]);
@@ -306,31 +315,33 @@ describe("streamHarnessAssistant", () => {
 	it("returns provider error settlements through the same lifecycle", async () => {
 		const final = assistant("provider failed", "error");
 		const events: string[] = [];
-		const result = await streamHarnessAssistant([user("prompt")], {
-			model: model(),
-			systemPrompt: "system",
-			thinkingLevel: "off",
-			streamOptions: {},
-			toProviderMessages,
-			request: () => {
-				const stream = createAssistantMessageEventStream();
-				queueMicrotask(() => stream.push({ type: "error", reason: "error", error: final }));
-				return stream;
+		const result = await streamHarnessAssistant(
+			[user("prompt")],
+			{
+				model: model(),
+				systemPrompt: "system",
+				thinkingLevel: "off",
+				streamOptions: {},
+				toProviderMessages,
+				request: () => {
+					const stream = createAssistantMessageEventStream();
+					queueMicrotask(() => stream.push({ type: "error", reason: "error", error: final }));
+					return stream;
+				},
+				observer: {
+					start(message) {
+						events.push(`start:${message.stopReason}`);
+					},
+					update() {
+						events.push("update");
+					},
+					end(message) {
+						events.push(`end:${message.stopReason}`);
+					},
+				},
 			},
-			observer: {
-				start(message) {
-					events.push(`start:${message.stopReason}`);
-				},
-				update() {
-					events.push("update");
-				},
-				end(message) {
-					events.push(`end:${message.stopReason}`);
-				},
-			},
-			telemetryContext: NOOP_TELEMETRY_CONTEXT,
-			signal: new AbortController().signal,
-		});
+			BACKGROUND_CONTEXT,
+		);
 
 		expect(result).toBe(final);
 		expect(events).toEqual(["start:error", "end:error"]);

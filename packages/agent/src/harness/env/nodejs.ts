@@ -18,6 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import type { Context } from "../context.ts";
 import {
 	type ExecutionEnv,
 	ExecutionError,
@@ -356,19 +357,21 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		this.shellEnv = options.shellEnv;
 	}
 
-	async absolutePath(path: string): Promise<Result<string, FileError>> {
+	async absolutePath(path: string, _context: Context): Promise<Result<string, FileError>> {
 		return ok(resolvePath(this.cwd, path));
 	}
 
-	async joinPath(parts: string[]): Promise<Result<string, FileError>> {
+	async joinPath(parts: string[], _context: Context): Promise<Result<string, FileError>> {
 		return ok(join(...parts));
 	}
 
 	async exec(
 		command: string,
-		options?: ShellExecOptions,
+		options: ShellExecOptions | undefined,
+		context: Context,
 	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
-		if (options?.abortSignal?.aborted) return err(new ExecutionError("aborted", "aborted"));
+		const signal = context.abortSignal;
+		if (signal?.aborted) return err(new ExecutionError("aborted", "aborted"));
 		const timeoutMsResult = resolveTimeoutMs(options?.timeout);
 		if (!timeoutMsResult.ok) return err(timeoutMsResult.error);
 		const timeoutMs = timeoutMsResult.value;
@@ -406,7 +409,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 
 			const settle = (result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>) => {
 				if (timeoutId) clearTimeout(timeoutId);
-				if (options?.abortSignal) options.abortSignal.removeEventListener("abort", onAbort);
+				if (signal) signal.removeEventListener("abort", onAbort);
 				if (child?.pid) this.activeChildPids.delete(child.pid);
 				if (settled) return;
 				settled = true;
@@ -447,11 +450,11 @@ export class NodeExecutionEnv implements ExecutionEnv {
 						}, timeoutMs)
 					: undefined;
 
-			if (options?.abortSignal) {
-				if (options.abortSignal.aborted) {
+			if (signal) {
+				if (signal.aborted) {
 					onAbort();
 				} else {
-					options.abortSignal.addEventListener("abort", onAbort, { once: true });
+					signal.addEventListener("abort", onAbort, { once: true });
 				}
 			}
 
@@ -460,7 +463,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 			child.stdout?.on("data", (chunk: string) => {
 				stdout += chunk;
 				try {
-					options?.onStdout?.(chunk);
+					options?.onStdout?.(chunk, context);
 				} catch (error) {
 					const cause = toError(error);
 					callbackError = new ExecutionError("callback_error", cause.message, cause);
@@ -470,7 +473,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 			child.stderr?.on("data", (chunk: string) => {
 				stderr += chunk;
 				try {
-					options?.onStderr?.(chunk);
+					options?.onStderr?.(chunk, context);
 				} catch (error) {
 					const cause = toError(error);
 					callbackError = new ExecutionError("callback_error", cause.message, cause);
@@ -488,7 +491,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 						settle(err(new ExecutionError("timeout", `timeout:${options?.timeout}`)));
 						return;
 					}
-					if (options?.abortSignal?.aborted) {
+					if (signal?.aborted) {
 						settle(err(new ExecutionError("aborted", "aborted")));
 						return;
 					}
@@ -499,12 +502,13 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		});
 	}
 
-	async readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
+	async readTextFile(path: string, context: Context): Promise<Result<string, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
-		const aborted = abortResult<string>(abortSignal, resolved);
+		const signal = context.abortSignal;
+		const aborted = abortResult<string>(signal, resolved);
 		if (aborted) return aborted;
 		try {
-			return ok(await readFile(resolved, { encoding: "utf8", signal: abortSignal }));
+			return ok(await readFile(resolved, { encoding: "utf8", signal }));
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
@@ -512,25 +516,27 @@ export class NodeExecutionEnv implements ExecutionEnv {
 
 	async readTextLines(
 		path: string,
-		options?: { maxLines?: number; abortSignal?: AbortSignal },
+		options: { maxLines?: number } | undefined,
+		context: Context,
 	): Promise<Result<string[], FileError>> {
 		const resolved = resolvePath(this.cwd, path);
-		const aborted = abortResult<string[]>(options?.abortSignal, resolved);
+		const signal = context.abortSignal;
+		const aborted = abortResult<string[]>(signal, resolved);
 		if (aborted) return aborted;
 		if (options?.maxLines !== undefined && options.maxLines <= 0) return ok([]);
 		let stream: ReturnType<typeof createReadStream> | undefined;
 		let lineReader: ReturnType<typeof createInterface> | undefined;
 		try {
-			stream = createReadStream(resolved, { encoding: "utf8", signal: options?.abortSignal });
+			stream = createReadStream(resolved, { encoding: "utf8", signal });
 			lineReader = createInterface({ input: stream, crlfDelay: Infinity });
 			const lines: string[] = [];
 			for await (const line of lineReader) {
-				const loopAbort = abortResult<string[]>(options?.abortSignal, resolved);
+				const loopAbort = abortResult<string[]>(signal, resolved);
 				if (loopAbort) return loopAbort;
 				lines.push(line);
 				if (options?.maxLines !== undefined && lines.length >= options.maxLines) break;
 			}
-			const afterReadAbort = abortResult<string[]>(options?.abortSignal, resolved);
+			const afterReadAbort = abortResult<string[]>(signal, resolved);
 			if (afterReadAbort) return afterReadAbort;
 			return ok(lines);
 		} catch (error) {
@@ -541,55 +547,55 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async readBinaryFile(path: string, abortSignal?: AbortSignal): Promise<Result<Uint8Array, FileError>> {
+	async readBinaryFile(path: string, context: Context): Promise<Result<Uint8Array, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
-		const aborted = abortResult<Uint8Array>(abortSignal, resolved);
+		const signal = context.abortSignal;
+		const aborted = abortResult<Uint8Array>(signal, resolved);
 		if (aborted) return aborted;
 		try {
-			return ok(await readFile(resolved, { signal: abortSignal }));
+			return ok(await readFile(resolved, { signal }));
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
 	}
 
-	async writeFile(
-		path: string,
-		content: string | Uint8Array,
-		abortSignal?: AbortSignal,
-	): Promise<Result<void, FileError>> {
+	async writeFile(path: string, content: string | Uint8Array, context: Context): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
-		const aborted = abortResult<void>(abortSignal, resolved);
+		const signal = context.abortSignal;
+		const aborted = abortResult<void>(signal, resolved);
 		if (aborted) return aborted;
 		try {
 			await mkdir(resolve(resolved, ".."), { recursive: true });
-			const afterMkdirAbort = abortResult<void>(abortSignal, resolved);
+			const afterMkdirAbort = abortResult<void>(signal, resolved);
 			if (afterMkdirAbort) return afterMkdirAbort;
-			await writeFile(resolved, content, { signal: abortSignal });
+			await writeFile(resolved, content, { signal });
 			return ok(undefined);
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
 	}
 
-	async appendFile(path: string, content: string | Uint8Array): Promise<Result<void, FileError>> {
+	async appendFile(path: string, content: string | Uint8Array, context: Context): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const signal = context.abortSignal;
+		const aborted = abortResult<void>(signal, resolved);
+		if (aborted) return aborted;
 		try {
 			await mkdir(resolve(resolved, ".."), { recursive: true });
+			const afterMkdirAbort = abortResult<void>(signal, resolved);
+			if (afterMkdirAbort) return afterMkdirAbort;
 			await appendFile(resolved, content);
-			return ok(undefined);
+			const afterAppendAbort = abortResult<void>(signal, resolved);
+			return afterAppendAbort ?? ok(undefined);
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
 	}
 
-	async renameFile(
-		sourcePath: string,
-		destinationPath: string,
-		abortSignal?: AbortSignal,
-	): Promise<Result<void, FileError>> {
+	async renameFile(sourcePath: string, destinationPath: string, context: Context): Promise<Result<void, FileError>> {
 		const source = resolvePath(this.cwd, sourcePath);
 		const destination = resolvePath(this.cwd, destinationPath);
-		const aborted = abortResult<void>(abortSignal, destination);
+		const aborted = abortResult<void>(context.abortSignal, destination);
 		if (aborted) return aborted;
 		try {
 			await rename(source, destination);
@@ -599,8 +605,10 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async fileInfo(path: string): Promise<Result<FileInfo, FileError>> {
+	async fileInfo(path: string, context: Context): Promise<Result<FileInfo, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<FileInfo>(context.abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
 			return fileInfoFromStats(resolved, await lstat(resolved));
 		} catch (error) {
@@ -608,15 +616,16 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async listDir(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo[], FileError>> {
+	async listDir(path: string, context: Context): Promise<Result<FileInfo[], FileError>> {
 		const resolved = resolvePath(this.cwd, path);
-		const aborted = abortResult<FileInfo[]>(abortSignal, resolved);
+		const signal = context.abortSignal;
+		const aborted = abortResult<FileInfo[]>(signal, resolved);
 		if (aborted) return aborted;
 		try {
 			const entries = await readdir(resolved, { withFileTypes: true });
 			const infos: FileInfo[] = [];
 			for (const entry of entries) {
-				const loopAbort = abortResult<FileInfo[]>(abortSignal, resolved);
+				const loopAbort = abortResult<FileInfo[]>(signal, resolved);
 				if (loopAbort) return loopAbort;
 				const entryPath = resolve(resolved, entry.name);
 				try {
@@ -632,8 +641,10 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async canonicalPath(path: string): Promise<Result<string, FileError>> {
+	async canonicalPath(path: string, context: Context): Promise<Result<string, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<string>(context.abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
 			return ok(await realpath(resolved));
 		} catch (error) {
@@ -641,15 +652,21 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async exists(path: string): Promise<Result<boolean, FileError>> {
-		const result = await this.fileInfo(path);
+	async exists(path: string, context: Context): Promise<Result<boolean, FileError>> {
+		const result = await this.fileInfo(path, context);
 		if (result.ok) return ok(true);
 		if (result.error.code === "not_found") return ok(false);
 		return err(result.error);
 	}
 
-	async createDir(path: string, options?: { recursive?: boolean }): Promise<Result<void, FileError>> {
+	async createDir(
+		path: string,
+		options: { recursive?: boolean } | undefined,
+		context: Context,
+	): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<void>(context.abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
 			await mkdir(resolved, { recursive: options?.recursive ?? true });
 			return ok(undefined);
@@ -658,8 +675,14 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async remove(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<Result<void, FileError>> {
+	async remove(
+		path: string,
+		options: { recursive?: boolean; force?: boolean } | undefined,
+		context: Context,
+	): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<void>(context.abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
 			await rm(resolved, { recursive: options?.recursive ?? false, force: options?.force ?? false });
 			return ok(undefined);
@@ -668,16 +691,22 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async createTempDir(prefix: string = "tmp-"): Promise<Result<string, FileError>> {
+	async createTempDir(prefix: string | undefined, context: Context): Promise<Result<string, FileError>> {
+		const aborted = abortResult<string>(context.abortSignal);
+		if (aborted) return aborted;
 		try {
+			prefix ??= "tmp-";
 			return ok(await mkdtemp(join(tmpdir(), prefix)));
 		} catch (error) {
 			return err(toFileError(error));
 		}
 	}
 
-	async createTempFile(options?: { prefix?: string; suffix?: string }): Promise<Result<string, FileError>> {
-		const dir = await this.createTempDir("tmp-");
+	async createTempFile(
+		options: { prefix?: string; suffix?: string } | undefined,
+		context: Context,
+	): Promise<Result<string, FileError>> {
+		const dir = await this.createTempDir("tmp-", context);
 		if (!dir.ok) return dir;
 		const filePath = join(dir.value, `${options?.prefix ?? ""}${randomUUID()}${options?.suffix ?? ""}`);
 		try {
@@ -688,7 +717,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async cleanup(): Promise<void> {
+	async cleanup(_context: Context): Promise<void> {
 		for (const pid of this.activeChildPids) killProcessTree(pid);
 		this.activeChildPids.clear();
 	}

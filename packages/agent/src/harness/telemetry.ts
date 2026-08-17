@@ -1,7 +1,6 @@
 import type {
 	ExactTelemetryAttributes,
 	SchemaTelemetrySpan,
-	TelemetryContext,
 	TelemetrySchemaDefinition,
 	TelemetrySchemaSpanEndAttributes,
 	TelemetrySchemaSpanEventAttributes,
@@ -11,6 +10,7 @@ import type {
 	TelemetrySchemaSpanUnion,
 	TelemetrySpan,
 } from "@draht/telemetry";
+import { type Context, withTelemetryContext } from "./context.ts";
 
 export type {
 	AttributeValue,
@@ -136,12 +136,14 @@ export type AiTelemetrySpan<Name extends AiSpanName> = SchemaTelemetrySpan<typeo
 export type AiSpan = TelemetrySchemaSpanUnion<typeof AI_TELEMETRY_SCHEMA>;
 
 export function startAiSpan<Name extends AiSpanName, const Attributes extends AiSpanStartAttributes<Name>, Result>(
-	telemetryContext: TelemetryContext,
 	name: Name,
 	attributes: ExactTelemetryAttributes<AiSpanStartAttributes<Name>, Attributes>,
-	callback: (span: AiTelemetrySpan<Name>) => Result | Promise<Result>,
+	callback: (span: AiTelemetrySpan<Name>, context: Context) => Result | Promise<Result>,
+	context: Context,
 ): Promise<Result> {
-	return telemetryContext.startSpan({ name, attributes }, (span) => callback(span as AiTelemetrySpan<Name>));
+	return context.telemetryContext.startSpan({ name, attributes }, (span) =>
+		callback(span as AiTelemetrySpan<Name>, withTelemetryContext(span, context)),
+	);
 }
 
 const HOOK_NAMES = [
@@ -623,12 +625,12 @@ export function startHarnessSpan<
 	const Attributes extends HarnessSpanStartAttributes<Name>,
 	Result,
 >(
-	telemetryContext: TelemetryContext,
 	name: Name,
 	attributes: ExactTelemetryAttributes<HarnessSpanStartAttributes<Name>, Attributes>,
-	callback: (span: HarnessTelemetrySpan<Name>) => Result | Promise<Result>,
+	callback: (span: HarnessTelemetrySpan<Name>, context: Context) => Result | Promise<Result>,
+	context: Context,
 ): Promise<Result> {
-	return telemetryContext.startSpan({ name, attributes }, (span: TelemetrySpan) =>
-		callback(span as HarnessTelemetrySpan<Name>),
+	return context.telemetryContext.startSpan({ name, attributes }, (span: TelemetrySpan) =>
+		callback(span as HarnessTelemetrySpan<Name>, withTelemetryContext(span, context)),
 	);
 }

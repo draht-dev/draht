@@ -1,6 +1,6 @@
 import { type ToolResultMessage, validateToolArguments } from "@draht/ai";
-import type { TelemetryContext } from "@draht/telemetry";
 import type { AgentTool, AgentToolCall, AgentToolResult } from "../../types.ts";
+import { type Context, withAbortSignal } from "../context.ts";
 import type { JsonValue } from "../session/types.ts";
 import type { EffectGate } from "./effect-gate.ts";
 
@@ -122,12 +122,14 @@ export async function executeToolCall(
 	call: ClearedToolCall,
 	effectGate: EffectGate,
 	onUpdate: (partial: AgentToolResult<unknown>) => void,
-	_telemetryContext: TelemetryContext,
+	context: Context,
 ): Promise<ExecutedToolCall> {
 	let acceptingUpdates = true;
 	effectGate.assertOpen();
+	const admittedContext = withAbortSignal(effectGate.signal, context);
+	admittedContext.abortSignal?.throwIfAborted();
 	try {
-		const result = await call.tool.execute(call.toolCall.id, call.args, effectGate.signal, (partial) => {
+		const result = await call.tool.execute(call.toolCall.id, call.args, admittedContext.abortSignal, (partial) => {
 			if (acceptingUpdates) onUpdate(partial);
 		});
 		return { result, isError: false };

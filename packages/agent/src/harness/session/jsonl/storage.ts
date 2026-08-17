@@ -109,16 +109,24 @@ function snapshotWrites(snapshot: JsonlSnapshotContents): CommittedWrite[] {
 	return writes.sort((left, right) => left.seq - right.seq);
 }
 
-async function publishFileAtomically(fileSystem: FileSystem, destinationPath: string, content: string): Promise<void> {
+async function publishFileAtomically(
+	fileSystem: FileSystem,
+	destinationPath: string,
+	content: string,
+	context: Context,
+): Promise<void> {
 	const tempPath = `${destinationPath}.tmp`;
 	try {
-		fileValue(await fileSystem.writeFile(tempPath, content), `Failed to stage JSONL storage ${destinationPath}`);
 		fileValue(
-			await fileSystem.renameFile(tempPath, destinationPath),
+			await fileSystem.writeFile(tempPath, content, context),
+			`Failed to stage JSONL storage ${destinationPath}`,
+		);
+		fileValue(
+			await fileSystem.renameFile(tempPath, destinationPath, context),
 			`Failed to publish JSONL storage ${destinationPath}`,
 		);
 	} catch (error) {
-		await fileSystem.remove(tempPath, { force: true });
+		await fileSystem.remove(tempPath, { force: true }, context);
 		throw error;
 	}
 }
@@ -144,10 +152,10 @@ export class JsonlStorage implements Storage {
 	static async create(
 		options: JsonlStorageOptions,
 		header: JsonlStorageHeader,
-		_context: Context,
+		context: Context,
 	): Promise<JsonlStorage> {
 		fileValue(
-			await options.fileSystem.writeFile(options.path, `${JSON.stringify(header)}\n`),
+			await options.fileSystem.writeFile(options.path, `${JSON.stringify(header)}\n`, context),
 			`Failed to create JSONL storage ${options.path}`,
 		);
 		return new JsonlStorage(options, header);
@@ -163,13 +171,13 @@ export class JsonlStorage implements Storage {
 		const writes = snapshotWrites(snapshot);
 		const snapshotHeader = { ...header, nextSeq: snapshot.nextSeq };
 		const content = `${[JSON.stringify(snapshotHeader), ...writes.map((write) => JSON.stringify(write))].join("\n")}\n`;
-		await publishFileAtomically(options.fileSystem, options.path, content);
+		await publishFileAtomically(options.fileSystem, options.path, content, context);
 		return JsonlStorage.open(options, context);
 	}
 
-	static async open(options: JsonlStorageOptions, _context: Context): Promise<JsonlStorage> {
+	static async open(options: JsonlStorageOptions, context: Context): Promise<JsonlStorage> {
 		const content = fileValue(
-			await options.fileSystem.readTextFile(options.path),
+			await options.fileSystem.readTextFile(options.path, context),
 			`Failed to read JSONL storage ${options.path}`,
 		);
 		const { lines, torn } = splitCompleteLines(content);
@@ -189,13 +197,13 @@ export class JsonlStorage implements Storage {
 			}
 		}
 		if (header.nextSeq !== undefined) storage.storageState.advanceNextSeq(header.nextSeq);
-		if (torn) await publishFileAtomically(options.fileSystem, options.path, `${lines.join("\n")}\n`);
+		if (torn) await publishFileAtomically(options.fileSystem, options.path, `${lines.join("\n")}\n`, context);
 		return storage;
 	}
 
-	async commit(writes: Write[], _context: Context): Promise<CommitResult> {
+	async commit(writes: Write[], context: Context): Promise<CommitResult> {
 		if (this.state !== "open") throw new Error("JsonlStorage is closed");
-		const result = this.commitQueue.then(() => this.applyCommit(writes));
+		const result = this.commitQueue.then(() => this.applyCommit(writes, context));
 		this.commitQueue = result.then(
 			() => undefined,
 			() => undefined,
@@ -203,13 +211,14 @@ export class JsonlStorage implements Storage {
 		return result;
 	}
 
-	private async applyCommit(writes: Write[]): Promise<CommitResult> {
+	private async applyCommit(writes: Write[], context: Context): Promise<CommitResult> {
 		const prepared = this.storageState.prepareCommit(writes, this.now());
 		if (prepared.writes.length !== 0) {
 			fileValue(
 				await this.fileSystem.appendFile(
 					this.path,
 					`${JSON.stringify(prepared.writes.length === 1 ? prepared.writes[0] : prepared.writes)}\n`,
+					context,
 				),
 				`Failed to append JSONL storage ${this.path}`,
 			);

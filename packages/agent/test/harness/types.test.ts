@@ -442,7 +442,8 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	expectTypeOf<OperationRequest["kind"]>().toEqualTypeOf<
 		"prompt" | "skill" | "prompt_template" | "compaction" | "navigation"
 	>();
-	expectTypeOf<Parameters<AgentHarnessTool<object>["execute"]>[5]>().toEqualTypeOf<AgentHarnessToolInvocation>();
+	expectTypeOf<Parameters<AgentHarnessTool<object>["execute"]>[4]>().toEqualTypeOf<AgentHarnessToolInvocation>();
+	expectTypeOf<Parameters<AgentHarnessTool<object>["execute"]>[5]>().toEqualTypeOf<Context>();
 	expectTypeOf<AgentTool["replay"]>().toEqualTypeOf<"never" | "safe" | undefined>();
 	expectTypeOf<AgentHarnessStreamOptions["deferred"]>().toEqualTypeOf<
 		boolean | { window?: "15m" | "1h" | "24h" } | undefined

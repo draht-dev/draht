@@ -448,7 +448,18 @@ describe("harness compaction", () => {
 			},
 		]);
 		getOrThrow(
-			await generateSummary(messages, models, reasoningModel, 2000, undefined, undefined, undefined, "medium"),
+			await generateSummary(
+				messages,
+				models,
+				reasoningModel,
+				2000,
+				undefined,
+				undefined,
+				"medium",
+				undefined,
+				undefined,
+				BACKGROUND_CONTEXT,
+			),
 		);
 		expect(seenOptions[0]).toMatchObject({ reasoning: "medium" });
 
@@ -459,7 +470,20 @@ describe("harness compaction", () => {
 				return fauxAssistantMessage("## Goal\nTest summary");
 			},
 		]);
-		getOrThrow(await generateSummary(messages, models, offModel, 2000, undefined, undefined, undefined, "off"));
+		getOrThrow(
+			await generateSummary(
+				messages,
+				models,
+				offModel,
+				2000,
+				undefined,
+				undefined,
+				"off",
+				undefined,
+				undefined,
+				BACKGROUND_CONTEXT,
+			),
+		);
 		expect(seenOptions[1]).not.toHaveProperty("reasoning");
 
 		const { faux: fauxNonReasoning, model: nonReasoningModel } = createFauxModel(false);
@@ -470,7 +494,18 @@ describe("harness compaction", () => {
 			},
 		]);
 		getOrThrow(
-			await generateSummary(messages, models, nonReasoningModel, 2000, undefined, undefined, undefined, "medium"),
+			await generateSummary(
+				messages,
+				models,
+				nonReasoningModel,
+				2000,
+				undefined,
+				undefined,
+				"medium",
+				undefined,
+				undefined,
+				BACKGROUND_CONTEXT,
+			),
 		);
 		expect(seenOptions[2]).not.toHaveProperty("reasoning");
 	});
@@ -489,7 +524,18 @@ describe("harness compaction", () => {
 		]);
 
 		const summary = getOrThrow(
-			await generateSummaryWithUsage(messages, models, model, 2000, undefined, "focus", "old summary"),
+			await generateSummaryWithUsage(
+				messages,
+				models,
+				model,
+				2000,
+				"focus",
+				"old summary",
+				undefined,
+				undefined,
+				undefined,
+				BACKGROUND_CONTEXT,
+			),
 		);
 
 		expect(summary.text).toContain("Test summary");
@@ -507,14 +553,40 @@ describe("harness compaction", () => {
 		const { faux, model } = createFauxModel(false);
 		faux.setResponses([fauxAssistantMessage("## Goal\nTest summary")]);
 
-		expect(getOrThrow(await generateSummary(messages, models, model, 2000))).toBe("## Goal\nTest summary");
+		expect(
+			getOrThrow(
+				await generateSummary(
+					messages,
+					models,
+					model,
+					2000,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					BACKGROUND_CONTEXT,
+				),
+			),
+		).toBe("## Goal\nTest summary");
 	});
 
 	it("returns error results for failed or aborted summary generations", async () => {
 		const messages: AgentMessage[] = [createUserMessage("Summarize this.")];
 		const { faux: errorFaux, model: errorModel } = createFauxModel(false);
 		errorFaux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom" })]);
-		const errorResult = await generateSummary(messages, models, errorModel, 2000);
+		const errorResult = await generateSummary(
+			messages,
+			models,
+			errorModel,
+			2000,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			BACKGROUND_CONTEXT,
+		);
 		expect(errorResult).toMatchObject({
 			ok: false,
 			error: { code: "summarization_failed", message: "Summarization failed: boom" },
@@ -522,7 +594,18 @@ describe("harness compaction", () => {
 
 		const { faux: abortedFaux, model: abortedModel } = createFauxModel(false);
 		abortedFaux.setResponses([fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "stopped" })]);
-		const abortedResult = await generateSummary(messages, models, abortedModel, 2000);
+		const abortedResult = await generateSummary(
+			messages,
+			models,
+			abortedModel,
+			2000,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			BACKGROUND_CONTEXT,
+		);
 		expect(abortedResult).toMatchObject({ ok: false, error: { code: "aborted", message: "stopped" } });
 	});
 
@@ -550,7 +633,9 @@ describe("harness compaction", () => {
 			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000 },
 		};
 
-		getOrThrow(await compact(preparation, models, model));
+		getOrThrow(
+			await compact(preparation, models, model, undefined, undefined, undefined, undefined, BACKGROUND_CONTEXT),
+		);
 
 		expect(seenOptions.map((options) => options?.maxTokens)).toEqual([128000, 128000]);
 		expect(seenOptions.map((options) => options?.cacheRetention)).toEqual(["none", "none"]);
@@ -571,7 +656,18 @@ describe("harness compaction", () => {
 		};
 		const { faux: historyFaux, model: historyModel } = createFauxModel(false);
 		historyFaux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "history failed" })]);
-		expect(await compact(preparation, models, historyModel)).toMatchObject({
+		expect(
+			await compact(
+				preparation,
+				models,
+				historyModel,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				BACKGROUND_CONTEXT,
+			),
+		).toMatchObject({
 			ok: false,
 			error: { code: "summarization_failed", message: "Summarization failed: history failed" },
 		});
@@ -596,7 +692,9 @@ describe("harness compaction", () => {
 			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
 		};
 
-		const result = getOrThrow(await compact(preparation, usageModels, model));
+		const result = getOrThrow(
+			await compact(preparation, usageModels, model, undefined, undefined, undefined, undefined, BACKGROUND_CONTEXT),
+		);
 
 		expect(result.usage).toEqual(createMockUsage(6, 8, 10, 12));
 	});
@@ -621,7 +719,9 @@ describe("harness compaction", () => {
 			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
 		};
 
-		getOrThrow(await compact(preparation, models, model, undefined, undefined, "high"));
+		getOrThrow(
+			await compact(preparation, models, model, undefined, "high", undefined, undefined, BACKGROUND_CONTEXT),
+		);
 
 		expect(seenOptions[0]).toMatchObject({ reasoning: "high" });
 	});
@@ -640,14 +740,27 @@ describe("harness compaction", () => {
 		const { faux, model } = createFauxModel(false);
 		faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "prefix failed" })]);
 
-		expect(await compact(preparation, models, model)).toMatchObject({
+		expect(
+			await compact(preparation, models, model, undefined, undefined, undefined, undefined, BACKGROUND_CONTEXT),
+		).toMatchObject({
 			ok: false,
 			error: { code: "summarization_failed", message: "Turn prefix summarization failed: prefix failed" },
 		});
 
 		const { faux: abortedFaux, model: abortedModel } = createFauxModel(false);
 		abortedFaux.setResponses([fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "prefix stopped" })]);
-		expect(await compact(preparation, models, abortedModel)).toMatchObject({
+		expect(
+			await compact(
+				preparation,
+				models,
+				abortedModel,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				BACKGROUND_CONTEXT,
+			),
+		).toMatchObject({
 			ok: false,
 			error: { code: "aborted", message: "prefix stopped" },
 		});
@@ -666,7 +779,9 @@ describe("harness compaction", () => {
 		expect(preparation).toBeDefined();
 		const { faux, model } = createFauxModel(false);
 		faux.setResponses([fauxAssistantMessage("## Goal\nTest summary")]);
-		const result = getOrThrow(await compact(preparation!, models, model));
+		const result = getOrThrow(
+			await compact(preparation!, models, model, undefined, undefined, undefined, undefined, BACKGROUND_CONTEXT),
+		);
 		expect(result.summary.length).toBeGreaterThan(0);
 		expect(result.usage?.totalTokens).toBeGreaterThan(0);
 		expect(result.retainedTail?.length).toBeGreaterThan(0);

@@ -1,6 +1,7 @@
 import { symlink } from "node:fs/promises";
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
+import { BACKGROUND_CONTEXT, type Context, withAbortSignal } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { type BashToolDetails, createBashTool } from "../../src/harness/tools/bash.ts";
 import { createEditTool } from "../../src/harness/tools/edit.ts";
@@ -40,9 +41,9 @@ function delay(ms: number): Promise<void> {
 }
 
 class SlowReadExecutionEnv extends NodeExecutionEnv {
-	override async readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
+	override async readTextFile(path: string, context: Context): Promise<Result<string, FileError>> {
 		await delay(20);
-		return super.readTextFile(path, abortSignal);
+		return super.readTextFile(path, context);
 	}
 }
 
@@ -54,7 +55,7 @@ class BlockingWriteExecutionEnv extends NodeExecutionEnv {
 	override async writeFile(
 		path: string,
 		content: string | Uint8Array,
-		abortSignal?: AbortSignal,
+		context: Context,
 	): Promise<Result<void, FileError>> {
 		if (content === "first\n") {
 			this.firstWriteStarted.resolve();
@@ -62,7 +63,7 @@ class BlockingWriteExecutionEnv extends NodeExecutionEnv {
 		} else if (content === "second\n") {
 			this.secondWriteStarted = true;
 		}
-		return super.writeFile(path, content, abortSignal);
+		return super.writeFile(path, content, context);
 	}
 }
 
@@ -75,29 +76,30 @@ class BlockingEditExecutionEnv extends NodeExecutionEnv {
 	override async writeFile(
 		path: string,
 		content: string | Uint8Array,
-		abortSignal?: AbortSignal,
+		context: Context,
 	): Promise<Result<void, FileError>> {
 		if (content === "ALPHA\nbeta\n") {
 			this.firstEditWriteStarted.resolve();
 			await this.finishFirstEditWrite.promise;
-			const result = await super.writeFile(path, content);
+			const result = await super.writeFile(path, content, BACKGROUND_CONTEXT);
 			this.firstEditWriteSettled = true;
 			return result;
 		}
 		if (content === "ALPHA\nBETA\n" || content === "alpha\nBETA\n") {
 			this.secondEditWriteStarted = true;
 		}
-		return super.writeFile(path, content, abortSignal);
+		return super.writeFile(path, content, context);
 	}
 }
 
 class LateOutputExecutionEnv extends NodeExecutionEnv {
 	override async exec(
 		_command: string,
-		options?: ShellExecOptions,
+		options: ShellExecOptions | undefined,
+		context: Context,
 	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
-		options?.onStdout?.("before\n");
-		setTimeout(() => options?.onStdout?.("late\n"), 0);
+		options?.onStdout?.("before\n", context);
+		setTimeout(() => options?.onStdout?.("late\n", context), 0);
 		return ok({ stdout: "before\n", stderr: "", exitCode: 0 });
 	}
 }
@@ -108,10 +110,11 @@ const invocation = { invocationId: "test-result", operationId: "test-operation",
 class TimeoutOutputExecutionEnv extends NodeExecutionEnv {
 	override async exec(
 		_command: string,
-		options?: ShellExecOptions,
+		options: ShellExecOptions | undefined,
+		context: Context,
 	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
 		const output = `${Array.from({ length: TRUNCATED_OUTPUT_LINES }, (_, index) => `line-${index + 1}`).join("\n")}\n`;
-		options?.onStdout?.(output);
+		options?.onStdout?.(output, context);
 		return err(new ExecutionError("timeout", `timeout:${options?.timeout}`));
 	}
 }
@@ -140,6 +143,7 @@ describe("AgentHarness tools", () => {
 				await context.env.writeFile(
 					"test.txt",
 					Array.from({ length: 100 }, (_, index) => `Line ${index + 1}`).join("\n"),
+					BACKGROUND_CONTEXT,
 				),
 			);
 
@@ -147,9 +151,9 @@ describe("AgentHarness tools", () => {
 				"read-1",
 				{ path: "test.txt", offset: 41, limit: 20 },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 			const output = textOutput(result);
 
@@ -166,6 +170,7 @@ describe("AgentHarness tools", () => {
 				await context.env.writeFile(
 					"large.txt",
 					Array.from({ length: 2500 }, (_, index) => `Line ${index + 1}`).join("\n"),
+					BACKGROUND_CONTEXT,
 				),
 			);
 
@@ -173,9 +178,9 @@ describe("AgentHarness tools", () => {
 				"read-2",
 				{ path: "large.txt" },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(textOutput(result)).toContain("[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]");
@@ -190,16 +195,20 @@ describe("AgentHarness tools", () => {
 		it("does not count a trailing newline as an extra line at the truncation limit", async () => {
 			const context = createContext();
 			getOrThrow(
-				await context.env.writeFile("exact.txt", `${Array.from({ length: 2000 }, () => "x").join("\n")}\n`),
+				await context.env.writeFile(
+					"exact.txt",
+					`${Array.from({ length: 2000 }, () => "x").join("\n")}\n`,
+					BACKGROUND_CONTEXT,
+				),
 			);
 
 			const result = await createReadTool().execute(
 				"read-exact",
 				{ path: "exact.txt" },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(result.details).toBeUndefined();
@@ -208,16 +217,16 @@ describe("AgentHarness tools", () => {
 
 		it("rejects offsets beyond the file", async () => {
 			const context = createContext();
-			getOrThrow(await context.env.writeFile("short.txt", "one\ntwo\nthree"));
+			getOrThrow(await context.env.writeFile("short.txt", "one\ntwo\nthree", BACKGROUND_CONTEXT));
 
 			await expect(
 				createReadTool().execute(
 					"read-3",
 					{ path: "short.txt", offset: 100 },
 					undefined,
-					undefined,
 					context,
 					invocation,
+					BACKGROUND_CONTEXT,
 				),
 			).rejects.toThrow("Offset 100 is beyond end of file (3 lines total)");
 		});
@@ -230,15 +239,15 @@ describe("AgentHarness tools", () => {
 					"base64",
 				),
 			);
-			getOrThrow(await context.env.writeFile("image.txt", png));
+			getOrThrow(await context.env.writeFile("image.txt", png, BACKGROUND_CONTEXT));
 
 			const result = await createReadTool().execute(
 				"read-4",
 				{ path: "image.txt" },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(textOutput(result)).toContain("Read image file [image/png]");
@@ -252,7 +261,7 @@ describe("AgentHarness tools", () => {
 		it("delegates image conversion and resizing to an injected processor", async () => {
 			const context = createContext();
 			const bmp = createTinyBmp();
-			getOrThrow(await context.env.writeFile("image.bmp", bmp));
+			getOrThrow(await context.env.writeFile("image.bmp", bmp, BACKGROUND_CONTEXT));
 			let received: { bytes: Uint8Array; mimeType: string; autoResizeImages: boolean } | undefined;
 			const tool = createReadTool({
 				autoResizeImages: false,
@@ -271,9 +280,9 @@ describe("AgentHarness tools", () => {
 				"read-bmp",
 				{ path: "image.bmp" },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(received).toMatchObject({ mimeType: "image/bmp", autoResizeImages: false });
@@ -290,13 +299,13 @@ describe("AgentHarness tools", () => {
 				"write-1",
 				{ path: "nested/dir/file.txt", content: "hello" },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(textOutput(result)).toBe("Successfully wrote 5 bytes to nested/dir/file.txt");
-			expect(getOrThrow(await context.env.readTextFile("nested/dir/file.txt"))).toBe("hello");
+			expect(getOrThrow(await context.env.readTextFile("nested/dir/file.txt", BACKGROUND_CONTEXT))).toBe("hello");
 		});
 
 		it("keeps the mutation queue locked until an aborted write settles", async () => {
@@ -306,12 +315,12 @@ describe("AgentHarness tools", () => {
 			const firstWrite = tool.execute(
 				"write-first",
 				{ path: "file.txt", content: "first\n" },
-				controller.signal,
 				undefined,
 				{
 					env,
 				},
 				invocation,
+				withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
 			);
 			await env.firstWriteStarted.promise;
 			controller.abort();
@@ -319,9 +328,9 @@ describe("AgentHarness tools", () => {
 				"write-second",
 				{ path: "file.txt", content: "second\n" },
 				undefined,
-				undefined,
 				{ env },
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			await delay(20);
@@ -329,7 +338,7 @@ describe("AgentHarness tools", () => {
 			env.finishFirstWrite.resolve();
 			await expect(firstWrite).rejects.toThrow();
 			await secondWrite;
-			expect(getOrThrow(await env.readTextFile("file.txt"))).toBe("second\n");
+			expect(getOrThrow(await env.readTextFile("file.txt", BACKGROUND_CONTEXT))).toBe("second\n");
 		});
 	});
 
@@ -337,7 +346,7 @@ describe("AgentHarness tools", () => {
 		it("applies disjoint edits and returns both diff formats", async () => {
 			const context = createContext();
 			const original = "alpha\nbeta\ngamma\ndelta\n";
-			getOrThrow(await context.env.writeFile("edit.txt", original));
+			getOrThrow(await context.env.writeFile("edit.txt", original, BACKGROUND_CONTEXT));
 
 			const result = await createEditTool().execute(
 				"edit-1",
@@ -349,21 +358,23 @@ describe("AgentHarness tools", () => {
 					],
 				},
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(textOutput(result)).toBe("Successfully replaced 2 block(s) in edit.txt.");
 			expect(result.details?.diff).toContain("ALPHA");
 			expect(result.details?.diff).toContain("GAMMA");
 			expect(applyPatch(original, result.details?.patch ?? "")).toBe("ALPHA\nbeta\nGAMMA\ndelta\n");
-			expect(getOrThrow(await context.env.readTextFile("edit.txt"))).toBe("ALPHA\nbeta\nGAMMA\ndelta\n");
+			expect(getOrThrow(await context.env.readTextFile("edit.txt", BACKGROUND_CONTEXT))).toBe(
+				"ALPHA\nbeta\nGAMMA\ndelta\n",
+			);
 		});
 
 		it("matches all edits against the original and rejects overlaps", async () => {
 			const context = createContext();
-			getOrThrow(await context.env.writeFile("edit.txt", "one\ntwo\nthree\n"));
+			getOrThrow(await context.env.writeFile("edit.txt", "one\ntwo\nthree\n", BACKGROUND_CONTEXT));
 
 			await expect(
 				createEditTool().execute(
@@ -376,17 +387,17 @@ describe("AgentHarness tools", () => {
 						],
 					},
 					undefined,
-					undefined,
 					context,
 					invocation,
+					BACKGROUND_CONTEXT,
 				),
 			).rejects.toThrow(/overlap/);
-			expect(getOrThrow(await context.env.readTextFile("edit.txt"))).toBe("one\ntwo\nthree\n");
+			expect(getOrThrow(await context.env.readTextFile("edit.txt", BACKGROUND_CONTEXT))).toBe("one\ntwo\nthree\n");
 		});
 
 		it("rejects missing and duplicate target text", async () => {
 			const context = createContext();
-			getOrThrow(await context.env.writeFile("edit.txt", "foo foo foo"));
+			getOrThrow(await context.env.writeFile("edit.txt", "foo foo foo", BACKGROUND_CONTEXT));
 			const tool = createEditTool();
 
 			await expect(
@@ -394,9 +405,9 @@ describe("AgentHarness tools", () => {
 					"edit-3",
 					{ path: "edit.txt", edits: [{ oldText: "bar", newText: "baz" }] },
 					undefined,
-					undefined,
 					context,
 					invocation,
+					BACKGROUND_CONTEXT,
 				),
 			).rejects.toThrow(/Could not find the exact text/);
 			await expect(
@@ -404,25 +415,25 @@ describe("AgentHarness tools", () => {
 					"edit-4",
 					{ path: "edit.txt", edits: [{ oldText: "foo", newText: "bar" }] },
 					undefined,
-					undefined,
 					context,
 					invocation,
+					BACKGROUND_CONTEXT,
 				),
 			).rejects.toThrow(/Found 3 occurrences/);
 		});
 
 		it("keeps the mutation queue locked until an aborted edit write settles", async () => {
 			const env = new BlockingEditExecutionEnv({ cwd: createTempDir() });
-			getOrThrow(await env.writeFile("file.txt", "alpha\nbeta\n"));
+			getOrThrow(await env.writeFile("file.txt", "alpha\nbeta\n", BACKGROUND_CONTEXT));
 			const tool = createEditTool();
 			const controller = new AbortController();
 			const firstEdit = tool.execute(
 				"edit-first",
 				{ path: "file.txt", edits: [{ oldText: "alpha", newText: "ALPHA" }] },
-				controller.signal,
 				undefined,
 				{ env },
 				invocation,
+				withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
 			);
 			await env.firstEditWriteStarted.promise;
 			controller.abort();
@@ -430,9 +441,9 @@ describe("AgentHarness tools", () => {
 				"edit-second",
 				{ path: "file.txt", edits: [{ oldText: "beta", newText: "BETA" }] },
 				undefined,
-				undefined,
 				{ env },
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			await delay(20);
@@ -441,12 +452,12 @@ describe("AgentHarness tools", () => {
 			await expect(firstEdit).rejects.toThrow("Operation aborted");
 			await secondEdit;
 			expect(env.firstEditWriteSettled).toBe(true);
-			expect(getOrThrow(await env.readTextFile("file.txt"))).toBe("ALPHA\nBETA\n");
+			expect(getOrThrow(await env.readTextFile("file.txt", BACKGROUND_CONTEXT))).toBe("ALPHA\nBETA\n");
 		});
 
 		it("serializes concurrent edits through canonical and symlink paths", async () => {
 			const env = new SlowReadExecutionEnv({ cwd: createTempDir() });
-			getOrThrow(await env.writeFile("target.txt", "alpha\nbeta\ngamma\n"));
+			getOrThrow(await env.writeFile("target.txt", "alpha\nbeta\ngamma\n", BACKGROUND_CONTEXT));
 			await symlink("target.txt", `${env.cwd}/link.txt`);
 			const tool = createEditTool();
 
@@ -455,54 +466,56 @@ describe("AgentHarness tools", () => {
 					"edit-target",
 					{ path: "target.txt", edits: [{ oldText: "alpha", newText: "ALPHA" }] },
 					undefined,
-					undefined,
 					{ env },
 					invocation,
+					BACKGROUND_CONTEXT,
 				),
 				tool.execute(
 					"edit-link",
 					{ path: "link.txt", edits: [{ oldText: "beta", newText: "BETA" }] },
 					undefined,
-					undefined,
 					{ env },
 					invocation,
+					BACKGROUND_CONTEXT,
 				),
 			]);
 
-			expect(getOrThrow(await env.readTextFile("target.txt"))).toBe("ALPHA\nBETA\ngamma\n");
+			expect(getOrThrow(await env.readTextFile("target.txt", BACKGROUND_CONTEXT))).toBe("ALPHA\nBETA\ngamma\n");
 		});
 
 		it("edits regular files through symlinks", async () => {
 			const context = createContext();
-			getOrThrow(await context.env.writeFile("target.txt", "before\n"));
+			getOrThrow(await context.env.writeFile("target.txt", "before\n", BACKGROUND_CONTEXT));
 			await symlink("target.txt", `${context.env.cwd}/link.txt`);
 
 			await createEditTool().execute(
 				"edit-symlink",
 				{ path: "link.txt", edits: [{ oldText: "before", newText: "after" }] },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
-			expect(getOrThrow(await context.env.readTextFile("target.txt"))).toBe("after\n");
+			expect(getOrThrow(await context.env.readTextFile("target.txt", BACKGROUND_CONTEXT))).toBe("after\n");
 		});
 
 		it("preserves BOM and CRLF line endings", async () => {
 			const context = createContext();
-			getOrThrow(await context.env.writeFile("edit.txt", "\uFEFFone\r\ntwo\r\n"));
+			getOrThrow(await context.env.writeFile("edit.txt", "\uFEFFone\r\ntwo\r\n", BACKGROUND_CONTEXT));
 
 			await createEditTool().execute(
 				"edit-5",
 				{ path: "edit.txt", edits: [{ oldText: "two", newText: "TWO" }] },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
-			expect(getOrThrow(await context.env.readTextFile("edit.txt"))).toBe("\uFEFFone\r\nTWO\r\n");
+			expect(getOrThrow(await context.env.readTextFile("edit.txt", BACKGROUND_CONTEXT))).toBe(
+				"\uFEFFone\r\nTWO\r\n",
+			);
 		});
 	});
 
@@ -513,9 +526,9 @@ describe("AgentHarness tools", () => {
 				"bash-1",
 				{ command: "printf out; printf err >&2" },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(textOutput(result)).toContain("out");
@@ -527,10 +540,24 @@ describe("AgentHarness tools", () => {
 			const tool = createBashTool();
 
 			await expect(
-				tool.execute("bash-2", { command: "printf failed; exit 7" }, undefined, undefined, context, invocation),
+				tool.execute(
+					"bash-2",
+					{ command: "printf failed; exit 7" },
+					undefined,
+					context,
+					invocation,
+					BACKGROUND_CONTEXT,
+				),
 			).rejects.toThrow(/failed[\s\S]*Command exited with code 7/);
 			await expect(
-				tool.execute("bash-3", { command: "sleep 2", timeout: 0.01 }, undefined, undefined, context, invocation),
+				tool.execute(
+					"bash-3",
+					{ command: "sleep 2", timeout: 0.01 },
+					undefined,
+					context,
+					invocation,
+					BACKGROUND_CONTEXT,
+				),
 			).rejects.toThrow(/Command timed out after 0.01 seconds/);
 		});
 
@@ -542,9 +569,9 @@ describe("AgentHarness tools", () => {
 					"bash-timeout-output",
 					{ command: "emit-output-then-time-out", timeout: 0.05 },
 					undefined,
-					undefined,
 					context,
 					invocation,
+					BACKGROUND_CONTEXT,
 				);
 			} catch (cause) {
 				error = cause;
@@ -555,7 +582,7 @@ describe("AgentHarness tools", () => {
 			expect(message).toContain("Command timed out after 0.05 seconds");
 			const fullOutputPath = message.match(/Full output: ([^\]\n]+)/)?.[1];
 			expect(fullOutputPath).toBeDefined();
-			const fullOutput = getOrThrow(await context.env.readTextFile(fullOutputPath!));
+			const fullOutput = getOrThrow(await context.env.readTextFile(fullOutputPath!, BACKGROUND_CONTEXT));
 			expect(fullOutput).toContain("line-1\nline-2");
 			expect(fullOutput).toContain(`line-${DEFAULT_MAX_LINES}\nline-${TRUNCATED_OUTPUT_LINES}`);
 		});
@@ -566,10 +593,10 @@ describe("AgentHarness tools", () => {
 			const result = await createBashTool().execute(
 				"bash-late",
 				{ command: "late" },
-				undefined,
 				(update) => updates.push(textOutput(update)),
 				{ env },
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 			await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -583,9 +610,9 @@ describe("AgentHarness tools", () => {
 				"bash-long-line",
 				{ command: "printf '%060000d' 0" },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(textOutput(result)).toMatch(/Showing last 50\.0KB of line 1 \(line is 58\.6KB\)\. Full output:/);
@@ -596,16 +623,16 @@ describe("AgentHarness tools", () => {
 				cwd: createTempDir(),
 				shellEnv: { DRAHT_BASH_PREPARE_INHERITED: "inherited" },
 			});
-			getOrThrow(await env.createDir("workspace"));
+			getOrThrow(await env.createDir("workspace", undefined, BACKGROUND_CONTEXT));
 			const context = { env, workspace: `${env.cwd}/workspace` };
 			const controller = new AbortController();
 			let receivedContext: typeof context | undefined;
 			let receivedSignal: AbortSignal | undefined;
 			const tool = createBashTool<typeof context>({
 				commandPrefix: "prefix=ready",
-				prepare: async (execution, turnContext, signal) => {
+				prepare: async (execution, turnContext, callContext) => {
 					receivedContext = turnContext;
-					receivedSignal = signal;
+					receivedSignal = callContext.abortSignal;
 					execution.cwd = turnContext.workspace;
 					execution.env = { DRAHT_BASH_PREPARE_EXPLICIT: "explicit" };
 					execution.inheritEnv = false;
@@ -616,15 +643,17 @@ describe("AgentHarness tools", () => {
 			const result = await tool.execute(
 				"bash-prepare",
 				{ command: ":" },
-				controller.signal,
 				undefined,
 				context,
 				invocation,
+				withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
 			);
 
 			expect(receivedContext).toBe(context);
 			expect(receivedSignal).toBe(controller.signal);
-			expect(textOutput(result)).toBe(`ready::explicit:${getOrThrow(await env.canonicalPath(context.workspace))}`);
+			expect(textOutput(result)).toBe(
+				`ready::explicit:${getOrThrow(await env.canonicalPath(context.workspace, BACKGROUND_CONTEXT))}`,
+			);
 		});
 
 		it("supports command prefixes", async () => {
@@ -633,9 +662,9 @@ describe("AgentHarness tools", () => {
 				"bash-4",
 				{ command: "printf $value" },
 				undefined,
-				undefined,
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(textOutput(result)).toBe("hello");
@@ -650,10 +679,10 @@ describe("AgentHarness tools", () => {
 			const result = await createBashTool().execute(
 				"bash-5",
 				{ command: "i=1; while [ $i -le 3000 ]; do echo line-$i; i=$((i + 1)); done" },
-				undefined,
 				(update) => updates.push(update),
 				context,
 				invocation,
+				BACKGROUND_CONTEXT,
 			);
 
 			expect(updates.length).toBeLessThan(25);
@@ -671,7 +700,9 @@ describe("AgentHarness tools", () => {
 				truncation: { totalLines: 3000, totalBytes: expect.any(Number) },
 				fullOutputPath: result.details?.fullOutputPath,
 			});
-			const fullOutput = getOrThrow(await context.env.readTextFile(result.details!.fullOutputPath!));
+			const fullOutput = getOrThrow(
+				await context.env.readTextFile(result.details!.fullOutputPath!, BACKGROUND_CONTEXT),
+			);
 			expect(fullOutput).toContain("line-1\nline-2");
 			expect(fullOutput).toContain("line-2999\nline-3000");
 		});

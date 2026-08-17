@@ -1,5 +1,5 @@
 import type { HookHandler, HookInvocation, HookMap, HookName, Hooks } from "./agent-harness.ts";
-import { type Context, withAbortSignal, withTelemetryContext } from "./context.ts";
+import { type Context, withAbortSignal } from "./context.ts";
 import type { EffectGate } from "./execution/effect-gate.ts";
 import { startHarnessSpan } from "./telemetry.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch } from "./types.ts";
@@ -374,7 +374,6 @@ export class HookRegistry implements Hooks {
 		context: Context,
 	): Promise<unknown> {
 		return startHarnessSpan(
-			context.telemetryContext,
 			"pi.harness.hook",
 			{
 				"pi.lane.name": event.lane,
@@ -382,9 +381,9 @@ export class HookRegistry implements Hooks {
 				"pi.hook.name": name,
 				...(registration.id === undefined ? {} : { "pi.hook.registration_id": registration.id }),
 			},
-			async (span) => {
+			async (span, spanContext) => {
 				try {
-					const result = await registration.handler(event, withTelemetryContext(span, context));
+					const result = await registration.handler(event, spanContext);
 					const blocked =
 						name === "before_tool" &&
 						result !== null &&
@@ -399,6 +398,7 @@ export class HookRegistry implements Hooks {
 					throw error;
 				}
 			},
+			context,
 		);
 	}
 

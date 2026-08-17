@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { FileError, getOrThrow } from "../../src/harness/types.ts";
 import { executeShellWithCapture } from "../../src/harness/utils/shell-output.ts";
@@ -71,16 +72,24 @@ describe("NodeExecutionEnv", () => {
 	it("reads, writes, lists, and removes files and directories", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		expect(getOrThrow(await env.absolutePath("nested/child"))).toBe(join(root, "nested/child"));
-		expect(getOrThrow(await env.joinPath([root, "nested", "child"]))).toBe(join(root, "nested", "child"));
-		getOrThrow(await env.createDir("nested/child"));
-		getOrThrow(await env.writeFile("nested/child/file.txt", "hel"));
-		getOrThrow(await env.appendFile("nested/child/file.txt", "lo"));
-		expect(getOrThrow(await env.readTextFile("nested/child/file.txt"))).toBe("hello");
-		expect(getOrThrow(await env.readTextLines("nested/child/file.txt", { maxLines: 1 }))).toEqual(["hello"]);
-		expect(Buffer.from(getOrThrow(await env.readBinaryFile("nested/child/file.txt"))).toString("utf8")).toBe("hello");
+		expect(getOrThrow(await env.absolutePath("nested/child", BACKGROUND_CONTEXT))).toBe(join(root, "nested/child"));
+		expect(getOrThrow(await env.joinPath([root, "nested", "child"], BACKGROUND_CONTEXT))).toBe(
+			join(root, "nested", "child"),
+		);
+		getOrThrow(await env.createDir("nested/child", undefined, BACKGROUND_CONTEXT));
+		getOrThrow(await env.writeFile("nested/child/file.txt", "hel", BACKGROUND_CONTEXT));
+		getOrThrow(await env.appendFile("nested/child/file.txt", "lo", BACKGROUND_CONTEXT));
+		expect(getOrThrow(await env.readTextFile("nested/child/file.txt", BACKGROUND_CONTEXT))).toBe("hello");
+		expect(getOrThrow(await env.readTextLines("nested/child/file.txt", { maxLines: 1 }, BACKGROUND_CONTEXT))).toEqual(
+			["hello"],
+		);
+		expect(
+			Buffer.from(getOrThrow(await env.readBinaryFile("nested/child/file.txt", BACKGROUND_CONTEXT))).toString(
+				"utf8",
+			),
+		).toBe("hello");
 
-		const entries = getOrThrow(await env.listDir("nested/child"));
+		const entries = getOrThrow(await env.listDir("nested/child", BACKGROUND_CONTEXT));
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({
 			name: "file.txt",
@@ -90,58 +99,62 @@ describe("NodeExecutionEnv", () => {
 		});
 		expect(typeof entries[0]!.mtimeMs).toBe("number");
 
-		expect(getOrThrow(await env.exists("nested/child/file.txt"))).toBe(true);
-		getOrThrow(await env.remove("nested/child/file.txt"));
-		expect(getOrThrow(await env.exists("nested/child/file.txt"))).toBe(false);
+		expect(getOrThrow(await env.exists("nested/child/file.txt", BACKGROUND_CONTEXT))).toBe(true);
+		getOrThrow(await env.remove("nested/child/file.txt", undefined, BACKGROUND_CONTEXT));
+		expect(getOrThrow(await env.exists("nested/child/file.txt", BACKGROUND_CONTEXT))).toBe(false);
 	});
 
 	it("expands home-relative paths and file URLs", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		expect(getOrThrow(await env.absolutePath("~/pi-node-env-test"))).toBe(join(homedir(), "pi-node-env-test"));
+		expect(getOrThrow(await env.absolutePath("~/pi-node-env-test", BACKGROUND_CONTEXT))).toBe(
+			join(homedir(), "pi-node-env-test"),
+		);
 		const filePath = join(root, "file with spaces.txt");
-		expect(getOrThrow(await env.absolutePath(pathToFileURL(filePath).href))).toBe(filePath);
+		expect(getOrThrow(await env.absolutePath(pathToFileURL(filePath).href, BACKGROUND_CONTEXT))).toBe(filePath);
 	});
 
 	it("returns fileInfo for files, directories, and symlinks without following symlinks", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.createDir("dir", { recursive: true }));
-		getOrThrow(await env.writeFile("dir/file.txt", "hello"));
+		getOrThrow(await env.createDir("dir", { recursive: true }, BACKGROUND_CONTEXT));
+		getOrThrow(await env.writeFile("dir/file.txt", "hello", BACKGROUND_CONTEXT));
 		await symlink(join(root, "dir/file.txt"), join(root, "file-link"));
 		await symlink(join(root, "dir"), join(root, "dir-link"));
 
-		expect(getOrThrow(await env.fileInfo("dir"))).toMatchObject({
+		expect(getOrThrow(await env.fileInfo("dir", BACKGROUND_CONTEXT))).toMatchObject({
 			name: "dir",
 			path: join(root, "dir"),
 			kind: "directory",
 		});
-		expect(getOrThrow(await env.fileInfo("dir/file.txt"))).toMatchObject({
+		expect(getOrThrow(await env.fileInfo("dir/file.txt", BACKGROUND_CONTEXT))).toMatchObject({
 			name: "file.txt",
 			path: join(root, "dir/file.txt"),
 			kind: "file",
 			size: 5,
 		});
-		expect(getOrThrow(await env.fileInfo("file-link"))).toMatchObject({
+		expect(getOrThrow(await env.fileInfo("file-link", BACKGROUND_CONTEXT))).toMatchObject({
 			name: "file-link",
 			path: join(root, "file-link"),
 			kind: "symlink",
 		});
-		expect(getOrThrow(await env.fileInfo("dir-link"))).toMatchObject({
+		expect(getOrThrow(await env.fileInfo("dir-link", BACKGROUND_CONTEXT))).toMatchObject({
 			name: "dir-link",
 			path: join(root, "dir-link"),
 			kind: "symlink",
 		});
-		expect(getOrThrow(await env.canonicalPath("file-link"))).toBe(await realpath(join(root, "dir/file.txt")));
+		expect(getOrThrow(await env.canonicalPath("file-link", BACKGROUND_CONTEXT))).toBe(
+			await realpath(join(root, "dir/file.txt")),
+		);
 	});
 
 	it("lists symlinks as symlinks", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.writeFile("target.txt", "hello"));
+		getOrThrow(await env.writeFile("target.txt", "hello", BACKGROUND_CONTEXT));
 		await symlink(join(root, "target.txt"), join(root, "link.txt"));
 
-		const entries = getOrThrow(await env.listDir("."));
+		const entries = getOrThrow(await env.listDir(".", BACKGROUND_CONTEXT));
 		expect(
 			entries.map((entry) => ({ name: entry.name, kind: entry.kind })).sort((a, b) => a.name.localeCompare(b.name)),
 		).toEqual([
@@ -153,14 +166,14 @@ describe("NodeExecutionEnv", () => {
 	it("stops reading text lines at the requested limit", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.writeFile("file.txt", "one\ntwo\nthree"));
-		expect(getOrThrow(await env.readTextLines("file.txt", { maxLines: 1 }))).toEqual(["one"]);
+		getOrThrow(await env.writeFile("file.txt", "one\ntwo\nthree", BACKGROUND_CONTEXT));
+		expect(getOrThrow(await env.readTextLines("file.txt", { maxLines: 1 }, BACKGROUND_CONTEXT))).toEqual(["one"]);
 	});
 
 	it("returns FileError for missing paths and keeps exists false for missing paths", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const info = await env.fileInfo("missing.txt");
+		const info = await env.fileInfo("missing.txt", BACKGROUND_CONTEXT);
 		expect(info.ok).toBe(false);
 		if (!info.ok) {
 			expect(info.error).toBeInstanceOf(FileError);
@@ -170,14 +183,14 @@ describe("NodeExecutionEnv", () => {
 				path: join(root, "missing.txt"),
 			});
 		}
-		expect(getOrThrow(await env.exists("missing.txt"))).toBe(false);
+		expect(getOrThrow(await env.exists("missing.txt", BACKGROUND_CONTEXT))).toBe(false);
 	});
 
 	it("returns FileError for listing non-directories", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.writeFile("file.txt", "hello"));
-		const result = await env.listDir("file.txt");
+		getOrThrow(await env.writeFile("file.txt", "hello", BACKGROUND_CONTEXT));
+		const result = await env.listDir("file.txt", BACKGROUND_CONTEXT);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error).toBeInstanceOf(FileError);
@@ -188,29 +201,29 @@ describe("NodeExecutionEnv", () => {
 	it("appends to new files and creates parent directories", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.appendFile("new/nested/file.txt", "a"));
-		getOrThrow(await env.appendFile("new/nested/file.txt", "b"));
-		expect(getOrThrow(await env.readTextFile("new/nested/file.txt"))).toBe("ab");
+		getOrThrow(await env.appendFile("new/nested/file.txt", "a", BACKGROUND_CONTEXT));
+		getOrThrow(await env.appendFile("new/nested/file.txt", "b", BACKGROUND_CONTEXT));
+		expect(getOrThrow(await env.readTextFile("new/nested/file.txt", BACKGROUND_CONTEXT))).toBe("ab");
 	});
 
 	it("atomically renames a file and replaces the destination", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.writeFile("source.txt", "new"));
-		getOrThrow(await env.writeFile("destination.txt", "old"));
+		getOrThrow(await env.writeFile("source.txt", "new", BACKGROUND_CONTEXT));
+		getOrThrow(await env.writeFile("destination.txt", "old", BACKGROUND_CONTEXT));
 
-		getOrThrow(await env.renameFile("source.txt", "destination.txt"));
+		getOrThrow(await env.renameFile("source.txt", "destination.txt", BACKGROUND_CONTEXT));
 
-		expect(getOrThrow(await env.exists("source.txt"))).toBe(false);
-		expect(getOrThrow(await env.readTextFile("destination.txt"))).toBe("new");
+		expect(getOrThrow(await env.exists("source.txt", BACKGROUND_CONTEXT))).toBe(false);
+		expect(getOrThrow(await env.readTextFile("destination.txt", BACKGROUND_CONTEXT))).toBe("new");
 	});
 
 	it("reports the source path when rename fails because the source is missing", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.writeFile("destination.txt", "unchanged"));
+		getOrThrow(await env.writeFile("destination.txt", "unchanged", BACKGROUND_CONTEXT));
 
-		const result = await env.renameFile("missing-source.txt", "destination.txt");
+		const result = await env.renameFile("missing-source.txt", "destination.txt", BACKGROUND_CONTEXT);
 
 		expect(result).toMatchObject({
 			ok: false,
@@ -219,15 +232,15 @@ describe("NodeExecutionEnv", () => {
 				path: join(root, "missing-source.txt"),
 			},
 		});
-		expect(getOrThrow(await env.readTextFile("destination.txt"))).toBe("unchanged");
+		expect(getOrThrow(await env.readTextFile("destination.txt", BACKGROUND_CONTEXT))).toBe("unchanged");
 	});
 
 	it("creates temporary directories and files", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const tempDir = getOrThrow(await env.createTempDir("node-env-test-"));
+		const tempDir = getOrThrow(await env.createTempDir("node-env-test-", BACKGROUND_CONTEXT));
 		await expect(access(tempDir)).resolves.toBeUndefined();
-		const tempFile = getOrThrow(await env.createTempFile({ prefix: "prefix-", suffix: ".txt" }));
+		const tempFile = getOrThrow(await env.createTempFile({ prefix: "prefix-", suffix: ".txt" }, BACKGROUND_CONTEXT));
 		await expect(access(tempFile)).resolves.toBeUndefined();
 		expect(tempFile.endsWith(".txt")).toBe(true);
 	});
@@ -235,36 +248,36 @@ describe("NodeExecutionEnv", () => {
 	it("honors createDir recursive false and remove recursive/force options", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const createResult = await env.createDir("missing/child", { recursive: false });
+		const createResult = await env.createDir("missing/child", { recursive: false }, BACKGROUND_CONTEXT);
 		expect(createResult.ok).toBe(false);
 		if (!createResult.ok) expect(createResult.error).toMatchObject({ code: "not_found" });
 
-		getOrThrow(await env.writeFile("dir/child/file.txt", "hello"));
-		const removeDirectory = await env.remove("dir", { recursive: false });
+		getOrThrow(await env.writeFile("dir/child/file.txt", "hello", BACKGROUND_CONTEXT));
+		const removeDirectory = await env.remove("dir", { recursive: false }, BACKGROUND_CONTEXT);
 		expect(removeDirectory.ok).toBe(false);
-		getOrThrow(await env.remove("dir", { recursive: true }));
-		expect(getOrThrow(await env.exists("dir"))).toBe(false);
+		getOrThrow(await env.remove("dir", { recursive: true }, BACKGROUND_CONTEXT));
+		expect(getOrThrow(await env.exists("dir", BACKGROUND_CONTEXT))).toBe(false);
 
-		const removeMissing = await env.remove("missing", { force: false });
+		const removeMissing = await env.remove("missing", { force: false }, BACKGROUND_CONTEXT);
 		expect(removeMissing.ok).toBe(false);
-		getOrThrow(await env.remove("missing", { force: true }));
+		getOrThrow(await env.remove("missing", { force: true }, BACKGROUND_CONTEXT));
 	});
 
 	it("returns aborted results for pre-aborted cancellable file operations", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.writeFile("file.txt", "hello"));
+		getOrThrow(await env.writeFile("file.txt", "hello", BACKGROUND_CONTEXT));
 		const controller = new AbortController();
 		controller.abort();
-		const signal = controller.signal;
+		const context = withAbortSignal(controller.signal, BACKGROUND_CONTEXT);
 
 		const results = await Promise.all([
-			env.readTextFile("file.txt", signal),
-			env.readTextLines("file.txt", { abortSignal: signal }),
-			env.readBinaryFile("file.txt", signal),
-			env.writeFile("other.txt", "hello", signal),
-			env.renameFile("file.txt", "renamed.txt", signal),
-			env.listDir(".", signal),
+			env.readTextFile("file.txt", context),
+			env.readTextLines("file.txt", undefined, context),
+			env.readBinaryFile("file.txt", context),
+			env.writeFile("other.txt", "hello", context),
+			env.renameFile("file.txt", "renamed.txt", context),
+			env.listDir(".", context),
 		]);
 		for (const result of results) {
 			expect(result.ok).toBe(false);
@@ -275,16 +288,20 @@ describe("NodeExecutionEnv", () => {
 	it("cleanup is best-effort", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		await expect(env.cleanup()).resolves.toBeUndefined();
+		await expect(env.cleanup(BACKGROUND_CONTEXT)).resolves.toBeUndefined();
 	});
 
 	it("executes commands in cwd with env overrides", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
 		const result = getOrThrow(
-			await env.exec('printf \'%s:%s\' "$PWD" "$NODE_ENV_TEST"', {
-				env: { NODE_ENV_TEST: "ok" },
-			}),
+			await env.exec(
+				'printf \'%s:%s\' "$PWD" "$NODE_ENV_TEST"',
+				{
+					env: { NODE_ENV_TEST: "ok" },
+				},
+				BACKGROUND_CONTEXT,
+			),
 		);
 		expect(result).toEqual({ stdout: `${await realpath(root)}:ok`, stderr: "", exitCode: 0 });
 	});
@@ -313,6 +330,7 @@ describe("NodeExecutionEnv", () => {
 				await env.exec(
 					`printf '%s:%s|%s|%s' "\${PI_SESSION_FILE+x}" "\${PI_SESSION_FILE-}" "$PI_CODING_AGENT" "$PI_NODE_ENV_PRESERVED_TEST"`,
 					{ env: overrides },
+					BACKGROUND_CONTEXT,
 				),
 			);
 
@@ -330,10 +348,14 @@ describe("NodeExecutionEnv", () => {
 		try {
 			const env = new NodeExecutionEnv({ cwd: root, shellEnv: { [configuredKey]: "configured" } });
 			const result = getOrThrow(
-				await env.exec(`printf '%s:%s:%s' "\${${inheritedKey}-}" "\${${configuredKey}-}" "\${${explicitKey}-}"`, {
-					inheritEnv: false,
-					env: { [explicitKey]: "explicit" },
-				}),
+				await env.exec(
+					`printf '%s:%s:%s' "\${${inheritedKey}-}" "\${${configuredKey}-}" "\${${explicitKey}-}"`,
+					{
+						inheritEnv: false,
+						env: { [explicitKey]: "explicit" },
+					},
+					BACKGROUND_CONTEXT,
+				),
 			);
 
 			expect(result.stdout).toBe("::explicit");
@@ -348,7 +370,13 @@ describe("NodeExecutionEnv", () => {
 		const root = createTempDir();
 		const shellPath = "C:\\Windows\\System32\\bash.exe";
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.writeFile(shellPath, '#!/bin/sh\nprintf \'args:%s\\n\' "$*" >&2\nexec /bin/bash "$@"\n'));
+		getOrThrow(
+			await env.writeFile(
+				shellPath,
+				'#!/bin/sh\nprintf \'args:%s\\n\' "$*" >&2\nexec /bin/bash "$@"\n',
+				BACKGROUND_CONTEXT,
+			),
+		);
 		await chmod(join(root, shellPath), 0o755);
 
 		const originalCwd = process.cwd();
@@ -364,7 +392,9 @@ describe("NodeExecutionEnv", () => {
 
 			const wslEnv = new NodeExecutionEnv({ cwd: root, shellPath });
 			const nameExpansion = "$" + "{name}";
-			const result = getOrThrow(await wslEnv.exec(`name='World'; echo "Hello, ${nameExpansion}!"`));
+			const result = getOrThrow(
+				await wslEnv.exec(`name='World'; echo "Hello, ${nameExpansion}!"`, undefined, BACKGROUND_CONTEXT),
+			);
 
 			expect(result).toEqual({ stdout: "Hello, World!\n", stderr: "args:-s\n", exitCode: 0 });
 		} finally {
@@ -386,7 +416,11 @@ describe("NodeExecutionEnv", () => {
 			try {
 				const result = getOrThrow(
 					await withTimeout(
-						env.exec(createInheritedStdioCommand(pidFile), { abortSignal: controller.signal }),
+						env.exec(
+							createInheritedStdioCommand(pidFile),
+							undefined,
+							withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
+						),
 						3000,
 						() => controller.abort(),
 					),
@@ -402,12 +436,12 @@ describe("NodeExecutionEnv", () => {
 	it("cleanup terminates active shell processes", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const execution = env.exec("touch started; sleep 60");
-		for (let attempt = 0; attempt < 100 && !getOrThrow(await env.exists("started")); attempt++) {
+		const execution = env.exec("touch started; sleep 60", undefined, BACKGROUND_CONTEXT);
+		for (let attempt = 0; attempt < 100 && !getOrThrow(await env.exists("started", BACKGROUND_CONTEXT)); attempt++) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
-		expect(getOrThrow(await env.exists("started"))).toBe(true);
-		await env.cleanup();
+		expect(getOrThrow(await env.exists("started", BACKGROUND_CONTEXT))).toBe(true);
+		await env.cleanup(BACKGROUND_CONTEXT);
 		await expect(withTimeout(execution, 3000)).resolves.toMatchObject({ ok: true });
 	});
 
@@ -417,14 +451,18 @@ describe("NodeExecutionEnv", () => {
 		let stdout = "";
 		let stderr = "";
 		const result = getOrThrow(
-			await env.exec("printf out; printf err >&2", {
-				onStdout: (chunk) => {
-					stdout += chunk;
+			await env.exec(
+				"printf out; printf err >&2",
+				{
+					onStdout: (chunk) => {
+						stdout += chunk;
+					},
+					onStderr: (chunk) => {
+						stderr += chunk;
+					},
 				},
-				onStderr: (chunk) => {
-					stderr += chunk;
-				},
-			}),
+				BACKGROUND_CONTEXT,
+			),
 		);
 		expect(result).toEqual({ stdout: "out", stderr: "err", exitCode: 0 });
 		expect(stdout).toBe("out");
@@ -434,7 +472,7 @@ describe("NodeExecutionEnv", () => {
 	it("reports a missing working directory before spawning", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: join(root, "missing") });
-		const result = await env.exec("printf ok");
+		const result = await env.exec("printf ok", undefined, BACKGROUND_CONTEXT);
 
 		expect(result).toMatchObject({
 			ok: false,
@@ -445,14 +483,14 @@ describe("NodeExecutionEnv", () => {
 	it("returns non-zero command exit codes as successful execution results", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const result = getOrThrow(await env.exec("exit 7"));
+		const result = getOrThrow(await env.exec("exit 7", undefined, BACKGROUND_CONTEXT));
 		expect(result).toEqual({ stdout: "", stderr: "", exitCode: 7 });
 	});
 
 	it("returns timeout errors for commands exceeding the timeout", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const result = await env.exec("sleep 5", { timeout: 0.01 });
+		const result = await env.exec("sleep 5", { timeout: 0.01 }, BACKGROUND_CONTEXT);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toMatchObject({ code: "timeout" });
 	});
@@ -460,11 +498,15 @@ describe("NodeExecutionEnv", () => {
 	it("returns callback errors from exec stream handlers", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const result = await env.exec("printf out", {
-			onStdout: () => {
-				throw new Error("callback failed");
+		const result = await env.exec(
+			"printf out",
+			{
+				onStdout: () => {
+					throw new Error("callback failed");
+				},
 			},
-		});
+			BACKGROUND_CONTEXT,
+		);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toMatchObject({ code: "callback_error", message: "callback failed" });
 	});
@@ -472,15 +514,15 @@ describe("NodeExecutionEnv", () => {
 	it("returns shell unavailable and spawn errors", async () => {
 		const root = createTempDir();
 		const missingShellEnv = new NodeExecutionEnv({ cwd: root, shellPath: join(root, "missing-shell") });
-		const missingShell = await missingShellEnv.exec("printf ok");
+		const missingShell = await missingShellEnv.exec("printf ok", undefined, BACKGROUND_CONTEXT);
 		expect(missingShell.ok).toBe(false);
 		if (!missingShell.ok) expect(missingShell.error).toMatchObject({ code: "shell_unavailable" });
 
 		const shellPath = join(root, "not-executable-shell");
 		const env = new NodeExecutionEnv({ cwd: root });
-		getOrThrow(await env.writeFile(shellPath, "not executable"));
+		getOrThrow(await env.writeFile(shellPath, "not executable", BACKGROUND_CONTEXT));
 		const spawnErrorEnv = new NodeExecutionEnv({ cwd: root, shellPath });
-		const spawnError = await spawnErrorEnv.exec("printf ok");
+		const spawnError = await spawnErrorEnv.exec("printf ok", undefined, BACKGROUND_CONTEXT);
 		expect(spawnError.ok).toBe(false);
 		if (!spawnError.ok) expect(spawnError.error).toMatchObject({ code: "spawn_error" });
 	});
@@ -489,7 +531,7 @@ describe("NodeExecutionEnv", () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
 		const controller = new AbortController();
-		const promise = env.exec("sleep 5", { abortSignal: controller.signal });
+		const promise = env.exec("sleep 5", undefined, withAbortSignal(controller.signal, BACKGROUND_CONTEXT));
 		controller.abort();
 		const result = await promise;
 		expect(result.ok).toBe(false);
@@ -499,10 +541,12 @@ describe("NodeExecutionEnv", () => {
 	it("captures large shell output to a full output file through the execution env", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
-		const result = getOrThrow(await executeShellWithCapture(env, "yes line | head -n 15000"));
+		const result = getOrThrow(
+			await executeShellWithCapture(env, "yes line | head -n 15000", undefined, BACKGROUND_CONTEXT),
+		);
 		expect(result.truncated).toBe(true);
 		expect(result.fullOutputPath).toBeDefined();
-		const fullOutput = getOrThrow(await env.readTextFile(result.fullOutputPath!));
+		const fullOutput = getOrThrow(await env.readTextFile(result.fullOutputPath!, BACKGROUND_CONTEXT));
 		expect(fullOutput.split("\n").length).toBeGreaterThan(10000);
 		expect(result.output.length).toBeLessThan(fullOutput.length);
 	});

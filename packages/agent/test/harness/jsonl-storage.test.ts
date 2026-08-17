@@ -70,7 +70,7 @@ describe("JsonlStorage snapshot creation", () => {
 			BACKGROUND_CONTEXT,
 		);
 
-		const lines = getOrThrow(await fileSystem.readTextFile("fork.jsonl"))
+		const lines = getOrThrow(await fileSystem.readTextFile("fork.jsonl", BACKGROUND_CONTEXT))
 			.trimEnd()
 			.split("\n");
 		expect(lines.slice(1).every((line) => !Array.isArray(JSON.parse(line)))).toBe(true);
@@ -100,7 +100,7 @@ describe("JsonlStorage snapshot creation", () => {
 			(await storage.commit([storedValues.setValue(storedValues.sessionName, "updated")], BACKGROUND_CONTEXT))
 				.firstSeq,
 		).toBe(9);
-		expect(getOrThrow(await fileSystem.exists("fork.jsonl.tmp"))).toBe(false);
+		expect(getOrThrow(await fileSystem.exists("fork.jsonl.tmp", BACKGROUND_CONTEXT))).toBe(false);
 		await storage.close(BACKGROUND_CONTEXT);
 
 		const reopened = await JsonlStorage.open(options, BACKGROUND_CONTEXT);
@@ -112,7 +112,7 @@ describe("JsonlStorage snapshot creation", () => {
 
 	it("removes the temporary file when publication fails", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
-		getOrThrow(await fileSystem.createDir("blocked.jsonl"));
+		getOrThrow(await fileSystem.createDir("blocked.jsonl", undefined, BACKGROUND_CONTEXT));
 
 		await expect(
 			JsonlStorage.createFromSnapshot(
@@ -122,8 +122,10 @@ describe("JsonlStorage snapshot creation", () => {
 				BACKGROUND_CONTEXT,
 			),
 		).rejects.toThrow("Failed to publish JSONL storage");
-		expect(getOrThrow(await fileSystem.exists("blocked.jsonl.tmp"))).toBe(false);
-		expect(getOrThrow(await fileSystem.fileInfo("blocked.jsonl"))).toMatchObject({ kind: "directory" });
+		expect(getOrThrow(await fileSystem.exists("blocked.jsonl.tmp", BACKGROUND_CONTEXT))).toBe(false);
+		expect(getOrThrow(await fileSystem.fileInfo("blocked.jsonl", BACKGROUND_CONTEXT))).toMatchObject({
+			kind: "directory",
+		});
 	});
 });
 
@@ -179,7 +181,7 @@ describe("JsonlStorage persistence", () => {
 		);
 		await storage.commit([storedValues.setValue(storedValues.sessionName, "name")], BACKGROUND_CONTEXT);
 
-		const lines = getOrThrow(await fileSystem.readTextFile("session.jsonl"))
+		const lines = getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT))
 			.trimEnd()
 			.split("\n");
 		expect(JSON.parse(lines[0]!)).toEqual(header("round-trip"));
@@ -275,7 +277,7 @@ describe("JsonlStorage torn tail", () => {
 		const storage = await JsonlStorage.create(options, header("torn"), BACKGROUND_CONTEXT);
 		await storage.commit([entryWrite("kept")], BACKGROUND_CONTEXT);
 		await storage.close(BACKGROUND_CONTEXT);
-		const prefix = getOrThrow(await fileSystem.readTextFile("session.jsonl"));
+		const prefix = getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT));
 		return { fileSystem, options, prefix };
 	}
 
@@ -292,13 +294,14 @@ describe("JsonlStorage torn tail", () => {
 				seq: 2,
 				timestamp: NOW,
 			}),
+			BACKGROUND_CONTEXT,
 		);
 
 		const reopened = await JsonlStorage.open(options, BACKGROUND_CONTEXT);
 		expect((await reopened.getEntries(["kept", "torn"], BACKGROUND_CONTEXT)).has("torn")).toBe(false);
 		expect((await reopened.getEntries(["kept"], BACKGROUND_CONTEXT)).get("kept")?.id).toBe("kept");
-		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(prefix);
-		expect(getOrThrow(await fileSystem.exists("session.jsonl.tmp"))).toBe(false);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT))).toBe(prefix);
+		expect(getOrThrow(await fileSystem.exists("session.jsonl.tmp", BACKGROUND_CONTEXT))).toBe(false);
 
 		const next = await reopened.commit([entryWrite("after")], BACKGROUND_CONTEXT);
 		expect(next.firstSeq).toBe(2);
@@ -324,24 +327,25 @@ describe("JsonlStorage torn tail", () => {
 				storedValues.setValue(storedValues.sessionName, "lost"),
 				storedValues.appendList(events, "lost"),
 			]),
+			BACKGROUND_CONTEXT,
 		);
 
 		const reopened = await JsonlStorage.open(options, BACKGROUND_CONTEXT);
 		expect((await reopened.getEntries(["torn-a"], BACKGROUND_CONTEXT)).has("torn-a")).toBe(false);
 		expect(await reopened.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toBeUndefined();
 		expect(await reopened.readList(events, undefined, BACKGROUND_CONTEXT)).toEqual([]);
-		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(prefix);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT))).toBe(prefix);
 		await reopened.close(BACKGROUND_CONTEXT);
 	});
 
 	it("rejects a malformed interior line without rewriting", async () => {
 		const { fileSystem, options, prefix } = await seed();
 		const corrupted = `${prefix}not-json\n${JSON.stringify(storedValues.setValue(storedValues.sessionName, "after"))}\n`;
-		await fileSystem.writeFile("session.jsonl", corrupted);
+		await fileSystem.writeFile("session.jsonl", corrupted, BACKGROUND_CONTEXT);
 
 		await expect(JsonlStorage.open(options, BACKGROUND_CONTEXT)).rejects.toThrow(/line 3/);
-		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(corrupted);
-		expect(getOrThrow(await fileSystem.exists("session.jsonl.tmp"))).toBe(false);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT))).toBe(corrupted);
+		expect(getOrThrow(await fileSystem.exists("session.jsonl.tmp", BACKGROUND_CONTEXT))).toBe(false);
 	});
 
 	it("rejects the unsupported pre-WP01 scalar record spelling", async () => {
@@ -355,34 +359,34 @@ describe("JsonlStorage torn tail", () => {
 			key: "state",
 			value: true,
 		})}\n`;
-		await fileSystem.writeFile("session.jsonl", corrupted);
+		await fileSystem.writeFile("session.jsonl", corrupted, BACKGROUND_CONTEXT);
 
 		await expect(JsonlStorage.open(options, BACKGROUND_CONTEXT)).rejects.toThrow(/line 3/);
-		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(corrupted);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT))).toBe(corrupted);
 	});
 
 	it("rejects a complete malformed final line without rewriting", async () => {
 		const { fileSystem, options, prefix } = await seed();
 		const corrupted = `${prefix}not-json\n`;
-		await fileSystem.writeFile("session.jsonl", corrupted);
+		await fileSystem.writeFile("session.jsonl", corrupted, BACKGROUND_CONTEXT);
 
 		await expect(JsonlStorage.open(options, BACKGROUND_CONTEXT)).rejects.toThrow(/line 3/);
-		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(corrupted);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT))).toBe(corrupted);
 	});
 
 	it("rejects a complete final line with invalid transaction framing", async () => {
 		const { fileSystem, options, prefix } = await seed();
 		const corrupted = `${prefix}${JSON.stringify({ kind: "nope", seq: 2 })}\n`;
-		await fileSystem.writeFile("session.jsonl", corrupted);
+		await fileSystem.writeFile("session.jsonl", corrupted, BACKGROUND_CONTEXT);
 
 		await expect(JsonlStorage.open(options, BACKGROUND_CONTEXT)).rejects.toThrow(/line 3/);
-		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl"))).toBe(corrupted);
+		expect(getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT))).toBe(corrupted);
 	});
 
 	it("rejects an unterminated header", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const options = { fileSystem, path: "session.jsonl", now: () => NOW };
-		await fileSystem.writeFile("session.jsonl", JSON.stringify(header("torn")).slice(0, -4));
+		await fileSystem.writeFile("session.jsonl", JSON.stringify(header("torn")).slice(0, -4), BACKGROUND_CONTEXT);
 
 		await expect(JsonlStorage.open(options, BACKGROUND_CONTEXT)).rejects.toThrow(/missing header/);
 	});

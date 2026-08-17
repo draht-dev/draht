@@ -1,6 +1,6 @@
-import { NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { AbortRequested, OperationEffectGate } from "../../src/harness/execution/effect-gate.ts";
 import {
 	applyBeforeToolDecision,
@@ -120,7 +120,7 @@ describe("tool execution primitives", () => {
 		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
 		const updates: AgentToolResult<unknown>[] = [];
 
-		const result = await executeToolCall(cleared, gate, (update) => updates.push(update), NOOP_TELEMETRY_CONTEXT);
+		const result = await executeToolCall(cleared, gate, (update) => updates.push(update), BACKGROUND_CONTEXT);
 		lateUpdate?.({ content: [{ type: "text", text: "late" }], details: { value: "late" } });
 
 		expect(vi.mocked(execute)).toHaveBeenCalledOnce();
@@ -146,7 +146,7 @@ describe("tool execution primitives", () => {
 	])("converts %s tool throws to error output", async (_kind, execute) => {
 		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
 
-		const result = await executeToolCall(cleared, effectGate(), () => {}, NOOP_TELEMETRY_CONTEXT);
+		const result = await executeToolCall(cleared, effectGate(), () => {}, BACKGROUND_CONTEXT);
 
 		expect(result.isError).toBe(true);
 		expect(text(result.result)).toBe("tool failed");
@@ -158,9 +158,7 @@ describe("tool execution primitives", () => {
 		const gate = effectGate();
 		gate.beginAbort(Promise.resolve());
 
-		await expect(executeToolCall(cleared, gate, () => {}, NOOP_TELEMETRY_CONTEXT)).rejects.toBeInstanceOf(
-			AbortRequested,
-		);
+		await expect(executeToolCall(cleared, gate, () => {}, BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(AbortRequested);
 		expect(execute).not.toHaveBeenCalled();
 	});
 

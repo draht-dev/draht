@@ -1,7 +1,7 @@
 import {
+	type Context as AiContext,
 	type Api,
 	type AssistantMessage,
-	type Context,
 	contentText,
 	type Model,
 	type Models,
@@ -13,6 +13,7 @@ import {
 	uuidv7,
 } from "@draht/ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
+import type { Context } from "../context.ts";
 import { convertToLlm, createBranchSummaryMessage, createCompactionSummaryMessage } from "../messages.ts";
 import { buildContextEntries, sessionEntryToContextMessages } from "../session/context.ts";
 import type { CompactionEntry, Entry } from "../session/types.ts";
@@ -110,19 +111,22 @@ export interface CompactResult<T = unknown> {
 export async function completeSimpleWithRetries(
 	models: Models,
 	model: Model<Api>,
-	context: Context,
+	aiContext: AiContext,
 	options: SimpleStreamOptions,
-	retry?: RetryPolicy,
-	callbacks?: RetryCallbacks,
+	retry: RetryPolicy | undefined,
+	callbacks: RetryCallbacks | undefined,
+	context: Context,
 ): Promise<AssistantMessage> {
 	// Summaries are standalone requests, so isolate routing and avoid cache writes that cannot be reused.
 	const requestOptions: SimpleStreamOptions = {
 		...options,
+		signal: context.abortSignal,
+		telemetryContext: context.telemetryContext,
 		cacheRetention: "none",
 		sessionId: uuidv7(),
 	};
 	return retryAssistantCall(
-		() => models.completeSimple(model, context, requestOptions),
+		() => models.completeSimple(model, aiContext, requestOptions),
 		retry,
 		requestOptions.signal,
 		callbacks,
@@ -485,24 +489,24 @@ export async function generateSummary(
 	models: Models,
 	model: Model<Api>,
 	reserveTokens: number,
-	signal?: AbortSignal,
-	customInstructions?: string,
-	previousSummary?: string,
-	thinkingLevel?: ThinkingLevel,
-	retry?: RetryPolicy,
-	callbacks?: RetryCallbacks,
+	customInstructions: string | undefined,
+	previousSummary: string | undefined,
+	thinkingLevel: ThinkingLevel | undefined,
+	retry: RetryPolicy | undefined,
+	callbacks: RetryCallbacks | undefined,
+	context: Context,
 ): Promise<Result<string, CompactionError>> {
 	const result = await generateSummaryWithUsage(
 		currentMessages,
 		models,
 		model,
 		reserveTokens,
-		signal,
 		customInstructions,
 		previousSummary,
 		thinkingLevel,
 		retry,
 		callbacks,
+		context,
 	);
 	return result.ok ? ok(result.value.text) : err(result.error);
 }
@@ -513,12 +517,12 @@ export async function generateSummaryWithUsage(
 	models: Models,
 	model: Model<Api>,
 	reserveTokens: number,
-	signal?: AbortSignal,
-	customInstructions?: string,
-	previousSummary?: string,
-	thinkingLevel?: ThinkingLevel,
-	retry?: RetryPolicy,
-	callbacks?: RetryCallbacks,
+	customInstructions: string | undefined,
+	previousSummary: string | undefined,
+	thinkingLevel: ThinkingLevel | undefined,
+	retry: RetryPolicy | undefined,
+	callbacks: RetryCallbacks | undefined,
+	context: Context,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
@@ -548,8 +552,8 @@ export async function generateSummaryWithUsage(
 
 	const completionOptions =
 		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, reasoning: thinkingLevel }
-			: { maxTokens, signal };
+			? { maxTokens, reasoning: thinkingLevel }
+			: { maxTokens };
 
 	const response = await completeSimpleWithRetries(
 		models,
@@ -558,6 +562,7 @@ export async function generateSummaryWithUsage(
 		completionOptions,
 		retry,
 		callbacks,
+		context,
 	);
 	if (response.stopReason === "aborted") {
 		return err(new CompactionError("aborted", response.errorMessage || "Summarization aborted"));
@@ -694,11 +699,11 @@ export async function compact(
 	preparation: CompactionPreparation,
 	models: Models,
 	model: Model<Api>,
-	customInstructions?: string,
-	signal?: AbortSignal,
-	thinkingLevel?: ThinkingLevel,
-	retry?: RetryPolicy,
-	callbacks?: RetryCallbacks,
+	customInstructions: string | undefined,
+	thinkingLevel: ThinkingLevel | undefined,
+	retry: RetryPolicy | undefined,
+	callbacks: RetryCallbacks | undefined,
+	context: Context,
 ): Promise<Result<CompactResult, CompactionError>> {
 	const {
 		messagesToSummarize,
@@ -723,12 +728,12 @@ export async function compact(
 				models,
 				model,
 				settings.reserveTokens,
-				signal,
 				customInstructions,
 				previousSummary,
 				thinkingLevel,
 				retry,
 				callbacks,
+				context,
 			);
 			if (!historyResult.ok) return err(historyResult.error);
 			historyText = historyResult.value.text;
@@ -739,10 +744,10 @@ export async function compact(
 			models,
 			model,
 			settings.reserveTokens,
-			signal,
 			thinkingLevel,
 			retry,
 			callbacks,
+			context,
 		);
 		if (!turnPrefixResult.ok) return err(turnPrefixResult.error);
 		summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value.text}`;
@@ -753,12 +758,12 @@ export async function compact(
 			models,
 			model,
 			settings.reserveTokens,
-			signal,
 			customInstructions,
 			previousSummary,
 			thinkingLevel,
 			retry,
 			callbacks,
+			context,
 		);
 		if (!summaryResult.ok) return err(summaryResult.error);
 		summary = summaryResult.value.text;
@@ -781,10 +786,10 @@ async function generateTurnPrefixSummary(
 	models: Models,
 	model: Model<Api>,
 	reserveTokens: number,
-	signal?: AbortSignal,
-	thinkingLevel?: ThinkingLevel,
-	retry?: RetryPolicy,
-	callbacks?: RetryCallbacks,
+	thinkingLevel: ThinkingLevel | undefined,
+	retry: RetryPolicy | undefined,
+	callbacks: RetryCallbacks | undefined,
+	context: Context,
 ): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
 	const maxTokens = Math.min(
 		Math.floor(0.5 * reserveTokens),
@@ -803,8 +808,8 @@ async function generateTurnPrefixSummary(
 
 	const completionOptions =
 		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, reasoning: thinkingLevel }
-			: { maxTokens, signal };
+			? { maxTokens, reasoning: thinkingLevel }
+			: { maxTokens };
 	const response = await completeSimpleWithRetries(
 		models,
 		model,
@@ -812,6 +817,7 @@ async function generateTurnPrefixSummary(
 		completionOptions,
 		retry,
 		callbacks,
+		context,
 	);
 	if (response.stopReason === "aborted") {
 		return err(new CompactionError("aborted", response.errorMessage || "Turn prefix summarization aborted"));

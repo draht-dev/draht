@@ -27,7 +27,6 @@ export interface Config<TContext extends object | undefined> {
 	readonly systemPrompt: AgentHarnessOptions<TContext>["systemPrompt"];
 	readonly toProviderMessages: NonNullable<AgentHarnessOptions<TContext>["toProviderMessages"]>;
 	readonly entryProjectors: Readonly<NonNullable<AgentHarnessOptions<TContext>["entryProjectors"]>>;
-	readonly telemetryContext: NonNullable<AgentHarnessOptions<TContext>["telemetryContext"]>;
 }
 
 /** The current durable state owned by one lane. */

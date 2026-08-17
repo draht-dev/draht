@@ -1,6 +1,7 @@
 import type { SimpleStreamOptions, Transport } from "@draht/ai";
 import type { Static, TSchema } from "typebox";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "../types.ts";
+import type { Context } from "./context.ts";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
 export type Result<TValue, TError> = { ok: true; value: TValue } | { ok: false; error: TError };
@@ -95,17 +96,17 @@ export type AgentHarnessTool<
 	execute(
 		toolCallId: string,
 		params: Static<TParameters>,
-		signal: AbortSignal | undefined,
 		onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
-		context: TContext,
+		toolContext: TContext,
 		invocation: AgentHarnessToolInvocation,
+		context: Context,
 	): Promise<AgentToolResult<TDetails>>;
 };
 
-/** Static tool context or zero-argument provider resolved for each turn snapshot. */
+/** Static tool context or provider resolved for each turn snapshot. */
 export type AgentHarnessToolContextSource<TContext extends object | undefined> =
 	| TContext
-	| (() => TContext | Promise<TContext>);
+	| ((context: Context) => TContext | Promise<TContext>);
 
 /** Curated provider request options owned by the harness and snapshotted per turn. */
 export interface AgentHarnessStreamOptions {
@@ -244,53 +245,55 @@ export interface FileSystem {
 	cwd: string;
 
 	/** Return an absolute addressed path without requiring it to exist and without resolving symlinks. */
-	absolutePath(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	absolutePath(path: string, context: Context): Promise<Result<string, FileError>>;
 	/** Join path segments in the filesystem namespace without requiring the result to exist. */
-	joinPath(parts: string[], abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	joinPath(parts: string[], context: Context): Promise<Result<string, FileError>>;
 	/** Read a UTF-8 text file. */
-	readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	readTextFile(path: string, context: Context): Promise<Result<string, FileError>>;
 	/** Read UTF-8 text lines. Implementations should stop once `maxLines` lines have been read. */
 	readTextLines(
 		path: string,
-		options?: { maxLines?: number; abortSignal?: AbortSignal },
+		options: { maxLines?: number } | undefined,
+		context: Context,
 	): Promise<Result<string[], FileError>>;
 	/** Read a binary file. */
-	readBinaryFile(path: string, abortSignal?: AbortSignal): Promise<Result<Uint8Array, FileError>>;
+	readBinaryFile(path: string, context: Context): Promise<Result<Uint8Array, FileError>>;
 	/** Create or overwrite a file, creating parent directories when supported. */
-	writeFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal): Promise<Result<void, FileError>>;
+	writeFile(path: string, content: string | Uint8Array, context: Context): Promise<Result<void, FileError>>;
 	/** Create or append to a file, creating parent directories when supported. */
-	appendFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal): Promise<Result<void, FileError>>;
+	appendFile(path: string, content: string | Uint8Array, context: Context): Promise<Result<void, FileError>>;
 	/** Atomically rename a file, replacing the destination when it exists. Does not copy across filesystems. */
-	renameFile(sourcePath: string, destinationPath: string, abortSignal?: AbortSignal): Promise<Result<void, FileError>>;
+	renameFile(sourcePath: string, destinationPath: string, context: Context): Promise<Result<void, FileError>>;
 	/** Return metadata for the addressed path without following symlinks. */
-	fileInfo(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo, FileError>>;
+	fileInfo(path: string, context: Context): Promise<Result<FileInfo, FileError>>;
 	/** List direct children of a directory without following symlinks. */
-	listDir(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo[], FileError>>;
+	listDir(path: string, context: Context): Promise<Result<FileInfo[], FileError>>;
 	/** Return the canonical path for an existing path, resolving symlinks where supported. */
-	canonicalPath(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	canonicalPath(path: string, context: Context): Promise<Result<string, FileError>>;
 	/** Return false for missing paths. Other errors, such as permission failures, return a {@link FileError}. */
-	exists(path: string, abortSignal?: AbortSignal): Promise<Result<boolean, FileError>>;
-	/** Create a directory. Defaults: `recursive: true`, no abort signal. */
+	exists(path: string, context: Context): Promise<Result<boolean, FileError>>;
+	/** Create a directory. Defaults to `recursive: true`. */
 	createDir(
 		path: string,
-		options?: { recursive?: boolean; abortSignal?: AbortSignal },
+		options: { recursive?: boolean } | undefined,
+		context: Context,
 	): Promise<Result<void, FileError>>;
-	/** Remove a file or directory. Defaults: `recursive: false`, `force: false`, no abort signal. */
+	/** Remove a file or directory. Defaults to `recursive: false` and `force: false`. */
 	remove(
 		path: string,
-		options?: { recursive?: boolean; force?: boolean; abortSignal?: AbortSignal },
+		options: { recursive?: boolean; force?: boolean } | undefined,
+		context: Context,
 	): Promise<Result<void, FileError>>;
-	/** Create a temporary directory and return its absolute path. Defaults: `prefix: "tmp-"`, no abort signal. */
-	createTempDir(prefix?: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
-	/** Create a temporary file and return its absolute path. Defaults: `prefix: ""`, `suffix: ""`, no abort signal. */
-	createTempFile(options?: {
-		prefix?: string;
-		suffix?: string;
-		abortSignal?: AbortSignal;
-	}): Promise<Result<string, FileError>>;
+	/** Create a temporary directory and return its absolute path. Defaults to `prefix: "tmp-"`. */
+	createTempDir(prefix: string | undefined, context: Context): Promise<Result<string, FileError>>;
+	/** Create a temporary file and return its absolute path. Defaults to `prefix: ""` and `suffix: ""`. */
+	createTempFile(
+		options: { prefix?: string; suffix?: string } | undefined,
+		context: Context,
+	): Promise<Result<string, FileError>>;
 
 	/** Release filesystem resources. Must be best-effort and must not throw or reject. */
-	cleanup(): Promise<void>;
+	cleanup(context: Context): Promise<void>;
 }
 
 /** Options for {@link Shell.exec}. */
@@ -303,12 +306,10 @@ export interface ShellExecOptions {
 	inheritEnv?: boolean;
 	/** Timeout in seconds. Implementations should return a timeout error when the command exceeds this duration. Defaults to no timeout. */
 	timeout?: number;
-	/** Abort signal used to terminate the command. Defaults to no abort signal. */
-	abortSignal?: AbortSignal;
 	/** Called with stdout chunks as they are produced. */
-	onStdout?: (chunk: string) => void;
+	onStdout?: (chunk: string, context: Context) => void;
 	/** Called with stderr chunks as they are produced. */
-	onStderr?: (chunk: string) => void;
+	onStderr?: (chunk: string, context: Context) => void;
 }
 
 /** Shell execution capability used by the harness. */
@@ -316,10 +317,11 @@ export interface Shell {
 	/** Execute a shell command in {@link FileSystem.cwd} unless `options.cwd` is provided. */
 	exec(
 		command: string,
-		options?: ShellExecOptions,
+		options: ShellExecOptions | undefined,
+		context: Context,
 	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>>;
 	/** Release shell resources. Must be best-effort and must not throw or reject. */
-	cleanup(): Promise<void>;
+	cleanup(context: Context): Promise<void>;
 }
 
 /** Filesystem and process execution environment used by the harness. */

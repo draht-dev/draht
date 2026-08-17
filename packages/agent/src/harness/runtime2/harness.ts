@@ -1,5 +1,4 @@
 import type { Models, RetryPolicy } from "@draht/ai";
-import { NOOP_TELEMETRY_CONTEXT } from "@draht/telemetry";
 import type { QueueMode } from "../../types.ts";
 import type {
 	AgentHarness,
@@ -82,9 +81,8 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 			drive: options.drive ?? "automatic",
 			toolContext: options.toolContext,
 			systemPrompt: options.systemPrompt,
-			toProviderMessages: options.toProviderMessages ?? convertToLlm,
+			toProviderMessages: options.toProviderMessages ?? ((messages) => convertToLlm(messages)),
 			entryProjectors: options.entryProjectors ?? {},
-			telemetryContext: options.telemetryContext ?? NOOP_TELEMETRY_CONTEXT,
 		};
 		this.events = new HarnessEventBus();
 		this.hooks = new HookRegistry((error, hook, lane, context) =>

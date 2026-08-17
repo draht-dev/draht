@@ -51,16 +51,38 @@ export default class Widget {}
 	}
 }
 
-func TestExtractExportsNamedFromIsExcluded(t *testing.T) {
-	// export { a, b } from "./x" is a RE-EXPORT statement (parse.Import
-	// territory), not an export declaration — visExtractExports's
-	// namedExportRe has a (?!\s+from) negative lookahead specifically to
-	// exclude this case (design §R2).
+func TestExtractExportsNamedFromIsReExport(t *testing.T) {
+	// export { a, b } from "./x" IS part of the barrel's public API: the CJS
+	// engine captures it with kind "re-export" (the old (?!\s+from) lookahead
+	// deliberately excluded it, which left every barrel with exports(0) —
+	// removed in the graphify-parity work). Multi-line blocks and
+	// `export * as NS from` are captured too.
 	src := []byte(`export { a, b } from "./other";
+export {
+	c,
+	d as e,
+} from "./more";
+export * as ns from "./star";
 `)
 	exports := extractExports("typescript", src)
-	if len(exports) != 0 {
-		t.Fatalf("expected 0 exports for a from-re-export line, got %+v", exports)
+	got := map[string]Export{}
+	for _, ex := range exports {
+		got[ex.Name] = ex
+	}
+	for _, name := range []string{"a", "b", "c", "e", "ns"} {
+		ex, ok := got[name]
+		if !ok {
+			t.Fatalf("expected re-export %q captured, got %+v", name, exports)
+		}
+		if ex.Kind != "re-export" {
+			t.Errorf("expected kind 're-export' for %q, got %q", name, ex.Kind)
+		}
+	}
+	if got["c"].Line != 2 {
+		t.Errorf("multi-line block should anchor at the block's first line: got %d", got["c"].Line)
+	}
+	if _, ok := got["d"]; ok {
+		t.Errorf("aliased re-export should surface the alias (e), not the source name (d)")
 	}
 }
 

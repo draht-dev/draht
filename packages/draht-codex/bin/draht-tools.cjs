@@ -3039,7 +3039,7 @@ function visBuildMap(root) {
 		.slice(0, 600);
 
 	return {
-		schemaVersion: 6,
+		schemaVersion: 5,
 		generatedAt: new Date().toISOString(),
 		buildMs: Date.now() - startedAt,
 		root: path.basename(root),

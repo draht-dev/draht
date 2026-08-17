@@ -18,6 +18,11 @@ var (
 	goFuncRe   = regexp.MustCompile(`^func\b`)
 
 	rustSymbolRe = regexp.MustCompile(`^\s*(?:fn|struct|enum|trait)\s+([A-Za-z_][\w]*)`)
+
+	// tsNamedExportStmtRe matches one assembled `export { ... }` statement in
+	// namedExportLocalAt (signature resolution only — exports extraction
+	// itself uses the content-level tsNamedBlockRe in exports.go).
+	tsNamedExportStmtRe = regexp.MustCompile(`^\s*export\s*\{([^}]+)\}`)
 )
 
 // buildSymbols ports visBuildSymbols (draht-tools.cjs:1815-1845): exported
@@ -152,7 +157,7 @@ func namedExportLocalAt(lines []string, idx int, exported string) string {
 			break
 		}
 	}
-	m := tsNamedExportRe.FindStringSubmatch(statement.String())
+	m := tsNamedExportStmtRe.FindStringSubmatch(statement.String())
 	if m == nil {
 		return ""
 	}

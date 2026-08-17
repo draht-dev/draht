@@ -136,25 +136,39 @@ Decision: add `action_required` to the existing operation outcome families. In m
 
 WP02 lands these public types and stubs. The first real drive package implements their behavior.
 
-### 8. Invocation context makes telemetry and RPC boundaries explicit
+### 8. Invocation context carries telemetry parentage and RPC request cancellation
 
-Problem: one harness or lane can serve concurrent local callers and RPC requests. A receiver-level or ambient context would let one invocation overwrite another's telemetry parent or cancellation authority. RPC also needs a place to reconstruct request-local authority without adding transport fields to every business method.
+Problem: one harness or lane can serve concurrent local callers and RPC requests. A receiver-level or ambient context would let one invocation overwrite another's telemetry parent or cancellation authority. RPC specifically needs an explicit channel for the server-side abort signal belonging to one request without adding transport fields to every business method.
 
-Concrete trace:
+Concrete telemetry trace:
 
 ```text
-client invocation context
-→ rpc.client injects a trace carrier and maps abort to request cancellation
-→ rpc.server creates a request AbortController and extracts a local telemetry parent
-→ adapter constructs a fresh server Context
-→ harness call, Session commit, and emitted events receive that Context
+client invocation Context
+→ rpc.client injects a trace carrier
+→ rpc.server extracts a local telemetry parent
+→ adapter derives a fresh server Context with withTelemetryContext(...)
+→ harness call, Session commit, and emitted events preserve that lineage
 ```
+
+Concrete RPC-abort trace:
+
+```text
+server allocates one request AbortController
+→ adapter derives the server Context with withAbortSignal(...) before invocation
+→ harness begins with that Context
+→ client context.abortSignal aborts and client sends cancel(request ID)
+→ server aborts the matching request AbortController
+→ the invocation's existing context.abortSignal fires
+```
+
+A connection disconnect aborts every active request controller and subscription owned by that connection. A pre-aborted client request is rejected by the adapter before server work starts.
 
 Decision:
 
 - every current public harness/lane operation receives one explicit trailing `context: Context`;
 - `context.telemetryContext` supplies the invocation parent for harness/session spans, and derived child contexts preserve parentage across concurrent asynchronous branches without ambient state;
-- `context.abortSignal` is process-local invocation cancellation; it never implies durable `cancel_requested`;
+- `context.abortSignal` is the explicit process-local invocation-cancellation channel used by local callers and reconstructed by RPC adapters from per-request cancel/disconnect control; it never implies durable `cancel_requested` and must not call `requestAbort()` implicitly;
+- each RPC request has an independent server `AbortController`; canceling one request or drive joiner must not abort unrelated callers or shared execution owned under a different policy;
 - shared harness, lane, Session, and SessionTree receivers never retain a caller context;
 - acceptance passes its invocation context to Session reads/mutation/commit, faults, and emitted events; buffered events retain `{ event, context }` so delayed local handlers and future RPC event frames preserve the source telemetry lineage;
 - RPC adapters remove Context from serialized business arguments, carry required trace/cancellation data as control-plane metadata, and reconstruct a fresh local Context at the receiving boundary; the Context object, `AbortSignal`, and `TelemetryContext` are never serialized as business arguments or stored durably;
@@ -425,11 +439,12 @@ This phase is mandatory and has its own review stop. Do not edit runtime source 
 - Define `running`, `resumable`, `blocked`, `aborting`, and idle once.
 - State that status is process-relative observation, while durable operation phase/control remains recovery truth.
 - Remove language equating every unowned operation with `status: "suspended"`.
-- Motivate explicit Context with the two accepted requirements: correct telemetry parentage for concurrent asynchronous work, and a transport-agnostic RPC boundary for reconstructed request telemetry/cancellation.
+- Motivate explicit Context with the two accepted requirements: correct telemetry parentage for concurrent asynchronous work, and carriage of the invocation `AbortSignal` that an RPC adapter reconstructs from one request's cancel/disconnect control.
 - Document the existing source contract: every public harness/lane operation takes a trailing `context: Context`; hooks and event listeners receive the invocation context as their final argument; Session reads/writes receive that context.
 - State that shared harness/lane/Session/SessionTree receivers retain no caller context. Context is invocation-scoped authority and propagation, not durable operation data: acceptance must not persist a `Context` or add it to the write set.
-- Specify the RPC boundary principle: an adapter maps a request trace carrier and request cancellation/disconnect into a fresh local Context, strips/inserts Context outside serialized business arguments, and never serializes the Context object, `AbortSignal`, or `TelemetryContext` as business arguments. Whether specific adapter-managed typed values cross as control-plane metadata remains open in `rpc.md`.
-- Distinguish `context.abortSignal` from durable abort: invocation or RPC cancellation must not write `cancel_requested`.
+- Specify the RPC boundary principle: the client maps `context.abortSignal` to `cancel(requestId)`; the server owns one `AbortController` per request, aborts it on matching cancellation or connection loss, and uses `withAbortSignal` plus extracted telemetry to construct a fresh local Context. The adapter strips/inserts Context outside serialized business arguments and never serializes the Context object, `AbortSignal`, or `TelemetryContext` as business arguments. Whether specific adapter-managed typed values cross as control-plane metadata remains open in `rpc.md`.
+- Require pre-aborted RPC calls to start no server work, while leaving that rejection in the adapter rather than the core harness.
+- Distinguish `context.abortSignal` from durable abort: invocation or RPC cancellation must not call `requestAbort()` or write `cancel_requested`; one canceled request/joiner must not cancel unrelated callers.
 - Keep the existing `AgentHarnessOptions.telemetryContext` option unchanged in WP02, but do not describe it as the invocation span parent; its removal belongs to the pending context/telemetry design.
 - Keep trailing parameter position and propagation behavior aligned with current source for WP02. Broader RPC transport, carrier encoding, and any future context-position migration remain open in non-normative `rpc.md` and are not decided by WP02.
 
@@ -527,7 +542,7 @@ Amend or add:
 - shared receivers never retain invocation Context, and concurrent calls preserve independent telemetry/cancellation lineage;
 - Context and its values are neither durable data nor serialized business arguments;
 - buffered events retain `{ event, context }`, not only event payloads;
-- invocation/RPC cancellation does not become durable cancellation;
+- RPC cancellation/disconnect reaches the matching invocation through `context.abortSignal`, does not become durable cancellation, and does not cancel unrelated request contexts;
 - attachment/resume, registration/resume, close/attach, snapshot/resume, and external-finalization races.
 
 ### Phase A review stop

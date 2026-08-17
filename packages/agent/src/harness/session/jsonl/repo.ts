@@ -1,6 +1,6 @@
 import { uuidv7 } from "@draht/ai";
 import type { FileError, FileSystem, Result } from "../../types.ts";
-import { createForkSnapshot } from "../fork.ts";
+import { createForkSnapshot, type ForkSourceSnapshot } from "../fork.ts";
 import { StorageBackedSession } from "../session.ts";
 import type { ForkOptions, Session, SessionRepo } from "../types.ts";
 import { parseJsonlStorageHeader } from "./codec.ts";
@@ -51,7 +51,8 @@ export class JsonlSessionRepo
 	private readonly fileSystem: FileSystem;
 	private readonly sessionsRootInput: string;
 	private readonly now: () => number;
-	private readonly activeCreateDestinations = new Set<string>();
+	private readonly openSessions = new Map<string, JsonlStorage>();
+	private readonly pendingCreates = new Set<string>();
 	private rootPromise: Promise<string> | undefined;
 	private closed = false;
 	private closePromise: Promise<void> | undefined;
@@ -65,11 +66,14 @@ export class JsonlSessionRepo
 	async create(options: JsonlSessionCreateOptions): Promise<Session<JsonlSessionMetadata>> {
 		this.assertOpen();
 		const createdAt = this.now();
-		const destination = await this.resolveCreateDestination(options.cwd, options.id, createdAt);
-		return this.claimCreateDestination(destination, async () => {
-			const { cwd, id } = destination;
-			if (await this.sessionIdExists(cwd, id)) throw new Error(`Session already exists: ${id}`);
-			const path = await this.createPath(cwd, createdAt, id);
+		const { cwd, id } = await this.resolveCreateDestination(options.cwd, options.id, createdAt);
+		const key = this.sessionKey(cwd, id);
+		if (this.openSessions.has(key) || this.pendingCreates.has(key)) throw new Error(`Session already exists: ${id}`);
+		this.pendingCreates.add(key);
+		let path: string | undefined;
+		let storage: JsonlStorage | undefined;
+		try {
+			path = await this.resolveNewSessionPath(cwd, createdAt, id);
 			const header: JsonlStorageHeader = {
 				v: JSONL_FORMAT_VERSION,
 				kind: "header",
@@ -80,34 +84,42 @@ export class JsonlSessionRepo
 				...(options.parentSessionId === undefined ? {} : { parentSessionId: options.parentSessionId }),
 			};
 			// TODO: do we want to make session creation atomic?
-			const storage = await JsonlStorage.create({ fileSystem: this.fileSystem, path, now: this.now }, header);
-			try {
-				await storage.commit({
-					writes: [
-						{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
-						{
-							kind: "register",
-							op: "set",
-							namespace: "lane.state",
-							key: "main",
-							value: { currentOperationId: null, pendingNextRun: [] },
-						},
-					],
-				});
-				const info = fileValue(await this.fileSystem.fileInfo(path), `Failed to read session ${path}`);
-				return new StorageBackedSession(metadataFromHeader(header, path, info.mtimeMs), storage);
-			} catch (error) {
-				await storage.close().catch(() => undefined);
-				await this.fileSystem.remove(path, { force: true });
-				throw error;
-			}
-		});
+			storage = await JsonlStorage.create({ fileSystem: this.fileSystem, path, now: this.now }, header);
+			await storage.commit({
+				writes: [
+					{ kind: "register", op: "set", namespace: "lane.leaf", key: "main", value: null },
+					{
+						kind: "register",
+						op: "set",
+						namespace: "lane.state",
+						key: "main",
+						value: { currentOperationId: null, pendingNextRun: [] },
+					},
+				],
+			});
+			const info = fileValue(await this.fileSystem.fileInfo(path), `Failed to read session ${path}`);
+			return this.publishOpenSession(metadataFromHeader(header, path, info.mtimeMs), storage, key);
+		} catch (error) {
+			await storage?.close();
+			if (path !== undefined) await this.fileSystem.remove(path, { force: true });
+			throw error;
+		} finally {
+			this.pendingCreates.delete(key);
+		}
 	}
 
 	async open(metadata: JsonlSessionMetadata): Promise<Session<JsonlSessionMetadata>> {
 		this.assertOpen();
-		const storage = await this.loadStorage(metadata);
-		return new StorageBackedSession(metadata, storage);
+		const key = this.sessionKey(metadata.cwd, metadata.id);
+		if (this.openSessions.has(key)) throw new Error(`Session is already open: ${metadata.id}`);
+		let storage: JsonlStorage | undefined;
+		try {
+			storage = await this.loadStorage(metadata);
+			return this.publishOpenSession(metadata, storage, key);
+		} catch (error) {
+			await storage?.close();
+			throw error;
+		}
 	}
 
 	async list(options: JsonlSessionListOptions = {}): Promise<JsonlSessionMetadata[]> {
@@ -132,6 +144,8 @@ export class JsonlSessionRepo
 
 	async delete(metadata: JsonlSessionMetadata): Promise<void> {
 		this.assertOpen();
+		const key = this.sessionKey(metadata.cwd, metadata.id);
+		if (this.openSessions.has(key)) throw new Error(`Session is open: ${metadata.id}`);
 		if (!fileValue(await this.fileSystem.exists(metadata.path), `Failed to check session ${metadata.path}`)) {
 			throw new Error(`Session file does not exist: ${metadata.path}`);
 		}
@@ -141,15 +155,22 @@ export class JsonlSessionRepo
 	async fork(source: JsonlSessionMetadata, options: ForkOptions): Promise<Session<JsonlSessionMetadata>> {
 		this.assertOpen();
 		const createdAt = this.now();
-		const destination = await this.resolveCreateDestination(source.cwd, options.id, createdAt);
-		return this.claimCreateDestination(destination, async () => {
-			const { cwd, id } = destination;
-			if (await this.sessionIdExists(cwd, id)) throw new Error(`Session already exists: ${id}`);
+		const sourceStorage = this.openSessions.get(this.sessionKey(source.cwd, source.id));
+		const sourceSnapshot = await (sourceStorage === undefined
+			? this.loadClosedForkSourceSnapshot(source)
+			: sourceStorage.snapshot());
+		const { cwd, id } = await this.resolveCreateDestination(source.cwd, options.id, createdAt);
+		const destinationKey = this.sessionKey(cwd, id);
+		if (this.openSessions.has(destinationKey) || this.pendingCreates.has(destinationKey)) {
+			throw new Error(`Session already exists: ${id}`);
+		}
+		this.pendingCreates.add(destinationKey);
 
-			const sourceStorage = await this.loadStorage(source);
-			const sourceSnapshot = await sourceStorage.snapshot().finally(() => sourceStorage.close());
+		let path: string | undefined;
+		let storage: JsonlStorage | undefined;
+		try {
+			path = await this.resolveNewSessionPath(cwd, createdAt, id);
 			const snapshot = createForkSnapshot(sourceSnapshot, options);
-			const path = await this.createPath(cwd, createdAt, id);
 			const header: JsonlStorageHeader = {
 				v: JSONL_FORMAT_VERSION,
 				kind: "header",
@@ -159,21 +180,20 @@ export class JsonlSessionRepo
 				cwd,
 				parentSessionId: source.id,
 			};
-			let storage: JsonlStorage | undefined;
-			try {
-				storage = await JsonlStorage.createFromSnapshot(
-					{ fileSystem: this.fileSystem, path, now: this.now },
-					header,
-					snapshot,
-				);
-				const info = fileValue(await this.fileSystem.fileInfo(path), `Failed to read session ${path}`);
-				return new StorageBackedSession(metadataFromHeader(header, path, info.mtimeMs), storage);
-			} catch (error) {
-				await storage?.close().catch(() => undefined);
-				await this.fileSystem.remove(path, { force: true });
-				throw error;
-			}
-		});
+			storage = await JsonlStorage.createFromSnapshot(
+				{ fileSystem: this.fileSystem, path, now: this.now },
+				header,
+				snapshot,
+			);
+			const info = fileValue(await this.fileSystem.fileInfo(path), `Failed to read session ${path}`);
+			return this.publishOpenSession(metadataFromHeader(header, path, info.mtimeMs), storage, destinationKey);
+		} catch (error) {
+			await storage?.close().catch(() => undefined);
+			if (path !== undefined) await this.fileSystem.remove(path, { force: true });
+			throw error;
+		} finally {
+			this.pendingCreates.delete(destinationKey);
+		}
 	}
 
 	close(): Promise<void> {
@@ -192,20 +212,6 @@ export class JsonlSessionRepo
 		const destinationId = id ?? uuidv7(createdAt);
 		const cwd = fileValue(await this.fileSystem.absolutePath(cwdInput), `Failed to resolve session cwd ${cwdInput}`);
 		return { cwd, id: destinationId };
-	}
-
-	private async claimCreateDestination<T>(
-		destination: { cwd: string; id: string },
-		operation: () => Promise<T>,
-	): Promise<T> {
-		const key = `${destination.cwd}\0${destination.id}`;
-		if (this.activeCreateDestinations.has(key)) throw new Error(`Session already exists: ${destination.id}`);
-		this.activeCreateDestinations.add(key);
-		try {
-			return await operation();
-		} finally {
-			this.activeCreateDestinations.delete(key);
-		}
 	}
 
 	private async listDirectory(directory: string, cwd?: string): Promise<JsonlSessionMetadata[]> {
@@ -248,24 +254,54 @@ export class JsonlSessionRepo
 		);
 	}
 
-	private async sessionIdExists(cwd: string, id: string): Promise<boolean> {
+	private async resolveNewSessionPath(cwd: string, createdAt: number, id: string): Promise<string> {
 		const directory = await this.sessionDirectory(cwd);
-		if (!fileValue(await this.fileSystem.exists(directory), `Failed to check sessions directory ${directory}`)) {
-			return false;
-		}
-		const suffix = `_${encodeURIComponent(id)}.jsonl`;
-		return fileValue(await this.fileSystem.listDir(directory), `Failed to list sessions directory ${directory}`).some(
-			(entry) => entry.kind !== "directory" && entry.name.endsWith(suffix),
-		);
-	}
-
-	private async createPath(cwd: string, createdAt: number, id: string): Promise<string> {
-		const directory = await this.sessionDirectory(cwd);
+		await this.assertSessionIdAvailable(directory, id);
 		fileValue(await this.fileSystem.createDir(directory), `Failed to create sessions directory ${directory}`);
 		return fileValue(
 			await this.fileSystem.joinPath([directory, sessionFileName(createdAt, id)]),
 			`Failed to resolve path for session ${id}`,
 		);
+	}
+
+	private async assertSessionIdAvailable(directory: string, id: string): Promise<void> {
+		if (!fileValue(await this.fileSystem.exists(directory), `Failed to check sessions directory ${directory}`))
+			return;
+
+		const suffix = `_${encodeURIComponent(id)}.jsonl`;
+		const idExists = fileValue(
+			await this.fileSystem.listDir(directory),
+			`Failed to list sessions directory ${directory}`,
+		).some((entry) => entry.kind !== "directory" && entry.name.endsWith(suffix));
+		if (idExists) throw new Error(`Session already exists: ${id}`);
+	}
+
+	private async loadClosedForkSourceSnapshot(source: JsonlSessionMetadata): Promise<ForkSourceSnapshot> {
+		const storage = await this.loadStorage(source);
+		try {
+			return await storage.snapshot();
+		} finally {
+			await storage.close();
+		}
+	}
+
+	private publishOpenSession(
+		metadata: JsonlSessionMetadata,
+		storage: JsonlStorage,
+		key: string,
+	): StorageBackedSession<JsonlSessionMetadata> {
+		if (this.openSessions.has(key)) throw new Error(`Session is already open: ${metadata.id}`);
+		const session = new StorageBackedSession(metadata, storage, {
+			onClose: () => {
+				if (this.openSessions.get(key) === storage) this.openSessions.delete(key);
+			},
+		});
+		this.openSessions.set(key, storage);
+		return session;
+	}
+
+	private sessionKey(cwd: string, id: string): string {
+		return `${cwd}\0${id}`;
 	}
 
 	private async loadStorage(metadata: JsonlSessionMetadata): Promise<JsonlStorage> {

@@ -40,6 +40,43 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		await repo.close();
 	});
 
+	it("keeps fork destinations claimed until close and rejects deleting open sessions", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
+		const source = await repo.create({ id: "source", cwd: "/workspace" });
+		const fork = await repo.fork(source.metadata, { id: "fork" });
+
+		await expect(repo.open(fork.metadata)).rejects.toThrow("already open");
+		await expect(repo.delete(fork.metadata)).rejects.toThrow("open");
+		await fork.close();
+
+		const reopened = await repo.open(fork.metadata);
+		await reopened.close();
+		await repo.delete(fork.metadata);
+		await expect(repo.open(fork.metadata)).rejects.toThrow("does not exist");
+
+		await source.close();
+		await repo.close();
+	});
+
+	it("rejects concurrent creates for the same working-directory id", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
+
+		const results = await Promise.allSettled([
+			repo.create({ id: "session", cwd: "/workspace" }),
+			repo.create({ id: "session", cwd: "/workspace" }),
+		]);
+
+		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+		expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+		expect(await repo.list({ cwd: "/workspace" })).toHaveLength(1);
+		for (const result of results) {
+			if (result.status === "fulfilled") await result.value.close();
+		}
+		await repo.close();
+	});
+
 	it("allows the same id to be active in different working directories", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });

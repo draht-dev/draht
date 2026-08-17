@@ -23,8 +23,9 @@ import type {
 	Transaction,
 } from "./types.ts";
 
-interface StorageBackedSessionConcurrency {
+interface StorageBackedSessionOptions {
 	laneMutationLine?: LaneMutationLine;
+	onClose?: () => void;
 }
 
 /** Durable session state is internally inconsistent and cannot be safely advanced. */
@@ -155,14 +156,16 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 	readonly idGenerator: IdGenerator = { next: uuidv7 };
 	private readonly storage: Storage;
 	private readonly laneMutationLine: LaneMutationLine;
+	private readonly onClose: (() => void) | undefined;
 	private readonly closedError = new Error("Session is closed");
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
 
-	constructor(metadata: TMetadata, storage: Storage, concurrency: StorageBackedSessionConcurrency = {}) {
+	constructor(metadata: TMetadata, storage: Storage, options: StorageBackedSessionOptions = {}) {
 		this.metadata = metadata;
 		this.storage = storage;
-		this.laneMutationLine = concurrency.laneMutationLine ?? new LaneMutationLine();
+		this.laneMutationLine = options.laneMutationLine ?? new LaneMutationLine();
+		this.onClose = options.onClose;
 	}
 
 	async mutate<T>(lane: string, mutation: (mutator: SessionMutator) => T | Promise<T>): Promise<T> {
@@ -361,6 +364,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 			.then(() => this.storage.close())
 			.finally(() => {
 				this.state = "closed";
+				this.onClose?.();
 			});
 		return this.closePromise;
 	}

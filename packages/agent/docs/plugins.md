@@ -53,7 +53,7 @@ interface CodingAgentPlugin {
 	readonly web?: PluginFacet<CodingAgentWebPluginContext>;
 }
 
-type PluginFacet<Context> = (context: Context) => void | Promise<void>;
+type PluginFacet<PluginContext> = (context: PluginContext) => void | Promise<void>;
 ```
 
 `PluginFacet` is the only plugin-facing shape the generic kernel needs; the facet names and context types belong to the coding-agent application. Facets are optional: a `models.json` plugin has only a session facet, a terminal theme only a TUI facet, the session directory a coordinator facet plus a TUI facet. Examples use an illustrative `definePlugin()` helper returning a `CodingAgentPlugin` — the loaded, in-process shape.

@@ -1,4 +1,4 @@
-# Typed values and lists — implementation handoff
+# Typed values and lists
 
 This document specifies the mutable storage primitive used by Session, the harness, and applications.
 
@@ -113,7 +113,7 @@ Rules:
 - object identity has no durable meaning;
 - separately constructed addresses with the same `(kind, namespace, key)` identify the same durable location;
 - constructing the same durable location with incompatible TypeScript types is a trusted-programming defect;
-- scalar and list addresses may not share the same `(namespace, key)` in one storage version;
+- scalar and list addresses may not share the same `(namespace, key)` in one storage version; violating this is a trusted-programming defect and storage performs no cross-kind collision check;
 - changing an address's namespace, key, kind, or incompatible value shape requires migration.
 
 The two components remain separate rather than concatenated. Dynamic application keys and operation IDs therefore require no escaping convention beyond the storage separator rule.
@@ -188,7 +188,7 @@ export const laneLastResult = (lane: string) =>
 export const laneLeafInventoryPrefix = () => value<string | null>("pi.lane.leaf");
 
 export const operationMeta = (operationId: string) =>
-  value<Operation>("pi.op.meta", operationId);
+  value<OperationMeta>("pi.op.meta", operationId);
 export const operationState = (operationId: string) =>
   value<OperationState>("pi.op.state", operationId);
 export const operationToolArgs = (operationId: string, stepId: string, sourceIndex: number) =>
@@ -237,6 +237,8 @@ export const sessionName = value<string>("pi.session.name");
 export const entryLabel = (entryId: string) => value<string>("pi.entry.label", entryId);
 ```
 
+`OperationMeta` is immutable acceptance metadata stored at `pi.op.meta`. The process-local `Operation` projection is `{ meta: OperationMeta, state: OperationState }`, assembled from the separate metadata and state values; it is never stored at one address.
+
 The five exported scan-prefix constructors are `laneLeafInventoryPrefix`, `operationToolArgsPrefix`, `operationToolMemoPrefix`, `operationPreparationPrefix`, and `pendingToolOutputPrefix`. Their addresses are consumed only by `scanValues()`.
 
 Applications define their own `value()` and `list()` addresses directly; there is no built-in custom application-state namespace or custom-state API. `AgentHarnessToolInvocation.getMemo()` and `setMemo()` are invocation-fenced capabilities over `operationToolMemo(...)`, not raw Session access. Invocation memos remain operation-owned and are deleted when their tool outcome becomes durable.
@@ -269,7 +271,7 @@ export interface ListReadOptions {
   cursor?: ListCursor;
   /** Default: asc. */
   order?: "asc" | "desc";
-  /** Default: 1,000. Maximum: 10,000. */
+  /** Query-page size. Default: 1,000. Values above 10,000 clamp to 10,000. */
   limit?: number;
 }
 
@@ -286,7 +288,7 @@ interface ValueReader {
 }
 ```
 
-`scanValues(prefixAddress)` scans scalar addresses with exactly that namespace and keys beginning with the bound key. Core call sites use only the exported prefix constructors above so raw namespace/key grammar stays in `session/values.ts`. Prefix addresses are passed only to `scanValues()`, never to exact get/set/delete operations. There is no unrestricted cross-namespace dump. Ordinary application reads use exact addresses.
+`scanValues(prefixAddress)` scans scalar addresses with exactly that namespace and keys beginning with the bound key, returning them in key-ascending order. Core call sites use only the exported prefix constructors above so raw namespace/key grammar stays in `session/values.ts`. Prefix addresses are passed only to `scanValues()`, never to exact get/set/delete operations. There is no unrestricted cross-namespace dump. Ordinary application reads use exact addresses.
 
 `SessionTree` exposes direct one-transition writes using the same addresses:
 
@@ -397,7 +399,7 @@ Rules:
 - absent and empty both return `[]`;
 - callers continue with the last returned element's `seq`;
 - an empty page ends iteration;
-- `limit` must be a positive safe integer, defaults to 1,000, and is capped at 10,000.
+- `limit` is only the query-page size: it must be a positive safe integer, defaults to 1,000, and values above 10,000 clamp to 10,000; it never limits total list length or bytes.
 
 ```ts
 let cursor: ListCursor | undefined;
@@ -516,7 +518,7 @@ CREATE TABLE list_values (
 ) WITHOUT ROWID;
 ```
 
-An implementation may retain an already-applied physical table name while exposing this logical API; do not rewrite an applied migration solely for terminology. Adding list storage uses a new migration when required by the backend's existing schema history.
+WP01 replaces the unfinished format-4 schema in place: edit `sqlite/migrations/001_initial.sql`, rename the physical `registers` table to `scalar_values`, add `list_values`, and keep `SQLITE_STORAGE_VERSION = 1`. There is no migration runner in this WIP implementation, and pre-WP01 SQLite files are unsupported. Do not add migration machinery in this package.
 
 List operations:
 
@@ -545,7 +547,7 @@ Logical records carry the bound address's physical components:
 {"kind":"list","op":"delete","seq":52,"namespace":"pi.pending.assistant_frame","key":"O:R"}
 ```
 
-Scalar records use `kind:"value"` with `op:"set"|"delete"`. An implementation may retain an old physical record spelling while decoding it into the new logical API when compatibility requires it.
+Scalar records use `kind:"value"` with `op:"set"|"delete"`. WP01 keeps JSONL format 4 and storage version 1 but replaces the unfinished record spelling in place; pre-WP01 format-4 files are unsupported and no legacy `kind:"register"` decoder remains.
 
 Replay folds records into the Memory state:
 
@@ -569,7 +571,7 @@ Fork and precise-rewrite code decides policy per concrete address grammar:
 - operation-owned `pi.op.*` scalar values are not copied into an idle fork;
 - `pi.pending.entry`, `pi.pending.tool_output`, and `pi.pending.assistant_frame` values/lists are not copied;
 - lane and semantic session values follow their existing scope rules;
-- application-defined values/lists require an explicit policy when their consuming feature is added.
+- application-defined values/lists are not copied by the generic fork; a consuming feature must add an explicit address-specific policy before relying on copied application state.
 
 A precise rewrite retaining list elements preserves their `seq` values unless it explicitly remaps the entire destination sequence space.
 
@@ -584,7 +586,7 @@ A bound address's namespace, key grammar, kind, and value type are durable schem
 - a list migration pages elements in sequence order and either maps them while preserving `seq` or deletes the complete list;
 - a migration must not load an unbounded logical list at once.
 
-Adding generic list storage is a backend schema change. Constructing a new application address with no persisted value requires no migration.
+Adding generic list storage replaces the current WIP backend schema in place. Constructing a new application address with no persisted value requires no migration.
 
 ## Instrumentation and telemetry
 
@@ -600,7 +602,7 @@ Append-path tests prove that no `readList` call occurs before append commit. Fra
 2. Address object identity has no durable meaning.
 3. Namespace `pi` and every `pi.*` are reserved by contract; every built-in namespace starts with `pi.`, and application use is a trusted-programming defect.
 4. Exactly five built-in prefix constructors encapsulate lane inventory and operation cleanup grammar; their results are consumed only by namespace-scoped `scanValues()`.
-5. Scalar and list addresses cannot occupy the same physical location.
+5. Scalar and list addresses must not occupy the same physical location; this is a trusted-programming rule, not a runtime cross-kind collision check.
 6. Typed reads and helper-constructed writes preserve `T`.
 7. Scalar helpers reject list addresses; list helpers reject scalar addresses.
 8. A Session/Storage operation never requires a second key after address construction.
@@ -643,7 +645,7 @@ Append-path tests prove that no `readList` call occurs before append commit. Fra
 - replacement retains only the latest logical value and latest set `seq`;
 - typed write helpers preserve mixed transaction order;
 - prefix scans interpret the bound address key as a prefix and remain namespace-scoped;
-- existing scalar JSONL/SQLite data opens through the compatibility policy chosen by those backends.
+- new scalar JSONL/SQLite files use only the value/list schema; pre-WP01 WIP files are explicitly unsupported.
 
 ### List conformance
 
@@ -677,7 +679,7 @@ Extend the shared backend conformance suite:
 - direct Session writes serialize and commit once;
 - explicit `Session.mutate()` can atomically combine typed value/list writes with entries and usage.
 
-### Assistant-frame integration
+### Assistant-frame integration — deferred beyond WP01
 
 - every converted non-terminal frame appends under the exact bound effect-pending response address;
 - terminal `done`/`error` events append nothing;
@@ -702,8 +704,7 @@ Expected primary changes:
 - expose `ValueReader` through Storage, SessionReader, SessionMutator, Session, and SessionTree;
 - add direct application scalar/list methods to SessionTree using bound addresses;
 - update Memory state, JSONL codec/storage, snapshots, fork/rewrite code, instrumentation, and conformance suites;
-- add SQLite list storage and address-based adapters without rewriting applied migrations solely for terminology;
-- update assistant execution, deferred polling, recovery, snapshots, and cleanup to use `pendingAssistantFrames(operationId, responseEntryId)`;
+- replace SQLite's unfinished initial schema in place with `scalar_values` and `list_values`; keep storage version 1 and add no migration runner;
 - update telemetry schema sources and regenerate `telemetry-schema.md`; do not edit that generated file manually.
 
-`assistant-durability.md` specifies the consuming lifecycle. `harness.md` must replace raw namespace/key examples and global register maps with this bound-address model before implementation.
+WP01 stops after generic addresses/storage and projection-only restore coverage. `assistant-durability.md` specifies the later consuming lifecycle; assistant execution, deferred polling, recovery, snapshot hydration, memo/checkpoint capabilities, and operation cleanup land only with their runtime work packages.

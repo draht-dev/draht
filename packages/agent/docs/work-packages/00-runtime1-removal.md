@@ -10,7 +10,7 @@ Make runtime2 the sole public harness implementation, delete runtime1 and its ob
 
 ## Prerequisites
 
-- The approved acceptance/hook redesign and durability handoffs are present in `runtime2.md`, `registers.md`, `assistant-durability.md`, and `tool-durability.md`.
+- The approved acceptance/hook redesign and durability handoffs are present in `runtime2.md`, `values.md`, `assistant-durability.md`, and `tool-durability.md`.
 - Existing tests are evidence, not authority.
 
 ## Work, in order

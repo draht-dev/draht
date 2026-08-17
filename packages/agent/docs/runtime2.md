@@ -29,7 +29,7 @@ A slice must close the entire named concern at parity, not only its immediately 
 
 ## Historical reading policy
 
-`packages/agent/docs/harness.md` is the normative source. Until their designs are folded into it, `registers.md`, `tool-durability.md`, and `assistant-durability.md` are binding handoffs for bound typed value/list addresses, tool outcomes/checkpoints/memos, and assistant frames. Runtime1 is implementation inspiration only: do not preserve its abstractions, internal bookkeeping, or accidental behavior unless the normative contract independently requires them. For each slice, read its listed sections completely. If any handoff or `harness.md` changed since the previous slice, inspect that diff and reread affected sections.
+`packages/agent/docs/harness.md` is the normative source. Until their designs are folded into it, `values.md`, `tool-durability.md`, and `assistant-durability.md` are binding handoffs for bound typed value/list addresses, tool outcomes/checkpoints/memos, and assistant frames. Runtime1 is implementation inspiration only: do not preserve its abstractions, internal bookkeeping, or accidental behavior unless the normative contract independently requires them. For each slice, read its listed sections completely. If any handoff or `harness.md` changed since the previous slice, inspect that diff and reread affected sections.
 
 Read a source or test file completely before editing that file. For dependencies that will not be edited, begin with the relevant exported types or functions and expand only when a concrete question requires it.
 
@@ -113,7 +113,7 @@ Do not read provider/tool procedures or implement ownership in a no-work shell. 
 Read:
 
 - `harness.md`: §§3.2, 3.7, 3.12–3.13, 4.1–4.2, 5.5–5.8;
-- `registers.md` assistant-frame consumer and `assistant-durability.md` fresh-stream/settlement sections;
+- `values.md` assistant-frame consumer and `assistant-durability.md` fresh-stream/settlement sections;
 - pi-ai's exported assistant-message frame converter/reducer;
 - `execution/assistant.ts`;
 - checkpoint, ordinary-ready/intent/settlement, and terminal paths in:
@@ -167,10 +167,10 @@ If implementation exposes a concrete dependency not listed above:
 
 ## Value/list and durability prerequisites
 
-Before further assistant/tool runtime slices, implement `registers.md` repo-wide:
+Before further assistant/tool runtime slices, implement `values.md` repo-wide:
 
 - replace global namespace/value maps and register tokens with `value<T>(namespace, key?)` and `list<T>(namespace, key?)`;
-- put direct built-in address constructors in `session/values.ts`, using the universal `value()`/`list()` constructors and the `pi.*` namespaces/key grammars documented by `registers.md`;
+- put direct built-in address constructors in `session/values.ts`, using the universal `value()`/`list()` constructors and the `pi.*` namespaces/key grammars documented by `values.md`;
 - expose `getValue`/`setValue`/`deleteValue`/`scanValues` and `readList`/`appendList`/`deleteList` without a second key argument; core lane inventory and cleanup use only the five exported `*Prefix` constructors as `scanValues` inputs;
 - add backend-conformant append/read/whole-list-delete storage;
 - add `pendingAssistantFrames(operationId, responseEntryId)` as a `ValueList<AssistantMessageFrame>` constructor.

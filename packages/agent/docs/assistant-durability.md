@@ -2,7 +2,7 @@
 
 This document specifies durable partial assistant messages for ordinary assistant generation and deferred-response polling. It builds on:
 
-- bound typed value/list addresses from `registers.md`;
+- bound typed value/list addresses from `values.md`;
 - `AssistantMessageFrame`, `assistantMessageEventToFrame()`, and `reduceAssistantMessageFrames()` from `@draht/ai`;
 - the assistant intent/effect/settlement state machine in `harness.md`.
 
@@ -337,7 +337,7 @@ JSONL retains deleted frame bytes until snapshot compaction. Logical deletion is
 Expected runtime areas:
 
 - built-in `pendingAssistantFrames(operationId, responseEntryId)` address constructor in `session/values.ts`;
-- bound value/list storage implementation from `registers.md`;
+- bound value/list storage implementation from `values.md`;
 - assistant execution observer and generation procedure;
 - deferred polling procedure;
 - activation and cancellation recovery;

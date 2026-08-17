@@ -378,7 +378,7 @@ export const laneLeafInventoryPrefix = () =>
   value<string | null>("pi.lane.leaf");
 
 export const operationMeta = (operationId: string) =>
-  value<Operation>("pi.op.meta", operationId);
+  value<OperationMeta>("pi.op.meta", operationId);
 export const operationState = (operationId: string) =>
   value<OperationState>("pi.op.state", operationId);
 export const operationToolArgs = (
@@ -449,7 +449,7 @@ The complete rules are:
 - an empty key is legal and naturally addresses one session-wide value or list;
 - object identity has no durable meaning; equal `(kind, namespace, key)` triples name the same location;
 - constructing one location with incompatible TypeScript types is a trusted-programming defect;
-- value and list addresses may not share one `(namespace, key)` in a storage version;
+- value and list addresses may not share one `(namespace, key)` in a storage version; violating this is a trusted-programming defect and storage performs no cross-kind collision check;
 - changing namespace, key grammar, kind, or incompatible value shape requires migration (§7.4);
 - built-in constructors live in `session/values.ts` and are imported directly; there is no runtime catalog or dependency-injection bundle;
 - later operations never accept another key after address construction.
@@ -480,7 +480,7 @@ type DurableStructuralPreparation =
 | `laneConfig(lane)` | value | `pi.lane.config`, lane | `LaneConfiguration` | total lane configuration |
 | `laneState(lane)` | value | `pi.lane.state`, lane | `LaneState` (§3.3) | `currentOperationId`, `pendingNextRun` |
 | `laneLastResult(lane)` | value | `pi.lane.lastResult`, lane | `LaneLastResult` (§3.13) | latest terminal outcome |
-| `operationMeta(opId)` | value | `pi.op.meta`, operation id | `Operation` (§3.1) | acceptance data; written once |
+| `operationMeta(opId)` | value | `pi.op.meta`, operation id | `OperationMeta` (§3.1) | acceptance data; written once |
 | `operationState(opId)` | value | `pi.op.state`, operation id | `OperationState` (§3.2) | total durable restart point |
 | `operationToolArgs(opId, stepId, sourceIndex)` | value | `pi.op.tool_args`, `{opId}:{stepId}:{sourceIndex}` | effective arguments | written once at clearance |
 | `operationToolMemo(opId, invocationId, name)` | value | `pi.op.tool_memo`, `{opId}:{invocationId}:{name}` | `JsonValue` | invocation-scoped durable memo |
@@ -591,13 +591,13 @@ interface ListCursor { seq: number }
 interface ListReadOptions {
   cursor?: ListCursor;        // exclusive
   order?: "asc" | "desc";     // default "asc"
-  limit?: number;             // positive safe integer; default 1,000, cap 10,000
+  limit?: number;             // query-page size: positive safe integer; default 1,000; values above 10,000 clamp to 10,000
 }
 ```
 
 List read semantics: ascending reads return `seq > cursor.seq`, descending reads `seq < cursor.seq`; results are ordered before `limit` applies; absent and empty keys both return `[]`; callers continue with the last returned element's `seq`, and an empty page ends iteration. A cursor is a sequence filter, not a snapshot or key-incarnation token: concurrent later appends may appear on later ascending pages, and after a whole-key delete a read simply applies the comparison to surviving elements. There is deliberately no unbounded “read the whole list” helper.
 
-`scanValues(prefixAddress)` is namespace-scoped and interprets the bound key as a prefix. Core inventory/cleanup uses only `laneLeafInventoryPrefix`, `operationToolArgsPrefix`, `operationToolMemoPrefix`, `operationPreparationPrefix`, and `pendingToolOutputPrefix`; core call sites do not repeat raw reserved namespace/key grammar. Ordinary reads use exact addresses. There is no cross-namespace value dump or durable write log. Entry inventory uses `scanEntries`; ledger reads use `scanUsage`; totals use the stats projection (§1.6); test-order assertions wrap `commit()` with the instrumented-storage decorator (Part 9).
+`scanValues(prefixAddress)` is namespace-scoped, interprets the bound key as a prefix, and returns values in key-ascending order. Core inventory/cleanup uses only `laneLeafInventoryPrefix`, `operationToolArgsPrefix`, `operationToolMemoPrefix`, `operationPreparationPrefix`, and `pendingToolOutputPrefix`; core call sites do not repeat raw reserved namespace/key grammar. Ordinary reads use exact addresses. There is no cross-namespace value dump or durable write log. Entry inventory uses `scanEntries`; ledger reads use `scanUsage`; totals use the stats projection (§1.6); test-order assertions wrap `commit()` with the instrumented-storage decorator (Part 9).
 
 Recovery and execution reads must be index-driven and bounded. They may not infer state from an absent value, and there is no value history to fold. Exact dereference is allowed: current typed state may name a bounded set of entries and bound values. An exact list address derived from current state may be read in bounded sequence pages and reduced by its consumer—assistant frames use pi-ai's `reduceAssistantMessageFrames` (§3.7). Base restore never reads lists (§4.4). Public inventory and debugging APIs expose explicit limits/pagination at the `SessionTree` layer.
 
@@ -660,7 +660,7 @@ The file is not the state; it is the **replay recipe** for the Memory maps above
 - This is format 4. The incompatible format-4 code currently in the source tree is unfinished and is replaced in place; no migration for it is required. Coding-agent format 3 remains supported (Appendix B).
 - Open replays lines in order into the Memory maps: entries and usage rows accumulate; a later scalar `set` overwrites the key, `delete` removes it; a list `append` adds `{ seq, value }` under its key and a list `delete` removes the whole key. That is *decoding*, not recovery logic. Open verifies persisted sequence monotonicity — strictly increasing, gaps legal (§1.4) — and timestamps, and never regenerates committed timestamps. All queries then run in RAM.
 - **A torn final line is discarded whole**, including every element of an array, and is truncated before new writes are admitted. This is what makes "no crash prefix inside a transaction" true here.
-- A malformed *interior* line or invalid transaction framing is corruption. Superseded old-shape register lines from before a schema migration replay as keyed raw JSON so the migration can convert the current value (Part 7); compaction retires the old bytes. Externally edited shape-invalid data is unsupported rather than runtime-validated on read.
+- A malformed *interior* line or invalid transaction framing is corruption. WP01 supports no pre-WP01 format-4 record spelling. A future older storage version is decoded only when an explicit R11 migration defines that total mapping; post-migration compaction retires its bytes. Externally edited shape-invalid data is unsupported rather than runtime-validated on read.
 - Durability is process-crash level: a resolved `commit()` survives process death. No fsync promise.
 - Optional: retain `(offset, length)` per entry and load payloads lazily, keeping only structure and current values/lists resident. Do this only if profiling demands it.
 
@@ -687,8 +687,9 @@ entries(id TEXT PRIMARY KEY, parent_id TEXT, seq INTEGER, type TEXT,
 CREATE INDEX ix_entry_parent ON entries(parent_id);
 CREATE INDEX ix_entry_seq ON entries(seq, type);
 
-scalar_values(namespace TEXT, key TEXT, seq INTEGER, value TEXT,
-              PRIMARY KEY (namespace, key));
+scalar_values(namespace TEXT NOT NULL, key TEXT NOT NULL, seq INTEGER NOT NULL,
+              value TEXT NOT NULL,
+              PRIMARY KEY (namespace, key)) WITHOUT ROWID;
 
 list_values(namespace TEXT NOT NULL, key TEXT NOT NULL, seq INTEGER NOT NULL,
             value TEXT NOT NULL,
@@ -717,7 +718,7 @@ session(created_at, parent_session_id, storage_version, metadata,
 writer_lease(owner_id TEXT, fence INTEGER, expires_at_ms INTEGER);
 ```
 
-These are logical table names. An implementation may retain an already-applied physical table name while exposing the bound-address API; do not rewrite applied migrations solely for terminology.
+WP01 replaces the unfinished format-4 schema in place: `001_initial.sql` uses these physical table names, keeps storage version 1, and supports no pre-WP01 format-4 SQLite file. Migration machinery belongs to R11, not this WIP schema replacement.
 
 One `commit()` is one SQL transaction: insert entries, insert ledger rows, replace or delete scalar values, insert or whole-list-delete list elements, maintain the branch index, and bump session stats (`message_count` and aggregate `usage_payload`). Never update or delete an entry or ledger row; mutability is confined to values/lists, the branch index, stats, sequences, the session catalog row, and leases. List paging is `SELECT seq, value FROM list_values WHERE namespace = ? AND key = ? AND seq > ? ORDER BY seq ASC LIMIT ?` (descending symmetric; omit the predicate without a cursor); assert with `EXPLAIN QUERY PLAN` that it uses the primary key with no temporary sort.
 
@@ -985,7 +986,7 @@ Tests assert these invariants and the required query plans. No wall-clock thresh
 
 ## 2.7 Forks
 
-A fork is a repository operation over one coherent source-session snapshot. It copies selected entries, latest semantic values, lane leaves, and total configuration; it never copies operation/pending values, assistant frame lists, or ledger rows — destination lanes start with a fresh empty `LaneState`. Application-defined values and lists require an explicit fork policy when their consuming feature is added; a precise rewrite (§2.9) that retains a list element preserves its sequence cursor unless it explicitly remaps the whole destination sequence space.
+A fork is a repository operation over one coherent source-session snapshot. It copies selected entries, latest semantic values, lane leaves, and total configuration; it never copies operation/pending values, assistant frame lists, or ledger rows — destination lanes start with a fresh empty `LaneState`. Application-defined values and lists are not copied by the generic fork; a consuming feature must add an explicit address-specific policy before relying on copied application state; a precise rewrite (§2.9) that retains a list element preserves its sequence cursor unless it explicitly remaps the whole destination sequence space.
 
 ```ts
 type ForkOptions =
@@ -996,7 +997,7 @@ type ForkOptions =
 - Memory and JSONL obtain the snapshot as one job on the source storage queue. SQLite uses one read transaction.
 - Branch scope copies one path and creates only destination `main`. Tree scope copies the whole tree and every lane leaf/configuration.
 - The destination is idle and its usage/cost ledger starts at zero. Entry-local display usage remains on copied entries.
-- Semantic values follow their declared scope: the session name copies; labels copy only when their target copies unless tree scope copies all targets; application-defined values/lists follow their explicit policy.
+- Semantic values follow their declared scope: the session name copies; labels copy only when their target copies unless tree scope copies all targets; application-defined values/lists are excluded unless a later consuming feature adds an explicit address-specific policy.
 - Any message may be the fork point. Request construction heals orphaned tool calls.
 - Copied entries keep their ids.
 - `id` optionally supplies the destination session id.
@@ -1207,7 +1208,7 @@ Entries and usage rows are never deleted (§1.2). The sole sanctioned exception 
 ## 3.1 Operations
 
 ```ts
-interface Operation {
+interface OperationMeta {
   operationId: string;
   lane: string;
   sourceLeafId: string | null;
@@ -1220,7 +1221,7 @@ interface Operation {
 }
 ```
 
-Acceptance data lives in the `operationMeta(operationId)` value: written once at acceptance, never overwritten, and deleted by the terminal transaction (§3.13). `sourceLeafId` is the lane's leaf *before* the operation; entries the operation itself appends come after it. `promptEntryIds` name the caller's normalized prompt entries, born placed in the acceptance transaction (§3.6). The id is either supplied to `accept` or minted before the acceptance command; it correlates a hosted submission with current operation and `pi.lane.lastResult`, but the harness retains no forever-idempotency index after a later terminal result replaces that value.
+`OperationMeta` is immutable acceptance metadata. It lives in the `operationMeta(operationId)` value: written once at acceptance, never overwritten, and deleted by the terminal transaction (§3.13). The process-local `Operation` projection is `{ meta: OperationMeta, state: OperationState }`, assembled from the separate `pi.op.meta` and `pi.op.state` values; it is never persisted as one value. `sourceLeafId` is the lane's leaf *before* the operation; entries the operation itself appends come after it. `promptEntryIds` name the caller's normalized prompt entries, born placed in the acceptance transaction (§3.6). The id is either supplied to `accept` or minted before the acceptance command; it correlates a hosted submission with current operation and `pi.lane.lastResult`, but the harness retains no forever-idempotency index after a later terminal result replaces that value.
 
 ## 3.2 Operation state — the durable restart point
 
@@ -1230,6 +1231,12 @@ That value is authoritative after process loss, but it is not the finer instruct
 
 ```ts
 type OperationState = RunState | CompactionState | NavigationState;
+
+/** Process-local owned projection assembled from two durable values. */
+interface Operation {
+  meta: OperationMeta;
+  state: OperationState;
+}
 
 type Control =
   | { status: "running" }
@@ -2168,7 +2175,6 @@ Recovery is point lookups against bound values. No history, no folding, no journ
 ```ts
 interface CurrentOperation {
   operation: Operation;
-  state: OperationState;
   laneState: LaneState;
   leafId: string | null;
   configuration: LaneConfiguration;
@@ -2197,8 +2203,7 @@ async function restore(lane: string): Promise<
   }
 
   return { kind: "suspended", current: {
-    operation: meta.value,
-    state: opState.value,
+    operation: { meta: meta.value, state: opState.value },
     laneState: state.value,
     leafId: leaf.value,
     configuration: config.value,
@@ -3400,7 +3405,7 @@ open session:
 
 Chained migrations run under the writer lease before `open()` returns (§2.8). Each step commits its conversions and version bump atomically, so a crash mid-chain resumes at the recorded version; conversions must be idempotent over already-converted values, which field mappings are by construction.
 
-JSONL has one wrinkle in each direction. Replay must decode superseded old-shape register lines leniently — as keyed raw JSON, overwrite-by-key only — because pre-migration bytes remain in the file (§1.7). And a migration must trigger snapshot compaction, whose temp-file-and-rename both persists the new header version atomically and retires the old-shape bytes. Between crash and compaction, lenient replay plus idempotent conversion make the intermediate state harmless.
+JSONL has one wrinkle in each direction. When R11 adds migrations, replay must decode exactly the older-version value/list records named by that migration because pre-migration bytes remain in the file (§1.7). A migration then triggers snapshot compaction, whose temp-file-and-rename both persists the new header version atomically and retires the old-version bytes. Between crash and compaction, version-specific decoding plus idempotent conversion make the intermediate state harmless. This does not add compatibility for the pre-WP01 WIP format-4 spelling.
 
 Legacy coding-agent format 3 predates `storageVersion` entirely; it normalizes through Appendix B on load and receives the current version with its first format-4 write.
 
@@ -3508,7 +3513,7 @@ Tree:
 
 Operations:
 
-12. `laneState(lane)` confers lane ownership, and `operationState(operationId)` confers operation-state ownership. An open lane names operation O, `operationMeta(O)` holds that lane's compatible `Operation`, and `operationState(O)` holds an `OperationState` compatible with O's intent kind; state values carry no duplicate owner metadata.
+12. `laneState(lane)` confers lane ownership, and `operationState(operationId)` confers operation-state ownership. An open lane names operation O, `operationMeta(O)` holds that lane's compatible `OperationMeta`, and `operationState(O)` holds an `OperationState` compatible with O's intent kind; state values carry no duplicate owner metadata.
 13. Operation-owned values and lists may exist only while their operation is open: the terminal transaction deletes them atomically with clearing `currentOperationId` (§3.13). Lane-owned `pendingNextRun` values are never deleted by it.
 14. Acceptance must observe `currentOperationId === null`, commits no `ActiveOperation`, and returns before any hook/provider/tool/timer work begins. Run acceptance commits payload-free `starting`; only its consuming command may apply `before_run` output and replace it with `checkpoint`. A supplied operation id obeys §1.2 and is the exact id written to `pi.op.meta`, events, and `pi.lane.lastResult`.
 15. A reserved id may exist only with the content its intent named. Queued-content ids begin in `pi.pending.entry`; settlement-family ids begin as strings in `pi.op.state`. A tool-result id may then move through `string only → outcome-ready pi.pending.entry → immutable entry`; no two representations coexist at a commit boundary (§2.2). An effect-pending response id may additionally key its auxiliary frame list (§3.7); frames are observation, not a content representation, and die with settlement.

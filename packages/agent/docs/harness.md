@@ -3106,7 +3106,7 @@ Uniform semantics:
 
 - Handlers run in registration order, each seeing prior aggregate output where the hook transforms a value.
 - A throw emits `handler_error`, skips that handler, and lets the rest continue. **`before_drive` instead fails closed and rejects the pass; `before_tool` fails closed and blocks the tool.**
-- A hook result becomes durable only in the transaction that consumes it. A crash before that commit may rerun the hook.
+- Durability is hook-specific, as classified below. Hook completion is never itself a durable fact.
 - Events expose post-hook values. Passive listeners cannot transform them.
 
 One accepted-operation hook invocation reaches one breakpoint, calls `EffectGate.assertOpen()`, then immediately invokes the complete registered pipeline; individual handlers are not separate breakpoints or gate checks. Once admitted, the aggregate follows its isolation rule. Aggregation is deterministic:
@@ -3117,19 +3117,25 @@ One accepted-operation hook invocation reaches one breakpoint, calls `EffectGate
 - `before_compaction`/`before_navigation` stop at the first decline or supplied result; if all handlers return neither, generation is selected. Returning decline plus a result is a handler error and is ignored like a throw.
 - `before_run_end` uses the latest defined follow-up.
 
-| Hook | When | Event | Result |
-|---|---|---|---|
-| `before_drive` | once per newly installed real drive pass, after cancellation/deadline checks and before recovery or ordinary work | `{ operation }` | `void`; failure rejects the pass with no durable progress |
-| `before_run` | while a run is durably `starting`, after `before_drive` | `{ prompt, resources }` | `{ messages? }`; output commits with `starting → checkpoint` |
-| `before_run_end` | at a normal finish boundary | `{ runId, messages }` | `{ followUp? }` |
-| `transform_context` | per request, `AgentMessage` level, before `toProviderMessages` | `{ messages, systemPrompt }` | `{ messages?, systemPrompt? }` |
-| `before_request` | per request, provider-neutral options | `{ model, step, attempt, streamOptions }` | `{ streamOptions? }` |
-| `before_payload` | per request, provider-specific wire payload | `{ model, payload }` | `{ payload }` |
-| `after_response` | per response, after streaming settles and the latest frame write completes (§3.7), before `message_end` and the commit | `{ status, headers, message }` | `{ message? }` (must keep role) |
-| `before_tool` | after validation, before execution | `{ toolCallId, toolName, args }` | `{ args?, block?: { reason: string; terminate?: boolean } }` |
-| `after_tool` | after execution, before outcome staging; patch semantics | `{ toolCallId, toolName, args, content, details, isError, usage? }` | `{ content?, details?, isError?, usage?, terminate? }` |
-| `before_compaction` | in `deciding` | `{ reason, preparation, customInstructions? }` | `{ decline?, compaction? }` |
-| `before_navigation` | in `deciding` | `{ targetId, preparation, customInstructions? }` | `{ decline?, summary? }` |
+Hook durability has three classes:
+
+- **Pass-local:** the result controls only the current process-local drive pass. Nothing records that the hook ran or completed.
+- **Request-local:** the transformed value exists only while constructing or executing that provider request. It is not represented in operation state or the conversation tree. In particular, transformed context, system prompts, stream-option patches, and provider payloads are not durable request snapshots. A later retry or rebuilt request runs fresh middleware.
+- **Transition-consumed:** the hook's interpreted output is reflected in the transaction that performs the dependent durable transition. Before that transaction commits, the output may be lost and the hook may or may not run again according to the recovery path; after it commits, recovery observes the resulting state or content rather than rerunning that hook for the settled transition. There is no separate hook-completion record.
+
+| Hook | When | Event | Result | Durability |
+|---|---|---|---|---|
+| `before_drive` | once per newly installed real drive pass, after cancellation/deadline checks and before recovery or ordinary work | `{ operation }` | `void`; failure rejects the pass with no durable progress | pass-local |
+| `before_run` | while a run is durably `starting`, after `before_drive` | `{ prompt, resources }` | `{ messages? }`; output commits with `starting → checkpoint` | transition-consumed: injected messages and the checkpoint commit together |
+| `before_run_end` | at a normal finish boundary | `{ runId, messages }` | `{ followUp? }` | transition-consumed: a follow-up and continuation commit together, or the terminal transaction consumes the no-follow-up decision |
+| `transform_context` | per request, `AgentMessage` level, before `toProviderMessages` | `{ messages, systemPrompt }` | `{ messages?, systemPrompt? }` | request-local: neither the transformed messages nor system prompt is persisted |
+| `before_request` | per request, provider-neutral options | `{ model, step, attempt, streamOptions }` | `{ streamOptions? }` | request-local: the patch is not persisted; the intent stores only its specified derived request metadata |
+| `before_payload` | per request, provider-specific wire payload | `{ model, payload }` | `{ payload }` | request-local: the provider payload is not persisted |
+| `after_response` | per response, after streaming settles and the latest frame write completes (§3.7), before `message_end` and the commit | `{ status, headers, message }` | `{ message? }` (must keep role) | transition-consumed: the transformed message feeds the settled response entry; cancellation or overflow may normalize it at commit |
+| `before_tool` | after validation, before execution | `{ toolCallId, toolName, args }` | `{ args?, block?: { reason: string; terminate?: boolean } }` | transition-consumed: effective arguments commit with effect intent, or a blocked outcome is staged |
+| `after_tool` | after execution, before outcome staging; patch semantics | `{ toolCallId, toolName, args, content, details, isError, usage? }` | `{ content?, details?, isError?, usage?, terminate? }` | transition-consumed: the finalized result commits with `outcome_ready` staging |
+| `before_compaction` | in `deciding` | `{ reason, preparation, customInstructions? }` | `{ decline?, compaction? }` | transition-consumed: decline, supplied result, or selection of durable generation commits as the next structural transition |
+| `before_navigation` | in `deciding` | `{ targetId, preparation, customInstructions? }` | `{ decline?, summary? }` | transition-consumed: decline, supplied result, or selection of durable generation commits as the next structural transition |
 
 `before_request` receives `AgentHarnessStreamOptions` and returns `AgentHarnessStreamOptionsPatch`; neither can contain a signal or provider lifecycle callback. `after_response` must preserve the assistant role and may return `aborted` only when the harness signal is already aborted. `before_navigation` runs only for summarized navigation; unsummarized navigation cannot decline.
 
@@ -3146,7 +3152,7 @@ Replay and repetition:
 | `before_compaction`, `before_navigation` | once until a structural source commits; never once `generating` is durable |
 | `before_run_end` | per normal finish boundary; may repeat after a crash at that boundary; never for abort, terminal failure, or exhausted auto-compaction |
 
-No external hook is globally exactly once. Core guarantees only that interpreted output commits before dependent durable progress. A crash before the consuming transaction may repeat the hook. External side effects require extension-owned idempotency keyed by stable operation or invocation ids.
+No external hook is globally exactly once. Transition-consumed hooks commit their interpreted output with dependent durable progress; pass-local and request-local hooks do not. A crash before a consuming transaction may lose the output and may repeat the hook when that procedure is retried, while recovery paths that synthesize an unknown outcome may skip it. External side effects require extension-owned idempotency keyed by stable operation or invocation ids.
 
 ## 5.7 Harness execution blocks
 

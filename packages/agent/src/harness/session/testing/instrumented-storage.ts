@@ -1,3 +1,4 @@
+import type { Context } from "../../context.ts";
 import type { CommitResult, Write } from "../types.ts";
 import { StorageDecorator } from "./storage-decorator.ts";
 
@@ -13,8 +14,8 @@ export class InstrumentedStorage extends StorageDecorator {
 		this.commitAttempts.length = 0;
 	}
 
-	override commit(writes: Write[]): Promise<CommitResult> {
+	override commit(writes: Write[], context: Context): Promise<CommitResult> {
 		this.commitAttempts.push(writes);
-		return this.delegate.commit(writes);
+		return this.delegate.commit(writes, context);
 	}
 }

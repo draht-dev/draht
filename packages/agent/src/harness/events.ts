@@ -1,6 +1,7 @@
 import type { EventListener, Events, HarnessEvent, HarnessEventType, WatchHandle } from "./agent-harness.ts";
+import type { Context } from "./context.ts";
 
-type UntypedEventListener = (event: HarnessEvent) => void | Promise<void>;
+type UntypedEventListener = (event: HarnessEvent, context: Context) => void | Promise<void>;
 
 /** Passive harness event bus with isolated handler failures. */
 export class HarnessEventBus implements Events {
@@ -14,7 +15,8 @@ export class HarnessEventBus implements Events {
 		listener: EventListener<Extract<HarnessEvent, { type: TType }>>,
 	): () => void {
 		if (this.closedError !== undefined) throw this.closedError;
-		const wrapped: UntypedEventListener = (event) => listener(event as Extract<HarnessEvent, { type: TType }>);
+		const wrapped: UntypedEventListener = (event, context) =>
+			listener(event as Extract<HarnessEvent, { type: TType }>, context);
 		let listeners = this.listeners.get(type);
 		if (listeners === undefined) {
 			listeners = new Set();
@@ -24,26 +26,27 @@ export class HarnessEventBus implements Events {
 		return () => listeners?.delete(wrapped);
 	}
 
-	emit(event: HarnessEvent): Promise<void> {
+	emit(event: HarnessEvent, context: Context): Promise<void> {
 		if (this.closedError !== undefined) return Promise.resolve();
-		const delivery = this.deliveryTail.then(() => this.deliver(event, true));
+		const delivery = this.deliveryTail.then(() => this.deliver(event, true, context));
 		this.deliveryTail = delivery.catch(() => {});
 		return delivery;
 	}
 
-	watch<T>(snapshot: T, filter: (event: HarnessEvent) => boolean): WatchHandle<T> {
+	watch<T>(snapshot: T, filter: (event: HarnessEvent) => boolean, _context: Context): WatchHandle<T> {
 		if (this.closedError !== undefined) throw this.closedError;
 		return this.installWatcher(snapshot, filter);
 	}
 
 	async watchFromSnapshot<T>(
-		capture: () => Promise<T>,
+		capture: (context: Context) => Promise<T>,
 		filter: (event: HarnessEvent) => boolean,
+		context: Context,
 	): Promise<WatchHandle<T>> {
 		if (this.closedError !== undefined) throw this.closedError;
 		const watcher = this.installWatcher<T>(undefined, filter);
 		try {
-			watcher.setSnapshot(await capture());
+			watcher.setSnapshot(await capture(context));
 			return watcher;
 		} catch (error) {
 			watcher.unsubscribe();
@@ -63,32 +66,35 @@ export class HarnessEventBus implements Events {
 		snapshot: T | undefined,
 		filter: (event: HarnessEvent) => boolean,
 	): BufferedEventWatcher<T> {
-		const watcher = new BufferedEventWatcher(snapshot, async (error, event) => {
+		const watcher = new BufferedEventWatcher(snapshot, async (error, event, context) => {
 			if (event.type === "handler_error") return;
 			const normalized = error instanceof Error ? error : new Error(String(error));
 			const lane = "lane" in event && typeof event.lane === "string" ? event.lane : undefined;
-			await this.emit({
-				type: "handler_error",
-				kind: "event",
-				event: event.type,
-				error: normalized.message,
-				...(normalized.stack === undefined ? {} : { stack: normalized.stack }),
-				...(lane === undefined ? {} : { lane }),
-			});
+			await this.emit(
+				{
+					type: "handler_error",
+					kind: "event",
+					event: event.type,
+					error: normalized.message,
+					...(normalized.stack === undefined ? {} : { stack: normalized.stack }),
+					...(lane === undefined ? {} : { lane }),
+				},
+				context,
+			);
 		});
-		const watchListener: UntypedEventListener = (event) => {
-			if (filter(event)) watcher.push(event);
+		const watchListener: UntypedEventListener = (event, context) => {
+			if (filter(event)) watcher.push(event, context);
 		};
 		this.watchListeners.add(watchListener);
 		watcher.setUnsubscribe(() => this.watchListeners.delete(watchListener));
 		return watcher;
 	}
 
-	private async deliver(event: HarnessEvent, reportErrors: boolean): Promise<void> {
+	private async deliver(event: HarnessEvent, reportErrors: boolean, context: Context): Promise<void> {
 		const listeners = [...(this.listeners.get(event.type) ?? []), ...this.watchListeners];
 		for (const listener of listeners) {
 			try {
-				await listener(structuredClone(event));
+				await listener(structuredClone(event), context);
 			} catch (error) {
 				if (!reportErrors || event.type === "handler_error") continue;
 				const normalized = error instanceof Error ? error : new Error(String(error));
@@ -101,7 +107,7 @@ export class HarnessEventBus implements Events {
 					...(normalized.stack === undefined ? {} : { stack: normalized.stack }),
 					...(lane === undefined ? {} : { lane }),
 				};
-				await this.deliver(handlerError, false);
+				await this.deliver(handlerError, false, context);
 			}
 		}
 	}
@@ -109,14 +115,17 @@ export class HarnessEventBus implements Events {
 
 class BufferedEventWatcher<T> implements WatchHandle<T> {
 	snapshot: T;
-	private readonly onError: (error: unknown, event: HarnessEvent) => void | Promise<void>;
-	private buffer: HarnessEvent[] = [];
+	private readonly onError: (error: unknown, event: HarnessEvent, context: Context) => void | Promise<void>;
+	private buffer: Array<{ event: HarnessEvent; context: Context }> = [];
 	private listener: EventListener | undefined;
 	private unsubscribeCallback: (() => void) | undefined;
 	private deliveryTail: Promise<void> = Promise.resolve();
 	private state: "buffering" | "started" | "unsubscribed" = "buffering";
 
-	constructor(snapshot: T | undefined, onError: (error: unknown, event: HarnessEvent) => void | Promise<void>) {
+	constructor(
+		snapshot: T | undefined,
+		onError: (error: unknown, event: HarnessEvent, context: Context) => void | Promise<void>,
+	) {
 		this.snapshot = snapshot as T;
 		this.onError = onError;
 	}
@@ -131,7 +140,7 @@ class BufferedEventWatcher<T> implements WatchHandle<T> {
 		this.listener = listener;
 		const buffered = this.buffer;
 		this.buffer = [];
-		for (const event of buffered) this.enqueue(event);
+		for (const bufferedEvent of buffered) this.enqueue(bufferedEvent.event, bufferedEvent.context);
 	}
 
 	unsubscribe(): void {
@@ -143,29 +152,29 @@ class BufferedEventWatcher<T> implements WatchHandle<T> {
 		this.unsubscribeCallback = undefined;
 	}
 
-	push(event: HarnessEvent): void {
+	push(event: HarnessEvent, context: Context): void {
 		if (this.state === "unsubscribed") return;
 		if (this.state === "buffering") {
-			this.buffer.push(event);
+			this.buffer.push({ event, context });
 			return;
 		}
-		this.enqueue(event);
+		this.enqueue(event, context);
 	}
 
 	setUnsubscribe(callback: () => void): void {
 		this.unsubscribeCallback = callback;
 	}
 
-	private enqueue(event: HarnessEvent): void {
+	private enqueue(event: HarnessEvent, context: Context): void {
 		const listener = this.listener;
 		if (listener === undefined) return;
 		this.deliveryTail = this.deliveryTail
 			.then(async () => {
-				if (this.state === "started") await listener(event);
+				if (this.state === "started") await listener(event, context);
 			})
 			.catch(async (error) => {
 				try {
-					await this.onError(error, event);
+					await this.onError(error, event, context);
 				} catch {}
 			});
 	}

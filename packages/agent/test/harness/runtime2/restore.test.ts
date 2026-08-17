@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
+import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
 import { restoreLane, restoreSession } from "../../../src/harness/runtime2/restore.ts";
 import { MemorySessionRepo, MemoryStorage } from "../../../src/harness/session/memory.ts";
 import type { LaneConfiguration, OperationMeta, RunState, Session } from "../../../src/harness/session/types.ts";
@@ -15,9 +16,12 @@ const configuration: LaneConfiguration = {
 async function createSession(): Promise<Session> {
 	const repo = new MemorySessionRepo();
 	repos.push(repo);
-	const session = await repo.create({});
-	await session.mutate("main", (mutator) =>
-		mutator.commit([storedValues.setValue(storedValues.laneConfig("main"), configuration)]),
+	const session = await repo.create({}, BACKGROUND_CONTEXT);
+	await session.mutate(
+		"main",
+		(mutator) =>
+			mutator.commit([storedValues.setValue(storedValues.laneConfig("main"), configuration)], BACKGROUND_CONTEXT),
+		BACKGROUND_CONTEXT,
 	);
 	return session;
 }
@@ -43,7 +47,7 @@ function runState(triggerEntryId: string): RunState {
 }
 
 afterEach(async () => {
-	for (const repo of repos.splice(0)) await repo.close();
+	for (const repo of repos.splice(0)) await repo.close(BACKGROUND_CONTEXT);
 });
 
 describe("runtime2 lane restore", () => {
@@ -56,11 +60,14 @@ describe("runtime2 lane restore", () => {
 			oldLeafId: null,
 			leafId: null,
 		};
-		await session.mutate("main", (mutator) =>
-			mutator.commit([storedValues.setValue(storedValues.laneLastResult("main"), result)]),
+		await session.mutate(
+			"main",
+			(mutator) =>
+				mutator.commit([storedValues.setValue(storedValues.laneLastResult("main"), result)], BACKGROUND_CONTEXT),
+			BACKGROUND_CONTEXT,
 		);
 
-		const state = await restoreLane(session, "main");
+		const state = await restoreLane(session, "main", BACKGROUND_CONTEXT);
 
 		expect(state).toEqual({
 			leafId: null,
@@ -83,18 +90,24 @@ describe("runtime2 lane restore", () => {
 			intent: { kind: "run", promptEntryIds: [] },
 		};
 		const state = runState(missingTriggerId);
-		await session.mutate("main", (mutator) =>
-			mutator.commit([
-				storedValues.setValue(storedValues.operationMeta(operationId), meta),
-				storedValues.setValue(storedValues.operationState(operationId), state),
-				storedValues.setValue(storedValues.laneState("main"), {
-					currentOperationId: operationId,
-					pendingNextRun: [],
-				}),
-			]),
+		await session.mutate(
+			"main",
+			(mutator) =>
+				mutator.commit(
+					[
+						storedValues.setValue(storedValues.operationMeta(operationId), meta),
+						storedValues.setValue(storedValues.operationState(operationId), state),
+						storedValues.setValue(storedValues.laneState("main"), {
+							currentOperationId: operationId,
+							pendingNextRun: [],
+						}),
+					],
+					BACKGROUND_CONTEXT,
+				),
+			BACKGROUND_CONTEXT,
 		);
 
-		const restored = await restoreLane(session, "main");
+		const restored = await restoreLane(session, "main", BACKGROUND_CONTEXT);
 
 		expect(restored.operation).toEqual({ meta, state });
 	});
@@ -105,9 +118,9 @@ describe("runtime2 lane restore", () => {
 		[storedValues.laneState("main").namespace, storedValues.deleteValue(storedValues.laneState("main"))],
 	] as const)("requires %s", async (namespace, write) => {
 		const session = await createSession();
-		await session.mutate("main", (mutator) => mutator.commit([write]));
+		await session.mutate("main", (mutator) => mutator.commit([write], BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 
-		await expect(restoreLane(session, "main")).rejects.toThrow(`missing ${namespace.slice(3)}`);
+		await expect(restoreLane(session, "main", BACKGROUND_CONTEXT)).rejects.toThrow(`missing ${namespace.slice(3)}`);
 	});
 
 	it.each([storedValues.operationMeta("").namespace, storedValues.operationState("").namespace] as const)(
@@ -123,22 +136,30 @@ describe("runtime2 lane restore", () => {
 				intent: { kind: "run", promptEntryIds: [] },
 			};
 			const state = runState(session.idGenerator.next());
-			await session.mutate("main", (mutator) =>
-				mutator.commit([
-					...(namespace === storedValues.operationMeta(operationId).namespace
-						? []
-						: [storedValues.setValue(storedValues.operationMeta(operationId), meta)]),
-					...(namespace === storedValues.operationState(operationId).namespace
-						? []
-						: [storedValues.setValue(storedValues.operationState(operationId), state)]),
-					storedValues.setValue(storedValues.laneState("main"), {
-						currentOperationId: operationId,
-						pendingNextRun: [],
-					}),
-				]),
+			await session.mutate(
+				"main",
+				(mutator) =>
+					mutator.commit(
+						[
+							...(namespace === storedValues.operationMeta(operationId).namespace
+								? []
+								: [storedValues.setValue(storedValues.operationMeta(operationId), meta)]),
+							...(namespace === storedValues.operationState(operationId).namespace
+								? []
+								: [storedValues.setValue(storedValues.operationState(operationId), state)]),
+							storedValues.setValue(storedValues.laneState("main"), {
+								currentOperationId: operationId,
+								pendingNextRun: [],
+							}),
+						],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
 			);
 
-			await expect(restoreLane(session, "main")).rejects.toThrow(`missing ${namespace.slice(3)}`);
+			await expect(restoreLane(session, "main", BACKGROUND_CONTEXT)).rejects.toThrow(
+				`missing ${namespace.slice(3)}`,
+			);
 		},
 	);
 
@@ -149,7 +170,7 @@ describe("runtime2 lane restore", () => {
 			thinkingLevel: "high",
 			activeToolNames: ["read"],
 		};
-		await session.createLane("worker", null, workerConfiguration);
+		await session.createLane("worker", null, workerConfiguration, BACKGROUND_CONTEXT);
 		const operationId = session.idGenerator.next();
 		const meta: OperationMeta = {
 			operationId,
@@ -159,27 +180,33 @@ describe("runtime2 lane restore", () => {
 			intent: { kind: "run", promptEntryIds: [] },
 		};
 		const state = runState(session.idGenerator.next());
-		await session.mutate("worker", (mutator) =>
-			mutator.commit([
-				storedValues.setValue(storedValues.operationMeta(operationId), meta),
-				storedValues.setValue(storedValues.operationState(operationId), state),
-				storedValues.setValue(storedValues.laneState("worker"), {
-					currentOperationId: operationId,
-					pendingNextRun: [],
-				}),
-			]),
+		await session.mutate(
+			"worker",
+			(mutator) =>
+				mutator.commit(
+					[
+						storedValues.setValue(storedValues.operationMeta(operationId), meta),
+						storedValues.setValue(storedValues.operationState(operationId), state),
+						storedValues.setValue(storedValues.laneState("worker"), {
+							currentOperationId: operationId,
+							pendingNextRun: [],
+						}),
+					],
+					BACKGROUND_CONTEXT,
+				),
+			BACKGROUND_CONTEXT,
 		);
 		const before = {
-			leaves: await session.scanValues(storedValues.laneLeafInventoryPrefix()),
-			mainConfiguration: await session.getValue(storedValues.laneConfig("main")),
-			workerConfiguration: await session.getValue(storedValues.laneConfig("worker")),
-			mainState: await session.getValue(storedValues.laneState("main")),
-			workerState: await session.getValue(storedValues.laneState("worker")),
+			leaves: await session.scanValues(storedValues.laneLeafInventoryPrefix(), BACKGROUND_CONTEXT),
+			mainConfiguration: await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
+			workerConfiguration: await session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT),
+			mainState: await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT),
+			workerState: await session.getValue(storedValues.laneState("worker"), BACKGROUND_CONTEXT),
 		};
 		const mutate = vi.spyOn(session, "mutate");
 		const readList = vi.spyOn(MemoryStorage.prototype, "readList");
 
-		const lanes = await restoreSession(session);
+		const lanes = await restoreSession(session, BACKGROUND_CONTEXT);
 
 		expect([...lanes.keys()].sort()).toEqual(["main", "worker"]);
 		expect(lanes.get("main")?.configuration).toEqual(configuration);
@@ -190,21 +217,23 @@ describe("runtime2 lane restore", () => {
 		expect(mutate.mock.calls.map(([lane]) => lane).sort()).toEqual(["main", "worker"]);
 		expect(readList).not.toHaveBeenCalled();
 		expect({
-			leaves: await session.scanValues(storedValues.laneLeafInventoryPrefix()),
-			mainConfiguration: await session.getValue(storedValues.laneConfig("main")),
-			workerConfiguration: await session.getValue(storedValues.laneConfig("worker")),
-			mainState: await session.getValue(storedValues.laneState("main")),
-			workerState: await session.getValue(storedValues.laneState("worker")),
+			leaves: await session.scanValues(storedValues.laneLeafInventoryPrefix(), BACKGROUND_CONTEXT),
+			mainConfiguration: await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
+			workerConfiguration: await session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT),
+			mainState: await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT),
+			workerState: await session.getValue(storedValues.laneState("worker"), BACKGROUND_CONTEXT),
 		}).toEqual(before);
 		readList.mockRestore();
 	});
 
 	it("requires main in the trusted lane inventory", async () => {
 		const session = await createSession();
-		await session.mutate("main", (mutator) =>
-			mutator.commit([storedValues.deleteValue(storedValues.laneLeaf("main"))]),
+		await session.mutate(
+			"main",
+			(mutator) => mutator.commit([storedValues.deleteValue(storedValues.laneLeaf("main"))], BACKGROUND_CONTEXT),
+			BACKGROUND_CONTEXT,
 		);
 
-		await expect(restoreSession(session)).rejects.toThrow("Session is missing main lane");
+		await expect(restoreSession(session, BACKGROUND_CONTEXT)).rejects.toThrow("Session is missing main lane");
 	});
 });

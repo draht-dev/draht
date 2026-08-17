@@ -1,3 +1,4 @@
+import { BACKGROUND_CONTEXT } from "../../../context.ts";
 import type { SessionMetadata, SessionRepo } from "../../types.ts";
 import { laneLeaf, setValue } from "../../values.ts";
 import { STORAGE_BENCHMARK_DATASETS, type StorageBenchmarkDataset } from "./datasets.ts";
@@ -59,9 +60,9 @@ export async function seedSessionRepoCatalogBenchmark(
 ): Promise<SessionMetadata[]> {
 	const metadata: SessionMetadata[] = [];
 	for (let index = 0; index < dataset.sessionCount; index++) {
-		const session = await repo.create({ id: sessionRepoBenchmarkSessionId(index) });
+		const session = await repo.create({ id: sessionRepoBenchmarkSessionId(index) }, BACKGROUND_CONTEXT);
 		metadata.push(session.metadata);
-		await session.close();
+		await session.close(BACKGROUND_CONTEXT);
 	}
 	return metadata;
 }
@@ -74,7 +75,7 @@ export const SESSION_REPO_CATALOG_READ_BENCHMARK_SCENARIOS: readonly SessionRepo
 			return dataset.sessionCount;
 		},
 		async run(repo) {
-			return (await repo.list()).length;
+			return (await repo.list(undefined, BACKGROUND_CONTEXT)).length;
 		},
 	},
 ];
@@ -87,7 +88,7 @@ export const SESSION_REPO_CATALOG_WRITE_BENCHMARK_SCENARIOS: readonly SessionRep
 		prepare(repo) {
 			return Promise.resolve({
 				async run() {
-					const session = await repo.create({ id: BENCHMARK_SESSION_ID });
+					const session = await repo.create({ id: BENCHMARK_SESSION_ID }, BACKGROUND_CONTEXT);
 					return session.metadata.id === BENCHMARK_SESSION_ID ? 1 : 0;
 				},
 			});
@@ -97,12 +98,12 @@ export const SESSION_REPO_CATALOG_WRITE_BENCHMARK_SCENARIOS: readonly SessionRep
 		name: "open closed empty session",
 		expectedResult: 1,
 		async prepare(repo) {
-			const session = await repo.create({ id: BENCHMARK_SESSION_ID });
+			const session = await repo.create({ id: BENCHMARK_SESSION_ID }, BACKGROUND_CONTEXT);
 			const { metadata } = session;
-			await session.close();
+			await session.close(BACKGROUND_CONTEXT);
 			return {
 				async run() {
-					const reopened = await repo.open(metadata);
+					const reopened = await repo.open(metadata, BACKGROUND_CONTEXT);
 					return reopened.metadata.id === metadata.id ? 1 : 0;
 				},
 			};
@@ -112,12 +113,12 @@ export const SESSION_REPO_CATALOG_WRITE_BENCHMARK_SCENARIOS: readonly SessionRep
 		name: "delete closed empty session",
 		expectedResult: 1,
 		async prepare(repo) {
-			const session = await repo.create({ id: BENCHMARK_SESSION_ID });
+			const session = await repo.create({ id: BENCHMARK_SESSION_ID }, BACKGROUND_CONTEXT);
 			const { metadata } = session;
-			await session.close();
+			await session.close(BACKGROUND_CONTEXT);
 			return {
 				async run() {
-					await repo.delete(metadata);
+					await repo.delete(metadata, BACKGROUND_CONTEXT);
 					return 1;
 				},
 			};
@@ -136,11 +137,15 @@ export async function seedSessionRepoForkBenchmark(
 	repo: SessionRepo,
 	dataset: StorageBenchmarkDataset,
 ): Promise<SessionMetadata> {
-	const session = await repo.create({ id: BENCHMARK_SESSION_ID });
+	const session = await repo.create({ id: BENCHMARK_SESSION_ID }, BACKGROUND_CONTEXT);
 	for (const transaction of generateStorageBenchmarkSeedTransactions(dataset)) {
-		await session.mutate("main", (mutator) => mutator.commit(transaction));
+		await session.mutate("main", (mutator) => mutator.commit(transaction, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 	}
-	await session.mutate("main", (mutator) => mutator.commit([setValue(laneLeaf("main"), dataset.leafId)]));
+	await session.mutate(
+		"main",
+		(mutator) => mutator.commit([setValue(laneLeaf("main"), dataset.leafId)], BACKGROUND_CONTEXT),
+		BACKGROUND_CONTEXT,
+	);
 	return session.metadata;
 }
 
@@ -152,7 +157,7 @@ export const SESSION_REPO_FORK_WRITE_BENCHMARK_SCENARIOS: readonly SessionRepoFo
 			return dataset.entryCount;
 		},
 		async run(repo, source, dataset) {
-			const fork = await repo.fork(source, { id: FORK_DESTINATION_SESSION_ID });
+			const fork = await repo.fork(source, { id: FORK_DESTINATION_SESSION_ID }, BACKGROUND_CONTEXT);
 			return fork.metadata.id === FORK_DESTINATION_SESSION_ID && fork.metadata.parentSessionId === source.id
 				? dataset.entryCount
 				: 0;

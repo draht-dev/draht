@@ -1,4 +1,4 @@
-import { type AgentHarness, MemorySessionRepo } from "@draht/agent-core";
+import { type AgentHarness, BACKGROUND_CONTEXT, MemorySessionRepo } from "@draht/agent-core";
 import { isDemoSessionId } from "./demo-sessions.ts";
 
 // Prototype-only control protocol. Real Harness operations will require a
@@ -32,19 +32,19 @@ async function run(): Promise<void> {
 	const repo = new MemorySessionRepo();
 	// Seed, close, list, and reopen to model restoring an existing Session
 	// instead of handing the freshly created facade directly to the Harness.
-	const created = await repo.create({ id: sessionId });
-	await created.close();
-	const metadata = (await repo.list()).find((candidate) => candidate.id === sessionId);
+	const created = await repo.create({ id: sessionId }, BACKGROUND_CONTEXT);
+	await created.close(BACKGROUND_CONTEXT);
+	const metadata = (await repo.list(undefined, BACKGROUND_CONTEXT)).find((candidate) => candidate.id === sessionId);
 	if (!metadata) throw new Error(`Unknown demo session: ${sessionId}`);
-	const session = await repo.open(metadata);
+	const session = await repo.open(metadata, BACKGROUND_CONTEXT);
 	// Prototype-only close-capable Harness placeholder. A production worker will
 	// construct and own the real AgentHarness for this durable Session.
-	const harnessOwner: Pick<AgentHarness, "close"> = { close: () => session.close() };
+	const harnessOwner: Pick<AgentHarness, "close"> = { close: () => session.close(BACKGROUND_CONTEXT) };
 
 	let closing: Promise<void> | undefined;
 	const close = (): Promise<void> => {
 		if (!closing) {
-			closing = harnessOwner.close().finally(() => repo.close());
+			closing = harnessOwner.close(BACKGROUND_CONTEXT).finally(() => repo.close(BACKGROUND_CONTEXT));
 		}
 		return closing;
 	};

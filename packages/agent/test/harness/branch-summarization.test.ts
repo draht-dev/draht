@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@draht/agent-core";
 import { describe, expect, it } from "vitest";
 import { collectEntriesForBranchSummary } from "../../src/harness/compaction/branch-summarization.ts";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import type { Entry, MessageEntry, SessionTree } from "../../src/harness/session/index.ts";
 
 function message(text: string): AgentMessage {
@@ -40,7 +41,7 @@ describe("v4 branch summarization", () => {
 		const target = messageEntry("target", common.id, "target", 5);
 		const session = branchReader([root, common, abandoned1, abandoned2, target]);
 
-		const result = await collectEntriesForBranchSummary(session, abandoned2.id, target.id);
+		const result = await collectEntriesForBranchSummary(session, abandoned2.id, target.id, BACKGROUND_CONTEXT);
 		expect(result.commonAncestorId).toBe(common.id);
 		expect(result.entries.map((entry) => entry.id)).toEqual([abandoned1.id, abandoned2.id]);
 		expect(result.entries.some((entry) => entry.id === root.id)).toBe(false);
@@ -48,9 +49,11 @@ describe("v4 branch summarization", () => {
 
 	it("returns no entries when there was no previous leaf", async () => {
 		const target = messageEntry("target", null, "target", 1);
-		expect(await collectEntriesForBranchSummary(branchReader([target]), null, target.id)).toEqual({
-			entries: [],
-			commonAncestorId: null,
-		});
+		expect(await collectEntriesForBranchSummary(branchReader([target]), null, target.id, BACKGROUND_CONTEXT)).toEqual(
+			{
+				entries: [],
+				commonAncestorId: null,
+			},
+		);
 	});
 });

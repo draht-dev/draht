@@ -1,4 +1,5 @@
 import type { AgentMessage } from "../../types.ts";
+import type { Context } from "../context.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../messages.ts";
 import type { CompactionEntry, Entry, EntryProjector } from "./types.ts";
 
@@ -45,8 +46,10 @@ export function sessionEntryToContextMessages(entry: Entry): AgentMessage[] {
 
 export async function buildSessionContext(
 	pathEntries: readonly Entry[],
-	options: SessionContextBuildOptions = {},
+	options: SessionContextBuildOptions | undefined,
+	context: Context,
 ): Promise<AgentMessage[]> {
+	options ??= {};
 	const entries = buildContextEntries(pathEntries);
 	const messages: AgentMessage[] = [];
 	for (const entry of entries) {
@@ -55,7 +58,7 @@ export async function buildSessionContext(
 			continue;
 		}
 		const projector = options.entryProjectors?.[entry.customType];
-		if (projector !== undefined) messages.push(...((await projector(entry)) ?? []));
+		if (projector !== undefined) messages.push(...((await projector(entry, context)) ?? []));
 	}
 	return messages;
 }

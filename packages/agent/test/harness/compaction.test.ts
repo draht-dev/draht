@@ -28,6 +28,7 @@ import {
 	serializeConversation,
 	shouldCompact,
 } from "../../src/harness/compaction/compaction.ts";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { buildSessionContext } from "../../src/harness/session/context.ts";
 import type {
 	BranchSummaryEntry,
@@ -333,7 +334,7 @@ describe("harness compaction", () => {
 		]);
 		const u3 = createMessageEntry(createUserMessage("3"), compaction.id);
 		const a3 = createMessageEntry(createAssistantMessage("c"), u3.id);
-		const loaded = await buildSessionContext([u1, a1, u2, a2, compaction, u3, a3]);
+		const loaded = await buildSessionContext([u1, a1, u2, a2, compaction, u3, a3], undefined, BACKGROUND_CONTEXT);
 		expect(loaded).toHaveLength(5);
 		expect(loaded[0]?.role).toBe("compactionSummary");
 		expect(loaded.map((message) => message.role)).toEqual([
@@ -358,7 +359,9 @@ describe("harness compaction", () => {
 		expect(preparation).toBeDefined();
 		expect(preparation?.previousSummary).toBe("First summary");
 		expect(preparation?.retainedTail.length).toBeGreaterThan(0);
-		expect(preparation?.tokensBefore).toBe(estimateContextTokens(await buildSessionContext(pathEntries)).tokens);
+		expect(preparation?.tokensBefore).toBe(
+			estimateContextTokens(await buildSessionContext(pathEntries, undefined, BACKGROUND_CONTEXT)).tokens,
+		);
 	});
 
 	it("carries a previous compaction's retained tail into the next preparation", () => {

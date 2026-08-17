@@ -1,5 +1,6 @@
 import type { AssistantMessageFrame } from "@draht/ai";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import type {
 	DurableStructuralPreparation,
@@ -90,22 +91,22 @@ describe("bound value addresses", () => {
 		const storage = new MemoryStorage({ now: () => 1 });
 		const events = list<{ name: string }>("app.events");
 		const reader: SessionReader = storage;
-		const storageElements = await storage.readList(events);
-		const readerElements = await reader.readList(events);
+		const storageElements = await storage.readList(events, undefined, BACKGROUND_CONTEXT);
+		const readerElements = await reader.readList(events, undefined, BACKGROUND_CONTEXT);
 		expectTypeOf(storageElements).toEqualTypeOf<ListElement<{ name: string }>[]>();
 		expectTypeOf(readerElements).toEqualTypeOf<ListElement<{ name: string }>[]>();
-		await storage.close();
+		await storage.close(BACKGROUND_CONTEXT);
 	});
 
 	it("uses separately constructed equal addresses for one durable location", async () => {
 		const storage = new MemoryStorage({ now: () => 1 });
 		const first = value<{ ready: boolean }>("app.state", "workspace");
 		const second = value<{ ready: boolean }>("app.state", "workspace");
-		await storage.commit([setValue(first, { ready: true })]);
-		const stored = await storage.getValue(second);
+		await storage.commit([setValue(first, { ready: true })], BACKGROUND_CONTEXT);
+		const stored = await storage.getValue(second, BACKGROUND_CONTEXT);
 		expect(stored).toEqual({ address: first, value: { ready: true }, seq: 1 });
 		expectTypeOf(stored).toEqualTypeOf<StoredValue<{ ready: boolean }> | undefined>();
-		await storage.close();
+		await storage.close(BACKGROUND_CONTEXT);
 	});
 });
 

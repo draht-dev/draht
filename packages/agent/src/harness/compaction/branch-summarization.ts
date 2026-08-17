@@ -9,6 +9,7 @@ import {
 } from "@draht/ai";
 
 import type { AgentMessage } from "../../types.ts";
+import type { Context } from "../context.ts";
 import { convertToLlm, createBranchSummaryMessage, createCompactionSummaryMessage } from "../messages.ts";
 import type { Entry, SessionTree } from "../session/index.ts";
 import { BranchSummaryError, err, ok, type Result } from "../types.ts";
@@ -83,12 +84,13 @@ export async function collectEntriesForBranchSummary(
 	session: Pick<SessionTree, "findEntriesOnBranch" | "getEntry">,
 	oldLeafId: string | null,
 	targetId: string,
+	context: Context,
 ): Promise<CollectEntriesResult> {
 	if (!oldLeafId) {
 		return { entries: [], commonAncestorId: null };
 	}
-	const oldPath = new Set((await session.findEntriesOnBranch({ start: oldLeafId })).map((entry) => entry.id));
-	const targetPath = await session.findEntriesOnBranch({ start: targetId });
+	const oldPath = new Set((await session.findEntriesOnBranch({ start: oldLeafId }, context)).map((entry) => entry.id));
+	const targetPath = await session.findEntriesOnBranch({ start: targetId }, context);
 	let commonAncestorId: string | null = null;
 	for (const entry of targetPath) {
 		if (oldPath.has(entry.id)) {
@@ -100,7 +102,7 @@ export async function collectEntriesForBranchSummary(
 	let current: string | null = oldLeafId;
 
 	while (current && current !== commonAncestorId) {
-		const entry = await session.getEntry(current);
+		const entry = await session.getEntry(current, context);
 		if (!entry) throw new Error(`Corrupt session: entry ${current} not found`);
 		entries.push(entry);
 		current = entry.parentId;

@@ -1,5 +1,6 @@
 import { uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../types.ts";
+import type { Context } from "../context.ts";
 import { insertEntry } from "./commit.ts";
 import { LaneMutationLine } from "./lane-mutations.ts";
 import type {
@@ -109,7 +110,7 @@ class StorageBackedSessionMutator implements SessionMutator {
 		this.storage = storage;
 	}
 
-	commit(writes: Write[]): Promise<CommitResult> {
+	commit(writes: Write[], context: Context): Promise<CommitResult> {
 		this.assertActive();
 		if (this.commitResult !== undefined) return Promise.reject(new Error("SessionMutator commit already attempted"));
 		try {
@@ -123,31 +124,35 @@ class StorageBackedSessionMutator implements SessionMutator {
 					throw new SessionPendingAssistantMessageError();
 				}
 			}
-			this.commitResult = this.storage.commit(writes);
+			this.commitResult = this.storage.commit(writes, context);
 		} catch (error) {
 			this.commitResult = Promise.reject(error);
 		}
 		return this.commitResult;
 	}
 
-	getEntries(ids: string[]): Promise<Map<string, Entry>> {
+	getEntries(ids: string[], context: Context): Promise<Map<string, Entry>> {
 		this.assertActive();
-		return this.storage.getEntries(ids);
+		return this.storage.getEntries(ids, context);
 	}
 
-	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined> {
+	getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined> {
 		this.assertActive();
-		return this.storage.getValue(address);
+		return this.storage.getValue(address, context);
 	}
 
-	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]> {
+	scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]> {
 		this.assertActive();
-		return this.storage.scanValues(prefix);
+		return this.storage.scanValues(prefix, context);
 	}
 
-	readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]> {
+	readList<T>(
+		address: ValueList<T>,
+		options: ListReadOptions | undefined,
+		context: Context,
+	): Promise<ListElement<T>[]> {
 		this.assertActive();
-		return this.storage.readList(address, options);
+		return this.storage.readList(address, options, context);
 	}
 
 	settle(): Promise<void> {
@@ -186,13 +191,17 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		this.onClose = options.onClose;
 	}
 
-	async mutate<T>(lane: string, mutation: (mutator: SessionMutator) => T | Promise<T>): Promise<T> {
+	async mutate<T>(
+		lane: string,
+		mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
+		context: Context,
+	): Promise<T> {
 		this.assertOpen();
 		return this.laneMutationLine.run(lane, async () => {
 			const mutator = new StorageBackedSessionMutator(lane, this.storage);
 			try {
 				try {
-					return await mutation(mutator);
+					return await mutation(mutator, context);
 				} finally {
 					await mutator.settle();
 				}
@@ -202,188 +211,219 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		});
 	}
 
-	async getEntries(ids: string[]): Promise<Map<string, Entry>> {
+	async getEntries(ids: string[], context: Context): Promise<Map<string, Entry>> {
 		this.assertOpen();
-		return this.storage.getEntries(ids);
+		return this.storage.getEntries(ids, context);
 	}
 
-	async getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined> {
+	async getValue<T>(address: Value<T>, context: Context): Promise<StoredValue<T> | undefined> {
 		this.assertOpen();
-		return this.storage.getValue(address);
+		return this.storage.getValue(address, context);
 	}
 
-	async scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]> {
+	async scanValues<T>(prefix: Value<T>, context: Context): Promise<StoredValue<T>[]> {
 		this.assertOpen();
-		return this.storage.scanValues(prefix);
+		return this.storage.scanValues(prefix, context);
 	}
 
-	async readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]> {
+	async readList<T>(
+		address: ValueList<T>,
+		options: ListReadOptions | undefined,
+		context: Context,
+	): Promise<ListElement<T>[]> {
 		this.assertOpen();
-		return this.storage.readList(address, options);
+		return this.storage.readList(address, options, context);
 	}
 
 	view(lane: string): SessionTree {
 		return {
-			getLeafId: () => this.getLeafIdForLane(lane),
-			getEntry: (id) => this.getEntry(id),
-			getStats: () => this.getStats(),
-			getValue: (address) => this.getValue(address),
-			scanValues: (prefix) => this.scanValues(prefix),
-			readList: (address, options) => this.readList(address, options),
-			setValue: (address, next) => this.setValueForLane(lane, address, next),
-			deleteValue: (address) => this.deleteValueForLane(lane, address),
-			appendList: (address, element) => this.appendListForLane(lane, address, element),
-			deleteList: (address) => this.deleteListForLane(lane, address),
-			getName: () => this.getName(),
-			setName: (name) => this.setNameForLane(lane, name),
-			getLabel: (targetId) => this.getLabel(targetId),
-			setLabel: (targetId, label) => this.setLabelForLane(lane, targetId, label),
-			findEntries: (query) => this.findEntries(query),
-			findEntry: (query) => this.findEntry(query),
-			findEntriesOnBranch: (query) => this.findEntriesOnBranchForLane(lane, query),
-			findEntryOnBranch: (query) => this.findEntryOnBranchForLane(lane, query),
-			appendMessage: (message) => this.appendMessageForLane(lane, message),
-			appendCustomEntry: (customType, data) => this.appendCustomEntryForLane(lane, customType, data),
+			getLeafId: (context) => this.getLeafIdForLane(lane, context),
+			getEntry: (id, context) => this.getEntry(id, context),
+			getStats: (context) => this.getStats(context),
+			getValue: (address, context) => this.getValue(address, context),
+			scanValues: (prefix, context) => this.scanValues(prefix, context),
+			readList: (address, options, context) => this.readList(address, options, context),
+			setValue: (address, next, context) => this.setValueForLane(lane, address, next, context),
+			deleteValue: (address, context) => this.deleteValueForLane(lane, address, context),
+			appendList: (address, element, context) => this.appendListForLane(lane, address, element, context),
+			deleteList: (address, context) => this.deleteListForLane(lane, address, context),
+			getName: (context) => this.getName(context),
+			setName: (name, context) => this.setNameForLane(lane, name, context),
+			getLabel: (targetId, context) => this.getLabel(targetId, context),
+			setLabel: (targetId, label, context) => this.setLabelForLane(lane, targetId, label, context),
+			findEntries: (query, context) => this.findEntries(query, context),
+			findEntry: (query, context) => this.findEntry(query, context),
+			findEntriesOnBranch: (query, context) => this.findEntriesOnBranchForLane(lane, query, context),
+			findEntryOnBranch: (query, context) => this.findEntryOnBranchForLane(lane, query, context),
+			appendMessage: (message, context) => this.appendMessageForLane(lane, message, context),
+			appendCustomEntry: (customType, data, context) =>
+				this.appendCustomEntryForLane(lane, customType, data, context),
 		};
 	}
 
-	async createLane(name: string, at: string | null, configuration: LaneConfiguration): Promise<SessionTree> {
+	async createLane(
+		name: string,
+		at: string | null,
+		configuration: LaneConfiguration,
+		context: Context,
+	): Promise<SessionTree> {
 		this.assertOpen();
 		if (name.length === 0) throw new SessionInvalidLaneError(name, "lane name must not be empty");
-		return this.mutate(name, async (mutator) => {
-			// R1 owns complete idle-lane and current-state validation. Slice 2 only
-			// distinguishes valid existing lane shapes from partial durable lane state.
-			const [leaf, storedConfiguration, storedLaneState, lastResult] = await Promise.all([
-				mutator.getValue(laneLeaf(name)),
-				mutator.getValue(laneConfig(name)),
-				mutator.getValue(laneState(name)),
-				mutator.getValue(laneLastResult(name)),
-			]);
-			const presentCount = [leaf, storedConfiguration, storedLaneState, lastResult].filter(
-				(stored) => stored !== undefined,
-			).length;
-			if (
-				leaf !== undefined &&
-				storedLaneState !== undefined &&
-				(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
-			) {
-				throw new SessionLaneExistsError(name);
-			}
-			if (presentCount !== 0) {
-				throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
-			}
-			if (at !== null && !(await mutator.getEntries([at])).has(at)) throw new SessionUnknownTargetError(at);
+		return this.mutate(
+			name,
+			async (mutator) => {
+				// R1 owns complete idle-lane and current-state validation. Slice 2 only
+				// distinguishes valid existing lane shapes from partial durable lane state.
+				const [leaf, storedConfiguration, storedLaneState, lastResult] = await Promise.all([
+					mutator.getValue(laneLeaf(name), context),
+					mutator.getValue(laneConfig(name), context),
+					mutator.getValue(laneState(name), context),
+					mutator.getValue(laneLastResult(name), context),
+				]);
+				const presentCount = [leaf, storedConfiguration, storedLaneState, lastResult].filter(
+					(stored) => stored !== undefined,
+				).length;
+				if (
+					leaf !== undefined &&
+					storedLaneState !== undefined &&
+					(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
+				) {
+					throw new SessionLaneExistsError(name);
+				}
+				if (presentCount !== 0) {
+					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
+				}
+				if (at !== null && !(await mutator.getEntries([at], context)).has(at)) {
+					throw new SessionUnknownTargetError(at);
+				}
 
-			// R6 adds the harness-wide admission barrier. Until then, close may reject
-			// this lane job before Storage.commit admits it; admitted commits still drain.
-			await mutator.commit([
-				setValueWrite(laneConfig(name), configuration),
-				setValueWrite(laneLeaf(name), at),
-				setValueWrite(laneState(name), { currentOperationId: null, pendingNextRun: [] }),
-			]);
-			return this.view(name);
-		});
+				// R6 adds the harness-wide admission barrier. Until then, close may reject
+				// this lane job before Storage.commit admits it; admitted commits still drain.
+				await mutator.commit(
+					[
+						setValueWrite(laneConfig(name), configuration),
+						setValueWrite(laneLeaf(name), at),
+						setValueWrite(laneState(name), { currentOperationId: null, pendingNextRun: [] }),
+					],
+					context,
+				);
+				return this.view(name);
+			},
+			context,
+		);
 	}
 
-	getLeafId(): Promise<string | null> {
-		return this.getLeafIdForLane("main");
+	getLeafId(context: Context): Promise<string | null> {
+		return this.getLeafIdForLane("main", context);
 	}
 
-	async getEntry(id: string): Promise<Entry | undefined> {
-		return (await this.getEntries([id])).get(id);
+	async getEntry(id: string, context: Context): Promise<Entry | undefined> {
+		return (await this.getEntries([id], context)).get(id);
 	}
 
-	async getStats(): Promise<SessionStats> {
+	async getStats(context: Context): Promise<SessionStats> {
 		this.assertOpen();
-		return this.storage.getStats();
+		return this.storage.getStats(context);
 	}
 
-	setValue<T>(address: Value<T>, next: NoInfer<T>): Promise<void> {
-		return this.setValueForLane("main", address, next);
+	setValue<T>(address: Value<T>, next: NoInfer<T>, context: Context): Promise<void> {
+		return this.setValueForLane("main", address, next, context);
 	}
 
-	deleteValue<T>(address: Value<T>): Promise<void> {
-		return this.deleteValueForLane("main", address);
+	deleteValue<T>(address: Value<T>, context: Context): Promise<void> {
+		return this.deleteValueForLane("main", address, context);
 	}
 
-	appendList<T>(address: ValueList<T>, element: NoInfer<T>): Promise<void> {
-		return this.appendListForLane("main", address, element);
+	appendList<T>(address: ValueList<T>, element: NoInfer<T>, context: Context): Promise<void> {
+		return this.appendListForLane("main", address, element, context);
 	}
 
-	deleteList<T>(address: ValueList<T>): Promise<void> {
-		return this.deleteListForLane("main", address);
+	deleteList<T>(address: ValueList<T>, context: Context): Promise<void> {
+		return this.deleteListForLane("main", address, context);
 	}
 
-	async getName(): Promise<string | undefined> {
-		return (await this.getValue(sessionName))?.value;
+	async getName(context: Context): Promise<string | undefined> {
+		return (await this.getValue(sessionName, context))?.value;
 	}
 
-	setName(name: string | undefined): Promise<void> {
-		return this.setNameForLane("main", name);
+	setName(name: string | undefined, context: Context): Promise<void> {
+		return this.setNameForLane("main", name, context);
 	}
 
-	async getLabel(targetId: string): Promise<string | undefined> {
-		return (await this.getValue(entryLabel(targetId)))?.value;
+	async getLabel(targetId: string, context: Context): Promise<string | undefined> {
+		return (await this.getValue(entryLabel(targetId), context))?.value;
 	}
 
-	setLabel(targetId: string, label: string | undefined): Promise<void> {
-		return this.setLabelForLane("main", targetId, label);
+	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void> {
+		return this.setLabelForLane("main", targetId, label, context);
 	}
 
-	async findEntries(query: EntryQuery = {}): Promise<Entry[]> {
+	async findEntries(query: EntryQuery | undefined, context: Context): Promise<Entry[]> {
+		query ??= {};
 		this.assertOpen();
 		const order = query.order ?? "desc";
 		if (query.cursor !== undefined) {
 			if (order === "asc" && query.cursor.seq === Number.MAX_SAFE_INTEGER) return [];
 			if (order === "desc" && query.cursor.seq <= 1) return [];
 		}
-		return this.storage.scanEntries({
-			type: query.type,
-			customType: query.customType,
-			order,
-			limit: query.limit,
-			...(query.cursor === undefined
-				? {}
-				: order === "asc"
-					? { fromSeq: query.cursor.seq + 1 }
-					: { toSeq: query.cursor.seq - 1 }),
-		});
+		return this.storage.scanEntries(
+			{
+				type: query.type,
+				customType: query.customType,
+				order,
+				limit: query.limit,
+				...(query.cursor === undefined
+					? {}
+					: order === "asc"
+						? { fromSeq: query.cursor.seq + 1 }
+						: { toSeq: query.cursor.seq - 1 }),
+			},
+			context,
+		);
 	}
 
-	async findEntry(query: EntryQuery = {}): Promise<Entry | undefined> {
-		const entries = await this.findEntries({
-			...query,
-			limit: query.limit === undefined ? 1 : Math.min(query.limit, 1),
-		});
+	async findEntry(query: EntryQuery | undefined, context: Context): Promise<Entry | undefined> {
+		query ??= {};
+		const entries = await this.findEntries(
+			{
+				...query,
+				limit: query.limit === undefined ? 1 : Math.min(query.limit, 1),
+			},
+			context,
+		);
 		return entries[0];
 	}
 
-	findEntriesOnBranch(query: BranchScan = {}): Promise<Entry[]> {
-		return this.findEntriesOnBranchForLane("main", query);
+	findEntriesOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry[]> {
+		return this.findEntriesOnBranchForLane("main", query, context);
 	}
 
-	findEntryOnBranch(query: BranchScan = {}): Promise<Entry | undefined> {
-		return this.findEntryOnBranchForLane("main", query);
+	findEntryOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry | undefined> {
+		return this.findEntryOnBranchForLane("main", query, context);
 	}
 
-	appendMessage(message: AgentMessage): Promise<string> {
-		return this.captureAppend("main", { type: "message", payload: message });
+	appendMessage(message: AgentMessage, context: Context): Promise<string> {
+		return this.captureAppend("main", { type: "message", payload: message }, context);
 	}
 
-	appendCustomEntry(customType: string, data?: JsonValue): Promise<string> {
-		return this.captureAppend("main", {
-			type: "custom",
-			customType,
-			...(data === undefined ? {} : { payload: data }),
-		});
+	appendCustomEntry(customType: string, data: JsonValue | undefined, context: Context): Promise<string> {
+		return this.captureAppend(
+			"main",
+			{
+				type: "custom",
+				customType,
+				...(data === undefined ? {} : { payload: data }),
+			},
+			context,
+		);
 	}
 
-	close(): Promise<void> {
+	close(context: Context): Promise<void> {
 		if (this.closePromise !== undefined) return this.closePromise;
 		this.state = "closing";
 		this.closePromise = this.laneMutationLine
 			.seal(this.closedError)
-			.then(() => this.storage.close())
+			.then(() => this.storage.close(context))
 			.finally(() => {
 				this.state = "closed";
 				this.onClose?.();
@@ -391,75 +431,121 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		return this.closePromise;
 	}
 
-	private async getLeafIdForLane(lane: string): Promise<string | null> {
-		const leaf = await this.getValue(laneLeaf(lane));
+	private async getLeafIdForLane(lane: string, context: Context): Promise<string | null> {
+		const leaf = await this.getValue(laneLeaf(lane), context);
 		if (leaf === undefined) throw new Error(`Unknown lane: ${lane}`);
 		return leaf.value;
 	}
 
-	private async findEntriesOnBranchForLane(lane: string, query: BranchScan = {}): Promise<Entry[]> {
+	private async findEntriesOnBranchForLane(
+		lane: string,
+		query: BranchScan | undefined,
+		context: Context,
+	): Promise<Entry[]> {
+		query ??= {};
 		this.assertOpen();
-		const start = query.start ?? (await this.getLeafIdForLane(lane));
+		const start = query.start ?? (await this.getLeafIdForLane(lane, context));
 		if (start === null) return [];
-		return this.storage.scanBranch({ ...query, start, order: query.order ?? "newestFirst" });
+		return this.storage.scanBranch({ ...query, start, order: query.order ?? "newestFirst" }, context);
 	}
 
-	private async findEntryOnBranchForLane(lane: string, query: BranchScan = {}): Promise<Entry | undefined> {
-		const entries = await this.findEntriesOnBranchForLane(lane, {
-			...query,
-			limit: query.limit === undefined ? 1 : Math.min(query.limit, 1),
-		});
+	private async findEntryOnBranchForLane(
+		lane: string,
+		query: BranchScan | undefined,
+		context: Context,
+	): Promise<Entry | undefined> {
+		query ??= {};
+		const entries = await this.findEntriesOnBranchForLane(
+			lane,
+			{
+				...query,
+				limit: query.limit === undefined ? 1 : Math.min(query.limit, 1),
+			},
+			context,
+		);
 		return entries[0];
 	}
 
-	private setValueForLane<T>(lane: string, address: Value<T>, next: NoInfer<T>): Promise<void> {
-		return this.mutate(lane, async (mutator) => {
-			await mutator.commit([setValueWrite(address, next)]);
-		});
+	private setValueForLane<T>(lane: string, address: Value<T>, next: NoInfer<T>, context: Context): Promise<void> {
+		return this.mutate(
+			lane,
+			async (mutator) => {
+				await mutator.commit([setValueWrite(address, next)], context);
+			},
+			context,
+		);
 	}
 
-	private deleteValueForLane<T>(lane: string, address: Value<T>): Promise<void> {
-		return this.mutate(lane, async (mutator) => {
-			await mutator.commit([deleteValueWrite(address)]);
-		});
+	private deleteValueForLane<T>(lane: string, address: Value<T>, context: Context): Promise<void> {
+		return this.mutate(
+			lane,
+			async (mutator) => {
+				await mutator.commit([deleteValueWrite(address)], context);
+			},
+			context,
+		);
 	}
 
-	private appendListForLane<T>(lane: string, address: ValueList<T>, element: NoInfer<T>): Promise<void> {
-		return this.mutate(lane, async (mutator) => {
-			await mutator.commit([appendListWrite(address, element)]);
-		});
+	private appendListForLane<T>(
+		lane: string,
+		address: ValueList<T>,
+		element: NoInfer<T>,
+		context: Context,
+	): Promise<void> {
+		return this.mutate(
+			lane,
+			async (mutator) => {
+				await mutator.commit([appendListWrite(address, element)], context);
+			},
+			context,
+		);
 	}
 
-	private deleteListForLane<T>(lane: string, address: ValueList<T>): Promise<void> {
-		return this.mutate(lane, async (mutator) => {
-			await mutator.commit([deleteListWrite(address)]);
-		});
+	private deleteListForLane<T>(lane: string, address: ValueList<T>, context: Context): Promise<void> {
+		return this.mutate(
+			lane,
+			async (mutator) => {
+				await mutator.commit([deleteListWrite(address)], context);
+			},
+			context,
+		);
 	}
 
-	private setNameForLane(lane: string, name: string | undefined): Promise<void> {
+	private setNameForLane(lane: string, name: string | undefined, context: Context): Promise<void> {
 		return name === undefined
-			? this.deleteValueForLane(lane, sessionName)
-			: this.setValueForLane(lane, sessionName, name);
+			? this.deleteValueForLane(lane, sessionName, context)
+			: this.setValueForLane(lane, sessionName, name, context);
 	}
 
-	private setLabelForLane(lane: string, targetId: string, label: string | undefined): Promise<void> {
+	private setLabelForLane(lane: string, targetId: string, label: string | undefined, context: Context): Promise<void> {
 		const address = entryLabel(targetId);
-		return label === undefined ? this.deleteValueForLane(lane, address) : this.setValueForLane(lane, address, label);
+		return label === undefined
+			? this.deleteValueForLane(lane, address, context)
+			: this.setValueForLane(lane, address, label, context);
 	}
 
-	private appendMessageForLane(lane: string, message: AgentMessage): Promise<string> {
-		return this.captureAppend(lane, { type: "message", payload: message });
+	private appendMessageForLane(lane: string, message: AgentMessage, context: Context): Promise<string> {
+		return this.captureAppend(lane, { type: "message", payload: message }, context);
 	}
 
-	private appendCustomEntryForLane(lane: string, customType: string, data?: JsonValue): Promise<string> {
-		return this.captureAppend(lane, {
-			type: "custom",
-			customType,
-			...(data === undefined ? {} : { payload: data }),
-		});
+	private appendCustomEntryForLane(
+		lane: string,
+		customType: string,
+		data: JsonValue | undefined,
+		context: Context,
+	): Promise<string> {
+		return this.captureAppend(
+			lane,
+			{
+				type: "custom",
+				customType,
+				...(data === undefined ? {} : { payload: data }),
+			},
+			context,
+		);
 	}
 
-	private async captureAppend(lane: string, pending: PendingEntry): Promise<string> {
+	private async captureAppend(lane: string, pending: PendingEntry, context: Context): Promise<string> {
 		this.assertOpen();
 		if (
 			pending.type === "message" &&
@@ -468,45 +554,53 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		) {
 			throw new SessionPendingAssistantMessageError();
 		}
-		return this.appendCaptured(lane, this.idGenerator.next(), pending);
+		return this.appendCaptured(lane, this.idGenerator.next(), pending, context);
 	}
 
-	private async appendCaptured(lane: string, id: string, pending: PendingEntry): Promise<string> {
-		await this.mutate(lane, (mutator) => this.appendCapturedIfReady(mutator, id, pending));
+	private async appendCaptured(lane: string, id: string, pending: PendingEntry, context: Context): Promise<string> {
+		await this.mutate(lane, (mutator) => this.appendCapturedIfReady(mutator, id, pending, context), context);
 		return id;
 	}
 
-	private async appendCapturedIfReady(mutator: SessionMutator, id: string, pending: PendingEntry): Promise<void> {
+	private async appendCapturedIfReady(
+		mutator: SessionMutator,
+		id: string,
+		pending: PendingEntry,
+		context: Context,
+	): Promise<void> {
 		const { lane } = mutator;
 		const [leaf, storedLaneState] = await Promise.all([
-			mutator.getValue(laneLeaf(lane)),
-			mutator.getValue(laneState(lane)),
+			mutator.getValue(laneLeaf(lane), context),
+			mutator.getValue(laneState(lane), context),
 		]);
 		if (leaf === undefined) throw new SessionInvariantError(`Unknown lane: ${lane}`);
 		if (storedLaneState === undefined)
 			throw new SessionInvariantError(`Lane ${JSON.stringify(lane)} is missing lane.state`);
 		const operationId = storedLaneState.value.currentOperationId;
 		if (operationId === null) {
-			await mutator.commit([
-				insertEntry(
-					pending.type === "message"
-						? { id, parentId: leaf.value, type: "message", message: pending.payload }
-						: {
-								id,
-								parentId: leaf.value,
-								type: "custom",
-								customType: pending.customType,
-								...(pending.payload === undefined ? {} : { data: pending.payload }),
-							},
-				),
-				setValueWrite(laneLeaf(lane), id),
-			]);
+			await mutator.commit(
+				[
+					insertEntry(
+						pending.type === "message"
+							? { id, parentId: leaf.value, type: "message", message: pending.payload }
+							: {
+									id,
+									parentId: leaf.value,
+									type: "custom",
+									customType: pending.customType,
+									...(pending.payload === undefined ? {} : { data: pending.payload }),
+								},
+					),
+					setValueWrite(laneLeaf(lane), id),
+				],
+				context,
+			);
 			return;
 		}
 
 		const [operation, storedOperationState] = await Promise.all([
-			mutator.getValue(operationMeta(operationId)),
-			mutator.getValue(operationState(operationId)),
+			mutator.getValue(operationMeta(operationId), context),
+			mutator.getValue(operationState(operationId), context),
 		]);
 		if (operation === undefined) {
 			throw new SessionInvariantError(`Active operation ${operationId} is missing op.meta`);
@@ -521,16 +615,19 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 			throw new Error(`Cannot append while structural operation ${operationId} is active`);
 		}
 
-		await mutator.commit([
-			setValueWrite(pendingEntry(id), pending),
-			setValueWrite(operationState(operationId), {
-				...storedOperationState.value,
-				inbox: {
-					...storedOperationState.value.inbox,
-					writes: [...storedOperationState.value.inbox.writes, id],
-				},
-			}),
-		]);
+		await mutator.commit(
+			[
+				setValueWrite(pendingEntry(id), pending),
+				setValueWrite(operationState(operationId), {
+					...storedOperationState.value,
+					inbox: {
+						...storedOperationState.value.inbox,
+						writes: [...storedOperationState.value.inbox.writes, id],
+					},
+				}),
+			],
+			context,
+		);
 	}
 
 	private validateCurrentOperation(lane: string, operation: OperationMeta, state: OperationState): void {

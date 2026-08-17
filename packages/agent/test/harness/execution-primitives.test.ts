@@ -1,9 +1,17 @@
 import { fauxProvider } from "@draht/ai";
 import { describe, expect, it, vi } from "vitest";
+import {
+	BACKGROUND_CONTEXT,
+	createContextKey,
+	withAbortSignal,
+	withContextValue,
+	withTelemetryContext,
+} from "../../src/harness/context.ts";
 import { HarnessEventBus } from "../../src/harness/events.ts";
 import { BreakpointBarrier } from "../../src/harness/execution/breakpoint.ts";
 import { AbortRequested, OperationEffectGate } from "../../src/harness/execution/effect-gate.ts";
 import { HookRegistry } from "../../src/harness/hooks.ts";
+import { InMemoryTelemetryContext } from "../../src/index.ts";
 
 function deferred(): { promise: Promise<void>; resolve(): void } {
 	let resolvePromise: (() => void) | undefined;
@@ -126,6 +134,7 @@ describe("HookRegistry", () => {
 				resources: {},
 			},
 			new OperationEffectGate(),
+			BACKGROUND_CONTEXT,
 		);
 
 		expect(result).toMatchObject({
@@ -156,10 +165,10 @@ describe("HookRegistry", () => {
 		const closed = new Error("closed");
 		const closedGate = new OperationEffectGate();
 		closedGate.close(closed);
-		expect(() => hooks.runWithGate("before_run", event, closedGate)).toThrow(closed);
+		expect(() => hooks.runWithGate("before_run", event, closedGate, BACKGROUND_CONTEXT)).toThrow(closed);
 		expect(calls).toEqual([]);
 
-		const running = hooks.runWithGate("before_run", event, new OperationEffectGate());
+		const running = hooks.runWithGate("before_run", event, new OperationEffectGate(), BACKGROUND_CONTEXT);
 		expect(calls).toEqual(["first:start"]);
 		hooks.on("before_run", () => {
 			calls.push("late");
@@ -169,6 +178,77 @@ describe("HookRegistry", () => {
 		release.resolve();
 		await running;
 		expect(calls).toEqual(["first:start", "first:end", "second"]);
+	});
+
+	it("rejects pre-aborted invocations and combines admitted hook cancellation with the effect gate", async () => {
+		const event = { operation: "run" as const, lane: "main", runId: "run" };
+		const preAbortedHooks = new HookRegistry(() => {});
+		const handler = vi.fn();
+		preAbortedHooks.on("before_drive", handler);
+		const preAbortedGate = new OperationEffectGate();
+		const invocationController = new AbortController();
+		const abortReason = new Error("invocation aborted");
+		invocationController.abort(abortReason);
+
+		expect(() =>
+			preAbortedHooks.runWithGate(
+				"before_drive",
+				event,
+				preAbortedGate,
+				withAbortSignal(invocationController.signal, BACKGROUND_CONTEXT),
+			),
+		).toThrow(abortReason);
+		expect(handler).not.toHaveBeenCalled();
+		expect(() => preAbortedGate.assertOpen()).not.toThrow();
+
+		const admittedHooks = new HookRegistry(() => {});
+		const admittedGate = new OperationEffectGate();
+		let admittedSignal: AbortSignal | undefined;
+		admittedHooks.on("before_drive", (_event, context) => {
+			admittedSignal = context.abortSignal;
+		});
+		await admittedHooks.runWithGate("before_drive", event, admittedGate, BACKGROUND_CONTEXT);
+		expect(admittedSignal?.aborted).toBe(false);
+
+		const gateReason = new Error("gate closed");
+		admittedGate.close(gateReason);
+		expect(admittedSignal?.aborted).toBe(true);
+		expect(admittedSignal?.reason).toBe(gateReason);
+	});
+
+	it("passes tool handlers a child context of the active hook span", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const valueKey = createContextKey<string>("hook.test.value");
+		const hooks = new HookRegistry(() => {});
+		let receivedValue: string | undefined;
+		hooks.on("before_tool", async (_event, context) => {
+			receivedValue = context.value(valueKey);
+			await context.telemetryContext.startSpan({ name: "handler.child" }, () => undefined);
+			return undefined;
+		});
+
+		await telemetry.startSpan({ name: "invocation" }, (invocationSpan) =>
+			hooks.runToolWithGate(
+				"before_tool",
+				{
+					lane: "main",
+					runId: "run",
+					toolCallId: "call",
+					toolName: "tool",
+					args: {},
+				},
+				new OperationEffectGate(),
+				withContextValue(valueKey, "preserved", withTelemetryContext(invocationSpan, BACKGROUND_CONTEXT)),
+			),
+		);
+
+		expect(receivedValue).toBe("preserved");
+		const spans = telemetry.getSpans();
+		const invocationSpan = spans.find((span) => span.name === "invocation");
+		const hookSpan = spans.find((span) => span.name === "pi.harness.hook");
+		const handlerSpan = spans.find((span) => span.name === "handler.child");
+		expect(hookSpan?.parentId).toBe(invocationSpan?.id);
+		expect(handlerSpan?.parentId).toBe(hookSpan?.id);
 	});
 
 	it("treats registration ids as optional metadata and fails before_drive closed", async () => {
@@ -188,7 +268,12 @@ describe("HookRegistry", () => {
 		hooks.on("before_drive", later, { id: "duplicate" });
 
 		await expect(
-			hooks.runWithGate("before_drive", { lane: "main", runId: "run", operation: "run" }, new OperationEffectGate()),
+			hooks.runWithGate(
+				"before_drive",
+				{ lane: "main", runId: "run", operation: "run" },
+				new OperationEffectGate(),
+				BACKGROUND_CONTEXT,
+			),
 		).rejects.toBe(failure);
 		expect(later).not.toHaveBeenCalled();
 		expect(errors).toEqual([failure]);
@@ -221,6 +306,7 @@ describe("HookRegistry", () => {
 				systemPrompt: "base",
 			},
 			new OperationEffectGate(),
+			BACKGROUND_CONTEXT,
 		);
 
 		expect(result).toEqual({ messages, systemPrompt: "final" });
@@ -247,6 +333,7 @@ describe("HookRegistry", () => {
 				streamOptions: { headers: { a: "1", b: "2" }, metadata: { x: 1 } },
 			},
 			new OperationEffectGate(),
+			BACKGROUND_CONTEXT,
 		);
 		expect(result).toEqual({
 			streamOptions: {
@@ -272,6 +359,7 @@ describe("HookRegistry", () => {
 				isError: true,
 			},
 			new OperationEffectGate(),
+			BACKGROUND_CONTEXT,
 		);
 		expect(result).toEqual({ content: [{ type: "text", text: "patched" }], isError: false });
 	});
@@ -299,6 +387,7 @@ describe("HookRegistry", () => {
 				},
 			},
 			new OperationEffectGate(),
+			BACKGROUND_CONTEXT,
 		);
 		expect(result).toEqual({ decline: false, summary: selected });
 		expect(errors).toHaveLength(1);
@@ -322,11 +411,13 @@ describe("HookRegistry", () => {
 		const abortFirstGate = new OperationEffectGate();
 		const cancellation = Promise.resolve();
 		abortFirstGate.beginAbort(cancellation);
-		expect(() => hooks.runWithGate("before_drive", event, abortFirstGate)).toThrow(AbortRequested);
+		expect(() => hooks.runWithGate("before_drive", event, abortFirstGate, BACKGROUND_CONTEXT)).toThrow(
+			AbortRequested,
+		);
 		expect(calls).toEqual([]);
 
 		const startFirstGate = new OperationEffectGate();
-		const running = hooks.runWithGate("before_drive", event, startFirstGate);
+		const running = hooks.runWithGate("before_drive", event, startFirstGate, BACKGROUND_CONTEXT);
 		expect(calls).toEqual(["first:start"]);
 		startFirstGate.beginAbort(cancellation);
 		startFirstGate.signalAbort();
@@ -339,18 +430,18 @@ describe("HookRegistry", () => {
 describe("HarnessEventBus", () => {
 	it("buffers between snapshot and start, then delivers each event once in order", async () => {
 		const bus = new HarnessEventBus();
-		const watcher = bus.watch({ leafId: null }, () => true);
-		await bus.emit({ type: "run_start", runId: "one", lane: "main" });
+		const watcher = bus.watch({ leafId: null }, () => true, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "one", lane: "main" }, BACKGROUND_CONTEXT);
 		const seen: string[] = [];
 		watcher.start((event) => {
 			seen.push(`${event.type}:${"runId" in event ? event.runId : ""}`);
 		});
-		await bus.emit({ type: "run_start", runId: "two", lane: "main" });
+		await bus.emit({ type: "run_start", runId: "two", lane: "main" }, BACKGROUND_CONTEXT);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(watcher.snapshot).toEqual({ leafId: null });
 		expect(seen).toEqual(["run_start:one", "run_start:two"]);
 		watcher.unsubscribe();
-		await bus.emit({ type: "run_start", runId: "three", lane: "main" });
+		await bus.emit({ type: "run_start", runId: "three", lane: "main" }, BACKGROUND_CONTEXT);
 		expect(seen).toHaveLength(2);
 	});
 
@@ -363,13 +454,16 @@ describe("HarnessEventBus", () => {
 		bus.on("config_update", (event) => {
 			if (event.property === "activeTools") observed = event.value;
 		});
-		await bus.emit({
-			type: "config_update",
-			property: "activeTools",
-			value: ["read"],
-			previous: [],
-			lane: "main",
-		});
+		await bus.emit(
+			{
+				type: "config_update",
+				property: "activeTools",
+				value: ["read"],
+				previous: [],
+				lane: "main",
+			},
+			BACKGROUND_CONTEXT,
+		);
 		expect(observed).toEqual(["read"]);
 	});
 
@@ -387,9 +481,9 @@ describe("HarnessEventBus", () => {
 			seen.push(`${event.runId}:end`);
 		});
 
-		const one = bus.emit({ type: "run_start", runId: "one", lane: "main" });
+		const one = bus.emit({ type: "run_start", runId: "one", lane: "main" }, BACKGROUND_CONTEXT);
 		await started.promise;
-		const two = bus.emit({ type: "run_start", runId: "two", lane: "main" });
+		const two = bus.emit({ type: "run_start", runId: "two", lane: "main" }, BACKGROUND_CONTEXT);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(seen).toEqual(["one:start"]);
 		release.resolve();
@@ -403,7 +497,7 @@ describe("HarnessEventBus", () => {
 		bus.on("handler_error", (event) => {
 			failures.push(event.error);
 		});
-		const watcher = bus.watch({}, (event) => event.type === "run_start");
+		const watcher = bus.watch({}, (event) => event.type === "run_start", BACKGROUND_CONTEXT);
 		const seen: string[] = [];
 		watcher.start((event) => {
 			if (event.type !== "run_start") return;
@@ -411,8 +505,8 @@ describe("HarnessEventBus", () => {
 			seen.push(event.runId);
 		});
 
-		await bus.emit({ type: "run_start", runId: "one", lane: "main" });
-		await bus.emit({ type: "run_start", runId: "two", lane: "main" });
+		await bus.emit({ type: "run_start", runId: "one", lane: "main" }, BACKGROUND_CONTEXT);
+		await bus.emit({ type: "run_start", runId: "two", lane: "main" }, BACKGROUND_CONTEXT);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(seen).toEqual(["two"]);
 		expect(failures).toEqual(["watcher failed"]);
@@ -427,7 +521,7 @@ describe("HarnessEventBus", () => {
 		bus.on("handler_error", (event) => {
 			failures.push(event.error);
 		});
-		await bus.emit({ type: "run_start", runId: "run", lane: "main" });
+		await bus.emit({ type: "run_start", runId: "run", lane: "main" }, BACKGROUND_CONTEXT);
 		expect(failures).toEqual(["listener failed"]);
 	});
 });

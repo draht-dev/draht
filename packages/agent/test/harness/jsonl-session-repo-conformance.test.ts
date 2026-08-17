@@ -1,4 +1,5 @@
 import { describe, it } from "vitest";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { type JsonlSessionMetadata, JsonlSessionRepo } from "../../src/harness/session/jsonl/index.ts";
 import {
@@ -33,20 +34,28 @@ async function createConformanceRepo() {
 	jsonlRepo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
 	return {
 		create: (options: { id?: string; parentSessionId?: string }) =>
-			jsonlRepo.create({ ...options, cwd: CONFORMANCE_CWD }),
-		open: (metadata: JsonlSessionMetadata) => jsonlRepo.open(metadata),
-		list: () => jsonlRepo.list({ cwd: CONFORMANCE_CWD }),
-		delete: (metadata: JsonlSessionMetadata) => jsonlRepo.delete(metadata),
-		fork: (source: JsonlSessionMetadata, options: ForkOptions) => jsonlRepo.fork(source, options),
+			jsonlRepo.create({ ...options, cwd: CONFORMANCE_CWD }, BACKGROUND_CONTEXT),
+		open: (metadata: JsonlSessionMetadata) => jsonlRepo.open(metadata, BACKGROUND_CONTEXT),
+		list: () => jsonlRepo.list({ cwd: CONFORMANCE_CWD }, BACKGROUND_CONTEXT),
+		delete: (metadata: JsonlSessionMetadata) => jsonlRepo.delete(metadata, BACKGROUND_CONTEXT),
+		fork: (source: JsonlSessionMetadata, options: ForkOptions) => jsonlRepo.fork(source, options, BACKGROUND_CONTEXT),
 	};
 }
 
 registerConformance("JsonlSessionRepo conformance", [
-	...createSessionRepoLifecycleConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
-	...createSessionRepoOwnershipConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
-	...createSessionRepoMessageConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
-	...createSessionRepoForkBehaviorConformance<JsonlSessionMetadata>(createConformanceRepo, () => jsonlRepo.close()),
+	...createSessionRepoLifecycleConformance<JsonlSessionMetadata>(createConformanceRepo, () =>
+		jsonlRepo.close(BACKGROUND_CONTEXT),
+	),
+	...createSessionRepoOwnershipConformance<JsonlSessionMetadata>(createConformanceRepo, () =>
+		jsonlRepo.close(BACKGROUND_CONTEXT),
+	),
+	...createSessionRepoMessageConformance<JsonlSessionMetadata>(createConformanceRepo, () =>
+		jsonlRepo.close(BACKGROUND_CONTEXT),
+	),
+	...createSessionRepoForkBehaviorConformance<JsonlSessionMetadata>(createConformanceRepo, () =>
+		jsonlRepo.close(BACKGROUND_CONTEXT),
+	),
 	...createSessionRepoForkSourceSnapshotConformance<JsonlSessionMetadata>(createConformanceRepo, () =>
-		jsonlRepo.close(),
+		jsonlRepo.close(BACKGROUND_CONTEXT),
 	),
 ]);

@@ -1,4 +1,5 @@
 import { describe, it } from "vitest";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { JSONL_FORMAT_VERSION, JsonlStorage } from "../../src/harness/session/jsonl/index.ts";
 import {
@@ -36,10 +37,11 @@ registerConformance(
 				createdAt: NOW,
 				cwd: "/workspace",
 			},
+			BACKGROUND_CONTEXT,
 		);
 		return {
 			storage,
-			[Symbol.asyncDispose]: () => storage.close(),
+			[Symbol.asyncDispose]: () => storage.close(BACKGROUND_CONTEXT),
 		} satisfies StorageFixture;
 	}),
 );

@@ -1,5 +1,6 @@
 import { deepStrictEqual, rejects, strictEqual } from "node:assert/strict";
 import type { AssistantMessage, StopReason } from "@draht/ai";
+import { BACKGROUND_CONTEXT } from "../../../context.ts";
 import { insertEntry, insertUsage } from "../../commit.ts";
 import type { JsonValue, LaneConfiguration, LaneState, SessionMetadata, SessionRepo, UsageRow } from "../../types.ts";
 import {
@@ -122,19 +123,19 @@ export function createSessionRepoLifecycleConformance<TMetadata extends SessionM
 			"lifecycle",
 			"creates an unconfigured main lane and rejects duplicate ids",
 			async ({ repo }) => {
-				const session = await repo.create({ id: "session" });
+				const session = await repo.create({ id: "session" }, BACKGROUND_CONTEXT);
 
 				strictEqual(session.metadata.id, "session");
 				strictEqual(Number.isSafeInteger(session.metadata.createdAt), true);
 				strictEqual(session.metadata.storageVersion, 1);
-				strictEqual(await session.getLeafId(), null);
-				deepStrictEqual((await session.getValue(laneState("main")))?.value, {
+				strictEqual(await session.getLeafId(BACKGROUND_CONTEXT), null);
+				deepStrictEqual((await session.getValue(laneState("main"), BACKGROUND_CONTEXT))?.value, {
 					currentOperationId: null,
 					pendingNextRun: [],
 				});
-				strictEqual(await session.getValue(laneConfig("main")), undefined);
-				await rejects(repo.create({ id: "session" }));
-				await session.close();
+				strictEqual(await session.getValue(laneConfig("main"), BACKGROUND_CONTEXT), undefined);
+				await rejects(repo.create({ id: "session" }, BACKGROUND_CONTEXT));
+				await session.close(BACKGROUND_CONTEXT);
 			},
 		),
 		createCase(
@@ -142,12 +143,12 @@ export function createSessionRepoLifecycleConformance<TMetadata extends SessionM
 			"lifecycle",
 			"lists metadata and preserves state across close and reopen",
 			async ({ repo }) => {
-				const first = await repo.create({ id: "first" });
-				await first.setName("preserved");
-				const second = await repo.create({ id: "second", parentSessionId: "parent" });
-				await second.close();
+				const first = await repo.create({ id: "first" }, BACKGROUND_CONTEXT);
+				await first.setName("preserved", BACKGROUND_CONTEXT);
+				const second = await repo.create({ id: "second", parentSessionId: "parent" }, BACKGROUND_CONTEXT);
+				await second.close(BACKGROUND_CONTEXT);
 
-				const listed = await repo.list();
+				const listed = await repo.list(undefined, BACKGROUND_CONTEXT);
 				deepStrictEqual(
 					listed
 						.map(({ id, parentSessionId }) => ({ id, parentSessionId }))
@@ -157,26 +158,26 @@ export function createSessionRepoLifecycleConformance<TMetadata extends SessionM
 						{ id: "second", parentSessionId: "parent" },
 					],
 				);
-				await first.close();
-				await rejects(first.getName());
-				const reopened = await repo.open(first.metadata);
+				await first.close(BACKGROUND_CONTEXT);
+				await rejects(first.getName(BACKGROUND_CONTEXT));
+				const reopened = await repo.open(first.metadata, BACKGROUND_CONTEXT);
 				strictEqual(reopened === first, false);
-				strictEqual(await reopened.getName(), "preserved");
-				await reopened.close();
+				strictEqual(await reopened.getName(BACKGROUND_CONTEXT), "preserved");
+				await reopened.close(BACKGROUND_CONTEXT);
 			},
 		),
 		createCase(factory, "lifecycle", "deletes closed sessions without affecting other sessions", async ({ repo }) => {
-			const removed = await repo.create({ id: "removed" });
-			const retained = await repo.create({ id: "retained" });
-			await Promise.all([removed.close(), retained.close()]);
+			const removed = await repo.create({ id: "removed" }, BACKGROUND_CONTEXT);
+			const retained = await repo.create({ id: "retained" }, BACKGROUND_CONTEXT);
+			await Promise.all([removed.close(BACKGROUND_CONTEXT), retained.close(BACKGROUND_CONTEXT)]);
 
-			await repo.delete(removed.metadata);
+			await repo.delete(removed.metadata, BACKGROUND_CONTEXT);
 			deepStrictEqual(
-				(await repo.list()).map(({ id }) => id),
+				(await repo.list(undefined, BACKGROUND_CONTEXT)).map(({ id }) => id),
 				["retained"],
 			);
-			await rejects(repo.open(removed.metadata));
-			await rejects(repo.delete(removed.metadata));
+			await rejects(repo.open(removed.metadata, BACKGROUND_CONTEXT));
+			await rejects(repo.delete(removed.metadata, BACKGROUND_CONTEXT));
 		}),
 	];
 }
@@ -189,13 +190,13 @@ export function createSessionRepoOwnershipConformance<TMetadata extends SessionM
 	const factory = prepareRepoCaseFactory(backendFactory, onClose);
 	return [
 		createCase(factory, "ownership", "rejects opening an already-open session", async ({ repo }) => {
-			const session = await repo.create({ id: "session" });
-			await rejects(repo.open(session.metadata));
-			await session.close();
+			const session = await repo.create({ id: "session" }, BACKGROUND_CONTEXT);
+			await rejects(repo.open(session.metadata, BACKGROUND_CONTEXT));
+			await session.close(BACKGROUND_CONTEXT);
 
-			const reopened = await repo.open(session.metadata);
-			await rejects(repo.open(session.metadata));
-			await reopened.close();
+			const reopened = await repo.open(session.metadata, BACKGROUND_CONTEXT);
+			await rejects(repo.open(session.metadata, BACKGROUND_CONTEXT));
+			await reopened.close(BACKGROUND_CONTEXT);
 		}),
 	];
 }
@@ -212,17 +213,17 @@ export function createSessionRepoMessageConformance<TMetadata extends SessionMet
 			"messages",
 			"rejects pending assistant messages without changing the tree",
 			async ({ repo }) => {
-				const session = await repo.create({ id: "session" });
+				const session = await repo.create({ id: "session" }, BACKGROUND_CONTEXT);
 
-				await rejects(session.appendMessage(assistantMessage("pending")));
+				await rejects(session.appendMessage(assistantMessage("pending"), BACKGROUND_CONTEXT));
 
-				strictEqual(await session.getLeafId(), null);
-				deepStrictEqual(await session.findEntries(), []);
-				await session.close();
+				strictEqual(await session.getLeafId(BACKGROUND_CONTEXT), null);
+				deepStrictEqual(await session.findEntries(undefined, BACKGROUND_CONTEXT), []);
+				await session.close(BACKGROUND_CONTEXT);
 			},
 		),
 		createCase(factory, "messages", "preserves every settled assistant stop reason", async ({ repo }) => {
-			const session = await repo.create({ id: "session" });
+			const session = await repo.create({ id: "session" }, BACKGROUND_CONTEXT);
 			const messagesByStopReason = {
 				stop: assistantMessage("stop"),
 				length: assistantMessage("length"),
@@ -234,9 +235,9 @@ export function createSessionRepoMessageConformance<TMetadata extends SessionMet
 			const messages = Object.values(messagesByStopReason);
 			const ids: string[] = [];
 
-			for (const message of messages) ids.push(await session.appendMessage(message));
+			for (const message of messages) ids.push(await session.appendMessage(message, BACKGROUND_CONTEXT));
 
-			const entries = await session.findEntries({ order: "asc", type: "message" });
+			const entries = await session.findEntries({ order: "asc", type: "message" }, BACKGROUND_CONTEXT);
 			deepStrictEqual(
 				entries.map((entry) => entry.id),
 				ids,
@@ -245,8 +246,8 @@ export function createSessionRepoMessageConformance<TMetadata extends SessionMet
 				if (entry.type !== "message") throw new Error("Expected message entry");
 				deepStrictEqual(entry.message, messages[index]);
 			}
-			strictEqual(await session.getLeafId(), ids.at(-1));
-			await session.close();
+			strictEqual(await session.getLeafId(BACKGROUND_CONTEXT), ids.at(-1));
+			await session.close(BACKGROUND_CONTEXT);
 		}),
 	];
 }
@@ -259,19 +260,19 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 	const factory = prepareRepoCaseFactory(backendFactory, onClose);
 	return [
 		createCase(factory, "forks", "forks a fresh session before first attachment", async ({ repo }) => {
-			const source = await repo.create({ id: "source" });
-			const fork = await repo.fork(source.metadata, { id: "fork" });
+			const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+			const fork = await repo.fork(source.metadata, { id: "fork" }, BACKGROUND_CONTEXT);
 
 			strictEqual(fork.metadata.id, "fork");
 			strictEqual(fork.metadata.parentSessionId, "source");
-			strictEqual(await fork.getLeafId(), null);
-			strictEqual(await fork.getValue(laneConfig("main")), undefined);
-			deepStrictEqual((await fork.getValue(laneState("main")))?.value, {
+			strictEqual(await fork.getLeafId(BACKGROUND_CONTEXT), null);
+			strictEqual(await fork.getValue(laneConfig("main"), BACKGROUND_CONTEXT), undefined);
+			deepStrictEqual((await fork.getValue(laneState("main"), BACKGROUND_CONTEXT))?.value, {
 				currentOperationId: null,
 				pendingNextRun: [],
 			});
-			deepStrictEqual(await fork.findEntries(), []);
-			deepStrictEqual(await fork.getStats(), {
+			deepStrictEqual(await fork.findEntries(undefined, BACKGROUND_CONTEXT), []);
+			deepStrictEqual(await fork.getStats(BACKGROUND_CONTEXT), {
 				messageCount: 0,
 				usage: {
 					input: 0,
@@ -282,96 +283,112 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				},
 			});
-			await Promise.all([source.close(), fork.close()]);
+			await Promise.all([source.close(BACKGROUND_CONTEXT), fork.close(BACKGROUND_CONTEXT)]);
 		}),
 		createCase(
 			factory,
 			"forks",
 			"forks one configured branch with scoped values and a zero ledger",
 			async ({ repo }) => {
-				const source = await repo.create({ id: "source" });
-				await source.mutate("main", (mutator) =>
-					mutator.commit([
-						insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
-						insertEntry({
-							id: CHILD_ID,
-							parentId: ROOT_ID,
-							type: "message",
-							message: { role: "user", content: "child", timestamp: 1 },
-						}),
-						insertEntry({
-							id: SIBLING_ID,
-							parentId: ROOT_ID,
-							type: "custom",
-							customType: "sibling",
-						}),
-						setValue(laneLeaf("main"), CHILD_ID),
-						setValue(laneConfig("main"), configuration),
-						setValue(laneState("main"), {
-							currentOperationId: OPERATION_ID,
-							pendingNextRun: [PENDING_ID],
-						}),
-						setValue(laneLastResult("main"), {
-							operationId: "previous",
-							kind: "navigation",
-							leafId: CHILD_ID,
-							oldLeafId: ROOT_ID,
-							outcome: "completed",
-						}),
-						setValue(sessionName, "source name"),
-						setValue(applicationValue, { copied: false }),
-						appendList(applicationList, { copied: false }),
-						setValue(entryLabel(ROOT_ID), "root label"),
-						setValue(entryLabel(SIBLING_ID), "sibling label"),
-						setValue(pendingEntry(PENDING_ID), { type: "custom", customType: "pending" }),
-						setValue(operationMeta(OPERATION_ID), {
-							operationId: OPERATION_ID,
-							lane: "main",
-							sourceLeafId: CHILD_ID,
-							startedAt: 1,
-							intent: { kind: "compaction" },
-						}),
-						setValue(operationState(OPERATION_ID), {
-							kind: "compaction",
-							control: { status: "running" },
-							structural: { taskId: OPERATION_ID, status: "deciding" },
-						}),
-						setValue(operationToolArgs(OPERATION_ID, ROOT_ID, 0), { argument: true }),
-						setValue(operationPreparation(OPERATION_ID, OPERATION_ID), {
-							kind: "compaction",
-							messagesToSummarize: [],
-							turnPrefixMessages: [],
-							retainedTail: [],
-							isSplitTurn: false,
-							tokensBefore: 0,
-							fileOps: { read: [], written: [], edited: [] },
-							settings: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
-						}),
-						insertUsage(usageRow()),
-					]),
+				const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+				await source.mutate(
+					"main",
+					(mutator) =>
+						mutator.commit(
+							[
+								insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+								insertEntry({
+									id: CHILD_ID,
+									parentId: ROOT_ID,
+									type: "message",
+									message: { role: "user", content: "child", timestamp: 1 },
+								}),
+								insertEntry({
+									id: SIBLING_ID,
+									parentId: ROOT_ID,
+									type: "custom",
+									customType: "sibling",
+								}),
+								setValue(laneLeaf("main"), CHILD_ID),
+								setValue(laneConfig("main"), configuration),
+								setValue(laneState("main"), {
+									currentOperationId: OPERATION_ID,
+									pendingNextRun: [PENDING_ID],
+								}),
+								setValue(laneLastResult("main"), {
+									operationId: "previous",
+									kind: "navigation",
+									leafId: CHILD_ID,
+									oldLeafId: ROOT_ID,
+									outcome: "completed",
+								}),
+								setValue(sessionName, "source name"),
+								setValue(applicationValue, { copied: false }),
+								appendList(applicationList, { copied: false }),
+								setValue(entryLabel(ROOT_ID), "root label"),
+								setValue(entryLabel(SIBLING_ID), "sibling label"),
+								setValue(pendingEntry(PENDING_ID), { type: "custom", customType: "pending" }),
+								setValue(operationMeta(OPERATION_ID), {
+									operationId: OPERATION_ID,
+									lane: "main",
+									sourceLeafId: CHILD_ID,
+									startedAt: 1,
+									intent: { kind: "compaction" },
+								}),
+								setValue(operationState(OPERATION_ID), {
+									kind: "compaction",
+									control: { status: "running" },
+									structural: { taskId: OPERATION_ID, status: "deciding" },
+								}),
+								setValue(operationToolArgs(OPERATION_ID, ROOT_ID, 0), { argument: true }),
+								setValue(operationPreparation(OPERATION_ID, OPERATION_ID), {
+									kind: "compaction",
+									messagesToSummarize: [],
+									turnPrefixMessages: [],
+									retainedTail: [],
+									isSplitTurn: false,
+									tokensBefore: 0,
+									fileOps: { read: [], written: [], edited: [] },
+									settings: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+								}),
+								insertUsage(usageRow()),
+							],
+							BACKGROUND_CONTEXT,
+						),
+					BACKGROUND_CONTEXT,
 				);
 
-				const fork = await repo.fork(source.metadata, { id: "fork", entryId: CHILD_ID, position: "at" });
+				const fork = await repo.fork(
+					source.metadata,
+					{ id: "fork", entryId: CHILD_ID, position: "at" },
+					BACKGROUND_CONTEXT,
+				);
 
 				deepStrictEqual(
-					(await fork.findEntries({ order: "asc" })).map(({ id }) => id),
+					(await fork.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
 					[ROOT_ID, CHILD_ID],
 				);
-				strictEqual(await fork.getLeafId(), CHILD_ID);
-				deepStrictEqual((await fork.getValue(laneConfig("main")))?.value, configuration);
-				deepStrictEqual((await fork.getValue(laneState("main")))?.value, idleLaneState);
-				strictEqual(await fork.getName(), "source name");
-				strictEqual(await fork.getValue(applicationValue), undefined);
-				deepStrictEqual(await fork.readList(applicationList), []);
-				strictEqual(await fork.getLabel(ROOT_ID), "root label");
-				strictEqual(await fork.getLabel(SIBLING_ID), undefined);
-				strictEqual(await fork.getValue(laneLastResult("main")), undefined);
-				strictEqual(await fork.getValue(pendingEntry(PENDING_ID)), undefined);
-				strictEqual(await fork.getValue(operationMeta(OPERATION_ID)), undefined);
-				strictEqual(await fork.getValue(operationState(OPERATION_ID)), undefined);
-				strictEqual(await fork.getValue(operationToolArgs(OPERATION_ID, ROOT_ID, 0)), undefined);
-				strictEqual(await fork.getValue(operationPreparation(OPERATION_ID, OPERATION_ID)), undefined);
-				const stats = await fork.getStats();
+				strictEqual(await fork.getLeafId(BACKGROUND_CONTEXT), CHILD_ID);
+				deepStrictEqual((await fork.getValue(laneConfig("main"), BACKGROUND_CONTEXT))?.value, configuration);
+				deepStrictEqual((await fork.getValue(laneState("main"), BACKGROUND_CONTEXT))?.value, idleLaneState);
+				strictEqual(await fork.getName(BACKGROUND_CONTEXT), "source name");
+				strictEqual(await fork.getValue(applicationValue, BACKGROUND_CONTEXT), undefined);
+				deepStrictEqual(await fork.readList(applicationList, undefined, BACKGROUND_CONTEXT), []);
+				strictEqual(await fork.getLabel(ROOT_ID, BACKGROUND_CONTEXT), "root label");
+				strictEqual(await fork.getLabel(SIBLING_ID, BACKGROUND_CONTEXT), undefined);
+				strictEqual(await fork.getValue(laneLastResult("main"), BACKGROUND_CONTEXT), undefined);
+				strictEqual(await fork.getValue(pendingEntry(PENDING_ID), BACKGROUND_CONTEXT), undefined);
+				strictEqual(await fork.getValue(operationMeta(OPERATION_ID), BACKGROUND_CONTEXT), undefined);
+				strictEqual(await fork.getValue(operationState(OPERATION_ID), BACKGROUND_CONTEXT), undefined);
+				strictEqual(
+					await fork.getValue(operationToolArgs(OPERATION_ID, ROOT_ID, 0), BACKGROUND_CONTEXT),
+					undefined,
+				);
+				strictEqual(
+					await fork.getValue(operationPreparation(OPERATION_ID, OPERATION_ID), BACKGROUND_CONTEXT),
+					undefined,
+				);
+				const stats = await fork.getStats(BACKGROUND_CONTEXT);
 				strictEqual(stats.messageCount, 1);
 				deepStrictEqual(stats.usage, {
 					input: 0,
@@ -381,7 +398,7 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 					totalTokens: 0,
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				});
-				await Promise.all([source.close(), fork.close()]);
+				await Promise.all([source.close(BACKGROUND_CONTEXT), fork.close(BACKGROUND_CONTEXT)]);
 			},
 		),
 		createCase(
@@ -389,81 +406,106 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 			"forks",
 			"supports before placement and rejects unknown fork points atomically",
 			async ({ repo }) => {
-				const source = await repo.create({ id: "source" });
-				await source.mutate("main", (mutator) =>
-					mutator.commit([
-						insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
-						insertEntry({
-							id: CHILD_ID,
-							parentId: ROOT_ID,
-							type: "custom",
-							customType: "child",
-						}),
-						setValue(laneLeaf("main"), CHILD_ID),
-					]),
+				const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+				await source.mutate(
+					"main",
+					(mutator) =>
+						mutator.commit(
+							[
+								insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+								insertEntry({
+									id: CHILD_ID,
+									parentId: ROOT_ID,
+									type: "custom",
+									customType: "child",
+								}),
+								setValue(laneLeaf("main"), CHILD_ID),
+							],
+							BACKGROUND_CONTEXT,
+						),
+					BACKGROUND_CONTEXT,
 				);
 
-				const before = await repo.fork(source.metadata, { id: "before", entryId: CHILD_ID, position: "before" });
-				strictEqual(await before.getLeafId(), ROOT_ID);
+				const before = await repo.fork(
+					source.metadata,
+					{ id: "before", entryId: CHILD_ID, position: "before" },
+					BACKGROUND_CONTEXT,
+				);
+				strictEqual(await before.getLeafId(BACKGROUND_CONTEXT), ROOT_ID);
 				deepStrictEqual(
-					(await before.findEntries({ order: "asc" })).map(({ id }) => id),
+					(await before.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
 					[ROOT_ID],
 				);
-				await rejects(repo.fork(source.metadata, { id: "failed", entryId: SIBLING_ID }));
-				deepStrictEqual((await repo.list()).map(({ id }) => id).sort(), ["before", "source"]);
-				await Promise.all([source.close(), before.close()]);
+				await rejects(repo.fork(source.metadata, { id: "failed", entryId: SIBLING_ID }, BACKGROUND_CONTEXT));
+				deepStrictEqual((await repo.list(undefined, BACKGROUND_CONTEXT)).map(({ id }) => id).sort(), [
+					"before",
+					"source",
+				]);
+				await Promise.all([source.close(BACKGROUND_CONTEXT), before.close(BACKGROUND_CONTEXT)]);
 			},
 		),
 		createCase(factory, "forks", "forks a closed source session", async ({ repo }) => {
-			const source = await repo.create({ id: "source" });
-			await source.mutate("main", (mutator) =>
-				mutator.commit([
-					insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
-					setValue(laneLeaf("main"), ROOT_ID),
-					setValue(applicationValue, "excluded"),
-					appendList(applicationList, "excluded"),
-				]),
+			const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+			await source.mutate(
+				"main",
+				(mutator) =>
+					mutator.commit(
+						[
+							insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+							setValue(laneLeaf("main"), ROOT_ID),
+							setValue(applicationValue, "excluded"),
+							appendList(applicationList, "excluded"),
+						],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
 			);
-			await source.close();
+			await source.close(BACKGROUND_CONTEXT);
 
-			const fork = await repo.fork(source.metadata, { id: "fork" });
-			strictEqual(await fork.getLeafId(), ROOT_ID);
-			strictEqual(await fork.getValue(applicationValue), undefined);
-			deepStrictEqual(await fork.readList(applicationList), []);
-			await fork.close();
+			const fork = await repo.fork(source.metadata, { id: "fork" }, BACKGROUND_CONTEXT);
+			strictEqual(await fork.getLeafId(BACKGROUND_CONTEXT), ROOT_ID);
+			strictEqual(await fork.getValue(applicationValue, BACKGROUND_CONTEXT), undefined);
+			deepStrictEqual(await fork.readList(applicationList, undefined, BACKGROUND_CONTEXT), []);
+			await fork.close(BACKGROUND_CONTEXT);
 		}),
 
 		createCase(factory, "forks", "forks the whole configured tree with fresh lane state", async ({ repo }) => {
-			const source = await repo.create({ id: "source" });
-			await source.mutate("main", (mutator) =>
-				mutator.commit([
-					insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
-					insertEntry({ id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" }),
-					insertEntry({
-						id: SIBLING_ID,
-						parentId: ROOT_ID,
-						type: "custom",
-						customType: "sibling",
-					}),
-					setValue(laneLeaf("main"), CHILD_ID),
-					setValue(laneConfig("main"), configuration),
-					setValue(laneLeaf("review"), SIBLING_ID),
-					setValue(laneConfig("review"), configuration),
-					setValue(laneState("review"), idleLaneState),
-				]),
+			const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+			await source.mutate(
+				"main",
+				(mutator) =>
+					mutator.commit(
+						[
+							insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "root" }),
+							insertEntry({ id: CHILD_ID, parentId: ROOT_ID, type: "custom", customType: "child" }),
+							insertEntry({
+								id: SIBLING_ID,
+								parentId: ROOT_ID,
+								type: "custom",
+								customType: "sibling",
+							}),
+							setValue(laneLeaf("main"), CHILD_ID),
+							setValue(laneConfig("main"), configuration),
+							setValue(laneLeaf("review"), SIBLING_ID),
+							setValue(laneConfig("review"), configuration),
+							setValue(laneState("review"), idleLaneState),
+						],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
 			);
 
-			const fork = await repo.fork(source.metadata, { id: "fork", scope: "tree" });
+			const fork = await repo.fork(source.metadata, { id: "fork", scope: "tree" }, BACKGROUND_CONTEXT);
 
 			deepStrictEqual(
-				(await fork.findEntries({ order: "asc" })).map(({ id }) => id),
+				(await fork.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
 				[ROOT_ID, CHILD_ID, SIBLING_ID],
 			);
-			strictEqual(await fork.getLeafId(), CHILD_ID);
-			strictEqual(await fork.view("review").getLeafId(), SIBLING_ID);
-			deepStrictEqual((await fork.getValue(laneConfig("review")))?.value, configuration);
-			deepStrictEqual((await fork.getValue(laneState("review")))?.value, idleLaneState);
-			await Promise.all([source.close(), fork.close()]);
+			strictEqual(await fork.getLeafId(BACKGROUND_CONTEXT), CHILD_ID);
+			strictEqual(await fork.view("review").getLeafId(BACKGROUND_CONTEXT), SIBLING_ID);
+			deepStrictEqual((await fork.getValue(laneConfig("review"), BACKGROUND_CONTEXT))?.value, configuration);
+			deepStrictEqual((await fork.getValue(laneState("review"), BACKGROUND_CONTEXT))?.value, idleLaneState);
+			await Promise.all([source.close(BACKGROUND_CONTEXT), fork.close(BACKGROUND_CONTEXT)]);
 		}),
 	];
 }
@@ -480,15 +522,15 @@ export function createSessionRepoForkDestinationReservationConformance<TMetadata
 			"fork coordination",
 			"publishes create when it reserves a shared destination id first",
 			async ({ repo }) => {
-				const source = await repo.create({ id: "source" });
+				const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
 				const results = await Promise.allSettled([
-					repo.create({ id: "destination" }),
-					repo.fork(source.metadata, { id: "destination" }),
+					repo.create({ id: "destination" }, BACKGROUND_CONTEXT),
+					repo.fork(source.metadata, { id: "destination" }, BACKGROUND_CONTEXT),
 				]);
 				strictEqual(results[0].status, "fulfilled");
 				strictEqual(results[1].status, "rejected");
-				if (results[0].status === "fulfilled") await results[0].value.close();
-				await source.close();
+				if (results[0].status === "fulfilled") await results[0].value.close(BACKGROUND_CONTEXT);
+				await source.close(BACKGROUND_CONTEXT);
 			},
 		),
 		createCase(
@@ -496,15 +538,15 @@ export function createSessionRepoForkDestinationReservationConformance<TMetadata
 			"fork coordination",
 			"publishes fork when it reserves a shared destination id first",
 			async ({ repo }) => {
-				const source = await repo.create({ id: "source" });
+				const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
 				const results = await Promise.allSettled([
-					repo.fork(source.metadata, { id: "destination" }),
-					repo.create({ id: "destination" }),
+					repo.fork(source.metadata, { id: "destination" }, BACKGROUND_CONTEXT),
+					repo.create({ id: "destination" }, BACKGROUND_CONTEXT),
 				]);
 				strictEqual(results[0].status, "fulfilled");
 				strictEqual(results[1].status, "rejected");
-				if (results[0].status === "fulfilled") await results[0].value.close();
-				await source.close();
+				if (results[0].status === "fulfilled") await results[0].value.close(BACKGROUND_CONTEXT);
+				await source.close(BACKGROUND_CONTEXT);
 			},
 		),
 	];
@@ -522,34 +564,46 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 			"fork coordination",
 			"captures one coherent boundary between source commits",
 			async ({ repo }) => {
-				const source = await repo.create({ id: "source" });
-				const firstCommit = source.mutate("main", (mutator) =>
-					mutator.commit([
-						insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "first" }),
-						setValue(laneLeaf("main"), ROOT_ID),
-					]),
+				const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
+				const firstCommit = source.mutate(
+					"main",
+					(mutator) =>
+						mutator.commit(
+							[
+								insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "first" }),
+								setValue(laneLeaf("main"), ROOT_ID),
+							],
+							BACKGROUND_CONTEXT,
+						),
+					BACKGROUND_CONTEXT,
 				);
-				const fork = repo.fork(source.metadata, { id: "fork" });
-				const secondCommit = source.mutate("main", (mutator) =>
-					mutator.commit([
-						insertEntry({
-							id: CHILD_ID,
-							parentId: ROOT_ID,
-							type: "custom",
-							customType: "second",
-						}),
-						setValue(laneLeaf("main"), CHILD_ID),
-					]),
+				const fork = repo.fork(source.metadata, { id: "fork" }, BACKGROUND_CONTEXT);
+				const secondCommit = source.mutate(
+					"main",
+					(mutator) =>
+						mutator.commit(
+							[
+								insertEntry({
+									id: CHILD_ID,
+									parentId: ROOT_ID,
+									type: "custom",
+									customType: "second",
+								}),
+								setValue(laneLeaf("main"), CHILD_ID),
+							],
+							BACKGROUND_CONTEXT,
+						),
+					BACKGROUND_CONTEXT,
 				);
 
 				const [, forked] = await Promise.all([firstCommit, fork]);
 				await secondCommit;
-				strictEqual(await forked.getLeafId(), ROOT_ID);
+				strictEqual(await forked.getLeafId(BACKGROUND_CONTEXT), ROOT_ID);
 				deepStrictEqual(
-					(await forked.findEntries({ order: "asc" })).map(({ id }) => id),
+					(await forked.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
 					[ROOT_ID],
 				);
-				await Promise.all([source.close(), forked.close()]);
+				await Promise.all([source.close(BACKGROUND_CONTEXT), forked.close(BACKGROUND_CONTEXT)]);
 			},
 		),
 	];

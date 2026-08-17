@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@draht/ai";
 import { describe, expect, it } from "vitest";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import type { CustomMessage } from "../../src/harness/messages.ts";
 import * as sessionWrites from "../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
@@ -25,7 +26,7 @@ const metadata = {
 } satisfies SessionMetadata;
 
 function commitSession(session: Session, transaction: Write[]) {
-	return session.mutate("main", (mutator) => mutator.commit(transaction));
+	return session.mutate("main", (mutator) => mutator.commit(transaction, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 }
 
 describe("StorageBackedSession", () => {
@@ -41,12 +42,14 @@ describe("StorageBackedSession", () => {
 		const result = await commitSession(session, transaction);
 
 		expect(storage.getCommitAttempts()[0]).toBe(transaction);
-		const entry = (await session.getEntries([ENTRY_ID])).get(ENTRY_ID);
+		const entry = (await session.getEntries([ENTRY_ID], BACKGROUND_CONTEXT)).get(ENTRY_ID);
 		expect(entry).toMatchObject({ seq: result.seqs[0], timestamp: NOW });
 		if (entry?.type !== "custom") throw new Error("Expected custom entry");
 		expect(entry.data).toBe(data);
-		expect((await session.getValue(storedValues.value<unknown>("test.value", "state")))?.value).toBe(data);
-		await session.close();
+		expect(
+			(await session.getValue(storedValues.value<unknown>("test.value", "state"), BACKGROUND_CONTEXT))?.value,
+		).toBe(data);
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("composes bound values and lists atomically with entries and usage", async () => {
@@ -55,31 +58,39 @@ describe("StorageBackedSession", () => {
 		const scalar = storedValues.value<string>("test.application.scalar");
 		const events = storedValues.list<string>("test.application.events");
 
-		const result = await session.mutate("main", (mutator) =>
-			mutator.commit([
-				sessionWrites.insertEntry({ id: ENTRY_ID, parentId: null, type: "custom", customType: "note" }),
-				storedValues.setValue(scalar, "state"),
-				storedValues.appendList(events, "event"),
-				sessionWrites.insertUsage({
-					id: "usage",
-					adjustment: false,
-					usage: {
-						input: 1,
-						output: 1,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 2,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-				}),
-			]),
+		const result = await session.mutate(
+			"main",
+			(mutator) =>
+				mutator.commit(
+					[
+						sessionWrites.insertEntry({ id: ENTRY_ID, parentId: null, type: "custom", customType: "note" }),
+						storedValues.setValue(scalar, "state"),
+						storedValues.appendList(events, "event"),
+						sessionWrites.insertUsage({
+							id: "usage",
+							adjustment: false,
+							usage: {
+								input: 1,
+								output: 1,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 2,
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+							},
+						}),
+					],
+					BACKGROUND_CONTEXT,
+				),
+			BACKGROUND_CONTEXT,
 		);
 
 		expect(result.seqs).toHaveLength(4);
-		expect((await session.getValue(scalar))?.seq).toBe(result.seqs[1]);
-		expect(await session.readList(events)).toEqual([{ seq: result.seqs[2], value: "event" }]);
+		expect((await session.getValue(scalar, BACKGROUND_CONTEXT))?.seq).toBe(result.seqs[1]);
+		expect(await session.readList(events, undefined, BACKGROUND_CONTEXT)).toEqual([
+			{ seq: result.seqs[2], value: "event" },
+		]);
 		expect(storage.getCommitAttempts()).toHaveLength(1);
-		await session.close();
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("rejects pending assistant entries at the durable session write boundary", async () => {
@@ -109,8 +120,8 @@ describe("StorageBackedSession", () => {
 			]),
 		).rejects.toThrow("Cannot persist a pending assistant message");
 		expect(storage.getCommitAttempts()).toEqual([]);
-		expect(await session.getEntries([ENTRY_ID])).toEqual(new Map());
-		await session.close();
+		expect(await session.getEntries([ENTRY_ID], BACKGROUND_CONTEXT)).toEqual(new Map());
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("trusts typed custom messages without repository schema registration", async () => {
@@ -127,12 +138,12 @@ describe("StorageBackedSession", () => {
 
 		const result = await commitSession(session, [sessionWrites.insertEntry(entry)]);
 
-		expect((await session.getEntries([ENTRY_ID])).get(ENTRY_ID)).toEqual({
+		expect((await session.getEntries([ENTRY_ID], BACKGROUND_CONTEXT)).get(ENTRY_ID)).toEqual({
 			...entry,
 			seq: result.firstSeq,
 			timestamp: result.timestamp,
 		});
-		await session.close();
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("serializes mutations, permits one commit attempt, and invalidates the mutator", async () => {
@@ -140,20 +151,24 @@ describe("StorageBackedSession", () => {
 		const session = new StorageBackedSession(metadata, storage);
 		let captured: SessionMutator | undefined;
 
-		await session.mutate("review", async (mutator) => {
-			captured = mutator;
-			expect(mutator.lane).toBe("review");
-			expect(await mutator.getValue(storedValues.sessionName)).toBeUndefined();
-			await mutator.commit([storedValues.setValue(storedValues.sessionName, "committed")]);
-			await expect(mutator.commit([])).rejects.toThrow("commit already attempted");
-		});
+		await session.mutate(
+			"review",
+			async (mutator) => {
+				captured = mutator;
+				expect(mutator.lane).toBe("review");
+				expect(await mutator.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toBeUndefined();
+				await mutator.commit([storedValues.setValue(storedValues.sessionName, "committed")], BACKGROUND_CONTEXT);
+				await expect(mutator.commit([], BACKGROUND_CONTEXT)).rejects.toThrow("commit already attempted");
+			},
+			BACKGROUND_CONTEXT,
+		);
 
 		expect(storage.getCommitAttempts()).toHaveLength(1);
-		expect(await session.getName()).toBe("committed");
+		expect(await session.getName(BACKGROUND_CONTEXT)).toBe("committed");
 		const invalidated = captured;
 		if (invalidated === undefined) throw new Error("Expected captured mutator");
-		expect(() => invalidated.getEntries([])).toThrow("outside its mutation callback");
-		await session.close();
+		expect(() => invalidated.getEntries([], BACKGROUND_CONTEXT)).toThrow("outside its mutation callback");
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("consumes the commit guard when the first commit fails", async () => {
@@ -164,13 +179,17 @@ describe("StorageBackedSession", () => {
 		] satisfies Write[];
 
 		await expect(
-			session.mutate("main", async (mutator) => {
-				await expect(mutator.commit(transaction)).rejects.toThrow("Missing parent entry");
-				await expect(mutator.commit([])).rejects.toThrow("commit already attempted");
-			}),
+			session.mutate(
+				"main",
+				async (mutator) => {
+					await expect(mutator.commit(transaction, BACKGROUND_CONTEXT)).rejects.toThrow("Missing parent entry");
+					await expect(mutator.commit([], BACKGROUND_CONTEXT)).rejects.toThrow("commit already attempted");
+				},
+				BACKGROUND_CONTEXT,
+			),
 		).resolves.toBeUndefined();
 		expect(storage.getCommitAttempts()).toHaveLength(1);
-		await session.close();
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("mints distinct follower ids with the leader timestamp", async () => {
@@ -182,7 +201,7 @@ describe("StorageBackedSession", () => {
 
 		expect([leader, ...followers].map(decodeTimestamp)).toEqual([leaderTimestamp, leaderTimestamp, leaderTimestamp]);
 		expect(new Set([leader, ...followers])).toHaveLength(3);
-		await session.close();
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("exposes metadata directly and the shared UUIDv7 id generator", async () => {
@@ -193,17 +212,19 @@ describe("StorageBackedSession", () => {
 		expect(session.idGenerator.next()).toMatch(
 			/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
 		);
-		await session.close();
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("closes idempotently and rejects operations not admitted before close", async () => {
 		const storage = new MemoryStorage({ now: () => NOW });
 		const session = new StorageBackedSession(metadata, storage);
 
-		await Promise.all([session.close(), session.close()]);
-		await expect(session.mutate("main", () => undefined)).rejects.toThrow("Session is closed");
-		await expect(session.getEntries([])).rejects.toThrow("Session is closed");
-		await expect(session.getValue(storedValues.sessionName)).rejects.toThrow("Session is closed");
-		await expect(session.scanValues(storedValues.sessionName)).rejects.toThrow("Session is closed");
+		await Promise.all([session.close(BACKGROUND_CONTEXT), session.close(BACKGROUND_CONTEXT)]);
+		await expect(session.mutate("main", () => undefined, BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
+		await expect(session.getEntries([], BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
+		await expect(session.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
+		await expect(session.scanValues(storedValues.sessionName, BACKGROUND_CONTEXT)).rejects.toThrow(
+			"Session is closed",
+		);
 	});
 });

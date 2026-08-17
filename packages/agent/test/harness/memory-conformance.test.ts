@@ -1,4 +1,5 @@
 import { describe, it } from "vitest";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { MemorySessionRepo } from "../../src/harness/session/index.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import {
@@ -28,7 +29,7 @@ registerConformance(
 		const storage = new MemoryStorage({ now: () => NOW });
 		return Promise.resolve<StorageFixture>({
 			storage,
-			[Symbol.asyncDispose]: () => storage.close(),
+			[Symbol.asyncDispose]: () => storage.close(BACKGROUND_CONTEXT),
 		});
 	}),
 );
@@ -41,6 +42,6 @@ registerConformance(
 			memoryRepo = new MemorySessionRepo({ now: () => NOW });
 			return Promise.resolve(memoryRepo);
 		},
-		() => memoryRepo.close(),
+		() => memoryRepo.close(BACKGROUND_CONTEXT),
 	),
 );

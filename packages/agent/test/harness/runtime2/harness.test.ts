@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentHarness, HarnessClosed, HarnessFault } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
+import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
 import type { Result } from "../../../src/harness/result.ts";
 import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
@@ -44,12 +45,15 @@ function tool(name: string): AgentHarnessTool<undefined, typeof toolParameters> 
 async function createSession(): Promise<Session> {
 	const repo = new MemorySessionRepo();
 	repos.push(repo);
-	return repo.create({});
+	return repo.create({}, BACKGROUND_CONTEXT);
 }
 
 async function configureMain(session: Session, configuration: LaneConfiguration = configuredMain): Promise<void> {
-	await session.mutate("main", (mutator) =>
-		mutator.commit([storedValues.setValue(storedValues.laneConfig("main"), configuration)]),
+	await session.mutate(
+		"main",
+		(mutator) =>
+			mutator.commit([storedValues.setValue(storedValues.laneConfig("main"), configuration)], BACKGROUND_CONTEXT),
+		BACKGROUND_CONTEXT,
 	);
 }
 
@@ -59,11 +63,17 @@ async function createStorageSession(storage: MemoryStorage): Promise<Session> {
 		storage,
 	);
 	standaloneSessions.push(session);
-	await session.mutate("main", (mutator) =>
-		mutator.commit([
-			storedValues.setValue(storedValues.laneLeaf("main"), null),
-			storedValues.setValue(storedValues.laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
-		]),
+	await session.mutate(
+		"main",
+		(mutator) =>
+			mutator.commit(
+				[
+					storedValues.setValue(storedValues.laneLeaf("main"), null),
+					storedValues.setValue(storedValues.laneState("main"), { currentOperationId: null, pendingNextRun: [] }),
+				],
+				BACKGROUND_CONTEXT,
+			),
+		BACKGROUND_CONTEXT,
 	);
 	return session;
 }
@@ -90,15 +100,21 @@ function operationMeta(session: Session, intent: OperationMeta["intent"], starte
 }
 
 async function installOperation(session: Session, meta: OperationMeta, state: OperationState): Promise<void> {
-	await session.mutate(meta.lane, (mutator) =>
-		mutator.commit([
-			storedValues.setValue(storedValues.operationMeta(meta.operationId), meta),
-			storedValues.setValue(storedValues.operationState(meta.operationId), state),
-			storedValues.setValue(storedValues.laneState(meta.lane), {
-				currentOperationId: meta.operationId,
-				pendingNextRun: [],
-			}),
-		]),
+	await session.mutate(
+		meta.lane,
+		(mutator) =>
+			mutator.commit(
+				[
+					storedValues.setValue(storedValues.operationMeta(meta.operationId), meta),
+					storedValues.setValue(storedValues.operationState(meta.operationId), state),
+					storedValues.setValue(storedValues.laneState(meta.lane), {
+						currentOperationId: meta.operationId,
+						pendingNextRun: [],
+					}),
+				],
+				BACKGROUND_CONTEXT,
+			),
+		BACKGROUND_CONTEXT,
 	);
 }
 
@@ -123,15 +139,15 @@ function runState(triggerEntryId: string): RunState {
 }
 
 afterEach(async () => {
-	for (const repo of repos.splice(0)) await repo.close();
-	for (const session of standaloneSessions.splice(0)) await session.close();
+	for (const repo of repos.splice(0)) await repo.close(BACKGROUND_CONTEXT);
+	for (const session of standaloneSessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
 describe("runtime2 AgentHarness", () => {
 	it("is selected by the public AgentHarness constructor", async () => {
 		const session = await createSession();
 
-		const { harness } = await AgentHarness.create(modelOptions(session));
+		const { harness } = await AgentHarness.create(modelOptions(session), BACKGROUND_CONTEXT);
 
 		expect(harness).toBeInstanceOf(Harness);
 	});
@@ -141,7 +157,7 @@ describe("runtime2 AgentHarness", () => {
 		const duplicate = tool("duplicate");
 
 		await expect(
-			createAgentHarness({ ...modelOptions(session), tools: [duplicate, duplicate] }),
+			createAgentHarness({ ...modelOptions(session), tools: [duplicate, duplicate] }, BACKGROUND_CONTEXT),
 		).rejects.toBeInstanceOf(TypeError);
 	});
 
@@ -152,31 +168,34 @@ describe("runtime2 AgentHarness", () => {
 		const initialStreamOptions = { timeoutMs: 10 };
 		const initialRetry = { enabled: true, maxRetries: 2, baseDelayMs: 20 };
 		const initialCompaction = { enabled: false, reserveTokens: 100, keepRecentTokens: 200 };
-		const { harness } = await createAgentHarness({
-			...modelOptions(session),
-			tools: initialTools,
-			resources: initialResources,
-			streamOptions: initialStreamOptions,
-			retry: initialRetry,
-			compaction: initialCompaction,
-			steeringMode: "one-at-a-time",
-			followUpMode: "one-at-a-time",
-			toolExecution: "sequential",
-		});
+		const { harness } = await createAgentHarness(
+			{
+				...modelOptions(session),
+				tools: initialTools,
+				resources: initialResources,
+				streamOptions: initialStreamOptions,
+				retry: initialRetry,
+				compaction: initialCompaction,
+				steeringMode: "one-at-a-time",
+				followUpMode: "one-at-a-time",
+				toolExecution: "sequential",
+			},
+			BACKGROUND_CONTEXT,
+		);
 
-		expect(await harness.getTools()).toBe(initialTools);
-		expect(await harness.getResources()).toBe(initialResources);
-		expect(await harness.getStreamOptions()).toBe(initialStreamOptions);
-		expect(await harness.getRetryPolicy()).toBe(initialRetry);
-		expect(await harness.getCompactionSettings()).toBe(initialCompaction);
-		expect(await harness.getSteeringMode()).toBe("one-at-a-time");
-		expect(await harness.getFollowUpMode()).toBe("one-at-a-time");
+		expect(await harness.getTools(BACKGROUND_CONTEXT)).toBe(initialTools);
+		expect(await harness.getResources(BACKGROUND_CONTEXT)).toBe(initialResources);
+		expect(await harness.getStreamOptions(BACKGROUND_CONTEXT)).toBe(initialStreamOptions);
+		expect(await harness.getRetryPolicy(BACKGROUND_CONTEXT)).toBe(initialRetry);
+		expect(await harness.getCompactionSettings(BACKGROUND_CONTEXT)).toBe(initialCompaction);
+		expect(await harness.getSteeringMode(BACKGROUND_CONTEXT)).toBe("one-at-a-time");
+		expect(await harness.getFollowUpMode(BACKGROUND_CONTEXT)).toBe("one-at-a-time");
 
 		const events: string[] = [];
 		let retryAtEvent: typeof initialRetry | undefined;
 		harness.events.on("config_update", async (event) => {
 			events.push(event.property);
-			if (event.property === "retryPolicy") retryAtEvent = await harness.getRetryPolicy();
+			if (event.property === "retryPolicy") retryAtEvent = await harness.getRetryPolicy(BACKGROUND_CONTEXT);
 		});
 		const nextTools = [tool("next")];
 		const nextResources = { promptTemplates: [] };
@@ -184,21 +203,21 @@ describe("runtime2 AgentHarness", () => {
 		const nextRetry = { enabled: false, maxRetries: 0, baseDelayMs: 0 };
 		const nextCompaction = { enabled: true, reserveTokens: 300, keepRecentTokens: 400 };
 
-		await harness.setTools(nextTools);
-		await harness.setResources(nextResources);
-		await harness.setStreamOptions(nextStreamOptions);
-		await harness.setRetryPolicy(nextRetry);
-		await harness.setCompactionSettings(nextCompaction);
-		await harness.setSteeringMode("all");
-		await harness.setFollowUpMode("all");
+		await harness.setTools(nextTools, BACKGROUND_CONTEXT);
+		await harness.setResources(nextResources, BACKGROUND_CONTEXT);
+		await harness.setStreamOptions(nextStreamOptions, BACKGROUND_CONTEXT);
+		await harness.setRetryPolicy(nextRetry, BACKGROUND_CONTEXT);
+		await harness.setCompactionSettings(nextCompaction, BACKGROUND_CONTEXT);
+		await harness.setSteeringMode("all", BACKGROUND_CONTEXT);
+		await harness.setFollowUpMode("all", BACKGROUND_CONTEXT);
 
-		expect(await harness.getTools()).toBe(nextTools);
-		expect(await harness.getResources()).toBe(nextResources);
-		expect(await harness.getStreamOptions()).toBe(nextStreamOptions);
-		expect(await harness.getRetryPolicy()).toBe(nextRetry);
-		expect(await harness.getCompactionSettings()).toBe(nextCompaction);
-		expect(await harness.getSteeringMode()).toBe("all");
-		expect(await harness.getFollowUpMode()).toBe("all");
+		expect(await harness.getTools(BACKGROUND_CONTEXT)).toBe(nextTools);
+		expect(await harness.getResources(BACKGROUND_CONTEXT)).toBe(nextResources);
+		expect(await harness.getStreamOptions(BACKGROUND_CONTEXT)).toBe(nextStreamOptions);
+		expect(await harness.getRetryPolicy(BACKGROUND_CONTEXT)).toBe(nextRetry);
+		expect(await harness.getCompactionSettings(BACKGROUND_CONTEXT)).toBe(nextCompaction);
+		expect(await harness.getSteeringMode(BACKGROUND_CONTEXT)).toBe("all");
+		expect(await harness.getFollowUpMode(BACKGROUND_CONTEXT)).toBe("all");
 		expect(retryAtEvent).toBe(nextRetry);
 		expect(events).toEqual([
 			"tools",
@@ -212,25 +231,28 @@ describe("runtime2 AgentHarness", () => {
 
 		const penultimateResources = { skills: [] };
 		const finalResources = { promptTemplates: [] };
-		await Promise.all([harness.setResources(penultimateResources), harness.setResources(finalResources)]);
-		expect(await harness.getResources()).toBe(finalResources);
+		await Promise.all([
+			harness.setResources(penultimateResources, BACKGROUND_CONTEXT),
+			harness.setResources(finalResources, BACKGROUND_CONTEXT),
+		]);
+		expect(await harness.getResources(BACKGROUND_CONTEXT)).toBe(finalResources);
 		expect(events.slice(-2)).toEqual(["resources", "resources"]);
 	});
 
 	it("emits lane config changes after committed memory publication", async () => {
 		const session = await createSession();
 		const options = modelOptions(session);
-		const { harness } = await createAgentHarness(options);
+		const { harness } = await createAgentHarness(options, BACKGROUND_CONTEXT);
 		const events: unknown[] = [];
 		let thinkingAtEvent: string | undefined;
 		harness.events.on("config_update", async (event) => {
 			events.push(event);
-			if (event.property === "thinkingLevel") thinkingAtEvent = await harness.getThinkingLevel();
+			if (event.property === "thinkingLevel") thinkingAtEvent = await harness.getThinkingLevel(BACKGROUND_CONTEXT);
 		});
 
-		await harness.setModel(options.model);
-		await harness.setThinkingLevel("high");
-		await harness.setActiveTools(["read"]);
+		await harness.setModel(options.model, BACKGROUND_CONTEXT);
+		await harness.setThinkingLevel("high", BACKGROUND_CONTEXT);
+		await harness.setActiveTools(["read"], BACKGROUND_CONTEXT);
 
 		const model = { provider: options.model.provider, modelId: options.model.id };
 		expect(events).toEqual([
@@ -244,61 +266,81 @@ describe("runtime2 AgentHarness", () => {
 	it("rejects invalid config without publication or fault", async () => {
 		const session = await createSession();
 		const initialTools = [tool("initial")];
-		const { harness } = await createAgentHarness({ ...modelOptions(session), tools: initialTools });
+		const { harness } = await createAgentHarness(
+			{ ...modelOptions(session), tools: initialTools },
+			BACKGROUND_CONTEXT,
+		);
 		const events: string[] = [];
 		harness.events.on("config_update", (event) => {
 			events.push(event.property);
 		});
 		const duplicate = tool("duplicate");
 
-		expect(() => harness.setTools([duplicate, duplicate])).toThrow(TypeError);
-		expect(() => harness.setRetryPolicy({ enabled: true, maxRetries: -1, baseDelayMs: 0 })).toThrow(RangeError);
-		expect(() => harness.setCompactionSettings({ enabled: true, reserveTokens: -1, keepRecentTokens: 0 })).toThrow(
-			RangeError,
-		);
+		expect(() => harness.setTools([duplicate, duplicate], BACKGROUND_CONTEXT)).toThrow(TypeError);
+		expect(() =>
+			harness.setRetryPolicy({ enabled: true, maxRetries: -1, baseDelayMs: 0 }, BACKGROUND_CONTEXT),
+		).toThrow(RangeError);
+		expect(() =>
+			harness.setCompactionSettings({ enabled: true, reserveTokens: -1, keepRecentTokens: 0 }, BACKGROUND_CONTEXT),
+		).toThrow(RangeError);
 
-		expect(await harness.getTools()).toBe(initialTools);
-		expect(await harness.getRetryPolicy()).toEqual({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 });
-		expect(await harness.getCompactionSettings()).toBe(DEFAULT_COMPACTION_SETTINGS);
+		expect(await harness.getTools(BACKGROUND_CONTEXT)).toBe(initialTools);
+		expect(await harness.getRetryPolicy(BACKGROUND_CONTEXT)).toEqual({
+			enabled: true,
+			maxRetries: 3,
+			baseDelayMs: 1_000,
+		});
+		expect(await harness.getCompactionSettings(BACKGROUND_CONTEXT)).toBe(DEFAULT_COMPACTION_SETTINGS);
 		expect(events).toEqual([]);
-		expect(await harness.lanes()).toHaveLength(1);
+		expect(await harness.lanes(BACKGROUND_CONTEXT)).toHaveLength(1);
 	});
 
 	it("validates initial config before writing durable state", async () => {
 		const invalidRetrySession = await createSession();
 		await expect(
-			createAgentHarness({
-				...modelOptions(invalidRetrySession),
-				retry: { enabled: true, maxRetries: -1, baseDelayMs: 0 },
-			}),
+			createAgentHarness(
+				{
+					...modelOptions(invalidRetrySession),
+					retry: { enabled: true, maxRetries: -1, baseDelayMs: 0 },
+				},
+				BACKGROUND_CONTEXT,
+			),
 		).rejects.toBeInstanceOf(RangeError);
-		expect(await invalidRetrySession.getValue(storedValues.laneConfig("main"))).toBeUndefined();
+		expect(await invalidRetrySession.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 
 		const invalidCompactionSession = await createSession();
 		await expect(
-			createAgentHarness({
-				...modelOptions(invalidCompactionSession),
-				compaction: { enabled: true, reserveTokens: -1, keepRecentTokens: 0 },
-			}),
+			createAgentHarness(
+				{
+					...modelOptions(invalidCompactionSession),
+					compaction: { enabled: true, reserveTokens: -1, keepRecentTokens: 0 },
+				},
+				BACKGROUND_CONTEXT,
+			),
 		).rejects.toBeInstanceOf(RangeError);
-		expect(await invalidCompactionSession.getValue(storedValues.laneConfig("main"))).toBeUndefined();
+		expect(
+			await invalidCompactionSession.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
+		).toBeUndefined();
 	});
 
 	it("seeds main and returns the concrete harness as its main lane", async () => {
 		const session = await createSession();
 		const options = modelOptions(session);
 
-		const { harness, suspended } = await createAgentHarness({
-			...options,
-			thinkingLevel: "high",
-			activeToolNames: ["read"],
-		});
+		const { harness, suspended } = await createAgentHarness(
+			{
+				...options,
+				thinkingLevel: "high",
+				activeToolNames: ["read"],
+			},
+			BACKGROUND_CONTEXT,
+		);
 
 		expect(harness).toBeInstanceOf(Harness);
-		expect(await harness.lane("main")).toBe(harness);
-		expect(await harness.getLeafId()).toBeNull();
+		expect(await harness.lane("main", BACKGROUND_CONTEXT)).toBe(harness);
+		expect(await harness.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
 		expect(suspended).toEqual([]);
-		expect((await session.getValue(storedValues.laneConfig("main")))?.value).toEqual({
+		expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 			model: { provider: options.model.provider, modelId: options.model.id },
 			thinkingLevel: "high",
 			activeToolNames: ["read"],
@@ -307,15 +349,18 @@ describe("runtime2 AgentHarness", () => {
 
 	it("appends idle entries through owned lane state", async () => {
 		const session = await createSession();
-		const { harness } = await createAgentHarness(modelOptions(session));
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 
-		const entryId = await harness.sessionTree.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+		const entryId = await harness.sessionTree.appendMessage(
+			{ role: "user", content: "hello", timestamp: 1 },
+			BACKGROUND_CONTEXT,
+		);
 
-		expect(await harness.getLeafId()).toBe(entryId);
-		expect((await session.getValue(storedValues.laneLeaf("main")))?.value).toBe(entryId);
-		expect(await harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" })).toMatchObject([
-			{ id: entryId, parentId: null, message: { role: "user", content: "hello" } },
-		]);
+		expect(await harness.getLeafId(BACKGROUND_CONTEXT)).toBe(entryId);
+		expect((await session.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT))?.value).toBe(entryId);
+		expect(await harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" }, BACKGROUND_CONTEXT)).toMatchObject(
+			[{ id: entryId, parentId: null, message: { role: "user", content: "hello" } }],
+		);
 	});
 
 	it("restores every configured lane without replacing its configuration", async () => {
@@ -325,25 +370,31 @@ describe("runtime2 AgentHarness", () => {
 			thinkingLevel: "medium",
 			activeToolNames: [],
 		};
-		await session.mutate("main", (mutator) =>
-			mutator.commit([storedValues.setValue(storedValues.laneConfig("main"), configuredMain)]),
+		await session.mutate(
+			"main",
+			(mutator) =>
+				mutator.commit(
+					[storedValues.setValue(storedValues.laneConfig("main"), configuredMain)],
+					BACKGROUND_CONTEXT,
+				),
+			BACKGROUND_CONTEXT,
 		);
-		await session.createLane("worker", null, workerConfiguration);
+		await session.createLane("worker", null, workerConfiguration, BACKGROUND_CONTEXT);
 		const before = await Promise.all([
-			session.getValue(storedValues.laneConfig("main")),
-			session.getValue(storedValues.laneConfig("worker")),
+			session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
+			session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT),
 		]);
 
-		const { harness } = await createAgentHarness(modelOptions(session));
-		const worker = await harness.lane("worker");
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const worker = await harness.lane("worker", BACKGROUND_CONTEXT);
 
 		expect(worker).toBeInstanceOf(Lane);
-		expect(await worker?.getLeafId()).toBeNull();
-		expect((await harness.lanes()).map((lane) => lane.name).sort()).toEqual(["main", "worker"]);
+		expect(await worker?.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
+		expect((await harness.lanes(BACKGROUND_CONTEXT)).map((lane) => lane.name).sort()).toEqual(["main", "worker"]);
 		expect(
 			await Promise.all([
-				session.getValue(storedValues.laneConfig("main")),
-				session.getValue(storedValues.laneConfig("worker")),
+				session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
+				session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT),
 			]),
 		).toEqual(before);
 	});
@@ -351,33 +402,37 @@ describe("runtime2 AgentHarness", () => {
 	it("creates a lane from the captured seed and publishes it after commit", async () => {
 		const session = await createSession();
 		const options = modelOptions(session);
-		const { harness } = await createAgentHarness({
-			...options,
-			thinkingLevel: "high",
-			activeToolNames: ["read"],
-		});
-		const anchor = await harness.sessionTree.appendCustomEntry("anchor");
-		await harness.setThinkingLevel("low");
+		const { harness } = await createAgentHarness(
+			{
+				...options,
+				thinkingLevel: "high",
+				activeToolNames: ["read"],
+			},
+			BACKGROUND_CONTEXT,
+		);
+		const anchor = await harness.sessionTree.appendCustomEntry("anchor", undefined, BACKGROUND_CONTEXT);
+		await harness.setThinkingLevel("low", BACKGROUND_CONTEXT);
 		let durableConfigurationAtEvent: LaneConfiguration | undefined;
 		let laneVisibleAtEvent = false;
 		harness.events.on("lane_created", async () => {
-			durableConfigurationAtEvent = (await session.getValue(storedValues.laneConfig("worker")))?.value;
-			laneVisibleAtEvent = (await harness.lane("worker")) !== undefined;
+			durableConfigurationAtEvent = (await session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT))
+				?.value;
+			laneVisibleAtEvent = (await harness.lane("worker", BACKGROUND_CONTEXT)) !== undefined;
 		});
 
-		const worker = unwrap(await harness.createLane("worker", anchor));
+		const worker = unwrap(await harness.createLane("worker", anchor, BACKGROUND_CONTEXT));
 
-		expect(await harness.lane("worker")).toBe(worker);
-		expect(await worker.getLeafId()).toBe(anchor);
-		expect(await worker.getThinkingLevel()).toBe("high");
-		expect(await worker.getActiveTools()).toEqual(["read"]);
+		expect(await harness.lane("worker", BACKGROUND_CONTEXT)).toBe(worker);
+		expect(await worker.getLeafId(BACKGROUND_CONTEXT)).toBe(anchor);
+		expect(await worker.getThinkingLevel(BACKGROUND_CONTEXT)).toBe("high");
+		expect(await worker.getActiveTools(BACKGROUND_CONTEXT)).toEqual(["read"]);
 		expect(durableConfigurationAtEvent).toEqual({
 			model: { provider: options.model.provider, modelId: options.model.id },
 			thinkingLevel: "high",
 			activeToolNames: ["read"],
 		});
 		expect(laneVisibleAtEvent).toBe(true);
-		expect((await session.getValue(storedValues.laneState("worker")))?.value).toEqual({
+		expect((await session.getValue(storedValues.laneState("worker"), BACKGROUND_CONTEXT))?.value).toEqual({
 			currentOperationId: null,
 			pendingNextRun: [],
 		});
@@ -385,34 +440,34 @@ describe("runtime2 AgentHarness", () => {
 
 	it("maps expected lane creation failures without faulting", async () => {
 		const session = await createSession();
-		const { harness } = await createAgentHarness(modelOptions(session));
-		unwrap(await harness.createLane("worker", null));
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		unwrap(await harness.createLane("worker", null, BACKGROUND_CONTEXT));
 
-		expect(await harness.createLane("worker", null)).toMatchObject({
+		expect(await harness.createLane("worker", null, BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "LaneExists", lane: "worker" },
 		});
-		expect(await harness.createLane("", null)).toMatchObject({
+		expect(await harness.createLane("", null, BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "InvalidLane", lane: "", reason: "lane name must not be empty" },
 		});
-		expect(await harness.createLane("missing", "unknown-entry")).toMatchObject({
+		expect(await harness.createLane("missing", "unknown-entry", BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "UnknownTarget", targetId: "unknown-entry" },
 		});
-		expect((await harness.lanes()).map((lane) => lane.name).sort()).toEqual(["main", "worker"]);
+		expect((await harness.lanes(BACKGROUND_CONTEXT)).map((lane) => lane.name).sort()).toEqual(["main", "worker"]);
 	});
 
 	it("faults without publishing a lane when creation commit fails", async () => {
 		const { session, storage } = await createFailingSession();
-		const { harness } = await createAgentHarness(modelOptions(session));
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
 		const failure = new Error("create lane failed");
 		storage.failure = failure;
 
 		let rejected: unknown;
 		try {
-			await harness.createLane("worker", null);
+			await harness.createLane("worker", null, BACKGROUND_CONTEXT);
 		} catch (error) {
 			rejected = error;
 		}
@@ -420,30 +475,30 @@ describe("runtime2 AgentHarness", () => {
 		expect(rejected).toBeInstanceOf(HarnessFault);
 		if (!(rejected instanceof HarnessFault)) throw new Error("missing harness fault");
 		expect(rejected.cause).toBe(failure);
-		await expect(harness.createLane("later", null)).rejects.toBe(rejected);
+		await expect(harness.createLane("later", null, BACKGROUND_CONTEXT)).rejects.toBe(rejected);
 		expect(harness.lanesByName.has("worker")).toBe(false);
-		expect(await session.getValue(storedValues.laneConfig("worker"))).toBeUndefined();
-		expect(await session.getValue(storedValues.laneLeaf("worker"))).toBeUndefined();
-		expect(await session.getValue(storedValues.laneState("worker"))).toBeUndefined();
+		expect(await session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT)).toBeUndefined();
+		expect(await session.getValue(storedValues.laneLeaf("worker"), BACKGROUND_CONTEXT)).toBeUndefined();
+		expect(await session.getValue(storedValues.laneState("worker"), BACKGROUND_CONTEXT)).toBeUndefined();
 	});
 
 	it("returns Closed when lane creation starts after close", async () => {
 		const session = await createSession();
-		const { harness } = await createAgentHarness(modelOptions(session));
-		await harness.close();
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		await harness.close(BACKGROUND_CONTEXT);
 
-		expect(await harness.createLane("late", null)).toMatchObject({
+		expect(await harness.createLane("late", null, BACKGROUND_CONTEXT)).toMatchObject({
 			ok: false,
 			error: { _tag: "Closed" },
 		});
-		await expect(harness.getTools()).rejects.toBeInstanceOf(HarnessClosed);
-		await expect(harness.setResources({})).rejects.toBeInstanceOf(HarnessClosed);
+		await expect(harness.getTools(BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(HarnessClosed);
+		await expect(harness.setResources({}, BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(HarnessClosed);
 	});
 
 	it("publishes an admitted lane creation before close finishes", async () => {
 		const storage = new ControlledMemoryStorage();
 		const session = await createStorageSession(storage);
-		const { harness } = await createAgentHarness(modelOptions(session));
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
 		const commitStarted = deferred();
 		const releaseCommit = deferred();
@@ -451,16 +506,16 @@ describe("runtime2 AgentHarness", () => {
 			commitStarted.resolve();
 			await releaseCommit.promise;
 		};
-		const creating = harness.createLane("worker", null);
+		const creating = harness.createLane("worker", null, BACKGROUND_CONTEXT);
 		await commitStarted.promise;
-		const closing = harness.close();
+		const closing = harness.close(BACKGROUND_CONTEXT);
 		releaseCommit.resolve();
 
 		const worker = unwrap(await creating);
 		await closing;
 
 		expect(harness.lanesByName.get("worker")).toBe(worker);
-		await expect(worker.getLeafId()).rejects.toBeInstanceOf(HarnessClosed);
+		await expect(worker.getLeafId(BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(HarnessClosed);
 	});
 
 	it("classifies assistant-ready suspensions from captured identities", async () => {
@@ -468,7 +523,7 @@ describe("runtime2 AgentHarness", () => {
 		const options = modelOptions(session);
 		await configureMain(session);
 		const prompt = { role: "user" as const, content: "hello", timestamp: 1 };
-		const promptId = await session.appendMessage(prompt);
+		const promptId = await session.appendMessage(prompt, BACKGROUND_CONTEXT);
 		const meta = operationMeta(session, { kind: "run", promptEntryIds: [promptId] }, 2);
 		const { operationId } = meta;
 		const captured: LaneConfiguration = {
@@ -495,7 +550,10 @@ describe("runtime2 AgentHarness", () => {
 			},
 		});
 
-		const { harness, suspended } = await createAgentHarness({ ...options, tools: [tool("available")] });
+		const { harness, suspended } = await createAgentHarness(
+			{ ...options, tools: [tool("available")] },
+			BACKGROUND_CONTEXT,
+		);
 		const expected = {
 			lane: "main",
 			operationId,
@@ -507,10 +565,10 @@ describe("runtime2 AgentHarness", () => {
 		};
 
 		expect(suspended).toEqual([expected]);
-		expect((await harness.inspectExecution()).current?.suspended).toBe(suspended[0]);
+		expect((await harness.inspectExecution(BACKGROUND_CONTEXT)).current?.suspended).toBe(suspended[0]);
 		const getEntries = vi.spyOn(session, "getEntries");
-		await harness.inspectExecution();
-		await harness.lanes();
+		await harness.inspectExecution(BACKGROUND_CONTEXT);
+		await harness.lanes(BACKGROUND_CONTEXT);
 		expect(getEntries).not.toHaveBeenCalled();
 	});
 
@@ -533,7 +591,7 @@ describe("runtime2 AgentHarness", () => {
 			},
 		});
 
-		const { harness, suspended } = await createAgentHarness(options);
+		const { harness, suspended } = await createAgentHarness(options, BACKGROUND_CONTEXT);
 
 		expect(suspended).toEqual([
 			{
@@ -546,7 +604,7 @@ describe("runtime2 AgentHarness", () => {
 				missing: { tools: ["missing-tool"] },
 			},
 		]);
-		expect((await harness.inspectExecution()).current?.suspended).toBe(suspended[0]);
+		expect((await harness.inspectExecution(BACKGROUND_CONTEXT)).current?.suspended).toBe(suspended[0]);
 	});
 
 	it("restores deferred suspension handles from their source entries", async () => {
@@ -554,7 +612,7 @@ describe("runtime2 AgentHarness", () => {
 		const options = modelOptions(session);
 		await configureMain(session);
 		const prompt = { role: "user" as const, content: "defer", timestamp: 1 };
-		const promptId = await session.appendMessage(prompt);
+		const promptId = await session.appendMessage(prompt, BACKGROUND_CONTEXT);
 		const handle = {
 			provider: options.model.provider,
 			modelId: options.model.id,
@@ -563,6 +621,7 @@ describe("runtime2 AgentHarness", () => {
 		};
 		const sourceId = await session.appendMessage(
 			fauxAssistantMessage([], { stopReason: "deferred", deferred: handle }),
+			BACKGROUND_CONTEXT,
 		);
 		const meta = operationMeta(session, { kind: "run", promptEntryIds: [promptId] }, 2);
 		const { operationId } = meta;
@@ -581,7 +640,7 @@ describe("runtime2 AgentHarness", () => {
 			},
 		});
 
-		const { harness, suspended } = await createAgentHarness(options);
+		const { harness, suspended } = await createAgentHarness(options, BACKGROUND_CONTEXT);
 
 		expect(suspended).toEqual([
 			{
@@ -594,7 +653,7 @@ describe("runtime2 AgentHarness", () => {
 				deferred: handle,
 			},
 		]);
-		expect((await harness.inspectExecution()).current?.suspended).toBe(suspended[0]);
+		expect((await harness.inspectExecution(BACKGROUND_CONTEXT)).current?.suspended).toBe(suspended[0]);
 	});
 
 	it("faults harness creation when restored suspension payloads are invalid", async () => {
@@ -616,7 +675,7 @@ describe("runtime2 AgentHarness", () => {
 			},
 		});
 
-		await expect(createAgentHarness(modelOptions(session))).rejects.toMatchObject({
+		await expect(createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT)).rejects.toMatchObject({
 			name: "HarnessFault",
 			cause: { name: "SessionInvariantError", message: "Deferred suspension source is invalid" },
 		});
@@ -628,7 +687,7 @@ describe("runtime2 AgentHarness", () => {
 			operationMeta(missingPromptSession, { kind: "run", promptEntryIds: ["missing-prompt"] }),
 			runState(missingPromptSession.idGenerator.next()),
 		);
-		await expect(createAgentHarness(modelOptions(missingPromptSession))).rejects.toMatchObject({
+		await expect(createAgentHarness(modelOptions(missingPromptSession), BACKGROUND_CONTEXT)).rejects.toMatchObject({
 			name: "HarnessFault",
 			cause: { name: "SessionInvariantError", message: "Prompt entry missing-prompt is missing" },
 		});
@@ -644,15 +703,15 @@ describe("runtime2 AgentHarness", () => {
 			control: { status: "cancel_requested", requestedAt: 2, drainedSteer: [], drainedFollowUp: [] },
 		});
 
-		const { harness, suspended } = await createAgentHarness(modelOptions(session));
+		const { harness, suspended } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 
 		expect(suspended).toHaveLength(1);
-		expect(await harness.inspectExecution()).toEqual({
+		expect(await harness.inspectExecution(BACKGROUND_CONTEXT)).toEqual({
 			lane: "main",
 			leafId: null,
 			current: { id: operationId, kind: "run", status: "aborting", startedAt: 1 },
 		});
-		expect(await harness.lanes()).toEqual([
+		expect(await harness.lanes(BACKGROUND_CONTEXT)).toEqual([
 			{ name: "main", leafId: null, operation: { id: operationId, kind: "run", status: "aborting" } },
 		]);
 	});
@@ -667,15 +726,26 @@ describe("runtime2 AgentHarness", () => {
 			oldLeafId: null,
 			leafId: null,
 		};
-		await session.mutate("main", (mutator) =>
-			mutator.commit([
-				storedValues.setValue(storedValues.laneConfig("main"), configuredMain),
-				storedValues.setValue(storedValues.laneLastResult("main"), lastResult),
-			]),
+		await session.mutate(
+			"main",
+			(mutator) =>
+				mutator.commit(
+					[
+						storedValues.setValue(storedValues.laneConfig("main"), configuredMain),
+						storedValues.setValue(storedValues.laneLastResult("main"), lastResult),
+					],
+					BACKGROUND_CONTEXT,
+				),
+			BACKGROUND_CONTEXT,
 		);
-		const { harness } = await createAgentHarness(modelOptions(session));
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 
-		expect(await harness.inspectExecution()).toEqual({ lane: "main", leafId: null, current: null, lastResult });
+		expect(await harness.inspectExecution(BACKGROUND_CONTEXT)).toEqual({
+			lane: "main",
+			leafId: null,
+			current: null,
+			lastResult,
+		});
 	});
 
 	it("persists application values through idle and active lane facades", async () => {
@@ -684,73 +754,79 @@ describe("runtime2 AgentHarness", () => {
 		const meta = operationMeta(session, { kind: "run", promptEntryIds: [] });
 		const { operationId } = meta;
 		await installOperation(session, meta, runState(session.idGenerator.next()));
-		const { harness } = await createAgentHarness(modelOptions(session));
-		const worker = unwrap(await harness.createLane("worker", null));
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const worker = unwrap(await harness.createLane("worker", null, BACKGROUND_CONTEXT));
 		const updates: unknown[] = [];
 		harness.events.on("value_update", (event) => {
 			updates.push(event);
 		});
 
-		await worker.sessionTree.setName("idle-worker");
-		await harness.sessionTree.setName("active-main");
-		await harness.sessionTree.setLabel("target", "label");
-		await harness.sessionTree.setValue(applicationValue, { durable: true });
+		await worker.sessionTree.setName("idle-worker", BACKGROUND_CONTEXT);
+		await harness.sessionTree.setName("active-main", BACKGROUND_CONTEXT);
+		await harness.sessionTree.setLabel("target", "label", BACKGROUND_CONTEXT);
+		await harness.sessionTree.setValue(applicationValue, { durable: true }, BACKGROUND_CONTEXT);
 
-		expect(await session.getName()).toBe("active-main");
-		expect(await session.getLabel("target")).toBe("label");
-		expect((await session.getValue(applicationValue))?.value).toEqual({ durable: true });
+		expect(await session.getName(BACKGROUND_CONTEXT)).toBe("active-main");
+		expect(await session.getLabel("target", BACKGROUND_CONTEXT)).toBe("label");
+		expect((await session.getValue(applicationValue, BACKGROUND_CONTEXT))?.value).toEqual({ durable: true });
 		expect(updates).toEqual([
 			{ type: "value_update", value: "session_name", name: "idle-worker" },
 			{ type: "value_update", value: "session_name", name: "active-main" },
 			{ type: "value_update", value: "entry_label", targetId: "target", label: "label" },
 		]);
-		expect((await harness.inspectExecution()).current?.id).toBe(operationId);
+		expect((await harness.inspectExecution(BACKGROUND_CONTEXT)).current?.id).toBe(operationId);
 	});
 
 	it("reports restored open operations without activating them", async () => {
 		const repo = new MemorySessionRepo();
 		repos.push(repo);
-		const session = await repo.create({});
+		const session = await repo.create({}, BACKGROUND_CONTEXT);
 		await configureMain(session);
 		const meta = operationMeta(session, { kind: "run", promptEntryIds: [] });
 		const { operationId } = meta;
 		const state = runState(session.idGenerator.next());
 		await installOperation(session, meta, state);
 
-		const { harness, suspended } = await createAgentHarness(modelOptions(session));
+		const { harness, suspended } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 
 		expect(suspended).toEqual([
 			{ lane: "main", operationId, kind: "run", startedAt: 1, prompt: [], reason: "crash" },
 		]);
-		expect(await harness.inspectExecution()).toEqual({
+		expect(await harness.inspectExecution(BACKGROUND_CONTEXT)).toEqual({
 			lane: "main",
 			leafId: null,
 			current: { id: operationId, kind: "run", status: "suspended", startedAt: 1, suspended: suspended[0] },
 		});
-		expect(await harness.lanes()).toEqual([
+		expect(await harness.lanes(BACKGROUND_CONTEXT)).toEqual([
 			{ name: "main", leafId: null, operation: { id: operationId, kind: "run", status: "suspended" } },
 		]);
-		const pendingId = await harness.sessionTree.appendCustomEntry("note", { text: "queued" });
+		const pendingId = await harness.sessionTree.appendCustomEntry("note", { text: "queued" }, BACKGROUND_CONTEXT);
 		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
 		const updatedState = harness.state.operation?.state;
 		if (updatedState?.kind !== "run") throw new Error("missing updated run state");
 		expect(updatedState.inbox.writes).toEqual([pendingId]);
-		expect((await session.getValue(storedValues.pendingEntry(pendingId)))?.value).toEqual({
+		expect((await session.getValue(storedValues.pendingEntry(pendingId), BACKGROUND_CONTEXT))?.value).toEqual({
 			type: "custom",
 			customType: "note",
 			payload: { text: "queued" },
 		});
-		expect((await session.getValue(storedValues.laneLeaf("main")))?.value).toBeNull();
+		expect((await session.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT))?.value).toBeNull();
 
-		const closing = harness.close();
-		expect(harness.close()).toBe(closing);
+		const closing = harness.close(BACKGROUND_CONTEXT);
+		expect(harness.close(BACKGROUND_CONTEXT)).toBe(closing);
 		await closing;
-		await expect(harness.lanes()).rejects.toBeInstanceOf(HarnessClosed);
-		await expect(harness.inspectExecution()).rejects.toBeInstanceOf(HarnessClosed);
-		const reopened = await repo.open(session.metadata);
-		expect((await reopened.getValue(storedValues.laneState("main")))?.value.currentOperationId).toBe(operationId);
-		expect((await reopened.getValue(storedValues.operationMeta(operationId)))?.value).toEqual(meta);
-		expect((await reopened.getValue(storedValues.operationState(operationId)))?.value).toEqual(updatedState);
+		await expect(harness.lanes(BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(HarnessClosed);
+		await expect(harness.inspectExecution(BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(HarnessClosed);
+		const reopened = await repo.open(session.metadata, BACKGROUND_CONTEXT);
+		expect(
+			(await reopened.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value.currentOperationId,
+		).toBe(operationId);
+		expect((await reopened.getValue(storedValues.operationMeta(operationId), BACKGROUND_CONTEXT))?.value).toEqual(
+			meta,
+		);
+		expect((await reopened.getValue(storedValues.operationState(operationId), BACKGROUND_CONTEXT))?.value).toEqual(
+			updatedState,
+		);
 	});
 
 	it("uses owned state after creation and starts no option callbacks", async () => {
@@ -758,34 +834,41 @@ describe("runtime2 AgentHarness", () => {
 		const forbidden = vi.fn(() => {
 			throw new Error("effect started");
 		});
-		const { harness } = await createAgentHarness({
-			...modelOptions(session),
-			toolContext: forbidden,
-			systemPrompt: forbidden,
-			toProviderMessages: forbidden,
-			entryProjectors: { forbidden },
-		});
+		const { harness } = await createAgentHarness(
+			{
+				...modelOptions(session),
+				toolContext: forbidden,
+				systemPrompt: forbidden,
+				toProviderMessages: forbidden,
+				entryProjectors: { forbidden },
+			},
+			BACKGROUND_CONTEXT,
+		);
 		const mutate = vi.spyOn(session, "mutate");
 		const getValue = vi.spyOn(session, "getValue");
 		const scanValues = vi.spyOn(session, "scanValues");
 		const readList = vi.spyOn(session, "readList");
 
-		expect(await harness.lane("main")).toBe(harness);
-		expect(await harness.lanes()).toHaveLength(1);
-		expect(await harness.getLeafId()).toBeNull();
-		expect(await harness.getLastResult()).toBeUndefined();
+		expect(await harness.lane("main", BACKGROUND_CONTEXT)).toBe(harness);
+		expect(await harness.lanes(BACKGROUND_CONTEXT)).toHaveLength(1);
+		expect(await harness.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
+		expect(await harness.getLastResult(BACKGROUND_CONTEXT)).toBeUndefined();
 		expect(forbidden).not.toHaveBeenCalled();
 		expect(mutate).not.toHaveBeenCalled();
 		expect(getValue).not.toHaveBeenCalled();
 		expect(scanValues).not.toHaveBeenCalled();
 		expect(readList).not.toHaveBeenCalled();
-		expect(await harness.getTools()).toEqual([]);
-		expect(await harness.getResources()).toEqual({});
-		expect(await harness.getStreamOptions()).toEqual({});
-		expect(await harness.getRetryPolicy()).toEqual({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 });
-		expect(await harness.getCompactionSettings()).toBe(DEFAULT_COMPACTION_SETTINGS);
-		expect(await harness.getSteeringMode()).toBe("all");
-		expect(await harness.getFollowUpMode()).toBe("all");
+		expect(await harness.getTools(BACKGROUND_CONTEXT)).toEqual([]);
+		expect(await harness.getResources(BACKGROUND_CONTEXT)).toEqual({});
+		expect(await harness.getStreamOptions(BACKGROUND_CONTEXT)).toEqual({});
+		expect(await harness.getRetryPolicy(BACKGROUND_CONTEXT)).toEqual({
+			enabled: true,
+			maxRetries: 3,
+			baseDelayMs: 1_000,
+		});
+		expect(await harness.getCompactionSettings(BACKGROUND_CONTEXT)).toBe(DEFAULT_COMPACTION_SETTINGS);
+		expect(await harness.getSteeringMode(BACKGROUND_CONTEXT)).toBe("all");
+		expect(await harness.getFollowUpMode(BACKGROUND_CONTEXT)).toBe("all");
 	});
 
 	it("rejects append during a structural operation without faulting", async () => {
@@ -801,21 +884,21 @@ describe("runtime2 AgentHarness", () => {
 			phase: { kind: "ready_to_commit" },
 		};
 		await installOperation(session, meta, state);
-		const { harness, suspended } = await createAgentHarness(modelOptions(session));
+		const { harness, suspended } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 
 		expect(suspended).toEqual([{ lane: "main", operationId, kind: "navigation", startedAt: 1, reason: "crash" }]);
-		await expect(harness.sessionTree.appendMessage({ role: "user", content: "later", timestamp: 2 })).rejects.toThrow(
-			`Cannot append while structural operation ${operationId} is active`,
-		);
-		expect(await harness.lanes()).toHaveLength(1);
-		await harness.setThinkingLevel("high");
+		await expect(
+			harness.sessionTree.appendMessage({ role: "user", content: "later", timestamp: 2 }, BACKGROUND_CONTEXT),
+		).rejects.toThrow(`Cannot append while structural operation ${operationId} is active`);
+		expect(await harness.lanes(BACKGROUND_CONTEXT)).toHaveLength(1);
+		await harness.setThinkingLevel("high", BACKGROUND_CONTEXT);
 	});
 
 	it("faults queued lane work before releasing a failed mutation", async () => {
 		const { session, storage } = await createFailingSession();
-		const { harness } = await createAgentHarness(modelOptions(session));
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
-		unwrap(await harness.createLane("worker", null));
+		unwrap(await harness.createLane("worker", null, BACKGROUND_CONTEXT));
 		const worker = harness.lanesByName.get("worker");
 		if (worker === undefined) throw new Error("missing runtime2 worker lane");
 		const initialConfiguration = worker.state.configuration;
@@ -824,8 +907,8 @@ describe("runtime2 AgentHarness", () => {
 		harness.events.on("config_update", configUpdate);
 		const failure = new Error("commit failed");
 		storage.failure = failure;
-		const failed = worker.setThinkingLevel("high");
-		const queued = worker.setActiveTools(["read"]);
+		const failed = worker.setThinkingLevel("high", BACKGROUND_CONTEXT);
+		const queued = worker.setActiveTools(["read"], BACKGROUND_CONTEXT);
 
 		let rejected: unknown;
 		try {
@@ -840,28 +923,36 @@ describe("runtime2 AgentHarness", () => {
 		expect(await faultEvent).toMatchObject({ type: "fault", code: "harness_fault" });
 		expect(configUpdate).not.toHaveBeenCalled();
 		await expect(queued).rejects.toBe(rejected);
-		await expect(harness.getLeafId()).rejects.toBe(rejected);
-		await expect(worker.getThinkingLevel()).rejects.toBe(rejected);
-		await expect(worker.inspectExecution()).rejects.toBe(rejected);
-		await expect(harness.getTools()).rejects.toBe(rejected);
-		await expect(harness.setResources({})).rejects.toBe(rejected);
-		expect(harness.fault(new Error("later"))).toBe(rejected);
+		await expect(harness.getLeafId(BACKGROUND_CONTEXT)).rejects.toBe(rejected);
+		await expect(worker.getThinkingLevel(BACKGROUND_CONTEXT)).rejects.toBe(rejected);
+		await expect(worker.inspectExecution(BACKGROUND_CONTEXT)).rejects.toBe(rejected);
+		await expect(harness.getTools(BACKGROUND_CONTEXT)).rejects.toBe(rejected);
+		await expect(harness.setResources({}, BACKGROUND_CONTEXT)).rejects.toBe(rejected);
+		expect(harness.fault(new Error("later"), BACKGROUND_CONTEXT)).toBe(rejected);
 		expect(worker.state.configuration).toBe(initialConfiguration);
-		expect((await session.getValue(storedValues.laneConfig("worker")))?.value).toEqual(initialConfiguration);
-		await harness.close();
+		expect((await session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT))?.value).toEqual(
+			initialConfiguration,
+		);
+		await harness.close(BACKGROUND_CONTEXT);
 	});
 
 	it("wraps initialization invariant failures as harness faults", async () => {
 		const session = await createSession();
-		await session.mutate("main", (mutator) =>
-			mutator.commit([
-				storedValues.setValue(storedValues.laneState("main"), {
-					currentOperationId: session.idGenerator.next(),
-					pendingNextRun: [],
-				}),
-			]),
+		await session.mutate(
+			"main",
+			(mutator) =>
+				mutator.commit(
+					[
+						storedValues.setValue(storedValues.laneState("main"), {
+							currentOperationId: session.idGenerator.next(),
+							pendingNextRun: [],
+						}),
+					],
+					BACKGROUND_CONTEXT,
+				),
+			BACKGROUND_CONTEXT,
 		);
 
-		await expect(createAgentHarness(modelOptions(session))).rejects.toBeInstanceOf(HarnessFault);
+		await expect(createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(HarnessFault);
 	});
 });

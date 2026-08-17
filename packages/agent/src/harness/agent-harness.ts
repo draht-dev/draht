@@ -15,6 +15,7 @@ import type { TelemetryContext } from "@draht/telemetry";
 import type { AgentMessage, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
 import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
+import type { Context } from "./context.ts";
 import { type Result, TaggedError } from "./result.ts";
 import { createAgentHarness } from "./runtime2/index.ts";
 import type {
@@ -499,7 +500,10 @@ export type HarnessEvent =
 	| (HandlerErrorPayload & ({ lane: string; recovery?: true } | { lane?: never; recovery?: never }));
 
 export type HarnessEventType = HarnessEvent["type"];
-export type EventListener<TEvent extends HarnessEvent = HarnessEvent> = (event: TEvent) => void | Promise<void>;
+export type EventListener<TEvent extends HarnessEvent = HarnessEvent> = (
+	event: TEvent,
+	context: Context,
+) => void | Promise<void>;
 
 export interface Events {
 	on<TType extends HarnessEventType>(
@@ -591,6 +595,7 @@ export type HookInvocation<TName extends HookName> = HookMap[TName]["event"] & {
 };
 export type HookHandler<TName extends HookName> = (
 	event: HookInvocation<TName>,
+	context: Context,
 ) => Promise<HookMap[TName]["result"]> | HookMap[TName]["result"];
 
 export interface Hooks {
@@ -606,8 +611,8 @@ export interface AgentHarnessOptions<TContext extends object | undefined = objec
 	thinkingLevel?: ThinkingLevel;
 	activeToolNames?: string[];
 	tools?: AgentHarnessTool<TContext>[];
-	toolContext?: TContext | (() => TContext | Promise<TContext>);
-	systemPrompt?: string | ((context: TContext) => string | Promise<string>);
+	toolContext?: TContext | ((context: Context) => TContext | Promise<TContext>);
+	systemPrompt?: string | ((toolContext: TContext, context: Context) => string | Promise<string>);
 	resources?: Resources;
 	streamOptions?: AgentHarnessStreamOptions;
 	retry?: RetryPolicy;
@@ -616,74 +621,87 @@ export interface AgentHarnessOptions<TContext extends object | undefined = objec
 	followUpMode?: QueueMode;
 	toolExecution?: "sequential" | "parallel";
 	drive?: "automatic" | "manual";
-	toProviderMessages?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+	toProviderMessages?: (messages: AgentMessage[], context: Context) => Message[] | Promise<Message[]>;
 	entryProjectors?: Record<string, EntryProjector>;
 	telemetryContext?: TelemetryContext;
 }
 
 export interface AgentLane {
 	readonly name: string;
-	getLeafId(): Promise<string | null>;
-	getLastResult(): Promise<LaneLastResult | undefined>;
-	accept(request: OperationRequest): Promise<OperationAdmissionResult>;
-	drive(options: DriveOptions): Promise<DriveResult>;
-	requestAbort(operationId: string): Promise<AbortRequestResult>;
-	inspectExecution(): Promise<LaneExecutionInfo>;
-	prompt(text: string, images?: ImageContent[]): Promise<RunResult>;
-	prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
-	skill(name: string, additionalInstructions?: string): Promise<RunResult>;
-	promptFromTemplate(name: string, args?: string[]): Promise<RunResult>;
-	compact(options?: { customInstructions?: string }): Promise<CompactionResult>;
-	navigateTree(targetId: string | null, options?: NavigateOptions): Promise<NavigationResult>;
-	resume(): Promise<ResumeResult>;
-	abort(): Promise<AbortResult>;
-	steer(message: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult>;
-	followUp(message: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult>;
-	nextRun(message: string | AgentMessage, images?: ImageContent[]): Promise<NextRunResult>;
-	cancelQueued(entryId: string): Promise<CancelQueuedResult>;
-	recordUsage(usage: Usage, options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult>;
-	waitForIdle(): Promise<void>;
-	runWhenIdle(callback: () => void | Promise<void>): Promise<void>;
-	peekAction(): Promise<ActionInfo | undefined>;
-	executeAction(): Promise<ActionInfo | undefined>;
-	runToCompletion(): Promise<void>;
-	getModel(): Promise<Model<Api> | undefined>;
-	setModel(model: Model<Api>): Promise<void>;
-	getThinkingLevel(): Promise<ThinkingLevel>;
-	setThinkingLevel(level: ThinkingLevel): Promise<void>;
-	getActiveTools(): Promise<string[]>;
-	setActiveTools(names: string[]): Promise<void>;
+	getLeafId(context: Context): Promise<string | null>;
+	getLastResult(context: Context): Promise<LaneLastResult | undefined>;
+	accept(request: OperationRequest, context: Context): Promise<OperationAdmissionResult>;
+	drive(options: DriveOptions, context: Context): Promise<DriveResult>;
+	requestAbort(operationId: string, context: Context): Promise<AbortRequestResult>;
+	inspectExecution(context: Context): Promise<LaneExecutionInfo>;
+	prompt(text: string, images: ImageContent[] | undefined, context: Context): Promise<RunResult>;
+	prompt(message: AgentMessage | AgentMessage[], context: Context): Promise<RunResult>;
+	skill(name: string, additionalInstructions: string | undefined, context: Context): Promise<RunResult>;
+	promptFromTemplate(name: string, args: string[] | undefined, context: Context): Promise<RunResult>;
+	compact(options: { customInstructions?: string } | undefined, context: Context): Promise<CompactionResult>;
+	navigateTree(
+		targetId: string | null,
+		options: NavigateOptions | undefined,
+		context: Context,
+	): Promise<NavigationResult>;
+	resume(context: Context): Promise<ResumeResult>;
+	abort(context: Context): Promise<AbortResult>;
+	steer(message: string | AgentMessage, images: ImageContent[] | undefined, context: Context): Promise<QueueResult>;
+	followUp(message: string | AgentMessage, images: ImageContent[] | undefined, context: Context): Promise<QueueResult>;
+	nextRun(
+		message: string | AgentMessage,
+		images: ImageContent[] | undefined,
+		context: Context,
+	): Promise<NextRunResult>;
+	cancelQueued(entryId: string, context: Context): Promise<CancelQueuedResult>;
+	recordUsage(
+		usage: Usage,
+		options: { entryId?: string; details?: JsonValue } | undefined,
+		context: Context,
+	): Promise<RecordUsageResult>;
+	waitForIdle(context: Context): Promise<void>;
+	runWhenIdle(callback: (context: Context) => void | Promise<void>, context: Context): Promise<void>;
+	peekAction(context: Context): Promise<ActionInfo | undefined>;
+	executeAction(context: Context): Promise<ActionInfo | undefined>;
+	runToCompletion(context: Context): Promise<void>;
+	getModel(context: Context): Promise<Model<Api> | undefined>;
+	setModel(model: Model<Api>, context: Context): Promise<void>;
+	getThinkingLevel(context: Context): Promise<ThinkingLevel>;
+	setThinkingLevel(level: ThinkingLevel, context: Context): Promise<void>;
+	getActiveTools(context: Context): Promise<string[]>;
+	setActiveTools(names: string[], context: Context): Promise<void>;
 	readonly sessionTree: SessionTree;
-	watch(): Promise<WatchHandle<LaneSnapshot>>;
+	watch(context: Context): Promise<WatchHandle<LaneSnapshot>>;
 }
 
 export interface AgentHarness<TContext extends object | undefined = object | undefined> extends AgentLane {
-	lane(name: string): Promise<AgentLane | undefined>;
-	createLane(name: string, at: string | null): Promise<CreateLaneResult>;
-	lanes(): Promise<LaneInfo[]>;
-	getTools(): Promise<AgentHarnessTool<TContext>[]>;
-	setTools(tools: AgentHarnessTool<TContext>[]): Promise<void>;
-	getResources(): Promise<Resources>;
-	setResources(resources: Resources): Promise<void>;
-	getStreamOptions(): Promise<AgentHarnessStreamOptions>;
-	setStreamOptions(options: AgentHarnessStreamOptions): Promise<void>;
-	getRetryPolicy(): Promise<RetryPolicy>;
-	setRetryPolicy(policy: RetryPolicy): Promise<void>;
-	getCompactionSettings(): Promise<CompactionSettings>;
-	setCompactionSettings(settings: CompactionSettings): Promise<void>;
-	getSteeringMode(): Promise<QueueMode>;
-	setSteeringMode(mode: QueueMode): Promise<void>;
-	getFollowUpMode(): Promise<QueueMode>;
-	setFollowUpMode(mode: QueueMode): Promise<void>;
-	watchSession(): Promise<WatchHandle<SessionSnapshot>>;
+	lane(name: string, context: Context): Promise<AgentLane | undefined>;
+	createLane(name: string, at: string | null, context: Context): Promise<CreateLaneResult>;
+	lanes(context: Context): Promise<LaneInfo[]>;
+	getTools(context: Context): Promise<AgentHarnessTool<TContext>[]>;
+	setTools(tools: AgentHarnessTool<TContext>[], context: Context): Promise<void>;
+	getResources(context: Context): Promise<Resources>;
+	setResources(resources: Resources, context: Context): Promise<void>;
+	getStreamOptions(context: Context): Promise<AgentHarnessStreamOptions>;
+	setStreamOptions(options: AgentHarnessStreamOptions, context: Context): Promise<void>;
+	getRetryPolicy(context: Context): Promise<RetryPolicy>;
+	setRetryPolicy(policy: RetryPolicy, context: Context): Promise<void>;
+	getCompactionSettings(context: Context): Promise<CompactionSettings>;
+	setCompactionSettings(settings: CompactionSettings, context: Context): Promise<void>;
+	getSteeringMode(context: Context): Promise<QueueMode>;
+	setSteeringMode(mode: QueueMode, context: Context): Promise<void>;
+	getFollowUpMode(context: Context): Promise<QueueMode>;
+	setFollowUpMode(mode: QueueMode, context: Context): Promise<void>;
+	watchSession(context: Context): Promise<WatchHandle<SessionSnapshot>>;
 	readonly hooks: Hooks;
 	readonly events: Events;
-	close(): Promise<void>;
+	close(context: Context): Promise<void>;
 }
 
 export interface AgentHarnessConstructor {
 	create<TContext extends object | undefined = object | undefined>(
 		options: AgentHarnessOptions<TContext>,
+		context: Context,
 	): Promise<{ harness: AgentHarness<TContext>; suspended: SuspendedOperation[] }>;
 }
 

@@ -1,3 +1,4 @@
+import type { Context } from "../../context.ts";
 import type { FileError, FileSystem, Result } from "../../types.ts";
 import {
 	type CommittedEntryWrite,
@@ -140,7 +141,11 @@ export class JsonlStorage implements Storage {
 		this.header = header;
 	}
 
-	static async create(options: JsonlStorageOptions, header: JsonlStorageHeader): Promise<JsonlStorage> {
+	static async create(
+		options: JsonlStorageOptions,
+		header: JsonlStorageHeader,
+		_context: Context,
+	): Promise<JsonlStorage> {
 		fileValue(
 			await options.fileSystem.writeFile(options.path, `${JSON.stringify(header)}\n`),
 			`Failed to create JSONL storage ${options.path}`,
@@ -153,15 +158,16 @@ export class JsonlStorage implements Storage {
 		options: JsonlStorageOptions,
 		header: JsonlStorageHeader,
 		snapshot: JsonlSnapshotContents,
+		context: Context,
 	): Promise<JsonlStorage> {
 		const writes = snapshotWrites(snapshot);
 		const snapshotHeader = { ...header, nextSeq: snapshot.nextSeq };
 		const content = `${[JSON.stringify(snapshotHeader), ...writes.map((write) => JSON.stringify(write))].join("\n")}\n`;
 		await publishFileAtomically(options.fileSystem, options.path, content);
-		return JsonlStorage.open(options);
+		return JsonlStorage.open(options, context);
 	}
 
-	static async open(options: JsonlStorageOptions): Promise<JsonlStorage> {
+	static async open(options: JsonlStorageOptions, _context: Context): Promise<JsonlStorage> {
 		const content = fileValue(
 			await options.fileSystem.readTextFile(options.path),
 			`Failed to read JSONL storage ${options.path}`,
@@ -187,7 +193,7 @@ export class JsonlStorage implements Storage {
 		return storage;
 	}
 
-	async commit(writes: Write[]): Promise<CommitResult> {
+	async commit(writes: Write[], _context: Context): Promise<CommitResult> {
 		if (this.state !== "open") throw new Error("JsonlStorage is closed");
 		const result = this.commitQueue.then(() => this.applyCommit(writes));
 		this.commitQueue = result.then(
@@ -212,53 +218,57 @@ export class JsonlStorage implements Storage {
 		return prepared.result;
 	}
 
-	getEntries(ids: string[]): Promise<Map<string, Entry>> {
+	getEntries(ids: string[], _context: Context): Promise<Map<string, Entry>> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
 		return Promise.resolve(this.storageState.getEntries(ids));
 	}
 
-	getValue<T>(address: Value<T>): Promise<StoredValue<T> | undefined> {
+	getValue<T>(address: Value<T>, _context: Context): Promise<StoredValue<T> | undefined> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
 		return Promise.resolve(this.storageState.getValue(address));
 	}
 
-	scanValues<T>(prefix: Value<T>): Promise<StoredValue<T>[]> {
+	scanValues<T>(prefix: Value<T>, _context: Context): Promise<StoredValue<T>[]> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
 		return Promise.resolve(this.storageState.scanValues(prefix));
 	}
 
-	async readList<T>(address: ValueList<T>, options?: ListReadOptions): Promise<ListElement<T>[]> {
+	async readList<T>(
+		address: ValueList<T>,
+		options: ListReadOptions | undefined,
+		_context: Context,
+	): Promise<ListElement<T>[]> {
 		if (this.state !== "open") throw new Error("JsonlStorage is closed");
 		return this.storageState.readList(address, options);
 	}
 
-	async scanBranch(query: StorageBranchScan): Promise<Entry[]> {
+	async scanBranch(query: StorageBranchScan, _context: Context): Promise<Entry[]> {
 		if (this.state !== "open") throw new Error("JsonlStorage is closed");
 		return this.storageState.scanBranch(query);
 	}
 
-	async scanBranchStructure(query: StorageBranchScan): Promise<EntryStructure[]> {
+	async scanBranchStructure(query: StorageBranchScan, _context: Context): Promise<EntryStructure[]> {
 		if (this.state !== "open") throw new Error("JsonlStorage is closed");
 		return this.storageState.scanBranchStructure(query);
 	}
 
-	scanEntries(query: EntryScan): Promise<Entry[]> {
+	scanEntries(query: EntryScan, _context: Context): Promise<Entry[]> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
 		return Promise.resolve(this.storageState.scanEntries(query));
 	}
 
-	scanUsage(query: UsageScan): Promise<UsageRow[]> {
+	scanUsage(query: UsageScan, _context: Context): Promise<UsageRow[]> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
 		return Promise.resolve(this.storageState.scanUsage(query));
 	}
 
-	getStats(): Promise<SessionStats> {
+	getStats(_context: Context): Promise<SessionStats> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
 		return Promise.resolve(this.storageState.getStats());
 	}
 
 	/** Capture the current entries and values at one serialized boundary between commits. */
-	snapshot(): Promise<{
+	snapshot(_context: Context): Promise<{
 		entries: Entry[];
 		scalarValues: StoredValue<unknown>[];
 		listValues: StorageStateSnapshot["listValues"];
@@ -279,7 +289,7 @@ export class JsonlStorage implements Storage {
 		return result;
 	}
 
-	close(): Promise<void> {
+	close(_context: Context): Promise<void> {
 		if (this.closePromise !== undefined) return this.closePromise;
 		this.state = "closing";
 		this.closePromise = this.commitQueue.then(() => {

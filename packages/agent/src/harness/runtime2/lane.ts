@@ -1,5 +1,5 @@
-import type { Api, Model, Models } from "@draht/ai";
-import type { ThinkingLevel } from "../../types.ts";
+import type { Api, ImageContent, Model, Models } from "@draht/ai";
+import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import type {
 	AgentLane,
 	HarnessEvent,
@@ -7,6 +7,7 @@ import type {
 	LaneExecutionInfo,
 	SuspendedOperation,
 } from "../agent-harness.ts";
+import type { Context } from "../context.ts";
 import { insertEntry } from "../session/commit.ts";
 import { SessionPendingAssistantMessageError } from "../session/session.ts";
 import type {
@@ -29,8 +30,8 @@ import {
 } from "../session/values.ts";
 import { type LaneState, SliceNotImplemented } from "./types.ts";
 
-type EventHandler = (event: HarnessEvent) => Promise<void>;
-type FaultHandler = (cause: unknown) => Error;
+type EventHandler = (event: HarnessEvent, context: Context) => Promise<void>;
+type FaultHandler = (cause: unknown, context: Context) => Error;
 type Synchronous<TResult> = TResult extends PromiseLike<unknown> ? never : TResult;
 
 type LaneCommand<TResult> =
@@ -78,14 +79,14 @@ export class Lane implements AgentLane {
 		this.sessionView = session.view(name);
 		this.sessionTree = {
 			...this.sessionView,
-			getLeafId: () => this.getLeafId(),
-			setName: (name) => this.setName(name),
-			setLabel: (targetId, label) => this.setLabel(targetId, label),
-			findEntriesOnBranch: (query) => this.findEntriesOnBranch(query),
-			findEntryOnBranch: (query) => this.findEntryOnBranch(query),
-			appendMessage: (message) => this.append({ type: "message", payload: message }),
-			appendCustomEntry: (customType, data) =>
-				this.append({ type: "custom", customType, ...(data === undefined ? {} : { payload: data }) }),
+			getLeafId: (context) => this.getLeafId(context),
+			setName: (name, context) => this.setName(name, context),
+			setLabel: (targetId, label, context) => this.setLabel(targetId, label, context),
+			findEntriesOnBranch: (query, context) => this.findEntriesOnBranch(query, context),
+			findEntryOnBranch: (query, context) => this.findEntryOnBranch(query, context),
+			appendMessage: (message, context) => this.append({ type: "message", payload: message }, context),
+			appendCustomEntry: (customType, data, context) =>
+				this.append({ type: "custom", customType, ...(data === undefined ? {} : { payload: data }) }, context),
 		};
 		this.state = state;
 		this.onFault = onFault;
@@ -93,12 +94,12 @@ export class Lane implements AgentLane {
 		this.suspension = suspension;
 	}
 
-	async getLeafId(): Promise<string | null> {
+	async getLeafId(_context: Context): Promise<string | null> {
 		this.assertOpen();
 		return this.state.leafId;
 	}
 
-	async getLastResult(): Promise<LaneLastResult | undefined> {
+	async getLastResult(_context: Context): Promise<LaneLastResult | undefined> {
 		this.assertOpen();
 		return this.state.lastResult;
 	}
@@ -121,36 +122,47 @@ export class Lane implements AgentLane {
 	 * timers, event handlers, or wait for task completion here; perform those after `command()` returns.
 	 */
 	async command<TResult>(
-		plan: (state: LaneState, reader: SessionReader) => LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
+		plan: (
+			state: LaneState,
+			reader: SessionReader,
+			context: Context,
+		) => LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
+		context: Context,
 	): Promise<TResult> {
 		this.assertOpen();
 		let outcome: LaneCommandOutcome<TResult>;
 		try {
-			outcome = await this.session.mutate(this.name, async (mutator) => {
-				this.assertOpen();
-				try {
-					const decision = await plan(this.state, mutator);
-					switch (decision.kind) {
-						case "return":
-							return { kind: "return", result: decision.result };
-						case "reject":
-							return { kind: "reject", error: decision.error };
-						case "commit": {
-							const commit = await mutator.commit(decision.writes);
-							this.state = decision.next;
-							if (this.suspension?.operationId !== decision.next.operation?.meta.operationId) {
-								this.suspension = undefined;
+			outcome = await this.session.mutate(
+				this.name,
+				async (mutator) => {
+					this.assertOpen();
+					try {
+						const decision = await plan(this.state, mutator, context);
+						switch (decision.kind) {
+							case "return":
+								return { kind: "return", result: decision.result };
+							case "reject":
+								return { kind: "reject", error: decision.error };
+							case "commit": {
+								const commit = await mutator.commit(decision.writes, context);
+								this.state = decision.next;
+								if (this.suspension?.operationId !== decision.next.operation?.meta.operationId) {
+									this.suspension = undefined;
+								}
+								const result = decision.materialize(commit);
+								if (isPromiseLike(result)) {
+									throw new TypeError("Lane command materialize() must be synchronous");
+								}
+								return { kind: "return", result };
 							}
-							const result = decision.materialize(commit);
-							if (isPromiseLike(result)) throw new TypeError("Lane command materialize() must be synchronous");
-							return { kind: "return", result };
 						}
+					} catch (error) {
+						if (this.closedError !== undefined) throw this.closedError;
+						throw this.onFault(error, context);
 					}
-				} catch (error) {
-					if (this.closedError !== undefined) throw this.closedError;
-					throw this.onFault(error);
-				}
-			});
+				},
+				context,
+			);
 		} catch (error) {
 			if (this.closedError !== undefined) throw this.closedError;
 			throw error;
@@ -159,19 +171,19 @@ export class Lane implements AgentLane {
 		return outcome.result;
 	}
 
-	async accept(): Promise<never> {
+	async accept(..._args: Parameters<AgentLane["accept"]>): Promise<never> {
 		throw new SliceNotImplemented("accept");
 	}
 
-	async drive(): Promise<never> {
+	async drive(..._args: Parameters<AgentLane["drive"]>): Promise<never> {
 		throw new SliceNotImplemented("drive");
 	}
 
-	async requestAbort(): Promise<never> {
+	async requestAbort(..._args: Parameters<AgentLane["requestAbort"]>): Promise<never> {
 		throw new SliceNotImplemented("requestAbort");
 	}
 
-	async inspectExecution(): Promise<LaneExecutionInfo> {
+	async inspectExecution(_context: Context): Promise<LaneExecutionInfo> {
 		this.assertOpen();
 		const operation = this.state.operation;
 		if (operation === null) {
@@ -201,80 +213,84 @@ export class Lane implements AgentLane {
 		};
 	}
 
-	async prompt(): Promise<never> {
+	async prompt(
+		..._args:
+			| [text: string, images: ImageContent[] | undefined, context: Context]
+			| [message: AgentMessage | AgentMessage[], context: Context]
+	): Promise<never> {
 		throw new SliceNotImplemented("prompt");
 	}
 
-	async skill(): Promise<never> {
+	async skill(..._args: Parameters<AgentLane["skill"]>): Promise<never> {
 		throw new SliceNotImplemented("skill");
 	}
 
-	async promptFromTemplate(): Promise<never> {
+	async promptFromTemplate(..._args: Parameters<AgentLane["promptFromTemplate"]>): Promise<never> {
 		throw new SliceNotImplemented("promptFromTemplate");
 	}
 
-	async compact(): Promise<never> {
+	async compact(..._args: Parameters<AgentLane["compact"]>): Promise<never> {
 		throw new SliceNotImplemented("compact");
 	}
 
-	async navigateTree(): Promise<never> {
+	async navigateTree(..._args: Parameters<AgentLane["navigateTree"]>): Promise<never> {
 		throw new SliceNotImplemented("navigateTree");
 	}
 
-	async resume(): Promise<never> {
+	async resume(..._args: Parameters<AgentLane["resume"]>): Promise<never> {
 		throw new SliceNotImplemented("resume");
 	}
 
-	async abort(): Promise<never> {
+	async abort(..._args: Parameters<AgentLane["abort"]>): Promise<never> {
 		throw new SliceNotImplemented("abort");
 	}
 
-	async steer(): Promise<never> {
+	async steer(..._args: Parameters<AgentLane["steer"]>): Promise<never> {
 		throw new SliceNotImplemented("steer");
 	}
 
-	async followUp(): Promise<never> {
+	async followUp(..._args: Parameters<AgentLane["followUp"]>): Promise<never> {
 		throw new SliceNotImplemented("followUp");
 	}
 
-	async nextRun(): Promise<never> {
+	async nextRun(..._args: Parameters<AgentLane["nextRun"]>): Promise<never> {
 		throw new SliceNotImplemented("nextRun");
 	}
 
-	async cancelQueued(): Promise<never> {
+	async cancelQueued(..._args: Parameters<AgentLane["cancelQueued"]>): Promise<never> {
 		throw new SliceNotImplemented("cancelQueued");
 	}
 
-	async recordUsage(): Promise<never> {
+	async recordUsage(..._args: Parameters<AgentLane["recordUsage"]>): Promise<never> {
 		throw new SliceNotImplemented("recordUsage");
 	}
 
-	async waitForIdle(): Promise<never> {
+	async waitForIdle(..._args: Parameters<AgentLane["waitForIdle"]>): Promise<never> {
 		throw new SliceNotImplemented("waitForIdle");
 	}
 
-	async runWhenIdle(): Promise<never> {
+	async runWhenIdle(..._args: Parameters<AgentLane["runWhenIdle"]>): Promise<never> {
 		throw new SliceNotImplemented("runWhenIdle");
 	}
 
-	async peekAction(): Promise<never> {
+	async peekAction(..._args: Parameters<AgentLane["peekAction"]>): Promise<never> {
 		throw new SliceNotImplemented("peekAction");
 	}
 
-	async executeAction(): Promise<never> {
+	async executeAction(..._args: Parameters<AgentLane["executeAction"]>): Promise<never> {
 		throw new SliceNotImplemented("executeAction");
 	}
 
-	async runToCompletion(): Promise<never> {
+	async runToCompletion(..._args: Parameters<AgentLane["runToCompletion"]>): Promise<never> {
 		throw new SliceNotImplemented("runToCompletion");
 	}
 
-	async getModel(): Promise<Model<Api> | undefined> {
+	async getModel(_context: Context): Promise<Model<Api> | undefined> {
 		this.assertOpen();
 		return this.models.getModel(this.state.configuration.model.provider, this.state.configuration.model.modelId);
 	}
 
-	setModel(model: Model<Api>): Promise<void> {
+	setModel(model: Model<Api>, context: Context): Promise<void> {
 		return this.setConfiguration(
 			(configuration) => ({
 				...configuration,
@@ -286,15 +302,16 @@ export class Lane implements AgentLane {
 				previous: previous.model,
 				value: value.model,
 			}),
+			context,
 		);
 	}
 
-	async getThinkingLevel(): Promise<ThinkingLevel> {
+	async getThinkingLevel(_context: Context): Promise<ThinkingLevel> {
 		this.assertOpen();
 		return this.state.configuration.thinkingLevel;
 	}
 
-	setThinkingLevel(thinkingLevel: ThinkingLevel): Promise<void> {
+	setThinkingLevel(thinkingLevel: ThinkingLevel, context: Context): Promise<void> {
 		return this.setConfiguration(
 			(configuration) => ({ ...configuration, thinkingLevel }),
 			(previous, value) => ({
@@ -303,15 +320,16 @@ export class Lane implements AgentLane {
 				previous: previous.thinkingLevel,
 				value: value.thinkingLevel,
 			}),
+			context,
 		);
 	}
 
-	async getActiveTools(): Promise<string[]> {
+	async getActiveTools(_context: Context): Promise<string[]> {
 		this.assertOpen();
 		return this.state.configuration.activeToolNames;
 	}
 
-	setActiveTools(activeToolNames: string[]): Promise<void> {
+	setActiveTools(activeToolNames: string[], context: Context): Promise<void> {
 		return this.setConfiguration(
 			(configuration) => ({ ...configuration, activeToolNames }),
 			(previous, value) => ({
@@ -320,16 +338,18 @@ export class Lane implements AgentLane {
 				previous: previous.activeToolNames,
 				value: value.activeToolNames,
 			}),
+			context,
 		);
 	}
 
-	async watch(): Promise<never> {
+	async watch(..._args: Parameters<AgentLane["watch"]>): Promise<never> {
 		throw new SliceNotImplemented("watch");
 	}
 
 	private async setConfiguration(
 		update: (configuration: LaneState["configuration"]) => LaneState["configuration"],
 		event: (previous: LaneState["configuration"], value: LaneState["configuration"]) => LaneConfigEventPayload,
+		context: Context,
 	): Promise<void> {
 		const payload = await this.command((state) => {
 			const configuration = update(state.configuration);
@@ -339,31 +359,32 @@ export class Lane implements AgentLane {
 				next: { ...state, configuration },
 				materialize: () => event(state.configuration, configuration),
 			};
-		});
-		await this.onEvent({ ...payload, lane: this.name });
+		}, context);
+		await this.onEvent({ ...payload, lane: this.name }, context);
 	}
 
-	private async setName(name: string | undefined): Promise<void> {
-		await this.sessionView.setName(name);
-		await this.onEvent({ type: "value_update", value: "session_name", name });
+	private async setName(name: string | undefined, context: Context): Promise<void> {
+		await this.sessionView.setName(name, context);
+		await this.onEvent({ type: "value_update", value: "session_name", name }, context);
 	}
 
-	private async setLabel(targetId: string, label: string | undefined): Promise<void> {
-		await this.sessionView.setLabel(targetId, label);
-		await this.onEvent({ type: "value_update", value: "entry_label", targetId, label });
+	private async setLabel(targetId: string, label: string | undefined, context: Context): Promise<void> {
+		await this.sessionView.setLabel(targetId, label, context);
+		await this.onEvent({ type: "value_update", value: "entry_label", targetId, label }, context);
 	}
 
-	private async findEntriesOnBranch(query: BranchScan = {}): Promise<Entry[]> {
+	private async findEntriesOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry[]> {
+		query ??= {};
 		this.assertOpen();
 		const start = query.start ?? this.state.leafId;
-		return start === null ? [] : this.sessionView.findEntriesOnBranch({ ...query, start });
+		return start === null ? [] : this.sessionView.findEntriesOnBranch({ ...query, start }, context);
 	}
 
-	private async findEntryOnBranch(query: BranchScan = {}): Promise<Entry | undefined> {
-		return (await this.findEntriesOnBranch({ ...query, limit: 1 }))[0];
+	private async findEntryOnBranch(query: BranchScan | undefined, context: Context): Promise<Entry | undefined> {
+		return (await this.findEntriesOnBranch({ ...query, limit: 1 }, context))[0];
 	}
 
-	private append(pending: PendingEntry): Promise<string> {
+	private append(pending: PendingEntry, context: Context): Promise<string> {
 		this.assertOpen();
 		if (
 			pending.type === "message" &&
@@ -420,7 +441,7 @@ export class Lane implements AgentLane {
 				next: { ...state, operation: { meta: state.operation.meta, state: operationState } },
 				materialize: () => id,
 			};
-		});
+		}, context);
 	}
 
 	seal(error: Error): void {

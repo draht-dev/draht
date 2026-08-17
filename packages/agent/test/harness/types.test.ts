@@ -13,6 +13,7 @@ import type {
 	CancelQueuedResult,
 	CheckpointPhase,
 	CompactionState,
+	Context,
 	Control,
 	CustomEntry,
 	Deferred,
@@ -344,18 +345,30 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 	expectTypeOf<Parameters<Storage["scanBranch"]>[0]["start"]>().toEqualTypeOf<string>();
 	expectTypeOf<BranchScan["start"]>().toEqualTypeOf<string | undefined>();
 	expectTypeOf<Storage["commit"]>().toEqualTypeOf<
-		(transactionToCommit: Write[]) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
+		(
+			transactionToCommit: Write[],
+			context: Context,
+		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
 	>();
 	expectTypeOf<Session["mutate"]>().toEqualTypeOf<
-		<T>(lane: string, mutation: (mutator: SessionMutator) => T | Promise<T>) => Promise<T>
+		<T>(
+			lane: string,
+			mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
+			context: Context,
+		) => Promise<T>
 	>();
 	expectTypeOf<SessionMutator["commit"]>().toEqualTypeOf<
-		(transactionToCommit: Write[]) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
+		(
+			transactionToCommit: Write[],
+			context: Context,
+		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
 	>();
 	expectTypeOf<Session["createLane"]>().toEqualTypeOf<
-		(name: string, at: string | null, laneConfiguration: LaneConfiguration) => Promise<SessionTree>
+		(name: string, at: string | null, laneConfiguration: LaneConfiguration, context: Context) => Promise<SessionTree>
 	>();
-	expectTypeOf<SessionRepo["create"]>().toEqualTypeOf<(options: SessionCreateOptions) => Promise<Session>>();
+	expectTypeOf<SessionRepo["create"]>().toEqualTypeOf<
+		(options: SessionCreateOptions, context: Context) => Promise<Session>
+	>();
 	expectTypeOf<SessionSearchService["searchSessions"]>().toEqualTypeOf<
 		(query: SearchQuery) => Promise<SessionSearchHit[]>
 	>();
@@ -435,7 +448,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 		boolean | { window?: "15m" | "1h" | "24h" } | undefined
 	>();
 	expectTypeOf<EntryProjector>().toEqualTypeOf<
-		(entry: CustomEntry) => AgentMessage[] | undefined | Promise<AgentMessage[] | undefined>
+		(entry: CustomEntry, context: Context) => AgentMessage[] | undefined | Promise<AgentMessage[] | undefined>
 	>();
 	expectTypeOf<NonNullable<AgentHarnessOptions["entryProjectors"]>>().toEqualTypeOf<Record<string, EntryProjector>>();
 

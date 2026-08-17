@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@draht/ai";
 import { describe, expect, it } from "vitest";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { buildSessionContext } from "../../src/harness/session/context.ts";
 import type {
 	BranchSummaryEntry,
@@ -65,7 +66,12 @@ describe("session context projection", () => {
 			messageEntry("length", "deferred", 7, length),
 		];
 
-		expect(await buildSessionContext(entries)).toEqual([user, stopped, toolUse, length]);
+		expect(await buildSessionContext(entries, undefined, BACKGROUND_CONTEXT)).toEqual([
+			user,
+			stopped,
+			toolUse,
+			length,
+		]);
 	});
 
 	it("projects branch summaries in branch order", async () => {
@@ -82,7 +88,7 @@ describe("session context projection", () => {
 		};
 		const after = messageEntry("after", summary.id, 3, userMessage("after summary"));
 
-		expect(await buildSessionContext([before, summary, after])).toEqual([
+		expect(await buildSessionContext([before, summary, after], undefined, BACKGROUND_CONTEXT)).toEqual([
 			userMessage("before summary"),
 			{
 				role: "branchSummary",
@@ -114,7 +120,7 @@ describe("session context projection", () => {
 			fromHook: false,
 		};
 
-		expect(await buildSessionContext([compaction])).toEqual([
+		expect(await buildSessionContext([compaction], undefined, BACKGROUND_CONTEXT)).toEqual([
 			{ role: "compactionSummary", summary: "summary", tokensBefore: 100, timestamp: NOW },
 			user,
 			stopped,
@@ -149,7 +155,9 @@ describe("session context projection", () => {
 		};
 		const after = messageEntry("after", latest.id, 5, userMessage("after latest"));
 
-		expect(await buildSessionContext([beforeFirst, first, between, latest, after])).toEqual([
+		expect(
+			await buildSessionContext([beforeFirst, first, between, latest, after], undefined, BACKGROUND_CONTEXT),
+		).toEqual([
 			{ role: "compactionSummary", summary: "latest summary", tokensBefore: 200, timestamp: NOW },
 			userMessage("latest tail"),
 			userMessage("after latest"),
@@ -202,19 +210,23 @@ describe("session context projection", () => {
 		};
 		const projectedIds: string[] = [];
 
-		const messages = await buildSessionContext([oldCustom, compaction, syncCustom, omittedCustom, asyncCustom], {
-			entryProjectors: {
-				sync: (entry) => {
-					projectedIds.push(entry.id);
-					return [userMessage(`projected:${entry.id}`)];
-				},
-				async: async (entry) => {
-					await Promise.resolve();
-					projectedIds.push(entry.id);
-					return [userMessage(`projected:${entry.id}`)];
+		const messages = await buildSessionContext(
+			[oldCustom, compaction, syncCustom, omittedCustom, asyncCustom],
+			{
+				entryProjectors: {
+					sync: (entry) => {
+						projectedIds.push(entry.id);
+						return [userMessage(`projected:${entry.id}`)];
+					},
+					async: async (entry) => {
+						await Promise.resolve();
+						projectedIds.push(entry.id);
+						return [userMessage(`projected:${entry.id}`)];
+					},
 				},
 			},
-		});
+			BACKGROUND_CONTEXT,
+		);
 
 		expect(projectedIds).toEqual([syncCustom.id, asyncCustom.id]);
 		expect(messages).toEqual([
@@ -236,9 +248,13 @@ describe("session context projection", () => {
 		const failure = new Error("projector failed");
 
 		await expect(
-			buildSessionContext([custom], {
-				entryProjectors: { broken: async () => Promise.reject(failure) },
-			}),
+			buildSessionContext(
+				[custom],
+				{
+					entryProjectors: { broken: async () => Promise.reject(failure) },
+				},
+				BACKGROUND_CONTEXT,
+			),
 		).rejects.toBe(failure);
 	});
 });

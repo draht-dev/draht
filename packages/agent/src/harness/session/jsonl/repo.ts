@@ -175,7 +175,7 @@ export class JsonlSessionRepo
 		const sourceStorage = this.openSessions.get(this.sessionKey(source.cwd, source.id));
 		const sourceSnapshot = await (sourceStorage === undefined
 			? this.loadClosedForkSourceSnapshot(source, context)
-			: sourceStorage.snapshot(context));
+			: sourceStorage.captureForkSource(context));
 		const { cwd, id } = await this.resolveCreateDestination(source.cwd, options.id, createdAt, context);
 		const destinationKey = this.sessionKey(cwd, id);
 		if (this.openSessions.has(destinationKey) || this.pendingCreates.has(destinationKey)) {
@@ -197,7 +197,7 @@ export class JsonlSessionRepo
 				cwd,
 				parentSessionId: source.id,
 			};
-			storage = await JsonlStorage.createFromSnapshot(
+			storage = await JsonlStorage.createFromForkSnapshot(
 				{ fileSystem: this.fileSystem, path, now: this.now },
 				header,
 				snapshot,
@@ -312,7 +312,7 @@ export class JsonlSessionRepo
 	): Promise<ForkSourceSnapshot> {
 		const storage = await this.loadStorage(source, context);
 		try {
-			return await storage.snapshot(context);
+			return await storage.captureForkSource(context);
 		} finally {
 			await storage.close(context);
 		}

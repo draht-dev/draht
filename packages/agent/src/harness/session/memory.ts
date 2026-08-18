@@ -1,9 +1,14 @@
 import { uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../types.ts";
 import type { Context } from "../context.ts";
-import { createForkSnapshot } from "./fork.ts";
+import {
+	createForkSnapshot,
+	type ForkDestinationSnapshot,
+	type ForkSourceSnapshot,
+	forkSnapshotWrites,
+} from "./fork.ts";
 import { StorageBackedSession } from "./session.ts";
-import { StorageState, type StorageStateSnapshot } from "./storage-state.ts";
+import { StorageState } from "./storage-state.ts";
 import type {
 	BranchScan,
 	CommitResult,
@@ -121,21 +126,10 @@ export class MemoryStorage implements Storage {
 		return Promise.resolve(this.storageState.getStats());
 	}
 
-	/** Capture the current stores at one serialized boundary between commits. */
-	snapshot(_context: Context): Promise<{
-		entries: Entry[];
-		scalarValues: StoredValue<unknown>[];
-		listValues: StorageStateSnapshot["listValues"];
-	}> {
+	/** Capture the state needed to fork at one serialized boundary between commits. */
+	captureForkSource(_context: Context): Promise<ForkSourceSnapshot> {
 		if (this.state !== "open") return Promise.reject(new Error("MemoryStorage is closed"));
-		const result = this.commitQueue.then(() => {
-			const snapshot = this.storageState.snapshot();
-			return {
-				entries: [...snapshot.entries.values()].sort((left, right) => left.seq - right.seq),
-				scalarValues: snapshot.scalarValues,
-				listValues: snapshot.listValues,
-			};
-		});
+		const result = this.commitQueue.then(() => this.storageState.snapshotEntriesAndValues());
 		this.commitQueue = result.then(
 			() => undefined,
 			() => undefined,
@@ -152,9 +146,11 @@ export class MemoryStorage implements Storage {
 		return this.closePromise;
 	}
 
-	static fromSnapshot(options: MemoryStorageOptions, snapshot: StorageStateSnapshot): MemoryStorage {
+	static fromSnapshot(options: MemoryStorageOptions, snapshot: ForkDestinationSnapshot): MemoryStorage {
 		const storage = new MemoryStorage(options);
-		storage.storageState = new StorageState(snapshot);
+		const writes = forkSnapshotWrites(snapshot);
+		storage.storageState.validateCommitted(writes);
+		storage.storageState.applyValidated(writes);
 		return storage;
 	}
 }
@@ -433,7 +429,7 @@ export class MemorySessionRepo implements SessionRepo {
 		this.reserveId(id);
 
 		try {
-			const snapshot = createForkSnapshot(await sourceRecord.storage.snapshot(context), options);
+			const snapshot = createForkSnapshot(await sourceRecord.storage.captureForkSource(context), options);
 			const storage = MemoryStorage.fromSnapshot({ now: this.now }, snapshot);
 			const metadata: SessionMetadata = {
 				id,

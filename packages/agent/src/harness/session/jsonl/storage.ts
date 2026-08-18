@@ -1,5 +1,6 @@
 import type { Context } from "../../context.ts";
 import type { FileError, FileSystem, Result } from "../../types.ts";
+import { type ForkDestinationSnapshot, type ForkSourceSnapshot, forkSnapshotWrites } from "../fork.ts";
 import {
 	type CommittedEntryWrite,
 	type CommittedListAppendWrite,
@@ -9,7 +10,6 @@ import {
 	type CommittedValueSetWrite,
 	type CommittedWrite,
 	StorageState,
-	type StorageStateSnapshot,
 } from "../storage-state.ts";
 import type {
 	CommitResult,
@@ -79,36 +79,6 @@ function splitCompleteLines(content: string): { lines: string[]; torn: boolean }
 	return { lines: content.slice(0, lastNewline).split("\n"), torn: true };
 }
 
-type JsonlSnapshotContents = Pick<StorageStateSnapshot, "entries" | "scalarValues" | "listValues" | "nextSeq">;
-
-function snapshotWrites(snapshot: JsonlSnapshotContents): CommittedWrite[] {
-	const writes: CommittedWrite[] = [];
-	for (const entry of snapshot.entries.values()) writes.push({ kind: "entry", ...entry });
-	for (const stored of snapshot.scalarValues) {
-		writes.push({
-			kind: "value",
-			op: "set",
-			seq: stored.seq,
-			namespace: stored.address.namespace,
-			key: stored.address.key,
-			value: stored.value,
-		});
-	}
-	for (const stored of snapshot.listValues) {
-		for (const element of stored.elements) {
-			writes.push({
-				kind: "list",
-				op: "append",
-				seq: element.seq,
-				namespace: stored.address.namespace,
-				key: stored.address.key,
-				value: element.value,
-			});
-		}
-	}
-	return writes.sort((left, right) => left.seq - right.seq);
-}
-
 async function publishFileAtomically(
 	fileSystem: FileSystem,
 	destinationPath: string,
@@ -162,13 +132,13 @@ export class JsonlStorage implements Storage {
 	}
 
 	/** Atomically create storage from a complete prepared snapshot. */
-	static async createFromSnapshot(
+	static async createFromForkSnapshot(
 		options: JsonlStorageOptions,
 		header: JsonlStorageHeader,
-		snapshot: JsonlSnapshotContents,
+		snapshot: ForkDestinationSnapshot,
 		context: Context,
 	): Promise<JsonlStorage> {
-		const writes = snapshotWrites(snapshot);
+		const writes = forkSnapshotWrites(snapshot);
 		const snapshotHeader = { ...header, nextSeq: snapshot.nextSeq };
 		const content = `${[JSON.stringify(snapshotHeader), ...writes.map((write) => JSON.stringify(write))].join("\n")}\n`;
 		await publishFileAtomically(options.fileSystem, options.path, content, context);
@@ -276,21 +246,10 @@ export class JsonlStorage implements Storage {
 		return Promise.resolve(this.storageState.getStats());
 	}
 
-	/** Capture the current entries and values at one serialized boundary between commits. */
-	snapshot(_context: Context): Promise<{
-		entries: Entry[];
-		scalarValues: StoredValue<unknown>[];
-		listValues: StorageStateSnapshot["listValues"];
-	}> {
+	/** Capture the state needed to fork at one serialized boundary between commits. */
+	captureForkSource(_context: Context): Promise<ForkSourceSnapshot> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
-		const result = this.commitQueue.then(() => {
-			const snapshot = this.storageState.snapshot();
-			return {
-				entries: [...snapshot.entries.values()].sort((left, right) => left.seq - right.seq),
-				scalarValues: snapshot.scalarValues,
-				listValues: snapshot.listValues,
-			};
-		});
+		const result = this.commitQueue.then(() => this.storageState.snapshotEntriesAndValues());
 		this.commitQueue = result.then(
 			() => undefined,
 			() => undefined,

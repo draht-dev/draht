@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import * as sessionWrites from "../../src/harness/session/commit.ts";
+import type { ForkDestinationSnapshot } from "../../src/harness/session/fork.ts";
 import { JSONL_FORMAT_VERSION, JsonlStorage, type JsonlStorageHeader } from "../../src/harness/session/jsonl/index.ts";
-import type { StorageStateSnapshot } from "../../src/harness/session/storage-state.ts";
 import * as storedValues from "../../src/harness/session/values.ts";
 import { getOrThrow } from "../../src/harness/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
@@ -29,7 +29,7 @@ function stored<T>(address: storedValues.Value<T>, value: T, seq: number): store
 	};
 }
 
-function preparedSnapshot(): Pick<StorageStateSnapshot, "entries" | "scalarValues" | "listValues" | "nextSeq"> {
+function preparedSnapshot(): ForkDestinationSnapshot {
 	return {
 		entries: new Map([
 			[
@@ -50,12 +50,6 @@ function preparedSnapshot(): Pick<StorageStateSnapshot, "entries" | "scalarValue
 			stored(storedValues.sessionName, "forked", 4),
 		],
 		nextSeq: 9,
-		listValues: [
-			{
-				address: storedValues.list<unknown>("test.events"),
-				elements: [{ seq: 5, value: "event" }],
-			},
-		],
 	};
 }
 
@@ -63,7 +57,7 @@ describe("JsonlStorage snapshot creation", () => {
 	it("atomically publishes, advances, and reopens a prepared snapshot", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const options = { fileSystem, path: "fork.jsonl", now: () => NOW };
-		const storage = await JsonlStorage.createFromSnapshot(
+		const storage = await JsonlStorage.createFromForkSnapshot(
 			options,
 			header("fork"),
 			preparedSnapshot(),
@@ -93,9 +87,6 @@ describe("JsonlStorage snapshot creation", () => {
 			},
 		});
 		expect(await storage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual([]);
-		expect(await storage.readList(storedValues.list<string>("test.events"), undefined, BACKGROUND_CONTEXT)).toEqual([
-			{ seq: 5, value: "event" },
-		]);
 		expect(
 			(await storage.commit([storedValues.setValue(storedValues.sessionName, "updated")], BACKGROUND_CONTEXT))
 				.firstSeq,
@@ -115,7 +106,7 @@ describe("JsonlStorage snapshot creation", () => {
 		getOrThrow(await fileSystem.createDir("blocked.jsonl", undefined, BACKGROUND_CONTEXT));
 
 		await expect(
-			JsonlStorage.createFromSnapshot(
+			JsonlStorage.createFromForkSnapshot(
 				{ fileSystem, path: "blocked.jsonl", now: () => NOW },
 				header("blocked"),
 				preparedSnapshot(),
@@ -236,7 +227,7 @@ describe("JsonlStorage snapshots", () => {
 			],
 			BACKGROUND_CONTEXT,
 		);
-		const snapshot = storage.snapshot(BACKGROUND_CONTEXT);
+		const snapshot = storage.captureForkSource(BACKGROUND_CONTEXT);
 		const secondCommit = storage.commit(
 			[
 				sessionWrites.insertEntry({ id: "child", parentId: "root", type: "custom", customType: "child" }),

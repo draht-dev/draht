@@ -1,5 +1,4 @@
-import type { Usage } from "@draht/ai";
-import type { StorageStateSnapshot } from "./storage-state.ts";
+import type { CommittedWrite } from "./commit.ts";
 import type { Entry, ForkOptions } from "./types.ts";
 import {
 	entryLabel,
@@ -16,9 +15,14 @@ import {
 export interface ForkSourceSnapshot {
 	entries: Entry[];
 	scalarValues: StoredValue<unknown>[];
-	listValues: StorageStateSnapshot["listValues"];
 	/** False when a backend supplied only the requested branch rather than the full tree. */
 	entriesComplete?: boolean;
+}
+
+export interface ForkDestinationSnapshot {
+	entries: Map<string, Entry>;
+	scalarValues: StoredValue<unknown>[];
+	nextSeq: number;
 }
 
 function storedValuesInNamespace<T>(values: readonly StoredValue<unknown>[], address: Value<T>): StoredValue<T>[] {
@@ -31,19 +35,8 @@ function findStoredValue<T>(values: readonly StoredValue<unknown>[], address: Va
 	) as StoredValue<T> | undefined;
 }
 
-function emptyUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 /** Build the complete logical state for a forked destination session. */
-export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOptions): StorageStateSnapshot {
+export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOptions): ForkDestinationSnapshot {
 	const sourceEntries = new Map(source.entries.map((entry) => [entry.id, entry]));
 	const sourceLeaves = storedValuesInNamespace(source.scalarValues, laneLeaf(""));
 	validateForkSourceSnapshot(source, sourceEntries, sourceLeaves, options);
@@ -74,17 +67,23 @@ export function createForkSnapshot(source: ForkSourceSnapshot, options: ForkOpti
 		if (label !== undefined) store(entryLabel(entryId), label.value);
 	}
 
-	return {
-		entries,
-		scalarValues,
-		listValues: [],
-		usage: new Map(),
-		stats: {
-			messageCount: [...entries.values()].filter((entry) => entry.type === "message").length,
-			usage: emptyUsage(),
-		},
-		nextSeq,
-	};
+	return { entries, scalarValues, nextSeq };
+}
+
+export function forkSnapshotWrites(snapshot: ForkDestinationSnapshot): CommittedWrite[] {
+	const writes: CommittedWrite[] = [];
+	for (const entry of snapshot.entries.values()) writes.push({ kind: "entry", ...entry });
+	for (const stored of snapshot.scalarValues) {
+		writes.push({
+			kind: "value",
+			op: "set",
+			seq: stored.seq,
+			namespace: stored.address.namespace,
+			key: stored.address.key,
+			value: stored.value,
+		});
+	}
+	return writes.sort((left, right) => left.seq - right.seq);
 }
 
 function selectForkContents(

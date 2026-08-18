@@ -34,18 +34,9 @@ import {
 	value,
 } from "./values.ts";
 
-export interface StoredListSnapshot {
+interface StoredListSnapshot {
 	address: ValueList<unknown>;
 	elements: ListElement<unknown>[];
-}
-
-export interface StorageStateSnapshot {
-	entries: Map<string, Entry>;
-	scalarValues: StoredValue<unknown>[];
-	listValues: StoredListSnapshot[];
-	usage: Map<string, UsageRow>;
-	stats: SessionStats;
-	nextSeq: number;
 }
 
 function physicalKey(namespace: string, key: string): string {
@@ -84,24 +75,14 @@ export class StorageState {
 	private stats: SessionStats;
 	private nextSeq: number;
 
-	constructor(snapshot?: StorageStateSnapshot) {
-		this.entries = snapshot?.entries ?? new Map();
-		this.entriesBySeq = [...this.entries.values()].sort((left, right) => left.seq - right.seq);
-		this.scalarValues = new Map(
-			(snapshot?.scalarValues ?? []).map((stored) => [
-				physicalKey(stored.address.namespace, stored.address.key),
-				stored,
-			]),
-		);
-		this.listValues = new Map(
-			(snapshot?.listValues ?? []).map((stored) => [
-				physicalKey(stored.address.namespace, stored.address.key),
-				stored,
-			]),
-		);
-		this.usage = snapshot?.usage ?? new Map();
-		this.stats = snapshot?.stats ?? { messageCount: 0, usage: emptyUsage() };
-		this.nextSeq = snapshot?.nextSeq ?? 1;
+	constructor() {
+		this.entries = new Map();
+		this.entriesBySeq = [];
+		this.scalarValues = new Map();
+		this.listValues = new Map();
+		this.usage = new Map();
+		this.stats = { messageCount: 0, usage: emptyUsage() };
+		this.nextSeq = 1;
 	}
 
 	prepareCommit(writes: Write[], timestamp: number): PreparedCommit {
@@ -280,17 +261,10 @@ export class StorageState {
 		return this.stats;
 	}
 
-	snapshot(): StorageStateSnapshot {
+	snapshotEntriesAndValues(): { entries: Entry[]; scalarValues: StoredValue<unknown>[] } {
 		return {
-			entries: new Map(this.entries),
+			entries: [...this.entries.values()].sort((left, right) => left.seq - right.seq),
 			scalarValues: [...this.scalarValues.values()],
-			listValues: [...this.listValues.values()].map(({ address, elements }) => ({
-				address,
-				elements: elements.slice(),
-			})),
-			usage: new Map(this.usage),
-			stats: this.stats,
-			nextSeq: this.nextSeq,
 		};
 	}
 }

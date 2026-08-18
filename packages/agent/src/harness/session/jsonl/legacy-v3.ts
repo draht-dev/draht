@@ -1,4 +1,4 @@
-import { type ImageContent, type TextContent, uuidv7 } from "@draht/ai";
+import { type ImageContent, type TextContent, type Usage, uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../../types.ts";
 import type { CommittedWrite } from "../commit.ts";
 import type { JsonValue } from "../types.ts";
@@ -40,6 +40,15 @@ interface LegacyV3CustomMessageEntry extends LegacyV3EntryBase {
 	display: boolean;
 }
 
+interface LegacyV3BranchSummaryEntry extends LegacyV3EntryBase {
+	type: "branch_summary";
+	fromId: string;
+	summary: string;
+	details?: JsonValue;
+	usage?: Usage;
+	fromHook?: boolean;
+}
+
 interface ImportedCustomMessage {
 	role: "custom";
 	customType: string;
@@ -49,7 +58,11 @@ interface ImportedCustomMessage {
 	timestamp: number;
 }
 
-type LegacyV3Entry = LegacyV3MessageEntry | LegacyV3CustomEntry | LegacyV3CustomMessageEntry;
+type LegacyV3Entry =
+	| LegacyV3MessageEntry
+	| LegacyV3CustomEntry
+	| LegacyV3CustomMessageEntry
+	| LegacyV3BranchSummaryEntry;
 
 export interface NormalizedLegacyV3 {
 	header: JsonlStorageHeader;
@@ -94,7 +107,12 @@ function parseLegacyV3Entry(line: string, lineNumber: number): LegacyV3Entry {
 	}
 	const recordType: unknown = entry.type;
 	// TODO: Support the remaining legacy v3 record types as their normalization slices are implemented.
-	if (recordType !== "message" && recordType !== "custom" && recordType !== "custom_message") {
+	if (
+		recordType !== "message" &&
+		recordType !== "custom" &&
+		recordType !== "custom_message" &&
+		recordType !== "branch_summary"
+	) {
 		throw new Error(`Unsupported legacy v3 record type at line ${lineNumber}: ${String(recordType)}`);
 	}
 	return entry;
@@ -127,6 +145,17 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 			};
 			// The coding-agent CustomAgentMessages declaration merge is not visible in this package.
 			return { ...committedBase, type: "message", message: message as unknown as AgentMessage };
+		}
+		if (entry.type === "branch_summary") {
+			return {
+				...committedBase,
+				type: "branch_summary",
+				fromId: importedIds.get(entry.fromId)!,
+				summary: entry.summary,
+				details: entry.details,
+				usage: entry.usage,
+				fromHook: entry.fromHook ?? false,
+			};
 		}
 		return {
 			...committedBase,

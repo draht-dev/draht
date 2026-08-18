@@ -1,3 +1,4 @@
+import type { Usage } from "@draht/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
@@ -203,6 +204,112 @@ describe("JSONL v3 migration", () => {
 		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(customMessageEntry.id);
 		expect((await session.getStats(BACKGROUND_CONTEXT)).messageCount).toBe(2);
 		await session.close(BACKGROUND_CONTEXT);
+	});
+
+	describe("importing branch summaries", () => {
+		const branchPointTimestamp = NOW + 1_000;
+		const abandonedResponseTimestamp = NOW + 2_000;
+		const summaryTimestamp = NOW + 3_000;
+		const details = { reason: "navigation" };
+		const usage = {
+			input: 11,
+			output: 7,
+			cacheRead: 3,
+			cacheWrite: 2,
+			totalTokens: 23,
+			cost: { input: 0.11, output: 0.07, cacheRead: 0.03, cacheWrite: 0.02, total: 0.23 },
+		} satisfies Usage;
+		const branchPointMessage = {
+			role: "user",
+			content: [{ type: "text", text: "Try the first approach" }],
+			timestamp: branchPointTimestamp,
+		} satisfies AgentMessage;
+		const abandonedResponse = {
+			role: "assistant",
+			content: [{ type: "text", text: "Implemented the first approach" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 20,
+				output: 10,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 30,
+				cost: { input: 0.2, output: 0.1, cacheRead: 0, cacheWrite: 0, total: 0.3 },
+			},
+			stopReason: "stop",
+			timestamp: abandonedResponseTimestamp,
+		} satisfies AgentMessage;
+
+		async function openFixture(fromHook?: true) {
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "branch-point",
+					parentId: null,
+					timestamp: new Date(branchPointTimestamp).toISOString(),
+					message: branchPointMessage,
+				},
+				{
+					type: "message",
+					id: "abandoned-response",
+					parentId: "branch-point",
+					timestamp: new Date(abandonedResponseTimestamp).toISOString(),
+					message: abandonedResponse,
+				},
+				{
+					type: "branch_summary",
+					id: "summary",
+					parentId: "branch-point",
+					timestamp: new Date(summaryTimestamp).toISOString(),
+					fromId: "branch-point",
+					summary: "Summary of the abandoned branch",
+					details,
+					usage,
+					...(fromHook === undefined ? {} : { fromHook }),
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(entries).toHaveLength(3);
+			const [branchPoint, abandoned, branchSummary] = entries;
+			if (branchPoint === undefined || abandoned === undefined || branchSummary === undefined) {
+				throw new Error("Legacy branch summary chain was not imported");
+			}
+			return { session, branchPoint, abandoned, branchSummary };
+		}
+
+		it("preserves payload and remaps references", async () => {
+			const { session, branchPoint, abandoned, branchSummary } = await openFixture();
+
+			expect(abandoned.parentId).toBe(branchPoint.id);
+			expect(branchSummary).toMatchObject({
+				type: "branch_summary",
+				parentId: branchPoint.id,
+				seq: 3,
+				timestamp: summaryTimestamp,
+				fromId: branchPoint.id,
+				summary: "Summary of the abandoned branch",
+				details,
+				usage,
+				fromHook: false,
+			});
+			expect(branchSummary.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+			expect(uuidTimestamp(branchSummary.id)).toBe(summaryTimestamp);
+			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(branchSummary.id);
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
+		it("preserves an explicit fromHook flag", async () => {
+			const { session, branchSummary } = await openFixture(true);
+
+			expect(branchSummary).toMatchObject({ type: "branch_summary", fromHook: true });
+			await session.close(BACKGROUND_CONTEXT);
+		});
 	});
 
 	it("remaps a legacy message chain and exposes it through current APIs", async () => {

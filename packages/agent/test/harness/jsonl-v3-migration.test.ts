@@ -90,6 +90,60 @@ describe("JSONL v3 migration", () => {
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
+	it("imports a custom entry without rewriting opaque data references", async () => {
+		const messageTimestamp = NOW + 1_000;
+		const customTimestamp = NOW + 2_000;
+		const message = {
+			role: "user",
+			content: [{ type: "text", text: "first" }],
+			timestamp: messageTimestamp,
+		} satisfies AgentMessage;
+		const data = {
+			legacyReference: "message-1",
+			nested: { legacyReference: "custom-1" },
+		};
+		await writeLegacyV3Fixture([
+			{
+				type: "message",
+				id: "message-1",
+				parentId: null,
+				timestamp: new Date(messageTimestamp).toISOString(),
+				message,
+			},
+			{
+				type: "custom",
+				id: "custom-1",
+				parentId: "message-1",
+				timestamp: new Date(customTimestamp).toISOString(),
+				customType: "checkpoint",
+				data,
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+		expect(entries).toHaveLength(2);
+		const [messageEntry, customEntry] = entries;
+		if (messageEntry === undefined || customEntry === undefined) {
+			throw new Error("Legacy custom chain was not imported");
+		}
+		expect(messageEntry.seq).toBe(1);
+		expect(customEntry).toMatchObject({
+			type: "custom",
+			parentId: messageEntry.id,
+			seq: 2,
+			timestamp: customTimestamp,
+			customType: "checkpoint",
+			data,
+		});
+		expect(customEntry.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(uuidTimestamp(customEntry.id)).toBe(customTimestamp);
+		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(customEntry.id);
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
 	it("remaps a legacy message chain and exposes it through current APIs", async () => {
 		const firstTimestamp = NOW + 1_000;
 		const secondTimestamp = NOW + 2_000;
@@ -127,8 +181,8 @@ describe("JSONL v3 migration", () => {
 		expect(entries).toHaveLength(2);
 		const [first, second] = entries;
 		if (first === undefined || second === undefined) throw new Error("Legacy message chain was not imported");
-		expect(first).toMatchObject({ parentId: null, timestamp: firstTimestamp, message: firstMessage });
-		expect(second).toMatchObject({ parentId: first.id, timestamp: secondTimestamp, message: secondMessage });
+		expect(first).toMatchObject({ parentId: null, seq: 1, timestamp: firstTimestamp, message: firstMessage });
+		expect(second).toMatchObject({ parentId: first.id, seq: 2, timestamp: secondTimestamp, message: secondMessage });
 		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
 		expect(
 			(await session.findEntriesOnBranch({ order: "oldestFirst" }, BACKGROUND_CONTEXT)).map((entry) => entry.id),
@@ -181,6 +235,7 @@ describe("JSONL v3 migration", () => {
 			expect(await importedEntry()).toMatchObject({
 				type: "message",
 				parentId: null,
+				seq: 1,
 				timestamp: entryTimestamp,
 				message,
 			});

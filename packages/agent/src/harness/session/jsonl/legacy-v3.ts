@@ -1,6 +1,7 @@
 import { uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../../types.ts";
 import type { CommittedWrite } from "../commit.ts";
+import type { JsonValue } from "../types.ts";
 import { laneLeaf, laneState } from "../values.ts";
 import { JSONL_FORMAT_VERSION, JSONL_STORAGE_VERSION, type JsonlStorageHeader } from "./types.ts";
 
@@ -13,13 +14,25 @@ export interface LegacyV3SessionHeader {
 	parentSession?: string;
 }
 
-interface LegacyV3MessageEntry {
-	type: "message";
+interface LegacyV3EntryBase {
+	type: string;
 	id: string;
 	parentId: string | null;
 	timestamp: string;
+}
+
+interface LegacyV3MessageEntry extends LegacyV3EntryBase {
+	type: "message";
 	message: AgentMessage;
 }
+
+interface LegacyV3CustomEntry extends LegacyV3EntryBase {
+	type: "custom";
+	customType: string;
+	data?: JsonValue;
+}
+
+type LegacyV3Entry = LegacyV3MessageEntry | LegacyV3CustomEntry;
 
 export interface NormalizedLegacyV3 {
 	header: JsonlStorageHeader;
@@ -55,34 +68,44 @@ export function normalizeLegacyV3Header(header: LegacyV3SessionHeader): JsonlSto
 	};
 }
 
-function parseLegacyV3MessageEntry(line: string, lineNumber: number): LegacyV3MessageEntry {
-	let entry: LegacyV3MessageEntry;
+function parseLegacyV3Entry(line: string, lineNumber: number): LegacyV3Entry {
+	let entry: LegacyV3Entry;
 	try {
-		entry = JSON.parse(line) as LegacyV3MessageEntry;
+		entry = JSON.parse(line) as LegacyV3Entry;
 	} catch (error) {
 		throw new Error(`Invalid legacy v3 JSONL record at line ${lineNumber}: not valid JSON`, { cause: error });
 	}
+	const recordType: unknown = entry.type;
 	// TODO: Support the remaining legacy v3 record types as their normalization slices are implemented.
-	if (entry.type !== "message") {
-		throw new Error(`Unsupported legacy v3 record type at line ${lineNumber}: ${String(entry.type)}`);
+	if (recordType !== "message" && recordType !== "custom") {
+		throw new Error(`Unsupported legacy v3 record type at line ${lineNumber}: ${String(recordType)}`);
 	}
 	return entry;
 }
 
-/** Normalize the currently supported message-only v3 slice without touching its source file. */
+/** Normalize the currently supported v3 entries without touching their source file. */
 export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: readonly string[]): NormalizedLegacyV3 {
-	const entries = recordLines.map((line, index) => parseLegacyV3MessageEntry(line, index + 2));
+	const entries = recordLines.map((line, index) => parseLegacyV3Entry(line, index + 2));
 	const importedIds = new Map(entries.map((entry) => [entry.id, uuidv7(Date.parse(entry.timestamp))]));
 
-	const writes: CommittedWrite[] = entries.map((entry, index) => ({
-		kind: "entry",
-		type: "message",
-		id: importedIds.get(entry.id)!,
-		parentId: entry.parentId === null ? null : importedIds.get(entry.parentId)!,
-		seq: index + 1,
-		timestamp: Date.parse(entry.timestamp),
-		message: entry.message,
-	}));
+	const writes: CommittedWrite[] = entries.map((entry, index): CommittedWrite => {
+		const committedBase = {
+			kind: "entry" as const,
+			id: importedIds.get(entry.id)!,
+			parentId: entry.parentId === null ? null : importedIds.get(entry.parentId)!,
+			seq: index + 1,
+			timestamp: Date.parse(entry.timestamp),
+		};
+		if (entry.type === "message") {
+			return { ...committedBase, type: "message", message: entry.message };
+		}
+		return {
+			...committedBase,
+			type: "custom",
+			customType: entry.customType,
+			...(entry.data === undefined ? {} : { data: entry.data }),
+		};
+	});
 	const leaf = entries.length === 0 ? null : importedIds.get(entries[entries.length - 1]!.id)!;
 	const leafAddress = laneLeaf("main");
 	writes.push({

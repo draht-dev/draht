@@ -6,7 +6,7 @@ import { StorageBackedSession } from "../session.ts";
 import type { ForkOptions, Session, SessionRepo } from "../types.ts";
 import { laneLeaf, laneState, setValue } from "../values.ts";
 import { type JsonlParsedSessionHeader, parseJsonlSessionHeader } from "./codec.ts";
-import { metadataFromLegacyV3Header } from "./legacy-v3.ts";
+import { normalizeLegacyV3Header } from "./legacy-v3.ts";
 import { JsonlStorage } from "./storage.ts";
 import {
 	JSONL_FORMAT_VERSION,
@@ -43,8 +43,8 @@ function metadataFromParsedHeader(
 	path: string,
 	modifiedAt: number,
 ): JsonlSessionMetadata {
-	if (parsed.format === "v3-legacy") return metadataFromLegacyV3Header(parsed.header, path, modifiedAt);
-	return metadataFromHeader(parsed.header, path, modifiedAt);
+	const header = parsed.format === "v3-legacy" ? normalizeLegacyV3Header(parsed.header) : parsed.header;
+	return metadataFromHeader(header, path, modifiedAt);
 }
 
 function sessionDirectoryName(cwd: string): string {
@@ -338,7 +338,6 @@ export class JsonlSessionRepo
 	}
 
 	private async loadStorage(metadata: JsonlSessionMetadata, context: Context): Promise<JsonlStorage> {
-		// TODO: normalize discovered legacy v3 sessions on open instead of rejecting them here.
 		if (
 			!fileValue(await this.fileSystem.exists(metadata.path, context), `Failed to check session ${metadata.path}`)
 		) {

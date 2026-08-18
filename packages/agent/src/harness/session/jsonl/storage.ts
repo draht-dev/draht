@@ -24,7 +24,8 @@ import type {
 	Write,
 } from "../types.ts";
 import type { ListElement, ListReadOptions, StoredValue, Value, ValueList } from "../values.ts";
-import { parseJsonlStorageHeader } from "./codec.ts";
+import { parseJsonlSessionHeader } from "./codec.ts";
+import { normalizeLegacyV3 } from "./legacy-v3.ts";
 import type { JsonlStorageHeader, JsonlStorageOptions } from "./types.ts";
 
 function fileValue<T>(result: Result<T, FileError>, action: string): T {
@@ -101,22 +102,26 @@ async function publishFileAtomically(
 	}
 }
 
-/** Format-4 JSONL storage backed by an injected filesystem capability. */
+type JsonlWriteMode = "append" | "read-only";
+
+/** JSONL storage backed by an injected filesystem capability. */
 export class JsonlStorage implements Storage {
 	private readonly fileSystem: FileSystem;
 	private readonly path: string;
 	private readonly now: () => number;
 	readonly header: JsonlStorageHeader;
+	private readonly writeMode: JsonlWriteMode;
 	private readonly storageState = new StorageState();
 	private commitQueue: Promise<void> = Promise.resolve();
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
 
-	private constructor(options: JsonlStorageOptions, header: JsonlStorageHeader) {
+	private constructor(options: JsonlStorageOptions, header: JsonlStorageHeader, writeMode: JsonlWriteMode) {
 		this.fileSystem = options.fileSystem;
 		this.path = options.path;
 		this.now = options.now ?? Date.now;
 		this.header = header;
+		this.writeMode = writeMode;
 	}
 
 	static async create(
@@ -128,7 +133,7 @@ export class JsonlStorage implements Storage {
 			await options.fileSystem.writeFile(options.path, `${JSON.stringify(header)}\n`, context),
 			`Failed to create JSONL storage ${options.path}`,
 		);
-		return new JsonlStorage(options, header);
+		return new JsonlStorage(options, header, "append");
 	}
 
 	/** Atomically create storage from a complete prepared snapshot. */
@@ -154,14 +159,23 @@ export class JsonlStorage implements Storage {
 		if (lines[0] === undefined || lines[0] === "") {
 			throw new Error(`Invalid JSONL storage ${options.path}: missing header`);
 		}
-		const header = parseJsonlStorageHeader(lines[0]);
-		const storage = new JsonlStorage(options, header);
+		const parsedHeader = parseJsonlSessionHeader(lines[0]);
+		if (!parsedHeader.ok) {
+			throw new Error(`Invalid JSONL storage ${options.path}: invalid header`, { cause: parsedHeader.error });
+		}
+		if (parsedHeader.value.format === "v3-legacy") {
+			const normalized = normalizeLegacyV3(parsedHeader.value.header, lines.slice(1));
+			const storage = new JsonlStorage(options, normalized.header, "read-only");
+			storage.replayCommitted(normalized.writes);
+			return storage;
+		}
+
+		const header = parsedHeader.value.header;
+		const storage = new JsonlStorage(options, header, "append");
 		for (let index = 1; index < lines.length; index++) {
 			const line = lines[index]!;
 			try {
-				const writes = parseTransaction(line);
-				storage.storageState.validateCommitted(writes);
-				storage.storageState.applyValidated(writes);
+				storage.replayCommitted(parseTransaction(line));
 			} catch (error) {
 				throw new Error(`Invalid JSONL storage ${options.path}: line ${index + 1}`, { cause: error });
 			}
@@ -169,6 +183,11 @@ export class JsonlStorage implements Storage {
 		if (header.nextSeq !== undefined) storage.storageState.advanceNextSeq(header.nextSeq);
 		if (torn) await publishFileAtomically(options.fileSystem, options.path, `${lines.join("\n")}\n`, context);
 		return storage;
+	}
+
+	private replayCommitted(writes: readonly CommittedWrite[]): void {
+		this.storageState.validateCommitted(writes);
+		this.storageState.applyValidated(writes);
 	}
 
 	async commit(writes: Write[], context: Context): Promise<CommitResult> {
@@ -182,6 +201,9 @@ export class JsonlStorage implements Storage {
 	}
 
 	private async applyCommit(writes: Write[], context: Context): Promise<CommitResult> {
+		if (this.writeMode === "read-only" && writes.length !== 0) {
+			throw new Error("Legacy v3 storage is read-only");
+		}
 		const prepared = this.storageState.prepareCommit(writes, this.now());
 		if (prepared.writes.length !== 0) {
 			fileValue(

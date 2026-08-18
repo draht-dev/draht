@@ -6,10 +6,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireSafeInteger(value: unknown, field: string, minimum: number): void {
-	if (!Number.isSafeInteger(value) || (value as number) < minimum) throw new Error(`Invalid JSONL ${field}`);
-}
-
 function isSafeIntegerAtLeast(value: unknown, minimum: number): value is number {
 	return Number.isSafeInteger(value) && (value as number) >= minimum;
 }
@@ -43,22 +39,4 @@ export function parseJsonlSessionHeader(line: string): Result<JsonlParsedSession
 	if (isJsonlStorageHeader(value)) return ok({ format: "v4", header: value });
 	if (isLegacyV3SessionHeader(value)) return ok({ format: "v3-legacy", header: value });
 	return err(new Error("Unsupported JSONL session header"));
-}
-
-export function parseJsonlStorageHeader(line: string): JsonlStorageHeader {
-	let value: unknown;
-	try {
-		value = JSON.parse(line);
-	} catch (error) {
-		throw new Error("Invalid JSONL header: not valid JSON", { cause: error });
-	}
-	if (!isRecord(value) || value.kind !== "header" || value.v !== JSONL_FORMAT_VERSION) {
-		throw new Error("Invalid JSONL header");
-	}
-	if (typeof value.id !== "string") throw new Error("Invalid JSONL id");
-	if (typeof value.cwd !== "string") throw new Error("Invalid JSONL cwd");
-	requireSafeInteger(value.storageVersion, "storageVersion", 1);
-	requireSafeInteger(value.createdAt, "createdAt", 0);
-	if (value.nextSeq !== undefined) requireSafeInteger(value.nextSeq, "nextSeq", 1);
-	return value as unknown as JsonlStorageHeader;
 }

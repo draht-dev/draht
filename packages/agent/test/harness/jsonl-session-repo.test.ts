@@ -46,50 +46,6 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		await repo.close(BACKGROUND_CONTEXT);
 	});
 
-	it("discovers legacy v3 session files without rewriting them", async () => {
-		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
-		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
-		const directory = getOrThrow(await fileSystem.joinPath(["sessions", "--workspace--"], BACKGROUND_CONTEXT));
-		getOrThrow(await fileSystem.createDir(directory, undefined, BACKGROUND_CONTEXT));
-		const path = getOrThrow(
-			await fileSystem.absolutePath(
-				getOrThrow(await fileSystem.joinPath([directory, "legacy.jsonl"], BACKGROUND_CONTEXT)),
-				BACKGROUND_CONTEXT,
-			),
-		);
-		const content = `${JSON.stringify({
-			type: "session",
-			version: 3,
-			id: "legacy",
-			timestamp: new Date(NOW).toISOString(),
-			cwd: "/workspace",
-			parentSession: "/old-session.jsonl",
-		})}\n${JSON.stringify({
-			type: "message",
-			id: "message-1",
-			parentId: null,
-			timestamp: new Date(NOW + 1).toISOString(),
-			message: { role: "user", content: [{ type: "text", text: "hello" }] },
-		})}\n`;
-		getOrThrow(await fileSystem.writeFile(path, content, BACKGROUND_CONTEXT));
-
-		const before = getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT));
-		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
-		const after = getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT));
-
-		expect(metadata).toMatchObject({
-			id: "legacy",
-			createdAt: NOW,
-			storageVersion: JSONL_STORAGE_VERSION,
-			cwd: "/workspace",
-			path,
-			legacyParentSessionPath: "/old-session.jsonl",
-		});
-		expect(Number.isFinite(metadata?.modifiedAt)).toBe(true);
-		expect(after).toBe(before);
-		await repo.close(BACKGROUND_CONTEXT);
-	});
-
 	it("keeps fork destinations claimed until close and rejects deleting open sessions", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });

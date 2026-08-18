@@ -1,6 +1,6 @@
 # Harness RPC Design Notes
 
-> **Status:** Design input, not a normative contract or implementation handoff. Commit `3fbfcf48f` added context-last parameters and mechanically threads them through the current harness, session implementations, hooks, events, and backends. RPC integration, telemetry carriers, and cancellation semantics remain design work. Resolve the open decisions and fold the accepted behavior into `harness.md` before creating a work package.
+> **Status:** Design input, not a normative contract or implementation handoff. Required trailing `Context` parameters and the untyped RPC transport have landed. `RemoteSession`/`RemoteSessionTree`, connection-owned remote mutation capabilities, and client-to-server request cancellation are implemented. The hosted Harness and worker protocols remain hand-written projections, worker-hop cancellation and trace carriers are still missing, and Pi request ingress still starts from `TODO_CONTEXT`. Resolve the remaining open decisions and fold the accepted behavior into `harness.md` before creating another work package.
 
 ## Goal
 
@@ -168,7 +168,15 @@ receive request
 
 A cancel frame aborts only the matching request controller. Disconnect aborts every active request and closes every subscription owned by that connection.
 
-`packages/protocol/src/rpc.ts` already separates a server implementation context from serialized arguments through `RpcImplementation<TManifest, TContext>`. It can inform this design, but the current client API has no invocation-context/cancellation/trace integration and the manifest model does not yet cover remote object references or subscriptions.
+`packages/protocol/src/rpc.ts` already separates a server implementation context from serialized arguments through `RpcImplementation<TManifest, TContext>`. Its implementation context is dispatcher-owned and context-first; an adapter then calls the real receiver with its required trailing `Context`. The manifest client API still has no invocation-context, cancellation, or trace integration, and the manifest model does not yet cover remote object references or subscriptions.
+
+## Current hosted-harness adapter
+
+The current Pi service protocol is an explicit adapter, not the generic proxy described below. `PiServerHost`, `HostedHarnessHandle`, `HostedHarnessAttachment`, and `HostedHarnessWatch` receive trailing contexts, and `HostedHarnessManager` forwards one context through session discovery, creation, attachment, prompting, watch lifecycle, and close.
+
+At Pi request ingress, `PiServer` still starts from `TODO_CONTEXT`, but derives a request context with a per-request abort signal. `PiClient.invoke()` sends an untyped method string plus unknown arguments and maps its signal to a cancel frame. The server routes `session.*` methods through `RemoteSessionManager`, which owns exclusive Session handles and mutation capabilities. The experimental coding-agent client opens a `RemoteSession`; prompting raises until `AgentHarness` runtime2 prompting is implemented.
+
+The coding-agent worker manager accepts contexts on its hosted interfaces, but worker operation frames carry neither cancellation nor trace metadata and the worker reconstructs calls with `TODO_CONTEXT`. Hosted Harness operations therefore still have interface propagation only across that hop.
 
 ## Remote object identity
 
@@ -246,7 +254,7 @@ Members requiring adaptation:
 - `view(lane)`: synchronous remote-object return; use a deterministic client proxy or adapter projection;
 - `mutate(callback)`: not ordinary RPC because it contains executable callback code and holds the session mutation line.
 
-If remote mutation is required, design a separate transaction protocol with explicit open/read/commit/close, timeout, cancellation, and disconnect behavior. Do not transparently serialize or reverse-call `Session.mutate()`.
+`RemoteSession.mutate()` executes the callback locally against a connection-owned `RemoteSessionMutator`. Its untyped protocol explicitly begins a mutation, performs reads and at most one commit by mutation ID, then finishes it. The server implements begin by entering the real `Session.mutate()` callback and retains the lane until finish, preserving client-local commit-then-publish ordering. Disconnect releases every owned mutation; a server-owned lease expires a wedged mutation after admitted commits drain. Callbacks are never serialized or reverse-called, and uncertain commits are never retried.
 
 ### `AgentLane` and `AgentHarness`
 
@@ -319,7 +327,7 @@ A future client facade may reconstruct the familiar local `Events`/`WatchHandle`
 
 ## Request cancellation
 
-The adapter maps each invocation's `abortSignal`, when present, to one request ID:
+Request cancellation is implemented between `PiClient` and `PiServer`. Worker transport cancellation remains missing. The adapter maps each invocation's `abortSignal`, when present, to one request ID:
 
 ```text
 client context.abortSignal aborts
@@ -387,37 +395,43 @@ Compilation proves signature coverage only. It does not prove correct trace pare
 
 ## Required tests for the later handoff
 
+Current tests cover typed service-adapter validation, untyped transport calls, pre-abort, request cancellation, ordinary Pi service calls, attachment/watch lifecycle, snapshot-first event buffering, remote Session/tree behavior, callback-scoped mutation, lease expiry, disconnect cleanup, and use of `RemoteSession` by `AgentHarness.create()`. Remaining generic RPC and context coverage includes:
+
 - static rejection of non-JSON ordinary interface members;
 - runtime rejection of functions, cycles, non-finite numbers, sparse arrays, and class instances;
-- context is removed from serialized arguments and reconstructed server-side;
-- landed context-last calls, plus the selected JSON-safe optional-argument strategy;
+- trailing context is removed from serialized arguments and reconstructed server-side;
+- omitted optional arguments are normalized without serializing `undefined`;
 - ordinary transparent method calls;
 - nested remote references and stable proxy identity;
 - adapter override invokes/decorates the real method;
 - property and synchronous remote-object projections;
 - unknown target/method and malformed envelope rejection;
-- pre-aborted request starts no server work;
-- one request cancellation does not abort another;
 - disconnect aborts requests and closes subscriptions;
 - client/server telemetry parentage;
 - malformed/missing trace carrier degrades safely;
 - event subscription establishment race;
 - event source telemetry reconstruction;
 - unsubscribe, disconnect, ordering, buffering, and backpressure;
-- snapshot plus buffered events has no observation gap;
 - drive joiner cancellation does not cancel shared execution;
 - invocation cancellation writes no durable cancellation state.
 
+## Resolved migration decisions
+
+- Context-aware receiver methods use one required trailing `Context`.
+- `Context`, `AbortSignal`, and `TelemetryContext` objects are never serialized.
+- RPC transport calls use an untyped method string and unknown arguments/result; domain facades own typing.
+- Remote mutation callbacks execute locally over an explicit connection-owned mutation capability.
+- Remote mutation leases are server-owned policy, distinct from caller cancellation.
+- The current Pi service remains an explicit adapter projection rather than a generic `AgentHarness` proxy.
+
 ## Open decisions before `harness.md`
 
-- whether to retain context last or migrate context first;
-- if context remains last, the JSON-safe trailing-`undefined`/arity protocol;
 - whether all ordinary results must be JSON-compatible or some interfaces need RPC projections;
 - static contract-checking API and test location;
 - object-reference ownership, lifetime, and nested result encoding;
 - exact adapter descriptor/override API;
 - event flow-control and reconnection policy;
-- whether remote transaction or hook protocols are required at all;
+- whether a remote hook protocol is required at all;
 - telemetry carrier adapter ownership;
 - drive ownership policy under multiple callers;
 - exact package boundaries for generic RPC, harness adapters, and protocol schemas.

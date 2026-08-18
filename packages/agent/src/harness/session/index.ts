@@ -21,6 +21,14 @@ export {
 } from "./jsonl/index.ts";
 export type { MemorySessionRepoOptions } from "./memory.ts";
 export { MemorySessionRepo } from "./memory.ts";
-export { StorageBackedSession } from "./session.ts";
+export { RemoteSession, type RemoteSessionRpc, RemoteSessionTree } from "./remote.ts";
+export {
+	SessionInvalidLaneError,
+	SessionInvariantError,
+	SessionLaneExistsError,
+	SessionPendingAssistantMessageError,
+	SessionUnknownTargetError,
+	StorageBackedSession,
+} from "./session.ts";
 export * from "./types.ts";
 export * from "./values.ts";

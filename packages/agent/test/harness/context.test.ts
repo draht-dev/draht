@@ -6,6 +6,7 @@ import {
 	withAbortSignal,
 	withCancel,
 	withContextValue,
+	withoutAbortSignal,
 	withTelemetryContext,
 } from "../../src/harness/context.ts";
 import { InMemoryTelemetryContext } from "../../src/index.ts";
@@ -57,6 +58,18 @@ describe("Context", () => {
 		parentController.abort("parent");
 		expect(sibling.context.abortSignal?.aborted).toBe(true);
 		expect(sibling.context.abortSignal?.reason).toBe("parent");
+	});
+
+	it("masks caller cancellation for mandatory cleanup", () => {
+		const controller = new AbortController();
+		const key = createContextKey<string>("value");
+		const context = withContextValue(key, "preserved", withAbortSignal(controller.signal, BACKGROUND_CONTEXT));
+		const cleanup = withoutAbortSignal(context);
+
+		controller.abort();
+		expect(context.abortSignal?.aborted).toBe(true);
+		expect(cleanup.abortSignal).toBeUndefined();
+		expect(cleanup.value(key)).toBe("preserved");
 	});
 
 	it("carries telemetry as an ordinary context value", async () => {

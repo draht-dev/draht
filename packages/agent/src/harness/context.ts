@@ -7,7 +7,9 @@ export interface ContextKey<T> {
 	readonly valueType?: (value: T) => T;
 }
 
-const ABORT_SIGNAL_CONTEXT_KEY: ContextKey<AbortSignal> = Object.freeze({ token: Symbol("pi.abortSignal") });
+const ABORT_SIGNAL_CONTEXT_KEY: ContextKey<AbortSignal | undefined> = Object.freeze({
+	token: Symbol("pi.abortSignal"),
+});
 const TELEMETRY_CONTEXT_KEY: ContextKey<TelemetryContext> = Object.freeze({ token: Symbol("pi.telemetryContext") });
 
 /** Immutable invocation-scoped values passed explicitly through harness operations. */
@@ -94,6 +96,11 @@ export function withAbortSignal(signal: AbortSignal, context: Context): Context 
 	const parentSignal = context.abortSignal;
 	const combined = parentSignal === undefined ? signal : AbortSignal.any([parentSignal, signal]);
 	return withContextValue(ABORT_SIGNAL_CONTEXT_KEY, combined, context);
+}
+
+/** Derive a context retaining all values except caller cancellation. Intended for mandatory cleanup only. */
+export function withoutAbortSignal(context: Context): Context {
+	return withContextValue(ABORT_SIGNAL_CONTEXT_KEY, undefined, context);
 }
 
 /** Derive an independently cancellable child context. */

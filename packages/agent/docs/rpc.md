@@ -1,6 +1,6 @@
 # Harness RPC Design Notes
 
-> **Status:** Design input, not a normative contract. Required trailing `Context` parameters have landed across the harness, sessions, hosted-harness interfaces, server manager, and worker adapters. The current Pi service protocol remains a hand-written projection and still enters through `TODO_CONTEXT`; generic harness/session proxies, request cancellation, and trace-carrier propagation remain design or implementation work. Fold accepted final behavior into `harness.md`.
+> **Status:** Design input, not a normative contract or implementation handoff. Commit `3fbfcf48f` added context-last parameters and mechanically threads them through the current harness, session implementations, hooks, events, and backends. RPC integration, telemetry carriers, and cancellation semantics remain design work. Resolve the open decisions and fold the accepted behavior into `harness.md` before creating a work package.
 
 ## Goal
 
@@ -25,6 +25,30 @@ Invocation context kills two integration problems at the boundary:
 
 The core sees only an ordinary explicit `Context`.
 
+## Landed interface state
+
+The current public APIs put context last:
+
+```ts
+lane.drive(options, context);
+session.getEntry(id, context);
+harness.prompt(text, images, context);
+```
+
+This shape is now threaded through `AgentHarness`, `AgentLane`, `Storage`, `SessionReader`, `SessionMutator`, `SessionTree`, `Session`, `SessionRepo`, runtime2, hooks, events, and session backends. Hook handlers, event listeners, mutation callbacks, entry projectors, system-prompt callbacks, tool-context factories, and provider-message conversion receive the invocation context.
+
+This is mechanical propagation, not complete RPC support. Known contract gaps are:
+
+- optional business arguments became required `T | undefined` positions before context;
+- `SessionReader.getEntries()` returns `Map`;
+- methods and results expose remote object capabilities directly;
+- `AgentHarnessTool.execute()` still receives a separate `AbortSignal` and no invocation `Context`;
+- the exported `AgentHarnessToolContextSource` still has a zero-argument factory;
+- `AgentHarnessOptions.telemetryContext` still installs receiver-level telemetry;
+- callback surfaces such as hooks, `Session.mutate()`, and `runWhenIdle()` are not ordinary RPC.
+
+The remaining `TODO_CONTEXT` uses are at coding-agent experimental process boundaries where RPC reconstruction has not been implemented.
+
 ## Non-goals
 
 Do not:
@@ -43,7 +67,7 @@ An ordinary proxyable method should:
 - return a promise;
 - accept only `JsonValue`-compatible business arguments;
 - return a `JsonValue`-compatible ordinary result or `void`;
-- receive one required trailing invocation context when the receiver method is context-aware.
+- optionally receive one required invocation context in the declared context position.
 
 `void` is represented by a successful response envelope without a result field. It does not require encoding `undefined` as a JSON value.
 
@@ -51,18 +75,26 @@ Remote object references and subscriptions are protocol envelopes, not domain co
 
 Current examples requiring review include `SessionReader.getEntries()`, which returns a `Map`, and methods returning `AgentLane`, `SessionTree`, executable tools, or callback-bearing handles. The intended response is not a catalog of hand-written codecs. Use a remote reference, a JSON projection, or mark the member host-local.
 
-## Context position
+## Context position and `undefined`
 
-Receiver methods use one required trailing `Context`. The implemented `Context` has no runtime brand, so a generic proxy must use trusted method metadata to distinguish context-aware methods from methods with no context. Position does not solve method discovery by itself.
+The implemented `Context` has no runtime brand. The landed receiver methods use context last, while methods such as `Session.view()` and host-local registration surfaces have no context. A generic proxy therefore needs trusted method metadata; position alone cannot distinguish contextual from non-contextual methods.
 
-A trailing context keeps propagation visible and consistent across ordinary receivers and callbacks:
+The landed shape has a strict JSON problem:
 
 ```ts
 harness.prompt(text, undefined, context);
-harness.prompt(messages, context);
+session.readList(address, undefined, context);
 ```
 
-The first form exposes a strict JSON issue: after removing the context, the optional image argument still occupies an `undefined` array slot. A generic adapter must normalize omitted trailing business arguments or use an adapter projection with an explicit JSON shape. The current Pi service protocol uses `PromptArguments` as such a projection; it never serializes the harness method's raw argument list.
+After the proxy strips context, the ordinary argument array still contains `undefined`, which is not a `JsonValue`.
+
+The final design must choose one of these approaches:
+
+1. move context first so optional business arguments remain trailing and can be omitted;
+2. retain context last but add trusted arity metadata that removes trailing `undefined` values on the wire and restores their positions before invoking the implementation;
+3. replace these positional optional arguments with JSON values such as options objects or `null`.
+
+An untyped `undefined` sentinel is a protocol codec and weakens the strict JSON contract. Do not silently rely on `JSON.stringify()` converting array `undefined` to `null`.
 
 ## Contract checking
 
@@ -90,8 +122,8 @@ Conceptually, the client proxy performs:
 
 ```text
 method invocation
-→ use trusted method metadata to remove the required trailing Context, when present
-→ normalize omitted optional arguments and validate remaining arguments as JSON
+→ use method metadata to remove Context from its declared position, if present
+→ validate remaining arguments as JSON
 → start rpc.client span
 → inject trace carrier
 → allocate request ID
@@ -112,7 +144,7 @@ interface RpcRequest {
 }
 ```
 
-A trusted manifest records whether the target method receives a trailing context. Untrusted wire input cannot select context placement.
+The trusted method manifest records whether context exists, its position, and any argument padding needed by the selected `undefined` policy. An untrusted client must not choose context placement.
 
 The context object, its values, signal, and telemetry implementation never appear in `args`.
 
@@ -128,7 +160,7 @@ receive request
 → extract trace carrier into local TelemetryContext
 → start rpc.server span
 → derive Context with withTelemetryContext(serverSpan, cancellationContext)
-→ append context for a context-aware target method
+→ insert context at declared position
 → invoke exposed real method or adapter override
 → validate result
 → return JSON/protocol envelope
@@ -136,19 +168,11 @@ receive request
 
 A cancel frame aborts only the matching request controller. Disconnect aborts every active request and closes every subscription owned by that connection.
 
-`packages/protocol/src/rpc.ts` already separates a server implementation context from serialized arguments through `RpcImplementation<TManifest, TContext>`. Its implementation context is dispatcher-owned and context-first; an adapter then calls the real receiver with its required trailing `Context`. The current client API has no invocation-context/cancellation/trace integration, and the manifest model does not yet cover remote object references or subscriptions.
-
-## Current hosted-harness adapter
-
-The current Pi service protocol is an explicit adapter, not the generic proxy described below. `PiServerHost`, `HostedHarnessHandle`, `HostedHarnessAttachment`, and `HostedHarnessWatch` receive trailing contexts, and `HostedHarnessManager` forwards one context through session discovery, creation, attachment, prompting, watch lifecycle, and close.
-
-At Pi request ingress, `PiServer` still supplies `TODO_CONTEXT`. The coding-agent worker manager accepts contexts on its hosted interfaces, but worker operation frames carry neither cancellation nor trace metadata and the worker reconstructs calls with `TODO_CONTEXT`. This is interface propagation only, not remote cancellation or telemetry support.
+`packages/protocol/src/rpc.ts` already separates a server implementation context from serialized arguments through `RpcImplementation<TManifest, TContext>`. It can inform this design, but the current client API has no invocation-context/cancellation/trace integration and the manifest model does not yet cover remote object references or subscriptions.
 
 ## Remote object identity
 
-In the future generic proxy, `AgentHarness`, `AgentLane`, `Session`, and `SessionTree` are stateful capabilities that cross RPC boundaries as opaque references. The current Pi service exposes session IDs and adapter-owned hosted handles instead; it does not expose these domain objects directly.
-
-Target reference shape:
+`AgentHarness`, `AgentLane`, `Session`, and `SessionTree` are stateful capabilities. They cross RPC boundaries as opaque references:
 
 ```ts
 interface ObjectReference {
@@ -273,13 +297,11 @@ type EventFrame =
 
 The server adapts host-local `events.on()` into this protocol. The real event bus remains unaware of RPC.
 
-The current watch adapter preserves snapshot-first buffering and forwards an event context through in-process hosted-harness callbacks. The worker event frame and public Pi event envelope do not yet carry trace metadata, so both process boundaries lose the emitting context.
+Each event frame carries trace metadata from the context that emitted the event. The client reconstructs a fresh event-delivery context and invokes local listeners under that parent. It does not receive the server's `Context` object or arbitrary context values.
 
-The final protocol requires each event frame to carry trace metadata from the context that emitted the event. The client reconstructs a fresh event-delivery context and invokes local listeners under that parent. It does not receive the server's `Context` object or arbitrary context values.
+Subscriptions are ongoing invocation-scoped resources. They may retain their creation context and own cancellation controller; ordinary harness/session proxies may not. Aborting the subscription context or disconnecting sends/unconditionally performs unsubscribe.
 
-Subscriptions are ongoing invocation-scoped resources. They may retain their creation context and own cancellation controller; ordinary harness/session proxies may not. Aborting the subscription context or disconnecting must unconditionally unsubscribe. The current hosted interfaces expose contexts for watch creation, start, and unsubscribe, but no cancellation controller is connected to them yet.
-
-The current protocol buffers events across the snapshot/start handshake but has no sequence numbers, acknowledgements, or bounded backpressure policy. Those mechanisms remain necessary to prevent unbounded memory growth and define delivery guarantees.
+The transport must buffer events arriving between server subscription installation and client reference decoding. Sequence numbers plus acknowledgements or a bounded flow-control policy prevent unbounded memory growth.
 
 `watch()` and `watchSession()` additionally require a race-free snapshot handshake:
 
@@ -293,11 +315,11 @@ server installs watcher in buffering mode
 
 This preserves the current snapshot-plus-buffer semantics without serializing listener callbacks.
 
-The current `PiClient` reconstructs its service-specific `PiLaneWatch` facade on top of `watch`, `startWatch`, and `stopWatch`. A future generic client may reconstruct the domain `Events`/`WatchHandle` experience on top of the richer subscription protocol described here.
+A future client facade may reconstruct the familiar local `Events`/`WatchHandle` experience on top of this protocol. That facade lives in the RPC client package.
 
 ## Request cancellation
 
-Request cancellation is not implemented in the current Pi client, protocol, server, or worker transport. The final adapter maps each invocation's `abortSignal`, when present, to one request ID:
+The adapter maps each invocation's `abortSignal`, when present, to one request ID:
 
 ```text
 client context.abortSignal aborts
@@ -326,7 +348,7 @@ The adapter only maps disconnect to the affected invocation signal. See `telemet
 
 ## Telemetry across RPC
 
-RPC telemetry is not implemented in the current wire protocol. The target parentage is:
+RPC telemetry follows:
 
 ```text
 client caller
@@ -355,22 +377,20 @@ The server exposure layer must:
 
 Authentication, authorization, and tenant metadata may be reconstructed as typed local context values by the server adapter. Client-supplied arbitrary context values are not trusted and do not cross by default.
 
-## Interface migration
+## Interface migration status
 
-The required trailing-context migration has landed, but it remains scaffolding rather than proof of RPC behavior.
+Commit `3fbfcf48f` updated the concrete current-runtime and session signatures rather than relying only on TypeScript's permissive `implements` checks. Context is mechanically forwarded through the agent package and session backends.
 
-`TODO_CONTEXT` marks a boundary whose real parent cannot yet be reconstructed. Current uses cluster at Pi protocol request ingress and worker RPC ingress. `BACKGROUND_CONTEXT` is reserved for intentional roots. Context-accepting shims that cannot yet transport cancellation or telemetry must not be described as semantic support.
+`TODO_CONTEXT` marks a boundary whose real parent is not yet reconstructed. `BACKGROUND_CONTEXT` is reserved for intentional roots. The remaining production `TODO_CONTEXT` uses are in coding-agent experimental server/worker code; they are the RPC integration boundary, not completed propagation.
 
-Because the superseded harness implementation has been removed, all eventual semantics must target the current harness runtime. Old-runtime propagation changes are not implementation evidence.
+Compilation proves signature coverage only. It does not prove correct trace parentage, pre-abort admission, drive ownership, durable cancellation, or RPC behavior. All eventual semantics target the current harness runtime; changes to the removed runtime are irrelevant.
 
 ## Required tests for the later handoff
 
-Current protocol and server tests cover manifest-based argument/result validation, ordinary Pi service calls, attachment/watch lifecycle, and snapshot-first event buffering. Remaining generic RPC and context coverage includes:
-
 - static rejection of non-JSON ordinary interface members;
 - runtime rejection of functions, cycles, non-finite numbers, sparse arrays, and class instances;
-- trailing context is removed from serialized arguments and reconstructed server-side;
-- omitted optional arguments are normalized without serializing `undefined`;
+- context is removed from serialized arguments and reconstructed server-side;
+- landed context-last calls, plus the selected JSON-safe optional-argument strategy;
 - ordinary transparent method calls;
 - nested remote references and stable proxy identity;
 - adapter override invokes/decorates the real method;
@@ -388,14 +408,10 @@ Current protocol and server tests cover manifest-based argument/result validatio
 - drive joiner cancellation does not cancel shared execution;
 - invocation cancellation writes no durable cancellation state.
 
-## Resolved migration decisions
-
-- Context-aware receiver methods use one required trailing `Context`.
-- `Context`, `AbortSignal`, and `TelemetryContext` objects are never serialized.
-- The current Pi service remains an explicit adapter projection rather than a generic `AgentHarness` proxy.
-
 ## Open decisions before `harness.md`
 
+- whether to retain context last or migrate context first;
+- if context remains last, the JSON-safe trailing-`undefined`/arity protocol;
 - whether all ordinary results must be JSON-compatible or some interfaces need RPC projections;
 - static contract-checking API and test location;
 - object-reference ownership, lifetime, and nested result encoding;

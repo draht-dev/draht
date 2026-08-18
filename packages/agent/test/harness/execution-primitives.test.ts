@@ -491,6 +491,54 @@ describe("HarnessEventBus", () => {
 		expect(seen).toEqual(["one:start", "one:end", "two:start", "two:end"]);
 	});
 
+	it("binds listeners and watchers when an event is enqueued", async () => {
+		const bus = new HarnessEventBus();
+		const started = deferred();
+		const release = deferred();
+		bus.on("run_start", async (event) => {
+			if (event.runId !== "blocking") return;
+			started.resolve();
+			await release.promise;
+		});
+		const blocking = bus.emit({ type: "run_start", runId: "blocking", lane: "main" }, BACKGROUND_CONTEXT);
+		await started.promise;
+
+		const queued = bus.emit({ type: "run_start", runId: "queued", lane: "main" }, BACKGROUND_CONTEXT);
+		const lateListenerEvents: string[] = [];
+		bus.on("run_start", (event) => {
+			lateListenerEvents.push(event.runId);
+		});
+		const lateWatcherEvents: string[] = [];
+		const lateWatcher = bus.watch({}, (event) => event.type === "run_start", BACKGROUND_CONTEXT);
+		lateWatcher.start((event) => {
+			if (event.type === "run_start") lateWatcherEvents.push(event.runId);
+		});
+
+		release.resolve();
+		await Promise.all([blocking, queued]);
+		expect(lateListenerEvents).toEqual([]);
+		expect(lateWatcherEvents).toEqual([]);
+
+		await bus.emit({ type: "run_start", runId: "later", lane: "main" }, BACKGROUND_CONTEXT);
+		expect(lateListenerEvents).toEqual(["later"]);
+		expect(lateWatcherEvents).toEqual(["later"]);
+	});
+
+	it("releases reserved delivery gates during close", async () => {
+		const bus = new HarnessEventBus();
+		const seen: string[] = [];
+		bus.on("run_start", (event) => {
+			seen.push(event.runId);
+		});
+		const delivery = bus.enqueue([{ type: "run_start", runId: "reserved", lane: "main" }], BACKGROUND_CONTEXT);
+
+		bus.close(new Error("closed"));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(seen).toEqual(["reserved"]);
+		await delivery.start();
+	});
+
 	it("continues watcher delivery after listener failure and reports it", async () => {
 		const bus = new HarnessEventBus();
 		const failures: string[] = [];

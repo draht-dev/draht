@@ -20,6 +20,7 @@ import type {
 	SessionStats,
 	SessionTree,
 	Storage,
+	StorageBranchScan,
 	Write,
 } from "./types.ts";
 import {
@@ -99,6 +100,65 @@ export class SessionUnknownTargetError extends Error {
 	}
 }
 
+/**
+ * Package-internal lane creation procedure for callers that own the lane mutation callback.
+ *
+ * TODO: Replace this one-off procedure if lane creation gains a shared command abstraction. The Harness must own the
+ * new lane's mutation so the durable commit, in-memory lane publication, and recipient-bound `lane_created` enqueue
+ * all happen before line release. Calling event-free `Session.createLane()` and emitting afterward would permit both
+ * snapshot-after plus a stale event and delivery to listeners registered after the commit.
+ */
+export async function createLaneWithMutator(
+	mutator: SessionMutator,
+	name: string,
+	at: string | null,
+	configuration: LaneConfiguration,
+	context: Context,
+): Promise<void> {
+	if (mutator.lane !== name) {
+		throw new SessionInvariantError(
+			`Lane mutation for ${JSON.stringify(mutator.lane)} cannot create ${JSON.stringify(name)}`,
+		);
+	}
+	if (name.length === 0) throw new SessionInvalidLaneError(name, "lane name must not be empty");
+
+	// R1 owns complete idle-lane and current-state validation. Slice 2 only
+	// distinguishes valid existing lane shapes from partial durable lane state.
+	const [leaf, storedConfiguration, storedLaneState, lastResult] = await Promise.all([
+		mutator.getValue(laneLeaf(name), context),
+		mutator.getValue(laneConfig(name), context),
+		mutator.getValue(laneState(name), context),
+		mutator.getValue(laneLastResult(name), context),
+	]);
+	const presentCount = [leaf, storedConfiguration, storedLaneState, lastResult].filter(
+		(stored) => stored !== undefined,
+	).length;
+	if (
+		leaf !== undefined &&
+		storedLaneState !== undefined &&
+		(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
+	) {
+		throw new SessionLaneExistsError(name);
+	}
+	if (presentCount !== 0) {
+		throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
+	}
+	if (at !== null && !(await mutator.getEntries([at], context)).has(at)) {
+		throw new SessionUnknownTargetError(at);
+	}
+
+	// R6 adds the harness-wide admission barrier. Until then, close may reject
+	// this lane job before Storage.commit admits it; admitted commits still drain.
+	await mutator.commit(
+		[
+			setValueWrite(laneConfig(name), configuration),
+			setValueWrite(laneLeaf(name), at),
+			setValueWrite(laneState(name), { currentOperationId: null, pendingNextRun: [] }),
+		],
+		context,
+	);
+}
+
 class StorageBackedSessionMutator implements SessionMutator {
 	readonly lane: string;
 	private readonly storage: Storage;
@@ -153,6 +213,11 @@ class StorageBackedSessionMutator implements SessionMutator {
 	): Promise<ListElement<T>[]> {
 		this.assertActive();
 		return this.storage.readList(address, options, context);
+	}
+
+	scanBranch(query: StorageBranchScan, context: Context): Promise<Entry[]> {
+		this.assertActive();
+		return this.storage.scanBranch(query, context);
 	}
 
 	settle(): Promise<void> {
@@ -235,6 +300,11 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		return this.storage.readList(address, options, context);
 	}
 
+	async scanBranch(query: StorageBranchScan, context: Context): Promise<Entry[]> {
+		this.assertOpen();
+		return this.storage.scanBranch(query, context);
+	}
+
 	view(lane: string): SessionTree {
 		return {
 			getLeafId: (context) => this.getLeafIdForLane(lane, context),
@@ -268,49 +338,8 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		context: Context,
 	): Promise<SessionTree> {
 		this.assertOpen();
-		if (name.length === 0) throw new SessionInvalidLaneError(name, "lane name must not be empty");
-		return this.mutate(
-			name,
-			async (mutator) => {
-				// R1 owns complete idle-lane and current-state validation. Slice 2 only
-				// distinguishes valid existing lane shapes from partial durable lane state.
-				const [leaf, storedConfiguration, storedLaneState, lastResult] = await Promise.all([
-					mutator.getValue(laneLeaf(name), context),
-					mutator.getValue(laneConfig(name), context),
-					mutator.getValue(laneState(name), context),
-					mutator.getValue(laneLastResult(name), context),
-				]);
-				const presentCount = [leaf, storedConfiguration, storedLaneState, lastResult].filter(
-					(stored) => stored !== undefined,
-				).length;
-				if (
-					leaf !== undefined &&
-					storedLaneState !== undefined &&
-					(storedConfiguration !== undefined || (name === "main" && lastResult === undefined))
-				) {
-					throw new SessionLaneExistsError(name);
-				}
-				if (presentCount !== 0) {
-					throw new SessionInvariantError(`Lane ${JSON.stringify(name)} has incomplete durable state`);
-				}
-				if (at !== null && !(await mutator.getEntries([at], context)).has(at)) {
-					throw new SessionUnknownTargetError(at);
-				}
-
-				// R6 adds the harness-wide admission barrier. Until then, close may reject
-				// this lane job before Storage.commit admits it; admitted commits still drain.
-				await mutator.commit(
-					[
-						setValueWrite(laneConfig(name), configuration),
-						setValueWrite(laneLeaf(name), at),
-						setValueWrite(laneState(name), { currentOperationId: null, pendingNextRun: [] }),
-					],
-					context,
-				);
-				return this.view(name);
-			},
-			context,
-		);
+		await this.mutate(name, (mutator) => createLaneWithMutator(mutator, name, at, configuration, context), context);
+		return this.view(name);
 	}
 
 	getLeafId(context: Context): Promise<string | null> {

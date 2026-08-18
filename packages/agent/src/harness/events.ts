@@ -3,10 +3,15 @@ import type { Context } from "./context.ts";
 
 type UntypedEventListener = (event: HarnessEvent, context: Context) => void | Promise<void>;
 
+export interface HarnessEventDelivery {
+	start(): Promise<void>;
+}
+
 /** Passive harness event bus with isolated handler failures. */
 export class HarnessEventBus implements Events {
 	private readonly listeners = new Map<HarnessEventType, Set<UntypedEventListener>>();
 	private readonly watchListeners = new Set<UntypedEventListener>();
+	private readonly pendingStarts = new Set<() => void>();
 	private deliveryTail: Promise<void> = Promise.resolve();
 	private closedError: Error | undefined;
 
@@ -27,10 +32,43 @@ export class HarnessEventBus implements Events {
 	}
 
 	emit(event: HarnessEvent, context: Context): Promise<void> {
-		if (this.closedError !== undefined) return Promise.resolve();
-		const delivery = this.deliveryTail.then(() => this.deliver(event, true, context));
+		return this.enqueue([event], context).start();
+	}
+
+	/**
+	 * Bind and reserve one contiguous event batch without permitting listener execution until `start()`.
+	 * Commit owners call this before releasing their serialization line, then call `start()` only after release.
+	 * Prefer `Lane.command`; a dropped or early-started delivery breaks snapshot/event boundary semantics.
+	 */
+	enqueue(events: readonly HarnessEvent[], context: Context): HarnessEventDelivery {
+		if (this.closedError !== undefined || events.length === 0) return { start: () => Promise.resolve() };
+		const bound = events.map((event) => {
+			const payload = structuredClone(event);
+			return { payload, recipients: this.snapshotRecipients(payload) };
+		});
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const delivery = this.deliveryTail.then(async () => {
+			await gate;
+			for (const { payload, recipients } of bound) await this.deliver(payload, recipients, true, context);
+		});
 		this.deliveryTail = delivery.catch(() => {});
-		return delivery;
+		let started = false;
+		const start = (): void => {
+			if (started) return;
+			started = true;
+			this.pendingStarts.delete(start);
+			release?.();
+		};
+		this.pendingStarts.add(start);
+		return {
+			start: () => {
+				start();
+				return delivery;
+			},
+		};
 	}
 
 	watch<T>(snapshot: T, filter: (event: HarnessEvent) => boolean, _context: Context): WatchHandle<T> {
@@ -56,6 +94,7 @@ export class HarnessEventBus implements Events {
 
 	close(error: Error): void {
 		this.closedError ??= error;
+		for (const start of [...this.pendingStarts]) start();
 		void this.deliveryTail.finally(() => {
 			this.listeners.clear();
 			this.watchListeners.clear();
@@ -90,9 +129,17 @@ export class HarnessEventBus implements Events {
 		return watcher;
 	}
 
-	private async deliver(event: HarnessEvent, reportErrors: boolean, context: Context): Promise<void> {
-		const listeners = [...(this.listeners.get(event.type) ?? []), ...this.watchListeners];
-		for (const listener of listeners) {
+	private snapshotRecipients(event: HarnessEvent): UntypedEventListener[] {
+		return [...(this.listeners.get(event.type) ?? []), ...this.watchListeners];
+	}
+
+	private async deliver(
+		event: HarnessEvent,
+		recipients: readonly UntypedEventListener[],
+		reportErrors: boolean,
+		context: Context,
+	): Promise<void> {
+		for (const listener of recipients) {
 			try {
 				await listener(structuredClone(event), context);
 			} catch (error) {
@@ -107,7 +154,7 @@ export class HarnessEventBus implements Events {
 					...(normalized.stack === undefined ? {} : { stack: normalized.stack }),
 					...(lane === undefined ? {} : { lane }),
 				};
-				await this.deliver(handlerError, false, context);
+				await this.deliver(handlerError, this.snapshotRecipients(handlerError), false, context);
 			}
 		}
 	}

@@ -1,4 +1,4 @@
-import { createModels, fauxAssistantMessage, fauxProvider } from "@draht/ai";
+import { createModels, fauxProvider } from "@draht/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentHarness, HarnessClosed, HarnessFault } from "../../../src/harness/agent-harness.ts";
@@ -263,6 +263,35 @@ describe("runtime2 AgentHarness", () => {
 		expect(thinkingAtEvent).toBe("high");
 	});
 
+	it("serializes inspection behind earlier lane commits", async () => {
+		const storage = new ControlledMemoryStorage();
+		const session = await createStorageSession(storage);
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const commitStarted = deferred();
+		const releaseCommit = deferred();
+		storage.beforeNextCommit = async () => {
+			commitStarted.resolve();
+			await releaseCommit.promise;
+		};
+		const setting = harness.setThinkingLevel("high", BACKGROUND_CONTEXT);
+		await commitStarted.promise;
+		let inspected = false;
+		const inspection = harness.inspectExecution(BACKGROUND_CONTEXT).then((value) => {
+			inspected = true;
+			return value;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(inspected).toBe(false);
+
+		releaseCommit.resolve();
+		await setting;
+		expect((await inspection).configuredModel).toEqual({
+			provider: modelOptions(session).model.provider,
+			modelId: modelOptions(session).model.id,
+		});
+		expect(await harness.getThinkingLevel(BACKGROUND_CONTEXT)).toBe("high");
+	});
+
 	it("rejects invalid config without publication or fault", async () => {
 		const session = await createSession();
 		const initialTools = [tool("initial")];
@@ -327,7 +356,7 @@ describe("runtime2 AgentHarness", () => {
 		const session = await createSession();
 		const options = modelOptions(session);
 
-		const { harness, suspended } = await createAgentHarness(
+		const { harness, open } = await createAgentHarness(
 			{
 				...options,
 				thinkingLevel: "high",
@@ -339,7 +368,7 @@ describe("runtime2 AgentHarness", () => {
 		expect(harness).toBeInstanceOf(Harness);
 		expect(await harness.lane("main", BACKGROUND_CONTEXT)).toBe(harness);
 		expect(await harness.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
-		expect(suspended).toEqual([]);
+		expect(open).toEqual([]);
 		expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value).toEqual({
 			model: { provider: options.model.provider, modelId: options.model.id },
 			thinkingLevel: "high",
@@ -350,6 +379,13 @@ describe("runtime2 AgentHarness", () => {
 	it("appends idle entries through owned lane state", async () => {
 		const session = await createSession();
 		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const events: string[] = [];
+		for (const type of ["message_start", "message_end", "entry_added"] as const) {
+			harness.events.on(type, async (event) => {
+				events.push(event.type);
+				await harness.inspectExecution(BACKGROUND_CONTEXT);
+			});
+		}
 
 		const entryId = await harness.sessionTree.appendMessage(
 			{ role: "user", content: "hello", timestamp: 1 },
@@ -361,6 +397,7 @@ describe("runtime2 AgentHarness", () => {
 		expect(await harness.sessionTree.findEntriesOnBranch({ order: "oldestFirst" }, BACKGROUND_CONTEXT)).toMatchObject(
 			[{ id: entryId, parentId: null, message: { role: "user", content: "hello" } }],
 		);
+		expect(events).toEqual(["message_start", "message_end", "entry_added"]);
 	});
 
 	it("restores every configured lane without replacing its configuration", async () => {
@@ -414,10 +451,13 @@ describe("runtime2 AgentHarness", () => {
 		await harness.setThinkingLevel("low", BACKGROUND_CONTEXT);
 		let durableConfigurationAtEvent: LaneConfiguration | undefined;
 		let laneVisibleAtEvent = false;
+		let laneInspectionAtEvent: string | undefined;
 		harness.events.on("lane_created", async () => {
 			durableConfigurationAtEvent = (await session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT))
 				?.value;
-			laneVisibleAtEvent = (await harness.lane("worker", BACKGROUND_CONTEXT)) !== undefined;
+			const published = await harness.lane("worker", BACKGROUND_CONTEXT);
+			laneVisibleAtEvent = published !== undefined;
+			laneInspectionAtEvent = (await published?.inspectExecution(BACKGROUND_CONTEXT))?.lane;
 		});
 
 		const worker = unwrap(await harness.createLane("worker", anchor, BACKGROUND_CONTEXT));
@@ -432,10 +472,56 @@ describe("runtime2 AgentHarness", () => {
 			activeToolNames: ["read"],
 		});
 		expect(laneVisibleAtEvent).toBe(true);
+		expect(laneInspectionAtEvent).toBe("worker");
 		expect((await session.getValue(storedValues.laneState("worker"), BACKGROUND_CONTEXT))?.value).toEqual({
 			currentOperationId: null,
 			pendingNextRun: [],
 		});
+	});
+
+	it("binds metadata and lane-creation recipients before releasing their mutation lines", async () => {
+		const session = await createSession();
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const blockStarted = deferred();
+		const releaseBlock = deferred();
+		let shouldBlock = true;
+		harness.events.on("config_update", async (event) => {
+			if (event.property !== "resources" || !shouldBlock) return;
+			shouldBlock = false;
+			blockStarted.resolve();
+			await releaseBlock.promise;
+		});
+		const blocking = harness.setResources({ skills: [] }, BACKGROUND_CONTEXT);
+		await blockStarted.promise;
+
+		const naming = harness.sessionTree.setName("bound", BACKGROUND_CONTEXT);
+		while ((await session.getName(BACKGROUND_CONTEXT)) !== "bound") await Promise.resolve();
+		const lateValues = vi.fn();
+		harness.events.on("value_update", lateValues);
+		releaseBlock.resolve();
+		await Promise.all([blocking, naming]);
+		expect(lateValues).not.toHaveBeenCalled();
+
+		const secondStarted = deferred();
+		const secondRelease = deferred();
+		let secondBlock = true;
+		harness.events.on("config_update", async (event) => {
+			if (event.property !== "streamOptions" || !secondBlock) return;
+			secondBlock = false;
+			secondStarted.resolve();
+			await secondRelease.promise;
+		});
+		const secondBlocking = harness.setStreamOptions({ timeoutMs: 1 }, BACKGROUND_CONTEXT);
+		await secondStarted.promise;
+		const creating = harness.createLane("worker", null, BACKGROUND_CONTEXT);
+		while ((await session.getValue(storedValues.laneLeaf("worker"), BACKGROUND_CONTEXT)) === undefined) {
+			await Promise.resolve();
+		}
+		const lateLanes = vi.fn();
+		harness.events.on("lane_created", lateLanes);
+		secondRelease.resolve();
+		await Promise.all([secondBlocking, creating]);
+		expect(lateLanes).not.toHaveBeenCalled();
 	});
 
 	it("maps expected lane creation failures without faulting", async () => {
@@ -518,150 +604,14 @@ describe("runtime2 AgentHarness", () => {
 		await expect(worker.getLeafId(BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(HarnessClosed);
 	});
 
-	it("classifies assistant-ready suspensions from captured identities", async () => {
+	it("attaches from the minimal projection without resolving identities or payload references", async () => {
 		const session = await createSession();
 		const options = modelOptions(session);
 		await configureMain(session);
-		const prompt = { role: "user" as const, content: "hello", timestamp: 1 };
-		const promptId = await session.appendMessage(prompt, BACKGROUND_CONTEXT);
-		const meta = operationMeta(session, { kind: "run", promptEntryIds: [promptId] }, 2);
-		const { operationId } = meta;
-		const captured: LaneConfiguration = {
-			model: { provider: "missing-provider", modelId: "missing-model" },
-			thinkingLevel: "off",
-			activeToolNames: ["missing-tool"],
-		};
-		await installOperation(session, meta, {
-			...runState(promptId),
-			phase: {
-				kind: "assistant",
-				generation: {
-					status: "ready",
-					context: {
-						stepId: session.idGenerator.next(),
-						triggerEntryId: promptId,
-						configuration: captured,
-						streamOptions: {},
-						retryPolicy: { maxAttempts: 1, baseDelayMs: 0 },
-						overflowRecoveryUsed: false,
-					},
-					nextAttempt: 1,
-				},
-			},
-		});
-
-		const { harness, suspended } = await createAgentHarness(
-			{ ...options, tools: [tool("available")] },
-			BACKGROUND_CONTEXT,
-		);
-		const expected = {
-			lane: "main",
-			operationId,
-			kind: "run" as const,
-			startedAt: 2,
-			prompt: [prompt],
-			reason: "crash" as const,
-			missing: { tools: ["missing-tool"], model: "missing-provider/missing-model" },
-		};
-
-		expect(suspended).toEqual([expected]);
-		expect((await harness.inspectExecution(BACKGROUND_CONTEXT)).current?.suspended).toBe(suspended[0]);
-		const getEntries = vi.spyOn(session, "getEntries");
-		await harness.inspectExecution(BACKGROUND_CONTEXT);
-		await harness.lanes(BACKGROUND_CONTEXT);
-		expect(getEntries).not.toHaveBeenCalled();
-	});
-
-	it("classifies tool-phase suspensions from captured tools", async () => {
-		const session = await createSession();
-		const options = modelOptions(session);
-		await configureMain(session);
-		const meta = operationMeta(session, { kind: "run", promptEntryIds: [] });
+		const meta = operationMeta(session, { kind: "run", promptEntryIds: ["missing-prompt"] }, 2);
 		const { operationId } = meta;
 		await installOperation(session, meta, {
-			...runState(session.idGenerator.next()),
-			phase: {
-				kind: "tools",
-				batch: {
-					assistantEntryId: session.idGenerator.next(),
-					configuration: { ...configuredMain, activeToolNames: ["missing-tool"] },
-					turnId: session.idGenerator.next(),
-					calls: [],
-				},
-			},
-		});
-
-		const { harness, suspended } = await createAgentHarness(options, BACKGROUND_CONTEXT);
-
-		expect(suspended).toEqual([
-			{
-				lane: "main",
-				operationId,
-				kind: "run",
-				startedAt: 1,
-				prompt: [],
-				reason: "crash",
-				missing: { tools: ["missing-tool"] },
-			},
-		]);
-		expect((await harness.inspectExecution(BACKGROUND_CONTEXT)).current?.suspended).toBe(suspended[0]);
-	});
-
-	it("restores deferred suspension handles from their source entries", async () => {
-		const session = await createSession();
-		const options = modelOptions(session);
-		await configureMain(session);
-		const prompt = { role: "user" as const, content: "defer", timestamp: 1 };
-		const promptId = await session.appendMessage(prompt, BACKGROUND_CONTEXT);
-		const handle = {
-			provider: options.model.provider,
-			modelId: options.model.id,
-			api: options.model.api,
-			id: "deferred-1",
-		};
-		const sourceId = await session.appendMessage(
-			fauxAssistantMessage([], { stopReason: "deferred", deferred: handle }),
-			BACKGROUND_CONTEXT,
-		);
-		const meta = operationMeta(session, { kind: "run", promptEntryIds: [promptId] }, 2);
-		const { operationId } = meta;
-		await installOperation(session, meta, {
-			...runState(promptId),
-			phase: {
-				kind: "deferred",
-				deferred: {
-					status: "suspended",
-					stepId: session.idGenerator.next(),
-					sourceEntryId: sourceId,
-					poll: 0,
-					configuration: configuredMain,
-					streamOptions: {},
-				},
-			},
-		});
-
-		const { harness, suspended } = await createAgentHarness(options, BACKGROUND_CONTEXT);
-
-		expect(suspended).toEqual([
-			{
-				lane: "main",
-				operationId,
-				kind: "run",
-				startedAt: 2,
-				prompt: [prompt],
-				reason: "deferred",
-				deferred: handle,
-			},
-		]);
-		expect((await harness.inspectExecution(BACKGROUND_CONTEXT)).current?.suspended).toBe(suspended[0]);
-	});
-
-	it("faults harness creation when restored suspension payloads are invalid", async () => {
-		const session = await createSession();
-		await configureMain(session);
-		const meta = operationMeta(session, { kind: "run", promptEntryIds: [] });
-		await installOperation(session, meta, {
-			...runState(session.idGenerator.next()),
+			...runState("missing-trigger"),
 			phase: {
 				kind: "deferred",
 				deferred: {
@@ -669,31 +619,61 @@ describe("runtime2 AgentHarness", () => {
 					stepId: session.idGenerator.next(),
 					sourceEntryId: "missing-source",
 					poll: 0,
-					configuration: configuredMain,
+					configuration: {
+						model: { provider: "missing-provider", modelId: "missing-model" },
+						thinkingLevel: "off",
+						activeToolNames: ["missing-tool"],
+					},
 					streamOptions: {},
 				},
 			},
 		});
+		const getEntries = vi.spyOn(session, "getEntries");
+		const getModel = vi.spyOn(options.models, "getModel");
 
-		await expect(createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT)).rejects.toMatchObject({
-			name: "HarnessFault",
-			cause: { name: "SessionInvariantError", message: "Deferred suspension source is invalid" },
-		});
-
-		const missingPromptSession = await createSession();
-		await configureMain(missingPromptSession);
-		await installOperation(
-			missingPromptSession,
-			operationMeta(missingPromptSession, { kind: "run", promptEntryIds: ["missing-prompt"] }),
-			runState(missingPromptSession.idGenerator.next()),
+		const { harness, open } = await createAgentHarness(
+			{ ...options, tools: [tool("available")] },
+			BACKGROUND_CONTEXT,
 		);
-		await expect(createAgentHarness(modelOptions(missingPromptSession), BACKGROUND_CONTEXT)).rejects.toMatchObject({
-			name: "HarnessFault",
-			cause: { name: "SessionInvariantError", message: "Prompt entry missing-prompt is missing" },
+
+		expect(open).toEqual([{ lane: "main", operationId, kind: "run", startedAt: 2 }]);
+		expect(getEntries).not.toHaveBeenCalled();
+		expect(getModel).not.toHaveBeenCalled();
+		expect(await harness.inspectExecution(BACKGROUND_CONTEXT)).toMatchObject({
+			configuredModel: configuredMain.model,
+			current: {
+				id: operationId,
+				status: "open",
+				capturedModel: { provider: "missing-provider", modelId: "missing-model" },
+			},
 		});
 	});
 
-	it("reports restored cancellation as aborting without a suspension descriptor", async () => {
+	it("does not classify unavailable captured request tools during attachment", async () => {
+		const session = await createSession();
+		const options = modelOptions(session);
+		await configureMain(session);
+		const meta = operationMeta(session, { kind: "run", promptEntryIds: [] });
+		const { operationId } = meta;
+		await installOperation(session, meta, {
+			...runState("missing-trigger"),
+			phase: {
+				kind: "tools",
+				batch: {
+					assistantEntryId: "missing-assistant",
+					configuration: { ...configuredMain, activeToolNames: ["missing-tool"] },
+					turnId: session.idGenerator.next(),
+					calls: [],
+				},
+			},
+		});
+
+		const { open } = await createAgentHarness(options, BACKGROUND_CONTEXT);
+
+		expect(open).toEqual([{ lane: "main", operationId, kind: "run", startedAt: 1 }]);
+	});
+
+	it("marks restored cancellation as aborting in the open inventory", async () => {
 		const session = await createSession();
 		await configureMain(session);
 		const meta = operationMeta(session, { kind: "run", promptEntryIds: [] });
@@ -703,16 +683,21 @@ describe("runtime2 AgentHarness", () => {
 			control: { status: "cancel_requested", requestedAt: 2, drainedSteer: [], drainedFollowUp: [] },
 		});
 
-		const { harness, suspended } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const { harness, open } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 
-		expect(suspended).toHaveLength(1);
+		expect(open).toEqual([{ lane: "main", operationId, kind: "run", startedAt: 1, aborting: true }]);
 		expect(await harness.inspectExecution(BACKGROUND_CONTEXT)).toEqual({
 			lane: "main",
 			leafId: null,
+			configuredModel: configuredMain.model,
 			current: { id: operationId, kind: "run", status: "aborting", startedAt: 1 },
 		});
 		expect(await harness.lanes(BACKGROUND_CONTEXT)).toEqual([
-			{ name: "main", leafId: null, operation: { id: operationId, kind: "run", status: "aborting" } },
+			{
+				name: "main",
+				leafId: null,
+				operation: { id: operationId, kind: "run", status: "aborting", startedAt: 1 },
+			},
 		]);
 	});
 
@@ -743,6 +728,7 @@ describe("runtime2 AgentHarness", () => {
 		expect(await harness.inspectExecution(BACKGROUND_CONTEXT)).toEqual({
 			lane: "main",
 			leafId: null,
+			configuredModel: configuredMain.model,
 			current: null,
 			lastResult,
 		});
@@ -787,18 +773,21 @@ describe("runtime2 AgentHarness", () => {
 		const state = runState(session.idGenerator.next());
 		await installOperation(session, meta, state);
 
-		const { harness, suspended } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const { harness, open } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 
-		expect(suspended).toEqual([
-			{ lane: "main", operationId, kind: "run", startedAt: 1, prompt: [], reason: "crash" },
-		]);
+		expect(open).toEqual([{ lane: "main", operationId, kind: "run", startedAt: 1 }]);
 		expect(await harness.inspectExecution(BACKGROUND_CONTEXT)).toEqual({
 			lane: "main",
 			leafId: null,
-			current: { id: operationId, kind: "run", status: "suspended", startedAt: 1, suspended: suspended[0] },
+			configuredModel: configuredMain.model,
+			current: { id: operationId, kind: "run", status: "open", startedAt: 1 },
 		});
 		expect(await harness.lanes(BACKGROUND_CONTEXT)).toEqual([
-			{ name: "main", leafId: null, operation: { id: operationId, kind: "run", status: "suspended" } },
+			{
+				name: "main",
+				leafId: null,
+				operation: { id: operationId, kind: "run", status: "open", startedAt: 1 },
+			},
 		]);
 		const pendingId = await harness.sessionTree.appendCustomEntry("note", { text: "queued" }, BACKGROUND_CONTEXT);
 		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
@@ -854,7 +843,7 @@ describe("runtime2 AgentHarness", () => {
 		expect(await harness.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
 		expect(await harness.getLastResult(BACKGROUND_CONTEXT)).toBeUndefined();
 		expect(forbidden).not.toHaveBeenCalled();
-		expect(mutate).not.toHaveBeenCalled();
+		expect(mutate).toHaveBeenCalledOnce();
 		expect(getValue).not.toHaveBeenCalled();
 		expect(scanValues).not.toHaveBeenCalled();
 		expect(readList).not.toHaveBeenCalled();
@@ -884,9 +873,9 @@ describe("runtime2 AgentHarness", () => {
 			phase: { kind: "ready_to_commit" },
 		};
 		await installOperation(session, meta, state);
-		const { harness, suspended } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const { harness, open } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
 
-		expect(suspended).toEqual([{ lane: "main", operationId, kind: "navigation", startedAt: 1, reason: "crash" }]);
+		expect(open).toEqual([{ lane: "main", operationId, kind: "navigation", startedAt: 1 }]);
 		await expect(
 			harness.sessionTree.appendMessage({ role: "user", content: "later", timestamp: 2 }, BACKGROUND_CONTEXT),
 		).rejects.toThrow(`Cannot append while structural operation ${operationId} is active`);

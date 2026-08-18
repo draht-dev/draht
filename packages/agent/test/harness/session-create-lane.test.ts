@@ -5,7 +5,11 @@ import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as sessionWrites from "../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
-import { SessionInvariantError, StorageBackedSession } from "../../src/harness/session/session.ts";
+import {
+	createLaneWithMutator,
+	SessionInvariantError,
+	StorageBackedSession,
+} from "../../src/harness/session/session.ts";
 import { InstrumentedStorage, StorageDecorator } from "../../src/harness/session/testing/index.ts";
 import type {
 	Entry,
@@ -101,6 +105,32 @@ class BlockingCommitStorage extends StorageDecorator {
 describe("StorageBackedSession.createLane", () => {
 	it("completes the package-internal Session contract", () => {
 		expectTypeOf<StorageBackedSession>().toMatchTypeOf<Session>();
+		expectTypeOf(createLaneWithMutator).returns.toEqualTypeOf<Promise<void>>();
+	});
+
+	it("exposes the same procedure to callers that own the lane mutation", async () => {
+		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
+		const session = new StorageBackedSession(metadata, storage);
+		await commitSession(session, rootTransaction());
+		storage.clearCommitAttempts();
+
+		await session.mutate(
+			"shared",
+			(mutator) => createLaneWithMutator(mutator, "shared", ROOT_ID, configuration, BACKGROUND_CONTEXT),
+			BACKGROUND_CONTEXT,
+		);
+
+		expect(storage.getCommitAttempts()).toEqual([expectedLaneWrites("shared", ROOT_ID, configuration)]);
+		await expect(session.view("shared").getLeafId(BACKGROUND_CONTEXT)).resolves.toBe(ROOT_ID);
+		await expect(
+			session.mutate(
+				"different-line",
+				(mutator) => createLaneWithMutator(mutator, "other", null, configuration, BACKGROUND_CONTEXT),
+				BACKGROUND_CONTEXT,
+			),
+		).rejects.toBeInstanceOf(SessionInvariantError);
+		expect(storage.getCommitAttempts()).toHaveLength(1);
+		await session.close(BACKGROUND_CONTEXT);
 	});
 
 	it("atomically creates configured lane views at an entry or at the root", async () => {

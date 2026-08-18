@@ -50,6 +50,21 @@ async function restoreLaneState(reader: SessionReader, lane: string, context: Co
 		]);
 		if (meta === undefined) throw new SessionInvariantError(`Operation ${operationId} is missing op.meta`);
 		if (state === undefined) throw new SessionInvariantError(`Operation ${operationId} is missing op.state`);
+		if (meta.value.operationId !== operationId) {
+			throw new SessionInvariantError(
+				`Operation ${operationId} metadata names operation ${JSON.stringify(meta.value.operationId)}`,
+			);
+		}
+		if (meta.value.lane !== lane) {
+			throw new SessionInvariantError(
+				`Operation ${operationId} belongs to lane ${JSON.stringify(meta.value.lane)}, not ${JSON.stringify(lane)}`,
+			);
+		}
+		if (meta.value.intent.kind !== state.value.kind) {
+			throw new SessionInvariantError(
+				`Operation ${operationId} intent ${meta.value.intent.kind} does not match state ${state.value.kind}`,
+			);
+		}
 		operation = { meta: meta.value, state: state.value };
 	}
 

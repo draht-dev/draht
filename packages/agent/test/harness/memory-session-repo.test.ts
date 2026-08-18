@@ -28,6 +28,7 @@ describe("MemorySessionRepo metadata", () => {
 		await expect(repo.open(first.metadata, BACKGROUND_CONTEXT)).rejects.toThrow("already open");
 		await Promise.all([admittedWrite, first.close(BACKGROUND_CONTEXT)]);
 		await expect(first.getName(BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
+		await expect(first.scanBranch({ start: "entry" }, BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
 		await expect(firstView.getName(BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
 
 		const second = await repo.open(first.metadata, BACKGROUND_CONTEXT);
@@ -61,6 +62,9 @@ describe("MemorySessionRepo metadata", () => {
 		options.position = "at";
 
 		await commit;
+		await expect(
+			source.scanBranch({ start: childId, order: "oldestFirst" }, BACKGROUND_CONTEXT),
+		).resolves.toMatchObject([{ id: rootId }, { id: childId }]);
 		const forked = await fork;
 		expect(await forked.getLeafId(BACKGROUND_CONTEXT)).toBe(rootId);
 		await Promise.all([

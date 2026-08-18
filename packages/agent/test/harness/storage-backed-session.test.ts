@@ -93,6 +93,37 @@ describe("StorageBackedSession", () => {
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
+	it("exposes explicit branch scans through the Session and callback-scoped mutator", async () => {
+		const storage = new MemoryStorage({ now: () => NOW });
+		const session = new StorageBackedSession(metadata, storage);
+		const childId = "00000000-0000-7000-8000-000000000002";
+		await commitSession(session, [
+			sessionWrites.insertEntry({ id: ENTRY_ID, parentId: null, type: "custom", customType: "root" }),
+			sessionWrites.insertEntry({ id: childId, parentId: ENTRY_ID, type: "custom", customType: "child" }),
+		]);
+
+		await expect(
+			session.scanBranch({ start: childId, order: "oldestFirst" }, BACKGROUND_CONTEXT),
+		).resolves.toMatchObject([{ id: ENTRY_ID }, { id: childId }]);
+		let captured: SessionMutator | undefined;
+		await session.mutate(
+			"main",
+			async (mutator) => {
+				captured = mutator;
+				await expect(mutator.scanBranch({ start: childId, limit: 1 }, BACKGROUND_CONTEXT)).resolves.toMatchObject([
+					{ id: childId },
+				]);
+			},
+			BACKGROUND_CONTEXT,
+		);
+		const invalidated = captured;
+		if (invalidated === undefined) throw new Error("Expected captured mutator");
+		expect(() => invalidated.scanBranch({ start: childId }, BACKGROUND_CONTEXT)).toThrow(
+			"outside its mutation callback",
+		);
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
 	it("rejects pending assistant entries at the durable session write boundary", async () => {
 		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
 		const session = new StorageBackedSession(metadata, storage);
@@ -226,5 +257,6 @@ describe("StorageBackedSession", () => {
 		await expect(session.scanValues(storedValues.sessionName, BACKGROUND_CONTEXT)).rejects.toThrow(
 			"Session is closed",
 		);
+		await expect(session.scanBranch({ start: ENTRY_ID }, BACKGROUND_CONTEXT)).rejects.toThrow("Session is closed");
 	});
 });

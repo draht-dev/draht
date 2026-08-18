@@ -53,14 +53,6 @@ export class OperationMismatch extends TaggedError("OperationMismatch")<{
 	lastOperationId?: string;
 	message: string;
 }> {}
-export interface MissingIdentityInfo {
-	tools: string[];
-	model?: string;
-}
-
-export class MissingIdentities extends TaggedError("MissingIdentities")<
-	{ lane: string; message: string } & MissingIdentityInfo
-> {}
 export class NoActiveRun extends TaggedError("NoActiveRun")<{ lane: string; message: string }> {}
 export class NoActiveOperation extends TaggedError("NoActiveOperation")<{ lane: string; message: string }> {}
 export class NothingToResume extends TaggedError("NothingToResume")<{ lane: string; message: string }> {}
@@ -107,11 +99,10 @@ export type OptionalFinalAssistant =
 	| { finalEntryId: string; finalMessage: AssistantMessage }
 	| { finalEntryId?: never; finalMessage?: never };
 
-export type MissingIdentitySuspension = {
-	kind: "suspended";
-	reason: "missing_identities";
-	missing: MissingIdentityInfo;
-};
+export interface ActionRequired {
+	kind: "action_required";
+	action: ActionInfo;
+}
 
 export type RunOutcome =
 	| ({ kind: "completed"; leafId: string } & OptionalFinalAssistant)
@@ -124,13 +115,13 @@ export type RunOutcome =
 			finalEntryId: string;
 			deferred: DeferredHandle;
 	  }
-	| (MissingIdentitySuspension & { leafId: string });
+	| ActionRequired;
 
 export type CompactionOutcome =
 	| { kind: "completed"; leafId: string; entry: CompactionEntry }
 	| { kind: "declined" | "aborted"; leafId: string }
 	| { kind: "failed"; leafId: string; error: OperationError }
-	| (MissingIdentitySuspension & { leafId: string });
+	| ActionRequired;
 
 export type NavigationOutcome =
 	| {
@@ -141,26 +132,24 @@ export type NavigationOutcome =
 	  }
 	| { kind: "declined" | "aborted"; leafId: string | null }
 	| { kind: "failed"; leafId: string | null; error: OperationError }
-	| (MissingIdentitySuspension & { leafId: string | null });
+	| ActionRequired;
 
-export type ResumeOutcome =
-	| ({ operation: "run"; runId: string } & RunOutcome)
-	| ({ operation: "compaction"; runId: string } & CompactionOutcome)
-	| ({ operation: "navigation"; runId: string } & NavigationOutcome);
+export type RunOperationOutcome = { operation: "run"; runId: string } & RunOutcome;
+export type CompactionOperationOutcome = { operation: "compaction"; runId: string } & CompactionOutcome;
+export type NavigationOperationOutcome = { operation: "navigation"; runId: string } & NavigationOutcome;
+export type ResumeOutcome = RunOperationOutcome | CompactionOperationOutcome | NavigationOperationOutcome;
+export type SettledResumeOutcome = Exclude<ResumeOutcome, { kind: "action_required" }>;
 
 export type RunResult = Result<
-	{ runId: string } & RunOutcome,
-	LaneBusy | MissingIdentities | InvalidMessage | UnknownSkill | UnknownTemplate | Closed
+	RunOperationOutcome,
+	LaneBusy | InvalidMessage | UnknownSkill | UnknownTemplate | Closed
 >;
-export type CompactionResult = Result<
-	{ runId: string } & CompactionOutcome,
-	LaneBusy | MissingIdentities | NothingToCompact | Closed
->;
+export type CompactionResult = Result<CompactionOperationOutcome, LaneBusy | NothingToCompact | Closed>;
 export type NavigationResult = Result<
-	{ runId: string } & NavigationOutcome,
-	LaneBusy | MissingIdentities | InvalidNavigation | UnknownTarget | Closed
+	NavigationOperationOutcome,
+	LaneBusy | InvalidNavigation | UnknownTarget | Closed
 >;
-export type ResumeResult = Result<ResumeOutcome, NothingToResume | MissingIdentities | Closed>;
+export type ResumeResult = Result<ResumeOutcome, NothingToResume | Closed>;
 export type QueueResult = Result<{ entryId: string }, NoActiveRun | InvalidMessage | Closed>;
 export type NextRunResult = Result<{ entryId: string }, InvalidMessage | Closed>;
 export type CancelQueuedResult = Result<{ kind: "cancelled" | "already_consumed" | "not_found" }, Closed>;
@@ -193,7 +182,6 @@ export interface OperationAdmission {
 
 export type OperationAdmissionError =
 	| LaneBusy
-	| MissingIdentities
 	| InvalidMessage
 	| UnknownSkill
 	| UnknownTemplate
@@ -210,37 +198,40 @@ export interface DriveOptions {
 	pollDeferred?: boolean;
 }
 
+export interface ModelIdentity {
+	provider: string;
+	modelId: string;
+}
+
+export type OperationStatus = "running" | "open" | "aborting";
+
 export interface CurrentOperationInfo {
 	id: string;
 	kind: "run" | "compaction" | "navigation";
-	status: "running" | "suspended" | "aborting";
 	startedAt: number;
-	suspended?: SuspendedOperation;
+	status: OperationStatus;
+	capturedModel?: ModelIdentity;
 }
 
 export interface LaneExecutionInfo {
 	lane: string;
 	leafId: string | null;
+	configuredModel: ModelIdentity;
 	current: CurrentOperationInfo | null;
 	lastResult?: LaneLastResult;
 }
 
 export type TerminalOperationOutcome =
-	| ({ operation: "run"; runId: string } & Exclude<RunOutcome, { kind: "suspended" }>)
-	| ({ operation: "compaction"; runId: string } & Exclude<CompactionOutcome, { kind: "suspended" }>)
-	| ({ operation: "navigation"; runId: string } & Exclude<NavigationOutcome, { kind: "suspended" }>);
+	| ({ operation: "run"; runId: string } & Exclude<RunOutcome, { kind: "suspended" } | ActionRequired>)
+	| ({ operation: "compaction"; runId: string } & Exclude<CompactionOutcome, ActionRequired>)
+	| ({ operation: "navigation"; runId: string } & Exclude<NavigationOutcome, ActionRequired>);
 
 export type DriveOutcome =
 	| { kind: "settled"; operationId: string; outcome: TerminalOperationOutcome }
 	| { kind: "waiting"; operationId: string; reason: "retry"; notBefore: number }
 	| { kind: "waiting"; operationId: string; reason: "deferred"; deferred: DeferredHandle }
-	| {
-			kind: "waiting";
-			operationId: string;
-			reason: "missing_identities";
-			missing: MissingIdentityInfo;
-	  }
-	| { kind: "yielded"; operationId: string };
+	| { kind: "yielded"; operationId: string }
+	| { kind: "action_required"; operationId: string; action: ActionInfo };
 export type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
 
 export type AbortRequestResult = Result<
@@ -268,33 +259,16 @@ export interface WatchHandle<T> {
 export interface LaneInfo {
 	name: string;
 	leafId: string | null;
-	operation: null | {
-		id: string;
-		kind: "run" | "compaction" | "navigation";
-		status: "running" | "suspended" | "aborting";
-	};
+	operation: CurrentOperationInfo | null;
 }
 
-export type SuspendedOperation = {
+export interface OpenOperation {
 	lane: string;
 	operationId: string;
 	kind: "run" | "compaction" | "navigation";
 	startedAt: number;
-	prompt?: AgentMessage[];
-	aborting?: { steer: AgentMessage[]; followUp: AgentMessage[] };
-} & (
-	| { reason: "deferred"; deferred: DeferredHandle; missing?: never }
-	| {
-			reason: "missing_identities";
-			missing: MissingIdentityInfo;
-			deferred?: never;
-	  }
-	| {
-			reason: "crash";
-			deferred?: DeferredHandle;
-			missing?: MissingIdentityInfo;
-	  }
-);
+	aborting?: true;
+}
 
 export interface QueuedItem {
 	entryId: string;
@@ -305,12 +279,16 @@ export interface LaneSnapshot {
 	lane: string;
 	transcript: Entry[];
 	leafId: string | null;
+	lastResult?: LaneLastResult;
 	operation: null | {
 		id: string;
 		kind: "run" | "compaction" | "navigation";
-		status: "running" | "suspended" | "aborting";
 		startedAt: number;
-		suspended?: SuspendedOperation;
+		status: OperationStatus;
+		action?: ActionInfo;
+		retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
+		deferred?: { handle: DeferredHandle; poll: number };
+		drained?: { steer: QueuedItem[]; followUp: QueuedItem[] };
 		streamingMessage?: AssistantMessage;
 		runningTools: {
 			toolCallId: string;
@@ -318,7 +296,6 @@ export interface LaneSnapshot {
 			args: unknown;
 			partialResult?: AgentToolResult<unknown>;
 		}[];
-		retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
 	};
 	queues: { steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] };
 	pendingWrites: {
@@ -332,7 +309,7 @@ export interface LaneSnapshot {
 }
 
 export interface SessionSnapshot {
-	lanes: (LaneInfo & { suspended?: SuspendedOperation })[];
+	lanes: LaneInfo[];
 	faulted: boolean;
 }
 
@@ -340,24 +317,6 @@ export type HarnessEventPayload =
 	| { type: "run_start"; runId: string }
 	| { type: "run_resume"; runId: string }
 	| { type: "run_suspend"; runId: string; reason: "deferred"; deferred: DeferredHandle }
-	| {
-			type: "run_suspend";
-			runId: string;
-			reason: "missing_identities";
-			missing: MissingIdentityInfo;
-	  }
-	| {
-			type: "compaction_suspend";
-			runId: string;
-			reason: "missing_identities";
-			missing: MissingIdentityInfo;
-	  }
-	| {
-			type: "navigation_suspend";
-			runId: string;
-			reason: "missing_identities";
-			missing: MissingIdentityInfo;
-	  }
 	| { type: "run_abort"; runId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
 	| ({ type: "run_end"; runId: string; leafId: string | null } & (
 			| ({ outcome: "completed" | "aborted" } & OptionalFinalAssistant)
@@ -660,8 +619,8 @@ export interface AgentLane {
 	waitForIdle(context: Context): Promise<void>;
 	runWhenIdle(callback: (context: Context) => void | Promise<void>, context: Context): Promise<void>;
 	peekAction(context: Context): Promise<ActionInfo | undefined>;
-	executeAction(context: Context): Promise<ActionInfo | undefined>;
-	runToCompletion(context: Context): Promise<void>;
+	executeAction(context: Context): Promise<ResumeResult>;
+	runToCompletion(context: Context): Promise<Result<SettledResumeOutcome, NothingToResume | Closed>>;
 	getModel(context: Context): Promise<Model<Api> | undefined>;
 	setModel(model: Model<Api>, context: Context): Promise<void>;
 	getThinkingLevel(context: Context): Promise<ThinkingLevel>;
@@ -700,7 +659,7 @@ export interface AgentHarnessConstructor {
 	create<TContext extends object | undefined = object | undefined>(
 		options: AgentHarnessOptions<TContext>,
 		context: Context,
-	): Promise<{ harness: AgentHarness<TContext>; suspended: SuspendedOperation[] }>;
+	): Promise<{ harness: AgentHarness<TContext>; open: OpenOperation[] }>;
 }
 
 /** Runtime constructor for attaching the durable harness to one open session. */

@@ -1,6 +1,7 @@
 import { type Api, createModels, fauxProvider, type Model } from "@draht/ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { HarnessClosed } from "../../../src/harness/agent-harness.ts";
+import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
@@ -51,7 +52,15 @@ async function createLane(): Promise<{
 			models,
 			await restoreLane(session, "main", BACKGROUND_CONTEXT),
 			(cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-			() => Promise.resolve(),
+			() => ({ start: () => Promise.resolve() }),
+			(snapshot) => ({ snapshot, start: () => {}, unsubscribe: () => {} }),
+			() => ({
+				resources: {},
+				compaction: DEFAULT_COMPACTION_SETTINGS,
+				steeringMode: "all",
+				followUpMode: "all",
+				toolExecution: "parallel",
+			}),
 		),
 		model: faux.getModel(),
 		session,

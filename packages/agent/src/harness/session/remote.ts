@@ -21,6 +21,7 @@ import type {
 	SessionMutator,
 	SessionStats,
 	SessionTree,
+	StorageBranchScan,
 	Write,
 } from "./types.ts";
 import type { ListElement, ListReadOptions, StoredValue, Value, ValueList } from "./values.ts";
@@ -240,6 +241,10 @@ export class RemoteSession<TMetadata extends SessionMetadata = SessionMetadata>
 		) as ListElement<T>[];
 	}
 
+	async scanBranch(query: StorageBranchScan, context: Context): Promise<Entry[]> {
+		return expectArray(await this.invoke("session.scanBranch", { query }, context), "branch entries") as Entry[];
+	}
+
 	async mutate<T>(
 		lane: string,
 		mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
@@ -394,6 +399,18 @@ class RemoteSessionMutator implements SessionMutator {
 			),
 			"list elements",
 		) as ListElement<T>[];
+	}
+
+	async scanBranch(query: StorageBranchScan, context: Context): Promise<Entry[]> {
+		this.assertActive();
+		return expectArray(
+			await this.rpc.invoke(
+				"session.mutation.scanBranch",
+				{ handle: this.handle, mutationId: this.mutationId, query },
+				context,
+			),
+			"branch entries",
+		) as Entry[];
 	}
 
 	settle(): Promise<void> {

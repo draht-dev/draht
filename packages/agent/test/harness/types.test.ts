@@ -18,6 +18,7 @@ import type {
 	CustomEntry,
 	Deferred,
 	DriveResult,
+	Entry,
 	EntryProjector,
 	EntryWrite,
 	Generation,
@@ -45,6 +46,7 @@ import type {
 	SessionCreateOptions,
 	SessionMetadata,
 	SessionMutator,
+	SessionReader,
 	SessionRepo,
 	SessionSearchHit,
 	SessionSearchService,
@@ -52,6 +54,7 @@ import type {
 	SessionTree,
 	SettledAssistantMessage,
 	Storage,
+	StorageBranchScan,
 	StructuralDecision,
 	SummaryContext,
 	SummaryGeneration,
@@ -110,7 +113,8 @@ const generations = [
 const toolCalls = [
 	{ status: "planned", sourceIndex: 0, resultEntryId: "result-0" },
 	{ status: "effect_pending", sourceIndex: 1, resultEntryId: "result-1", replay: "safe" },
-	{ status: "completed", sourceIndex: 2, resultEntryId: "result-2", terminate: false },
+	{ status: "outcome_ready", sourceIndex: 2, resultEntryId: "result-2", terminate: true },
+	{ status: "completed", sourceIndex: 3, resultEntryId: "result-3", terminate: false },
 ] satisfies ToolCall[];
 const deferredStates = [
 	{
@@ -148,7 +152,7 @@ const structuralDecisions = [
 	{ status: "generating", taskId: "task", generation: summaryGenerations[0] },
 ] satisfies StructuralDecision[];
 
-const runPhases = [
+const runPhases: RunPhase[] = [
 	{ kind: "starting" },
 	checkpoint,
 	{ kind: "assistant", generation: generations[0] },
@@ -168,7 +172,25 @@ const runPhases = [
 		error: { code: "provider", message: "failed" },
 		provenance: { kind: "response", entryId: "response" },
 	},
-] satisfies RunPhase[];
+	{
+		kind: "failure_drain",
+		error: {
+			code: "model_unavailable",
+			message: "Model is unavailable",
+			details: { provider: "provider", modelId: "model" },
+		},
+		provenance: { kind: "configuration" },
+	},
+	{
+		kind: "failure_drain",
+		error: {
+			code: "configured_tools_unavailable",
+			message: "Configured tools are unavailable",
+			details: { tools: ["read"] },
+		},
+		provenance: { kind: "configuration" },
+	},
+];
 
 const runState = {
 	kind: "run",
@@ -179,7 +201,7 @@ const runState = {
 		followUpMode: "one-at-a-time",
 		toolExecution: "parallel",
 	},
-	phase: runPhases[0],
+	phase: runPhases[0]!,
 	inbox: { steer: [], followUp: [], writes: [] },
 	latestAssistantEntryId: null,
 } satisfies RunState;
@@ -312,7 +334,7 @@ it("covers the complete durable storage and Part 3 discriminants", () => {
 	expectTypeOf<OperationMeta["intent"]["kind"]>().toEqualTypeOf<"run" | "compaction" | "navigation">();
 	expectTypeOf<Control["status"]>().toEqualTypeOf<"running" | "cancel_requested">();
 	expectTypeOf<Generation["status"]>().toEqualTypeOf<"ready" | "effect_pending" | "retry_wait">();
-	expectTypeOf<ToolCall["status"]>().toEqualTypeOf<"planned" | "effect_pending" | "completed">();
+	expectTypeOf<ToolCall["status"]>().toEqualTypeOf<"planned" | "effect_pending" | "outcome_ready" | "completed">();
 	expectTypeOf<Deferred["status"]>().toEqualTypeOf<"suspended" | "effect_pending">();
 	expectTypeOf<SummaryGeneration["status"]>().toEqualTypeOf<"ready" | "effect_pending" | "retry_wait">();
 	expectTypeOf<StructuralDecision["status"]>().toEqualTypeOf<"deciding" | "generating">();
@@ -363,6 +385,9 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 			context: Context,
 		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
 	>();
+	expectTypeOf<SessionReader["scanBranch"]>().toEqualTypeOf<
+		(query: StorageBranchScan, context: Context) => Promise<Entry[]>
+	>();
 	expectTypeOf<Session["createLane"]>().toEqualTypeOf<
 		(name: string, at: string | null, laneConfiguration: LaneConfiguration, context: Context) => Promise<SessionTree>
 	>();
@@ -379,7 +404,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	type RunErrorTag = Extract<RunResult, { ok: false }>["error"]["_tag"];
 	type CancelKind = Extract<CancelQueuedResult, { ok: true }>["value"]["kind"];
 	expectTypeOf<RunErrorTag>().toEqualTypeOf<
-		"LaneBusy" | "MissingIdentities" | "InvalidMessage" | "UnknownSkill" | "UnknownTemplate" | "Closed"
+		"LaneBusy" | "InvalidMessage" | "UnknownSkill" | "UnknownTemplate" | "Closed"
 	>();
 	expectTypeOf<CancelKind>().toEqualTypeOf<"cancelled" | "already_consumed" | "not_found">();
 	expectTypeOf<HarnessEvent["type"]>().toEqualTypeOf<
@@ -408,9 +433,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 		| "config_update"
 		| "compaction_start"
 		| "compaction_end"
-		| "compaction_suspend"
 		| "navigation_start"
-		| "navigation_suspend"
 		| "navigation_end"
 		| "lane_created"
 		| "usage"

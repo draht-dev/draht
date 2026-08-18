@@ -112,6 +112,44 @@ describe("runtime2 lane restore", () => {
 		expect(restored.operation).toEqual({ meta, state });
 	});
 
+	it("validates current-operation identity, lane ownership, and intent/state compatibility", async () => {
+		for (const corruption of ["identity", "lane", "kind"] as const) {
+			const session = await createSession();
+			const operationId = session.idGenerator.next();
+			const base: OperationMeta = {
+				operationId,
+				lane: "main",
+				sourceLeafId: null,
+				startedAt: 1,
+				intent: { kind: "run", promptEntryIds: [] },
+			};
+			const meta: OperationMeta =
+				corruption === "identity"
+					? { ...base, operationId: "different-operation" }
+					: corruption === "lane"
+						? { ...base, lane: "worker" }
+						: { ...base, intent: { kind: "navigation", targetId: null, summarize: false } };
+			await session.mutate(
+				"main",
+				(mutator) =>
+					mutator.commit(
+						[
+							storedValues.setValue(storedValues.operationMeta(operationId), meta),
+							storedValues.setValue(storedValues.operationState(operationId), runState("trigger")),
+							storedValues.setValue(storedValues.laneState("main"), {
+								currentOperationId: operationId,
+								pendingNextRun: [],
+							}),
+						],
+						BACKGROUND_CONTEXT,
+					),
+				BACKGROUND_CONTEXT,
+			);
+
+			await expect(restoreLane(session, "main", BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(Error);
+		}
+	});
+
 	it.each([
 		[storedValues.laneLeaf("main").namespace, storedValues.deleteValue(storedValues.laneLeaf("main"))],
 		[storedValues.laneConfig("main").namespace, storedValues.deleteValue(storedValues.laneConfig("main"))],

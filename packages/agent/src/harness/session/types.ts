@@ -154,20 +154,19 @@ export type Generation =
 			errorMessage: string;
 	  };
 
-export type ToolCall =
-	| { status: "planned"; sourceIndex: number; resultEntryId: string }
-	| {
-			status: "effect_pending";
-			sourceIndex: number;
-			resultEntryId: string;
-			replay: "never" | "safe";
-	  }
-	| {
-			status: "completed";
-			sourceIndex: number;
-			resultEntryId: string;
-			terminate: boolean;
-	  };
+interface ToolCallSource {
+	/** Zero-based index in the assistant message's complete content array, not a filtered tool-call ordinal. */
+	sourceIndex: number;
+	resultEntryId: string;
+}
+
+export type ToolCall = ToolCallSource &
+	(
+		| { status: "planned" }
+		| { status: "effect_pending"; replay: "never" | "safe" }
+		| { status: "outcome_ready"; terminate: boolean }
+		| { status: "completed"; terminate: boolean }
+	);
 
 export interface ToolBatch {
 	assistantEntryId: string;
@@ -243,7 +242,10 @@ export type RunPhase =
 	| {
 			kind: "failure_drain";
 			error: OperationError;
-			provenance: { kind: "response"; entryId: string } | { kind: "structural"; taskId: string };
+			provenance:
+				| { kind: "response"; entryId: string }
+				| { kind: "structural"; taskId: string }
+				| { kind: "configuration" };
 	  };
 
 export interface RunState {
@@ -487,6 +489,8 @@ export interface SessionReader {
 		options: ListReadOptions | undefined,
 		context: Context,
 	): Promise<ListElement<T>[]>;
+	/** Scan a branch from an explicit entry while this reader capability remains valid. */
+	scanBranch(query: StorageBranchScan, context: Context): Promise<Entry[]>;
 }
 
 /** Callback-scoped write capability bound to one lane. */

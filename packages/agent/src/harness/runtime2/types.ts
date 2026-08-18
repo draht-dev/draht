@@ -29,6 +29,15 @@ export interface Config<TContext extends object | undefined> {
 	readonly entryProjectors: Readonly<NonNullable<AgentHarnessOptions<TContext>["entryProjectors"]>>;
 }
 
+/** Harness-global settings captured by an accepted run. */
+export interface AcceptanceConfig {
+	readonly resources: Resources;
+	readonly compaction: CompactionSettings;
+	readonly steeringMode: QueueMode;
+	readonly followUpMode: QueueMode;
+	readonly toolExecution: "sequential" | "parallel";
+}
+
 /** The current durable state owned by one lane. */
 export interface LaneState {
 	readonly leafId: string | null;

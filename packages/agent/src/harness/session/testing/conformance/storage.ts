@@ -2,7 +2,16 @@ import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert/strict";
 import type { Usage } from "@draht/ai";
 import { BACKGROUND_CONTEXT } from "../../../context.ts";
 import { insertEntry, insertUsage } from "../../commit.ts";
-import type { CompactionEntry, CustomEntry, Entry, JsonValue, MessageEntry, NewEntry, Write } from "../../types.ts";
+import type {
+	CompactionEntry,
+	CustomEntry,
+	Entry,
+	EntryStructure,
+	JsonValue,
+	MessageEntry,
+	NewEntry,
+	Write,
+} from "../../types.ts";
 import {
 	appendList,
 	deleteList,
@@ -104,7 +113,8 @@ function compactionEntry(id: string, parentId: string | null): NewEntry<Compacti
 	};
 }
 
-function ids(entries: readonly Entry[]): string[] {
+// EntryStructure is included for scanBranchStructure conformance, especially SQLite's payload-free branch scans.
+function ids(entries: readonly (Entry | EntryStructure)[]): string[] {
 	return entries.map((entry) => entry.id);
 }
 
@@ -368,6 +378,43 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 					{ address: testValue("prefix/\u{10000}"), value: 5, seq: first.seqs[4] },
 				]);
 				strictEqual(await storage.getValue(testValue("absent"), BACKGROUND_CONTEXT), undefined);
+			},
+		),
+
+		createCase(
+			factory,
+			"values",
+			"applies same-transaction value and list operations in write order",
+			async ({ storage }) => {
+				const keptValue = testValue("write-order/kept");
+				const deletedValue = testValue("write-order/deleted");
+				const keptList = testList("write-order/kept");
+				const deletedList = testList("write-order/deleted");
+				const result = await storage.commit(
+					[
+						setValue(deletedValue, "transient"),
+						deleteValue(deletedValue),
+						setValue(keptValue, "transient"),
+						setValue(keptValue, "kept"),
+						appendList(keptList, "transient"),
+						deleteList(keptList),
+						appendList(keptList, "kept"),
+						appendList(deletedList, "transient"),
+						deleteList(deletedList),
+					],
+					BACKGROUND_CONTEXT,
+				);
+
+				strictEqual(await storage.getValue(deletedValue, BACKGROUND_CONTEXT), undefined);
+				deepStrictEqual(await storage.getValue(keptValue, BACKGROUND_CONTEXT), {
+					address: keptValue,
+					value: "kept",
+					seq: result.seqs[3],
+				});
+				deepStrictEqual(await storage.readList(keptList, undefined, BACKGROUND_CONTEXT), [
+					{ seq: result.seqs[6], value: "kept" },
+				]);
+				deepStrictEqual(await storage.readList(deletedList, undefined, BACKGROUND_CONTEXT), []);
 			},
 		),
 
@@ -692,6 +739,45 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 				],
 			);
 		}),
+
+		createCase(
+			factory,
+			"branch queries",
+			"applies branch query semantics to structure scans",
+			async ({ storage }) => {
+				const result = await storage.commit(
+					[
+						insertEntry(userEntry("root")),
+						insertEntry(customEntry("marker", "root", "marker")),
+						insertEntry(userEntry("middle", "marker")),
+						insertEntry(compactionEntry("compact", "middle")),
+						insertEntry(customEntry("note", "compact", "note")),
+						insertEntry(userEntry("leaf", "note")),
+					],
+					BACKGROUND_CONTEXT,
+				);
+
+				deepStrictEqual(
+					ids(
+						await storage.scanBranchStructure(
+							{ start: "leaf", stopAtType: "compaction", type: "message" },
+							BACKGROUND_CONTEXT,
+						),
+					),
+					["leaf"],
+				);
+				deepStrictEqual(
+					ids(
+						await storage.scanBranchStructure(
+							{ start: "leaf", order: "oldestFirst", cursor: { seq: result.seqs[1] }, limit: 2 },
+							BACKGROUND_CONTEXT,
+						),
+					),
+					["middle", "compact"],
+				);
+				await rejects(storage.scanBranchStructure({ start: "missing" }, BACKGROUND_CONTEXT));
+			},
+		),
 
 		createCase(
 			factory,

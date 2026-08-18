@@ -572,6 +572,8 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 							[
 								insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "first" }),
 								setValue(laneLeaf("main"), ROOT_ID),
+								setValue(sessionName, "first name"),
+								setValue(entryLabel(ROOT_ID), "first label"),
 							],
 							BACKGROUND_CONTEXT,
 						),
@@ -590,6 +592,8 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 									customType: "second",
 								}),
 								setValue(laneLeaf("main"), CHILD_ID),
+								setValue(sessionName, "second name"),
+								setValue(entryLabel(ROOT_ID), "second label"),
 							],
 							BACKGROUND_CONTEXT,
 						),
@@ -603,6 +607,8 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 					(await forked.findEntries({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id }) => id),
 					[ROOT_ID],
 				);
+				strictEqual(await forked.getName(BACKGROUND_CONTEXT), "first name");
+				strictEqual(await forked.getLabel(ROOT_ID, BACKGROUND_CONTEXT), "first label");
 				await Promise.all([source.close(BACKGROUND_CONTEXT), forked.close(BACKGROUND_CONTEXT)]);
 			},
 		),

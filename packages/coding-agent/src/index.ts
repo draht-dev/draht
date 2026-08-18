@@ -34,6 +34,7 @@ export {
 export {
 	type BranchPreparation,
 	type BranchSummaryResult,
+	type CacheFriendlySummaryOptions,
 	type CollectEntriesResult,
 	type CompactionResult,
 	type CutPointResult,

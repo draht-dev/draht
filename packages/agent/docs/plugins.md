@@ -184,13 +184,15 @@ Out of scope: arbitrary object remoting, serialized functions/classes/`Map`/`Set
 
 ## Services connect host facets
 
-Facets communicate across processes through **services**. A service token is a typed identity plus trusted exposure metadata for the generic RPC layer:
+Facets communicate across processes through **services**. A service token is only a typed identity for the generic RPC layer:
 
 ```ts
-function defineRemoteService<T>(id: string, exposure?: ServiceExposure<T>): RemoteService<T>;
+function defineRemoteService<T>(id: string): RemoteService<T>;
 ```
 
-The exact exposure-descriptor API belongs to `rpc.md`; examples use `state`, `events`, and `results` only to illustrate the required capabilities.
+TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel descriptor. When `provide()` receives the implementation, the host classifies functions as remote methods and recognizes branded `RemoteState` and `RemoteEvents` values. It rejects unsupported members and announces the resulting member table over the transport.
+
+`use()` returns a stable lazy proxy synchronously, even before a provider is attached. Member access creates local method, state, or event slots as they are used; attachment validates those slots against the provider-announced kinds. A mismatch is an assembly or protocol error. This runtime mechanism is implemented once by the host rather than repeated in every service declaration.
 
 The models service — the authority behind the model picker and thinking-level control — exercises methods, replicated state, and multiple consumers.
 
@@ -217,10 +219,10 @@ export interface ModelsService {
 	select(model: ModelRef, context: Context): Promise<void>;
 }
 
-export const Models = defineRemoteService<ModelsService>("models", { state: ["state"] });
+export const Models = defineRemoteService<ModelsService>("models");
 ```
 
-Everything in a contract is strict JSON: arguments, results, replicated state, events. That is why state uses `null`, never `undefined`. `Context` is control-plane data in a declared position; the proxy strips it and it is never serialized.
+Everything transported in a remote contract is strict JSON: arguments, results, replicated state, and events. Business-level absence uses JSON `null`, never `undefined`. An unhydrated `RemoteState.value === undefined` is local control-plane readiness, not a transported state value. `Context` is control-plane data in a declared position; the proxy strips it and it is never serialized.
 
 ### Session facet
 
@@ -262,15 +264,15 @@ export const providersBuiltin = definePlugin({
 export const modelSelection = definePlugin({
 	id: "@pi/model-selection",
 
-	async tui(pluginContext: CodingAgentTuiPluginContext) {
-		const models = await pluginContext.session.use(Models);
+	tui(pluginContext: CodingAgentTuiPluginContext) {
+		const models = pluginContext.session.use(Models);
 		pluginContext.commands.register("models.select", (ctx, model: ModelRef) => models.select(model, ctx));
 		models.state.subscribe((next) => renderModelSelector(next));
 	},
 });
 ```
 
-The TUI facet has no credentials, registry, or refresh logic: it calls a **typed proxy** — a generated object with the contract's method signatures whose calls become RPC — and renders replicated state. A web facet would do the same through the web host context.
+The TUI facet has no credentials, registry, or refresh logic: it calls a typed lazy proxy with the contract's method signatures and renders replicated state after hydration. A web facet would do the same through the web host context.
 
 ### Service semantics
 
@@ -279,7 +281,7 @@ A service has **one owner and many consumers**: `providersBuiltin` provides `Mod
 `use()` has two modes:
 
 - **Local:** in the process that provides the service, `use()` is synchronous and returns the actual implementation object. No serialization, no proxy.
-- **Remote:** across a connection, `use()` is asynchronous and demand-driven: it subscribes to the service on first demand and resolves a typed proxy. Concurrent consumers of one token in one process share one proxy, one state replica, and one remote subscription.
+- **Remote:** across a connection, `use()` synchronously returns a stable lazy proxy. Calls made while disconnected fail when invoked; state has no value until hydrated. Concurrent consumers of one token in one process share one proxy, one state replica, and one remote subscription.
 
 Presentation facets consume remotely through two explicit namespaces — `server.use()` and `session.use()`, defined below. Session facets consume their own process's services locally and server services remotely through `server.use()`. `provide()`, `use()`, and `remoteState()` are host infrastructure layered over the kernel scope, not kernel API.
 
@@ -327,14 +329,14 @@ interface CodingAgentSessionPluginContext extends PluginLifecycleScope {
 
 ```ts
 interface ServerServices {
-	use<T>(service: RemoteService<T>): Promise<T>; // terminates at the connected server
+	use<T>(service: RemoteService<T>): T; // terminates at the connected server
 	readonly connection: RemoteState<ConnectionState>;
 }
 
 type AttachmentState = { status: "detached" } | { status: "attaching" | "attached" | "degraded"; sessionId: string };
 
 interface SessionServices {
-	use<T>(service: RemoteService<T>): Promise<T>; // forwarded to the one selected session
+	use<T>(service: RemoteService<T>): T; // forwarded to the one selected session
 	readonly attachment: RemoteState<AttachmentState>;
 }
 
@@ -352,7 +354,7 @@ interface CodingAgentTuiPluginContext extends PluginLifecycleScope {
 }
 ```
 
-The two namespaces are the topology made visible: `server.use(SessionDirectory)` resolves a service the connected server provides itself; `session.use(Models)` resolves a service of the one **selected session** — the session this presentation is currently attached to. A presentation has at most one selected session. `session.use()` resolves its shared proxy immediately; while detached, calls fail with `not_attached` and no state is present. The two namespaces fail independently: the server connection can be healthy while the selected session is unreachable (`attachment.status === "degraded"`).
+The two namespaces are the topology made visible: `server.use(SessionDirectory)` returns a proxy for a service the connected server provides itself; `session.use(Models)` returns one for the **selected session** — the session this presentation is currently attached to. A presentation has at most one selected session. `session.use()` returns its shared proxy immediately; while detached, calls fail with `not_attached` and no state is present. The two namespaces fail independently: the server connection can be healthy while the selected session is unreachable (`attachment.status === "degraded"`).
 
 A future `CodingAgentWebPluginContext` carries the same two namespaces plus browser registries — routes, views, DOM dialogs. The server context is defined in the [server section](#the-server-directory-management-and-routing). Contexts resemble each other by convention; no kernel-owned base type forces the shape.
 
@@ -385,7 +387,7 @@ interface AccountsService {
 	readonly state: RemoteState<{ providers: Array<{ provider: string; configured: boolean }> }>;
 	remove(provider: string, context: Context): Promise<void>;
 }
-const Accounts = defineRemoteService<AccountsService>("accounts", { state: ["state"] });
+const Accounts = defineRemoteService<AccountsService>("accounts");
 ```
 
 The auth plugin's session facet uses `Credentials` directly; presentations see provider IDs and `configured` booleans — never secrets. If some settings must not be remotely writable, split them the same way; do not rely on presentation-side convention.
@@ -396,24 +398,27 @@ The auth plugin's session facet uses `Credentials` directly; presentations see p
 
 ```ts
 interface RemoteState<T> {
-	readonly value: T;
+	/** `undefined` until the first authoritative snapshot arrives. */
+	readonly value: T | undefined;
 	subscribe(listener: (value: T, context: Context) => void): () => void;
 }
 
 interface MutableRemoteState<T> extends RemoteState<T> {
+	/** A providing state is always initialized. */
+	readonly value: T;
 	set(value: T, context: Context): void;
 }
 ```
 
 Required behavior:
 
-1. The providing host owns the one authoritative value; remote consumers call methods rather than writing the replica.
-2. Every replica has a local initial value. A facility may declare one; otherwise it is JSON `null`. `subscribe()` immediately reports that current local value even before hydration, keeping local and remote subscription behavior consistent. The state type must include `null` when no non-null initial value is declared.
-3. **Hydration** — installing a complete snapshot of all exposed state values atomically before updates flow — happens when a consumer first subscribes; subscribing before hydration is valid, and updates emitted meanwhile are buffered, so a client observes initial-value, snapshot, then updates with no gap.
-4. The client replica retains its latest local value. After hydration, client `.value` is synchronously readable and `subscribe()` immediately reports the current value, then future updates. The immediate pre-hydration callback uses a local lifecycle context; a hydrated snapshot callback uses a fresh **hydration context** parented to the subscription, because the write that produced the value may be long settled.
+1. The providing host owns one initialized authoritative value; remote consumers call methods rather than writing the replica.
+2. A cold remote replica has no value. Its `.value` is `undefined`, and `subscribe()` registers the listener without invoking it. This `undefined` is local readiness state and never crosses the wire.
+3. **Hydration** installs a complete snapshot atomically before updates flow. Subscribing before hydration is valid, and updates emitted concurrently with the snapshot are buffered, so the listener observes snapshot then updates with no gap.
+4. Once hydrated, `.value` is synchronously readable and `subscribe()` immediately reports the current value, then future updates. The first snapshot callback uses a fresh **hydration context** parented to the subscription; an immediate callback for an already-present value uses a fresh local delivery context because the write that produced it may be long settled.
 5. Values are detached with structured JSON semantics; one listener cannot mutate another's state.
-6. Reconnect or reattach replaces client state from a fresh authoritative snapshot; disconnect retains the last value as stale display data alongside the connection/attachment state.
-7. `set(value, context)` carries source trace metadata; each delivery invokes listeners with a reconstructed delivery `Context`. Background updates use an intentional background or lifecycle context, never a retained caller context.
+6. Disconnect retains the last value as stale display data alongside connection or attachment state. Reconnecting to the same provider replaces it with a fresh snapshot. Switching to a different provider clears readiness and `.value` becomes `undefined` until that provider hydrates; service-bound presentation resources are disposed as part of the switch.
+7. `set(value, context)` carries source trace metadata; each live delivery invokes listeners with a reconstructed delivery `Context`. Background updates use an intentional background or lifecycle context, never a retained caller context.
 
 Anything a consumer must recover after reconnect is exposed as remote state or pulled through a remote method. Remote state is latest-value replication, not by itself durable session storage; the providing facet must reconstruct its authoritative value after a worker restart.
 
@@ -493,7 +498,7 @@ interface GitService {
 	readonly events: RemoteEvents<GitEvent>;   // { type: "status_changed" | "head_changed" }
 	refresh(context: Context): Promise<void>;
 }
-const Git = defineRemoteService<GitService>("git", { state: ["status"], events: ["events"] });
+const Git = defineRemoteService<GitService>("git");
 ```
 
 Server-side, the exposure adapter subscribes to the host-local source once per remote subscription and forwards frames. Client-side, `events` is a local facade whose listeners run in the client process — callbacks never cross the wire; `on(type, listener)` filters by discriminator, `subscribe(listener)` observes everything. Each event carries source trace metadata from the providing host's context, so client-side handling stays correlated with the originating operation. The adapter owns subscribe/unsubscribe frames, sequencing, buffering, flow control, and disconnect cleanup (`rpc.md`). Remote events are non-durable and never replayed: a new or reconnected consumer sees only events emitted after its subscription becomes active. Anything needed to reconstruct current behavior after reconnect belongs in remote state or a pull method.
@@ -577,10 +582,7 @@ export interface SessionDirectoryService {
 	readonly events: RemoteEvents<SessionDirectoryEvent>;
 }
 
-export const SessionDirectory = defineRemoteService<SessionDirectoryService>("session-directory", {
-	state: ["state"],
-	events: ["events"],
-});
+export const SessionDirectory = defineRemoteService<SessionDirectoryService>("session-directory");
 
 export interface SessionManagementService {
 	create(options: { title: string }, context: Context): Promise<SessionRecordSummary>;
@@ -650,15 +652,18 @@ Every call is authorized against the client identity that transport policy insta
 
 ```ts
 // tui.ts
-export async function sessionPickerTuiFacet(pluginContext: CodingAgentTuiPluginContext) {
-	const directory = await pluginContext.server.use(SessionDirectory);
-	const management = await pluginContext.server.use(SessionManagement);
+export function sessionPickerTuiFacet(pluginContext: CodingAgentTuiPluginContext) {
+	const directory = pluginContext.server.use(SessionDirectory);
+	const management = pluginContext.server.use(SessionManagement);
 
 	pluginContext.commands.register("sessions.switch", async (context) => {
-		const entries = directory.state.value.sessions;
+		const current = directory.state.value;
+		const attachment = pluginContext.session.attachment.value;
+		if (current === undefined || attachment === undefined) return;
+		const entries = current.sessions;
 		const picked = await pluginContext.ui.select(
 			"Sessions",
-			entries.map((entry) => pickerLabel(entry, pluginContext.session.attachment.value)),
+			entries.map((entry) => pickerLabel(entry, attachment)),
 			{ signal: context.abortSignal },
 		);
 		if (picked === undefined) return;
@@ -680,7 +685,7 @@ The TUI facet consumes a service provided by the one connected server. There is 
 3. it binds the session namespace to the selected session worker;
 4. the session worker hydrates the client with a complete fresh snapshot; `session.attachment` becomes `attached`.
 
-Session-namespace proxies are stable across switches: `session.use(Models)` resolved once keeps working against the new session. Frames belonging to closed subscriptions or requests are dropped.
+Session-namespace proxies are stable across switches: a proxy returned once by `session.use(Models)` keeps working against the new session. Frames belonging to closed subscriptions or requests are dropped.
 
 ### Routed session call
 
@@ -747,7 +752,7 @@ interface QuestionsService {
 	submitAnswer(id: string, response: QuestionResponse, context: Context): Promise<DurableRequestSubmitResult>;
 }
 
-const Questions = defineRemoteService<QuestionsService>("questions", { state: ["pending"] });
+const Questions = defineRemoteService<QuestionsService>("questions");
 const QuestionRequests = defineDurableRequests({
 	id: "questions",
 	request: QuestionParamsSchema,
@@ -952,7 +957,7 @@ Errors cross the wire as a JSON envelope `{ code, message, data? }` with stable 
 
 Security rules every providing host (session and server alike) must enforce:
 
-- remote service IDs and members are allowlisted by trusted manifests or exposure descriptors; local services are never discoverable remotely;
+- remote service IDs are allowlisted by trusted manifests; `provide()` exposes only implementation functions and branded remote-state/event members, and local services are never discoverable remotely;
 - business arguments, results, state, and events are validated as JSON; protocol envelopes cannot be forged as ordinary values;
 - clients cannot choose context position, server typed values, telemetry parents, or cancellation targets other than their own request IDs;
 - credentials, prompts, completions, tool arguments/results, and filesystem contents are not exposed unless an explicit contract permits them; state snapshots contain only client-safe data;
@@ -973,7 +978,7 @@ Before this becomes normative:
 - whether directory state is projected per client (workspace-scoped snapshots) or one presentation-safe value plus method authorization;
 - multiple selected sessions per presentation connection (a multi-pane web UI) — deferred; it changes the session-namespace API;
 - authentication of presentations and session workers, and protocol version negotiation;
-- the exact `RemoteService`/exposure-descriptor API, and the context-position and JSON-safe optional-argument policy from `rpc.md`;
+- the exact lazy `RemoteService` member-discovery and provider-kind-validation API, and the context-position and JSON-safe optional-argument policy from `rpc.md`;
 - whether `RemoteState` is generic RPC infrastructure or host infrastructure; snapshot granularity; exact hydration/delivery-context semantics;
 - state/event flow control and per-client buffering at the server; reference lifetime and garbage collection;
 - the stable error envelope and expected-error registration; activation/disposal ordering, optional dependencies, and shared-proxy lifetime;
@@ -987,7 +992,7 @@ The handoff should include a reusable two-transport test matrix (loopback plus a
 - **Composition:** hosts start from one plugin manifest, not hard-coded features; per-host entry-point resolution with no session modules reachable in a presentation bundle; provide/demand-resolve round trip; shared proxy/replica across concurrent consumers; local services unreachable remotely; duplicate/missing service failures; activation only after registration; reverse-order disposal.
 - **Connections:** `Connect` performs one abortable attempt and the host owns retries; peer identity comes from the accepting server's handshake; session and presentation hosts connect to that server, and `server.local` runs the same host boundaries without sockets.
 - **RPC and context:** JSON call and `void` result; invalid argument/result and unknown service/member rejection; client span → `rpc.client` → `rpc.server` → service span; per-call cancellation isolation; disconnect aborts active calls; no callback, context, signal, telemetry object, or secret in wire JSON.
-- **State and events:** snapshot plus concurrent update with no gap; update ordering and detached values; reconnect replaces stale state; subscribe/unsubscribe and disconnect cleanup; deliveries carry reconstructed source contexts; immediate snapshot callbacks run under the hydration context.
+- **State and events:** a cold replica has `.value === undefined` and does not invoke subscribers before hydration; snapshot plus concurrent update has no gap; hydrated subscriptions immediately receive the current value; update ordering and detached values; reconnect replaces stale state; provider switching clears readiness; subscribe/unsubscribe and disconnect cleanup; deliveries carry reconstructed source contexts; first snapshot callbacks run under the hydration context.
 - **Registries:** ordered provider contributions rebuild deterministically; tool wrappers compose once and rebuild correctly after removal.
 - **Routing:** attach authorizes at the server and rejects cross-workspace targets; attach/switch closes previous routed requests and hydrates the selected session; a routed call reconstructs `Context` at the session worker, with cancellation and trace carriers traversing the server; per-client keying prevents ID collisions; the server routes services whose contracts it does not load; session-worker failure leaves server services healthy and updates directory status; presentation disconnect cleanup reaches the session; summaries contain no `ownerId` or `cwd`.
 - **Boundaries:** scoped agent and fleet capabilities cannot reach host ownership or whole-registry mutation; raw Harness/Session/SessionRepo capabilities unreachable from any client connection; job `wait` cancellation distinct from `job.cancel()`; stale/closed reference rejection; one pending question appears through remote state in simultaneous TUI and web clients, survives having no connected presentation, hydrates from its invocation memo after worker restart before tool replay, accepts an answer with or without a live waiter, returns that answer when the Harness safely replays the tool, rejects later answers, cleans up with durable tool-result staging, and closes in every presentation; invocation cancellation writes no durable cancellation state.

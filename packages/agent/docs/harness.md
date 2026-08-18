@@ -994,6 +994,8 @@ Tests assert these invariants and the required query plans. No wall-clock thresh
 
 A fork is a repository operation over one coherent source-session snapshot. It copies selected entries, latest semantic values, lane leaves, and total configuration; it never copies operation/pending values, assistant frame lists, or ledger rows — destination lanes start with a fresh empty `LaneState`. Application-defined values and lists are not copied by the generic fork; a consuming feature must add an explicit address-specific policy before relying on copied application state; a precise rewrite (§2.9) that retains a list element preserves its sequence cursor unless it explicitly remaps the whole destination sequence space.
 
+Forking should not require all copied entries and values to be materialized in memory at once. Backends may use native copying, streaming, paging, or already-resident state while preserving one coherent source snapshot.
+
 ```ts
 type ForkOptions =
   | { scope?: "branch"; entryId?: string; position?: "before" | "at"; id?: string }

@@ -1,4 +1,4 @@
-import { uuidv7 } from "@draht/ai";
+import { type ImageContent, type TextContent, uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../../types.ts";
 import type { CommittedWrite } from "../commit.ts";
 import type { JsonValue } from "../types.ts";
@@ -32,7 +32,24 @@ interface LegacyV3CustomEntry extends LegacyV3EntryBase {
 	data?: JsonValue;
 }
 
-type LegacyV3Entry = LegacyV3MessageEntry | LegacyV3CustomEntry;
+interface LegacyV3CustomMessageEntry extends LegacyV3EntryBase {
+	type: "custom_message";
+	customType: string;
+	content: string | (TextContent | ImageContent)[];
+	details?: unknown;
+	display: boolean;
+}
+
+interface ImportedCustomMessage {
+	role: "custom";
+	customType: string;
+	content: string | (TextContent | ImageContent)[];
+	details?: unknown;
+	display: boolean;
+	timestamp: number;
+}
+
+type LegacyV3Entry = LegacyV3MessageEntry | LegacyV3CustomEntry | LegacyV3CustomMessageEntry;
 
 export interface NormalizedLegacyV3 {
 	header: JsonlStorageHeader;
@@ -77,7 +94,7 @@ function parseLegacyV3Entry(line: string, lineNumber: number): LegacyV3Entry {
 	}
 	const recordType: unknown = entry.type;
 	// TODO: Support the remaining legacy v3 record types as their normalization slices are implemented.
-	if (recordType !== "message" && recordType !== "custom") {
+	if (recordType !== "message" && recordType !== "custom" && recordType !== "custom_message") {
 		throw new Error(`Unsupported legacy v3 record type at line ${lineNumber}: ${String(recordType)}`);
 	}
 	return entry;
@@ -98,6 +115,18 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 		};
 		if (entry.type === "message") {
 			return { ...committedBase, type: "message", message: entry.message };
+		}
+		if (entry.type === "custom_message") {
+			const message: ImportedCustomMessage = {
+				role: "custom",
+				customType: entry.customType,
+				content: entry.content,
+				details: entry.details,
+				display: entry.display,
+				timestamp: committedBase.timestamp,
+			};
+			// The coding-agent CustomAgentMessages declaration merge is not visible in this package.
+			return { ...committedBase, type: "message", message: message as unknown as AgentMessage };
 		}
 		return {
 			...committedBase,

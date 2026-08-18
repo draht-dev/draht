@@ -144,6 +144,67 @@ describe("JSONL v3 migration", () => {
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
+	it("imports a custom message as a current message entry", async () => {
+		const parentTimestamp = NOW + 1_000;
+		const customMessageTimestamp = NOW + 2_000;
+		const parentMessage = {
+			role: "user",
+			content: [{ type: "text", text: "first" }],
+			timestamp: parentTimestamp,
+		} satisfies AgentMessage;
+		const content = [{ type: "text", text: "legacy custom message" }];
+		const details = { status: "complete" };
+		await writeLegacyV3Fixture([
+			{
+				type: "message",
+				id: "message-1",
+				parentId: null,
+				timestamp: new Date(parentTimestamp).toISOString(),
+				message: parentMessage,
+			},
+			{
+				type: "custom_message",
+				id: "custom-message-1",
+				parentId: "message-1",
+				timestamp: new Date(customMessageTimestamp).toISOString(),
+				customType: "status",
+				content,
+				details,
+				display: false,
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+		expect(entries).toHaveLength(2);
+		const [parentEntry, customMessageEntry] = entries;
+		if (parentEntry === undefined || customMessageEntry === undefined) {
+			throw new Error("Legacy custom message chain was not imported");
+		}
+		expect(parentEntry.seq).toBe(1);
+		expect(customMessageEntry).toMatchObject({
+			type: "message",
+			parentId: parentEntry.id,
+			seq: 2,
+			timestamp: customMessageTimestamp,
+			message: {
+				role: "custom",
+				customType: "status",
+				content,
+				details,
+				display: false,
+				timestamp: customMessageTimestamp,
+			},
+		});
+		expect(customMessageEntry.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(uuidTimestamp(customMessageEntry.id)).toBe(customMessageTimestamp);
+		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(customMessageEntry.id);
+		expect((await session.getStats(BACKGROUND_CONTEXT)).messageCount).toBe(2);
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
 	it("remaps a legacy message chain and exposes it through current APIs", async () => {
 		const firstTimestamp = NOW + 1_000;
 		const secondTimestamp = NOW + 2_000;

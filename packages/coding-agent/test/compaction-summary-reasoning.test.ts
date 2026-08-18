@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@draht/agent-core";
-import type { AssistantMessage, Model } from "@draht/ai";
+import type { AssistantMessage, Context, Model } from "@draht/ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type CompactionPreparation,
@@ -127,6 +127,25 @@ describe("generateSummary reasoning options", () => {
 			cacheRetention: "none",
 			toolChoice: "none",
 		});
+	});
+
+	it("preserves the standalone split-turn summary prompt", async () => {
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: [],
+			turnPrefixMessages: messages,
+			isSplitTurn: true,
+			tokensBefore: 100,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
+		};
+
+		await compact(preparation, createModel(false), "test-key");
+
+		const requestContext = completeSimpleMock.mock.calls[0][1] as Context;
+		const prompt = JSON.stringify(requestContext.messages);
+		expect(prompt).toContain("This is the PREFIX of a turn that was too large to keep");
+		expect(prompt).toContain("<conversation>");
 	});
 
 	it("rejects tool calls from conversation summaries", async () => {

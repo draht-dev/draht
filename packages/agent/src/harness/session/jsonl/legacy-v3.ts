@@ -132,7 +132,7 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 			...committedBase,
 			type: "custom",
 			customType: entry.customType,
-			...(entry.data === undefined ? {} : { data: entry.data }),
+			data: entry.data,
 		};
 	});
 	const leaf = entries.length === 0 ? null : importedIds.get(entries[entries.length - 1]!.id)!;

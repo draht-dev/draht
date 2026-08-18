@@ -83,25 +83,92 @@ model calls the question tool                  (session facet)
 
 The models service in the next sections illustrates services and replicated state; the [coordinator section](#the-coordinator-directory-management-and-forwarding) covers fleet services and forwarding; the [question section](#reverse-interactions-the-question-plugin) makes the full round trip concrete.
 
-## What app startup does
+## Starting and connecting hosts
 
-Every host shares the **logical manifest** — plugin identity, order, and version, JSON-safe — never a JavaScript object. Each host resolves facet modules for those IDs from per-host entry points (for example, package export conditions `./coordinator`, `./session`, `./tui`, `./web`); a missing entry point means no facet for that host. Resolution, not convention, enforces the dependency boundary.
+Every host receives the same **logical manifest**: JSON-safe plugin identity, order, and version. It resolves only its own package entry points (`./coordinator`, `./session`, `./tui`, or `./web`); a missing entry point means that plugin has no facet for the host.
+
+Hosts do not discover coordinators or open sockets themselves. They receive one **connection function**:
 
 ```ts
-const manifest: PluginManifestEntry[] = [
-	{ id: "@pi/session-core" },
-	{ id: "@pi/providers-builtin" },
-	{ id: "@pi/question" },
-];
+type Connect = (signal: AbortSignal) => Promise<Transport>;
 
-await coordinatorAppHost.start(manifest); // every coordinator process; resolves ./coordinator
-await sessionAppHost.start(manifest);     // every session process; resolves ./session
-await tuiAppHost.start(manifest);         // every TUI process; resolves ./tui
+type Listen = (accept: (transport: Transport) => void) => () => void;
+
+interface Transport {
+	send(frame: JsonValue): void;
+	receive(listener: (frame: JsonValue) => void): void;
+	close(): void;
+	readonly closed: Promise<void>;
+}
 ```
 
-A loopback single-process app may instead load one `CodingAgentPlugin` bundle with several facets; each facet still receives only its own host context.
+`Connect` performs one connection attempt. Its closure owns the endpoint and credential, so the host never reads an address, environment variable, or secret. `Listen` lets a coordinator accept presentations, sessions, and child coordinators. Both operate on the same bidirectional framed `Transport`.
 
-For each selected facet, the host asks the kernel to create a lifecycle scope, builds its host-specific context around that scope, and invokes the facet. The scope is the kernel's entire per-facet contract:
+```ts
+declare const tuiAppHost: {
+	start(options: { manifest: Manifest; connect: Connect }): Promise<RunningHost>;
+};
+
+declare const sessionAppHost: {
+	start(options: { manifest: Manifest; connect: Connect; identity: SessionIdentity }): Promise<RunningHost>;
+};
+
+declare const coordinatorAppHost: {
+	start(options: {
+		manifest: Manifest;
+		listen: Listen;
+		connect?: Connect; // parent coordinator; omitted at the root
+	}): Promise<RunningCoordinator>;
+};
+
+interface RunningHost {
+	readonly connection: RemoteState<ConnectionState>;
+	stop(): Promise<void>;
+}
+
+interface RunningCoordinator {
+	readonly parentConnection: RemoteState<ConnectionState> | null;
+	readonly local: Connect; // connect another host in the same process
+	stop(): Promise<void>;
+}
+```
+
+Every deployment uses those three entry points:
+
+```ts
+// separate processes
+await tuiAppHost.start({ manifest, connect: dialSocket(endpoint, token) });
+await sessionAppHost.start({ manifest, identity, connect: dialSocket(endpoint, token) });
+await coordinatorAppHost.start({ manifest, listen: listenSocket(socketPath) }); // root
+await coordinatorAppHost.start({
+	manifest,
+	listen: listenSocket(childSocketPath),
+	connect: dialTls(parentUrl, certificate),
+}); // child
+
+// standalone: the same hosts and boundaries, without sockets
+const coordinator = await coordinatorAppHost.start({ manifest, listen: listenNothing() });
+await sessionAppHost.start({ manifest, identity, connect: coordinator.local });
+await tuiAppHost.start({ manifest, connect: coordinator.local });
+```
+
+This keeps deployment policy outside plugins:
+
+- reconnecting means calling `connect(signal)` again; the host owns retry timing, while `Connect` owns one attempt;
+- the accepting coordinator assigns peer identity during its handshake from the presented credential; `SessionIdentity` identifies the durable session being run, not a trusted claim about the connection;
+- `coordinator.local` makes standalone a deployment, not a separate mode or code path;
+- a child coordinator's parent link uses the same `Connect` shape as every other connection.
+
+The only connection state exposed to facets is:
+
+```ts
+type ConnectionState =
+	| { status: "connecting"; attempt: number }
+	| { status: "connected"; since: string }
+	| { status: "disconnected"; since: string; reason: string; retryAt: string | null };
+```
+
+After connecting, each host asks the kernel to create one lifecycle scope per selected facet, builds its host-specific context, and invokes the facet:
 
 ```ts
 interface PluginLifecycleScope {
@@ -111,13 +178,9 @@ interface PluginLifecycleScope {
 }
 ```
 
-Host contexts extend this scope. Host infrastructure calls `own()` whenever a facet registers a service, contribution, or subscription, so removal never depends on the facet undoing anything by hand. Nothing else in this document — services, tools, dialogs, interactions — is kernel API.
+Host infrastructure calls `own()` for every service, contribution, or subscription registered through a facet context. Facets first register in manifest order; then `onActivate` callbacks start effects and the host exposes state snapshots. Failure and normal shutdown dispose scopes in reverse order. Duplicate services, missing dependencies, and dependency cycles are application-assembly errors.
 
-Startup runs in deterministic manifest order and two phases: facets register services, contributions, and callbacks, and all registrations become visible; then `onActivate` callbacks start background work and the host exposes its authoritative state snapshot to its connections. This prevents one facet from starting effects while another is still constructing a dependency. Duplicate service IDs reject during registration; missing services and cycles are trusted application-assembly errors — no dependency-injection framework. If setup or activation fails, the kernel disposes already-created scopes in reverse order; normal shutdown does the same.
-
-The prototype in `packages/coding-agent/test/fixtures/plugin-app/` demonstrates the composition model with an ad hoc RPC implementation; the shared RPC design in `rpc.md` should replace that transport without replacing the host/facet architecture.
-
-One process owns one session, and session authority never migrates. Each process has exactly one multiplexed connection to its coordinator; plugins never open private sockets. Plugin authors never implement request IDs, sockets, trace carriers, cancellation frames, remote-reference registries, or reconnect buffering.
+The prototype in `packages/coding-agent/test/fixtures/plugin-app/` demonstrates this composition with an ad hoc transport. `rpc.md` should replace that transport without changing the host/facet model. Plugins never open sockets or implement request IDs, trace carriers, cancellation frames, references, or reconnect buffering.
 
 Out of scope: arbitrary object remoting, serialized functions/classes/`Map`/`Set`, remote hook or tool execution, offline presentation writes or automatic mutation replay, a universal remote `AgentHarness` or serialized UI tree, and re-exposing forwarded frames, proxies, or references as plugin-visible objects.
 
@@ -803,7 +866,6 @@ Before this becomes normative:
 - the exact minimal kernel contract (scope shape, phase ordering, failure policy), the built-in manifest, and the concrete coordinator/session/TUI host context surfaces;
 - the logical-manifest format, per-host entry-point resolution, and cross-process version pinning;
 - whether directory state is projected per client (workspace-scoped snapshots) or one presentation-safe value plus method authorization;
-- the standalone/loopback story: an in-process coordinator host versus an absent coordinator, and how `coordinator.use()` degrades;
 - multiple selected sessions per presentation connection (a multi-pane web UI) — deferred; it changes the session-namespace API;
 - authentication of presentations, sessions, and child coordinators, and protocol version negotiation;
 - the exact `RemoteService`/exposure-descriptor API, and the context-position and JSON-safe optional-argument policy from `rpc.md`;
@@ -818,6 +880,7 @@ Before this becomes normative:
 The handoff should include a reusable two-transport test matrix (loopback plus a real framed transport) covering:
 
 - **Composition:** hosts start from one plugin manifest, not hard-coded features; per-host entry-point resolution with no session modules reachable in a presentation bundle; provide/demand-resolve round trip; shared proxy/replica across concurrent consumers; local services unreachable remotely; duplicate/missing service failures; activation only after registration; reverse-order disposal.
+- **Connections:** `Connect` performs one abortable attempt and the host owns retries; peer identity comes from the accepting coordinator's handshake; a root omits `connect`, a child uses it for its parent, and `coordinator.local` runs the same host boundaries without sockets.
 - **RPC and context:** JSON call and `void` result; invalid argument/result and unknown service/member rejection; client span → `rpc.client` → `rpc.server` → service span; per-call cancellation isolation; disconnect aborts active calls; no callback, context, signal, telemetry object, or secret in wire JSON.
 - **State and events:** snapshot plus concurrent update with no gap; update ordering and detached values; reconnect replaces stale state; subscribe/unsubscribe and disconnect cleanup; deliveries carry reconstructed source contexts; immediate snapshot callbacks run under the hydration context.
 - **Registries:** ordered provider contributions rebuild deterministically; tool wrappers compose once and rebuild correctly after removal.

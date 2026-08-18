@@ -79,6 +79,7 @@ export type KnownImagesProvider = "openrouter";
 
 export type ImagesProviderId = KnownImagesProvider | string;
 
+export type ToolChoice = "auto" | "none";
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ModelThinkingLevel = "off" | ThinkingLevel;
 export type ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>;
@@ -304,6 +305,8 @@ export type AnthropicRefusalFallback = "default" | readonly { model: string }[];
 
 // Unified options with reasoning passed to streamSimple() and completeSimple()
 export interface SimpleStreamOptions extends StreamOptions {
+	/** Provider-neutral tool selection for simple requests. Default: "auto". */
+	toolChoice?: ToolChoice;
 	reasoning?: ThinkingLevel;
 	/** Anthropic server-side fallback for eligible refusal stop reasons. Anthropic providers only. */
 	refusalFallbacks?: AnthropicRefusalFallback;

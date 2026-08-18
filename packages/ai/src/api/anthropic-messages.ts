@@ -8,6 +8,7 @@ import type {
 	RefusalStopDetails,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { calculateCost } from "../models.ts";
+import { ANTHROPIC_MODELS } from "../providers/anthropic.models.ts";
 import type {
 	AnthropicMessagesCompat,
 	AnthropicRefusalFallback,
@@ -540,6 +541,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
+			let usageModel = model;
 
 			if (options?.client) {
 				client = options.client;
@@ -602,6 +604,11 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				if (event.type === "message_start") {
 					output.responseId = event.message.id;
 					output.model = event.message.model;
+					usageModel =
+						model.provider === "anthropic"
+							? ((ANTHROPIC_MODELS as Record<string, Model<"anthropic-messages"> | undefined>)[output.model] ??
+								model)
+							: model;
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
 					output.usage.input = event.message.usage.input_tokens || 0;
@@ -612,7 +619,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-					calculateCost(model, output.usage);
+					calculateCost(usageModel, output.usage);
 				} else if (event.type === "content_block_start") {
 					if (event.content_block.type === "text") {
 						const block: Block = {
@@ -769,7 +776,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-					calculateCost(model, output.usage);
+					calculateCost(usageModel, output.usage);
 				}
 			}
 

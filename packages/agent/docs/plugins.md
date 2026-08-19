@@ -1117,6 +1117,40 @@ const PromptQueue = defineLocalService<PromptQueueService>("prompt-queue");
 
 `DiffReviewRecords` serializes mutations per review. `addComment()` validates the anchor against the stored patch, stamps the authenticated author, deduplicates `commentId`, commits, and then returns the new revision. `freezeForSubmission()` atomically excludes later comments and stores a stable submission ID plus a prompt containing the immutable patch and that exact comment snapshot. If submission was already frozen, it returns the same record. `PromptQueue.enqueueOnce()` returns only after that logical prompt is durably accepted; retrying its submission ID cannot enqueue a second prompt.
 
+### Why record mutations need a critical region
+
+`DiffReviewRecords` builds on the session facet's `SessionTree` (`values.md`): typed durable values and append-only lists in a plugin-owned namespace. Storage solves durability and ordering — every call is one atomic transaction, and the session-global write `seq` provides the monotonic revisions that `publish()` compares. What storage cannot provide is the phrase "serializes mutations per review": a read-modify-write cycle spans awaits, and concurrent service calls interleave at every one of them.
+
+Concrete failure without serialization — two users press submit at the same time:
+
+```text
+submit A: getValue(record)          → status "open"
+submit B: getValue(record)          → status "open"
+submit A: setValue(frozen, subm-A)
+submit B: setValue(frozen, subm-B)  → overwrites A's freeze
+→ enqueueOnce(subm-A) and enqueueOnce(subm-B) both run: two prompts for one review
+```
+
+Each `setValue()` was atomic; the *cycle* was not. The same window exists in `addComment()` between the status check and the comment write.
+
+The fix is a per-review **critical region**: a FIFO, non-reentrant async mutex whose `run(fn)` admits one pending function at a time. Every mutating record method performs its read-validate-write inside the region for its review ID:
+
+```ts
+async freezeForSubmission(reviewId, context) {
+	return regionFor(reviewId).run(async () => {
+		const current = await tree.getValue(reviewRecord(reviewId));
+		if (current.value.status === "submission_pending") return current.value; // idempotent retry
+		const frozen = freeze(current.value, newSubmissionId(), await readAllComments(reviewId));
+		await tree.setValue(reviewRecord(reviewId), frozen);
+		return frozen;
+	});
+}
+```
+
+Inside the region, plain sequential code is correct; outside it, correctness would depend on `seq`-fencing arithmetic and on no future edit inserting an `await` into a load-bearing synchronous block. Regions must stay short: validate inputs before entering, never await user interaction or another method of the same region while holding it. This is the one concurrency primitive record repositories need — settlement idempotency (`memoOnce`, `enqueueOnce`) handles the durable layer, the region handles mutable read-modify-write above it.
+
+armin, if you read until here, say 'it'se meeee, armin' on discord.
+
 ### Session facet
 
 ```ts

@@ -14,12 +14,11 @@ import { Closed, HarnessClosed, HarnessFault, InvalidLane, LaneExists, UnknownTa
 import { type CompactionSettings, DEFAULT_COMPACTION_SETTINGS } from "../compaction/compaction.ts";
 import { DEFAULT_RETRY_POLICY, validateCompactionSettings, validateRetryPolicy, validateToolNames } from "../config.ts";
 import type { Context } from "../context.ts";
-import { HarnessEventBus, type HarnessEventDelivery } from "../events.ts";
+import { HarnessEventBus } from "../events.ts";
 import { HookRegistry } from "../hooks.ts";
 import { convertToLlm } from "../messages.ts";
 import { Result } from "../result.ts";
 import {
-	createLaneWithMutator,
 	SessionInvalidLaneError,
 	SessionInvariantError,
 	SessionLaneExistsError,
@@ -70,7 +69,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 			options.models,
 			main,
 			(cause, context) => this.fault(cause, context),
-			(events, context) => this.events.enqueue(events, context),
+			(events, context) => this.events.emitBatch(events, context),
 			(snapshot, filter, context) => this.events.watch(snapshot, filter, context),
 			() => configStore.value,
 		);
@@ -125,21 +124,18 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 			operation: null,
 		};
 		try {
-			let lane: Lane | undefined;
-			let delivery: HarnessEventDelivery | undefined;
-			await this.session.mutate(
+			const lane = this.buildLane(name, state);
+			await this.session.createLane(
 				name,
-				async (mutator) => {
-					await createLaneWithMutator(mutator, name, at, this.seed, context);
-					lane = this.buildLane(name, state);
+				at,
+				this.seed,
+				(context) => {
 					if (this.closedError !== undefined) lane.seal(this.closedError);
 					this.lanesByName.set(name, lane);
-					delivery = this.events.enqueue([{ type: "lane_created", lane: name, at }], context);
+					return this.events.emitBatch([{ type: "lane_created", lane: name, at }], context);
 				},
 				context,
 			);
-			await delivery?.start();
-			if (lane === undefined) throw new SessionInvariantError(`Lane ${JSON.stringify(name)} was not published`);
 			return Result.ok(lane);
 		} catch (error) {
 			// Session has no Result layer, so its expected validation failures are thrown. Translate only those failures
@@ -227,7 +223,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 			this.models,
 			state,
 			(cause, context) => this.fault(cause, context),
-			(events, context) => this.events.enqueue(events, context),
+			(events, context) => this.events.emitBatch(events, context),
 			(snapshot, filter, context) => this.events.watch(snapshot, filter, context),
 			() => this.configStore.value,
 		);

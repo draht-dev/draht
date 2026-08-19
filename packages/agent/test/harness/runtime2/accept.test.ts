@@ -322,7 +322,7 @@ describe("runtime2 atomic run acceptance", () => {
 		expect(harness.state.operation).toBeNull();
 	});
 
-	it("delivers acceptance listeners outside the lane line after publishing state", async () => {
+	it("delivers acceptance listeners after publishing state and permits serialized reads", async () => {
 		const { harness } = await createHarness();
 		let inspected = false;
 		harness.events.on("run_start", async () => {
@@ -332,6 +332,28 @@ describe("runtime2 atomic run acceptance", () => {
 		unwrap(await harness.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT));
 
 		expect(inspected).toBe(true);
+	});
+
+	it("does not resolve acceptance before its direct listeners settle", async () => {
+		const { harness } = await createHarness();
+		const started = deferred();
+		const release = deferred();
+		harness.events.on("run_start", async () => {
+			started.resolve();
+			await release.promise;
+		});
+
+		const acceptance = harness.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT);
+		await started.promise;
+		let resolved = false;
+		void acceptance.then(() => {
+			resolved = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(resolved).toBe(false);
+		release.resolve();
+		unwrap(await acceptance);
+		expect(resolved).toBe(true);
 	});
 
 	it("returns Closed when acceptance starts after close", async () => {

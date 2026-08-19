@@ -391,7 +391,13 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 		(query: StorageBranchScan, context: Context) => Promise<Entry[]>
 	>();
 	expectTypeOf<Session["createLane"]>().toEqualTypeOf<
-		(name: string, at: string | null, laneConfiguration: LaneConfiguration, context: Context) => Promise<SessionTree>
+		(
+			name: string,
+			at: string | null,
+			laneConfiguration: LaneConfiguration,
+			onCommitted: ((context: Context) => void | Promise<void>) | undefined,
+			context: Context,
+		) => Promise<SessionTree>
 	>();
 	expectTypeOf<SessionRepo["create"]>().toEqualTypeOf<
 		(options: SessionCreateOptions, context: Context) => Promise<Session>

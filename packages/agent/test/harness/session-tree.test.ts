@@ -411,7 +411,7 @@ describe("StorageBackedSession SessionTree", () => {
 			thinkingLevel: "off" as const,
 			activeToolNames: [],
 		};
-		const review = await session.createLane("review", ROOT_ID, configuration, BACKGROUND_CONTEXT);
+		const review = await session.createLane("review", ROOT_ID, configuration, undefined, BACKGROUND_CONTEXT);
 
 		const [mainId, reviewId] = await Promise.all([
 			session.appendCustomEntry("main-child", undefined, BACKGROUND_CONTEXT),

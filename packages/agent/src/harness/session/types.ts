@@ -540,6 +540,7 @@ export interface Session<TMetadata extends SessionMetadata = SessionMetadata> ex
 		name: string,
 		at: string | null,
 		configuration: LaneConfiguration,
+		onCommitted: ((context: Context) => void | Promise<void>) | undefined,
 		context: Context,
 	): Promise<SessionTree>;
 	close(context: Context): Promise<void>;

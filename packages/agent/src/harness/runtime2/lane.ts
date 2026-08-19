@@ -19,7 +19,6 @@ import {
 	type WatchHandle,
 } from "../agent-harness.ts";
 import type { Context } from "../context.ts";
-import type { HarnessEventDelivery } from "../events.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
 import { Result } from "../result.ts";
 import { insertEntry } from "../session/commit.ts";
@@ -55,7 +54,7 @@ import {
 import { formatSkillInvocation } from "../skills.ts";
 import { type AcceptanceConfig, type LaneState, SliceNotImplemented } from "./types.ts";
 
-type EventHandler = (events: readonly HarnessEvent[], context: Context) => HarnessEventDelivery;
+type EmitBatch = (events: readonly HarnessEvent[], context: Context) => Promise<void>;
 type WatchHandler = <T>(snapshot: T, filter: (event: HarnessEvent) => boolean, context: Context) => WatchHandle<T>;
 type FaultHandler = (cause: unknown, context: Context) => Error;
 type Synchronous<TResult> = TResult extends PromiseLike<unknown> ? never : TResult;
@@ -72,7 +71,7 @@ type LaneCommand<TResult> =
 	| { kind: "reject"; error: Error };
 
 type LaneCommandOutcome<TResult> =
-	| { kind: "return"; result: TResult; delivery?: HarnessEventDelivery }
+	| { kind: "return"; result: TResult; delivery?: Promise<void> }
 	| { kind: "reject"; error: Error };
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
@@ -114,7 +113,7 @@ export class Lane implements AgentLane {
 	protected readonly session: Session;
 	protected readonly models: Models;
 	private readonly onFault: FaultHandler;
-	private readonly onEvent: EventHandler;
+	private readonly emitBatch: EmitBatch;
 	private readonly installWatch: WatchHandler;
 	private readonly getAcceptanceConfig: () => AcceptanceConfig;
 	state: LaneState;
@@ -126,7 +125,7 @@ export class Lane implements AgentLane {
 		models: Models,
 		state: LaneState,
 		onFault: FaultHandler,
-		onEvent: EventHandler,
+		emitBatch: EmitBatch,
 		installWatch: WatchHandler,
 		getAcceptanceConfig: () => AcceptanceConfig,
 	) {
@@ -147,7 +146,7 @@ export class Lane implements AgentLane {
 		};
 		this.state = state;
 		this.onFault = onFault;
-		this.onEvent = onEvent;
+		this.emitBatch = emitBatch;
 		this.installWatch = installWatch;
 		this.getAcceptanceConfig = getAcceptanceConfig;
 	}
@@ -209,7 +208,7 @@ export class Lane implements AgentLane {
 									throw new TypeError("Lane command materialize() must be synchronous");
 								}
 								const events = decision.events?.(commit) ?? [];
-								const delivery = events.length === 0 ? undefined : this.onEvent(events, context);
+								const delivery = events.length === 0 ? undefined : this.emitBatch(events, context);
 								return { kind: "return", result, ...(delivery === undefined ? {} : { delivery }) };
 							}
 						}
@@ -225,7 +224,7 @@ export class Lane implements AgentLane {
 			throw error;
 		}
 		if (outcome.kind === "reject") throw outcome.error;
-		await outcome.delivery?.start();
+		await outcome.delivery;
 		return outcome.result;
 	}
 

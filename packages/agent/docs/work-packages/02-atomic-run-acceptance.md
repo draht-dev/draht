@@ -2,7 +2,7 @@
 
 ## Status
 
-Complete. Phase A established minimal attachment, open-operation inventory, lane-line inspection/watch capture, enqueue-time recipient binding, and in-band identity-failure vocabulary. Phase B landed in `beac75ecc` with focused, monorepo-check, full-suite, and final Fable review passing.
+Complete. Phase A established minimal attachment, open-operation inventory, lane-line inspection/watch capture, commit-continuation recipient binding, and in-band identity-failure vocabulary. Phase B landed in `beac75ecc` with focused, monorepo-check, full-suite, and final Fable review passing.
 
 Implementation also updated downstream protocol/coding-agent wire projections required by the changed public contract. No execution owner, provider/tool effect, timer, retry, polling, cancellation procedure, manual action, or terminal settlement was added.
 
@@ -27,8 +27,8 @@ After `AgentHarness.create(options, context)` succeeds:
 - attachment starts no hook, provider, tool, timer, breakpoint, drive owner, or application callback;
 - `inspectExecution(context)` observes the small projection and local owner on the lane line;
 - `watch(context)` registers buffering, clones live presentation, and performs bounded snapshot reads in one no-write lane job;
-- every committing lane job publishes memory and synchronously enqueues its event batch before releasing the line;
-- listener delivery remains asynchronous and outside the lane line.
+- every committing lane job publishes memory and synchronously binds its event batch in the commit continuation;
+- the mutation does not await listener delivery, while the public operation does.
 
 WP02 does not implement drive, provider generation, hooks, tools, retries, deferred polling, cancellation procedures, manual action execution, or terminal settlement.
 
@@ -73,21 +73,19 @@ The bounded read set is:
 
 `ToolCall.sourceIndex` is the index in the assistant message's full content array, not a filtered tool-call ordinal. A represented call must index a tool-call block.
 
-### 3. Event enqueue, not delivery, belongs on the lane line
+### 3. Recipient binding belongs in the commit continuation
 
 A successful committing lane job performs:
 
 ```text
 commit
 → publish small owned projection
-→ synchronously bind recipients and enqueue complete `{ event, context }` batch
-→ release lane line
-→ deliver listeners later outside the line
+→ synchronously bind recipients and append the complete `{ event, context }` batch
+→ return from the mutation without awaiting delivery
+→ await delivery before the public operation resolves
 ```
 
-Listeners must never execute on the lane line.
-
-Recipient binding happens at enqueue. A listener or watcher registered after enqueue cannot receive that historical event even if delivery has not started.
+WP02 initially implemented this with `enqueue()` plus caller-operated `start()`. WP04 replaces that gate with one immediate `emitBatch()` call in the same commit-observation continuation. Recipient binding and delivery awaiting remain unchanged. A listener or watcher registered after `emitBatch()` cannot receive that historical event.
 
 The only watcher/publication orders are:
 
@@ -95,11 +93,11 @@ The only watcher/publication orders are:
 watcher first
 → snapshot-before + complete buffered event batch
 
-publication/enqueue first
+publication/`emitBatch` first
 → snapshot-after + no old event
 ```
 
-A live provider/tool presentation update follows the same synchronous publish-plus-enqueue discipline. Frame/checkpoint commits are lane jobs and queue behind watch capture.
+A live provider/tool presentation update follows the same synchronous publish-plus-`emitBatch` discipline. Frame/checkpoint commits are lane jobs and queue behind watch capture.
 
 ### 4. Inspection is a no-write lane-line observation
 
@@ -144,7 +142,7 @@ A misconfigured convenience prompt eventually returns a durable failed run from 
 
 ### 7. Invocation Context remains explicit
 
-Every current public harness/lane operation receives trailing `context: Context`. Acceptance, attachment, watch capture, Session reads/commit, faults, and event enqueue preserve it. Shared harness/lane/Session receivers retain no caller Context. Context and its signal/telemetry values are never durable business data.
+Every current public harness/lane operation receives trailing `context: Context`. Acceptance, attachment, watch capture, Session reads/commit, faults, and event publication preserve it. Shared harness/lane/Session receivers retain no caller Context. Context and its signal/telemetry values are never durable business data.
 
 Buffered events retain the exact emitting Context. Invocation cancellation remains distinct from durable `requestAbort()`.
 
@@ -283,8 +281,8 @@ Inside one lane command:
 5. parent captured next-run entries before request prompt entries;
 6. commit exactly once;
 7. publish the small owned projection;
-8. synchronously enqueue the acceptance event batch with the accepting Context;
-9. release the lane line;
+8. synchronously call `emitBatch` with the acceptance event batch and accepting Context;
+9. return from the mutation callback without awaiting delivery;
 10. await event delivery before `accept` resolves.
 
 Exact writes:
@@ -320,7 +318,7 @@ Update `harness.md` before runtime source:
 - replace predictive status/classifier with open inventory;
 - specify configured/captured identity inspection without resolution;
 - move detailed reads to ad-hoc lane-line watch capture;
-- require recipient binding and event-batch enqueue before line release;
+- require recipient binding in the exact commit-observation continuation;
 - remove identity preflight/suspension/error/event types;
 - specify in-band model/tool unavailability and configuration provenance;
 - require direct detail-free synthetic tool-result messages;
@@ -357,16 +355,16 @@ Modify session types:
 
 ### Event publication
 
-Modify `HarnessEventBus`:
+WP02 initially added synchronous recipient binding with a reserved delivery gate. WP04 supersedes only that mechanism:
 
-- snapshot ordinary and watcher recipients synchronously in `emit()`;
-- deliver only to that bound list;
-- retain `{ event, context }` in watcher buffers;
-- a watcher registered after enqueue receives nothing from that event.
+- `HarnessEventBus.emitBatch()` snapshots ordinary and watcher recipients synchronously;
+- delivery uses only that bound list;
+- watcher buffers retain `{ event, context }`;
+- a watcher registered after `emitBatch` receives nothing from that event.
 
-Extend `LaneCommand` commit decisions with a synchronous post-commit event batch. After commit succeeds, `Lane.command` publishes `next`, enqueues the complete batch, and only then releases the mutation callback. It awaits delivery outside `Session.mutate` before resolving the command. Route every existing event-producing commit through this path, including direct idle/pending appends, lane configuration setters, and session-name/entry-label setters.
+`LaneCommand` commit decisions retain a synchronous post-commit event batch. After commit succeeds, `Lane.command` publishes `next`, calls `emitBatch` as its final mutation action, and carries the delivery promise outside `Session.mutate` before awaiting it. Every existing event-producing commit uses this path, including direct idle/pending appends, lane configuration setters, and session-name/entry-label setters.
 
-For harness `createLane`, factor the existing Session lane-validation/write logic into one package-internal mutator procedure shared with event-free `Session.createLane`. The harness variant enters the new lane's mutation itself, commits through that procedure, publishes `lanesByName`, and enqueues `lane_created` before returning from the mutation callback; it awaits delivery outside the line.
+WP04 also moves harness lane publication into `Session.createLane`'s committed-publication callback. Session commits, Harness publishes `lanesByName` and calls `emitBatch(lane_created)` in that continuation, and Session awaits the retained delivery promise after releasing the line.
 
 Do not execute listeners on the line.
 
@@ -436,10 +434,10 @@ Provider/tool/configuration-failure transitions are specified now but implemente
 
 ### Event publication and watch
 
-- recipient set binds at enqueue: watcher registered after emit but before delivery receives nothing;
+- recipient set binds at `emitBatch`: a watcher registered after publication but before delivery receives nothing;
 - state/event batch publication happens before lane-line release;
 - direct append, lane configuration, session-name/entry-label, acceptance, and lane-creation commits all use that publication path;
-- `value_update` and `lane_created` bind recipients on the committing line, so listeners registered after enqueue receive neither historical event;
+- `value_update` and `lane_created` bind recipients in their commit continuation, so later listeners receive neither historical event;
 - watcher-first gives snapshot-before plus complete events;
 - publication-first gives snapshot-after without old events;
 - live update during awaited capture appears only as a buffered event after the cloned live snapshot;
@@ -536,7 +534,7 @@ Stop when:
 - attachment returns minimal complete projections and open inventory;
 - inspection is a coherent lane-line no-write observation;
 - watch captures detailed state ad hoc on the lane line;
-- state publication and event enqueue occur before line release while delivery remains outside;
+- state publication and `emitBatch` recipient binding occur in the commit continuation while the mutation never awaits delivery;
 - snapshots and buffered events have no gap or duplicate;
 - required payload corruption faults its consumer;
 - no execution effect or owner is introduced;

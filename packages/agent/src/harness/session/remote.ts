@@ -294,6 +294,7 @@ export class RemoteSession<TMetadata extends SessionMetadata = SessionMetadata>
 		name: string,
 		at: string | null,
 		configuration: LaneConfiguration,
+		onCommitted: ((context: Context) => void | Promise<void>) | undefined,
 		context: Context,
 	): Promise<SessionTree> {
 		this.assertOpen();
@@ -306,6 +307,7 @@ export class RemoteSession<TMetadata extends SessionMetadata = SessionMetadata>
 			if (code === "session_unknown_target" && at !== null) throw new SessionUnknownTargetError(at);
 			throw error;
 		}
+		await onCommitted?.(context);
 		return this.view(name);
 	}
 

@@ -491,7 +491,39 @@ describe("HarnessEventBus", () => {
 		expect(seen).toEqual(["one:start", "one:end", "two:start", "two:end"]);
 	});
 
-	it("binds listeners and watchers when an event is enqueued", async () => {
+	it("keeps concurrent batches contiguous with their emitting contexts", async () => {
+		const bus = new HarnessEventBus();
+		const sourceKey = createContextKey<string>("event.batch.source");
+		const firstContext = withContextValue(sourceKey, "first", BACKGROUND_CONTEXT);
+		const secondContext = withContextValue(sourceKey, "second", BACKGROUND_CONTEXT);
+		const seen: Array<{ runId: string; context: typeof firstContext }> = [];
+		bus.on("run_start", async (event, context) => {
+			seen.push({ runId: event.runId, context });
+			await Promise.resolve();
+		});
+
+		const first = bus.emitBatch(
+			[
+				{ type: "run_start", runId: "a1", lane: "main" },
+				{ type: "run_start", runId: "a2", lane: "main" },
+			],
+			firstContext,
+		);
+		const second = bus.emitBatch(
+			[
+				{ type: "run_start", runId: "b1", lane: "worker" },
+				{ type: "run_start", runId: "b2", lane: "worker" },
+			],
+			secondContext,
+		);
+
+		await Promise.all([first, second]);
+		expect(seen.map(({ runId }) => runId)).toEqual(["a1", "a2", "b1", "b2"]);
+		expect(seen.slice(0, 2).every(({ context }) => context === firstContext)).toBe(true);
+		expect(seen.slice(2).every(({ context }) => context === secondContext)).toBe(true);
+	});
+
+	it("binds listeners and watchers when a batch is emitted", async () => {
 		const bus = new HarnessEventBus();
 		const started = deferred();
 		const release = deferred();
@@ -524,19 +556,44 @@ describe("HarnessEventBus", () => {
 		expect(lateWatcherEvents).toEqual(["later"]);
 	});
 
-	it("releases reserved delivery gates during close", async () => {
+	it("resolves an empty batch without delivery", async () => {
 		const bus = new HarnessEventBus();
+		const listener = vi.fn();
+		bus.on("run_start", listener);
+
+		await bus.emitBatch([], BACKGROUND_CONTEXT);
+
+		expect(listener).not.toHaveBeenCalled();
+	});
+
+	it("drains already emitted contiguous batches during close and ignores later publication", async () => {
+		const bus = new HarnessEventBus();
+		const started = deferred();
+		const release = deferred();
 		const seen: string[] = [];
-		bus.on("run_start", (event) => {
+		bus.on("run_start", async (event) => {
 			seen.push(event.runId);
+			if (event.runId === "blocking") {
+				started.resolve();
+				await release.promise;
+			}
 		});
-		const delivery = bus.enqueue([{ type: "run_start", runId: "reserved", lane: "main" }], BACKGROUND_CONTEXT);
+		const blocking = bus.emit({ type: "run_start", runId: "blocking", lane: "main" }, BACKGROUND_CONTEXT);
+		await started.promise;
+		const batch = bus.emitBatch(
+			[
+				{ type: "run_start", runId: "one", lane: "main" },
+				{ type: "run_start", runId: "two", lane: "main" },
+			],
+			BACKGROUND_CONTEXT,
+		);
 
 		bus.close(new Error("closed"));
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await bus.emit({ type: "run_start", runId: "late", lane: "main" }, BACKGROUND_CONTEXT);
+		release.resolve();
+		await Promise.all([blocking, batch]);
 
-		expect(seen).toEqual(["reserved"]);
-		await delivery.start();
+		expect(seen).toEqual(["blocking", "one", "two"]);
 	});
 
 	it("continues watcher delivery after listener failure and reports it", async () => {
@@ -571,5 +628,21 @@ describe("HarnessEventBus", () => {
 		});
 		await bus.emit({ type: "run_start", runId: "run", lane: "main" }, BACKGROUND_CONTEXT);
 		expect(failures).toEqual(["listener failed"]);
+	});
+
+	it("does not recurse when a handler_error listener fails", async () => {
+		const bus = new HarnessEventBus();
+		let handlerErrors = 0;
+		bus.on("run_start", () => {
+			throw new Error("listener failed");
+		});
+		bus.on("handler_error", () => {
+			handlerErrors += 1;
+			throw new Error("error listener failed");
+		});
+
+		await bus.emit({ type: "run_start", runId: "run", lane: "main" }, BACKGROUND_CONTEXT);
+
+		expect(handlerErrors).toBe(1);
 	});
 });

@@ -208,7 +208,7 @@ describe("runtime2 lane restore", () => {
 			thinkingLevel: "high",
 			activeToolNames: ["read"],
 		};
-		await session.createLane("worker", null, workerConfiguration, BACKGROUND_CONTEXT);
+		await session.createLane("worker", null, workerConfiguration, undefined, BACKGROUND_CONTEXT);
 		const operationId = session.idGenerator.next();
 		const meta: OperationMeta = {
 			operationId,

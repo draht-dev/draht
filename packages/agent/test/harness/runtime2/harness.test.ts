@@ -416,7 +416,7 @@ describe("runtime2 AgentHarness", () => {
 				),
 			BACKGROUND_CONTEXT,
 		);
-		await session.createLane("worker", null, workerConfiguration, BACKGROUND_CONTEXT);
+		await session.createLane("worker", null, workerConfiguration, undefined, BACKGROUND_CONTEXT);
 		const before = await Promise.all([
 			session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT),
 			session.getValue(storedValues.laneConfig("worker"), BACKGROUND_CONTEXT),
@@ -477,6 +477,67 @@ describe("runtime2 AgentHarness", () => {
 			currentOperationId: null,
 			pendingNextRun: [],
 		});
+	});
+
+	it("publishes a created lane before a duplicate observes it and awaits lane_created listeners", async () => {
+		const session = await createSession();
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const listenerStarted = deferred();
+		const releaseListener = deferred();
+		harness.events.on("lane_created", async (event) => {
+			if (event.lane !== "worker") return;
+			listenerStarted.resolve();
+			await releaseListener.promise;
+		});
+
+		const winner = harness.createLane("worker", null, BACKGROUND_CONTEXT);
+		await listenerStarted.promise;
+		let winnerResolved = false;
+		void winner.then(() => {
+			winnerResolved = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(winnerResolved).toBe(false);
+		const visible = await harness.lane("worker", BACKGROUND_CONTEXT);
+		expect(visible).toBeInstanceOf(Lane);
+
+		const duplicate = await harness.createLane("worker", null, BACKGROUND_CONTEXT);
+		expect(duplicate).toMatchObject({ ok: false, error: { _tag: "LaneExists", lane: "worker" } });
+		expect(await harness.lane("worker", BACKGROUND_CONTEXT)).toBe(visible);
+
+		releaseListener.resolve();
+		expect(unwrap(await winner)).toBe(visible);
+		expect(winnerResolved).toBe(true);
+	});
+
+	it("globally orders complete event batches from concurrent lanes", async () => {
+		const session = await createSession();
+		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
+		const worker = unwrap(await harness.createLane("worker", null, BACKGROUND_CONTEXT));
+		const seen: Array<{ type: string; lane: string }> = [];
+		for (const type of ["message_start", "message_end", "entry_added"] as const) {
+			harness.events.on(type, (event) => {
+				seen.push({ type: event.type, lane: event.lane });
+			});
+		}
+
+		await Promise.all([
+			harness.sessionTree.appendMessage({ role: "user", content: "main", timestamp: 1 }, BACKGROUND_CONTEXT),
+			worker.sessionTree.appendMessage({ role: "user", content: "worker", timestamp: 2 }, BACKGROUND_CONTEXT),
+		]);
+
+		expect(seen.map(({ type }) => type)).toEqual([
+			"message_start",
+			"message_end",
+			"entry_added",
+			"message_start",
+			"message_end",
+			"entry_added",
+		]);
+		expect(new Set(seen.map(({ lane }) => lane))).toEqual(new Set(["main", "worker"]));
+		expect(seen.slice(0, 3).every(({ lane }) => lane === seen[0]?.lane)).toBe(true);
+		expect(seen.slice(3).every(({ lane }) => lane === seen[3]?.lane)).toBe(true);
+		expect(seen[0]?.lane).not.toBe(seen[3]?.lane);
 	});
 
 	it("binds metadata and lane-creation recipients before releasing their mutation lines", async () => {

@@ -1,8 +1,9 @@
 import { type Api, createModels, fauxProvider, type Model } from "@draht/ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { HarnessClosed } from "../../../src/harness/agent-harness.ts";
+import { HarnessClosed, type HarnessEvent } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
-import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
+import { BACKGROUND_CONTEXT, type Context } from "../../../src/harness/context.ts";
+import { HarnessEventBus } from "../../../src/harness/events.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
@@ -17,7 +18,9 @@ const configuration: LaneConfiguration = {
 	activeToolNames: [],
 };
 
-async function createLane(): Promise<{
+async function createLane(
+	emitBatch: (events: readonly HarnessEvent[], context: Context) => Promise<void> = () => Promise.resolve(),
+): Promise<{
 	lane: Lane;
 	model: Model<Api>;
 	session: Session;
@@ -52,7 +55,7 @@ async function createLane(): Promise<{
 			models,
 			await restoreLane(session, "main", BACKGROUND_CONTEXT),
 			(cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-			() => ({ start: () => Promise.resolve() }),
+			emitBatch,
 			(snapshot) => ({ snapshot, start: () => {}, unsubscribe: () => {} }),
 			() => ({
 				resources: {},
@@ -198,6 +201,35 @@ describe("runtime2 Lane commands", () => {
 				};
 			}, BACKGROUND_CONTEXT),
 		).rejects.toThrow("Lane command materialize() must be synchronous");
+
+		expect(lane.state.configuration.thinkingLevel).toBe("high");
+		expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value.thinkingLevel).toBe(
+			"high",
+		);
+	});
+
+	it("preserves committed memory when synchronous event publication fails", async () => {
+		const bus = new HarnessEventBus();
+		const { lane, session } = await createLane((events, context) => bus.emitBatch(events, context));
+		const uncloneable = {
+			type: "run_start",
+			runId: "run",
+			lane: "main",
+			invalid: () => undefined,
+		} as unknown as HarnessEvent;
+
+		await expect(
+			lane.command((state) => {
+				const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
+				return {
+					kind: "commit",
+					writes: [storedValues.setValue(storedValues.laneConfig("main"), configuration)],
+					next: { ...state, configuration },
+					materialize: () => undefined,
+					events: () => [uncloneable],
+				};
+			}, BACKGROUND_CONTEXT),
+		).rejects.toMatchObject({ name: "DataCloneError" });
 
 		expect(lane.state.configuration.thinkingLevel).toBe("high");
 		expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value.thinkingLevel).toBe(

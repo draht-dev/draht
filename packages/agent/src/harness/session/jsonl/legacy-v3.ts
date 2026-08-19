@@ -3,7 +3,7 @@ import type { AgentMessage } from "../../../types.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../../messages.ts";
 import type { CommittedWrite } from "../commit.ts";
 import type { JsonValue } from "../types.ts";
-import { laneLeaf, laneState } from "../values.ts";
+import { laneLeaf, laneState, sessionName } from "../values.ts";
 import { JSONL_FORMAT_VERSION, JSONL_STORAGE_VERSION, type JsonlStorageHeader } from "./types.ts";
 
 export interface LegacyV3SessionHeader {
@@ -75,6 +75,11 @@ interface LegacyV3ActiveToolsChangeEntry extends LegacyV3EntryBase {
 	type: "active_tools_change";
 }
 
+interface LegacyV3SessionInfoEntry extends LegacyV3EntryBase {
+	type: "session_info";
+	name?: string;
+}
+
 interface ImportedCustomMessage {
 	role: "custom";
 	customType: string;
@@ -94,7 +99,8 @@ type RetainedLegacyV3Entry =
 type DiscardedLegacyV3Entry =
 	| LegacyV3ModelChangeEntry
 	| LegacyV3ThinkingLevelChangeEntry
-	| LegacyV3ActiveToolsChangeEntry;
+	| LegacyV3ActiveToolsChangeEntry
+	| LegacyV3SessionInfoEntry;
 
 type LegacyV3Entry = RetainedLegacyV3Entry | DiscardedLegacyV3Entry;
 
@@ -149,7 +155,8 @@ function parseLegacyV3Entry(line: string, lineNumber: number): LegacyV3Entry {
 		recordType !== "compaction" &&
 		recordType !== "model_change" &&
 		recordType !== "thinking_level_change" &&
-		recordType !== "active_tools_change"
+		recordType !== "active_tools_change" &&
+		recordType !== "session_info"
 	) {
 		throw new Error(`Unsupported legacy v3 record type at line ${lineNumber}: ${String(recordType)}`);
 	}
@@ -171,7 +178,10 @@ function importedCustomMessage(entry: LegacyV3CustomMessageEntry): AgentMessage 
 
 function isRetainedEntry(entry: LegacyV3Entry): entry is RetainedLegacyV3Entry {
 	return (
-		entry.type !== "model_change" && entry.type !== "thinking_level_change" && entry.type !== "active_tools_change"
+		entry.type !== "model_change" &&
+		entry.type !== "thinking_level_change" &&
+		entry.type !== "active_tools_change" &&
+		entry.type !== "session_info"
 	);
 }
 
@@ -256,6 +266,7 @@ function projectContextMessages(entry: LegacyV3Entry, resolver: RetainedIdResolv
 		case "model_change":
 		case "thinking_level_change":
 		case "active_tools_change":
+		case "session_info":
 			return [];
 	}
 }
@@ -340,6 +351,20 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 			data: entry.data,
 		};
 	});
+	let latestSessionInfo: LegacyV3SessionInfoEntry | undefined;
+	for (const entry of entries) {
+		if (entry.type === "session_info") latestSessionInfo = entry;
+	}
+	if (latestSessionInfo?.name) {
+		writes.push({
+			kind: "value",
+			op: "set",
+			seq: writes.length + 1,
+			namespace: sessionName.namespace,
+			key: sessionName.key,
+			value: latestSessionInfo.name,
+		});
+	}
 	const finalEntry = entries.at(-1);
 	const leaf = finalEntry === undefined ? null : retainedIdResolver.resolve(finalEntry.id);
 	const leafAddress = laneLeaf("main");

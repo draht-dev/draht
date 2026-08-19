@@ -197,6 +197,106 @@ describe("JSONL v3 migration", () => {
 		});
 	});
 
+	it("imports session info as the current name without retaining a tree entry", async () => {
+		await writeLegacyV3Fixture([
+			{
+				type: "session_info",
+				id: "session-info",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+				name: "Imported session",
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		expect(await session.getName(BACKGROUND_CONTEXT)).toBe("Imported session");
+		expect(await session.findEntries(undefined, BACKGROUND_CONTEXT)).toEqual([]);
+		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBeNull();
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
+	it("uses the latest session info and resolves tree structure through discarded records", async () => {
+		const firstMessage = {
+			role: "user",
+			content: [{ type: "text", text: "first" }],
+			timestamp: NOW + 1_000,
+		} satisfies AgentMessage;
+		const secondMessage = {
+			role: "user",
+			content: [{ type: "text", text: "second" }],
+			timestamp: NOW + 3_000,
+		} satisfies AgentMessage;
+		await writeLegacyV3Fixture([
+			{
+				type: "message",
+				id: "message-1",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+				message: firstMessage,
+			},
+			{
+				type: "session_info",
+				id: "session-info-1",
+				parentId: "message-1",
+				timestamp: new Date(NOW + 2_000).toISOString(),
+				name: "Earlier name",
+			},
+			{
+				type: "message",
+				id: "message-2",
+				parentId: "session-info-1",
+				timestamp: new Date(NOW + 3_000).toISOString(),
+				message: secondMessage,
+			},
+			{
+				type: "session_info",
+				id: "session-info-2",
+				parentId: "message-2",
+				timestamp: new Date(NOW + 4_000).toISOString(),
+				name: "Latest name",
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+		expect(entries).toHaveLength(2);
+		const [first, second] = entries;
+		if (first === undefined || second === undefined) throw new Error("Legacy message chain was not imported");
+		expect(second.parentId).toBe(first.id);
+		expect(await session.getName(BACKGROUND_CONTEXT)).toBe("Latest name");
+		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
+	it.each([{ name: undefined }, { name: "" }])("clears the session name with $name", async ({ name }) => {
+		await writeLegacyV3Fixture([
+			{
+				type: "session_info",
+				id: "session-info-1",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+				name: "Earlier name",
+			},
+			{
+				type: "session_info",
+				id: "session-info-2",
+				parentId: "session-info-1",
+				timestamp: new Date(NOW + 2_000).toISOString(),
+				...(name === undefined ? {} : { name }),
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		expect(await session.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toBeUndefined();
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
 	it("imports a custom entry without rewriting opaque data references", async () => {
 		const messageTimestamp = NOW + 1_000;
 		const customTimestamp = NOW + 2_000;

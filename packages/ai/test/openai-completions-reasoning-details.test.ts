@@ -99,9 +99,11 @@ async function runOpenAICompletionsStream(messages: AssistantMessage[] = []): Pr
 	return await streamOpenAICompletions(model(), { messages, tools: [readTool] }, { apiKey: "test" }).result();
 }
 
-function getAssistantPayload(payload: unknown): { reasoning_details?: unknown } | undefined {
-	const messages = (payload as { messages?: Array<{ role?: string; reasoning_details?: unknown }> }).messages ?? [];
-	return messages.find((message) => message.role === "assistant");
+function getAssistantPayload(payload: unknown): { reasoning?: unknown; reasoning_details?: unknown } | undefined {
+	const messages = (
+		payload as { messages?: Array<{ role?: string; reasoning?: unknown; reasoning_details?: unknown }> }
+	).messages;
+	return messages?.find((message) => message.role === "assistant");
 }
 
 describe("openai-completions reasoning_details streaming", () => {
@@ -110,22 +112,26 @@ describe("openai-completions reasoning_details streaming", () => {
 		mockState.payloads = [];
 	});
 
-	it("preserves reasoning_details that arrive before their matching tool call", async () => {
+	it("preserves reasoning_details in the thinking signature", async () => {
 		mockState.chunkSets = [
 			[chunk({ reasoning_details: [reasoningDetail] }), toolCallChunk(), chunk({}, "tool_calls")],
 			[chunk({ content: "ok" }), chunk({}, "stop")],
 		];
 
 		const assistantMessage = await runOpenAICompletionsStream();
+		const thinking = assistantMessage.content.find((block) => block.type === "thinking");
+		expect(thinking).toEqual({
+			type: "thinking",
+			thinking: "",
+			thinkingSignature: JSON.stringify([reasoningDetail]),
+		});
 		const toolCall = assistantMessage.content.find((block) => block.type === "toolCall");
-		expect(toolCall).toMatchObject({
+		expect(toolCall).toEqual({
 			type: "toolCall",
 			id: "call_1",
 			name: "read",
 			arguments: { path: "README.md" },
-			thoughtSignature: JSON.stringify(reasoningDetail),
 		});
-		expect(assistantMessage.reasoningDetails).toEqual([reasoningDetail]);
 
 		await runOpenAICompletionsStream([assistantMessage]);
 
@@ -139,7 +145,10 @@ describe("openai-completions reasoning_details streaming", () => {
 		];
 
 		const assistantMessage = await runOpenAICompletionsStream();
-		delete assistantMessage.reasoningDetails;
+		assistantMessage.content = assistantMessage.content.filter((block) => block.type !== "thinking");
+		const toolCall = assistantMessage.content.find((block) => block.type === "toolCall");
+		if (!toolCall || toolCall.type !== "toolCall") throw new Error("Expected tool call");
+		toolCall.thoughtSignature = JSON.stringify(reasoningDetail);
 
 		await runOpenAICompletionsStream([assistantMessage]);
 
@@ -149,7 +158,7 @@ describe("openai-completions reasoning_details streaming", () => {
 	it("preserves signed text and summary reasoning_details in their original sequence", async () => {
 		mockState.chunkSets = [
 			[
-				chunk({ reasoning_details: [signedReasoningTextDetail] }),
+				chunk({ reasoning: signedReasoningTextDetail.text, reasoning_details: [signedReasoningTextDetail] }),
 				chunk({ reasoning_details: [reasoningDetail, reasoningSummaryDetail] }),
 				toolCallChunk(),
 				chunk({}, "tool_calls"),
@@ -159,10 +168,17 @@ describe("openai-completions reasoning_details streaming", () => {
 
 		const assistantMessage = await runOpenAICompletionsStream();
 		const expectedReasoningDetails = [signedReasoningTextDetail, reasoningDetail, reasoningSummaryDetail];
-		expect(assistantMessage.reasoningDetails).toEqual(expectedReasoningDetails);
+		const thinking = assistantMessage.content.find((block) => block.type === "thinking");
+		expect(thinking).toEqual({
+			type: "thinking",
+			thinking: signedReasoningTextDetail.text,
+			thinkingSignature: JSON.stringify(expectedReasoningDetails),
+		});
 
 		await runOpenAICompletionsStream([assistantMessage]);
 
-		expect(getAssistantPayload(mockState.payloads[1])?.reasoning_details).toEqual(expectedReasoningDetails);
+		const payload = getAssistantPayload(mockState.payloads[1]);
+		expect(payload?.reasoning_details).toEqual(expectedReasoningDetails);
+		expect(payload?.reasoning).toBeUndefined();
 	});
 });

@@ -160,17 +160,6 @@ function isOpenAIReasoningDetail(detail: unknown): detail is OpenAIReasoningDeta
 	}
 }
 
-function isEncryptedReasoningDetail(detail: unknown): detail is OpenAIEncryptedReasoningDetail {
-	return (
-		isReasoningDetailObject(detail) &&
-		detail.type === "reasoning.encrypted" &&
-		typeof detail.id === "string" &&
-		detail.id.length > 0 &&
-		typeof detail.data === "string" &&
-		detail.data.length > 0
-	);
-}
-
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: OpenAI.Chat.Completions.ChatCompletionToolChoiceOption;
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -219,7 +208,6 @@ type OpenAIReasoningSummaryDetail = OpenAIReasoningDetailBase & {
 
 type OpenAIEncryptedReasoningDetail = OpenAIReasoningDetailBase & {
 	type: "reasoning.encrypted";
-	id: string;
 	data: string;
 };
 
@@ -230,6 +218,34 @@ type OpenAIReasoningTextDetail = OpenAIReasoningDetailBase & {
 };
 
 type OpenAIReasoningDetail = OpenAIReasoningSummaryDetail | OpenAIEncryptedReasoningDetail | OpenAIReasoningTextDetail;
+
+function parseOpenAIReasoningDetails(signature: string | undefined): OpenAIReasoningDetail[] | undefined {
+	if (!signature) return undefined;
+	try {
+		const parsed = JSON.parse(signature) as unknown;
+		return Array.isArray(parsed) && parsed.length > 0 && parsed.every(isOpenAIReasoningDetail) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function parseLegacyEncryptedReasoningDetail(
+	signature: string | undefined,
+): OpenAIEncryptedReasoningDetail | undefined {
+	if (!signature) return undefined;
+	try {
+		const parsed = JSON.parse(signature) as unknown;
+		return isOpenAIReasoningDetail(parsed) &&
+			parsed.type === "reasoning.encrypted" &&
+			typeof parsed.id === "string" &&
+			parsed.id.length > 0 &&
+			parsed.data.length > 0
+			? parsed
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 const OPENAI_COMPLETIONS_REASONING_FIELDS = ["reasoning", "reasoning_content", "reasoning_text"] as const;
 
@@ -341,7 +357,6 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			let hasFinishReason = false;
 			const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
 			const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
-			const pendingReasoningDetailsByToolCallId = new Map<string, string>();
 			const blocks = output.content as StreamingBlock[];
 			const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
 			const getCustomToolCallInput = (block: StreamingToolCallBlock): string => {
@@ -432,16 +447,6 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				}
 				return thinkingBlock;
 			};
-			const applyPendingReasoningDetail = (block: StreamingToolCallBlock) => {
-				if (!block.id) {
-					return;
-				}
-				const pendingReasoningDetail = pendingReasoningDetailsByToolCallId.get(block.id);
-				if (pendingReasoningDetail) {
-					block.thoughtSignature = pendingReasoningDetail;
-					pendingReasoningDetailsByToolCallId.delete(block.id);
-				}
-			};
 			const ensureToolCallBlock = (toolCall: StreamingToolCallDelta) => {
 				const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
 				const name = toolCall.function?.name ?? toolCall.custom?.name ?? "";
@@ -498,7 +503,6 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 					};
 					delete block.partialArgs;
 				}
-				applyPendingReasoningDetail(block);
 				return block;
 			};
 
@@ -616,24 +620,13 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 					const reasoningDetails = (choice.delta as { reasoning_details?: unknown }).reasoning_details;
 					if (Array.isArray(reasoningDetails)) {
 						for (const detail of reasoningDetails) {
-							if (!isOpenAIReasoningDetail(detail)) {
-								continue;
-							}
-							output.reasoningDetails ??= [];
-							// OpenRouter requires reasoning_details to be replayed unmodified and in order.
-							output.reasoningDetails.push(detail);
-
-							// Keep the legacy encrypted tool-call attachment path for compatibility with
-							// sessions that replay encrypted details from toolCall.thoughtSignature.
-							if (isEncryptedReasoningDetail(detail)) {
-								const serializedDetail = JSON.stringify(detail);
-								const matchingToolCall = toolCallBlocksById.get(detail.id);
-								if (matchingToolCall) {
-									matchingToolCall.thoughtSignature = serializedDetail;
-								} else {
-									pendingReasoningDetailsByToolCallId.set(detail.id, serializedDetail);
-								}
-							}
+							if (!isOpenAIReasoningDetail(detail)) continue;
+							const block = ensureThinkingBlock("");
+							const preservedDetails = parseOpenAIReasoningDetails(block.thinkingSignature) ?? [];
+							preservedDetails.push(detail);
+							// Keep provider replay data in the existing signature slot. OpenRouter
+							// requires the complete reasoning_details sequence in its original order.
+							block.thinkingSignature = JSON.stringify(preservedDetails);
 						}
 					}
 				}
@@ -1238,6 +1231,16 @@ export function convertMessages(
 			const assistantText = assistantTextParts.map((part) => part.text).join("");
 
 			const allThinkingBlocks = msg.content.filter(isThinkingContentBlock);
+			const toolCalls = msg.content.filter(isToolCallBlock);
+			const signedReasoningDetails = allThinkingBlocks
+				.map((block) => parseOpenAIReasoningDetails(block.thinkingSignature))
+				.find((details) => details !== undefined);
+			const legacyReasoningDetails = toolCalls
+				.map((toolCall) => parseLegacyEncryptedReasoningDetail(toolCall.thoughtSignature))
+				.filter((detail): detail is OpenAIEncryptedReasoningDetail => detail !== undefined);
+			const preservedReasoningDetails =
+				signedReasoningDetails ?? (legacyReasoningDetails.length > 0 ? legacyReasoningDetails : undefined);
+
 			const nonEmptyThinkingBlocks = allThinkingBlocks.filter((block) => block.thinking.trim().length > 0);
 			if (nonEmptyThinkingBlocks.length > 0 && compat.requiresThinkingAsText) {
 				// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
@@ -1253,7 +1256,8 @@ export function convertMessages(
 					assistantMsg.content = assistantText;
 				}
 
-				if (!compat.requiresThinkingAsText) {
+				// reasoning_details is the structured alternative to a raw reasoning field.
+				if (!compat.requiresThinkingAsText && !preservedReasoningDetails) {
 					// Replay the captured reasoning field (e.g. "reasoning_content" for llama.cpp
 					// server, gpt-oss, and DeepSeek reasoner) under its captured signature. DeepSeek
 					// requires this on every thinking-mode assistant turn — even when the captured
@@ -1275,15 +1279,6 @@ export function convertMessages(
 				}
 			}
 
-			const preservedReasoningDetails =
-				msg.provider === model.provider &&
-				msg.api === model.api &&
-				msg.model === model.id &&
-				msg.reasoningDetails?.length
-					? msg.reasoningDetails
-					: undefined;
-
-			const toolCalls = msg.content.filter(isToolCallBlock);
 			if (toolCalls.length > 0) {
 				assistantMsg.tool_calls = toolCalls.map((tc): ChatCompletionMessageToolCall => {
 					const customInputProperty = options?.grammarToolInputProperties?.get(tc.name);
@@ -1306,22 +1301,6 @@ export function convertMessages(
 						},
 					};
 				});
-				if (!preservedReasoningDetails) {
-					const reasoningDetails = toolCalls
-						.filter((tc) => tc.thoughtSignature)
-						.map((tc): OpenAIReasoningDetail | null => {
-							try {
-								const parsed = JSON.parse(tc.thoughtSignature!) as unknown;
-								return isOpenAIReasoningDetail(parsed) ? parsed : null;
-							} catch {
-								return null;
-							}
-						})
-						.filter((detail): detail is OpenAIReasoningDetail => detail !== null);
-					if (reasoningDetails.length > 0) {
-						assistantMsg.reasoning_details = reasoningDetails;
-					}
-				}
 			}
 			if (preservedReasoningDetails) {
 				assistantMsg.reasoning_details = preservedReasoningDetails;

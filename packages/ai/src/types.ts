@@ -356,7 +356,7 @@ export interface TextContent {
 export interface ThinkingContent {
 	type: "thinking";
 	thinking: string;
-	thinkingSignature?: string; // e.g., for OpenAI responses, the reasoning item ID
+	thinkingSignature?: string; // Provider-specific opaque or serialized reasoning replay data
 	/** When true, the thinking content was redacted by safety filters. The opaque
 	 *  encrypted payload is stored in `thinkingSignature` so it can be passed back
 	 *  to the API for multi-turn continuity. */
@@ -432,7 +432,6 @@ export interface AssistantMessage {
 	model: string;
 	responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
-	reasoningDetails?: JsonValue[]; // Provider-specific structured reasoning details to replay verbatim on later same-model turns.
 	diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
 	usage: Usage;
 	stopReason: StopReason;

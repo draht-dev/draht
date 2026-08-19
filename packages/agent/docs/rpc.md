@@ -1,437 +1,193 @@
-# Harness RPC Design Notes
+# Plugin Service RPC Design Notes
 
-> **Status:** Design input, not a normative contract or implementation handoff. Required trailing `Context` parameters and the untyped RPC transport have landed. `RemoteSession`/`RemoteSessionTree`, connection-owned remote mutation capabilities, and client-to-server request cancellation are implemented. The hosted Harness and worker protocols remain hand-written projections, worker-hop cancellation and trace carriers are still missing, and Pi request ingress still starts from `TODO_CONTEXT`. Resolve the remaining open decisions and fold the accepted behavior into `harness.md` before creating another work package.
+> **Status:** Design input, not a normative contract or implementation handoff. This document specifies only the RPC semantics required by `plugins.md`. Exact control-frame shapes and local proxy implementation are intentionally deferred.
 
-## Goal
+## Role
 
-Make the ordinary `AgentHarness`, `AgentLane`, `Session`, and `SessionTree` surfaces straightforward to expose through RPC with generic client/server machinery and small adapter-specific touch-ups.
-
-The core implementations remain transport-agnostic. They must not know about request IDs, serialization, sockets, remote references, trace carriers, disconnects, or subscription frames.
+`provide()`/`use()` and `spawn()`/`observe()` are the plugin system's hidden RPC. Plugin facets share TypeScript service contracts, while the transport carries only service/member identifiers, strict JSON values, request/subscription correlation, and trace/control metadata. Hosts construct the typed local implementation or facade; TypeScript types and arbitrary objects never cross the wire. All connected hosts are assumed to use exactly matching contracts and protocol behavior; version negotiation and compatibility are deferred.
 
 ```text
-AgentHarness / AgentLane / Session / SessionTree
-                        ↑
-                  server adapter
-                        ↕
-                  wire protocol
-                        ↕
-                  client proxies
+session/server facet: provide() / spawn()
+                    ↕ hidden service RPC
+presentation/session facet: use() / observe()
 ```
 
-Invocation context kills two integration problems at the boundary:
-
-- the adapter reconstructs the telemetry parent for the server invocation;
-- the adapter maps request cancellation/disconnect to `context.abortSignal`.
-
-The core sees only an ordinary explicit `Context`.
-
-## Landed interface state
-
-The current public APIs put context last:
-
-```ts
-lane.drive(options, context);
-session.getEntry(id, context);
-harness.prompt(text, images, context);
-```
-
-This shape is now threaded through `AgentHarness`, `AgentLane`, `Storage`, `SessionReader`, `SessionMutator`, `SessionTree`, `Session`, `SessionRepo`, runtime2, hooks, events, and session backends. Hook handlers, event listeners, mutation callbacks, entry projectors, system-prompt callbacks, tool-context factories, and provider-message conversion receive the invocation context.
-
-This is mechanical propagation, not complete RPC support. Known contract gaps are:
-
-- optional business arguments became required `T | undefined` positions before context;
-- `SessionReader.getEntries()` returns `Map`;
-- methods and results expose remote object capabilities directly;
-- `AgentHarnessTool.execute()` still receives a separate `AbortSignal` and no invocation `Context`;
-- the exported `AgentHarnessToolContextSource` still has a zero-argument factory;
-- `AgentHarnessOptions.telemetryContext` still installs receiver-level telemetry;
-- callback surfaces such as hooks, `Session.mutate()`, and `runWhenIdle()` are not ordinary RPC.
-
-The remaining `TODO_CONTEXT` uses are at coding-agent experimental process boundaries where RPC reconstruction has not been implemented.
+The service system is the plugin boundary. Presentation facets receive semantic services, replicated state, and semantic events; they never receive a raw Harness, Session, tool registry, hook registry, credential store, or storage handle.
 
 ## Non-goals
 
-Do not:
+Do not serialize `Context`, `AbortSignal`, telemetry objects, callbacks, tools, hooks, functions, or arbitrary object graphs. Do not make core Harness or Session implementations aware of transport mechanics. Do not make disconnect perform durable or service-owned cancellation. Do not build per-method codecs for values already constrained to JSON.
 
-- add RPC methods, reference types, request IDs, or transport state to real harness/session implementations;
-- serialize `Context`, `AbortSignal`, `TelemetryContext`, hooks, tools, or callbacks;
-- make the core depend on one transport or telemetry backend;
-- use `AsyncLocalStorage` for parent discovery;
-- hide durable cancellation behind an RPC disconnect;
-- build per-method codecs for values already constrained to JSON.
+## Service contracts and typed facades
 
-## Ordinary RPC contract
+A remote-service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. `provide()` exposes one singleton implementation; `spawn()` exposes a keyed implementation. A token has one mode in one namespace: mixing singleton and keyed use is an error.
 
-An ordinary proxyable method should:
+The provider must make enough control-plane information available for the host to validate an accessed member as a method, `RemoteState`, or `RemoteEvents`. The consumer must be able to obtain the member name from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. How a disconnected lazy proxy represents an unresolved member, and the exact provider-kind validation exchange, are implementation details.
 
-- return a promise;
-- accept only `JsonValue`-compatible business arguments;
-- return a `JsonValue`-compatible ordinary result or `void`;
-- optionally receive one required invocation context in the declared context position.
+A local `use()` returns the actual implementation. A remote `use()` returns one stable, lazy typed facade shared by local consumers of that token. While disconnected, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
 
-`void` is represented by a successful response envelope without a result field. It does not require encoding `undefined` as a JSON value.
+Remote methods return promises and accept and return strict JSON apart from their declared `Context`; `void` is a successful response without a result field. A private returned reference is a separately validated control envelope, not a business JSON value. The client removes the context before transport and the receiving host constructs a fresh local context. The contract position is host-controlled and must be consistent; the current examples use one required trailing `Context`. Business absence is JSON `null` or an options object, never transported `undefined`.
 
-Remote object references and subscriptions are protocol envelopes, not domain codecs. Methods returning non-JSON domain objects require an adapter projection or a change to a JSON result shape.
+Use static assertions and runtime validation. Static checks constrain remote methods and state/event members; runtime boundaries reject unsupported members and non-JSON arguments, results, state, and event values. TypeScript supplies typed facades but does not authenticate a peer or create runtime metadata.
 
-Current examples requiring review include `SessionReader.getEntries()`, which returns a `Map`, and methods returning `AgentLane`, `SessionTree`, executable tools, or callback-bearing handles. The intended response is not a catalog of hand-written codecs. Use a remote reference, a JSON projection, or mark the member host-local.
+## Namespaces, bindings, and identity
 
-## Context position and `undefined`
+The host exposes two remote namespaces: `server` names services provided by the connected server; `session` names services from the presentation's currently selected session. A session-service call never accepts a client-selected durable `sessionId`. The server authorizes attachment and routes the selected session namespace to its worker.
 
-The implemented `Context` has no runtime brand. The landed receiver methods use context last, while methods such as `Session.view()` and host-local registration surfaces have no context. A generic proxy therefore needs trusted method metadata; position alone cannot distinguish contextual from non-contextual methods.
+### Server control plane
 
-The landed shape has a strict JSON problem:
+Session listing and management are ordinary server singleton services, not generic remote `Session` methods. `SessionDirectory` exposes presentation-safe session summaries as replicated state plus semantic directory events. `SessionManagement` exposes `create`, `remove`, `attach`, and `detach` methods. Presentation facets consume both through `server.use()`:
 
 ```ts
-harness.prompt(text, undefined, context);
-session.readList(address, undefined, context);
+const directory = context.server.use(SessionDirectory);
+const management = context.server.use(SessionManagement);
 ```
 
-After the proxy strips context, the ordinary argument array still contains `undefined`, which is not a `JsonValue`.
+The server derives workspace and client authority from its locally authenticated identity, not from the summary or method arguments. It may project directory state per client; either way, summaries never expose server-private fields such as owner IDs or working directories.
 
-The final design must choose one of these approaches:
+`management.attach(sessionId, context)` is the bridge between the namespaces. The server authorizes the requested managed session, closes the presentation's previous session-scoped requests, subscriptions, references, and observer tasks, binds its `session` namespace to the worker, then hydrates the new singleton state and keyed-instance directory. `session.attachment` is host control state reporting this selection and its health; it is not a directory service. `detach()` performs the same cleanup without a replacement.
 
-1. move context first so optional business arguments remain trailing and can be omitted;
-2. retain context last but add trusted arity metadata that removes trailing `undefined` values on the wire and restores their positions before invoking the implementation;
-3. replace these positional optional arguments with JSON values such as options objects or `null`.
+The host needs a private, host-owned binding incarnation for that route. It changes when the presentation attaches, detaches, switches session, or replaces a failed worker. Its representation is deliberately unspecified. The binding prevents a delayed frame for the old selected session from being applied to the new one; it is not a plugin-visible service value or a substitute for authorization.
 
-An untyped `undefined` sentinel is a protocol codec and weakens the strict JSON contract. Do not silently rely on `JSON.stringify()` converting array `undefined` to `null`.
-
-## Contract checking
-
-Use both static and runtime checks.
-
-A mapped TypeScript assertion can reject ordinary members whose arguments/results are not JSON-compatible, are synchronous, or are non-method properties. Adapter-declared escape members are excluded from that ordinary check.
-
-Runtime transport boundaries must reject:
-
-- functions and symbols;
-- `undefined` array entries;
-- non-finite numbers;
-- sparse arrays;
-- cyclic data;
-- class instances, `Map`, `Set`, `Date`, and other non-plain objects;
-- symbol-keyed object state.
-
-JavaScript reflection can enumerate exposed implementation methods and validate values from executed calls. It cannot invent semantically valid arguments for arbitrary methods, so it cannot automatically execute every interface member. Static contract assertions and focused behavior fixtures remain necessary.
-
-TypeScript also permits concrete implementations to accept fewer parameters than their interfaces. Exact-signature type tests or explicit implementation inventories are needed during the context migration.
-
-## Generic client call
-
-Conceptually, the client proxy performs:
+A state or event source has structural identity:
 
 ```text
-method invocation
-→ use method metadata to remove Context from its declared position, if present
-→ validate remaining arguments as JSON
-→ start rpc.client span
-→ inject trace carrier
-→ allocate request ID
-→ send target + method + arguments + trace carrier
-→ if context.abortSignal exists, send cancel(request ID) when it aborts
-→ decode JSON result or remote protocol envelope
+(provider binding, service ID, optional instance key + generation, member name)
 ```
 
-A request frame can be transport-specific, but carries equivalent information:
+There is no separately discoverable state ID. A spawned instance key is a plugin-level logical key. Its host-owned generation changes when a closed key is reused, so a stale proxy cannot call the replacement. `requestId` identifies one transport invocation for response, cancellation, and tracing. A Harness/tool `invocationId` may be a useful instance key—as in the question plugin—but it does not replace the service, binding, or generation parts of the live address.
 
-```ts
-interface RpcRequest {
-	id: string;
-	target: ObjectReference;
-	method: string;
-	args: JsonValue[];
-	trace?: JsonValue;
-}
-```
+## Calls, context, and routing
 
-The trusted method manifest records whether context exists, its position, and any argument padding needed by the selected `undefined` policy. An untrusted client must not choose context placement.
+A call carries enough control-plane information to select a namespace, service, optional keyed instance, and member, plus a request ID, JSON arguments, and trace carrier. The server may parse those control-plane fields to route a session call, but it does not parse plugin business payloads or load plugin contracts. The service endpoint validates the member and values, creates a request-local abort controller and `Context`, installs authenticated client identity as a server-created context value, and invokes the local implementation.
 
-The context object, its values, signal, and telemetry implementation never appear in `args`.
+The client maps `context.abortSignal` to cancellation of that one request. Disconnect cancels that connection's active calls and closes its subscriptions. Neither action cancels service-owned work or writes durable Harness cancellation. Per-client request correlation reaches the worker so request IDs from different presentations cannot collide.
 
-## Generic server call
+## Replicated state, events, and keyed instances
 
-The server performs:
+`RemoteState` is authoritative latest-value replication, not event history, durable storage, a CRDT, or multi-writer state. A cold replica has `value === undefined`; subscribing before hydration records a listener without invoking it. Hydration installs a complete snapshot atomically before later updates are delivered, so there is no snapshot/update gap. Once hydrated, `value` is synchronous and subscribing reports the current value followed by later updates. The first snapshot callback uses a fresh hydration context; an already hydrated replica uses a fresh local delivery context rather than retaining the original write context. State values are detached JSON values.
+
+The providing host attaches source trace metadata to updates. The consumer reconstructs fresh delivery contexts; hydration uses a fresh context parented to the subscription. Disconnect may retain a value as stale display data. Reconnect replaces it from a complete snapshot, while a switch to a different provider clears readiness and disposes binding-specific resources. The precise subscription, buffering, sequence, acknowledgement, and flow-control frames are transport mechanics.
+
+`RemoteEvents` is a projection of provider-local events. Listeners run only in the consuming process; callbacks never cross the wire. Events are non-durable and never replayed after reconnect. Event delivery carries source trace metadata. State subscriptions, event subscriptions, and their cleanup are host-owned resources, not retained caller contexts.
+
+`observe()` is keyed-instance discovery, not a `RemoteState` containing proxies. It reconciles a complete initial directory with ordered additions, replacements, and removals. Each instance's initial state members hydrate before its observer task starts. Closing an instance rejects new calls, aborts only that instance's observer task, and allows admitted calls to settle. A stable `session.observe()` registration aborts old tasks and reconciles the fresh directory on a binding switch.
+
+## Private returned references
+
+A service method may return a private remote reference for caller-owned work, such as `IndexJob`. This is distinct from a keyed service: a reference is passed explicitly and is not discovered by `observe()`. It is scoped to the recipient and its provider/binding lifetime, and must be invalidated on the relevant close, switch, or disconnect. Exact reference encoding, ownership, and collection remain open.
+
+No generic Harness projection is part of this design. Raw Harness, Session, lane, tool, hook, and storage objects remain local authority. If a future integration needs a remote callback or a general object capability, it needs a separate explicit protocol and policy; it is not an extension of service RPC.
+
+## Context, cancellation, and telemetry
+
+Every remote method receives a fresh local `Context`; the sender's object, signal, telemetry implementation, and arbitrary typed values never cross the wire. The client starts `rpc.client`, injects its trace carrier, and maps the call's abort signal to that request. The endpoint extracts the carrier, starts `rpc.server`, and constructs a request-local abort signal and server-created typed values such as authenticated client identity.
 
 ```text
-receive request
-→ validate target, method, and JSON arguments
-→ allocate request-local AbortController
-→ derive cancellation context with withAbortSignal(controller.signal, BACKGROUND_CONTEXT)
-→ extract trace carrier into local TelemetryContext
-→ start rpc.server span
-→ derive Context with withTelemetryContext(serverSpan, cancellationContext)
-→ insert context at declared position
-→ invoke exposed real method or adapter override
-→ validate result
-→ return JSON/protocol envelope
-```
-
-A cancel frame aborts only the matching request controller. Disconnect aborts every active request and closes every subscription owned by that connection.
-
-`packages/protocol/src/rpc.ts` already separates a server implementation context from serialized arguments through `RpcImplementation<TManifest, TContext>`. Its implementation context is dispatcher-owned and context-first; an adapter then calls the real receiver with its required trailing `Context`. The manifest client API still has no invocation-context, cancellation, or trace integration, and the manifest model does not yet cover remote object references or subscriptions.
-
-## Current hosted-harness adapter
-
-The current Pi service protocol is an explicit adapter, not the generic proxy described below. `PiServerHost`, `HostedHarnessHandle`, `HostedHarnessAttachment`, and `HostedHarnessWatch` receive trailing contexts, and `HostedHarnessManager` forwards one context through session discovery, creation, attachment, prompting, watch lifecycle, and close.
-
-At Pi request ingress, `PiServer` still starts from `TODO_CONTEXT`, but derives a request context with a per-request abort signal. `PiClient.invoke()` sends an untyped method string plus unknown arguments and maps its signal to a cancel frame. The server routes `session.*` methods through `RemoteSessionManager`, which owns exclusive Session handles and mutation capabilities. The experimental coding-agent client opens a `RemoteSession`; prompting raises until `AgentHarness` runtime2 prompting is implemented.
-
-The coding-agent worker manager accepts contexts on its hosted interfaces, but worker operation frames carry neither cancellation nor trace metadata and the worker reconstructs calls with `TODO_CONTEXT`. Hosted Harness operations therefore still have interface propagation only across that hop.
-
-## Remote object identity
-
-`AgentHarness`, `AgentLane`, `Session`, and `SessionTree` are stateful capabilities. They cross RPC boundaries as opaque references:
-
-```ts
-interface ObjectReference {
-	readonly id: string;
-	readonly interface: "AgentHarness" | "AgentLane" | "Session" | "SessionTree";
-}
-```
-
-The protocol serializes a reserved JSON envelope. The client decodes it into another identity-only proxy. A proxy retains transport and remote identity, never an invocation context.
-
-Examples:
-
-- `harness.lane()` returns an `AgentLane` reference;
-- successful `harness.createLane()` contains an `AgentLane` reference;
-- `session.createLane()` returns a `SessionTree` reference;
-- `harness.sessionTree` resolves to a linked `SessionTree` reference.
-
-References may be registry IDs or deterministic selectors. For example, `session.view(lane)` can be represented as `{ sessionId, lane }` without calling the server until a method on that tree is invoked.
-
-## Adapter escape hatch
-
-Most methods should use generic reflection/dispatch. Exceptional members are described in the server adapter, not implemented in the real harness/session classes.
-
-Conceptual exposure:
-
-```ts
-function exposeHarness(server: RpcServer, harness: AgentHarness): ObjectReference {
-	return server.expose(harness, {
-		properties: {
-			sessionTree: remote((target) => target.sessionTree),
-		},
-		results: {
-			lane: optionalRemote("AgentLane"),
-			createLane: resultRemote("AgentLane"),
-		},
-		subscriptions: {
-			events: (target, publish) => installEventForwarder(target.events, publish),
-		},
-		excluded: ["hooks", "getTools", "setTools", "runWhenIdle"],
-	});
-}
-```
-
-The exact descriptor API is open. It should support these operations:
-
-- invoke or decorate the corresponding real method;
-- expose a returned object as another remote capability;
-- project a readonly property;
-- add a synthetic RPC projection when an existing callback/synchronous member cannot cross directly;
-- create a subscription;
-- exclude a host-local member.
-
-No descriptor, `$rpc` envelope, or transport concept belongs in `AgentHarness`, `Lane`, `Session`, or `SessionTree` implementations.
-
-## Surface classification
-
-### `SessionTree`
-
-Most asynchronous reads and writes are ordinary RPC after their argument/result types satisfy the JSON contract. Bound value/list payloads must themselves be JSON-compatible.
-
-A derived tree proxy retains only session/tree identity. It never captures the context used to obtain it.
-
-### `Session`
-
-Ordinary candidates include inherited tree/reader operations, lane creation, and close.
-
-Members requiring adaptation:
-
-- `metadata`: include a JSON snapshot with the reference or expose an async getter;
-- `idGenerator`: host-local capability, not remotely exposed;
-- `view(lane)`: synchronous remote-object return; use a deterministic client proxy or adapter projection;
-- `mutate(callback)`: not ordinary RPC because it contains executable callback code and holds the session mutation line.
-
-`RemoteSession.mutate()` executes the callback locally against a connection-owned `RemoteSessionMutator`. Its untyped protocol explicitly begins a mutation, performs reads and at most one commit by mutation ID, then finishes it. The server implements begin by entering the real `Session.mutate()` callback and retains the lane until finish, preserving client-local commit-then-publish ordering. Disconnect releases every owned mutation; a server-owned lease expires a wedged mutation after admitted commits drain. Callbacks are never serialized or reverse-called, and uncertain commits are never retried.
-
-### `AgentLane` and `AgentHarness`
-
-Ordinary candidates include operation admission/drive/control, prompts, queue operations, navigation, configuration, inspection, idle waiting, lane lookup/creation, and close, subject to JSON-compatible types.
-
-Members requiring adaptation or exclusion:
-
-- returned `AgentLane` and `SessionTree` values become references;
-- `runWhenIdle(callback)` is host-local; remote callers use `waitForIdle()`;
-- executable tools and callback-bearing tool configuration remain host-local;
-- constructor callbacks remain in the process hosting the harness;
-- hooks remain host-local;
-- events and watchers use subscriptions.
-
-Plain resources such as skill and prompt-template data may cross when their complete values are JSON-compatible and contain no executable behavior.
-
-## Hooks
-
-Do not proxy `hooks.on()` as an ordinary method.
-
-Hooks synchronously affect execution and may modify, block, decline, or terminate work. A remote hook requires explicit policy for:
-
-- registration lifetime;
-- invocation IDs and duplicate delivery;
-- ordering;
-- timeout/deadline;
-- disconnect;
-- retry;
-- fail-open versus fail-closed behavior;
-- telemetry and cancellation for the reverse call.
-
-If remote hooks become a requirement, define a dedicated interceptor/reverse-RPC protocol. Do not make generic callback serialization part of the harness proxy.
-
-## Events and watchers
-
-Events are passive and one-way, so they map naturally to subscriptions.
-
-A subscription protocol needs frames equivalent to:
-
-```ts
-type EventFrame =
-	| { type: "subscribe"; requestId: string; target: ObjectReference; filter?: JsonValue }
-	| { type: "subscribed"; requestId: string; subscriptionId: string }
-	| { type: "event"; subscriptionId: string; sequence: number; value: JsonValue; trace?: JsonValue }
-	| { type: "ack"; subscriptionId: string; sequence: number }
-	| { type: "unsubscribe"; subscriptionId: string };
-```
-
-The server adapts host-local `events.on()` into this protocol. The real event bus remains unaware of RPC.
-
-Each event frame carries trace metadata from the context that emitted the event. The client reconstructs a fresh event-delivery context and invokes local listeners under that parent. It does not receive the server's `Context` object or arbitrary context values.
-
-Subscriptions are ongoing invocation-scoped resources. They may retain their creation context and own cancellation controller; ordinary harness/session proxies may not. Aborting the subscription context or disconnecting sends/unconditionally performs unsubscribe.
-
-The transport must buffer events arriving between server subscription installation and client reference decoding. Sequence numbers plus acknowledgements or a bounded flow-control policy prevent unbounded memory growth.
-
-`watch()` and `watchSession()` additionally require a race-free snapshot handshake:
-
-```text
-server installs watcher in buffering mode
-→ server captures snapshot
-→ server sends subscription ID + snapshot
-→ server starts buffered/future event delivery
-→ client returns local WatchHandle
-```
-
-This preserves the current snapshot-plus-buffer semantics without serializing listener callbacks.
-
-A future client facade may reconstruct the familiar local `Events`/`WatchHandle` experience on top of this protocol. That facade lives in the RPC client package.
-
-## Request cancellation
-
-Request cancellation is implemented between `PiClient` and `PiServer`. Worker transport cancellation remains missing. The adapter maps each invocation's `abortSignal`, when present, to one request ID:
-
-```text
-client context.abortSignal aborts
-→ cancel(request ID)
-→ server request AbortController aborts
-→ reconstructed context.abortSignal aborts
-```
-
-An undefined client `abortSignal` means that the call has no client-side cancellation signal. Pre-aborted calls must not start server work. Disconnect aborts all active request controllers for that connection.
-
-This is process-local invocation cancellation. It must not call `requestAbort()` or write durable `cancel_requested` automatically.
-
-## `drive()` concurrency
-
-RPC does not decide whether a `drive()` caller installs execution or joins an existing process-local owner. The core lane arbitration decides that after receiving the reconstructed context.
-
-Every concurrent RPC has an independent `abortSignal` and telemetry parent. Never combine every joiner's signal into the active execution signal. A canceled joiner must cancel only its own wait.
-
-The runtime must choose one execution ownership policy:
-
-- installer-owned execution;
-- caller leases, where execution stops only after the last waiter leaves;
-- harness-owned execution independent of caller lifetime.
-
-The adapter only maps disconnect to the affected invocation signal. See `telemetry.md` for joiner spans and the durable-cancellation distinction.
-
-## Telemetry across RPC
-
-RPC telemetry follows:
-
-```text
-client caller
+caller
 └─ rpc.client
    └─ rpc.server
-      └─ harness/session span
+      └─ service implementation
 ```
 
-The client injects trace metadata from `rpc.client`; the server extracts a new local parent before `rpc.server`. No telemetry object crosses the wire.
+State and event delivery independently carry source trace metadata. The consumer reconstructs a delivery context from it rather than retaining the context that established the subscription.
 
-A joiner's `rpc.server`/`drive.join` spans remain under the joiner's incoming trace. They correlate with active execution by lane, operation ID, execution ID, and eventually span links. They cannot become a second parent of already-running execution.
-
-Event frames independently inject the source event context so client-side event processing remains related to the operation that emitted the event rather than the subscription-establishment call.
+Three cancellation domains remain separate: aborting one RPC invocation; explicitly cancelling service-owned work such as `job.cancel()`; and durable Harness cancellation such as `requestAbort()`. Transport cancellation and disconnect perform only the first. Work that outlives a call must detach into a service-owned task with its own controller and telemetry root.
 
 ## Security and lifecycle
 
-The server exposure layer must:
+Only manifest-allowlisted remote service IDs may be provided or spawned. Local services are never discoverable remotely. Providers validate member kinds and every JSON business value; clients cannot forge control envelopes as ordinary values, choose instance generations, select another session's route, choose server context values, or cancel another client's request.
 
-- allowlist methods or derive a trusted manifest rather than reflecting arbitrary property names from untrusted input;
-- validate all request arguments before invocation and results before response;
-- reserve and validate protocol-envelope keys;
-- scope object references and subscriptions to the appropriate connection/authorization domain;
-- release references, active requests, and subscriptions on disconnect;
-- prevent clients from selecting arbitrary server-side context placement or internal implementation members;
-- treat telemetry recording failures as passive and business-neutral.
+The server authenticates its connection and authorizes attachment. It reconstructs client identity locally at the service endpoint; ordinary arguments never carry authority. Credentials, prompts, completions, tool data, filesystem contents, and other sensitive values cross only through an explicit presentation-safe contract.
 
-Authentication, authorization, and tenant metadata may be reconstructed as typed local context values by the server adapter. Client-supplied arbitrary context values are not trusted and do not cross by default.
+Facet scopes own registrations, spawned instances, subscriptions, observations, in-flight RPCs, and presentation resources. Disposal and binding changes close the relevant resources in dependency order. The provider's own session work remains alive unless its own lifecycle policy stops it.
 
-## Interface migration status
+## Required tests
 
-Commit `3fbfcf48f` updated the concrete current-runtime and session signatures rather than relying only on TypeScript's permissive `implements` checks. Context is mechanically forwarded through the agent package and session backends.
+Test the plugin-facing semantics over loopback and a real framed transport:
 
-`TODO_CONTEXT` marks a boundary whose real parent is not yet reconstructed. `BACKGROUND_CONTEXT` is reserved for intentional roots. The remaining production `TODO_CONTEXT` uses are in coding-agent experimental server/worker code; they are the RPC integration boundary, not completed propagation.
+- local and remote `use()`, singleton/keyed mode validation, manifest allowlisting, lazy member access, and local services remaining unreachable remotely;
+- strict JSON boundaries, method context reconstruction, request cancellation isolation, and trace propagation without serializing context values;
+- server/session namespace isolation, authorized attach, selected-session switching, stale-frame rejection, and worker-side per-client request correlation;
+- cold and hydrated `RemoteState`, snapshot/update race freedom, delivery contexts, stale display on reconnect, and clearing on provider switch;
+- event subscription setup, non-replay, ordering, cleanup, and bounded flow control;
+- instance directory hydration, ordered reconciliation, state hydration before observer tasks, generation-based stale rejection, and task cleanup on close or switch;
+- private returned-reference lifetime distinct from keyed-service discovery; and
+- the question and shared-review patterns: concurrent instances, late presentation attachment, disconnect without cancelling session work, worker replacement, and durable application-level settlement.
 
-Compilation proves signature coverage only. It does not prove correct trace parentage, pre-abort admission, drive ownership, durable cancellation, or RPC behavior. All eventual semantics target the current harness runtime; changes to the removed runtime are irrelevant.
+## Open protocol mechanics
 
-## Required tests for the later handoff
+The following are intentionally not specified here: exact control-frame schemas; member-kind discovery and lazy-proxy implementation; subscription sequencing, acknowledgements, buffering, and flow control; provider replacement and reference collection; and how a future multi-pane presentation represents more than one selected session. They must preserve the semantics above without changing the plugin contract.
 
-Current tests cover typed service-adapter validation, untyped transport calls, pre-abort, request cancellation, ordinary Pi service calls, attachment/watch lifecycle, snapshot-first event buffering, remote Session/tree behavior, callback-scoped mutation, lease expiry, disconnect cleanup, and use of `RemoteSession` by `AgentHarness.create()`. Remaining generic RPC and context coverage includes:
+## Example: directory and selected session
 
-- static rejection of non-JSON ordinary interface members;
-- runtime rejection of functions, cycles, non-finite numbers, sparse arrays, and class instances;
-- trailing context is removed from serialized arguments and reconstructed server-side;
-- omitted optional arguments are normalized without serializing `undefined`;
-- ordinary transparent method calls;
-- nested remote references and stable proxy identity;
-- adapter override invokes/decorates the real method;
-- property and synchronous remote-object projections;
-- unknown target/method and malformed envelope rejection;
-- disconnect aborts requests and closes subscriptions;
-- client/server telemetry parentage;
-- malformed/missing trace carrier degrades safely;
-- event subscription establishment race;
-- event source telemetry reconstruction;
-- unsubscribe, disconnect, ordering, buffering, and backpressure;
-- drive joiner cancellation does not cancel shared execution;
-- invocation cancellation writes no durable cancellation state.
+The directory and management services are normal server services. Their contracts carry only presentation-safe values:
 
-## Resolved migration decisions
+```ts
+interface SessionSummary {
+	sessionId: string;
+	title: string;
+	workspaceId: string;
+	status: "starting" | "active" | "idle" | "closed" | "unreachable";
+	updatedAt: string;
+}
 
-- Context-aware receiver methods use one required trailing `Context`.
-- `Context`, `AbortSignal`, and `TelemetryContext` objects are never serialized.
-- RPC transport calls use an untyped method string and unknown arguments/result; domain facades own typing.
-- Remote mutation callbacks execute locally over an explicit connection-owned mutation capability.
-- Remote mutation leases are server-owned policy, distinct from caller cancellation.
-- The current Pi service remains an explicit adapter projection rather than a generic `AgentHarness` proxy.
+type SessionDirectoryEvent =
+	| { type: "created" | "changed"; session: SessionSummary }
+	| { type: "deleted"; sessionId: string };
 
-## Open decisions before `harness.md`
+interface SessionDirectoryService {
+	readonly state: RemoteState<{ revision: number; sessions: SessionSummary[] }>;
+	readonly events: RemoteEvents<SessionDirectoryEvent>;
+}
 
-- whether all ordinary results must be JSON-compatible or some interfaces need RPC projections;
-- static contract-checking API and test location;
-- object-reference ownership, lifetime, and nested result encoding;
-- exact adapter descriptor/override API;
-- event flow-control and reconnection policy;
-- whether a remote hook protocol is required at all;
-- telemetry carrier adapter ownership;
-- drive ownership policy under multiple callers;
-- exact package boundaries for generic RPC, harness adapters, and protocol schemas.
+interface SessionManagementService {
+	attach(sessionId: string, context: Context): Promise<void>;
+	detach(context: Context): Promise<void>;
+}
+
+const SessionDirectory = defineRemoteService<SessionDirectoryService>("session-directory");
+const SessionManagement = defineRemoteService<SessionManagementService>("session-management");
+```
+
+A server facet supplies the services. The host-local attachment capability derives the client from `Context`, authorizes the requested session, and performs the binding transition:
+
+```ts
+serverContext.provide(SessionDirectory, { state: directoryState, events: directoryEvents });
+serverContext.provide(SessionManagement, {
+	async attach(sessionId, context) {
+		const client = requireClientIdentity(context);
+		authorizeSession(client, sessionId);
+		await attachments.bind(client.clientId, sessionId, context);
+	},
+	async detach(context) {
+		await attachments.unbind(requireClientIdentity(context).clientId, context);
+	},
+});
+```
+
+A presentation uses server services to render and select, then continues using the same stable session-service facade after the host rebinds it:
+
+```ts
+const directory = tuiContext.server.use(SessionDirectory);
+const management = tuiContext.server.use(SessionManagement);
+const models = tuiContext.session.use(Models);
+
+tuiContext.commands.register("sessions.switch", async (operation) => {
+	const snapshot = directory.state.value;
+	if (snapshot === undefined) return;
+
+	const sessionId = await tuiContext.ui.select(
+		"Sessions",
+		snapshot.sessions.map((session) => ({ label: session.title, value: session.sessionId })),
+		{ signal: operation.abortSignal },
+	);
+	if (sessionId !== undefined) await management.attach(sessionId, operation);
+});
+
+// After attach() settles, `models` addresses the selected worker. Its state
+// is cleared or retained as stale according to the binding transition, then
+// replaced by that worker's fresh authoritative snapshot.
+```
+
+The presentation never routes `models` with a selected `sessionId`; that remains host routing state. The server closes the prior session binding's resources before hydrating the new one.

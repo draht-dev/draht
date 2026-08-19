@@ -312,7 +312,7 @@ describe("JSONL v3 migration", () => {
 		});
 	});
 
-	it("imports a compaction with its retained tail materialized", async () => {
+	describe("importing compactions", () => {
 		const excludedTimestamp = NOW + 1_000;
 		const retainedTimestamp = NOW + 2_000;
 		const compactionTimestamp = NOW + 3_000;
@@ -335,61 +335,78 @@ describe("JSONL v3 migration", () => {
 			totalTokens: 165,
 			cost: { input: 1.2, output: 0.3, cacheRead: 0.1, cacheWrite: 0.05, total: 1.65 },
 		} satisfies Usage;
-		await writeLegacyV3Fixture([
-			{
-				type: "message",
-				id: "excluded-message",
-				parentId: null,
-				timestamp: new Date(excludedTimestamp).toISOString(),
-				message: excludedMessage,
-			},
-			{
-				type: "message",
-				id: "retained-message",
-				parentId: "excluded-message",
-				timestamp: new Date(retainedTimestamp).toISOString(),
-				message: retainedMessage,
-			},
-			{
+
+		async function openFixture(fromHook?: true) {
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "excluded-message",
+					parentId: null,
+					timestamp: new Date(excludedTimestamp).toISOString(),
+					message: excludedMessage,
+				},
+				{
+					type: "message",
+					id: "retained-message",
+					parentId: "excluded-message",
+					timestamp: new Date(retainedTimestamp).toISOString(),
+					message: retainedMessage,
+				},
+				{
+					type: "compaction",
+					id: "compaction",
+					parentId: "retained-message",
+					timestamp: new Date(compactionTimestamp).toISOString(),
+					summary: "Summary of the earlier context",
+					firstKeptEntryId: "retained-message",
+					tokensBefore: 12_000,
+					details,
+					usage,
+					...(fromHook === undefined ? {} : { fromHook }),
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(entries).toHaveLength(3);
+			const [excluded, retained, compaction] = entries;
+			if (excluded === undefined || retained === undefined || compaction === undefined) {
+				throw new Error("Legacy compaction chain was not imported");
+			}
+			return { session, excluded, retained, compaction };
+		}
+
+		it("materializes the retained tail and preserves the payload", async () => {
+			const { session, excluded, retained, compaction } = await openFixture();
+
+			expect(retained).toMatchObject({ parentId: excluded.id, seq: 2 });
+			expect(compaction).toMatchObject({
 				type: "compaction",
-				id: "compaction",
-				parentId: "retained-message",
-				timestamp: new Date(compactionTimestamp).toISOString(),
+				parentId: retained.id,
+				seq: 3,
+				timestamp: compactionTimestamp,
 				summary: "Summary of the earlier context",
-				firstKeptEntryId: "retained-message",
+				retainedTail: [retainedMessage],
 				tokensBefore: 12_000,
 				details,
 				usage,
-			},
-		]);
-		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
-		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
-
-		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
-		const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
-		expect(entries).toHaveLength(3);
-		const [excluded, retained, compaction] = entries;
-		if (excluded === undefined || retained === undefined || compaction === undefined) {
-			throw new Error("Legacy compaction chain was not imported");
-		}
-		expect(retained).toMatchObject({ parentId: excluded.id, seq: 2 });
-		expect(compaction).toMatchObject({
-			type: "compaction",
-			parentId: retained.id,
-			seq: 3,
-			timestamp: compactionTimestamp,
-			summary: "Summary of the earlier context",
-			retainedTail: [retainedMessage],
-			tokensBefore: 12_000,
-			details,
-			usage,
-			fromHook: false,
+				fromHook: false,
+			});
+			expect(compaction).not.toHaveProperty("firstKeptEntryId");
+			expect(compaction.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+			expect(uuidTimestamp(compaction.id)).toBe(compactionTimestamp);
+			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(compaction.id);
+			await session.close(BACKGROUND_CONTEXT);
 		});
-		expect(compaction).not.toHaveProperty("firstKeptEntryId");
-		expect(compaction.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-		expect(uuidTimestamp(compaction.id)).toBe(compactionTimestamp);
-		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(compaction.id);
-		await session.close(BACKGROUND_CONTEXT);
+
+		it("preserves an explicit fromHook flag", async () => {
+			const { session, compaction } = await openFixture(true);
+
+			expect(compaction).toMatchObject({ type: "compaction", fromHook: true });
+			await session.close(BACKGROUND_CONTEXT);
+		});
 	});
 
 	it("remaps a legacy message chain and exposes it through current APIs", async () => {

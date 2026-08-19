@@ -8,8 +8,8 @@ interface ParkedBreakpoint {
 	reject: (error: Error) => void;
 }
 
-/** Process-local manual-execution barrier. It owns no durable state or work. */
-export class BreakpointBarrier {
+/** Process-local manual-execution breakpoint. It owns no durable state or work. */
+export class Breakpoint {
 	private readonly mode: "automatic" | "manual";
 	private parked: ParkedBreakpoint | undefined;
 	private closedError: Error | undefined;
@@ -65,7 +65,7 @@ export class BreakpointBarrier {
 		this.notifyChange();
 	}
 
-	/** Resolve when the parked action changes or the barrier closes. */
+	/** Resolve when the parked action changes or the breakpoint closes. */
 	waitForChange(): Promise<void> {
 		if (this.closedError !== undefined) return Promise.resolve();
 		return new Promise<void>((resolve) => this.changeWaiters.add(resolve));

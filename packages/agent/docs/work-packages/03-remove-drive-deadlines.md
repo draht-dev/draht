@@ -51,7 +51,7 @@ type DriveOutcome =
 
 There is no deprecated alias, ignored `deadline` field, compatibility overload, alternate timestamp option, or replacement pause flag in WP03.
 
-The next drive package will be redesigned manual-first. Procedure code reaches one shared `BreakpointBarrier`: manual mode parks and reports `action_required`; automatic mode crosses the same boundary immediately. Manual mode exists to inspect and test transitions, and automatic mode is the same transition path with automatic barrier release. That design is evaluated only after this cleanup lands.
+The next drive package will be redesigned manual-first. Procedure code reaches one shared `Breakpoint`: manual mode parks and reports `action_required`; automatic mode crosses the same boundary immediately. Manual mode exists to inspect and test transitions, and automatic mode is the same transition path with automatic breakpoint release. That design is evaluated only after this cleanup lands.
 
 ## Host behavior
 

@@ -44,7 +44,7 @@
   - [3.13 Terminal transactions](#313-terminal-transactions)
 - [Part 4 — Execution, recovery, abort, close](#part-4--execution-recovery-abort-close)
   - [4.1 The live operation task](#41-the-live-operation-task)
-  - [4.2 Breakpoint barrier and effect gate](#42-breakpoint-barrier-and-effect-gate)
+  - [4.2 Breakpoint and effect gate](#42-breakpoint-and-effect-gate)
   - [4.3 The lane mutation line](#43-the-lane-mutation-line)
   - [4.4 Attachment and open-operation inventory](#44-attachment-and-open-operation-inventory)
   - [4.5 Driving and crash recovery](#45-driving-and-crash-recovery)
@@ -1910,7 +1910,7 @@ class AbortRequested extends Error {
 class OperationEnded extends Error {}
 ```
 
-The lane implementation also has one breakpoint barrier used by `peekAction(context)`/`executeAction(context)`. It is a lane field, not another operation/task record. In manual mode a pass reaching that barrier returns `action_required` instead of leaving a public drive or convenience promise unresolved. Same-operation callers observe the same current action without releasing it. `executeAction(context)` releases exactly one action and returns the next action or non-action `ResumeResult`; `runToCompletion(context)` repeatedly releases actions and cannot return `action_required`. Automatic mode crosses barriers and never returns `action_required`.
+The lane implementation also has one `Breakpoint` used by `peekAction(context)`/`executeAction(context)`. It is a lane field, not another operation/task record. In manual mode a pass reaching that breakpoint returns `action_required` instead of leaving a public drive or convenience promise unresolved. Same-operation callers observe the same current action without releasing it. `executeAction(context)` releases exactly one action and returns the next action or non-action `ResumeResult`; `runToCompletion(context)` repeatedly releases actions and cannot return `action_required`. Automatic mode crosses breakpoints and never returns `action_required`.
 
 This is not another state machine. `completion` is the ordinary promise returned by the async operation procedure. `effectGate` owns only abort-versus-start arbitration and the operation's cooperative signal (§4.2). Current state, retry data, responses awaiting settlement, structural intermediate content, and parallel tool promises remain ordinary procedure-local variables. Streaming drafts and running-tool display values are ordinary lane fields used only for snapshots.
 
@@ -2005,13 +2005,13 @@ Convenience methods add policy, not another execution path. `prompt`/`skill`/`co
 
 `AgentHarness.create(options, context)` restores the minimal projection and reports open operations but installs no tasks and starts no hooks, providers, tools, timers, breakpoints, or application callbacks.
 
-## 4.2 Breakpoint barrier and effect gate
+## 4.2 Breakpoint and effect gate
 
 Two small process-local mechanisms cover manual drive and abort-versus-start. They have no business logic and own no durable state.
 
-### Breakpoint barrier
+### Breakpoint
 
-A breakpoint is only an execution barrier placed immediately before code whose boundary manual mode must expose:
+A breakpoint is placed immediately before code whose boundary manual mode must expose:
 
 ```ts
 await breakpoint({
@@ -2020,7 +2020,7 @@ await breakpoint({
   details: { attempt: 1 },
 });
 
-// Ordinary code follows the barrier.
+// Ordinary code follows the breakpoint.
 ```
 
 The existing public `ActionInfo` is the breakpoint descriptor:
@@ -2032,17 +2032,17 @@ interface ActionInfo {
   details?: JsonValue;       // JSON-safe diagnostic data
 }
 
-interface BreakpointBarrier {
+interface Breakpoint {
   hit(info: ActionInfo, options?: { interruptOnAbort?: boolean }): Promise<void>;
-  /** Reject only a parked barrier whose interruptOnAbort is not false. */
+  /** Reject only a parked breakpoint whose interruptOnAbort is not false. */
   interrupt(cancellation: Promise<void>): void;
   close(error: HarnessClosed | HarnessFault | OperationEnded): void;
 }
 ```
 
-There is no second breakpoint-name or breakpoint-data type. `peekAction()` returns the currently parked `ActionInfo`; `executeAction()` releases exactly that barrier. Each runtime slice defines and tests the stable `kind` values and safe `details` fields for the boundaries it adds.
+There is no second breakpoint-name or breakpoint-data type. `peekAction()` returns the currently parked `ActionInfo`; `executeAction()` releases exactly that breakpoint. Each runtime slice defines and tests the stable `kind` values and safe `details` fields for the boundaries it adds.
 
-In automatic mode `breakpoint(info)` returns immediately and no public outcome is `action_required`. In manual mode it publishes `info`, parks the ordinary continuation, and reports `{ kind: "action_required", action: info }` from the current drive/convenience call. The continuation remains owned but no public promise is left invisibly pending. Same-operation calls report the same action without releasing it. `executeAction(context)` attaches to that continuation, releases exactly this barrier, and returns when it next parks or reaches another resume outcome; `runToCompletion(context)` repeats that operation internally. Ordinary barriers default to `interruptOnAbort:true`; cancellation-reconciliation barriers pass `false`, so a repeated abort reports the same durable marker without skipping reconciliation work. Breakpoints precede operation-procedure commits, hook aggregates, provider requests, real tool invocations, and retry sleeps. Nested boundaries are legal: `before_payload` and `after_response` may become the next reported action while the enclosing assistant procedure awaits them. Waiting for a provider/tool promise that already started is not another breakpoint.
+In automatic mode `breakpoint(info)` returns immediately and no public outcome is `action_required`. In manual mode it publishes `info`, parks the ordinary continuation, and reports `{ kind: "action_required", action: info }` from the current drive/convenience call. The continuation remains owned but no public promise is left invisibly pending. Same-operation calls report the same action without releasing it. `executeAction(context)` attaches to that continuation, releases exactly this breakpoint, and returns when it next parks or reaches another resume outcome; `runToCompletion(context)` repeats that operation internally. Ordinary breakpoints default to `interruptOnAbort:true`; cancellation-reconciliation breakpoints pass `false`, so a repeated abort reports the same durable marker without skipping reconciliation work. Breakpoints precede operation-procedure commits, hook aggregates, provider requests, real tool invocations, and retry sleeps. Nested boundaries are legal: `before_payload` and `after_response` may become the next reported action while the enclosing assistant procedure awaits them. Waiting for a provider/tool promise that already started is not another breakpoint.
 
 The breakpoint performs no commit, callback invocation, telemetry, classification, or state transition. The ordinary statement following it does the work. Procedure code and tests can therefore be read in the same order:
 
@@ -2053,9 +2053,9 @@ breakpoint
 → operation code
 ```
 
-Public lane calls—acceptance, `steer`, `followUp`, `nextRun`, `cancelQueued`, `requestAbort`/`abort`, configuration and value setters, and tree writes—do not wait at this barrier. They remain able to race a parked drive pass through `Session.mutate`. Acceptance always commits immediately without a breakpoint; the first operation breakpoint can occur only after a later `drive` claims the accepted operation.
+Public lane calls—acceptance, `steer`, `followUp`, `nextRun`, `cancelQueued`, `requestAbort`/`abort`, configuration and value setters, and tree writes—do not wait at this breakpoint. They remain able to race a parked drive pass through `Session.mutate`. Acceptance always commits immediately without a breakpoint; the first operation breakpoint can occur only after a later `drive` claims the accepted operation.
 
-Abort rejects an ordinary parked breakpoint with `AbortRequested` instead of requiring another `executeAction()`. The signal carries the abort-mutation promise; the task waits for it, reloads durable ownership/control, and either enters cancellation reconciliation or observes that the operation already ended, without executing the ordinary statement after the interrupted barrier. Reconciliation's own commits and cleanup effects still park at their documented breakpoints. Close/fault rejects a parked barrier without executing the following code. An operation performs zero procedure writes and starts zero hooks/providers/tools/timers while parked.
+Abort rejects an ordinary parked breakpoint with `AbortRequested` instead of requiring another `executeAction()`. The signal carries the abort-mutation promise; the task waits for it, reloads durable ownership/control, and either enters cancellation reconciliation or observes that the operation already ended, without executing the ordinary statement after the interrupted breakpoint. Reconciliation's own commits and cleanup effects still park at their documented breakpoints. Close/fault rejects a parked breakpoint without executing the following code. An operation performs zero procedure writes and starts zero hooks/providers/tools/timers while parked.
 
 Passive event-listener delivery is observation, not an operation breakpoint. It remains isolated and telemetry-wrapped after publication.
 
@@ -2092,7 +2092,7 @@ assertOpen(): void {
 }
 ```
 
-`AbortRequested` is internal expected control flow shared with the breakpoint barrier. It carries the in-progress abort-mutation promise. That promise resolves when the lane job either commits cancellation or observes that a terminal transaction already won; it rejects on fault/close. The nearest procedure with relevant local work catches it; otherwise the operation-task boundary catches it, waits for that lane result, reloads, and either reconciles durable cancellation or resolves the already-terminal result. `HarnessClosed` and `HarnessFault` follow their ordinary rejection paths and perform no cancellation write.
+`AbortRequested` is internal expected control flow shared with the breakpoint. It carries the in-progress abort-mutation promise. That promise resolves when the lane job either commits cancellation or observes that a terminal transaction already won; it rejects on fault/close. The nearest procedure with relevant local work catches it; otherwise the operation-task boundary catches it, waits for that lane result, reloads, and either reconciles durable cancellation or resolves the already-terminal result. `HarnessClosed` and `HarnessFault` follow their ordinary rejection paths and perform no cancellation write.
 
 For a driven operation, the gate applies to starting ordinary hooks, provider requests/fetches, real tools, and convenience-owned retry timers. It does not wrap commits: dependent commits use `Session.mutate`. Both `before_drive` and `before_run` execute only after an operation owns a real drive pass, so they use the same operation gate. Best-effort `cancelDeferred` is cancellation cleanup, not ordinary work; it runs only after durable cancellation and uses a close-only signal.
 
@@ -2255,7 +2255,7 @@ The lane's configured model identity comes from `laneConfig`. A current operatio
 
 Recovery begins only when an open operation has no `ActiveOperation` and a matching `drive({ operationId }, context)` installs a real pass owner. `AgentHarness.create(options, context)` never drives. `resume(context)` inspects and drives the current operation without exposing its id and grants the same pass one deferred-poll permit. `requestAbort(operationId, context)` with no task commits cancellation but installs nothing; the next drive enters cancellation reconciliation directly.
 
-The pass first reloads durable control. If cancellation is requested, it invokes neither `before_drive` nor `before_run` and enters §4.6. Otherwise it gates and invokes `before_drive`; failure rejects this pass without faulting the harness or writing durable progress. Model/tool implementations are resolved only at the actual operation boundary that needs them. An unavailable provider/model or configured request tool becomes a non-retryable configuration failure before request intent; an unavailable requested tool becomes a synthetic error result. Neither condition suspends the operation. Durable phase then decides the work: `starting` runs and settles `before_run` as §3.6 specifies; an unowned pending effect is orphaned by construction and follows the table below; all other phases continue ordinarily. In manual mode, reaching a breakpoint returns `action_required` with the parked `ActionInfo`; automatic mode crosses it. A later `executeAction(context)` releases one barrier, while `runToCompletion(context)` continues across action branches until it reaches a non-action result.
+The pass first reloads durable control. If cancellation is requested, it invokes neither `before_drive` nor `before_run` and enters §4.6. Otherwise it gates and invokes `before_drive`; failure rejects this pass without faulting the harness or writing durable progress. Model/tool implementations are resolved only at the actual operation boundary that needs them. An unavailable provider/model or configured request tool becomes a non-retryable configuration failure before request intent; an unavailable requested tool becomes a synthetic error result. Neither condition suspends the operation. Durable phase then decides the work: `starting` runs and settles `before_run` as §3.6 specifies; an unowned pending effect is orphaned by construction and follows the table below; all other phases continue ordinarily. In manual mode, reaching a breakpoint returns `action_required` with the parked `ActionInfo`; automatic mode crosses it. A later `executeAction(context)` releases one breakpoint, while `runToCompletion(context)` continues across action branches until it reaches a non-action result.
 
 | Orphaned restart point | Activation recovery |
 |---|---|
@@ -3695,14 +3695,14 @@ One corruption assertion constructs an `aborted` response with running control d
 
 **Tier B — writer conformance.** Run the public harness against the instrumented-storage decorator: a spy wrapping `Storage.commit()` that records every transaction's writes in order. Assert exact write order and content against the Part 3 transaction tables and §5.5 ordering. Faux provider/tool/hook spies interleave starts/events with commits. This tier catches: effects before intent; failure to await the latest update delivery or latest checkpoint write before `after_tool`; a provider loop awaiting storage per frame; frame appends out of provider-event order or persisted for `done`/`error`; a settlement transaction missing its frame-list delete; `tool_end` emitted after rather than before outcome staging; missing response/usage settlement; checkpoint or frame writes after ownership loss; outcomes not staged before replay becomes impossible; out-of-order tree placement; result ids reserved late; invocation memos or staged/checkpoint/frame values leaked by outcome/terminal cleanup.
 
-**Tier C — deterministic interleavings.** Every race in §9.2, both orders, using the manual breakpoint barrier. Every introduced breakpoint kind and JSON-safe details shape is asserted explicitly.
+**Tier C — deterministic interleavings.** Every race in §9.2, both orders, using the manual breakpoint. Every introduced breakpoint kind and JSON-safe details shape is asserted explicitly.
 
 **Cross-cutting:**
 
 - **Backend conformance.** One suite, three backends, identical results — including checkpoint scalar set/replace/delete, list append/page/whole-key-delete with identical sequence cursors and reduced frame sequences, and torn-transaction handling exposing no list element. Memory/SQLite retain one current checkpoint; JSONL may retain superseded bytes physically but compaction produces identical logical state, including preserved list cursors. Internal values are not cloned or shape-validated. Write-order assertions use the instrumented decorator, never a durable log.
 - **Attachment and watch.** Construct every durable phase directly and assert minimal open inventory, configured/captured identity inspection without resolution, projection corruption faulting create, presentation corruption faulting watch, exact required/optional ad-hoc reads, no attachment effects, lane-line inspection, complete snapshots, live-over-durable partial precedence, no historical lifecycle replay, recipient binding at `emitBatch`, and both registration/publication orders without gaps or duplicates.
-- **Drive equivalence.** The same scenario in automatic and manual breakpoint mode must produce byte-identical durable state. Convenience calls and explicit `accept`/`drive`/`requestAbort` compositions must likewise produce byte-identical durable state and equivalent events/results. Manual calls report `action_required`; `executeAction(context)` advances one barrier and `runToCompletion(context)` consumes action branches.
-- **Breakpoint catalog.** Each runtime slice specifies and tests the stable `ActionInfo.kind` values and JSON-safe details for the boundaries it introduces. A parked operation performs no following procedure work; abort rejects interruptible ordinary barriers into reconciliation but leaves cancellation barriers parked; close/fault rejects every barrier.
+- **Drive equivalence.** The same scenario in automatic and manual breakpoint mode must produce byte-identical durable state. Convenience calls and explicit `accept`/`drive`/`requestAbort` compositions must likewise produce byte-identical durable state and equivalent events/results. Manual calls report `action_required`; `executeAction(context)` advances one breakpoint and `runToCompletion(context)` consumes action branches.
+- **Breakpoint catalog.** Each runtime slice specifies and tests the stable `ActionInfo.kind` values and JSON-safe details for the boundaries it introduces. A parked operation performs no following procedure work; abort rejects interruptible ordinary breakpoints into reconciliation but leaves cancellation breakpoints parked; close/fault rejects every breakpoint.
 - **Effect-start gate.** Cover every item in §4.2's complete catalog and assert that no other path calls `assertOpen()`. At each listed integration, force both orders of abort versus operation admission: the check and invocation are adjacent, abort-first invokes nothing, and admission-first gives the complete operation `EffectGate.signal`. Provider tests assert that request preparation precedes the check and that the same signal reaches Models auth/lazy/provider work. Hook tests treat each aggregate pipeline as one admitted unit. A cancelled drive must enter reconciliation without invoking `before_drive` or `before_run`.
 - **Invocation context.** Public operations receive trailing Context; hooks/listeners/callbacks and Session reads/writes preserve it. Cross concurrent calls on one shared receiver and assert independent telemetry/cancellation lineage. Buffered delivery retains the object-identical emitting Context. Context is never written durably. An RPC cancel/disconnect aborts only its reconstructed request signal, and invocation cancellation never writes `cancel_requested`.
 - **Signal ownership.** No public surface accepts a standalone operation signal; invocation cancellation arrives through `Context.abortSignal`, while operation-owned effect signals remain harness-controlled. A `before_request` patch carrying a signal has it stripped. Assert by type and by test.

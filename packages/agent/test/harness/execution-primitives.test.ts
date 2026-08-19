@@ -8,7 +8,7 @@ import {
 	withTelemetryContext,
 } from "../../src/harness/context.ts";
 import { HarnessEventBus } from "../../src/harness/events.ts";
-import { BreakpointBarrier } from "../../src/harness/execution/breakpoint.ts";
+import { Breakpoint } from "../../src/harness/execution/breakpoint.ts";
 import { AbortRequested, OperationEffectGate } from "../../src/harness/execution/effect-gate.ts";
 import { HookRegistry } from "../../src/harness/hooks.ts";
 import { InMemoryTelemetryContext } from "../../src/index.ts";
@@ -21,36 +21,36 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
 	return { promise, resolve: () => resolvePromise?.() };
 }
 
-describe("BreakpointBarrier", () => {
+describe("Breakpoint", () => {
 	it("parks before work, publishes JSON-safe action data, and releases exactly once", async () => {
-		const barrier = new BreakpointBarrier("manual");
+		const breakpoint = new Breakpoint("manual");
 		let worked = false;
 		const task = (async () => {
-			await barrier.hit({ kind: "test.effect", description: "Run effect", details: { attempt: 1 } });
+			await breakpoint.hit({ kind: "test.effect", description: "Run effect", details: { attempt: 1 } });
 			worked = true;
 		})();
 
-		expect(barrier.peek()).toEqual({
+		expect(breakpoint.peek()).toEqual({
 			kind: "test.effect",
 			description: "Run effect",
 			details: { attempt: 1 },
 		});
-		expect(JSON.parse(JSON.stringify(barrier.peek()))).toEqual(barrier.peek());
+		expect(JSON.parse(JSON.stringify(breakpoint.peek()))).toEqual(breakpoint.peek());
 		expect(worked).toBe(false);
-		expect(barrier.release()?.kind).toBe("test.effect");
-		expect(barrier.release()).toBeUndefined();
+		expect(breakpoint.release()?.kind).toBe("test.effect");
+		expect(breakpoint.release()).toBeUndefined();
 		await task;
 		expect(worked).toBe(true);
 	});
 
-	it("interrupts ordinary barriers but not cancellation-reconciliation barriers", async () => {
-		const ordinary = new BreakpointBarrier("manual");
+	it("interrupts ordinary breakpoints but not cancellation-reconciliation breakpoints", async () => {
+		const ordinary = new Breakpoint("manual");
 		const cancellation = deferred();
 		const parked = ordinary.hit({ kind: "ordinary", description: "ordinary" });
 		ordinary.interrupt(cancellation.promise);
 		await expect(parked).rejects.toBeInstanceOf(AbortRequested);
 
-		const reconciliation = new BreakpointBarrier("manual");
+		const reconciliation = new Breakpoint("manual");
 		const protectedPark = reconciliation.hit(
 			{ kind: "cancel.reconcile", description: "reconcile" },
 			{ interruptOnAbort: false },
@@ -62,23 +62,23 @@ describe("BreakpointBarrier", () => {
 	});
 
 	it("publishes sequential nested boundaries without conflating them", async () => {
-		const barrier = new BreakpointBarrier("manual");
+		const breakpoint = new Breakpoint("manual");
 		const task = (async () => {
-			await barrier.hit({ kind: "outer", description: "outer" });
-			await barrier.hit({ kind: "inner", description: "inner" });
+			await breakpoint.hit({ kind: "outer", description: "outer" });
+			await breakpoint.hit({ kind: "inner", description: "inner" });
 		})();
-		expect(barrier.peek()?.kind).toBe("outer");
-		barrier.release();
+		expect(breakpoint.peek()?.kind).toBe("outer");
+		breakpoint.release();
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(barrier.peek()?.kind).toBe("inner");
-		barrier.release();
+		expect(breakpoint.peek()?.kind).toBe("inner");
+		breakpoint.release();
 		await task;
 	});
 
 	it("has equivalent non-parking automatic behavior", async () => {
-		const barrier = new BreakpointBarrier("automatic");
-		await barrier.hit({ kind: "automatic", description: "automatic" });
-		expect(barrier.peek()).toBeUndefined();
+		const breakpoint = new Breakpoint("automatic");
+		await breakpoint.hit({ kind: "automatic", description: "automatic" });
+		expect(breakpoint.peek()).toBeUndefined();
 	});
 });
 

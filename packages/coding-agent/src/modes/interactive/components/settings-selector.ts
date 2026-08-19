@@ -537,6 +537,8 @@ export class SettingsSelectorComponent extends Container {
 							);
 						},
 						() => done(),
+						undefined,
+						{ searchable: true },
 					);
 				},
 			},
@@ -701,6 +703,7 @@ export class SettingsSelectorComponent extends Container {
 								return items;
 							},
 							preselect: () => currentDefaultModelKey,
+							searchable: true,
 						},
 						{
 							key: "level",

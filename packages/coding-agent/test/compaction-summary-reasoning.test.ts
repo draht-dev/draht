@@ -437,16 +437,22 @@ describe("generateSummary reasoning options", () => {
 	});
 
 	it("sets Anthropic refusal fallback from model metadata", async () => {
+		const fallbackCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
 		await generateSummary(
 			messages,
-			createModel(true, 8192, { allowedFallbackModels: ["claude-opus-4-8", "claude-opus-5"] }),
+			createModel(true, 8192, {
+				allowedFallbackModels: [
+					{ model: "claude-opus-4-8", cost: fallbackCost },
+					{ model: "claude-opus-5", cost: fallbackCost },
+				],
+			}),
 			2000,
 			"test-key",
 		);
 
 		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
 		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
-			refusalFallbacks: [{ model: "claude-opus-4-8" }],
+			refusalFallbacks: [{ model: "claude-opus-4-8", cost: fallbackCost }],
 		});
 	});
 

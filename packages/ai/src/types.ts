@@ -304,7 +304,13 @@ export interface ImagesOptions extends ProviderRequestOptions<ImagesModel<Images
 
 export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
-export type AnthropicRefusalFallback = "default" | readonly { model: string }[];
+export interface AnthropicRefusalFallbackTarget {
+	model: string;
+	/** Local pricing for this fallback target. Stripped before sending the provider request. @internal */
+	cost?: ModelCost;
+}
+
+export type AnthropicRefusalFallback = "default" | readonly AnthropicRefusalFallbackTarget[];
 
 // Unified options with reasoning passed to streamSimple() and completeSimple()
 export interface SimpleStreamOptions extends StreamOptions {
@@ -695,7 +701,7 @@ export interface AnthropicMessagesCompat {
 	 * When absent or empty, callers must omit `fallbacks`; Anthropic rejects the
 	 * field for models with no permitted fallback targets.
 	 */
-	allowedFallbackModels?: string[];
+	allowedFallbackModels?: AnthropicRefusalFallbackTarget[];
 	/**
 	 * Whether the provider supports deferred tools loaded by `tool_reference`
 	 * blocks in tool results. Default: true for first-party Anthropic models

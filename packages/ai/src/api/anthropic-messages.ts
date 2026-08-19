@@ -540,6 +540,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
+			let usageModel = model;
 
 			if (options?.client) {
 				client = options.client;
@@ -602,6 +603,14 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				if (event.type === "message_start") {
 					output.responseId = event.message.id;
 					output.model = event.message.model;
+					const fallbackCost =
+						output.model === model.id
+							? undefined
+							: ((Array.isArray(options?.refusalFallbacks)
+									? options.refusalFallbacks.find((fallback) => fallback.model === output.model)?.cost
+									: undefined) ??
+								model.compat?.allowedFallbackModels?.find((fallback) => fallback.model === output.model)?.cost);
+					usageModel = fallbackCost ? { ...model, id: output.model, cost: fallbackCost } : model;
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
 					output.usage.input = event.message.usage.input_tokens || 0;
@@ -612,7 +621,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-					calculateCost(model, output.usage);
+					calculateCost(usageModel, output.usage);
 				} else if (event.type === "content_block_start") {
 					if (event.content_block.type === "text") {
 						const block: Block = {
@@ -769,7 +778,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-					calculateCost(model, output.usage);
+					calculateCost(usageModel, output.usage);
 				}
 			}
 
@@ -1116,7 +1125,10 @@ function buildParams(
 	}
 
 	if (options?.refusalFallbacks !== undefined) {
-		params.fallbacks = options.refusalFallbacks;
+		params.fallbacks =
+			options.refusalFallbacks === "default"
+				? "default"
+				: options.refusalFallbacks.map((fallback) => ({ model: fallback.model }));
 	}
 
 	return params;

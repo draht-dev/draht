@@ -38,6 +38,21 @@ vi.mock("openai", () => {
 });
 
 const reasoningDetail = { type: "reasoning.encrypted", id: "call_1", data: "encrypted-signature" };
+const signedReasoningTextDetail = {
+	type: "reasoning.text",
+	text: "I should call the read tool.",
+	signature: "sha256:signed-text",
+	id: "reasoning-text-1",
+	format: "anthropic-claude-v1",
+	index: 0,
+};
+const reasoningSummaryDetail = {
+	type: "reasoning.summary",
+	summary: "Decided to inspect the requested file.",
+	id: "reasoning-summary-1",
+	format: "anthropic-claude-v1",
+	index: 1,
+};
 const readTool: Tool = {
 	name: "read",
 	description: "Read a file",
@@ -110,9 +125,44 @@ describe("openai-completions reasoning_details streaming", () => {
 			arguments: { path: "README.md" },
 			thoughtSignature: JSON.stringify(reasoningDetail),
 		});
+		expect(assistantMessage.reasoningDetails).toEqual([reasoningDetail]);
 
 		await runOpenAICompletionsStream([assistantMessage]);
 
 		expect(getAssistantPayload(mockState.payloads[1])?.reasoning_details).toEqual([reasoningDetail]);
+	});
+
+	it("falls back to encrypted tool-call signatures for older stored assistant messages", async () => {
+		mockState.chunkSets = [
+			[chunk({ reasoning_details: [reasoningDetail] }), toolCallChunk(), chunk({}, "tool_calls")],
+			[chunk({ content: "ok" }), chunk({}, "stop")],
+		];
+
+		const assistantMessage = await runOpenAICompletionsStream();
+		delete assistantMessage.reasoningDetails;
+
+		await runOpenAICompletionsStream([assistantMessage]);
+
+		expect(getAssistantPayload(mockState.payloads[1])?.reasoning_details).toEqual([reasoningDetail]);
+	});
+
+	it("preserves signed text and summary reasoning_details in their original sequence", async () => {
+		mockState.chunkSets = [
+			[
+				chunk({ reasoning_details: [signedReasoningTextDetail] }),
+				chunk({ reasoning_details: [reasoningDetail, reasoningSummaryDetail] }),
+				toolCallChunk(),
+				chunk({}, "tool_calls"),
+			],
+			[chunk({ content: "ok" }), chunk({}, "stop")],
+		];
+
+		const assistantMessage = await runOpenAICompletionsStream();
+		const expectedReasoningDetails = [signedReasoningTextDetail, reasoningDetail, reasoningSummaryDetail];
+		expect(assistantMessage.reasoningDetails).toEqual(expectedReasoningDetails);
+
+		await runOpenAICompletionsStream([assistantMessage]);
+
+		expect(getAssistantPayload(mockState.payloads[1])?.reasoning_details).toEqual(expectedReasoningDetails);
 	});
 });

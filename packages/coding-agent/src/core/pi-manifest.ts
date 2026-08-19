@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { stripBom } from "../utils/text.ts";
 
 export interface PiManifest {
 	extensions?: string[];
@@ -32,7 +33,7 @@ function validateManifest(raw: Record<string, unknown>): PiManifest {
  */
 export function readPiManifest(packageJsonPath: string): PiManifest | null {
 	try {
-		const pkg: unknown = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+		const pkg: unknown = JSON.parse(stripBom(readFileSync(packageJsonPath, "utf-8")));
 		if (!isObject(pkg)) {
 			return null;
 		}

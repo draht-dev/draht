@@ -1002,3 +1002,260 @@ The handoff should include a reusable two-transport test matrix (loopback plus a
 - **Presentation:** typed selections return values rather than labels; modal leases do not interleave multi-step dialogs; closing a queued instance removes it before display; closing an active instance aborts and dismisses only that dialog; non-cancellation observer failures reach host failure policy.
 - **Routing:** attach authorizes at the server and rejects cross-workspace targets; attach/switch closes previous routed requests and instance tasks, then hydrates the selected session; a routed singleton or instance call reconstructs `Context` at the session worker, with cancellation and trace carriers traversing the server; stale instance generations are rejected; per-client keying prevents request-ID collisions; the server routes services whose contracts it does not load; session-worker failure leaves server services healthy and updates directory status; presentation disconnect cleanup reaches the session; summaries contain no `ownerId` or `cwd`.
 - **Boundaries:** scoped agent and fleet capabilities cannot reach host ownership or whole-registry mutation; raw Harness/Session/SessionRepo capabilities unreachable from any client connection; job `wait` cancellation distinct from `job.cancel()`; stale/closed reference rejection; concurrent question invocations spawn distinct services visible in simultaneous TUI and web clients, survive having no connected presentation while the worker is live, disappear on worker loss, reappear under new generations when safe replay finds no answer memo, accept only one durable answer each, reject the tool wait rather than hang when the memo write fails, return committed answers without respawning on replay, clean up with durable tool-result staging, and close in every presentation; invocation cancellation writes no durable cancellation state.
+
+## Collaborative diff review: a durable shared sidebar
+
+A diff review starts in a presentation rather than in a tool invocation. A user asks to review the current working-tree diff; the session snapshots it and opens one shared review. Every attached TUI and web presentation renders the same patch and comments, and any authorized user may add a comment or submit the whole review as one prompt.
+
+This uses two service modes:
+
+```text
+DiffReviewManager                         singleton service
+  createReview()
+    → persist immutable patch
+    → spawn DiffReviews[reviewId]
+
+DiffReviews[reviewId]                    keyed service
+  document                               immutable patch state
+  activity                               durable comments + status state
+  addComment()                           commit, then publish
+  submit()                               freeze, enqueue one prompt, close
+```
+
+The keyed instance is the live, reactive projection. A plugin-owned record is the durable authority. Pending comments are not weakly persisted: each acknowledged comment survives a worker restart, but the record is deleted after its prompt is durably accepted.
+
+### Shared remote contract
+
+```ts
+interface DiffCommentInput {
+	commentId: string; // stable across an uncertain retry
+	path: string;
+	side: "old" | "new";
+	line: number;
+	body: string;
+}
+
+interface DiffComment extends DiffCommentInput {
+	author: { userId: string; displayName: string };
+	createdAt: string;
+}
+
+interface DiffReviewDocument {
+	reviewId: string;
+	patch: string;
+}
+
+interface DiffReviewActivity {
+	revision: number;
+	comments: DiffComment[];
+	status: "open" | "submitting";
+}
+
+interface DiffReviewManagerService {
+	createReview(context: Context): Promise<void>;
+}
+
+interface DiffReviewService {
+	readonly document: RemoteState<DiffReviewDocument>;
+	readonly activity: RemoteState<DiffReviewActivity>;
+	addComment(input: DiffCommentInput, context: Context): Promise<void>;
+	submit(context: Context): Promise<void>;
+}
+
+const DiffReviewManager = defineRemoteService<DiffReviewManagerService>("diff-review-manager");
+const DiffReviews = defineRemoteService<DiffReviewService>("diff-review");
+```
+
+The client never supplies a patch, author, or review ID. The session computes a bounded immutable patch, creates the ID, and derives each author from the authenticated identity in `Context`. `commentId` is only an idempotency key; it grants no authority.
+
+### Narrow local durability capabilities
+
+Unlike a question, this interaction has no invocation memo. The session facet therefore depends on local services backed by session storage and the durable prompt lane:
+
+```ts
+type DiffReviewRecord =
+	| {
+			reviewId: string;
+			patch: string;
+			revision: number;
+			comments: DiffComment[];
+			status: "open";
+			submission: null;
+	  }
+	| {
+			reviewId: string;
+			patch: string;
+			revision: number;
+			comments: DiffComment[];
+			status: "submission_pending";
+			submission: { submissionId: string; prompt: string };
+	  };
+
+type OpenDiffReviewRecord = Extract<DiffReviewRecord, { status: "open" }>;
+type SubmittingDiffReviewRecord = Extract<DiffReviewRecord, { status: "submission_pending" }>;
+
+interface DiffSourceService {
+	snapshotWorkingTree(context: Context): Promise<string>;
+}
+
+interface DiffReviewRecordsService {
+	listPending(context: Context): Promise<DiffReviewRecord[]>;
+	create(patch: string, context: Context): Promise<OpenDiffReviewRecord>;
+	addComment(reviewId: string, input: DiffCommentInput, context: Context): Promise<OpenDiffReviewRecord>;
+	freezeForSubmission(reviewId: string, context: Context): Promise<SubmittingDiffReviewRecord>;
+	complete(reviewId: string, submissionId: string, context: Context): Promise<void>;
+}
+
+interface PromptQueueService {
+	enqueueOnce(submissionId: string, prompt: string, context: Context): Promise<void>;
+}
+
+const DiffSource = defineLocalService<DiffSourceService>("diff-source");
+const DiffReviewRecords = defineLocalService<DiffReviewRecordsService>("diff-review-records");
+const PromptQueue = defineLocalService<PromptQueueService>("prompt-queue");
+```
+
+`DiffReviewRecords` serializes mutations per review. `addComment()` validates the anchor against the stored patch, stamps the authenticated author, deduplicates `commentId`, commits, and then returns the new revision. `freezeForSubmission()` atomically excludes later comments and stores a stable submission ID plus a prompt containing the immutable patch and that exact comment snapshot. If submission was already frozen, it returns the same record. `PromptQueue.enqueueOnce()` returns only after that logical prompt is durably accepted; retrying its submission ID cannot enqueue a second prompt.
+
+### Session facet
+
+```ts
+function toDiffReviewActivity(record: DiffReviewRecord): DiffReviewActivity {
+	return {
+		revision: record.revision,
+		comments: record.comments,
+		status: record.status === "open" ? "open" : "submitting",
+	};
+}
+
+export function diffReviewSessionFacet(bindings: CodingAgentSessionPluginContext) {
+	const diffs = bindings.use(DiffSource);
+	const records = bindings.use(DiffReviewRecords);
+	const prompts = bindings.use(PromptQueue);
+
+	function exposeReview(initial: DiffReviewRecord) {
+		const document = bindings.remoteState({ reviewId: initial.reviewId, patch: initial.patch });
+		const activity = bindings.remoteState(toDiffReviewActivity(initial));
+
+		function publish(next: DiffReviewRecord, context: Context) {
+			if (next.revision > activity.value.revision) activity.set(toDiffReviewActivity(next), context);
+		}
+
+		async function finish(record: SubmittingDiffReviewRecord, context: Context) {
+			await prompts.enqueueOnce(record.submission.submissionId, record.submission.prompt, context);
+			await records.complete(record.reviewId, record.submission.submissionId, context);
+			close();
+		}
+
+		const close = bindings.spawn(DiffReviews, initial.reviewId, {
+			document,
+			activity,
+			async addComment(input, context) {
+				publish(await records.addComment(initial.reviewId, input, context), context);
+			},
+			async submit(context) {
+				const frozen = await records.freezeForSubmission(initial.reviewId, context);
+				publish(frozen, context);
+				await finish(frozen, context);
+			},
+		});
+
+		return { finish };
+	}
+
+	bindings.provide(DiffReviewManager, {
+		async createReview(context) {
+			const patch = await diffs.snapshotWorkingTree(context);
+			const record = await records.create(patch, context);
+			exposeReview(record);
+		},
+	});
+
+	bindings.onActivate(async () => {
+		for (const record of await records.listPending(BACKGROUND_CONTEXT)) {
+			const review = exposeReview(record);
+			if (record.status === "submission_pending") await review.finish(record, BACKGROUND_CONTEXT);
+		}
+	});
+}
+```
+
+Every mutation commits before `publish()`. Concurrent comment and submit calls are ordered by the record repository: a comment committed first is in the frozen prompt; a comment arriving after the freeze receives `review_closed`. `complete()` deletes only the matching frozen record, and `close()` is idempotent.
+
+The startup scan reconstructs every open keyed instance from durable records. A `submission_pending` record resumes delivery through `enqueueOnce()` and then closes. Thus a crash before prompt acceptance retries the prompt, while a crash after acceptance but before cleanup observes the same submission ID and only completes cleanup.
+
+### TUI and web facets
+
+The plugin owns its TUI and browser widgets. Both implement this local presentation interface; it is not an RPC contract:
+
+```ts
+type DiffReviewAction =
+	| { type: "add_comment"; input: DiffCommentInput; context: Context }
+	| { type: "submit"; context: Context };
+
+interface DiffReviewPanel {
+	render(activity: DiffReviewActivity): void;
+	nextAction(signal: AbortSignal): Promise<DiffReviewAction | undefined>;
+	close(): void;
+}
+
+function observeDiffReviews(
+	scope: PluginLifecycleScope,
+	session: SessionServices,
+	openPanel: (document: DiffReviewDocument) => DiffReviewPanel,
+) {
+	scope.own(
+		session.observe(DiffReviews, async (review, context) => {
+			const document = review.service.document.value;
+			if (document === undefined) throw new Error("Diff review was observed before hydration");
+			const panel = openPanel(document);
+			const unsubscribe = review.service.activity.subscribe((activity) => panel.render(activity));
+
+			try {
+				while (true) {
+					const action = await panel.nextAction(context.abortSignal);
+					if (action === undefined) return;
+					if (action.type === "add_comment") {
+						await review.service.addComment(action.input, action.context);
+					} else {
+						await review.service.submit(action.context);
+					}
+				}
+			} finally {
+				unsubscribe();
+				panel.close();
+			}
+		}),
+	);
+}
+
+// tui.ts
+export function diffReviewTuiFacet(bindings: CodingAgentTuiPluginContext) {
+	const manager = bindings.session.use(DiffReviewManager);
+	bindings.commands.register("diff.review", (context) => manager.createReview(context));
+	observeDiffReviews(bindings, bindings.session, (document) => createTuiDiffReviewPanel(bindings.slots, document));
+}
+
+// web.ts
+export function diffReviewWebFacet(bindings: CodingAgentWebPluginContext) {
+	observeDiffReviews(bindings, bindings.session, (document) => createWebDiffReviewPanel(bindings.views, document));
+	// The web plugin's "Review diff" button calls bindings.session.use(DiffReviewManager).createReview(context).
+}
+```
+
+`observe()` begins only after both state members hydrate. The panel receives the immutable document once, and subscribing to `activity` immediately renders current comments without retransmitting the patch on every edit. A late client sees the same pending review. Activity updates continue while `nextAction()` waits. Each sidebar action carries a fresh presentation-created `Context`; the longer-lived observation context controls only panel lifetime. When submission closes the keyed instance, every panel's observation context aborts and its `finally` block disposes the subscription and widget.
+
+The submitted prompt contains the immutable patch and all frozen comments in one request. Abbreviated:
+
+```text
+Review this patch and address all comments:
+
+<stored immutable patch>
+
+- src/parser.ts, new line 42 — Armin: Preserve the original error cause.
+- src/ui.ts, new line 18 — Jane: Keep this state visible after reconnect.
+```
+
+Comment authors give the sidebar its basic multiplayer presence. A current-viewer roster or cursors would be separate live state and would not be written to the review record.
+
+This is a shared review, not a generic room primitive. Keyed services provide discovery and reactive lifetime; the record repository provides temporary durability; the prompt queue provides idempotent handoff into the session.

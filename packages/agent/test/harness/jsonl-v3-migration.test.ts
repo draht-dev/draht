@@ -401,6 +401,80 @@ describe("JSONL v3 migration", () => {
 			await session.close(BACKGROUND_CONTEXT);
 		});
 
+		it("builds the retained tail from the compaction branch rather than physical order", async () => {
+			const firstMainMessage = {
+				role: "user",
+				content: [{ type: "text", text: "first main-branch message" }],
+				timestamp: NOW + 10_000,
+			} satisfies AgentMessage;
+			const firstOtherBranchMessage = {
+				role: "user",
+				content: [{ type: "text", text: "first unrelated-branch message" }],
+				timestamp: NOW + 11_000,
+			} satisfies AgentMessage;
+			const secondMainMessage = {
+				role: "user",
+				content: [{ type: "text", text: "second main-branch message" }],
+				timestamp: NOW + 12_000,
+			} satisfies AgentMessage;
+			const secondOtherBranchMessage = {
+				role: "user",
+				content: [{ type: "text", text: "second unrelated-branch message" }],
+				timestamp: NOW + 13_000,
+			} satisfies AgentMessage;
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "main-1",
+					parentId: null,
+					timestamp: new Date(NOW + 10_000).toISOString(),
+					message: firstMainMessage,
+				},
+				{
+					type: "message",
+					id: "other-1",
+					parentId: "main-1",
+					timestamp: new Date(NOW + 11_000).toISOString(),
+					message: firstOtherBranchMessage,
+				},
+				{
+					type: "message",
+					id: "main-2",
+					parentId: "main-1",
+					timestamp: new Date(NOW + 12_000).toISOString(),
+					message: secondMainMessage,
+				},
+				{
+					type: "message",
+					id: "other-2",
+					parentId: "other-1",
+					timestamp: new Date(NOW + 13_000).toISOString(),
+					message: secondOtherBranchMessage,
+				},
+				{
+					type: "compaction",
+					id: "compaction",
+					parentId: "main-2",
+					timestamp: new Date(NOW + 14_000).toISOString(),
+					summary: "Summary before the retained main branch",
+					firstKeptEntryId: "main-1",
+					tokensBefore: 8_000,
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			const compaction = entries.find((entry) => entry.type === "compaction");
+
+			expect(compaction).toMatchObject({
+				type: "compaction",
+				retainedTail: [firstMainMessage, secondMainMessage],
+			});
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
 		it("preserves an explicit fromHook flag", async () => {
 			const { session, compaction } = await openFixture(true);
 

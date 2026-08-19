@@ -20,6 +20,8 @@ const SUBMENU_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 export interface SelectSubmenuOptions {
 	/** Enable type-to-search fuzzy filtering. */
 	searchable?: boolean;
+	/** Override the select list layout (column widths). */
+	layout?: SelectListLayoutOptions;
 }
 
 /**
@@ -30,6 +32,7 @@ export class SelectSubmenu extends Container {
 	private selectList: SelectList;
 	private listChildIndex: number;
 	private allOptions: SelectItem[];
+	private listLayout: SelectListLayoutOptions;
 	private searchInput: Input | undefined;
 	private onSelectCb: (value: string) => void;
 	private onCancelCb: () => void;
@@ -48,6 +51,7 @@ export class SelectSubmenu extends Container {
 		super();
 
 		this.allOptions = options;
+		this.listLayout = submenuOptions?.layout ?? SUBMENU_SELECT_LIST_LAYOUT;
 		this.onSelectCb = onSelect;
 		this.onCancelCb = onCancel;
 		this.onSelectionChangeCb = onSelectionChange;
@@ -88,12 +92,7 @@ export class SelectSubmenu extends Container {
 	}
 
 	private buildSelectList(options: SelectItem[], preselect: string): SelectList {
-		const list = new SelectList(
-			options,
-			Math.min(options.length, 10),
-			getSelectListTheme(),
-			SUBMENU_SELECT_LIST_LAYOUT,
-		);
+		const list = new SelectList(options, Math.min(options.length, 10), getSelectListTheme(), this.listLayout);
 
 		const idx = options.findIndex((o) => o.value === preselect);
 		if (idx !== -1) list.setSelectedIndex(idx);
@@ -156,6 +155,8 @@ export interface SteppedSubmenuStep {
 	preselect?: (context: Record<string, string>) => string | undefined;
 	/** Enable type-to-search fuzzy filtering for this step. */
 	searchable?: boolean;
+	/** Override the select list layout (column widths) for this step. */
+	layout?: SelectListLayoutOptions;
 }
 
 interface SteppedSubmenuOptions {
@@ -239,7 +240,7 @@ export class SteppedSubmenu extends Container {
 				}
 			},
 			undefined,
-			step.searchable ? { searchable: true } : undefined,
+			step.searchable || step.layout ? { searchable: step.searchable, layout: step.layout } : undefined,
 		);
 	}
 

@@ -475,6 +475,50 @@ describe("JSONL v3 migration", () => {
 			await session.close(BACKGROUND_CONTEXT);
 		});
 
+		it.each([
+			{ boundary: "missing", firstKeptEntryId: "missing-entry" },
+			{ boundary: "off-branch", firstKeptEntryId: "other-branch" },
+		])("rejects a $boundary firstKeptEntryId", async ({ firstKeptEntryId }) => {
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "root",
+					parentId: null,
+					timestamp: new Date(NOW + 20_000).toISOString(),
+					message: excludedMessage,
+				},
+				{
+					type: "message",
+					id: "main-branch",
+					parentId: "root",
+					timestamp: new Date(NOW + 21_000).toISOString(),
+					message: retainedMessage,
+				},
+				{
+					type: "message",
+					id: "other-branch",
+					parentId: "root",
+					timestamp: new Date(NOW + 22_000).toISOString(),
+					message: excludedMessage,
+				},
+				{
+					type: "compaction",
+					id: "compaction",
+					parentId: "main-branch",
+					timestamp: new Date(NOW + 23_000).toISOString(),
+					summary: "Summary before the retained main branch",
+					firstKeptEntryId,
+					tokensBefore: 8_000,
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			await expect(repo.open(metadata, BACKGROUND_CONTEXT)).rejects.toThrow(
+				"firstKeptEntryId is not on its parent branch",
+			);
+		});
+
 		it("preserves an explicit fromHook flag", async () => {
 			const { session, compaction } = await openFixture(true);
 

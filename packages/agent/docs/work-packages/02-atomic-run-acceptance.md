@@ -351,7 +351,7 @@ Modify session types:
 - add the already-normative `ToolCall.outcome_ready` vocabulary without producers;
 - document `sourceIndex` as full assistant-content index;
 - add callback-scoped `scanBranch` to `SessionReader`; inheritance by `SessionMutator` and `Session` is intentional;
-- implement it in `StorageBackedSession` and its mutator, `MemorySessionFacade`, `RemoteSession`, and `RemoteSessionMutator`, including the remote mutation RPC dispatcher.
+- implement it in `StorageBackedSession` and its mutator and `MemorySessionFacade`; Session mutation authority remains process-local and has no remote Session facade.
 
 ### Event publication
 

@@ -226,7 +226,7 @@ Modify:
 - local Session implementations and tests required by the `createLane` signature;
 - direct event primitive, acceptance, watch, lane, and harness tests.
 
-Remote/experimental runtime behavior is not a design constraint for WP04. For compile compatibility only, `RemoteSession.createLane` invokes a non-`undefined` callback client-side after its successful create RPC; it does not claim the local commit-continuation boundary. Do not add remote callback transport, protocol machinery, compatibility abstractions, or boundary tests.
+Remote/experimental runtime behavior is not a design constraint for WP04. Session mutation authority remains process-local; do not add remote Session callback transport, protocol machinery, compatibility abstractions, or boundary tests.
 
 ### Documentation
 

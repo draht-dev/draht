@@ -2,9 +2,9 @@
 
 ## Status
 
-Phase A redesign in progress. Implementation planning showed that eager attachment hydration and predictive missing-identity status duplicated future drive logic and created unnecessary shadow state. `harness.md` is normative. Runtime implementation has not started.
+Complete. Phase A established minimal attachment, open-operation inventory, lane-line inspection/watch capture, enqueue-time recipient binding, and in-band identity-failure vocabulary. Phase B landed in `beac75ecc` with focused, monorepo-check, full-suite, and final Fable review passing.
 
-The implementation baseline is the current `origin/dev` runtime2. Preserve unrelated work, especially concurrent `packages/agent/docs/plugins.md` changes and experimental directories.
+Implementation also updated downstream protocol/coding-agent wire projections required by the changed public contract. No execution owner, provider/tool effect, timer, retry, polling, cancellation procedure, manual action, or terminal settlement was added.
 
 ## Goal
 

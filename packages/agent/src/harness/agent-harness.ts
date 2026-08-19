@@ -193,7 +193,6 @@ export type OperationAdmissionResult = Result<OperationAdmission, OperationAdmis
 
 export interface DriveOptions {
 	operationId: string;
-	deadline?: number;
 	waitForRetry?: boolean;
 	pollDeferred?: boolean;
 }
@@ -230,7 +229,6 @@ export type DriveOutcome =
 	| { kind: "settled"; operationId: string; outcome: TerminalOperationOutcome }
 	| { kind: "waiting"; operationId: string; reason: "retry"; notBefore: number }
 	| { kind: "waiting"; operationId: string; reason: "deferred"; deferred: DeferredHandle }
-	| { kind: "yielded"; operationId: string }
 	| { kind: "action_required"; operationId: string; action: ActionInfo };
 export type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
 

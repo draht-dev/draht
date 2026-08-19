@@ -17,6 +17,8 @@ import type {
 	Control,
 	CustomEntry,
 	Deferred,
+	DriveOptions,
+	DriveOutcome,
 	DriveResult,
 	Entry,
 	EntryProjector,
@@ -461,6 +463,8 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	expectTypeOf<AgentLane["getLastResult"]>().returns.toEqualTypeOf<Promise<LaneLastResult | undefined>>();
 	expectTypeOf<AgentLane["accept"]>().returns.toEqualTypeOf<Promise<OperationAdmissionResult>>();
 	expectTypeOf<AgentLane["drive"]>().returns.toEqualTypeOf<Promise<DriveResult>>();
+	expectTypeOf<keyof DriveOptions>().toEqualTypeOf<"operationId" | "waitForRetry" | "pollDeferred">();
+	expectTypeOf<DriveOutcome["kind"]>().toEqualTypeOf<"settled" | "waiting" | "action_required">();
 	expectTypeOf<AgentLane["inspectExecution"]>().returns.toEqualTypeOf<Promise<LaneExecutionInfo>>();
 	expectTypeOf<OperationRequest["kind"]>().toEqualTypeOf<
 		"prompt" | "skill" | "prompt_template" | "compaction" | "navigation"
@@ -479,6 +483,11 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	const compileTimeFailures = () => {
 		// @ts-expect-error callers cannot supply the harness-owned abort signal
 		const invalidOptions: AgentHarnessStreamOptions = { signal: new AbortController().signal };
+		const invalidDriveOptions: DriveOptions = {
+			operationId: "run",
+			// @ts-expect-error drive has no wall-clock deadline
+			deadline: Date.now(),
+		};
 		const invalidValueEvent: Extract<HarnessEvent, { type: "value_update" }> = {
 			type: "value_update",
 			value: "session_name",
@@ -487,6 +496,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 			lane: "main",
 		};
 		void invalidOptions;
+		void invalidDriveOptions;
 		void invalidValueEvent;
 	};
 	expectTypeOf(compileTimeFailures).toBeFunction();

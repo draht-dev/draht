@@ -10,12 +10,12 @@ Make runtime2 the sole public harness implementation, delete runtime1 and its ob
 
 ## Prerequisites
 
-- The approved acceptance/hook redesign and durability handoffs are present in `runtime2.md`, `values.md`, `assistant-durability.md`, and `tool-durability.md`.
+- The approved acceptance/hook redesign and durability handoffs are present in `harness.md`, `values.md`, `assistant-durability.md`, and `tool-durability.md`.
 - Existing tests are evidence, not authority.
 
 ## Work, in order
 
-1. **Reconcile the contract.** Fold the approved acceptance/hook redesign into `harness.md`, including durable `starting`, atomic hook-free acceptance, driver-owned `before_run`, `before_drive`, request-local system-prompt transformation, trusted restore, and removal of process-origin activation semantics. Audit §§0.4, 1.2, 3.1–3.6, 4.1–4.2, 4.5, 5.1–5.2, 5.5–5.6, and Parts 8–9; remove every stale `BeforeResumePrepared`, `before_resume`, `resumeData`, `systemPromptOverride`, stable-ID routing, reservation, and `fresh | continue | resume` activation reference. Then remove the temporary supersession notice and duplicated redesign from `runtime2.md`.
+1. **Reconcile the contract.** Fold the approved acceptance/hook redesign into `harness.md`, including durable `starting`, atomic hook-free acceptance, driver-owned `before_run`, `before_drive`, request-local system-prompt transformation, trusted restore, and removal of process-origin activation semantics. Audit §§0.4, 1.2, 3.1–3.6, 4.1–4.2, 4.5, 5.1–5.2, 5.5–5.6, and Parts 8–9; remove every stale `BeforeResumePrepared`, `before_resume`, `resumeData`, `systemPromptOverride`, stable-ID routing, reservation, and `fresh | continue | resume` activation reference. Delete obsolete runtime planning documents once `harness.md` and linked handoffs own the active contract.
 2. **Harvest before deletion.** Inspect `agent-harness-runtime.test.ts`, `agent-harness-r2/r3/r4.test.ts`, and old `restore.test.ts`. Preserve unique scenarios in the detailed future rows or a temporary categorized inventory; explicitly discard old reservation, `before_resume`, `resumeData`, persisted hook prompt override, semantic restore audit, and pre-`outcome_ready` tool-crash behavior.
 3. **Remove runtime1-only public members.** Delete `before_resume`, `BeforeResumePrepared`, `resumeData`, `systemPromptOverride`, and stable hook-ID routing. Add the approved `before_drive` and `transform_context` shapes. Update telemetry schema source and regenerate its document. Do not implement `starting` or acceptance behavior here.
 4. **Switch the factory.** Add `packages/agent/src/harness/runtime2/index.ts`, point `agent-harness.ts` at it, and add a constructor-selection regression. Verify the experimental coding-agent worker still creates the harness, subscribes to events, and closes it.

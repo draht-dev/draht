@@ -805,8 +805,8 @@ interface CompactionEntry    extends EntryBase { type: "compaction"; summary: st
                                                  retainedTail: AgentMessage[]; tokensBefore: number;
                                                  details?: JsonValue; usage?: Usage; fromHook: boolean }
 /** fromId is the summarized branch's pre-navigation leaf: the producing
-    operation's sourceLeafId (§3.10). */
-interface BranchSummaryEntry extends EntryBase { type: "branch_summary"; fromId: string;
+    operation's sourceLeafId (§3.10), or null when that source is the root. */
+interface BranchSummaryEntry extends EntryBase { type: "branch_summary"; fromId: string | null;
                                                  summary: string; details?: JsonValue;
                                                  usage?: Usage; fromHook: boolean }
 interface CustomEntry        extends EntryBase { type: "custom"; customType: string; data?: JsonValue }
@@ -3760,7 +3760,7 @@ One corruption assertion constructs an `aborted` response with running control d
 - v3 ISO timestamps convert to Unix milliseconds.
 - A v3 `parentSession` path resolves to an available parent header id; otherwise metadata and first-write conversion preserve it as `legacyParentSessionPath`.
 - On first format-4 write, append one aggregate adjustment usage row with `details: { source: "v3-import" }`, summing v3 node usage so ledger-derived totals remain unchanged.
-- Legacy v3 ids are re-minted at import: each entry gets a UUIDv7 whose prefix is the legacy entry's own timestamp (random tail for uniqueness), preserving time order and §1.2's every-id-is-time-prefixed property. All references the format knows are remapped — parent chains, `main`'s leaf, label keys, `fromId`, usage `entryId`. Ids embedded in opaque payloads (custom entry data, `details`, message text) are not rewritten; the opaque-payload contract (§1.2) already covers them.
+- Legacy v3 ids are re-minted at import: each entry gets a UUIDv7 whose prefix is the legacy entry's own timestamp (random tail for uniqueness), preserving time order and §1.2's every-id-is-time-prefixed property. All references the format knows are remapped — parent chains, `main`'s leaf, label keys, non-null `fromId`, usage `entryId`. Ids embedded in opaque payloads (custom entry data, `details`, message text) are not rewritten; the opaque-payload contract (§1.2) already covers them.
 
 Read-only open leaves the file unchanged and computes stats from normalized entry snapshots. The first format-4 write persists normalization through a temporary file and atomic rename over the original path, including the aggregate adjustment so subsequent stats are ledger-derived, and stamps the current `storageVersion` (§7.3). A fork from an unconfigured read-only v3 session follows §2.7 and leaves destination `main` for first harness attachment to seed.
 

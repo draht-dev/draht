@@ -60,6 +60,21 @@ interface LegacyV3CompactionEntry extends LegacyV3EntryBase {
 	fromHook?: boolean;
 }
 
+interface LegacyV3ModelChangeEntry extends LegacyV3EntryBase {
+	type: "model_change";
+	provider: string;
+	modelId: string;
+}
+
+interface LegacyV3ThinkingLevelChangeEntry extends LegacyV3EntryBase {
+	type: "thinking_level_change";
+	thinkingLevel: string;
+}
+
+interface LegacyV3ActiveToolsChangeEntry extends LegacyV3EntryBase {
+	type: "active_tools_change";
+}
+
 interface ImportedCustomMessage {
 	role: "custom";
 	customType: string;
@@ -69,12 +84,19 @@ interface ImportedCustomMessage {
 	timestamp: number;
 }
 
-type LegacyV3Entry =
+type RetainedLegacyV3Entry =
 	| LegacyV3MessageEntry
 	| LegacyV3CustomEntry
 	| LegacyV3CustomMessageEntry
 	| LegacyV3BranchSummaryEntry
 	| LegacyV3CompactionEntry;
+
+type DiscardedLegacyV3Entry =
+	| LegacyV3ModelChangeEntry
+	| LegacyV3ThinkingLevelChangeEntry
+	| LegacyV3ActiveToolsChangeEntry;
+
+type LegacyV3Entry = RetainedLegacyV3Entry | DiscardedLegacyV3Entry;
 
 export interface NormalizedLegacyV3 {
 	header: JsonlStorageHeader;
@@ -124,7 +146,10 @@ function parseLegacyV3Entry(line: string, lineNumber: number): LegacyV3Entry {
 		recordType !== "custom" &&
 		recordType !== "custom_message" &&
 		recordType !== "branch_summary" &&
-		recordType !== "compaction"
+		recordType !== "compaction" &&
+		recordType !== "model_change" &&
+		recordType !== "thinking_level_change" &&
+		recordType !== "active_tools_change"
 	) {
 		throw new Error(`Unsupported legacy v3 record type at line ${lineNumber}: ${String(recordType)}`);
 	}
@@ -144,13 +169,72 @@ function importedCustomMessage(entry: LegacyV3CustomMessageEntry): AgentMessage 
 	return message as unknown as AgentMessage;
 }
 
-function requireRemintedId(remintedIds: ReadonlyMap<string, string>, legacyId: string): string {
-	const importedId = remintedIds.get(legacyId);
-	if (importedId === undefined) throw new Error(`Missing legacy v3 entry reference: ${legacyId}`);
+function isRetainedEntry(entry: LegacyV3Entry): entry is RetainedLegacyV3Entry {
+	return (
+		entry.type !== "model_change" && entry.type !== "thinking_level_change" && entry.type !== "active_tools_change"
+	);
+}
+
+class RetainedIdResolver {
+	/** Caches the reminted ID of each discarded legacy node's nearest retained ancestor, or null. */
+	private resolvedIds = new Map<string, string | null>();
+	private entriesById: Map<string, LegacyV3Entry>;
+	private remintedIds: Map<string, string>;
+
+	/**
+	 * @param entriesById Complete inventory of legacy physical nodes, including discarded nodes.
+	 * @param remintedIds Legacy-to-current ID map containing retained nodes only.
+	 */
+	constructor(entriesById: Map<string, LegacyV3Entry>, remintedIds: Map<string, string>) {
+		this.entriesById = entriesById;
+		this.remintedIds = remintedIds;
+	}
+
+	/**
+	 * Resolve a legacy node to its reminted ID, or to its nearest retained ancestor when discarded.
+	 * Returns null when the reference is null or no retained ancestor exists.
+	 */
+	resolve(legacyId: string | null): string | null {
+		const traversedIds: string[] = [];
+		const visitedIds = new Set<string>();
+		let currentId = legacyId;
+		let resolvedId: string | null = null;
+
+		while (currentId !== null) {
+			const remintedId = this.remintedIds.get(currentId);
+			if (remintedId !== undefined) {
+				resolvedId = remintedId;
+				break;
+			}
+			if (this.resolvedIds.has(currentId)) {
+				resolvedId = this.resolvedIds.get(currentId) ?? null;
+				break;
+			}
+			if (visitedIds.has(currentId)) throw new Error(`Cycle in legacy v3 parent chain at entry: ${currentId}`);
+			visitedIds.add(currentId);
+			const entry = this.entriesById.get(currentId);
+			if (entry === undefined) throw new Error(`Missing legacy v3 entry reference: ${currentId}`);
+			traversedIds.push(currentId);
+			currentId = entry.parentId;
+		}
+
+		for (const traversedId of traversedIds) this.resolvedIds.set(traversedId, resolvedId);
+		return resolvedId;
+	}
+}
+
+function requireRetainedId(resolver: RetainedIdResolver, legacyId: string): string {
+	const importedId = resolver.resolve(legacyId);
+	if (importedId === null) throw new Error(`Legacy v3 entry reference has no retained ancestor: ${legacyId}`);
 	return importedId;
 }
 
-function projectContextMessages(entry: LegacyV3Entry, remintedIds: ReadonlyMap<string, string>): AgentMessage[] {
+function resolveBranchSummaryFromId(resolver: RetainedIdResolver, legacyFromId: string): string | null {
+	// Legacy branchWithSummary() encoded a root source as the "root" sentinel instead of null.
+	return legacyFromId === "root" ? null : resolver.resolve(legacyFromId);
+}
+
+function projectContextMessages(entry: LegacyV3Entry, resolver: RetainedIdResolver): AgentMessage[] {
 	switch (entry.type) {
 		case "message":
 			return [entry.message];
@@ -158,11 +242,20 @@ function projectContextMessages(entry: LegacyV3Entry, remintedIds: ReadonlyMap<s
 			return [importedCustomMessage(entry)];
 		case "branch_summary":
 			return entry.summary
-				? [createBranchSummaryMessage(entry.summary, requireRemintedId(remintedIds, entry.fromId), entry.timestamp)]
+				? [
+						createBranchSummaryMessage(
+							entry.summary,
+							resolveBranchSummaryFromId(resolver, entry.fromId),
+							entry.timestamp,
+						),
+					]
 				: [];
 		case "compaction":
 			return [createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)];
 		case "custom":
+		case "model_change":
+		case "thinking_level_change":
+		case "active_tools_change":
 			return [];
 	}
 }
@@ -170,7 +263,7 @@ function projectContextMessages(entry: LegacyV3Entry, remintedIds: ReadonlyMap<s
 function materializeRetainedTail(
 	compaction: LegacyV3CompactionEntry,
 	entriesById: ReadonlyMap<string, LegacyV3Entry>,
-	remintedIds: ReadonlyMap<string, string>,
+	resolver: RetainedIdResolver,
 ): AgentMessage[] {
 	const reversedTail: LegacyV3Entry[] = [];
 	const visited = new Set<string>();
@@ -182,7 +275,7 @@ function materializeRetainedTail(
 		if (entry === undefined) throw new Error(`Missing legacy v3 parent entry: ${currentId}`);
 		reversedTail.push(entry);
 		if (currentId === compaction.firstKeptEntryId) {
-			return reversedTail.reverse().flatMap((tailEntry) => projectContextMessages(tailEntry, remintedIds));
+			return reversedTail.reverse().flatMap((tailEntry) => projectContextMessages(tailEntry, resolver));
 		}
 		currentId = entry.parentId;
 	}
@@ -194,14 +287,20 @@ function materializeRetainedTail(
 /** Normalize the currently supported v3 entries without touching their source file. */
 export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: readonly string[]): NormalizedLegacyV3 {
 	const entries = recordLines.map((line, index) => parseLegacyV3Entry(line, index + 2));
-	const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
-	const remintedIds = new Map(entries.map((entry) => [entry.id, uuidv7(Date.parse(entry.timestamp))]));
+	const entriesById = new Map<string, LegacyV3Entry>();
+	for (const entry of entries) {
+		if (entriesById.has(entry.id)) throw new Error(`Duplicate legacy v3 entry id: ${entry.id}`);
+		entriesById.set(entry.id, entry);
+	}
+	const retainedEntries = entries.filter(isRetainedEntry);
+	const remintedIds = new Map(retainedEntries.map((entry) => [entry.id, uuidv7(Date.parse(entry.timestamp))]));
+	const retainedIdResolver = new RetainedIdResolver(entriesById, remintedIds);
 
-	const writes: CommittedWrite[] = entries.map((entry, index): CommittedWrite => {
+	const writes: CommittedWrite[] = retainedEntries.map((entry, index): CommittedWrite => {
 		const committedBase = {
 			kind: "entry" as const,
-			id: requireRemintedId(remintedIds, entry.id),
-			parentId: entry.parentId === null ? null : requireRemintedId(remintedIds, entry.parentId),
+			id: requireRetainedId(retainedIdResolver, entry.id),
+			parentId: retainedIdResolver.resolve(entry.parentId),
 			seq: index + 1,
 			timestamp: Date.parse(entry.timestamp),
 		};
@@ -215,7 +314,7 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 			return {
 				...committedBase,
 				type: "branch_summary",
-				fromId: requireRemintedId(remintedIds, entry.fromId),
+				fromId: resolveBranchSummaryFromId(retainedIdResolver, entry.fromId),
 				summary: entry.summary,
 				details: entry.details,
 				usage: entry.usage,
@@ -227,7 +326,7 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 				...committedBase,
 				type: "compaction",
 				summary: entry.summary,
-				retainedTail: materializeRetainedTail(entry, entriesById, remintedIds),
+				retainedTail: materializeRetainedTail(entry, entriesById, retainedIdResolver),
 				tokensBefore: entry.tokensBefore,
 				details: entry.details,
 				usage: entry.usage,
@@ -242,7 +341,7 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 		};
 	});
 	const finalEntry = entries.at(-1);
-	const leaf = finalEntry === undefined ? null : requireRemintedId(remintedIds, finalEntry.id);
+	const leaf = finalEntry === undefined ? null : retainedIdResolver.resolve(finalEntry.id);
 	const leafAddress = laneLeaf("main");
 	writes.push({
 		kind: "value",

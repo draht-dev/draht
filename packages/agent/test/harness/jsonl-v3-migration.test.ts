@@ -91,6 +91,112 @@ describe("JSONL v3 migration", () => {
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
+	describe("discarding legacy configuration changes", () => {
+		const firstTimestamp = NOW + 1_000;
+		const modelChangeTimestamp = NOW + 2_000;
+		const thinkingChangeTimestamp = NOW + 3_000;
+		const activeToolsChangeTimestamp = NOW + 4_000;
+		const secondTimestamp = NOW + 5_000;
+		const firstMessage = {
+			role: "user",
+			content: [{ type: "text", text: "first" }],
+			timestamp: firstTimestamp,
+		} satisfies AgentMessage;
+		const secondMessage = {
+			role: "user",
+			content: [{ type: "text", text: "second" }],
+			timestamp: secondTimestamp,
+		} satisfies AgentMessage;
+		const configurationChanges = [
+			{
+				type: "model_change",
+				id: "model-change",
+				parentId: "message-1",
+				timestamp: new Date(modelChangeTimestamp).toISOString(),
+				provider: "anthropic",
+				modelId: "claude-sonnet-4-5",
+			},
+			{
+				type: "thinking_level_change",
+				id: "thinking-change",
+				parentId: "model-change",
+				timestamp: new Date(thinkingChangeTimestamp).toISOString(),
+				thinkingLevel: "high",
+			},
+			{
+				type: "active_tools_change",
+				id: "active-tools-change",
+				parentId: "thinking-change",
+				timestamp: new Date(activeToolsChangeTimestamp).toISOString(),
+				activeToolNames: ["read", "bash"],
+			},
+		] as const;
+
+		it("reparents a retained child through configuration changes", async () => {
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "message-1",
+					parentId: null,
+					timestamp: new Date(firstTimestamp).toISOString(),
+					message: firstMessage,
+				},
+				...configurationChanges,
+				{
+					type: "message",
+					id: "message-2",
+					parentId: "active-tools-change",
+					timestamp: new Date(secondTimestamp).toISOString(),
+					message: secondMessage,
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(entries).toHaveLength(2);
+			const [first, second] = entries;
+			if (first === undefined || second === undefined) {
+				throw new Error("Legacy configuration-change chain was not imported");
+			}
+			expect(first).toMatchObject({ type: "message", parentId: null, message: firstMessage });
+			expect(second).toMatchObject({ type: "message", parentId: first.id, message: secondMessage });
+			expect(second.seq).toBeGreaterThan(first.seq);
+			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
+			expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
+		it("resolves the main leaf through trailing configuration changes", async () => {
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "message-1",
+					parentId: null,
+					timestamp: new Date(firstTimestamp).toISOString(),
+					message: firstMessage,
+				},
+				...configurationChanges,
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(entries).toHaveLength(1);
+			const [message] = entries;
+			if (message === undefined) throw new Error("Legacy message was not imported");
+			expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(message.id);
+			expect((await session.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				currentOperationId: null,
+				pendingNextRun: [],
+			});
+			expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
+			await session.close(BACKGROUND_CONTEXT);
+		});
+	});
+
 	it("imports a custom entry without rewriting opaque data references", async () => {
 		const messageTimestamp = NOW + 1_000;
 		const customTimestamp = NOW + 2_000;
@@ -308,6 +414,75 @@ describe("JSONL v3 migration", () => {
 			const { session, branchSummary } = await openFixture(true);
 
 			expect(branchSummary).toMatchObject({ type: "branch_summary", fromHook: true });
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
+		it('normalizes fromId "root" to null', async () => {
+			await writeLegacyV3Fixture([
+				{
+					type: "branch_summary",
+					id: "summary",
+					parentId: null,
+					timestamp: new Date(summaryTimestamp).toISOString(),
+					fromId: "root",
+					summary: "Summary from the root",
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(entries).toHaveLength(1);
+			expect(entries[0]).toMatchObject({ type: "branch_summary", fromId: null });
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
+		it("rejects a missing fromId", async () => {
+			await writeLegacyV3Fixture([
+				{
+					type: "branch_summary",
+					id: "summary",
+					parentId: null,
+					timestamp: new Date(summaryTimestamp).toISOString(),
+					fromId: "missing-legacy-entry",
+					summary: "Summary from a missing source",
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			await expect(repo.open(metadata, BACKGROUND_CONTEXT)).rejects.toThrow(
+				"Missing legacy v3 entry reference: missing-legacy-entry",
+			);
+		});
+
+		it("keeps fromId null when a discarded source has no retained ancestor", async () => {
+			await writeLegacyV3Fixture([
+				{
+					type: "model_change",
+					id: "model-change",
+					parentId: null,
+					timestamp: new Date(branchPointTimestamp).toISOString(),
+					provider: "anthropic",
+					modelId: "claude-sonnet-4-5",
+				},
+				{
+					type: "branch_summary",
+					id: "summary",
+					parentId: "model-change",
+					timestamp: new Date(summaryTimestamp).toISOString(),
+					fromId: "model-change",
+					summary: "Summary from the root",
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(entries).toHaveLength(1);
+			expect(entries[0]).toMatchObject({ type: "branch_summary", parentId: null, fromId: null });
 			await session.close(BACKGROUND_CONTEXT);
 		});
 	});

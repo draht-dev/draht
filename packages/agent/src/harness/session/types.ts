@@ -41,7 +41,7 @@ export interface CompactionEntry extends EntryBase {
 
 export interface BranchSummaryEntry extends EntryBase {
 	type: "branch_summary";
-	fromId: string;
+	fromId: string | null;
 	summary: string;
 	details?: JsonValue;
 	usage?: Usage;

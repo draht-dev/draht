@@ -3,7 +3,7 @@ import type { AgentMessage } from "../../../types.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../../messages.ts";
 import type { CommittedWrite } from "../commit.ts";
 import type { JsonValue } from "../types.ts";
-import { laneLeaf, laneState, sessionName } from "../values.ts";
+import { entryLabel, laneLeaf, laneState, sessionName } from "../values.ts";
 import { JSONL_FORMAT_VERSION, JSONL_STORAGE_VERSION, type JsonlStorageHeader } from "./types.ts";
 
 export interface LegacyV3SessionHeader {
@@ -80,6 +80,12 @@ interface LegacyV3SessionInfoEntry extends LegacyV3EntryBase {
 	name?: string;
 }
 
+interface LegacyV3LabelEntry extends LegacyV3EntryBase {
+	type: "label";
+	targetId: string;
+	label?: string;
+}
+
 interface ImportedCustomMessage {
 	role: "custom";
 	customType: string;
@@ -100,7 +106,8 @@ type DiscardedLegacyV3Entry =
 	| LegacyV3ModelChangeEntry
 	| LegacyV3ThinkingLevelChangeEntry
 	| LegacyV3ActiveToolsChangeEntry
-	| LegacyV3SessionInfoEntry;
+	| LegacyV3SessionInfoEntry
+	| LegacyV3LabelEntry;
 
 type LegacyV3Entry = RetainedLegacyV3Entry | DiscardedLegacyV3Entry;
 
@@ -156,7 +163,8 @@ function parseLegacyV3Entry(line: string, lineNumber: number): LegacyV3Entry {
 		recordType !== "model_change" &&
 		recordType !== "thinking_level_change" &&
 		recordType !== "active_tools_change" &&
-		recordType !== "session_info"
+		recordType !== "session_info" &&
+		recordType !== "label"
 	) {
 		throw new Error(`Unsupported legacy v3 record type at line ${lineNumber}: ${String(recordType)}`);
 	}
@@ -181,7 +189,8 @@ function isRetainedEntry(entry: LegacyV3Entry): entry is RetainedLegacyV3Entry {
 		entry.type !== "model_change" &&
 		entry.type !== "thinking_level_change" &&
 		entry.type !== "active_tools_change" &&
-		entry.type !== "session_info"
+		entry.type !== "session_info" &&
+		entry.type !== "label"
 	);
 }
 
@@ -267,6 +276,7 @@ function projectContextMessages(entry: LegacyV3Entry, resolver: RetainedIdResolv
 		case "thinking_level_change":
 		case "active_tools_change":
 		case "session_info":
+		case "label":
 			return [];
 	}
 }
@@ -363,6 +373,27 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 			namespace: sessionName.namespace,
 			key: sessionName.key,
 			value: latestSessionInfo.name,
+		});
+	}
+	const labels = new Map<string, string>();
+	for (const entry of entries) {
+		if (entry.type !== "label") continue;
+		const targetId = retainedIdResolver.resolve(entry.targetId);
+		// TODO: Decide whether labels whose targets normalize to the root should import as root labels.
+		if (targetId === null) continue;
+		// Legacy v3 treated both undefined and the empty string as clearing a label.
+		if (entry.label) labels.set(targetId, entry.label);
+		else labels.delete(targetId);
+	}
+	for (const [targetId, label] of labels) {
+		const address = entryLabel(targetId);
+		writes.push({
+			kind: "value",
+			op: "set",
+			seq: writes.length + 1,
+			namespace: address.namespace,
+			key: address.key,
+			value: label,
 		});
 	}
 	const finalEntry = entries.at(-1);

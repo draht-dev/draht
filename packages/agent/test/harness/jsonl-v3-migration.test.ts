@@ -297,6 +297,148 @@ describe("JSONL v3 migration", () => {
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
+	it("imports a label for its remapped entry without retaining a tree node", async () => {
+		const message = {
+			role: "user",
+			content: [{ type: "text", text: "label me" }],
+			timestamp: NOW + 1_000,
+		} satisfies AgentMessage;
+		await writeLegacyV3Fixture([
+			{
+				type: "message",
+				id: "message-1",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+				message,
+			},
+			{
+				type: "label",
+				id: "label-1",
+				parentId: "message-1",
+				timestamp: new Date(NOW + 2_000).toISOString(),
+				targetId: "message-1",
+				label: "Important",
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+		expect(entries).toHaveLength(1);
+		const [entry] = entries;
+		if (entry === undefined) throw new Error("Legacy message was not imported");
+		expect((await session.getValue(storedValues.entryLabel(entry.id), BACKGROUND_CONTEXT))?.value).toBe("Important");
+		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(entry.id);
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
+	it("uses the latest label after remapping discarded targets", async () => {
+		const firstMessage = {
+			role: "user",
+			content: [{ type: "text", text: "first" }],
+			timestamp: NOW + 1_000,
+		} satisfies AgentMessage;
+		const secondMessage = {
+			role: "user",
+			content: [{ type: "text", text: "second" }],
+			timestamp: NOW + 5_000,
+		} satisfies AgentMessage;
+		await writeLegacyV3Fixture([
+			{
+				type: "message",
+				id: "message-1",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+				message: firstMessage,
+			},
+			{
+				type: "session_info",
+				id: "session-info",
+				parentId: "message-1",
+				timestamp: new Date(NOW + 2_000).toISOString(),
+			},
+			{
+				type: "label",
+				id: "label-1",
+				parentId: "session-info",
+				timestamp: new Date(NOW + 3_000).toISOString(),
+				targetId: "session-info",
+				label: "Earlier label",
+			},
+			{
+				type: "label",
+				id: "label-2",
+				parentId: "label-1",
+				timestamp: new Date(NOW + 4_000).toISOString(),
+				targetId: "message-1",
+				label: "Latest label",
+			},
+			{
+				type: "message",
+				id: "message-2",
+				parentId: "label-2",
+				timestamp: new Date(NOW + 5_000).toISOString(),
+				message: secondMessage,
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+		expect(entries).toHaveLength(2);
+		const [first, second] = entries;
+		if (first === undefined || second === undefined) throw new Error("Legacy message chain was not imported");
+		expect(second.parentId).toBe(first.id);
+		expect(await session.getLabel(first.id, BACKGROUND_CONTEXT)).toBe("Latest label");
+		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
+	it.each([{ label: undefined }, { label: "" }])("clears a label with $label", async ({ label }) => {
+		const message = {
+			role: "user",
+			content: [{ type: "text", text: "clear my label" }],
+			timestamp: NOW + 1_000,
+		} satisfies AgentMessage;
+		await writeLegacyV3Fixture([
+			{
+				type: "message",
+				id: "message-1",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+				message,
+			},
+			{
+				type: "label",
+				id: "label-1",
+				parentId: "message-1",
+				timestamp: new Date(NOW + 2_000).toISOString(),
+				targetId: "message-1",
+				label: "Earlier label",
+			},
+			{
+				type: "label",
+				id: "label-2",
+				parentId: "label-1",
+				timestamp: new Date(NOW + 3_000).toISOString(),
+				targetId: "message-1",
+				...(label === undefined ? {} : { label }),
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		const entries = await session.findEntries(undefined, BACKGROUND_CONTEXT);
+		const [entry] = entries;
+		if (entry === undefined) throw new Error("Legacy message was not imported");
+		expect(await session.getLabel(entry.id, BACKGROUND_CONTEXT)).toBeUndefined();
+		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(entry.id);
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
 	it("imports a custom entry without rewriting opaque data references", async () => {
 		const messageTimestamp = NOW + 1_000;
 		const customTimestamp = NOW + 2_000;

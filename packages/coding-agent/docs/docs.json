@@ -40,6 +40,10 @@
           "path": "sessions.md"
         },
         {
+          "title": "Attachable Sessions",
+          "path": "attachable-sessions.md"
+        },
+        {
           "title": "Compaction",
           "path": "compaction.md"
         }

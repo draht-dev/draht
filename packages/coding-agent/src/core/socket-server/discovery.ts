@@ -5,7 +5,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { SocketSessionInfo } from "./types.js";
 
@@ -15,7 +15,11 @@ import type { SocketSessionInfo } from "./types.js";
  * Scans the socket directory for .sock files and reads their corresponding
  * .lock files to extract metadata (PID, cwd, createdAt).
  *
- * Filters out stale sessions (PID no longer running).
+ * Sessions whose lock file names a dead PID are stale: nothing can ever accept a
+ * connection on that socket again. Discovery reaps those `.sock`/`.lock` pairs instead
+ * of leaving them to accumulate forever, and also reaps `.lock` files whose `.sock` is
+ * already gone and whose owner is dead. Files belonging to a live PID, and files whose
+ * lock is missing or unreadable (ownership unknown), are never touched.
  *
  * @param socketDir - Directory containing socket files
  * @returns Array of discovered session info
@@ -29,12 +33,14 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 
 	try {
 		const entries = await readdir(socketDir);
+		const sessionIdsWithSocket = new Set<string>();
 
 		for (const entry of entries) {
 			// Only process .sock files
 			if (!entry.endsWith(".sock")) continue;
 
 			const sessionId = entry.replace(/\.sock$/, "");
+			sessionIdsWithSocket.add(sessionId);
 			const socketPath = path.join(socketDir, entry);
 			const lockPath = path.join(socketDir, `${sessionId}.lock`);
 
@@ -61,7 +67,7 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 
 				// Verify PID is still running
 				if (!isProcessRunning(pid)) {
-					// Stale socket - skip it (cleanup could be done here)
+					await reapStaleSession(socketPath, lockPath);
 					continue;
 				}
 
@@ -74,6 +80,8 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 				});
 			} catch {}
 		}
+
+		await reapOrphanedLocks(socketDir, entries, sessionIdsWithSocket);
 	} catch {
 		// Directory not readable - return empty
 		return [];
@@ -83,16 +91,60 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 }
 
 /**
+ * Remove the socket and lock file of a session whose owning process is gone.
+ *
+ * Best effort: a concurrent reaper or a permission problem must never turn a
+ * discovery call into a failure.
+ */
+async function reapStaleSession(socketPath: string, lockPath: string): Promise<void> {
+	try {
+		await rm(socketPath, { force: true });
+		await rm(lockPath, { force: true });
+	} catch {}
+}
+
+/**
+ * Remove `.lock` files whose `.sock` is already gone and whose owner is provably dead.
+ *
+ * Such locks are invisible to the `.sock` scan above, so without this they accumulate
+ * forever. A lock with no socket is also the normal state for a moment during startup -
+ * the lock is claimed before the socket is bound - so a lock whose PID is alive, or
+ * whose PID cannot be read at all, is always left alone.
+ */
+async function reapOrphanedLocks(
+	socketDir: string,
+	entries: string[],
+	sessionIdsWithSocket: Set<string>,
+): Promise<void> {
+	for (const entry of entries) {
+		if (!entry.endsWith(".lock")) continue;
+		if (sessionIdsWithSocket.has(entry.replace(/\.lock$/, ""))) continue;
+
+		const lockPath = path.join(socketDir, entry);
+		try {
+			const lockContent = await readFile(lockPath, "utf-8");
+			const pid = Number.parseInt(lockContent.trim().split("\n")[0], 10);
+			// Unreadable ownership: never guess, leave it alone.
+			if (!Number.isInteger(pid)) continue;
+			if (isProcessRunning(pid)) continue;
+			await rm(lockPath, { force: true });
+		} catch {}
+	}
+}
+
+/**
  * Check if a process with the given PID is running.
  *
  * Uses `process.kill(pid, 0)` which doesn't actually send a signal,
  * but throws if the process doesn't exist.
  */
-function isProcessRunning(pid: number): boolean {
+export function isProcessRunning(pid: number): boolean {
+	if (!Number.isInteger(pid) || pid <= 0) return false;
 	try {
 		process.kill(pid, 0);
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		// EPERM means the process exists but belongs to another user.
+		return (error as NodeJS.ErrnoException)?.code === "EPERM";
 	}
 }

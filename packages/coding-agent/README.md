@@ -29,6 +29,7 @@ Draht runs in four modes: interactive, print or JSON, RPC for process integratio
   - [Message Queue](#message-queue)
 - [Sessions](#sessions)
   - [Branching](#branching)
+  - [Attachable Sessions](#attachable-sessions)
   - [Compaction](#compaction)
 - [Settings](#settings)
 - [Context Files](#context-files)
@@ -222,6 +223,9 @@ draht -r                  # Browse and select from past sessions
 draht --no-session        # Ephemeral mode (don't save)
 draht --session <path>    # Use specific session file or ID
 draht --fork <path>       # Fork specific session file or ID into a new session
+draht --attachable        # Expose this session on an owner-only Unix socket
+draht --list-sessions     # List running attachable sessions
+draht --attach <id>       # Attach to a running attachable session
 ```
 
 ### Branching
@@ -237,6 +241,20 @@ draht --fork <path>       # Fork specific session file or ID into a new session
 **`/fork`** - Create a new session file from the current branch. Opens a selector, copies history up to the selected point, and places that message in the editor for modification.
 
 **`--fork <path|id>`** - Fork an existing session file or partial session UUID directly from the CLI. This copies the full source session into a new session file in the current project.
+
+### Attachable Sessions
+
+**Experimental, opt-in.** `--attachable` exposes a running session on a Unix domain socket in `~/.draht/agent/sockets/`, so another terminal can watch its output and send prompts to it.
+
+```bash
+draht --attachable "Refactor auth module"   # terminal 1
+draht --list-sessions                       # terminal 2: find the session id
+draht --attach <session-id>                 # terminal 2: attach, Ctrl+D detaches
+```
+
+The socket and its lock file are owner-only (0600) in a 0700 directory and there is no other authentication, so this is for your own terminals — not for sharing a session with other people. Attached clients see output from the moment they attach (no replay), and input sent while the agent is streaming is rejected with an error. Only one live process may own a session id; `/new`, `/resume`, and `/fork` move the socket to the new session and disconnect attached clients. Files left behind by a `SIGKILL`ed session are reaped by the next `--list-sessions`.
+
+See [docs/attachable-sessions.md](docs/attachable-sessions.md) for details.
 
 ### Compaction
 
@@ -503,6 +521,9 @@ cat README.md | draht -p "Summarize this text"
 | `--fork <path>` | Fork specific session file or partial UUID into a new session |
 | `--session-dir <dir>` | Custom session storage directory |
 | `--no-session` | Ephemeral mode (don't save) |
+| `--attachable` | Expose this session on an owner-only Unix socket (experimental) |
+| `--attach <session-id>` | Attach to a running attachable session |
+| `--list-sessions` | List running attachable sessions and exit |
 
 ### Tool Options
 

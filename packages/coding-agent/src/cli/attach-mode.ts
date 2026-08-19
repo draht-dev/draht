@@ -8,8 +8,41 @@
 import path from "node:path";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
-import { getAgentDir } from "../config.js";
+import { APP_NAME, getAgentDir } from "../config.js";
+import { assertValidSessionId } from "../core/session-manager.js";
 import { SocketClient } from "../core/socket-server/index.js";
+
+/**
+ * Build the socket path for a session id supplied on the command line.
+ *
+ * The value is validated with the same rule the session manager applies when creating
+ * ids, so a `--attach` argument can never traverse out of the socket directory.
+ *
+ * @throws {Error} When the session id is not a valid session id.
+ */
+export function resolveAttachSocketPath(sessionId: string, socketDir: string): string {
+	assertValidSessionId(sessionId);
+	return path.join(socketDir, `${sessionId}.sock`);
+}
+
+/**
+ * Error frames that report a recoverable condition rather than a dead session.
+ *
+ * `PROMPT_FAILED` means one prompt was rejected (typically because the agent was already
+ * streaming) and `SESSION_REPLACED` means the runtime switched sessions - in both cases
+ * the client is still attached and the session is still there, so the client prints the
+ * message and stays.
+ */
+const NON_FATAL_ERROR_CODES = new Set(["PROMPT_FAILED", "SESSION_REPLACED"]);
+
+/**
+ * Whether an `error` frame from the server should end the attached client.
+ *
+ * Uncoded frames stay fatal: they report protocol or attach failures.
+ */
+export function isFatalAttachError(code?: string): boolean {
+	return code === undefined || !NON_FATAL_ERROR_CODES.has(code);
+}
 
 /**
  * Run attach mode - connect to an existing socket session.
@@ -19,7 +52,17 @@ import { SocketClient } from "../core/socket-server/index.js";
 export async function runAttachMode(sessionId: string): Promise<void> {
 	const agentDir = getAgentDir();
 	const socketDir = path.join(agentDir, "sockets");
-	const socketPath = path.join(socketDir, `${sessionId}.sock`);
+
+	let socketPath: string;
+	try {
+		socketPath = resolveAttachSocketPath(sessionId, socketDir);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "Invalid session id";
+		console.error(chalk.red(`Invalid --attach value: ${sessionId}`));
+		console.error(chalk.dim(message));
+		console.error(chalk.dim(`\nList running sessions with: ${APP_NAME} --list-sessions\n`));
+		process.exit(1);
+	}
 
 	console.log(chalk.dim(`Attaching to session ${chalk.cyan(sessionId)}...`));
 
@@ -61,9 +104,11 @@ export async function runAttachMode(sessionId: string): Promise<void> {
 	});
 
 	// Handle errors
-	client.onError((message) => {
+	client.onError((message, code) => {
 		console.error(chalk.red(`\nError: ${message}\n`));
-		process.exit(1);
+		if (isFatalAttachError(code)) {
+			process.exit(1);
+		}
 	});
 
 	// Handle disconnect

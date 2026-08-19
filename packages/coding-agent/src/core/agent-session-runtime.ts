@@ -73,6 +73,7 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
  */
 export class AgentSessionRuntime {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
+	private sessionReplacedListeners = new Set<(session: AgentSession) => Promise<void> | void>();
 	private beforeSessionInvalidate?: () => void;
 	private _session: AgentSession;
 	private _services: AgentSessionServices;
@@ -116,6 +117,23 @@ export class AgentSessionRuntime {
 
 	setRebindSession(rebindSession?: (session: AgentSession) => Promise<void>): void {
 		this.rebindSession = rebindSession;
+	}
+
+	/**
+	 * Subscribe to session replacement (/new, /resume, /fork, /import).
+	 *
+	 * `setRebindSession` is a single slot that the active mode (interactive, print, rpc)
+	 * already owns, so host features that must also follow the current session - the
+	 * attachable-session socket, for example - register here instead of stealing it.
+	 * Listeners run after the mode's own rebind, with the new session.
+	 *
+	 * @returns unsubscribe function
+	 */
+	addSessionReplacedListener(listener: (session: AgentSession) => Promise<void> | void): () => void {
+		this.sessionReplacedListeners.add(listener);
+		return () => {
+			this.sessionReplacedListeners.delete(listener);
+		};
 	}
 
 	/**
@@ -184,6 +202,9 @@ export class AgentSessionRuntime {
 	private async finishSessionReplacement(withSession?: (ctx: ReplacedSessionContext) => Promise<void>): Promise<void> {
 		if (this.rebindSession) {
 			await this.rebindSession(this.session);
+		}
+		for (const listener of this.sessionReplacedListeners) {
+			await listener(this.session);
 		}
 		if (withSession) {
 			await withSession(this.session.createReplacedSessionContext());

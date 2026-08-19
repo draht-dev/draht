@@ -380,7 +380,7 @@ function normalizeLegacyV3Values(
 	for (const entry of entries) {
 		if (entry.type !== "label") continue;
 		const targetId = resolver.resolve(entry.targetId);
-		// TODO: Decide whether labels whose targets normalize to the root should import as root labels.
+		// Labels have no current address when their target has no retained ancestor.
 		if (targetId === null) continue;
 		// Legacy v3 treated both undefined and the empty string as clearing a label.
 		if (entry.label) labels.set(targetId, entry.label);

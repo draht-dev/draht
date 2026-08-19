@@ -333,6 +333,49 @@ describe("JSONL v3 migration", () => {
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
+	it("skips a label whose target has no retained ancestor", async () => {
+		const message = {
+			role: "user",
+			content: [{ type: "text", text: "retained message" }],
+			timestamp: NOW + 3_000,
+		} satisfies AgentMessage;
+		await writeLegacyV3Fixture([
+			{
+				type: "session_info",
+				id: "root-session-info",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+			},
+			{
+				type: "label",
+				id: "root-label",
+				parentId: "root-session-info",
+				timestamp: new Date(NOW + 2_000).toISOString(),
+				targetId: "root-session-info",
+				label: "Skipped label",
+			},
+			{
+				type: "message",
+				id: "message-1",
+				parentId: "root-label",
+				timestamp: new Date(NOW + 3_000).toISOString(),
+				message,
+			},
+		]);
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+		expect(entries).toHaveLength(1);
+		const [entry] = entries;
+		if (entry === undefined) throw new Error("Legacy message was not imported");
+		expect(entry.parentId).toBeNull();
+		expect(await session.getLabel(entry.id, BACKGROUND_CONTEXT)).toBeUndefined();
+		expect(await session.getLeafId(BACKGROUND_CONTEXT)).toBe(entry.id);
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
 	it("uses the latest label after remapping discarded targets", async () => {
 		const firstMessage = {
 			role: "user",

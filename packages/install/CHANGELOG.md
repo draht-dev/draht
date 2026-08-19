@@ -24,6 +24,8 @@
 - Schema-versioned JSON: one document for read commands, NDJSON event records for mutations, schema-stable error output, and no prose on stdout in JSON mode.
 - Blocked `draht-init` plans stop before scaffolding with exit 3; init event identity and mutation failure NDJSON remain stable and line-parseable.
 - Hermetic end-to-end suite driving the packed tarball's bins against a fake HOME, controlled PATH, stub hosts and a loopback fixture registry.
+- Checked-in JSON Schemas (draft 2020-12) for every `--json` surface, shipped in `schemas/`: the `version`, `plan`, `status`, `doctor` and error documents, and the `install`/`update`, `uninstall` and `draht-init` NDJSON streams. They are generated from `src/json-schema.ts` and held to the CLI's real output by `test/json-contract.test.ts`, which validates each emitted document against the (strict) contract and snapshots the observed shape of every verb, so no emitted shape can change without the test failing. `checkJsonContract` is exported for consumers.
+- Help text on both bins now distinguishes `draht-install <command>` (machine-level components) from `draht install <source>` (the coding agent's own extension manager, provided by the `coding-agent` component's `draht` bin), and points at the shipped schemas.
 
 ### Changed
 

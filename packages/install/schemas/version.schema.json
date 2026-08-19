@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "draht-install --version --json",
+  "description": "The single document `--version --json` writes, from either bin.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "command": {
+      "type": "string",
+      "const": "version"
+    },
+    "bin": {
+      "type": "string",
+      "enum": [
+        "draht-install",
+        "draht-init"
+      ]
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "command",
+    "bin",
+    "version"
+  ],
+  "additionalProperties": false
+}

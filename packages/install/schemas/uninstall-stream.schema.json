@@ -1,0 +1,890 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "draht-install uninstall --json (NDJSON stream)",
+  "description": "One JSON object per line. Progress records come first, then exactly one `summary` record — or one error document if the command failed.",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "command": {
+          "type": "string",
+          "const": "uninstall"
+        },
+        "event": {
+          "type": "string",
+          "const": "action-start"
+        },
+        "componentId": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "install",
+            "update",
+            "remove",
+            "delegate-install",
+            "delegate-uninstall"
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "command",
+        "event",
+        "componentId",
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "command": {
+          "type": "string",
+          "const": "uninstall"
+        },
+        "event": {
+          "type": "string",
+          "const": "action-done"
+        },
+        "componentId": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "install",
+            "update",
+            "remove",
+            "delegate-install",
+            "delegate-uninstall"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "command",
+        "event",
+        "componentId",
+        "type",
+        "notes"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "command": {
+          "type": "string",
+          "const": "uninstall"
+        },
+        "event": {
+          "type": "string",
+          "const": "blocked"
+        },
+        "componentId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "command",
+        "event",
+        "componentId",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "command": {
+          "type": "string",
+          "const": "uninstall"
+        },
+        "event": {
+          "type": "string",
+          "const": "recovered"
+        },
+        "transactions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "command",
+        "event",
+        "transactions",
+        "notes"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "event": {
+          "type": "string",
+          "const": "summary"
+        },
+        "command": {
+          "type": "string",
+          "const": "uninstall"
+        },
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "install"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "toVersion": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "npmName": {
+                        "type": "string"
+                      },
+                      "resolvedVersion": {
+                        "type": "string"
+                      },
+                      "integrity": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "npmName",
+                      "resolvedVersion"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "toVersion",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "update"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "toVersion": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "npmName": {
+                        "type": "string"
+                      },
+                      "resolvedVersion": {
+                        "type": "string"
+                      },
+                      "integrity": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "npmName",
+                      "resolvedVersion"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "toVersion",
+                  "fromVersion",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "remove"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "fromVersion": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "fromVersion"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "delegate-install"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "delegate-uninstall"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "event",
+        "command",
+        "ok",
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "event": {
+          "type": "string",
+          "const": "summary"
+        },
+        "command": {
+          "type": "string",
+          "const": "uninstall"
+        },
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "dryRun": {
+          "type": "boolean",
+          "const": true
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "install"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "toVersion": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "npmName": {
+                        "type": "string"
+                      },
+                      "resolvedVersion": {
+                        "type": "string"
+                      },
+                      "integrity": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "npmName",
+                      "resolvedVersion"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "toVersion",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "update"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "toVersion": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "npmName": {
+                        "type": "string"
+                      },
+                      "resolvedVersion": {
+                        "type": "string"
+                      },
+                      "integrity": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "npmName",
+                      "resolvedVersion"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "toVersion",
+                  "fromVersion",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "remove"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "fromVersion": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "fromVersion"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "delegate-install"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "delegate-uninstall"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "event",
+        "command",
+        "ok",
+        "dryRun",
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "event": {
+          "type": "string",
+          "const": "summary"
+        },
+        "command": {
+          "type": "string",
+          "const": "uninstall"
+        },
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "tx": {
+          "type": "string"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "install"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "toVersion": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "npmName": {
+                        "type": "string"
+                      },
+                      "resolvedVersion": {
+                        "type": "string"
+                      },
+                      "integrity": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "npmName",
+                      "resolvedVersion"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "toVersion",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "update"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "toVersion": {
+                    "type": "string"
+                  },
+                  "fromVersion": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "npmName": {
+                        "type": "string"
+                      },
+                      "resolvedVersion": {
+                        "type": "string"
+                      },
+                      "integrity": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "npmName",
+                      "resolvedVersion"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "toVersion",
+                  "fromVersion",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "remove"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  },
+                  "fromVersion": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind",
+                  "fromVersion"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "delegate-install"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "delegate-uninstall"
+                  },
+                  "componentId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "claude-plugin",
+                      "codex-plugin",
+                      "global-cli"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "componentId",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "event",
+        "command",
+        "ok",
+        "actions",
+        "notes"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "draht-install --json error document",
+      "description": "Emitted instead of a success document when a command fails. `error.code` is the machine-readable discriminator; `error.message` is prose that may change between releases and must not be parsed.",
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "ok": {
+          "type": "boolean",
+          "const": false
+        },
+        "command": {
+          "type": "string"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "ok",
+        "command",
+        "error"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

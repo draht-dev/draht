@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -169,8 +169,94 @@ function windowsZipFixture({ symlink = false } = {}) {
 	return f;
 }
 
+/**
+ * The standard fixture, with `uname` pinned to the linux-x64 platform its
+ * release payload is actually built for, so the `~/.draht` ownership guard
+ * can be driven through a complete install on any host.
+ */
+function drahtHomeFixture() {
+	const f = fixture({ withGh: false });
+	writeFileSync(join(f.fakeBin, "uname"), "#!/bin/sh\ncase \"$1\" in -s) echo Linux;; -m) echo x86_64;; esac\n", "utf8");
+	chmodSync(join(f.fakeBin, "uname"), 0o755);
+	return f;
+}
+
+/**
+ * Runs the installer with DRAHT_DIR unset, so INSTALL_DIR falls back to
+ * `$HOME/.draht/runtime` and the guard on `~/.draht` itself is in play.
+ * (The rest of the suite pins DRAHT_DIR outside `~/.draht`, where the guard
+ * deliberately does not apply.)
+ */
+function runInDrahtHome(installer, f, extraEnv = {}) {
+	return runInstaller(installer, f, { DRAHT_DIR: undefined, DRAHT_ALLOW_UNVERIFIED: "1", ...extraEnv });
+}
+
 for (const installer of INSTALLERS) {
 	const label = installer === INSTALLERS[0] ? "root installer" : "landing installer mirror";
+
+	test(`${label} claims an absent ~/.draht and re-installs into the directory it owns`, () => {
+		const f = drahtHomeFixture();
+		const drahtHome = join(f.home, ".draht");
+		assert.equal(existsSync(drahtHome), false);
+		const result = runInDrahtHome(installer, f);
+		assert.equal(result.status, 0, result.stderr || result.stdout);
+		assert.equal(existsSync(join(drahtHome, ".draht-home")), true);
+		assert.equal(existsSync(join(drahtHome, "runtime", "current", "draht")), true);
+		assert.equal(existsSync(join(f.home, "bin", "draht")), true);
+		// Second run: ~/.draht is now non-empty and non-git, and must still be
+		// accepted because the marker proves Draht owns it.
+		const again = runInDrahtHome(installer, f);
+		assert.equal(again.status, 0, again.stderr || again.stdout);
+	});
+
+	test(`${label} adopts an empty ~/.draht`, () => {
+		const f = drahtHomeFixture();
+		const drahtHome = join(f.home, ".draht");
+		mkdirSync(drahtHome);
+		const result = runInDrahtHome(installer, f);
+		assert.equal(result.status, 0, result.stderr || result.stdout);
+		assert.equal(existsSync(join(drahtHome, ".draht-home")), true);
+		assert.equal(existsSync(join(drahtHome, "runtime", "current", "draht")), true);
+	});
+
+	test(`${label} refuses a non-empty non-git ~/.draht and leaves it untouched`, () => {
+		const f = drahtHomeFixture();
+		const drahtHome = join(f.home, ".draht");
+		mkdirSync(join(drahtHome, "someone-elses-data"), { recursive: true });
+		writeFileSync(join(drahtHome, "notes.txt"), "not draht's\n", "utf8");
+		const result = runInDrahtHome(installer, f);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /is not empty, and was not created by Draht/);
+		assert.match(result.stderr, /DRAHT_DIR/);
+		assert.equal(readFileSync(join(drahtHome, "notes.txt"), "utf8"), "not draht's\n");
+		assert.equal(existsSync(join(drahtHome, ".draht-home")), false);
+		assert.equal(existsSync(join(drahtHome, "runtime")), false);
+		assert.equal(existsSync(join(f.home, "bin", "draht")), false);
+	});
+
+	test(`${label} accepts a git-checkout ~/.draht from the legacy bootstrap`, () => {
+		const f = drahtHomeFixture();
+		const drahtHome = join(f.home, ".draht");
+		mkdirSync(join(drahtHome, ".git"), { recursive: true });
+		writeFileSync(join(drahtHome, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+		writeFileSync(join(drahtHome, "package.json"), "{}\n", "utf8");
+		const result = runInDrahtHome(installer, f);
+		assert.equal(result.status, 0, result.stderr || result.stdout);
+		assert.equal(existsSync(join(drahtHome, ".git", "HEAD")), true);
+		assert.equal(existsSync(join(drahtHome, "runtime", "current", "draht")), true);
+	});
+
+	test(`${label} leaves a foreign ~/.draht alone when DRAHT_DIR points elsewhere`, () => {
+		const f = drahtHomeFixture();
+		const drahtHome = join(f.home, ".draht");
+		mkdirSync(drahtHome);
+		writeFileSync(join(drahtHome, "notes.txt"), "not draht's\n", "utf8");
+		const elsewhere = join(f.home, "opt", "draht");
+		const result = runInDrahtHome(installer, f, { DRAHT_DIR: elsewhere });
+		assert.equal(result.status, 0, result.stderr || result.stdout);
+		assert.equal(existsSync(join(elsewhere, "current", "draht")), true);
+		assert.deepEqual(readdirSync(drahtHome), ["notes.txt"]);
+	});
 
 	test(`${label} installs an immutable checked and attested platform binary`, () => {
 		const f = fixture();

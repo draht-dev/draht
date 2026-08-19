@@ -11,6 +11,7 @@ export * from "./hash.ts";
 export * from "./host.ts";
 export * from "./journal.ts";
 export * from "./json.ts";
+export * from "./json-schema.ts";
 export * from "./lock.ts";
 export * from "./paths.ts";
 export * from "./plan.ts";

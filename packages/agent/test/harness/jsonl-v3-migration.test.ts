@@ -475,6 +475,112 @@ describe("JSONL v3 migration", () => {
 			await session.close(BACKGROUND_CONTEXT);
 		});
 
+		it("projects every supported legacy node in a retained tail", async () => {
+			const ordinaryTimestamp = NOW + 30_000;
+			const customMessageTimestamp = NOW + 31_000;
+			const customEntryTimestamp = NOW + 32_000;
+			const branchSummaryTimestamp = NOW + 33_000;
+			const olderCompactionTimestamp = NOW + 34_000;
+			const finalCompactionTimestamp = NOW + 35_000;
+			const ordinaryMessage = {
+				role: "user",
+				content: [{ type: "text", text: "ordinary retained message" }],
+				timestamp: ordinaryTimestamp,
+			} satisfies AgentMessage;
+			const customContent = [{ type: "text" as const, text: "custom retained message" }];
+			const customDetails = { status: "complete" };
+			await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "ordinary-message",
+					parentId: null,
+					timestamp: new Date(ordinaryTimestamp).toISOString(),
+					message: ordinaryMessage,
+				},
+				{
+					type: "custom_message",
+					id: "custom-message",
+					parentId: "ordinary-message",
+					timestamp: new Date(customMessageTimestamp).toISOString(),
+					customType: "notice",
+					content: customContent,
+					details: customDetails,
+					display: false,
+				},
+				{
+					type: "custom",
+					id: "plain-custom",
+					parentId: "custom-message",
+					timestamp: new Date(customEntryTimestamp).toISOString(),
+					customType: "checkpoint",
+					data: { ignored: true },
+				},
+				{
+					type: "branch_summary",
+					id: "branch-summary",
+					parentId: "plain-custom",
+					timestamp: new Date(branchSummaryTimestamp).toISOString(),
+					fromId: "ordinary-message",
+					summary: "Earlier branch work",
+				},
+				{
+					type: "compaction",
+					id: "older-compaction",
+					parentId: "branch-summary",
+					timestamp: new Date(olderCompactionTimestamp).toISOString(),
+					summary: "Older compacted context",
+					firstKeptEntryId: "ordinary-message",
+					tokensBefore: 4_000,
+				},
+				{
+					type: "compaction",
+					id: "final-compaction",
+					parentId: "older-compaction",
+					timestamp: new Date(finalCompactionTimestamp).toISOString(),
+					summary: "Final compacted context",
+					firstKeptEntryId: "ordinary-message",
+					tokensBefore: 8_000,
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+			const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const entries = await session.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(entries).toHaveLength(6);
+			const ordinary = entries.at(0);
+			const finalCompaction = entries.at(-1);
+			if (ordinary === undefined || finalCompaction?.type !== "compaction") {
+				throw new Error("Legacy retained-tail fixture was not imported");
+			}
+
+			expect(uuidTimestamp(ordinary.id)).toBe(ordinaryTimestamp);
+			expect(finalCompaction.retainedTail).toEqual([
+				ordinaryMessage,
+				{
+					role: "custom",
+					customType: "notice",
+					content: customContent,
+					details: customDetails,
+					display: false,
+					timestamp: customMessageTimestamp,
+				},
+				{
+					role: "branchSummary",
+					summary: "Earlier branch work",
+					fromId: ordinary.id,
+					timestamp: branchSummaryTimestamp,
+				},
+				{
+					role: "compactionSummary",
+					summary: "Older compacted context",
+					tokensBefore: 4_000,
+					timestamp: olderCompactionTimestamp,
+				},
+			]);
+			await session.close(BACKGROUND_CONTEXT);
+		});
+
 		it.each([
 			{ boundary: "missing", firstKeptEntryId: "missing-entry" },
 			{ boundary: "off-branch", firstKeptEntryId: "other-branch" },

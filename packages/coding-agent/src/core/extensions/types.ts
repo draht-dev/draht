@@ -1795,13 +1795,13 @@ export type SetActiveToolsHandler = (toolNames: string[]) => void;
 export type RefreshToolsHandler = () => void;
 
 export interface ModelSelectionOptions {
-	/** Whether to update the global default model. Defaults to true. */
-	persistDefault?: boolean;
+	/** Whether to update the global default model. Defaults to false (session-scoped). */
+	persist?: boolean;
 }
 
 export interface ThinkingLevelSelectionOptions {
-	/** Whether to update the global default thinking level. Defaults to true. */
-	persistDefault?: boolean;
+	/** Whether to update the global default thinking level. Defaults to false (session-scoped). */
+	persist?: boolean;
 }
 
 export type SetModelHandler = (model: Model<any>, options?: ModelSelectionOptions) => Promise<boolean>;

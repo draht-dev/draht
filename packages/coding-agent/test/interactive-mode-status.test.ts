@@ -8,7 +8,7 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
-import { InteractiveMode, parseModelCommandArgs } from "../src/modes/interactive/interactive-mode.ts";
+import { InteractiveMode, parseDefaultFlagArgs } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 function renderLastLine(container: Container, width = 120): string {
@@ -401,16 +401,16 @@ describe("InteractiveMode.setupAutocompleteProvider", () => {
 });
 
 describe("InteractiveMode.createBaseAutocompleteProvider", () => {
-	describe("parseModelCommandArgs", () => {
+	describe("parseDefaultFlagArgs", () => {
 		test("parses --default as a persistent model selection", () => {
-			expect(parseModelCommandArgs("--default openai/gpt-5")).toEqual({
+			expect(parseDefaultFlagArgs("model", "--default openai/gpt-5")).toEqual({
 				persist: true,
 				searchTerm: "openai/gpt-5",
 			});
 		});
 
 		test("rejects unknown /model flags", () => {
-			expect(parseModelCommandArgs("--global openai/gpt-5")).toMatchObject({
+			expect(parseDefaultFlagArgs("model", "--global openai/gpt-5")).toMatchObject({
 				persist: false,
 				error: 'Unknown /model option "--global". Supported option: --default.',
 			});

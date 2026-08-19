@@ -1,7 +1,17 @@
 import type { ThinkingLevel } from "@draht/agent-core";
-import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@draht/tui";
-import { getSelectListTheme } from "../theme/theme.js";
-import { DynamicBorder } from "./dynamic-border.js";
+import {
+	Container,
+	type Focusable,
+	getKeybindings,
+	type SelectItem,
+	SelectList,
+	type SelectListLayoutOptions,
+	Spacer,
+	Text,
+} from "@draht/tui";
+import { getSelectListTheme, theme } from "../theme/theme.ts";
+import { DynamicBorder } from "./dynamic-border.ts";
+import { keyDisplayText } from "./keybinding-hints.ts";
 
 const THINKING_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
@@ -21,16 +31,28 @@ const LEVEL_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 /**
  * Component that renders a thinking level selector with borders
  */
-export class ThinkingSelectorComponent extends Container {
+export class ThinkingSelectorComponent extends Container implements Focusable {
 	private selectList: SelectList;
+	private onSelectAsDefault?: (level: ThinkingLevel) => void;
+	private _focused = false;
+
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+	}
 
 	constructor(
 		currentLevel: ThinkingLevel,
 		availableLevels: ThinkingLevel[],
 		onSelect: (level: ThinkingLevel) => void,
 		onCancel: () => void,
+		onSelectAsDefault?: (level: ThinkingLevel) => void,
 	) {
 		super();
+		this.onSelectAsDefault = onSelectAsDefault;
 
 		const thinkingLevels: SelectItem[] = availableLevels.map((level) => ({
 			value: level,
@@ -40,6 +62,11 @@ export class ThinkingSelectorComponent extends Container {
 
 		// Add top border
 		this.addChild(new DynamicBorder());
+		this.addChild(new Spacer(1));
+		this.addChild(new Text("Thinking Level", 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(`${keyDisplayText("app.thinking.cycle")} cycles thinking levels in-session`, 0, 0));
+		this.addChild(new Spacer(1));
 
 		// Create selector
 		this.selectList = new SelectList(
@@ -64,9 +91,33 @@ export class ThinkingSelectorComponent extends Container {
 		};
 
 		this.addChild(this.selectList);
+		this.addChild(new Spacer(1));
+		const confirmKey = keyDisplayText("tui.select.confirm");
+		const confirmAsDefaultKey = keyDisplayText("tui.select.confirmAsDefault");
+		const cancelKey = keyDisplayText("tui.select.cancel");
+		this.addChild(
+			new Text(
+				theme.fg(
+					"dim",
+					`  ${confirmKey} to select · ${confirmAsDefaultKey} to set as default · ${cancelKey} to cancel`,
+				),
+				0,
+				0,
+			),
+		);
 
 		// Add bottom border
 		this.addChild(new DynamicBorder());
+	}
+
+	handleInput(keyData: string): void {
+		if (getKeybindings().matches(keyData, "tui.select.confirmAsDefault") && this.onSelectAsDefault) {
+			const item = this.selectList.getSelectedItem();
+			if (item) this.onSelectAsDefault(item.value as ThinkingLevel);
+			return;
+		}
+
+		this.selectList.handleInput(keyData);
 	}
 
 	getSelectList(): SelectList {

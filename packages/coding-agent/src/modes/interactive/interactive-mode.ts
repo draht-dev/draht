@@ -7,7 +7,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@draht/agent-core";
+import type { AgentMessage, ThinkingLevel } from "@draht/agent-core";
 import type { AuthEvent, AuthPrompt } from "@draht/ai";
 import type { AssistantMessage, ImageContent, Message, Model, Usage } from "@draht/ai/compat";
 import type {
@@ -163,6 +163,7 @@ import {
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
+import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
@@ -247,13 +248,13 @@ function isDeadTerminalError(error: unknown): boolean {
 	return code !== undefined && DEAD_TERMINAL_ERROR_CODES.has(code);
 }
 
-export interface ModelCommandArgs {
+export interface DefaultFlagArgs {
 	searchTerm?: string;
 	persist: boolean;
 	error?: string;
 }
 
-export function parseModelCommandArgs(args: string | undefined): ModelCommandArgs {
+export function parseDefaultFlagArgs(commandName: string, args: string | undefined): DefaultFlagArgs {
 	if (!args?.trim()) return { persist: false };
 
 	let persist = false;
@@ -275,7 +276,7 @@ export function parseModelCommandArgs(args: string | undefined): ModelCommandArg
 			return {
 				persist,
 				searchTerm: searchTerms.join(" ") || undefined,
-				error: `Unknown /model option "${token}". Supported option: --default.`,
+				error: `Unknown /${commandName} option "${token}". Supported option: --default.`,
 			};
 		}
 
@@ -761,7 +762,7 @@ export class InteractiveMode {
 						: null;
 				}
 
-				const parsed = parseModelCommandArgs(prefix);
+				const parsed = parseDefaultFlagArgs("model", prefix);
 				if (parsed.error) return null;
 
 				const models =
@@ -785,6 +786,32 @@ export class InteractiveMode {
 					label: item.id,
 					description: parsed.persist ? `${item.provider} · set as startup default` : item.provider,
 				}));
+			};
+		}
+
+		const thinkingCommand = slashCommands.find((command) => command.name === "thinking");
+		if (thinkingCommand) {
+			thinkingCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const trimmedPrefix = prefix.trimStart();
+				if (trimmedPrefix.startsWith("--") && !trimmedPrefix.includes(" ")) {
+					return "--default".startsWith(trimmedPrefix)
+						? [{ value: "--default ", label: "--default", description: "Set as startup default" }]
+						: null;
+				}
+
+				const parsed = parseDefaultFlagArgs("thinking", prefix);
+				if (parsed.error) return null;
+				const searchPrefix = parsed.persist ? (parsed.searchTerm ?? "") : prefix;
+				return createFuzzyAutocompleteItems(
+					this.session.getAvailableThinkingLevels(),
+					searchPrefix,
+					(level) => level,
+					(level) => ({
+						value: parsed.persist ? `--default ${level}` : level,
+						label: level,
+						description: parsed.persist ? "set as startup default" : undefined,
+					}),
+				);
 			};
 		}
 
@@ -3263,13 +3290,26 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/model" || text.startsWith("/model ")) {
-				const args = parseModelCommandArgs(text.startsWith("/model ") ? text.slice(7).trim() : undefined);
+				const args = parseDefaultFlagArgs("model", text.startsWith("/model ") ? text.slice(7).trim() : undefined);
 				this.editor.setText("");
 				if (args.error) {
 					this.showError(args.error);
 					return;
 				}
 				await this.handleModelCommand(args.searchTerm, { persist: args.persist });
+				return;
+			}
+			if (text === "/thinking" || text.startsWith("/thinking ")) {
+				const args = parseDefaultFlagArgs(
+					"thinking",
+					text.startsWith("/thinking ") ? text.slice(10).trim() : undefined,
+				);
+				this.editor.setText("");
+				if (args.error) {
+					this.showError(args.error);
+					return;
+				}
+				this.handleThinkingCommand(args.searchTerm, { persist: args.persist });
 				return;
 			}
 			if (text === "/export" || text.startsWith("/export ")) {
@@ -5133,6 +5173,54 @@ export class InteractiveMode {
 				},
 			);
 			return { component: selector, focus: selector.getSettingsList() };
+		});
+	}
+
+	private handleThinkingCommand(searchTerm?: string, options: { persist?: boolean } = {}): void {
+		const availableLevels = this.session.getAvailableThinkingLevels();
+		if (!searchTerm) {
+			this.showThinkingSelector(options);
+			return;
+		}
+
+		const normalized = searchTerm.trim().toLowerCase();
+		const level = availableLevels.find((candidate) => candidate.toLowerCase() === normalized);
+		if (!level) {
+			this.showError(`Unknown thinking level "${searchTerm}". Available levels: ${availableLevels.join(", ")}.`);
+			return;
+		}
+
+		this.selectThinkingLevel(level, options.persist === true);
+	}
+
+	private selectThinkingLevel(level: ThinkingLevel, persist: boolean): void {
+		try {
+			this.session.setThinkingLevel(level, { persist });
+			this.footer.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(persist ? `Default thinking level: ${level}` : `Thinking level: ${level}`);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private showThinkingSelector(options: { persist?: boolean } = {}): void {
+		this.showSelector((done) => {
+			const selectLevel = (level: ThinkingLevel, persist: boolean) => {
+				this.selectThinkingLevel(level, persist);
+				done();
+			};
+			const selector = new ThinkingSelectorComponent(
+				this.session.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+				this.session.getAvailableThinkingLevels(),
+				(level) => selectLevel(level, options.persist === true),
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				(level) => selectLevel(level, true),
+			);
+			return { component: selector, focus: selector };
 		});
 	}
 

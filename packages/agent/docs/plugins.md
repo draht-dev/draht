@@ -191,7 +191,7 @@ Facets communicate across processes through **services**. One token type gives a
 function defineRemoteService<T>(id: string): RemoteService<T>;
 ```
 
-The declaration lives in the shared contract module and creates nothing. `provide(service, implementation)` exposes one singleton; `spawn(key, service, implementation)` exposes a keyed instance. Consumers select the same mode with `use(service)` or `observe(service, handler)`. Within one host namespace, a token must stay in one mode: mixing `provide`/`use` with `spawn`/`observe` is an assembly or protocol error.
+The declaration lives in the shared contract module and creates nothing. `provide(service, implementation)` exposes one singleton; `spawn(service, key, implementation)` exposes a keyed instance. Consumers select the same mode with `use(service)` or `observe(service, handler)`. Within one host namespace, a token must stay in one mode: mixing `provide`/`use` with `spawn`/`observe` is an assembly or protocol error.
 
 TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel descriptor. When `provide()` or `spawn()` receives an implementation, the host classifies functions as remote methods and recognizes branded `RemoteState` and `RemoteEvents` values. It rejects unsupported members and announces the resulting member table over the transport.
 
@@ -315,7 +315,7 @@ A service has **one owner and many consumers**. In singleton mode, `providersBui
 - **Local:** in the process that provides the singleton, `use()` is synchronous and returns the actual implementation object. No serialization, no proxy.
 - **Remote:** across a connection, `use()` synchronously returns a stable lazy proxy. Calls made while disconnected fail when invoked; state has no value until hydrated. Concurrent consumers of one token in one process share one proxy, one state replica, and one remote subscription.
 
-Keyed services use `spawn()` and `observe()`. A keyed service is empty until its owner calls `spawn()`; observing it never creates an instance. `spawn(key, service, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. `observe(service, handler)` reconciles a snapshot of current instances and then ordered additions, replacements, and removals. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
+Keyed services use `spawn()` and `observe()`. A keyed service is empty until its owner calls `spawn()`; observing it never creates an instance. `spawn(service, key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. `observe(service, handler)` reconciles a snapshot of current instances and then ordered additions, replacements, and removals. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
 
 A spawned member has structural identity `(service, key, generation, member)`. Its `RemoteState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a plugin-visible `RemoteState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
 
@@ -343,7 +343,7 @@ interface CodingAgentSessionPluginContext extends PluginLifecycleScope {
 	// service/state infrastructure (session-host owned)
 	provide<T>(service: RemoteService<T> | LocalService<T>, implementation: T): void;
 	use<T>(service: RemoteService<T> | LocalService<T>): T;
-	spawn<T>(key: string, service: RemoteService<T>, implementation: T): () => void;
+	spawn<T>(service: RemoteService<T>, key: string, implementation: T): () => void;
 	observe<T>(
 		service: RemoteService<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
@@ -830,7 +830,7 @@ function questionResult(request: QuestionRequest, answer: string | null, wasCust
 
 ### Session facet: spawn one dialog service
 
-`awaitAbortable()` below is an ordinary shared cancellation utility.
+`memoOnce(name, candidate)` is an atomic invocation-memo operation. It keeps the first value, returns that durable winner to every caller, and reports all failures by rejecting its promise rather than throwing synchronously. `awaitAbortable()` is an ordinary shared cancellation utility.
 
 ```ts
 // session.ts
@@ -851,21 +851,16 @@ export function questionSessionFacet(bindings: CodingAgentSessionPluginContext) 
 
 				if (response === undefined) {
 					const completion = Promise.withResolvers<QuestionResponse>();
-					let commit: Promise<QuestionResponse> | undefined;
 					const request = bindings.remoteState<QuestionRequest>(params);
-					const close = bindings.spawn(invocation.invocationId, QuestionDialogs, {
+					const close = bindings.spawn(QuestionDialogs, invocation.invocationId, {
 						request,
 						async submitAnswer(candidate, _answerContext) {
 							if (candidate.outcome === "selected" && params.options[candidate.index] === undefined) {
 								throw new Error("Question response selected an invalid option");
 							}
-							if (commit !== undefined) {
-								await commit;
-								return;
-							}
-
-							commit = invocation.setMemo(memoName, candidate).then(() => candidate);
-							completion.resolve(await commit);
+							const committed = invocation.memoOnce(memoName, candidate);
+							completion.resolve(committed);
+							await committed;
 						},
 					});
 
@@ -887,7 +882,7 @@ export function questionSessionFacet(bindings: CodingAgentSessionPluginContext) 
 }
 ```
 
-`spawn()` installs the instance before `execute()` waits. The returned close function is the single normal, cancellation, and error cleanup path. The first valid `submitAnswer()` call assigns `commit` before awaiting, so concurrent calls join that durable write rather than overwrite it. `completion.resolve()` runs only after `setMemo()` commits. Calls through a closed instance or an old generation fail as stale service calls.
+`spawn()` installs the instance before `execute()` waits. The returned close function is the single normal, cancellation, and error cleanup path. Concurrent submissions call `memoOnce()`, whose atomic first-writer rule prevents overwrite and returns the same durable winner. `completion.resolve(committed)` makes the local wait follow that durable operation: success resumes the tool, while failure rejects it and runs the same cleanup instead of leaving it suspended. Each service call also awaits its own `committed` promise, so it cannot report success before durability or leave an ignored rejection. Calls through a closed instance or an old generation fail as stale service calls.
 
 ### TUI and web facets: observe every dialog instance
 
@@ -944,7 +939,7 @@ With no connected presentation, the spawned instance and unresolved tool remain 
 
 ### Durability and worker replacement
 
-The service instance is live process state; the invocation memo is the replay receipt. The Harness already persists a safe tool's effective arguments, stable invocation ID, `effect_pending` state, and memos. `setMemo()` synchronously enters its write on the invocation's lane mutation line and verifies that the same operation, turn, source position, and invocation still own the effect before committing.
+The service instance is live process state; the invocation memo is the replay receipt. The Harness already persists a safe tool's effective arguments, stable invocation ID, `effect_pending` state, and memos. `memoOnce()` synchronously enters one atomic read-or-write on the invocation's lane mutation line and verifies that the same operation, turn, source position, and invocation still own the effect. It returns the existing value or commits and returns the candidate.
 
 If the worker dies before the answer commit, the old instance and promise disappear. Safe replay reads no answer and spawns the same logical key with a new generation. If it dies after the commit, replay reads the answer and returns without spawning. A client cannot answer while the worker is absent; calls through the old generation fail instead of locating an invocation by bare ID.
 
@@ -1006,4 +1001,4 @@ The handoff should include a reusable two-transport test matrix (loopback plus a
 - **Registries:** ordered provider contributions rebuild deterministically; tool wrappers compose once and rebuild correctly after removal.
 - **Presentation:** typed selections return values rather than labels; modal leases do not interleave multi-step dialogs; closing a queued instance removes it before display; closing an active instance aborts and dismisses only that dialog; non-cancellation observer failures reach host failure policy.
 - **Routing:** attach authorizes at the server and rejects cross-workspace targets; attach/switch closes previous routed requests and instance tasks, then hydrates the selected session; a routed singleton or instance call reconstructs `Context` at the session worker, with cancellation and trace carriers traversing the server; stale instance generations are rejected; per-client keying prevents request-ID collisions; the server routes services whose contracts it does not load; session-worker failure leaves server services healthy and updates directory status; presentation disconnect cleanup reaches the session; summaries contain no `ownerId` or `cwd`.
-- **Boundaries:** scoped agent and fleet capabilities cannot reach host ownership or whole-registry mutation; raw Harness/Session/SessionRepo capabilities unreachable from any client connection; job `wait` cancellation distinct from `job.cancel()`; stale/closed reference rejection; concurrent question invocations spawn distinct services visible in simultaneous TUI and web clients, survive having no connected presentation while the worker is live, disappear on worker loss, reappear under new generations when safe replay finds no answer memo, accept only one durable answer each, return committed answers without respawning on replay, clean up with durable tool-result staging, and close in every presentation; invocation cancellation writes no durable cancellation state.
+- **Boundaries:** scoped agent and fleet capabilities cannot reach host ownership or whole-registry mutation; raw Harness/Session/SessionRepo capabilities unreachable from any client connection; job `wait` cancellation distinct from `job.cancel()`; stale/closed reference rejection; concurrent question invocations spawn distinct services visible in simultaneous TUI and web clients, survive having no connected presentation while the worker is live, disappear on worker loss, reappear under new generations when safe replay finds no answer memo, accept only one durable answer each, reject the tool wait rather than hang when the memo write fails, return committed answers without respawning on replay, clean up with durable tool-result staging, and close in every presentation; invocation cancellation writes no durable cancellation state.

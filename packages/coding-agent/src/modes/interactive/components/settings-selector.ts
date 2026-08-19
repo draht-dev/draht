@@ -477,6 +477,7 @@ export class SettingsSelectorComponent extends Container {
 
 		const supportsImages = getCapabilities().images;
 		const followUpKey = keyDisplayText("app.message.followUp");
+		const cycleThinkingKey = keyDisplayText("app.thinking.cycle");
 		let currentWarnings = { ...config.warnings };
 		const currentModelThinkingLevels = { ...config.modelThinkingLevels };
 		let lastSelectedDefaultModel: Model<any> | undefined;
@@ -662,7 +663,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "thinking",
 				label: "Default thinking level",
-				description: "Startup reasoning depth for thinking-capable models",
+				description: `Startup reasoning depth for thinking-capable models. ${cycleThinkingKey} cycles in-session.`,
 				currentValue: config.thinkingLevel,
 				submenu: (currentValue, done) =>
 					new SelectSubmenu(
@@ -684,7 +685,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "model-thinking",
 				label: "Default thinking level per model",
-				description: "Override the default thinking level for specific models",
+				description: `Override the default thinking level for specific models. ${cycleThinkingKey} cycles in-session.`,
 				currentValue: modelThinkingOverridesSummary(currentModelThinkingLevels),
 				submenu: (_currentValue, done) => {
 					const preselected = lastSelectedDefaultModel;

@@ -5,7 +5,7 @@ import { refreshModelCatalogs } from "../model-catalog-refresh.ts";
 import { getModelSelectorSearchText } from "../model-search.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint } from "./keybinding-hints.ts";
+import { keyDisplayText, keyHint } from "./keybinding-hints.ts";
 
 interface ModelItem {
 	provider: string;
@@ -44,6 +44,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private currentModel?: Model<any>;
 	private modelRuntime: ModelRuntime;
 	private onSelectCallback: (model: Model<any>) => void;
+	private onSelectAsDefaultCallback?: (model: Model<any>) => void;
 	private onCancelCallback: () => void;
 	private errorMessage?: string;
 	private refreshStatusMessage = "Refreshing model catalogs…";
@@ -65,6 +66,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		onSelect: (model: Model<any>) => void,
 		onCancel: () => void,
 		initialSearchInput?: string,
+		onSelectAsDefault?: (model: Model<any>) => void,
 	) {
 		super();
 
@@ -74,6 +76,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.scopedModels = scopedModels;
 		this.scope = scopedModels.length > 0 ? "scoped" : "all";
 		this.onSelectCallback = onSelect;
+		this.onSelectAsDefaultCallback = onSelectAsDefault;
 		this.onCancelCallback = onCancel;
 
 		// Add top border
@@ -112,6 +115,23 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.addChild(this.listContainer);
 
 		this.addChild(new Spacer(1));
+
+		// Hint
+		if (this.onSelectAsDefaultCallback) {
+			const confirmKey = keyDisplayText("tui.select.confirm");
+			const confirmAsDefaultKey = keyDisplayText("tui.select.confirmAsDefault");
+			const cancelKey = keyDisplayText("tui.select.cancel");
+			this.addChild(
+				new Text(
+					theme.fg(
+						"dim",
+						`  ${confirmKey} to select \u00b7 ${confirmAsDefaultKey} to set as default \u00b7 ${cancelKey} to cancel`,
+					),
+					0,
+					0,
+				),
+			);
+		}
 
 		// Add bottom border
 		this.addChild(new DynamicBorder());
@@ -340,6 +360,14 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		else if (kb.matches(keyData, "tui.select.cancel")) {
 			this.dispose();
 			this.onCancelCallback();
+		}
+		// Select and save as default
+		else if (kb.matches(keyData, "tui.select.confirmAsDefault") && this.onSelectAsDefaultCallback) {
+			const selectedModel = this.filteredModels[this.selectedIndex];
+			if (selectedModel) {
+				this.dispose();
+				this.onSelectAsDefaultCallback(selectedModel.model);
+			}
 		}
 		// Pass everything else to search input
 		else {

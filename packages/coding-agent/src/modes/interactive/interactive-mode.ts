@@ -5287,32 +5287,32 @@ export class InteractiveMode {
 
 	private showModelSelector(initialSearchInput?: string, options: { persist?: boolean } = {}): void {
 		this.showSelector((done) => {
+			const selectModel = async (model: Model<any>, persist: boolean) => {
+				try {
+					await this.session.setModel(model, { persist });
+					this.footer.invalidate();
+					this.updateEditorBorderColor();
+					done();
+					this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
+					void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
+					this.checkDaxnutsEasterEgg(model);
+				} catch (error) {
+					done();
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+			};
 			const selector = new ModelSelectorComponent(
 				this.ui,
 				this.session.model,
 				this.session.modelRuntime,
 				this.session.scopedModels,
-				async (model) => {
-					try {
-						await this.session.setModel(model, { persist: options.persist === true });
-						this.footer.invalidate();
-						this.updateEditorBorderColor();
-						done();
-						this.showStatus(
-							options.persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`,
-						);
-						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-						this.checkDaxnutsEasterEgg(model);
-					} catch (error) {
-						done();
-						this.showError(error instanceof Error ? error.message : String(error));
-					}
-				},
+				(model) => selectModel(model, options.persist === true),
 				() => {
 					done();
 					this.ui.requestRender();
 				},
 				initialSearchInput,
+				(model) => selectModel(model, true),
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});

@@ -335,7 +335,7 @@
 - R47-SKL.4: Drift gate — `check:skills-artifacts` (regenerate + byte-compare, non-zero on drift) wired into root `npm run check` and both plugin packages' `prepublishOnly`; `check-plugin-mirrors.mjs` reduced to its agents/ byte-identity check
 - R47-SKL.5: Native artifact tests — Agent Skills spec validation, portability lint (no `../` escapes, no absolute paths, no `${CLAUDE_PLUGIN_ROOT}`/`${PLUGIN_ROOT` tokens, host-dialect markers only in an explicit documented allowlist), ≤500-line size gate, generator determinism, dialect completeness, wrapper-standalone resolution
 - R47-SKL.6: Catalog proof — a native implementation of the skills-CLI priority-walk semantics (root `skills/` short-circuit, first-found-wins name dedup) over this repository lists exactly the canonical skill set
-- R47-SKL.7: README truth — both plugin READMEs list the real skill surface (9 disciplines + `draht` router)
+- R47-SKL.7: README truth — both plugin READMEs list the real skill surface (10 disciplines + `draht` router) *(count corrected 2026-08-18: the canonical tree holds 28 skill dirs = 17 command skills + 10 disciplines + the `draht` router; `saga-spawner` was omitted from the old tally.)*
 
 ### R48-ENG: Install Engine Core
 - R48-ENG.1: New workspace package `packages/install/` publishing `@draht/install` (private:false, `files` allowlist, lockstep CalVer, vitest suite, `workspace:*` dependency on `@draht/tools` for the init scaffold), wired into the root `build` chain and green under `npm run check` and `check-draht-customizations`

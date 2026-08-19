@@ -1,6 +1,6 @@
 # Coding-Agent Application Hosts and Plugin Facets
 
-> **Status:** Tentative design input, not a normative contract or implementation handoff. The examples use illustrative APIs that do not exist yet. Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
+> **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `RemoteState` substrate now have an experimental implementation; the application host contexts, plugin kernel, events, references, telemetry propagation, and most example facets remain illustrative. Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
 
 This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `SessionTree`, `SessionRepo`, invocation `Context`, and telemetry. Read `rpc.md` for wire frames, remote references, subscriptions, and trace carriers, and `telemetry.md` for context propagation and cancellation semantics.
 
@@ -468,14 +468,16 @@ The auth plugin's session facet uses `Credentials` directly; presentations see p
 
 ```ts
 interface RemoteState<T> {
-	/** `undefined` until the first authoritative snapshot arrives. */
+	/** Borrowed immutable value, or `undefined` until hydration. Do not mutate or retain it. */
 	readonly value: T | undefined;
+	/** Listener values are borrowed and must not be mutated or retained. */
 	subscribe(listener: (value: T, context: Context) => void): () => void;
 }
 
 interface MutableRemoteState<T> extends RemoteState<T> {
 	/** A providing state is always initialized. */
 	readonly value: T;
+	/** Transfers the JSON value to the state; the caller must not subsequently mutate it. */
 	set(value: T, context: Context): void;
 }
 ```
@@ -486,7 +488,7 @@ Required behavior:
 2. A cold remote replica has no value. Its `.value` is `undefined`, and `subscribe()` registers the listener without invoking it. This `undefined` is local readiness state and never crosses the wire.
 3. **Hydration** installs a complete snapshot atomically before updates flow. Subscribing before hydration is valid, and updates emitted concurrently with the snapshot are buffered, so the listener observes snapshot then updates with no gap.
 4. Once hydrated, `.value` is synchronously readable and `subscribe()` immediately reports the current value, then future updates. The first snapshot callback uses a fresh **hydration context** parented to the subscription; an immediate callback for an already-present value uses a fresh local delivery context because the write that produced it may be long settled.
-5. Values are detached with structured JSON semantics; one listener cannot mutate another's state.
+5. State values are borrowed immutable JSON. The state runtime does not defensively clone reads, writes, snapshots, or listener deliveries. Callers transfer ownership to `set()` and must not mutate or retain values returned by `.value` or passed to listeners; copy explicitly when ownership is required. Process and transport serialization may naturally produce a detached value, but callers must not depend on object identity or detachment.
 6. Disconnect retains the last value as stale display data alongside connection or attachment state. Reconnecting to the same provider replaces it with a fresh snapshot. Switching to a different provider clears readiness and `.value` becomes `undefined` until that provider hydrates; service-bound presentation resources are disposed as part of the switch.
 7. `set(value, context)` carries source trace metadata; each live delivery invokes listeners with a reconstructed delivery `Context`. Background updates use an intentional background or lifecycle context, never a retained caller context.
 
@@ -997,7 +999,7 @@ The handoff should include a reusable two-transport test matrix (loopback plus a
 - **Composition:** hosts start from one plugin manifest, not hard-coded features; per-host entry-point resolution with no session modules reachable in a presentation bundle; provide/demand-resolve round trip; mixed singleton/keyed use rejected; shared proxy/replica across concurrent consumers; instance snapshot plus spawn/close/re-spawn reconciliation; local services unreachable remotely; duplicate/missing service failures; activation only after registration; reverse-order disposal.
 - **Connections:** `Connect` performs one abortable attempt and the host owns retries; peer identity comes from the accepting server's handshake; session and presentation hosts connect to that server, and `server.local` runs the same host boundaries without sockets.
 - **RPC and context:** JSON call and `void` result; invalid argument/result and unknown service/member rejection; client span → `rpc.client` → `rpc.server` → service span; per-call cancellation isolation; disconnect aborts active calls; no callback, context, signal, telemetry object, or secret in wire JSON.
-- **State and events:** a cold replica has `.value === undefined` and does not invoke subscribers before hydration; snapshot plus concurrent update has no gap; instance discovery and member-state hydration do not miss a spawn, update, or close; hydrated subscriptions immediately receive the current value; update ordering and detached values; reconnect replaces stale state; provider switching clears readiness; subscribe/unsubscribe and disconnect cleanup; deliveries carry reconstructed source contexts; first snapshot callbacks run under the hydration context.
+- **State and events:** a cold replica has `.value === undefined` and does not invoke subscribers before hydration; snapshot plus concurrent update has no gap; instance discovery and member-state hydration do not miss a spawn, update, or close; hydrated subscriptions immediately receive the current borrowed value; update ordering without defensive cloning; reconnect replaces stale state; provider switching clears readiness; subscribe/unsubscribe and disconnect cleanup; deliveries carry reconstructed source contexts; first snapshot callbacks run under the hydration context.
 - **Registries:** ordered provider contributions rebuild deterministically; tool wrappers compose once and rebuild correctly after removal.
 - **Presentation:** typed selections return values rather than labels; modal leases do not interleave multi-step dialogs; closing a queued instance removes it before display; closing an active instance aborts and dismisses only that dialog; non-cancellation observer failures reach host failure policy.
 - **Routing:** attach authorizes at the server and rejects cross-workspace targets; attach/switch closes previous routed requests and instance tasks, then hydrates the selected session; a routed singleton or instance call reconstructs `Context` at the session worker, with cancellation and trace carriers traversing the server; stale instance generations are rejected; per-client keying prevents request-ID collisions; the server routes services whose contracts it does not load; session-worker failure leaves server services healthy and updates directory status; presentation disconnect cleanup reaches the session; summaries contain no `ownerId` or `cwd`.

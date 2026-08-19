@@ -1,0 +1,191 @@
+import type { Context } from "../../harness/context.ts";
+import type { JsonValue } from "../../harness/session/types.ts";
+
+const REMOTE_SERVICE_TYPE = Symbol("pi.remoteService.type");
+
+export type ServiceMode = "singleton" | "keyed";
+export type ServiceMemberKind = "method" | "state";
+
+export interface RemoteState<T> {
+	/** Borrowed immutable value, or undefined until hydration. Do not mutate or retain it. */
+	readonly value: T | undefined;
+	/** Listener values are borrowed and must not be mutated or retained. */
+	subscribe(listener: (value: T, context: Context) => void): () => void;
+}
+
+export interface MutableRemoteState<T> extends RemoteState<T> {
+	readonly value: T;
+	/** Transfers the JSON value to the state; the caller must not subsequently mutate it. */
+	set(value: T, context: Context): void;
+}
+
+type JsonPrimitive = null | boolean | number | string;
+type InvalidJsonPart<T> = T extends JsonPrimitive
+	? never
+	: T extends readonly (infer TItem)[]
+		? InvalidJsonPart<TItem>
+		: T extends (...args: never[]) => unknown
+			? T
+			: T extends object
+				? { [TKey in keyof T]-?: InvalidJsonPart<T[TKey]> }[keyof T]
+				: T;
+
+type InvalidRemoteMember<T> = T extends RemoteState<infer TValue>
+	? InvalidJsonPart<TValue> extends never
+		? never
+		: "state value is not JSON"
+	: T extends (...args: [...infer TArgs, Context]) => Promise<infer TResult>
+		? InvalidJsonPart<TArgs[number]> extends never
+			? TResult extends void
+				? never
+				: InvalidJsonPart<TResult> extends never
+					? never
+					: "method result is not JSON or void"
+			: "method argument is not JSON"
+		: "member is not a remote method or RemoteState";
+
+type InvalidRemoteMemberNames<T> = {
+	[TKey in keyof T]-?: InvalidRemoteMember<T[TKey]> extends never ? never : TKey;
+}[keyof T];
+
+type CheckedRemoteContract<T> = InvalidRemoteMemberNames<T> extends never ? T : never;
+
+/** Stable identity for one shared TypeScript service contract. */
+export interface RemoteService<T> {
+	readonly id: string;
+	readonly [REMOTE_SERVICE_TYPE]?: (value: T) => T;
+}
+
+export type RemoteServiceType<TService> = TService extends RemoteService<infer T> ? T : never;
+
+export function defineRemoteService<T>(id: string): RemoteService<CheckedRemoteContract<T>> {
+	if (id.length === 0) throw new TypeError("Remote service ID must not be empty");
+	if (id.startsWith("$pi.")) throw new TypeError("Remote service IDs beginning with $pi. are reserved");
+	return Object.freeze({ id });
+}
+
+export interface ServiceInstanceAddress {
+	readonly key: string;
+	readonly generation: number;
+}
+
+export interface ServiceMemberDescription {
+	readonly name: string;
+	readonly kind: ServiceMemberKind;
+}
+
+export interface ServiceStateSnapshot {
+	readonly sequence: number;
+	readonly value: JsonValue;
+}
+
+export interface ServiceInstanceSnapshot {
+	readonly instance?: ServiceInstanceAddress;
+	readonly members: readonly ServiceMemberDescription[];
+	readonly states: Readonly<Record<string, ServiceStateSnapshot>>;
+}
+
+export interface ServiceSubscriptionSnapshot {
+	readonly serviceId: string;
+	readonly mode: ServiceMode;
+	readonly instances: readonly ServiceInstanceSnapshot[];
+}
+
+export type ServiceProviderUpdate =
+	| {
+			readonly type: "state";
+			readonly instance?: ServiceInstanceAddress;
+			readonly member: string;
+			readonly sequence: number;
+			readonly value: JsonValue;
+	  }
+	| { readonly type: "spawned"; readonly instance: ServiceInstanceSnapshot }
+	| { readonly type: "closed"; readonly instance: ServiceInstanceAddress };
+
+export interface ServiceCall {
+	readonly serviceId: string;
+	readonly instance?: ServiceInstanceAddress;
+	readonly member: string;
+	readonly args: readonly JsonValue[];
+}
+
+export interface ServiceProviderSubscription {
+	readonly snapshot: ServiceSubscriptionSnapshot;
+	activate(): void;
+	close(): void;
+}
+
+export interface RemoteServiceSubscription {
+	readonly snapshot: ServiceSubscriptionSnapshot;
+	activate(): void;
+	close(context: Context): void | Promise<void>;
+}
+
+/** Transport-neutral connection consumed by a remote service namespace. */
+export interface RemoteServiceConnection {
+	invoke(call: ServiceCall, context: Context): Promise<JsonValue | undefined>;
+	subscribe(
+		serviceId: string,
+		mode: ServiceMode,
+		listener: (update: ServiceProviderUpdate, context: Context) => void,
+		context: Context,
+	): Promise<RemoteServiceSubscription>;
+}
+
+export interface RemoteServiceInstance<T> {
+	readonly key: string;
+	readonly service: T;
+}
+
+export interface RemoteServiceNamespaceOptions {
+	readonly services: readonly { readonly id: string }[];
+	readonly connection: RemoteServiceConnection;
+	readonly bound?: boolean;
+	readonly onError?: (error: Error) => void;
+}
+
+export interface RemoteServiceNamespaceApi {
+	use<T>(service: RemoteService<T>): T;
+	observe<T>(
+		service: RemoteService<T>,
+		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
+	): () => void;
+	dispose(context: Context): Promise<void>;
+}
+
+export function isJsonValue(value: unknown): value is JsonValue {
+	return checkJsonValue(value, new Set<object>());
+}
+
+function checkJsonValue(value: unknown, ancestors: Set<object>): value is JsonValue {
+	if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+	if (typeof value === "number") return Number.isFinite(value);
+	if (typeof value !== "object" || ancestors.has(value)) return false;
+	if (!Array.isArray(value)) {
+		const prototype = Object.getPrototypeOf(value);
+		if (prototype !== Object.prototype && prototype !== null) return false;
+		if (
+			Object.getOwnPropertySymbols(value).some((symbol) => Object.prototype.propertyIsEnumerable.call(value, symbol))
+		) {
+			return false;
+		}
+	}
+	ancestors.add(value);
+	const valid = Array.isArray(value)
+		? checkJsonArray(value, ancestors)
+		: Object.values(value).every((item) => checkJsonValue(item, ancestors));
+	ancestors.delete(value);
+	return valid;
+}
+
+function checkJsonArray(value: unknown[], ancestors: Set<object>): value is JsonValue[] {
+	for (let index = 0; index < value.length; index++) {
+		if (!Object.hasOwn(value, index) || !checkJsonValue(value[index], ancestors)) return false;
+	}
+	return true;
+}
+
+export function cloneJson<T>(value: T): T {
+	if (!isJsonValue(value)) throw new TypeError("Remote service value must be strict JSON");
+	return structuredClone(value);
+}

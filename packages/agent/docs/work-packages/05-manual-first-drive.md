@@ -2,7 +2,7 @@
 
 ## Status
 
-Design draft. Implementation has not started. `harness.md` remains normative.
+Design draft. Implementation has not started. The current `harness.md` remains normative until WP05 code and focused tests are accepted. WP05 intentionally updates `harness.md` afterward, from the proven implementation rather than a speculative design.
 
 WP02 atomic acceptance/observation and WP03 deadline removal are complete. WP04 first simplifies mutation publication and event delivery. WP05 then adds execution without reopening those packages.
 
@@ -70,15 +70,71 @@ The same code serves both modes:
 The minimal process-local shape is:
 
 ```ts
-interface ActiveOperation {
+interface ActiveDrive {
   operationId: string;
   completion: Promise<DriveOutcome>;
-  barrier: BreakpointBarrier;
+  breakpoint: Breakpoint;
   effectGate: EffectGate;
 }
 ```
 
-Implementation may need a small internal observation promise so `drive()` can return `action_required` while `completion` remains pending. That is breakpoint plumbing, not business state.
+`Lane` owns at most one `activeDrive`. Expected-id claim/join runs on the lane line:
+
+```text
+wrong current id
+→ OperationMismatch
+
+matching latest terminal id
+→ hydrate and return the durable result
+
+matching activeDrive
+→ join its observation
+
+matching durable open operation with no owner
+→ install ActiveDrive
+→ start its procedure only after leaving the lane line
+```
+
+`drive()` observes `activeDrive.breakpoint.peek()` or races `breakpoint.waitForChange()` with `completion`. `peek()` and waiter registration are synchronous with no intervening `await`, so no revision/epoch machinery is needed. `waitForChange()` must reject current and future waiters when the breakpoint closes; the observation loop propagates that close/fault instead of repeatedly racing an already-resolved change promise. In manual mode `drive()` returns `action_required` while the same owned completion remains parked internally. In automatic mode every breakpoint resolves immediately.
+
+`executeAction()` releases exactly `activeDrive.breakpoint`; concurrent callers cannot release the same parked breakpoint twice. `runToCompletion()` repeats observation/release until the outcome is not `action_required`.
+
+On ordinary settlement or failure, the drive task resolves/rejects its retained completion only after a no-write lane job removes that exact `ActiveDrive` by object identity. An old cleanup cannot remove a replacement owner. After close or fault, no lane job can be admitted: cleanup instead removes that exact process-local owner synchronously before rejecting completion. This is breakpoint plumbing, not business state.
+
+## Source shape
+
+Keep public ownership and business procedures separate but direct:
+
+- `runtime2/lane.ts`: public drive/action methods, expected-id claim/join, observation, and exact-owner cleanup;
+- `runtime2/drive.ts`: one ordinary async procedure dispatching from current durable phase;
+- existing `execution/assistant.ts`: provider request adapter;
+- existing `Breakpoint` and `EffectGate`: process-local control primitives.
+
+The procedure should remain visibly procedural:
+
+```ts
+async function runDrive(active: ActiveDrive, context: Context): Promise<DriveOutcome> {
+  await runBeforeDrive(active, context);
+  while (true) {
+    const current = await inspectCurrentPhase(active.operationId, context);
+    switch (current.phase.kind) {
+      case "starting":
+        await startRun(active, current, context);
+        break;
+      case "checkpoint":
+        await continueCheckpoint(active, current, context);
+        break;
+      case "assistant":
+        await continueAssistant(active, current, context);
+        break;
+      default:
+        throw new SliceNotImplemented(`drive(${current.phase.kind})`);
+    }
+  }
+}
+```
+
+The exact helper boundaries may change during implementation, but they must not become a scheduler, instruction graph, generic action interpreter, or second source of restart authority. An unsupported durable branch rejects honestly with `SliceNotImplemented`; exact-owner cleanup still runs, so the lane is not wedged and a later implementation may drive it. Convenience prompt/skill/template methods literally call `accept()` and then `drive()` with the returned operation id.
 
 ## Recovery
 
@@ -145,19 +201,30 @@ Add another breakpoint only when a concrete transition/effect in this package ne
 
 WP04 owns mutation publication and event-delivery simplification. WP05 uses its `emitBatch()` boundary and does not reopen recipient binding, watcher coherence, direct-listener awaiting, lane creation, or event/hook ordering.
 
-## Required design checks
+## Implementation and documentation order
 
 Before source work:
 
+- agree this small source shape with the user and Fable;
 - prove the process-local breakpoint observer can return an action without resolving/removing the underlying procedure;
 - prove same-id drives join and stale ids start nothing;
 - prove manual release advances exactly one breakpoint;
 - enumerate the first no-tool request's crash positions around intent/effect/outcome;
 - define the honest result for tool-call and deferred responses not implemented here;
 - define whether accepted pending writes force a small checkpoint drain into this package;
-- define close versus a parked procedure and admitted commit without redesigning unrelated lifecycle APIs;
-- update only the normative sections needed by those decisions;
-- review the final small handoff with Fable.
+- define close versus a parked procedure and admitted commit without redesigning unrelated lifecycle APIs, including process-local exact-owner removal when the lane line is sealed;
+- prove every observer terminates on breakpoint close/fault without a resolved-promise busy loop;
+- decide Context ownership explicitly: which installing invocation supplies the retained task lineage, confirm joiners and `executeAction(context)` do not reparent that procedure, and ensure every operation-owned effect replaces invocation cancellation with `EffectGate.signal`.
+
+Then implement the smallest source slice and its focused deterministic tests. Do **not** rewrite `harness.md` first. Iterate on code until:
+
+- automatic and manual paths use the same direct procedure;
+- `Breakpoint.waitForChange()` tests cover wake on hit, release, interrupt, and close, including rejection for current and future waiters after close;
+- crash/recovery, ownership, close/fault cleanup, multiple-observer, and unsupported-state rejection tests pass;
+- event listeners complete before the first subsequent procedure hook;
+- the user and Fable are satisfied that the shape is small and can extend naturally to tools, retry, deferred polling, abort, structural work, and later mechanisms without replacement machinery.
+
+Only after that acceptance, update `harness.md` to describe the proven behavior, remove or revise conflicting future R2/R3 prose, and record the package's actual invariants, races, breakpoint catalog, and test obligations. Run focused tests, `npm run check`, and `./test.sh` again after the normative rewrite, then perform the final Fable review.
 
 ## Non-goals
 

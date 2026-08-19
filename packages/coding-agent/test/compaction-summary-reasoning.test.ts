@@ -213,14 +213,16 @@ describe("generateSummary reasoning options", () => {
 		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("reasoning");
 	});
 
-	it("sets Anthropic refusal fallback from model metadata", async () => {
-		const fallbackCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+	it("leaves Anthropic refusal fallback handling to pi-ai model metadata", async () => {
 		await generateSummary(
 			messages,
 			createModel(true, 8192, {
 				allowedFallbackModels: [
-					{ model: "claude-opus-4-8", cost: fallbackCost },
-					{ model: "claude-opus-5", cost: fallbackCost },
+					{
+						provider: "anthropic",
+						model: "claude-opus-4-8",
+						cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+					},
 				],
 			}),
 			2000,
@@ -228,9 +230,7 @@ describe("generateSummary reasoning options", () => {
 		);
 
 		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
-		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
-			refusalFallbacks: [{ model: "claude-opus-4-8", cost: fallbackCost }],
-		});
+		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("refusalFallbacks");
 	});
 
 	it("does not set Anthropic refusal fallback for models without allowed fallback targets", async () => {

@@ -752,18 +752,20 @@ function isAnthropicFallbackMetadataModel(model: Model<Api>): model is Model<"an
 	);
 }
 
-function applyAnthropicFallbackCostMetadata(models: readonly Model<"anthropic-messages">[]): void {
+function applyAnthropicAllowedFallbackModelMetadata(models: readonly Model<"anthropic-messages">[]): void {
 	const modelsById = new Map(models.map((model) => [model.id, model]));
 	for (const [modelId, fallbackModelIds] of Object.entries(ANTHROPIC_ALLOWED_FALLBACK_MODELS)) {
 		const model = modelsById.get(modelId);
-		if (!model?.compat?.allowedFallbackModels) continue;
+		if (!model) continue;
 
-		for (const fallbackModelId of fallbackModelIds) {
-			const fallback = model.compat.allowedFallbackModels.find((target) => target.model === fallbackModelId);
+		const allowedFallbackModels = fallbackModelIds.flatMap((fallbackModelId) => {
 			const fallbackModel = modelsById.get(fallbackModelId);
-			if (fallback && fallbackModel) {
-				fallback.cost = fallbackModel.cost;
-			}
+			return fallbackModel
+				? [{ provider: fallbackModel.provider, model: fallbackModel.id, cost: fallbackModel.cost }]
+				: [];
+		});
+		if (allowedFallbackModels.length > 0) {
+			mergeAnthropicMessagesCompat(model, { allowedFallbackModels });
 		}
 	}
 }
@@ -984,12 +986,6 @@ function getAnthropicMessagesCompat(provider: string, modelId: string): Anthropi
 	const compat: AnthropicMessagesCompat = {};
 	if (EAGER_TOOL_INPUT_STREAMING_UNSUPPORTED_ANTHROPIC_MODELS.has(`${provider}:${modelId}`)) {
 		compat.supportsEagerToolInputStreaming = false;
-	}
-	if (provider === "anthropic") {
-		const allowedFallbackModels = ANTHROPIC_ALLOWED_FALLBACK_MODELS[modelId];
-		if (allowedFallbackModels) {
-			compat.allowedFallbackModels = allowedFallbackModels.map((fallbackModel) => ({ model: fallbackModel }));
-		}
 	}
 	if (provider === "xiaomi" || provider.startsWith("xiaomi-token-plan-")) {
 		compat.allowEmptySignature = true;
@@ -2809,7 +2805,7 @@ async function generateModels() {
 		applyOpenAIToolSearchMetadata(model);
 		applyOpenAIExplicitPromptCacheMetadata(model);
 	}
-	applyAnthropicFallbackCostMetadata(allModels.filter(isAnthropicFallbackMetadataModel));
+	applyAnthropicAllowedFallbackModelMetadata(allModels.filter(isAnthropicFallbackMetadataModel));
 
 	// Group by provider and deduplicate by model ID
 	const providers: Record<string, Record<string, Model<any>>> = {};

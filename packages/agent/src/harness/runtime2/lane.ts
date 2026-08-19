@@ -637,6 +637,7 @@ export class Lane implements AgentLane {
 					operation?.state.kind === "run"
 						? await queuedItems(operation.state.inbox.followUp, "Follow-up entry")
 						: [];
+				// TODO does a client really need pending writes? We wouldn't visualize those, any other uses for them?
 				const pendingWrites =
 					operation?.state.kind === "run"
 						? await Promise.all(
@@ -663,6 +664,8 @@ export class Lane implements AgentLane {
 					let streamingMessage: NonNullable<LaneSnapshot["operation"]>["streamingMessage"];
 					let retry: NonNullable<LaneSnapshot["operation"]>["retry"];
 					let deferred: NonNullable<LaneSnapshot["operation"]>["deferred"];
+					// TODO we should always read the full frame list here, assistant messages
+					// are never humongous
 					const readStreamingMessage = async (responseEntryId: string) => {
 						const frames = [];
 						let cursor: { seq: number } | undefined;

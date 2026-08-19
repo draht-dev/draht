@@ -1,7 +1,7 @@
 import { type ImageContent, type TextContent, type Usage, uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../../types.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../../messages.ts";
-import type { CommittedWrite } from "../commit.ts";
+import type { CommittedEntryWrite, CommittedValueSetWrite, CommittedWrite } from "../commit.ts";
 import type { JsonValue } from "../types.ts";
 import { entryLabel, laneLeaf, laneState, sessionName } from "../values.ts";
 import { JSONL_FORMAT_VERSION, JSONL_STORAGE_VERSION, type JsonlStorageHeader } from "./types.ts";
@@ -305,62 +305,62 @@ function materializeRetainedTail(
 	);
 }
 
-/** Normalize the currently supported v3 entries without touching their source file. */
-export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: readonly string[]): NormalizedLegacyV3 {
-	const entries = recordLines.map((line, index) => parseLegacyV3Entry(line, index + 2));
-	const entriesById = new Map<string, LegacyV3Entry>();
-	for (const entry of entries) {
-		if (entriesById.has(entry.id)) throw new Error(`Duplicate legacy v3 entry id: ${entry.id}`);
-		entriesById.set(entry.id, entry);
+function normalizeRetainedEntry(
+	entry: RetainedLegacyV3Entry,
+	seq: number,
+	entriesById: ReadonlyMap<string, LegacyV3Entry>,
+	resolver: RetainedIdResolver,
+): CommittedEntryWrite {
+	const committedBase = {
+		kind: "entry" as const,
+		id: requireRetainedId(resolver, entry.id),
+		parentId: resolver.resolve(entry.parentId),
+		seq,
+		timestamp: Date.parse(entry.timestamp),
+	};
+	if (entry.type === "message") {
+		return { ...committedBase, type: "message", message: entry.message };
 	}
-	const retainedEntries = entries.filter(isRetainedEntry);
-	const remintedIds = new Map(retainedEntries.map((entry) => [entry.id, uuidv7(Date.parse(entry.timestamp))]));
-	const retainedIdResolver = new RetainedIdResolver(entriesById, remintedIds);
-
-	const writes: CommittedWrite[] = retainedEntries.map((entry, index): CommittedWrite => {
-		const committedBase = {
-			kind: "entry" as const,
-			id: requireRetainedId(retainedIdResolver, entry.id),
-			parentId: retainedIdResolver.resolve(entry.parentId),
-			seq: index + 1,
-			timestamp: Date.parse(entry.timestamp),
-		};
-		if (entry.type === "message") {
-			return { ...committedBase, type: "message", message: entry.message };
-		}
-		if (entry.type === "custom_message") {
-			return { ...committedBase, type: "message", message: importedCustomMessage(entry) };
-		}
-		if (entry.type === "branch_summary") {
-			return {
-				...committedBase,
-				type: "branch_summary",
-				fromId: resolveBranchSummaryFromId(retainedIdResolver, entry.fromId),
-				summary: entry.summary,
-				details: entry.details,
-				usage: entry.usage,
-				fromHook: entry.fromHook ?? false,
-			};
-		}
-		if (entry.type === "compaction") {
-			return {
-				...committedBase,
-				type: "compaction",
-				summary: entry.summary,
-				retainedTail: materializeRetainedTail(entry, entriesById, retainedIdResolver),
-				tokensBefore: entry.tokensBefore,
-				details: entry.details,
-				usage: entry.usage,
-				fromHook: entry.fromHook ?? false,
-			};
-		}
+	if (entry.type === "custom_message") {
+		return { ...committedBase, type: "message", message: importedCustomMessage(entry) };
+	}
+	if (entry.type === "branch_summary") {
 		return {
 			...committedBase,
-			type: "custom",
-			customType: entry.customType,
-			data: entry.data,
+			type: "branch_summary",
+			fromId: resolveBranchSummaryFromId(resolver, entry.fromId),
+			summary: entry.summary,
+			details: entry.details,
+			usage: entry.usage,
+			fromHook: entry.fromHook ?? false,
 		};
-	});
+	}
+	if (entry.type === "compaction") {
+		return {
+			...committedBase,
+			type: "compaction",
+			summary: entry.summary,
+			retainedTail: materializeRetainedTail(entry, entriesById, resolver),
+			tokensBefore: entry.tokensBefore,
+			details: entry.details,
+			usage: entry.usage,
+			fromHook: entry.fromHook ?? false,
+		};
+	}
+	return {
+		...committedBase,
+		type: "custom",
+		customType: entry.customType,
+		data: entry.data,
+	};
+}
+
+function normalizeLegacyV3Values(
+	entries: readonly LegacyV3Entry[],
+	resolver: RetainedIdResolver,
+	firstSeq: number,
+): CommittedValueSetWrite[] {
+	const writes: CommittedValueSetWrite[] = [];
 	let latestSessionInfo: LegacyV3SessionInfoEntry | undefined;
 	for (const entry of entries) {
 		if (entry.type === "session_info") latestSessionInfo = entry;
@@ -369,16 +369,17 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 		writes.push({
 			kind: "value",
 			op: "set",
-			seq: writes.length + 1,
+			seq: firstSeq + writes.length,
 			namespace: sessionName.namespace,
 			key: sessionName.key,
 			value: latestSessionInfo.name,
 		});
 	}
+
 	const labels = new Map<string, string>();
 	for (const entry of entries) {
 		if (entry.type !== "label") continue;
-		const targetId = retainedIdResolver.resolve(entry.targetId);
+		const targetId = resolver.resolve(entry.targetId);
 		// TODO: Decide whether labels whose targets normalize to the root should import as root labels.
 		if (targetId === null) continue;
 		// Legacy v3 treated both undefined and the empty string as clearing a label.
@@ -390,35 +391,53 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 		writes.push({
 			kind: "value",
 			op: "set",
-			seq: writes.length + 1,
+			seq: firstSeq + writes.length,
 			namespace: address.namespace,
 			key: address.key,
 			value: label,
 		});
 	}
+
 	const finalEntry = entries.at(-1);
-	const leaf = finalEntry === undefined ? null : retainedIdResolver.resolve(finalEntry.id);
 	const leafAddress = laneLeaf("main");
 	writes.push({
 		kind: "value",
 		op: "set",
-		seq: writes.length + 1,
+		seq: firstSeq + writes.length,
 		namespace: leafAddress.namespace,
 		key: leafAddress.key,
-		value: leaf,
+		value: finalEntry === undefined ? null : resolver.resolve(finalEntry.id),
 	});
 	const stateAddress = laneState("main");
 	writes.push({
 		kind: "value",
 		op: "set",
-		seq: writes.length + 1,
+		seq: firstSeq + writes.length,
 		namespace: stateAddress.namespace,
 		key: stateAddress.key,
 		value: { currentOperationId: null, pendingNextRun: [] },
 	});
-	const nextSeq = writes.length + 1;
+	return writes;
+}
+
+/** Normalize the currently supported v3 entries without touching their source file. */
+export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: readonly string[]): NormalizedLegacyV3 {
+	const entries = recordLines.map((line, index) => parseLegacyV3Entry(line, index + 2));
+	const entriesById = new Map<string, LegacyV3Entry>();
+	for (const entry of entries) {
+		if (entriesById.has(entry.id)) throw new Error(`Duplicate legacy v3 entry id: ${entry.id}`);
+		entriesById.set(entry.id, entry);
+	}
+	const retainedEntries = entries.filter(isRetainedEntry);
+	const remintedIds = new Map(retainedEntries.map((entry) => [entry.id, uuidv7(Date.parse(entry.timestamp))]));
+	const resolver = new RetainedIdResolver(entriesById, remintedIds);
+	const entryWrites = retainedEntries.map((entry, index) =>
+		normalizeRetainedEntry(entry, index + 1, entriesById, resolver),
+	);
+	const valueWrites = normalizeLegacyV3Values(entries, resolver, entryWrites.length + 1);
+	const writes: CommittedWrite[] = [...entryWrites, ...valueWrites];
 	return {
-		header: { ...normalizeLegacyV3Header(header), nextSeq },
+		header: { ...normalizeLegacyV3Header(header), nextSeq: writes.length + 1 },
 		writes,
 	};
 }

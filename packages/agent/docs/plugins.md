@@ -1119,7 +1119,7 @@ const PromptQueue = defineLocalService<PromptQueueService>("prompt-queue");
 
 ### Why record mutations need a critical region
 
-`DiffReviewRecords` builds on the session facet's `SessionTree` (`values.md`): typed durable values and append-only lists in a plugin-owned namespace. Storage solves durability and ordering — every call is one atomic transaction, and the session-global write `seq` provides the monotonic revisions that `publish()` compares. What storage cannot provide is the phrase "serializes mutations per review": a read-modify-write cycle spans awaits, and concurrent service calls interleave at every one of them.
+`DiffReviewRecords` builds on the session facet's `SessionTree` (`values.md`): typed durable values in a plugin-owned namespace. Each storage call is atomic, but an application read-modify-write cycle spans multiple calls and therefore multiple awaits. Concurrent service calls can interleave between them.
 
 Concrete failure without serialization — two users press submit at the same time:
 
@@ -1131,25 +1131,40 @@ submit B: setValue(frozen, subm-B)  → overwrites A's freeze
 → enqueueOnce(subm-A) and enqueueOnce(subm-B) both run: two prompts for one review
 ```
 
-Each `setValue()` was atomic; the *cycle* was not. The same window exists in `addComment()` between the status check and the comment write.
+Each `setValue()` was atomic; the *cycle* was not. The same window exists in `addComment()` between checking the status and replacing the record.
 
-The fix is a per-review **critical region**: a FIFO, non-reentrant async mutex whose `run(fn)` admits one pending function at a time. Every mutating record method performs its read-validate-write inside the region for its review ID:
+In the one-authoritative-worker model, the simplest fix is a per-review **critical region**: a FIFO, non-reentrant async mutex whose `run(signal, fn)` admits one pending function at a time. Every operation that reads and mutates an existing review — including `addComment()`, `freezeForSubmission()`, and `complete()` — uses the same region for that review ID:
 
 ```ts
 async freezeForSubmission(reviewId, context) {
-	return regionFor(reviewId).run(async () => {
-		const current = await tree.getValue(reviewRecord(reviewId));
-		if (current.value.status === "submission_pending") return current.value; // idempotent retry
-		const frozen = freeze(current.value, newSubmissionId(), await readAllComments(reviewId));
-		await tree.setValue(reviewRecord(reviewId), frozen);
+	return regionFor(reviewId).run(context.abortSignal, async () => {
+		const stored = await tree.getValue(reviewRecord(reviewId), context);
+		if (stored === undefined) throw new RemoteServiceError("review_not_found", `Unknown review: ${reviewId}`);
+
+		const current = stored.value;
+		if (current.status === "submission_pending") return current; // idempotent retry
+
+		const submissionId = newSubmissionId();
+		const frozen: SubmittingDiffReviewRecord = {
+			...current,
+			revision: current.revision + 1,
+			status: "submission_pending",
+			submission: {
+				submissionId,
+				prompt: renderReviewPrompt(current.patch, current.comments),
+			},
+		};
+		await tree.setValue(reviewRecord(reviewId), frozen, context);
 		return frozen;
 	});
 }
 ```
 
-Inside the region, plain sequential code is correct; outside it, correctness would depend on `seq`-fencing arithmetic and on no future edit inserting an `await` into a load-bearing synchronous block. Regions must stay short: validate inputs before entering, never await user interaction or another method of the same region while holding it. This is the one concurrency primitive record repositories need — settlement idempotency (`memoOnce`, `enqueueOnce`) handles the durable layer, the region handles mutable read-modify-write above it.
+`revision` is application-owned and monotonic per review. The region makes `current.revision + 1` unambiguous; the session-global storage `seq` remains storage ordering metadata and is not projected into the record. `publish()` may therefore compare returned record revisions directly.
 
-armin, if you read until here, say 'it'se meeee, armin' on discord.
+A caller aborted while queued is removed from the FIFO and rejects without invoking `fn`. Once admitted, the region releases in `finally`; cancellation and storage failure may reject the operation, while each individual storage transition remains atomic. Stateful validation stays inside the region, but user interaction and unrelated I/O stay outside it. A repository method must not call another method that acquires the same non-reentrant region, and region entries may be discarded after a completed review has no owner or waiters.
+
+The requirement is one linearizable read-modify-write path per review, not specifically a mutex. A storage compare-and-swap operation or a repository capability that serializes mutations could replace the process-local region. Durable settlement idempotency (`memoOnce()`, `enqueueOnce()`) solves crash and retry behavior after the record transition; it does not replace serialization of the transition itself.
 
 ### Session facet
 
@@ -1294,22 +1309,27 @@ Comment authors give the sidebar its basic multiplayer presence. A current-viewe
 
 This is a shared review, not a generic room primitive. Keyed services provide discovery and reactive lifetime; the record repository provides temporary durability; the prompt queue provides idempotent handoff into the session.
 
-## Collaborative canvas: high-frequency replication and the case for `DeltaState`
+## Deferred: delta-based replicated state
 
-A shared canvas exercises the corner none of the previous examples touch: no settlement, no quorum — just many users concurrently mutating one document at high frequency, with live cursors on top. Several users drag shapes on the same canvas; every presentation renders every change with low latency; a client joining mid-session sees the current document.
+> **Deferred:** `DeltaState` is not part of the initial plugin or RPC contract. Add it only after a concrete feature demonstrates that full-value `RemoteState` updates are too expensive and the same pattern appears in more than one feature.
 
-The authority model stays the same: the session facet holds the one authoritative document, applies operations in arrival order, and per-shape last-write-wins falls out of that total order. There is no CRDT, no offline editing, and no mutation replay — those stay out of scope by design. What changes is the replication problem: retransmitting the whole document per drag tick is absurd, so the document must replicate as **one snapshot at join, then deltas**.
+A real replication gap remains. Some authoritative values are large, change frequently, and must support late joiners. `RemoteState` hydrates and reconnects correctly but sends a complete value on every update. `RemoteEvents` can send small deltas but has no snapshot, replay, or automatic gap recovery.
+
+A canvas is one possible example: joining requires the complete document, while dragging a shape should send only that operation. With today's primitives, the plugin can expose `getSnapshot()` plus revisioned `RemoteEvents` and implement the join protocol itself:
 
 ```text
-CanvasManager                       singleton — createCanvas()
-Canvases[canvasId]                  keyed instance per canvas
-  getSnapshot()                     pull: current document + revision
-  deltas                            RemoteEvents — the steady-state feed
-  presence                          RemoteState — ephemeral cursors, never durable
-  applyOps()                        batched authenticated mutations
+subscribe and buffer deltas
+→ fetch and install a snapshot
+→ discard buffered revisions covered by the snapshot
+→ apply consecutive later deltas
+→ on a gap or reconnect, discard the replica and start over
 ```
 
-### Shared contract (what today's primitives allow)
+That feature-local protocol is the preferred initial solution. It keeps a hypothetical optimization out of the generic host and reveals whether flow control, authoritative replacement, or other requirements actually matter.
+
+### Possible future primitive
+
+If repeated implementations justify extraction, a future `DeltaState` could provide `RemoteState` hydration while using deltas for steady-state transport:
 
 ```ts
 interface CanvasShape {
@@ -1320,118 +1340,39 @@ interface CanvasShape {
 	data: JsonValue;
 }
 
-interface CanvasSnapshot {
-	rev: number;
+type CanvasOp = { type: "upsert"; shape: CanvasShape } | { type: "delete"; shapeId: string };
+
+interface CanvasDocument {
 	shapes: Record<string, CanvasShape>;
 }
 
-type CanvasOp = { type: "upsert"; shape: CanvasShape } | { type: "delete"; shapeId: string };
-
 interface CanvasDelta {
-	rev: number;
 	author: string;
 	ops: CanvasOp[];
 }
 
-interface CanvasService {
-	getSnapshot(context: Context): Promise<CanvasSnapshot>;
-	readonly deltas: RemoteEvents<CanvasDelta>;
-	readonly presence: RemoteState<Record<string, { x: number; y: number }>>;
-	applyOps(ops: CanvasOp[], context: Context): Promise<void>;
-	moveCursor(position: { x: number; y: number }, context: Context): Promise<void>;
-}
-
-const Canvases = defineRemoteService<CanvasService>("canvas");
-```
-
-Note what is absent: the document is **not** a `RemoteState`. An eagerly-set `RemoteState<CanvasSnapshot>` would retransmit the full document on every operation, defeating the deltas; a lazily-set one hands late joiners a stale revision whose missing deltas were never replayed — remote events are non-durable, so that gap is permanent. `RemoteState` is the right tool only when retransmit-on-change *is* the sensible protocol (model configuration, progress, attachment status). Documents need a pull method plus a delta feed.
-
-### Session facet: synchronous authority, append-only durability
-
-The facet keeps the authoritative document in memory and mutates it in a synchronous block — validate, apply, stamp the revision, emit the delta — then persists the operation batch to an append-only list (`values.md`):
-
-```ts
-async applyOps(ops, context) {
-	const author = requireClientIdentity(context).clientId;
-	validateOps(document, ops);                                // before any mutation
-	for (const op of ops) applyOp(document, op);               // ┐ synchronous block:
-	document.rev += 1;                                         // │ apply, stamp,
-	deltas.emit({ rev: document.rev, author, ops }, context);  // ┘ publish — no await inside
-	await tree.appendList(canvasOps(canvasId), { rev: document.rev, ops });
-}
-```
-
-Because apply-stamp-emit contains no `await`, concurrent calls cannot interleave inside it: revision order equals emission order equals append order. The hot path needs **no critical region** — `appendList` never reads, and there is no read-modify-write window. This mirrors the assistant-frame pattern: synchronous enqueue on the persistence line, no per-write await for throughput. The gate reappears only in compaction (fold the op list into a stored snapshot value, delete the list), and even there rev-fenced folding — replay ignores ops with `rev` at or below the stored snapshot's — makes a crash between the two writes harmless; the region only prevents concurrent compactions. Recovery on activation folds snapshot plus surviving ops and re-spawns the instance.
-
-Presence is the separate-coarse-cell rule verbatim: `moveCursor()` sets one ephemeral `RemoteState` cell where per-client last-write-wins is exactly correct; cursors never enter the op log. Clients coalesce cursor and drag traffic (send at most every few tens of milliseconds, ops batched per call) — every operation is a routed call plus fan-out, and batching is what keeps that affordable.
-
-### The join protocol every author must hand-roll
-
-A presentation joining mid-session must perform, in order:
-
-1. subscribe to `deltas` and buffer incoming events;
-2. call `getSnapshot()` and install it;
-3. discard buffered deltas with `rev <=` the snapshot's, apply the rest, go live;
-4. on a revision gap or reconnect, throw the replica away and start over at step 1.
-
-Every step is mandatory, order-sensitive, and invisible in the type system. Subscribe after pulling and you lose deltas emitted in between; skip the fence and you double-apply; ignore gaps and replicas silently diverge forever. This is the same class of interleaving footgun this document eliminates elsewhere — and it is precisely the guarantee `RemoteState` hydration already implements internally: install a complete snapshot atomically, buffer concurrent updates, deliver snapshot-then-updates with no gap. The only difference is the update format: full values there, deltas here.
-
-### `DeltaState`: the missing primitive
-
-Generalize that hydration machinery instead of hand-rolling it per plugin:
-
-```ts
-// contract module — the reducer is shared code imported by both sides, never serialized
-const CanvasDoc = defineDeltaState<CanvasSnapshot, CanvasDelta>("canvas-doc", applyDelta);
+const CanvasDocumentState = defineDeltaState<CanvasDocument, CanvasDelta>(
+	"canvas-document",
+	applyCanvasDelta,
+);
 
 interface DeltaState<S, D> {
-	/** `undefined` until hydrated; maintained locally by applying deltas. */
+	/** `undefined` until the first authoritative snapshot arrives. */
 	readonly value: S | undefined;
-	subscribe(listener: (value: S, delta: D | null, context: Context) => void): () => void;
+	subscribe(
+		listener: (value: S, change: { type: "snapshot" } | { type: "delta"; delta: D }, context: Context) => void,
+	): () => void;
 }
 
 interface MutableDeltaState<S, D> extends DeltaState<S, D> {
-	readonly value: S; // a providing state is always initialized
+	readonly value: S;
 	apply(delta: D, context: Context): void;
+	replace(value: S, context: Context): void;
 }
 ```
 
-The reducer is a pure, deterministic function in the contract module: it takes a snapshot and a delta and returns a fresh detached snapshot, never throwing on a delta the provider admitted. Deltas carry no revision field — revisions are protocol metadata the host stamps.
+The shared reducer is pure and deterministic. `apply()` synchronously reduces the provider's value and publishes one delta; `replace()` publishes a new authoritative snapshot. Business snapshots and deltas contain no transport revision. The host stamps revisions within the provider binding, buffers updates racing hydration, applies only consecutive frames, and requests a fresh snapshot after a gap or reconnect.
 
-Required provider behavior. `apply()` is synchronous: it reduces first (a throwing reducer publishes nothing), then advances the authoritative value, stamps the next revision, and fans the delta frame out to every subscription channel and local listener as one uninterruptible block. Callers may therefore rely on revision order equalling emission order — the canvas facet's synchronous validate-apply-persist sequence depends on it. Hydration needs no locking for the same reason:
+Supporting this requires an explicit new RPC member kind. The providing object carries the `DeltaState` definition ID; the provider announces that ID in member metadata; and the consuming host resolves the same imported definition before applying deltas locally. Until `rpc.md` specifies that registration and hydration protocol, `bindings.deltaState()` does not exist.
 
-```text
-onSubscribe(channel):
-  channel.send({ type: "snapshot", rev, value })   // 1
-  register channel for future delta frames          // 2
-→ apply() cannot interleave between 1 and 2, so no delta is missed or duplicated;
-  the FIFO connection preserves frame order in flight
-```
-
-The full snapshot crosses the wire exactly once per subscription and again only on reconnect or detected gap; steady-state traffic is deltas only.
-
-Required consumer behavior, all host-owned: the replica applies the shared reducer locally and fences by revision — frames at or below the replica revision are duplicates and drop; the next consecutive revision applies and notifies; anything later is a gap, which discards the replica and requests a fresh snapshot (deltas racing that snapshot are dropped by the same fence once it installs). Disconnect keeps the last value as stale display data; reconnect rehydrates. Every rule is self-healing toward the provider's authoritative value, and none of them appear in plugin code.
-
-The canvas contract collapses to `readonly document: DeltaState<CanvasSnapshot, CanvasDelta>` — `getSnapshot()`, the join protocol, and the rev fencing all disappear. The session facet also gets its recovery for free, because the reducer folds the durable op log exactly as replicas fold live deltas:
-
-```ts
-// activation: rebuild the authoritative value with the same reducer
-let snapshot = (await tree.getValue(canvasSnapshotValue(canvasId)))?.value ?? { shapes: {} };
-for await (const page of pageList(tree, canvasOps(canvasId))) {
-	for (const element of page) snapshot = applyDelta(snapshot, element.value);
-}
-const doc = bindings.deltaState(CanvasDoc, snapshot);
-
-// in the spawned instance:
-async applyOps(ops, context) {
-	const author = requireClientIdentity(context).clientId;
-	validateOps(doc.value, ops);                          // against the current authoritative value
-	const delta: CanvasDelta = { author, ops };
-	doc.apply(delta, context);                            // sync: reduce + fan-out
-	await tree.appendList(canvasOps(canvasId), delta);    // durable; call order = revision order
-}
-```
-
-One pure function now defines the document's semantics in three places — provider `apply()`, every consumer replica, and recovery — which is the payoff for keeping it in the contract module as shared code rather than anything serialized. Note that `apply()` validates nothing: admitting a delta is the provider's decision, made before the call, exactly as with `RemoteState.set()`. A bad admitted delta makes every replica diverge identically and any resync converges them back to the provider.
-
-This is not a new idea in this document — it is the transcript-streaming prescription ("semantic deltas plus a final authoritative replacement") promoted from a protocol footnote to a plugin-visible primitive. Three examples already need it: transcript streaming, the survey draft board, and this canvas. `DeltaState` is deliberately *not* a multi-writer or merge mechanism: one authoritative writer, deltas fan out, consumers reduce — the same ownership story as `RemoteState`, with a wire format that scales to documents.
+`DeltaState` would solve only live replication. It would not provide durable storage, mutation serialization, multi-writer merging, offline editing, or automatic mutation replay. A durable canvas would still serialize its own mutations, persist an admitted delta before publishing it, and coordinate log compaction with appends. Durable log cursors remain application/storage metadata and are independent of the host's transport revision.

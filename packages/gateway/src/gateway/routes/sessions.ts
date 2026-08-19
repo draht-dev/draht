@@ -42,6 +42,12 @@ interface SendInputBody {
 /**
  * Validate that a value is a non-empty array of non-empty strings.
  * Returns a descriptive error message, or null if the value is acceptable.
+ *
+ * SECURITY: this is a shape check only — any token holder can still ask for an
+ * arbitrary executable and have it spawned. Constraining `command` to an
+ * allowlist is a separate planned phase. Until then the containment boundary is
+ * the loopback-by-default bind posture enforced in `gateway/bind-host.ts`; see
+ * `assertBindHostAllowed` / `--allow-non-loopback` there.
  */
 function validateCommand(command: unknown): string | null {
 	if (!Array.isArray(command)) return "command must be an array";

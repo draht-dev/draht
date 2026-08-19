@@ -3,9 +3,10 @@ import { websocket } from "hono/bun";
 import { except } from "hono/combine";
 import { cors } from "hono/cors";
 import pkg from "../../package.json" with { type: "json" };
-import type { GatewaySettings } from "../config/config";
+import { DEFAULT_CONFIG, type GatewaySettings } from "../config/config";
 import { EventBus } from "../session/event-bus";
 import { SessionManager } from "../session/session-manager";
+import { assertBindHostAllowed, isLoopbackPeer, nonLoopbackPeerRefusal } from "./bind-host";
 import { bearerAuthMiddleware } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { createSessionStreamRoutes } from "./routes/session-stream";
@@ -27,6 +28,28 @@ export interface GatewayConfig {
 	 * Used for path validation, etc.
 	 */
 	config?: GatewaySettings;
+	/**
+	 * Interface to bind.
+	 *
+	 * Defaults to `config.host`, then to the loopback default. A non-loopback
+	 * value is refused unless {@link GatewayConfig.allowNonLoopback} is set —
+	 * the guard lives here, not only in argv parsing, so a programmatic embedder
+	 * gets the same refusal an operator does.
+	 */
+	host?: string;
+	/**
+	 * Explicit opt-in to a non-loopback bind.
+	 *
+	 * `POST /sessions` spawns an arbitrary `command` array, so a reachable bind
+	 * is remote code execution for any bearer-token holder. Setting this is the
+	 * programmatic equivalent of the CLI's `--allow-non-loopback`.
+	 */
+	allowNonLoopback?: boolean;
+	/**
+	 * Sink for the bind-posture notices — the non-loopback opt-in warning, and
+	 * the first refusal of an off-box request. Defaults to `console.warn`.
+	 */
+	warn?: (message: string) => void;
 }
 
 /**
@@ -35,19 +58,96 @@ export interface GatewayConfig {
  * `app`       — Hono application for HTTP request handling (use as `fetch` in Bun.serve)
  * `websocket` — Bun WebSocket handler object; must be passed to Bun.serve as `websocket`
  * `eventBus`  — The domain event bus; subscribe to session lifecycle events
+ * `hostname`  — The bind host the guard approved; pass this to Bun.serve
  *
- * Returning all three together keeps the caller's Bun.serve wiring simple and ensures
- * the websocket handler is always the one that matches the app's upgrade path.
+ * Returning all four together keeps the caller's Bun.serve wiring simple, ensures
+ * the websocket handler is always the one that matches the app's upgrade path, and
+ * makes the approved bind host the obvious thing to bind.
+ *
+ * `hostname` is a convenience, not the enforcement point: a caller who binds
+ * something else does not escape the posture, because `app` itself refuses any
+ * request from a peer that is not on this machine unless `allowNonLoopback` was
+ * set. Prefer {@link startGateway}, which owns the bind and needs no such
+ * back-stop.
  */
 export interface ServerHandle {
 	app: Hono;
 	websocket: typeof websocket;
 	eventBus: EventBus;
+	hostname: string;
+}
+
+/**
+ * The parts of a listening server that describe what is actually exposed.
+ *
+ * Both fields are optional because `Bun.serve` leaves them undefined for a unix
+ * socket — reporting nothing is honest there; inventing a host would not be.
+ */
+export interface BoundServer {
+	readonly hostname?: string;
+	readonly port?: number;
+}
+
+/**
+ * The peer address of an in-flight request, when the runtime can report one.
+ *
+ * `undefined` means "not observable" — a unix-socket listener, a direct
+ * `app.fetch(request)` call with no server, or a non-Bun host. That is reported
+ * honestly rather than guessed at; the caller treats it as "nothing to check".
+ *
+ * @param env - Hono's `c.env`, which under `Bun.serve` is the `Server` object.
+ * @param request - The raw request, needed to look its connection up.
+ */
+function peerAddress(env: unknown, request: Request): string | undefined {
+	const requestIP = (env as { requestIP?: unknown } | undefined)?.requestIP;
+	if (typeof requestIP !== "function") return undefined;
+	try {
+		const peer = (requestIP as (r: Request) => { address?: unknown } | null).call(env, request);
+		return typeof peer?.address === "string" ? peer.address : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export function createServer(config: GatewayConfig): ServerHandle {
+	// Bind policy first: refuse before building anything that could be served.
+	const hostname = assertBindHostAllowed({
+		host: config.host ?? config.config?.host ?? DEFAULT_CONFIG.host,
+		allowNonLoopback: config.allowNonLoopback,
+		warn: config.warn,
+	});
+
 	const app = new Hono();
 	const startedAt = Date.now();
+
+	// The host guard above cannot stand on its own: `createServer` hands back an
+	// `app` that the *caller* binds, so an embedder can ignore the vetted
+	// hostname — or call `Bun.serve` with no `hostname` at all, which binds every
+	// interface while still reporting `server.hostname === "localhost"`. The
+	// posture is therefore also enforced where a caller cannot route around it:
+	// on the request. Anything arriving from a peer that is not provably on this
+	// machine is refused unless the caller gave the same explicit opt-in that
+	// would have allowed a non-loopback bind.
+	//
+	// Registered before CORS and before auth so it also covers `/health` and the
+	// WebSocket upgrade, and so a refusal never reveals which routes exist.
+	if (!config.allowNonLoopback) {
+		const warn = config.warn ?? ((message: string) => console.warn(message));
+		let refusalLogged = false;
+		app.use("*", async (c, next) => {
+			const address = peerAddress(c.env, c.req.raw);
+			if (address !== undefined && !isLoopbackPeer(address)) {
+				// Once per server, not once per request: a port scan must not become
+				// a log-flooding primitive.
+				if (!refusalLogged) {
+					refusalLogged = true;
+					warn(nonLoopbackPeerRefusal(address));
+				}
+				return c.json({ error: "Forbidden: gateway is bound loopback-only" }, 403);
+			}
+			await next();
+		});
+	}
 
 	// CORS — allow any origin so browser-based clients (Quest browser, web dev)
 	// can reach the gateway. Credentials are not used (we rely on the Bearer
@@ -90,5 +190,42 @@ export function createServer(config: GatewayConfig): ServerHandle {
 	app.onError(errorHandler);
 	app.notFound(notFoundHandler);
 
-	return { app, websocket, eventBus };
+	return { app, websocket, eventBus, hostname };
+}
+
+/** Options for {@link startGateway}. */
+export interface StartGatewayOptions extends GatewayConfig {
+	/** Idle timeout in seconds (max 255). Defaults to the config value. */
+	idleTimeout?: number;
+}
+
+/** The result of {@link startGateway}. */
+export interface StartedGateway {
+	server: ReturnType<typeof Bun.serve>;
+	eventBus: EventBus;
+}
+
+/**
+ * Build the app and bind it — the supported programmatic entry point.
+ *
+ * Because this function owns the `Bun.serve` call, the loopback-by-default bind
+ * posture is enforced on the path that actually opens the socket: the refusal
+ * happens before any listener exists. The CLI uses this same function, so the
+ * operator and library behaviours cannot drift.
+ *
+ * @throws Error when the requested host is non-loopback and `allowNonLoopback`
+ *         was not set.
+ */
+export function startGateway(options: StartGatewayOptions): StartedGateway {
+	const { app, websocket: ws, eventBus, hostname } = createServer(options);
+
+	const server = Bun.serve({
+		port: options.port,
+		hostname,
+		fetch: app.fetch,
+		websocket: ws,
+		idleTimeout: options.idleTimeout ?? options.config?.idleTimeout ?? DEFAULT_CONFIG.idleTimeout,
+	});
+
+	return { server, eventBus };
 }

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { parseArgs, startupLog } from "../cli";
+import { parseArgs, startupLog, startupLogForServer } from "../cli";
 import type { GatewaySettings } from "../config/config";
 import { Logger } from "../gateway/logger";
 
 const DEFAULT_CONFIG: GatewaySettings = {
 	port: 7878,
-	host: "0.0.0.0",
+	host: "127.0.0.1",
 	tokens: {},
 	allowedPaths: ["~/"],
 	maxSessions: 100,
@@ -21,10 +21,10 @@ describe("parseArgs", () => {
 		expect(result.config).toEqual(DEFAULT_CONFIG);
 	});
 
-	test("defaults port to 7878 and host to 0.0.0.0 when not provided", () => {
+	test("defaults port to 7878 and host to loopback 127.0.0.1 when not provided", () => {
 		const result = parseArgs(["--auth", "token123"], DEFAULT_CONFIG);
 		expect(result.port).toBe(7878);
-		expect(result.host).toBe("0.0.0.0");
+		expect(result.host).toBe("127.0.0.1");
 	});
 
 	test("allows custom host", () => {
@@ -58,5 +58,27 @@ describe("startupLog", () => {
 		expect(entry.level).toBe("info");
 		expect(entry.host).toBe("0.0.0.0");
 		expect(entry.port).toBe(7878);
+	});
+});
+
+describe("startupLogForServer", () => {
+	test("reports the address Bun.serve actually bound, not the one requested", () => {
+		// Requested port 0 — the operator record must show the real ephemeral port.
+		const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
+		try {
+			const lines: string[] = [];
+			const log = new Logger({ write: (s: string) => lines.push(s) });
+
+			startupLogForServer(server, log);
+
+			expect(lines).toHaveLength(1);
+			const entry = JSON.parse(lines[0]!) as Record<string, unknown>;
+			expect(entry.message).toBe("draht-gateway listening");
+			expect(entry.host).toBe(server.hostname);
+			expect(entry.port).toBe(server.port);
+			expect(entry.port).not.toBe(0);
+		} finally {
+			server.stop(true);
+		}
 	});
 });

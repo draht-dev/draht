@@ -133,7 +133,8 @@ describe("WebSocket auth", () => {
 		});
 		// Bun may expose the server's 1001 close code or normalize it to 1000.
 		expect(result.opened).toBe(true);
-		expect([1000, 1001]).toContain(result.closeCode);
+		expect(result.closeCode).toBeDefined();
+		expect([1000, 1001]).toContain(result.closeCode as number);
 	});
 
 	test("case 5: correct token, running session → WebSocket stays OPEN", async () => {

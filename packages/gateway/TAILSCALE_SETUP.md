@@ -2,24 +2,43 @@
 
 ## Overview
 
-The draht gateway binds to `0.0.0.0` by default, making it accessible over your Tailscale network. This allows you to access it from Adler on your phone or Quest 3.
+The draht gateway binds to **loopback (`127.0.0.1`) only**. Remote devices —
+Adler on your phone or Quest 3 — reach it through `tailscale serve`, which
+publishes the loopback listener onto your tailnet.
+
+This is not an inconvenience to be worked around. `POST /sessions` accepts an
+arbitrary `command` array and spawns it with your user's privileges, so a
+gateway bound to a reachable interface is remote code execution for anyone
+holding a bearer token. Loopback + `tailscale serve` is the supported path.
+
+> **Scope note.** The loopback-by-default bind posture described here is the
+> gateway's own. It does **not** close the `GSEC-04` finding in
+> `.planning/geist/SECURITY-2026-07-13.md`: that finding's named component is
+> the **pairing server**, which this package does not contain. The pairing
+> finding remains open and is tracked separately.
+
+### Why `tailscale serve` and not a wider bind
+
+| | `--host 0.0.0.0` / `--host 100.x` | `tailscale serve` |
+|---|---|---|
+| Transport | plain `http://` / `ws://` | `https://` / `wss://` with a **real Let's Encrypt certificate** |
+| Address | raw `100.x` IP that can change | stable **MagicDNS** name |
+| Exposure | every interface the process can see | tailnet only, via the Tailscale daemon |
+| Quest browser / iOS clients | **do not work** | work |
+
+That last row is the practical one. The Quest browser and iOS WebView clients
+refuse WebSocket connections that are not `wss://` with a certificate they
+trust. A bare `ws://100.72.9.11:7878` will not connect from those clients no
+matter how the gateway is bound. `tailscale serve` gives you both the TLS
+termination and the stable hostname those clients require.
+
+> **Never use `tailscale funnel` for the gateway.** Funnel publishes the service
+> to the *public internet*, which turns a token leak into world-reachable remote
+> code execution. Use `tailscale serve` (tailnet-only) exclusively.
 
 ## Quick Start
 
-### 1. Find Your Tailscale IP
-
-```bash
-tailscale status
-```
-
-Look for your machine's IP (starts with `100.`):
-```
-100.72.9.11    omf            execute008@  macOS  -
-```
-
-Your Tailscale IP is: `100.72.9.11`
-
-### 2. Start the Gateway
+### 1. Start the gateway on loopback
 
 ```bash
 cd draht-mono/packages/gateway
@@ -28,258 +47,278 @@ bun start --auth YOUR_SECRET_TOKEN
 
 You should see:
 ```json
-{"level":"info","timestamp":"2026-03-09T21:37:40.361Z","message":"draht-gateway listening","host":"0.0.0.0","port":7878}
+{"level":"info","timestamp":"2026-03-09T21:37:40.361Z","message":"draht-gateway listening","host":"127.0.0.1","port":7878}
 ```
 
-Note: `"host":"0.0.0.0"` means it's listening on all interfaces (including Tailscale).
+`"host":"127.0.0.1"` is correct. Nothing off this machine can reach it yet.
 
-### 3. Test from Another Device
-
-From your phone, Quest 3, or another computer on your Tailnet:
+### 2. Publish it to your tailnet
 
 ```bash
-# Test health endpoint (no auth required)
-curl http://100.72.9.11:7878/health
+tailscale serve --bg http://127.0.0.1:7878
+```
+
+Check what got published:
+
+```bash
+tailscale serve status
+```
+
+You will get an `https://<machine>.<tailnet>.ts.net/` URL. Find the exact name
+with:
+
+```bash
+tailscale status
+```
+
+(the second column is your MagicDNS hostname). MagicDNS must be enabled in your
+Tailscale admin console.
+
+### 3. Test from another device
+
+From your phone, Quest 3, or another computer on your tailnet:
+
+```bash
+# Health endpoint (no auth required)
+curl https://your-machine.your-tailnet.ts.net/health
 
 # Expected response:
 {"status":"ok","sessions":0,"uptime":0.123,"version":"0.1.0"}
 
-# Test authenticated endpoint
+# Authenticated endpoint
 curl -H "Authorization: Bearer YOUR_SECRET_TOKEN" \
-     http://100.72.9.11:7878/sessions
+     https://your-machine.your-tailnet.ts.net/sessions
 
 # Expected response:
 {"sessions":[]}
 ```
 
-If you get a response, it's working! 🎉
+If you get a response, it's working. 🎉
+
+### 4. Make it survive reboots
+
+`tailscale serve --bg` config persists across restarts of `tailscaled`. To take
+it down:
+
+```bash
+tailscale serve --https=443 off
+```
 
 ## Common Issues
 
 ### ❌ Connection Refused / Timeout
 
-**Problem**: Gateway is not accessible over Tailscale.
-
-**Solution**:
-
-1. **Check gateway is running**:
+1. **Check the gateway is running locally**:
    ```bash
-   curl http://localhost:7878/health
+   curl http://127.0.0.1:7878/health
    ```
    If this fails, the gateway isn't running.
 
-2. **Check Tailscale is active**:
+2. **Check the serve mapping exists**:
+   ```bash
+   tailscale serve status
+   ```
+   You should see your `https://…ts.net` name mapped to `http://127.0.0.1:7878`.
+
+3. **Check Tailscale is active on both ends**:
    ```bash
    tailscale status
    ```
-   Should show connected devices.
+   Both this machine and the client device must appear and be online.
 
-3. **Check firewall** (macOS):
-   ```bash
-   # Allow incoming connections on port 7878
-   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add $(which bun)
-   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp $(which bun)
-   ```
+4. **Check MagicDNS**: if the hostname does not resolve on the client, enable
+   MagicDNS in the Tailscale admin console, or test with the `100.x` address of
+   the machine (`https://` will fail certificate validation against a raw IP,
+   which is itself the reason to use MagicDNS).
 
-4. **Verify binding**:
-   ```bash
-   lsof -i :7878
-   ```
-   Should show process listening on `*:7878` (not `127.0.0.1:7878`).
+You should **not** need a macOS firewall exception. `tailscale serve` proxies
+from the Tailscale daemon to loopback, so no new listening socket is opened on
+an external interface.
 
-### ❌ Gateway Binds to Localhost Only
+### ❌ "Refusing to bind non-loopback host …"
 
-**Problem**: Gateway shows `"host":"127.0.0.1"` in logs.
+This is intentional. You passed `--host` with a non-loopback value, or your
+`~/.draht/gateway.config.json` still contains an old `"host": "0.0.0.0"`.
 
-**Solution**: Don't use `--host 127.0.0.1`. Either:
-- Omit `--host` (defaults to `0.0.0.0`)
-- Or explicitly use `--host 0.0.0.0`
+Fix the config file:
 
-```bash
-# ✅ Good (binds to all interfaces)
-bun start --auth mytoken
-
-# ✅ Good (explicit)
-bun start --host 0.0.0.0 --auth mytoken
-
-# ❌ Bad (localhost only, no Tailscale)
-bun start --host 127.0.0.1 --auth mytoken
+```json
+{
+  "host": "127.0.0.1"
+}
 ```
 
-### ❌ Tailscale IP Changed
+and use `tailscale serve` as above. Only if you genuinely cannot, see
+[Escape hatch](#escape-hatch---allow-non-loopback) below.
 
-**Problem**: Your Tailscale IP changed and clients can't connect.
+### ❌ Quest / iOS client won't connect but curl works
 
-**Solution**: Tailscale IPs are usually stable, but if it changes:
+Those clients require `wss://` with a trusted certificate. Confirm you are
+pointing them at the `https://…ts.net` MagicDNS name and **not** at a
+`http://100.x:7878` address.
 
-1. Find new IP:
-   ```bash
-   tailscale status | grep "$(hostname)"
-   ```
+### ❌ Tailscale IP changed
 
-2. Update clients (Adler settings) with new IP.
-
-**Better**: Use MagicDNS (Tailscale's DNS):
-```bash
-# Instead of: http://100.72.9.11:7878
-# Use:        http://omf.tail-scale.ts.net:7878
-```
-
-Find your hostname in `tailscale status` (second column).
+Stop using IPs. The MagicDNS name from `tailscale serve` is stable and survives
+address changes.
 
 ## Security Considerations
 
-### ✅ Tailscale Security Model
+### ✅ Tailscale security model
 
-- **Encrypted**: All Tailscale traffic is encrypted (WireGuard)
-- **Authenticated**: Only your Tailnet devices can connect
-- **Private**: Not exposed to the public internet
+- **Encrypted**: all tailnet traffic is WireGuard-encrypted
+- **Authenticated**: only your tailnet devices can connect
+- **Private**: not exposed to the public internet — *as long as you use `serve`,
+  not `funnel`*
 
-### ✅ Gateway Security Model
+### ✅ Gateway security model
 
-- **Bearer token**: All API endpoints (except `/health`) require auth
-- **CORS enabled**: Allows browser-based clients (Quest browser)
-- **No credentials**: Token is passed in `Authorization` header
+- **Loopback by default**: the process itself is unreachable off-box
+- **Bearer token**: all API endpoints except `/health` require auth
+- **CORS enabled**: allows browser-based clients (Quest browser)
 
-### 🔒 Best Practices
+### ⚠️ Known limitation
+
+`POST /sessions` currently only shape-checks that `command` is an array of
+non-empty strings before spawning it. **A bearer token is equivalent to shell
+access as your user.** Constraining `command` to an allowlist is a separate
+planned phase; until it lands, treat the token as a root-equivalent secret and
+keep the bind on loopback.
+
+### 🔒 Best practices
 
 1. **Use a strong token**:
    ```bash
-   # Generate a secure token
    openssl rand -base64 32
    ```
 
-2. **Store token securely**:
-   ```bash
-   # In Adler: Settings > Gateways > Bearer Token
-   # Don't commit tokens to git
-   # Don't share tokens publicly
-   ```
+2. **Store it securely** — in Adler under Settings → Gateways → Bearer Token.
+   Don't commit tokens to git; don't share them.
 
-3. **Monitor access**:
-   ```bash
-   # Gateway logs all requests
-   {"level":"info","timestamp":"...","message":"..."}
-   ```
+3. **Rotate tokens** periodically and update Adler.
 
-4. **Rotate tokens**:
-   - Change token periodically
-   - Update Adler settings with new token
+4. **Monitor access** — the gateway logs every request as JSON.
+
+## Escape hatch: `--allow-non-loopback`
+
+> ⚠️ **Read this whole section before using the flag.** It disables the only
+> containment boundary the gateway currently has.
+
+If you must bind a non-loopback interface — for example a hermetic CI box on an
+isolated network segment where a Tailscale daemon cannot run — pass the flag
+explicitly:
+
+```bash
+bun start --host 0.0.0.0 --auth YOUR_TOKEN --allow-non-loopback
+```
+
+The gateway will start and print a loud warning. What you are accepting:
+
+- every process and device that can route to that interface can reach
+  `POST /sessions`;
+- with a valid bearer token, that is **arbitrary command execution as your
+  user**, with no allowlist in front of it;
+- the transport is plain `http://` / `ws://` unless you put your own TLS
+  terminator in front, so the bearer token crosses the wire in cleartext.
+
+Loopback is exactly `127.0.0.1`, `::1`, and `localhost`. Everything else —
+including `0.0.0.0` and every Tailscale `100.x` address — requires this flag.
+Embedding the gateway as a library is no way around it: `createServer` and
+`startGateway` refuse the same hosts unless you pass `allowNonLoopback: true`, and
+an app from `createServer` that you bind yourself still answers `403` to any
+request from off this machine unless you passed it.
+Binding the Tailscale address directly is **not** the recommended path: it gives
+you no TLS and no MagicDNS name, so Quest and iOS clients still cannot use it.
 
 ## Advanced Configuration
 
-### Bind to Specific Interface
-
-If you have multiple network interfaces and want to bind to a specific one:
+### Custom port
 
 ```bash
-# Bind to Tailscale IP only
-bun start --host 100.72.9.11 --auth mytoken
-
-# Bind to localhost only (for testing)
-bun start --host 127.0.0.1 --auth mytoken
-
-# Bind to all interfaces (default)
-bun start --host 0.0.0.0 --auth mytoken
-```
-
-### Use MagicDNS
-
-Enable MagicDNS in your Tailscale admin console, then:
-
-```bash
-# Find your hostname
-tailscale status
-
-# Use hostname instead of IP
-curl http://omf.tail-scale.ts.net:7878/health
-```
-
-Benefits:
-- Survives IP changes
-- Easier to remember
-- Works across all Tailnet devices
-
-### Custom Port
-
-```bash
-# Use a different port
 bun start --port 8080 --auth mytoken
-
-# Access from clients
-curl http://100.72.9.11:8080/health
+tailscale serve --bg http://127.0.0.1:8080
 ```
+
+The public MagicDNS URL stays on 443 regardless of the local port.
+
+### Serving under a path prefix
+
+If you want several services on one machine:
+
+```bash
+tailscale serve --bg --set-path /gateway http://127.0.0.1:7878
+# → https://your-machine.your-tailnet.ts.net/gateway
+```
+
+Make sure the client is configured with the full prefixed URL.
 
 ## Testing from Adler
 
-### Configure Gateway in Adler
+### Configure the gateway in Adler
 
-1. Open Adler app
+1. Open Adler
 2. Tap **Add Gateway**
 3. Enter:
    - **Name**: "My Mac" (or any friendly name)
-   - **Gateway URL**: `http://100.72.9.11:7878`
+   - **Gateway URL**: `https://your-machine.your-tailnet.ts.net`
    - **Bearer Token**: `YOUR_SECRET_TOKEN`
 4. Toggle **Connect automatically** on
 
-### Verify Connection
+### Verify connection
 
 You should see:
-- Green dot next to gateway name (connected)
-- Session count (e.g., "0 sessions")
-- Uptime (e.g., "5m 23s")
+- Green dot next to the gateway name (connected)
+- Session count (e.g. "0 sessions")
+- Uptime (e.g. "5m 23s")
 
-### Troubleshooting Adler Connection
+### Troubleshooting the Adler connection
 
-If Adler can't connect:
-
-1. **Test from same device** (phone/Quest):
-   - Open browser on device
-   - Visit: `http://100.72.9.11:7878/health`
-   - Should see JSON response
-
-2. **Check Tailscale on device**:
-   - Install Tailscale app on phone/Quest
-   - Login with same account
-   - Verify device appears in `tailscale status`
-
-3. **Check token**:
-   - Copy-paste token exactly (no extra spaces)
-   - Tokens are case-sensitive
+1. **Test from the same device**: open the browser on the phone/Quest and visit
+   `https://your-machine.your-tailnet.ts.net/health`. You should see JSON.
+2. **Check Tailscale on the device**: install the Tailscale app, log in with the
+   same account, and confirm the device appears in `tailscale status`.
+3. **Check the URL scheme**: it must be `https://`, not `http://`.
+4. **Check the token**: copy-paste exactly, no extra spaces; tokens are
+   case-sensitive.
 
 ## Network Architecture
 
 ```
-┌─────────────────────────────────────┐
-│  Your Mac (100.72.9.11)             │
-│  ┌───────────────────────────────┐  │
-│  │  draht-gateway                │  │
-│  │  Listening on: 0.0.0.0:7878   │  │
-│  │  (all interfaces)             │  │
-│  └───────────┬───────────────────┘  │
-└──────────────┼──────────────────────┘
-               │
-        ┌──────┴──────┐
-        │  Tailscale  │
-        │  (encrypted)│
-        └──────┬──────┘
-               │
-    ┌──────────┼──────────┬───────────┐
+┌──────────────────────────────────────────────┐
+│  Your Mac                                    │
+│  ┌────────────────────────────────────────┐  │
+│  │  draht-gateway                         │  │
+│  │  Listening on: 127.0.0.1:7878          │  │
+│  │  (loopback only — unreachable off-box) │  │
+│  └───────────────▲────────────────────────┘  │
+│                  │ loopback proxy            │
+│  ┌───────────────┴────────────────────────┐  │
+│  │  tailscaled — `tailscale serve`        │  │
+│  │  https://mac.tailnet.ts.net (TLS 443)  │  │
+│  └───────────────┬────────────────────────┘  │
+└──────────────────┼───────────────────────────┘
+                   │
+            ┌──────┴──────┐
+            │  Tailscale  │
+            │ (WireGuard) │
+            └──────┬──────┘
+                   │
+    ┌──────────┬───┴──────┬───────────┐
     │          │          │           │
-┌───▼──┐   ┌──▼───┐   ┌──▼───┐   ┌──▼────┐
+┌───▼──┐   ┌──▼───┐   ┌──▼───┐   ┌───▼───┐
 │Phone │   │Quest3│   │Laptop│   │Server │
 │Adler │   │Adler │   │ curl │   │  API  │
 └──────┘   └──────┘   └──────┘   └───────┘
 
 All devices must:
-✓ Be on same Tailnet
+✓ Be on the same tailnet
 ✓ Have Tailscale running
-✓ Know your Mac's Tailscale IP
+✓ Use the https:// MagicDNS name (not a raw 100.x IP)
 ```
 
 ## Monitoring
 
-### View Gateway Logs
+### View gateway logs
 
 ```bash
 cd draht-mono/packages/gateway
@@ -292,23 +331,23 @@ This pretty-prints JSON logs:
   "level": "info",
   "timestamp": "2026-03-09T21:37:40.361Z",
   "message": "draht-gateway listening",
-  "host": "0.0.0.0",
+  "host": "127.0.0.1",
   "port": 7878
 }
 ```
 
-### Check Active Sessions
+### Check active sessions
 
 ```bash
 curl -H "Authorization: Bearer mytoken" \
-     http://100.72.9.11:7878/sessions | jq
+     https://your-machine.your-tailnet.ts.net/sessions | jq
 ```
 
-### Monitor Events (SSE)
+### Monitor events (SSE)
 
 ```bash
 curl -H "Authorization: Bearer mytoken" \
-     -N http://100.72.9.11:7878/events
+     -N https://your-machine.your-tailnet.ts.net/events
 ```
 
 ## Performance
@@ -320,22 +359,26 @@ Typical round-trip times over Tailscale:
 - Different networks: 20-100ms
 - Cross-continent: 100-300ms
 
+`tailscale serve` adds a local proxy hop; it is not measurable next to the above.
+
 ### Bandwidth
 
-Gateway bandwidth usage:
 - Health checks: < 1 KB/request
 - Session list: ~1 KB/session
 - Streaming output: ~10-50 KB/s per session
 - WebSocket: minimal overhead
 
-### Concurrent Connections
+### Concurrent connections
 
 Default limits:
-- Max sessions: No hard limit (memory-bound)
-- Max WebSocket connections: No hard limit
-- Max SSE connections: No hard limit
+- Max sessions: `maxSessions` in config (default 100)
+- Max WebSocket connections: no hard limit (memory-bound)
+- Max SSE connections: no hard limit (memory-bound)
 
 ## Production Deployment
+
+Both examples keep the gateway on loopback and rely on `tailscale serve` for
+reachability.
 
 ### systemd Service (Linux)
 
@@ -349,6 +392,7 @@ Type=simple
 User=youruser
 WorkingDirectory=/path/to/draht-mono/packages/gateway
 ExecStart=/usr/bin/bun start --auth YOUR_TOKEN
+ExecStartPost=/usr/bin/tailscale serve --bg http://127.0.0.1:7878
 Restart=on-failure
 
 [Install]
@@ -380,6 +424,30 @@ WantedBy=multi-user.target
 </dict>
 </plist>
 ```
+
+Run `tailscale serve --bg http://127.0.0.1:7878` once; the mapping persists.
+
+## Config File Reference
+
+`~/.draht/gateway.config.json`:
+
+```json
+{
+  "$schema": "https://draht.io/gateway.schema.json",
+  "port": 7878,
+  "host": "127.0.0.1",
+  "tokens": {
+    "default": "your-secret-token"
+  },
+  "allowedPaths": ["~/", "~/projects", "~/code"],
+  "maxSessions": 100,
+  "idleTimeout": 255
+}
+```
+
+Keep `host` on `127.0.0.1`. Any other value is a non-loopback bind and the
+gateway will refuse to start without `--allow-non-loopback`, whether the value
+came from this file or from the `--host` flag.
 
 ## Related Documentation
 

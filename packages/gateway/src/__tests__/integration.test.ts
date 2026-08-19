@@ -4,7 +4,7 @@ import { createServer, parseArgs } from "../index";
 
 const TEST_CONFIG: GatewaySettings = {
 	port: 7878,
-	host: "0.0.0.0",
+	host: "127.0.0.1",
 	tokens: {},
 	allowedPaths: ["~/"],
 	maxSessions: 100,

@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from "hono";
+import { decodeWsBearerSubprotocol } from "../ws-bearer";
 
 /**
  * Timing-safe byte-level string comparison.
@@ -37,8 +38,10 @@ function timingSafeEqual(actual: string, expected: string): boolean {
  * Bearer token authentication middleware.
  *
  * Validates the `Authorization: Bearer <token>` header on every request.
- * For WebSocket connections, also accepts `?token=XXX` query parameter
- * (since WebSocket upgrades can't always carry custom headers from browsers).
+ * For WebSocket connections, also accepts the `Sec-WebSocket-Protocol` header
+ * (`geist.bearer.<base64url>`, the only credential a browser can put on an
+ * upgrade) and, still, a `?token=XXX` query parameter — the last of which
+ * R33-REACH.3 removes.
  * Returns a 401 JSON response for missing, malformed, or incorrect tokens.
  * Uses a timing-safe comparison to prevent token oracle attacks.
  * Use with `except` from `hono/combine` to exclude public endpoints like /health.
@@ -60,6 +63,15 @@ export function bearerAuthMiddleware(expectedToken: string): MiddlewareHandler {
 			if (match) {
 				token = match[1];
 			}
+		}
+
+		// Then the WebSocket subprotocol, which is a request *header*
+		// (`Sec-WebSocket-Protocol`) and the only credential a browser can put on
+		// an upgrade — `new WebSocket(url)` takes no headers of its own. This is
+		// what the daemon-served console uses (R32-FLEET.10); see ws-bearer.ts for
+		// why the value is base64url and why Bun's protocol echo makes it work.
+		if (!token) {
+			token = decodeWsBearerSubprotocol(c.req.header("Sec-WebSocket-Protocol"));
 		}
 
 		// Fallback to query parameter (for WebSocket connections)

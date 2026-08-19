@@ -37,6 +37,16 @@ import { createSessionBridge, type SessionBridge } from "../session-bridge.js";
 export interface PairingServerOptions {
 	/** Port to listen on. Defaults to 0 (OS-assigned ephemeral port — matches this monorepo's test convention, e.g. `packages/gateway`). */
 	port?: number;
+	/**
+	 * Interface to bind. Defaults to `127.0.0.1` (R32-FLEET.9, GSEC-04 bind
+	 * half). Anything non-loopback is refused unless {@link
+	 * PairingServerOptions.allowNonLoopback} is also set.
+	 */
+	hostname?: string;
+	/** Explicitly accept a non-loopback bind. Off by default; see {@link assertBindHostAllowed}. */
+	allowNonLoopback?: boolean;
+	/** Sink for the non-loopback opt-in warning. Defaults to `console.warn`. */
+	warn?: (message: string) => void;
 	/** Reconnect grace window in ms (spec §16 M1). Defaults to `PairingState`'s own default (60s). */
 	graceWindowMs?: PairingStateOptions["graceWindowMs"];
 	/** Fixed pairing token, for deterministic tests/provisioning. Defaults to a fresh random LAN pairing token. */
@@ -73,6 +83,104 @@ export interface PairingServerHandle {
 	close(): void;
 }
 
+/**
+ * The only hostnames treated as loopback.
+ *
+ * An exact set rather than a `127.0.0.0/8` range check: for a *bind* target,
+ * anything we are not certain is loopback must fall into the guarded path.
+ *
+ * Deliberately a local copy rather than an import of the identically-named
+ * guard in `@draht/gateway`: the geist family may import only its non-privileged
+ * geist siblings (R31-FOUND.4, enforced by `scripts/check-geist-boundary.mjs`),
+ * and a security guard is not worth re-privileging the package for. The
+ * repo-wide `check:bun-serve-hostname` gate is what keeps both copies honest —
+ * it fails on any `Bun.serve` that does not name its interface, wherever it is.
+ */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/**
+ * Pure predicate — is `host` a loopback bind target?
+ *
+ * `0.0.0.0`, `::`, LAN addresses and Tailscale `100.x` addresses are all
+ * non-loopback and therefore require an explicit opt-in.
+ */
+export function isLoopbackHost(host: string): boolean {
+	if (typeof host !== "string") {
+		throw new TypeError(`bind host must be a string, got ${host === null ? "null" : typeof host}`);
+	}
+	// Normalize the shapes a human or a config file may legitimately produce:
+	// surrounding whitespace, mixed case, and bracketed IPv6 (`[::1]`).
+	const normalized = host.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+	return LOOPBACK_HOSTS.has(normalized);
+}
+
+/** Inputs to {@link assertBindHostAllowed}. */
+export interface BindHostPolicy {
+	/** The interface the caller wants to bind. */
+	host: string;
+	/** True when the caller explicitly accepted a non-loopback bind. */
+	allowNonLoopback?: boolean;
+	/** Sink for the opt-in warning. Defaults to `console.warn`. */
+	warn?: (message: string) => void;
+}
+
+/**
+ * Enforce the loopback-by-default bind posture for the pairing listener.
+ *
+ * This exists because `createPairingServer` used to call `Bun.serve({ port })`
+ * with no `hostname` — which binds every interface — putting the pairing token
+ * and the permission relay behind it on the LAN. That is GSEC-04's named
+ * subject.
+ *
+ * @returns The host, unchanged, once it is allowed to be bound.
+ * @throws Error when `host` is non-loopback and `allowNonLoopback` is not set.
+ */
+export function assertBindHostAllowed({ host, allowNonLoopback = false, warn }: BindHostPolicy): string {
+	if (isLoopbackHost(host)) {
+		return host;
+	}
+	if (!allowNonLoopback) {
+		throw new Error(
+			[
+				`Refusing to bind non-loopback host '${host}'.`,
+				"",
+				"This listener carries the pairing token and the permission relay: a headset",
+				"that reaches it can answer permission prompts on your behalf. Binding it to an",
+				"interface another machine can route to hands that to anyone on the network.",
+				"",
+				"Supported remote access path: leave the listener on loopback and put Tailscale",
+				"in front of it:",
+				"",
+				"    tailscale serve --bg http://127.0.0.1:<port>",
+				"",
+				"That terminates TLS with a real certificate on a stable MagicDNS name, which",
+				"the Quest browser and iOS clients require. Never use `tailscale funnel`.",
+				"",
+				"If you understand the risk and still want a raw non-loopback bind, pass",
+				"allowNonLoopback: true explicitly.",
+			].join("\n"),
+		);
+	}
+	(warn ?? ((message: string) => console.warn(message)))(
+		[
+			"",
+			"!!! ============================================================== !!!",
+			`!!! Binding NON-LOOPBACK host '${host}' for the pairing listener.`,
+			"!!! Anyone who can route to this interface can attempt to pair and",
+			"!!! answer permission prompts as you.",
+			"!!! Prefer: bind 127.0.0.1 and expose it with `tailscale serve`.",
+			"!!! ============================================================== !!!",
+			"",
+		].join("\n"),
+	);
+	return host;
+}
+
+/** Render a bound host for use inside a URL (IPv6 needs brackets). */
+function urlHost(host: string): string {
+	return host.includes(":") ? `[${host}]` : host;
+}
+
 type InboundPairMessage = { type: "pair" | "reconnect"; token: string };
 
 function isInboundPairMessage(value: unknown): value is InboundPairMessage {
@@ -86,6 +194,16 @@ function isInboundPairMessage(value: unknown): value is InboundPairMessage {
  * to tear it down (e.g. in a test's `afterEach`).
  */
 export function createPairingServer(options: PairingServerOptions = {}): PairingServerHandle {
+	// Bind policy first, before anything that would have to be torn down: a
+	// refusal must mean nothing was ever wired and nothing was ever listening
+	// (R32-FLEET.9). In particular the `sessionBridge.onPermissionRequest`
+	// subscription below has no owner to unsubscribe it if we throw past it.
+	const hostname = assertBindHostAllowed({
+		host: options.hostname ?? "127.0.0.1",
+		allowNonLoopback: options.allowNonLoopback,
+		warn: options.warn,
+	});
+
 	const path = options.path ?? "/pair";
 	const state = new PairingState({
 		graceWindowMs: options.graceWindowMs,
@@ -208,11 +326,14 @@ export function createPairingServer(options: PairingServerOptions = {}): Pairing
 		})),
 	);
 
-	const server = Bun.serve({ port: options.port ?? 0, fetch: app.fetch, websocket });
+	const server = Bun.serve({ port: options.port ?? 0, hostname, fetch: app.fetch, websocket });
 
 	return {
 		server,
-		url: `ws://localhost:${server.port}${path}`,
+		// Built from the host that was actually bound, not from `localhost`:
+		// `localhost` can resolve to `::1` first, which a `127.0.0.1` listener
+		// does not answer.
+		url: `ws://${urlHost(server.hostname ?? hostname)}:${server.port}${path}`,
 		state,
 		sessionBridge,
 		close() {

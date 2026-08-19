@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { isFatalAttachError, resolveAttachSocketPath } from "../src/cli/attach-mode.ts";
+import { isAttachNotice, isFatalAttachError, resolveAttachSocketPath } from "../src/cli/attach-mode.ts";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import { AgentSessionRuntime, type CreateAgentSessionRuntimeResult } from "../src/core/agent-session-runtime.ts";
@@ -289,9 +289,23 @@ describe("attach client error frame handling", () => {
 		// Both are recoverable: the session is still there and still attached.
 		expect(isFatalAttachError("PROMPT_FAILED")).toBe(false);
 		expect(isFatalAttachError("SESSION_REPLACED")).toBe(false);
+		// R32-FLEET.7: a prompt sent mid-turn is queued and the sender is told so.
+		// That notice rides the same coded error channel, and it must not end the
+		// attached client - the prompt it describes is about to run.
+		expect(isFatalAttachError("PROMPT_QUEUED")).toBe(false);
 		// Anything else - protocol errors, rejected attaches - still ends the client.
 		expect(isFatalAttachError(undefined)).toBe(true);
 		expect(isFatalAttachError("MAX_CLIENTS")).toBe(true);
+	});
+
+	test("the queued-prompt notice is a notice, not a failure", () => {
+		// It rides the `error` channel because the socket wire has only one, but
+		// it reports success - rendering it as an error would say the opposite of
+		// what happened.
+		expect(isAttachNotice("PROMPT_QUEUED")).toBe(true);
+		expect(isAttachNotice("PROMPT_FAILED")).toBe(false);
+		expect(isAttachNotice("SESSION_REPLACED")).toBe(false);
+		expect(isAttachNotice(undefined)).toBe(false);
 	});
 
 	test("a failed prompt reaches the client as a non-fatal coded frame", async () => {

@@ -17,9 +17,10 @@ export interface GatewaySettings {
 	/**
 	 * Host to bind to (default: "127.0.0.1" — loopback only).
 	 *
-	 * Binding a non-loopback interface exposes the session API — which spawns
-	 * arbitrary `command` arrays — to every holder of a bearer token on that
-	 * interface, so it requires the explicit `--allow-non-loopback` flag. For
+	 * Binding a non-loopback interface exposes the session API — which drives a
+	 * `draht` agent process on this user's behalf — to every holder of a bearer
+	 * token on that interface, so it requires the explicit
+	 * `--allow-non-loopback` flag. For
 	 * remote access use `tailscale serve` in front of the loopback listener
 	 * instead.
 	 */

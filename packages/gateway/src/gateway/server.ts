@@ -1,3 +1,4 @@
+import { resolveSocketDir } from "@draht/geist-core";
 import { Hono } from "hono";
 import { websocket } from "hono/bun";
 import { except } from "hono/combine";
@@ -9,6 +10,8 @@ import { SessionManager } from "../session/session-manager";
 import { assertBindHostAllowed, isLoopbackPeer, nonLoopbackPeerRefusal } from "./bind-host";
 import { bearerAuthMiddleware } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
+import { createConsoleRoutes } from "./routes/console";
+import { createFleetRoutes } from "./routes/fleet";
 import { createSessionStreamRoutes } from "./routes/session-stream";
 import { createSessionRoutes } from "./routes/sessions";
 import { createSseRoutes } from "./routes/sse";
@@ -45,6 +48,14 @@ export interface GatewayConfig {
 	 * programmatic equivalent of the CLI's `--allow-non-loopback`.
 	 */
 	allowNonLoopback?: boolean;
+	/**
+	 * Directory the machine's attachable draht sessions publish themselves in.
+	 *
+	 * Defaults to the same `<agent dir>/sockets` the `draht` binary writes, so
+	 * the daemon and the sessions agree without configuration. Tests point both
+	 * at one throwaway directory through `DRAHT_CODING_AGENT_DIR`.
+	 */
+	socketDir?: string;
 	/**
 	 * Sink for the bind-posture notices — the non-loopback opt-in warning, and
 	 * the first refusal of an off-box request. Defaults to `console.warn`.
@@ -164,11 +175,18 @@ export function createServer(config: GatewayConfig): ServerHandle {
 
 	// Middleware ordering constraint:
 	//   1. Auth middleware must be registered first so every subsequent route is
-	//      protected by default. The `except` wrapper carves out /health only.
+	//      protected by default. The `except` wrapper carves out /health and the
+	//      served console only.
 	//   2. Public routes (e.g. /health) follow the middleware registration.
 	//   3. Protected sub-apps (e.g. /sessions) are mounted last so the auth
 	//      middleware has already run before any session handler is invoked.
-	app.use("*", except("/health", bearerAuthMiddleware(config.authToken)));
+	//
+	// `/ui` and its assets are public on purpose (R32-FLEET.10): a browser cannot
+	// put an `Authorization` header on a document navigation, so an authenticated
+	// console is a console nobody can open. The carve-out is for static bytes
+	// only — `/fleet` and `/attach`, the routes that carry session data, are not
+	// in the list and still refuse an unauthenticated caller.
+	app.use("*", except(["/health", "/ui", "/ui/*"], bearerAuthMiddleware(config.authToken)));
 
 	const eventBus = new EventBus();
 	const manager = config.manager ?? new SessionManager(eventBus);
@@ -182,6 +200,12 @@ export function createServer(config: GatewayConfig): ServerHandle {
 			version: pkg.version,
 		});
 	});
+	// The console the daemon serves. Mounted before the protected sub-apps so its
+	// public carve-out reads next to the middleware that grants it.
+	app.route("/", createConsoleRoutes());
+	// Mounted at the root: the fleet is a property of the machine, not of one
+	// session, and `/attach` fronts the whole fleet over one wire.
+	app.route("/", createFleetRoutes({ socketDir: config.socketDir ?? resolveSocketDir() }));
 	app.route("/sessions", createSessionRoutes(manager, config.config));
 	app.route("/sessions", createSessionStreamRoutes(manager));
 	app.route("/sessions", createWsRoutes(manager));

@@ -68,7 +68,10 @@ describe("parseArgs loopback guard", () => {
 
 		expect(result.host).toBe("100.72.9.11");
 		expect(result.allowNonLoopback).toBe(true);
-		expect(warnings.join("\n")).toMatch(/command/i);
+		// The warning has to say *why*, and name the mechanism that is still
+		// there — not the `command` array POST /sessions used to spawn, which
+		// R32-FLEET.8 deleted.
+		expect(warnings.join("\n")).toMatch(/POST \/sessions\/:id\/input/);
 		expect(warnings.join("\n")).toMatch(/remote code execution|RCE/i);
 	});
 

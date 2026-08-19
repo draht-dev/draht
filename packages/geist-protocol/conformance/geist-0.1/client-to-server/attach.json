@@ -1,0 +1,14 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.1",
+	"direction": "client-to-server",
+	"type": "attach",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer",
+	"normalizedFields": [],
+	"frame": {
+		"type": "attach",
+		"sessionId": "conformance",
+		"clientId": "client-a",
+		"mode": "read-write"
+	}
+}

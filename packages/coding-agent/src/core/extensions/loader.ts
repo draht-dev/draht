@@ -13,6 +13,7 @@ import type { Provider } from "@draht/ai";
 import * as _bundledPiAiCompat from "@draht/ai/compat";
 import * as _bundledPiAiOauth from "@draht/ai/oauth";
 import * as _bundledPiAiProviders from "@draht/ai/providers/all";
+import * as _bundledPiAiProvidersFaux from "@draht/ai/providers/faux";
 import type { KeyId } from "@draht/tui";
 import * as _bundledPiTui from "@draht/tui";
 import { createJiti } from "@mariozechner/jiti";
@@ -66,6 +67,11 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@draht/ai/compat": _bundledPiAiCompat,
 	"@draht/ai/oauth": _bundledPiAiOauth,
 	"@draht/ai/providers/all": _bundledPiAiProviders,
+	// Every @draht/ai subpath an extension may import needs its own entry here and
+	// in getAliases(): the bare "@draht/ai" key below is a PREFIX match, so an
+	// unlisted subpath is rewritten onto the compat entrypoint
+	// ("<compat.js>/providers/faux") and fails to resolve.
+	"@draht/ai/providers/faux": _bundledPiAiProvidersFaux,
 	"@draht/coding-agent": _bundledPiCodingAgent,
 };
 
@@ -106,12 +112,14 @@ function getAliases(): Record<string, string> {
 	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@draht/ai/compat");
 	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@draht/ai/oauth");
 	const piAiProvidersEntry = resolveWorkspaceOrImport("ai/dist/providers/all.js", "@draht/ai/providers/all");
+	const piAiProvidersFauxEntry = resolveWorkspaceOrImport("ai/dist/providers/faux.js", "@draht/ai/providers/faux");
 
 	_aliases = {
 		"@draht/coding-agent": piCodingAgentEntry,
 		"@draht/agent-core": piAgentCoreEntry,
 		"@draht/tui": piTuiEntry,
 		"@draht/ai/providers/all": piAiProvidersEntry,
+		"@draht/ai/providers/faux": piAiProvidersFauxEntry,
 		"@draht/ai/compat": piAiCompatEntry,
 		"@draht/ai/oauth": piAiOauthEntry,
 		"@draht/ai": piAiCompatEntry,

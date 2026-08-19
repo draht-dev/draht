@@ -28,12 +28,13 @@ export function resolveAttachSocketPath(sessionId: string, socketDir: string): s
 /**
  * Error frames that report a recoverable condition rather than a dead session.
  *
- * `PROMPT_FAILED` means one prompt was rejected (typically because the agent was already
- * streaming) and `SESSION_REPLACED` means the runtime switched sessions - in both cases
- * the client is still attached and the session is still there, so the client prints the
- * message and stays.
+ * `PROMPT_FAILED` means one prompt was rejected (no model, no credentials),
+ * `PROMPT_QUEUED` means a prompt sent mid-turn was accepted and runs when the current
+ * turn finishes (R32-FLEET.7), and `SESSION_REPLACED` means the runtime switched
+ * sessions - in all three cases the client is still attached and the session is still
+ * there, so the client prints the message and stays.
  */
-const NON_FATAL_ERROR_CODES = new Set(["PROMPT_FAILED", "SESSION_REPLACED"]);
+const NON_FATAL_ERROR_CODES = new Set(["PROMPT_FAILED", "PROMPT_QUEUED", "SESSION_REPLACED"]);
 
 /**
  * Whether an `error` frame from the server should end the attached client.
@@ -42,6 +43,21 @@ const NON_FATAL_ERROR_CODES = new Set(["PROMPT_FAILED", "SESSION_REPLACED"]);
  */
 export function isFatalAttachError(code?: string): boolean {
 	return code === undefined || !NON_FATAL_ERROR_CODES.has(code);
+}
+
+/**
+ * Codes that ride the `error` channel while reporting something that went RIGHT.
+ *
+ * The socket wire has one server→client channel for out-of-band messages, so
+ * R32-FLEET.7's "your prompt was queued" arrives as an `error` frame. Printing
+ * it in red under an "Error:" heading would tell the operator their prompt
+ * failed at the exact moment it did not.
+ */
+const NOTICE_ERROR_CODES = new Set(["PROMPT_QUEUED"]);
+
+/** Whether an `error` frame is a notice rather than a failure. */
+export function isAttachNotice(code?: string): boolean {
+	return code !== undefined && NOTICE_ERROR_CODES.has(code);
 }
 
 /**
@@ -105,6 +121,10 @@ export async function runAttachMode(sessionId: string): Promise<void> {
 
 	// Handle errors
 	client.onError((message, code) => {
+		if (isAttachNotice(code)) {
+			console.log(chalk.dim(`\n[${message}]\n`));
+			return;
+		}
 		console.error(chalk.red(`\nError: ${message}\n`));
 		if (isFatalAttachError(code)) {
 			process.exit(1);

@@ -92,13 +92,41 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 
 		// Forward input from socket clients to session
 		next.onInput((data: string, clientId: string) => {
-			// AgentSession.prompt() rejects for ordinary reasons - most commonly a prompt sent
-			// while the agent is already streaming. An unhandled rejection here would take the
-			// whole agent down under Node's default --unhandled-rejections=throw, so remote
-			// input must never be left floating: report the failure to the client that sent it
-			// and keep the session running.
+			// Concurrent-writer policy (R32-FLEET.7): QUEUE, and say so.
+			//
+			// Without a `streamingBehavior`, AgentSession.prompt() refuses outright while the
+			// agent is mid-turn. Over a socket that refusal reached only the sender, while every
+			// OTHER attached client had already been shown the prompt as an `input_echo` - so on
+			// a second screen the message appeared, was never answered, and was never explained.
+			// That is precisely the "vanished message" a phone must never be shown.
+			//
+			// `followUp` is the queueing mode chosen over `steer`: the running turn finishes
+			// exactly as it would have (steering rewrites what the agent is currently doing,
+			// which no remote client can see well enough to intend), the queued prompt runs next,
+			// and its output streams to every attached client like any other turn. Order is
+			// preserved, and nothing is dropped.
+			//
+			// Queuing silently would trade a vanished message for an unexplained pause, so the
+			// client that sent it is told on the relayed error channel, under a code a renderer
+			// can switch on rather than prose it would have to match.
+			const queueing = session.isStreaming;
+			// An unhandled rejection here would take the whole agent down under Node's default
+			// --unhandled-rejections=throw, so remote input is never left floating: genuine
+			// failures (no model, no credentials) are reported to the client that sent them and
+			// the session keeps running.
 			void Promise.resolve()
-				.then(() => session.prompt(data))
+				.then(() => session.prompt(data, { streamingBehavior: "followUp" }))
+				.then(() => {
+					// `queueing` is sampled before the call and confirmed after it: a prompt that
+					// was accepted immediately must not be announced as deferred, and a turn that
+					// ended in between needs no notice because nothing is waiting.
+					if (!queueing || !session.isStreaming) return;
+					next.sendErrorToClient(
+						clientId,
+						"The agent is mid-turn. Your prompt was queued and runs when the current turn finishes.",
+						"PROMPT_QUEUED",
+					);
+				})
 				.catch((error: unknown) => {
 					const message = error instanceof Error ? error.message : String(error);
 					next.sendErrorToClient(clientId, `Prompt failed: ${message}`, "PROMPT_FAILED");

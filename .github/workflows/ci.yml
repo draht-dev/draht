@@ -42,6 +42,13 @@ jobs:
       - name: Check
         run: bun run check
 
+      # The headless-browser harness (scripts/browser-harness.mjs, R32-FLEET.12)
+      # runs as part of `bun run test`. playwright-core ships no browser of its
+      # own, so Chromium is installed explicitly here — without this step the
+      # browser tests fail loudly rather than silently skipping.
+      - name: Install Chromium for the browser harness
+        run: bunx playwright-core install --with-deps chromium
+
       - name: Test
         run: bun run test
 

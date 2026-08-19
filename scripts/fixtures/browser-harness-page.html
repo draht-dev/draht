@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Draht browser harness fixture</title>
+		<style>
+			body {
+				font-family: system-ui, sans-serif;
+				margin: 0;
+				padding: 1rem;
+			}
+			/* Which label renders is decided by CSS alone, so a viewport assertion proves
+			   the browser really re-laid the page out rather than that a script read a
+			   number off window.innerWidth. */
+			#layout .narrow {
+				display: none;
+			}
+			@media (max-width: 480px) {
+				#layout .wide {
+					display: none;
+				}
+				#layout .narrow {
+					display: inline;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<h1 id="title">Draht browser harness fixture</h1>
+		<p>Layout: <span id="layout"><span class="wide">wide</span><span class="narrow">narrow</span></span></p>
+
+		<button id="ping" type="button">Ping</button>
+		<ul id="log"></ul>
+
+		<label for="prompt">Prompt</label>
+		<input id="prompt" type="text" />
+		<button id="send" type="button">Send</button>
+		<p id="echo"></p>
+
+		<script>
+			let pings = 0;
+			document.getElementById("ping").addEventListener("click", () => {
+				pings += 1;
+				const item = document.createElement("li");
+				item.textContent = `pong ${pings}`;
+				document.getElementById("log").append(item);
+			});
+			document.getElementById("send").addEventListener("click", () => {
+				const value = document.getElementById("prompt").value;
+				document.getElementById("echo").textContent = `echo: ${value}`;
+			});
+		</script>
+	</body>
+</html>

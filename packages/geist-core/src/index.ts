@@ -1,3 +1,12 @@
+export type { AttachBridgeOptions, RendererConnection } from "./attach/attach-bridge.js";
+export { AttachBridge } from "./attach/attach-bridge.js";
+export {
+	AGENT_DIR_ENV,
+	buildFleetFrame,
+	listAttachableSessions,
+	resolveSocketDir,
+	SOCKETS_DIR_NAME,
+} from "./attach/socket-sessions.js";
 export type {
 	ComposeElementContextInput,
 	ElementBoundingRect,

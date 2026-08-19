@@ -6,6 +6,7 @@ export {
 	nonLoopbackBindWarning,
 	nonLoopbackPeerRefusal,
 } from "./gateway/bind-host";
+export { createFleetRoutes, type FleetRoutesOptions } from "./gateway/routes/fleet";
 export { createSessionRoutes } from "./gateway/routes/sessions";
 export {
 	type BoundServer,

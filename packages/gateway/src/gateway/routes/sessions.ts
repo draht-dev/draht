@@ -18,17 +18,31 @@ interface SerializedSession {
 /**
  * Expected JSON body for POST /sessions.
  *
- * `command` — optional array of command + arguments to spawn as the session
- *             process (e.g. `["draht", "start", "--prompt", "..."]`).
- *             When omitted the session is created in 'starting' status with no
- *             backing process (useful for testing / placeholder sessions).
- * `cwd`     — optional working directory path for the session process.
- *             If omitted, defaults to the gateway's current working directory.
+ * `cwd` — optional working directory path for the session, validated against
+ *         the configured `allowedPaths`.
+ *
+ * There is deliberately no `command` field. This route used to accept a
+ * caller-supplied `command: string[]` and hand it to `Bun.spawn` (R32-FLEET.8,
+ * GSEC-12): with only a shape check in front of it, any bearer-token holder
+ * could run any binary as the gateway's user. The field is gone rather than
+ * narrowed — the harness-id + project selection that replaces it is resolved
+ * against the registry in a later phase, and until that exists no request body
+ * may influence what gets executed.
  */
 interface CreateSessionBody {
-	command?: string[];
 	cwd?: string;
 }
+
+/**
+ * Operator/caller-facing refusal for a request that still carries `command`.
+ *
+ * Refused rather than ignored: a caller asking for arbitrary execution must be
+ * told no. Silently creating a process-less session would leave an integration
+ * believing it had launched something.
+ */
+const COMMAND_REJECTED =
+	"command is not accepted: POST /sessions does not spawn caller-supplied commands. " +
+	"Create the session without a command; what runs is chosen by the gateway, never by the request body.";
 
 /**
  * Expected JSON body for POST /sessions/:id/input.
@@ -37,27 +51,6 @@ interface CreateSessionBody {
  */
 interface SendInputBody {
 	text: string;
-}
-
-/**
- * Validate that a value is a non-empty array of non-empty strings.
- * Returns a descriptive error message, or null if the value is acceptable.
- *
- * SECURITY: this is a shape check only — any token holder can still ask for an
- * arbitrary executable and have it spawned. Constraining `command` to an
- * allowlist is a separate planned phase. Until then the containment boundary is
- * the loopback-by-default bind posture enforced in `gateway/bind-host.ts`; see
- * `assertBindHostAllowed` / `--allow-non-loopback` there.
- */
-function validateCommand(command: unknown): string | null {
-	if (!Array.isArray(command)) return "command must be an array";
-	if (command.length === 0) return "command must be a non-empty array";
-	for (let i = 0; i < command.length; i++) {
-		if (typeof command[i] !== "string" || (command[i] as string).length === 0) {
-			return `command[${i}] must be a non-empty string`;
-		}
-	}
-	return null;
 }
 
 /**
@@ -81,8 +74,9 @@ function serializeSession(session: Session): SerializedSession {
  * Mount with: `app.route('/sessions', createSessionRoutes(manager, config))`
  *
  * Routes:
- *   POST   /          → Create a session; optional JSON body `{ command?: string[], cwd?: string }`;
- *                       returns 201 + serialized session
+ *   POST   /          → Create a session; optional JSON body `{ cwd?: string }`;
+ *                       returns 201 + serialized session. A body carrying
+ *                       `command` is refused with 400 (R32-FLEET.8).
  *   GET    /          → List all sessions; returns 200 + { sessions: [...] }
  *   GET    /:id       → Get one session; 200 or 404
  *   DELETE /:id       → Destroy a session; 204 or 404
@@ -92,14 +86,14 @@ function serializeSession(session: Session): SerializedSession {
 export function createSessionRoutes(manager: SessionManager, config?: GatewaySettings): Hono {
 	const app = new Hono();
 
-	// POST / — spawn a new session and return its metadata.
-	// Accepts an optional JSON body: { command?: string[] }
-	// When `command` is present it is validated and passed to the session manager
-	// to spawn a real subprocess. When absent, a no-process session is created.
+	// POST / — register a new session and return its metadata.
+	// Accepts an optional JSON body: { cwd?: string }. No process is spawned
+	// here, and no field of the body can cause one to be: the caller-supplied
+	// `command` path was removed in R32-FLEET.8 and a body still carrying
+	// `command` is refused.
 	app.post("/", async (c): Promise<Response> => {
 		console.log(`[SESSION CREATE] Received session creation request`);
 
-		let command: string[] | undefined;
 		let cwd: string | undefined;
 
 		const contentType = c.req.header("Content-Type") ?? "";
@@ -120,11 +114,7 @@ export function createSessionRoutes(manager: SessionManager, config?: GatewaySet
 					const bodyObj = body as CreateSessionBody;
 
 					if ("command" in bodyObj) {
-						const err = validateCommand(bodyObj.command);
-						if (err !== null) {
-							return c.json({ error: err }, 400);
-						}
-						command = bodyObj.command;
+						return c.json({ error: COMMAND_REJECTED }, 400);
 					}
 
 					if ("cwd" in bodyObj) {
@@ -149,7 +139,9 @@ export function createSessionRoutes(manager: SessionManager, config?: GatewaySet
 			// Empty body with Content-Type: application/json is OK, creates no-process session
 		}
 
-		const session = manager.create(command, cwd);
+		// `undefined` command, unconditionally: this route creates a session
+		// record, never a process (R32-FLEET.8).
+		const session = manager.create(undefined, cwd);
 		console.log(
 			`[SESSION CREATE] Created session ${session.id}, status: ${session.status}, hasProcess: ${!!session.process}`,
 		);

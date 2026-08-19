@@ -56,7 +56,8 @@ export function nonLoopbackBindError(host: string): string {
 	return [
 		`Refusing to bind non-loopback host '${host}'.`,
 		"",
-		"POST /sessions accepts an arbitrary `command` array and spawns it, so a",
+		"A bearer token on this interface is shell access as you: POST /sessions/:id/input",
+		"pipes its text into a `draht` agent process that runs tools on your behalf, so a",
 		"non-loopback bind is remote code execution for anyone holding a bearer token.",
 		"",
 		"Supported remote access path: leave the gateway on loopback and put Tailscale",
@@ -80,7 +81,7 @@ export function nonLoopbackBindWarning(host: string): string {
 		"",
 		"!!! ============================================================== !!!",
 		`!!! Binding NON-LOOPBACK host '${host}'.`,
-		"!!! POST /sessions runs an arbitrary `command` array with your user's",
+		"!!! POST /sessions/:id/input drives a `draht` agent process with your user's",
 		"!!! privileges. This gateway is therefore REMOTE CODE EXECUTION for any",
 		"!!! holder of a bearer token that can reach this interface.",
 		"!!! Prefer: bind 127.0.0.1 and expose it with `tailscale serve`.",
@@ -106,10 +107,11 @@ export interface BindHostPolicy {
  * @throws Error when `host` is non-loopback and `allowNonLoopback` is not set,
  *         or TypeError when `host` is not a string.
  *
- * NOTE on blast radius: POST /sessions only shape-checks `command` (see
- * validateCommand in gateway/routes/sessions.ts) before handing it to
- * Bun.spawn. Narrowing that to an allowlist is a separate planned phase; until
- * then loopback is the containment boundary.
+ * NOTE on blast radius: the caller-supplied `command` array POST /sessions used
+ * to hand to `Bun.spawn` is gone (R32-FLEET.8) — no request body chooses what
+ * runs any more. What remains is still shell-equivalent: POST /sessions/:id/input
+ * drives a `draht` agent process, which runs tools as this user. Loopback is
+ * therefore still the containment boundary.
  */
 export function assertBindHostAllowed({ host, allowNonLoopback = false, warn }: BindHostPolicy): string {
 	if (isLoopbackHost(host)) {
@@ -161,8 +163,8 @@ export function nonLoopbackPeerRefusal(address: string): string {
 		"!!! ============================================================== !!!",
 		`!!! Refused a request from non-loopback peer '${address}'.`,
 		"!!! This gateway was built for a loopback bind, but the app was served",
-		"!!! on an interface reachable from another machine. POST /sessions runs",
-		"!!! an arbitrary `command` array, so serving it off-box is remote code",
+		"!!! on an interface reachable from another machine. POST /sessions/:id/input",
+		"!!! drives a `draht` agent process, so serving it off-box is remote code",
 		"!!! execution for any bearer-token holder — every off-box request is",
 		"!!! being refused with 403.",
 		"!!! Fix: serve with startGateway(), which owns the bind, or pass",

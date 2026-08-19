@@ -52,9 +52,14 @@ degrading silently or crashing inside the bind guard.
 
 ### Security: loopback by default
 
-`POST /sessions` accepts an arbitrary `command` array and spawns it with your
-user's privileges. A gateway bound to a reachable interface is therefore remote
-code execution for anyone holding a bearer token.
+`POST /sessions/:id/input` drives a `draht` agent process with your user's
+privileges, and that agent runs tools on your behalf. A gateway bound to a
+reachable interface is therefore remote code execution for anyone holding a
+bearer token.
+
+(`POST /sessions` used to accept an arbitrary `command` array and spawn it. That
+path was removed in R32-FLEET.8: no request body chooses what runs, and a body
+still carrying `command` is refused with 400.)
 
 Because of that the gateway binds `127.0.0.1` by default and **refuses to start**
 on a non-loopback host unless you pass `--allow-non-loopback`:
@@ -136,13 +141,12 @@ Content-Type: application/json
 (empty body)
 ```
 
-This creates a session with `status: "starting"` but no backing process. To spawn an actual draht process, send:
+This creates a session with `status: "starting"` but no backing process. The
+`draht` process is spawned by the gateway on the first `POST /sessions/:id/input`.
 
-```json
-{
-  "command": ["draht", "start"]
-}
-```
+A body carrying `command` is **refused with 400**. The route used to spawn any
+array a caller sent, which was remote code execution for any token holder; it was
+removed in R32-FLEET.8. Nothing in a request body decides what gets executed.
 
 ## Status
 

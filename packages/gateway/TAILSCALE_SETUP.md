@@ -6,10 +6,11 @@ The draht gateway binds to **loopback (`127.0.0.1`) only**. Remote devices —
 Adler on your phone or Quest 3 — reach it through `tailscale serve`, which
 publishes the loopback listener onto your tailnet.
 
-This is not an inconvenience to be worked around. `POST /sessions` accepts an
-arbitrary `command` array and spawns it with your user's privileges, so a
-gateway bound to a reachable interface is remote code execution for anyone
-holding a bearer token. Loopback + `tailscale serve` is the supported path.
+This is not an inconvenience to be worked around. `POST /sessions/:id/input`
+drives a `draht` agent process with your user's privileges, and that agent runs
+tools on your behalf, so a gateway bound to a reachable interface is remote code
+execution for anyone holding a bearer token. Loopback + `tailscale serve` is the
+supported path.
 
 > **Scope note.** The loopback-by-default bind posture described here is the
 > gateway's own. It does **not** close the `GSEC-04` finding in
@@ -179,11 +180,15 @@ address changes.
 
 ### ⚠️ Known limitation
 
-`POST /sessions` currently only shape-checks that `command` is an array of
-non-empty strings before spawning it. **A bearer token is equivalent to shell
-access as your user.** Constraining `command` to an allowlist is a separate
-planned phase; until it lands, treat the token as a root-equivalent secret and
-keep the bind on loopback.
+`POST /sessions` no longer accepts a caller-supplied `command` array — the route
+that shape-checked one and handed it to `Bun.spawn` was removed in R32-FLEET.8,
+and a body still carrying `command` is refused with 400. Nothing in a request
+body decides what gets executed.
+
+That is a removed exposure, not a solved one. **A bearer token is still
+equivalent to shell access as your user**: `POST /sessions/:id/input` drives a
+`draht` agent, and the agent runs tools. Treat the token as a root-equivalent
+secret and keep the bind on loopback.
 
 ### 🔒 Best practices
 
@@ -217,7 +222,8 @@ The gateway will start and print a loud warning. What you are accepting:
 - every process and device that can route to that interface can reach
   `POST /sessions`;
 - with a valid bearer token, that is **arbitrary command execution as your
-  user**, with no allowlist in front of it;
+  user** — not by naming a command in the request (that path is gone), but by
+  steering the `draht` agent that `POST /sessions/:id/input` drives;
 - the transport is plain `http://` / `ws://` unless you put your own TLS
   terminator in front, so the bearer token crosses the wire in cleartext.
 

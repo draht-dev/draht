@@ -1,0 +1,368 @@
+/*
+ * The one daemon-served surface — layout and skin (R32-FLEET.10).
+ * Decision record: .planning/specs/2026-08-19-geist-served-surface-decision.md
+ *
+ * Ships on geist-glass from the first pixel: every colour below resolves through
+ * a `--token` defined by tokens.css, which the daemon serves at /ui/tokens.css
+ * from packages/geist-console/src/tokens.css. There is not one literal colour in
+ * this file, and the browser acceptance fails on any hex it can find here.
+ *
+ * Mobile-first, deliberately. The 390px layout is the base stylesheet and the
+ * desktop layout is the media query, because the phone is Phase 33's surface and
+ * a rule that only exists inside `@media (max-width: …)` is a rule nobody
+ * maintains.
+ */
+
+/* --- semantic tokens, all derived from geist-glass ----------------------- */
+:root {
+	--surface: var(--smoke-900);
+	--surface-raised: var(--smoke-700);
+	--hairline: color-mix(in srgb, var(--ink) 12%, transparent);
+	--hover: color-mix(in srgb, var(--ink) 7%, transparent);
+	--selected: color-mix(in srgb, var(--spectra-a) 18%, transparent);
+	--field: color-mix(in srgb, var(--ink) 5%, transparent);
+
+	--gap: 12px;
+	--radius: 10px;
+	/* Width of the fleet rail once there is room for one. */
+	--rail-width: 300px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+}
+
+body {
+	display: grid;
+	/*
+	 * `minmax(0, 1fr)`, never a bare `1fr` or an implicit column: an implicit grid
+	 * column is `auto`, whose minimum is min-content, so one unbreakable child can
+	 * make the column wider than the viewport and give a phone a horizontal
+	 * scrollbar. Measured at 390px before this line existed: the document was
+	 * 401px wide. Same reason `#shell` and `#transcript` are written this way.
+	 */
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr) auto;
+	height: 100dvh;
+	overflow: hidden;
+	background: var(--surface);
+	color: var(--ink);
+	font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+	/* Below the notch and above the home indicator on a phone. */
+	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+		env(safe-area-inset-left);
+}
+
+/* --- top bar ------------------------------------------------------------- */
+#topbar {
+	display: flex;
+	align-items: center;
+	gap: var(--gap);
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--hairline);
+	background: var(--surface-raised);
+}
+
+#brand {
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	background: var(--spectra-gradient);
+	background-clip: text;
+	-webkit-background-clip: text;
+	color: transparent;
+}
+
+#status {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+	color: var(--ink-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+#status[data-state="connected"] {
+	color: var(--status-ok);
+}
+
+#status[data-state="disconnected"],
+#status[data-state="error"] {
+	color: var(--status-danger);
+}
+
+/* --- shell --------------------------------------------------------------- */
+#shell {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	min-height: 0;
+	min-width: 0;
+}
+
+#rail,
+#session {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+	grid-area: 1 / 1;
+}
+
+/* One document, two layouts: below 720px exactly one pane is on screen. */
+body[data-view="fleet"] #session,
+body[data-view="session"] #rail {
+	display: none;
+}
+
+/* --- fleet rail ---------------------------------------------------------- */
+#rail {
+	overflow-y: auto;
+	border-right: 1px solid var(--hairline);
+	padding: var(--gap);
+	gap: var(--gap);
+}
+
+.pane-title {
+	margin: 0;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--ink-dim);
+}
+
+.pane-note {
+	margin: 0;
+	font-size: 13px;
+	color: var(--ink-dim);
+	overflow-wrap: anywhere;
+}
+
+#fleet {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.session-row {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 10px 12px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+	overflow-wrap: anywhere;
+}
+
+.session-row:hover {
+	background: var(--hover);
+}
+
+.session-row[aria-current="true"] {
+	background: var(--selected);
+	border-color: color-mix(in srgb, var(--spectra-a) 45%, transparent);
+}
+
+.session-cwd {
+	display: block;
+	font-weight: 600;
+}
+
+.session-sub {
+	display: block;
+	margin-top: 2px;
+	font-size: 12px;
+	color: var(--ink-dim);
+}
+
+#token-form {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+#token-input {
+	padding: 8px 10px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	min-width: 0;
+}
+
+/* --- session pane -------------------------------------------------------- */
+#session-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px var(--gap);
+	border-bottom: 1px solid var(--hairline);
+	min-width: 0;
+}
+
+#session-title {
+	min-width: 0;
+}
+
+#session-cwd {
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+#session-meta {
+	font-size: 12px;
+	color: var(--ink-dim);
+	overflow-wrap: anywhere;
+}
+
+#transcript {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: var(--gap);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.entry {
+	max-width: 100%;
+	padding: 8px 11px;
+	border-radius: var(--radius);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 14px;
+}
+
+.entry[data-kind="you"] {
+	align-self: flex-end;
+	background: var(--selected);
+}
+
+.entry[data-kind="peer"] {
+	align-self: flex-end;
+	background: var(--hover);
+	color: var(--ink-dim);
+}
+
+.entry[data-kind="agent"] {
+	background: var(--field);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.entry[data-kind="notice"] {
+	align-self: center;
+	background: color-mix(in srgb, var(--status-warn) 14%, transparent);
+	color: var(--status-warn);
+	font-size: 12px;
+}
+
+.entry[data-kind="fatal"] {
+	align-self: center;
+	background: color-mix(in srgb, var(--status-danger) 16%, transparent);
+	color: var(--status-danger);
+	font-size: 12px;
+}
+
+/* --- composer ------------------------------------------------------------ */
+#composer {
+	display: flex;
+	gap: 8px;
+	padding: var(--gap);
+	border-top: 1px solid var(--hairline);
+	background: var(--surface-raised);
+}
+
+#prompt {
+	flex: 1;
+	min-width: 0;
+	max-height: 30vh;
+	padding: 10px 12px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	resize: none;
+	/* 16px stops iOS Safari zooming the viewport when the field takes focus. */
+	font-size: 16px;
+}
+
+button {
+	padding: 9px 14px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+	/* A phone target, not a mouse target. */
+	min-height: 44px;
+}
+
+button:hover {
+	background: var(--hover);
+}
+
+#send {
+	background: var(--spectra-gradient);
+	border-color: transparent;
+	color: var(--smoke-900);
+	font-weight: 600;
+}
+
+#back {
+	min-width: 44px;
+	padding: 9px 12px;
+}
+
+/* --- footer -------------------------------------------------------------- */
+#decision-record {
+	padding: 6px 14px;
+	border-top: 1px solid var(--hairline);
+	font-size: 11px;
+	color: var(--ink-dim);
+	overflow-wrap: anywhere;
+}
+
+/* --- desktop ------------------------------------------------------------- */
+@media (min-width: 720px) {
+	#shell {
+		grid-template-columns: var(--rail-width) minmax(0, 1fr);
+	}
+
+	#rail {
+		grid-area: 1 / 1;
+	}
+
+	#session {
+		grid-area: 1 / 2;
+	}
+
+	/* Both panes at once: the fleet stays addressable while a session streams. */
+	body[data-view="fleet"] #session,
+	body[data-view="session"] #rail {
+		display: flex;
+	}
+
+	/* Nothing to go back to when the list never left. */
+	#back {
+		display: none;
+	}
+}

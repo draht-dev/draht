@@ -203,7 +203,14 @@ WP04 owns mutation publication and event-delivery simplification. WP05 uses its 
 
 ## Implementation and documentation order
 
-Before source work:
+Before any design review, source work, or test planning:
+
+- read **all** of `packages/agent/docs/harness.md`, from start to finish; excerpts, searches, prior conversation context, and this handoff are not substitutes;
+- treat the current `harness.md`, this handoff, and the current runtime2/session/execution APIs as the only architectural sources of truth;
+- implement runtime2 clean-room: do **not** inspect Git history for deleted runtime implementations and do not recover, copy, adapt, or use removed runtime1 code as a reference;
+- reread the relevant current source files completely before changing them.
+
+Then, before source work:
 
 - agree this small source shape with the user and Fable;
 - prove the process-local breakpoint observer can return an action without resolving/removing the underlying procedure;

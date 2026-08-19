@@ -11,6 +11,7 @@ import { handleCheckpointCommand } from "../src/core/checkpoints/checkpoint-cli.
 import {
 	CHECKPOINT_REF_PREFIX,
 	CheckpointManager,
+	type CheckpointRestoreOptions,
 	checkpointSidecarPath,
 	propagateCheckpointSidecar,
 	readCheckpointSidecar,
@@ -94,14 +95,43 @@ type AnyHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | 
 
 function createFakePi() {
 	const handlers = new Map<string, AnyHandler[]>();
+	// `pi.checkpoints` is backed by the session the handlers are currently
+	// running under, the same way the real ExtensionRunner resolves it.
+	let current: ExtensionContext | undefined;
+	const resolveManager = (): CheckpointManager | undefined => {
+		const sessionFile = current?.sessionManager.getSessionFile();
+		if (!current || !sessionFile) return undefined;
+		return new CheckpointManager({
+			cwd: current.cwd,
+			sessionId: current.sessionManager.getSessionId(),
+			sessionFile,
+		});
+	};
 	const pi = {
 		on(event: string, handler: AnyHandler) {
 			const list = handlers.get(event) ?? [];
 			list.push(handler);
 			handlers.set(event, list);
 		},
+		checkpoints: {
+			list: () => resolveManager()?.list() ?? [],
+			get: (entryId: string) => resolveManager()?.get(entryId),
+			restore: async (options: CheckpointRestoreOptions) =>
+				(await resolveManager()?.restore(options)) ?? {
+					status: "disabled" as const,
+					restored: [],
+					deleted: [],
+					reason: "no session",
+				},
+			capture: async (entryId: string) =>
+				(await resolveManager()?.captureIfChanged(entryId)) ?? {
+					status: "disabled" as const,
+					reason: "no session",
+				},
+		},
 	} as unknown as ExtensionAPI;
 	const emit = async (event: { type: string } & Record<string, unknown>, ctx: ExtensionContext): Promise<void> => {
+		current = ctx;
 		for (const handler of handlers.get(event.type) ?? []) {
 			await handler(event, ctx);
 		}

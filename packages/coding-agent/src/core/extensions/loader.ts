@@ -27,6 +27,7 @@ import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.ts";
 // avoiding a circular dependency. Extensions can import from @draht/coding-agent.
 import * as _bundledPiCodingAgent from "../../index.ts";
 import { resolvePath } from "../../utils/paths.ts";
+import type { CheckpointRestoreOptions } from "../checkpoints/checkpoint-manager.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
@@ -44,6 +45,9 @@ import type {
 	RegisteredCommand,
 	ToolDefinition,
 } from "./types.ts";
+
+/** Reason reported by `pi.checkpoints` when the session has no checkpoint storage. */
+const CHECKPOINTS_UNAVAILABLE = "checkpoints are unavailable for this session";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
@@ -171,6 +175,9 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		setModel: () => Promise.reject(new Error("Extension runtime not initialized")),
 		getThinkingLevel: notInitialized,
 		setThinkingLevel: notInitialized,
+		// Checkpoints need the runner's session binding; until bindCore() runs
+		// there is none, and pi.checkpoints degrades instead of throwing.
+		getCheckpointManager: () => undefined,
 		assertActive: notInitialized,
 		invalidate: notInitialized,
 		flagValues: new Map(),
@@ -350,6 +357,34 @@ function createExtensionAPI(
 		},
 
 		events: eventBus,
+
+		checkpoints: {
+			list() {
+				runtime.assertActive();
+				return runtime.getCheckpointManager()?.list() ?? [];
+			},
+
+			get(entryId: string) {
+				runtime.assertActive();
+				return runtime.getCheckpointManager()?.get(entryId);
+			},
+
+			async restore(options: CheckpointRestoreOptions) {
+				runtime.assertActive();
+				const manager = runtime.getCheckpointManager();
+				if (!manager) {
+					return { status: "disabled" as const, restored: [], deleted: [], reason: CHECKPOINTS_UNAVAILABLE };
+				}
+				return manager.restore(options);
+			},
+
+			async capture(entryId: string) {
+				runtime.assertActive();
+				const manager = runtime.getCheckpointManager();
+				if (!manager) return { status: "disabled" as const, reason: CHECKPOINTS_UNAVAILABLE };
+				return manager.captureIfChanged(entryId);
+			},
+		},
 	} as ExtensionAPI;
 
 	return api;

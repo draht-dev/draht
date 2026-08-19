@@ -47,6 +47,13 @@ import type {
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BashResult } from "../bash-executor.ts";
+import type {
+	CheckpointCaptureResult,
+	CheckpointManager,
+	CheckpointRecord,
+	CheckpointRestoreOptions,
+	CheckpointRestoreResult,
+} from "../checkpoints/checkpoint-manager.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
@@ -642,6 +649,21 @@ export interface SessionBeforeTreeEvent {
 	signal: AbortSignal;
 }
 
+/**
+ * Fired before a `/rewind` restores conversation and/or working-tree state
+ * (can be cancelled). Emitted before the pre-rewind safety snapshot is taken,
+ * so a cancelling handler leaves both halves of the session untouched.
+ */
+export interface SessionBeforeRewindEvent {
+	type: "session_before_rewind";
+	/** Entry the rewind targets. */
+	targetEntryId: string;
+	/** Current conversation leaf the rewind starts from. */
+	currentEntryId: string;
+	/** Which halves of the state the rewind would restore. */
+	scope: "conversation-and-files" | "conversation-only" | "files-only";
+}
+
 /** Fired after navigating in the session tree */
 export interface SessionTreeEvent {
 	type: "session_tree";
@@ -660,7 +682,18 @@ export type SessionEvent =
 	| SessionCompactEvent
 	| SessionShutdownEvent
 	| SessionBeforeTreeEvent
+	| SessionBeforeRewindEvent
 	| SessionTreeEvent;
+
+// ============================================================================
+// Checkpoint Events
+// ============================================================================
+
+/** Fired after a working-tree checkpoint has been captured and recorded. */
+export interface CheckpointCreatedEvent {
+	type: "checkpoint_created";
+	record: CheckpointRecord;
+}
 
 // ============================================================================
 // Agent Events
@@ -1035,6 +1068,7 @@ export type ExtensionEvent =
 	| ProjectTrustEvent
 	| ResourcesDiscoverEvent
 	| SessionEvent
+	| CheckpointCreatedEvent
 	| ContextEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
@@ -1129,6 +1163,10 @@ export interface SessionBeforeTreeResult {
 	label?: string;
 }
 
+export interface SessionBeforeRewindResult {
+	cancel?: boolean;
+}
+
 // ============================================================================
 // Message and Entry Rendering
 // ============================================================================
@@ -1203,7 +1241,12 @@ export interface ExtensionAPI {
 	on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): void;
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
+	on(
+		event: "session_before_rewind",
+		handler: ExtensionHandler<SessionBeforeRewindEvent, SessionBeforeRewindResult>,
+	): void;
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
+	on(event: "checkpoint_created", handler: ExtensionHandler<CheckpointCreatedEvent>): void;
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): void;
 	on(
 		event: "before_provider_request",
@@ -1417,6 +1460,45 @@ export interface ExtensionAPI {
 
 	/** Shared event bus for extension communication. */
 	events: EventBus;
+
+	// =========================================================================
+	// Checkpoints
+	// =========================================================================
+
+	/** Working-tree checkpoints for the current session (R42-RWD.8). */
+	checkpoints: ExtensionCheckpointsAPI;
+}
+
+/**
+ * `pi.checkpoints` — read and restore the working-tree snapshots taken for the
+ * current session. All calls operate on the session's own checkpoint namespace
+ * and degrade quietly when checkpoints are unavailable (no session file yet, or
+ * a cwd outside any git repository).
+ */
+export interface ExtensionCheckpointsAPI {
+	/** Every checkpoint recorded for this session, in capture order. */
+	list(): CheckpointRecord[];
+
+	/** The newest checkpoint recorded for an entry id, if any. */
+	get(entryId: string): CheckpointRecord | undefined;
+
+	/**
+	 * Restore the working tree to an entry's checkpoint, taking a pre-rewind
+	 * safety snapshot first and rolling back to it on failure. Never throws:
+	 * the outcome is on the returned status.
+	 */
+	restore(options: CheckpointRestoreOptions): Promise<CheckpointRestoreResult>;
+
+	/**
+	 * Capture a checkpoint for an entry id, skipping when the working tree is
+	 * unchanged since the previous one. A successful capture dispatches
+	 * `checkpoint_created`.
+	 *
+	 * This is the seam the always-loaded checkpoints builtin captures through,
+	 * which is what makes `checkpoint_created` fire for every capture in the
+	 * session rather than only for extension-initiated ones. Never throws.
+	 */
+	capture(entryId: string): Promise<CheckpointCaptureResult>;
 }
 
 // ============================================================================
@@ -1589,6 +1671,12 @@ export interface ExtensionRuntimeState {
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;
 	/** Native @draht/ai provider registrations queued during extension loading, processed when runner binds. */
 	pendingNativeProviderRegistrations: Array<{ provider: Provider; extensionPath: string }>;
+	/**
+	 * Checkpoint manager for the active session, backing `pi.checkpoints`.
+	 * Bound by the runner; returns undefined until then, and whenever the
+	 * session has no file to hang a checkpoint sidecar off.
+	 */
+	getCheckpointManager: () => CheckpointManager | undefined;
 	/** Throws when this extension instance is stale after runtime replacement. */
 	assertActive: () => void;
 	/** Marks this extension instance as stale after runtime replacement or reload. */

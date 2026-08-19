@@ -45,13 +45,15 @@ Ad-hoc:
 - `commands/review.md`
 - `commands/atomic-commit.md`
 - `commands/orchestrate.md`
+- `commands/orchestrate-loop.md`
 
 Use the wrappers for picker-driven invocation, and keep the `commands/*.md` files as the source prompt templates.
 
 ### Specialist agent prompts
 
-The plugin ships reference prompts in `agents/`:
+The plugin ships 9 reference prompts in `agents/`:
 
+- `advisor`
 - `architect`
 - `implementer`
 - `reviewer`
@@ -65,7 +67,7 @@ Codex subagent availability depends on the active Codex feature/configuration. W
 
 ### Command prompt wrappers
 
-The command prompt wrappers are:
+The plugin ships 17 command prompt wrappers, one per `commands/*.md` template:
 
 - `new-project`
 - `init-project`
@@ -83,17 +85,31 @@ The command prompt wrappers are:
 - `review`
 - `atomic-commit`
 - `orchestrate`
+- `orchestrate-loop`
 
 ### Support skills
 
-The GSD workflow templates live in `commands/`. The plugin also ships these supporting skills:
+The GSD workflow templates live in `commands/`. Alongside the 17 command wrappers above, the plugin ships 12 support skills (29 skill directories in total), loaded by description match or by name.
 
-- `tdd-workflow`
-- `ddd-workflow`
-- `verification-gate`
-- `brainstorming`
-- `debugging-workflow`
-- `atomic-reasoning`
+Router:
+
+- `draht` — catalog of the whole draht skill family: what draht is, the `.planning/` state model, a situation→skill map, host invocation, and install pointers
+
+Disciplines:
+
+- `atomic-reasoning` — decompose work into atomic, independently-verifiable units before acting
+- `brainstorming` — Socratic ideation gate that runs before any project work begins
+- `ddd-workflow` — bounded contexts, ubiquitous language, aggregates, domain events
+- `debugging-workflow` — four-phase systematic debugging, the protocol behind `$draht:fix`
+- `gsd-workflow` — complete GSD methodology reference (directory structure, cycle, hooks, config)
+- `loop-workflow` — iterate-until-a-deterministic-check-passes loops and their stop conditions
+- `model-tiering` — advisor and orchestrator patterns for cost-efficient model selection
+- `saga-spawner` — saga-graph reconciliation loop for unattended repo advancement as a cloud routine
+- `tdd-workflow` — red→green→refactor discipline, commit conventions, cycle violations
+- `verification-gate` — evidence before claims: run the command that proves it before saying "done"
+
+Creative:
+
 - `cinematic-continuation` — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
 
 ### Hooks and scripts
@@ -104,8 +120,10 @@ The plugin includes `hooks/hooks.json` plus these scripts:
 - `gsd-post-task.cjs`
 - `gsd-post-phase.cjs`
 - `gsd-quality-gate.cjs`
-- `session-start.cjs`
-- `prompt-context.cjs`
+- `session-start.cjs` (SessionStart)
+- `prompt-context.cjs` (UserPromptSubmit)
+- `post-edit-check.cjs` (PostToolUse on `Edit`/`Write`/`MultiEdit`)
+- `stop-quality-gate.cjs` (Stop)
 
 Codex loads plugin-bundled hooks only after the user reviews and trusts them.
 

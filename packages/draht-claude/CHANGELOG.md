@@ -8,6 +8,11 @@
 - `--no-graph-engine` install flag and `DRAHT_SKIP_GRAPH_ENGINE` env var to skip the automatic fetch
 - portable `cinematic-continuation` skill with bundled style/continuity references, a neutral sequence template, Seedance adapter boundary, and offline timeline compiler
 
+### Fixed
+
+- plugin manifest version lockstep — `.claude-plugin/plugin.json` is now stamped by the automated release path (`setVersion` in `scripts/release-helpers.mjs`) as well as the manual `npm run version:*` path. The 2026.7.11 lockstep fix only patched the manual path, which the release pipeline never calls, so the manifest froze at `2026.7.7-1` while this package advanced from `2026.7.11` through `2026.7.30`. Both plugin manifests now read `2026.7.30`, matching their `package.json`
+- the two writers remain separate — the manual path stamps manifests through `scripts/lib/version-stamp.mjs`, while the automated path stamps them from its own path list in `scripts/release-helpers.mjs` — so two gates make any future divergence loud: `scripts/check-draht-customizations.mjs` fails when `.claude-plugin/plugin.json` disagrees with this package's `package.json` version, and `assertReleaseVersions` re-reads every stamped surface after a release writes it
+
 ## [2026.7.12] - 2026-07-12
 
 ### Changed

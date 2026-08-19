@@ -12,7 +12,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 
 ## What you get
 
-### 16 slash commands
+### 17 slash commands
 
 **Project lifecycle**
 - `/new-project` — greenfield: questioning → domain model → requirements → roadmap
@@ -37,13 +37,15 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/review [scope]` — parallel code review + security audit
 - `/atomic-commit` — analyze diff, split into atomic conventional commits
 - `/orchestrate <task>` — decompose work and dispatch the right mix of specialist subagents
+- `/orchestrate-loop <goal>` — run one goal in a deterministic-check-gated loop until it passes
 
-### 7 specialist subagents
+### 9 specialist subagents
 
 All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 
 | Agent | Use |
 |---|---|
+| `advisor` | Strategic guidance on the strongest tier — consulted rarely, steers, never implements |
 | `architect` | Reads codebase, produces structured implementation plans |
 | `implementer` | Writes code following TDD cycle from plan tasks |
 | `reviewer` | Reviews changes for correctness, types, conventions, domain language |
@@ -51,12 +53,31 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `verifier` | Runs lint + typecheck + tests, reports results without fixing |
 | `git-committer` | Stages and commits with conventional commit messages |
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
+| `spec-reviewer` | Checks a task's diff against its spec — no omissions, no additions |
 
-### Bundled workflow and creative skills
+### 12 bundled skills
 
-- **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
-- **`tdd-workflow`** — red→green→refactor discipline, commit conventions, cycle violations
+Skills load by description match or on request — no slash command needed.
+
+**Router**
+
+- **`draht`** — catalog of the whole draht skill family: what draht is, the `.planning/` state model, a situation→skill map, host invocation, and install pointers
+
+**Disciplines**
+
+- **`atomic-reasoning`** — decompose work into atomic, independently-verifiable units before acting
+- **`brainstorming`** — Socratic ideation gate that runs before any project work begins
 - **`ddd-workflow`** — bounded contexts, ubiquitous language, aggregates, domain events
+- **`debugging-workflow`** — four-phase systematic debugging, the protocol behind `/fix`
+- **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
+- **`loop-workflow`** — iterate-until-a-deterministic-check-passes loops and their stop conditions
+- **`model-tiering`** — advisor and orchestrator patterns for cost-efficient model selection
+- **`saga-spawner`** — saga-graph reconciliation loop for unattended repo advancement as a cloud routine
+- **`tdd-workflow`** — red→green→refactor discipline, commit conventions, cycle violations
+- **`verification-gate`** — evidence before claims: run the command that proves it before saying "done"
+
+**Creative**
+
 - **`cinematic-continuation`** — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
 
 ### 4 workflow hook scripts
@@ -68,10 +89,12 @@ Invoked from inside commands (not Claude Code lifecycle hooks):
 - `gsd-post-phase.cjs <phase>` — generate phase report, update ROADMAP status
 - `gsd-quality-gate.cjs [--strict]` — lint + typecheck + test + coverage enforcement
 
-### 2 Claude Code lifecycle hooks
+### 4 Claude Code lifecycle hooks
 
-- **SessionStart** — surfaces current phase, status, and CONTINUE-HERE marker when a session opens in a draht project
-- **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt
+- **SessionStart** — surfaces current phase, status, and CONTINUE-HERE marker when a session opens in a draht project (`session-start.cjs`)
+- **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt (`prompt-context.cjs`)
+- **PostToolUse** — after `Edit`/`Write`/`MultiEdit`, runs a fast check over the touched files (`post-edit-check.cjs`)
+- **Stop** — runs the quality gate when a session ends (`stop-quality-gate.cjs`)
 
 ### Bundled `draht-tools` CLI
 
@@ -170,11 +193,13 @@ Each specialist subagent ships with a default model tuned to its workload:
 
 | Agent | Default | Used by |
 |---|---|---|
+| `advisor` | `fable` | any command — rare, high-leverage course correction |
 | `architect` | `opus` | `/plan-phase` — deep reasoning for architectural plans |
 | `implementer` | `sonnet` | `/execute-phase` — fast, reliable code changes |
 | `verifier` | `sonnet` | `/verify-work` — lint, typecheck, test runs |
 | `security-auditor` | `opus` | `/verify-work` — security audit and CVE analysis |
-| `reviewer` | `inherit` | `/verify-work`, `/review` — code review |
+| `reviewer` | `opus` | `/verify-work`, `/review` — code review |
+| `spec-reviewer` | `opus` | `/execute-phase` — diff-vs-spec compliance |
 | `debugger` | `inherit` | `/fix` — bug diagnosis |
 | `git-committer` | `inherit` | `/atomic-commit` — commit staging |
 

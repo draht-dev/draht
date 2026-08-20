@@ -3,8 +3,20 @@ import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import * as sessionWrites from "../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { InstrumentedStorage } from "../../src/harness/session/testing/index.ts";
-import type { CommitResult, Write } from "../../src/harness/session/types.ts";
+import type { CommitResult, SessionStats, Write } from "../../src/harness/session/types.ts";
 import * as storedValues from "../../src/harness/session/values.ts";
+
+const EMPTY_STATS: SessionStats = {
+	messageCount: 0,
+	usage: {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	},
+};
 
 class ControlledCommitStorage extends MemoryStorage {
 	private readonly pending: Array<{
@@ -55,11 +67,11 @@ describe("InstrumentedStorage", () => {
 		expect(secondCommit).toBe(delegate.lastCommit);
 		expect(storage.getCommitAttempts()).toEqual([firstTransaction, secondTransaction]);
 
-		const firstResult = { firstSeq: 1, seqs: [1], timestamp: 10 };
+		const firstResult = { firstSeq: 1, seqs: [1], timestamp: 10, stats: EMPTY_STATS };
 		delegate.resolveNextCommit(firstResult);
 		expect(await firstCommit).toBe(firstResult);
 		expect(storage.getCommitAttempts()).toEqual([firstTransaction, secondTransaction]);
-		const secondResult = { firstSeq: 2, seqs: [2], timestamp: 20 };
+		const secondResult = { firstSeq: 2, seqs: [2], timestamp: 20, stats: EMPTY_STATS };
 		delegate.resolveNextCommit(secondResult);
 		expect(await secondCommit).toBe(secondResult);
 		await storage.close(BACKGROUND_CONTEXT);
@@ -71,7 +83,7 @@ describe("InstrumentedStorage", () => {
 
 		const commit = storage.commit(transaction, BACKGROUND_CONTEXT);
 		expect(storage.getCommitAttempts()[0]).toBe(transaction);
-		delegate.resolveNextCommit({ firstSeq: 1, seqs: [1], timestamp: 10 });
+		delegate.resolveNextCommit({ firstSeq: 1, seqs: [1], timestamp: 10, stats: EMPTY_STATS });
 		await commit;
 		await storage.close(BACKGROUND_CONTEXT);
 	});

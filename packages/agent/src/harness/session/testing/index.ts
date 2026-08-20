@@ -28,6 +28,7 @@ export {
 	createSessionRepoOwnershipConformance,
 } from "./conformance/session-repo.ts";
 export { createStorageConformance } from "./conformance/storage.ts";
+export { CommitDiscarded, GatingStorage } from "./gating-storage.ts";
 export { InstrumentedStorage } from "./instrumented-storage.ts";
 export { StorageDecorator } from "./storage-decorator.ts";
 export type { ConformanceCase, StorageFixture } from "./types.ts";

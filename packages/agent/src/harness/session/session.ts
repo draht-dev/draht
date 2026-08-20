@@ -44,8 +44,9 @@ import {
 	type ValueList,
 } from "./values.ts";
 
-interface StorageBackedSessionOptions {
+export interface StorageBackedSessionOptions {
 	laneMutationLine?: LaneMutationLine;
+	idGenerator?: IdGenerator;
 	onClose?: () => void;
 }
 
@@ -182,7 +183,7 @@ class StorageBackedSessionMutator implements SessionMutator {
 /** Package-internal typed boundary shared by concrete session repositories. */
 export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMetadata> implements Session<TMetadata> {
 	readonly metadata: TMetadata;
-	readonly idGenerator: IdGenerator = { next: uuidv7 };
+	readonly idGenerator: IdGenerator;
 	private readonly storage: Storage;
 	private readonly laneMutationLine: LaneMutationLine;
 	private readonly onClose: (() => void) | undefined;
@@ -192,6 +193,7 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 
 	constructor(metadata: TMetadata, storage: Storage, options: StorageBackedSessionOptions = {}) {
 		this.metadata = metadata;
+		this.idGenerator = options.idGenerator ?? { next: uuidv7 };
 		this.storage = storage;
 		this.laneMutationLine = options.laneMutationLine ?? new LaneMutationLine();
 		this.onClose = options.onClose;

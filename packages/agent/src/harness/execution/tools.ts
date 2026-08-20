@@ -2,7 +2,7 @@ import { type ToolResultMessage, validateToolArguments } from "@draht/ai";
 import type { AgentTool, AgentToolCall, AgentToolResult } from "../../types.ts";
 import { type Context, withAbortSignal } from "../context.ts";
 import type { JsonValue } from "../session/types.ts";
-import type { EffectGate } from "./effect-gate.ts";
+import type { Gate } from "./effect-gate.ts";
 
 /** A tool call whose tool exists and whose prepared arguments passed validation. */
 export interface PreparedToolCall {
@@ -118,29 +118,30 @@ export function applyBeforeToolDecision(
 }
 
 /** Execute one cleared external tool effect, converting expected tool throws to error output. */
-export async function executeToolCall(
+export function executeToolCall(
 	call: ClearedToolCall,
-	effectGate: EffectGate,
+	gate: Gate,
 	onUpdate: (partial: AgentToolResult<unknown>) => void,
 	context: Context,
 ): Promise<ExecutedToolCall> {
 	let acceptingUpdates = true;
-	effectGate.assertOpen();
-	const admittedContext = withAbortSignal(effectGate.signal, context);
-	admittedContext.abortSignal?.throwIfAborted();
-	try {
-		const result = await call.tool.execute(call.toolCall.id, call.args, admittedContext.abortSignal, (partial) => {
-			if (acceptingUpdates) onUpdate(partial);
-		});
-		return { result, isError: false };
-	} catch (error) {
-		return {
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
-			isError: true,
-		};
-	} finally {
-		acceptingUpdates = false;
-	}
+	return gate.admit(async () => {
+		const admittedContext = withAbortSignal(gate.signal, context);
+		admittedContext.abortSignal?.throwIfAborted();
+		try {
+			const result = await call.tool.execute(call.toolCall.id, call.args, admittedContext.abortSignal, (partial) => {
+				if (acceptingUpdates) onUpdate(partial);
+			});
+			return { result, isError: false };
+		} catch (error) {
+			return {
+				result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+				isError: true,
+			};
+		} finally {
+			acceptingUpdates = false;
+		}
+	});
 }
 
 /** Apply an after-tool patch field by field. */

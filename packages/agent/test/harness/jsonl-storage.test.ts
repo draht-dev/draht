@@ -197,7 +197,7 @@ describe("JsonlStorage persistence", () => {
 		expect(
 			(await reopened.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT)).map(({ id, seq }) => ({ id, seq })),
 		).toEqual([{ id: "usage", seq: committed.seqs[2] }]);
-		expect(await reopened.getStats(BACKGROUND_CONTEXT)).toEqual({
+		const historicalStats = {
 			messageCount: 1,
 			usage: {
 				input: 1,
@@ -207,9 +207,11 @@ describe("JsonlStorage persistence", () => {
 				totalTokens: 3,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
-		});
+		};
+		expect(await reopened.getStats(BACKGROUND_CONTEXT)).toEqual(historicalStats);
 		const next = await reopened.commit([], BACKGROUND_CONTEXT);
 		expect(next.firstSeq).toBe(5);
+		expect(next.stats).toEqual(historicalStats);
 		await reopened.close(BACKGROUND_CONTEXT);
 	});
 });

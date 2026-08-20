@@ -42,7 +42,7 @@ export type CommittedWrite =
 
 export interface PreparedCommit {
 	writes: CommittedWrite[];
-	result: CommitResult;
+	result: Omit<CommitResult, "stats">;
 }
 
 export interface CommitValidationState {

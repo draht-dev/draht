@@ -1,6 +1,6 @@
 import type { HookHandler, HookInvocation, HookMap, HookName, Hooks } from "./agent-harness.ts";
 import { type Context, withAbortSignal } from "./context.ts";
-import type { EffectGate } from "./execution/effect-gate.ts";
+import type { Gate } from "./execution/effect-gate.ts";
 import { startHarnessSpan } from "./telemetry.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch } from "./types.ts";
 
@@ -10,13 +10,6 @@ interface HookRegistration {
 }
 
 type HookErrorReporter = (error: Error, hook: HookName, lane: string, context: Context) => void | Promise<void>;
-
-function admitEffect(effectGate: EffectGate, context: Context): Context {
-	effectGate.assertOpen();
-	const admittedContext = withAbortSignal(effectGate.signal, context);
-	admittedContext.abortSignal?.throwIfAborted();
-	return admittedContext;
-}
 
 /** Ordered harness hook registry and aggregate runner. */
 export class HookRegistry implements Hooks {
@@ -51,25 +44,32 @@ export class HookRegistry implements Hooks {
 	runWithGate<TName extends HookName>(
 		name: TName,
 		event: HookInvocation<TName>,
-		effectGate: EffectGate,
+		gate: Gate,
 		context: Context,
 	): Promise<HookMap[TName]["result"]> {
-		return this.runAdmitted(name, event, admitEffect(effectGate, context));
+		return gate.admit(() => {
+			const admittedContext = withAbortSignal(gate.signal, context);
+			admittedContext.abortSignal?.throwIfAborted();
+			return this.runAdmitted(name, event, admittedContext);
+		});
 	}
 
 	/** Invoke a tool-hook aggregate with one telemetry span per registered handler. */
 	runToolWithGate<TName extends "before_tool" | "after_tool">(
 		name: TName,
 		event: HookInvocation<TName>,
-		effectGate: EffectGate,
+		gate: Gate,
 		context: Context,
 	): Promise<HookMap[TName]["result"]> {
-		const admittedContext = admitEffect(effectGate, context);
-		return (
-			name === "before_tool"
-				? this.beforeTool(event as HookInvocation<"before_tool">, admittedContext)
-				: this.afterTool(event as HookInvocation<"after_tool">, admittedContext)
-		) as Promise<HookMap[TName]["result"]>;
+		return gate.admit(() => {
+			const admittedContext = withAbortSignal(gate.signal, context);
+			admittedContext.abortSignal?.throwIfAborted();
+			return (
+				name === "before_tool"
+					? this.beforeTool(event as HookInvocation<"before_tool">, admittedContext)
+					: this.afterTool(event as HookInvocation<"after_tool">, admittedContext)
+			) as Promise<HookMap[TName]["result"]>;
+		});
 	}
 
 	close(error: Error): void {

@@ -235,6 +235,17 @@ describe("StorageBackedSession", () => {
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
+	it("accepts an injected id generator for deterministic execution tests", async () => {
+		let next = 0;
+		const idGenerator = { next: (timestampMs?: number) => `${timestampMs ?? "now"}:${++next}` };
+		const session = new StorageBackedSession(metadata, new MemoryStorage({ now: () => NOW }), { idGenerator });
+
+		expect(session.idGenerator).toBe(idGenerator);
+		expect(session.idGenerator.next(7)).toBe("7:1");
+		expect(session.idGenerator.next()).toBe("now:2");
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
 	it("exposes metadata directly and the shared UUIDv7 id generator", async () => {
 		const sourceMetadata = { ...metadata };
 		const session = new StorageBackedSession(sourceMetadata, new MemoryStorage({ now: () => NOW }));

@@ -34,11 +34,10 @@ import { type Config, type LaneState, SliceNotImplemented } from "./types.ts";
 type GlobalConfigProperty = GlobalConfigEventPayload["property"];
 
 /** Runtime2 implementation of AgentHarness. The harness is the main lane. */
-export class Harness<TContext extends object | undefined> extends Lane implements AgentHarness<TContext> {
-	readonly hooks: HookRegistry;
+export class Harness<TContext extends object | undefined> extends Lane<TContext> implements AgentHarness<TContext> {
 	readonly events: HarnessEventBus;
 	readonly seed: LaneConfiguration;
-	readonly lanesByName = new Map<string, Lane>();
+	readonly lanesByName = new Map<string, Lane<TContext>>();
 	private readonly configStore: { value: Config<TContext> };
 	closePromise: Promise<void> | undefined;
 	faultError: HarnessFault | undefined;
@@ -46,6 +45,20 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 	constructor(options: AgentHarnessOptions<TContext>, seed: LaneConfiguration, restored: Map<string, LaneState>) {
 		const main = restored.get("main");
 		if (main === undefined) throw new SessionInvariantError("Session is missing main lane");
+		const events = new HarnessEventBus();
+		const hooks = new HookRegistry((error, hook, lane, context) =>
+			events.emit(
+				{
+					type: "handler_error",
+					kind: "hook",
+					hook,
+					error: error.message,
+					...(error.stack === undefined ? {} : { stack: error.stack }),
+					lane,
+				},
+				context,
+			),
+		);
 		const configStore: { value: Config<TContext> } = {
 			value: {
 				tools: options.tools ?? [],
@@ -66,6 +79,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 			"main",
 			options.session,
 			options.models,
+			hooks,
 			main,
 			(cause, context) => this.fault(cause, context),
 			(events, context) => this.events.emitBatch(events, context),
@@ -74,20 +88,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		);
 		this.seed = seed;
 		this.configStore = configStore;
-		this.events = new HarnessEventBus();
-		this.hooks = new HookRegistry((error, hook, lane, context) =>
-			this.events.emit(
-				{
-					type: "handler_error",
-					kind: "hook",
-					hook,
-					error: error.message,
-					...(error.stack === undefined ? {} : { stack: error.stack }),
-					lane,
-				},
-				context,
-			),
-		);
+		this.events = events;
 		this.lanesByName.set("main", this);
 		for (const [name, state] of restored) {
 			if (name !== "main") this.lanesByName.set(name, this.buildLane(name, state));
@@ -215,11 +216,12 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		throw new SliceNotImplemented("watchSession");
 	}
 
-	private buildLane(name: string, state: LaneState): Lane {
-		return new Lane(
+	private buildLane(name: string, state: LaneState): Lane<TContext> {
+		return new Lane<TContext>(
 			name,
 			this.session,
 			this.models,
+			this.hooks,
 			state,
 			(cause, context) => this.fault(cause, context),
 			(events, context) => this.events.emitBatch(events, context),
@@ -265,7 +267,7 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 		/*
 		 * Close is a process-local admission boundary, not an abort. Public lane work checks Lane.assertOpen() at
 		 * entry. Durable work then enters Session.mutate(), whose mutation line is the final write-admission gate.
-		 * External effects check their EffectGate immediately before invocation. Closing seals all applicable gates
+		 * External effects use Gate.admit() immediately around invocation. Closing seals all applicable gates
 		 * before awaiting anything.
 		 *
 		 * If close wins, new work and queued mutation callbacks that have not started reject. An active mutation may

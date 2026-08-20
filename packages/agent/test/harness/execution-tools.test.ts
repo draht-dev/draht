@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
-import { AbortRequested, OperationEffectGate } from "../../src/harness/execution/effect-gate.ts";
+import { AbortRequested, createGate, type Gate } from "../../src/harness/execution/effect-gate.ts";
 import {
 	applyBeforeToolDecision,
 	createToolResultMessage,
@@ -52,8 +52,8 @@ function clearPrepared(callToClear: ReturnType<typeof prepareToolCall>) {
 	return cleared;
 }
 
-function effectGate(): OperationEffectGate {
-	return new OperationEffectGate();
+function effectGate(): Gate {
+	return createGate().gate;
 }
 
 describe("tool execution primitives", () => {
@@ -155,10 +155,10 @@ describe("tool execution primitives", () => {
 	it("lets abort-first gate refusal escape without invoking the tool", async () => {
 		const execute = vi.fn(tool().execute);
 		const cleared = clearPrepared(prepareToolCall(call(), [tool({ execute })]));
-		const gate = effectGate();
-		gate.beginAbort(Promise.resolve());
+		const { gate, control } = createGate();
+		control.beginAbort(Promise.resolve());
 
-		await expect(executeToolCall(cleared, gate, () => {}, BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(AbortRequested);
+		expect(() => executeToolCall(cleared, gate, () => {}, BACKGROUND_CONTEXT)).toThrow(AbortRequested);
 		expect(execute).not.toHaveBeenCalled();
 	});
 

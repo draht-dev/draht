@@ -11,8 +11,8 @@ import {
 	type CommittedValueDeleteWrite,
 	type CommittedValueSetWrite,
 	type CommittedWrite,
-	StorageState,
-} from "../storage-state.ts";
+	InMemoryStorageState,
+} from "../in-memory-storage-state.ts";
 import type {
 	CommitResult,
 	Entry,
@@ -127,7 +127,7 @@ export class JsonlStorage implements Storage {
 	private readonly now: () => number;
 	readonly header: JsonlStorageHeader;
 	private backing: JsonlBacking;
-	private readonly storageState = new StorageState();
+	private readonly storageState = new InMemoryStorageState();
 	private commitQueue: Promise<void> = Promise.resolve();
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
@@ -256,8 +256,8 @@ export class JsonlStorage implements Storage {
 				`Failed to append JSONL storage ${this.path}`,
 			);
 		}
-		this.storageState.applyValidated(prepared.writes);
-		return prepared.result;
+		const stats = this.storageState.applyValidated(prepared.writes);
+		return { ...prepared.result, stats: this.withImportedUsage(stats) };
 	}
 
 	/** Atomically upgrade legacy v3 backing and preserve the first caller write as a v4 transaction. */
@@ -289,13 +289,14 @@ export class JsonlStorage implements Storage {
 			context,
 		);
 
-		this.storageState.applyValidated(prepared.writes);
+		const stats = this.storageState.applyValidated(prepared.writes);
 		this.backing = { kind: "v4" };
 		// The first sequence belongs to the internal usage adjustment; return only caller-write sequences.
 		return {
 			...prepared.result,
 			firstSeq: prepared.result.firstSeq + 1,
 			seqs: prepared.result.seqs.slice(1),
+			stats: this.withImportedUsage(stats),
 		};
 	}
 
@@ -345,12 +346,11 @@ export class JsonlStorage implements Storage {
 
 	getStats(_context: Context): Promise<SessionStats> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
-		const stats = this.storageState.getStats();
-		if (this.backing.kind === "v4") return Promise.resolve(stats);
-		return Promise.resolve({
-			...stats,
-			usage: this.backing.importedUsage,
-		});
+		return Promise.resolve(this.withImportedUsage(this.storageState.getStats()));
+	}
+
+	private withImportedUsage(stats: SessionStats): SessionStats {
+		return this.backing.kind === "v4" ? stats : { ...stats, usage: this.backing.importedUsage };
 	}
 
 	/** Capture the state needed to fork at one serialized boundary between commits. */

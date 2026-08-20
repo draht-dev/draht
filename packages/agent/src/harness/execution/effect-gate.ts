@@ -9,53 +9,64 @@ export class AbortRequested extends Error {
 	}
 }
 
-type EffectGateState =
+/** Invocation cancellation or owner abandonment. Never durable cancellation. */
+export class DriveAbandoned extends Error {
+	constructor() {
+		super("Drive pass was abandoned by its installing invocation");
+		this.name = "DriveAbandoned";
+	}
+}
+
+/** Procedure-facing synchronous admission capability for one drive pass. */
+export interface Gate {
+	readonly signal: AbortSignal;
+	admit<T>(invoke: () => T): T;
+}
+
+/** Owner-facing lifecycle controls for one drive pass. */
+export interface GateControl {
+	beginAbort(cancellation: Promise<void>): void;
+	signalAbort(): void;
+	close(error: Error): void;
+}
+
+type GateState =
 	| { status: "open" }
 	| { status: "aborting"; cancellation: Promise<void> }
 	| { status: "closed"; error: Error };
 
-/** Process-local admission gate for one operation's external work. */
-export interface EffectGate {
-	/** The operation-owned cooperative signal. */
-	readonly signal: AbortSignal;
-	/** Synchronously throws when ordinary work may no longer start. */
-	assertOpen(): void;
-	/** Close ordinary starts before the durable cancellation mutation begins. */
-	beginAbort(cancellation: Promise<void>): void;
-	/** Pull the cooperative signal only after cancellation is durable. */
-	signalAbort(): void;
-	/** Permanently stop starts and signal already-admitted work. */
-	close(error: Error): void;
-}
+/** Create separate procedure-facing and owner-facing views of one effect gate. */
+export function createGate(): { gate: Gate; control: GateControl } {
+	let state: GateState = { status: "open" };
+	const controller = new AbortController();
 
-/** Default {@link EffectGate} implementation used by drive passes. */
-export class OperationEffectGate implements EffectGate {
-	private readonly controller = new AbortController();
-	private state: EffectGateState = { status: "open" };
+	const check = (): void => {
+		if (state.status === "aborting") throw new AbortRequested(state.cancellation);
+		if (state.status === "closed") throw state.error;
+	};
 
-	get signal(): AbortSignal {
-		return this.controller.signal;
-	}
-
-	assertOpen(): void {
-		if (this.state.status === "aborting") throw new AbortRequested(this.state.cancellation);
-		if (this.state.status === "closed") throw this.state.error;
-	}
-
-	beginAbort(cancellation: Promise<void>): void {
-		if (this.state.status === "open") {
-			this.state = { status: "aborting", cancellation };
-		}
-	}
-
-	signalAbort(): void {
-		if (this.state.status !== "aborting" || this.controller.signal.aborted) return;
-		this.controller.abort(new AbortRequested(this.state.cancellation));
-	}
-
-	close(error: Error): void {
-		if (this.state.status === "closed") return;
-		this.state = { status: "closed", error };
-		if (!this.controller.signal.aborted) this.controller.abort(error);
-	}
+	return {
+		gate: {
+			admit<T>(invoke: () => T): T {
+				check();
+				return invoke();
+			},
+			signal: controller.signal,
+		},
+		control: {
+			beginAbort(cancellation) {
+				if (state.status !== "open") return;
+				state = { status: "aborting", cancellation };
+			},
+			signalAbort() {
+				if (state.status !== "aborting" || controller.signal.aborted) return;
+				controller.abort(new AbortRequested(state.cancellation));
+			},
+			close(error) {
+				if (state.status === "closed") return;
+				state = { status: "closed", error };
+				if (!controller.signal.aborted) controller.abort(error);
+			},
+		},
+	};
 }

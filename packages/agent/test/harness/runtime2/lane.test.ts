@@ -4,6 +4,8 @@ import { HarnessClosed, type HarnessEvent } from "../../../src/harness/agent-har
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT, type Context } from "../../../src/harness/context.ts";
 import { HarnessEventBus } from "../../../src/harness/events.ts";
+import { HookRegistry } from "../../../src/harness/hooks.ts";
+import { convertToLlm } from "../../../src/harness/messages.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
@@ -21,7 +23,7 @@ const configuration: LaneConfiguration = {
 async function createLane(
 	emitBatch: (events: readonly HarnessEvent[], context: Context) => Promise<void> = () => Promise.resolve(),
 ): Promise<{
-	lane: Lane;
+	lane: Lane<undefined>;
 	model: Model<Api>;
 	session: Session;
 	storage: ControlledMemoryStorage;
@@ -49,20 +51,28 @@ async function createLane(
 	const models = createModels();
 	models.setProvider(faux.provider);
 	return {
-		lane: new Lane(
+		lane: new Lane<undefined>(
 			"main",
 			session,
 			models,
+			new HookRegistry(() => {}),
 			await restoreLane(session, "main", BACKGROUND_CONTEXT),
 			(cause) => (cause instanceof Error ? cause : new Error(String(cause))),
 			emitBatch,
 			(snapshot) => ({ snapshot, start: () => {}, unsubscribe: () => {} }),
 			() => ({
+				tools: [],
 				resources: {},
+				streamOptions: {},
+				retryPolicy: { enabled: true, maxRetries: 3, baseDelayMs: 1_000 },
 				compaction: DEFAULT_COMPACTION_SETTINGS,
 				steeringMode: "all",
 				followUpMode: "all",
 				toolExecution: "parallel",
+				toolContext: undefined,
+				systemPrompt: undefined,
+				toProviderMessages: (messages) => convertToLlm(messages),
+				entryProjectors: {},
 			}),
 		),
 		model: faux.getModel(),
@@ -72,7 +82,7 @@ async function createLane(
 }
 
 function setThinkingLevel(
-	lane: Lane,
+	lane: Lane<undefined>,
 	thinkingLevel: LaneConfiguration["thinkingLevel"],
 	observed?: LaneConfiguration["thinkingLevel"][],
 ): Promise<LaneConfiguration["thinkingLevel"]> {

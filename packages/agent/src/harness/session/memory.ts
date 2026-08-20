@@ -7,8 +7,8 @@ import {
 	type ForkSourceSnapshot,
 	forkSnapshotWrites,
 } from "./fork.ts";
+import { InMemoryStorageState } from "./in-memory-storage-state.ts";
 import { StorageBackedSession } from "./session.ts";
-import { StorageState } from "./storage-state.ts";
 import type {
 	BranchScan,
 	CommitResult,
@@ -54,7 +54,7 @@ export interface MemorySessionRepoOptions {
 
 export class MemoryStorage implements Storage {
 	private readonly now: () => number;
-	private storageState = new StorageState();
+	private storageState = new InMemoryStorageState();
 	private commitQueue: Promise<void> = Promise.resolve();
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
@@ -67,8 +67,8 @@ export class MemoryStorage implements Storage {
 		if (this.state !== "open") throw new Error("MemoryStorage is closed");
 		const result = this.commitQueue.then(() => {
 			const prepared = this.storageState.prepareCommit(writes, this.now());
-			this.storageState.applyValidated(prepared.writes);
-			return prepared.result;
+			const stats = this.storageState.applyValidated(prepared.writes);
+			return { ...prepared.result, stats };
 		});
 		this.commitQueue = result.then(
 			() => undefined,

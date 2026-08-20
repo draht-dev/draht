@@ -3,6 +3,7 @@ import type { Usage } from "@draht/ai";
 import { BACKGROUND_CONTEXT } from "../../../context.ts";
 import { insertEntry, insertUsage } from "../../commit.ts";
 import type {
+	CommitResult,
 	CompactionEntry,
 	CustomEntry,
 	Entry,
@@ -10,6 +11,7 @@ import type {
 	JsonValue,
 	MessageEntry,
 	NewEntry,
+	Storage,
 	Write,
 } from "../../types.ts";
 import {
@@ -124,6 +126,10 @@ function assertStrictlyIncreasing(values: readonly number[]): void {
 	}
 }
 
+async function assertCommitStats(storage: Storage, result: CommitResult): Promise<void> {
+	deepStrictEqual(result.stats, await storage.getStats(BACKGROUND_CONTEXT));
+}
+
 /** Creates fresh, runner-independent cases for the durable Storage contract. */
 export function createStorageConformance(factory: () => Promise<StorageFixture>): readonly ConformanceCase[] {
 	return [
@@ -139,6 +145,7 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 
 			strictEqual(result.seqs.length, 3);
 			strictEqual(result.firstSeq, result.seqs[0]);
+			await assertCommitStats(storage, result);
 			assertStrictlyIncreasing(result.seqs);
 			ok(Number.isSafeInteger(result.timestamp) && result.timestamp >= 0);
 			deepStrictEqual(
@@ -822,17 +829,18 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 				deepStrictEqual(await storage.getStats(BACKGROUND_CONTEXT), { messageCount: 0, usage: zeroUsage() });
 
 				const firstUsage = usage(2, 3, { cacheWrite1h: 4, reasoning: 1 });
-				await storage.commit(
+				const first = await storage.commit(
 					[
 						insertEntry(userEntry("message")),
 						insertUsage({ id: "usage-1", usage: firstUsage, adjustment: false }),
 					],
 					BACKGROUND_CONTEXT,
 				);
-				deepStrictEqual(await storage.getStats(BACKGROUND_CONTEXT), { messageCount: 1, usage: firstUsage });
+				await assertCommitStats(storage, first);
+				deepStrictEqual(first.stats, { messageCount: 1, usage: firstUsage });
 
 				const secondUsage = usage(5, 7, { cacheWrite1h: 6, reasoning: 2 });
-				await storage.commit(
+				const second = await storage.commit(
 					[
 						insertEntry(customEntry("custom", "message")),
 						insertEntry(compactionEntry("compaction", "custom")),
@@ -840,7 +848,8 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 					],
 					BACKGROUND_CONTEXT,
 				);
-				deepStrictEqual(await storage.getStats(BACKGROUND_CONTEXT), {
+				await assertCommitStats(storage, second);
+				deepStrictEqual(second.stats, {
 					messageCount: 1,
 					usage: {
 						input: 7,
@@ -872,6 +881,9 @@ export function createStorageConformance(factory: () => Promise<StorageFixture>)
 				const [firstResult, secondResult] = await Promise.all([first, second]);
 
 				ok(firstResult.seqs[0]! < secondResult.seqs[0]!);
+				deepStrictEqual(firstResult.stats, { messageCount: 1, usage: zeroUsage() });
+				deepStrictEqual(secondResult.stats, { messageCount: 2, usage: zeroUsage() });
+				await assertCommitStats(storage, secondResult);
 				deepStrictEqual(ids(await storage.scanEntries({ order: "asc" }, BACKGROUND_CONTEXT)), ["first", "second"]);
 			},
 		),

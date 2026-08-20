@@ -16,7 +16,7 @@ import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch
 import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
 import type { Context } from "./context.ts";
 import { type Result, TaggedError } from "./result.ts";
-import { createAgentHarness } from "./runtime2/index.ts";
+import { createAgentHarness } from "./runtime2/harness.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -640,4 +640,4 @@ export interface AgentHarnessConstructor {
 }
 
 /** Runtime constructor for attaching the durable harness to one open session. */
-export const AgentHarness: AgentHarnessConstructor = { create: createAgentHarness };
+export const AgentHarness = { create: createAgentHarness } satisfies AgentHarnessConstructor;

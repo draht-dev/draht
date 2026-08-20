@@ -392,6 +392,8 @@ export interface CommitResult {
 	firstSeq: number;
 	seqs: number[];
 	timestamp: number;
+	/** Session totals immediately after this commit was applied. */
+	stats: SessionStats;
 }
 
 export interface EntryStructure {

@@ -12,6 +12,7 @@ import {
 	type LaneSnapshot,
 	type ModelIdentity,
 	type OperationAdmissionResult,
+	OperationMismatch,
 	type OperationRequest,
 	type QueuedItem,
 	UnknownSkill,
@@ -19,13 +20,13 @@ import {
 	type WatchHandle,
 } from "../agent-harness.ts";
 import type { Context } from "../context.ts";
+import type { HookRegistry } from "../hooks.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
 import { Result } from "../result.ts";
 import { insertEntry } from "../session/commit.ts";
 import { SessionInvariantError, SessionPendingAssistantMessageError } from "../session/session.ts";
 import type {
 	BranchScan,
-	CommitResult,
 	Entry,
 	LaneLastResult,
 	Operation,
@@ -34,7 +35,6 @@ import type {
 	SessionReader,
 	SessionTree,
 	StructuralDecision,
-	Write,
 } from "../session/types.ts";
 import {
 	deleteValue,
@@ -52,23 +52,19 @@ import {
 	setValue,
 } from "../session/values.ts";
 import { formatSkillInvocation } from "../skills.ts";
-import { type AcceptanceConfig, type LaneState, SliceNotImplemented } from "./types.ts";
+import {
+	type ActiveDrive,
+	type Config,
+	type DriveScope,
+	type LaneCommand,
+	type LaneDriveCapabilities,
+	type LaneState,
+	SliceNotImplemented,
+} from "./types.ts";
 
 type EmitBatch = (events: readonly HarnessEvent[], context: Context) => Promise<void>;
 type WatchHandler = <T>(snapshot: T, filter: (event: HarnessEvent) => boolean, context: Context) => WatchHandle<T>;
 type FaultHandler = (cause: unknown, context: Context) => Error;
-type Synchronous<TResult> = TResult extends PromiseLike<unknown> ? never : TResult;
-
-type LaneCommand<TResult> =
-	| {
-			kind: "commit";
-			writes: Write[];
-			next: LaneState;
-			materialize(commit: CommitResult): Synchronous<TResult>;
-			events?(commit: CommitResult): HarnessEvent[];
-	  }
-	| { kind: "return"; result: TResult }
-	| { kind: "reject"; error: Error };
 
 type LaneCommandOutcome<TResult> =
 	| { kind: "return"; result: TResult; delivery?: Promise<void> }
@@ -106,16 +102,18 @@ function capturedModel(operation: Operation): ModelIdentity | undefined {
 }
 
 /** Runtime2 implementation of one configured lane. */
-export class Lane implements AgentLane {
+export class Lane<TContext extends object | undefined> implements AgentLane, LaneDriveCapabilities<TContext> {
 	readonly name: string;
 	readonly sessionTree: SessionTree;
+	readonly session: Session;
+	readonly models: Models;
+	readonly hooks: HookRegistry;
+	readonly emitBatch: EmitBatch;
 	private readonly sessionView: SessionTree;
-	protected readonly session: Session;
-	protected readonly models: Models;
 	private readonly onFault: FaultHandler;
-	private readonly emitBatch: EmitBatch;
 	private readonly installWatch: WatchHandler;
-	private readonly getAcceptanceConfig: () => AcceptanceConfig;
+	private readonly config: () => Config<TContext>;
+	private activeDrive: ActiveDrive | undefined;
 	state: LaneState;
 	closedError: Error | undefined;
 
@@ -123,14 +121,16 @@ export class Lane implements AgentLane {
 		name: string,
 		session: Session,
 		models: Models,
+		hooks: HookRegistry,
 		state: LaneState,
 		onFault: FaultHandler,
 		emitBatch: EmitBatch,
 		installWatch: WatchHandler,
-		getAcceptanceConfig: () => AcceptanceConfig,
+		readConfig: () => Config<TContext>,
 	) {
 		this.session = session;
 		this.models = models;
+		this.hooks = hooks;
 		this.name = name;
 		this.sessionView = session.view(name);
 		this.sessionTree = {
@@ -148,7 +148,7 @@ export class Lane implements AgentLane {
 		this.onFault = onFault;
 		this.emitBatch = emitBatch;
 		this.installWatch = installWatch;
-		this.getAcceptanceConfig = getAcceptanceConfig;
+		this.config = readConfig;
 	}
 
 	async getLeafId(_context: Context): Promise<string | null> {
@@ -159,6 +159,24 @@ export class Lane implements AgentLane {
 	async getLastResult(_context: Context): Promise<LaneLastResult | undefined> {
 		this.assertOpen();
 		return this.state.lastResult;
+	}
+
+	readConfig(): Config<TContext> {
+		return this.config();
+	}
+
+	ownsDrive(scope: DriveScope<TContext>): boolean {
+		return this.activeDrive === scope.owner;
+	}
+
+	mismatch(expected: string, currentOperationId: string | null, last: LaneLastResult | undefined): OperationMismatch {
+		return new OperationMismatch({
+			lane: this.name,
+			expectedOperationId: expected,
+			...(currentOperationId === null ? {} : { currentOperationId }),
+			...(last === undefined ? {} : { lastOperationId: last.operationId }),
+			message: `Operation ${expected} does not own lane ${JSON.stringify(this.name)}`,
+		});
 	}
 
 	/**
@@ -179,11 +197,7 @@ export class Lane implements AgentLane {
 	 * timers, event handlers, or wait for task completion here; perform those after `command()` returns.
 	 */
 	async command<TResult>(
-		plan: (
-			state: LaneState,
-			reader: SessionReader,
-			context: Context,
-		) => LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
+		plan: (state: LaneState, reader: SessionReader) => LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
 		context: Context,
 	): Promise<TResult> {
 		this.assertOpen();
@@ -194,7 +208,7 @@ export class Lane implements AgentLane {
 				async (mutator) => {
 					this.assertOpen();
 					try {
-						const decision = await plan(this.state, mutator, context);
+						const decision = await plan(this.state, mutator);
 						switch (decision.kind) {
 							case "return":
 								return { kind: "return", result: decision.result };
@@ -239,7 +253,7 @@ export class Lane implements AgentLane {
 
 		const startedAt = Date.now();
 		const operationId = request.operationId ?? this.session.idGenerator.next(startedAt);
-		const acceptanceConfig = this.getAcceptanceConfig();
+		const acceptanceConfig = this.readConfig();
 		let messages: AgentMessage[];
 		switch (request.kind) {
 			case "prompt":

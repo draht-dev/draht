@@ -53,8 +53,13 @@ function compareKeys(left: string, right: string): number {
 	return leftCodePoints.length - rightCodePoints.length;
 }
 
-/** Current in-memory projection shared by storage backends. */
-export class StorageState {
+/**
+ * Complete materialized session state for MemoryStorage and JsonlStorage.
+ *
+ * This is intentionally unsuitable for database backends and long-running sessions that may not fit in memory.
+ * Those backends should query indexed durable state and update durable aggregates within each commit transaction.
+ */
+export class InMemoryStorageState {
 	private readonly entries: Map<string, Entry>;
 	private readonly entriesBySeq: Entry[];
 	private readonly scalarValues: Map<string, StoredValue<unknown>>;
@@ -86,8 +91,8 @@ export class StorageState {
 		});
 	}
 
-	/** Apply writes already accepted by validateCommitted(). */
-	applyValidated(writes: readonly CommittedWrite[]): void {
+	/** Apply writes already accepted by validateCommitted() and return the post-apply totals. */
+	applyValidated(writes: readonly CommittedWrite[]): SessionStats {
 		for (const write of writes) {
 			switch (write.kind) {
 				case "entry": {
@@ -137,6 +142,7 @@ export class StorageState {
 			}
 			this.nextSeq = write.seq + 1;
 		}
+		return this.stats;
 	}
 
 	advanceNextSeq(nextSeq: number): void {

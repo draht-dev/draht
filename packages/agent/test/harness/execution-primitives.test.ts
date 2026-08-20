@@ -8,7 +8,7 @@ import {
 	withTelemetryContext,
 } from "../../src/harness/context.ts";
 import { HarnessEventBus } from "../../src/harness/events.ts";
-import { AbortRequested, OperationEffectGate } from "../../src/harness/execution/effect-gate.ts";
+import { AbortRequested, createGate, DriveAbandoned } from "../../src/harness/execution/effect-gate.ts";
 import { HookRegistry } from "../../src/harness/hooks.ts";
 import { InMemoryTelemetryContext } from "../../src/index.ts";
 
@@ -20,15 +20,15 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
 	return { promise, resolve: () => resolvePromise?.() };
 }
 
-describe("OperationEffectGate", () => {
+describe("createGate", () => {
 	it("closes starts synchronously and signals only after cancellation commits", async () => {
-		const gate = new OperationEffectGate();
+		const { gate, control } = createGate();
 		const cancellation = deferred();
-		gate.beginAbort(cancellation.promise);
+		control.beginAbort(cancellation.promise);
 
 		let refusal: unknown;
 		try {
-			gate.assertOpen();
+			gate.admit(() => undefined);
 		} catch (error) {
 			refusal = error;
 		}
@@ -37,16 +37,21 @@ describe("OperationEffectGate", () => {
 		expect(gate.signal.aborted).toBe(false);
 		cancellation.resolve();
 		await cancellation.promise;
-		gate.signalAbort();
+		control.signalAbort();
 		expect(gate.signal.aborted).toBe(true);
 	});
 
 	it("permanently closes and signals admitted work", () => {
-		const gate = new OperationEffectGate();
+		const { gate, control } = createGate();
 		const error = new Error("closed");
-		gate.close(error);
-		expect(() => gate.assertOpen()).toThrow(error);
+		control.close(error);
+		expect(() => gate.admit(() => undefined)).toThrow(error);
 		expect(gate.signal.aborted).toBe(true);
+	});
+
+	it("keeps invocation abandonment distinct from durable abort control flow", () => {
+		expect(new DriveAbandoned()).not.toBeInstanceOf(AbortRequested);
+		expect(new DriveAbandoned().name).toBe("DriveAbandoned");
 	});
 });
 
@@ -71,7 +76,7 @@ describe("HookRegistry", () => {
 				prompt: [{ role: "user", content: "prompt", timestamp: 1 }],
 				resources: {},
 			},
-			new OperationEffectGate(),
+			createGate().gate,
 			BACKGROUND_CONTEXT,
 		);
 
@@ -101,12 +106,12 @@ describe("HookRegistry", () => {
 		});
 		const event = { lane: "main", runId: "run", prompt: [], resources: {} };
 		const closed = new Error("closed");
-		const closedGate = new OperationEffectGate();
-		closedGate.close(closed);
-		expect(() => hooks.runWithGate("before_run", event, closedGate, BACKGROUND_CONTEXT)).toThrow(closed);
+		const closedGate = createGate();
+		closedGate.control.close(closed);
+		expect(() => hooks.runWithGate("before_run", event, closedGate.gate, BACKGROUND_CONTEXT)).toThrow(closed);
 		expect(calls).toEqual([]);
 
-		const running = hooks.runWithGate("before_run", event, new OperationEffectGate(), BACKGROUND_CONTEXT);
+		const running = hooks.runWithGate("before_run", event, createGate().gate, BACKGROUND_CONTEXT);
 		expect(calls).toEqual(["first:start"]);
 		hooks.on("before_run", () => {
 			calls.push("late");
@@ -123,7 +128,7 @@ describe("HookRegistry", () => {
 		const preAbortedHooks = new HookRegistry(() => {});
 		const handler = vi.fn();
 		preAbortedHooks.on("before_drive", handler);
-		const preAbortedGate = new OperationEffectGate();
+		const preAbortedGate = createGate();
 		const invocationController = new AbortController();
 		const abortReason = new Error("invocation aborted");
 		invocationController.abort(abortReason);
@@ -132,24 +137,24 @@ describe("HookRegistry", () => {
 			preAbortedHooks.runWithGate(
 				"before_drive",
 				event,
-				preAbortedGate,
+				preAbortedGate.gate,
 				withAbortSignal(invocationController.signal, BACKGROUND_CONTEXT),
 			),
 		).toThrow(abortReason);
 		expect(handler).not.toHaveBeenCalled();
-		expect(() => preAbortedGate.assertOpen()).not.toThrow();
+		expect(() => preAbortedGate.gate.admit(() => undefined)).not.toThrow();
 
 		const admittedHooks = new HookRegistry(() => {});
-		const admittedGate = new OperationEffectGate();
+		const admittedGate = createGate();
 		let admittedSignal: AbortSignal | undefined;
 		admittedHooks.on("before_drive", (_event, context) => {
 			admittedSignal = context.abortSignal;
 		});
-		await admittedHooks.runWithGate("before_drive", event, admittedGate, BACKGROUND_CONTEXT);
+		await admittedHooks.runWithGate("before_drive", event, admittedGate.gate, BACKGROUND_CONTEXT);
 		expect(admittedSignal?.aborted).toBe(false);
 
 		const gateReason = new Error("gate closed");
-		admittedGate.close(gateReason);
+		admittedGate.control.close(gateReason);
 		expect(admittedSignal?.aborted).toBe(true);
 		expect(admittedSignal?.reason).toBe(gateReason);
 	});
@@ -175,7 +180,7 @@ describe("HookRegistry", () => {
 					toolName: "tool",
 					args: {},
 				},
-				new OperationEffectGate(),
+				createGate().gate,
 				withContextValue(valueKey, "preserved", withTelemetryContext(invocationSpan, BACKGROUND_CONTEXT)),
 			),
 		);
@@ -209,7 +214,7 @@ describe("HookRegistry", () => {
 			hooks.runWithGate(
 				"before_drive",
 				{ lane: "main", runId: "run", operation: "run" },
-				new OperationEffectGate(),
+				createGate().gate,
 				BACKGROUND_CONTEXT,
 			),
 		).rejects.toBe(failure);
@@ -243,7 +248,7 @@ describe("HookRegistry", () => {
 				messages: [{ role: "user", content: "original", timestamp: 1 }],
 				systemPrompt: "base",
 			},
-			new OperationEffectGate(),
+			createGate().gate,
 			BACKGROUND_CONTEXT,
 		);
 
@@ -270,7 +275,7 @@ describe("HookRegistry", () => {
 				attempt: 1,
 				streamOptions: { headers: { a: "1", b: "2" }, metadata: { x: 1 } },
 			},
-			new OperationEffectGate(),
+			createGate().gate,
 			BACKGROUND_CONTEXT,
 		);
 		expect(result).toEqual({
@@ -296,7 +301,7 @@ describe("HookRegistry", () => {
 				content: [{ type: "text", text: "raw" }],
 				isError: true,
 			},
-			new OperationEffectGate(),
+			createGate().gate,
 			BACKGROUND_CONTEXT,
 		);
 		expect(result).toEqual({ content: [{ type: "text", text: "patched" }], isError: false });
@@ -324,7 +329,7 @@ describe("HookRegistry", () => {
 					totalTokens: 0,
 				},
 			},
-			new OperationEffectGate(),
+			createGate().gate,
 			BACKGROUND_CONTEXT,
 		);
 		expect(result).toEqual({ decline: false, summary: selected });
@@ -346,19 +351,19 @@ describe("HookRegistry", () => {
 		});
 		const event = { operation: "run" as const, lane: "main", runId: "run" };
 
-		const abortFirstGate = new OperationEffectGate();
+		const abortFirstGate = createGate();
 		const cancellation = Promise.resolve();
-		abortFirstGate.beginAbort(cancellation);
-		expect(() => hooks.runWithGate("before_drive", event, abortFirstGate, BACKGROUND_CONTEXT)).toThrow(
+		abortFirstGate.control.beginAbort(cancellation);
+		expect(() => hooks.runWithGate("before_drive", event, abortFirstGate.gate, BACKGROUND_CONTEXT)).toThrow(
 			AbortRequested,
 		);
 		expect(calls).toEqual([]);
 
-		const startFirstGate = new OperationEffectGate();
-		const running = hooks.runWithGate("before_drive", event, startFirstGate, BACKGROUND_CONTEXT);
+		const startFirstGate = createGate();
+		const running = hooks.runWithGate("before_drive", event, startFirstGate.gate, BACKGROUND_CONTEXT);
 		expect(calls).toEqual(["first:start"]);
-		startFirstGate.beginAbort(cancellation);
-		startFirstGate.signalAbort();
+		startFirstGate.control.beginAbort(cancellation);
+		startFirstGate.control.signalAbort();
 		release.resolve();
 		await running;
 		expect(calls).toEqual(["first:start", "first:end", "second"]);

@@ -1284,13 +1284,13 @@ export interface CommitResult {
 }
 ```
 
-The seed is free: `StorageState` already folds `messageCount` and `usage` in `applyValidated` and is rebuilt from the log on open, so a reopened session's first commit reports totals that include all history.
+For the deliberately materialized Memory and JSONL backends, `InMemoryStorageState` already folds `messageCount` and `usage` in `applyValidated` and is rebuilt from the log on JSONL open. It is not an architecture for database backends or long-running sessions that may not fit in memory. SQLite maintains and reads indexed durable aggregates inside its commit transaction.
 
 | File | Change |
 |---|---|
 | `src/harness/session/types.ts` | add `stats: SessionStats` to `CommitResult` |
 | `src/harness/session/commit.ts` | `PreparedCommit.result` becomes `Omit<CommitResult, "stats">`; `prepareStorageCommit` is unchanged otherwise (it runs before apply and cannot know the totals) |
-| `src/harness/session/storage-state.ts` | `applyValidated(writes)` returns the post-apply `SessionStats` (it already computes it into `this.stats`) |
+| `src/harness/session/in-memory-storage-state.ts` | `InMemoryStorageState.applyValidated(writes)` returns the post-apply `SessionStats` for the deliberately materialized Memory and JSONL backends |
 | `src/harness/session/memory.ts` | `const stats = this.storageState.applyValidated(prepared.writes); return { ...prepared.result, stats };` |
 | `src/harness/session/jsonl/storage.ts` | same composition inside `applyCommit` |
 | `packages/session-backends/sqlite-node/src/sqlite/storage.ts` | **third backend — do not miss it.** `applyCommit` already runs inside `this.db.transaction(…)` and already maintains stats there via `incrementMessageCount` / `addUsageToSessionStats`. Read them back with `readSessionStats(this.db)` **inside the same transaction closure**, after `advanceNextSeq`, so the snapshot is atomic with the writes that produced it (see below) |
@@ -1443,7 +1443,7 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 **Read completely before editing**
 - `src/harness/execution/effect-gate.ts`, `src/harness/hooks.ts`
 - `src/harness/runtime2/{lane,types,harness,restore}.ts`
-- `src/harness/session/{values,types,session,commit,storage-state,memory}.ts`
+- `src/harness/session/{values,types,session,commit,in-memory-storage-state,memory}.ts`
 - `src/harness/session/jsonl/storage.ts`
 - `src/harness/session/testing/{storage-decorator,instrumented-storage,index}.ts`
 - `src/harness/session/testing/conformance/storage.ts`
@@ -1468,7 +1468,7 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 | `src/harness/runtime2/restore.ts` | name `Lane<TContext>` wherever it names `Lane` |
 | `src/harness/session/types.ts` | add `stats: SessionStats` to `CommitResult` (§2.12) |
 | `src/harness/session/commit.ts` | `PreparedCommit.result` becomes `Omit<CommitResult, "stats">` |
-| `src/harness/session/storage-state.ts` | `applyValidated` returns the post-apply `SessionStats` |
+| `src/harness/session/in-memory-storage-state.ts` | `InMemoryStorageState.applyValidated` returns the post-apply `SessionStats` for Memory and JSONL |
 | `src/harness/session/memory.ts`, `src/harness/session/jsonl/storage.ts` | compose `{ ...prepared.result, stats }` |
 | `packages/session-backends/sqlite-node/src/sqlite/storage.ts` | return `{ ...prepared.result, stats: readSessionStats(this.db) }` from **inside** the `db.transaction` closure (§2.12) |
 | `packages/session-backends/sqlite-node/test/storage-conformance.test.ts`, `packages/session-backends/sqlite-node/test/storage.test.ts` | SQLite conformance plus a post-write-snapshot assertion |
@@ -1991,7 +1991,7 @@ Milestone in parentheses where creation order matters.
 - `packages/agent/src/harness/session/session.ts`
 - `packages/agent/src/harness/session/types.ts`
 - `packages/agent/src/harness/session/commit.ts`
-- `packages/agent/src/harness/session/storage-state.ts`
+- `packages/agent/src/harness/session/in-memory-storage-state.ts`
 - `packages/agent/src/harness/session/memory.ts`
 - `packages/agent/src/harness/session/jsonl/storage.ts`
 - `packages/agent/src/harness/session/testing/conformance/storage.ts`

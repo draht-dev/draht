@@ -2,6 +2,7 @@ import type { AssistantMessage, AssistantMessageFrame, Usage } from "@draht/ai";
 import { expectTypeOf, it } from "vitest";
 import * as storedValues from "../../src/harness/session/values.ts";
 import type {
+	AgentHarness,
 	AgentHarnessOptions,
 	AgentHarnessStreamOptions,
 	AgentHarnessTool,
@@ -53,6 +54,7 @@ import type {
 	SessionSearchHit,
 	SessionSearchService,
 	SessionSnapshot,
+	SessionStats,
 	SessionTree,
 	SettledAssistantMessage,
 	Storage,
@@ -372,7 +374,7 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 		(
 			transactionToCommit: Write[],
 			context: Context,
-		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
+		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number; stats: SessionStats }>
 	>();
 	expectTypeOf<Session["mutate"]>().toEqualTypeOf<
 		<T>(
@@ -385,7 +387,7 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 		(
 			transactionToCommit: Write[],
 			context: Context,
-		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number }>
+		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number; stats: SessionStats }>
 	>();
 	expectTypeOf<SessionReader["scanBranch"]>().toEqualTypeOf<
 		(query: StorageBranchScan, context: Context) => Promise<Entry[]>
@@ -472,6 +474,12 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	expectTypeOf<keyof DriveOptions>().toEqualTypeOf<"operationId" | "waitForRetry" | "pollDeferred">();
 	expectTypeOf<DriveOutcome["kind"]>().toEqualTypeOf<"settled" | "waiting">();
 	expectTypeOf<AgentLane["inspectExecution"]>().returns.toEqualTypeOf<Promise<LaneExecutionInfo>>();
+	expectTypeOf<
+		Extract<keyof AgentLane, "session" | "models" | "hooks" | "command" | "readConfig" | "ownsDrive" | "mismatch">
+	>().toEqualTypeOf<never>();
+	expectTypeOf<
+		Extract<keyof AgentHarness, "session" | "models" | "command" | "readConfig" | "ownsDrive" | "mismatch">
+	>().toEqualTypeOf<never>();
 	expectTypeOf<OperationRequest["kind"]>().toEqualTypeOf<
 		"prompt" | "skill" | "prompt_template" | "compaction" | "navigation"
 	>();

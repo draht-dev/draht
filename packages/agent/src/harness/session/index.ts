@@ -28,6 +28,7 @@ export {
 	SessionPendingAssistantMessageError,
 	SessionUnknownTargetError,
 	StorageBackedSession,
+	type StorageBackedSessionOptions,
 } from "./session.ts";
 export * from "./types.ts";
 export * from "./values.ts";

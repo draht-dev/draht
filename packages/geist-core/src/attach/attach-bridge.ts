@@ -19,12 +19,22 @@
  *      Size is not drift — `maxFrameBytes` bounds the renderer's direction, and
  *      oversized session output is chunked rather than refused.
  *   2. **No session socket is opened for a connection that has not earned it.**
- *      The dial happens only after `hello`, after `attach`, and after the named
- *      session is found live in the fleet. Authentication is the host's job and
- *      happens earlier still, on the upgrade request.
- *   3. **Every bound is per-connection.** An overflowing renderer is dropped
+ *      The dial happens only after `hello`, after this connection has proved
+ *      who it is, after `attach`, and after the named session is found live in
+ *      the fleet.
+ *   3. **Authentication is a gate, not a hint** (R33-REACH.3, R33-REACH.5). A
+ *      bridge given a {@link DeviceAuthenticator} answers `hello` with
+ *      `server_hello` and *nothing else* — the fleet is session data, so it
+ *      waits — and accepts exactly two frames next: `pair_device` and
+ *      `authenticate`. Anything else is `not_authenticated` and this
+ *      connection is dropped. One attempt per connection, so one socket is not
+ *      an online guessing oracle; a bounded window, so an idle unauthenticated
+ *      connection does not sit there; and the identity that results is a field
+ *      on this object, so two bridges in one process cannot see each other's
+ *      (R33-REACH.7).
+ *   4. **Every bound is per-connection.** An overflowing renderer is dropped
  *      alone; the session keeps streaming to everyone else.
- *   4. **Identity is the daemon's.** A relayed frame carries the client id this
+ *   5. **Identity is the daemon's.** A relayed frame carries the client id this
  *      connection attached with, never one the caller wrote into the frame, so
  *      no client can type or detach as another.
  *
@@ -44,6 +54,7 @@ import {
 	encodeFrame,
 	GEIST_PROTOCOL_FAMILY,
 	GEIST_PROTOCOL_VERSION,
+	type GeistClientFrame,
 	type GeistServerFrame,
 	type ProtocolErrorCode,
 	protocolError,
@@ -68,6 +79,84 @@ export interface RendererConnection {
 	close(code: number, reason: string): void;
 }
 
+/**
+ * Who this connection has proved itself to be.
+ *
+ * Deliberately one field. Everything an authorization policy needs hangs off
+ * the device id via the registry; copying device metadata in here would put a
+ * second, staler copy of it in every bridge.
+ */
+export interface AttachIdentity {
+	deviceId: string;
+}
+
+/**
+ * What an authenticator answers with. The success branch carries exactly the
+ * body of a `device_credential` frame, because that is what the client is owed:
+ * the credential it just earned, already rotated (R33-REACH.5).
+ *
+ * `reason` on the failure branch is for the *host's* audit trail. It never
+ * reaches the wire — see {@link AttachBridge.#spendAttempt} for why telling a
+ * caller which way its credential was wrong is an oracle.
+ */
+export type DeviceAuthResult =
+	| { ok: true; deviceId: string; credential: string; issuedAt: string; expiresAt: string }
+	| { ok: false; reason?: string };
+
+/**
+ * The device store as this bridge needs it — the port `DeviceRegistry` fills.
+ *
+ * A port rather than a direct dependency for the usual boundary reason (a
+ * bridge that opened the credential file would be a second writer of it), and
+ * synchronous on purpose: `receive()` is called from a socket's message
+ * callback and frame order is load-bearing, so an authentication that returned
+ * a promise would let the frame after it overtake the gate.
+ */
+export interface DeviceAuthenticator {
+	/** Spend a bootstrap token for a device id and its first credential. */
+	pair(input: { bootstrapToken: string; device: { name: string; platform: string } }): DeviceAuthResult;
+	/** Verify an already-issued credential and rotate it. */
+	authenticate(input: { deviceId: string; credential: string }): DeviceAuthResult;
+}
+
+/**
+ * A credential the host read off the upgrade request — `Authorization: Bearer`
+ * or the `geist.bearer.<base64url>` subprotocol, the only two sources
+ * R33-REACH.3 leaves standing. The host decodes it into this pair; the bridge
+ * verifies it down exactly the same path as an `authenticate` frame, so a
+ * header-authenticated client and a first-message one are the same client to
+ * everything downstream.
+ */
+export interface PresentedCredential {
+	deviceId: string;
+	credential: string;
+}
+
+/**
+ * One authorization question. Asked of every frame in both directions, which
+ * is what makes this the single seam a per-device policy attaches to rather
+ * than a set of call sites a later change can miss.
+ */
+export type AuthorizationRequest =
+	| {
+			direction: "inbound";
+			frame: GeistClientFrame;
+			identity: AttachIdentity | null;
+			sessionId: string | null;
+	  }
+	| {
+			direction: "outbound";
+			frame: GeistServerFrame;
+			identity: AttachIdentity | null;
+			sessionId: string | null;
+	  };
+
+/** The answer. A refusal names the code the client is disconnected with. */
+export type AuthorizationVerdict = { allow: true } | { allow: false; code?: ProtocolErrorCode; message?: string };
+
+/** Default pre-auth window: a connection that says nothing for this long is dropped. */
+export const DEFAULT_AUTH_DEADLINE_MS = 5_000;
+
 export interface AttachBridgeOptions {
 	/** Directory the fleet publishes itself in. See `resolveSocketDir`. */
 	socketDir: string;
@@ -79,6 +168,36 @@ export interface AttachBridgeOptions {
 	limits?: TransportLimits;
 	/** How often a paused session is re-checked while the renderer drains. */
 	drainCheckMs?: number;
+	/**
+	 * The device store this bridge authenticates against.
+	 *
+	 * Its **presence is the switch**: a bridge given one requires a credential
+	 * before it will say anything but `server_hello`, and a bridge given none is
+	 * one whose host already authenticated the upgrade request — which is what
+	 * the gateway's bearer middleware does today — and behaves exactly as it did
+	 * before this gate existed.
+	 */
+	devices?: DeviceAuthenticator;
+	/**
+	 * A credential the host found on the upgrade request. Verified at `hello`,
+	 * and it spends this connection's one attempt just as a first message would.
+	 */
+	presentedCredential?: PresentedCredential;
+	/**
+	 * How long an unauthenticated connection may sit here. Defaults to 5s. The
+	 * window exists because an authenticated connection is bounded by everything
+	 * else in this file and an unauthenticated one is bounded by nothing.
+	 */
+	authDeadlineMs?: number;
+	/**
+	 * Consulted on every inbound frame and before every outbound emit. Absent
+	 * means "authentication is the whole policy"; present means this hook has
+	 * the last word, in both directions, on every frame.
+	 *
+	 * A hook that throws refuses the frame. Failing closed is the only safe
+	 * reading of a policy that could not answer.
+	 */
+	authorize?: (request: AuthorizationRequest) => AuthorizationVerdict;
 	/**
 	 * How to ask this host's session socket how many bytes it has accepted from
 	 * us and not yet flushed.
@@ -125,6 +244,25 @@ export class AttachBridge {
 	readonly #server: { name: string; version: string };
 	readonly #drainCheckMs: number;
 	readonly #backlogBytes: (socket: Socket) => number;
+	readonly #devices: DeviceAuthenticator | null;
+	readonly #presented: PresentedCredential | null;
+	readonly #authDeadlineMs: number;
+	readonly #authorize: ((request: AuthorizationRequest) => AuthorizationVerdict) | null;
+
+	/**
+	 * Who this connection is, or null while it is nobody.
+	 *
+	 * A field, not a module-level map keyed by anything: one daemon fronts a
+	 * whole fleet and runs many bridges at once, and an identity kept anywhere
+	 * but here would be one connection's credential deciding another
+	 * connection's access the moment two handshakes overlap (R33-REACH.7).
+	 */
+	#identity: AttachIdentity | null = null;
+	/** Whether this connection may send anything beyond the two auth frames. */
+	#authenticated: boolean;
+	/** Whether this connection's one authentication attempt has been used. */
+	#authSpent = false;
+	#authTimer: ReturnType<typeof setTimeout> | null = null;
 
 	#greeted = false;
 	#closed = false;
@@ -164,6 +302,29 @@ export class AttachBridge {
 		this.#server = options.server ?? { name: "geist-attach-bridge", version: GEIST_PROTOCOL_VERSION };
 		this.#drainCheckMs = options.drainCheckMs ?? DEFAULT_DRAIN_CHECK_MS;
 		this.#backlogBytes = options.backlogBytes ?? ((socket) => socket.writableLength);
+		this.#devices = options.devices ?? null;
+		this.#presented = options.presentedCredential ?? null;
+		this.#authDeadlineMs = options.authDeadlineMs ?? DEFAULT_AUTH_DEADLINE_MS;
+		this.#authorize = options.authorize ?? null;
+		// No device store means the host authenticated the upgrade request; see
+		// `AttachBridgeOptions.devices`. Anything else and this connection starts
+		// out as nobody, on a clock.
+		this.#authenticated = this.#devices === null;
+		if (!this.#authenticated) this.#startAuthTimer();
+	}
+
+	/**
+	 * The device this connection authenticated as, or null. Null on an
+	 * authenticated bridge too, when the host — not a device credential — is
+	 * what vouched for the connection.
+	 */
+	get identity(): AttachIdentity | null {
+		return this.#identity;
+	}
+
+	/** Whether this connection has passed the gate, however it passed it. */
+	get authenticated(): boolean {
+		return this.#authenticated;
 	}
 
 	/** The session this connection is attached to, or null before `attach`. */
@@ -192,8 +353,25 @@ export class AttachBridge {
 		}
 		const frame = decoded.frame;
 
+		if (!this.#allowed({ direction: "inbound", frame, identity: this.#identity, sessionId: this.#sessionId })) return;
+
 		if (!this.#greeted && frame.type !== "hello") {
 			this.#refuse("handshake_required", `expected hello, got ${frame.type}`);
+			return;
+		}
+
+		// The gate. Three frame types exist before a credential does: the
+		// handshake, and the two halves of the exchange. Everything else — every
+		// frame that would reach a session, and the fleet listing that would
+		// describe one — is refused here, above the switch, so no later case can
+		// be added below it that forgets to ask.
+		if (
+			!this.#authenticated &&
+			frame.type !== "hello" &&
+			frame.type !== "pair_device" &&
+			frame.type !== "authenticate"
+		) {
+			this.#refuse("not_authenticated", `${frame.type} before this connection presented a credential`);
 			return;
 		}
 
@@ -203,6 +381,17 @@ export class AttachBridge {
 					this.#refuse("invalid_frame", "hello was already sent on this connection");
 					return;
 				}
+				// A credential from the upgrade request is spent before a single
+				// word is said back, so a bad one costs the client the handshake it
+				// had not earned rather than merely the frame after it.
+				let credential: GeistServerFrame | null = null;
+				if (!this.#authenticated && this.#presented !== null) {
+					credential = this.#spendAttempt(
+						this.#authenticateWith(this.#presented),
+						"the credential presented on the upgrade request",
+					);
+					if (credential === null) return;
+				}
 				this.#greeted = true;
 				this.#emit({
 					type: "server_hello",
@@ -211,7 +400,23 @@ export class AttachBridge {
 					server: this.#server,
 					limits: this.#limits,
 				});
-				this.#emit(buildFleetFrame(this.#socketDir));
+				if (credential !== null) this.#emit(credential);
+				// The fleet is session data: which sessions exist, where they run
+				// and under which pid. It goes out once this connection is somebody
+				// and not a frame earlier.
+				if (this.#authenticated) this.#emit(buildFleetFrame(this.#socketDir));
+				return;
+			}
+			case "pair_device": {
+				this.#exchange("the bootstrap token", (devices) =>
+					devices.pair({ bootstrapToken: frame.bootstrapToken, device: frame.device }),
+				);
+				return;
+			}
+			case "authenticate": {
+				this.#exchange("the credential", (devices) =>
+					devices.authenticate({ deviceId: frame.deviceId, credential: frame.credential }),
+				);
 				return;
 			}
 			case "attach": {
@@ -252,6 +457,7 @@ export class AttachBridge {
 	close(): void {
 		this.#closed = true;
 		this.#clearDrainTimer();
+		this.#clearAuthTimer();
 		const session = this.#session;
 		this.#session = null;
 		try {
@@ -259,6 +465,120 @@ export class AttachBridge {
 		} catch {
 			// The session may already be gone; nothing to unwind.
 		}
+	}
+
+	/**
+	 * Both halves of the device exchange, which differ only in what the client
+	 * presented — `run` is the half. Neither half is relayed: the exchange
+	 * terminates here and a draht session never hears about it.
+	 *
+	 * @param present - What was presented, for the refusal message. Never why it
+	 *                  failed; see {@link AttachBridge.#spendAttempt}.
+	 * @param run     - The store call this half makes. Not invoked unless this
+	 *                  connection still has an attempt to spend.
+	 */
+	#exchange(present: string, run: (devices: DeviceAuthenticator) => DeviceAuthResult): void {
+		const devices = this.#devices;
+		if (devices === null) {
+			this.#refuse("not_authenticated", "this daemon does not exchange device credentials on the wire");
+			return;
+		}
+		// One attempt per connection, checked before the store is touched. A
+		// socket that could be guessed on twice could be guessed on forever, and
+		// the cost of a fresh connection per guess is the whole point.
+		if (this.#authSpent) {
+			this.#refuse("not_authenticated", "this connection has already spent its one authentication attempt");
+			return;
+		}
+
+		const credential = this.#spendAttempt(run(devices), present);
+		if (credential === null) return;
+
+		this.#emit(credential);
+		this.#emit(buildFleetFrame(this.#socketDir));
+	}
+
+	/** Verify a credential the host read off the upgrade request. */
+	#authenticateWith(presented: PresentedCredential): DeviceAuthResult {
+		const devices = this.#devices;
+		if (devices === null) return { ok: false, reason: "no device store" };
+		return devices.authenticate({ deviceId: presented.deviceId, credential: presented.credential });
+	}
+
+	/**
+	 * Spend this connection's one attempt on `result`.
+	 *
+	 * The refusal message says only *which* credential was rejected, never why.
+	 * "no such device", "wrong credential" and "a credential you already rotated
+	 * away" are three different facts about the store, and handing a caller the
+	 * difference turns one connection into a lookup service; the store already
+	 * raised the one outcome worth waking up for as an audit event, where it
+	 * belongs.
+	 *
+	 * @returns the `device_credential` frame the client has earned, or null when
+	 *          the connection has been refused and is already closing.
+	 */
+	#spendAttempt(result: DeviceAuthResult, what: string): GeistServerFrame | null {
+		this.#authSpent = true;
+		if (!result.ok) {
+			this.#refuse("not_authenticated", `${what} was rejected`);
+			return null;
+		}
+		this.#authenticated = true;
+		this.#identity = { deviceId: result.deviceId };
+		this.#clearAuthTimer();
+		return {
+			type: "device_credential",
+			deviceId: result.deviceId,
+			credential: result.credential,
+			issuedAt: result.issuedAt,
+			expiresAt: result.expiresAt,
+		};
+	}
+
+	/**
+	 * Put one frame to the authorization hook, in either direction.
+	 *
+	 * A hook that throws is a hook that could not answer, and the only safe
+	 * reading of that is no: a policy failure that silently allowed the frame
+	 * would be indistinguishable from no policy at all.
+	 *
+	 * @returns false when the frame was refused and this connection is closing.
+	 */
+	#allowed(request: AuthorizationRequest): boolean {
+		const authorize = this.#authorize;
+		if (authorize === null) return true;
+		let verdict: AuthorizationVerdict;
+		try {
+			verdict = authorize(request);
+		} catch {
+			this.#refuse("not_authenticated", `${request.frame.type} could not be authorized`);
+			return false;
+		}
+		if (verdict.allow) return true;
+		this.#refuse(
+			verdict.code ?? "not_authenticated",
+			verdict.message ?? `${request.frame.type} is not permitted on this connection`,
+		);
+		return false;
+	}
+
+	/** The pre-auth window. Starts with the connection, dies with the credential. */
+	#startAuthTimer(): void {
+		const timer = setTimeout(() => {
+			this.#authTimer = null;
+			if (this.#closed || this.#authenticated) return;
+			this.#refuse("not_authenticated", `no credential within ${this.#authDeadlineMs}ms`);
+		}, this.#authDeadlineMs);
+		// Like the drain poll: never the reason a daemon refuses to exit.
+		timer.unref?.();
+		this.#authTimer = timer;
+	}
+
+	#clearAuthTimer(): void {
+		if (this.#authTimer === null) return;
+		clearTimeout(this.#authTimer);
+		this.#authTimer = null;
 	}
 
 	/**
@@ -377,6 +697,13 @@ export class AttachBridge {
 	 */
 	#emit(frame: GeistServerFrame): void {
 		if (this.#closed) return;
+		// Asked before the frame is encoded, let alone sent: a frame this
+		// connection may not see must not exist on its wire, and a client that is
+		// refused mid-stream is told so rather than left holding a transcript with
+		// a hole in it. `protocol_error` does not come through here — a refusal
+		// has to reach the client even when the policy that caused it says no.
+		if (!this.#allowed({ direction: "outbound", frame, identity: this.#identity, sessionId: this.#sessionId }))
+			return;
 		const text = encodeFrame(ServerFrameSchema.parse(frame));
 		const buffered = this.#conn.bufferedBytes();
 
@@ -501,6 +828,7 @@ export class AttachBridge {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#clearDrainTimer();
+		this.#clearAuthTimer();
 		try {
 			this.#conn.send(encodeFrame(protocolError(code, message)));
 		} catch {

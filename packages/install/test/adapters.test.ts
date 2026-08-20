@@ -10,6 +10,7 @@ import { createStubHost } from "./helpers/stub-host.ts";
 const CLAUDE_MARKETPLACE_REGISTERED = JSON.stringify([{ name: "draht" }]);
 const CLAUDE_MARKETPLACE_EMPTY = JSON.stringify([]);
 const CLAUDE_PLUGIN_INSTALLED = JSON.stringify([{ name: "draht", marketplace: "draht", enabled: true }]);
+const CLAUDE_PLUGIN_DISABLED = JSON.stringify([{ name: "draht", marketplace: "draht", enabled: false }]);
 const CLAUDE_PLUGIN_ABSENT = JSON.stringify([]);
 const CODEX_MARKETPLACE_EMPTY = JSON.stringify({ marketplaces: [] });
 const CODEX_MARKETPLACE_REGISTERED = JSON.stringify({ marketplaces: [{ name: "draht" }] });
@@ -78,10 +79,16 @@ describe("claude-plugin adapter", () => {
 		}
 	});
 
-	it("drives the pinned first-install call sequence", async () => {
+	it("drives the pinned first-install call sequence, skipping the redundant enable", async () => {
+		// `claude plugin install` leaves a freshly installed plugin enabled as a
+		// side effect (CLAUDE_PLUGIN_INSTALLED here), so the explicit enable call
+		// that used to always follow it is now skipped — the real `claude` CLI
+		// rejects a redundant enable on an already-enabled plugin instead of
+		// treating it as a no-op.
 		const stub = createStubHost([
 			{ match: "plugin marketplace list --json", respond: { stdout: CLAUDE_MARKETPLACE_EMPTY } },
-			// Absent when probed, installed when verified after the install call.
+			// Absent when probed, installed (and already enabled) once checked after
+			// the install call.
 			{
 				match: "plugin list --json",
 				respond: [{ stdout: CLAUDE_PLUGIN_ABSENT }, { stdout: CLAUDE_PLUGIN_INSTALLED }],
@@ -98,11 +105,46 @@ describe("claude-plugin adapter", () => {
 			`/usr/bin/claude plugin validate ${target}/plugins/draht`,
 			`/usr/bin/claude plugin marketplace add ${target}`,
 			"/usr/bin/claude plugin install draht@draht --scope user",
-			"/usr/bin/claude plugin enable draht@draht",
+			"/usr/bin/claude plugin list --json",
 			"/usr/bin/claude plugin list --json",
 		]);
 		expect(outcome.registered).toBe(true);
 		expect(outcome.effectiveness).toBe("restart-required");
+	});
+
+	it("calls disable when a reinstall genuinely leaves a previously-disabled plugin re-enabled", async () => {
+		// The install step's auto-enable side effect means restoring a previously
+		// *disabled* plugin is never redundant — the post-install state (enabled)
+		// always differs from the target state (disabled), so the explicit
+		// disable call still fires.
+		const stub = createStubHost([
+			{ match: "plugin marketplace list --json", respond: { stdout: CLAUDE_MARKETPLACE_REGISTERED } },
+			{
+				match: "plugin list --json",
+				respond: [
+					{ stdout: CLAUDE_PLUGIN_DISABLED },
+					{ stdout: CLAUDE_PLUGIN_INSTALLED },
+					{ stdout: CLAUDE_PLUGIN_DISABLED },
+				],
+			},
+		]);
+		const ctx = makeContext("/home/tester", stub.runner, { claude: "/usr/bin/claude" });
+		const target = "/home/tester/.draht/claude-marketplace";
+
+		const outcome = await adapterFor("claude-plugin").register(ctx, claudeComponent, target);
+
+		expect(stub.commandLines()).toEqual([
+			"/usr/bin/claude plugin marketplace list --json",
+			"/usr/bin/claude plugin list --json",
+			`/usr/bin/claude plugin validate ${target}/plugins/draht`,
+			"/usr/bin/claude plugin marketplace update draht",
+			"/usr/bin/claude plugin uninstall draht@draht",
+			"/usr/bin/claude plugin install draht@draht --scope user",
+			"/usr/bin/claude plugin list --json",
+			"/usr/bin/claude plugin disable draht@draht",
+			"/usr/bin/claude plugin list --json",
+		]);
+		expect(outcome.notes).toContain("preserved the previously disabled plugin state");
 	});
 
 	it("updates an already-registered marketplace and re-installs an already-installed plugin", async () => {
@@ -122,7 +164,7 @@ describe("claude-plugin adapter", () => {
 			"/usr/bin/claude plugin marketplace update draht",
 			"/usr/bin/claude plugin uninstall draht@draht",
 			"/usr/bin/claude plugin install draht@draht --scope user",
-			"/usr/bin/claude plugin enable draht@draht",
+			"/usr/bin/claude plugin list --json",
 			"/usr/bin/claude plugin list --json",
 		]);
 	});

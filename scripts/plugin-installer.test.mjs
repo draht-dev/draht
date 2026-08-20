@@ -431,24 +431,30 @@ test("draht-claude failed replacement preserves a previously disabled plugin sta
 	assert.notEqual(result.status, 0);
 	const log = commands(f);
 	assert.equal(log.filter((command) => command === f.config.install).length, 2);
+	// The plugin was already disabled and the stub reports the same static
+	// "disabled" state before and after reinstall, so neither call is needed
+	// to restore it — calling either would be a redundant, idempotency-unsafe
+	// no-op on the real `claude` CLI.
 	assert.equal(log.includes(f.config.enable), false);
-	assert.equal(log.includes(f.config.disable), true);
+	assert.equal(log.includes(f.config.disable), false);
 });
 
 for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 	test(`${implementation} required CLI failures abort and restore the marketplace`, async (t) => {
 		const probe = fixture(implementation, { pluginInstalled: true });
+		// "enable"/"disable" are intentionally excluded here: they are only
+		// called when the plugin's actual post-install state differs from the
+		// target state (see the idempotency-aware regression tests below), so a
+		// forced failure of either is only meaningful with a stub that tracks
+		// live enabled/disabled state — which this static-list fixture does not.
 		const required = implementation === "draht-claude"
-			? ["remove", "install", "validate", "marketplaceUpdate", "enable", "disable"]
+			? ["remove", "install", "validate", "marketplaceUpdate"]
 			: ["marketplaceAdd", "remove", "install"];
 		for (const commandKey of required) {
 			await t.test(commandKey, () => {
 				const f = fixture(implementation, { pluginInstalled: true });
 				const failedCommand = f.config[commandKey];
-				const installedList = commandKey === "disable"
-					? '[{"id":"draht@draht","enabled":false}]'
-					: f.config.installedList;
-				const result = run(f, { DRAHT_TEST_FAIL_COMMAND: failedCommand, DRAHT_TEST_INSTALLED_LIST: installedList });
+				const result = run(f, { DRAHT_TEST_FAIL_COMMAND: failedCommand, DRAHT_TEST_INSTALLED_LIST: f.config.installedList });
 				assert.notEqual(result.status, 0, `reported success when ${failedCommand} failed`);
 				assert.doesNotMatch(result.stdout, /(?:✓ installed|^installed draht@draht)/m);
 				assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
@@ -486,8 +492,11 @@ test("draht-claude successful update preserves a previously disabled plugin", ()
 	const f = fixture("draht-claude", { pluginInstalled: true });
 	const result = run(f, { DRAHT_TEST_INSTALLED_LIST: '[{"id":"draht@draht","enabled":false}]' });
 	assert.equal(result.status, 0, result.stderr || result.stdout);
+	// Already disabled before and after reinstall (static stub state), so
+	// restoring it needs neither call — see the dedicated idempotency tests
+	// below for the case where the state genuinely needs to change.
 	assert.equal(commands(f).includes(f.config.enable), false);
-	assert.equal(commands(f).includes(f.config.disable), true);
+	assert.equal(commands(f).includes(f.config.disable), false);
 });
 
 for (const implementation of Object.keys(IMPLEMENTATIONS)) {

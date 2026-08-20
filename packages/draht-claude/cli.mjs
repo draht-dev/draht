@@ -512,8 +512,20 @@ function rollbackClaudePlugin(transaction, previousState, pluginSpec) {
 				failures.push("could not reinstall the previously working plugin");
 				return failures;
 			}
-			const stateCommand = previousState.plugin.enabled ? "enable" : "disable";
-			if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
+			// Same idempotency hazard as the primary install path: reinstalling
+			// already left the plugin enabled, so only call enable/disable when the
+			// reinstalled state actually differs from what is being restored.
+			let reinstalledState;
+			try {
+				reinstalledState = claudePluginState(pluginSpec);
+			} catch (error) {
+				failures.push(`could not inspect plugin state after reinstall: ${error.message}`);
+				return failures;
+			}
+			if (reinstalledState.enabled !== previousState.plugin.enabled) {
+				const stateCommand = previousState.plugin.enabled ? "enable" : "disable";
+				if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
+			}
 		}
 		try {
 			const restored = claudePluginState(pluginSpec);
@@ -953,8 +965,16 @@ async function cmdInstall(flags) {
 		if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) throw new Error("replacement install failed");
 
 		const shouldEnable = previousState.plugin.installed ? previousState.plugin.enabled : true;
-		const stateCommand = shouldEnable ? "enable" : "disable";
-		if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) throw new Error(`plugin ${stateCommand} failed`);
+		// `claude plugin install` leaves the plugin enabled as a side effect, and
+		// the real CLI rejects a redundant `plugin enable`/`disable` call on a
+		// plugin already in that state ("already enabled", non-zero exit) instead
+		// of treating it as a no-op — so only call it when the state actually
+		// needs to change.
+		const postInstallState = claudePluginState(pluginSpec);
+		if (postInstallState.enabled !== shouldEnable) {
+			const stateCommand = shouldEnable ? "enable" : "disable";
+			if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) throw new Error(`plugin ${stateCommand} failed`);
+		}
 		const installedState = claudePluginState(pluginSpec);
 		if (!installedState.installed || installedState.enabled !== shouldEnable) throw new Error("post-install plugin state verification failed");
 	} catch (error) {

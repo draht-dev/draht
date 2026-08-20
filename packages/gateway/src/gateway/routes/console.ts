@@ -1,6 +1,6 @@
 import { CONSOLE_BUNDLE_ASSETS } from "@draht/geist-console";
 import { GEIST_PROTOCOL_FAMILY, GEIST_PROTOCOL_VERSION } from "@draht/geist-protocol";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 
 /**
  * The one daemon-served surface (R32-FLEET.10).
@@ -35,8 +35,55 @@ function contentType(name: string): string {
 	return CONTENT_TYPES[name.slice(name.lastIndexOf(".") + 1)] ?? "application/octet-stream";
 }
 
+/**
+ * The policy every `/ui*` response carries (R33-REACH.9, GSEC-04 sign-off #5).
+ *
+ * The console keeps its device credential in origin-scoped storage (P33-T12).
+ * That is the right place for it — it survives a tab restart and never travels
+ * in a URL — but it also means script running on this origin can read it. An
+ * XSS in the bundle is therefore not a defacement, it is credential theft: the
+ * attacker walks away with a paired device's identity and steers the daemon
+ * from anywhere on the tailnet. This header is what makes injected bytes inert.
+ *
+ * Read it directive by directive:
+ *
+ *   default-src 'self'          nothing loads from anywhere but this daemon
+ *   script-src  'self'          no inline `<script>`, no `onclick=`, no eval —
+ *                               the omission of 'unsafe-inline'/'unsafe-eval'
+ *                               is the whole point, so neither may be added
+ *                               back without re-arguing the credential story
+ *   style-src   'self'          the two stylesheets are linked, never inlined
+ *   connect-src 'self' wss:     `/fleet` and the `/attach` upgrade; `wss:` and
+ *                               not `ws:` because a tailnet-fronted deployment
+ *                               is TLS-terminated and a plaintext socket would
+ *                               carry the credential in the clear
+ *   img-src     'self' data:    for the `data:` favicon in index.html, which
+ *                               exists so the browser stops asking for one
+ *   frame-ancestors 'none'      no page may frame the console — clickjacking a
+ *                               prompt composer is a remote-execution primitive
+ *   base-uri    'none'          an injected `<base>` cannot repoint the
+ *                               relative asset and API paths at another origin
+ *
+ * Asserted on the document, the CSS, the JS, `protocol.json` and the 404 path
+ * by `src/__tests__/console-csp.test.ts`.
+ */
+export const CONSOLE_CSP =
+	"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' wss:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'";
+
 export function createConsoleRoutes(): Hono {
 	const app = new Hono();
+
+	// Scoped to `/ui` and `/ui/*` rather than `*`: this router is mounted at the
+	// gateway root, so a wildcard here would stamp the policy onto `/health`,
+	// `/sessions` and every other API response too. Registered as middleware
+	// rather than set inside each handler so that a route added later — or the
+	// 404 that `asset()` returns for an unknown name — cannot be served bare.
+	const withCsp: MiddlewareHandler = async (c, next) => {
+		await next();
+		c.res.headers.set("Content-Security-Policy", CONSOLE_CSP);
+	};
+	app.use("/ui", withCsp);
+	app.use("/ui/*", withCsp);
 
 	/**
 	 * Serve one named asset.

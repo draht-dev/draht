@@ -25,8 +25,8 @@ import type {
 	Write,
 } from "../types.ts";
 import type { ListElement, ListReadOptions, StoredValue, Value, ValueList } from "../values.ts";
-import { parseJsonlSessionHeader } from "./codec.ts";
-import { normalizeLegacyV3 } from "./legacy-v3.ts";
+import { type LegacyV3SessionHeader, parseJsonlSessionHeader } from "./codec.ts";
+import { normalizeLegacyV3Header, normalizeLegacyV3Records } from "./legacy-v3.ts";
 import type { JsonlStorageHeader, JsonlStorageOptions } from "./types.ts";
 
 function fileValue<T>(result: Result<T, FileError>, action: string): T {
@@ -165,13 +165,7 @@ export class JsonlStorage implements Storage {
 			throw new Error(`Invalid JSONL storage ${options.path}: invalid header`, { cause: parsedHeader.error });
 		}
 		if (parsedHeader.value.format === "v3-legacy") {
-			const normalized = normalizeLegacyV3(parsedHeader.value.header, lines.slice(1));
-			const storage = new JsonlStorage(options, normalized.header, {
-				kind: "v3",
-				importedUsage: normalized.importedUsage,
-			});
-			storage.replayCommitted(normalized.writes);
-			return storage;
+			return JsonlStorage.openLegacyV3(options, parsedHeader.value.header, lines.slice(1), context);
 		}
 
 		const header = parsedHeader.value.header;
@@ -186,6 +180,25 @@ export class JsonlStorage implements Storage {
 		}
 		if (header.nextSeq !== undefined) storage.storageState.advanceNextSeq(header.nextSeq);
 		if (torn) await publishFileAtomically(options.fileSystem, options.path, `${lines.join("\n")}\n`, context);
+		return storage;
+	}
+
+	private static async openLegacyV3(
+		options: JsonlStorageOptions,
+		header: LegacyV3SessionHeader,
+		recordLines: readonly string[],
+		context: Context,
+	): Promise<JsonlStorage> {
+		const normalized = normalizeLegacyV3Records(recordLines);
+		const targetHeader = {
+			...(await normalizeLegacyV3Header(options.fileSystem, header, context)),
+			nextSeq: normalized.nextSeq,
+		};
+		const storage = new JsonlStorage(options, targetHeader, {
+			kind: "v3",
+			importedUsage: normalized.importedUsage,
+		});
+		storage.replayCommitted(normalized.writes);
 		return storage;
 	}
 

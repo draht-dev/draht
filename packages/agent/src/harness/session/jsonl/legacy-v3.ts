@@ -1,20 +1,19 @@
 import { type ImageContent, type TextContent, type Usage, uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../../types.ts";
+import type { Context } from "../../context.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../../messages.ts";
+import type { FileSystem } from "../../types.ts";
 import { addUsage, emptyUsage } from "../../utils/usage.ts";
 import type { CommittedEntryWrite, CommittedValueSetWrite, CommittedWrite } from "../commit.ts";
 import type { JsonValue } from "../types.ts";
 import { entryLabel, laneLeaf, laneState, sessionName } from "../values.ts";
-import { JSONL_FORMAT_VERSION, JSONL_STORAGE_VERSION, type JsonlStorageHeader } from "./types.ts";
-
-export interface LegacyV3SessionHeader {
-	type: "session";
-	version: 3;
-	id: string;
-	timestamp: string;
-	cwd: string;
-	parentSession?: string;
-}
+import { type LegacyV3SessionHeader, parseJsonlSessionHeader } from "./codec.ts";
+import {
+	JSONL_FORMAT_VERSION,
+	JSONL_STORAGE_VERSION,
+	type JsonlSessionMetadata,
+	type JsonlStorageHeader,
+} from "./types.ts";
 
 interface LegacyV3EntryBase {
 	type: string;
@@ -112,38 +111,53 @@ type DiscardedLegacyV3Entry =
 
 type LegacyV3Entry = RetainedLegacyV3Entry | DiscardedLegacyV3Entry;
 
-export interface NormalizedLegacyV3 {
-	header: JsonlStorageHeader;
+export interface NormalizedLegacyV3Records {
 	writes: CommittedWrite[];
 	importedUsage: Usage;
+	nextSeq: number;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+type JsonlSessionMetadataBase = Omit<JsonlSessionMetadata, "path" | "modifiedAt">;
+
+async function resolveLegacyV3ParentSessionId(
+	fileSystem: FileSystem,
+	parentSessionPath: string,
+	context: Context,
+): Promise<string | undefined> {
+	const lines = await fileSystem.readTextLines(parentSessionPath, { maxLines: 1 }, context);
+	if (!lines.ok || lines.value[0] === undefined) return undefined;
+	const parsed = parseJsonlSessionHeader(lines.value[0]);
+	return parsed.ok ? parsed.value.header.id : undefined;
 }
 
-export function isLegacyV3SessionHeader(value: unknown): value is LegacyV3SessionHeader {
-	return (
-		isRecord(value) &&
-		value.type === "session" &&
-		value.version === 3 &&
-		typeof value.id === "string" &&
-		typeof value.cwd === "string" &&
-		typeof value.timestamp === "string" &&
-		Number.isFinite(Date.parse(value.timestamp)) &&
-		(value.parentSession === undefined || typeof value.parentSession === "string")
-	);
+export async function metadataFromLegacyV3Header(
+	fileSystem: FileSystem,
+	header: LegacyV3SessionHeader,
+	context: Context,
+): Promise<JsonlSessionMetadataBase> {
+	const metadata: JsonlSessionMetadataBase = {
+		id: header.id,
+		createdAt: Date.parse(header.timestamp),
+		storageVersion: JSONL_STORAGE_VERSION,
+		cwd: header.cwd,
+	};
+	if (header.parentSession !== undefined) {
+		const parentSessionId = await resolveLegacyV3ParentSessionId(fileSystem, header.parentSession, context);
+		if (parentSessionId !== undefined) metadata.parentSessionId = parentSessionId;
+		else metadata.legacyParentSessionPath = header.parentSession;
+	}
+	return metadata;
 }
 
-export function normalizeLegacyV3Header(header: LegacyV3SessionHeader): JsonlStorageHeader {
+export async function normalizeLegacyV3Header(
+	fileSystem: FileSystem,
+	header: LegacyV3SessionHeader,
+	context: Context,
+): Promise<JsonlStorageHeader> {
 	return {
 		v: JSONL_FORMAT_VERSION,
 		kind: "header",
-		id: header.id,
-		storageVersion: JSONL_STORAGE_VERSION,
-		createdAt: Date.parse(header.timestamp),
-		cwd: header.cwd,
-		...(header.parentSession === undefined ? {} : { legacyParentSessionPath: header.parentSession }),
+		...(await metadataFromLegacyV3Header(fileSystem, header, context)),
 	};
 }
 
@@ -437,8 +451,8 @@ function aggregateImportedUsage(entries: readonly LegacyV3Entry[]): Usage {
 	return aggregate;
 }
 
-/** Normalize the currently supported v3 entries without touching their source file. */
-export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: readonly string[]): NormalizedLegacyV3 {
+/** Normalize the currently supported v3 records without touching their source file. */
+export function normalizeLegacyV3Records(recordLines: readonly string[]): NormalizedLegacyV3Records {
 	const entries = recordLines.map((line, index) => parseLegacyV3Entry(line, index + 2));
 	const entriesById = new Map<string, LegacyV3Entry>();
 	for (const entry of entries) {
@@ -454,8 +468,8 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 	const valueWrites = normalizeLegacyV3Values(entries, resolver, entryWrites.length + 1);
 	const writes: CommittedWrite[] = [...entryWrites, ...valueWrites];
 	return {
-		header: { ...normalizeLegacyV3Header(header), nextSeq: writes.length + 1 },
 		writes,
 		importedUsage: aggregateImportedUsage(entries),
+		nextSeq: writes.length + 1,
 	};
 }

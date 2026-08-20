@@ -76,6 +76,60 @@ describe("JSONL v3 migration", () => {
 		expect(after).toBe(content);
 	});
 
+	it.each([
+		{
+			format: "v3",
+			parentId: "legacy-parent",
+			header: {
+				type: "session",
+				version: 3,
+				id: "legacy-parent",
+				timestamp: new Date(NOW - 1_000).toISOString(),
+				cwd: "/workspace",
+			},
+		},
+		{
+			format: "v4",
+			parentId: "current-parent",
+			header: {
+				v: 4,
+				kind: "header",
+				id: "current-parent",
+				storageVersion: JSONL_STORAGE_VERSION,
+				createdAt: NOW - 1_000,
+				cwd: "/workspace",
+			},
+		},
+	])("resolves an available $format parent path to its session id", async ({ format, parentId, header }) => {
+		const parentPath = getOrThrow(await fileSystem.absolutePath(`parent-${format}.jsonl`, BACKGROUND_CONTEXT));
+		getOrThrow(await fileSystem.writeFile(parentPath, `${JSON.stringify(header)}\n`, BACKGROUND_CONTEXT));
+		await writeLegacyV3Fixture([], { parentSession: parentPath });
+
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+
+		expect(metadata).toMatchObject({ id: "legacy", parentSessionId: parentId });
+		expect(metadata).not.toHaveProperty("legacyParentSessionPath");
+		const session = await repo.open(metadata, BACKGROUND_CONTEXT);
+		expect(session.metadata).toMatchObject({ parentSessionId: parentId });
+		expect(session.metadata).not.toHaveProperty("legacyParentSessionPath");
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
+	it("preserves an invalid parent path as legacy metadata", async () => {
+		const parentPath = getOrThrow(await fileSystem.absolutePath("invalid-parent.jsonl", BACKGROUND_CONTEXT));
+		getOrThrow(await fileSystem.writeFile(parentPath, '{"not":"a session header"}\n', BACKGROUND_CONTEXT));
+		await writeLegacyV3Fixture([], { parentSession: parentPath });
+
+		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+
+		expect(metadata).toMatchObject({
+			id: "legacy",
+			legacyParentSessionPath: parentPath,
+		});
+		expect(metadata).not.toHaveProperty("parentSessionId");
+	});
+
 	it("opens an empty legacy session with an idle unconfigured main lane", async () => {
 		await writeLegacyV3Fixture([]);
 		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);

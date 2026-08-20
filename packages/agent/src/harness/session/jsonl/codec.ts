@@ -1,6 +1,14 @@
 import { err, ok, type Result } from "../../types.ts";
-import { isLegacyV3SessionHeader, type LegacyV3SessionHeader } from "./legacy-v3.ts";
 import { JSONL_FORMAT_VERSION, type JsonlStorageHeader } from "./types.ts";
+
+export interface LegacyV3SessionHeader {
+	type: "session";
+	version: 3;
+	id: string;
+	timestamp: string;
+	cwd: string;
+	parentSession?: string;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -8,6 +16,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isSafeIntegerAtLeast(value: unknown, minimum: number): value is number {
 	return Number.isSafeInteger(value) && (value as number) >= minimum;
+}
+
+export function isLegacyV3SessionHeader(value: unknown): value is LegacyV3SessionHeader {
+	return (
+		isRecord(value) &&
+		value.type === "session" &&
+		value.version === 3 &&
+		typeof value.id === "string" &&
+		typeof value.cwd === "string" &&
+		typeof value.timestamp === "string" &&
+		Number.isFinite(Date.parse(value.timestamp)) &&
+		(value.parentSession === undefined || typeof value.parentSession === "string")
+	);
 }
 
 export function isJsonlStorageHeader(value: unknown): value is JsonlStorageHeader {

@@ -1,12 +1,12 @@
 import { uuidv7 } from "@draht/ai";
 import type { Context } from "../../context.ts";
-import type { FileError, FileSystem, Result } from "../../types.ts";
+import type { FileError, FileInfo, FileSystem, Result } from "../../types.ts";
 import { createForkSnapshot, type ForkSourceSnapshot } from "../fork.ts";
 import { StorageBackedSession } from "../session.ts";
 import type { ForkOptions, Session, SessionRepo } from "../types.ts";
 import { laneLeaf, laneState, setValue } from "../values.ts";
-import { type JsonlParsedSessionHeader, parseJsonlSessionHeader } from "./codec.ts";
-import { normalizeLegacyV3Header } from "./legacy-v3.ts";
+import { parseJsonlSessionHeader } from "./codec.ts";
+import { metadataFromLegacyV3Header } from "./legacy-v3.ts";
 import { JsonlStorage } from "./storage.ts";
 import {
 	JSONL_FORMAT_VERSION,
@@ -36,15 +36,6 @@ function metadataFromHeader(header: JsonlStorageHeader, path: string, modifiedAt
 			? {}
 			: { legacyParentSessionPath: header.legacyParentSessionPath }),
 	};
-}
-
-function metadataFromParsedHeader(
-	parsed: JsonlParsedSessionHeader,
-	path: string,
-	modifiedAt: number,
-): JsonlSessionMetadata {
-	const header = parsed.format === "v3-legacy" ? normalizeLegacyV3Header(parsed.header) : parsed.header;
-	return metadataFromHeader(header, path, modifiedAt);
 }
 
 function sessionDirectoryName(cwd: string): string {
@@ -252,18 +243,27 @@ export class JsonlSessionRepo
 		).filter((file) => file.kind !== "directory" && file.name.endsWith(".jsonl"));
 		const metadata: JsonlSessionMetadata[] = [];
 		for (const file of files) {
-			const lines = fileValue(
-				await this.fileSystem.readTextLines(file.path, { maxLines: 1 }, context),
-				`Failed to read session header ${file.path}`,
-			);
-			if (lines[0] === undefined) continue;
-			const header = parseJsonlSessionHeader(lines[0]);
-			if (!header.ok) continue;
-			const discovered = metadataFromParsedHeader(header.value, file.path, file.mtimeMs);
+			const discovered = await this.readSessionMetadata(file, context);
+			if (discovered === undefined) continue;
 			// Directory encoding is lossy: /a/b and /a-b both map to --a-b--.
 			if (cwd === undefined || discovered.cwd === cwd) metadata.push(discovered);
 		}
 		return metadata;
+	}
+
+	private async readSessionMetadata(file: FileInfo, context: Context): Promise<JsonlSessionMetadata | undefined> {
+		const lines = fileValue(
+			await this.fileSystem.readTextLines(file.path, { maxLines: 1 }, context),
+			`Failed to read session header ${file.path}`,
+		);
+		if (lines[0] === undefined) return undefined;
+		const parsedHeader = parseJsonlSessionHeader(lines[0]);
+		if (!parsedHeader.ok) return undefined;
+		if (parsedHeader.value.format === "v3-legacy") {
+			const metadata = await metadataFromLegacyV3Header(this.fileSystem, parsedHeader.value.header, context);
+			return { ...metadata, path: file.path, modifiedAt: file.mtimeMs };
+		}
+		return metadataFromHeader(parsedHeader.value.header, file.path, file.mtimeMs);
 	}
 
 	private async sessionDirectories(root: string, context: Context): Promise<string[]> {

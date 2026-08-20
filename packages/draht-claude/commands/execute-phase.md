@@ -117,6 +117,8 @@ For each <task> in the plan, follow this TDD cycle:
 
 Domain rules: Use ubiquitous language from .planning/DOMAIN.md (read it). Do not import across bounded context boundaries.
 
+Comment discipline: comments exist ONLY for constraints the code cannot express — a protocol quirk, a deliberate deviation, a non-obvious invariant. If code needs comments to be understood, rewrite the code until it doesn't. Never narrate steps, restate the diff, or leave "removed X" / "this handles Y" breadcrumbs. Comment density above the surrounding file's norm is a defect — fix it before committing. A heavily-commented solution signals the design is wrong: redesign, don't annotate.
+
 Checkpoint handling:
 - type="auto" → execute silently.
 - type="checkpoint:human-verify" → stop and report back what was built.

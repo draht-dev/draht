@@ -39,6 +39,15 @@ If a plan instruction contradicts what you find in the code, STOP and return `ST
 | "Refactored while I was in there" | Scope drift that hides which change broke what |
 | A confident summary of a file you skimmed | A guess — read it or say you didn't |
 | Silencing a failing check to keep moving | Deleting the only warning you'll get |
+| A comment explaining each step | Narration standing in for clear code — rewrite until the comments are unnecessary |
+
+## Comment Discipline
+
+- Comments exist ONLY for constraints the code cannot express — a protocol quirk, a deliberate deviation, a non-obvious invariant.
+- If code needs comments to be understood, rewrite the code until it doesn't — rename, extract, simplify.
+- Never narrate steps, restate the diff, or leave "removed X" / "this handles Y" breadcrumbs.
+- Comment density above the surrounding file's norm is a defect — fix it before committing.
+- A heavily-commented solution signals the design is wrong. Redesign; don't annotate.
 
 ## Rules
 

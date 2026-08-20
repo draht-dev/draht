@@ -111,6 +111,8 @@ You may also say "I don't understand X" rather than pretend. That is the correct
 
 ### Phase 4 — Implementation
 
+Comment discipline: the fix ships no narration — comments exist ONLY for constraints the code cannot express: a protocol quirk, a deliberate deviation, a non-obvious invariant. If code needs comments to be understood, rewrite the code until it doesn't. Never narrate steps, restate the diff, or leave "removed X" / "this handles Y" breadcrumbs. Comment density above the surrounding file's norm is a defect — fix it before committing. A heavily-commented solution signals the design is wrong: redesign, don't annotate.
+
 1. **Write the reproducing test FIRST.** Seed it from the Phase 1 reproduction command — the loop that already goes red is the test's skeleton; port its scenario and its symptom assertion to the right test seam. Smallest possible test that demonstrates the bug. Run it — confirm it FAILS for the right reason (not for a syntax error, not for a missing import).
    - Commit: `git add <test-files> && git commit -m "red: reproduce <bug>"`
 

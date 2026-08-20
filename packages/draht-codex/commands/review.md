@@ -37,7 +37,7 @@ Check domain language compliance and bounded context boundaries.
 
    - **Codex subagent** with ``reviewer` agent prompt` and prompt:
      ```
-     Review the following code changes for correctness, type safety, conventions, and potential issues. Scope: <scope summary and file list>. Read each changed file to understand the changes. For each finding: cite the exact file and line, explain the issue, suggest the fix. Prioritize: Critical (must fix) > Important (should fix) > Minor (style/optional). Check domain language compliance against `.planning/DOMAIN.md` if it exists.
+     Review the following code changes for correctness, type safety, conventions, and potential issues. Scope: <scope summary and file list>. Read each changed file to understand the changes. For each finding: cite the exact file and line, explain the issue, suggest the fix. Prioritize: Critical (must fix) > Important (should fix) > Minor (style/optional). Treat comment-heavy new code as a design defect, not a style nit: comments exist only for constraints the code cannot express — if new code needed narration to be understood (step-by-step comments, diff restatements, "removed X" / "this handles Y" breadcrumbs), report the finding as "code needed narration" at Important or higher; the fix is rewriting the code until the comments are unnecessary, not deleting the comments. Check domain language compliance against `.planning/DOMAIN.md` if it exists.
 
      End with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`.
      ```

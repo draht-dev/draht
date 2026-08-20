@@ -39,6 +39,8 @@ Decompose the work into independently verifiable units before acting; the `atomi
 
    Exception: skip the TDD cycle only for pure config or documentation-only tasks that have no testable behaviour.
 
+   Comment discipline: comments exist ONLY for constraints the code cannot express — a protocol quirk, a deliberate deviation, a non-obvious invariant. If code needs comments to be understood, rewrite the code until it doesn't. Never narrate steps, restate the diff, or leave "removed X" / "this handles Y" breadcrumbs. Comment density above the surrounding file's norm is a defect — fix it before committing. A heavily-commented solution signals the design is wrong: redesign, don't annotate.
+
    After completion, report: files changed, tests written, and verification results.
 
    End your response with `STATUS: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED` per the agent contract.

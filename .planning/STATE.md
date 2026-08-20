@@ -1,9 +1,13 @@
 # State
 
-## Current Phase: Phase 33 — On the Phone (Exposure, Pairing, Device Credentials) — `pending`, ready to execute
-## Status: active — Phase 32 landed `partial`: remote control works end to end on loopback. Phases 42 and 44 remain `partial` and blocked on design decisions.
+## Current Phase: Phase 34 — The Ask Reaches the Phone (Permission Relay) — `pending`, ready to execute
+## Status: active — Phase 33 landed `partial` (29 commits): a phone pairs by QR and steers a live session over TLS, proven class 3 against the emitted binaries. Three residuals need Oskar and hardware, not agent work; one test is deliberately red until the tailnet identity header is captured.
 
 ## Decisions
+- Phase 33 wire frame named `pair_device`, not `pair` (Claude, 2026-08-20). `packages/geist/src/pairing/server.ts:26` already ships a different `pair` message on the legacy Adler bridge protocol, and wire type names must be globally unique across geist or a reader cannot tell which protocol a frame belongs to. The shipped format outranks the unreleased one; geist/0.2 had never been committed when the rename landed.
+- Device posture is a per-connection provider, not a startup-fixed value (Claude + Fable 5 advisor, 2026-08-21). Fixing it at startup refused the first-ever pairing until a daemon restart, contradicting Phase 33's own goal. The flip to device posture is one-way and strengthening only.
+- Accepting the operator token AND device credentials simultaneously on `/attach` was REJECTED (Fable 5 advisor, 2026-08-21). `/attach` survives to protocol 1.0 while the operator-token routes are slated for retirement (spec §7), so accept-both would bake a permanent non-enumerable, non-rotating, non-revocable credential into the surviving wire and give revocation-within-1s a reachable bypass.
+- The tailnet identity-header pin ships as a placeholder with a deliberately RED test (Claude, 2026-08-20). The header has never been observed on this machine; a plausible-looking invented pin would be fiction where a gate belongs. It does not block commits — pre-commit runs `npm run check`, not the suite.
 - Astro replaces Next.js in all templates and references (Oskar, 2026-02-28)
 - Yolo mode — no interactive confirmations needed
 - Fork attribution kept in LICENSE

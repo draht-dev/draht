@@ -191,7 +191,7 @@
 - `listeningSockets()` in `bind-host-emitted.e2e.test.ts` returns `[]` both when a process has no listeners and when `lsof` is missing, so the single-listener proof degrades to a vacuous pass on a host without `lsof`. Non-vacuous on this machine.
 - Session-direction frames are capped at `maxBufferedOutputBytes` (4 MiB) rather than uncapped; a single socket-wire line above that still disconnects readers.
 
-## Phase 33: On the Phone — Exposure, Pairing, Device Credentials — `pending`
+## Phase 33: On the Phone — Exposure, Pairing, Device Credentials — `partial`
 **Why here:** the phone is the product, and the one assumption that could invalidate Phases 34-40's whole delivery model — that `tailscale serve` carries a `wss://` upgrade to iOS Safari and the Quest browser — is cheapest to falsify the moment there is something to load.
 **Goal:** Oskar opens the MagicDNS URL on his iPhone, scans a QR once, and steers a live session — no IP typing, no token typing, no secrets in URLs, daemon still bound to loopback.
 **Requirements:** R33-REACH.1, R33-REACH.2, R33-REACH.3, R33-REACH.4, R33-REACH.5, R33-REACH.6, R33-REACH.7, R33-REACH.8, R33-REACH.9, R33-REACH.10
@@ -202,6 +202,50 @@
 - **Retry policy:** none automatic. No `continue-on-error`, no `--rerun-each`, no muted step. `fleet-attach.e2e.test.ts`'s concurrent-writer runs inside gateway's `bun test`, not the node group, so serializing the node group does **not** fix it — the policy for it is one manual "re-run failed jobs"; a second failure is a regression, not a flake, and gets a fix rather than a rerun.
 - **Wiring gate:** `scripts/root-test-script-parity.test.mjs` walks the tree and fails if any `scripts/**/*.test.mjs` is unreachable from the root `test` script, if the script names a path that does not exist (`node --test missing.mjs` exits 0), or if the workspace fan-out that carries `packages/gateway`'s `*.e2e.test.ts` files is removed. It found three suites already unwired — `geist-reach-browser.e2e.test.mjs`, `geist-device-evidence.test.mjs` and `publish-workspaces.test.mjs` (unwired since well before this phase). Evidence class 2: it closes no acceptance clause, it only guarantees the class-3 suites actually run.
 - **CI is knowingly RED and must stay that way:** `packages/gateway`'s `tailnet-identity.test.ts` → "is a real capture, not the placeholder this repo ships" fails because the real tailnet identity header has never been observed on this machine and the pin file is a marked placeholder. Nothing in CI can clear it. It is cleared only by a human running, on a tailnet-joined machine, `node scripts/geist-tailscale-serve.mjs --capture-identity --peer NODE --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json` — which is also the class-4 half of this phase's acceptance. Do not skip, exclude or `continue-on-error` it to make the badge green.
+
+**Landed `partial` 2026-08-21 (29 commits).** Everything not requiring Oskar's hardware is done and
+verified on an idle machine: `packages/gateway` 364 pass / 1 fail, where the single failure is the
+deliberate capture tripwire below. `npm run check` green.
+
+Class-3 evidence, against spawned emitted binaries through the TLS reverse-proxy fixture — no in-process
+daemon import in any of them:
+- `reach-transport.e2e.test.ts` 9/9 — all eight acceptance clauses, plus the whole-run 127.0.0.1 bind
+  assertion through the non-vacuous watcher.
+- `first-pairing-no-restart.e2e.test.ts` 5/5 — a QR scanned against an already-running daemon pairs
+  without a restart, asserted by an unchanged pid.
+- `geist-reach-browser.e2e.test.mjs` 2/2 — deep-link → paired → prompt → assistant text → reload → steer
+  again, and proxy-killed mid-stream → visible disconnect → reconnect with the transcript intact.
+- `fleet-attach.e2e.test.ts` 10/10 — Phase 32's invariant rewritten, not deleted: an unauthenticated
+  attach still reaches no Unix socket, now proven by the `not_authenticated` refusal plus an unchanged
+  socket directory.
+- `geist-console-bundle.e2e.test.mjs` 29/29 — including the 390x400 keyboard layout and 44px touch targets.
+
+**What Phase 33 still needs, and it is not more agent work:**
+1. **R33-REACH.1's run.** `node scripts/geist-tailscale-serve.mjs --verify --peer <node>` on a
+   tailnet-joined machine. The script, its funnel guard, its failure taxonomy and its idempotency are
+   committed and green against a fake tailscale binary; only the execution needs a tailnet. Note the
+   recorded client/daemon skew (CLI 1.98.8 vs tailscaled 1.102.1) and that `tailscale serve status`
+   reports no serve config, so this is a first publish.
+2. **R33-REACH.8's capture — this is what keeps one test red.**
+   `node scripts/geist-tailscale-serve.mjs --capture-identity --peer <node> --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json`
+   then set `DEFAULT_TAILNET_IDENTITY_HEADER` in
+   `packages/gateway/src/gateway/middleware/tailnet-identity.ts` to the header it records. The real
+   tailnet identity header has never been observed on this machine; the pin ships as a marked
+   placeholder and the test fails until it is replaced. **Do not skip, exclude or `continue-on-error`
+   it.** The deny-only policy it guards is tested and green — what is unverified is which header name
+   Tailscale actually sends.
+3. **R33-REACH.2 — class 4, iOS Safari and the Quest 3 browser.** `node scripts/geist-device-evidence.mjs`
+   collapses it to one command plus two QR scans, four screenshots and two console-log pastes; `--measure`
+   records the idle-timeout, sleep/wake and tailnet-drop behaviour that is the declared input to Phase 39.
+   The Quest 3 has been offline 36 days — charge it first. No emulator substitutes: this clause exists
+   because rev 8's delivery model rests on the unverified assumption that `tailscale serve` carries a
+   `wss://` upgrade to those two browsers.
+
+**Scope corrections made during execution, so the roadmap text above is stale in two places:** the
+bind-host obligation was already closed in Phase 32 (`check:bun-serve-hostname` green over 1561 files),
+so Phase 33 owed only the continuous assertion and the `lsof` vacuous-pass fix; and "an automatic
+reconnect that restores the transcript" is client-side preservation plus re-attach, not server replay —
+neither the geist wire nor the coding-agent socket server has any scrollback concept.
 
 **Residual — `geist` is not runnable as an installed npm bin (found 2026-08-20 by P33-T19, unowned):**
 `packages/geist` declares `bin.geist = dist/cli.js`, but that file imports `@draht/geist-core`, whose

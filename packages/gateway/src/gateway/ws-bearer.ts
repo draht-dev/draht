@@ -1,11 +1,11 @@
 /**
  * Carrying a bearer token on a browser's WebSocket upgrade (R32-FLEET.10).
  *
- * `new WebSocket(url)` accepts no headers, which is the entire reason
- * `bearerAuthMiddleware` still has a `?token=` query fallback — and R33-REACH.3
- * deletes that fallback, because spec §6.4 forbids credentials in query strings.
- * The replacement a browser can actually produce is the subprotocol list, which
- * Chromium sends as the `Sec-WebSocket-Protocol` *request header*:
+ * `new WebSocket(url)` accepts no headers, which is why the daemon once read a
+ * `?token=` query fallback. R33-REACH.3 deleted it — spec §6.4 forbids
+ * credentials in query strings — so this is now the *only* credential a browser
+ * can put on an upgrade. What a browser can actually produce is the subprotocol
+ * list, which Chromium sends as the `Sec-WebSocket-Protocol` *request header*:
  *
  *     new WebSocket(url, ["geist.bearer.<base64url(token)>"])
  *

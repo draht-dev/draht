@@ -1,7 +1,7 @@
 /**
  * R32-FLEET.10 — a browser must be able to authenticate a WebSocket upgrade with
- * a *header*, because the `?token=` query fallback it uses today is deleted by
- * R33-REACH.3 and forbidden outright by spec §6.4.
+ * a *header*, because the `?token=` query fallback it once used is gone:
+ * R33-REACH.3 deleted it, and spec §6.4 forbids it outright.
  *
  * These are unit-level proofs of the codec and of the middleware decision. The
  * end-to-end proof — that Chromium really sends this header, that Bun really

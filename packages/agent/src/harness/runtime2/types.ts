@@ -22,7 +22,6 @@ export interface Config<TContext extends object | undefined> {
 	readonly steeringMode: QueueMode;
 	readonly followUpMode: QueueMode;
 	readonly toolExecution: "sequential" | "parallel";
-	readonly drive: NonNullable<AgentHarnessOptions<TContext>["drive"]>;
 	readonly toolContext: AgentHarnessOptions<TContext>["toolContext"];
 	readonly systemPrompt: AgentHarnessOptions<TContext>["systemPrompt"];
 	readonly toProviderMessages: NonNullable<AgentHarnessOptions<TContext>["toProviderMessages"]>;

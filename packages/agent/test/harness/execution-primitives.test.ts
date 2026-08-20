@@ -8,7 +8,6 @@ import {
 	withTelemetryContext,
 } from "../../src/harness/context.ts";
 import { HarnessEventBus } from "../../src/harness/events.ts";
-import { Breakpoint } from "../../src/harness/execution/breakpoint.ts";
 import { AbortRequested, OperationEffectGate } from "../../src/harness/execution/effect-gate.ts";
 import { HookRegistry } from "../../src/harness/hooks.ts";
 import { InMemoryTelemetryContext } from "../../src/index.ts";
@@ -20,67 +19,6 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
 	});
 	return { promise, resolve: () => resolvePromise?.() };
 }
-
-describe("Breakpoint", () => {
-	it("parks before work, publishes JSON-safe action data, and releases exactly once", async () => {
-		const breakpoint = new Breakpoint("manual");
-		let worked = false;
-		const task = (async () => {
-			await breakpoint.hit({ kind: "test.effect", description: "Run effect", details: { attempt: 1 } });
-			worked = true;
-		})();
-
-		expect(breakpoint.peek()).toEqual({
-			kind: "test.effect",
-			description: "Run effect",
-			details: { attempt: 1 },
-		});
-		expect(JSON.parse(JSON.stringify(breakpoint.peek()))).toEqual(breakpoint.peek());
-		expect(worked).toBe(false);
-		expect(breakpoint.release()?.kind).toBe("test.effect");
-		expect(breakpoint.release()).toBeUndefined();
-		await task;
-		expect(worked).toBe(true);
-	});
-
-	it("interrupts ordinary breakpoints but not cancellation-reconciliation breakpoints", async () => {
-		const ordinary = new Breakpoint("manual");
-		const cancellation = deferred();
-		const parked = ordinary.hit({ kind: "ordinary", description: "ordinary" });
-		ordinary.interrupt(cancellation.promise);
-		await expect(parked).rejects.toBeInstanceOf(AbortRequested);
-
-		const reconciliation = new Breakpoint("manual");
-		const protectedPark = reconciliation.hit(
-			{ kind: "cancel.reconcile", description: "reconcile" },
-			{ interruptOnAbort: false },
-		);
-		reconciliation.interrupt(cancellation.promise);
-		expect(reconciliation.peek()?.kind).toBe("cancel.reconcile");
-		reconciliation.release();
-		await protectedPark;
-	});
-
-	it("publishes sequential nested boundaries without conflating them", async () => {
-		const breakpoint = new Breakpoint("manual");
-		const task = (async () => {
-			await breakpoint.hit({ kind: "outer", description: "outer" });
-			await breakpoint.hit({ kind: "inner", description: "inner" });
-		})();
-		expect(breakpoint.peek()?.kind).toBe("outer");
-		breakpoint.release();
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(breakpoint.peek()?.kind).toBe("inner");
-		breakpoint.release();
-		await task;
-	});
-
-	it("has equivalent non-parking automatic behavior", async () => {
-		const breakpoint = new Breakpoint("automatic");
-		await breakpoint.hit({ kind: "automatic", description: "automatic" });
-		expect(breakpoint.peek()).toBeUndefined();
-	});
-});
 
 describe("OperationEffectGate", () => {
 	it("closes starts synchronously and signals only after cancellation commits", async () => {

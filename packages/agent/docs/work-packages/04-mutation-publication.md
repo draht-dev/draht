@@ -4,7 +4,7 @@
 
 Complete. Phase A and the final implementation rereview passed Fable with no findings. Focused agent/server/SQLite tests, `npm run build`, `npm run check`, and `./test.sh` pass. `packages/agent/docs/harness.md` remains normative.
 
-WP02 established atomic acceptance, recipient binding, and coherent lane watches. WP03 removed drive deadlines. WP04 removes the caller-operated event-delivery gate without weakening those guarantees and makes `Session.createLane()` own lane creation end to end. The manual-first drive package follows as WP05.
+WP02 established atomic acceptance, recipient binding, and coherent lane watches. WP03 removed drive deadlines. WP04 removes the caller-operated event-delivery gate without weakening those guarantees and makes `Session.createLane()` own lane creation end to end. The direct durable-drive package follows as WP05.
 
 ## Problem
 
@@ -237,7 +237,7 @@ Update normative `harness.md`:
 - retain awaited direct-listener, event/hook, watcher, Context, close, and ordering semantics;
 - replace shared exported mutator-procedure lane creation with `Session.createLane(onCommitted, context)`;
 - update invariants, races, tests, glossary, and Part 8;
-- link WP04 and move manual-first drive to WP05.
+- link WP04 and move direct durable drive to WP05.
 
 Update the historical WP02 handoff only where it points forward or claims the old mechanism remains current. Do not rewrite its completed-package record as though WP04 behavior landed in WP02.
 
@@ -306,7 +306,7 @@ git diff --check -- \
   packages/agent/docs/harness.md \
   packages/agent/docs/work-packages/02-atomic-run-acceptance.md \
   packages/agent/docs/work-packages/04-mutation-publication.md \
-  packages/agent/docs/work-packages/05-manual-first-drive.md
+  packages/agent/docs/work-packages/05-direct-durable-drive.md
 ```
 
 After implementation, run every modified focused test, then:

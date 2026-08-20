@@ -56,7 +56,6 @@ export class Harness<TContext extends object | undefined> extends Lane implement
 				steeringMode: options.steeringMode ?? "all",
 				followUpMode: options.followUpMode ?? "all",
 				toolExecution: options.toolExecution ?? "parallel",
-				drive: options.drive ?? "automatic",
 				toolContext: options.toolContext,
 				systemPrompt: options.systemPrompt,
 				toProviderMessages: options.toProviderMessages ?? ((messages) => convertToLlm(messages)),

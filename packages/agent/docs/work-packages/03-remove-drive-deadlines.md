@@ -51,7 +51,7 @@ type DriveOutcome =
 
 There is no deprecated alias, ignored `deadline` field, compatibility overload, alternate timestamp option, or replacement pause flag in WP03.
 
-The next drive package will be redesigned manual-first. Procedure code reaches one shared `Breakpoint`: manual mode parks and reports `action_required`; automatic mode crosses the same boundary immediately. Manual mode exists to inspect and test transitions, and automatic mode is the same transition path with automatic breakpoint release. That design is evaluated only after this cleanup lands.
+The next drive package uses direct durable transitions. Deterministic tests gate commits and control hooks, providers, tools, and timers without adding production execution barriers.
 
 ## Host behavior
 
@@ -64,9 +64,9 @@ invoke drive
 → forced termination: replacement attaches and recovers durable open operations
 ```
 
-A process-per-session host may attempt graceful manual checkpoint parking before exit and use process termination as the hard fence for non-cooperative providers, tools, hooks, storage, or event listeners. This operational policy does not require a wall-clock field in `DriveOptions`.
+A process-per-session host may stop routing work and close before exit, and use process termination as the hard fence for non-cooperative providers, tools, hooks, storage, or event listeners. This operational policy does not require a wall-clock field in `DriveOptions`.
 
-WP03 does not add `stopAfterCheckpoint`, `pause`, `quiesce`, or in-process crash simulation. Those ideas belong to the manual-first drive design review. In-process process-loss simulation is not a public core primitive: an old continuation requires fencing, for which process isolation is the reliable mechanism.
+WP03 does not add `stopAfterCheckpoint`, `pause`, `quiesce`, or in-process crash simulation. Those ideas remain outside the direct durable-drive design. In-process process-loss simulation is not a public core primitive: an old continuation requires fencing, for which process isolation is the reliable mechanism.
 
 ## Work
 
@@ -100,7 +100,7 @@ Do not alter generic RPC timeout/deadline documentation or unrelated process/mod
 
 Delete obsolete `packages/agent/docs/runtime2.md`; `harness.md` plus linked handoffs are the sole implementation plan and history needed for active work.
 
-Mark WP02 complete in its handoff and Part 8. Add WP03 as the concrete cleanup package. Leave the former R2/R3 drive rows as future candidates, minus deadline/yield requirements, until the manual-first redesign replaces them with a reviewed handoff.
+Mark WP02 complete in its handoff and Part 8. Add WP03 as the concrete cleanup package. Leave the former R2/R3 drive rows as historical future candidates, minus deadline/yield requirements, until the reviewed direct-drive handoff replaces them.
 
 ### Delete
 
@@ -180,4 +180,4 @@ Stop when:
 - focused tests, `npm run check`, and `./test.sh` pass;
 - final Fable and Codex reviews have no findings.
 
-Do not begin the manual-first drive redesign in this package.
+Do not begin the direct durable-drive implementation in this package.

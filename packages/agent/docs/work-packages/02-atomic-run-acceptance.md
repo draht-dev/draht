@@ -213,9 +213,7 @@ Keep deferred suspension as provider semantics:
 { kind: "suspended"; reason: "deferred"; ... }
 ```
 
-Keep `action_required` as the successful manual-progress outcome. WP02 changes its types and leaves behavior to R2.
-
-Convenience operation outcomes remain operation-tagged branches of `ResumeOutcome`. `executeAction(context)` returns `ResumeResult`; `runToCompletion(context)` excludes `action_required`.
+WP05 removes the withdrawn action outcome before execution is enabled. Convenience operation outcomes remain operation-tagged branches of `ResumeOutcome`.
 
 ### Snapshot
 

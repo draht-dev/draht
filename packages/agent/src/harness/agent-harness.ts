@@ -99,11 +99,6 @@ export type OptionalFinalAssistant =
 	| { finalEntryId: string; finalMessage: AssistantMessage }
 	| { finalEntryId?: never; finalMessage?: never };
 
-export interface ActionRequired {
-	kind: "action_required";
-	action: ActionInfo;
-}
-
 export type RunOutcome =
 	| ({ kind: "completed"; leafId: string } & OptionalFinalAssistant)
 	| ({ kind: "aborted"; leafId: string } & OptionalFinalAssistant)
@@ -114,14 +109,12 @@ export type RunOutcome =
 			leafId: string;
 			finalEntryId: string;
 			deferred: DeferredHandle;
-	  }
-	| ActionRequired;
+	  };
 
 export type CompactionOutcome =
 	| { kind: "completed"; leafId: string; entry: CompactionEntry }
 	| { kind: "declined" | "aborted"; leafId: string }
-	| { kind: "failed"; leafId: string; error: OperationError }
-	| ActionRequired;
+	| { kind: "failed"; leafId: string; error: OperationError };
 
 export type NavigationOutcome =
 	| {
@@ -131,14 +124,12 @@ export type NavigationOutcome =
 			summaryEntry?: BranchSummaryEntry;
 	  }
 	| { kind: "declined" | "aborted"; leafId: string | null }
-	| { kind: "failed"; leafId: string | null; error: OperationError }
-	| ActionRequired;
+	| { kind: "failed"; leafId: string | null; error: OperationError };
 
 export type RunOperationOutcome = { operation: "run"; runId: string } & RunOutcome;
 export type CompactionOperationOutcome = { operation: "compaction"; runId: string } & CompactionOutcome;
 export type NavigationOperationOutcome = { operation: "navigation"; runId: string } & NavigationOutcome;
 export type ResumeOutcome = RunOperationOutcome | CompactionOperationOutcome | NavigationOperationOutcome;
-export type SettledResumeOutcome = Exclude<ResumeOutcome, { kind: "action_required" }>;
 
 export type RunResult = Result<
 	RunOperationOutcome,
@@ -221,15 +212,14 @@ export interface LaneExecutionInfo {
 }
 
 export type TerminalOperationOutcome =
-	| ({ operation: "run"; runId: string } & Exclude<RunOutcome, { kind: "suspended" } | ActionRequired>)
-	| ({ operation: "compaction"; runId: string } & Exclude<CompactionOutcome, ActionRequired>)
-	| ({ operation: "navigation"; runId: string } & Exclude<NavigationOutcome, ActionRequired>);
+	| ({ operation: "run"; runId: string } & Exclude<RunOutcome, { kind: "suspended" }>)
+	| ({ operation: "compaction"; runId: string } & CompactionOutcome)
+	| ({ operation: "navigation"; runId: string } & NavigationOutcome);
 
 export type DriveOutcome =
 	| { kind: "settled"; operationId: string; outcome: TerminalOperationOutcome }
 	| { kind: "waiting"; operationId: string; reason: "retry"; notBefore: number }
-	| { kind: "waiting"; operationId: string; reason: "deferred"; deferred: DeferredHandle }
-	| { kind: "action_required"; operationId: string; action: ActionInfo };
+	| { kind: "waiting"; operationId: string; reason: "deferred"; deferred: DeferredHandle };
 export type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
 
 export type AbortRequestResult = Result<
@@ -241,12 +231,6 @@ export type AbortRequestResult = Result<
 	},
 	OperationMismatch | Closed
 >;
-
-export interface ActionInfo {
-	kind: string;
-	description: string;
-	details?: JsonValue;
-}
 
 export interface WatchHandle<T> {
 	snapshot: T;
@@ -283,7 +267,6 @@ export interface LaneSnapshot {
 		kind: "run" | "compaction" | "navigation";
 		startedAt: number;
 		status: OperationStatus;
-		action?: ActionInfo;
 		retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
 		deferred?: { handle: DeferredHandle; poll: number };
 		drained?: { steer: QueuedItem[]; followUp: QueuedItem[] };
@@ -576,7 +559,6 @@ export interface AgentHarnessOptions<TContext extends object | undefined = objec
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	toolExecution?: "sequential" | "parallel";
-	drive?: "automatic" | "manual";
 	toProviderMessages?: (messages: AgentMessage[], context: Context) => Message[] | Promise<Message[]>;
 	entryProjectors?: Record<string, EntryProjector>;
 }
@@ -616,9 +598,6 @@ export interface AgentLane {
 	): Promise<RecordUsageResult>;
 	waitForIdle(context: Context): Promise<void>;
 	runWhenIdle(callback: (context: Context) => void | Promise<void>, context: Context): Promise<void>;
-	peekAction(context: Context): Promise<ActionInfo | undefined>;
-	executeAction(context: Context): Promise<ResumeResult>;
-	runToCompletion(context: Context): Promise<Result<SettledResumeOutcome, NothingToResume | Closed>>;
 	getModel(context: Context): Promise<Model<Api> | undefined>;
 	setModel(model: Model<Api>, context: Context): Promise<void>;
 	getThinkingLevel(context: Context): Promise<ThinkingLevel>;

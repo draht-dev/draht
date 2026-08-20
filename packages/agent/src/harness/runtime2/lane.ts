@@ -531,18 +531,6 @@ export class Lane implements AgentLane {
 		throw new SliceNotImplemented("runWhenIdle");
 	}
 
-	async peekAction(..._args: Parameters<AgentLane["peekAction"]>): Promise<never> {
-		throw new SliceNotImplemented("peekAction");
-	}
-
-	async executeAction(..._args: Parameters<AgentLane["executeAction"]>): Promise<never> {
-		throw new SliceNotImplemented("executeAction");
-	}
-
-	async runToCompletion(..._args: Parameters<AgentLane["runToCompletion"]>): Promise<never> {
-		throw new SliceNotImplemented("runToCompletion");
-	}
-
 	async getModel(_context: Context): Promise<Model<Api> | undefined> {
 		this.assertOpen();
 		return this.models.getModel(this.state.configuration.model.provider, this.state.configuration.model.modelId);

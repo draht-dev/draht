@@ -470,7 +470,7 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	expectTypeOf<AgentLane["accept"]>().returns.toEqualTypeOf<Promise<OperationAdmissionResult>>();
 	expectTypeOf<AgentLane["drive"]>().returns.toEqualTypeOf<Promise<DriveResult>>();
 	expectTypeOf<keyof DriveOptions>().toEqualTypeOf<"operationId" | "waitForRetry" | "pollDeferred">();
-	expectTypeOf<DriveOutcome["kind"]>().toEqualTypeOf<"settled" | "waiting" | "action_required">();
+	expectTypeOf<DriveOutcome["kind"]>().toEqualTypeOf<"settled" | "waiting">();
 	expectTypeOf<AgentLane["inspectExecution"]>().returns.toEqualTypeOf<Promise<LaneExecutionInfo>>();
 	expectTypeOf<OperationRequest["kind"]>().toEqualTypeOf<
 		"prompt" | "skill" | "prompt_template" | "compaction" | "navigation"

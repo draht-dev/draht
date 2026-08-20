@@ -4,7 +4,16 @@ import type { JsonValue } from "../../harness/session/types.ts";
 const REMOTE_SERVICE_TYPE = Symbol("pi.remoteService.type");
 
 export type ServiceMode = "singleton" | "keyed";
-export type ServiceMemberKind = "method" | "state";
+export type ServiceMemberKind = "method" | "state" | "events";
+
+export class ServiceSliceNotImplemented extends Error {
+	readonly code = "service_not_implemented" as const;
+
+	constructor(operation: string) {
+		super(`${operation} is not implemented until its later plugin-service slice`);
+		this.name = "ServiceSliceNotImplemented";
+	}
+}
 
 export interface RemoteState<T> {
 	/** Borrowed immutable value, or undefined until hydration. Do not mutate or retain it. */
@@ -19,30 +28,56 @@ export interface MutableRemoteState<T> extends RemoteState<T> {
 	set(value: T, context: Context): void;
 }
 
+export type RemoteEventType<T> = T extends { readonly type: infer TType extends string } ? TType : never;
+export type RemoteEventListener<T> = (event: T, context: Context) => void | Promise<void>;
+
+/** Contract surface for non-durable semantic events. Remote delivery is a later service slice. */
+export interface RemoteEvents<T> {
+	subscribe(listener: RemoteEventListener<T>): () => void;
+	on<TType extends RemoteEventType<T>>(
+		type: TType,
+		listener: RemoteEventListener<Extract<T, { readonly type: TType }>>,
+	): () => void;
+}
+
+export interface MutableRemoteEvents<T> extends RemoteEvents<T> {
+	emit(event: T, context: Context): void;
+}
+
+/** Marks an existing schema-validated wire DTO as JSON-safe for static service-contract checking. */
+declare const REMOTE_JSON_TYPE: unique symbol;
+export type RemoteJson<T> = T & { readonly [REMOTE_JSON_TYPE]?: true };
+
 type JsonPrimitive = null | boolean | number | string;
-type InvalidJsonPart<T> = T extends JsonPrimitive
+type InvalidJsonPart<T> = typeof REMOTE_JSON_TYPE extends keyof T
 	? never
-	: T extends readonly (infer TItem)[]
-		? InvalidJsonPart<TItem>
-		: T extends (...args: never[]) => unknown
-			? T
-			: T extends object
-				? { [TKey in keyof T]-?: InvalidJsonPart<T[TKey]> }[keyof T]
-				: T;
+	: T extends JsonPrimitive
+		? never
+		: T extends readonly (infer TItem)[]
+			? InvalidJsonPart<TItem>
+			: T extends (...args: never[]) => unknown
+				? T
+				: T extends object
+					? { [TKey in keyof T]-?: InvalidJsonPart<T[TKey]> }[keyof T]
+					: T;
 
 type InvalidRemoteMember<T> = T extends RemoteState<infer TValue>
 	? InvalidJsonPart<TValue> extends never
 		? never
 		: "state value is not JSON"
-	: T extends (...args: [...infer TArgs, Context]) => Promise<infer TResult>
-		? InvalidJsonPart<TArgs[number]> extends never
-			? TResult extends void
-				? never
-				: InvalidJsonPart<TResult> extends never
+	: T extends RemoteEvents<infer TEvent>
+		? InvalidJsonPart<TEvent> extends never
+			? never
+			: "event value is not JSON"
+		: T extends (...args: [...infer TArgs, Context]) => Promise<infer TResult>
+			? InvalidJsonPart<TArgs[number]> extends never
+				? TResult extends void
 					? never
-					: "method result is not JSON or void"
-			: "method argument is not JSON"
-		: "member is not a remote method or RemoteState";
+					: InvalidJsonPart<TResult> extends never
+						? never
+						: "method result is not JSON or void"
+				: "method argument is not JSON"
+			: "member is not a remote method, RemoteState, or RemoteEvents";
 
 type InvalidRemoteMemberNames<T> = {
 	[TKey in keyof T]-?: InvalidRemoteMember<T[TKey]> extends never ? never : TKey;

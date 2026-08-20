@@ -1,6 +1,6 @@
 # Coding-Agent Application Hosts and Plugin Facets
 
-> **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `RemoteState` substrate now have an experimental implementation; the application host contexts, plugin kernel, events, references, telemetry propagation, and most example facets remain illustrative. Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
+> **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `RemoteState` substrate now have an experimental implementation, including a `Models` vertical slice. `RemoteEvents` contract/member metadata is scaffolded with explicit `ServiceSliceNotImplemented` behavior; event delivery is not implemented. The application host contexts, plugin kernel, references, telemetry propagation, and most other example facets remain illustrative. Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
 
 This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `SessionTree`, `SessionRepo`, invocation `Context`, and telemetry. Read `rpc.md` for wire frames, remote references, subscriptions, and trace carriers, and `telemetry.md` for context propagation and cancellation semantics.
 
@@ -428,7 +428,7 @@ The two namespaces are the topology made visible: `server.use(SessionDirectory)`
 
 A future `CodingAgentWebPluginContext` carries the same two namespaces plus browser registries — routes, views, DOM dialogs. The server context is defined in the [server section](#the-server-directory-management-and-routing). Contexts resemble each other by convention; no kernel-owned base type forces the shape.
 
-Concretely, a chat plugin exposes a narrow `Chat` contract — `prompt(request, context)` returning `{ accepted, operationId, error }`, plus `requestAbort(operationId, context)` — and implements it with direct local lane capabilities:
+Concretely, the minimum chat slice exposes `prompt(request, context)` returning `{ accepted, operationId, error }`, plus `requestAbort(operationId, context)`, and implements it with direct local lane capabilities. The experimental `Chat` contract also predeclares the later steer, follow-up, next-run, queue cancellation, resume, compaction, and navigation presentation operations; those members throw `ServiceSliceNotImplemented` until their Harness adapter slices land:
 
 ```ts
 session(pluginContext: CodingAgentSessionPluginContext) {
@@ -960,7 +960,7 @@ Disconnect behavior, from the plugin author's perspective:
 - **A process loses its server connection.** A presentation loses both namespaces. A session worker loses server services and all attached presentations at once; unattended-session policy decides whether it exits.
 - Reconnect and reattach always hydrate from a fresh authoritative snapshot; prior remote references are invalid unless the exposure has explicitly session-stable identity. **Never blindly replay a mutation after an uncertain disconnect** — a replayed `select()` is harmless, a replayed `prompt()` is not. Reconnect, hydrate, and reconcile, or design the operation around a stable operation ID with explicit lookup semantics.
 
-Errors cross the wire as a JSON envelope `{ code, message, data? }` with stable codes. Expected service errors use stable codes or result values; unexpected exceptions become an internal error with safe metadata — no stacks or sensitive causes by default. Cancellation, disconnect, unknown service/method, invalid arguments/results, stale references, `not_attached`, `not_authorized`, `unknown_session`, and `session_unavailable` need distinct codes.
+Errors cross the wire as a JSON envelope `{ code, message, data? }` with stable codes. Expected service errors use stable codes or result values; unexpected exceptions become an internal error with safe metadata — no stacks or sensitive causes by default. Experimental scaffold members use `service_not_implemented` until their implementation slice lands. Cancellation, disconnect, unknown service/method, invalid arguments/results, stale references, `not_attached`, `not_authorized`, `unknown_session`, and `session_unavailable` need distinct codes.
 
 Security rules every providing host (session and server alike) must enforce:
 

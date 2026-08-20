@@ -4,11 +4,14 @@ import {
 	BACKGROUND_CONTEXT,
 	createLoopbackServiceConnection,
 	defineRemoteService,
+	type RemoteEvents,
 	type RemoteServiceConnection,
 	RemoteServiceNamespace,
 	RemoteServiceProvider,
 	type RemoteState,
+	remoteEvents,
 	remoteState,
+	ServiceSliceNotImplemented,
 } from "../../src/index.ts";
 
 type ModelRef = { provider: string; modelId: string };
@@ -30,6 +33,12 @@ interface QuestionDialogService {
 }
 
 const QuestionDialogs = defineRemoteService<QuestionDialogService>("question-dialog");
+
+interface ActivityService {
+	readonly events: RemoteEvents<{ type: "changed"; revision: number }>;
+}
+
+const Activity = defineRemoteService<ActivityService>("activity");
 
 describe("plugin remote services", () => {
 	test("does not defensively clone borrowed state values", () => {
@@ -190,6 +199,31 @@ describe("plugin remote services", () => {
 
 		closeSecond();
 		stop();
+		await namespace.dispose(BACKGROUND_CONTEXT);
+		provider.dispose();
+	});
+
+	test("declares RemoteEvents members while delivery remains an explicit later slice", async () => {
+		const provider = new RemoteServiceProvider([Activity]);
+		const events = remoteEvents<{ type: "changed"; revision: number }>();
+		provider.provide(Activity, { events });
+		const subscription = provider.subscribe("activity", "singleton", () => {});
+		expect(subscription.snapshot.instances[0]?.members).toEqual([{ name: "events", kind: "events" }]);
+		expect(() => events.subscribe(() => {})).toThrow(ServiceSliceNotImplemented);
+		expect(() => events.on("changed", () => {})).toThrow(ServiceSliceNotImplemented);
+		expect(() => events.emit({ type: "changed", revision: 1 }, BACKGROUND_CONTEXT)).toThrow(
+			ServiceSliceNotImplemented,
+		);
+		subscription.close();
+
+		const namespace = new RemoteServiceNamespace({
+			services: [Activity],
+			connection: createLoopbackServiceConnection(provider),
+		});
+		const activity = namespace.use(Activity);
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(() => activity.events.subscribe(() => {})).toThrow(ServiceSliceNotImplemented);
+		expect(() => activity.events.on("changed", () => {})).toThrow(ServiceSliceNotImplemented);
 		await namespace.dispose(BACKGROUND_CONTEXT);
 		provider.dispose();
 	});

@@ -1,5 +1,6 @@
 import type { Context } from "../../harness/context.ts";
 import type { JsonValue } from "../../harness/session/types.ts";
+import { getRemoteEventsInternals } from "./events.ts";
 import { freshDeliveryContext, getRemoteStateInternals, type RemoteStateInternals } from "./state.ts";
 import {
 	cloneJson,
@@ -24,7 +25,8 @@ export type RemoteServiceErrorCode =
 	| "service_member_mismatch"
 	| "service_instance_not_found"
 	| "service_stale_instance"
-	| "service_invalid_value";
+	| "service_invalid_value"
+	| "service_not_implemented";
 
 export class RemoteServiceError extends Error {
 	readonly code: RemoteServiceErrorCode;
@@ -40,7 +42,8 @@ type RemoteMethod = (...args: unknown[]) => unknown;
 
 type InstanceMember =
 	| { readonly kind: "method"; readonly method: RemoteMethod }
-	| { readonly kind: "state"; readonly state: RemoteStateInternals };
+	| { readonly kind: "state"; readonly state: RemoteStateInternals }
+	| { readonly kind: "events" };
 
 interface ProviderInstance {
 	readonly address?: ServiceInstanceAddress;
@@ -261,29 +264,34 @@ export class RemoteServiceProvider {
 				continue;
 			}
 			const state = getRemoteStateInternals(descriptor.value);
-			if (state === undefined) {
-				throw new TypeError(`Remote service member ${registration.serviceId}.${name} is not remotely exposable`);
+			if (state !== undefined) {
+				members.set(name, { kind: "state", state });
+				removeStateListeners.push(
+					state.subscribe((value, sequence, context) => {
+						if (!instance.active) return;
+						if (!isJsonValue(value)) {
+							throw new RemoteServiceError("service_invalid_value", "Remote state update must be strict JSON");
+						}
+						this.#emit(
+							registration,
+							{
+								type: "state",
+								...(address === undefined ? {} : { instance: address }),
+								member: name,
+								sequence,
+								value,
+							},
+							context,
+						);
+					}),
+				);
+				continue;
 			}
-			members.set(name, { kind: "state", state });
-			removeStateListeners.push(
-				state.subscribe((value, sequence, context) => {
-					if (!instance.active) return;
-					if (!isJsonValue(value)) {
-						throw new RemoteServiceError("service_invalid_value", "Remote state update must be strict JSON");
-					}
-					this.#emit(
-						registration,
-						{
-							type: "state",
-							...(address === undefined ? {} : { instance: address }),
-							member: name,
-							sequence,
-							value,
-						},
-						context,
-					);
-				}),
-			);
+			if (getRemoteEventsInternals(descriptor.value) !== undefined) {
+				members.set(name, { kind: "events" });
+				continue;
+			}
+			throw new TypeError(`Remote service member ${registration.serviceId}.${name} is not remotely exposable`);
 		}
 		if (members.size === 0) throw new TypeError(`Remote service ${registration.serviceId} has no members`);
 		return instance;

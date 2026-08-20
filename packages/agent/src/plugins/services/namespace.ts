@@ -17,6 +17,7 @@ import {
 	type ServiceMemberDescription,
 	type ServiceMemberKind,
 	type ServiceProviderUpdate,
+	ServiceSliceNotImplemented,
 	type ServiceStateSnapshot,
 } from "./types.ts";
 
@@ -107,8 +108,20 @@ class MemberSlot {
 					return this.#state.value;
 				}
 				if (property === "subscribe") {
+					if (this.#kind === "events") {
+						this.#expect("events");
+						return () => {
+							throw new ServiceSliceNotImplemented("RemoteEvents.subscribe");
+						};
+					}
 					this.#expect("state");
 					return this.#state.subscribe.bind(this.#state);
+				}
+				if (property === "on") {
+					this.#expect("events");
+					return () => {
+						throw new ServiceSliceNotImplemented("RemoteEvents.on");
+					};
 				}
 				if (property === Symbol.toStringTag) return "RemoteServiceMember";
 				if (property === "then") return undefined;

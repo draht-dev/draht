@@ -1,3 +1,10 @@
+export {
+	getRemoteEventsInternals,
+	REMOTE_EVENTS_INTERNALS,
+	type RemoteEventsInternals,
+	type RemoteEventsSource,
+	remoteEvents,
+} from "./events.ts";
 export { RemoteServiceNamespace } from "./namespace.ts";
 export {
 	createLoopbackServiceConnection,
@@ -17,7 +24,12 @@ export {
 	cloneJson,
 	defineRemoteService,
 	isJsonValue,
+	type MutableRemoteEvents,
 	type MutableRemoteState,
+	type RemoteEventListener,
+	type RemoteEvents,
+	type RemoteEventType,
+	type RemoteJson,
 	type RemoteService,
 	type RemoteServiceConnection,
 	type RemoteServiceInstance,
@@ -34,6 +46,7 @@ export {
 	type ServiceMode,
 	type ServiceProviderSubscription,
 	type ServiceProviderUpdate,
+	ServiceSliceNotImplemented,
 	type ServiceStateSnapshot,
 	type ServiceSubscriptionSnapshot,
 } from "./types.ts";

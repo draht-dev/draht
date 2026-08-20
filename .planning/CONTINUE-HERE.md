@@ -98,8 +98,14 @@ leftover — and would relay permissions only for geist-*spawned* sessions, leav
 in your own terminal with no relay at all. It recommends a `RelayUIContext` decorator at the mode-agnostic
 injection point instead.
 
-An R34-PERM.8 turn-hold measurement was running when this handoff was written; check
-`.planning/ROADMAP.md` Phase 34 for its result.
+**R34-PERM.8 is measured, and its result reshapes Phase 34.** The agent core imposes no deadline on a
+permission ask — verified at every layer, measured to 25 minutes against the emitted binary with zero
+degradation. But the gateway's WebSocket closes any silent connection at **255 seconds**
+(`config.ts:67`), there is no keepalive anywhere in `packages/gateway/src`, and a pending ask produces no
+output by definition. So the phone drops at ~4m15s while the agent waits forever. Phase 34's real latency
+work is a heartbeat or a durable pending ask — a prerequisite, not a nice-to-have. Two shipped defects
+also wedge or kill a pending ask (`rpc-mode.ts:428` and `:799-802`). Full detail and the seven
+prerequisites are in `.planning/ROADMAP.md` under Phase 34.
 
 ## Uncommitted
 

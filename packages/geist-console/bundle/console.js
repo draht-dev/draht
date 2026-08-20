@@ -1,36 +1,75 @@
 /**
- * The one daemon-served surface — behaviour (R32-FLEET.10).
+ * The one daemon-served surface — behaviour (R32-FLEET.10, R33-REACH.3/.5/.9).
  * Decision record: .planning/specs/2026-08-19-geist-served-surface-decision.md
  *
  * Lists the live attachable draht sessions, opens one, streams its output and
  * sends prompts. Plain ES modules: the daemon serves this file byte for byte and
  * the browser runs it, so the file the acceptance drives is the file that ships.
  *
- * Two things here are load-bearing and deliberately not obvious:
+ * Three things here are load-bearing and deliberately not obvious:
  *
- *  1. **The credential never touches a query string.** It arrives in the URL
+ *  1. **Authentication is a frame, not a header and never a query string.**
+ *     The page opens `/attach` with no credential at all — no `Authorization`
+ *     (a browser's `new WebSocket()` takes no headers), no
+ *     `Sec-WebSocket-Protocol` smuggling, no `?token=`. After `hello` /
+ *     `server_hello` it presents exactly one of two frames: `pair_device`,
+ *     carrying the single-use bootstrap token it read out of the URL
  *     *fragment* (never sent to the server, never logged, never in a Referer),
- *     moves to sessionStorage on the first tick and is stripped from the address
- *     bar. `GET /fleet` then uses `Authorization: Bearer`; the attach WebSocket —
- *     which takes no headers from `new WebSocket()` — carries it in the
- *     `Sec-WebSocket-Protocol` request header as `geist.bearer.<base64url>`.
- *     base64url is required, not decoration: Chromium refuses a subprotocol
- *     containing `/` or `=` (not RFC 7230 tchars) before a byte leaves the page.
- *     R33-REACH.3 deletes the daemon's `?token=` fallback; nothing here uses it.
+ *     or `authenticate`, carrying the device credential it was last issued.
+ *     The daemon answers both with one `device_credential` frame.
  *
- *  2. **No protocol literal is written down twice.** The family and 0.x member
+ *  2. **The credential is rotated at every exchange, and persisted before the
+ *     old one can be used again.** `device_credential` is written to
+ *     localStorage under {@link DEVICE_KEY} — localStorage, not
+ *     sessionStorage, because R33-REACH.9 asks the credential to survive a tab
+ *     close and an app restart — synchronously, in the handler, overwriting the
+ *     value it supersedes. The predecessor is dead the instant that frame is
+ *     sent, so a write that happened "later" would be a window in which this
+ *     page holds only a credential the daemon has already retired.
+ *
+ *     Eviction is defined rather than left to chance: a `not_authenticated`
+ *     `protocol_error` clears the stored credential, stops the reconnect loop
+ *     and reveals the re-bootstrap prompt. Re-pair, never a broken page.
+ *
+ *  3. **No protocol literal is written down twice.** The family and 0.x member
  *     come from `/ui/protocol.json`, which the daemon renders from the same
  *     `@draht/geist-protocol` constants it validates with — so a version bump
  *     cannot leave the served page speaking last month's handshake.
+ *
+ *  4. **A reconnect restores; it never replays.** There is no server-side
+ *     scrollback to replay from — see {@link clearTranscript} — so the page
+ *     keeps the transcript it has rendered across the gap, says "disconnected"
+ *     while the gap lasts, and re-attaches the same session on the far side.
+ *     Its retry budget is replenished by arriving, which for a connection that
+ *     wanted a session means the attach and for one that did not means the
+ *     exchange; the ceiling itself never moves.
+ *
+ *  5. **The composer is positioned against the *visual* viewport, not `dvh`.**
+ *     See {@link syncViewport}: `dvh` is the layout viewport, which iOS
+ *     Safari does not shrink for a keyboard, so `dvh` alone puts the
+ *     composer behind one on half the browsers this phase has to serve.
+ *
+ * There is no HTTP fleet read here either. The fleet is session data: the
+ * daemon withholds it until this connection is somebody and then pushes it on
+ * the wire, so "refresh" means "reconnect", not "GET /fleet with a bearer".
  */
 
-const TOKEN_KEY = "geist.console.token";
-const WS_BEARER_PREFIX = "geist.bearer.";
+/** Where the rotated device credential lives, as `{deviceId, credential}`. */
+const DEVICE_KEY = "geist.console.device";
 const CLIENT_NAME = "geist-console";
 /** Stable for the lifetime of this page; the wire wants a non-empty id. */
 const CLIENT_ID = `${CLIENT_NAME}-${Math.random().toString(36).slice(2, 10)}`;
 /** Reconnect attempts spent before the page stops and says so. */
 const MAX_RETRIES = 8;
+/** How often the diagnostics readout re-renders its live measurements. */
+const DIAGNOSTICS_TICK_MS = 500;
+/**
+ * Slack before a shorter visual viewport counts as a keyboard, in CSS px.
+ *
+ * A collapsing URL bar moves the visual viewport by a pixel or two on its
+ * own, and treating that as a keyboard would flicker the footer.
+ */
+const KEYBOARD_SLACK_PX = 8;
 
 const el = (id) => document.getElementById(id);
 const statusEl = el("status");
@@ -44,50 +83,126 @@ const sessionCwdEl = el("session-cwd");
 const sessionMetaEl = el("session-meta");
 const promptEl = el("prompt");
 
-let token = takeToken();
+/**
+ * How this device names itself in `geist devices list|revoke` (R33-REACH.6).
+ * Display metadata only — the daemon assigns the device id and never trusts a
+ * word of this for authorization.
+ */
+const DEVICE = {
+	name: "geist console",
+	platform: navigator.userAgentData?.platform || navigator.platform || "browser",
+};
+
+/**
+ * Whether this page was asked for the evidence readout (R33-REACH.2).
+ *
+ * Read from the same fragment the bootstrap token arrives in, and read as a
+ * *flag*: `#diag`, `#diag=1` and `#token=…&diag=1` all mean yes.
+ * {@link takeBootstrapToken} strips only the token, so the flag survives into
+ * the address bar and a reload keeps the readout on — which matters when the
+ * thing being archived is a reconnect.
+ */
+const DIAGNOSTICS = new URLSearchParams(location.hash.replace(/^#/, "")).has("diag");
+
+/** The single-use bootstrap token, if this page was opened from a pairing link. */
+let bootstrap = takeBootstrapToken();
+/** `{deviceId, credential}` once this browser has paired, else null. */
+let device = loadDevice();
 let protocol = null;
 let socket = null;
-let greeted = false;
+/** True once a `device_credential` proved this connection to the daemon. */
+let authenticated = false;
 let attachedId = null;
-/** The session the operator asked for, attached after the next `server_hello`. */
+/** The session the operator asked for, attached once this connection is authenticated. */
 let wantedId = null;
+/**
+ * The session whose conversation is on screen, or null.
+ *
+ * Tracked separately from {@link attachedId} — which a drop clears — because it
+ * is what decides when the transcript may be thrown away, and a drop must not
+ * be able to decide that. See {@link clearTranscript}.
+ */
+let transcriptId = null;
 /** The streaming assistant bubble; nulled whenever a new turn starts. */
 let agentEntry = null;
 /** True while a close is one we asked for, so it reconnects instead of retrying. */
 let deliberateClose = false;
 let retries = 0;
+/** `performance.now()` when the live socket opened, or null while there is none. */
+let socketOpenedAt = null;
+/** How the last socket died, as the readout prints it; empty until one has. */
+let lastClose = "";
 
-/* ------------------------------------------------------------------ token -- */
-
-/** base64url — the subprotocol alphabet a browser will actually accept. */
-function base64url(text) {
-	const bytes = new TextEncoder().encode(text);
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
+/* ------------------------------------------------------------ credential -- */
 
 /**
- * Take the credential out of the fragment and out of the address bar.
+ * Take the bootstrap token out of the fragment and out of the address bar.
  *
  * A fragment is the one part of a URL the browser keeps to itself, which is why
- * Phase 33's QR deep link will carry the bootstrap token here and not in a query.
+ * `geist pair`'s QR and deep link carry the token here and not in a query
+ * (R33-REACH.3/.4). Deliberately *not* persisted: the token is single-use and
+ * is dead the moment the daemon answers, so the only thing storing it could
+ * achieve is keeping a spent secret on disk.
  */
-function takeToken() {
+function takeBootstrapToken() {
 	const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
 	const supplied = fragment.get("token");
-	if (!supplied) return sessionStorage.getItem(TOKEN_KEY) ?? "";
-	sessionStorage.setItem(TOKEN_KEY, supplied);
+	if (!supplied) return "";
 	fragment.delete("token");
 	const rest = fragment.toString();
 	history.replaceState(null, "", location.pathname + (rest ? `#${rest}` : ""));
 	return supplied;
 }
 
-function forgetToken() {
-	token = "";
-	sessionStorage.removeItem(TOKEN_KEY);
+/** The stored device credential, or null — a value that is not the documented shape is evicted rather than presented. */
+function loadDevice() {
+	const raw = localStorage.getItem(DEVICE_KEY);
+	if (!raw) return null;
+	try {
+		const parsed = JSON.parse(raw);
+		if (typeof parsed?.deviceId === "string" && typeof parsed?.credential === "string") {
+			if (parsed.deviceId && parsed.credential) return { deviceId: parsed.deviceId, credential: parsed.credential };
+		}
+	} catch {
+		// Fall through: unparseable is exactly as unusable as absent.
+	}
+	localStorage.removeItem(DEVICE_KEY);
+	return null;
+}
+
+/**
+ * Persist the credential the daemon just issued, replacing the one it retired.
+ *
+ * Synchronous and unconditional. The daemon rotates on every exchange, so the
+ * value this overwrites is already refused; anything that deferred the write
+ * would leave a reload holding a credential the daemon has retired, which is
+ * the difference between "reconnects" and "silently unpairs itself".
+ */
+function rememberDevice(frame) {
+	device = { deviceId: frame.deviceId, credential: frame.credential };
+	localStorage.setItem(DEVICE_KEY, JSON.stringify(device));
+	// Spent at the daemon in the same exchange; holding it would only invite a replay.
+	bootstrap = "";
+}
+
+/** Say — in the UI — that this browser holds nothing the daemon will accept. */
+function needsPairing(why) {
 	tokenForm.hidden = false;
+	setStatus(why, "error");
+}
+
+/**
+ * Eviction (R33-REACH.9): drop the credential and ask to be paired again.
+ *
+ * Called only for `not_authenticated`, which is the daemon saying this exact
+ * credential is not one it will take — revoked, superseded, or never issued.
+ * Keeping it would spend every future reconnect re-presenting it.
+ */
+function forgetDevice() {
+	device = null;
+	bootstrap = "";
+	localStorage.removeItem(DEVICE_KEY);
+	needsPairing("not paired — this device's credential was refused");
 }
 
 /* ----------------------------------------------------------------- render -- */
@@ -154,11 +269,112 @@ function addOutput(text) {
 	transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
 
+/**
+ * Throw the conversation away. Called from exactly one place, on purpose.
+ *
+ * **There is no scrollback anywhere to get it back from.** The geist wire has
+ * no replay frame and neither does the session's own protocol
+ * (`coding-agent/src/core/socket-server/types.ts`: output, input_echo,
+ * client_joined, client_left, session_metadata, error) — a session streams to
+ * whoever is attached at the time and remembers nothing for whoever is not. So
+ * what this clears is the only copy, and clearing it because a socket died
+ * would lose the conversation for good (R33-REACH.9). A reconnect therefore
+ * preserves the transcript and re-attaches; only a deliberate switch to a
+ * *different* session, where the text on screen would be the wrong session's,
+ * reaches here.
+ */
 function clearTranscript() {
 	transcriptEl.textContent = "";
 	transcriptEl.append(transcriptEmptyEl);
 	transcriptEmptyEl.hidden = false;
 	agentEntry = null;
+}
+
+/* --------------------------------------------------------------- viewport -- */
+
+/**
+ * Publish the *visual* viewport to CSS, so the composer is never behind the
+ * keyboard (R33-REACH.10).
+ *
+ * console.css sizes `body` with `var(--viewport-height, 100dvh)` and offsets
+ * it with `var(--viewport-offset, 0px)`. Those two custom properties are the
+ * only thing this function writes, and it writes them from the one API that
+ * measures what is actually visible.
+ *
+ * Why `dvh` is not enough on its own: `dvh` is the *layout* viewport. Chrome
+ * on Android shrinks the layout viewport when the keyboard opens, so `dvh`
+ * follows and the fallback would do. iOS Safari does not — the page stays laid
+ * out at full height and only `visualViewport` shrinks, which means a composer
+ * anchored to `100dvh`'s bottom edge is a few hundred pixels below the
+ * keyboard: on screen as far as CSS is concerned, and unreachable in fact.
+ *
+ * `offsetTop` is the same story a second time. With the keyboard up iOS lets
+ * the page scroll under the layout viewport's origin, so the visible area
+ * moves down as well as shrinking; the offset is handed to a transform, which
+ * moves the pixels without being able to make the document scrollable.
+ *
+ * A browser with no `visualViewport` gets neither property and therefore gets
+ * the `100dvh` fallback — which is correct for it, and is why this returns
+ * quietly rather than throwing.
+ */
+function syncViewport() {
+	const visual = window.visualViewport;
+	if (!visual) return;
+	const root = document.documentElement.style;
+	root.setProperty("--viewport-height", `${visual.height}px`);
+	root.setProperty("--viewport-offset", `${visual.offsetTop}px`);
+
+	// "A keyboard is up" is not something a browser reports; it is the layout
+	// viewport having more height than the visual one can see.
+	const covered = window.innerHeight - (visual.height + visual.offsetTop);
+	const up = covered > KEYBOARD_SLACK_PX;
+	document.body.dataset.keyboard = up ? "up" : "down";
+	// The last line of the transcript is what the operator was reading, and a
+	// keyboard that covers it is the same defect as one that covers the
+	// composer — the scroll offset that was at the bottom no longer is.
+	if (up) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+	renderDiagnostics();
+}
+
+/* ------------------------------------------------------------ diagnostics -- */
+
+/**
+ * The evidence readout (R33-REACH.2), re-rendered from live state.
+ *
+ * Everything Phase 39 has to archive about a device run and cannot get off a
+ * phone any other way: which browser build loaded these bytes, what geometry
+ * it laid them out in, which protocol member it spoke, how long its socket
+ * survived and how that socket died. One screenshot, the whole set.
+ *
+ * A no-op unless {@link DIAGNOSTICS} — so it is safe to call from anywhere
+ * that changes one of those facts, which is what the call sites do.
+ */
+function renderDiagnostics() {
+	if (!DIAGNOSTICS) return;
+	el("diag-ua").textContent = navigator.userAgent;
+	el("diag-protocol").textContent = protocol ? `${protocol.protocol}/${protocol.version}` : "—";
+
+	const visual = window.visualViewport;
+	const layout = `${window.innerWidth}x${window.innerHeight} layout`;
+	const seen = visual
+		? `${Math.round(visual.width)}x${Math.round(visual.height)}+${Math.round(visual.offsetTop)} visual`
+		: "no visualViewport";
+	el("diag-viewport").textContent = `${layout} · ${seen} · dpr ${window.devicePixelRatio}`;
+
+	// Uptime rather than an opened-at timestamp: the measured number
+	// R33-REACH.2 asks for is how long a socket lasts through the proxy before
+	// something idles it out, and that is what a photograph of this line says.
+	const uptimeMs = socketOpenedAt === null ? null : performance.now() - socketOpenedAt;
+	el("diag-uptime").textContent = uptimeMs === null ? "—" : `${(uptimeMs / 1000).toFixed(1)}s`;
+	el("diag-close").textContent = lastClose || "—";
+}
+
+/** Reveal the readout and start its clock, if this page was asked for it. */
+function startDiagnostics() {
+	if (!DIAGNOSTICS) return;
+	el("diagnostics").hidden = false;
+	renderDiagnostics();
+	setInterval(renderDiagnostics, DIAGNOSTICS_TICK_MS);
 }
 
 /* ------------------------------------------------------------------- wire -- */
@@ -173,16 +389,36 @@ function sendAttach(sessionId) {
 	send({ type: "attach", sessionId, clientId: CLIENT_ID, mode: "read-write" });
 }
 
+/**
+ * The first frame after the handshake, and the only two shapes it takes.
+ *
+ * `pair_device` when this browser holds a bootstrap token it has not spent;
+ * `authenticate` when it holds a credential from a previous exchange. Bootstrap
+ * wins when both exist — an operator who has just scanned a fresh QR is asking
+ * for a new pairing, not for the old credential to be tried first.
+ */
+function presentCredential() {
+	if (bootstrap) {
+		send({ type: "pair_device", bootstrapToken: bootstrap, device: DEVICE });
+		return;
+	}
+	if (device) send({ type: "authenticate", deviceId: device.deviceId, credential: device.credential });
+}
+
 function connect() {
-	if (!token || !protocol) return;
-	greeted = false;
+	// Nothing to present is not a connection worth opening: the daemon would
+	// greet it and then refuse everything after, which costs a socket and
+	// teaches the operator nothing.
+	if (!protocol || (!bootstrap && !device)) return;
+	authenticated = false;
 	attachedId = null;
 	setStatus("connecting…", "connecting");
 
 	const url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/attach`;
 	let opened;
 	try {
-		opened = new WebSocket(url, [WS_BEARER_PREFIX + base64url(token)]);
+		// No subprotocol, no header, no query: the credential is a frame.
+		opened = new WebSocket(url);
 	} catch (error) {
 		setStatus(`cannot connect: ${error.message}`, "error");
 		return;
@@ -190,6 +426,8 @@ function connect() {
 	socket = opened;
 
 	opened.addEventListener("open", () => {
+		socketOpenedAt = performance.now();
+		renderDiagnostics();
 		send({
 			type: "hello",
 			protocol: protocol.protocol,
@@ -216,16 +454,29 @@ function connect() {
 }
 
 function closed(event) {
-	greeted = false;
+	authenticated = false;
 	attachedId = null;
 	markCurrent();
+	// Recorded before any of the branches below return: how the socket died is
+	// the fact the archived run is after, and every one of those paths is a way
+	// of dying (R33-REACH.2).
+	socketOpenedAt = null;
+	lastClose = `${event.code}${event.reason ? ` ${event.reason}` : ""}`;
+	renderDiagnostics();
 
+	// Evicted — or never paired. Checked before the deliberate-close branch,
+	// because a credential the daemon has refused makes every reconnect a
+	// refusal, including one we asked for ourselves.
+	if (!bootstrap && !device) {
+		deliberateClose = false;
+		needsPairing("not paired — open the link from `geist pair`");
+		return;
+	}
 	if (deliberateClose) {
 		deliberateClose = false;
 		connect();
 		return;
 	}
-	setStatus(`disconnected (${event.code}${event.reason ? ` ${event.reason}` : ""})`, "disconnected");
 	// Bounded, because a rejected credential — or a session that is gone —
 	// closes on every attempt and an unbounded retry would turn that into a
 	// login-attempt loop. Giving up says so rather than leaving a "disconnected"
@@ -236,31 +487,58 @@ function closed(event) {
 	}
 	const delay = Math.min(500 * 2 ** retries, 5000);
 	retries += 1;
+	// Said out loud, and said as a state (R33-REACH.9): the transcript stays on
+	// screen through the gap, so without this the page is indistinguishable from
+	// one whose session has simply gone quiet.
+	setStatus(`disconnected (${event.code}${event.reason ? ` ${event.reason}` : ""}) — reconnecting…`, "disconnected");
 	setTimeout(connect, delay);
 }
 
 function receive(frame) {
 	switch (frame.type) {
-		// The transport handshake only proves the daemon answered. Deliberately
-		// does NOT clear `retries`: the attach that follows can still be refused
-		// — `unknown_session` when the session died — and a counter reset here
-		// would make every one of those refusals look like a fresh start, which
-		// is an unbounded reconnect loop against a session that is never coming
-		// back. Only `session_metadata` below, the daemon's answer to a
-		// SUCCESSFUL attach, is evidence the retry budget can be given back.
+		// The transport handshake only proves the daemon answered — this
+		// connection is still anonymous, and the daemon has deliberately sent no
+		// fleet. Present the credential and wait.
 		case "server_hello":
-			greeted = true;
-			setStatus(`connected · ${frame.server.name} ${frame.server.version}`, "connected");
-			if (wantedId) sendAttach(wantedId);
+			setStatus("authenticating…", "connecting");
+			presentCredential();
 			break;
 
+		// The exchange succeeded and the credential has been rotated. Persist it
+		// first — before the attach, before the status, before anything that
+		// could throw — because everything else on this page can be redone by
+		// reloading and this cannot.
+		case "device_credential":
+			rememberDevice(frame);
+			authenticated = true;
+			tokenForm.hidden = true;
+			setStatus("connected", "connected");
+			// A connection that owes an attach is not finished arriving, so its
+			// budget is not yet earned — see `session_metadata`. One that owes
+			// nothing has arrived: it is authenticated, it is about to be handed
+			// the fleet, and that is the whole of what it asked for. Replenishing
+			// here is what a console left sitting on the fleet needs; without it
+			// the budget was spent once across the page's entire life and the
+			// eighth blip — a lock screen, a lift, a tailnet re-key — stopped it
+			// reconnecting for good, on a healthy network.
+			if (wantedId) sendAttach(wantedId);
+			else retries = 0;
+			break;
+
+		// Session data, and the daemon's proof that it accepted us: it is not
+		// sent to a connection that has not authenticated.
 		case "fleet":
 			renderFleet(frame.sessions);
 			break;
 
-		// The attach worked. This — not the handshake — is what earns a fresh
-		// retry budget, so a transient drop mid-session still reconnects freely
-		// while a session that cannot be attached to runs the budget down.
+		// The attach worked, which is the whole of what a connection that wanted a
+		// session was for — so this is where *it* earns a fresh retry budget. The
+		// handshake never does, and the exchange only does for a connection that
+		// wanted nothing more (see `device_credential`). That split is the bound:
+		// a page whose session has died authenticates successfully on every single
+		// attempt and is refused only afterwards, so a budget cleared by the
+		// exchange alone would never reach its ceiling and the page would hammer
+		// the daemon forever.
 		case "session_metadata":
 			retries = 0;
 			attachedId = frame.sessionId;
@@ -298,10 +576,12 @@ function receive(frame) {
 			break;
 
 		// Raised by the daemon about this connection; it is about to be dropped.
+		// `not_authenticated` is the one that changes stored state: it is the
+		// daemon refusing this credential, so the credential goes.
 		case "protocol_error":
 			addEntry("fatal", `${frame.code}: ${frame.message}`);
 			setStatus(`refused: ${frame.code}`, "error");
-			if (frame.code === "not_authenticated") forgetToken();
+			if (frame.code === "not_authenticated") forgetDevice();
 			break;
 	}
 }
@@ -318,13 +598,20 @@ function openSession(sessionId) {
 		document.body.dataset.view = "session";
 		return;
 	}
+	// The switch, and the only one: a different session's output would otherwise
+	// stream into the conversation on screen. Re-opening the session already
+	// rendered — after a trip back to the fleet, or while a reconnect is still in
+	// flight and `attachedId` is momentarily null — keeps what is there.
+	if (transcriptId !== sessionId) {
+		clearTranscript();
+		transcriptId = sessionId;
+	}
 	wantedId = sessionId;
-	clearTranscript();
 	if (attachedId) {
 		deliberateClose = true;
 		send({ type: "detach", clientId: CLIENT_ID });
 		attachedId = null;
-	} else if (greeted) {
+	} else if (authenticated) {
 		sendAttach(sessionId);
 	} else if (!socket) {
 		connect();
@@ -352,17 +639,22 @@ function sendPrompt() {
 	resizePrompt();
 }
 
-async function refreshFleet() {
-	if (!token) return;
-	const response = await fetch("/fleet", { headers: { Authorization: `Bearer ${token}` } });
-	if (response.status === 401) {
-		forgetToken();
-		setStatus("token rejected", "error");
+/**
+ * Re-read the fleet — which, on this wire, means reconnecting.
+ *
+ * There is no client frame that asks for the fleet: the daemon pushes it once,
+ * to a connection that has authenticated, because it is session data. So the
+ * honest refresh is a fresh authenticated connection, not a bearer-authorized
+ * `GET /fleet` that would put the credential back into an HTTP header.
+ */
+function refreshFleet() {
+	if (!socket) {
+		retries = 0;
+		connect();
 		return;
 	}
-	if (!response.ok) return;
-	const body = await response.json();
-	renderFleet(body.sessions ?? []);
+	deliberateClose = true;
+	socket.close();
 }
 
 function resizePrompt() {
@@ -373,9 +665,19 @@ function resizePrompt() {
 /* ------------------------------------------------------------------- boot -- */
 
 function wire() {
-	el("refresh").addEventListener("click", () => {
-		void refreshFleet();
-	});
+	// Before anything can be typed into: the composer has to be on screen for
+	// the first tap, not after it.
+	syncViewport();
+	startDiagnostics();
+	if (window.visualViewport) {
+		window.visualViewport.addEventListener("resize", syncViewport);
+		window.visualViewport.addEventListener("scroll", syncViewport);
+	}
+	// Rotation, a resized desktop window, and — on browsers with no
+	// `visualViewport` — the only signal there is.
+	window.addEventListener("resize", syncViewport);
+
+	el("refresh").addEventListener("click", refreshFleet);
 	el("back").addEventListener("click", backToFleet);
 	el("composer").addEventListener("submit", (event) => {
 		event.preventDefault();
@@ -392,8 +694,9 @@ function wire() {
 		event.preventDefault();
 		const supplied = tokenInput.value.trim();
 		if (!supplied) return;
-		token = supplied;
-		sessionStorage.setItem(TOKEN_KEY, supplied);
+		// A pasted pairing token is the same single-use bootstrap the deep link
+		// carries; the exchange that follows is byte for byte the QR's.
+		bootstrap = supplied;
 		tokenInput.value = "";
 		tokenForm.hidden = true;
 		void start();
@@ -401,18 +704,20 @@ function wire() {
 }
 
 async function start() {
-	if (!token) {
+	if (!protocol) {
+		const response = await fetch("/ui/protocol.json");
+		protocol = await response.json();
+		// The family and member are half the pinned-version evidence set, and this
+		// is the first moment the page knows them.
+		renderDiagnostics();
+	}
+	if (!bootstrap && !device) {
 		tokenForm.hidden = false;
-		setStatus("waiting for a token", "disconnected");
+		setStatus("waiting for a pairing token", "disconnected");
 		return;
 	}
 	tokenForm.hidden = true;
 	retries = 0;
-	if (!protocol) {
-		const response = await fetch("/ui/protocol.json");
-		protocol = await response.json();
-	}
-	await refreshFleet();
 	connect();
 }
 

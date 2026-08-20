@@ -78,6 +78,38 @@
 			</section>
 		</main>
 
+		<!--
+			The evidence readout (R33-REACH.2), rendered only when the URL fragment
+			carries `diag`.
+
+			Phase 39 archives a device run: which browser build loaded this bundle,
+			which protocol member it spoke, how long its socket survived and how that
+			socket died. A phone has no devtools to read any of that out of, so the
+			page says it — and one screenshot then carries the whole pinned-version
+			set rather than a photo of a transcript plus a claim about the versions.
+
+			Opt-in, because an operator's console is not an evidence sheet. The switch
+			is `diag` in the same fragment the bootstrap token arrives in —
+			`/ui#diag`, or `/ui#token=…&diag=1` — and nothing else turns it on. No
+			command emits that fragment today: whoever runs the archived device
+			capture appends it, and a `geist pair --diag` that puts it in the QR is
+			still owed.
+		-->
+		<section id="diagnostics" aria-label="Device diagnostics" hidden>
+			<dl>
+				<dt>ua</dt>
+				<dd id="diag-ua">—</dd>
+				<dt>protocol</dt>
+				<dd id="diag-protocol">—</dd>
+				<dt>viewport</dt>
+				<dd id="diag-viewport">—</dd>
+				<dt>socket</dt>
+				<dd id="diag-uptime">—</dd>
+				<dt>last close</dt>
+				<dd id="diag-close">—</dd>
+			</dl>
+		</section>
+
 		<footer id="decision-record">
 			one served bundle · desktop + phone · .planning/specs/2026-08-19-geist-served-surface-decision.md
 		</footer>

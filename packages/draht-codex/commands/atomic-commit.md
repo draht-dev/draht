@@ -21,18 +21,7 @@ If any of these triggers, surface the issue to the user and split the change set
 
 ## Atomic Reasoning
 
-Before creating commits, decompose changes into atomic reasoning units:
-
-**For each file change:**
-1. **State the logical component** — What does this change do? What is its purpose? Does it complete a thought?
-2. **Validate independence** — Can this change be applied independently? Does it depend on other changes? Does it break the build alone?
-3. **Verify correctness** — Is this change logically complete? Does it mix concerns? Should it be split further?
-
-**Synthesize commit strategy:**
-- Group changes by logical concern (one commit = one idea)
-- Order commits so each builds successfully
-- Write clear commit messages that explain WHY, not just WHAT
-- Ensure each commit is self-contained and reviewable
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## Gathering Current State
 

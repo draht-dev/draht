@@ -16,18 +16,9 @@ If no scope given, reviews all recent uncommitted changes.
 
 ## Atomic Reasoning
 
-Before reviewing, decompose code changes into atomic reasoning units:
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
-**For each changed file:**
-1. **State the logical component** — What does this change do? What problem does it solve? What behavior does it add/modify?
-2. **Validate independence** — Does this change have side effects? Does it affect other modules? Are there hidden dependencies?
-3. **Verify correctness** — Is this change correct? Type-safe? Secure? Does it follow conventions? What could go wrong?
-
-**Synthesize review strategy:**
-- Group changes by concern (correctness, security, style, spec compliance)
-- Prioritize findings (critical, important, minor)
-- Identify patterns across multiple files
-- Check domain language compliance and bounded context boundaries
+Check domain language compliance and bounded context boundaries.
 
 ## Steps
 1. Identify the scope:

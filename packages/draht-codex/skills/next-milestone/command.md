@@ -11,18 +11,7 @@ Plan the next milestone after ALL phases in the current one are complete.
 
 ## Atomic Reasoning
 
-Before planning the next milestone, decompose progress into atomic reasoning units:
-
-**For each completed phase:**
-1. **State the logical component** — What was built? What user value was delivered? What requirements were satisfied?
-2. **Validate independence** — What worked well? What had issues? What assumptions proved wrong?
-3. **Verify correctness** — Is every phase truly complete? Are there lingering fix plans? Is the codebase healthy?
-
-**Synthesize milestone strategy:**
-- Identify gaps from the current milestone
-- Derive new requirements from lessons learned
-- Group into a coherent next milestone with testable phase goals
-- Ensure domain model and test strategy still reflect reality
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## Steps
 1. Run `draht-tools verify-milestone` to ensure every phase in the current milestone is `complete`

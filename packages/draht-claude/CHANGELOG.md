@@ -8,6 +8,10 @@
 - `--no-graph-engine` install flag and `DRAHT_SKIP_GRAPH_ENGINE` env var to skip the automatic fetch
 - portable `cinematic-continuation` skill with bundled style/continuity references, a neutral sequence template, Seedance adapter boundary, and offline timeline compiler
 
+### Changed
+
+- pruned the boilerplate Atomic Reasoning section from all generated command templates; commands keep only command-specific reasoning plus a one-line pointer to the `atomic-reasoning` skill (already shipped in this plugin's skills/)
+
 ### Fixed
 
 - implementer agent TDD commit prefixes now follow the enforced `red:`/`green:`/`refactor:` convention (previously `test:`/`feat:`, which the gsd-post-task hook's `red:`/`green:` cycle check could never match)

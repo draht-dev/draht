@@ -41,11 +41,7 @@ When you've tried **3 fix attempts and still failing**, STOP. This is a **hard c
 
 ## Atomic Reasoning
 
-Before diagnosing, decompose this bug into atomic reasoning units:
-
-1. **State the logical component** — What is the observed failure? What should happen vs what actually happens?
-2. **Validate independence** — Which components/files are involved? Can we isolate the failure? Are there related bugs that should be fixed separately?
-3. **Verify correctness** — What test will reproduce this bug reliably? What would prove it's fixed? What regressions could the fix introduce?
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## The Four Phases
 

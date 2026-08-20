@@ -14,19 +14,7 @@ Description: $ARGUMENTS
 
 ## Atomic Reasoning
 
-Before questioning, decompose project vision into atomic reasoning units:
-
-**For each aspect of the new project:**
-1. **State the logical component** — What problem does this solve? Who are the users? What is core vs peripheral?
-2. **Validate independence** — What bounded contexts will exist? What domain concepts are central? Can features be built independently?
-3. **Verify correctness** — What defines MVP success? What constraints exist (time, tech, team)? What is explicitly out of scope?
-
-**Synthesize project strategy:**
-- Define bounded contexts and ubiquitous language upfront
-- Establish test strategy before writing code
-- Create requirements mapped to domain contexts
-- Build roadmap with testable phase goals
-- Ensure each phase delivers verifiable user value
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## Steps
 1. Run `draht-tools init` to check preconditions

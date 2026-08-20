@@ -3,7 +3,7 @@ import { getCollection } from "astro:content";
 import AtelierPage from "../../layouts/AtelierPage.astro";
 
 const title = "Episodes — Draht";
-const description = "The university's rebuild, one episode a week — filtered from the Draht blog. Start at Episode 1: the deletion.";
+const description = "The university's build, one episode a week — filtered from the Draht blog. Start at Episode 1: the first brick.";
 
 const episodes = (await getCollection("blog", ({ data }) => !data.draft && data.category === "episode"))
 	.sort((a, b) => new Date(a.data.date).getTime() - new Date(b.data.date).getTime());
@@ -14,10 +14,10 @@ const startHref = episodes.length > 0 ? `/blog/${episodes[0].id}` : "#episode-1"
 <AtelierPage title={title} description={description}>
 	<main class="episodes-index">
 		<header class="page-head">
-			<div class="page-kicker">uni.draht.dev · rebuilding in public</div>
+			<div class="page-kicker">uni.draht.dev · building in public</div>
 			<h1 class="page-title">Episodes<span class="ampersand">.</span></h1>
 			<p class="page-lede">
-				The university's first course is its own build. Weekly episodes, live repo, no theory — start at Episode 1.
+				A university built in public, one episode a week — live repo, no theory. Start at Episode 1.
 			</p>
 			<div class="ep-actions">
 				<a class="btn" href={startHref}>Start at Episode 1 &nbsp;→</a>
@@ -30,9 +30,9 @@ const startHref = episodes.length > 0 ? `/blog/${episodes[0].id}` : "#episode-1"
 				<span class="ep-num">Episode 01</span>
 				<div class="ep-body">
 					<span class="ep-status">Live now</span>
-					<h2 class="ep-title">Episode 1 — the deletion</h2>
+					<h2 class="ep-title">Episode 1 — the first brick</h2>
 					<p class="ep-desc">
-						We deleted the university. Episode 1 of the rebuild is live — watch it happen, then join the waitlist
+						The first brick is laid. Episode 1 of the build is live — watch it happen, then join the waitlist
 						for the next one.
 					</p>
 				</div>

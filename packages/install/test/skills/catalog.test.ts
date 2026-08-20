@@ -88,6 +88,7 @@ const EXPECTED_NAMES = [
 	"plan-phase",
 	"progress",
 	"quick",
+	"resolve-conflicts",
 	"resume-work",
 	"review",
 	"saga-spawner",
@@ -97,7 +98,7 @@ const EXPECTED_NAMES = [
 ].sort();
 
 describe("catalog: priority walk over this repo", () => {
-	it("returns exactly the 28 canonical skill names", () => {
+	it("returns exactly the 29 canonical skill names", () => {
 		expect(discoverSkillCatalog(REPO_ROOT).sort()).toEqual(EXPECTED_NAMES);
 	});
 
@@ -111,7 +112,7 @@ describe("catalog: priority walk over this repo", () => {
 		// would instead surface duplicates or the wrong file for those names.
 		const names = discoverSkillCatalog(REPO_ROOT);
 		expect(names.length).toBe(new Set(names).size);
-		expect(names.length).toBe(28);
+		expect(names.length).toBe(29);
 	});
 });
 

@@ -609,6 +609,7 @@ const requiredCommandPrompts = [
 	"plan-phase",
 	"progress",
 	"quick",
+	"resolve-conflicts",
 	"resume-work",
 	"review",
 	"verify-work",

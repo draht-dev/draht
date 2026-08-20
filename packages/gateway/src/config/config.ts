@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import type { TailnetFrontingSettings } from "../gateway/middleware/tailnet-identity";
 
 /**
  * Gateway settings loaded from config file.
@@ -37,6 +38,18 @@ export interface GatewaySettings {
 
 	/** Idle timeout for connections in seconds (max 255) */
 	idleTimeout: number;
+
+	/**
+	 * Declares the deployment fronted by `tailscale serve`, and names the tailnet
+	 * user allowed through it (R33-REACH.8).
+	 *
+	 * Absent on a daemon nobody has fronted — which is the common case and not a
+	 * weaker posture, because this block can only ever *refuse*. The header it
+	 * describes is forgeable by anything that can reach the loopback listener,
+	 * so it is never a credential and never the only check; see
+	 * `gateway/middleware/tailnet-identity.ts`.
+	 */
+	tailnet?: TailnetFrontingSettings;
 }
 
 /**
@@ -225,11 +238,44 @@ export function normalizeConfig(json: unknown, source: string): GatewaySettings 
 		}
 	}
 
+	// The tailnet block declares that `tailscale serve` fronts this daemon and
+	// names the tailnet user allowed through it (R33-REACH.8). It is validated
+	// strictly rather than best-effort: a typo here must be a startup error, not
+	// a check that quietly turns itself off. That it can only ever *refuse* is
+	// not a licence to be sloppy about whether it is on.
+	let tailnet: TailnetFrontingSettings | undefined;
+	if (!isAbsent(raw.tailnet)) {
+		if (typeof raw.tailnet !== "object" || raw.tailnet === null || Array.isArray(raw.tailnet)) {
+			problems.push(`"tailnet" must be an object, got ${describeType(raw.tailnet)}`);
+		} else {
+			const block = raw.tailnet as Record<string, unknown>;
+			const before = problems.length;
+			if (typeof block.fronted !== "boolean") {
+				problems.push(`"tailnet.fronted" must be a boolean, got ${describeType(block.fronted)}`);
+			}
+			if (typeof block.owner !== "string" || block.owner.trim() === "") {
+				problems.push(`"tailnet.owner" must be a non-empty string, got ${describeType(block.owner)}`);
+			}
+			if (!isAbsent(block.header) && (typeof block.header !== "string" || block.header.trim() === "")) {
+				problems.push(`"tailnet.header" must be a non-empty string, got ${describeType(block.header)}`);
+			}
+			if (problems.length === before) {
+				tailnet = {
+					fronted: block.fronted as boolean,
+					owner: block.owner as string,
+					...(isAbsent(block.header) ? {} : { header: block.header as string }),
+				};
+			}
+		}
+	}
+
 	if (problems.length > 0) {
 		throw new Error(`Invalid gateway config at ${source}:\n  - ${problems.join("\n  - ")}`);
 	}
 
-	return { port, host, tokens, allowedPaths, maxSessions, idleTimeout };
+	// Spread rather than always-present-and-undefined: a daemon with no tailnet
+	// block returns exactly the settings it always did.
+	return { port, host, tokens, allowedPaths, maxSessions, idleTimeout, ...(tailnet ? { tailnet } : {}) };
 }
 
 /**

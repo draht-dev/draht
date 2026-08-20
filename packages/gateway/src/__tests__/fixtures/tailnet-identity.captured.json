@@ -1,0 +1,14 @@
+{
+	"$PLACEHOLDER": "THIS FILE IS A PLACEHOLDER. NOTHING HERE WAS OBSERVED. Do not read a header name out of it and do not ship it.",
+	"$replaceWith": "node scripts/geist-tailscale-serve.mjs --capture-identity --peer NODE --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json",
+	"placeholder": true,
+	"capturedAt": null,
+	"origin": null,
+	"peer": null,
+	"path": "/__geist-identity-capture",
+	"tailscaleVersion": null,
+	"identityHeaders": {
+		"X-Uncaptured-Tailnet-Identity-Header-Placeholder": "PLACEHOLDER-nobody@invalid.example"
+	},
+	"headers": {}
+}

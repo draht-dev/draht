@@ -10,6 +10,7 @@ import { SessionManager } from "../session/session-manager";
 import { assertBindHostAllowed, isLoopbackPeer, nonLoopbackPeerRefusal } from "./bind-host";
 import { bearerAuthMiddleware } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
+import { tailnetIdentityMiddleware } from "./middleware/tailnet-identity";
 import { createConsoleRoutes } from "./routes/console";
 import { type AttachDeviceAuthenticator, createFleetRoutes } from "./routes/fleet";
 import { createSessionStreamRoutes } from "./routes/session-stream";
@@ -181,6 +182,17 @@ export function createServer(config: GatewayConfig): ServerHandle {
 			exposeHeaders: ["Content-Type"],
 		}),
 	);
+
+	// The tailnet identity check, ahead of the bearer middleware (R33-REACH.8).
+	//
+	// It is registered here — before auth, before any route — because it can only
+	// subtract: a fronted deployment refuses a request whose identity header
+	// names somebody other than the configured owner, and every other outcome is
+	// "carry on to the credential check". It never grants, never marks the
+	// context, and is never the only check; the header is forgeable by anything
+	// that can reach the loopback listener, which is exactly why it may not be
+	// treated as a credential. See `middleware/tailnet-identity.ts`.
+	app.use("*", tailnetIdentityMiddleware(config.config?.tailnet));
 
 	// Middleware ordering constraint:
 	//   1. Auth middleware must be registered first so every subsequent route is

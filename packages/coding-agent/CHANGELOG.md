@@ -13,6 +13,10 @@
 
 - `/fix` Phase 4 now commits the TDD cycle with plain `git commit` (`red:`/`green:`/`refactor:` prefixes); it previously used `draht-tools commit-docs`, which stages only `.planning/` and prefixes the message with `docs:` — so /fix TDD commits contained no source changes and the TDD hooks could never match them
 
+### Removed
+
+- legacy `/build`, `/plan`, `/verify` shipped prompt templates (`prompts/agents/`) — carried the dead `draht commit-task N P T` commit convention and were referenced nowhere; the build agent's Competence Mimics table now lives in the `implementer` builtin agent
+
 ## [2026.7.30] - 2026-07-30
 
 ### Added

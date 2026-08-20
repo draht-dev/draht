@@ -23,7 +23,8 @@
  *   7. Repo-level subagents exist in .draht/agents/
  *   8. GSD sources exist in packages/coding-agent/src/gsd/
  *   9. GSD hooks exist in packages/coding-agent/hooks/gsd/
- *  10. GSD prompt templates exist in packages/coding-agent/prompts/
+ *  10. GSD command prompt templates exist in packages/coding-agent/prompts/commands/
+ *      (and the legacy prompts/agents/ templates stay retired)
  *  11. Built-in agents exist in packages/coding-agent/agents/, and the set of
  *      agent names dispatched by prompts/commands/*.md matches the shipped
  *      roster in both directions (no command routes to an unshipped agent,
@@ -621,15 +622,15 @@ for (const name of requiredCommandPrompts) {
 	);
 }
 
-const requiredAgentPrompts = ["build", "plan", "verify"];
-for (const name of requiredAgentPrompts) {
-	check(
-		existsSync(
-			resolve(root, `packages/coding-agent/prompts/agents/${name}.md`),
-		),
-		`prompts/agents/${name}.md exists`,
-	);
-}
+// Legacy build/plan/verify agent prompt templates are retired: they carried
+// the dead `draht commit-task N P T` commit convention (superseded by plain
+// red:/green:/refactor: git commits) and were referenced nowhere. An
+// upstream rebase must not resurrect them.
+const retiredAgentPromptsDir = "packages/coding-agent/prompts/agents";
+check(
+	!existsSync(resolve(root, retiredAgentPromptsDir)),
+	`${retiredAgentPromptsDir}/ stays retired (legacy build/plan/verify templates)`,
+);
 
 // ── 11. Built-in agents ─────────────────────────────────────────────
 

@@ -248,44 +248,6 @@ function isDeadTerminalError(error: unknown): boolean {
 	return code !== undefined && DEAD_TERMINAL_ERROR_CODES.has(code);
 }
 
-export interface DefaultFlagArgs {
-	searchTerm?: string;
-	persist: boolean;
-	error?: string;
-}
-
-export function parseDefaultFlagArgs(commandName: string, args: string | undefined): DefaultFlagArgs {
-	if (!args?.trim()) return { persist: false };
-
-	let persist = false;
-	const searchTerms: string[] = [];
-	for (const token of args.trim().split(/\s+/u)) {
-		if (token === "--default") {
-			persist = true;
-			continue;
-		}
-
-		if (token.startsWith("--default=")) {
-			persist = true;
-			const value = token.slice("--default=".length);
-			if (value) searchTerms.push(value);
-			continue;
-		}
-
-		if (token.startsWith("--")) {
-			return {
-				persist,
-				searchTerm: searchTerms.join(" ") || undefined,
-				error: `Unknown /${commandName} option "${token}". Supported option: --default.`,
-			};
-		}
-
-		searchTerms.push(token);
-	}
-
-	return { persist, searchTerm: searchTerms.join(" ") || undefined };
-}
-
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
 	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage. Disable this warning in /settings.";
 
@@ -755,16 +717,6 @@ export class InteractiveMode {
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
 			modelCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				const trimmedPrefix = prefix.trimStart();
-				if (trimmedPrefix.startsWith("--") && !trimmedPrefix.includes(" ")) {
-					return "--default".startsWith(trimmedPrefix)
-						? [{ value: "--default ", label: "--default", description: "Set as startup default" }]
-						: null;
-				}
-
-				const parsed = parseDefaultFlagArgs("model", prefix);
-				if (parsed.error) return null;
-
 				const models =
 					this.session.scopedModels.length > 0
 						? this.session.scopedModels.map((s) => s.model)
@@ -780,11 +732,10 @@ export class InteractiveMode {
 					label: `${m.provider}/${m.id}`,
 				}));
 
-				const searchPrefix = parsed.persist ? (parsed.searchTerm ?? "") : prefix;
-				return createFuzzyAutocompleteItems(items, searchPrefix, getModelSearchText, (item) => ({
-					value: parsed.persist ? `--default ${item.label}` : item.label,
+				return createFuzzyAutocompleteItems(items, prefix, getModelSearchText, (item) => ({
+					value: item.label,
 					label: item.id,
-					description: parsed.persist ? `${item.provider} · set as startup default` : item.provider,
+					description: item.provider,
 				}));
 			};
 		}
@@ -792,24 +743,13 @@ export class InteractiveMode {
 		const thinkingCommand = slashCommands.find((command) => command.name === "thinking");
 		if (thinkingCommand) {
 			thinkingCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				const trimmedPrefix = prefix.trimStart();
-				if (trimmedPrefix.startsWith("--") && !trimmedPrefix.includes(" ")) {
-					return "--default".startsWith(trimmedPrefix)
-						? [{ value: "--default ", label: "--default", description: "Set as startup default" }]
-						: null;
-				}
-
-				const parsed = parseDefaultFlagArgs("thinking", prefix);
-				if (parsed.error) return null;
-				const searchPrefix = parsed.persist ? (parsed.searchTerm ?? "") : prefix;
 				return createFuzzyAutocompleteItems(
 					this.session.getAvailableThinkingLevels(),
-					searchPrefix,
+					prefix,
 					(level) => level,
 					(level) => ({
-						value: parsed.persist ? `--default ${level}` : level,
+						value: level,
 						label: level,
-						description: parsed.persist ? "set as startup default" : undefined,
 					}),
 				);
 			};
@@ -3290,26 +3230,15 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/model" || text.startsWith("/model ")) {
-				const args = parseDefaultFlagArgs("model", text.startsWith("/model ") ? text.slice(7).trim() : undefined);
+				const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
 				this.editor.setText("");
-				if (args.error) {
-					this.showError(args.error);
-					return;
-				}
-				await this.handleModelCommand(args.searchTerm, { persist: args.persist });
+				await this.handleModelCommand(searchTerm);
 				return;
 			}
 			if (text === "/thinking" || text.startsWith("/thinking ")) {
-				const args = parseDefaultFlagArgs(
-					"thinking",
-					text.startsWith("/thinking ") ? text.slice(10).trim() : undefined,
-				);
+				const searchTerm = text.startsWith("/thinking ") ? text.slice(10).trim() : undefined;
 				this.editor.setText("");
-				if (args.error) {
-					this.showError(args.error);
-					return;
-				}
-				this.handleThinkingCommand(args.searchTerm, { persist: args.persist });
+				this.handleThinkingCommand(searchTerm);
 				return;
 			}
 			if (text === "/export" || text.startsWith("/export ")) {
@@ -4971,18 +4900,6 @@ export class InteractiveMode {
 						this.session.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
 					},
-					onDefaultModelChange: async (model) => {
-						try {
-							await this.session.setModel(model, { persist: true });
-							this.footer.invalidate();
-							this.updateEditorBorderColor();
-							this.showStatus(`Default model: ${model.provider}/${model.id}`);
-							void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-							this.checkDaxnutsEasterEgg(model);
-						} catch (error) {
-							this.showError(error instanceof Error ? error.message : String(error));
-						}
-					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
 						for (const child of this.chatContainer.children) {
@@ -5176,10 +5093,10 @@ export class InteractiveMode {
 		});
 	}
 
-	private handleThinkingCommand(searchTerm?: string, options: { persist?: boolean } = {}): void {
+	private handleThinkingCommand(searchTerm?: string): void {
 		const availableLevels = this.session.getAvailableThinkingLevels();
 		if (!searchTerm) {
-			this.showThinkingSelector(options);
+			this.showThinkingSelector();
 			return;
 		}
 
@@ -5190,7 +5107,7 @@ export class InteractiveMode {
 			return;
 		}
 
-		this.selectThinkingLevel(level, options.persist === true);
+		this.selectThinkingLevel(level, false);
 	}
 
 	private selectThinkingLevel(level: ThinkingLevel, persist: boolean): void {
@@ -5204,7 +5121,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private showThinkingSelector(options: { persist?: boolean } = {}): void {
+	private showThinkingSelector(): void {
 		this.showSelector((done) => {
 			const selectLevel = (level: ThinkingLevel, persist: boolean) => {
 				this.selectThinkingLevel(level, persist);
@@ -5213,7 +5130,7 @@ export class InteractiveMode {
 			const selector = new ThinkingSelectorComponent(
 				this.session.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
 				this.session.getAvailableThinkingLevels(),
-				(level) => selectLevel(level, options.persist === true),
+				(level) => selectLevel(level, false),
 				() => {
 					done();
 					this.ui.requestRender();
@@ -5224,19 +5141,19 @@ export class InteractiveMode {
 		});
 	}
 
-	private async handleModelCommand(searchTerm?: string, options: { persist?: boolean } = {}): Promise<void> {
+	private async handleModelCommand(searchTerm?: string): Promise<void> {
 		if (!searchTerm) {
-			this.showModelSelector(undefined, options);
+			this.showModelSelector();
 			return;
 		}
 
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
 			try {
-				await this.session.setModel(model, { persist: options.persist === true });
+				await this.session.setModel(model, { persist: false });
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				this.showStatus(options.persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
+				this.showStatus(`Model: ${model.id}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 				this.checkDaxnutsEasterEgg(model);
 			} catch (error) {
@@ -5245,7 +5162,7 @@ export class InteractiveMode {
 			return;
 		}
 
-		this.showModelSelector(searchTerm, options);
+		this.showModelSelector(searchTerm);
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
@@ -5373,7 +5290,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private showModelSelector(initialSearchInput?: string, options: { persist?: boolean } = {}): void {
+	private showModelSelector(initialSearchInput?: string): void {
 		this.showSelector((done) => {
 			const selectModel = async (model: Model<any>, persist: boolean) => {
 				try {
@@ -5394,7 +5311,7 @@ export class InteractiveMode {
 				this.session.model,
 				this.session.modelRuntime,
 				this.session.scopedModels,
-				(model) => selectModel(model, options.persist === true),
+				(model) => selectModel(model, false),
 				() => {
 					done();
 					this.ui.requestRender();

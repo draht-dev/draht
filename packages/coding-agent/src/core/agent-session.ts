@@ -1637,8 +1637,8 @@ export class AgentSession {
 			this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
 		}
 
-		// Re-clamp session thinking level for new model's capabilities.
-		// Per-model thinking level overrides take priority over session carry-over.
+		// Apply thinking level for the new model.
+		// Per-model thinking level overrides take priority over the global default.
 		// Model persistence does not implicitly rewrite the global thinking default.
 		this.setThinkingLevel(thinkingLevel);
 
@@ -1689,9 +1689,9 @@ export class AgentSession {
 			this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
 		}
 
-		// Apply session thinking level.
-		// - Explicit scoped model thinking level overrides current session level
-		// - Undefined scoped model thinking level inherits the current session preference
+		// Apply thinking level for the new model.
+		// - Explicit scoped model thinking level overrides defaults
+		// - Per-model thinking level overrides take priority over the global default
 		// setThinkingLevel clamps to model capabilities.
 		// Model persistence does not implicitly rewrite the global thinking default.
 		this.setThinkingLevel(thinkingLevel);
@@ -1723,7 +1723,7 @@ export class AgentSession {
 			this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
 		}
 
-		// Re-clamp session thinking level for new model's capabilities.
+		// Apply thinking level for the new model.
 		// Model persistence does not implicitly rewrite the global thinking default.
 		this.setThinkingLevel(thinkingLevel);
 
@@ -1856,10 +1856,7 @@ export class AgentSession {
 				return perModel;
 			}
 		}
-		if (!this.supportsThinking()) {
-			return this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
-		}
-		return this.thinkingLevel;
+		return this.settingsManager.getDefaultThinkingLevel() ?? this.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
 	}
 
 	private _clampThinkingLevel(level: ThinkingLevel, _availableLevels: ThinkingLevel[]): ThinkingLevel {

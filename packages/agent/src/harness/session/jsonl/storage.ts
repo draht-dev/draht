@@ -75,6 +75,10 @@ function parseTransaction(line: string): CommittedWrite[] {
 	return (Array.isArray(value) ? value : [value]).map(parseCommittedWrite);
 }
 
+function serializeTransaction(writes: readonly CommittedWrite[]): string {
+	return JSON.stringify(writes.length === 1 ? writes[0] : writes);
+}
+
 function splitCompleteLines(content: string): { lines: string[]; torn: boolean } {
 	if (content.endsWith("\n")) return { lines: content.slice(0, -1).split("\n"), torn: false };
 	const lastNewline = content.lastIndexOf("\n");
@@ -135,13 +139,16 @@ export class JsonlStorage implements Storage {
 	static async create(
 		options: JsonlStorageOptions,
 		header: JsonlStorageHeader,
+		initialWrites: Write[],
 		context: Context,
 	): Promise<JsonlStorage> {
-		fileValue(
-			await options.fileSystem.writeFile(options.path, `${JSON.stringify(header)}\n`, context),
-			`Failed to create JSONL storage ${options.path}`,
-		);
-		return new JsonlStorage(options, header, { kind: "v4" });
+		const storage = new JsonlStorage(options, header, { kind: "v4" });
+		const prepared = storage.storageState.prepareCommit(initialWrites, storage.now());
+		const lines = [JSON.stringify(header)];
+		if (prepared.writes.length !== 0) lines.push(serializeTransaction(prepared.writes));
+		await publishFileAtomically(options.fileSystem, options.path, `${lines.join("\n")}\n`, context);
+		storage.storageState.applyValidated(prepared.writes);
+		return storage;
 	}
 
 	/** Atomically create storage from a complete prepared snapshot. */
@@ -232,11 +239,7 @@ export class JsonlStorage implements Storage {
 		const prepared = this.storageState.prepareCommit(writes, this.now());
 		if (prepared.writes.length !== 0) {
 			fileValue(
-				await this.fileSystem.appendFile(
-					this.path,
-					`${JSON.stringify(prepared.writes.length === 1 ? prepared.writes[0] : prepared.writes)}\n`,
-					context,
-				),
+				await this.fileSystem.appendFile(this.path, `${serializeTransaction(prepared.writes)}\n`, context),
 				`Failed to append JSONL storage ${this.path}`,
 			);
 		}

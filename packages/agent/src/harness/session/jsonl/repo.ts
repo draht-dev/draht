@@ -85,9 +85,9 @@ export class JsonlSessionRepo
 				cwd,
 				...(options.parentSessionId === undefined ? {} : { parentSessionId: options.parentSessionId }),
 			};
-			// TODO: do we want to make session creation atomic?
-			storage = await JsonlStorage.create({ fileSystem: this.fileSystem, path, now: this.now }, header, context);
-			await storage.commit(
+			storage = await JsonlStorage.create(
+				{ fileSystem: this.fileSystem, path, now: this.now },
+				header,
 				[
 					setValue(laneLeaf("main"), null),
 					setValue(laneState("main"), { currentOperationId: null, pendingNextRun: [] }),

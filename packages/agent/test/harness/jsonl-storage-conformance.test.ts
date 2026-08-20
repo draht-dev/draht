@@ -37,6 +37,7 @@ registerConformance(
 				createdAt: NOW,
 				cwd: "/workspace",
 			},
+			[],
 			BACKGROUND_CONTEXT,
 		);
 		return {

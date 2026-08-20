@@ -1,11 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
+import { BACKGROUND_CONTEXT, type Context } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { JSONL_STORAGE_VERSION, JsonlSessionRepo } from "../../src/harness/session/jsonl/index.ts";
 import { getOrThrow } from "../../src/harness/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
 const NOW = 1_700_000_000_000;
+
+class AtomicPublicationNodeExecutionEnv extends NodeExecutionEnv {
+	publication:
+		| { sourcePath: string; destinationPath: string; destinationExisted: boolean; stagedContent: string }
+		| undefined;
+
+	override async renameFile(sourcePath: string, destinationPath: string, context: Context) {
+		const destinationExists = await super.exists(destinationPath, context);
+		const stagedContent = await super.readTextFile(sourcePath, context);
+		if (destinationExists.ok && stagedContent.ok) {
+			this.publication = {
+				sourcePath,
+				destinationPath,
+				destinationExisted: destinationExists.value,
+				stagedContent: stagedContent.value,
+			};
+		}
+		return super.renameFile(sourcePath, destinationPath, context);
+	}
+}
 
 describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 	it("persists metadata and filters discovery by cwd", async () => {
@@ -43,6 +63,45 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 			cwd: "/workspace",
 			parentSessionId: "parent",
 		});
+		await repo.close(BACKGROUND_CONTEXT);
+	});
+
+	it("atomically publishes the header and initialized main lane", async () => {
+		const fileSystem = new AtomicPublicationNodeExecutionEnv({ cwd: createTempDir() });
+		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
+		const session = await repo.create({ id: "session", cwd: "/workspace" }, BACKGROUND_CONTEXT);
+
+		const publication = fileSystem.publication;
+		if (publication === undefined) throw new Error("Expected atomic session publication");
+		expect(publication.destinationPath).toBe(session.metadata.path);
+		expect(publication.destinationExisted).toBe(false);
+		const lines = publication.stagedContent.trimEnd().split("\n");
+		expect(lines).toHaveLength(2);
+		expect(JSON.parse(lines[0]!)).toMatchObject({ kind: "header", id: "session" });
+		expect(JSON.parse(lines[1]!)).toEqual([
+			{
+				kind: "value",
+				op: "set",
+				seq: 1,
+				namespace: "pi.lane.leaf",
+				key: "main",
+				value: null,
+			},
+			{
+				kind: "value",
+				op: "set",
+				seq: 2,
+				namespace: "pi.lane.state",
+				key: "main",
+				value: { currentOperationId: null, pendingNextRun: [] },
+			},
+		]);
+		expect(getOrThrow(await fileSystem.readTextFile(session.metadata.path, BACKGROUND_CONTEXT))).toBe(
+			publication.stagedContent,
+		);
+		expect(getOrThrow(await fileSystem.exists(publication.sourcePath, BACKGROUND_CONTEXT))).toBe(false);
+
+		await session.close(BACKGROUND_CONTEXT);
 		await repo.close(BACKGROUND_CONTEXT);
 	});
 

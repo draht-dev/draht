@@ -125,7 +125,7 @@ describe("JsonlStorage persistence", () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const options = { fileSystem, path: "list-delete.jsonl", now: () => NOW };
 		const events = storedValues.list<string>("test.events");
-		const storage = await JsonlStorage.create(options, header("list-delete"), BACKGROUND_CONTEXT);
+		const storage = await JsonlStorage.create(options, header("list-delete"), [], BACKGROUND_CONTEXT);
 		await storage.commit(
 			[storedValues.appendList(events, "first"), storedValues.appendList(events, "second")],
 			BACKGROUND_CONTEXT,
@@ -144,7 +144,7 @@ describe("JsonlStorage persistence", () => {
 	it("writes one line per transaction and replays stamped state", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const options = { fileSystem, path: "session.jsonl", now: () => NOW };
-		const storage = await JsonlStorage.create(options, header("round-trip"), BACKGROUND_CONTEXT);
+		const storage = await JsonlStorage.create(options, header("round-trip"), [], BACKGROUND_CONTEXT);
 		const committed = await storage.commit(
 			[
 				sessionWrites.insertEntry({
@@ -218,7 +218,7 @@ describe("JsonlStorage snapshots", () => {
 	it("captures one serialized boundary between commits", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const options = { fileSystem, path: "session.jsonl", now: () => NOW };
-		const storage = await JsonlStorage.create(options, header("snapshot"), BACKGROUND_CONTEXT);
+		const storage = await JsonlStorage.create(options, header("snapshot"), [], BACKGROUND_CONTEXT);
 
 		const firstCommit = storage.commit(
 			[
@@ -265,7 +265,7 @@ describe("JsonlStorage torn tail", () => {
 	async function seed() {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const options = { fileSystem, path: "session.jsonl" as const, now: () => NOW };
-		const storage = await JsonlStorage.create(options, header("torn"), BACKGROUND_CONTEXT);
+		const storage = await JsonlStorage.create(options, header("torn"), [], BACKGROUND_CONTEXT);
 		await storage.commit([entryWrite("kept")], BACKGROUND_CONTEXT);
 		await storage.close(BACKGROUND_CONTEXT);
 		const prefix = getOrThrow(await fileSystem.readTextFile("session.jsonl", BACKGROUND_CONTEXT));

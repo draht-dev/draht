@@ -75,8 +75,12 @@ function parseTransaction(line: string): CommittedWrite[] {
 	return (Array.isArray(value) ? value : [value]).map(parseCommittedWrite);
 }
 
-function serializeTransaction(writes: readonly CommittedWrite[]): string {
+function serializeTransaction(writes: CommittedWrite[]): string {
 	return JSON.stringify(writes.length === 1 ? writes[0] : writes);
+}
+
+function serializeStorage(header: JsonlStorageHeader, transactions: CommittedWrite[][]): string {
+	return `${[JSON.stringify(header), ...transactions.map(serializeTransaction)].join("\n")}\n`;
 }
 
 function splitCompleteLines(content: string): { lines: string[]; torn: boolean } {
@@ -144,9 +148,8 @@ export class JsonlStorage implements Storage {
 	): Promise<JsonlStorage> {
 		const storage = new JsonlStorage(options, header, { kind: "v4" });
 		const prepared = storage.storageState.prepareCommit(initialWrites, storage.now());
-		const lines = [JSON.stringify(header)];
-		if (prepared.writes.length !== 0) lines.push(serializeTransaction(prepared.writes));
-		await publishFileAtomically(options.fileSystem, options.path, `${lines.join("\n")}\n`, context);
+		const transactions = prepared.writes.length === 0 ? [] : [prepared.writes];
+		await publishFileAtomically(options.fileSystem, options.path, serializeStorage(header, transactions), context);
 		storage.storageState.applyValidated(prepared.writes);
 		return storage;
 	}
@@ -160,8 +163,15 @@ export class JsonlStorage implements Storage {
 	): Promise<JsonlStorage> {
 		const writes = forkSnapshotWrites(snapshot);
 		const snapshotHeader = { ...header, nextSeq: snapshot.nextSeq };
-		const content = `${[JSON.stringify(snapshotHeader), ...writes.map((write) => JSON.stringify(write))].join("\n")}\n`;
-		await publishFileAtomically(options.fileSystem, options.path, content, context);
+		await publishFileAtomically(
+			options.fileSystem,
+			options.path,
+			serializeStorage(
+				snapshotHeader,
+				writes.map((write) => [write]),
+			),
+			context,
+		);
 		return JsonlStorage.open(options, context);
 	}
 
@@ -269,13 +279,12 @@ export class JsonlStorage implements Storage {
 
 		const nextSeq = prepared.result.firstSeq + prepared.writes.length;
 		const upgradedHeader = { ...this.header, nextSeq };
-		const content = `${[
-			JSON.stringify(upgradedHeader),
-			...backing.baselineWrites.map((write) => JSON.stringify(write)),
-			JSON.stringify(prepared.writes),
-		].join("\n")}\n`;
-
-		await publishFileAtomically(this.fileSystem, this.path, content, context);
+		await publishFileAtomically(
+			this.fileSystem,
+			this.path,
+			serializeStorage(upgradedHeader, [...backing.baselineWrites.map((write) => [write]), prepared.writes]),
+			context,
+		);
 
 		this.storageState.applyValidated(prepared.writes);
 		this.backing = { kind: "v4" };

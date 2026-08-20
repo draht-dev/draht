@@ -203,6 +203,18 @@
 - **Wiring gate:** `scripts/root-test-script-parity.test.mjs` walks the tree and fails if any `scripts/**/*.test.mjs` is unreachable from the root `test` script, if the script names a path that does not exist (`node --test missing.mjs` exits 0), or if the workspace fan-out that carries `packages/gateway`'s `*.e2e.test.ts` files is removed. It found three suites already unwired — `geist-reach-browser.e2e.test.mjs`, `geist-device-evidence.test.mjs` and `publish-workspaces.test.mjs` (unwired since well before this phase). Evidence class 2: it closes no acceptance clause, it only guarantees the class-3 suites actually run.
 - **CI is knowingly RED and must stay that way:** `packages/gateway`'s `tailnet-identity.test.ts` → "is a real capture, not the placeholder this repo ships" fails because the real tailnet identity header has never been observed on this machine and the pin file is a marked placeholder. Nothing in CI can clear it. It is cleared only by a human running, on a tailnet-joined machine, `node scripts/geist-tailscale-serve.mjs --capture-identity --peer NODE --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json` — which is also the class-4 half of this phase's acceptance. Do not skip, exclude or `continue-on-error` it to make the badge green.
 
+**Residual — `geist` is not runnable as an installed npm bin (found 2026-08-20 by P33-T19, unowned):**
+`packages/geist` declares `bin.geist = dist/cli.js`, but that file imports `@draht/geist-core`, whose
+package `main` is `./src/index.ts`, and `packages/geist-core` ships no `dist/`. Node cannot parse
+TypeScript, and geist-core's internal `./x.js` specifiers do not exist on disk either
+(`ERR_MODULE_NOT_FOUND` on `geist-core/src/attach/attach-bridge.js`). `@draht/geist-protocol` has the
+same shape (`main: ./src/index.ts`, no `dist/`). The CLI therefore runs only under `bun`, which resolves
+TypeScript directly — every Phase 33 suite spawns it with `bun` for this reason and says so. This is
+latent today because nothing installs `geist` from a registry, but it blocks **Phase 38** (`runGeist()`
+as a real emitted binary starting at login) and **Phase 52** (publish). Whoever owns Phase 38 must decide
+whether geist-core/geist-protocol gain a build step or whether geist ships as a bun-compiled single file.
+Verified by reading the three package.json files and confirming no `dist/` exists in geist-core.
+
 ## Phase 34: The Ask Reaches the Phone — Permission Relay — `pending`
 **Why here:** this is the mobile companion's whole reason to exist (spec §5.2), and it is the last frame-shaping change the wire needs before default-on multiplies clients — better to shape the wire while it is young and the corpus is small.
 **Goal:** An agent asks for permission on the Mac; the phone shows exactly what it wants; a tap answers it; the terminal and every other surface reflect the same answer.

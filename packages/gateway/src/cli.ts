@@ -9,7 +9,7 @@ import { CONFIG_PATH, createDefaultConfigFile, type GatewaySettings, loadConfigS
 import { assertBindHostAllowed } from "./gateway/bind-host";
 import { GatewayLifecycle } from "./gateway/lifecycle";
 import { type Logger, logger } from "./gateway/logger";
-import type { AttachDeviceAuthenticator } from "./gateway/routes/fleet";
+import type { AttachDeviceAuthenticator, AttachDeviceProvider } from "./gateway/routes/fleet";
 import { type BoundServer, type StartGatewayOptions, startGateway } from "./gateway/server";
 import { EventBus } from "./session/event-bus";
 import { SessionManager } from "./session/session-manager";
@@ -189,41 +189,49 @@ export interface DeviceWiringOptions {
 }
 
 /**
- * Build the `devices` port `startGateway` reads, or decide this daemon has none.
+ * Build the `devices` provider `startGateway` reads (R33-REACH.5).
  *
- * ## Why there is a decision here at all
+ * ## Why this is a provider and not a store
  *
- * `createServer` hands `config.devices` to `createFleetRoutes` once, when the
- * surface is built, and `attachAuthentication` reads its *presence* on every
- * upgrade: a store means `/attach` authenticates devices, no store means the
- * shared operator token still vouches for a connection the way it did before
- * pairing existed (outcome 2). So the posture is fixed at startup and this
- * function is what fixes it.
+ * `/attach` asks this once per connection, and the answer decides who the
+ * authority for that connection is: a store means devices authenticate
+ * themselves with a frame, `undefined` means the shared operator token still
+ * vouches for the connection the way it did before pairing existed (outcome 2
+ * in `attachAuthentication`).
  *
- * Two answers count as "this machine has a device store", and both are things
- * an operator did rather than things this code guessed:
+ * Asking per connection is what makes the *first* pairing on a machine work.
+ * The store is written by `geist pair` — another process, run whenever its
+ * operator decides to point a phone at this machine, which on a fresh machine
+ * is always after the daemon started. A single answer computed at startup was
+ * therefore `undefined` forever on exactly the machine that had never paired,
+ * so the first QR ever scanned was refused and the operator had to know to
+ * restart a daemon that was working fine. Now the daemon notices.
  *
- *  - `GEIST_DEVICES_PATH` names one — explicit configuration, and how every
+ * ## What the answer can and cannot do over time
+ *
+ * The flip is **one-way and strengthening only**. `undefined` may become a
+ * store; a store never becomes `undefined`. The forbidden direction is a
+ * silent downgrade of a paired machine back to a single shared bearer token —
+ * a posture with no enumeration, no rotation and no revocation — triggered by
+ * nothing more than a file going missing, which is a thing anything that can
+ * write the disk could arrange.
+ *
+ * Two shapes, decided once from the environment:
+ *
+ *  - `GEIST_DEVICES_PATH` names a store: it is built eagerly and every call
+ *    returns it, file or no file. That is explicit configuration, and how every
  *    fronted deployment in this repo is wired, because the daemon and
- *    `geist devices` must resolve one file rather than two;
- *  - the default store already exists at {@link resolveDeviceRegistryPath},
- *    which is where `geist pair` wrote it the first time it ran here.
+ *    `geist devices` must resolve one file rather than two. `DeviceRegistry`
+ *    re-stats on every call precisely so the file can appear underneath it.
+ *  - No such variable: the default path is probed per call until it exists,
+ *    then the store is built once and cached. A machine with no store has never
+ *    paired anything, and turning its `/attach` into device-only before then
+ *    would lock out the operator token it ships with today.
  *
- * A machine with neither has never paired anything, and turning its `/attach`
- * into device-only would lock out the operator token it ships with today. The
- * *file* being absent is emphatically not such a case: a configured daemon
- * starts before `geist pair` writes the store, and `DeviceRegistry` re-stats on
- * every call precisely so the store can appear underneath it.
- *
- * The wart this leaves, named rather than hidden: on the default path the very
- * first `geist pair` on a machine whose daemon is already running writes a store
- * that daemon will not adopt until it restarts — which is what the warning below
- * tells the operator. Closing it means `createFleetRoutes` taking a provider
- * rather than a value, a change to that route's contract and not this file's.
- *
- * @returns the port, or `undefined` on a daemon with no store to authenticate against.
+ * @returns a provider answering with this daemon's store, or `undefined` while
+ *          it has none to authenticate against.
  */
-export function createDeviceAuthenticator(options: DeviceWiringOptions = {}): AttachDeviceAuthenticator | undefined {
+export function createDeviceAuthenticator(options: DeviceWiringOptions = {}): AttachDeviceProvider {
 	const env = options.env ?? process.env;
 	const log = options.log ?? logger;
 	// The same helper `geist devices` resolves from, given the same environment:
@@ -231,15 +239,42 @@ export function createDeviceAuthenticator(options: DeviceWiringOptions = {}): At
 	const path = resolveDeviceRegistryPath(env);
 	const configured = env[DEVICE_REGISTRY_PATH_ENV] !== undefined && env[DEVICE_REGISTRY_PATH_ENV] !== "";
 
-	if (!configured && !existsSync(path)) {
-		log.warn({
-			message: "no device store: /attach still accepts the operator token",
-			path,
-			hint: `run 'geist pair' to create the store, then restart the daemon (or set ${DEVICE_REGISTRY_PATH_ENV}) to require per-device credentials`,
-		});
-		return undefined;
+	/** The store, once there is one. Assigned at most once; never cleared. */
+	let store: AttachDeviceAuthenticator | undefined;
+
+	if (configured) {
+		store = buildDeviceStore(path, log);
+		return () => store;
 	}
 
+	log.warn({
+		message: "no device store: /attach accepts the operator token until a device is paired",
+		path,
+		// No restart clause: the daemon adopts the store the moment `geist pair`
+		// writes it. Operator-facing text, so it names a command and carries no
+		// finding id (REQUIREMENTS.md:225).
+		hint: "run 'geist pair' to require per-device credentials",
+	});
+
+	return () => {
+		// Memoized, and the `existsSync` runs only while the answer is still
+		// "no store": on the hot path — every `/attach` upgrade on a paired
+		// machine — this is one already-assigned reference and no syscall.
+		if (store !== undefined) return store;
+		if (!existsSync(path)) return undefined;
+		store = buildDeviceStore(path, log);
+		return store;
+	};
+}
+
+/**
+ * Construct the store itself: a `DeviceRegistry` over `path`, adapted to the
+ * `/attach` port and wired to this daemon's log.
+ *
+ * Separate from the decision above so the decision reads as a decision. It is
+ * called at most once per daemon, from whichever branch got there first.
+ */
+function buildDeviceStore(path: string, log: Logger): AttachDeviceAuthenticator {
 	const registry = new DeviceRegistry({
 		path,
 		// The audit trail an operator actually sees. `DeviceRegistryEvent` carries

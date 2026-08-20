@@ -12,7 +12,7 @@ import { bearerAuthMiddleware } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { tailnetIdentityMiddleware } from "./middleware/tailnet-identity";
 import { createConsoleRoutes } from "./routes/console";
-import { type AttachDeviceAuthenticator, createFleetRoutes } from "./routes/fleet";
+import { type AttachDeviceAuthenticator, type AttachDeviceProvider, createFleetRoutes } from "./routes/fleet";
 import { createSessionStreamRoutes } from "./routes/session-stream";
 import { createSessionRoutes } from "./routes/sessions";
 import { createSseRoutes } from "./routes/sse";
@@ -64,8 +64,15 @@ export interface GatewayConfig {
 	 * Optional because a daemon that nobody has paired with has none, and that
 	 * daemon is not thereby open: `/attach` refuses on the wire instead. See
 	 * `attachAuthentication` in `routes/fleet.ts` for the three cases.
+	 *
+	 * Either a store, for an embedder that has one already, or an
+	 * {@link AttachDeviceProvider} for a host whose store may appear *after* the
+	 * server does — which is every machine `geist pair` has not been run on yet.
+	 * The route only takes the provider; a plain store is lifted into a constant
+	 * one below, so "my store never changes" stays a value and does not have to
+	 * be spelled `() => store` at every call site.
 	 */
-	devices?: AttachDeviceAuthenticator;
+	devices?: AttachDeviceAuthenticator | AttachDeviceProvider;
 	/**
 	 * Sink for the bind-posture notices — the non-loopback opt-in warning, and
 	 * the first refusal of an off-box request. Defaults to `console.warn`.
@@ -128,6 +135,24 @@ function peerAddress(env: unknown, request: Request): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Lift the `devices` option into the per-connection provider `/attach` takes.
+ *
+ * A store is a value; *whether this machine has one* is not, and the daemon is
+ * the caller for which that distinction is the whole point — its store is
+ * written by `geist pair`, in another process, after it started. So the route
+ * asks per connection and this is where "I already have one, it never changes"
+ * is turned into that question's answer.
+ *
+ * `typeof === "function"` is the discriminator, and it is sound in both
+ * directions: `AttachDeviceAuthenticator` is an object with `pair` and
+ * `authenticate` *properties*, never a callable itself.
+ */
+function deviceProvider(devices: GatewayConfig["devices"]): AttachDeviceProvider {
+	if (typeof devices === "function") return devices;
+	return () => devices;
 }
 
 export function createServer(config: GatewayConfig): ServerHandle {
@@ -241,7 +266,7 @@ export function createServer(config: GatewayConfig): ServerHandle {
 		createFleetRoutes({
 			socketDir: config.socketDir ?? resolveSocketDir(),
 			authToken: config.authToken,
-			devices: config.devices,
+			devices: deviceProvider(config.devices),
 		}),
 	);
 	app.route("/sessions", createSessionRoutes(manager, config.config));

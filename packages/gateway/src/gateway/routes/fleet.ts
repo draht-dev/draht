@@ -94,11 +94,22 @@ export interface FleetRoutesOptions {
 	 */
 	authToken: string;
 	/**
-	 * The per-device store, on a daemon that has been paired with (R33-REACH.5).
+	 * How this daemon obtains its per-device store, asked once per `/attach`
+	 * connection (R33-REACH.5).
 	 *
-	 * Its presence changes who the authority is, never whether there is one.
+	 * A provider rather than a value, because *when* the store exists is not the
+	 * daemon's decision. `geist pair` writes it, from another process, at
+	 * whatever moment Oskar decides to point a phone at this machine — which on
+	 * a fresh machine is always after the daemon started. Reading the store once
+	 * while the routes were built froze the answer at that moment and made the
+	 * first-ever pairing wait for a restart; asking per connection is what makes
+	 * the daemon notice the store appearing underneath it.
+	 *
+	 * `undefined` from the provider means the same thing it meant when this was a
+	 * value: no store, so the operator token is still the credential. Its
+	 * presence changes who the authority is, never whether there is one.
 	 */
-	devices?: AttachDeviceAuthenticator;
+	devices?: AttachDeviceProvider;
 }
 
 /**
@@ -109,6 +120,18 @@ export interface FleetRoutesOptions {
  * here instead of a second, drifting copy of the contract.
  */
 export type AttachDeviceAuthenticator = NonNullable<AttachBridgeOptions["devices"]>;
+
+/**
+ * How the route asks, per connection, what this daemon's device posture is.
+ *
+ * Implementations are expected to be cheap — this is on the upgrade path — and
+ * to strengthen in one direction only: once a store exists, a later call must
+ * not answer `undefined` again. Weakening from device posture back to operator
+ * posture at runtime would turn a paired daemon into an unpaired one without
+ * anybody typing anything, which is a downgrade nothing should be able to
+ * trigger remotely. See `createDeviceAuthenticator` in `cli.ts`.
+ */
+export type AttachDeviceProvider = () => AttachDeviceAuthenticator | undefined;
 
 /** A credential read off the upgrade request, in the shape the bridge verifies. */
 export type AttachPresentedCredential = NonNullable<AttachBridgeOptions["presentedCredential"]>;
@@ -202,7 +225,7 @@ function parseDeviceCredential(value: string): AttachPresentedCredential | undef
  */
 export function attachAuthentication(
 	credential: string | undefined,
-	options: Pick<FleetRoutesOptions, "authToken" | "devices">,
+	options: { authToken: string; devices?: AttachDeviceAuthenticator },
 ): AttachAuthentication {
 	const devices = options.devices;
 	if (devices !== undefined) {
@@ -292,25 +315,43 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 	const app = new Hono();
 	const limits = options.limits ?? DEFAULT_TRANSPORT_LIMITS;
 
-	// A configured store that can neither be asked about revocation nor observed
-	// is a daemon where `geist devices revoke` reaches the next *connect* and
-	// nothing sooner. That is a real posture — a store can be an adapter over
-	// something that genuinely cannot answer — but it is not one an operator
-	// should have to infer from a requirement id, so it is said once, here, at
-	// the moment the surface is built.
-	if (options.devices !== undefined && options.devices.isRevoked === undefined) {
-		logger.warn({
-			message:
-				"the /attach device store cannot report revocation; a revoked device keeps any live connection until it reconnects",
-			requirement: "R33-REACH.6",
-		});
-	} else if (options.devices !== undefined && options.devices.subscribe === undefined) {
-		logger.warn({
-			message:
-				"the /attach device store cannot be observed; a revoked device keeps a silent connection until its next frame in either direction",
-			requirement: "R33-REACH.6",
-		});
-	}
+	/** Whether the store this daemon ended up with has already been described. */
+	let describedStore = false;
+
+	/**
+	 * The device posture for one connection, plus the one-time notice about it.
+	 *
+	 * A configured store that can neither be asked about revocation nor observed
+	 * is a daemon where `geist devices revoke` reaches the next *connect* and
+	 * nothing sooner. That is a real posture — a store can be an adapter over
+	 * something that genuinely cannot answer — but it is not one an operator
+	 * should have to infer from a requirement id, so it is said once.
+	 *
+	 * "Once" is pinned to the first connection that actually *sees* a store
+	 * rather than to the moment the surface was built. On a fresh machine there
+	 * is no store when the routes exist, so a build-time check had nothing to
+	 * inspect and said nothing at all; saying it when the store appears is both
+	 * the first moment the answer is knowable and the moment it starts to matter.
+	 */
+	const devicesFor = (): AttachDeviceAuthenticator | undefined => {
+		const devices = options.devices?.();
+		if (devices === undefined || describedStore) return devices;
+		describedStore = true;
+		if (devices.isRevoked === undefined) {
+			logger.warn({
+				message:
+					"the /attach device store cannot report revocation; a revoked device keeps any live connection until it reconnects",
+				requirement: "R33-REACH.6",
+			});
+		} else if (devices.subscribe === undefined) {
+			logger.warn({
+				message:
+					"the /attach device store cannot be observed; a revoked device keeps a silent connection until its next frame in either direction",
+				requirement: "R33-REACH.6",
+			});
+		}
+		return devices;
+	};
 
 	// The same body the `fleet` frame carries, so a renderer parses one shape
 	// whether the list arrived over HTTP or was pushed after `hello`.
@@ -324,9 +365,19 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 			// credential is not verified here — the bridge verifies it, so a
 			// header-authenticated client and a first-message one are the same
 			// client to everything downstream.
+			//
+			// The posture is decided here too, per connection, and then held for
+			// the life of this one: a store that appears while a host-vouched
+			// operator connection is open does not retroactively unauthenticate
+			// it. That connection keeps the authority it was admitted under until
+			// it closes, and the next connection gets the new one. Re-deciding
+			// mid-connection would cut a live session off because a pairing
+			// happened somewhere else, and `geist devices revoke` — which this
+			// route already arms both halves of — is the control for ending a
+			// connection on purpose.
 			const authentication = attachAuthentication(
 				upgradeCredential(c.req.header("Authorization"), c.req.header("Sec-WebSocket-Protocol")),
-				options,
+				{ authToken: options.authToken, devices: devicesFor() },
 			);
 			let bridge: AttachBridge | null = null;
 			let unobserve: (() => void) | null = null;

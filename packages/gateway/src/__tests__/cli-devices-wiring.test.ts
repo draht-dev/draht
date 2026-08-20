@@ -22,6 +22,15 @@
  * on a real machine the daemon starts first and `geist pair` writes the store
  * afterwards, and a wiring that only worked when the file already existed would
  * be unreachable in precisely the order an operator does things.
+ *
+ * ## FIX-4 — and why the port is a function
+ *
+ * The `devices` field is a *provider*, asked once per `/attach` connection. On
+ * an unconfigured machine the answer starts as "no store" and becomes a store
+ * the moment `geist pair` writes one, with nothing restarted; the reverse never
+ * happens. The clauses at the bottom of this file are the unit-level statement
+ * of that, and `first-pairing-no-restart.e2e.test.ts` is the same claim proved
+ * against two real processes and a wire.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -31,7 +40,7 @@ import { DeviceRegistry, resolveDeviceRegistryPath } from "@draht/geist-core";
 import { gatewayOptions, parseArgs } from "../cli";
 import type { GatewaySettings } from "../config/config";
 import { Logger } from "../gateway/logger";
-import type { AttachDeviceAuthenticator } from "../gateway/routes/fleet";
+import type { AttachDeviceAuthenticator, AttachDeviceProvider } from "../gateway/routes/fleet";
 import { EventBus } from "../session/event-bus";
 import { SessionManager } from "../session/session-manager";
 
@@ -80,13 +89,24 @@ function optionsFor(env: NodeJS.ProcessEnv) {
 	return gatewayOptions(parsed, new SessionManager(new EventBus()), { env, log });
 }
 
-/** The `devices` port as the CLI filled it, or a failure naming what is missing. */
+/**
+ * The provider the CLI filled the `devices` port with.
+ *
+ * `/attach` asks it once per connection rather than once per process, so what
+ * the CLI hands `startGateway` is a function; every clause below reaches
+ * through it exactly as the route does.
+ */
+function providerFrom(env: NodeJS.ProcessEnv): AttachDeviceProvider {
+	return optionsFor(env).devices as AttachDeviceProvider;
+}
+
+/** The store that provider currently answers with, or a failure naming what is missing. */
 function authenticatorFrom(env: NodeJS.ProcessEnv): AttachDeviceAuthenticator {
-	const options = optionsFor(env);
-	if (options.devices === undefined) {
-		throw new Error("the CLI built its gateway options with no devices port");
+	const devices = providerFrom(env)();
+	if (devices === undefined) {
+		throw new Error("the CLI's devices provider answered with no store");
 	}
-	return options.devices;
+	return devices;
 }
 
 /** The environment the daemon is deployed with: a store location, named. */
@@ -256,8 +276,8 @@ test("a daemon whose store file does not exist yet still builds its options and 
 	expect(options.authToken).toBe(TOKEN);
 	expect(existsSync(devicesPath)).toBe(false);
 
-	const devices = options.devices;
-	if (devices === undefined) throw new Error("the CLI built its gateway options with no devices port");
+	const devices = (options.devices as AttachDeviceProvider)();
+	if (devices === undefined) throw new Error("the CLI's devices provider answered with no store");
 	expect(devices.pair({ bootstrapToken: "not-a-token", device: { name: "nobody", platform: "ios" } }).ok).toBe(false);
 	expect(devices.authenticate({ deviceId: "dev_absent", credential: "nothing" }).ok).toBe(false);
 	// Fail closed: an id this store never heard of is not an allowed one.
@@ -272,10 +292,10 @@ test("an unconfigured daemon with no store keeps the operator-token posture and 
 	// ships with is the only branch nothing exercises.
 	const options = optionsFor({ HOME: home });
 
-	// No devices port at all — `attachAuthentication` therefore takes outcome 2
-	// for a request bearing the operator token, which is the pre-Phase-33
-	// behaviour `fleet-attach.e2e.test.ts` still proves end to end.
-	expect(options.devices).toBeUndefined();
+	// The provider answers with no store — `attachAuthentication` therefore takes
+	// outcome 2 for a request bearing the operator token, which is the
+	// pre-Phase-33 behaviour `fleet-attach.e2e.test.ts` still proves end to end.
+	expect((options.devices as AttachDeviceProvider)()).toBeUndefined();
 	expect(options.authToken).toBe(TOKEN);
 	expect(existsSync(devicesPath)).toBe(false);
 
@@ -284,4 +304,47 @@ test("an unconfigured daemon with no store keeps the operator-token posture and 
 	const warned = records.filter((record) => record.level === "warn");
 	expect(warned.length).toBeGreaterThan(0);
 	expect(JSON.stringify(warned)).toMatch(/pair|device/i);
+});
+
+test("the unconfigured provider adopts the store the moment `geist pair` writes it, with nothing restarted", () => {
+	// The order that broke: a daemon exists, has no store, and is not restarted.
+	const devices = providerFrom({ HOME: home });
+	expect(devices()).toBeUndefined();
+
+	// `geist pair`, from its own process, writing the file this daemon never had.
+	mkdirSync(join(home, ".geist"), { recursive: true, mode: 0o700 });
+	const bootstrap = elsewhere().mintBootstrap().token;
+	expect(existsSync(devicesPath)).toBe(true);
+
+	// The same provider object, never rebuilt: the daemon in the e2e is a
+	// process nobody signalled, and this is the object inside it.
+	const adopted = devices();
+	if (adopted === undefined) throw new Error("the provider ignored the store `geist pair` wrote");
+	const issued = adopted.pair({ bootstrapToken: bootstrap, device: { name: "first-ever", platform: "ios" } });
+	if (!issued.ok) throw new Error(`the first pairing was refused: ${issued.reason ?? "no reason given"}`);
+
+	// Memoized: the store is built once and every later connection is handed the
+	// same one, so a daemon under load is not opening a registry per upgrade.
+	expect(devices()).toBe(adopted);
+
+	// And strengthening only. A store never becomes "no store": the downgrade
+	// would put a paired machine back on one shared, unrevocable bearer token,
+	// and it would be triggered by nothing more than a file going missing.
+	rmSync(devicesPath, { force: true });
+	expect(devices()).toBe(adopted);
+});
+
+test("a configured provider answers with its store before the file exists, and keeps answering with that one", () => {
+	// `GEIST_DEVICES_PATH` is a statement that this machine has a device store;
+	// the file is where it will be, not evidence of whether it is wanted. The
+	// registry re-stats on every call, so the store works the moment it is written.
+	const devices = providerFrom(configuredEnv());
+	expect(existsSync(devicesPath)).toBe(false);
+
+	const first = devices();
+	if (first === undefined) throw new Error("a configured daemon answered with no store");
+	expect(devices()).toBe(first);
+
+	const bootstrap = elsewhere().mintBootstrap().token;
+	expect(first.pair({ bootstrapToken: bootstrap, device: { name: "configured", platform: "android" } }).ok).toBe(true);
 });

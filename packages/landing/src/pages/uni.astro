@@ -4,6 +4,11 @@ import AtelierPage from "../layouts/AtelierPage.astro";
 const title = "draht uni — building in public";
 const description =
 	"uni.draht.dev is being built in public, one episode a week. Episode 1: the first brick is live now — join the waitlist for every episode.";
+
+// Google Apps Script waitlist endpoint (see waitlist/README.md — signups land
+// in Google Contacts under "draht uni waitlist", newsletter goes out via Gmail).
+// TODO-CONFIGURE: deploy the script and paste its /exec URL here.
+const WAITLIST_ENDPOINT = "PASTE_APPS_SCRIPT_EXEC_URL";
 ---
 
 <AtelierPage title={title} description={description}>
@@ -18,21 +23,13 @@ const description =
 
 		<section class="waitlist">
 			<!--
-				TODO-CONFIGURE: point this form at the real ESP-hosted endpoint before launch.
-				- List name (provider-side, domain-neutral per Gate 4.3 of the brainstorm doc): "draht uni waitlist"
-				- Shape below assumes Buttondown's embed-subscribe endpoint
-				  (https://buttondown.com/api/emails/embed-subscribe/<USERNAME>) — swap
-				  "draht-uni" for the real Buttondown username, or repoint `action` at another
-				  hosted ESP form endpoint (Loops, etc.). No custom backend/Lambda.
-				- MUST enable double opt-in on the list before launch (DACH/DSGVO — Gate 3 + 4.3).
+				Waitlist backend: Google Apps Script → Google Contacts label "draht uni waitlist"
+				(waitlist/Code.gs + waitlist/README.md). Double opt-in via confirmation mail
+				(DACH/DSGVO — Gate 3 + 4.3); the newsletter goes out from Gmail to that label.
+				No ESP, no Lambda. With JS disabled the plain POST gets the script's own
+				styled response page, so the flow still works.
 			-->
-			<form
-				class="waitlist-form"
-				action="https://buttondown.com/api/emails/embed-subscribe/draht-uni"
-				method="post"
-				target="popupwindow"
-				onsubmit="window.open('https://buttondown.com/draht-uni', 'popupwindow')"
-			>
+			<form class="waitlist-form" action={WAITLIST_ENDPOINT} method="post">
 				<input
 					type="email"
 					name="email"
@@ -40,9 +37,10 @@ const description =
 					aria-label="Email address"
 					required
 				/>
-				<input type="hidden" name="embed" value="1" />
+				<input type="text" name="hp_ref" class="waitlist-hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
 				<button type="submit" class="btn">Join the waitlist — Episode 1 is live.</button>
 			</form>
+			<p class="waitlist-note" hidden></p>
 			<p class="waitlist-foot">The waitlist moves with the uni — uni.draht.dev takes over soon.</p>
 		</section>
 
@@ -58,6 +56,36 @@ const description =
 		</section>
 	</main>
 </AtelierPage>
+
+<script is:inline>
+	(() => {
+		const form = document.querySelector(".waitlist-form");
+		const note = document.querySelector(".waitlist-note");
+		if (!form || !note) return;
+		const say = (msg) => {
+			note.textContent = msg;
+			note.hidden = false;
+		};
+		if (new URLSearchParams(location.search).get("confirmed") === "1") {
+			form.hidden = true;
+			say("Confirmed — you're on the list. Every new episode lands in your inbox.");
+			return;
+		}
+		form.addEventListener("submit", (ev) => {
+			ev.preventDefault();
+			if (form.action.includes("PASTE_")) {
+				say("The waitlist isn't wired up yet — mail oskar@draht.dev and you're in.");
+				return;
+			}
+			fetch(form.action, { method: "POST", mode: "no-cors", body: new URLSearchParams(new FormData(form)) })
+				.then(() => {
+					form.hidden = true;
+					say("Check your inbox — if the address checks out, the confirmation link is on its way.");
+				})
+				.catch(() => say("That didn't go through — try again, or mail oskar@draht.dev."));
+		});
+	})();
+</script>
 
 <style>
 	.uni-main {
@@ -90,6 +118,17 @@ const description =
 	}
 	.waitlist-form input[type="email"]:focus-visible {
 		border-color: var(--copper);
+	}
+
+	.waitlist-hp {
+		display: none;
+	}
+
+	.waitlist-note {
+		margin: 18px 0 0;
+		font-size: 15px;
+		line-height: 1.6;
+		color: var(--copper);
 	}
 
 	.waitlist-foot {

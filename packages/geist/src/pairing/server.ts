@@ -241,13 +241,13 @@ export function createPairingServer(options: PairingServerOptions = {}): Pairing
 		path,
 		upgradeWebSocket(() => ({
 			onOpen(_evt, _ws) {
-				// A fresh socket opening is a pairing attempt UNLESS a paired
-				// session is already resuming from a disconnect — beginPairingAttempt()
-				// is a no-op in that case (unpaired -> pairing only). The socket is
-				// NOT bound as the authenticated connection here: that only happens
-				// once it presents a valid token (see the pair/reconnect handling
-				// below), so merely opening `/pair` grants no permission access.
-				state.beginPairingAttempt();
+				// Deliberately empty: opening `/pair` is not a pairing attempt.
+				//
+				// A socket that has presented NOTHING must not touch the shared
+				// `PairingState` at all (GSEC-08, R33-REACH.7) — it is neither bound
+				// as the authenticated connection (that happens only on a valid
+				// token, below) nor allowed to move the state machine. The attempt
+				// begins when a `pair` frame actually arrives, in `onMessage`.
 			},
 
 			onMessage(evt, ws) {
@@ -261,6 +261,12 @@ export function createPairingServer(options: PairingServerOptions = {}): Pairing
 
 				if (isInboundPairMessage(parsed)) {
 					if (parsed.type === "pair") {
+						// This socket has now presented something, so the attempt
+						// begins here rather than at open. A no-op while a session is
+						// already `paired` (unpaired -> pairing only), so a second
+						// socket's `pair` cannot disturb the bound device — and a
+						// rejected token below is itself a no-op on shared state.
+						state.beginPairingAttempt();
 						const result = state.completePairing(parsed.token);
 						// Bind authorization to THIS socket only on a successful pair.
 						if (result.ok) {

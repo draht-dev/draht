@@ -35,18 +35,9 @@ A plan's YAML frontmatter may declare `rlm: true` (alongside `phase`, `plan`, `d
 
 ## Atomic Reasoning
 
-Before executing, decompose this phase execution into atomic reasoning units:
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
-**For each plan in the phase:**
-1. **State the logical component** — What is this plan's singular purpose? What observable outcome does it produce?
-2. **Validate independence** — Can this plan execute in parallel with others, or does it depend on their outputs? Which files does it touch?
-3. **Verify correctness** — What tests will prove this plan works? What failure modes exist?
-
-**Synthesize execution strategy:**
-- Identify parallel execution groups (plans with no shared files/dependencies)
-- Order dependent plans (plan B depends on plan A's outputs)
-- Within each group, dispatch the riskiest plan first (highest uncertainty × blast radius) — its failure invalidates the rest of the phase most cheaply, before effort has been sunk into work it would obsolete
-- Map each plan to a subagent task with clear success criteria
+Within each group of independent plans, dispatch the riskiest plan first (highest uncertainty × blast radius) — its failure invalidates the rest of the phase most cheaply, before effort has been sunk into work it would obsolete.
 
 ## Steps
 1. Run `draht-tools discover-plans $1` to find and order plans

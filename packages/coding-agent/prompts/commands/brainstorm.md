@@ -15,17 +15,7 @@ Topic: $ARGUMENTS
 
 ## Atomic Reasoning
 
-Before asking anything, decompose the idea into atomic reasoning units:
-
-1. **State the logical component** — What problem does this solve? Who is it for? What changes for them when it ships?
-2. **Validate independence** — What bounded contexts will exist? What is core vs peripheral? What can be built independently?
-3. **Verify correctness** — What defines v1 success? What constraints exist (time, tech, team)? What is explicitly out of scope?
-
-**Synthesize design strategy:**
-- Ground questions in what is already on disk instead of asking what the user already told you
-- Sequence questions foundational → detailed, one at a time
-- Surface 2–3 approaches with trade-offs before committing
-- Record decisions (not proposals) in a spec file
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## Hear the Problem Beneath the Ask
 

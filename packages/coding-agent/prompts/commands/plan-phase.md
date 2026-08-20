@@ -29,21 +29,12 @@ Run `draht-tools validate-plans $1` after saving. Fix any issues it reports befo
 
 ## Atomic Reasoning
 
-Before creating plans, decompose this phase goal into atomic reasoning units:
-
-**For each observable truth (user-visible outcome):**
-1. **State the logical component** — What must be true for the user? What can they do/see/verify?
-2. **Validate independence** — Which artifacts (files, endpoints, schemas) prove this truth exists? Can it be built independently?
-3. **Verify correctness** — What test scenarios would prove this observable truth? What are the specific inputs → expected outputs?
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 **Atomicity test:** a task is atomic only if its `<verify>` can fail while every other task passes. If two tasks can only be checked together, they are one task.
 
-**Synthesize planning strategy:**
-- Group related observable truths into cohesive plans (2-5 tasks each)
-- Identify which plans can be created in parallel vs sequentially
-- Map each plan to specific bounded contexts and domain concepts
-- Ensure each plan produces testable, verifiable outcomes
 - **Order risk-first**: score each truth by uncertainty (has this codebase done it before?) × blast radius (how much becomes invalid if it's wrong?). The plan proving the highest-scoring truth executes first; boilerplate goes last. Boilerplate never invalidates a phase — the risky part regularly does.
+
 - Write every assumption a plan rests on as an explicit `Assumes:` line (with how to confirm it) in the plan header. Unwritten assumptions become the executor's bugs.
 
 ## Steps

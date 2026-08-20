@@ -15,18 +15,7 @@ Phase: $1
 
 ## Atomic Reasoning
 
-Before verifying, decompose phase acceptance into atomic reasoning units:
-
-**For each deliverable:**
-1. **State the logical component** — What was this deliverable meant to produce? What user value does it provide?
-2. **Validate independence** — Can this deliverable be tested independently? What are its dependencies?
-3. **Verify correctness** — What tests prove it works? What edge cases must pass? What security concerns exist?
-
-**Synthesize verification strategy:**
-- Group parallel verification tasks (test suite, security audit, code review, spec compliance, domain compliance)
-- Map each deliverable to its plan file (the spec)
-- Identify critical vs optional checks
-- Plan fix strategies for potential failures
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## Steps
 1. Run `draht-tools extract-deliverables $1` to get testable items

@@ -19,17 +19,7 @@ Before planning, verify the task is actually quick: grep the blast radius (calle
 
 ## Atomic Reasoning
 
-Before executing, decompose this task into atomic reasoning units:
-
-1. **State the logical component** — What is the single, concrete outcome? What files need to change? What behavior needs to work?
-2. **Validate independence** — Can this be done without touching other features? What dependencies exist? What could break?
-3. **Verify correctness** — What test proves this works? What edge cases matter? Is this testable behavior or pure config?
-
-**Synthesize execution plan:**
-- Define specific files to modify
-- Write failing test (if testable behavior)
-- Implement minimal solution
-- Verify and document
+Decompose the work into independently verifiable units before acting; the `atomic-reasoning` skill holds the full discipline — load it when the decomposition is not obvious.
 
 ## Steps
 1. Run `draht-tools next-quick-number` to get task number

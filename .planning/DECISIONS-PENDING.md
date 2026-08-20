@@ -4,6 +4,55 @@
 > Each carries a recommendation. Approving means: reply with the decision number and `approve`,
 > or name the alternative you want instead. None of these blocks Phase 33.
 
+## Phase 34 — which seam relays a permission ask to the phone (NEW, 2026-08-21)
+
+**Confidence:** the probe and the advisor disagree. Both agree R34-PERM.2 as written is wrong.
+
+**Ask:** Should the permission relay hook the attach wire (sessions you start in your terminal) or the ACP path (sessions geist spawns)? Recommended: attach wire.
+
+### What the probe established by running code, not reading it
+
+`createExtensionUIContext` is exactly where R34-PERM.2 says (`interactive-mode.ts:2190`) — but it is a
+*producer*, not a chokepoint, and **the phone never reaches draht through it.** geist spawns `draht-acp` as
+a headless subprocess with no InteractiveMode and no TUI, running a second, independent permission system
+(`draht-acp/src/draht-acp-agent.ts:164`). There are two disconnected permission architectures and the
+requirement names the one the phone cannot see.
+
+Three things the probe proved that change the plan:
+1. **Under shipped defaults an external ACP client's `bash` call hard-fails with NO permission request
+   raised at all.** The probe only saw the happy path because its shell had `DRAHT_PERMISSION_MODE=auto`
+   set. With `default`, requests raised: 0, tool status: failed. This is a shipped defect today, not a
+   Phase 34 feature gap.
+2. **A real approved permission leaves zero trace in the session JSONL.** R34-PERM.2 demands the
+   resolution be asserted "from the session's own JSONL, not in-process state". Nothing writes one —
+   `SessionEntry` has no permission variant. That is a durability task, not part of the relay.
+3. **An attached socket client sees only `[Tool: bash]`, and answering "Yes" is swallowed as a queued new
+   prompt.** The relay does not partially exist on the attach wire; it does not exist at all.
+
+### The disagreement
+
+- **Probe's fallback:** re-spec onto the ACP seam — geist already fans out to N listeners there
+  (`acp-harness-session.ts:469`), enforces first-answer-wins (`:325`), and a real round-trip passes today.
+- **Fable 5 advisor (high confidence) REJECTS that**: the ACP path runs through
+  `packages/geist/src/pairing/server.ts:296-313`, which is rev-7 leftover — that file is GSEC-04's named
+  subject, and rev-8 §7 marks geist-acp an "upgrade, not a v1 gate". Re-speccing onto it would relay
+  permissions only for geist-*spawned* headless sessions and leave the actual §1 sentence — the sessions
+  you start in your own terminal — with no relay at all. Its recommendation: a `RelayUIContext` decorator
+  over whatever base context the mode bound, installed where the session is made attachable, at the
+  mode-agnostic injection point one level below `createExtensionUIContext`.
+
+**The advisor names the thing only you can settle:** if geist-owned ACP sessions are the product's future,
+the attach-wire relay optimises the rev-8 path at the cost of a second permission system living on.
+
+### What I am doing meanwhile
+
+Running the R34-PERM.8 turn-hold measurement, which is seam-agnostic and is the only finding that could
+invalidate the product premise: if a provider turn tolerates *less* delay than a human walking away
+needs, Phase 34 changes from hold-the-turn to park/auto-deny/notify/retry. Not building the relay until
+the seam is settled.
+
+---
+
 ## Phase 42 — batching vs. per-path callback
 
 **Confidence:** high

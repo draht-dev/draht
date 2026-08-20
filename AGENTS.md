@@ -5,6 +5,7 @@ Standing rules only. Task-specific playbooks live in `docs/` — read them when 
 - Adding an LLM provider → `docs/adding-a-provider.md`
 - Releasing → `docs/releasing.md`
 - Testing the TUI with tmux → `docs/tui-testing.md`
+- Why an architectural decision stands (logic placement, skill channels, commit convention) → `docs/adr/`
 
 ## Conversational Style
 

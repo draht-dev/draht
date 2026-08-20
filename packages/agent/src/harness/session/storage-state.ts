@@ -1,5 +1,4 @@
-import type { Usage } from "@draht/ai";
-import { addUsage } from "../utils/usage.ts";
+import { addUsage, emptyUsage } from "../utils/usage.ts";
 import { type CommittedWrite, type PreparedCommit, prepareStorageCommit, validateCommittedWrites } from "./commit.ts";
 
 export type {
@@ -52,17 +51,6 @@ function compareKeys(left: string, right: string): number {
 		if (difference !== 0) return difference;
 	}
 	return leftCodePoints.length - rightCodePoints.length;
-}
-
-function emptyUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
 }
 
 /** Current in-memory projection shared by storage backends. */

@@ -1,3 +1,4 @@
+import type { Usage } from "@draht/ai";
 import type { Context } from "../../context.ts";
 import type { FileError, FileSystem, Result } from "../../types.ts";
 import { type ForkDestinationSnapshot, type ForkSourceSnapshot, forkSnapshotWrites } from "../fork.ts";
@@ -102,7 +103,7 @@ async function publishFileAtomically(
 	}
 }
 
-type JsonlWriteMode = "append" | "read-only";
+type JsonlBacking = { kind: "v4" } | { kind: "v3"; importedUsage: Usage };
 
 /** JSONL storage backed by an injected filesystem capability. */
 export class JsonlStorage implements Storage {
@@ -110,18 +111,18 @@ export class JsonlStorage implements Storage {
 	private readonly path: string;
 	private readonly now: () => number;
 	readonly header: JsonlStorageHeader;
-	private readonly writeMode: JsonlWriteMode;
+	private backing: JsonlBacking;
 	private readonly storageState = new StorageState();
 	private commitQueue: Promise<void> = Promise.resolve();
 	private state: "open" | "closing" | "closed" = "open";
 	private closePromise: Promise<void> | undefined;
 
-	private constructor(options: JsonlStorageOptions, header: JsonlStorageHeader, writeMode: JsonlWriteMode) {
+	private constructor(options: JsonlStorageOptions, header: JsonlStorageHeader, backing: JsonlBacking) {
 		this.fileSystem = options.fileSystem;
 		this.path = options.path;
 		this.now = options.now ?? Date.now;
 		this.header = header;
-		this.writeMode = writeMode;
+		this.backing = backing;
 	}
 
 	static async create(
@@ -133,7 +134,7 @@ export class JsonlStorage implements Storage {
 			await options.fileSystem.writeFile(options.path, `${JSON.stringify(header)}\n`, context),
 			`Failed to create JSONL storage ${options.path}`,
 		);
-		return new JsonlStorage(options, header, "append");
+		return new JsonlStorage(options, header, { kind: "v4" });
 	}
 
 	/** Atomically create storage from a complete prepared snapshot. */
@@ -165,13 +166,16 @@ export class JsonlStorage implements Storage {
 		}
 		if (parsedHeader.value.format === "v3-legacy") {
 			const normalized = normalizeLegacyV3(parsedHeader.value.header, lines.slice(1));
-			const storage = new JsonlStorage(options, normalized.header, "read-only");
+			const storage = new JsonlStorage(options, normalized.header, {
+				kind: "v3",
+				importedUsage: normalized.importedUsage,
+			});
 			storage.replayCommitted(normalized.writes);
 			return storage;
 		}
 
 		const header = parsedHeader.value.header;
-		const storage = new JsonlStorage(options, header, "append");
+		const storage = new JsonlStorage(options, header, { kind: "v4" });
 		for (let index = 1; index < lines.length; index++) {
 			const line = lines[index]!;
 			try {
@@ -201,7 +205,7 @@ export class JsonlStorage implements Storage {
 	}
 
 	private async applyCommit(writes: Write[], context: Context): Promise<CommitResult> {
-		if (this.writeMode === "read-only" && writes.length !== 0) {
+		if (this.backing.kind === "v3" && writes.length !== 0) {
 			throw new Error("Legacy v3 storage is read-only");
 		}
 		const prepared = this.storageState.prepareCommit(writes, this.now());
@@ -265,7 +269,12 @@ export class JsonlStorage implements Storage {
 
 	getStats(_context: Context): Promise<SessionStats> {
 		if (this.state !== "open") return Promise.reject(new Error("JsonlStorage is closed"));
-		return Promise.resolve(this.storageState.getStats());
+		const stats = this.storageState.getStats();
+		if (this.backing.kind === "v4") return Promise.resolve(stats);
+		return Promise.resolve({
+			...stats,
+			usage: this.backing.importedUsage,
+		});
 	}
 
 	/** Capture the state needed to fork at one serialized boundary between commits. */

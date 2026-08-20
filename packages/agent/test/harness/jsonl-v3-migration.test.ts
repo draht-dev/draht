@@ -6,6 +6,7 @@ import {
 	JSONL_STORAGE_VERSION,
 	type JsonlSessionMetadata,
 	JsonlSessionRepo,
+	JsonlStorage,
 } from "../../src/harness/session/jsonl/index.ts";
 import type { Entry, Session } from "../../src/harness/session/types.ts";
 import * as storedValues from "../../src/harness/session/values.ts";
@@ -89,6 +90,91 @@ describe("JSONL v3 migration", () => {
 		});
 		expect(await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
 		await session.close(BACKGROUND_CONTEXT);
+	});
+
+	it("reports embedded legacy usage without creating usage rows or rewriting the source", async () => {
+		const usage = (factor: number): Usage => ({
+			input: factor,
+			output: factor * 2,
+			cacheRead: factor * 3,
+			cacheWrite: factor * 4,
+			cacheWrite1h: factor * 5,
+			reasoning: factor * 6,
+			totalTokens: factor * 10,
+			cost: {
+				input: factor,
+				output: factor * 2,
+				cacheRead: factor * 3,
+				cacheWrite: factor * 4,
+				total: factor * 10,
+			},
+		});
+		const assistantUsage = usage(1);
+		const toolUsage = usage(10);
+		const compactionUsage = usage(100);
+		const branchSummaryUsage = usage(1_000);
+		const { path, content } = await writeLegacyV3Fixture([
+			{
+				type: "message",
+				id: "assistant",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "answer" }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-sonnet-4-5",
+					usage: assistantUsage,
+					stopReason: "stop",
+					timestamp: NOW + 1_000,
+				} satisfies AgentMessage,
+			},
+			{
+				type: "message",
+				id: "tool-result",
+				parentId: "assistant",
+				timestamp: new Date(NOW + 2_000).toISOString(),
+				message: {
+					role: "toolResult",
+					toolCallId: "call-1",
+					toolName: "test",
+					content: [{ type: "text", text: "result" }],
+					usage: toolUsage,
+					isError: false,
+					timestamp: NOW + 2_000,
+				} satisfies AgentMessage,
+			},
+			{
+				type: "compaction",
+				id: "compaction",
+				parentId: "tool-result",
+				timestamp: new Date(NOW + 3_000).toISOString(),
+				summary: "Earlier context",
+				firstKeptEntryId: "assistant",
+				tokensBefore: 1_000,
+				usage: compactionUsage,
+			},
+			{
+				type: "branch_summary",
+				id: "branch-summary",
+				parentId: "compaction",
+				timestamp: new Date(NOW + 4_000).toISOString(),
+				fromId: "assistant",
+				summary: "Abandoned branch",
+				usage: branchSummaryUsage,
+			},
+		]);
+
+		const storage = await JsonlStorage.open({ fileSystem, path, now: () => NOW }, BACKGROUND_CONTEXT);
+
+		expect(await storage.getStats(BACKGROUND_CONTEXT)).toEqual({
+			messageCount: 2,
+			usage: usage(1_111),
+		});
+		expect(await storage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual([]);
+		await storage.close(BACKGROUND_CONTEXT);
+		expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
 	});
 
 	describe("discarding legacy configuration changes", () => {

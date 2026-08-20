@@ -1,6 +1,7 @@
 import { type ImageContent, type TextContent, type Usage, uuidv7 } from "@draht/ai";
 import type { AgentMessage } from "../../../types.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage } from "../../messages.ts";
+import { addUsage, emptyUsage } from "../../utils/usage.ts";
 import type { CommittedEntryWrite, CommittedValueSetWrite, CommittedWrite } from "../commit.ts";
 import type { JsonValue } from "../types.ts";
 import { entryLabel, laneLeaf, laneState, sessionName } from "../values.ts";
@@ -114,6 +115,7 @@ type LegacyV3Entry = RetainedLegacyV3Entry | DiscardedLegacyV3Entry;
 export interface NormalizedLegacyV3 {
 	header: JsonlStorageHeader;
 	writes: CommittedWrite[];
+	importedUsage: Usage;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -420,6 +422,21 @@ function normalizeLegacyV3Values(
 	return writes;
 }
 
+function aggregateImportedUsage(entries: readonly LegacyV3Entry[]): Usage {
+	let aggregate = emptyUsage();
+	for (const entry of entries) {
+		let usage: Usage | undefined;
+		if (entry.type === "message") {
+			if (entry.message.role === "assistant") usage = entry.message.usage;
+			else if (entry.message.role === "toolResult") usage = entry.message.usage;
+		} else if (entry.type === "compaction" || entry.type === "branch_summary") {
+			usage = entry.usage;
+		}
+		if (usage !== undefined) aggregate = addUsage(aggregate, usage);
+	}
+	return aggregate;
+}
+
 /** Normalize the currently supported v3 entries without touching their source file. */
 export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: readonly string[]): NormalizedLegacyV3 {
 	const entries = recordLines.map((line, index) => parseLegacyV3Entry(line, index + 2));
@@ -439,5 +456,6 @@ export function normalizeLegacyV3(header: LegacyV3SessionHeader, recordLines: re
 	return {
 		header: { ...normalizeLegacyV3Header(header), nextSeq: writes.length + 1 },
 		writes,
+		importedUsage: aggregateImportedUsage(entries),
 	};
 }

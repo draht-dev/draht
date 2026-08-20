@@ -1,439 +1,515 @@
 # Tailscale Setup for draht-gateway
 
-## Overview
+The daemon binds **loopback (`127.0.0.1`) only** and stays there. A phone, a
+Quest 3 or a second laptop reaches it through `tailscale serve`, which
+terminates TLS with a real certificate on a stable MagicDNS name and proxies to
+that loopback listener.
 
-The draht gateway binds to **loopback (`127.0.0.1`) only**. Remote devices —
-Adler on your phone or Quest 3 — reach it through `tailscale serve`, which
-publishes the loopback listener onto your tailnet.
+This is not an inconvenience to route around. `POST /sessions/:id/input` drives
+a `draht` agent process with your user's privileges and that agent runs tools on
+your behalf, so a daemon on a reachable interface is remote code execution for
+whoever holds a credential. Loopback plus `tailscale serve` is the only
+supported exposure.
 
-This is not an inconvenience to be worked around. `POST /sessions/:id/input`
-drives a `draht` agent process with your user's privileges, and that agent runs
-tools on your behalf, so a gateway bound to a reachable interface is remote code
-execution for anyone holding a bearer token. Loopback + `tailscale serve` is the
-supported path.
+Everything on this page is either a command this repo implements or a fact about
+code in it. Where something has **not** been verified on real hardware, it says
+so in the same breath rather than in a footnote.
 
-> **Scope note.** The loopback-by-default bind posture described here is the
-> gateway's own. It does **not** close the `GSEC-04` finding in
-> `.planning/geist/SECURITY-2026-07-13.md`: that finding's named component is
-> the **pairing server**, which this package does not contain. The pairing
-> finding remains open and is tracked separately.
+---
 
-### Why `tailscale serve` and not a wider bind
+## Scope: which half of `GSEC-04` this closes
 
-| | `--host 0.0.0.0` / `--host 100.x` | `tailscale serve` |
-|---|---|---|
-| Transport | plain `http://` / `ws://` | `https://` / `wss://` with a **real Let's Encrypt certificate** |
-| Address | raw `100.x` IP that can change | stable **MagicDNS** name |
-| Exposure | every interface the process can see | tailnet only, via the Tailscale daemon |
-| Quest browser / iOS clients | **do not work** | work |
+The finding was split (see the re-ownership table in
+`.planning/geist/SECURITY-2026-07-13.md`). Its **bind half** — the pairing
+server's hostname-less `Bun.serve({ port })`, which bound every interface —
+closed in Phase 32, and the gateway's loopback default does not close it on its
+own: what closes it is `createPairingServer()` routing its bind through
+`assertBindHostAllowed` on a `127.0.0.1` default
+(`packages/geist/src/pairing/server.ts`), plus `npm run
+check:bun-serve-hostname`, which fails repo-wide on any `Bun.serve` that does
+not name a hostname. Its **credential half** is what the pairing flow on this
+page closes: a single-use bootstrap token exchanged for a rotated, device-bound
+credential, individually revocable — `geist pair` and `geist devices`,
+documented below.
 
-That last row is the practical one. The Quest browser and iOS WebView clients
-refuse WebSocket connections that are not `wss://` with a certificate they
-trust. A bare `ws://100.72.9.11:7878` will not connect from those clients no
-matter how the gateway is bound. `tailscale serve` gives you both the TLS
-termination and the stable hostname those clients require.
+So the sentence this page used to carry — that the bind posture closes nothing —
+was true and useless, because it named no owner for what was left. Both halves
+now have one.
 
-> **Never use `tailscale funnel` for the gateway.** Funnel publishes the service
-> to the *public internet*, which turns a token leak into world-reachable remote
-> code execution. Use `tailscale serve` (tailnet-only) exclusively.
+---
 
-## Quick Start
+## A tailnet is an ACL. It is **never an authentication boundary**
 
-### 1. Start the gateway on loopback
+Every credential check on this daemon runs on the assumption that the caller is
+already inside the tailnet. Reachability decides *who may knock*; it decides
+nothing about who gets in. Three consequences, and none of them is theoretical.
+
+**The daemon cannot tell a proxied request from a local one.** It listens on
+`127.0.0.1`. A request arriving there carries no evidence of whether it came
+through `tailscale serve` or from a process on this machine that wrote the
+proxy's headers itself. That is why the identity-header check
+(`packages/gateway/src/gateway/middleware/tailnet-identity.ts`) is deny-only: a
+value naming somebody other than the configured owner is refused, and every
+other outcome —
+including a value naming the owner — falls through to the credential check that
+was going to run anyway. Nothing in that module can grant.
+
+**What a compromised tailnet node gains**: the ability to reach
+`https://<magicdns>/` subject to your ACL, which means the public routes —
+`/health` and the `/ui` bundle bytes, both intentionally unauthenticated so a
+browser can load the page before it has a credential — and the ability to open
+`/attach` and be refused on the wire. **What it does not gain**: a device
+credential. It has none, it cannot read one out of a URL or a log because none
+is ever put there, and `/attach` withholds the fleet listing until a connection
+has authenticated.
+
+**What a compromised coordination server gains**: more, and it is worth being
+honest about. Tailscale's control plane distributes node keys and drives the
+DNS-01 challenge for your `*.ts.net` name, so a compromised one can add a node
+to your tailnet and can, in principle, obtain a certificate for the MagicDNS
+name — which is reachability *and* a position to intercept. **What it still does
+not gain**: a bypass of the device credential. Reaching the daemon is not
+authenticating to it; every frame is authorized in both directions; and any
+credential that is exposed is individually revocable with `geist devices revoke`
+and refused at that device's next frame. Treat the tailnet as a narrowing of who
+can attempt authentication, never as the authentication.
+
+### Narrowing the serve ACL to your own devices
+
+`tailscale serve` publishes on this node's `tcp:443`, and who may reach that is
+your tailnet's Access Controls policy — Tailscale admin console → **Access
+controls**. A default `autogroup:member` → `*:*` policy lets every node on the
+tailnet knock. Narrow it to the devices you actually pair:
+
+```json
+{
+  "tagOwners": { "tag:draht-daemon": ["autogroup:admin"] },
+  "grants": [
+    {
+      "src": ["your-login@example.com"],
+      "dst": ["tag:draht-daemon"],
+      "ip":  ["tcp:443"]
+    }
+  ]
+}
+```
+
+Tag the machine running the daemon `tag:draht-daemon`, and leave no broader rule
+whose `dst` covers it — ACL rules are additive, so a surviving `*:*` grant makes
+the narrow one decorative. Verify the narrowing empirically rather than by
+reading it back: run the two-node drive below from a device that *should* reach
+it, then from one that should not. The second must fail.
+
+### Never Funnel
+
+`tailscale funnel` publishes to the *public internet*, which turns a credential
+leak into world-reachable code execution for anyone who finds the name. The
+publish script refuses it structurally: `assertNoFunnel` in
+`scripts/geist-tailscale-serve.mjs` kills the run if `funnel` appears anywhere
+in the argv or in the binary's own path, at parse time and again at spawn time.
+There is **no override for this**, no flag, and no supported reason to want one.
+
+---
+
+## The procedure
+
+Every command below runs from the **repo root** — the `draht-mono/` directory
+that holds `scripts/` and the workspace `package.json` — unless its own block
+says otherwise. This is not housekeeping: every relative path below resolves
+against the directory you are standing in, and nothing warns you when that is
+the wrong one. `scripts/geist-tailscale-serve.mjs` resolves `--out` with
+`resolve(process.cwd(), …)` and creates whatever directory that names, so the
+same command run one level down still succeeds — it just writes the file where
+nothing reads it.
+
+### 1. Start the daemon on loopback
+
+The daemon is the one thing that runs from the package directory, because
+`start` is a script in `packages/gateway/package.json`:
 
 ```bash
-cd draht-mono/packages/gateway
+cd packages/gateway
 bun start --auth YOUR_SECRET_TOKEN
 ```
 
-You should see:
 ```json
 {"level":"info","timestamp":"2026-03-09T21:37:40.361Z","message":"draht-gateway listening","host":"127.0.0.1","port":7878}
 ```
 
-`"host":"127.0.0.1"` is correct. Nothing off this machine can reach it yet.
+`"host":"127.0.0.1"` is the only correct value. Nothing off this machine can
+reach it yet.
 
-### 2. Publish it to your tailnet
+That terminal now belongs to the daemon. Open a second one and `cd` back to the
+repo root for everything below.
 
-```bash
-tailscale serve --bg http://127.0.0.1:7878
-```
-
-Check what got published:
+### 2. Check the posture before publishing anything
 
 ```bash
-tailscale serve status
+node scripts/geist-tailscale-serve.mjs --doctor
 ```
 
-You will get an `https://<machine>.<tailnet>.ts.net/` URL. Find the exact name
-with:
+`--doctor` prints the tailscale binary and version, the backend state, this
+node's MagicDNS name, the live serve mapping, and — the part worth running it
+for — reads `~/.draht/gateway.config.json` and prints the exact replacement file
+if it still binds a non-loopback host. It exits `76` in that case rather than
+letting you publish a wide bind onto a tailnet.
+
+### 3. Publish the loopback listener
 
 ```bash
-tailscale status
+node scripts/geist-tailscale-serve.mjs --port 7878
 ```
 
-(the second column is your MagicDNS hostname). MagicDNS must be enabled in your
-Tailscale admin console.
+Idempotent: the mapping is read out of `tailscale serve status --json` before
+anything is published, so a second run reports `no change` instead of stacking a
+duplicate handler. The origin it prints is parsed from the live serve config,
+never from a config file — a name in a file can be stale, the serve config is
+what tailscaled is actually doing.
 
-### 3. Test from another device
-
-From your phone, Quest 3, or another computer on your tailnet:
-
-```bash
-# Health endpoint (no auth required)
-curl https://your-machine.your-tailnet.ts.net/health
-
-# Expected response:
-{"status":"ok","sessions":0,"uptime":0.123,"version":"0.1.0"}
-
-# Authenticated endpoint
-curl -H "Authorization: Bearer YOUR_SECRET_TOKEN" \
-     https://your-machine.your-tailnet.ts.net/sessions
-
-# Expected response:
-{"sessions":[]}
-```
-
-If you get a response, it's working. 🎉
-
-### 4. Make it survive reboots
-
-`tailscale serve --bg` config persists across restarts of `tailscaled`. To take
-it down:
+Take it down again with Tailscale's own command:
 
 ```bash
 tailscale serve --https=443 off
 ```
 
-## Common Issues
+### 4. Prove the published surface works, from a second node
 
-### ❌ Connection Refused / Timeout
+```bash
+node scripts/geist-tailscale-serve.mjs --verify --peer OTHER-NODE
+```
 
-1. **Check the gateway is running locally**:
-   ```bash
-   curl http://127.0.0.1:7878/health
-   ```
-   If this fails, the gateway isn't running.
+The drive genuinely originates on `OTHER-NODE` over Tailscale SSH — driving it
+from this machine would prove only that the loopback listener answers, which was
+never in doubt. It probes `https://…/health` and a real `wss://` upgrade, and it
+names its failures apart: `72` DNS, `71` certificate, `73` upgrade, `78` no such
+peer. Three different problems with three different fixes.
 
-2. **Check the serve mapping exists**:
-   ```bash
-   tailscale serve status
-   ```
-   You should see your `https://…ts.net` name mapped to `http://127.0.0.1:7878`.
+### 5. Pair a phone
 
-3. **Check Tailscale is active on both ends**:
-   ```bash
-   tailscale status
-   ```
-   Both this machine and the client device must appear and be online.
+`@draht/geist` ships its CLI as `dist/cli.js`, so build the package once before
+the `geist` binary exists on your path:
 
-4. **Check MagicDNS**: if the hostname does not resolve on the client, enable
-   MagicDNS in the Tailscale admin console, or test with the `100.x` address of
-   the machine (`https://` will fail certificate validation against a raw IP,
-   which is itself the reason to use MagicDNS).
+```bash
+npm run build --workspace @draht/geist
+```
 
-You should **not** need a macOS firewall exception. `tailscale serve` proxies
-from the Tailscale daemon to loopback, so no new listening socket is opened on
-an external interface.
+```bash
+geist pair
+```
 
-### ❌ "Refusing to bind non-loopback host …"
+Prints a QR and the same URL as copyable text:
 
-This is intentional. You passed `--host` with a non-loopback value, or your
-`~/.draht/gateway.config.json` still contains an old `"host": "0.0.0.0"`.
+```
+https://your-machine.your-tailnet.ts.net/ui#token=<bootstrap>
+```
 
-Fix the config file:
+Four properties of that link matter:
+
+- **The token is in the fragment, never the query.** A fragment is not sent to
+  the server, so it cannot land in an access log, is not part of a `Referer`,
+  and never reaches the proxy's request line. `assertNoQueryCredential` in
+  `packages/geist/src/commands/pair.ts` refuses to print a link containing `?`
+  at all, so a later edit cannot quietly reintroduce the leak. The `?token=`
+  credential source is deleted daemon-side too.
+- **The origin comes from the live serve mapping**, not from config. `geist
+  pair` resolves it before minting anything, so a failed resolve leaves no
+  spendable token in the store with nobody holding it.
+- **The token is single-use and short-TTL** — two minutes by default
+  (`DEFAULT_BOOTSTRAP_TTL_MS`). Override with `geist pair --ttl 300`. It is
+  invalidated at the moment it is exchanged, and a replay of it is refused on
+  the replaying connection while the device that spent it stays bound and
+  undisturbed.
+- **What comes back is not the token.** On first connect the phone sends
+  `pair_device` carrying the bootstrap; the daemon answers `device_credential`
+  with a device id and a fresh per-device credential. Every later connect sends
+  `authenticate` and is answered with a *rotated* credential — the predecessor
+  is dead the instant the new one is issued. Up to eight rotated-away
+  credentials stay recognisable per device so a reuse attempt is raised as an
+  audit event rather than merely refused.
+
+Other flags: `geist pair --port 7878`, `geist pair --serve-path /gateway`.
+`geist pair --origin https://host` exists for tests only, announces itself on
+stderr every single time, and bypasses the live mapping — do not use it to set
+up a real device.
+
+### 6. Enumerate and revoke
+
+```bash
+geist devices list
+```
+
+One row per device — id, `active`/`revoked`, platform, last seen, name. The rows
+are built from the registry's `DeviceSummary`, which has no field capable of
+carrying credential material, so this table cannot disclose a secret however it
+is later edited.
+
+```bash
+geist devices revoke dev_abc123
+```
+
+Revocation is a write to `~/.geist/devices.json` (mode `0600`, in a `0700`
+directory; `GEIST_DEVICES_PATH` overrides the location). The CLI deliberately
+does not signal the daemon: a revocation that needed IPC would fail silently
+exactly when the daemon is wedged, which is one of the moments you most want to
+revoke. The daemon re-reads the store on an inode-freshness check, and the
+authorization hook runs on **every inbound frame and before every outbound
+emit** — which is what makes "refused at its next frame, not merely at its next
+connect" true for a phone that is sitting there reading and sending nothing.
+
+Revoking twice is success and says so. An unknown id is exit `1` with the id
+quoted back, because the likely cause is a typo and you need to know the
+revocation did *not* happen.
+
+### 7. Prove no credential leaked into the transport or the logs
+
+```bash
+node scripts/geist-credential-scan.mjs --secret YOUR_BOOTSTRAP_TOKEN recorded-transport.ndjson gateway.log
+```
+
+Finds the secret raw, percent-encoded, base64 and base64url, plus any
+`?token=`-shaped construct, and reports file, line and encoding. It exits
+non-zero on an empty secret, so a vacuous invocation cannot be mistaken for a
+clean result.
+
+---
+
+## The tailnet identity header: a contract to capture, not one to invent
+
+> **The real header has never been captured on this machine.** This section
+> documents how to capture it and where it is pinned. It deliberately does not
+> print a header name, because a name written from memory would be fiction that
+> the daemon then trusts as a contract.
+
+When a deployment declares itself fronted, the daemon reads one request header
+and refuses any value that is not the configured owner. Config:
 
 ```json
 {
-  "host": "127.0.0.1"
+  "host": "127.0.0.1",
+  "tailnet": {
+    "fronted": true,
+    "owner": "your-login@example.com",
+    "header": "Tailscale-Header-Name-You-Captured"
+  }
 }
 ```
 
-and use `tailscale serve` as above. Only if you genuinely cannot, see
-[Escape hatch](#escape-hatch---allow-non-loopback) below.
+`fronted: false` (or no `tailnet` block) means the header is not consulted at
+all — not that it is trusted. A malformed block is a config error, never a
+silently-disabled check.
 
-### ❌ Quest / iOS client won't connect but curl works
+Omit `header` and the daemon falls back to
+`DEFAULT_TAILNET_IDENTITY_HEADER` in
+`packages/gateway/src/gateway/middleware/tailnet-identity.ts`, which currently
+reads `X-Uncaptured-Tailnet-Identity-Header-Placeholder`. That is a placeholder
+naming a header no proxy will ever send, so the check never fires. Safe — the
+module cannot grant — but it is not the feature, and the intentionally failing
+test `the pinned identity-header contract > is a real capture, not the
+placeholder this repo ships` in
+`packages/gateway/src/__tests__/tailnet-identity.test.ts` is what stops the
+placeholder being mistaken for one.
 
-Those clients require `wss://` with a trusted certificate. Confirm you are
-pointing them at the `https://…ts.net` MagicDNS name and **not** at a
-`http://100.x:7878` address.
+### Capturing it
 
-### ❌ Tailscale IP changed
+```bash
+node scripts/geist-tailscale-serve.mjs --capture-identity --peer OTHER-NODE \
+  --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json
+```
 
-Stop using IPs. The MagicDNS name from `tailscale serve` is stable and survives
-address changes.
+Run it from the repo root and pass that `--out` exactly. It is the one path the
+failing test reads, and it is not optional: omit it and the script writes its
+own default fixture next to itself, leaving the tripwire red with nothing to
+show for a capture that worked. The failing test prints this same command.
 
-## Security Considerations
+This publishes a throwaway loopback recorder at a temporary path, drives exactly
+one request to it from a real peer, records what arrived, and takes the
+temporary mapping down again. The file it writes is the pin, and it records:
 
-### ✅ Tailscale security model
+| field | what it holds |
+|---|---|
+| `capturedAt` | ISO timestamp of the observation |
+| `origin`, `peer`, `path` | where it was observed and who drove it |
+| `tailscaleVersion` | first line of `tailscale version` on this machine — the version the contract came from, without which the pin dates nothing |
+| `identityHeaders` | every request header whose name begins `tailscale-`, with its value |
+| `headers` | the full request headers, for context |
 
-- **Encrypted**: all tailnet traffic is WireGuard-encrypted
-- **Authenticated**: only your tailnet devices can connect
-- **Private**: not exposed to the public internet — *as long as you use `serve`,
-  not `funnel`*
+Then set `DEFAULT_TAILNET_IDENTITY_HEADER` to the header the capture recorded.
+The two must agree: a second test fails whenever the constant and the pin
+disagree, whatever the pin says, so replacing the file is a one-step operation
+with a visible failure if the constant is left behind. If the capture records
+more than one `tailscale-*` header the pin reader refuses to guess between them
+and tells you to choose by hand — read
+`packages/gateway/src/__tests__/tailnet-identity.test.ts` for the tie-breaker it
+applies first.
 
-### ✅ Gateway security model
+Until a real capture lands, treat the identity header as **not implemented in
+practice**: the credential check is the only thing standing, which is exactly
+the posture the deny-only design assumes anyway.
 
-- **Loopback by default**: the process itself is unreachable off-box
-- **Bearer token**: all API endpoints except `/health` require auth
-- **CORS enabled**: allows browser-based clients (Quest browser)
+---
 
-### ⚠️ Known limitation
+## The phone side: what is stored, and when it is thrown away
 
-`POST /sessions` no longer accepts a caller-supplied `command` array — the route
-that shape-checked one and handed it to `Bun.spawn` was removed in R32-FLEET.8,
-and a body still carrying `command` is refused with 400. Nothing in a request
-body decides what gets executed.
+The served bundle (`@draht/geist-console`) keeps `{deviceId, credential}` in
+**`localStorage`** under the key `geist.console.device`.
 
-That is a removed exposure, not a solved one. **A bearer token is still
-equivalent to shell access as your user**: `POST /sessions/:id/input` drives a
-`draht` agent, and the agent runs tools. Treat the token as a root-equivalent
-secret and keep the bind on loopback.
+- **localStorage, not sessionStorage**, because the credential has to survive a
+  tab close and an app restart — reopening the page must resume, not re-pair.
+- **Written synchronously in the `device_credential` handler**, overwriting the
+  value it supersedes. The predecessor is dead the instant the daemon sends the
+  new one, so a deferred write would leave a reload holding a credential the
+  daemon has already retired.
+- **The bootstrap token is stripped from the address bar** with
+  `history.replaceState` the moment it is read, so it does not survive into
+  scrollback, screenshots or a shared URL.
 
-### 🔒 Best practices
+Eviction is defined, not left to chance:
 
-1. **Use a strong token**:
-   ```bash
-   openssl rand -base64 32
-   ```
+| trigger | what happens |
+|---|---|
+| a `not_authenticated` `protocol_error` — revoked, superseded, or never issued | the credential is removed, the reconnect loop stops, and the re-pair prompt is shown |
+| a stored value that is not `{deviceId, credential}` (corrupt, truncated, hand-edited) | removed and treated as absent |
+| the reconnect budget is spent (8 attempts) | the page stops and says it is disconnected — it never renders a silently dead transcript |
+| the browser clears site data — private browsing, "Clear website data", or a storage-lifetime policy such as Safari's cap on script-writable storage for sites without recent interaction | the credential is gone and the page asks to be paired again |
 
-2. **Store it securely** — in Adler under Settings → Gateways → Bearer Token.
-   Don't commit tokens to git; don't share them.
+The last row is browser behaviour this repo has not measured; it is written here
+because the outcome is the same in every case and it is the one an operator
+needs to expect. Measuring it on real devices is the class-4 evidence
+R33-REACH.2 asks for and it has not been collected. In all four rows the
+observable result is a re-pair prompt, never a broken page: run `geist pair`
+again and scan.
 
-3. **Rotate tokens** periodically and update Adler.
+Revocation reaches the phone through this same path — `geist devices revoke`
+makes the daemon refuse the connection with `not_authenticated`, which the page
+handles as the first row above.
 
-4. **Monitor access** — the gateway logs every request as JSON.
+---
+
+## Sign-off conditions 5 and 6
+
+The amendment recorded against `GSEC-04` replaces the original "wildcard bind
+requires LAN mTLS 1.3" remediation, which rev 8 made unreachable by removing
+wildcard bind entirely. Conditions 5 and 6 of the replacement — a rotated,
+device-bound credential and revocation — are the two the pairing flow above
+implements, and the loopback bind does not close them; steps 5 and 6 of the
+procedure do. Conditions 1-4 (permanent loopback bind, serve-provided TLS,
+tailnet identity assertion, one-time bootstrap) are covered by steps 1-3 and by
+the identity-header section, whose assertion is **not yet in force** for the
+reason given there.
+
+### Known gap: the daemon's CLI does not construct the device store yet
+
+`packages/gateway/src/cli.ts` does not build a `DeviceRegistry` and does not
+pass `devices` to `startGateway`, so a daemon started with `bun start` runs in
+the pre-pairing posture: `/attach` accepts the operator token on the upgrade
+request and refuses everything else on the wire. You can tell which posture a
+daemon is in from the refusal itself — a console that reports
+
+```
+this daemon does not exchange device credentials on the wire
+```
+
+is talking to a daemon with no device store, and no bootstrap token will be
+accepted by it however correctly `geist pair` minted one. Embedders can pass
+`devices` to `createServer` / `startGateway` today; the CLI wiring is what is
+missing.
+
+---
+
+## Troubleshooting
+
+**Connection refused or timeout.** Run `node scripts/geist-tailscale-serve.mjs
+--doctor` first — it answers "is the daemon published", "is MagicDNS resolving",
+and "is my config still binding a wide host" in one pass. Then check the local
+listener directly:
+
+```bash
+curl http://127.0.0.1:7878/health
+```
+
+You should **not** need a macOS firewall exception. `tailscale serve` proxies
+from the Tailscale daemon to loopback; no new socket is opened on an external
+interface.
+
+**`Refusing to bind non-loopback host …`.** Intentional. You passed `--host`
+with a non-loopback value, or `~/.draht/gateway.config.json` still holds an old
+`"host": "0.0.0.0"`. `--doctor` prints the exact replacement file. If you
+genuinely cannot use a tailnet, read [Escape
+hatch](#escape-hatch---allow-non-loopback) in full first.
+
+**A phone or Quest browser will not connect but `curl` does.** Those clients
+require `wss://` with a certificate they trust. Confirm you are pointing them at
+the `https://…ts.net` MagicDNS name and not at `http://100.x:7878`, which
+cannot work for them however the daemon is bound. `--verify` reproduces the
+upgrade from a second node and will tell you whether the failure is DNS, the
+certificate or the upgrade.
+
+**`Forbidden: tailnet identity does not match the configured owner`.** The
+configured `tailnet.owner` does not equal the value in the identity header. Note
+that with the placeholder header name shipped today this refusal cannot fire at
+all; if you are seeing it, you have configured a real captured header.
+
+**The Tailscale IP changed.** Stop using IPs. The MagicDNS name is stable and
+survives address changes; that is half the reason `serve` is the supported path.
+
+---
+
+## Security posture, stated plainly
+
+- **Loopback by default** — the process is unreachable off-box; `tailscale
+  serve` is the only exposure.
+- **WireGuard-encrypted transport**, TLS terminated by tailscaled with a real
+  certificate.
+- **`/health` and the `/ui` bundle are public** to anything that can reach the
+  origin. The bundle is static bytes; it holds no credential and lists no
+  session. The fleet listing is pushed on the wire only after a connection has
+  authenticated — there is no HTTP `GET /fleet` for a browser to try.
+- **The operator bearer token is root-equivalent.** `POST /sessions/:id/input`
+  steers a `draht` agent, and the agent runs tools. `POST /sessions` no longer
+  accepts a caller-supplied `command` array (removed in R32-FLEET.8; a body
+  still carrying one is refused with 400) — that is a removed exposure, not a
+  solved one.
+- Generate the token with `openssl rand -base64 32`, never commit it, and rotate
+  it. Per-device credentials are the phone's path; the bearer token is the
+  operator's.
+
+---
 
 ## Escape hatch: `--allow-non-loopback`
 
 > ⚠️ **Read this whole section before using the flag.** It disables the only
-> containment boundary the gateway currently has.
+> containment boundary the daemon has.
 
-If you must bind a non-loopback interface — for example a hermetic CI box on an
-isolated network segment where a Tailscale daemon cannot run — pass the flag
-explicitly:
+If you must bind a non-loopback interface — a hermetic CI box on an isolated
+segment where a Tailscale daemon cannot run — pass it explicitly, from
+`packages/gateway` as in step 1:
 
 ```bash
 bun start --host 0.0.0.0 --auth YOUR_TOKEN --allow-non-loopback
 ```
 
-The gateway will start and print a loud warning. What you are accepting:
+The daemon starts and prints a loud warning. What you are accepting:
 
 - every process and device that can route to that interface can reach
   `POST /sessions`;
-- with a valid bearer token, that is **arbitrary command execution as your
-  user** — not by naming a command in the request (that path is gone), but by
-  steering the `draht` agent that `POST /sessions/:id/input` drives;
+- with a valid bearer token that is **arbitrary command execution as your
+  user** — not by naming a command in the request, that path is gone, but by
+  steering the `draht` agent `POST /sessions/:id/input` drives;
 - the transport is plain `http://` / `ws://` unless you put your own TLS
-  terminator in front, so the bearer token crosses the wire in cleartext.
+  terminator in front, so the token crosses the wire in cleartext.
 
-Loopback is exactly `127.0.0.1`, `::1`, and `localhost`. Everything else —
-including `0.0.0.0` and every Tailscale `100.x` address — requires this flag.
+Loopback is exactly `127.0.0.1`, `::1` and `localhost`. Everything else,
+including `0.0.0.0` and every Tailscale `100.x` address, requires this flag.
 Embedding the gateway as a library is no way around it: `createServer` and
-`startGateway` refuse the same hosts unless you pass `allowNonLoopback: true`, and
-an app from `createServer` that you bind yourself still answers `403` to any
-request from off this machine unless you passed it.
-Binding the Tailscale address directly is **not** the recommended path: it gives
-you no TLS and no MagicDNS name, so Quest and iOS clients still cannot use it.
+`startGateway` refuse the same hosts unless you pass `allowNonLoopback: true`,
+and an app from `createServer` that you bind yourself still answers `403` to any
+off-box request unless you passed it. Binding the Tailscale address directly is
+**not** a shortcut: it gives you no TLS and no MagicDNS name, so phones and the
+Quest browser still cannot use it.
 
-## Advanced Configuration
+---
 
-### Custom port
-
-```bash
-bun start --port 8080 --auth mytoken
-tailscale serve --bg http://127.0.0.1:8080
-```
-
-The public MagicDNS URL stays on 443 regardless of the local port.
-
-### Serving under a path prefix
-
-If you want several services on one machine:
-
-```bash
-tailscale serve --bg --set-path /gateway http://127.0.0.1:7878
-# → https://your-machine.your-tailnet.ts.net/gateway
-```
-
-Make sure the client is configured with the full prefixed URL.
-
-## Testing from Adler
-
-### Configure the gateway in Adler
-
-1. Open Adler
-2. Tap **Add Gateway**
-3. Enter:
-   - **Name**: "My Mac" (or any friendly name)
-   - **Gateway URL**: `https://your-machine.your-tailnet.ts.net`
-   - **Bearer Token**: `YOUR_SECRET_TOKEN`
-4. Toggle **Connect automatically** on
-
-### Verify connection
-
-You should see:
-- Green dot next to the gateway name (connected)
-- Session count (e.g. "0 sessions")
-- Uptime (e.g. "5m 23s")
-
-### Troubleshooting the Adler connection
-
-1. **Test from the same device**: open the browser on the phone/Quest and visit
-   `https://your-machine.your-tailnet.ts.net/health`. You should see JSON.
-2. **Check Tailscale on the device**: install the Tailscale app, log in with the
-   same account, and confirm the device appears in `tailscale status`.
-3. **Check the URL scheme**: it must be `https://`, not `http://`.
-4. **Check the token**: copy-paste exactly, no extra spaces; tokens are
-   case-sensitive.
-
-## Network Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│  Your Mac                                    │
-│  ┌────────────────────────────────────────┐  │
-│  │  draht-gateway                         │  │
-│  │  Listening on: 127.0.0.1:7878          │  │
-│  │  (loopback only — unreachable off-box) │  │
-│  └───────────────▲────────────────────────┘  │
-│                  │ loopback proxy            │
-│  ┌───────────────┴────────────────────────┐  │
-│  │  tailscaled — `tailscale serve`        │  │
-│  │  https://mac.tailnet.ts.net (TLS 443)  │  │
-│  └───────────────┬────────────────────────┘  │
-└──────────────────┼───────────────────────────┘
-                   │
-            ┌──────┴──────┐
-            │  Tailscale  │
-            │ (WireGuard) │
-            └──────┬──────┘
-                   │
-    ┌──────────┬───┴──────┬───────────┐
-    │          │          │           │
-┌───▼──┐   ┌──▼───┐   ┌──▼───┐   ┌───▼───┐
-│Phone │   │Quest3│   │Laptop│   │Server │
-│Adler │   │Adler │   │ curl │   │  API  │
-└──────┘   └──────┘   └──────┘   └───────┘
-
-All devices must:
-✓ Be on the same tailnet
-✓ Have Tailscale running
-✓ Use the https:// MagicDNS name (not a raw 100.x IP)
-```
-
-## Monitoring
-
-### View gateway logs
-
-```bash
-cd draht-mono/packages/gateway
-bun start --auth mytoken 2>&1 | jq
-```
-
-This pretty-prints JSON logs:
-```json
-{
-  "level": "info",
-  "timestamp": "2026-03-09T21:37:40.361Z",
-  "message": "draht-gateway listening",
-  "host": "127.0.0.1",
-  "port": 7878
-}
-```
-
-### Check active sessions
-
-```bash
-curl -H "Authorization: Bearer mytoken" \
-     https://your-machine.your-tailnet.ts.net/sessions | jq
-```
-
-### Monitor events (SSE)
-
-```bash
-curl -H "Authorization: Bearer mytoken" \
-     -N https://your-machine.your-tailnet.ts.net/events
-```
-
-## Performance
-
-### Latency
-
-Typical round-trip times over Tailscale:
-- Same network: 1-5ms
-- Different networks: 20-100ms
-- Cross-continent: 100-300ms
-
-`tailscale serve` adds a local proxy hop; it is not measurable next to the above.
-
-### Bandwidth
-
-- Health checks: < 1 KB/request
-- Session list: ~1 KB/session
-- Streaming output: ~10-50 KB/s per session
-- WebSocket: minimal overhead
-
-### Concurrent connections
-
-Default limits:
-- Max sessions: `maxSessions` in config (default 100)
-- Max WebSocket connections: no hard limit (memory-bound)
-- Max SSE connections: no hard limit (memory-bound)
-
-## Production Deployment
-
-Both examples keep the gateway on loopback and rely on `tailscale serve` for
-reachability.
-
-### systemd Service (Linux)
-
-```ini
-[Unit]
-Description=draht-gateway
-After=network.target tailscaled.service
-
-[Service]
-Type=simple
-User=youruser
-WorkingDirectory=/path/to/draht-mono/packages/gateway
-ExecStart=/usr/bin/bun start --auth YOUR_TOKEN
-ExecStartPost=/usr/bin/tailscale serve --bg http://127.0.0.1:7878
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### launchd (macOS)
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>dev.draht.gateway</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/bun</string>
-        <string>start</string>
-        <string>--auth</string>
-        <string>YOUR_TOKEN</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>/path/to/draht-mono/packages/gateway</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>
-```
-
-Run `tailscale serve --bg http://127.0.0.1:7878` once; the mapping persists.
-
-## Config File Reference
+## Config file reference
 
 `~/.draht/gateway.config.json`:
 
@@ -452,14 +528,40 @@ Run `tailscale serve --bg http://127.0.0.1:7878` once; the mapping persists.
 ```
 
 Keep `host` on `127.0.0.1`. Any other value is a non-loopback bind and the
-gateway will refuse to start without `--allow-non-loopback`, whether the value
-came from this file or from the `--host` flag.
+daemon refuses to start without `--allow-non-loopback`, whether it came from
+this file or from the `--host` flag.
 
-## Related Documentation
+## Keeping it up across reboots
 
-- [Gateway README](README.md) - API documentation
-- [Gateway SPEC](SPEC.md) - Architecture details
-- [Adler README](../../adler/README.md) - Client setup
+`tailscale serve --bg` config persists across `tailscaled` restarts, so only the
+daemon needs supervising.
+
+```ini
+[Unit]
+Description=draht-gateway
+After=network.target tailscaled.service
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/path/to/draht-mono/packages/gateway
+ExecStart=/usr/bin/bun start --auth YOUR_TOKEN
+ExecStartPost=/usr/bin/node /path/to/draht-mono/scripts/geist-tailscale-serve.mjs --port 7878
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+On macOS, run the daemon from launchd the same way and run the publish script
+once by hand — the mapping persists, and the script is a no-op on a second run.
+
+## Related documentation
+
+- [Gateway README](README.md) — API surface
+- [Gateway SPEC](SPEC.md) — architecture
+- `scripts/geist-tailscale-serve.mjs` — publish, verify, capture, doctor
+- `scripts/geist-credential-scan.mjs` — the leak scan
 
 ---
 

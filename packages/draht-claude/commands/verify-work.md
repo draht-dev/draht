@@ -77,7 +77,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
 8. Record results (pass/fail/partially/skip). Label each: **observed** (you or a subagent ran it and quoted output), **derived** (follows necessarily from something observed), or **assumed** (unchecked). Verdicts inherit the weakest label they rest on.
 
 9. For failures: diagnose and create fix plans via `draht-tools create-fix-plan $1 P`
-   - Fix plans MUST include a reproducing test that demonstrates the failure before any implementation
+   - Fix plans MUST include a reproducing test that demonstrates the failure before any implementation — held to the /fix Phase 1 red-capable standard: one named command, already run once, invocation and output shown, asserting the exact failing symptom (red now, green once fixed)
    - Spec-reviewer omissions become explicit fix-plan tasks (one task per omission)
 
 10. Write UAT report: `draht-tools write-uat $1`

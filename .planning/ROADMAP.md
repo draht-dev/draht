@@ -265,6 +265,52 @@ Verified by reading the three package.json files and confirming no `dist/` exist
 **Requirements:** R34-PERM.1, R34-PERM.2, R34-PERM.3, R34-PERM.4, R34-PERM.5, R34-PERM.6, R34-PERM.7, R34-PERM.8
 **Acceptance:** Class 3. The phase opens with a timeboxed probe against the seam named in R34-PERM.2 and a written go/no-go recording viability plus, on no-go, the fallback and what it costs the §1 thesis. Then: with an in-repo extension and a subagent-gated tool call, a session started by the emitted `draht` binary is attached over the public WS and the request arrives carrying the real command, canonical cwd and tool-call id; answering from the WS lets the session proceed, and the resolution appears in a second attached client and in the local TUI — asserted from the session's own JSONL, not in-process state; the local TUI answering first tells the WS client the request was resolved and by which surface; a second answer is refused as already-resolved; an unknown, stale or cross-session option id is refused without consuming the still-answerable request; a request containing CR, ANSI and RTL-override bytes renders neutralized with its decisive path suffix intact; SIGKILLing the answering client mid-request and reconnecting replays it exactly once; expiry denies and the session reports the denial; killing the session removes the pending entry. An enumeration regression walks the active tool registry — including one extension-provided tool and one invoked inside a subagent — and asserts every execution that raises a local prompt raises a remote one. A measured answer-latency ceiling from a real provider turn is archived.
 
+**R34-PERM.8 measured (2026-08-21), and the headline number is not the one that matters.**
+
+*The agent core imposes no deadline on a permission ask.* Verified at every layer between the provider
+request and the dialog — `agent-loop.ts:193/214/619-628` (the stream is fully drained and `message_end`
+emitted before any tool runs; the gate is a bare `await` with no race and no timer), `runner.ts:986`,
+`agent-session.ts:473` (the loop's `signal` is not even forwarded), `subagent.ts:605` (calls `confirm`
+with two arguments — the `opts` carrying `timeout`/`signal` is never supplied), `packages/ai` (per-request
+timeouts only), and no reaper in session-manager, agent-session or socket-server. **Measured against the
+emitted binary at 30s / 120s / 600s / 1500s — four rungs, zero degradation.** Phase 34 MAY keep
+"hold the turn" as its primary mechanism; do NOT build park/auto-deny/retry as the primary design.
+
+*But answer latency is bounded by the TRANSPORT at 255 seconds, not by the agent.* `config.ts:67`
+`idleTimeout: 255` (Bun's per-socket maximum, hard-capped at `:213`) goes straight to the WebSocket server
+at `server.ts:314`. There is **no keepalive anywhere in `packages/gateway/src`** — zero `setInterval`, zero
+ping/pong/heartbeat outside tests — and attach traffic is purely output-driven (`routes/ws.ts`
+`proc.onOutput(...)`). **A pending ask is by definition a period with no output**, so the phone's socket
+goes silent the instant the ask is raised and is closed ~4m15s later. Combined with the core's infinite
+patience, the real failure mode is: the phone drops silently at 4m15s while the agent sits blocked in
+`beforeToolCall` forever.
+
+**Phase 34 prerequisites that follow, not nice-to-haves:**
+1. An application-level heartbeat on `/attach` well under 255s, or a durable pending ask a reconnecting
+   phone re-reads. Without one, the measured 25-minute core tolerance is unreachable in the product.
+2. Arm the dialog deliberately — pass real `ExtensionUIDialogOptions` at `subagent.ts:605` with a generous
+   `timeout` (an hour, not 30s) and a `signal`. Today it inherits "wait forever", making an unanswered ask
+   an immortal wedged turn. Timeout defaults to DENY (`rpc-mode.ts:142`), the right fail-safe direction —
+   surface "timed out, denied" as distinct from "user said no".
+3. **Defect:** `rpc-mode.ts:428` `session.abort()` never clears `pendingExtensionRequests` (`:79`), so
+   aborting during a pending ask wedges the loop permanently.
+4. **Defect:** `rpc-mode.ts:799-802` shuts the whole agent down on stdin `end` — if the relay bridge dies
+   while Oskar is away, the ask dies with it.
+5. Render pending-approval from `extension_ui_request`, never from `tool_execution_start` — the latter
+   fires BEFORE the gate in both sequential and parallel paths, so a naive surface shows a blocked tool as
+   "running".
+6. Parallel tool calls **serialize at the gate** (`agent-loop.ts:489-520`). Either batch-approve, or accept
+   N serial round trips and design the surface to show the queue.
+7. Set `PI_CACHE_RETENTION=long` for remote-controlled sessions (`anthropic-messages.ts:49-57` defaults to
+   a 5-minute TTL) so a walk-away lands inside a 1-hour cache window.
+
+**Unverified — do not read these as proven:** no real provider was exercised (no API key in the
+environment; real-provider tolerance is INFERRED from provider-agnostic sequencing, an inference an
+independent adjudicator confirmed sound but which remains untested). 25 minutes is the longest hold ever
+run. The interactive TUI path was not held (SSH idle, tmux, sleep/wake unexercised). The Codex/ChatGPT
+WebSocket transport was not run — a >5-min hold there is correctness-safe but discards the continuation
+delta and forces a full-context resend, so it is a real token COST the measurement wrongly excluded.
+
 ## Phase 35: Every Session Is There — Default-On, History, Honest Liveness — `pending`
 **Why here:** this is the phase that makes "just automatically" literally true, and it is deliberately after the wire settles because turning sockets on by default multiplies per-host session state and collides with a known open Phase 42 residual.
 **Goal:** Oskar stops typing `--attachable`. Any draht he starts shows up on the phone; past sessions show up as history, honestly labelled and resumable.

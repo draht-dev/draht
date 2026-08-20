@@ -1,6 +1,6 @@
 import type { Usage } from "@draht/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
+import { BACKGROUND_CONTEXT, type Context } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import {
 	JSONL_FORMAT_VERSION,
@@ -11,22 +11,37 @@ import {
 } from "../../src/harness/session/jsonl/index.ts";
 import type { Entry, Session } from "../../src/harness/session/types.ts";
 import * as storedValues from "../../src/harness/session/values.ts";
-import { getOrThrow } from "../../src/harness/types.ts";
+import { err, FileError, getOrThrow, type Result } from "../../src/harness/types.ts";
 import type { AgentMessage } from "../../src/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
 const NOW = 1_700_000_000_000;
+
+class FailableRenameNodeExecutionEnv extends NodeExecutionEnv {
+	failRename = false;
+
+	override async renameFile(
+		sourcePath: string,
+		destinationPath: string,
+		context: Context,
+	): Promise<Result<void, FileError>> {
+		if (this.failRename) {
+			return err(new FileError("unknown", "Injected rename failure", sourcePath));
+		}
+		return super.renameFile(sourcePath, destinationPath, context);
+	}
+}
 
 function uuidTimestamp(id: string): number {
 	return Number.parseInt(id.replaceAll("-", "").slice(0, 12), 16);
 }
 
 describe("JSONL v3 migration", () => {
-	let fileSystem: NodeExecutionEnv;
+	let fileSystem: FailableRenameNodeExecutionEnv;
 	let repo: JsonlSessionRepo;
 
 	beforeEach(() => {
-		fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		fileSystem = new FailableRenameNodeExecutionEnv({ cwd: createTempDir() });
 		repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
 	});
 
@@ -379,6 +394,37 @@ describe("JSONL v3 migration", () => {
 	});
 
 	describe("upgrading legacy v3 sessions to v4", () => {
+		const importedUsage = {
+			input: 10,
+			output: 5,
+			cacheRead: 2,
+			cacheWrite: 1,
+			totalTokens: 18,
+			cost: { input: 0.1, output: 0.05, cacheRead: 0.02, cacheWrite: 0.01, total: 0.18 },
+		} satisfies Usage;
+		const importedMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "imported answer" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: importedUsage,
+			stopReason: "stop",
+			timestamp: NOW + 1_000,
+		} satisfies AgentMessage;
+
+		function writeUsageFixture() {
+			return writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "assistant",
+					parentId: null,
+					timestamp: new Date(NOW + 1_000).toISOString(),
+					message: importedMessage,
+				},
+			]);
+		}
+
 		it("writes one zero-valued usage adjustment when converting a session without imported usage", async () => {
 			const { path } = await writeLegacyV3Fixture([]);
 			const storage = await JsonlStorage.open({ fileSystem, path, now: () => NOW }, BACKGROUND_CONTEXT);
@@ -408,33 +454,7 @@ describe("JSONL v3 migration", () => {
 
 		it("converts to v4 and preserves the first caller transaction with one usage adjustment", async () => {
 			// Seed a v3 session whose embedded usage must become a durable v4 ledger adjustment.
-			const usage = {
-				input: 10,
-				output: 5,
-				cacheRead: 2,
-				cacheWrite: 1,
-				totalTokens: 18,
-				cost: { input: 0.1, output: 0.05, cacheRead: 0.02, cacheWrite: 0.01, total: 0.18 },
-			} satisfies Usage;
-			const message = {
-				role: "assistant",
-				content: [{ type: "text", text: "imported answer" }],
-				api: "anthropic-messages",
-				provider: "anthropic",
-				model: "claude-sonnet-4-5",
-				usage,
-				stopReason: "stop",
-				timestamp: NOW + 1_000,
-			} satisfies AgentMessage;
-			const { path } = await writeLegacyV3Fixture([
-				{
-					type: "message",
-					id: "assistant",
-					parentId: null,
-					timestamp: new Date(NOW + 1_000).toISOString(),
-					message,
-				},
-			]);
+			const { path } = await writeUsageFixture();
 			// Capture the normalized read-only view so conversion can be checked for identity and stats stability.
 			const options = { fileSystem, path, now: () => NOW };
 			const storage = await JsonlStorage.open(options, BACKGROUND_CONTEXT);
@@ -455,7 +475,7 @@ describe("JSONL v3 migration", () => {
 			const [adjustment] = usageRows;
 			if (adjustment === undefined) throw new Error("Import usage adjustment was not committed");
 			expect(adjustment).toMatchObject({
-				usage,
+				usage: importedUsage,
 				adjustment: true,
 				details: { source: "v3-import" },
 			});
@@ -510,6 +530,54 @@ describe("JSONL v3 migration", () => {
 			expect(await reopened.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual([adjustment]);
 			expect(await reopened.getStats(BACKGROUND_CONTEXT)).toEqual(statsBefore);
 			await reopened.close(BACKGROUND_CONTEXT);
+		});
+
+		it("leaves the v3 source and live state unchanged when atomic publication fails", async () => {
+			const { path, content } = await writeUsageFixture();
+			const options = { fileSystem, path, now: () => NOW };
+			const storage = await JsonlStorage.open(options, BACKGROUND_CONTEXT);
+			const entriesBefore = await storage.scanEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			const leafBefore = await storage.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT);
+			const laneStateBefore = await storage.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT);
+			const nameBefore = await storage.getValue(storedValues.sessionName, BACKGROUND_CONTEXT);
+			const statsBefore = await storage.getStats(BACKGROUND_CONTEXT);
+			const usageBefore = await storage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT);
+			if (laneStateBefore === undefined) throw new Error("Normalized main lane state is missing");
+
+			fileSystem.failRename = true;
+			await expect(
+				storage.commit([storedValues.setValue(storedValues.sessionName, "Converted session")], BACKGROUND_CONTEXT),
+			).rejects.toThrow(`Failed to publish JSONL storage ${path}`);
+			fileSystem.failRename = false;
+
+			expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
+			expect(await storage.scanEntries({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual(entriesBefore);
+			expect(await storage.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT)).toEqual(leafBefore);
+			expect(await storage.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT)).toEqual(laneStateBefore);
+			expect(await storage.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toEqual(nameBefore);
+			expect(await storage.getStats(BACKGROUND_CONTEXT)).toEqual(statsBefore);
+			expect(await storage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual(usageBefore);
+
+			const committed = await storage.commit(
+				[storedValues.setValue(storedValues.sessionName, "Converted session")],
+				BACKGROUND_CONTEXT,
+			);
+
+			expect(committed.firstSeq).toBe(laneStateBefore.seq + 2);
+			expect(committed.seqs).toEqual([committed.firstSeq]);
+			expect(await storage.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toMatchObject({
+				seq: committed.firstSeq,
+				value: "Converted session",
+			});
+			const usageRows = await storage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(usageRows).toHaveLength(1);
+			expect(usageRows[0]).toMatchObject({
+				usage: importedUsage,
+				adjustment: true,
+				details: { source: "v3-import" },
+			});
+			expect(await storage.getStats(BACKGROUND_CONTEXT)).toEqual(statsBefore);
+			await storage.close(BACKGROUND_CONTEXT);
 		});
 	});
 

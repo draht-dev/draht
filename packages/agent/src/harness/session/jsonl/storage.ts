@@ -28,7 +28,7 @@ import type {
 import type { ListElement, ListReadOptions, StoredValue, Value, ValueList } from "../values.ts";
 import { type LegacyV3SessionHeader, parseJsonlSessionHeader } from "./codec.ts";
 import { normalizeLegacyV3Header, normalizeLegacyV3Records } from "./legacy-v3.ts";
-import type { JsonlStorageHeader, JsonlStorageOptions } from "./types.ts";
+import { JSONL_STORAGE_VERSION, type JsonlStorageHeader, type JsonlStorageOptions } from "./types.ts";
 
 function fileValue<T>(result: Result<T, FileError>, action: string): T {
 	if (!result.ok) throw new Error(`${action}: ${result.error.message}`, { cause: result.error });
@@ -193,6 +193,9 @@ export class JsonlStorage implements Storage {
 		}
 
 		const header = parsedHeader.value.header;
+		if (header.storageVersion !== JSONL_STORAGE_VERSION) {
+			throw new Error(`Session ${header.id} uses unsupported storage version ${header.storageVersion}`);
+		}
 		const storage = new JsonlStorage(options, header, { kind: "v4" });
 		for (let index = 1; index < lines.length; index++) {
 			const line = lines[index]!;

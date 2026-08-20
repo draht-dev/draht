@@ -105,6 +105,29 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		await repo.close(BACKGROUND_CONTEXT);
 	});
 
+	it("rejects unsupported storage versions without repairing a torn tail", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
+		const session = await repo.create({ id: "future", cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		const metadata = session.metadata;
+		await session.close(BACKGROUND_CONTEXT);
+
+		const lines = getOrThrow(await fileSystem.readTextFile(metadata.path, BACKGROUND_CONTEXT))
+			.trimEnd()
+			.split("\n");
+		const unsupportedVersion = JSONL_STORAGE_VERSION + 1;
+		lines[0] = JSON.stringify({ ...JSON.parse(lines[0]!), storageVersion: unsupportedVersion });
+		const unsupportedContent = `${lines.join("\n")}\n{"kind":"entry"`;
+		getOrThrow(await fileSystem.writeFile(metadata.path, unsupportedContent, BACKGROUND_CONTEXT));
+
+		await expect(repo.open(metadata, BACKGROUND_CONTEXT)).rejects.toThrow(
+			`unsupported storage version ${unsupportedVersion}`,
+		);
+		expect(getOrThrow(await fileSystem.readTextFile(metadata.path, BACKGROUND_CONTEXT))).toBe(unsupportedContent);
+
+		await repo.close(BACKGROUND_CONTEXT);
+	});
+
 	it("keeps fork destinations claimed until close and rejects deleting open sessions", async () => {
 		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
 		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });

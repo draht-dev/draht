@@ -1,7 +1,17 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	statSync,
+	watch,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 /**
  * The per-device credential store behind `geist pair` and `geist devices`
@@ -32,6 +42,12 @@ import { dirname, join } from "node:path";
  *   therefore re-stats the file first and reloads when it changed
  *   (`ensureFresh()`), which is what makes R33-REACH.6's "refused at its next
  *   frame, not merely at its next connect" true across processes.
+ * - **And the file pushes, because "its next frame" is not enough.** A phone
+ *   that has attached and gone quiet has no next frame; on an inbound-only
+ *   reading it would keep receiving a session's output forever while the
+ *   operator watched `geist devices list` say `revoked`. `subscribe()` is the
+ *   other half: an fs watch on the directory the store is renamed into, which
+ *   degrades to a bounded poll and *says so* rather than observing nothing.
  * - **Writes are atomic and 0600.** Temp file in the same directory, then
  *   `rename(2)`. A half-written credential store is an outage or an
  *   authentication bypass depending on where the write was interrupted; a
@@ -72,6 +88,16 @@ const MAX_REMEMBERED_BOOTSTRAPS = 32;
  * has been locked out for eight reconnects already.
  */
 const MAX_RETIRED_CREDENTIALS = 8;
+
+/**
+ * How often a degraded registry re-stats the store.
+ *
+ * R33-REACH.6 gives a revocation one second to reach a live connection. A
+ * quarter of that leaves room for the reload, the policy check and the close,
+ * and costs one `stat(2)` per interval per daemon whether or not anything
+ * changed — which is the price of not silently observing nothing.
+ */
+const DEFAULT_POLL_INTERVAL_MS = 250;
 
 /** Bytes of entropy behind bootstrap tokens and device credentials (256 bits, hex-encoded). */
 const SECRET_BYTES = 32;
@@ -133,6 +159,40 @@ export type DeviceRegistryEvent = {
 	at: number;
 };
 
+/**
+ * How this registry watches its own file.
+ *
+ * A seam rather than a direct `fs.watch` call for one reason: the interesting
+ * case is the host where watching does *not* work — an exhausted inotify
+ * budget, a network filesystem that reports no events, a sandbox that refuses
+ * the syscall — and that case has to be reachable from a test, because a
+ * watcher that silently observes nothing turns R33-REACH.6 into theatre.
+ *
+ * @param directory - Directory holding the store. Watched rather than the file
+ *                    itself: every write lands by `rename(2)`, and a watch on
+ *                    the old inode sees none of them.
+ * @param onChange  - Called with the changed entry's name, or null on a host
+ *                    that does not report one.
+ * @param onError   - Called when the watch dies after being established. The
+ *                    registry degrades to a poll from here too.
+ */
+export type DeviceRegistryWatchFactory = (
+	directory: string,
+	onChange: (filename: string | null) => void,
+	onError: (error: unknown) => void,
+) => { close(): void };
+
+/** `fs.watch`, adapted to {@link DeviceRegistryWatchFactory}. */
+const defaultWatchFactory: DeviceRegistryWatchFactory = (directory, onChange, onError) => {
+	// `persistent: false`: observing a credential file must never be the reason
+	// a daemon refuses to exit.
+	const watcher = watch(directory, { persistent: false }, (_event, filename) =>
+		onChange(filename === null || filename === undefined ? null : String(filename)),
+	);
+	watcher.on("error", onError);
+	return watcher;
+};
+
 export interface DeviceRegistryOptions {
 	/** Store location. Defaults to `resolveDeviceRegistryPath()`. */
 	path?: string;
@@ -140,6 +200,18 @@ export interface DeviceRegistryOptions {
 	now?: () => number;
 	/** Audit sink. Never receives credential material. A throwing sink cannot break authentication. */
 	onEvent?: (event: DeviceRegistryEvent) => void;
+	/** How {@link DeviceRegistry.subscribe} watches the store. Defaults to `fs.watch`. */
+	watchFactory?: DeviceRegistryWatchFactory;
+	/** Interval of the fallback poll, in ms. Defaults to 250. */
+	pollIntervalMs?: number;
+	/**
+	 * Where a degraded observation is reported. Defaults to `console.warn`.
+	 *
+	 * Not optional in effect, only in configuration: a store that cannot watch
+	 * itself has lost the mechanism R33-REACH.6 depends on, and an operator who
+	 * is not told has a revocation control that looks like it works.
+	 */
+	onDegraded?: (message: string) => void;
 }
 
 /** Thrown when the store exists but cannot be understood — see `load()` for why this is not degraded away. */
@@ -220,6 +292,11 @@ function digestsMatch(presented: string, stored: string): boolean {
 	return timingSafeEqual(a, b);
 }
 
+/** An error, as a log line. Never interpolated into anything a caller is told. */
+function describe(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 /** Identity of the file we last read, used to notice an out-of-process write. */
 interface FileIdentity {
 	ino: string;
@@ -246,13 +323,30 @@ export class DeviceRegistry {
 	private readonly now: () => number;
 	private readonly onEvent: ((event: DeviceRegistryEvent) => void) | undefined;
 
+	private readonly watchFactory: DeviceRegistryWatchFactory;
+	private readonly pollIntervalMs: number;
+	private readonly onDegraded: (message: string) => void;
+
 	private state: RegistryState | null = null;
 	private loadedFrom: FileIdentity | null = null;
+
+	/** Everyone waiting to hear that the store changed underneath them. */
+	private readonly listeners = new Set<() => void>();
+	/** The live watch, or null while nobody is subscribed or the watch is dead. */
+	private watcher: { close(): void } | null = null;
+	private pollTimer: ReturnType<typeof setInterval> | null = null;
+	/** How the store is being observed right now. */
+	private observing: "idle" | "watch" | "poll" = "idle";
+	/** Identity of the file as of the last notification, so a change is told from a re-read. */
+	private observed: FileIdentity | null = null;
 
 	constructor(options: DeviceRegistryOptions = {}) {
 		this.filePath = options.path ?? resolveDeviceRegistryPath();
 		this.now = options.now ?? Date.now;
 		this.onEvent = options.onEvent;
+		this.watchFactory = options.watchFactory ?? defaultWatchFactory;
+		this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+		this.onDegraded = options.onDegraded ?? ((message: string) => console.warn(message));
 	}
 
 	/** Where this registry persists. Exposed so an operator-facing command can print it. */
@@ -431,6 +525,162 @@ export class DeviceRegistry {
 			lastSeen: device.lastSeen,
 			revoked: device.revoked,
 		}));
+	}
+
+	/**
+	 * Whether this device is currently barred, according to the file.
+	 *
+	 * The question {@link verify} answers as a side effect, asked on its own —
+	 * because R33-REACH.6's hard half is a connection that presents no
+	 * credential at all. A device that has already authenticated is not going to
+	 * present one again, and the frames it is *receiving* carry nothing to
+	 * verify, so the authorization hook in front of every emit needs a question
+	 * it can ask about an identity rather than about a secret.
+	 *
+	 * A device id this store has never heard of answers `true`. That is the fail
+	 * closed reading and the only safe one: the caller is holding a live
+	 * connection that authenticated as this id, so an id that has since vanished
+	 * from the store is a connection whose authority cannot be established, and
+	 * "cannot be established" must not read as "allowed".
+	 *
+	 * Re-stats the file first, like every other public method, so a revocation
+	 * written by `geist devices revoke` in another process is visible here on the
+	 * very next call.
+	 */
+	isRevoked(deviceId: string): boolean {
+		this.ensureFresh();
+		const device = this.mutableState().devices.find((candidate) => candidate.id === deviceId);
+		return device === undefined ? true : device.revoked;
+	}
+
+	/**
+	 * Be told when the store changes underneath this process (R33-REACH.6).
+	 *
+	 * `ensureFresh()` makes every *asked* question current. This makes the
+	 * question get asked: a phone that has attached and gone quiet sends nothing
+	 * and, on a silent session, receives nothing, so there is no frame on which
+	 * anything would think to look. Without a push it keeps its socket until it
+	 * next speaks — which a thief has no reason to do — and "revoked" in the CLI
+	 * would mean nothing at all to the connection it was meant to cut.
+	 *
+	 * The observation is a watch on the *directory*, because the store is
+	 * replaced by `rename(2)` and a watch on the file follows the old inode into
+	 * oblivion. If the watch cannot be established, or dies later, this falls
+	 * back to a bounded poll and **says so** through
+	 * {@link DeviceRegistryOptions.onDegraded}. Falling back silently would be
+	 * the worse failure of the two: a control that is visibly absent gets fixed,
+	 * and one that is invisibly absent gets trusted.
+	 *
+	 * Listeners are told that *something* changed, not what: the store is the
+	 * authority, and a listener that acts on a diff computed here would be acting
+	 * on this object's opinion rather than on the file. They call
+	 * {@link isRevoked} (or {@link list}) and get the file's answer.
+	 *
+	 * @param listener - Called after each observed change. A listener that throws
+	 *                   is swallowed: one broken subscriber must not stop the
+	 *                   others being told, nor kill the watch for everybody.
+	 * @returns an idempotent unsubscribe. The watch stops with the last listener.
+	 */
+	subscribe(listener: () => void): () => void {
+		this.listeners.add(listener);
+		if (this.observing === "idle") this.startObserving();
+		let live = true;
+		return () => {
+			if (!live) return;
+			live = false;
+			this.listeners.delete(listener);
+			if (this.listeners.size === 0) this.stopObserving();
+		};
+	}
+
+	/** How the store is being observed. `"idle"` when nobody is subscribed. */
+	get observationMode(): "idle" | "watch" | "poll" {
+		return this.observing;
+	}
+
+	private startObserving(): void {
+		this.observed = readIdentity(this.filePath);
+		const directory = dirname(this.filePath);
+		const target = basename(this.filePath);
+		try {
+			// The directory has to exist to be watched, and on a daemon that has
+			// never been paired with it does not yet. Creating it at 0700 is the
+			// same posture `save()` establishes.
+			mkdirSync(directory, { recursive: true, mode: 0o700 });
+			this.watcher = this.watchFactory(
+				directory,
+				(filename) => {
+					// Every write lands as `<file>.tmp-<pid>-<hex>` and then a rename,
+					// so the temp names are noise; a host that reports no name at all
+					// is taken at face value and the identity check below filters it.
+					if (filename !== null && filename !== target) return;
+					this.notify();
+				},
+				(error) => this.degradeToPoll(`its fs watch failed: ${describe(error)}`),
+			);
+			this.observing = "watch";
+		} catch (error) {
+			this.degradeToPoll(`its fs watch could not be established: ${describe(error)}`);
+		}
+	}
+
+	/**
+	 * Give up on the watch and poll instead, loudly.
+	 *
+	 * Called both when the watch cannot be established and when an established
+	 * one dies. Idempotent: a watcher that errors repeatedly reports once.
+	 */
+	private degradeToPoll(reason: string): void {
+		if (this.observing === "poll") return;
+		this.observing = "poll";
+		try {
+			this.watcher?.close();
+		} catch {
+			// A watcher that failed may also fail to close; the poll below is what matters.
+		}
+		this.watcher = null;
+		this.onDegraded(
+			`device registry ${this.filePath}: ${reason}. Falling back to a ${this.pollIntervalMs}ms poll — ` +
+				"a revoked device is still cut off, up to one poll interval later.",
+		);
+		const timer = setInterval(() => this.notify(), this.pollIntervalMs);
+		// Like the watch: never the reason a daemon refuses to exit.
+		timer.unref?.();
+		this.pollTimer = timer;
+	}
+
+	private stopObserving(): void {
+		try {
+			this.watcher?.close();
+		} catch {
+			// Already gone.
+		}
+		this.watcher = null;
+		if (this.pollTimer !== null) clearInterval(this.pollTimer);
+		this.pollTimer = null;
+		this.observing = "idle";
+	}
+
+	/**
+	 * Tell the listeners, if the file really is a different file.
+	 *
+	 * Both observation modes are noisy — `fs.watch` fires more than once per
+	 * `rename(2)`, and the poll fires whether or not anything happened — so the
+	 * identity comparison, not the event, is what decides. It also means this
+	 * object's own `save()` costs the listeners one harmless call rather than a
+	 * special case that could be got wrong.
+	 */
+	private notify(): void {
+		const identity = readIdentity(this.filePath);
+		if (sameIdentity(identity, this.observed)) return;
+		this.observed = identity;
+		for (const listener of [...this.listeners]) {
+			try {
+				listener();
+			} catch {
+				// One broken subscriber must not silence the rest, or the watch.
+			}
+		}
 	}
 
 	private emit(event: DeviceRegistryEvent): void {

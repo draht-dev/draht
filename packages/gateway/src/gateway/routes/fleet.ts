@@ -1,10 +1,18 @@
 import { timingSafeEqual } from "node:crypto";
-import { AttachBridge, type AttachBridgeOptions, buildFleetFrame, type RendererConnection } from "@draht/geist-core";
+import {
+	AttachBridge,
+	type AttachBridgeOptions,
+	type AuthorizationRequest,
+	type AuthorizationVerdict,
+	buildFleetFrame,
+	type RendererConnection,
+} from "@draht/geist-core";
 import { DEFAULT_TRANSPORT_LIMITS, type TransportLimits } from "@draht/geist-protocol";
 import { Hono } from "hono";
 import { upgradeWebSocket } from "hono/bun";
 import type { WSContext } from "hono/ws";
 import pkg from "../../../package.json" with { type: "json" };
+import { logger } from "../logger";
 import { decodeWsBearerSubprotocol } from "../ws-bearer";
 
 /**
@@ -43,6 +51,26 @@ import { decodeWsBearerSubprotocol } from "../ws-bearer";
  * session up. An unauthenticated peer gets a socket to the daemon and two
  * frames; it does not get a session, a session's output, or the knowledge that
  * a session exists.
+ *
+ * ## Where a revocation catches a connection that already exists
+ *
+ * R33-REACH.6 says a revoked device is "refused at its next frame, not merely at
+ * its next connect". Taken literally that is inbound-only, and inbound-only is
+ * not a control: the device this exists to cut off is a phone in somebody else's
+ * hands, and it has no reason to send anything. It reads. So this route arms two
+ * things at once, and the second is the one that matters:
+ *
+ *  - the bridge's `authorize` hook ({@link revocationPolicy}), asked on every
+ *    inbound frame *and before every outbound emit*, so the session's own output
+ *    is what trips over the revocation and the connection dies with a typed
+ *    `not_authenticated` rather than quietly continuing;
+ *  - a subscription to the store, so a connection with no traffic in either
+ *    direction — attached to a session that happens to be idle — is dropped
+ *    anyway, within the store's observation latency of the revocation landing on
+ *    disk.
+ *
+ * A store that can do neither is not silently tolerated; `createFleetRoutes`
+ * says which half is missing, once, when the surface is built.
  *
  * What this route does own is the *upgrade-request* half of R33-REACH.3: a
  * credential may arrive on `Authorization: Bearer` or on the
@@ -185,6 +213,43 @@ export function attachAuthentication(
 	return { devices: NO_DEVICE_EXCHANGE };
 }
 
+/**
+ * The per-frame revocation policy, or undefined when the store cannot answer.
+ *
+ * Handed to the bridge as its `authorize` hook, which is asked on every inbound
+ * frame **and before every outbound emit**. That second half is the one
+ * R33-REACH.6 actually needs: "refused at its next frame" is inbound-only, and
+ * the device this control exists to stop — a phone somebody else is holding —
+ * has no reason to send a next frame. It sits there reading. The pre-emit check
+ * is what makes the session's own output the thing that trips over the
+ * revocation, and the identity, not a credential, is what it asks about, because
+ * a connection that is merely receiving presents no credential to check.
+ *
+ * A connection with no identity is left alone: it is either still
+ * pre-authentication, where the bridge's own gate is the policy, or it is a
+ * host-vouched connection on a daemon with no device store, where there is no
+ * device to revoke.
+ *
+ * The store is asked every time rather than cached. Each call is a `stat(2)`
+ * that reloads only when the file changed, and a cache here would be a second
+ * opinion about the credential file — which is exactly the thing
+ * `DeviceRegistry` refuses to be. A policy that could not answer, because the
+ * store threw, is refused by the bridge: see its `#allowed`.
+ */
+function revocationPolicy(
+	devices: AttachDeviceAuthenticator | undefined,
+): ((request: AuthorizationRequest) => AuthorizationVerdict) | undefined {
+	if (devices?.isRevoked === undefined) return undefined;
+	return (request: AuthorizationRequest): AuthorizationVerdict => {
+		const deviceId = request.identity?.deviceId;
+		if (deviceId === undefined) return { allow: true };
+		if (devices.isRevoked?.(deviceId) !== true) return { allow: true };
+		// No device id in the message: it reaches a phone, and naming the id it
+		// authenticated as tells a holder of a stolen credential which one it is.
+		return { allow: false, code: "not_authenticated", message: "this device has been revoked" };
+	};
+}
+
 /** Bun hands binary frames through as an ArrayBuffer; text arrives as a string. */
 function frameText(data: unknown): string {
 	if (typeof data === "string") return data;
@@ -227,6 +292,26 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 	const app = new Hono();
 	const limits = options.limits ?? DEFAULT_TRANSPORT_LIMITS;
 
+	// A configured store that can neither be asked about revocation nor observed
+	// is a daemon where `geist devices revoke` reaches the next *connect* and
+	// nothing sooner. That is a real posture — a store can be an adapter over
+	// something that genuinely cannot answer — but it is not one an operator
+	// should have to infer from a requirement id, so it is said once, here, at
+	// the moment the surface is built.
+	if (options.devices !== undefined && options.devices.isRevoked === undefined) {
+		logger.warn({
+			message:
+				"the /attach device store cannot report revocation; a revoked device keeps any live connection until it reconnects",
+			requirement: "R33-REACH.6",
+		});
+	} else if (options.devices !== undefined && options.devices.subscribe === undefined) {
+		logger.warn({
+			message:
+				"the /attach device store cannot be observed; a revoked device keeps a silent connection until its next frame in either direction",
+			requirement: "R33-REACH.6",
+		});
+	}
+
 	// The same body the `fleet` frame carries, so a renderer parses one shape
 	// whether the list arrived over HTTP or was pushed after `hello`.
 	app.get("/fleet", (c) => c.json(buildFleetFrame(options.socketDir)));
@@ -244,8 +329,37 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 				options,
 			);
 			let bridge: AttachBridge | null = null;
+			let unobserve: (() => void) | null = null;
+
+			const stopObserving = (): void => {
+				const stop = unobserve;
+				unobserve = null;
+				try {
+					stop?.();
+				} catch {
+					// A store that cannot be unsubscribed from is not a reason to fail a close.
+				}
+			};
+
+			/**
+			 * The store changed. If it changed to say this connection's device is
+			 * revoked, the connection ends now — not when it next speaks, and not
+			 * when its session next prints.
+			 *
+			 * This is the half the `authorize` hook cannot cover: the hook fires on
+			 * frames, and the connection this exists to cut is the one with no
+			 * frames in either direction.
+			 */
+			const enforceRevocation = (): void => {
+				const deviceId = bridge?.identity?.deviceId;
+				if (deviceId === undefined) return;
+				if (authentication.devices?.isRevoked?.(deviceId) !== true) return;
+				stopObserving();
+				bridge?.refuse("not_authenticated", "this device has been revoked");
+			};
 
 			const release = (): void => {
+				stopObserving();
 				bridge?.close();
 				bridge = null;
 			};
@@ -257,8 +371,14 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 						connection: rendererConnection(ws),
 						limits,
 						server: { name: "draht-gateway", version: pkg.version },
+						authorize: revocationPolicy(authentication.devices),
 						...authentication,
 					});
+					// Subscribed for the whole connection rather than from the moment
+					// it authenticates: the identity is read inside the callback, so a
+					// notification that arrives before there is one costs nothing, and
+					// there is no window between "authenticated" and "observed".
+					unobserve = authentication.devices?.subscribe?.(enforceRevocation) ?? null;
 				},
 				onMessage(evt) {
 					bridge?.receive(frameText(evt.data));

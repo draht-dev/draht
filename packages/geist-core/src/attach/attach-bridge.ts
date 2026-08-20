@@ -31,7 +31,11 @@
  *      an online guessing oracle; a bounded window, so an idle unauthenticated
  *      connection does not sit there; and the identity that results is a field
  *      on this object, so two bridges in one process cannot see each other's
- *      (R33-REACH.7).
+ *      (R33-REACH.7). And a gate that only opens is not a gate: `authorize` is
+ *      asked before every *outbound* frame as well, which is where a revocation
+ *      catches a connection that has stopped talking, and {@link
+ *      AttachBridge.refuse} lets a host that observed one end it with no frame
+ *      moving in either direction (R33-REACH.6).
  *   4. **Every bound is per-connection.** An overflowing renderer is dropped
  *      alone; the session keeps streaming to everyone else.
  *   5. **Identity is the daemon's.** A relayed frame carries the client id this
@@ -117,6 +121,34 @@ export interface DeviceAuthenticator {
 	pair(input: { bootstrapToken: string; device: { name: string; platform: string } }): DeviceAuthResult;
 	/** Verify an already-issued credential and rotate it. */
 	authenticate(input: { deviceId: string; credential: string }): DeviceAuthResult;
+	/**
+	 * Whether a device that already authenticated has since been barred
+	 * (R33-REACH.6).
+	 *
+	 * Separate from {@link DeviceAuthenticator.authenticate} because the question
+	 * is different: `authenticate` asks whether a *secret* is good, and a
+	 * connection that is merely receiving output presents no secret to ask about.
+	 * This asks about an identity, which is the only thing an attached connection
+	 * still has.
+	 *
+	 * Optional, because a store may genuinely be unable to answer — and a store
+	 * that cannot is not thereby a store that says "no". The host is expected to
+	 * notice the absence and say so; see `createFleetRoutes`.
+	 */
+	isRevoked?(deviceId: string): boolean;
+	/**
+	 * Be told when the store changed underneath this process, so a revocation
+	 * reaches a connection that is sending nothing.
+	 *
+	 * Optional for the same reason as {@link DeviceAuthenticator.isRevoked}, and
+	 * with the same consequence when absent: the refusal still holds on the
+	 * device's next inbound frame and on the next frame emitted to it, but a
+	 * silent connection to a silent session keeps its socket until one of those
+	 * happens.
+	 *
+	 * @returns an unsubscribe the host calls when the connection ends.
+	 */
+	subscribe?(listener: () => void): () => void;
 }
 
 /**
@@ -193,6 +225,12 @@ export interface AttachBridgeOptions {
 	 * Consulted on every inbound frame and before every outbound emit. Absent
 	 * means "authentication is the whole policy"; present means this hook has
 	 * the last word, in both directions, on every frame.
+	 *
+	 * The outbound half is what R33-REACH.6 rests on. "Refused at its next
+	 * frame" is inbound-only, and a revoked device that sends nothing has no
+	 * next frame — so the check that actually stops a stolen phone reading a
+	 * transcript is the one asked before each emit, on an identity rather than
+	 * on a credential.
 	 *
 	 * A hook that throws refuses the frame. Failing closed is the only safe
 	 * reading of a policy that could not answer.
@@ -451,6 +489,33 @@ export class AttachBridge {
 				return;
 			}
 		}
+	}
+
+	/**
+	 * Refuse this connection because something *outside* it changed
+	 * (R33-REACH.6).
+	 *
+	 * Every other refusal in this file is provoked by a frame — one arriving, or
+	 * one about to leave. A revocation is provoked by neither: it happens in
+	 * another process, to a connection that may be sending nothing and receiving
+	 * nothing, and the whole point of R33-REACH.6 is that such a connection is
+	 * cut anyway. So the host, which is what can observe the store, gets a way to
+	 * say so.
+	 *
+	 * The client is told with the same typed `protocol_error` any other refusal
+	 * uses and the same 1008 close, because from the phone's side this is not a
+	 * special event: it is the daemon declining to keep talking to it, and a
+	 * renderer that already handles `not_authenticated` handles this without
+	 * knowing the difference.
+	 *
+	 * Idempotent, and a no-op on a connection that is already closing.
+	 *
+	 * @param code    - The typed refusal the client is given.
+	 * @param message - Operator-facing detail. Carries no finding id and no
+	 *                  credential material.
+	 */
+	refuse(code: ProtocolErrorCode, message: string): void {
+		this.#refuse(code, message);
 	}
 
 	/** The renderer went away. Release the session socket. */

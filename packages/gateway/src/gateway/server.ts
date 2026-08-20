@@ -11,7 +11,7 @@ import { assertBindHostAllowed, isLoopbackPeer, nonLoopbackPeerRefusal } from ".
 import { bearerAuthMiddleware } from "./middleware/auth";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 import { createConsoleRoutes } from "./routes/console";
-import { createFleetRoutes } from "./routes/fleet";
+import { type AttachDeviceAuthenticator, createFleetRoutes } from "./routes/fleet";
 import { createSessionStreamRoutes } from "./routes/session-stream";
 import { createSessionRoutes } from "./routes/sessions";
 import { createSseRoutes } from "./routes/sse";
@@ -56,6 +56,15 @@ export interface GatewayConfig {
 	 * at one throwaway directory through `DRAHT_CODING_AGENT_DIR`.
 	 */
 	socketDir?: string;
+	/**
+	 * The per-device credential store `/attach` authenticates against
+	 * (R33-REACH.5).
+	 *
+	 * Optional because a daemon that nobody has paired with has none, and that
+	 * daemon is not thereby open: `/attach` refuses on the wire instead. See
+	 * `attachAuthentication` in `routes/fleet.ts` for the three cases.
+	 */
+	devices?: AttachDeviceAuthenticator;
 	/**
 	 * Sink for the bind-posture notices — the non-loopback opt-in warning, and
 	 * the first refusal of an off-box request. Defaults to `console.warn`.
@@ -183,10 +192,20 @@ export function createServer(config: GatewayConfig): ServerHandle {
 	//
 	// `/ui` and its assets are public on purpose (R32-FLEET.10): a browser cannot
 	// put an `Authorization` header on a document navigation, so an authenticated
-	// console is a console nobody can open. The carve-out is for static bytes
-	// only — `/fleet` and `/attach`, the routes that carry session data, are not
-	// in the list and still refuse an unauthenticated caller.
-	app.use("*", except(["/health", "/ui", "/ui/*"], bearerAuthMiddleware(config.authToken)));
+	// console is a console nobody can open. That carve-out is for static bytes
+	// only — `/fleet`, the other route that carries session data, is not in the
+	// list and still 401s an unauthenticated caller.
+	//
+	// `/attach` is in the list for a different reason, and it is not a hole
+	// (R33-REACH.3, R33-REACH.5). A device authenticates with a *frame*, and a
+	// frame needs the 101 this middleware would have refused. So `/attach`
+	// upgrades first and authenticates on the wire: the bridge answers `hello`
+	// with `server_hello` and refuses every other frame — `attach` included, and
+	// the fleet listing along with it — until a credential has been presented, so
+	// no Unix socket is dialled for a connection that has not proved who it is.
+	// The reasoning, and the three cases the upgrade handler decides between,
+	// are written out at the top of `routes/fleet.ts`.
+	app.use("*", except(["/health", "/ui", "/ui/*", "/attach"], bearerAuthMiddleware(config.authToken)));
 
 	const eventBus = new EventBus();
 	const manager = config.manager ?? new SessionManager(eventBus);
@@ -205,7 +224,14 @@ export function createServer(config: GatewayConfig): ServerHandle {
 	app.route("/", createConsoleRoutes());
 	// Mounted at the root: the fleet is a property of the machine, not of one
 	// session, and `/attach` fronts the whole fleet over one wire.
-	app.route("/", createFleetRoutes({ socketDir: config.socketDir ?? resolveSocketDir() }));
+	app.route(
+		"/",
+		createFleetRoutes({
+			socketDir: config.socketDir ?? resolveSocketDir(),
+			authToken: config.authToken,
+			devices: config.devices,
+		}),
+	);
 	app.route("/sessions", createSessionRoutes(manager, config.config));
 	app.route("/sessions", createSessionStreamRoutes(manager));
 	app.route("/sessions", createWsRoutes(manager));

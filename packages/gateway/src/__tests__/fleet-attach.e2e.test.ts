@@ -375,45 +375,85 @@ describe("the attach bridge (R32-FLEET.3)", () => {
 	}, 60_000);
 
 	test("an unauthenticated attach is refused before any Unix socket is opened", async () => {
+		// The property this test has always proved: an attach that has not
+		// authenticated reaches no session. Phase 32 held it by 401-ing the
+		// upgrade; R33-REACH.5 cannot, because a device presents its credential in
+		// a *frame* and a frame needs the 101 that 401 refused. So the 101 now
+		// happens first and the refusal is a `not_authenticated` `protocol_error`
+		// on the wire. The mechanism moved one layer in. The property did not, and
+		// it is still asserted the only way that means anything: on what the
+		// intruder could actually reach.
 		const watcher = await Renderer.open(base);
 		await watcher.handshake();
 		await watcher.attach(session.id, "watcher");
 		const joinsBefore = watcher.frames.filter((frame) => frame.type === "client_joined").length;
+		const socketsBefore = sockets(join(agentDir, "sockets")).sort();
+		expect(socketsBefore).toContain(`${session.id}.sock`);
 
-		// The upgrade request itself is refused: no WebSocket, so no frame, so no
-		// dial. Asserted on the raw request as well as on the socket, because a
-		// daemon that upgraded first and checked afterwards would still "close"
-		// the connection while having already reached the session.
-		expect((await fetch(`${httpBase}/attach`)).status).toBe(401);
+		// A plain GET is not an upgrade and reaches no handler at all. Kept as an
+		// assertion because "the route left the auth middleware" must not quietly
+		// become "the route serves something over HTTP".
+		expect((await fetch(`${httpBase}/attach`)).status).toBe(404);
 
+		const frames: GeistServerFrame[] = [];
+		const intruder: { closed: { code: number; reason: string } | null } = { closed: null };
 		const unauthenticated = new WebSocket(`${base}/attach`);
+		unauthenticated.addEventListener("message", (event: MessageEvent) => {
+			frames.push(ServerFrameSchema.parse(JSON.parse(String(event.data))));
+		});
+		unauthenticated.addEventListener("close", (event: CloseEvent) => {
+			intruder.closed = { code: event.code, reason: event.reason };
+		});
 		const outcome = await new Promise<string>((res) => {
 			unauthenticated.addEventListener("open", () => res("open"));
 			unauthenticated.addEventListener("error", () => res("error"));
 			unauthenticated.addEventListener("close", () => res("close"));
 		});
-		if (outcome === "open") {
-			// Auth is not doing its job. Drive the whole attach anyway, so the
-			// assertion below reports what an unauthenticated peer could actually
-			// reach rather than quietly passing on a socket nobody used.
-			unauthenticated.send(
-				JSON.stringify({
-					type: "hello",
-					protocol: GEIST_PROTOCOL_FAMILY,
-					version: GEIST_PROTOCOL_VERSION,
-					client: { name: "intruder", version: "0.0.0" },
-				}),
-			);
-			unauthenticated.send(
-				JSON.stringify({ type: "attach", sessionId: session.id, clientId: "intruder", mode: "read-write" }),
-			);
-		}
+		// The upgrade is expected to succeed now. It is where the credential would
+		// have gone, not where it is checked.
+		expect(outcome).toBe("open");
 
-		// If the refusal had happened after the dial, the already-attached client
-		// would have been told a new client joined.
+		unauthenticated.send(
+			JSON.stringify({
+				type: "hello",
+				protocol: GEIST_PROTOCOL_FAMILY,
+				version: GEIST_PROTOCOL_VERSION,
+				client: { name: "intruder", version: "0.0.0" },
+			}),
+		);
+		await until(
+			() => frames.some((frame) => frame.type === "server_hello"),
+			"the daemon's server_hello to the intruder",
+		);
+		// `server_hello` and nothing else. The fleet listing is session data — ids,
+		// working directories, pids — and an unauthenticated peer is not told that
+		// a session exists, let alone which.
+		expect(frames.filter((frame) => frame.type === "fleet")).toHaveLength(0);
+
+		// The frame that would dial `<id>.sock`, naming a session that really is
+		// live. Refused above the switch that looks it up.
+		unauthenticated.send(
+			JSON.stringify({ type: "attach", sessionId: session.id, clientId: "intruder", mode: "read-write" }),
+		);
+		const refusal = await until(
+			() => frames.find((frame) => frame.type === "protocol_error"),
+			`the refusal (saw: ${frames.map((f) => f.type).join(", ")})`,
+		);
+		expect(refusal).toMatchObject({ type: "protocol_error", code: "not_authenticated" });
+		expect(await until(() => intruder.closed, "the daemon to drop the intruder")).toMatchObject({ code: 1008 });
+
+		// The two independent proofs that no Unix socket was dialled.
+		//
+		// The first is the session's own account of who reached it: had the
+		// refusal happened after the dial, the already-attached watcher would have
+		// been told a new client joined. That is the load-bearing one — it is
+		// asserted on the far side of the socket, by the draht process itself.
 		await Bun.sleep(1000);
 		expect(watcher.frames.filter((frame) => frame.type === "client_joined")).toHaveLength(joinsBefore);
-		expect(outcome).not.toBe("open");
+		// The second is the fleet's own filesystem: the same sockets, no more and
+		// no fewer, and the named session still published rather than reaped by an
+		// intruder-induced failure.
+		expect(sockets(join(agentDir, "sockets")).sort()).toEqual(socketsBefore);
 		watcher.close();
 	}, 60_000);
 });

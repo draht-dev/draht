@@ -29,9 +29,9 @@ export interface MutableRemoteState<T> extends RemoteState<T> {
 }
 
 export type RemoteEventType<T> = T extends { readonly type: infer TType extends string } ? TType : never;
-export type RemoteEventListener<T> = (event: T, context: Context) => void | Promise<void>;
+export type RemoteEventListener<T> = (event: T, context: Context) => void;
 
-/** Contract surface for non-durable semantic events. Remote delivery is a later service slice. */
+/** Non-durable semantic events. Event values are borrowed immutable JSON and are never replayed. */
 export interface RemoteEvents<T> {
 	subscribe(listener: RemoteEventListener<T>): () => void;
 	on<TType extends RemoteEventType<T>>(
@@ -133,6 +133,12 @@ export type ServiceProviderUpdate =
 			readonly member: string;
 			readonly sequence: number;
 			readonly value: JsonValue;
+	  }
+	| {
+			readonly type: "event";
+			readonly instance?: ServiceInstanceAddress;
+			readonly member: string;
+			readonly event: JsonValue;
 	  }
 	| { readonly type: "spawned"; readonly instance: ServiceInstanceSnapshot }
 	| { readonly type: "closed"; readonly instance: ServiceInstanceAddress };

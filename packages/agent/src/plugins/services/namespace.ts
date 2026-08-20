@@ -5,6 +5,9 @@ import { freshDeliveryContext } from "./state.ts";
 import {
 	cloneJson,
 	isJsonValue,
+	type RemoteEventListener,
+	type RemoteEvents,
+	type RemoteEventType,
 	type RemoteService,
 	type RemoteServiceConnection,
 	type RemoteServiceInstance,
@@ -17,7 +20,6 @@ import {
 	type ServiceMemberDescription,
 	type ServiceMemberKind,
 	type ServiceProviderUpdate,
-	ServiceSliceNotImplemented,
 	type ServiceStateSnapshot,
 } from "./types.ts";
 
@@ -77,12 +79,54 @@ class RemoteStateReplica implements RemoteState<JsonValue> {
 	}
 }
 
+class RemoteEventsReplica implements RemoteEvents<JsonValue> {
+	readonly #listeners = new Set<RemoteEventListener<JsonValue>>();
+	readonly #reportError: ErrorReporter;
+
+	constructor(reportError: ErrorReporter) {
+		this.#reportError = reportError;
+	}
+
+	subscribe(listener: RemoteEventListener<JsonValue>): () => void {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
+	}
+
+	on<TType extends RemoteEventType<JsonValue>>(
+		type: TType,
+		listener: RemoteEventListener<Extract<JsonValue, { readonly type: TType }>>,
+	): () => void {
+		return this.subscribe((event, context) => {
+			if (hasEventType(event, type)) listener(event, context);
+		});
+	}
+
+	deliver(event: JsonValue, context: Context): void {
+		for (const listener of this.#listeners) {
+			try {
+				listener(event, context);
+			} catch (error) {
+				this.#reportError(toError(error));
+			}
+		}
+	}
+}
+
+interface PendingMemberSubscription {
+	readonly listener: RemoteEventListener<JsonValue>;
+	remove: (() => void) | undefined;
+	closed: boolean;
+}
+
 class MemberSlot {
 	readonly #serviceId: string;
 	readonly #member: string;
 	readonly #invoke: (args: readonly JsonValue[], context: Context) => Promise<JsonValue | undefined>;
 	readonly #state: RemoteStateReplica;
+	readonly #events: RemoteEventsReplica;
 	readonly #isActive: () => boolean;
+	readonly #reportError: ErrorReporter;
+	readonly #pendingSubscriptions = new Set<PendingMemberSubscription>();
 	readonly value: unknown;
 	#kind: ServiceMemberKind | undefined;
 	#expectedKind: ServiceMemberKind | undefined;
@@ -98,7 +142,9 @@ class MemberSlot {
 		this.#member = member;
 		this.#invoke = invoke;
 		this.#isActive = isActive;
+		this.#reportError = reportError;
 		this.#state = new RemoteStateReplica(reportError);
+		this.#events = new RemoteEventsReplica(reportError);
 		const callable = (): void => {};
 		this.value = new Proxy(callable, {
 			apply: (_target, _thisArg, args) => this.#call(args),
@@ -107,21 +153,10 @@ class MemberSlot {
 					this.#expect("state");
 					return this.#state.value;
 				}
-				if (property === "subscribe") {
-					if (this.#kind === "events") {
-						this.#expect("events");
-						return () => {
-							throw new ServiceSliceNotImplemented("RemoteEvents.subscribe");
-						};
-					}
-					this.#expect("state");
-					return this.#state.subscribe.bind(this.#state);
-				}
+				if (property === "subscribe") return this.#subscribe.bind(this);
 				if (property === "on") {
 					this.#expect("events");
-					return () => {
-						throw new ServiceSliceNotImplemented("RemoteEvents.on");
-					};
+					return this.#events.on.bind(this.#events);
 				}
 				if (property === Symbol.toStringTag) return "RemoteServiceMember";
 				if (property === "then") return undefined;
@@ -141,6 +176,8 @@ class MemberSlot {
 				`Remote service member ${this.#serviceId}.${this.#member} is ${kind}, not ${this.#expectedKind}`,
 			);
 		}
+		for (const pending of this.#pendingSubscriptions) this.#activateSubscription(pending, kind);
+		this.#pendingSubscriptions.clear();
 	}
 
 	hydrate(snapshot: ServiceStateSnapshot, context: Context): void {
@@ -153,8 +190,49 @@ class MemberSlot {
 		this.#state.update(sequence, value, context);
 	}
 
+	deliverEvent(event: JsonValue, context: Context): void {
+		this.setDescription("events");
+		this.#events.deliver(event, context);
+	}
+
 	clear(): void {
 		this.#state.clear();
+	}
+
+	#subscribe(listener: RemoteEventListener<JsonValue>): () => void {
+		if (typeof listener !== "function")
+			throw new TypeError("Remote service subscription listener must be a function");
+		if (this.#kind === "state" || this.#expectedKind === "state") {
+			this.#expect("state");
+			return this.#state.subscribe(listener);
+		}
+		if (this.#kind === "events" || this.#expectedKind === "events") {
+			this.#expect("events");
+			return this.#events.subscribe(listener);
+		}
+		const pending: PendingMemberSubscription = { listener, remove: undefined, closed: false };
+		this.#pendingSubscriptions.add(pending);
+		return () => {
+			if (pending.closed) return;
+			pending.closed = true;
+			pending.remove?.();
+			this.#pendingSubscriptions.delete(pending);
+		};
+	}
+
+	#activateSubscription(pending: PendingMemberSubscription, kind: ServiceMemberKind): void {
+		if (pending.closed) return;
+		if (kind === "state") pending.remove = this.#state.subscribe(pending.listener);
+		else if (kind === "events") pending.remove = this.#events.subscribe(pending.listener);
+		else {
+			pending.closed = true;
+			this.#reportError(
+				new RemoteServiceError(
+					"service_member_mismatch",
+					`Remote service member ${this.#serviceId}.${this.#member} is a method, not subscribable`,
+				),
+			);
+		}
 	}
 
 	#expect(kind: ServiceMemberKind): void {
@@ -272,6 +350,13 @@ class ServiceFacade {
 		const snapshot = { sequence, value };
 		this.#stateSnapshots.set(member, snapshot);
 		this.#slot(member).update(sequence, value, context);
+	}
+
+	deliverEvent(member: string, event: JsonValue, context: Context): void {
+		if (this.#descriptions.get(member) !== "events") {
+			throw new Error(`Remote service event targets non-event member ${this.#serviceId}.${member}`);
+		}
+		this.#slot(member).deliverEvent(event, context);
 	}
 
 	clear(): void {
@@ -458,6 +543,13 @@ class KeyedBinding<T> {
 					instance.facade.update(update.member, update.sequence, update.value, context);
 					break;
 				}
+				case "event": {
+					if (update.instance === undefined) throw new Error("Keyed event has no instance address");
+					const instance = this.#instances.get(update.instance.key);
+					if (instance?.address.generation !== update.instance.generation) return;
+					instance.facade.deliverEvent(update.member, update.event, context);
+					break;
+				}
 			}
 		} catch (error) {
 			this.#reportError(toError(error));
@@ -634,16 +726,13 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 			serviceId,
 			"singleton",
 			(update, context) => {
-				if (
-					!binding.active ||
-					binding.revision !== revision ||
-					update.type !== "state" ||
-					update.instance !== undefined
-				) {
-					return;
-				}
+				if (!binding.active || binding.revision !== revision || update.instance !== undefined) return;
 				try {
-					binding.facade.update(update.member, update.sequence, update.value, context);
+					if (update.type === "state") {
+						binding.facade.update(update.member, update.sequence, update.value, context);
+					} else if (update.type === "event") {
+						binding.facade.deliverEvent(update.member, update.event, context);
+					}
 				} catch (error) {
 					this.#reportError(toError(error));
 				}
@@ -703,6 +792,10 @@ function isContext(value: unknown): value is Context {
 	if (typeof value !== "object" || value === null) return false;
 	const candidate = value as Partial<Context>;
 	return typeof candidate.value === "function" && typeof candidate.toString === "function";
+}
+
+function hasEventType<T, TType extends string>(event: T, type: TType): event is Extract<T, { readonly type: TType }> {
+	return typeof event === "object" && event !== null && "type" in event && event.type === type;
 }
 
 function toError(error: unknown): Error {

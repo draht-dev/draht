@@ -1,6 +1,6 @@
 import type { Context } from "../../harness/context.ts";
 import type { JsonValue } from "../../harness/session/types.ts";
-import { getRemoteEventsInternals } from "./events.ts";
+import { getRemoteEventsInternals, type RemoteEventsInternals } from "./events.ts";
 import { freshDeliveryContext, getRemoteStateInternals, type RemoteStateInternals } from "./state.ts";
 import {
 	cloneJson,
@@ -43,13 +43,13 @@ type RemoteMethod = (...args: unknown[]) => unknown;
 type InstanceMember =
 	| { readonly kind: "method"; readonly method: RemoteMethod }
 	| { readonly kind: "state"; readonly state: RemoteStateInternals }
-	| { readonly kind: "events" };
+	| { readonly kind: "events"; readonly events: RemoteEventsInternals };
 
 interface ProviderInstance {
 	readonly address?: ServiceInstanceAddress;
 	readonly implementation: object;
 	readonly members: ReadonlyMap<string, InstanceMember>;
-	readonly removeStateListeners: readonly (() => void)[];
+	readonly removeMemberListeners: readonly (() => void)[];
 	active: boolean;
 }
 
@@ -124,7 +124,7 @@ export class RemoteServiceProvider {
 			closed = true;
 			if (registration.instances.get(key) !== instance) return;
 			instance.active = false;
-			for (const remove of instance.removeStateListeners) remove();
+			for (const remove of instance.removeMemberListeners) remove();
 			registration.instances.delete(key);
 			this.#emit(registration, { type: "closed", instance: address });
 		};
@@ -206,7 +206,7 @@ export class RemoteServiceProvider {
 			for (const instance of instances) {
 				if (!instance) continue;
 				instance.active = false;
-				for (const remove of instance.removeStateListeners) remove();
+				for (const remove of instance.removeMemberListeners) remove();
 			}
 			registration.instances.clear();
 			delete registration.singleton;
@@ -246,12 +246,12 @@ export class RemoteServiceProvider {
 			throw new TypeError(`Remote service ${registration.serviceId} implementation must be an object`);
 		}
 		const members = new Map<string, InstanceMember>();
-		const removeStateListeners: (() => void)[] = [];
+		const removeMemberListeners: (() => void)[] = [];
 		const instance: ProviderInstance = {
 			...(address === undefined ? {} : { address }),
 			implementation,
 			members,
-			removeStateListeners,
+			removeMemberListeners,
 			active: true,
 		};
 		for (const name of Object.keys(implementation).sort()) {
@@ -266,7 +266,7 @@ export class RemoteServiceProvider {
 			const state = getRemoteStateInternals(descriptor.value);
 			if (state !== undefined) {
 				members.set(name, { kind: "state", state });
-				removeStateListeners.push(
+				removeMemberListeners.push(
 					state.subscribe((value, sequence, context) => {
 						if (!instance.active) return;
 						if (!isJsonValue(value)) {
@@ -287,8 +287,27 @@ export class RemoteServiceProvider {
 				);
 				continue;
 			}
-			if (getRemoteEventsInternals(descriptor.value) !== undefined) {
-				members.set(name, { kind: "events" });
+			const events = getRemoteEventsInternals(descriptor.value);
+			if (events !== undefined) {
+				members.set(name, { kind: "events", events });
+				removeMemberListeners.push(
+					events.subscribe((event, context) => {
+						if (!instance.active) return;
+						if (!isJsonValue(event)) {
+							throw new RemoteServiceError("service_invalid_value", "Remote event must be strict JSON");
+						}
+						this.#emit(
+							registration,
+							{
+								type: "event",
+								...(address === undefined ? {} : { instance: address }),
+								member: name,
+								event,
+							},
+							context,
+						);
+					}),
+				);
 				continue;
 			}
 			throw new TypeError(`Remote service member ${registration.serviceId}.${name} is not remotely exposable`);

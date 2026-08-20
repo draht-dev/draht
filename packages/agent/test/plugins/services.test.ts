@@ -11,7 +11,6 @@ import {
 	type RemoteState,
 	remoteEvents,
 	remoteState,
-	ServiceSliceNotImplemented,
 } from "../../src/index.ts";
 
 type ModelRef = { provider: string; modelId: string };
@@ -34,8 +33,9 @@ interface QuestionDialogService {
 
 const QuestionDialogs = defineRemoteService<QuestionDialogService>("question-dialog");
 
+type ActivityEvent = { type: "changed"; revision: number } | { type: "ignored"; revision: number };
 interface ActivityService {
-	readonly events: RemoteEvents<{ type: "changed"; revision: number }>;
+	readonly events: RemoteEvents<ActivityEvent>;
 }
 
 const Activity = defineRemoteService<ActivityService>("activity");
@@ -139,6 +139,43 @@ describe("plugin remote services", () => {
 		provider.dispose();
 	});
 
+	test("hydrates cold RemoteState replicas and replaces them across rebinds", async () => {
+		const provider = new RemoteServiceProvider([Models]);
+		const state = remoteState<ModelsState>({ selected: null, revision: 0 });
+		provider.provide(Models, {
+			state,
+			async select() {},
+		});
+		const namespace = new RemoteServiceNamespace({
+			services: [Models],
+			connection: createLoopbackServiceConnection(provider),
+			bound: false,
+		});
+		const models = namespace.use(Models);
+		const revisions: number[] = [];
+		models.state.subscribe((value) => revisions.push(value.revision));
+		expect(models.state.value).toBeUndefined();
+		expect(revisions).toEqual([]);
+
+		state.set({ selected: null, revision: 1 }, BACKGROUND_CONTEXT);
+		await namespace.rebind(true, BACKGROUND_CONTEXT);
+		expect(models.state.value?.revision).toBe(1);
+		expect(revisions).toEqual([1]);
+		state.set({ selected: null, revision: 2 }, BACKGROUND_CONTEXT);
+		expect(revisions).toEqual([1, 2]);
+
+		await namespace.rebind(false, BACKGROUND_CONTEXT);
+		expect(models.state.value).toBeUndefined();
+		state.set({ selected: null, revision: 3 }, BACKGROUND_CONTEXT);
+		expect(revisions).toEqual([1, 2]);
+		await namespace.rebind(true, BACKGROUND_CONTEXT);
+		expect(models.state.value?.revision).toBe(3);
+		expect(revisions).toEqual([1, 2, 3]);
+
+		await namespace.dispose(BACKGROUND_CONTEXT);
+		provider.dispose();
+	});
+
 	test("hydrates keyed state before observe handlers and fences reused keys", async () => {
 		const provider = new RemoteServiceProvider([QuestionDialogs]);
 		const connection = createLoopbackServiceConnection(provider);
@@ -203,27 +240,90 @@ describe("plugin remote services", () => {
 		provider.dispose();
 	});
 
-	test("declares RemoteEvents members while delivery remains an explicit later slice", async () => {
+	test("delivers filtered RemoteEvents without replay and buffers hydration races", async () => {
 		const provider = new RemoteServiceProvider([Activity]);
-		const events = remoteEvents<{ type: "changed"; revision: number }>();
+		const events = remoteEvents<ActivityEvent>();
 		provider.provide(Activity, { events });
-		const subscription = provider.subscribe("activity", "singleton", () => {});
-		expect(subscription.snapshot.instances[0]?.members).toEqual([{ name: "events", kind: "events" }]);
-		expect(() => events.subscribe(() => {})).toThrow(ServiceSliceNotImplemented);
-		expect(() => events.on("changed", () => {})).toThrow(ServiceSliceNotImplemented);
-		expect(() => events.emit({ type: "changed", revision: 1 }, BACKGROUND_CONTEXT)).toThrow(
-			ServiceSliceNotImplemented,
-		);
-		subscription.close();
+		const local: ActivityEvent[] = [];
+		const localChanged: ActivityEvent[] = [];
+		const removeLocal = events.subscribe((event) => local.push(event));
+		const removeLocalChanged = events.on("changed", (event) => localChanged.push(event));
+		const beforeSubscription = { type: "changed", revision: 0 } as const;
+		events.emit(beforeSubscription, BACKGROUND_CONTEXT);
+		expect(local[0]).toBe(beforeSubscription);
+		expect(localChanged).toEqual([beforeSubscription]);
 
+		const connection: RemoteServiceConnection = {
+			invoke: (call, context) => provider.invoke(call, context),
+			subscribe: async (serviceId, mode, listener) => {
+				const subscription = provider.subscribe(serviceId, mode, listener);
+				events.emit({ type: "changed", revision: 1 }, BACKGROUND_CONTEXT);
+				return {
+					snapshot: subscription.snapshot,
+					activate: () => subscription.activate(),
+					close: () => subscription.close(),
+				};
+			},
+		};
+		const errors: Error[] = [];
+		const namespace = new RemoteServiceNamespace({
+			services: [Activity],
+			connection,
+			onError: (error) => errors.push(error),
+		});
+		const activity = namespace.use(Activity);
+		const received: ActivityEvent[] = [];
+		const changed: Extract<ActivityEvent, { type: "changed" }>[] = [];
+		const unsubscribe = activity.events.subscribe((event) => received.push(event));
+		const unsubscribeChanged = activity.events.on("changed", (event) => changed.push(event));
+		await vi.waitFor(() => expect(received).toEqual([{ type: "changed", revision: 1 }]));
+		events.emit({ type: "ignored", revision: 2 }, BACKGROUND_CONTEXT);
+		events.emit({ type: "changed", revision: 3 }, BACKGROUND_CONTEXT);
+		expect(received).toEqual([
+			{ type: "changed", revision: 1 },
+			{ type: "ignored", revision: 2 },
+			{ type: "changed", revision: 3 },
+		]);
+		expect(changed).toEqual([
+			{ type: "changed", revision: 1 },
+			{ type: "changed", revision: 3 },
+		]);
+		expect(received).not.toContainEqual(beforeSubscription);
+		expect(errors).toEqual([]);
+		expect(() => events.emit({ type: "changed", revision: Number.NaN }, BACKGROUND_CONTEXT)).toThrow(
+			"Remote event value must be strict JSON",
+		);
+
+		removeLocal();
+		removeLocalChanged();
+		unsubscribe();
+		unsubscribeChanged();
+		await namespace.dispose(BACKGROUND_CONTEXT);
+		provider.dispose();
+	});
+
+	test("routes keyed RemoteEvents only for the live instance generation", async () => {
+		const provider = new RemoteServiceProvider([Activity]);
 		const namespace = new RemoteServiceNamespace({
 			services: [Activity],
 			connection: createLoopbackServiceConnection(provider),
 		});
-		const activity = namespace.use(Activity);
-		await new Promise<void>((resolve) => setTimeout(resolve, 0));
-		expect(() => activity.events.subscribe(() => {})).toThrow(ServiceSliceNotImplemented);
-		expect(() => activity.events.on("changed", () => {})).toThrow(ServiceSliceNotImplemented);
+		let observed: ActivityService | undefined;
+		const stop = namespace.observe(Activity, (instance) => {
+			observed = instance.service;
+		});
+		const events = remoteEvents<ActivityEvent>();
+		const close = provider.spawn(Activity, "activity-1", { events });
+		await vi.waitFor(() => expect(observed).toBeDefined());
+		const received: ActivityEvent[] = [];
+		observed!.events.subscribe((event) => received.push(event));
+		events.emit({ type: "changed", revision: 1 }, BACKGROUND_CONTEXT);
+		expect(received).toEqual([{ type: "changed", revision: 1 }]);
+		close();
+		events.emit({ type: "changed", revision: 2 }, BACKGROUND_CONTEXT);
+		expect(received).toEqual([{ type: "changed", revision: 1 }]);
+
+		stop();
 		await namespace.dispose(BACKGROUND_CONTEXT);
 		provider.dispose();
 	});

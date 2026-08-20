@@ -27,11 +27,16 @@ export async function provideModelsService(
 	};
 	const readCatalog = async (context: Context = BACKGROUND_CONTEXT): Promise<ModelsState["catalog"]> => {
 		const selected = await harness.getModel(context);
-		const available = modelRuntime?.getAvailableSnapshot() ?? (selected === undefined ? [] : [selected]);
+		const available = modelRuntime?.getAvailableSnapshot() ?? [];
+		const catalog =
+			selected === undefined ||
+			available.some((model) => model.provider === selected.provider && model.id === selected.id)
+				? available
+				: [...available, selected];
 		catalogRevision += 1;
 		return {
 			revision: catalogRevision,
-			availableModels: available.map((model) => ({
+			availableModels: catalog.map((model) => ({
 				provider: model.provider,
 				modelId: model.id,
 				name: model.name,

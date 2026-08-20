@@ -41,7 +41,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/resolve-conflicts` — resolve an in-progress merge/rebase by reconstructing both sides' intent
 - `/grill <subject>` — whole-frontier interrogation of any idea, spec, ticket list, or decision; output form chosen at the end
 
-### 7 specialist subagents
+### 9 specialist subagents
 
 All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 
@@ -50,16 +50,26 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `architect` | Reads codebase, produces structured implementation plans |
 | `implementer` | Writes code following TDD cycle from plan tasks |
 | `reviewer` | Reviews changes for correctness, types, conventions, domain language |
+| `spec-reviewer` | Checks a completed task's diff against its spec — no more, no less |
 | `debugger` | Reproduces and diagnoses bugs to root cause |
 | `verifier` | Runs lint + typecheck + tests, reports results without fixing |
 | `git-committer` | Stages and commits with conventional commit messages |
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
+| `advisor` | Strongest-tier strategic steer, consulted rarely when stuck or before committing to an approach |
 
-### Bundled workflow and creative skills
+### 12 bundled skills
 
+- **`draht`** — router and catalog for the skill family: what draht is, which skill fits which situation
 - **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
 - **`tdd-workflow`** — red→green→refactor discipline, commit conventions, cycle violations
 - **`ddd-workflow`** — bounded contexts, ubiquitous language, aggregates, domain events
+- **`debugging-workflow`** — the four-phase systematic debugging protocol `/fix` enforces, available transversally
+- **`atomic-reasoning`** — decompose work into independently verifiable units before acting
+- **`brainstorming`** — Socratic ideation gate before any project work begins
+- **`loop-workflow`** — cycles of work gated by deterministic checks until a stop condition holds
+- **`model-tiering`** — advisor and orchestrator patterns for cost-efficient model selection
+- **`verification-gate`** — evidence before claims: run the proving command before saying "done"
+- **`saga-spawner`** — unattended repo advancement as a cloud routine reconciling a saga graph of beats
 - **`cinematic-continuation`** — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
 
 ### 4 workflow hook scripts
@@ -178,8 +188,10 @@ Each specialist subagent ships with a default model tuned to its workload:
 | `verifier` | `sonnet` | `/verify-work` — lint, typecheck, test runs |
 | `security-auditor` | `opus` | `/verify-work` — security audit and CVE analysis |
 | `reviewer` | `inherit` | `/verify-work`, `/review` — code review |
+| `spec-reviewer` | `opus` | `/execute-phase`, `/verify-work`, `/review`, `/quick` — spec compliance |
 | `debugger` | `inherit` | `/fix` — bug diagnosis |
 | `git-committer` | `inherit` | `/atomic-commit` — commit staging |
+| `advisor` | `fable` | any command — rare high-leverage strategic consults |
 
 You can override any agent with the `configure` command:
 

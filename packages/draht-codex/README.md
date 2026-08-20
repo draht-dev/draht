@@ -63,6 +63,7 @@ The plugin ships reference prompts in `agents/`:
 - `git-committer`
 - `security-auditor`
 - `spec-reviewer`
+- `advisor`
 
 Codex subagent availability depends on the active Codex feature/configuration. When named Draht agent roles are not registered directly, the command templates can still use generic Codex subagents by pasting the relevant Draht agent prompt into the delegated task.
 

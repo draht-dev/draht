@@ -130,6 +130,152 @@ describe("JSONL v3 migration", () => {
 		expect(metadata).not.toHaveProperty("parentSessionId");
 	});
 
+	describe("forking legacy v3 sessions", () => {
+		const firstMessage = {
+			role: "user",
+			content: [{ type: "text", text: "fork me" }],
+			timestamp: NOW + 1_000,
+		} satisfies AgentMessage;
+		const usage = {
+			input: 10,
+			output: 5,
+			cacheRead: 2,
+			cacheWrite: 1,
+			totalTokens: 18,
+			cost: { input: 0.1, output: 0.05, cacheRead: 0.02, cacheWrite: 0.01, total: 0.18 },
+		} satisfies Usage;
+		const secondMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "forked" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage,
+			stopReason: "stop",
+			timestamp: NOW + 4_000,
+		} satisfies AgentMessage;
+
+		async function writeForkFixture() {
+			const fixture = await writeLegacyV3Fixture([
+				{
+					type: "message",
+					id: "message-1",
+					parentId: null,
+					timestamp: new Date(NOW + 1_000).toISOString(),
+					message: firstMessage,
+				},
+				{
+					type: "label",
+					id: "label-1",
+					parentId: "message-1",
+					timestamp: new Date(NOW + 2_000).toISOString(),
+					targetId: "message-1",
+					label: "Fork point",
+				},
+				{
+					type: "session_info",
+					id: "session-info",
+					parentId: "label-1",
+					timestamp: new Date(NOW + 3_000).toISOString(),
+					name: "Imported fork",
+				},
+				{
+					type: "message",
+					id: "message-2",
+					parentId: "session-info",
+					timestamp: new Date(NOW + 4_000).toISOString(),
+					message: secondMessage,
+				},
+			]);
+			const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);
+			if (metadata === undefined) throw new Error("Legacy fixture was not discovered");
+			return { ...fixture, metadata };
+		}
+
+		async function expectForkedState(fork: Session<JsonlSessionMetadata>): Promise<Entry[]> {
+			expect(fork.metadata).toMatchObject({
+				storageVersion: JSONL_STORAGE_VERSION,
+				parentSessionId: "legacy",
+			});
+			const entries = await fork.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			expect(entries).toHaveLength(2);
+			const [first, second] = entries;
+			if (first === undefined || second === undefined) throw new Error("Forked entries were not written");
+			expect(first).toMatchObject({ type: "message", parentId: null, message: firstMessage });
+			expect(second).toMatchObject({ type: "message", parentId: first.id, message: secondMessage });
+			expect(first.id).not.toBe("message-1");
+			expect(second.id).not.toBe("message-2");
+			expect(await fork.getLeafId(BACKGROUND_CONTEXT)).toBe(second.id);
+			expect(await fork.getName(BACKGROUND_CONTEXT)).toBe("Imported fork");
+			expect(await fork.getLabel(first.id, BACKGROUND_CONTEXT)).toBe("Fork point");
+			expect((await fork.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+				currentOperationId: null,
+				pendingNextRun: [],
+			});
+			expect(await fork.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT)).toBeUndefined();
+			expect(await fork.getStats(BACKGROUND_CONTEXT)).toEqual({
+				messageCount: 2,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			});
+			return entries;
+		}
+
+		it("forks a closed source into a complete v4 destination without rewriting it", async () => {
+			const { path, content, metadata } = await writeForkFixture();
+
+			const fork = await repo.fork(metadata, { id: "closed-fork" }, BACKGROUND_CONTEXT);
+
+			expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
+			expect(fork.metadata.id).toBe("closed-fork");
+			const [headerLine] = getOrThrow(
+				await fileSystem.readTextLines(fork.metadata.path, { maxLines: 1 }, BACKGROUND_CONTEXT),
+			);
+			if (headerLine === undefined) throw new Error("Fork header was not written");
+			expect(JSON.parse(headerLine)).toMatchObject({
+				v: 4,
+				kind: "header",
+				id: "closed-fork",
+				storageVersion: JSONL_STORAGE_VERSION,
+				parentSessionId: "legacy",
+			});
+			await expectForkedState(fork);
+
+			await fork.close(BACKGROUND_CONTEXT);
+			const destinationStorage = await JsonlStorage.open(
+				{ fileSystem, path: fork.metadata.path, now: () => NOW },
+				BACKGROUND_CONTEXT,
+			);
+			expect(await destinationStorage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual([]);
+			await destinationStorage.close(BACKGROUND_CONTEXT);
+			expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
+		});
+
+		it("forks an already-open source without converting or renormalizing it", async () => {
+			const { path, content, metadata } = await writeForkFixture();
+			const source = await repo.open(metadata, BACKGROUND_CONTEXT);
+			const sourceEntries = await source.findEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+			const sourceStats = await source.getStats(BACKGROUND_CONTEXT);
+
+			const fork = await repo.fork(metadata, { id: "open-fork" }, BACKGROUND_CONTEXT);
+			const forkEntries = await expectForkedState(fork);
+
+			expect(fork.metadata.id).toBe("open-fork");
+			expect(forkEntries).toEqual(sourceEntries);
+			expect(sourceStats.usage).toEqual(usage);
+			expect(await source.getStats(BACKGROUND_CONTEXT)).toEqual(sourceStats);
+			expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
+			await Promise.all([source.close(BACKGROUND_CONTEXT), fork.close(BACKGROUND_CONTEXT)]);
+			expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
+		});
+	});
+
 	it("opens an empty legacy session with an idle unconfigured main lane", async () => {
 		await writeLegacyV3Fixture([]);
 		const [metadata] = await repo.list({ cwd: "/workspace" }, BACKGROUND_CONTEXT);

@@ -13,6 +13,13 @@ concurrency:
 jobs:
   build-check-test:
     runs-on: ubuntu-latest
+    # Phase 33 added three spawned-process/browser suites on top of Phase 32's.
+    # A hung spawn is the failure mode this job is most exposed to, so the job
+    # is bounded here rather than left on the 6h default. Measured wall time on
+    # a 14-core dev box: ~52s for the serial spawned-process group, ~107s for
+    # the concurrent scripts group, minutes for build+check. 60 is roomy on a
+    # 4-vCPU runner and still fails fast when something wedges.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,10 +53,36 @@ jobs:
       # runs as part of `bun run test`. playwright-core ships no browser of its
       # own, so Chromium is installed explicitly here — without this step the
       # browser tests fail loudly rather than silently skipping.
+      #
+      # Three suites now depend on this step, not one:
+      #   scripts/browser-harness.test.mjs          (R32-FLEET.12)
+      #   scripts/geist-console-bundle.e2e.test.mjs (R32-FLEET.12)
+      #   scripts/geist-reach-browser.e2e.test.mjs  (R33-REACH.4/.9/.10, mobile-emulated)
+      # All three are in the `test:scripts:serial` group, which runs them one
+      # file at a time so only one Chromium is alive at a time.
       - name: Install Chromium for the browser harness
         run: bunx playwright-core install --with-deps chromium
 
+      # CI runs the ROOT script verbatim — not a hand-picked subset — so there is
+      # exactly one definition of "the Phase 33 suite" and CI cannot drift from
+      # what a developer gets locally. The run budget lives in package.json:
+      # `test:scripts` runs the fast suites at node's default file concurrency,
+      # `test:scripts:serial` runs the spawned-process/browser suites with
+      # --test-concurrency=1, and both declare --test-timeout so a wedged spawn
+      # fails instead of eating the job. scripts/root-test-script-parity.test.mjs
+      # fails if any suite under scripts/ is left out of that chain.
+      #
+      # KNOWN RED, DELIBERATELY: packages/gateway's
+      # "the pinned identity-header contract > is a real capture, not the
+      # placeholder this repo ships" fails until a human captures the real
+      # tailnet identity header from a live tailnet. Nothing in CI can clear it
+      # and nothing in CI should hide it. It is cleared by running, on a machine
+      # joined to the tailnet:
+      #   node scripts/geist-tailscale-serve.mjs --capture-identity --peer NODE \
+      #     --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json
+      # Do not skip, exclude or continue-on-error this step to go green.
       - name: Test
+        timeout-minutes: 40
         run: bun run test
 
   go:

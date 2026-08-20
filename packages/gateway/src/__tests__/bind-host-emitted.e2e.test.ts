@@ -22,10 +22,10 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
+import { describeListeners, type Listener, watchListeners } from "./helpers/listening-sockets";
 
 const GATEWAY_SRC = join(import.meta.dir, "..");
 const CLI = join(GATEWAY_SRC, "cli.ts");
@@ -69,19 +69,29 @@ function externalIPv4(): string | null {
 }
 
 /**
- * The listening TCP sockets the kernel attributes to `pid`.
+ * Watch `pid`'s listening sockets for as long as `body` runs, and hand back every
+ * distinct one the kernel showed.
  *
- * `lsof` exits 1 with no output when a process has none, so a non-zero status is
- * not treated as a failure — an empty list is the answer we want to be able to
- * assert.
+ * Enumeration lives in `helpers/listening-sockets.ts`, which throws rather than
+ * returning an empty list when it cannot see the process at all — the Phase 32
+ * residual was a single `lsof` sample that read its own unavailability as "this
+ * daemon is listening on nothing". The rejection is settled into a value here
+ * because the watcher can fail while `body` is still running.
  */
-function listeningSockets(pid: number): string[] {
-	const out = spawnSync("lsof", ["-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN"], { encoding: "utf-8" });
-	return (out.stdout ?? "")
-		.split("\n")
-		.slice(1)
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0);
+async function listenersDuring(pid: number, body: () => Promise<void>): Promise<Listener[]> {
+	const controller = new AbortController();
+	const watching = watchListeners(pid, { intervalMs: 25, signal: controller.signal }).then(
+		(listeners) => ({ listeners, error: undefined as unknown }),
+		(error: unknown) => ({ listeners: undefined, error }),
+	);
+	try {
+		await body();
+	} finally {
+		controller.abort();
+	}
+	const settled = await watching;
+	if (settled.listeners === undefined) throw settled.error;
+	return settled.listeners;
 }
 
 /** Write a script into a temp dir and spawn it with `bun`, capturing both pipes. */
@@ -178,16 +188,28 @@ describe("the config-file site — a spawned daemon, host only from gateway.conf
 		}) as Bun.Subprocess<"ignore", "ignore", "pipe">;
 		children.push(proc);
 
-		const deadline = Date.now() + 20_000;
 		let health: Response | undefined;
-		while (Date.now() < deadline && !health) {
-			try {
-				health = await fetch(`http://127.0.0.1:${port}/health`);
-			} catch {
+		const observed = await listenersDuring(proc.pid as number, async () => {
+			const deadline = Date.now() + 20_000;
+			while (Date.now() < deadline && !health) {
+				try {
+					health = await fetch(`http://127.0.0.1:${port}/health`);
+				} catch {
+					await Bun.sleep(50);
+				}
+			}
+			// Keep watching past the first successful request: a daemon that binds
+			// loopback and widens a moment later would pass a one-shot sample.
+			for (let i = 0; i < 4; i++) {
+				expect((await fetch(`http://127.0.0.1:${port}/health`)).status).toBe(200);
 				await Bun.sleep(50);
 			}
-		}
+		});
 		expect(health?.status).toBe(200);
+
+		// The acceptance clause in full: 127.0.0.1 for the whole run, and nothing
+		// else — including nothing that only appeared after the daemon warmed up.
+		expect(describeListeners(observed)).toBe(`127.0.0.1:${port}`);
 	}, 30_000);
 });
 
@@ -229,17 +251,20 @@ describe("the programmatic site — a separate process that imports the shipped 
 			await Bun.sleep(15000);
 		`);
 
-		const result = await firstJsonLine<Record<string, string>>(proc);
-		for (const [site, message] of Object.entries(result)) {
+		// The refusal happened before any listener existed, and no listener appears
+		// later either — asserted on the kernel's view of the process for the whole
+		// run, not on the return value of the call and not at one sampled instant.
+		let result: Record<string, string> | undefined;
+		const observed = await listenersDuring(proc.pid as number, async () => {
+			result = await firstJsonLine<Record<string, string>>(proc);
+			await Bun.sleep(200);
+		});
+
+		for (const [site, message] of Object.entries(result ?? {})) {
 			expect({ site, refused: message.includes(REFUSAL) }).toEqual({ site, refused: true });
 		}
-
-		// The refusal happened before any listener existed — asserted on the
-		// kernel's view of the process, not on the return value of the call.
-		expect({ pid: proc.pid, listeners: listeningSockets(proc.pid as number) }).toEqual({
-			pid: proc.pid,
-			listeners: [],
-		});
+		expect(Object.keys(result ?? {})).toEqual(["createServer", "startGateway", "fromSettings"]);
+		expect(describeListeners(observed)).toBe("(none)");
 
 		// And the port really is still free.
 		const after = Bun.serve({ port, hostname: "127.0.0.1", fetch: () => new Response("free") });

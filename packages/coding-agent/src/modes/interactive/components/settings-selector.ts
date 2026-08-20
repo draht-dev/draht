@@ -98,7 +98,6 @@ export interface SettingsCallbacks {
 	onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
 	onTransportChange: (transport: Transport) => void;
 	onHttpIdleTimeoutMsChange: (timeoutMs: number) => void;
-	onThinkingLevelChange: (level: ThinkingLevel) => void;
 	onModelThinkingLevelChange: (provider: string, modelId: string, level: ThinkingLevel) => void;
 	onModelThinkingLevelRemove: (provider: string, modelId: string) => void;
 	onThemeChange: (theme: string) => void;
@@ -572,28 +571,6 @@ export class SettingsSelectorComponent extends Container {
 						(warnings) => {
 							currentWarnings = warnings;
 							callbacks.onWarningsChange(warnings);
-						},
-						() => done(),
-					),
-			},
-			{
-				id: "thinking",
-				label: "Default thinking level",
-				description: `Startup reasoning depth for thinking-capable models. ${cycleThinkingKey} cycles in-session.`,
-				currentValue: config.thinkingLevel,
-				submenu: (currentValue, done) =>
-					new SelectSubmenu(
-						"Default Thinking Level",
-						"Select the reasoning depth to use when starting new sessions",
-						config.availableThinkingLevels.map((level) => ({
-							value: level,
-							label: level,
-							description: THINKING_DESCRIPTIONS[level],
-						})),
-						currentValue,
-						(value) => {
-							callbacks.onThinkingLevelChange(value as ThinkingLevel);
-							done(value);
 						},
 						() => done(),
 					),

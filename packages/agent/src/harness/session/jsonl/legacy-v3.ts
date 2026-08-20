@@ -169,7 +169,6 @@ function parseLegacyV3Entry(line: string, lineNumber: number): LegacyV3Entry {
 		throw new Error(`Invalid legacy v3 JSONL record at line ${lineNumber}: not valid JSON`, { cause: error });
 	}
 	const recordType: unknown = entry.type;
-	// TODO: Support the remaining legacy v3 record types as their normalization slices are implemented.
 	if (
 		recordType !== "message" &&
 		recordType !== "custom" &&

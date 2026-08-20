@@ -4858,6 +4858,7 @@ export class InteractiveMode {
 				{
 					autoCompact: this.session.autoCompactionEnabled,
 					defaultModel,
+					currentModel: this.session.model,
 					availableDefaultModels: this.session.modelRuntime.getAvailableSnapshot(),
 					showImages: this.settingsManager.getShowImages(),
 					imageWidthCells: this.settingsManager.getImageWidthCells(),

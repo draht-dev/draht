@@ -49,6 +49,7 @@ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 export interface SettingsConfig {
 	autoCompact: boolean;
 	defaultModel: string;
+	currentModel?: Model<any>;
 	availableDefaultModels: readonly Model<any>[];
 	showImages: boolean;
 	imageWidthCells: number;
@@ -451,6 +452,7 @@ export class SettingsSelectorComponent extends Container {
 			config.availableDefaultModels.map((model) => [modelSettingKey(model), model]),
 		);
 		const currentDefaultModelKey = defaultModelByValue.has(config.defaultModel) ? config.defaultModel : undefined;
+		const currentModelKey = config.currentModel ? modelSettingKey(config.currentModel) : undefined;
 
 		const items: SettingItem[] = [
 			{
@@ -590,11 +592,11 @@ export class SettingsSelectorComponent extends Container {
 								const sorted = [...config.availableDefaultModels].sort((a, b) => {
 									const aKey = modelSettingKey(a);
 									const bKey = modelSettingKey(b);
+									if (aKey === currentModelKey) return -1;
+									if (bKey === currentModelKey) return 1;
 									if (aKey === currentDefaultModelKey) return -1;
 									if (bKey === currentDefaultModelKey) return 1;
-									const pc = a.provider.localeCompare(b.provider);
-									if (pc !== 0) return pc;
-									return (a.name || a.id).localeCompare(b.name || b.id);
+									return a.provider.localeCompare(b.provider);
 								});
 								const items: SelectItem[] = sorted.map((model) => {
 									const key = modelSettingKey(model);
@@ -614,7 +616,7 @@ export class SettingsSelectorComponent extends Container {
 								}
 								return items;
 							},
-							preselect: () => currentDefaultModelKey,
+							preselect: () => currentModelKey ?? currentDefaultModelKey,
 							searchable: true,
 							layout: MODEL_PICKER_LAYOUT,
 						},

@@ -8,6 +8,10 @@
 - `--no-graph-engine` install flag and `DRAHT_SKIP_GRAPH_ENGINE` env var to skip the automatic fetch
 - portable `cinematic-continuation` skill with bundled style/continuity references, a neutral sequence template, Seedance adapter boundary, and offline timeline compiler
 
+### Fixed
+
+- implementer agent TDD commit prefixes now follow the enforced `red:`/`green:`/`refactor:` convention (previously `test:`/`feat:`, which the gsd-post-task hook's `red:`/`green:` cycle check could never match)
+
 ## [2026.7.12] - 2026-07-12
 
 ### Changed

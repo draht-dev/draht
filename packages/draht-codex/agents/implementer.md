@@ -18,8 +18,8 @@ You are the Implementer agent. Your job is to write code that fulfills the given
 
 When a task includes `<test>`, `<action>`, and `<refactor>` sections, follow the cycle strictly:
 
-1. **RED** — Write the failing tests from `<test>` first. Run them. Confirm they FAIL for the right reason. Commit: `test: <description>`
-2. **GREEN** — Write the minimal implementation from `<action>` to make tests pass. Run tests. Confirm PASS. Commit: `feat: <task name>`
+1. **RED** — Write the failing tests from `<test>` first. Run them. Confirm they FAIL for the right reason. Commit: `red: <description>`
+2. **GREEN** — Write the minimal implementation from `<action>` to make tests pass. Run tests. Confirm PASS. Commit: `green: <task name>`
 3. **REFACTOR** — Apply `<refactor>` improvements if any. Tests must stay green. Commit: `refactor: <description>`
 
 Skip the TDD cycle only for pure config or documentation-only changes with no testable behaviour.

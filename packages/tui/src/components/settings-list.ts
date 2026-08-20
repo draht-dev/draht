@@ -129,7 +129,7 @@ export class SettingsList implements Component {
 		const { startIndex, endIndex } = this.getVisibleRange(displayItems);
 
 		// Calculate max label width for alignment
-		const maxLabelWidth = Math.min(30, Math.max(...this.items.map((item) => visibleWidth(item.label))));
+		const maxLabelWidth = Math.min(36, Math.max(...this.items.map((item) => visibleWidth(item.label))));
 
 		// Render visible items
 		for (let i = startIndex; i < endIndex; i++) {

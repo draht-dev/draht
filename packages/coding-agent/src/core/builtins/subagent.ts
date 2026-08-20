@@ -28,6 +28,7 @@ import {
 	loadRules,
 	type Message as MailboxMessage,
 	MailboxSystem,
+	type MergeResult,
 	PERMISSION_MODES,
 	PermissionGate,
 	type PermissionMode,
@@ -162,6 +163,12 @@ export interface RunResult {
 	stderr: string;
 	usage?: Usage;
 	step?: number;
+	/**
+	 * Outcome of merging the task's worktree branch back. Present only when
+	 * the run opted into worktree isolation, a real worktree existed (git
+	 * repo), and the agent exited 0 so a merge-back was attempted.
+	 */
+	merge?: MergeResult;
 }
 
 function writeTemp(name: string, content: string): { file: string; dir: string } {
@@ -424,8 +431,10 @@ async function runAgentWithLifecycle(
 
 	const result = await runner(effectiveCwd, agent, task, opts.signal, opts.step, opts.onProgress);
 
-	if (worktree) {
-		if (result.exitCode === 0) worktreeIsolator.merge(taskId);
+	// effectiveCwd === cwd means create() fell back to cwd outside a git repo,
+	// where merge(taskId) would fabricate a failure for the unknown taskId.
+	if (worktree && effectiveCwd !== cwd) {
+		if (result.exitCode === 0) result.merge = worktreeIsolator.merge(taskId);
 		worktreeIsolator.cleanup(taskId);
 	}
 
@@ -640,6 +649,23 @@ const Params = Type.Object({
 
 // ─── Rendering helpers ──────────────────────────────────────────────────────
 
+/**
+ * Human-readable recovery notice for a failed worktree merge-back, or
+ * `undefined` when no merge was attempted or it succeeded. The branch name,
+ * the literal `git merge <branch>` command, and the word "resolve-conflicts"
+ * are the contract callers (and tests) rely on.
+ */
+export function describeMergeFailure(result: RunResult): string | undefined {
+	if (!result.merge || result.merge.success) return undefined;
+	const branch = result.merge.branch ?? "agent/<taskId>";
+	const conflicts = result.merge.conflicts?.length ? ` Conflicting paths: ${result.merge.conflicts.join(", ")}.` : "";
+	return (
+		`Worktree merge-back FAILED: the agent's work is committed on the unmerged branch "${branch}" ` +
+		`and is NOT in the working tree.${conflicts} To integrate it, run \`git merge ${branch}\`, ` +
+		`then invoke the resolve-conflicts skill (/resolve-conflicts) to resolve the conflicts and finish the merge.`
+	);
+}
+
 function truncateTask(task: string, maxLen = 120): string {
 	const oneLine = task.replace(/\n/g, " ").trim();
 	return oneLine.length > maxLen ? `${oneLine.slice(0, maxLen)}...` : oneLine;
@@ -775,6 +801,11 @@ export default function (pi: ExtensionAPI) {
 					},
 				});
 
+				const mergeNotices = results
+					.map(describeMergeFailure)
+					.filter((notice): notice is string => notice !== undefined);
+				const noticeBlock = mergeNotices.length > 0 ? `\n\n${mergeNotices.join("\n\n")}` : "";
+
 				const last = results[results.length - 1];
 				if (last.exitCode !== 0) {
 					const failedIndex = results.length - 1;
@@ -782,7 +813,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text" as const,
-								text: `Chain failed at step ${failedIndex + 1} (${params.chain[failedIndex].agent}):\n${last.output || last.stderr}`,
+								text: `Chain failed at step ${failedIndex + 1} (${params.chain[failedIndex].agent}):\n${last.output || last.stderr}${noticeBlock}`,
 							},
 						],
 						isError: true,
@@ -790,7 +821,10 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 				return {
-					content: [{ type: "text" as const, text: last.output || "(no output)" }],
+					content: [{ type: "text" as const, text: `${last.output || "(no output)"}${noticeBlock}` }],
+					// A merge-back failure means a step's work did not land in the
+					// caller's tree, even though every step's agent succeeded.
+					...(mergeNotices.length > 0 ? { isError: true } : {}),
 					details: {},
 				};
 			}
@@ -820,12 +854,24 @@ export default function (pi: ExtensionAPI) {
 					makeOnProgress: (agentName) => makeProgressFn(agentName),
 				});
 
-				const ok = results.filter((r) => r.exitCode === 0).length;
+				const ok = results.filter((r) => r.exitCode === 0 && describeMergeFailure(r) === undefined).length;
 				const summary = results
-					.map((r) => `[${r.agent}] ${r.exitCode === 0 ? "ok" : "fail"} ${r.output.slice(0, 200)}`)
+					.map(
+						(r) =>
+							`[${r.agent}] ${r.exitCode !== 0 ? "fail" : describeMergeFailure(r) ? "merge-failed" : "ok"} ${r.output.slice(0, 200)}`,
+					)
 					.join("\n\n");
+				const notices = results
+					.map(describeMergeFailure)
+					.filter((notice): notice is string => notice !== undefined);
+				const noticeBlock = notices.length > 0 ? `\n\n${notices.join("\n\n")}` : "";
 				return {
-					content: [{ type: "text" as const, text: `Parallel: ${ok}/${results.length} succeeded\n\n${summary}` }],
+					content: [
+						{
+							type: "text" as const,
+							text: `Parallel: ${ok}/${results.length} succeeded\n\n${summary}${noticeBlock}`,
+						},
+					],
 					details: {},
 				};
 			}
@@ -840,9 +886,13 @@ export default function (pi: ExtensionAPI) {
 					worktree,
 					onProgress: makeProgressFn(params.agent),
 				});
-				const isError = result.exitCode !== 0;
+				const mergeNotice = describeMergeFailure(result);
+				// A merge-back failure means the delegated change did NOT land in
+				// the caller's tree — a plain success would mislead the orchestrator.
+				const isError = result.exitCode !== 0 || mergeNotice !== undefined;
+				const baseText = result.output || result.stderr || "(no output)";
 				return {
-					content: [{ type: "text" as const, text: result.output || result.stderr || "(no output)" }],
+					content: [{ type: "text" as const, text: mergeNotice ? `${baseText}\n\n${mergeNotice}` : baseText }],
 					...(isError ? { isError: true } : {}),
 					details: {},
 				};

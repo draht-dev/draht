@@ -1,11 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type AgentConfig,
 	type AgentRunner,
 	createPermissionGateToolCallHandler,
+	describeMergeFailure,
 	multiAgentState,
 	onAgentFsmTransition,
 	type RunResult,
@@ -210,11 +213,62 @@ describe("multi-agent integration: worktree isolation opt-in", () => {
 			return { agent: "worker", task: "isolated task", exitCode: 0, output: "ok", stderr: "" };
 		};
 
-		await runSingleTask(repo.repoPath, makeAgent(), "isolated task", { worktree: true, agentId, runner });
+		const result = await runSingleTask(repo.repoPath, makeAgent(), "isolated task", {
+			worktree: true,
+			agentId,
+			runner,
+		});
 
 		expect(observedCwd).toBe(join(repo.repoPath, WORKTREE_DIR_NAME, agentId));
 		// Merged back and cleaned up on success: the worktree directory no longer exists.
 		expect(existsSync(observedCwd)).toBe(false);
+		expect(result.merge?.success).toBe(true);
+		expect(result.merge?.branch).toBe(`agent/${agentId}`);
+	});
+
+	it("surfaces a failed merge-back with branch name and conflicts on the RunResult", async () => {
+		const agentId = `wt-conflict-${randomUUID()}`;
+		const runner: AgentRunner = async (cwd) => {
+			// Diverge the base branch after the worktree was created...
+			writeFileSync(join(repo.repoPath, "README.md"), "main change\n", "utf-8");
+			execFileSync("git", ["add", "README.md"], { cwd: repo.repoPath });
+			execFileSync("git", ["commit", "-m", "main: change readme"], { cwd: repo.repoPath });
+			// ...and make a conflicting edit in the worktree.
+			writeFileSync(join(cwd, "README.md"), "agent change\n", "utf-8");
+			return { agent: "worker", task: "conflicting task", exitCode: 0, output: "ok", stderr: "" };
+		};
+
+		const result = await runSingleTask(repo.repoPath, makeAgent(), "conflicting task", {
+			worktree: true,
+			agentId,
+			runner,
+		});
+
+		expect(result.merge?.success).toBe(false);
+		expect(result.merge?.branch).toBe(`agent/${agentId}`);
+		expect(result.merge?.conflicts).toContain("README.md");
+		// The agent's work survives cleanup on its unmerged branch...
+		expect(() =>
+			execFileSync("git", ["rev-parse", "--verify", `agent/${agentId}`], { cwd: repo.repoPath }),
+		).not.toThrow();
+		// ...and the base tree is left clean (merge was aborted).
+		expect(readFileSync(join(repo.repoPath, "README.md"), "utf-8")).toBe("main change\n");
+	});
+
+	it("does not report a merge outcome when cwd is not a git repo", async () => {
+		const plainDir = mkdtempSync(join(tmpdir(), "subagent-non-git-"));
+		try {
+			const { runner } = makeFakeRunner();
+			const result = await runSingleTask(plainDir, makeAgent(), "no repo here", {
+				worktree: true,
+				agentId: `wt-plain-${randomUUID()}`,
+				runner,
+			});
+
+			expect(result.merge).toBeUndefined();
+		} finally {
+			rmSync(plainDir, { recursive: true, force: true });
+		}
 	});
 
 	it("runs directly in cwd (no isolation) when worktree is not opted in", async () => {
@@ -227,6 +281,30 @@ describe("multi-agent integration: worktree isolation opt-in", () => {
 		await runSingleTask(repo.repoPath, makeAgent(), "not isolated", { runner });
 
 		expect(observedCwd).toBe(repo.repoPath);
+	});
+});
+
+describe("describeMergeFailure", () => {
+	const base: RunResult = { agent: "worker", task: "t", exitCode: 0, output: "ok", stderr: "" };
+
+	it("returns undefined when no merge was attempted", () => {
+		expect(describeMergeFailure(base)).toBeUndefined();
+	});
+
+	it("returns undefined when the merge-back succeeded", () => {
+		expect(describeMergeFailure({ ...base, merge: { success: true, branch: "agent/x" } })).toBeUndefined();
+	});
+
+	it("names the branch, the recovery command, and the resolve-conflicts skill on failure", () => {
+		const notice = describeMergeFailure({
+			...base,
+			merge: { success: false, branch: "agent/x", conflicts: ["a.txt"] },
+		});
+
+		expect(notice).toContain("agent/x");
+		expect(notice).toContain("git merge agent/x");
+		expect(notice).toContain("resolve-conflicts");
+		expect(notice).toContain("a.txt");
 	});
 });
 

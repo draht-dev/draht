@@ -8,11 +8,15 @@
 - `--no-graph-engine` install flag and `DRAHT_SKIP_GRAPH_ENGINE` env var to skip the automatic fetch
 - portable `cinematic-continuation` skill with bundled style/continuity references, a neutral sequence template, Seedance adapter boundary, and offline timeline compiler
 - `/grill` command for whole-frontier interrogation of any subject
+- `/resolve-conflicts` command: resolve an in-progress git merge, rebase, or cherry-pick by reconstructing both sides' intent — never by picking a side blind
 
 ### Changed
 
 - pruned the boilerplate Atomic Reasoning section from all generated command templates; commands keep only command-specific reasoning plus a one-line pointer to the `atomic-reasoning` skill (already shipped in this plugin's skills/)
 - frontier-rounds questioning protocol in the brainstorming skill and the discuss-phase/new-project/init-project commands
+- `/fix` Phase 1 now gates on a red-capable reproduction loop (one named command, already run, invocation and output shown, asserting the exact symptom) and Phase 3 tests 3-5 ranked falsifiable hypotheses instead of a single one; the `debugger` agent and the debugging-workflow skill carry the same reproduction-first brief and reproduction ladder
+- `/verify-work` fix plans now hold their reproducing tests to the same red-capable standard as `/fix` Phase 1
+- comment discipline enforced across the implementer and reviewer agents, the execute-phase/fix/quick/review commands, and the tdd-workflow skill: comments only for constraints the code cannot express
 
 ### Fixed
 

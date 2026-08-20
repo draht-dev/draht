@@ -9,16 +9,22 @@
 - working-tree checkpoints: every turn snapshots the tree into `refs/draht/checkpoints/<session>/<entry>` via a temporary index, so the user's index, `HEAD`, stash and reflog are never touched and no `git stash` is used; identical trees dedup, metadata lands in a `<session-file>.checkpoints.jsonl` sidecar that survives `/fork` and `/clone`, non-git directories degrade to a one-time notice, and `draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]` applies the `checkpoints.*` retention policy
 - duet mode for shared-session model turn-taking and lead/teammate triage with parallel read-only delegation
 - `/grill` command: subject-agnostic whole-frontier interrogation (numbered question rounds with recommended answers, non-blocking fact-finding subagents, output form — spec, tickets, decision record, or notes — chosen at the end)
+- `/resolve-conflicts` command: resolve an in-progress git merge, rebase, or cherry-pick by reconstructing both sides' intent — never by picking a side blind; also the designated recovery path for failed subagent worktree merge-backs
+- `spec-reviewer` builtin agent — six commands (`/execute-phase`, `/orchestrate`, `/orchestrate-loop`, `/quick`, `/review`, `/verify-work`) dispatch it, but it previously shipped only in the plugin packages; unknown agents hard-fail in the subagent tool, so `/execute-phase` Stage 2 was broken out of the box
 - bundled `draht-tools.cjs` now dispatches `map-graph`/`graph-*`/`map-codebase` to a prebuilt Go `draht-graph` binary when one resolves (`~/.draht/bin`, `$DRAHT_GRAPH_BIN`, or `$PATH`; `DRAHT_GRAPH_ENGINE=auto|go|js`), falling back to the existing JS engine otherwise — install the binary via `npx draht-claude install-graph-engine` or `npx draht-codex install-graph-engine`; see `go/README.md`
 
 ### Changed
 
 - pruned the boilerplate Atomic Reasoning section from all command prompts; commands keep only command-specific reasoning plus a one-line pointer to the `atomic-reasoning` skill; deleted outright from `/progress`, `/pause-work`, `/resume-work`
 - `/brainstorm`, `/discuss-phase`, `/new-project`, `/init-project` now question in whole-frontier rounds (all settled-prerequisite questions per round, numbered, with recommended answers; accepted-by-number = decided) instead of 1-2 questions at a time
+- `/fix` Phase 1 now gates on a red-capable reproduction loop: ONE named command, already run at least once, invocation and output shown, asserting the exact symptom — built by working down a ladder from failing test to human-in-the-loop steps; no causal theorising until it exists. Phase 3 generates 3-5 ranked falsifiable hypotheses (the user's diagnosis enters as Hypothesis #0) instead of testing a single one, and Phase 4 sweeps tagged `[DEBUG-*]` instrumentation before done. The `debugger` builtin agent carries the same reproduction-first, ranked-hypotheses operating brief
+- `/verify-work` fix plans now hold their reproducing tests to the same red-capable standard as `/fix` Phase 1 (named command, already run, output shown, asserting the exact failing symptom)
+- the `implementer` and `reviewer` builtin agents and the code-writing command prompts (`/execute-phase`, `/fix`, `/quick`, `/review`) now enforce comment discipline: comments only for constraints the code cannot express; above-norm comment density is a review defect
 
 ### Fixed
 
 - `/fix` Phase 4 now commits the TDD cycle with plain `git commit` (`red:`/`green:`/`refactor:` prefixes); it previously used `draht-tools commit-docs`, which stages only `.planning/` and prefixes the message with `docs:` — so /fix TDD commits contained no source changes and the TDD hooks could never match them
+- subagent worktree merge-back failures are now surfaced instead of silently discarded: `RunResult.merge` carries the merge outcome, single and chain results become errors (`isError`) with a recovery notice naming the unmerged `agent/<taskId>` branch, the literal `git merge` command, and `/resolve-conflicts`; parallel mode reports `merge-failed` per task. Previously a conflicted merge-back stranded the agent's committed work on an unmerged branch behind a success-looking tool result
 
 ### Removed
 

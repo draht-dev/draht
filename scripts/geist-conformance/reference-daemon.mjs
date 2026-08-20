@@ -24,11 +24,32 @@
  * `packages/geist-core` can be a like-for-like swap under
  * `check-geist-boundary.mjs` (R32-FLEET.1).
  *
+ * Since `geist/0.2` it also implements the device-credential exchange
+ * (R33-REACH.5), which is what lets the corpus hold RECORDED `pair_device`,
+ * `authenticate` and `device_credential` goldens rather than authored ones:
+ *
+ *   - `pair_device` spends a single-use bootstrap token and is answered with a
+ *     `device_credential` bound to a device id the daemon assigns. The token is
+ *     invalidated at exchange, so a replay is refused with `not_authenticated`
+ *     on the replaying connection only — the device bound by the first exchange
+ *     keeps its credential and its stream (R33-REACH.7).
+ *   - `authenticate` presents an already-issued credential and is answered with
+ *     a `device_credential` carrying a ROTATED value; the presented one dies at
+ *     that moment, so an observed credential is worth nothing on the next
+ *     connect (R33-REACH.5).
+ *   - nothing about the fleet, and no `attach`, is reachable before the exchange
+ *     completes: `fleet` is sent only after a credential is issued, and an
+ *     `attach` on an unauthenticated connection is refused `not_authenticated`.
+ *
+ * No credential is ever written to stdout, stderr or a URL (R33-REACH.3): it
+ * crosses this wire as a first message and nowhere else.
+ *
  * Readiness is one newline-JSON line on stdout: {"ready":true,"port":N}
  *
- * Usage: bun scripts/geist-conformance/reference-daemon.mjs --socket-dir <dir> --token <bearer>
+ * Usage: bun scripts/geist-conformance/reference-daemon.mjs --socket-dir <dir> --token <bearer> --bootstrap <t1,t2,…>
  */
 
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
@@ -45,6 +66,8 @@ import {
 
 const DAEMON_NAME = "geist-reference-daemon";
 const DAEMON_VERSION = "0.1.0";
+/** How long an issued device credential is good for. Short on purpose. */
+const CREDENTIAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function arg(name, fallback) {
 	const index = process.argv.indexOf(`--${name}`);
@@ -59,6 +82,60 @@ function arg(name, fallback) {
 const socketDir = arg("socket-dir");
 const token = arg("token");
 const limits = DEFAULT_TRANSPORT_LIMITS;
+
+/**
+ * The single-use bootstrap tokens this daemon will honour, spent on first use.
+ * A `Set` rather than a list because "spent" is a deletion: the second `pair_device`
+ * presenting the same bytes finds nothing and is refused.
+ */
+const bootstrapTokens = new Set(
+	arg("bootstrap", "")
+		.split(",")
+		.map((entry) => entry.trim())
+		.filter(Boolean),
+);
+
+/** deviceId → the one credential currently valid for it. Rotated on every issue. */
+const devices = new Map();
+
+/** Constant-time compare, so a wrong credential leaks nothing through timing. */
+function credentialMatches(presented, stored) {
+	const a = Buffer.from(presented, "utf8");
+	const b = Buffer.from(stored, "utf8");
+	return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * The device id is derived from the name the device gave itself, not claimed by
+ * the renderer: a `pair_device` cannot name the device id it wants to become, so it
+ * cannot aim at one another device already holds.
+ */
+function deviceIdFor(name) {
+	const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+	return `device-${slug || "unnamed"}`;
+}
+
+/**
+ * Issue — or rotate — the credential for a device and return the frame that
+ * carries it. The previous value is overwritten here, which is what makes an
+ * observed credential worthless after the next exchange.
+ */
+function issueCredential(deviceId, device) {
+	const issuedAt = new Date();
+	const record = {
+		credential: randomBytes(32).toString("base64url"),
+		name: device?.name ?? devices.get(deviceId)?.name,
+		platform: device?.platform ?? devices.get(deviceId)?.platform,
+	};
+	devices.set(deviceId, record);
+	return {
+		type: "device_credential",
+		deviceId,
+		credential: record.credential,
+		issuedAt: issuedAt.toISOString(),
+		expiresAt: new Date(issuedAt.getTime() + CREDENTIAL_TTL_MS).toISOString(),
+	};
+}
 
 /**
  * Fleet projection straight off the `<id>.sock` + `.lock` contract: pid on line
@@ -153,7 +230,7 @@ const server = Bun.serve({
 			return new Response("unauthorized", { status: 401 });
 		}
 		if (url.pathname !== "/attach") return new Response("not found", { status: 404 });
-		if (bunServer.upgrade(request, { data: { state: { phase: "awaiting_hello", upstream: null, upstreamBuffer: "" } } })) {
+		if (bunServer.upgrade(request, { data: { state: { phase: "awaiting_hello", deviceId: null, upstream: null, upstreamBuffer: "" } } })) {
 			return undefined;
 		}
 		return new Response("expected websocket upgrade", { status: 426 });
@@ -173,9 +250,16 @@ const server = Bun.serve({
 				return;
 			}
 
+			// A device that has gone away between two frames of the same connection
+			// is refused at THIS frame, not merely at its next connect (R33-REACH.6).
+			if (state.deviceId && !devices.has(state.deviceId)) {
+				refuse(ws, "not_authenticated", "this device is no longer authorized");
+				return;
+			}
+
 			switch (frame.type) {
 				case "hello": {
-					state.phase = "ready";
+					state.phase = "awaiting_credential";
 					send(ws, {
 						type: "server_hello",
 						protocol: GEIST_PROTOCOL_FAMILY,
@@ -183,10 +267,51 @@ const server = Bun.serve({
 						server: { name: DAEMON_NAME, version: DAEMON_VERSION },
 						limits,
 					});
+					// No `fleet` yet: nothing about the fleet reaches a socket that has
+					// not completed the device exchange.
+					return;
+				}
+				case "pair_device": {
+					if (state.deviceId) {
+						refuse(ws, "invalid_frame", "this connection has already completed the device exchange");
+						return;
+					}
+					// Spend-on-use. `delete` returning false is both "never issued" and
+					// "already spent" — the replaying connection learns nothing about
+					// which, and the device bound by the first exchange is untouched.
+					if (!bootstrapTokens.delete(frame.bootstrapToken)) {
+						refuse(ws, "not_authenticated", "bootstrap token is not valid");
+						return;
+					}
+					const issued = issueCredential(deviceIdFor(frame.device.name), frame.device);
+					state.deviceId = issued.deviceId;
+					state.phase = "ready";
+					send(ws, issued);
+					send(ws, { type: "fleet", sessions: discoverSessions() });
+					return;
+				}
+				case "authenticate": {
+					if (state.deviceId) {
+						refuse(ws, "invalid_frame", "this connection has already completed the device exchange");
+						return;
+					}
+					const record = devices.get(frame.deviceId);
+					if (!record || !credentialMatches(frame.credential, record.credential)) {
+						refuse(ws, "not_authenticated", "device credential is not valid");
+						return;
+					}
+					const issued = issueCredential(frame.deviceId, record);
+					state.deviceId = issued.deviceId;
+					state.phase = "ready";
+					send(ws, issued);
 					send(ws, { type: "fleet", sessions: discoverSessions() });
 					return;
 				}
 				case "attach": {
+					if (!state.deviceId) {
+						refuse(ws, "not_authenticated", "attach before the device exchange");
+						return;
+					}
 					if (state.upstream) {
 						refuse(ws, "invalid_frame", "this connection is already attached");
 						return;
@@ -196,6 +321,10 @@ const server = Bun.serve({
 				}
 				case "input":
 				case "detach": {
+					if (!state.deviceId) {
+						refuse(ws, "not_authenticated", `${frame.type} before the device exchange`);
+						return;
+					}
 					if (!state.upstream) {
 						refuse(ws, "invalid_frame", `${frame.type} before attach`);
 						return;

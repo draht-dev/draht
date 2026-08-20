@@ -18,6 +18,43 @@ Adding a member:
 Older members' directories stay committed. They are the record of what the wire
 actually was, not scaffolding.
 
+## geist/0.2
+
+The device-credential exchange (R33-REACH.3, R33-REACH.5). Three added message
+types, no changed and no removed ones:
+
+- client → server: `pair_device` (`bootstrapToken`, `device.name`, `device.platform`)
+  and `authenticate` (`deviceId`, `credential`)
+- server → client: `device_credential` (`deviceId`, `credential`, `issuedAt`,
+  `expiresAt`) — the single answer to both
+
+None of the three is relayed. They terminate at the daemon and never reach a
+draht session's Unix socket, so none is in `MIRRORED_FRAMES` and the socket wire
+did not move with this bump.
+
+**What a renderer has to do.** A `0.1` renderer sent `hello` and was attached.
+A `0.2` renderer has one more step, and two behaviours changed around it:
+
+1. `hello` is answered with `server_hello` **and nothing else**. `fleet` no
+   longer follows the handshake — nothing about the fleet reaches a connection
+   that has not completed the exchange.
+2. Send `pair_device` with the single-use bootstrap token from the QR or deep link on a
+   first-ever connect, or `authenticate` with the stored `deviceId` +
+   `credential` on every later one. Either is answered with `device_credential`,
+   then `fleet`.
+3. Persist the `deviceId` and `credential` out of that frame, replacing what was
+   stored: every exchange rotates the credential, so the value just presented is
+   dead the moment the answer arrives. Re-present the new one next time.
+4. `attach`, `input` and `detach` before the exchange are refused with a
+   `not_authenticated` `protocol_error` and the connection is dropped. So is a
+   replayed bootstrap token — spend-on-use — while the device bound by the first
+   exchange keeps its credential and its stream (R33-REACH.7).
+
+No credential appears in a URL, query string or log line; it crosses this wire
+as a message and nowhere else (R33-REACH.3). The corpus normalizes the recorded
+credentials and their `issuedAt`/`expiresAt` instants rather than committing
+real bearer values.
+
 ## geist/0.1
 
 First published member — the Phase 32 attach wire (R32-FLEET.4, R32-FLEET.5).

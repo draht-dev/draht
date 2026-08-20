@@ -11,10 +11,12 @@
  *     runs, and a frame is appended to the transcript at the moment it is
  *     awaited (not at the moment it arrives), so the transcript order is the
  *     recorder's script order rather than a race between clients;
- *   - client ids, the session id and the session's reported cwd are fixed;
- *   - the two values that cannot be fixed — the daemon's real pid and the real
- *     creation timestamps — are normalized against NORMALIZED_FIELDS below and
- *     that substitution is declared in every golden file it touched.
+ *   - client ids, the session id, the session's reported cwd and the bootstrap
+ *     tokens are fixed;
+ *   - the values that cannot be fixed — the daemon's real pid, the real
+ *     creation timestamps, and the randomly generated device credentials with
+ *     their issue/expiry instants — are normalized against NORMALIZED_FIELDS
+ *     below and that substitution is declared in every golden file it touched.
  */
 
 import { spawn } from "node:child_process";
@@ -31,6 +33,18 @@ const SESSION_ID = "conformance";
 /** Reported as the session's cwd. A literal, so no machine path reaches the corpus. */
 const SESSION_CWD = "/geist/conformance";
 const BEARER_TOKEN = "conformance-bearer-token";
+/**
+ * The single-use bootstrap tokens handed to the daemon, one per device the
+ * script pairs plus one that is deliberately spent and then replayed by the
+ * rejection battery. Fixed strings: the recording has to be reproducible, and
+ * these are a reference daemon's, never a real deployment's.
+ */
+const BOOTSTRAP_TOKENS = {
+	a: "conformance-bootstrap-a",
+	b: "conformance-bootstrap-b",
+	c: "conformance-bootstrap-c",
+	d: "conformance-bootstrap-d",
+};
 const READY_TIMEOUT_MS = 20_000;
 const FRAME_TIMEOUT_MS = 10_000;
 
@@ -43,6 +57,16 @@ export const NORMALIZED_FIELDS = {
 	pid: 1,
 	startedAt: "1970-01-01T00:00:00.000Z",
 	createdAt: "1970-01-01T00:00:00.000Z",
+	/**
+	 * Device credentials are random by construction and must stay that way — a
+	 * credential the daemon could hold fixed for a recording would be a
+	 * credential an attacker could predict. They are substituted here rather
+	 * than weakened at the source, which also means no bearer value, not even a
+	 * reference daemon's, is committed to this repository (R33-REACH.3).
+	 */
+	credential: "<normalized-credential>",
+	issuedAt: "1970-01-01T00:00:00.000Z",
+	expiresAt: "1970-01-08T00:00:00.000Z",
 };
 
 function normalize(value) {
@@ -249,6 +273,29 @@ export const REJECTED_FRAMES = [
 		raw: JSON.stringify({ type: "attach", sessionId: SESSION_ID, clientId: "client-x", mode: "read-write" }),
 		expect: "handshake_required",
 	},
+	{
+		// A perfectly valid `attach` that has simply not earned one: the device
+		// exchange never happened on this connection (R33-REACH.5). The frame
+		// decodes, so this is the auth gate refusing it, not the decoder.
+		name: "attach-before-auth",
+		handshake: true,
+		raw: JSON.stringify({ type: "attach", sessionId: SESSION_ID, clientId: "client-x", mode: "read-write" }),
+		expect: "not_authenticated",
+	},
+	{
+		// The bootstrap token client-a already spent in step 2, presented again on
+		// a fresh socket. Single-use means the second presentation buys nothing —
+		// and the recorder asserts immediately afterwards that client-a, bound by
+		// the first exchange, is still streaming (R33-REACH.7).
+		name: "replayed-bootstrap",
+		handshake: true,
+		raw: JSON.stringify({
+			type: "pair_device",
+			bootstrapToken: BOOTSTRAP_TOKENS.a,
+			device: { name: "replay", platform: "linux" },
+		}),
+		expect: "not_authenticated",
+	},
 ];
 
 const HELLO_FRAME = {
@@ -288,6 +335,8 @@ export async function recordCorpus() {
 			socketDir,
 			"--token",
 			BEARER_TOKEN,
+			"--bootstrap",
+			Object.values(BOOTSTRAP_TOKENS).join(","),
 		]);
 		const url = `ws://127.0.0.1:${referenceDaemon.banner.port}/attach`;
 
@@ -298,10 +347,25 @@ export async function recordCorpus() {
 			return client;
 		};
 
-		// 1. Handshake, then the fleet the daemon really discovered on disk.
+		/**
+		 * Handshake, then spend a bootstrap token for a real rotated credential.
+		 * Returns the issued `{ deviceId, credential }` so a later step can
+		 * reconnect with it — the recorder holds the real value in memory and the
+		 * transcript keeps only the normalized substitute.
+		 */
+		const pair = async (client, bootstrapToken, device) => {
+			client.send(HELLO_FRAME);
+			await client.expect("server_hello");
+			client.send({ type: "pair_device", bootstrapToken, device });
+			const issued = await client.expect("device_credential");
+			return { deviceId: issued.deviceId, credential: issued.credential };
+		};
+
+		// 1. Handshake and pair, then the fleet the daemon really discovered on
+		//    disk — which arrives only after the exchange, because nothing about
+		//    the fleet reaches a socket that has not completed it.
 		const a = await connect("client-a");
-		a.send(HELLO_FRAME);
-		await a.expect("server_hello");
+		const deviceA = await pair(a, BOOTSTRAP_TOKENS.a, { name: "conformance-a", platform: "linux" });
 		const fleet = await a.expect("fleet");
 		if (fleet.sessions.length !== 1 || fleet.sessions[0].id !== SESSION_ID) {
 			throw new Error(`fleet did not report the running session: ${JSON.stringify(fleet)}`);
@@ -317,8 +381,7 @@ export async function recordCorpus() {
 
 		// 4. A second attached client — client-a sees it join.
 		const b = await connect("client-b");
-		b.send(HELLO_FRAME);
-		await b.expect("server_hello");
+		await pair(b, BOOTSTRAP_TOKENS.b, { name: "conformance-b", platform: "ios" });
 		await b.expect("fleet");
 		b.send({ type: "attach", sessionId: SESSION_ID, clientId: "client-b", mode: "read-write" });
 		await b.expect("session_metadata");
@@ -331,8 +394,7 @@ export async function recordCorpus() {
 		// 6. A read-only client types and the draht session refuses it — `error`
 		//    is the session's refusal, relayed, not the daemon's.
 		const c = await connect("client-c");
-		c.send(HELLO_FRAME);
-		await c.expect("server_hello");
+		await pair(c, BOOTSTRAP_TOKENS.c, { name: "conformance-c", platform: "android" });
 		await c.expect("fleet");
 		c.send({ type: "attach", sessionId: SESSION_ID, clientId: "client-c", mode: "read-only" });
 		await c.expect("session_metadata");
@@ -344,11 +406,26 @@ export async function recordCorpus() {
 		b.send({ type: "detach", clientId: "client-b" });
 		await a.expect("client_left");
 
+		// 7a. device-a comes back on a fresh socket and authenticates with the
+		//     credential it was issued in step 1. The daemon answers with a
+		//     ROTATED value, so the credential just presented is already dead —
+		//     this is `authenticate` recorded under its real conditions, not
+		//     described (R33-REACH.5).
+		const reconnect = await connect("client-a-reconnect");
+		reconnect.send(HELLO_FRAME);
+		await reconnect.expect("server_hello");
+		reconnect.send({ type: "authenticate", deviceId: deviceA.deviceId, credential: deviceA.credential });
+		const rotated = await reconnect.expect("device_credential");
+		if (rotated.credential === deviceA.credential) {
+			throw new Error("authenticate returned the same credential — it was not rotated");
+		}
+		await reconnect.expect("fleet");
+
 		// 8. An oversized frame: a typed refusal on the offending connection only.
+		//    Refused on size before anything else, so it never reaches the auth gate.
 		const d = await connect("client-d");
 		d.send(HELLO_FRAME);
 		await d.expect("server_hello");
-		await d.expect("fleet");
 		d.sendRaw(
 			JSON.stringify({ type: "input", clientId: "client-d", data: "x".repeat(DEFAULT_TRANSPORT_LIMITS.maxFrameBytes) }),
 		);
@@ -365,8 +442,7 @@ export async function recordCorpus() {
 			const probe = await connect(`probe-${candidate.name}`);
 			if (candidate.handshake) {
 				probe.socket.send(JSON.stringify(HELLO_FRAME));
-				await probe.next(); // server_hello
-				await probe.next(); // fleet
+				await probe.next(); // server_hello — `fleet` follows the device exchange, not the handshake
 			}
 			probe.sendRaw(candidate.raw);
 			const answer = await probe.next();
@@ -382,14 +458,17 @@ export async function recordCorpus() {
 				closed: closed !== null,
 			});
 		}
-		// A refusal must not have disturbed the attached client.
+		// A refusal must not have disturbed the attached client — including the
+		// replayed bootstrap token, which client-a spent: an invalid or replayed
+		// `pair_device` on a second socket leaves the already-bound device alone
+		// (R33-REACH.7).
 		socketDaemon.child.stdin.write(`${JSON.stringify({ cmd: "output", data: "still here\n", stream: "stdout" })}\n`);
 		if ((await a.peekType()) !== "output") throw new Error("client-a's stream did not survive the rejection battery");
 
 		return {
 			protocol: GEIST_PROTOCOL_FAMILY,
 			version: GEIST_PROTOCOL_VERSION,
-			recordedFrom: "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer",
+			recordedFrom: "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
 			normalizedFields: NORMALIZED_FIELDS,
 			transcript: transcript.map((entry, seq) => ({ seq, ...entry })),
 			rejections,

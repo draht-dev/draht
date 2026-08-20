@@ -11,10 +11,15 @@ import { z } from "zod";
  * (`packages/coding-agent/src/core/socket-server/types.ts`).
  *
  * Two directions, deliberately disjoint by type name:
- *   client → server  `hello` `attach` `input` `detach`
- *   server → client  `server_hello` `fleet` `session_metadata` `output`
- *                    `input_echo` `client_joined` `client_left` `error`
- *                    `protocol_error`
+ *   client → server  `hello` `pair_device` `authenticate` `attach` `input` `detach`
+ *   server → client  `server_hello` `device_credential` `fleet`
+ *                    `session_metadata` `output` `input_echo` `client_joined`
+ *                    `client_left` `error` `protocol_error`
+ *
+ * `pair_device`, `authenticate` and `device_credential` are the device-credential
+ * exchange added in `geist/0.2` (R33-REACH.5). They terminate at the daemon:
+ * none of them is relayed to a draht session, so none appears in the mirror
+ * table and the mirror clause is unaffected by them.
  *
  * Six of the server frames and two of the client frames are *relayed*: the
  * bridge forwards them between the renderer and a draht session's Unix socket
@@ -37,7 +42,7 @@ export const GEIST_PROTOCOL_FAMILY = "geist/0.x";
  * to `conformance/MIGRATIONS.md`, and regenerating the conformance corpus
  * (R32-FLEET.5). `check:geist-protocol` fails the build otherwise.
  */
-export const GEIST_PROTOCOL_VERSION = "0.1";
+export const GEIST_PROTOCOL_VERSION = "0.2";
 
 const ProtocolFamilySchema = z.literal(GEIST_PROTOCOL_FAMILY);
 const ProtocolVersionSchema = z.literal(GEIST_PROTOCOL_VERSION);
@@ -122,6 +127,47 @@ export const DetachFrameSchema = z.object({
 });
 export type DetachFrame = z.infer<typeof DetachFrameSchema>;
 
+/**
+ * `pair_device` — the bootstrap half of the device exchange (R33-REACH.5). A renderer
+ * that has never been here before presents the single-use, short-TTL token it
+ * read off the QR or deep link, names itself, and gets back a `device_credential`
+ * bound to a device id the daemon assigns. The token is invalidated at exchange:
+ * a replay is answered with `not_authenticated` on the replaying connection only,
+ * and the device already bound by the first exchange is undisturbed (R33-REACH.7).
+ *
+ * Deliberately NOT relayed. The bootstrap exchange terminates at the daemon and
+ * never reaches a draht session's Unix socket, so this frame is absent from the
+ * mirror table in `scripts/check-geist-protocol.mjs` on purpose.
+ */
+export const PairDeviceFrameSchema = z.object({
+	type: z.literal("pair_device"),
+	/** Single-use, short-TTL. Never carried in a URL, query string or log line (R33-REACH.3). */
+	bootstrapToken: z.string().min(1),
+	/**
+	 * How this device names itself, so `geist devices list|revoke` has something
+	 * a human can recognize (R33-REACH.6). Descriptive only: the daemon assigns
+	 * the device id, a renderer never claims one at pair time.
+	 */
+	device: z.object({ name: z.string().min(1), platform: z.string().min(1) }),
+});
+export type PairDeviceFrame = z.infer<typeof PairDeviceFrameSchema>;
+
+/**
+ * `authenticate` — the reconnect half of the device exchange. An already-paired
+ * renderer presents the credential it was last issued for its device id; the
+ * daemon answers with a `device_credential` carrying a rotated value, so a
+ * credential observed on one connection is dead by the next (R33-REACH.5).
+ * A revoked device is refused here and at its next frame (R33-REACH.6).
+ *
+ * Not relayed, for the same reason as `pair_device`.
+ */
+export const AuthenticateFrameSchema = z.object({
+	type: z.literal("authenticate"),
+	deviceId: z.string().min(1),
+	credential: z.string().min(1),
+});
+export type AuthenticateFrame = z.infer<typeof AuthenticateFrameSchema>;
+
 // ---------------------------------------------------------------------------
 // server → client
 // ---------------------------------------------------------------------------
@@ -135,6 +181,30 @@ export const ServerHelloFrameSchema = z.object({
 	limits: TransportLimitsSchema,
 });
 export type ServerHelloFrame = z.infer<typeof ServerHelloFrameSchema>;
+
+/**
+ * `device_credential` — the daemon's single answer to BOTH `pair_device` and
+ * `authenticate`, carrying the rotated value (R33-REACH.5). One frame for both
+ * so a renderer has one place to persist from: it stores `deviceId` and
+ * `credential` and re-presents them in `authenticate` on the next connect,
+ * whether this is its first exchange or its hundredth.
+ *
+ * The credential is a bearer value. It crosses this wire as a first message and
+ * nowhere else — never a URL, query string, `Referer` or log line (R33-REACH.3)
+ * — and the conformance corpus normalizes it rather than committing one.
+ *
+ * Not relayed: the daemon issues it, the socket wire has never heard of it.
+ */
+export const DeviceCredentialFrameSchema = z.object({
+	type: z.literal("device_credential"),
+	deviceId: z.string().min(1),
+	/** The rotated value. The one this replaces is dead the moment this is sent. */
+	credential: z.string().min(1),
+	issuedAt: z.string().min(1),
+	/** After this instant the daemon refuses the credential and the device re-bootstraps. */
+	expiresAt: z.string().min(1),
+});
+export type DeviceCredentialFrame = z.infer<typeof DeviceCredentialFrameSchema>;
 
 /**
  * One live attachable draht session as the fleet sees it (R32-FLEET.2): the
@@ -231,9 +301,11 @@ export const ProtocolErrorCodeSchema = z.enum([
 	"version_mismatch",
 	/**
 	 * Credentials absent or rejected; raised before any Unix socket is opened.
-	 * Phase 32 refuses on the upgrade request itself (HTTP 401), so this code is
-	 * declared here for the first-message auth that replaces the header in
-	 * Phase 33 (R33-REACH.3) rather than produced by today's daemon.
+	 * The first-message answer to a bad `pair_device` or `authenticate`, to a replayed
+	 * bootstrap token, and to any `attach` on a connection that has not completed
+	 * the exchange (R33-REACH.3, R33-REACH.5). Refusing here drops only the
+	 * offending connection: a device already bound elsewhere is undisturbed
+	 * (R33-REACH.7).
 	 */
 	"not_authenticated",
 	/** `attach` named a session that is not live. */
@@ -263,6 +335,8 @@ export type ProtocolErrorFrame = z.infer<typeof ProtocolErrorFrameSchema>;
 
 export const ClientFrameSchema = z.discriminatedUnion("type", [
 	HelloFrameSchema,
+	PairDeviceFrameSchema,
+	AuthenticateFrameSchema,
 	AttachFrameSchema,
 	InputFrameSchema,
 	DetachFrameSchema,
@@ -271,6 +345,7 @@ export type GeistClientFrame = z.infer<typeof ClientFrameSchema>;
 
 export const ServerFrameSchema = z.discriminatedUnion("type", [
 	ServerHelloFrameSchema,
+	DeviceCredentialFrameSchema,
 	FleetFrameSchema,
 	SessionMetadataFrameSchema,
 	OutputFrameSchema,

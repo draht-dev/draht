@@ -71,7 +71,13 @@ describe("frame unions", () => {
 	});
 
 	test("the Phase 32 attach wire covers the socket wire it relays", () => {
-		expect([...SERVER_FRAME_TYPES].sort()).toEqual(
+		// The relayed set is frozen: these are the frames that cross to a draht
+		// session's Unix socket, and the mirror clause in
+		// `scripts/check-geist-protocol.mjs` checks them against the socket wire.
+		// Phase 33's device-exchange frames are deliberately NOT here — they
+		// terminate at the daemon (R33-REACH.5) — so they are asserted separately
+		// below rather than being quietly folded into the relayed list.
+		expect([...SERVER_FRAME_TYPES].filter((t) => t !== "device_credential").sort()).toEqual(
 			[
 				"client_joined",
 				"client_left",
@@ -84,7 +90,17 @@ describe("frame unions", () => {
 				"session_metadata",
 			].sort(),
 		);
-		expect([...CLIENT_FRAME_TYPES].sort()).toEqual(["attach", "detach", "hello", "input"].sort());
+		expect([...CLIENT_FRAME_TYPES].filter((t) => t !== "pair_device" && t !== "authenticate").sort()).toEqual(
+			["attach", "detach", "hello", "input"].sort(),
+		);
+	});
+
+	test("the geist/0.2 device-exchange frames exist and are not relayed", () => {
+		// If one of these ever needs relaying it must be added to MIRRORED_FRAMES
+		// in `scripts/check-geist-protocol.mjs` deliberately, not by accident.
+		expect([...CLIENT_FRAME_TYPES]).toContain("pair_device");
+		expect([...CLIENT_FRAME_TYPES]).toContain("authenticate");
+		expect([...SERVER_FRAME_TYPES]).toContain("device_credential");
 	});
 });
 

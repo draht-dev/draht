@@ -12,7 +12,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 
 ## What you get
 
-### 16 slash commands
+### 18 slash commands
 
 **Project lifecycle**
 - `/new-project` — greenfield: questioning → domain model → requirements → roadmap
@@ -37,6 +37,8 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/review [scope]` — parallel code review + security audit
 - `/atomic-commit` — analyze diff, split into atomic conventional commits
 - `/orchestrate <task>` — decompose work and dispatch the right mix of specialist subagents
+- `/orchestrate-loop <goal>` — verification-gated loop of fresh worker iterations until a deterministic check passes
+- `/resolve-conflicts` — resolve an in-progress merge/rebase by reconstructing both sides' intent
 
 ### 7 specialist subagents
 

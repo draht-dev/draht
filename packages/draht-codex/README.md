@@ -45,6 +45,8 @@ Ad-hoc:
 - `commands/review.md`
 - `commands/atomic-commit.md`
 - `commands/orchestrate.md`
+- `commands/orchestrate-loop.md`
+- `commands/resolve-conflicts.md`
 
 Use the wrappers for picker-driven invocation, and keep the `commands/*.md` files as the source prompt templates.
 

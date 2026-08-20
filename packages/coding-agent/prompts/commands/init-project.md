@@ -24,7 +24,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
 1. Run `draht-tools init` to check preconditions (git repo, etc.)
 2. Run `draht-tools map-codebase` to build a structural map of the existing code
 3. Analyze the codebase map to understand architecture, tech stack, and conventions
-4. Deep questioning phase (3-7 rounds, 1-2 questions at a time):
+4. Deep questioning phase (3-7 rounds — each round asks the whole frontier: settled-prerequisite questions only, numbered, each with a recommended answer):
    - What is this project? Who uses it?
    - What are the current pain points or goals?
    - What is MVP vs aspirational scope?
@@ -62,7 +62,9 @@ After project initialization, phases are executed one at a time in new sessions:
 Each step runs in its own session (`/new` between steps). Do NOT suggest `/next-milestone` until every phase in the milestone is verified.
 
 ## Rules
-- Ask 1-2 questions at a time, never dump 10 at once
+- Ask the whole frontier per round — numbered, each with a recommended answer; the user replies by number, and accepted-by-number counts as decided
+- Questions that depend on still-open answers wait for a later round
+- Finding facts is your job, never the user's — dispatch a subagent for anything the environment can answer and keep asking the rest of the frontier while it runs
 - Follow threads based on answers
 - Use examples ("Like Stripe Checkout, or custom?")
 - Confirm, don't assume

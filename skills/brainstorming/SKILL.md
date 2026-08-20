@@ -7,6 +7,8 @@ description: Socratic ideation gate before any project work begins. Use when the
 
 The pre-planning gate. Before draht's GSD cycle runs, before code is scaffolded, before /new-project or /init-project, the idea has to be converged on. This skill enforces design-first discipline through dialogue.
 
+For subject-agnostic interrogation that does not presume a project — a spec, raw tickets, an architecture decision, an open discussion — use the `grill` skill; brainstorming stays the project-creation entry and questions with the same whole-frontier protocol.
+
 ## Hear the Problem Beneath the Ask
 
 The user's words describe an artifact; the design must serve a need. They are rarely the same thing.
@@ -20,7 +22,7 @@ The user's words describe an artifact; the design must serve a need. They are ra
 ## The Hard Gate
 
 > Do NOT invoke any planning skill, write any code, scaffold any project, or take any implementation action until you have:
->   1. Asked clarifying questions one at a time
+>   1. Worked the question frontier in rounds until it was empty
 >   2. Proposed 2–3 approaches with trade-offs
 >   3. Presented a structured design and the user has approved it
 >   4. Written the design to `.planning/specs/YYYY-MM-DD-<slug>-design.md`
@@ -41,9 +43,9 @@ If an existing codebase is in play (extending a real project), run `draht-tools 
 
 Use this to ground questions in reality instead of asking things the user has already told you.
 
-### 2. Ask Clarifying Questions — ONE at a time
+### 2. Question in Rounds — Ask the Whole Frontier
 
-Most failed projects come from rushing past ambiguity. Ask **one focused question per message**, not a long list. Wait for the answer, then ask the next.
+Most failed projects come from rushing past ambiguity. Map the open decisions as a design tree — every decision branches into the decisions that hang off it. The **frontier** is every question whose prerequisites are already settled. Each round, ask the WHOLE frontier in one message: numbered, foundational → detailed, each question with a *Recommended:* answer line so the user can accept by number ("1 yes, 2: B, 3 later"). A question accepted by number or answered explicitly is **decided**; a recommendation acted on without confirmation is **assumed** and stays flagged. Questions that depend on still-open answers wait for a later round. Environment facts (files, git history, code structure) are your job, never the user's — dispatch a subagent non-blockingly; only the questions downstream of it wait.
 
 Question categories (sequence from foundational → detailed):
 - **Goal** — who is this for? what changes for them when it ships?
@@ -111,7 +113,8 @@ The spec file becomes input to those commands.
 
 ## Anti-Patterns — STOP
 
-- **Asking multiple questions in one message** — splits the user's attention, lowers answer quality
+- **Dribbling questions one at a time** — a serial interview hides the decision tree and wastes rounds; ask the whole frontier, numbered, with recommended answers
+- **Asking the user for facts you can look up** — filesystem, git history, and code structure are your job; dispatch a subagent and keep the round moving
 - **Pre-deciding before they've answered** — "I'll just assume you mean X" is a failure mode
 - **Skipping the alternatives** — proposing only one approach hides the trade-space
 - **Writing the spec before approval** — the spec records *decisions*, not *proposals*. Get the decision first.
@@ -125,6 +128,8 @@ The spec file becomes input to those commands.
 | "User said 'just build it'" | They'll be unhappier when the wrong thing gets built. Surface the trade-off. |
 | "I already know what they want" | Verify by stating it back and getting confirmation. |
 | "Let's iterate after a first draft" | A first draft in code is more expensive to throw away than a first draft on paper. |
+| "Ten questions at once will overwhelm them" | Numbered questions with recommended answers are skimmable — the user replies "1 yes, 2: B, 3 later". Serial questioning is the slower burden. |
+| "I'll just ask what's in the repo" | Finding facts is your job, never the user's. Dispatch a subagent. |
 
 ## Output
 

@@ -20,9 +20,9 @@ Decompose the work into independently verifiable units before acting; the `atomi
 1. Run `draht-tools phase-info $1` to load phase context
 2. Ground the discussion in current structure: run `draht-tools graph-context <area>` and `draht-tools graph-clusters` on the area being discussed, and cross-check discovered domain terms with `draht-tools graph-query <term>`.
 3. Identify gray areas based on what's being built
-4. Present 1-2 questions at a time about preferences
+4. Present the whole frontier of open decisions in one numbered round — every question whose prerequisites are settled, each with a recommended answer the user can accept by number; defer questions that depend on still-open answers to the next round. Environment facts are your job, never the user's — dispatch a subagent and only hold back the questions downstream of it.
 5. If `.planning/DOMAIN.md` exists, load it and validate discovered terms against the glossary. Add any new domain terms found during discussion.
-6. Record decisions with `draht-tools save-context $1` — label each entry **decided** (the user explicitly chose) or **assumed** (you inferred from context). Assumed entries are flagged for confirmation; a plan built on an unlabeled assumption fails silently later.
+6. Record decisions with `draht-tools save-context $1` — label each entry **decided** (the user explicitly chose) or **assumed** (you inferred from context). An answer accepted by number counts as decided. Assumed entries are flagged for confirmation; a plan built on an unlabeled assumption fails silently later.
 7. Commit: `draht-tools commit-docs "capture phase $1 context"`
 
 ## Workflow

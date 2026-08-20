@@ -22,7 +22,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
 5. Refresh the living map if stale: `draht-tools map-graph --quiet` (guarded — skip if the post-phase hook already refreshed), then `draht-tools graph-clusters --surprising`. Compare clusters / bounded contexts / entry points against the milestone start to surface architectural drift before planning the next milestone
 6. Review `.planning/DOMAIN.md` — is it still accurate? Any terms to add/revise (esp. drift flagged in step 5)?
 7. Review `.planning/TEST-STRATEGY.md` — any updates needed?
-8. Questioning phase (1-2 questions at a time):
+8. Questioning phase (whole frontier per round — numbered, each with a recommended answer):
    - What is the next milestone's goal?
    - What user-visible outcomes must be true by the end?
    - What is in vs out of scope?

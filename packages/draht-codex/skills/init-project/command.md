@@ -22,7 +22,7 @@ Decompose the work into independently verifiable units before acting; the `atomi
 1. Run `draht-tools init` to check preconditions (git repo, etc.)
 2. Run `draht-tools map-codebase` to build a structural map of the existing code, then `draht-tools map-graph` to produce `.planning/codebase/MAP.json` + `GRAPH_REPORT.md` (map-codebase alone does NOT emit MAP.json)
 3. Analyze the codebase map to understand architecture, tech stack, and conventions: read `.planning/codebase/MAP.json` and run `draht-tools graph-hotspots` + `draht-tools graph-clusters` to surface high-traffic and cohesive modules
-4. Deep questioning phase (3-7 rounds, 1-2 questions at a time):
+4. Deep questioning phase (3-7 rounds — each round asks the whole frontier: settled-prerequisite questions only, numbered, each with a recommended answer):
    - What is this project? Who uses it?
    - What are the current pain points or goals?
    - What is MVP vs aspirational scope?
@@ -49,7 +49,9 @@ After project initialization, phases are executed one at a time in fresh session
 ```
 
 ## Rules
-- Ask 1-2 questions at a time, never dump 10 at once
+- Ask the whole frontier per round — numbered, each with a recommended answer; the user replies by number, and accepted-by-number counts as decided
+- Questions that depend on still-open answers wait for a later round
+- Finding facts is your job, never the user's — dispatch a subagent for anything the environment can answer and keep asking the rest of the frontier while it runs
 - When the focus names a solution ("migrate to X"), ask what problem it solves — the existing code may admit a smaller answer
 - Respect what already exists — do not propose rewriting working code
 - Stop when you have: current state, goals, MVP scope, constraints, success criteria

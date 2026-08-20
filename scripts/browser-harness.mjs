@@ -47,6 +47,44 @@ export const VIEWPORTS = {
 };
 
 /**
+ * Context options that make a page a *phone* and not merely a narrow window.
+ *
+ * A 390px viewport alone proves almost nothing a phone acceptance needs: the
+ * page still reports a desktop UA, `navigator.maxTouchPoints` is 0 so every
+ * `(hover: hover)`/`(pointer: coarse)` branch takes the wrong arm, `tap()` is
+ * unavailable because touch is not enabled, and `devicePixelRatio` is 1 so a
+ * layout that only breaks at 2x or 3x is invisible. These four options are what
+ * Chromium's device emulation turns on, and they are separated from
+ * {@link VIEWPORTS} so a caller composes them deliberately:
+ *
+ *   harness.newPage(VIEWPORTS.mobile, { ...MOBILE_CONTEXT, ignoreHTTPSErrors: true })
+ *
+ * **This is Chromium emulation, and emulation is not a device.** It renders with
+ * Blink, not WebKit; it has no real virtual keyboard, no real
+ * `visualViewport` resize, no iOS WKWebView networking, no Safari WS idle
+ * timeout. Whatever this proves is a statement about layout, touch semantics and
+ * the protocol — never about iOS Safari or the Quest browser, whose behavior is
+ * R33-REACH.2's archived class-4 evidence and cannot be obtained here.
+ *
+ * **Why the viewport is not `devices["iPhone 14"]`.** Playwright's descriptor
+ * for that device carries `viewport: { width: 390, height: 664 }` — 844 is the
+ * *screen* height, and 664 is what is left of it under Safari's chrome — and its
+ * `defaultBrowserType` is `"webkit"`. Adopting the descriptor wholesale would
+ * therefore silently move every phone acceptance off the 390x844 target the
+ * roadmap names, and its browser field would be a lie the moment it is read,
+ * because this harness launches Chromium. So the UA below is a real iOS Safari
+ * string (what a served bundle actually has to branch on) while the viewport
+ * stays the caller's — normally {@link VIEWPORTS.mobile}, 390x844.
+ */
+export const MOBILE_CONTEXT = Object.freeze({
+	isMobile: true,
+	hasTouch: true,
+	deviceScaleFactor: 3,
+	userAgent:
+		"Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+});
+
+/**
  * Launch one headless Chromium. Pages are cheap; the browser is not — share one
  * harness across a suite and open a page per test.
  *

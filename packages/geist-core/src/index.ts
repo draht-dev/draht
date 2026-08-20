@@ -1,5 +1,14 @@
-export type { AttachBridgeOptions, RendererConnection } from "./attach/attach-bridge.js";
-export { AttachBridge } from "./attach/attach-bridge.js";
+export type {
+	AttachBridgeOptions,
+	AttachIdentity,
+	AuthorizationRequest,
+	AuthorizationVerdict,
+	DeviceAuthenticator,
+	DeviceAuthResult,
+	PresentedCredential,
+	RendererConnection,
+} from "./attach/attach-bridge.js";
+export { AttachBridge, DEFAULT_AUTH_DEADLINE_MS } from "./attach/attach-bridge.js";
 export {
 	AGENT_DIR_ENV,
 	buildFleetFrame,

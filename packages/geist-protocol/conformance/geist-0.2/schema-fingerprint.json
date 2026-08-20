@@ -60,6 +60,27 @@
 				}
 			}
 		},
+		"AuthenticateFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"credential": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"deviceId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "authenticate"
+				}
+			}
+		},
 		"ClientFrameSchema": {
 			"kind": "discriminatedUnion",
 			"discriminator": "type",
@@ -267,6 +288,39 @@
 				"type": {
 					"kind": "literal",
 					"value": "detach"
+				}
+			}
+		},
+		"DeviceCredentialFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"credential": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"deviceId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"expiresAt": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"issuedAt": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "device_credential"
 				}
 			}
 		},
@@ -570,6 +624,38 @@
 				"type": {
 					"kind": "literal",
 					"value": "output"
+				}
+			}
+		},
+		"PairDeviceFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"bootstrapToken": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"device": {
+					"kind": "object",
+					"fields": {
+						"name": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"platform": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "pair_device"
 				}
 			}
 		},

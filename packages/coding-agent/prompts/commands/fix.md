@@ -91,15 +91,15 @@ If Phase 2 reveals a different root cause, go back to Phase 1.
 ### Phase 4 — Implementation
 
 1. **Write the reproducing test FIRST.** Confirm it FAILS for the right reason.
-   - Commit: `draht-tools commit-docs "red: reproduce <bug>"`
+   - Commit: `git add <test-files> && git commit -m "red: reproduce <bug>"`
 
 2. **Apply the single fix** from Phase 3. No other changes.
    - Failing test now PASSES.
    - Full test suite — no regressions.
-   - Commit: `draht-tools commit-docs "green: fix <bug>"`
+   - Commit: `git add <files> && git commit -m "green: fix <bug>"`
 
 3. **Refactor (optional)** — only if clear improvement, no behaviour change. Tests stay green.
-   - Commit: `draht-tools commit-docs "refactor: <description>"`
+   - Commit: `git add <files> && git commit -m "refactor: <description>"`
 
 4. **Verify the original symptom is gone** — run the user-level reproduction.
 

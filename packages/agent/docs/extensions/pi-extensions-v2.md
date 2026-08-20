@@ -2,7 +2,8 @@
 
 Status: **exploratory**. A working document, not a spec. Records what we learned
 from other harnesses, what we take and reject, and the current shape. Expected to
-change.
+change. `../plugins.md` and `../plugin-reloading.md` supersede its service-dependency,
+reload, and rollback discussion where they conflict.
 
 ---
 

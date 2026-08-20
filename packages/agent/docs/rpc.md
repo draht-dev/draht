@@ -4,10 +4,10 @@
 
 ## Role
 
-`provide()`/`use()` and `spawn()`/`observe()` are the plugin system's hidden RPC. Plugin facets share TypeScript service contracts, while the transport carries only service/member identifiers, strict JSON values, request/subscription correlation, and trace/control metadata. Hosts construct the typed local implementation or facade; TypeScript types and arbitrary objects never cross the wire. All connected hosts are assumed to use exactly matching contracts and protocol behavior; version negotiation and compatibility are deferred.
+`provide()`/`use()` and `provideKeyed().spawn()`/`observe()` are the plugin system's hidden RPC. Plugin facets share TypeScript service contracts, while the transport carries only service/member identifiers, strict JSON values, request/subscription correlation, and trace/control metadata. Hosts construct the typed local implementation or facade; TypeScript types and arbitrary objects never cross the wire. Connected hosts may temporarily run different manifest generations, so their service contracts must remain forward compatible across the supported skew window; version negotiation remains deferred.
 
 ```text
-session/server facet: provide() / spawn()
+session/server facet: provide() / provideKeyed().spawn()
                     ↕ hidden service RPC
 presentation/session facet: use() / observe()
 ```
@@ -20,7 +20,7 @@ Do not serialize `Context`, `AbortSignal`, telemetry objects, callbacks, tools, 
 
 ## Service contracts and typed facades
 
-A remote-service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. `provide()` exposes one singleton implementation; `spawn()` exposes a keyed implementation. A token has one mode in one namespace: mixing singleton and keyed use is an error.
+A remote-service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. `provide()` exposes one singleton implementation. `provideKeyed()` registers one keyed-service owner during facet setup and returns a scoped handle whose later `spawn()` calls expose instances. A token has one mode in one namespace: mixing singleton and keyed use is an error.
 
 The provider must make enough control-plane information available for the host to validate an accessed member as a method, `RemoteState`, or `RemoteEvents`. The consumer must be able to obtain the member name from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. How a disconnected lazy proxy represents an unresolved member, and the exact provider-kind validation exchange, are implementation details.
 
@@ -29,6 +29,21 @@ A local `use()` returns the actual implementation. A remote `use()` returns one 
 Remote methods return promises and accept and return strict JSON apart from their declared `Context`; `void` is a successful response without a result field. A private returned reference is a separately validated control envelope, not a business JSON value. The client removes the context before transport and the receiving host constructs a fresh local context. The contract position is host-controlled and must be consistent; the current examples use one required trailing `Context`. Business absence is JSON `null` or an options object, never transported `undefined`.
 
 Use static assertions and runtime validation. Static checks constrain remote methods and state/event members; runtime boundaries reject unsupported members and non-JSON arguments, results, state, and event values. TypeScript supplies typed facades but does not authenticate a peer or create runtime metadata.
+
+## Dependency ledger
+
+Type erasure does not hide service identity: every service token retains its stable ID at runtime. Facet contexts are created by the host with a non-forgeable owner identity, and their setup-time service methods append to a generation-scoped ledger:
+
+- `provide()` records a singleton provision;
+- `provideKeyed()` records a keyed provision;
+- `use()` records a singleton requirement; and
+- `observe()` records a keyed requirement.
+
+The context or namespace on which the method is called supplies the service scope (`local`, `server`, or `session`). The method supplies the mode. The token supplies the ID. The host therefore needs no reflection over the erased `T` and no handwritten parallel dependency list.
+
+First acquisition or provision is permitted only during facet setup. Later commands, hooks, events, and activation callbacks use setup-acquired singleton facades, observer registrations, or keyed-provider handles. In particular, dynamic keyed instances are spawned through the handle returned by `provideKeyed()`; a late direct `spawn(service, ...)` cannot introduce a previously undeclared provision.
+
+After setup, each host produces a JSON-safe facet plan containing owner, facet kind, requirements, and provisions. Host control combines plans by scope, service ID, and mode to reject missing or duplicate providers and mode mismatches, derive allowlists, and record lifecycle edges. This service graph is distinct from the module loader's source import graph.
 
 ## Namespaces, bindings, and identity
 
@@ -96,7 +111,7 @@ Three cancellation domains remain separate: aborting one RPC invocation; explici
 
 ## Security and lifecycle
 
-Only manifest-allowlisted remote service IDs may be provided or spawned. Local services are never discoverable remotely. Providers validate member kinds and every JSON business value; clients cannot forge control envelopes as ordinary values, choose instance generations, select another session's route, choose server context values, or cancel another client's request.
+Only manifest-allowlisted remote service IDs may be provided or registered as keyed services. Only the owning keyed-provider handle may spawn instances. Local services are never discoverable remotely. Providers validate member kinds and every JSON business value; clients cannot forge control envelopes as ordinary values, choose instance generations, select another session's route, choose server context values, or cancel another client's request.
 
 The server authenticates its connection and authorizes attachment. It reconstructs client identity locally at the service endpoint; ordinary arguments never carry authority. Credentials, prompts, completions, tool data, filesystem contents, and other sensitive values cross only through an explicit presentation-safe contract.
 
@@ -106,7 +121,7 @@ Facet scopes own registrations, spawned instances, subscriptions, observations, 
 
 Test the plugin-facing semantics over loopback and a real framed transport:
 
-- local and remote `use()`, singleton/keyed mode validation, manifest allowlisting, lazy member access, and local services remaining unreachable remotely;
+- setup-time dependency-ledger ownership, rejection of late acquisition, local and remote `use()`, keyed-provider ownership, singleton/keyed mode validation, manifest allowlisting, lazy member access, and local services remaining unreachable remotely;
 - strict JSON boundaries, method context reconstruction, request cancellation isolation, and trace propagation without serializing context values;
 - server/session namespace isolation, authorized attach, selected-session switching, stale-frame rejection, and worker-side per-client request correlation;
 - cold and hydrated `RemoteState`, snapshot/update race freedom, delivery contexts, stale display on reconnect, and clearing on provider switch;

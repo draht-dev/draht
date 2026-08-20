@@ -6,7 +6,7 @@
  * the two plugin packages by hand-editing one and forgetting the other.
  *
  * Source of truth: skills/<name>/SKILL.md (+ skills/<name>/command.md for
- * the 18 command-template skills).
+ * the 19 command-template skills).
  * Consumers:
  *   - packages/draht-claude/commands/<cmd>.md        (claude dialect)
  *   - packages/draht-claude/skills/<name>/SKILL.md    (claude dialect, plain skills only)

@@ -16,7 +16,7 @@ This creates a local Codex marketplace at `~/.draht/codex-marketplace`, installs
 
 The plugin bundles Draht workflow prompt templates under `commands/`. Codex CLI currently does not expose plugin `commands/` files as TUI slash commands, so Claude Code-style syntax such as `/draht:new-project` or `/draht:orchestrate` will not work in Codex.
 
-For Codex, each command prompt is exposed through a thin skill wrapper named after the command. Use `$draht:<command>` or `/skills` and select the wrapper, for example `$draht:new-project`, `$draht:plan-phase`, or `$draht:orchestrate`. The wrapper reads the matching `commands/*.md` file and runs it as the active workflow.
+For Codex, each command prompt is exposed through a thin skill wrapper named after the command. Use `$draht:<command>` or `/skills` and select the wrapper, for example `$draht:new-project`, `$draht:plan-phase`, `$draht:orchestrate`, or `$draht:grill`. The wrapper reads the matching `commands/*.md` file and runs it as the active workflow.
 
 Project lifecycle:
 
@@ -47,6 +47,7 @@ Ad-hoc:
 - `commands/orchestrate.md`
 - `commands/orchestrate-loop.md`
 - `commands/resolve-conflicts.md`
+- `commands/grill.md` - whole-frontier interrogation of any subject; output form chosen at the end
 
 Use the wrappers for picker-driven invocation, and keep the `commands/*.md` files as the source prompt templates.
 

@@ -600,6 +600,7 @@ const requiredCommandPrompts = [
 	"discuss-phase",
 	"execute-phase",
 	"fix",
+	"grill",
 	"init-project",
 	"map-codebase",
 	"new-project",

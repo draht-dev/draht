@@ -106,7 +106,7 @@ export const DISCIPLINE_DIALECT = {
 	],
 };
 
-// ── 18 command templates — line-scoped dialect spans ────────────────────────
+// ── 19 command templates — line-scoped dialect spans ────────────────────────
 // Lines that differ only by the plugin-root token (e.g. every tool-note line
 // in discuss-phase, init-project, next-milestone, pause-work, progress,
 // resume-work) are not listed — PLUGIN_ROOT_TOKEN handles those generically.
@@ -167,6 +167,15 @@ export const COMMAND_DIALECT = {
 			claude:
 				'Once the affected/buggy file is identified, run `draht-tools graph-context <buggy-file>` and `draht-tools graph-callers <buggy-file>` to orient (package, layer, who calls it) — paste the summary into the `debugger` prompt to support its "trace UPWARD" step.',
 			codex: 'Once the affected/buggy file is identified, run `draht-tools graph-context <buggy-file>` and `draht-tools graph-callers <buggy-file>` to orient (package, layer, who calls it) — paste the summary into the Codex subagent prompt to support its "trace UPWARD" step.',
+		},
+	],
+	grill: [
+		{
+			canonical:
+				"> **Tool note**: For environment facts, dispatch the `architect` subagent the way your host runs subagents — read-only fact-finding; never block the current round on it.",
+			claude:
+				'> **Tool note**: For environment facts, use the **Task tool** with `subagent_type: "architect"` — read-only fact-finding; never block the current round on it.',
+			codex: "> **Tool note**: For environment facts, spawn a Codex subagent using the `architect` agent prompt — read-only fact-finding; never block the current round on it.",
 		},
 	],
 	"map-codebase": [
@@ -383,7 +392,7 @@ export const COMMAND_DIALECT = {
 	],
 };
 
-// ── 18 command-wrapper skills (codex-only) — one shared span ────────────────
+// ── 19 command-wrapper skills (codex-only) — one shared span ────────────────
 // Claude never renders these files at all (no wrapper skills on the claude
 // side), so there is no "claude" field: only "codex" is ever read.
 export const WRAPPER_DIALECT = [

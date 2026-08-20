@@ -10,14 +10,14 @@ Draht is a methodology for running agentic coding work through a milestone → p
 ## Two Kinds of Sibling Skills
 
 - **9 discipline skills** — transversal habits that apply regardless of which command is running: `atomic-reasoning`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `gsd-workflow`, `loop-workflow`, `model-tiering`, `tdd-workflow`, `verification-gate`.
-- **18 command skills** — one per stage of the GSD lifecycle, from greenfield questioning through milestone completion: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`.
+- **19 command skills** — one per stage of the GSD lifecycle, from greenfield questioning through milestone completion: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`.
 
 Every skill's frontmatter `name` matches its directory name, so `skills/<name>/` and the name you invoke are always the same string.
 
 ## Repository Layout
 
 - `skills/<name>/SKILL.md` — every skill has one; frontmatter (`name`, `description`) plus instructions.
-- `skills/<name>/command.md` — the 18 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
+- `skills/<name>/command.md` — the 19 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
 - The 9 discipline skills have no `command.md` — their `SKILL.md` is self-contained.
 - This file, `skills/draht/SKILL.md`, is itself a plain skill (no `command.md`) — it is discovered and loaded the same way any discipline skill is.
 
@@ -56,6 +56,7 @@ Command skills and discipline skills are not independent choices — most comman
 | Decomposing a task and dispatching the right mix of specialists | `orchestrate` |
 | Running one goal in a deterministic-check-gated loop until it passes | `orchestrate-loop` |
 | Resolving an in-progress merge/rebase conflict — including a failed `agent/<taskId>` worktree merge-back | `resolve-conflicts` |
+| Stress-testing any subject — an idea, a spec, tickets, a decision — in whole-frontier question rounds | `grill` |
 
 ### Transversal disciplines
 
@@ -77,13 +78,14 @@ A few sibling pairs are easy to reach for incorrectly:
 - `quick` vs `execute-phase` — `quick` is for a task with no roadmap phase behind it; `execute-phase` assumes a phase was already planned by `plan-phase` and has plan files to execute.
 - `orchestrate` vs `orchestrate-loop` — `orchestrate` fans a task out to specialists once; `orchestrate-loop` re-runs one worker against a deterministic check until it passes or a bound is hit.
 - `review` vs `verify-work` — `review` is ad hoc, any time; `verify-work` is the phase-level acceptance gate and additionally checks the diff against the phase's plan files.
+- `grill` vs `brainstorming` — `brainstorming` is the project-creation gate: it ends in a written spec and a handoff to `/new-project` or `/init-project`; `grill` interrogates any subject with no presumed outcome — the artifact (spec, tickets, decision record, notes, or nothing) is chosen only when the frontier is empty.
 
 ## Host Invocation
 
 | Host | How to invoke a draht skill |
 |---|---|
-| Claude Code | `/draht:<command>` slash commands for the 18 command skills (for example `/draht:plan-phase`); the 9 discipline skills load automatically by description match or on request |
-| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 18 command skills; discipline skills load automatically or by name |
+| Claude Code | `/draht:<command>` slash commands for the 19 command skills (for example `/draht:plan-phase`); the 9 discipline skills load automatically by description match or on request |
+| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 19 command skills; discipline skills load automatically or by name |
 | Any Agent-Skills-compatible host | invoke the sibling skill directly by name — every `SKILL.md` in this tree is self-contained and portable |
 | draht CLI (`@draht/coding-agent`) | runs the GSD workflow natively; no skill indirection needed |
 

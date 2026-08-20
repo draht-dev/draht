@@ -8,11 +8,13 @@
 - shipped builtin skill `atomic-reasoning` — the decomposition discipline the slash commands point at instead of restating it
 - working-tree checkpoints: every turn snapshots the tree into `refs/draht/checkpoints/<session>/<entry>` via a temporary index, so the user's index, `HEAD`, stash and reflog are never touched and no `git stash` is used; identical trees dedup, metadata lands in a `<session-file>.checkpoints.jsonl` sidecar that survives `/fork` and `/clone`, non-git directories degrade to a one-time notice, and `draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]` applies the `checkpoints.*` retention policy
 - duet mode for shared-session model turn-taking and lead/teammate triage with parallel read-only delegation
+- `/grill` command: subject-agnostic whole-frontier interrogation (numbered question rounds with recommended answers, non-blocking fact-finding subagents, output form — spec, tickets, decision record, or notes — chosen at the end)
 - bundled `draht-tools.cjs` now dispatches `map-graph`/`graph-*`/`map-codebase` to a prebuilt Go `draht-graph` binary when one resolves (`~/.draht/bin`, `$DRAHT_GRAPH_BIN`, or `$PATH`; `DRAHT_GRAPH_ENGINE=auto|go|js`), falling back to the existing JS engine otherwise — install the binary via `npx draht-claude install-graph-engine` or `npx draht-codex install-graph-engine`; see `go/README.md`
 
 ### Changed
 
 - pruned the boilerplate Atomic Reasoning section from all command prompts; commands keep only command-specific reasoning plus a one-line pointer to the `atomic-reasoning` skill; deleted outright from `/progress`, `/pause-work`, `/resume-work`
+- `/brainstorm`, `/discuss-phase`, `/new-project`, `/init-project` now question in whole-frontier rounds (all settled-prerequisite questions per round, numbered, with recommended answers; accepted-by-number = decided) instead of 1-2 questions at a time
 
 ### Fixed
 

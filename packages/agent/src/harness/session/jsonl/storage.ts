@@ -1,6 +1,7 @@
-import type { Usage } from "@draht/ai";
+import { type Usage, uuidv7 } from "@draht/ai";
 import type { Context } from "../../context.ts";
 import type { FileError, FileSystem, Result } from "../../types.ts";
+import { insertUsage } from "../commit.ts";
 import { type ForkDestinationSnapshot, type ForkSourceSnapshot, forkSnapshotWrites } from "../fork.ts";
 import {
 	type CommittedEntryWrite,
@@ -103,7 +104,13 @@ async function publishFileAtomically(
 	}
 }
 
-type JsonlBacking = { kind: "v4" } | { kind: "v3"; importedUsage: Usage };
+type LegacyV3Backing = {
+	kind: "v3";
+	importedUsage: Usage;
+	baselineWrites: readonly CommittedWrite[];
+};
+
+type JsonlBacking = { kind: "v4" } | LegacyV3Backing;
 
 /** JSONL storage backed by an injected filesystem capability. */
 export class JsonlStorage implements Storage {
@@ -189,16 +196,17 @@ export class JsonlStorage implements Storage {
 		recordLines: readonly string[],
 		context: Context,
 	): Promise<JsonlStorage> {
-		const normalized = normalizeLegacyV3Records(recordLines);
+		const { writes, importedUsage, nextSeq } = normalizeLegacyV3Records(recordLines);
 		const targetHeader = {
 			...(await normalizeLegacyV3Header(options.fileSystem, header, context)),
-			nextSeq: normalized.nextSeq,
+			nextSeq,
 		};
 		const storage = new JsonlStorage(options, targetHeader, {
 			kind: "v3",
-			importedUsage: normalized.importedUsage,
+			importedUsage,
+			baselineWrites: writes,
 		});
-		storage.replayCommitted(normalized.writes);
+		storage.replayCommitted(writes);
 		return storage;
 	}
 
@@ -219,7 +227,7 @@ export class JsonlStorage implements Storage {
 
 	private async applyCommit(writes: Write[], context: Context): Promise<CommitResult> {
 		if (this.backing.kind === "v3" && writes.length !== 0) {
-			throw new Error("Legacy v3 storage is read-only");
+			return this.upgradeLegacyV3ToV4(this.backing, writes, context);
 		}
 		const prepared = this.storageState.prepareCommit(writes, this.now());
 		if (prepared.writes.length !== 0) {
@@ -234,6 +242,46 @@ export class JsonlStorage implements Storage {
 		}
 		this.storageState.applyValidated(prepared.writes);
 		return prepared.result;
+	}
+
+	/** Atomically upgrade legacy v3 backing and preserve the first caller write as a v4 transaction. */
+	private async upgradeLegacyV3ToV4(
+		backing: LegacyV3Backing,
+		callerWrites: Write[],
+		context: Context,
+	): Promise<CommitResult> {
+		const timestamp = this.now();
+		const prepared = this.storageState.prepareCommit(
+			[
+				insertUsage({
+					id: uuidv7(timestamp),
+					usage: backing.importedUsage,
+					adjustment: true,
+					details: { source: "v3-import" },
+				}),
+				...callerWrites,
+			],
+			timestamp,
+		);
+
+		const nextSeq = prepared.result.firstSeq + prepared.writes.length;
+		const upgradedHeader = { ...this.header, nextSeq };
+		const content = `${[
+			JSON.stringify(upgradedHeader),
+			...backing.baselineWrites.map((write) => JSON.stringify(write)),
+			JSON.stringify(prepared.writes),
+		].join("\n")}\n`;
+
+		await publishFileAtomically(this.fileSystem, this.path, content, context);
+
+		this.storageState.applyValidated(prepared.writes);
+		this.backing = { kind: "v4" };
+		// The first sequence belongs to the internal usage adjustment; return only caller-write sequences.
+		return {
+			...prepared.result,
+			firstSeq: prepared.result.firstSeq + 1,
+			seqs: prepared.result.seqs.slice(1),
+		};
 	}
 
 	getEntries(ids: string[], _context: Context): Promise<Map<string, Entry>> {

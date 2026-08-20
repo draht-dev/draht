@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import {
+	JSONL_FORMAT_VERSION,
 	JSONL_STORAGE_VERSION,
 	type JsonlSessionMetadata,
 	JsonlSessionRepo,
@@ -375,6 +376,109 @@ describe("JSONL v3 migration", () => {
 		expect(await storage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual([]);
 		await storage.close(BACKGROUND_CONTEXT);
 		expect(getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))).toBe(content);
+	});
+
+	it("converts to v4 and preserves the first caller transaction with one usage adjustment", async () => {
+		// Seed a v3 session whose embedded usage must become a durable v4 ledger adjustment.
+		const usage = {
+			input: 10,
+			output: 5,
+			cacheRead: 2,
+			cacheWrite: 1,
+			totalTokens: 18,
+			cost: { input: 0.1, output: 0.05, cacheRead: 0.02, cacheWrite: 0.01, total: 0.18 },
+		} satisfies Usage;
+		const message = {
+			role: "assistant",
+			content: [{ type: "text", text: "imported answer" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage,
+			stopReason: "stop",
+			timestamp: NOW + 1_000,
+		} satisfies AgentMessage;
+		const { path } = await writeLegacyV3Fixture([
+			{
+				type: "message",
+				id: "assistant",
+				parentId: null,
+				timestamp: new Date(NOW + 1_000).toISOString(),
+				message,
+			},
+		]);
+		// Capture the normalized read-only view so conversion can be checked for identity and stats stability.
+		const options = { fileSystem, path, now: () => NOW };
+		const storage = await JsonlStorage.open(options, BACKGROUND_CONTEXT);
+		const importedEntries = await storage.scanEntries({ order: "asc" }, BACKGROUND_CONTEXT);
+		const statsBefore = await storage.getStats(BACKGROUND_CONTEXT);
+
+		// The first caller write triggers conversion and must not expose the internal adjustment sequence.
+		const committed = await storage.commit(
+			[storedValues.setValue(storedValues.sessionName, "Converted session")],
+			BACKGROUND_CONTEXT,
+		);
+
+		expect(committed.seqs).toHaveLength(1);
+		expect(committed.firstSeq).toBe(committed.seqs[0]);
+		expect((await storage.getValue(storedValues.sessionName, BACKGROUND_CONTEXT))?.seq).toBe(committed.seqs[0]);
+		const usageRows = await storage.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT);
+		expect(usageRows).toHaveLength(1);
+		const [adjustment] = usageRows;
+		if (adjustment === undefined) throw new Error("Import usage adjustment was not committed");
+		expect(adjustment).toMatchObject({
+			usage,
+			adjustment: true,
+			details: { source: "v3-import" },
+		});
+		expect(adjustment).not.toHaveProperty("entryId");
+		expect(committed.seqs).not.toContain(adjustment.seq);
+		expect(await storage.getStats(BACKGROUND_CONTEXT)).toEqual(statsBefore);
+
+		// Conversion replaces the legacy file and retains the adjustment and caller writes as its first transaction.
+		const convertedLines = getOrThrow(await fileSystem.readTextFile(path, BACKGROUND_CONTEXT))
+			.trimEnd()
+			.split("\n");
+		const headerLine = convertedLines[0];
+		const transactionLine = convertedLines.at(-1);
+		if (headerLine === undefined || transactionLine === undefined) throw new Error("Converted file was not written");
+		expect(JSON.parse(headerLine)).toMatchObject({
+			v: JSONL_FORMAT_VERSION,
+			kind: "header",
+			id: "legacy",
+			storageVersion: JSONL_STORAGE_VERSION,
+			createdAt: NOW,
+			cwd: "/workspace",
+		});
+		expect(JSON.parse(transactionLine)).toEqual([
+			{ kind: "usage", ...adjustment },
+			{
+				kind: "value",
+				op: "set",
+				seq: committed.seqs[0],
+				namespace: storedValues.sessionName.namespace,
+				key: storedValues.sessionName.key,
+				value: "Converted session",
+			},
+		]);
+		await storage.close(BACKGROUND_CONTEXT);
+
+		// Reopening through the ordinary v4 path must recover the complete normalized and newly committed state.
+		const reopened = await JsonlStorage.open(options, BACKGROUND_CONTEXT);
+		expect(await reopened.scanEntries({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual(importedEntries);
+		const [importedEntry] = importedEntries;
+		if (importedEntry === undefined) throw new Error("Legacy message was not imported");
+		expect((await reopened.getValue(storedValues.laneLeaf("main"), BACKGROUND_CONTEXT))?.value).toBe(
+			importedEntry.id,
+		);
+		expect((await reopened.getValue(storedValues.laneState("main"), BACKGROUND_CONTEXT))?.value).toEqual({
+			currentOperationId: null,
+			pendingNextRun: [],
+		});
+		expect((await reopened.getValue(storedValues.sessionName, BACKGROUND_CONTEXT))?.value).toBe("Converted session");
+		expect(await reopened.scanUsage({ order: "asc" }, BACKGROUND_CONTEXT)).toEqual([adjustment]);
+		expect(await reopened.getStats(BACKGROUND_CONTEXT)).toEqual(statsBefore);
+		await reopened.close(BACKGROUND_CONTEXT);
 	});
 
 	describe("discarding legacy configuration changes", () => {

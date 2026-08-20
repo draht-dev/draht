@@ -5131,6 +5131,7 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				(level) => selectLevel(level, true),
+				this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
 			);
 			return { component: selector, focus: selector };
 		});
@@ -5301,6 +5302,8 @@ export class InteractiveMode {
 					this.showError(error instanceof Error ? error.message : String(error));
 				}
 			};
+			const defaultProvider = this.settingsManager.getDefaultProvider();
+			const defaultModel = this.settingsManager.getDefaultModel();
 			const selector = new ModelSelectorComponent(
 				this.ui,
 				this.session.model,
@@ -5313,6 +5316,7 @@ export class InteractiveMode {
 				},
 				initialSearchInput,
 				(model) => selectModel(model, true),
+				defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined,
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});

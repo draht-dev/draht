@@ -13,8 +13,10 @@
  *   • the emitted draht binary (`packages/coding-agent/dist/cli.js`) with
  *     `--attachable` against the in-repo keyless stub provider, so it publishes a
  *     real `<id>.sock` and answers real prompts with real streamed text;
- *   • a gateway on an ephemeral loopback port, serving the bundle at `/ui`
- *     (see {@link DEVICE_HOST} for why it is not the shipped `draht-gateway` bin);
+ *   • the emitted gateway binary — whatever `packages/gateway/package.json`
+ *     names as its `draht-gateway` bin, spawned as that bin, on an ephemeral
+ *     loopback port, serving the bundle at `/ui` and pairing out of the store
+ *     at `GEIST_DEVICES_PATH`;
  *   • `scripts/fixtures/tls-proxy.mjs` in front of it, terminating TLS the way
  *     `tailscale serve` does, so the page is loaded from `https://` and the
  *     socket is a real `wss://` upgrade through a proxy hop;
@@ -37,18 +39,25 @@
  *
  * ## Evidence class
  *
- * Class 3 for the daemon-under-test's *product surface*: the draht session is
- * the emitted binary, the pairing link is a spawned CLI's stdout, the browser
- * speaks the public geist/0.2 protocol over the wire and every assertion below
+ * Class 3, with nothing held back. Every process in the journey is a shipped
+ * entrypoint: the draht session is the emitted `draht` binary, the gateway is
+ * the emitted `draht-gateway` bin (read out of its own `package.json`, not
+ * spelled out here), the pairing link is a spawned CLI's stdout, the browser
+ * speaks the public geist/0.2 protocol over the wire, and every assertion below
  * is a DOM assertion or a `localStorage` read against bytes that crossed TLS.
  *
- * It is **not** class 3 for `draht-gateway` itself, and this file will not
- * pretend otherwise: the shipped bin (`packages/gateway/src/cli.ts`) still
- * constructs no device store and passes no `devices` port to `startGateway`, so
- * it cannot pair a phone at all. {@link DEVICE_HOST} is the same `startGateway`
- * the bin calls, in its own process, plus the ten lines of `DeviceRegistry`
- * adapter the bin still owes. Until that wiring lands, "the emitted gateway
- * binary paired a phone" is a claim no test in this repo can make.
+ * This file used to carve `draht-gateway` out of that claim, because the bin
+ * constructed no device store and passed no `devices` port to `startGateway`
+ * and so could not pair a phone at all; a bespoke ~30-line host stood in for it.
+ * The bin now builds its own `DeviceRegistry` (`createDeviceAuthenticator` in
+ * `packages/gateway/src/cli.ts`) and hands `/attach` a *provider*, consulted per
+ * connection — which is what lets `geist pair` write the store after the daemon
+ * is already up, exactly as it does below. The stand-in is gone, and "the
+ * emitted gateway binary paired a phone" is now a claim this test makes.
+ *
+ * The daemon's isolation is `GEIST_DEVICES_PATH` (and `DRAHT_CODING_AGENT_DIR`
+ * for the socket directory): real flags and real environment variables of the
+ * real bin, so nothing here is a test-only seam and no run touches `~/.draht`.
  *
  * ## Build state this suite depends on
  *
@@ -69,7 +78,7 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import https from "node:https";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -82,6 +91,20 @@ const REPO_ROOT = join(HERE, "..");
 const DRAHT_CLI = join(REPO_ROOT, "packages/coding-agent/dist/cli.js");
 const GEIST_CLI = join(REPO_ROOT, "packages/geist/src/cli.ts");
 const TLS_PROXY = join(HERE, "fixtures/tls-proxy.mjs");
+
+/**
+ * The gateway entrypoint `packages/gateway/package.json` declares as its
+ * `draht-gateway` bin, read from that manifest rather than spelled out here: the
+ * whole point of this suite is that the thing under test is what the package
+ * ships, so a bin that moved must move this spawn with it or fail loudly.
+ */
+const GATEWAY_PACKAGE_DIR = join(REPO_ROOT, "packages/gateway");
+const GATEWAY_BIN = (() => {
+	const manifest = JSON.parse(readFileSync(join(GATEWAY_PACKAGE_DIR, "package.json"), "utf8"));
+	const declared = manifest.bin?.["draht-gateway"];
+	if (!declared) throw new Error("packages/gateway/package.json declares no `draht-gateway` bin");
+	return join(GATEWAY_PACKAGE_DIR, declared);
+})();
 
 /** Where the bundle persists `{deviceId, credential}` (R33-REACH.9). */
 const DEVICE_KEY = "geist.console.device";
@@ -101,49 +124,6 @@ const OPERATOR_TOKEN = "aGVsbG8+d29ybGQ/Cg==";
  * command, not a test-only seam.
  */
 const BOOTSTRAP_TTL_SECONDS = 3600;
-
-/**
- * A gateway with a device store, in its own process.
- *
- * Identical in shape to the one `geist-console-bundle.e2e.test.mjs` uses, with
- * one difference that matters: it mints **no** bootstrap tokens. Every token in
- * this suite comes out of a spawned `geist pair`, through the shared store at
- * `GEIST_DEVICES_PATH`, which is the only way the CLI's real output can be the
- * thing the browser consumes.
- */
-const DEVICE_HOST = `
-import { DeviceRegistry } from ${JSON.stringify(join(REPO_ROOT, "packages/geist-core/src/index.ts"))};
-import { startGateway } from ${JSON.stringify(join(REPO_ROOT, "packages/gateway/src/gateway/server.ts"))};
-
-const [port, socketDir, devicesPath, authToken] = process.argv.slice(2);
-const registry = new DeviceRegistry({ path: devicesPath });
-const CREDENTIAL_TTL_MS = 3_600_000;
-const issue = (deviceId, credential) => ({
-	ok: true,
-	deviceId,
-	credential,
-	issuedAt: new Date().toISOString(),
-	expiresAt: new Date(Date.now() + CREDENTIAL_TTL_MS).toISOString(),
-});
-
-const devices = {
-	pair({ bootstrapToken, device }) {
-		const exchanged = registry.exchange(bootstrapToken, device);
-		if (!exchanged.ok) return { ok: false, reason: exchanged.reason };
-		return issue(exchanged.deviceId, exchanged.credential);
-	},
-	authenticate({ deviceId, credential }) {
-		const verified = registry.verify(deviceId, credential);
-		if (!verified.ok) return { ok: false, reason: verified.outcome };
-		const rotated = registry.rotate(deviceId);
-		if (!rotated.ok) return { ok: false, reason: rotated.reason };
-		return issue(deviceId, rotated.credential);
-	},
-};
-
-const { server } = startGateway({ port: Number(port), host: "127.0.0.1", authToken, socketDir, devices });
-process.stderr.write("draht-gateway listening on " + server.hostname + ":" + server.port + "\\n");
-`;
 
 /**
  * A Unix socket path over ~104 bytes fails to bind with EINVAL, and macOS's
@@ -199,6 +179,30 @@ function freeLoopbackPort() {
 	});
 }
 
+/**
+ * The emitted gateway's own "I am listening" record, or null until it lands.
+ *
+ * `packages/gateway/src/cli.ts` reports its bind through the structured logger
+ * (`startupLogForServer`), one newline-delimited JSON object per record on
+ * stderr — so what is exposed is read out of the shipped binary's operator log
+ * rather than out of a line written for this suite's benefit. Lines that are not
+ * JSON, or are some other record, are skipped rather than thrown on: bun prints
+ * its own diagnostics on the same stream.
+ */
+function listeningRecord(stderr) {
+	for (const line of stderr.split("\n")) {
+		if (!line.startsWith("{")) continue;
+		let record;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (record.message === "draht-gateway listening") return record;
+	}
+	return null;
+}
+
 function sockets(socketDir) {
 	try {
 		return readdirSync(socketDir).filter((entry) => entry.endsWith(".sock"));
@@ -245,7 +249,10 @@ let backendOrigin;
 let proxy = null;
 /** The PEM the fixture generated for itself. */
 let proxyCa;
-/** Where `geist pair` and the gateway meet: one device store, two processes. */
+/**
+ * Where `geist pair` and the emitted gateway meet: one device store, two
+ * shipped processes, both pointed at it by `GEIST_DEVICES_PATH`.
+ */
 let devicesPath;
 let sessionId;
 let sessionCwd;
@@ -509,27 +516,32 @@ before(async () => {
 	);
 	sessionId = socketFile.slice(0, -".sock".length);
 
-	const hostDir = tempDir("grb-host-");
-	const hostFile = join(hostDir, "device-gateway.ts");
-	writeFileSync(hostFile, DEVICE_HOST, "utf8");
-	devicesPath = join(hostDir, "devices.json");
+	devicesPath = join(tempDir("grb-devices-"), "devices.json");
 
 	const gatewayPort = await freeLoopbackPort();
 	daemonStderr = { text: "" };
 	const daemon = track(
-		spawn("bun", [hostFile, String(gatewayPort), socketDir, devicesPath, OPERATOR_TOKEN], {
-			env: { ...process.env, HOME: home, DRAHT_CODING_AGENT_DIR: agentDir },
+		spawn("bun", [GATEWAY_BIN, "--port", String(gatewayPort), "--host", "127.0.0.1", "--auth", OPERATOR_TOKEN], {
+			cwd: REPO_ROOT,
+			env: {
+				...process.env,
+				HOME: home,
+				DRAHT_CODING_AGENT_DIR: agentDir,
+				GEIST_DEVICES_PATH: devicesPath,
+			},
 			stdio: ["ignore", "ignore", "pipe"],
 		}),
 	);
 	collect(daemon.stderr, daemonStderr);
-	await until(
-		() => daemonStderr.text.includes("draht-gateway listening"),
+	const listening = await until(
+		() => listeningRecord(daemonStderr.text),
 		() => `the daemon to report a bound port (stderr: ${daemonStderr.text})`,
 	);
 	// The daemon behind the front end is on loopback, which is the whole reason
-	// there is a front end (GSEC-04 bind half).
-	assert.match(daemonStderr.text, /draht-gateway listening on 127\.0\.0\.1:/, daemonStderr.text);
+	// there is a front end (GSEC-04 bind half). Read out of the bin's own
+	// structured startup record rather than a line this suite asked it to print.
+	assert.equal(listening.host, "127.0.0.1", daemonStderr.text);
+	assert.equal(listening.port, gatewayPort, daemonStderr.text);
 	await waitForServer(`http://127.0.0.1:${gatewayPort}/health`);
 
 	backendOrigin = `http://127.0.0.1:${gatewayPort}`;

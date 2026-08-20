@@ -62,6 +62,24 @@ export type {
 } from "./ledger/sha-ledger.js";
 export { isDirtyOrAhead, ShaLedger, ShaLedgerError } from "./ledger/sha-ledger.js";
 export type {
+	BootstrapToken,
+	DeviceMeta,
+	DeviceRegistryEvent,
+	DeviceRegistryOptions,
+	DeviceSummary,
+	ExchangeResult,
+	RevokeResult,
+	RotateResult,
+	VerifyResult,
+} from "./pairing/device-registry.js";
+export {
+	DEFAULT_BOOTSTRAP_TTL_MS,
+	DEVICE_REGISTRY_PATH_ENV,
+	DeviceRegistry,
+	DeviceRegistryError,
+	resolveDeviceRegistryPath,
+} from "./pairing/device-registry.js";
+export type {
 	PairingAttemptResult,
 	PairingStateOptions,
 	PairingStatus,

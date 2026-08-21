@@ -653,7 +653,13 @@ check(
 
 console.log("\nDual-channel skill byte-copies (root skills/ ↔ shipped builtin)");
 
-const DUAL_CHANNEL_SKILLS = ["atomic-reasoning", "epistemics", "typescript-discipline", "unslop"];
+const DUAL_CHANNEL_SKILLS = [
+	"atomic-reasoning",
+	"blast-radius",
+	"epistemics",
+	"typescript-discipline",
+	"unslop",
+];
 
 function walkSkillFiles(dirAbs, prefix = "") {
 	const files = [];

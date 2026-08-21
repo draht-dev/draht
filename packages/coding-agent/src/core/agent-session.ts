@@ -98,6 +98,7 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { createRelayUIContext, noOpRelayBaseUIContext, type PermissionRelay } from "./permission-relay/index.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
@@ -356,6 +357,7 @@ export class AgentSession {
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
+	private _permissionRelay?: PermissionRelay;
 	private _extensionMode: ExtensionMode = "print";
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
@@ -2278,6 +2280,18 @@ export class AgentSession {
 		return this.settingsManager.getCompactionEnabled();
 	}
 
+	/**
+	 * Install (or remove) the permission relay this session's dialogs are mirrored onto.
+	 *
+	 * Re-applies the extension bindings immediately: the constructor's own apply has already run
+	 * by the time any caller can hand a relay over, so without the re-apply the runner would keep
+	 * an undecorated context until the next reload.
+	 */
+	setPermissionRelay(relay: PermissionRelay | undefined): void {
+		this._permissionRelay = relay;
+		this._applyExtensionBindings(this._extensionRunner);
+	}
+
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
 		if (bindings.uiContext !== undefined) {
 			this._extensionUIContext = bindings.uiContext;
@@ -2356,8 +2370,23 @@ export class AgentSession {
 		return `extension:${name}`;
 	}
 
+	/**
+	 * Wrap the mode's UI context so an attached remote surface can answer the same dialogs.
+	 *
+	 * Returns the base untouched when no relay is installed. When one is, the decorator is built
+	 * here and NOWHERE else: this is the only mode-agnostic seam every session passes through
+	 * (bindExtensions for interactive/rpc/print, _buildRuntime for the constructor and reload),
+	 * so a wrap installed anywhere else is silently overwritten when a mode binds its own context.
+	 */
+	private _wrapUIContext(base: ExtensionUIContext | undefined): ExtensionUIContext | undefined {
+		if (this._permissionRelay === undefined) {
+			return base;
+		}
+		return createRelayUIContext(base ?? noOpRelayBaseUIContext, this._permissionRelay, base !== undefined);
+	}
+
 	private _applyExtensionBindings(runner: ExtensionRunner): void {
-		runner.setUIContext(this._extensionUIContext, this._extensionMode);
+		runner.setUIContext(this._wrapUIContext(this._extensionUIContext), this._extensionMode);
 		runner.bindCommandContext(this._extensionCommandContextActions);
 
 		this._extensionErrorUnsubscriber?.();

@@ -462,7 +462,11 @@ export class ExtensionRunner {
 	}
 
 	hasUI(): boolean {
-		return this.uiContext !== noOpUIContext;
+		// Not an identity check alone: a decorator (e.g. the permission relay) is a different object
+		// than noOpUIContext but may still have nothing that can answer. Asking the context itself
+		// keeps an attachable session with zero attached clients honestly UI-less, so callers keep
+		// their loud fail-closed path instead of receiving a fabricated "denied" answer.
+		return this.uiContext !== noOpUIContext && (this.uiContext.hasAnswerSurface?.() ?? true);
 	}
 
 	getExtensionPaths(): string[] {

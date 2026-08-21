@@ -99,12 +99,60 @@ export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
 // UI Context
 // ============================================================================
 
+/**
+ * Structured detail for a tool permission ask.
+ *
+ * Carried as optional trailing data on {@link ExtensionUIDialogOptions} so that every surface
+ * (TUI, attached client, RPC) renders the same canonical facts instead of a prose summary.
+ * All fields are already-resolved values: `cwd` is a canonical (realpath) directory, and
+ * `options` is the immutable set of choices that were offered for this request.
+ */
+export interface PermissionAskDetail {
+	kind: "tool_permission";
+	/** Id of the tool call this ask gates. */
+	toolCallId: string;
+	/** Name of the tool being gated (e.g. "bash", "write"). */
+	toolName: string;
+	/** Canonical (realpath) working directory the tool call would run in. */
+	cwd: string;
+	/** The command line, for command-shaped tools. */
+	command?: string;
+	/** The target path, for file-shaped tools. */
+	path?: string;
+	/** The operation being performed, when the tool distinguishes several. */
+	operation?: string;
+	/** Why the permission gate stopped this call. */
+	reason: string;
+	/**
+	 * The immutable set of options offered for this request, each stating its OWN semantics.
+	 *
+	 * `decision` is what makes this a permission vocabulary rather than a list of words: it says,
+	 * per option, whether choosing it lets the tool call proceed. Consumers read it; nothing may
+	 * infer an option's meaning from its position in this array, from the array's length, or from
+	 * its id — a vocabulary like `[allow, deny-once, deny-always]` has its denial in the middle and
+	 * two of them, and a positional rule silently turns a human's denial into an approval.
+	 *
+	 * A vocabulary must be non-empty, must carry only the two decision words, and must not repeat
+	 * an id. A consumer that cannot honour those rules must offer NOTHING rather than substitute a
+	 * vocabulary of its own: an empty list is a caller that authorised no option, and a repeated id
+	 * makes array position decide which of two options an answer names.
+	 */
+	options: readonly { id: string; label: string; decision: "approve" | "deny" }[];
+}
+
 /** Options for extension UI dialogs. */
 export interface ExtensionUIDialogOptions {
 	/** AbortSignal to programmatically dismiss the dialog. */
 	signal?: AbortSignal;
 	/** Timeout in milliseconds. Dialog auto-dismisses with live countdown display. */
 	timeout?: number;
+	/**
+	 * Structured detail for a tool permission ask.
+	 *
+	 * Optional and purely additive: third-party extensions implement `ExtensionUIContext`,
+	 * so widening the options object is the only backwards-compatible way to carry it.
+	 */
+	detail?: PermissionAskDetail;
 }
 
 /** Placement for extension widgets. */
@@ -286,6 +334,16 @@ export interface ExtensionUIContext {
 
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
+
+	/**
+	 * True only while some surface can actually answer right now.
+	 *
+	 * Optional: an implementation that omits it is assumed to be able to answer, which keeps
+	 * every existing implementer working unchanged. Implementations that can lose their answering
+	 * surface at runtime (for example a relay whose clients have all disconnected) must evaluate
+	 * this LIVE on every call rather than caching it.
+	 */
+	hasAnswerSurface?(): boolean;
 }
 
 // ============================================================================

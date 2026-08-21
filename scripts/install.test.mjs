@@ -9,6 +9,26 @@ import test from "node:test";
 const ROOT = resolve(import.meta.dirname, "..");
 const INSTALLERS = [join(ROOT, "install.sh"), join(ROOT, "packages", "landing", "public", "install.sh")];
 
+// The gh-absent scenarios (DRAHT_ALLOW_UNVERIFIED opt-out, fails-closed-without-gh)
+// require that no real gh is reachable through the system portion of the pinned
+// PATH — the installers refuse to let the opt-out mask a present gh, so a host
+// gh (e.g. /usr/bin/gh on GitHub Actions runners, which refuses without
+// GH_TOKEN) turns every opt-out install into a provenance failure. Symlink the
+// system tools into one dir, minus gh, so absence is guaranteed on every host.
+const SYSTEM_BIN = (() => {
+	const dir = mkdtempSync(join(tmpdir(), "draht-install-system-bin-"));
+	for (const sys of ["/run/current-system/sw/bin", "/usr/bin", "/bin"]) {
+		if (!existsSync(sys)) continue;
+		for (const entry of readdirSync(sys)) {
+			if (entry === "gh") continue;
+			try {
+				symlinkSync(join(sys, entry), join(dir, entry));
+			} catch {}
+		}
+	}
+	return dir;
+})();
+
 function sha256(bytes) {
 	return createHash("sha256").update(bytes).digest("hex");
 }
@@ -133,7 +153,7 @@ function runInstaller(installer, f, extraEnv = {}) {
 			...process.env,
 			HOME: f.home,
 			SHELL: "/bin/false",
-			PATH: `${f.fakeBin}:/run/current-system/sw/bin:/usr/bin:/bin`,
+			PATH: `${f.fakeBin}:${SYSTEM_BIN}`,
 			DRAHT_VERSION: "1.2.3",
 			DRAHT_BIN: join(f.home, "bin"),
 			DRAHT_DIR: join(f.home, ".draht-runtime"),

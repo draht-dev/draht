@@ -414,6 +414,31 @@ reaches the session — the read-only check at `socket-server.ts:502` is a negat
 over an unvalidated field. Answer authority cannot rest on that field until it is a closed set.
 
 
+**KNOWN GAP, carried out of Phase 34 (2026-08-22).** A `select` or `input` that carries a
+`tool_permission` detail writes a durable audit row with the WRONG decision word. Proven live against the
+emitted binary with a probe extension calling `ctx.ui.select("Pick a lane", [...], {detail})` to gate a
+real bash call: a LOCAL answer records `{decision:"cancelled", chosenOptionId:null}` while the command
+RAN, and a REMOTE answer records `{decision:"approved"}` — the first understates, the second fabricates a
+grant.
+
+`RelayOutcome` already carries the honest `answered` kind; what is missing is a neutral member in the
+wire's `TerminalDecision`, so `terminalDecisionFor` flattens `answered` onto `cancelled`. The earlier
+containment argument — that `appendResolution` only writes for a `tool_permission` detail, which
+`select`/`input` never carry — **is false**: nothing stops an extension attaching one, and the probe did.
+
+Closing it is a protocol revision, not a patch: a neutral member in `TerminalDecision`,
+`socket-server/types.ts`, `PermissionResolutionEntry.decision`, `geist-protocol/src/wire.ts`, its geist
+mirror, `MIRRORED_FRAMES`, the regenerated `geist-0.3` corpus and `MIGRATIONS.md`. It is out of reach of
+any single task's file set, which is why it was deliberately not attempted. **Owner: whoever next opens
+the wire** — Phase 37 changes it for run lanes, and Phase 38 freezes it at 1.0. It must not survive the
+freeze.
+
+Scope, stated honestly: only reachable through a third-party extension today, because draht's own
+permission gate raises a `confirm`. It is under-reporting on the local path and a fabricated grant on the
+remote one, so it is not fail-open for the gate — but it is exactly the class of falsehood Phase 34 spent
+three rounds removing from `confirm`.
+
+
 ## Phase 35: Every Session Is There — Default-On, History, Honest Liveness — `pending`
 **Why here:** this is the phase that makes "just automatically" literally true, and it is deliberately after the wire settles because turning sockets on by default multiplies per-host session state and collides with a known open Phase 42 residual.
 **Goal:** Oskar stops typing `--attachable`. Any draht he starts shows up on the phone; past sessions show up as history, honestly labelled and resumable.

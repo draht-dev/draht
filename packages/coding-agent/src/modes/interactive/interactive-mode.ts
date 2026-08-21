@@ -6577,7 +6577,7 @@ export class InteractiveMode {
 	private async handleShareCommand(): Promise<void> {
 		// Radius artifacts natively support JSONL sessions. Gist fallback keeps the legacy HTML upload.
 		const jsonlFile = path.join(os.tmpdir(), "session.jsonl");
-		const htmlFile = path.join(os.tmpdir(), "session.html");
+		let htmlFile = null;
 
 		try {
 			try {
@@ -6586,10 +6586,21 @@ export class InteractiveMode {
 				this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
 				return;
 			}
-			const radiusResult = await this.tryShareViaRadius(jsonlFile);
-			if (radiusResult !== "radius-unavailable") return;
+			if (await this.tryShareViaRadius(jsonlFile)) return;
 
 			try {
+				const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
+				if (authResult.status !== 0) {
+					this.showError("GitHub CLI is not logged in. Run 'gh auth login' first.");
+					return;
+				}
+			} catch {
+				this.showError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/");
+				return;
+			}
+
+			try {
+				htmlFile = path.join(os.tmpdir(), "session.html");
 				await this.session.exportToHtml(htmlFile, { themeName: theme.name });
 			} catch (error: unknown) {
 				this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -6599,7 +6610,9 @@ export class InteractiveMode {
 		} finally {
 			for (const tmpFile of [jsonlFile, htmlFile]) {
 				try {
-					fs.unlinkSync(tmpFile);
+					if (tmpFile !== null) {
+						fs.unlinkSync(tmpFile);
+					}
 				} catch {
 					// Ignore cleanup errors
 				}
@@ -6607,16 +6620,16 @@ export class InteractiveMode {
 		}
 	}
 
-	private async tryShareViaRadius(tmpFile: string): Promise<"shared" | "radius-unavailable"> {
+	private async tryShareViaRadius(tmpFile: string): Promise<boolean> {
 		const provider = this.session.modelRuntime.getProvider("radius");
-		if (!provider) return "radius-unavailable";
+		if (!provider) return false;
 
 		const gatewayUrl = DEFAULT_RADIUS_GATEWAY;
 
 		const token = getAuthCredential(
 			await this.session.modelRuntime.getAuth("radius", { minOAuthValidityMs: 5 * 60_000 }),
 		);
-		if (!token) return "radius-unavailable";
+		if (!token) return false;
 
 		const loader = new BorderedLoader(this.ui, theme, "Uploading to Radius...");
 		this.editorContainer.clear();
@@ -6643,30 +6656,22 @@ export class InteractiveMode {
 				body,
 				signal: loader.signal,
 			});
-			if (loader.signal.aborted) return "shared";
+			if (loader.signal.aborted) return true;
 			const json = (await response.json().catch(() => null)) as {
-				artifact?: { canonical_url?: string; url?: string; visibility?: string };
+				artifact?: { canonical_url: string };
 				error?: string;
 			} | null;
-			if (loader.signal.aborted) return "shared";
+			if (loader.signal.aborted) return true;
 			this.restoreShareEditor(loader);
 			if (!response.ok || !json?.artifact) {
 				this.showError(
 					`Failed to upload Radius artifact: ${json?.error || response.statusText || response.status}`,
 				);
-				return "shared";
+				return true;
 			}
-			const shareUrl = json.artifact.canonical_url || json.artifact.url;
-			if (!shareUrl) {
-				this.showError("Failed to upload Radius artifact: response did not include a share URL");
-				return "shared";
-			}
-			const artifactId = this.radiusArtifactIdFromUrl(shareUrl);
-			const previewUrl =
-				json.artifact.visibility === "public" && artifactId ? getShareViewerUrl(`radius/${artifactId}`) : shareUrl;
-			const visibilityNote = json.artifact.visibility === "public" ? "" : " (private; sign-in required)";
-			this.showStatus(`Share URL: ${previewUrl}${visibilityNote}\nRadius artifact: ${shareUrl}`);
-			return "shared";
+			const shareUrl = json.artifact.canonical_url;
+			this.showStatus(`Share URL: ${hyperlink(shareUrl, shareUrl)}`);
+			return true;
 		} catch (error: unknown) {
 			if (!loader.signal.aborted) {
 				this.restoreShareEditor(loader);
@@ -6674,23 +6679,11 @@ export class InteractiveMode {
 					`Failed to upload Radius artifact: ${error instanceof Error ? error.message : "Unknown error"}`,
 				);
 			}
-			return "shared";
+			return true;
 		}
 	}
 
 	private async shareViaGist(tmpFile: string): Promise<void> {
-		// Check if gh is available and logged in
-		try {
-			const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
-			if (authResult.status !== 0) {
-				this.showError("GitHub CLI is not logged in. Run 'gh auth login' first.");
-				return;
-			}
-		} catch {
-			this.showError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/");
-			return;
-		}
-
 		// Show cancellable loader, replacing the editor
 		const loader = new BorderedLoader(this.ui, theme, "Creating gist...");
 		this.editorContainer.clear();
@@ -6742,7 +6735,7 @@ export class InteractiveMode {
 
 			// Create the preview URL
 			const previewUrl = getShareViewerUrl(gistId);
-			this.showStatus(`Share URL: ${previewUrl}\nGist: ${gistUrl}`);
+			this.showStatus(`Share URL: ${hyperlink(previewUrl, previewUrl)}\nGist: ${hyperlink(gistUrl, gistUrl)}`);
 		} catch (error: unknown) {
 			if (!loader.signal.aborted) {
 				this.restoreShareEditor(loader);
@@ -6756,16 +6749,6 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
 		this.ui.setFocus(this.editor);
-	}
-
-	private radiusArtifactIdFromUrl(value: string): string | null {
-		try {
-			const url = new URL(value);
-			const match = /^\/artifact\/([^/?#]+)\/?$/iu.exec(url.pathname);
-			return match ? match[1] : null;
-		} catch {
-			return null;
-		}
 	}
 
 	private async handleCopyCommand(options: { flashConfirmation?: boolean } = {}): Promise<void> {

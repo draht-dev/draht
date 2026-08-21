@@ -601,6 +601,20 @@ export async function runChainTasks(
 const PERMISSION_DETAIL_MAX_GRAPHEMES = 512;
 
 /**
+ * Byte budget for the same strings, stated HERE and not left to the default, because this is the
+ * producer whose output has to fit a frame: one grapheme cluster admits unboundedly many combining
+ * marks, so 512 clusters of Zalgo weighed 383,246 bytes until this bound existed — accepted by the
+ * schema, then refused by the attach bridge, which closed the renderer's socket with 1008.
+ *
+ * 512 × 4 bytes: four is the widest a single code point is in UTF-8, so every ordinary cluster
+ * survives untouched. A `tool_permission` detail carries FIVE such fields — `toolCallId`,
+ * `toolName`, `cwd`, `reason`, and exactly one of `command` / `path` / `operation` — so at maximum
+ * it is 5 × 2048 = 10,240 bytes of free text plus a fixed option pair and a handful of keys: ~10 KiB
+ * against the 64 KiB `maxFrameBytes` a permission frame must fit into, which is never split.
+ */
+const PERMISSION_DETAIL_MAX_BYTES = 512 * 4;
+
+/**
  * The vocabulary this phase offers for a tool permission ask.
  *
  * Frozen and shared: the same object identity is handed to every surface, so no renderer can
@@ -612,9 +626,9 @@ const TOOL_PERMISSION_OPTIONS: readonly { id: string; label: string; decision: "
 	Object.freeze({ id: "deny", label: "No", decision: "deny" as const }),
 ]);
 
-/** Neutralize-and-bound a single wire-bound string, keeping only the safe value. */
+/** Neutralize-and-bound a single wire-bound string — in clusters AND bytes — keeping only the safe value. */
 function safeField(raw: string): string {
-	return boundedSafeText(raw, PERMISSION_DETAIL_MAX_GRAPHEMES).value;
+	return boundedSafeText(raw, PERMISSION_DETAIL_MAX_GRAPHEMES, PERMISSION_DETAIL_MAX_BYTES).value;
 }
 
 /**

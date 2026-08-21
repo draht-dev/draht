@@ -61,9 +61,33 @@ export function describeSchema(schema) {
 
 function describeChecks(checks) {
 	if (!checks) return [];
-	return checks
-		.map((check) => (check.value === undefined ? check.kind : `${check.kind}:${check.value}`))
-		.sort();
+	return checks.map(describeCheck).sort();
+}
+
+/**
+ * One check, as a string that carries everything the check ENFORCES.
+ *
+ * Most checks put their value in `check.value` (`min:1`, `max:4000`). A regex check does not: its
+ * value is the pattern, and `check.value` is `undefined`, so recording `check.kind` alone reduced
+ * every regex check to the bare word `regex`. That is not a cosmetic loss — the wire's `safeText`
+ * fields fold BOTH their neutralization table and their length bound into one regex check, so nine
+ * descriptors that read `max:200` / `max:4000` / `max:1024` / `max:128` collapsed into an identical
+ * `regex`, and the version gate could no longer tell `toolName` from `message`, nor notice a
+ * neutralization range being deleted.
+ *
+ * So a regex is described by its source, its flags, and any own enumerable property it carries: a
+ * `RegExp` subclass whose `test` is parameterized (the wire's grapheme bound is one) hides its bound
+ * nowhere else, and a plain `RegExp` has no such properties, so this costs nothing anywhere else.
+ */
+function describeCheck(check) {
+	if (check.kind === "regex" && check.regex instanceof RegExp) {
+		const parameters = Object.keys(check.regex)
+			.sort()
+			.map((key) => ` ${key}=${JSON.stringify(check.regex[key])}`)
+			.join("");
+		return `regex:/${check.regex.source}/${check.regex.flags}${parameters}`;
+	}
+	return check.value === undefined ? check.kind : `${check.kind}:${check.value}`;
 }
 
 /** True when the value is a zod schema rather than a constant or a function. */

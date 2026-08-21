@@ -757,9 +757,13 @@ export class AttachBridge {
 	#fit(frame: GeistServerFrame): GeistServerFrame[] {
 		const cap = this.#limits.maxFrameBytes;
 		if (frame.type !== "output" || Buffer.byteLength(encodeFrame(frame)) <= cap) {
-			// A permission ask is small BY CONSTRUCTION — every free-text field of
-			// `permission_request` carries a `.max()` bound in the wire schema, and
-			// the sum of them is an order of magnitude under this cap. If one ever is
+			// A permission ask is small BY CONSTRUCTION — every free-text field is built
+			// through `boundedSafeText`, which bounds graphemes AND UTF-8 bytes, and the
+			// sum of those bounds is well under this cap (the arithmetic is written out
+			// over MAX_FIELD_BYTES in coding-agent's `safe-text.ts`). Note the bound is
+			// enforced at CONSTRUCTION, not by a `.max()` in the wire schema: `safeText`
+			// there is a single grapheme-counting regex check, because a code-unit
+			// `.max()` refused strings the producer considered valid. If a frame ever is
 			// not, it is REFUSED rather than split: half an ask is a dialog showing
 			// half a command with an Approve button under it, which is worse than no
 			// dialog at all. The refusal drops only this connection.

@@ -359,6 +359,9 @@ export type ProtocolErrorFrame = z.infer<typeof ProtocolErrorFrameSchema>;
  *     wire `string` — every refined field would silently degrade to an opaque
  *     shape. A regex check leaves the field a `ZodString`, so the gate keeps
  *     comparing it field-for-field while the predicate is still enforced.
+ *
+ * `NeutralizedGraphemeBound` below folds the length bound into that same check,
+ * for the same two reasons.
  */
 const NEUTRALIZED_FORBIDDEN_RANGES: readonly (readonly [number, number])[] = [
 	[0x0000, 0x001f], // C0 controls, including TAB, LF, CR and ESC
@@ -397,11 +400,96 @@ function codePointEscape(codePoint: number): string {
 	return `\\u{${codePoint.toString(16)}}`;
 }
 
-const NEUTRALIZED_MESSAGE = "carries a control, bidi or invisible code point that must be neutralized before the wire";
+/**
+ * Grapheme-cluster segmentation — the SAME unit `boundedSafeText` bounds by in
+ * `packages/coding-agent/src/core/socket-server/safe-text.ts`. `Intl.Segmenter`
+ * ships with both Node and Bun, so counting the producer's unit costs this
+ * package nothing, which matters: it must keep zero `@draht/*` dependencies, so
+ * importing the counterpart is not an option and hand-mirroring is the contract.
+ */
+const graphemeSegmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
 
-/** Attacker-influenced free text: bounded, and neutralized before it got here. */
-function safeText(max: number) {
-	return z.string().max(max).regex(NEUTRALIZED_TEXT, NEUTRALIZED_MESSAGE);
+/** Grapheme clusters in `value`. Linear, and it never materializes the segments. */
+function graphemeCount(value: string): number {
+	const segments = graphemeSegmenter.segment(value)[Symbol.iterator]();
+	let count = 0;
+	while (!segments.next().done) count++;
+	return count;
+}
+
+/**
+ * The whole `safeText` predicate: "neutralized, AND no longer than
+ * `maxGraphemes` GRAPHEME CLUSTERS".
+ *
+ * COUNTING CLUSTERS IS THE POINT. `boundedSafeText(raw, 512)` bounds by grapheme
+ * clusters, and a `z.string().max(512)` bounds by UTF-16 code units. One
+ * legitimate cluster is routinely several code units — an astral emoji is two, a
+ * flag four, a base with combining marks unboundedly many — so a code-unit cap
+ * REFUSES text the producer constructed as valid. The daemon answers a frame no
+ * schema validates by closing the connection with 1008, which is precisely the
+ * phone-killing failure the capability gate was added to prevent, reintroduced
+ * through a units mismatch. The two sides now count the same unit, so there is
+ * nothing left to convert. Counting clusters is also all this does: the frame's
+ * SIZE is bounded by the producer's byte ceiling, never by this check.
+ *
+ * Handed to `.regex()` as a `RegExp` SUBCLASS rather than written as the
+ * `.refine()` this obviously wants to be, for the reason spelled out over
+ * `NEUTRALIZED_FORBIDDEN_RANGES`: `.refine()` wraps the field in `ZodEffects`,
+ * and the mirror gate then reads `opaque:ZodEffects` where the socket wire says
+ * `string` and fails clause C of `scripts/check-geist-protocol.mjs` — measured,
+ * not assumed. A subclass IS a `RegExp`, keeps the field a `ZodString`, and the
+ * only method zod's regex check calls on it is `test`.
+ *
+ * A PREDICATE, never a transform: it inspects and refuses, it never rewrites, so
+ * decode → encode stays byte-identical and the conformance goldens keep comparing.
+ *
+ * Both halves ride in ONE check on purpose. A second check would read as a second
+ * rule, and the rule here is single: this is text `safe-text.ts` could have
+ * produced.
+ */
+class NeutralizedGraphemeBound extends RegExp {
+	readonly maxGraphemes: number;
+
+	constructor(maxGraphemes: number) {
+		super(NEUTRALIZED_TEXT.source, NEUTRALIZED_TEXT.flags);
+		this.maxGraphemes = maxGraphemes;
+	}
+
+	override test(value: string): boolean {
+		return super.test(value) && graphemeCount(value) <= this.maxGraphemes;
+	}
+}
+
+/**
+ * Attacker-influenced free text: bounded IN GRAPHEME CLUSTERS, and neutralized
+ * before it got here.
+ *
+ * COUNTERPART: `boundedSafeText` in
+ * `packages/coding-agent/src/core/socket-server/safe-text.ts`, which CONSTRUCTS
+ * the text this only re-asserts. Its `maxGraphemes` argument and this one must
+ * stay the same kind of number; the moment either stops counting grapheme
+ * clusters, valid frames start being refused. `wire.test.ts` pins the unit and
+ * every budget below, and `schema-fingerprint.json` records this check by its
+ * pattern and its bound, so neither can move without the version gate seeing it.
+ *
+ * THIS BOUND IS IN DISPLAY UNITS AND BOUNDS NO BYTES. One cluster may carry
+ * unboundedly many combining marks, so a frame every field of which satisfies
+ * this predicate can still be hundreds of kilobytes. What keeps the bytes small
+ * is the SECOND bound the producer applies at construction — `boundedSafeText`
+ * bounds graphemes and UTF-8 bytes, whichever binds first — not anything in this
+ * file. `decode`'s `maxFrameBytes` is a transport backstop with whatever value
+ * its caller passed, and the attach bridge passes
+ * `max(maxFrameBytes, maxBufferedOutputBytes)` = 4 MiB when it decodes a session
+ * line, so a 383 KB permission frame passes decode and is refused later, at the
+ * fit step, by dropping the renderer's connection.
+ */
+function safeText(maxGraphemes: number) {
+	return z
+		.string()
+		.regex(
+			new NeutralizedGraphemeBound(maxGraphemes),
+			`must be at most ${maxGraphemes} grapheme clusters and carry no control, bidi or invisible code point that should have been neutralized before the wire`,
+		);
 }
 
 /**
@@ -420,10 +508,20 @@ export type PermissionRelayOption = z.infer<typeof PermissionRelayOptionSchema>;
 /**
  * `permission_request` — relayed. Exact mirror of `PermissionRequestMessage`.
  *
- * Every free-text field is bounded well under `maxFrameBytes`, so this frame is
- * small BY CONSTRUCTION: the bridge splits only `output`, and a permission frame
- * that did not fit would be refused rather than chunked into halves a renderer
- * would have to reassemble before it could show anybody what it is approving.
+ * Every free-text field is bounded in grapheme clusters, the unit the producer
+ * bounds by, so no frame `safe-text.ts` constructed is refused by THIS schema for
+ * its length.
+ *
+ * That is a statement about clusters and nothing else. The bytes are bounded at
+ * CONSTRUCTION, by the byte ceiling `boundedSafeText` applies alongside its
+ * grapheme budget; nothing here re-asserts it, because a byte check in a schema
+ * cannot tell a producer that stayed inside its budget from one that did not — it
+ * can only refuse, and refusing a permission frame drops the renderer. With that
+ * ceiling the whole frame is at most ~46 KB by that arithmetic (36 KB measured
+ * for the worst witness), against the 64 KiB
+ * `maxFrameBytes` the bridge fits it to; a permission frame that somehow does not
+ * fit is refused there rather than chunked into halves a renderer would have to
+ * reassemble before it could show anybody what it is approving.
  */
 export const PermissionRequestFrameSchema = z.object({
 	type: z.literal("permission_request"),

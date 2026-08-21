@@ -63,7 +63,15 @@ clause holds it field-for-field against
 
 Every free-text field of the two server frames is bounded and carries a
 neutralization predicate: no C0/DEL/C1 control, bidi override or invisible code
-point survives to a surface. The predicate is a `.regex()` check hand-mirrored
+point survives to a surface. **The bound counts GRAPHEME CLUSTERS, not UTF-16
+code units** — the unit `boundedSafeText` bounds by, so a legitimate emoji or
+combining sequence is not refused for being several code units wide. **Bytes are
+bounded separately, at construction, not by any check in this file**: one cluster
+admits unboundedly many combining marks, so `boundedSafeText` also caps each
+field's UTF-8 length (4 bytes per cluster, at most 4096 per field), which is what
+keeps a whole `permission_request` under the 64 KiB `maxFrameBytes` the bridge
+refuses a permission frame past rather than splitting it. The predicate is a
+`.regex()` check hand-mirrored
 from `NEUTRALIZED_FORBIDDEN_RANGES` in
 `packages/coding-agent/src/core/socket-server/safe-text.ts` (this package keeps
 zero `@draht/*` dependencies). It is a predicate, never a transform — a

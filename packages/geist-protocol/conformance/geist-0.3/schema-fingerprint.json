@@ -771,8 +771,7 @@
 				"label": {
 					"kind": "string",
 					"checks": [
-						"max:200",
-						"regex"
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
 					]
 				}
 			}
@@ -785,16 +784,14 @@
 					"inner": {
 						"kind": "string",
 						"checks": [
-							"max:4000",
-							"regex"
+							"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=4000"
 						]
 					}
 				},
 				"cwd": {
 					"kind": "string",
 					"checks": [
-						"max:1024",
-						"regex"
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
 					]
 				},
 				"deadline": {
@@ -809,8 +806,7 @@
 				"message": {
 					"kind": "string",
 					"checks": [
-						"max:4000",
-						"regex"
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=4000"
 					]
 				},
 				"method": {
@@ -826,8 +822,7 @@
 					"inner": {
 						"kind": "string",
 						"checks": [
-							"max:128",
-							"regex"
+							"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=128"
 						]
 					}
 				},
@@ -846,8 +841,7 @@
 							"label": {
 								"kind": "string",
 								"checks": [
-									"max:200",
-									"regex"
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
 								]
 							}
 						}
@@ -858,8 +852,7 @@
 					"inner": {
 						"kind": "string",
 						"checks": [
-							"max:1024",
-							"regex"
+							"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
 						]
 					}
 				},
@@ -880,8 +873,7 @@
 				"title": {
 					"kind": "string",
 					"checks": [
-						"max:200",
-						"regex"
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
 					]
 				},
 				"toolCallId": {
@@ -894,8 +886,7 @@
 				"toolName": {
 					"kind": "string",
 					"checks": [
-						"max:128",
-						"regex"
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=128"
 					]
 				},
 				"truncated": {
@@ -993,8 +984,7 @@
 				"surface": {
 					"kind": "string",
 					"checks": [
-						"max:64",
-						"regex"
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=64"
 					]
 				},
 				"type": {
@@ -1359,16 +1349,14 @@
 							"inner": {
 								"kind": "string",
 								"checks": [
-									"max:4000",
-									"regex"
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=4000"
 								]
 							}
 						},
 						"cwd": {
 							"kind": "string",
 							"checks": [
-								"max:1024",
-								"regex"
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
 							]
 						},
 						"deadline": {
@@ -1383,8 +1371,7 @@
 						"message": {
 							"kind": "string",
 							"checks": [
-								"max:4000",
-								"regex"
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=4000"
 							]
 						},
 						"method": {
@@ -1400,8 +1387,7 @@
 							"inner": {
 								"kind": "string",
 								"checks": [
-									"max:128",
-									"regex"
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=128"
 								]
 							}
 						},
@@ -1420,8 +1406,7 @@
 									"label": {
 										"kind": "string",
 										"checks": [
-											"max:200",
-											"regex"
+											"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
 										]
 									}
 								}
@@ -1432,8 +1417,7 @@
 							"inner": {
 								"kind": "string",
 								"checks": [
-									"max:1024",
-									"regex"
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
 								]
 							}
 						},
@@ -1454,8 +1438,7 @@
 						"title": {
 							"kind": "string",
 							"checks": [
-								"max:200",
-								"regex"
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
 							]
 						},
 						"toolCallId": {
@@ -1468,8 +1451,7 @@
 						"toolName": {
 							"kind": "string",
 							"checks": [
-								"max:128",
-								"regex"
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=128"
 							]
 						},
 						"truncated": {
@@ -1521,8 +1503,7 @@
 						"surface": {
 							"kind": "string",
 							"checks": [
-								"max:64",
-								"regex"
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=64"
 							]
 						},
 						"type": {

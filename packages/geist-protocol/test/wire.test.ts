@@ -10,6 +10,8 @@ import {
 	GEIST_PROTOCOL_FAMILY,
 	GEIST_PROTOCOL_VERSION,
 	HelloFrameSchema,
+	PermissionRequestFrameSchema,
+	PermissionResolvedFrameSchema,
 	protocolError,
 	SERVER_FRAME_TYPES,
 	ServerFrameSchema,
@@ -217,5 +219,137 @@ describe("encodeFrame", () => {
 
 	test("emits no trailing newline — WS frames are already delimited", () => {
 		expect(encodeFrame(helloFrame as never)).not.toContain("\n");
+	});
+});
+
+describe("safeText bounds count grapheme clusters, like the producer does", () => {
+	// ONE extended grapheme cluster that survives neutralization untouched: an astral base
+	// (U+1F642 SLIGHTLY SMILING FACE) plus seven U+0334 COMBINING TILDE OVERLAY. Nothing in it
+	// is listed in `NEUTRALIZED_FORBIDDEN_RANGES` - no ZWJ, no variation selector, no bidi
+	// control - and it is NFC-stable, so `boundedSafeText` in
+	// `packages/coding-agent/src/core/socket-server/safe-text.ts` emits it VERBATIM and counts
+	// it as one. Nine UTF-16 code units, eighteen UTF-8 bytes.
+	//
+	// A ZWJ family emoji would NOT do here, however tempting: U+200D is in the forbidden table,
+	// so the producer replaces it and such a frame could never legitimately reach this schema.
+	// Every code point below is written as an escape on purpose: an invisible character pasted
+	// into a test is exactly the hazard this suite is about.
+	const COMBINING_TILDE_OVERLAY = String.fromCodePoint(0x0334);
+	const CLUSTER = `${String.fromCodePoint(0x1f642)}${COMBINING_TILDE_OVERLAY.repeat(7)}`;
+	const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+	const graphemes = (value: string) => [...segmenter.segment(value)].length;
+
+	/** The producer's single budget for every attacker-influenced permission string. */
+	const PRODUCER_MAX_GRAPHEMES = 512;
+
+	const permissionRequest = (overrides: Record<string, unknown>) => ({
+		type: "permission_request",
+		requestId: "req-1",
+		method: "confirm",
+		toolCallId: "call-1",
+		toolName: "bash",
+		cwd: "/repo",
+		title: "Approve tool call?",
+		message: "bash wants to run a command",
+		truncated: false,
+		options: [{ id: "approve", label: "Yes" }],
+		requestedAt: "2026-08-21T00:00:00.000Z",
+		deadline: null,
+		...overrides,
+	});
+
+	test("the cluster this suite is built on really is one grapheme and many code units", () => {
+		expect(graphemes(CLUSTER)).toBe(1);
+		expect(CLUSTER.length).toBe(9);
+		expect(CLUSTER.normalize("NFC")).toBe(CLUSTER);
+	});
+
+	test("a command of exactly the producer's 512 grapheme clusters encodes and decodes cleanly", () => {
+		// The defect this pins: the producer bounds by grapheme clusters and the wire bounded by
+		// UTF-16 code units, so a frame the producer considered valid came back `invalid_frame` -
+		// and the bridge answers an invalid frame by closing the connection with 1008.
+		const command = CLUSTER.repeat(PRODUCER_MAX_GRAPHEMES);
+		expect(graphemes(command)).toBe(PRODUCER_MAX_GRAPHEMES);
+		expect(command.length).toBeGreaterThan(4000);
+
+		const frame = PermissionRequestFrameSchema.parse(permissionRequest({ command }));
+		const result = decodeServerFrame(encodeFrame(frame));
+		expect(result.ok).toBe(true);
+		if (result.ok && result.frame.type === "permission_request") expect(result.frame.command).toBe(command);
+	});
+
+	// Every attacker-influenced field on `permission_request`, with the budget `wire.ts`
+	// declares for it. This table is load-bearing: the conformance fingerprint records a bound
+	// carried inside a regex check as a bare `regex`, WITHOUT its value, so these assertions are
+	// the only thing left that notices a budget being quietly moved.
+	const REQUEST_BUDGETS: readonly (readonly [string, number])[] = [
+		["toolName", 128],
+		["cwd", 1024],
+		["title", 200],
+		["message", 4000],
+		["command", 4000],
+		["path", 1024],
+		["operation", 128],
+	];
+
+	for (const [field, budget] of REQUEST_BUDGETS) {
+		test(`permission_request.${field} holds ${budget} grapheme clusters and refuses one more`, () => {
+			expect(
+				PermissionRequestFrameSchema.safeParse(permissionRequest({ [field]: CLUSTER.repeat(budget) })).success,
+			).toBe(true);
+			expect(
+				PermissionRequestFrameSchema.safeParse(permissionRequest({ [field]: CLUSTER.repeat(budget + 1) })).success,
+			).toBe(false);
+		});
+	}
+
+	test("an option label holds 200 grapheme clusters and refuses one more", () => {
+		const withLabel = (label: string) => permissionRequest({ options: [{ id: "approve", label }] });
+		expect(PermissionRequestFrameSchema.safeParse(withLabel(CLUSTER.repeat(200))).success).toBe(true);
+		expect(PermissionRequestFrameSchema.safeParse(withLabel(CLUSTER.repeat(201))).success).toBe(false);
+	});
+
+	test("permission_resolved.surface holds 64 grapheme clusters and refuses one more", () => {
+		const resolved = (surface: string) => ({
+			type: "permission_resolved",
+			requestId: "req-1",
+			decision: "approved",
+			chosenOptionId: "approve",
+			surface,
+			clientId: "client-1",
+		});
+		expect(PermissionResolvedFrameSchema.safeParse(resolved(CLUSTER.repeat(64))).success).toBe(true);
+		expect(PermissionResolvedFrameSchema.safeParse(resolved(CLUSTER.repeat(65))).success).toBe(false);
+	});
+
+	test("a bound counted in ASCII is the same bound", () => {
+		// One grapheme is one code unit is one byte here, so this is the one case where the old
+		// code-unit cap and the new cluster bound agree - and it still has to hold.
+		expect(PermissionRequestFrameSchema.safeParse(permissionRequest({ command: "x".repeat(4000) })).success).toBe(
+			true,
+		);
+		expect(PermissionRequestFrameSchema.safeParse(permissionRequest({ command: "x".repeat(4001) })).success).toBe(
+			false,
+		);
+	});
+
+	test("the neutralization predicate still refuses a control, bidi or invisible code point", () => {
+		// Widening the bound must not widen the alphabet: these are exactly the code points
+		// `safe-text.ts` replaces before the wire, so one arriving here means something bypassed it.
+		const forbidden = [0x0007, 0x00ad, 0x200d, 0x202e, 0xfe0f, 0xfeff, 0xe0041];
+		for (const codePoint of forbidden) {
+			const command = `rm -rf${String.fromCodePoint(codePoint)} /`;
+			expect(PermissionRequestFrameSchema.safeParse(permissionRequest({ command })).success).toBe(false);
+		}
+	});
+
+	test("a frame that is small in clusters but huge in bytes is still refused by the frame cap", () => {
+		// A grapheme bound does not cap bytes - combining marks per cluster are unbounded - so the
+		// per-frame byte cap in `decode` is what keeps a permission frame small on the wire.
+		const command = `${String.fromCodePoint(0x1f642)}${COMBINING_TILDE_OVERLAY.repeat(4000)}`.repeat(20);
+		expect(graphemes(command)).toBe(20);
+		const result = decodeServerFrame(JSON.stringify(permissionRequest({ command })));
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.code).toBe("frame_too_large");
 	});
 });

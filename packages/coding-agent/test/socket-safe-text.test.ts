@@ -237,3 +237,152 @@ describe("boundedSafeText is idempotent", () => {
 		expect(isNeutralized(once)).toBe(true);
 	});
 });
+
+/**
+ * The 1008 witness (H5). A grapheme bound ALONE cannot keep a frame small: one cluster admits
+ * unboundedly many combining marks, so 512 clusters encoded to 383,246 bytes — a frame
+ * `decodeServerFrame` accepted and `AttachBridge.#fit` then refused, dropping the renderer.
+ *
+ * Marks are chosen from U+0334..U+033F: all combining, none of which forms a canonical composite
+ * with the base `x`, so NFC cannot quietly collapse the witness into something smaller.
+ */
+const ZALGO_MARKS_PER_CLUSTER = 200;
+const ZALGO_CLUSTER = `x${Array.from({ length: ZALGO_MARKS_PER_CLUSTER }, (_, i) => String.fromCodePoint(0x0334 + (i % 12))).join("")}`;
+/** The decisive tail: what a human is actually deciding about, at the end where bounding keeps it. */
+const ZALGO_TAIL = "| sh # rm -rf ~/.ssh";
+const ZALGO = `${ZALGO_CLUSTER.repeat(512)}${ZALGO_TAIL}`;
+
+/** JSON escapes `\\` to two bytes, so an all-backslash field is the other worst case: ASCII, but doubled. */
+const BACKSLASHES = "\\".repeat(8192);
+
+const utf8 = new TextEncoder();
+function utf8Bytes(value: string): number {
+	return utf8.encode(value).length;
+}
+
+/**
+ * The wire's per-field grapheme budgets, hand-mirrored from `PermissionRequestFrameSchema` in
+ * `packages/geist-protocol/src/wire.ts` — this package does not depend on that one, exactly as
+ * that package does not depend on this one.
+ */
+const WIRE_FIELD_GRAPHEMES = {
+	toolName: 128,
+	cwd: 1024,
+	title: 200,
+	message: 4000,
+	command: 4000,
+	path: 1024,
+	operation: 128,
+	optionLabel: 200,
+} as const;
+const WIRE_MAX_OPTIONS = 16;
+/** `DEFAULT_TRANSPORT_LIMITS.maxFrameBytes`, and the cap `AttachBridge.#fit` refuses a permission frame past. */
+const MAX_FRAME_BYTES = 64 * 1024;
+
+/**
+ * A `permission_request` with every free-text field filled at its wire budget from whatever
+ * `rawFor` hands back for that budget — so a test can put the worst raw text for EACH field in it,
+ * which is the real worst case: bytes bind on wide clusters, JSON escaping binds on ASCII.
+ */
+function buildPermissionFrame(rawFor: (budget: number) => string): Record<string, unknown> {
+	const field = (budget: number) => boundedSafeText(rawFor(budget), budget).value;
+	return {
+		type: "permission_request",
+		requestId: "R".repeat(128),
+		method: "select",
+		toolCallId: "T".repeat(128),
+		toolName: field(WIRE_FIELD_GRAPHEMES.toolName),
+		cwd: field(WIRE_FIELD_GRAPHEMES.cwd),
+		title: field(WIRE_FIELD_GRAPHEMES.title),
+		message: field(WIRE_FIELD_GRAPHEMES.message),
+		command: field(WIRE_FIELD_GRAPHEMES.command),
+		path: field(WIRE_FIELD_GRAPHEMES.path),
+		operation: field(WIRE_FIELD_GRAPHEMES.operation),
+		truncated: true,
+		options: Array.from({ length: WIRE_MAX_OPTIONS }, (_, i) => ({
+			id: `${i}`.padEnd(128, "o"),
+			label: field(WIRE_FIELD_GRAPHEMES.optionLabel),
+		})),
+		requestedAt: "2026-08-21T00:00:00.000Z".padEnd(64, "Z"),
+		deadline: "2026-08-21T00:01:00.000Z".padEnd(64, "Z"),
+	};
+}
+
+describe("boundedSafeText — the byte ceiling (the 1008 witness)", () => {
+	it("bounds the Zalgo witness by BYTES as well as graphemes", () => {
+		const bounded = boundedSafeText(ZALGO, 512);
+
+		expect(graphemeCount(bounded.value)).toBeLessThanOrEqual(512);
+		// 512 graphemes × 4 bytes — the widest a single code point is in UTF-8.
+		expect(utf8Bytes(bounded.value)).toBeLessThanOrEqual(2048);
+		expect(bounded.truncated).toBe(true);
+	});
+
+	it("keeps the decisive tail and the elision marker inside that byte budget", () => {
+		const bounded = boundedSafeText(ZALGO, 512);
+
+		expect(bounded.value.endsWith("rm -rf ~/.ssh")).toBe(true);
+		const marker = bounded.value.match(/…\[(\d+) chars elided\]…/);
+		expect(marker).not.toBeNull();
+		expect(Number(marker?.[1])).toBeGreaterThan(0);
+		expect(isNeutralized(bounded.value)).toBe(true);
+	});
+
+	it("encodes a whole permission_request under 64 KiB with every field at its wire maximum", () => {
+		const encoded = JSON.stringify(buildPermissionFrame(() => ZALGO));
+
+		expect(utf8Bytes(encoded)).toBeLessThan(MAX_FRAME_BYTES);
+	});
+
+	it("encodes a whole permission_request under 64 KiB when every field is escape-heavy ASCII", () => {
+		// JSON escapes `\` and `"` to two bytes each, so an all-backslash field encodes to twice its
+		// grapheme count. That is the other worst case, and it must fit too.
+		const encoded = JSON.stringify(buildPermissionFrame(() => BACKSLASHES));
+
+		expect(utf8Bytes(encoded)).toBeLessThan(MAX_FRAME_BYTES);
+	});
+
+	it("encodes a whole permission_request under 64 KiB when each field carries its OWN worst case", () => {
+		// The binding case: the byte ceiling caps the wide fields, the grapheme budget caps the
+		// escape-heavy ones, and the frame is the sum of both worsts, not of either alone.
+		const encoded = JSON.stringify(buildPermissionFrame((budget) => (budget >= 4000 ? BACKSLASHES : ZALGO)));
+
+		expect(utf8Bytes(encoded)).toBeLessThan(MAX_FRAME_BYTES);
+	});
+
+	it("does NOT cut a legitimate ASCII field that fills its grapheme budget", () => {
+		const legitimate = `${"a".repeat(3984)} | sh # rm -rf ~`;
+
+		expect(graphemeCount(legitimate)).toBe(4000);
+		expect(boundedSafeText(legitimate, 4000)).toEqual({
+			value: legitimate,
+			truncated: false,
+			originalLength: 4000,
+		});
+	});
+
+	it("takes an explicit byte ceiling and honours it before the grapheme budget", () => {
+		const bounded = boundedSafeText(`${"é".repeat(200)} | sh`, 200, 64);
+
+		expect(utf8Bytes(bounded.value)).toBeLessThanOrEqual(64);
+		expect(bounded.value.endsWith(" | sh")).toBe(true);
+		expect(bounded.truncated).toBe(true);
+		expect(bounded.originalLength).toBe(205);
+	});
+
+	it("degrades to the tail alone when the byte ceiling cannot hold the marker", () => {
+		// The marker costs 21 bytes before its digits; 12 bytes cannot hold it.
+		const bounded = boundedSafeText(`${"é".repeat(40)}TAIL`, 200, 12);
+
+		expect(utf8Bytes(bounded.value)).toBeLessThanOrEqual(12);
+		expect(bounded.value.endsWith("TAIL")).toBe(true);
+		expect(bounded.truncated).toBe(true);
+	});
+
+	it("stays idempotent under the byte ceiling", () => {
+		for (const budget of [8, 48, 512]) {
+			const once = boundedSafeText(ZALGO, budget).value;
+			expect(boundedSafeText(once, budget).value, `zalgo @ ${budget}`).toBe(once);
+		}
+	});
+});

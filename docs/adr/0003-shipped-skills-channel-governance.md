@@ -32,3 +32,7 @@ The Known gap above is closed by "feat(scripts): gate dual-channel skill byte-co
 ## Update (2026-08-21): epistemics admitted
 
 `epistemics` is admitted as a runtime-referenced dual-channel discipline: the shipped `prompts/commands/why.md` points at it by name for its synthesis step, and the pointer must resolve with nothing installed — the same admission test `atomic-reasoning` and `unslop` passed. The section-10b `DUAL_CHANNEL_SKILLS` allowlist is extended in the same change that creates the shipped copy. Dual-channel occupants as of this update: `atomic-reasoning`, `epistemics`, `unslop`.
+
+## Update (2026-08-21): typescript-discipline admitted
+
+`typescript-discipline` is admitted as a runtime-referenced dual-channel discipline: the shipped `agents/reviewer.md` points at it by name in its Type Safety criteria, and the pointer must resolve with nothing installed — the same admission test the prior occupants passed. It is the first dual-channel occupant with a file beyond SKILL.md: the shipped copy carries the skill's `references/patterns.md` alongside the byte-copied SKILL.md so the body's `./references/patterns.md` pointer resolves in the shipped channel too, and section 10b is widened in the same change from pinning the SKILL.md pair to pinning the whole skill dir (equal file sets, every file byte-equal), so a references file cannot drift while its SKILL.md stays pinned. Dual-channel occupants as of this update: `atomic-reasoning`, `epistemics`, `typescript-discipline`, `unslop`.

@@ -642,32 +642,61 @@ check(
 // A discipline that exists in both channels — root skills/<name>/ as the
 // canonical source, packages/coding-agent/skills/<name>/ as the shipped
 // fallback so shipped prompts resolve the name with nothing installed —
-// must be a byte-copy, not an adaptation (ADR 0003). Without this gate the
-// pair drifts silently: no generator emits the shipped copy and no mirror
-// check covers it. Extend DUAL_CHANNEL_SKILLS in the same change as any new
-// dual-channel occupant. hexagon-animation is deliberately excluded: it is
-// an asset-bearing product default with no root twin.
+// must be a byte-copy, not an adaptation (ADR 0003) — the whole dir, so a
+// skill's references/ files can't drift while its SKILL.md stays pinned.
+// Without this gate the pair drifts silently: no generator emits the
+// shipped copy and no mirror check covers it. Extend DUAL_CHANNEL_SKILLS in
+// the same change as any new dual-channel occupant. hexagon-animation is
+// deliberately excluded: it is an asset-bearing product default with no
+// root twin.
 
 console.log("\nDual-channel skill byte-copies (root skills/ ↔ shipped builtin)");
 
-const DUAL_CHANNEL_SKILLS = ["atomic-reasoning", "epistemics", "unslop"];
+const DUAL_CHANNEL_SKILLS = ["atomic-reasoning", "epistemics", "typescript-discipline", "unslop"];
+
+function walkSkillFiles(dirAbs, prefix = "") {
+	const files = [];
+	const entries = readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) =>
+		a.name.localeCompare(b.name),
+	);
+	for (const entry of entries) {
+		const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+		if (entry.isDirectory()) {
+			files.push(...walkSkillFiles(resolve(dirAbs, entry.name), rel));
+		} else {
+			files.push(rel);
+		}
+	}
+	return files;
+}
 
 for (const name of DUAL_CHANNEL_SKILLS) {
-	const rootCopyPath = `skills/${name}/SKILL.md`;
-	const shippedCopyPath = `packages/coding-agent/skills/${name}/SKILL.md`;
-	const rootCopyAbs = resolve(root, rootCopyPath);
-	const shippedCopyAbs = resolve(root, shippedCopyPath);
-	if (!existsSync(rootCopyAbs) || !existsSync(shippedCopyAbs)) {
+	const rootDirPath = `skills/${name}`;
+	const shippedDirPath = `packages/coding-agent/skills/${name}`;
+	const rootDirAbs = resolve(root, rootDirPath);
+	const shippedDirAbs = resolve(root, shippedDirPath);
+	if (!existsSync(rootDirAbs) || !existsSync(shippedDirAbs)) {
 		fail(
-			`${shippedCopyPath} and ${rootCopyPath} both exist (dual-channel occupant "${name}")`,
+			`${shippedDirPath}/ and ${rootDirPath}/ both exist (dual-channel occupant "${name}")`,
 		);
 		continue;
 	}
+	const rootFiles = walkSkillFiles(rootDirAbs);
+	const shippedFiles = walkSkillFiles(shippedDirAbs);
 	check(
-		readFileSync(shippedCopyAbs, "utf-8") === readFileSync(rootCopyAbs, "utf-8"),
-		`${shippedCopyPath} is byte-equal to ${rootCopyPath}` +
-			` (fix: cp ${rootCopyPath} ${shippedCopyPath})`,
+		rootFiles.join("\n") === shippedFiles.join("\n"),
+		`${shippedDirPath}/ has the same file set as ${rootDirPath}/` +
+			` (root: ${rootFiles.join(", ")}; shipped: ${shippedFiles.join(", ")})`,
 	);
+	for (const rel of rootFiles) {
+		if (!shippedFiles.includes(rel)) continue;
+		check(
+			readFileSync(resolve(shippedDirAbs, rel), "utf-8") ===
+				readFileSync(resolve(rootDirAbs, rel), "utf-8"),
+			`${shippedDirPath}/${rel} is byte-equal to ${rootDirPath}/${rel}` +
+				` (fix: cp ${rootDirPath}/${rel} ${shippedDirPath}/${rel})`,
+		);
+	}
 }
 
 // ── 11. Built-in agents ─────────────────────────────────────────────

@@ -23,6 +23,7 @@
 - `/verify-work` fix plans now hold their reproducing tests to the same red-capable standard as `/fix` Phase 1
 - comment discipline enforced across the implementer and reviewer agents, the execute-phase/fix/quick/review commands, and the tdd-workflow skill: comments only for constraints the code cannot express
 - the pause-work/verify-work/grill commands, the brainstorming skill, and the git-committer agent now point their prose-producing steps at the `unslop` skill
+- the reviewer agent's Type Safety criteria now name the TypeScript anti-patterns to hunt (optional-field state bags, unbranded interchangeable IDs, non-exhaustive switches, unearned casts) and point at the `typescript-discipline` skill
 
 ### Fixed
 

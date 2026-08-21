@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message } from "@draht/ai";
@@ -214,6 +214,32 @@ describe("CheckpointManager", () => {
 			const treeFiles = git(repo, ["ls-tree", "-r", "--name-only", record.ref]).split("\n");
 			expect(treeFiles).toContain("tracked.txt");
 			expect(treeFiles).not.toContain("ignored.log");
+		});
+
+		it("snapshots the rewritten content of a same-size rewrite whose stat still matches the index's cache", async () => {
+			initRepo(repo);
+			// ctime cannot be set from userspace the way mtime can, so this
+			// repo opts out of comparing it (core.trustctime); the fields left
+			// are exactly the ones the same-second interleaving collides on.
+			git(repo, ["config", "core.trustctime", "false"]);
+			const second = new Date(Math.floor(Date.now() / 1000) * 1000 - 5000);
+			writeFileSync(join(repo, "a.txt"), "v1");
+			utimesSync(join(repo, "a.txt"), second, second);
+			commitAll(repo, "initial");
+			// The interleaving CI hits, pinned instead of raced: write, `add`
+			// and `commit` all landed in the same wall-clock second, so the
+			// index file's own mtime equals the cached entry's...
+			const realIndex = join(repo, git(repo, ["rev-parse", "--git-path", "index"]));
+			utimesSync(realIndex, second, second);
+			// ...and the rewrite landed in that second too, with the same size,
+			// so only the content distinguishes v2 from the cached stat of v1.
+			writeFileSync(join(repo, "a.txt"), "v2");
+			utimesSync(join(repo, "a.txt"), second, second);
+
+			const result = await createManager().captureIfChanged("entry-01");
+
+			expect(result.status).toBe("created");
+			expect(git(repo, ["show", `${result.record?.ref}:a.txt`])).toBe("v2");
 		});
 
 		it("captures in a repository with no commits yet (unborn HEAD)", async () => {

@@ -6,12 +6,17 @@
  * the two plugin packages by hand-editing one and forgetting the other.
  *
  * Source of truth: skills/<name>/SKILL.md (+ skills/<name>/command.md for
- * the 19 command-template skills).
+ * the 19 command-template skills, + any additional files under a plain
+ * skill dir — e.g. references/ — mirrored to both hosts modulo the generic
+ * <PLUGIN_ROOT> token substitution; command skills may not carry extra
+ * files because the claude side has no skills/<cmd>/ dir to receive them).
  * Consumers:
  *   - packages/draht-claude/commands/<cmd>.md        (claude dialect)
  *   - packages/draht-claude/skills/<name>/SKILL.md    (claude dialect, plain skills only)
+ *   - packages/draht-claude/skills/<name>/<extra>     (plain skills only)
  *   - packages/draht-codex/commands/<cmd>.md          (codex dialect)
  *   - packages/draht-codex/skills/<name>/SKILL.md     (codex dialect)
+ *   - packages/draht-codex/skills/<name>/<extra>      (plain skills only)
  *   - packages/draht-codex/skills/<cmd>/SKILL.md      (codex-only wrapper)
  *   - packages/draht-codex/skills/<cmd>/command.md    (== codex commands/<cmd>.md)
  *
@@ -74,6 +79,26 @@ function render(text, entries, host) {
 }
 
 /**
+ * Recursively collect every file under a skill dir besides its top-level
+ * SKILL.md / command.md, as { relPath, content } records in sorted order.
+ */
+function collectExtraFiles(dir, prefix = "") {
+	const files = [];
+	for (const entry of readdirSync(dir).sort()) {
+		if (entry.startsWith(".")) continue;
+		if (prefix === "" && (entry === "SKILL.md" || entry === "command.md")) continue;
+		const full = join(dir, entry);
+		const rel = prefix ? `${prefix}/${entry}` : entry;
+		if (statSync(full).isDirectory()) {
+			files.push(...collectExtraFiles(full, rel));
+		} else {
+			files.push({ relPath: rel, content: readFileSync(full, "utf8") });
+		}
+	}
+	return files;
+}
+
+/**
  * Walk skillsRoot and classify each child directory as a "command" skill
  * (has command.md) or a "plain" skill (SKILL.md only). Returns entries
  * sorted by name for deterministic output.
@@ -96,6 +121,7 @@ export function discoverSkills(skillsRoot) {
 			dir,
 			skillMd: readFileSync(skillMdPath, "utf8"),
 			commandMd: existsSync(commandMdPath) ? readFileSync(commandMdPath, "utf8") : null,
+			extraFiles: collectExtraFiles(dir),
 		});
 	}
 	return skills;
@@ -110,6 +136,8 @@ export function computeArtifacts(skillsRoot) {
 	for (const skill of discoverSkills(skillsRoot)) {
 		if (skill.commandMd === null) {
 			// Plain skill: same-shaped SKILL.md on both hosts, no wrapper.
+			// Extra files (references/ etc.) mirror verbatim modulo the generic
+			// <PLUGIN_ROOT> token, so in-skill relative pointers keep resolving.
 			const entries = DISCIPLINE_DIALECT[skill.name] ?? [];
 			for (const host of HOSTS) {
 				artifacts.push({
@@ -117,8 +145,23 @@ export function computeArtifacts(skillsRoot) {
 					relPath: `skills/${skill.name}/SKILL.md`,
 					content: render(skill.skillMd, entries, host),
 				});
+				for (const extra of skill.extraFiles) {
+					artifacts.push({
+						pkg: PACKAGE_NAME[host],
+						relPath: `skills/${skill.name}/${extra.relPath}`,
+						content: render(extra.content, [], host),
+					});
+				}
 			}
 			continue;
+		}
+
+		if (skill.extraFiles.length > 0) {
+			throw new Error(
+				`skills/${skill.name}: extra files (${skill.extraFiles
+					.map((f) => f.relPath)
+					.join(", ")}) are only supported for plain skills — the claude side has no skills/${skill.name}/ dir to mirror them into`,
+			);
 		}
 
 		// Command skill: commands/<name>.md on both hosts; codex additionally

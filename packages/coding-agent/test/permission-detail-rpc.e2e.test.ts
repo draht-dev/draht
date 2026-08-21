@@ -82,7 +82,10 @@ interface RpcSession {
 	lines: Record<string, unknown>[];
 	stderr: () => string;
 	send: (value: unknown) => void;
-	waitFor: <T extends Record<string, unknown>>(predicate: (line: Record<string, unknown>) => boolean) => Promise<T>;
+	waitFor: <T extends Record<string, unknown>>(
+		predicate: (line: Record<string, unknown>) => boolean,
+		timeoutMs?: number,
+	) => Promise<T>;
 	/** Wait for the agent loop to finish the turn — the `prompt` response is ACKNOWLEDGEMENT ONLY. */
 	waitForTurnEnd: () => Promise<void>;
 	kill: () => void;
@@ -146,8 +149,11 @@ function startRpc(options: { cwd: string; agentDir: string; script: string }): R
 		lines,
 		stderr: () => stderrText,
 		send: (value) => child.stdin.write(`${JSON.stringify(value)}\n`),
-		waitFor: async <T extends Record<string, unknown>>(predicate: (line: Record<string, unknown>) => boolean) => {
-			const deadline = Date.now() + WAIT_TIMEOUT_MS;
+		waitFor: async <T extends Record<string, unknown>>(
+			predicate: (line: Record<string, unknown>) => boolean,
+			timeoutMs?: number,
+		) => {
+			const deadline = Date.now() + (timeoutMs ?? WAIT_TIMEOUT_MS);
 			for (;;) {
 				const found = lines.find(predicate);
 				if (found) return found as T;
@@ -306,6 +312,265 @@ describe("the permission ask carries canonical detail over the public RPC protoc
 
 				await rpc.waitForTurnEnd();
 				expect(existsSync(marker), `a denied tool call still ran; stderr:\n${rpc.stderr()}`).toBe(false);
+			} finally {
+				rpc.kill();
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+/**
+ * R34-PERM.5 on the RPC surface — an answer that NAMES an option is decided by THAT
+ * option's own `decision`, and an answer naming an option nobody offered is refused
+ * without consuming the still-answerable request.
+ *
+ * The hole these tests close: `optionId` was documented as "must be one of the ids the
+ * matching request offered", but nothing validated it. rpc-mode decided purely on
+ * `confirmed`, so `{confirmed: true, optionId: "deny"}` — a client whose operator
+ * pressed the DENY button — was recorded as an APPROVAL and the tool ran.
+ *
+ * Evidence class 3 as above: the emitted binary, driven over the public protocol.
+ */
+describe("an RPC answer is decided by the option it names, not by `confirmed` (R34-PERM.5)", () => {
+	/** Poll until `probe` reports the outcome we are trying to DISPROVE, or the window closes. */
+	async function settle(probe: () => string | undefined, windowMs: number): Promise<void> {
+		const deadline = Date.now() + windowMs;
+		while (Date.now() < deadline) {
+			const violation = probe();
+			if (violation) throw new Error(violation);
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	}
+
+	test(
+		'`{confirmed: true, optionId: "deny"}` denies — the named option wins over the boolean',
+		async () => {
+			const workDir = await createTempDir("pdr-");
+			const marker = path.join(realpathSync(workDir), "approved.txt");
+			const command = `echo ran > ${marker}`;
+			const script = JSON.stringify([{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command } }] }]);
+			const rpc = startRpc({ cwd: workDir, agentDir: path.join(workDir, "ad"), script });
+
+			try {
+				rpc.send({ id: "p1", type: "prompt", message: "run the tool" });
+				const ask = await rpc.waitFor((line) => line.type === "extension_ui_request" && line.method === "confirm");
+
+				// The request offered `deny`, and the answer names it. `confirmed: true` is the
+				// contradiction a confused client sends; the offered set must win.
+				expect(ask.detail as Record<string, unknown>).toMatchObject({
+					options: [
+						{ id: "approve", label: "Yes", decision: "approve" },
+						{ id: "deny", label: "No", decision: "deny" },
+					],
+				});
+
+				rpc.send({ type: "extension_ui_response", id: ask.id, confirmed: true, optionId: "deny" });
+
+				await rpc.waitForTurnEnd();
+				expect(existsSync(marker), `an answer naming "deny" ran the tool anyway; stderr:\n${rpc.stderr()}`).toBe(
+					false,
+				);
+			} finally {
+				rpc.kill();
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an optionId nobody offered is refused WITHOUT consuming the ask — a later valid answer still wins",
+		async () => {
+			const workDir = await createTempDir("pdr-");
+			const marker = path.join(realpathSync(workDir), "later.txt");
+			const command = `echo ran > ${marker}`;
+			const script = JSON.stringify([{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command } }] }]);
+			const rpc = startRpc({ cwd: workDir, agentDir: path.join(workDir, "ad"), script });
+
+			try {
+				rpc.send({ id: "p1", type: "prompt", message: "run the tool" });
+				const ask = await rpc.waitFor((line) => line.type === "extension_ui_request" && line.method === "confirm");
+
+				rpc.send({ type: "extension_ui_response", id: ask.id, confirmed: true, optionId: "not-an-option" });
+
+				// The unofferred id decides NOTHING: the turn must not end and the tool must not run
+				// while the dialog is still, legitimately, waiting for an answer.
+				await settle(() => {
+					if (existsSync(marker)) return `an unoffered optionId approved the call; stderr:\n${rpc.stderr()}`;
+					if (rpc.lines.some((line) => line.type === "agent_end")) {
+						return `the turn ended on an unoffered optionId; stderr:\n${rpc.stderr()}`;
+					}
+					return undefined;
+				}, 3_000);
+
+				// The client is told its answer was refused rather than left guessing.
+				const refusal = rpc.lines.find(
+					(line) => line.type === "response" && line.command === "extension_ui_response" && line.success === false,
+				);
+				expect(
+					refusal,
+					`no refusal reported for an unoffered optionId: ${JSON.stringify(rpc.lines)}`,
+				).toBeDefined();
+
+				// And the request is still answerable: the valid answer that follows decides it.
+				rpc.send({ type: "extension_ui_response", id: ask.id, confirmed: true, optionId: "approve" });
+
+				await rpc.waitForTurnEnd();
+				expect(
+					existsSync(marker),
+					`the refusal consumed the ask; a later valid approval did nothing; stderr:\n${rpc.stderr()}`,
+				).toBe(true);
+			} finally {
+				rpc.kill();
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a present-but-non-string optionId is refused, not silently treated as absent",
+		async () => {
+			const workDir = await createTempDir("pdr-");
+			const marker = path.join(realpathSync(workDir), "typed.txt");
+			const command = `echo ran > ${marker}`;
+			const script = JSON.stringify([{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command } }] }]);
+			const rpc = startRpc({ cwd: workDir, agentDir: path.join(workDir, "ad"), script });
+
+			try {
+				rpc.send({ id: "p1", type: "prompt", message: "run the tool" });
+				const ask = await rpc.waitFor((line) => line.type === "extension_ui_request" && line.method === "confirm");
+
+				// `123` is PRESENT and is not one of the offered ids, so the documented rule
+				// ("when present it must be one of the ids the matching request offered") refuses
+				// it. A `typeof === "string"` guard would reclassify it as ABSENT and fall back to
+				// `confirmed: true` — the tool would run on an answer the protocol forbids, which
+				// is exactly the shape a buggy or hostile middlebox produces.
+				rpc.send({ type: "extension_ui_response", id: ask.id, confirmed: true, optionId: 123 });
+
+				await settle(() => {
+					if (existsSync(marker)) return `a non-string optionId approved the call; stderr:\n${rpc.stderr()}`;
+					if (rpc.lines.some((line) => line.type === "agent_end")) {
+						return `the turn ended on a non-string optionId; stderr:\n${rpc.stderr()}`;
+					}
+					return undefined;
+				}, 3_000);
+
+				const refusal = rpc.lines.find(
+					(line) => line.type === "response" && line.command === "extension_ui_response" && line.success === false,
+				);
+				expect(
+					refusal,
+					`no refusal reported for a non-string optionId: ${JSON.stringify(rpc.lines)}`,
+				).toBeDefined();
+
+				// Same as any other invalid id: the ask was not consumed, so a valid answer decides.
+				rpc.send({ type: "extension_ui_response", id: ask.id, confirmed: true, optionId: "approve" });
+
+				await rpc.waitForTurnEnd();
+				expect(
+					existsSync(marker),
+					`the refusal consumed the ask; a later valid approval did nothing; stderr:\n${rpc.stderr()}`,
+				).toBe(true);
+			} finally {
+				rpc.kill();
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an answer with no optionId still decides on `confirmed` — existing clients keep working",
+		async () => {
+			const workDir = await createTempDir("pdr-");
+			const marker = path.join(realpathSync(workDir), "legacy.txt");
+			const command = `echo ran > ${marker}`;
+			const script = JSON.stringify([{ toolCalls: [{ id: "call-1", name: "bash", arguments: { command } }] }]);
+			const rpc = startRpc({ cwd: workDir, agentDir: path.join(workDir, "ad"), script });
+
+			try {
+				rpc.send({ id: "p1", type: "prompt", message: "run the tool" });
+				const ask = await rpc.waitFor((line) => line.type === "extension_ui_request" && line.method === "confirm");
+
+				rpc.send({ type: "extension_ui_response", id: ask.id, confirmed: true });
+
+				await rpc.waitForTurnEnd();
+				expect(
+					existsSync(marker),
+					`a legacy yes/no client's approval stopped working; stderr:\n${rpc.stderr()}`,
+				).toBe(true);
+			} finally {
+				rpc.kill();
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+/**
+ * R34-PERM.5 validates an answer against THE SET A REQUEST OFFERED — so where a request
+ * offered no set, the rule has no subject and `optionId` must be IGNORED, not refused.
+ *
+ * The hole this closes: refusing an `optionId` on a dialog that recorded no offered set
+ * wedges the agent loop permanently. Five in-repo dialogs carry no `detail` AND pass no
+ * `timeout` and no `signal` — `/rewind`'s "Restore files?" confirm, `/agent`'s picker, two
+ * llama dialogs and `promptForMissingSessionCwd` — so `createDialogPromise` has nothing
+ * that can ever settle them. A client that reflexively attaches `optionId` to any answer
+ * (which the protocol permits: the field is optional, and these requests carry no
+ * `detail.options` to check it against) would park the loop forever with only an error
+ * line to show for it.
+ *
+ * Evidence class 3 as above: the emitted binary, driven over the public protocol.
+ */
+describe("a dialog that offered no options ignores `optionId` instead of hanging on it", () => {
+	test(
+		"a detail-less dialog answered with an optionId still settles",
+		async () => {
+			const workDir = await createTempDir("pdr-");
+			// No tool calls: `/agent` is an extension command, it runs no model turn.
+			const rpc = startRpc({ cwd: workDir, agentDir: path.join(workDir, "ad"), script: "[]" });
+
+			try {
+				rpc.send({ id: "c1", type: "prompt", message: "/agent" });
+
+				const ask = await rpc.waitFor(
+					(line) =>
+						line.type === "extension_ui_request" &&
+						line.method === "select" &&
+						line.title === "Select agent for your prompts",
+				);
+
+				// The three properties that make this dialog unsettleable by anything but an
+				// answer. If any of them ever appears here, this test has stopped covering the
+				// wedge and the dialog it stands in for must be replaced, not the assertions.
+				expect(ask.detail, `the /agent picker grew a detail: ${JSON.stringify(ask)}`).toBeUndefined();
+				expect(ask.timeout, `the /agent picker grew a timeout: ${JSON.stringify(ask)}`).toBeUndefined();
+
+				const options = ask.options as string[];
+				expect(options.length).toBeGreaterThan(0);
+
+				rpc.send({
+					type: "extension_ui_response",
+					id: ask.id,
+					value: options[0],
+					optionId: "reflexively-attached",
+				});
+
+				// rpc-mode emits the `prompt` response only after the extension command's handler
+				// has RETURNED, so this line cannot appear while the dialog is still pending. It is
+				// the settle signal here; `agent_end` never comes, because no model turn ran.
+				const ack = await rpc.waitFor(
+					(line) => line.type === "response" && line.command === "prompt" && line.id === "c1",
+					20_000,
+				);
+				expect(ack.success, JSON.stringify(ack)).toBe(true);
+
+				const refusal = rpc.lines.find(
+					(line) => line.type === "response" && line.command === "extension_ui_response" && line.success === false,
+				);
+				expect(
+					refusal,
+					`an optionId was refused on a dialog that offered no options: ${JSON.stringify(refusal)}`,
+				).toBeUndefined();
 			} finally {
 				rpc.kill();
 			}

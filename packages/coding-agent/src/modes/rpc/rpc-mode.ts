@@ -19,6 +19,7 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import type { PermissionAskDetail } from "../../core/extensions/types.ts";
 import {
 	flushRawStdout,
 	takeOverStdout,
@@ -75,10 +76,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		return { id, type: "response", command, success: false, error: message };
 	};
 
-	// Pending extension UI requests waiting for response
+	/** One option as it was OFFERED, carrying its own decision. Never re-derived from an answer. */
+	type OfferedOption = PermissionAskDetail["options"][number];
+
+	// Pending extension UI requests waiting for response.
+	//
+	// `offeredOptions` is the immutable set this exact request went out with (R34-PERM.5). It is
+	// stored at emit time, never taken from the answer, and is what an incoming `optionId` is
+	// checked against — the answering client does not get to name a vocabulary of its own.
 	const pendingExtensionRequests = new Map<
 		string,
-		{ resolve: (value: any) => void; reject: (error: Error) => void }
+		{
+			resolve: (value: any) => void;
+			reject: (error: Error) => void;
+			offeredOptions?: readonly OfferedOption[];
+		}
 	>();
 
 	/**
@@ -147,6 +159,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					resolve(parseResponse(response));
 				},
 				reject,
+				offeredOptions: opts?.detail?.options,
 			});
 			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 		});
@@ -862,10 +875,64 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		) {
 			const response = parsed as RpcExtensionUIResponse;
 			const pending = pendingExtensionRequests.get(response.id);
-			if (pending) {
+			if (!pending) return;
+
+			// R34-PERM.5 on the RPC surface. An answer that NAMES an option is decided by that
+			// option's own `decision`, checked against the immutable set this request was emitted
+			// with. Without this, `{confirmed: true, optionId: "deny"}` — a client whose operator
+			// pressed DENY — was recorded as an APPROVAL, and the resolution disagreed with what
+			// the operator's client believes it sent.
+			// PRESENCE, not type. `rpc-types.ts` says an `optionId`, WHEN PRESENT, must be one of the
+			// ids the matching request offered — and `123` or `null` is present and is not among
+			// them. Gating on `typeof === "string"` would reclassify a wrongly-typed optionId as
+			// ABSENT and fall back to `confirmed`, which is the one shape a buggy or hostile
+			// middlebox produces. (`undefined` cannot reach here from the wire — this is JSON — and
+			// is excluded so an in-process caller spreading an absent field reads as absent.)
+			const named: unknown = "optionId" in response ? (response as { optionId?: unknown }).optionId : undefined;
+			// A request that recorded NO offered set has nothing for an `optionId` to be validated
+			// against, so R34-PERM.5 — whose rule is about the offered set a request actually
+			// carries — has no subject here, and the answer decides on `confirmed` as it always
+			// did. Do NOT "tighten" this into a refusal: five in-repo dialogs (`/rewind`'s "Restore
+			// files?" confirm, `/agent`'s picker, two llama dialogs, `promptForMissingSessionCwd`)
+			// pass no `detail`, no `timeout` and no `signal`, so nothing but an answer can ever
+			// settle them — refusing there wedges the agent loop permanently. (An offered set that is
+			// EMPTY is still a set: a caller that authorised no option authorised none, and every
+			// `optionId` against it is refused.)
+			if (named !== undefined && pending.offeredOptions !== undefined) {
+				// Never by position, index, label or a magic id string: an option's meaning is only
+				// ever its own `decision` field. A repeated id makes "which option was named"
+				// undecidable, so that is a refusal too rather than a coin flip on the first match.
+				const matches = pending.offeredOptions.filter((option) => (option.id as unknown) === named);
+				if (matches.length !== 1) {
+					// Refuse WITHOUT consuming the request: it stays pending and answerable, so a
+					// later valid answer still decides it. Dropping it here would strand the agent
+					// loop; resolving it here would let an unoffered word decide a permission.
+					output(
+						error(
+							response.id,
+							"extension_ui_response",
+							matches.length === 0
+								? `optionId ${JSON.stringify(named)} is not one of the options offered for this request; the request is still pending`
+								: `optionId ${JSON.stringify(named)} is ambiguous in the offered options for this request; the request is still pending`,
+						),
+					);
+					await waitForRawStdoutBackpressure();
+					return;
+				}
+
+				// The offered set wins over `confirmed`. A client that sends both is already
+				// confused about its own answer, and only one of the two was ever offered to it.
+				const chosen = matches[0] as OfferedOption;
 				pendingExtensionRequests.delete(response.id);
-				pending.resolve(response);
+				pending.resolve({ ...response, confirmed: chosen.decision === "approve" } as RpcExtensionUIResponse);
+				return;
 			}
+
+			// No `optionId` to validate — absent, or present on a request that offered no set to
+			// validate it against: decide on `confirmed`, exactly as before. Clients that only know
+			// yes/no keep working unchanged.
+			pendingExtensionRequests.delete(response.id);
+			pending.resolve(response);
 			return;
 		}
 

@@ -329,7 +329,23 @@ export type RpcExtensionUIResponse =
 	/**
 	 * `optionId` names WHICH offered option the answer chose. It is optional for backwards
 	 * compatibility with clients that only know yes/no; when present it must be one of the ids the
-	 * matching request offered in `detail.options`.
+	 * matching request offered in `detail.options`, and it then DECIDES — an option's own
+	 * `decision` overrides `confirmed` in both directions.
+	 *
+	 * "Present" is about presence, not type: this field is declared `string`, but the wire is JSON
+	 * written by someone else, and `{"optionId": 123}` is present and is not one of the offered
+	 * ids. It is refused exactly like `{"optionId": "not-an-option"}` rather than being read as
+	 * absent — a wrongly-typed id must never silently fall back to `confirmed`.
+	 *
+	 * A refused `optionId` does NOT consume the request: the agent answers with
+	 * `{"type":"response","command":"extension_ui_response","success":false,…}` and the dialog
+	 * stays pending, so a later valid answer still decides it.
+	 *
+	 * Where the matching request offered NO options at all (a dialog raised without `detail` —
+	 * `/rewind`'s restore confirm, `/agent`'s picker, …), there is nothing to validate against and
+	 * `optionId` is IGNORED: the answer decides on `confirmed`/`value` as it always did. Refusing
+	 * it there would leave those dialogs — which carry no timeout and no abort signal — pending
+	 * forever.
 	 */
 	| { type: "extension_ui_response"; id: string; confirmed: boolean; optionId?: string }
 	| { type: "extension_ui_response"; id: string; cancelled: true };

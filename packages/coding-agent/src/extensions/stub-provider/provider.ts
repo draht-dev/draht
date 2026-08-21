@@ -15,7 +15,14 @@
  */
 
 import type { Provider } from "@draht/ai";
-import { type FauxResponseFactory, fauxAssistantMessage, fauxProvider } from "@draht/ai/providers/faux";
+import {
+	type FauxContentBlock,
+	type FauxResponseFactory,
+	fauxAssistantMessage,
+	fauxProvider,
+	fauxText,
+	fauxToolCall,
+} from "@draht/ai/providers/faux";
 
 /** Provider id to pass as `--provider`. */
 export const STUB_PROVIDER_ID = "draht-stub";
@@ -28,6 +35,14 @@ export const STUB_REPLY_PREFIX = "stub: ";
 export const STUB_PROVIDER_ENV = "DRAHT_STUB_PROVIDER";
 /** Optional pacing knob, so a driver can send a second prompt mid-stream. */
 export const STUB_PROVIDER_TOKENS_PER_SECOND_ENV = "DRAHT_STUB_PROVIDER_TOKENS_PER_SECOND";
+/**
+ * Optional script of tool calls, so a spawned binary can be made to issue a REAL
+ * tool call with no API key. JSON: an array of turn scripts, one per provider
+ * turn — `[{ "toolCalls": [{ "id": "call-1", "name": "bash", "arguments": { "command": "true" } }], "text": "optional" }]`.
+ * Once the scripts are exhausted the stub falls back to its text reply forever,
+ * which is what ends a turn after the scripted call has run.
+ */
+export const STUB_PROVIDER_TOOL_CALLS_ENV = "DRAHT_STUB_TOOL_CALLS";
 
 export function isStubProviderEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const value = env[STUB_PROVIDER_ENV];
@@ -61,6 +76,66 @@ export function stubReplyFor(prompt: string): string {
 	return `${STUB_REPLY_PREFIX}${prompt}`;
 }
 
+/** One provider turn of the scripted stub: tool calls, plus optional leading text. */
+export interface StubTurnScript {
+	toolCalls: { id: string; name: string; arguments: Record<string, unknown> }[];
+	text?: string;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseTurnScript(raw: unknown): StubTurnScript | undefined {
+	if (!isPlainObject(raw)) return undefined;
+	if (raw.text !== undefined && typeof raw.text !== "string") return undefined;
+	const toolCalls = raw.toolCalls ?? [];
+	if (!Array.isArray(toolCalls)) return undefined;
+	const parsed: StubTurnScript["toolCalls"] = [];
+	for (const entry of toolCalls) {
+		if (!isPlainObject(entry)) return undefined;
+		if (typeof entry.id !== "string" || typeof entry.name !== "string") return undefined;
+		const arguments_ = entry.arguments ?? {};
+		if (!isPlainObject(arguments_)) return undefined;
+		parsed.push({ id: entry.id, name: entry.name, arguments: arguments_ });
+	}
+	return { toolCalls: parsed, text: raw.text as string | undefined };
+}
+
+/**
+ * Turn scripts from the environment, or `undefined` when the variable is absent
+ * or malformed. Malformed input never throws: a spawned binary that dies on a
+ * bad script would report a harness typo as a product failure, so the stub warns
+ * once on stderr and answers with plain text exactly as it does today.
+ */
+export function parseStubToolCallScripts(env: NodeJS.ProcessEnv = process.env): StubTurnScript[] | undefined {
+	const raw = env[STUB_PROVIDER_TOOL_CALLS_ENV];
+	if (raw === undefined || raw.trim() === "") return undefined;
+	let decoded: unknown;
+	try {
+		decoded = JSON.parse(raw);
+	} catch (error) {
+		console.error(
+			`${STUB_PROVIDER_TOOL_CALLS_ENV}: ignoring malformed JSON (${error instanceof Error ? error.message : String(error)})`,
+		);
+		return undefined;
+	}
+	if (!Array.isArray(decoded)) {
+		console.error(`${STUB_PROVIDER_TOOL_CALLS_ENV}: ignoring value, expected an array of turn scripts`);
+		return undefined;
+	}
+	const scripts: StubTurnScript[] = [];
+	for (const entry of decoded) {
+		const script = parseTurnScript(entry);
+		if (!script) {
+			console.error(`${STUB_PROVIDER_TOOL_CALLS_ENV}: ignoring value, expected an array of turn scripts`);
+			return undefined;
+		}
+		scripts.push(script);
+	}
+	return scripts;
+}
+
 /**
  * Faux provider whose queued response re-queues itself, so the provider answers
  * every turn of a spawned session instead of erroring once the queue drains.
@@ -77,9 +152,21 @@ export function createStubProvider(env: NodeJS.ProcessEnv = process.env): Provid
 		tokenSize: { min: 1, max: 1 },
 	});
 
+	const scripts = parseStubToolCallScripts(env);
+	let turn = 0;
+
 	const respond: FauxResponseFactory = (context) => {
 		handle.appendResponses([respond]);
-		return fauxAssistantMessage(stubReplyFor(lastUserText(context.messages)));
+		const script = scripts?.[turn++];
+		if (!script || script.toolCalls.length === 0) {
+			return fauxAssistantMessage(script?.text ?? stubReplyFor(lastUserText(context.messages)));
+		}
+		const content: FauxContentBlock[] = [];
+		if (script.text !== undefined) content.push(fauxText(script.text));
+		for (const call of script.toolCalls) {
+			content.push(fauxToolCall(call.name, call.arguments, { id: call.id }));
+		}
+		return fauxAssistantMessage(content, { stopReason: "toolUse" });
 	};
 	handle.setResponses([respond]);
 

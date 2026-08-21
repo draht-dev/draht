@@ -12,7 +12,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 
 ## What you get
 
-### 19 slash commands
+### 22 slash commands
 
 **Project lifecycle**
 - `/new-project` — greenfield: questioning → domain model → requirements → roadmap
@@ -40,8 +40,11 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/orchestrate-loop <goal>` — verification-gated loop of fresh worker iterations until a deterministic check passes
 - `/resolve-conflicts` — resolve an in-progress merge/rebase by reconstructing both sides' intent
 - `/grill <subject>` — whole-frontier interrogation of any idea, spec, ticket list, or decision; output form chosen at the end
+- `/why <question>` — code archaeology: parallel `investigator` subagents gather evidence per category, synthesized into a confidence-tiered, citation-backed answer
+- `/triage <report>` — classify an external issue report after a bounded cause trace, dedupe against GitHub Issues, create a ticket only behind a fail-closed gate
+- `/create-verification-skill [app]` — generate a committed project-local `verify-<app>` skill that drives the real app the way a user does and captures proof artifacts
 
-### 9 specialist subagents
+### 10 specialist subagents
 
 All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 
@@ -53,11 +56,12 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `spec-reviewer` | Checks a completed task's diff against its spec — no more, no less |
 | `debugger` | Reproduces and diagnoses bugs to root cause |
 | `verifier` | Runs lint + typecheck + tests, reports results without fixing |
+| `investigator` | Searches one assigned evidence category (git history, review/planning/decision records) and returns verbatim-cited findings for `/why` |
 | `git-committer` | Stages and commits with conventional commit messages |
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
 | `advisor` | Strongest-tier strategic steer, consulted rarely when stuck or before committing to an approach |
 
-### 12 bundled skills
+### 16 bundled skills
 
 - **`draht`** — router and catalog for the skill family: what draht is, which skill fits which situation
 - **`gsd-workflow`** — complete GSD methodology reference (directory structure, cycle, hooks, config)
@@ -71,6 +75,10 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 - **`verification-gate`** — evidence before claims: run the proving command before saying "done"
 - **`saga-spawner`** — unattended repo advancement as a cloud routine reconciling a saga graph of beats
 - **`cinematic-continuation`** — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
+- **`unslop`** — cut AI tells from prose deliverables, then add voice back so the result is neither slop nor sterile
+- **`epistemics`** — confidence calibration for investigation findings: five tiers, cite-or-label-as-inference, null results as evidence
+- **`typescript-discipline`** — make illegal states unrepresentable: discriminated unions, branded primitives, boundary parsing, exhaustiveness
+- **`blast-radius`** — impact analysis beyond the diff: reduce the safety argument to one falsifiable fact and prove it on the evidence ladder
 
 ### 4 workflow hook scripts
 
@@ -190,6 +198,7 @@ Each specialist subagent ships with a default model tuned to its workload:
 | `reviewer` | `inherit` | `/verify-work`, `/review` — code review |
 | `spec-reviewer` | `opus` | `/execute-phase`, `/verify-work`, `/review`, `/quick` — spec compliance |
 | `debugger` | `inherit` | `/fix` — bug diagnosis |
+| `investigator` | `sonnet` | `/why` — parallel single-category evidence gathering |
 | `git-committer` | `inherit` | `/atomic-commit` — commit staging |
 | `advisor` | `fable` | any command — rare high-leverage strategic consults |
 

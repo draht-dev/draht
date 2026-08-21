@@ -48,6 +48,9 @@ Ad-hoc:
 - `commands/orchestrate-loop.md`
 - `commands/resolve-conflicts.md`
 - `commands/grill.md` - whole-frontier interrogation of any subject; output form chosen at the end
+- `commands/why.md` - code archaeology: design rationale and history via parallel evidence investigators, synthesized with confidence tiers and citations
+- `commands/triage.md` - external issue-report triage: classify, bounded cause trace, dedupe against GitHub Issues, fail-closed ticket creation
+- `commands/create-verification-skill.md` - generate a committed project-local `verify-<app>` skill that drives the real app and captures proof artifacts
 
 Use the wrappers for picker-driven invocation, and keep the `commands/*.md` files as the source prompt templates.
 
@@ -60,6 +63,7 @@ The plugin ships reference prompts in `agents/`:
 - `reviewer`
 - `debugger`
 - `verifier`
+- `investigator`
 - `git-committer`
 - `security-auditor`
 - `spec-reviewer`
@@ -87,17 +91,32 @@ The command prompt wrappers are:
 - `review`
 - `atomic-commit`
 - `orchestrate`
+- `orchestrate-loop`
+- `resolve-conflicts`
+- `grill`
+- `why`
+- `triage`
+- `create-verification-skill`
 
 ### Support skills
 
 The GSD workflow templates live in `commands/`. The plugin also ships these supporting skills:
 
+- `draht` — router and catalog for the skill family
+- `gsd-workflow`
 - `tdd-workflow`
 - `ddd-workflow`
 - `verification-gate`
 - `brainstorming`
 - `debugging-workflow`
 - `atomic-reasoning`
+- `loop-workflow`
+- `model-tiering`
+- `saga-spawner`
+- `unslop` — cut AI tells from prose deliverables, then add voice back
+- `epistemics` — confidence calibration for investigation findings
+- `typescript-discipline` — make illegal states unrepresentable
+- `blast-radius` — impact analysis beyond the diff on the evidence ladder
 - `cinematic-continuation` — provider-neutral, time-coded video continuation from bundled distilled style and continuity references
 
 ### Hooks and scripts

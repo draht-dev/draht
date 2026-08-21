@@ -125,9 +125,9 @@ Options:
 What this installs:
   • Local Claude Code marketplace named "${MARKETPLACE_NAME}" at ~/.draht/claude-marketplace/
   • Plugin "${PLUGIN_NAME}" inside that marketplace, registered and enabled
-  • 19 slash commands (/new-project, /plan-phase, /execute-phase, /orchestrate, ...)
-  • 9 specialist subagents (architect, implementer, reviewer, debugger, ...)
-  • 12 bundled skills (gsd-workflow, tdd-workflow, debugging-workflow, ...)
+  • 22 slash commands (/new-project, /plan-phase, /execute-phase, /orchestrate, ...)
+  • 10 specialist subagents (architect, implementer, reviewer, debugger, ...)
+  • 16 bundled skills (gsd-workflow, tdd-workflow, debugging-workflow, ...)
   • Workflow hook scripts (pre-execute, post-task, post-phase, quality-gate)
   • Claude Code lifecycle hooks (SessionStart, UserPromptSubmit)
   • Self-contained draht-tools CLI (JS graph engine built in — works out of the box)

@@ -599,6 +599,7 @@ console.log("\nGSD prompt templates (packages/coding-agent/prompts/)");
 
 const requiredCommandPrompts = [
 	"atomic-commit",
+	"create-verification-skill",
 	"discuss-phase",
 	"execute-phase",
 	"fix",

@@ -6578,19 +6578,16 @@ export class InteractiveMode {
 		// Radius artifacts natively support JSONL sessions. Gist fallback keeps the legacy HTML upload.
 		const jsonlFile = path.join(os.tmpdir(), "session.jsonl");
 		const htmlFile = path.join(os.tmpdir(), "session.html");
-		const useRadiusShare = process.env.PI_EXPERIMENTAL === "1";
 
 		try {
-			if (useRadiusShare) {
-				try {
-					this.session.exportToJsonl(jsonlFile);
-				} catch (error: unknown) {
-					this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-					return;
-				}
-				const radiusResult = await this.tryShareViaRadius(jsonlFile);
-				if (radiusResult !== "radius-unavailable") return;
+			try {
+				this.session.exportToJsonl(jsonlFile);
+			} catch (error: unknown) {
+				this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
+				return;
 			}
+			const radiusResult = await this.tryShareViaRadius(jsonlFile);
+			if (radiusResult !== "radius-unavailable") return;
 
 			try {
 				await this.session.exportToHtml(htmlFile, { themeName: theme.name });
@@ -6616,20 +6613,10 @@ export class InteractiveMode {
 
 		const gatewayUrl = DEFAULT_RADIUS_GATEWAY;
 
-		let token = getAuthCredential(
-			await this.session.modelRuntime.getAuth("radius", { minOAuthValidityMs: 30 * 60_000 }),
+		const token = getAuthCredential(
+			await this.session.modelRuntime.getAuth("radius", { minOAuthValidityMs: 5 * 60_000 }),
 		);
-		if (!token) {
-			this.showStatus("Signing in to Radius...");
-			await this.showLoginDialog("radius", provider.name || "Radius");
-			token = getAuthCredential(
-				await this.session.modelRuntime.getAuth("radius", { minOAuthValidityMs: 30 * 60_000 }),
-			);
-		}
-		if (!token) {
-			this.showError("Radius is not logged in. Run `/login radius` and try /share again.");
-			return "shared";
-		}
+		if (!token) return "radius-unavailable";
 
 		const loader = new BorderedLoader(this.ui, theme, "Uploading to Radius...");
 		this.editorContainer.clear();
@@ -6674,14 +6661,11 @@ export class InteractiveMode {
 				this.showError("Failed to upload Radius artifact: response did not include a share URL");
 				return "shared";
 			}
-			const themedShareUrl = this.withUrlParam(shareUrl, "theme", "dark");
 			const artifactId = this.radiusArtifactIdFromUrl(shareUrl);
 			const previewUrl =
-				json.artifact.visibility === "public" && artifactId
-					? getShareViewerUrl(`radius/${artifactId}&theme=dark`)
-					: themedShareUrl;
+				json.artifact.visibility === "public" && artifactId ? getShareViewerUrl(`radius/${artifactId}`) : shareUrl;
 			const visibilityNote = json.artifact.visibility === "public" ? "" : " (private; sign-in required)";
-			this.showStatus(`Share URL: ${previewUrl}${visibilityNote}\nRadius artifact: ${themedShareUrl}`);
+			this.showStatus(`Share URL: ${previewUrl}${visibilityNote}\nRadius artifact: ${shareUrl}`);
 			return "shared";
 		} catch (error: unknown) {
 			if (!loader.signal.aborted) {
@@ -6772,16 +6756,6 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
 		this.ui.setFocus(this.editor);
-	}
-
-	private withUrlParam(value: string, name: string, paramValue: string): string {
-		try {
-			const url = new URL(value);
-			url.searchParams.set(name, paramValue);
-			return url.toString();
-		} catch {
-			return value;
-		}
 	}
 
 	private radiusArtifactIdFromUrl(value: string): string | null {

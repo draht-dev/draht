@@ -16,6 +16,9 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@draht/geist-console": "workspace:*",
+		"@draht/geist-core": "workspace:*",
+		"@draht/geist-protocol": "workspace:*",
 		"hono": "^4.12.5"
 	},
 	"devDependencies": {

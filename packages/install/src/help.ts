@@ -5,6 +5,20 @@ const INSTALL_HELP = `draht-install — transactional management of Draht compon
 Usage:
   draht-install <command> [components…] [options]
 
+Not the same command as "draht install":
+  draht-install <command>
+                       This command. Manages Draht's machine-level components
+                       — the Claude and Codex plugin payloads, the draht
+                       coding agent, and this installer itself — as
+                       transactions recorded under ~/.draht/install.
+  draht install <source>
+                       A different program: the extension manager built into
+                       the draht coding agent, which adds an extension source
+                       to that agent's settings. "draht" is the bin of the
+                       "coding-agent" component, which draht-install installs;
+                       it manages that agent's extensions, never this machine's
+                       components.
+
 Commands:
   plan                 Show what install/update would change. Exits 2 when changes are pending.
   install              Apply the resolved plan transactionally.
@@ -34,6 +48,12 @@ Environment:
   DRAHT_REGISTRY       Override the npm registry base URL.
   DRAHT_HOME           Override the home directory used to resolve component targets.
 
+Machine-readable output:
+  Every --json shape is pinned by a JSON Schema shipped in this package's
+  schemas/ directory (plan, status, doctor, version, the error document, and
+  the install/update, uninstall and init NDJSON streams). Every document
+  carries "schemaVersion".
+
 Exit codes:
   0 ok · 1 error · 2 changes pending · 3 blocked or partially applied
 `;
@@ -42,6 +62,21 @@ const INIT_HELP = `draht-init — bootstrap a Draht project in a directory
 
 Usage:
   draht-init [directory] [options]
+
+Three different programs, easily confused:
+  draht-init [directory]
+                       This command. Bootstraps one project directory.
+  draht-install <command>
+                       Manages Draht's machine-level components on this machine
+                       — the Claude and Codex plugin payloads, the draht
+                       coding agent, and the installer itself. draht-init calls
+                       the same engine to ensure components before scaffolding.
+  draht install <source>
+                       The extension manager built into the draht coding agent,
+                       which adds an extension source to that agent's settings.
+                       "draht" is the bin of the "coding-agent" component; it
+                       touches only that agent's extensions, never machine
+                       components and never a project scaffold.
 
 Ensures the requested Draht components are present, then scaffolds the project's
 .planning/ tree by invoking the bundled draht-tools CLI. The directory defaults
@@ -64,6 +99,10 @@ Environment:
   DRAHT_INSTALL_DIR    Override the state root (default ~/.draht/install).
   DRAHT_REGISTRY       Override the npm registry base URL.
   DRAHT_TOOLS_BIN      Override the resolved draht-tools entry script.
+
+Machine-readable output:
+  --json writes one NDJSON record per line; its shape is pinned by
+  schemas/init-stream.schema.json, shipped in this package.
 
 Exit codes:
   0 ok · 1 error · 3 blocked or partially applied

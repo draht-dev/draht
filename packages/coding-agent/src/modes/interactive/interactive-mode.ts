@@ -61,6 +61,16 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { CheckpointManager } from "../../core/checkpoints/checkpoint-manager.ts";
+import {
+	DEFAULT_REWIND_SCOPE,
+	listRewindTargets,
+	type PerformRewindResult,
+	performRewind,
+	REWIND_SCOPE_CHOICES,
+	type RewindScope,
+	rewindScopeForLabel,
+} from "../../core/checkpoints/rewind.ts";
 import { formatContextWindow } from "../../core/context-windows.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -387,6 +397,11 @@ export class InteractiveMode {
 
 	// Track if editor is in bash mode (text starts with !)
 	private isBashMode = false;
+
+	// True while `/rewind` is rewriting the working tree. The selector hands
+	// focus back to the editor before the restore finishes, so submissions have
+	// to be gated here or a new prompt runs against a half-restored tree.
+	private isRewindRunning = false;
 
 	// Track current bash execution component
 	private bashComponent: BashExecutionComponent | undefined = undefined;
@@ -2634,6 +2649,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
+		this.defaultEditor.onAction("app.session.rewind", () => this.showRewindSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
@@ -2681,6 +2697,15 @@ export class InteractiveMode {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
 			if (!text) return;
+
+			// A `/rewind` is rewriting the working tree right now. Anything
+			// submitted here would run against a tree that is mid-restore, so
+			// hold the text in the editor the way the bash guard below does.
+			if (this.isRewindRunning) {
+				this.showWarning("A rewind is restoring your files. Wait for it to finish.");
+				this.editor.setText(text);
+				return;
+			}
 
 			// Handle commands
 			if (text === "/settings") {
@@ -2751,6 +2776,11 @@ export class InteractiveMode {
 			}
 			if (text === "/tree") {
 				this.showTreeSelector();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/rewind") {
+				this.showRewindSelector();
 				this.editor.setText("");
 				return;
 			}
@@ -4681,6 +4711,14 @@ export class InteractiveMode {
 				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
 				async (entryId) => {
 					done();
+					// The user committed to forking: stop the active response first,
+					// the same way /tree and /rewind do. The fork fires the
+					// checkpoint restore offer, and that must never rewrite the
+					// working tree while the agent is still writing to it.
+					if (this.session.isStreaming) {
+						this.restoreQueuedMessagesToEditor();
+						await this.session.abort();
+					}
 					try {
 						const result = await this.runtimeHost.fork(entryId);
 						if (result.cancelled) {
@@ -4864,6 +4902,147 @@ export class InteractiveMode {
 			};
 			return { component: selector, focus: selector };
 		});
+	}
+
+	/** Checkpoint manager for the live session; undefined before a session file exists. */
+	private createCheckpointManager(): CheckpointManager | undefined {
+		const sessionFile = this.sessionManager.getSessionFile();
+		if (!sessionFile) return undefined;
+		return new CheckpointManager({
+			cwd: this.sessionManager.getCwd(),
+			sessionId: this.sessionManager.getSessionId(),
+			sessionFile,
+		});
+	}
+
+	/**
+	 * `/rewind` (R42-RWD.1): the tree selector, restricted to entries that have a
+	 * checkpoint and annotated with its time and dirty-file count, followed by the
+	 * restore-scope menu (R42-RWD.2). Entries on abandoned branches keep their
+	 * checkpoints, so rewinding forward to one is just another selection (R42-RWD.6).
+	 */
+	private showRewindSelector(initialSelectedId?: string): void {
+		const tree = this.sessionManager.getTree();
+		if (tree.length === 0) {
+			this.showStatus("No entries in session");
+			return;
+		}
+
+		const manager = this.createCheckpointManager();
+		const targets = manager ? listRewindTargets(manager.list()) : [];
+		const checkpoints =
+			targets.length > 0
+				? new Map(
+						targets.map((target) => [
+							target.entryId,
+							{ timestamp: target.timestamp, dirtyFileCount: target.dirtyFileCount },
+						]),
+					)
+				: undefined;
+
+		if (!checkpoints) {
+			// No snapshots (e.g. a non-git cwd): still rewind the conversation.
+			this.showStatus("No checkpoints recorded - /rewind will restore the conversation only");
+		}
+
+		this.showSelector((done) => {
+			const selector = new TreeSelectorComponent(
+				tree,
+				this.sessionManager.getLeafId(),
+				this.ui.terminal.rows,
+				async (entryId) => {
+					done();
+
+					if (!checkpoints) {
+						await this.runRewind(entryId, "conversation-only", undefined);
+						return;
+					}
+
+					const label = await this.showExtensionSelector(
+						"Restore scope?",
+						REWIND_SCOPE_CHOICES.map((choice) => choice.label),
+					);
+					if (label === undefined) {
+						// Escape returns to the selector with the same entry focused.
+						this.showRewindSelector(entryId);
+						return;
+					}
+					await this.runRewind(entryId, rewindScopeForLabel(label) ?? DEFAULT_REWIND_SCOPE, manager);
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				undefined,
+				initialSelectedId,
+				undefined,
+				{ title: "Rewind", checkpoints },
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	/**
+	 * Run the rewind under the chosen scope. The conversation leaf is moved by
+	 * `performRewind` through this navigate callback, which it only invokes once
+	 * the file restore has succeeded (R42-RWD.5).
+	 */
+	private async runRewind(
+		targetEntryId: string,
+		scope: RewindScope,
+		manager: CheckpointManager | undefined,
+	): Promise<void> {
+		const currentEntryId = this.sessionManager.getLeafId();
+		if (!currentEntryId) {
+			this.showStatus("Nothing to rewind yet");
+			return;
+		}
+		if (targetEntryId === currentEntryId && scope === "conversation-only") {
+			this.showStatus("Already at this point");
+			return;
+		}
+
+		// The user committed to rewinding: stop the active response first.
+		if (this.session.isStreaming) {
+			this.restoreQueuedMessagesToEditor();
+			await this.session.abort();
+		}
+
+		// The selector already called `done()`, so the editor has focus again
+		// while this runs. Block submissions until the restore is finished
+		// rather than let a new prompt race the file writes.
+		this.isRewindRunning = true;
+		let result: PerformRewindResult;
+		try {
+			result = await performRewind({
+				manager,
+				scope,
+				targetEntryId,
+				currentEntryId,
+				// Gives extensions the `session_before_rewind` veto (R42-RWD.8).
+				runner: this.session.extensionRunner,
+				navigate: async () => {
+					if (targetEntryId === currentEntryId) return;
+					const navigation = await this.session.navigateTree(targetEntryId, { summarize: false });
+					if (navigation.cancelled) throw new Error("navigation cancelled");
+					this.chatContainer.clear();
+					this.renderInitialMessages();
+					if (navigation.editorText && !this.editor.getText().trim()) {
+						this.editor.setText(navigation.editorText);
+					}
+					void this.flushCompactionQueue({ willRetry: false });
+				},
+			});
+		} finally {
+			this.isRewindRunning = false;
+		}
+
+		if (result.ok) {
+			this.showStatus(result.message);
+		} else {
+			this.showError(result.message);
+		}
+		this.ui.requestRender();
 	}
 
 	private showSessionSelector(): void {

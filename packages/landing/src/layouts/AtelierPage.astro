@@ -6,13 +6,14 @@ interface Props {
 	title: string;
 	description: string;
 	ogImage?: string;
+	lang?: string;
 }
 
-const { title, description, ogImage = "/og.png" } = Astro.props;
+const { title, description, ogImage = "/og.png", lang = "en" } = Astro.props;
 const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 ---
 
-<html lang="en">
+<html lang={lang}>
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -304,6 +305,7 @@ const canonicalUrl = new URL(Astro.url.pathname, "https://draht.dev");
 				<div class="foot-col">
 					<h6>Werkstatt</h6>
 					<a href="https://github.com/draht-dev/draht">Source on GitHub</a>
+					<a href="https://x.com/freyedev">Follow on X ↗</a>
 					<a href="https://www.npmjs.com/package/draht-claude">Plugin on npm</a>
 					<a href="/docs">Documentation</a>
 					<a href="/blog">Blog</a>

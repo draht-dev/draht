@@ -8,11 +8,25 @@
  * - Clients can join/leave without disrupting the session
  */
 
-import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import path from "node:path";
+import { assertValidSessionId } from "../session-manager.js";
+import { isProcessRunning } from "./discovery.js";
 import type { ClientMessage, ClientMode, ConnectedClient, ServerMessage } from "./types.js";
+
+/**
+ * How long {@link SocketServer.stop} waits for peers to close their end before it
+ * forces the remaining sockets down.
+ */
+const STOP_CLOSE_TIMEOUT_MS = 1000;
+
+/**
+ * How long a lock file with no readable PID has to sit untouched before it counts as
+ * debris rather than as a claim another starter is in the middle of writing.
+ */
+const UNWRITTEN_LOCK_STALE_MS = 10_000;
 
 export interface SocketServerOptions {
 	/** Session ID (used for socket filename) */
@@ -25,6 +39,40 @@ export interface SocketServerOptions {
 	maxClients?: number;
 	/** Whether to echo input to all clients (tmux-style) */
 	broadcastInputEcho?: boolean;
+}
+
+/**
+ * Thrown when another live process already owns the socket for this session id.
+ *
+ * Taking the socket over would silently steal attachments from a running session,
+ * so the second process refuses to bind instead.
+ */
+export class SocketSessionBusyError extends Error {
+	readonly sessionId: string;
+	/** PID of the owning process, or null when the lock exists but names no readable PID. */
+	readonly ownerPid: number | null;
+	readonly socketPath: string;
+
+	constructor(sessionId: string, ownerPid: number | null, socketPath: string) {
+		// Two genuinely different situations - do not describe them the same way. A
+		// readable PID means a live process really does own this session. An
+		// unreadable lock usually means another process is claiming it right now, but
+		// it is equally a lock left truncated by a process killed mid-claim, in which
+		// case nothing is running and the claim clears itself shortly.
+		super(
+			ownerPid === null
+				? `Session "${sessionId}" has an attachable lock that names no readable PID. ` +
+						`Another process is probably claiming it right now; it can also be debris from a ` +
+						`process killed mid-claim, in which case it clears itself within ` +
+						`${Math.round(UNWRITTEN_LOCK_STALE_MS / 1000)}s. Retry shortly. Socket: ${socketPath}`
+				: `Session "${sessionId}" is already attachable from a running process (PID ${ownerPid}). ` +
+						`Attach to it instead, or stop that process. Socket: ${socketPath}`,
+		);
+		this.name = "SocketSessionBusyError";
+		this.sessionId = sessionId;
+		this.ownerPid = ownerPid;
+		this.socketPath = socketPath;
+	}
 }
 
 /**
@@ -43,12 +91,29 @@ export class SocketServer {
 
 	#server: Server | null = null;
 	#clients = new Map<string, ConnectedClient>();
+	/**
+	 * Every accepted connection, including ones that never sent an `attach` frame.
+	 * `#clients` only holds attached peers, and shutdown has to reach the others too.
+	 */
+	#sockets = new Set<Socket>();
 	#createdAt = new Date();
+	#stopped = false;
+	/**
+	 * Whether THIS instance won the exclusive lock create. Only an owner may remove
+	 * the socket/lock files; an instance whose start() was refused must never delete
+	 * the live owner's files.
+	 */
+	#ownsLock = false;
+	#rejectListen: ((error: Error) => void) | null = null;
 
 	/** Callback for input received from any client */
 	#onInput: ((data: string, clientId: string) => void) | null = null;
 
 	constructor(options: SocketServerOptions) {
+		// The id becomes a path component of the .sock and .lock files, and it arrives here
+		// straight from a session file on disk, so it is untrusted input. Reject anything
+		// that is not a plain session id rather than trying to sanitize it.
+		assertValidSessionId(options.sessionId);
 		this.#sessionId = options.sessionId;
 		this.#cwd = options.cwd;
 		this.#maxClients = options.maxClients ?? 10;
@@ -60,55 +125,145 @@ export class SocketServer {
 
 	/**
 	 * Start the socket server.
-	 * Creates socket directory, binds Unix socket, and starts listening.
+	 * Creates socket directory, claims the session lock, binds the Unix socket, and listens.
+	 *
+	 * @throws {SocketSessionBusyError} When another live process already owns this session's socket.
 	 */
 	async start(): Promise<void> {
-		// Ensure socket directory exists
+		// Ensure socket directory exists and is owner-only. `mkdir` applies its mode only
+		// when it creates the directory, and masks it with the umask, so re-assert it.
 		const socketDir = path.dirname(this.#socketPath);
 		await mkdir(socketDir, { recursive: true, mode: 0o700 });
+		await chmod(socketDir, 0o700);
 
-		// Clean up stale socket if it exists
-		if (existsSync(this.#socketPath)) {
-			await rm(this.#socketPath, { force: true });
+		// Take ownership of the session id before touching the socket path.
+		await this.#claimLock();
+
+		try {
+			this.#server = createServer((socket) => this.#handleConnection(socket));
+			const server = this.#server;
+
+			// One long-lived error listener: it rejects the pending listen() and swallows
+			// post-startup server errors, which must not become uncaught exceptions.
+			server.on("error", (error: Error) => {
+				const reject = this.#rejectListen;
+				this.#rejectListen = null;
+				reject?.(error);
+			});
+
+			await new Promise<void>((resolve, reject) => {
+				this.#rejectListen = reject;
+				server.listen(this.#socketPath, () => {
+					this.#rejectListen = null;
+					resolve();
+				});
+			});
+
+			// bind(2) applies the process umask, so tighten the socket explicitly. Between
+			// bind and this chmod the socket is still unreachable for other users: it can
+			// only be named through the 0700 directory above, and Unix-domain permissions
+			// are enforced at connect(2) time. Mutating the process-global umask instead
+			// would leak into every unrelated file this process creates concurrently.
+			await chmod(this.#socketPath, 0o600);
+		} catch (error) {
+			// Never leave a lock behind that advertises a socket which was never bound.
+			this.#server = null;
+			this.#rejectListen = null;
+			await rm(this.#lockPath, { force: true }).catch(() => {});
+			await rm(this.#socketPath, { force: true }).catch(() => {});
+			throw error;
 		}
-
-		// Write PID lock file for cleanup on crash
-		await writeFile(this.#lockPath, `${process.pid}\n${this.#cwd}\n${this.#createdAt.toISOString()}`);
-
-		// Create Unix domain socket server
-		this.#server = createServer((socket) => this.#handleConnection(socket));
-
-		// Bind to socket path
-		await new Promise<void>((resolve, reject) => {
-			this.#server!.listen(this.#socketPath, () => resolve());
-			this.#server!.on("error", reject);
-		});
-
-		// Set socket permissions (owner-only)
-		await import("node:fs/promises").then((fs) => fs.chmod(this.#socketPath, 0o600));
 	}
 
 	/**
 	 * Stop the socket server and clean up.
 	 */
 	async stop(): Promise<void> {
-		// Disconnect all clients
-		for (const client of this.#clients.values()) {
-			client.socket.end();
+		if (this.#stopped) return;
+		this.#stopped = true;
+
+		// Half-close every accepted connection, not just the attached clients: a peer that
+		// connected and never sent an `attach` frame is not in #clients, and leaving it open
+		// would keep server.close() from ever calling back.
+		for (const socket of this.#sockets) {
+			try {
+				socket.end();
+			} catch {}
 		}
 		this.#clients.clear();
 
 		// Close server
 		if (this.#server) {
-			await new Promise<void>((resolve) => {
-				this.#server!.close(() => resolve());
-			});
+			const server = this.#server;
 			this.#server = null;
+			await new Promise<void>((resolve) => {
+				// A peer that never closes its own half - a non-Node bridge, say - must not be
+				// able to wedge shutdown forever. Force the stragglers down after a grace
+				// period and carry on; the .sock/.lock cleanup below then runs either way.
+				const timer = setTimeout(() => {
+					for (const socket of this.#sockets) {
+						try {
+							socket.destroy();
+						} catch {}
+					}
+					this.#sockets.clear();
+					resolve();
+				}, STOP_CLOSE_TIMEOUT_MS);
+				server.close(() => {
+					clearTimeout(timer);
+					resolve();
+				});
+			});
+		}
+		this.#sockets.clear();
+
+		// Clean up socket and lock files — but only if this instance owns them. A
+		// server whose start() was refused with SocketSessionBusyError never claimed
+		// the lock; deleting these paths would destroy the LIVE owner's files and let
+		// a third process steal the session id.
+		if (this.#ownsLock) {
+			this.#ownsLock = false;
+			await rm(this.#socketPath, { force: true });
+			await rm(this.#lockPath, { force: true });
+		}
+	}
+
+	/**
+	 * Stop the socket server from a synchronous exit path.
+	 *
+	 * `process.on("exit")` and signal handlers cannot await, so this does the same
+	 * teardown as {@link stop} without yielding to the event loop.
+	 */
+	stopSync(): void {
+		if (this.#stopped) return;
+		this.#stopped = true;
+
+		for (const socket of this.#sockets) {
+			try {
+				socket.destroy();
+			} catch {}
+		}
+		this.#sockets.clear();
+		this.#clients.clear();
+
+		if (this.#server) {
+			const server = this.#server;
+			this.#server = null;
+			try {
+				server.close();
+			} catch {}
 		}
 
-		// Clean up socket and lock files
-		await rm(this.#socketPath, { force: true });
-		await rm(this.#lockPath, { force: true });
+		// Only remove files this instance actually claimed — see stop().
+		if (this.#ownsLock) {
+			this.#ownsLock = false;
+			try {
+				rmSync(this.#socketPath, { force: true });
+			} catch {}
+			try {
+				rmSync(this.#lockPath, { force: true });
+			} catch {}
+		}
 	}
 
 	/**
@@ -127,6 +282,23 @@ export class SocketServer {
 	}
 
 	/**
+	 * Broadcast an error to all connected clients.
+	 */
+	broadcastError(message: string, code?: string): void {
+		const error: ServerMessage = { type: "error", message, code };
+		this.#broadcast(error);
+	}
+
+	/**
+	 * Send an error to one specific client, if it is still connected.
+	 */
+	sendErrorToClient(clientId: string, message: string, code?: string): void {
+		const client = this.#clients.get(clientId);
+		if (!client) return;
+		this.#sendError(client.socket, message, code);
+	}
+
+	/**
 	 * Set callback for input received from clients.
 	 */
 	onInput(callback: (data: string, clientId: string) => void): void {
@@ -141,6 +313,13 @@ export class SocketServer {
 	}
 
 	/**
+	 * Get the session id this socket is bound to.
+	 */
+	get sessionId(): string {
+		return this.#sessionId;
+	}
+
+	/**
 	 * Get number of connected clients.
 	 */
 	get clientCount(): number {
@@ -148,9 +327,82 @@ export class SocketServer {
 	}
 
 	/**
+	 * Claim the session lock, or refuse when a live process already holds it.
+	 *
+	 * The lock file is created exclusively so two processes racing for the same session id
+	 * cannot both believe they won. An existing lock is only reaped when its PID is dead
+	 * (or is our own leftover, e.g. re-binding after a session switch). A lock that exists
+	 * but names no readable PID counts as held, not as dead: the exclusive create and the
+	 * PID write are two steps, and reaping in between would steal a live owner's session.
+	 */
+	async #claimLock(): Promise<void> {
+		const contents = `${process.pid}\n${this.#cwd}\n${this.#createdAt.toISOString()}`;
+
+		for (let attempt = 0; attempt < 2; attempt++) {
+			try {
+				await writeFile(this.#lockPath, contents, { flag: "wx", mode: 0o600 });
+				// A leftover socket from a dead owner cannot be connected to; remove it so
+				// listen() can bind the path.
+				await rm(this.#socketPath, { force: true });
+				this.#ownsLock = true;
+				return;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error;
+			}
+
+			const ownerPid = await this.#readLockPid();
+			if (ownerPid === null) {
+				// The lock exists but names no readable PID. The likely cause is a starter that
+				// won the exclusive create microseconds ago and has not written its PID yet;
+				// reaping it here would hand the same session id to two live processes. Only a
+				// lock that has sat unwritten far longer than any write takes counts as debris.
+				if (!(await this.#lockIsAbandoned())) {
+					throw new SocketSessionBusyError(this.#sessionId, null, this.#socketPath);
+				}
+			} else if (ownerPid !== process.pid && isProcessRunning(ownerPid)) {
+				throw new SocketSessionBusyError(this.#sessionId, ownerPid, this.#socketPath);
+			}
+
+			// Dead owner, our own leftover, or abandoned debris: reap and retry the create.
+			await rm(this.#lockPath, { force: true });
+			await rm(this.#socketPath, { force: true });
+		}
+
+		throw new Error(`Could not claim the attachable-session lock at ${this.#lockPath}`);
+	}
+
+	/**
+	 * Whether an existing lock with no readable PID is old enough to count as debris
+	 * rather than as a claim another process is in the middle of writing.
+	 */
+	async #lockIsAbandoned(): Promise<boolean> {
+		try {
+			const info = await stat(this.#lockPath);
+			return Date.now() - info.mtimeMs > UNWRITTEN_LOCK_STALE_MS;
+		} catch {
+			// It vanished while we looked at it: the session id is free again.
+			return true;
+		}
+	}
+
+	/**
+	 * Read the PID recorded in an existing lock file, or null when it is unreadable.
+	 */
+	async #readLockPid(): Promise<number | null> {
+		try {
+			const contents = await readFile(this.#lockPath, "utf-8");
+			const pid = Number.parseInt(contents.trim().split("\n")[0], 10);
+			return Number.isInteger(pid) ? pid : null;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
 	 * Handle new client connection.
 	 */
 	#handleConnection(socket: Socket): void {
+		this.#sockets.add(socket);
 		let clientId: string | null = null;
 		let _mode: ClientMode = "read-write";
 		let buffer = "";
@@ -178,6 +430,7 @@ export class SocketServer {
 
 		// Handle client disconnect
 		socket.on("close", () => {
+			this.#sockets.delete(socket);
 			if (clientId) {
 				this.#handleClientDisconnect(clientId);
 			}

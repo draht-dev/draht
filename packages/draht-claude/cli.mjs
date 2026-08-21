@@ -125,11 +125,11 @@ Options:
 What this installs:
   • Local Claude Code marketplace named "${MARKETPLACE_NAME}" at ~/.draht/claude-marketplace/
   • Plugin "${PLUGIN_NAME}" inside that marketplace, registered and enabled
-  • 22 slash commands (/new-project, /plan-phase, /execute-phase, /orchestrate, ...)
-  • 10 specialist subagents (architect, implementer, reviewer, debugger, ...)
-  • 16 bundled skills (gsd-workflow, tdd-workflow, debugging-workflow, ...)
+  • 23 slash commands (/new-project, /plan-phase, /execute-phase, /orchestrate, ...)
+  • 11 specialist subagents (architect, implementer, reviewer, debugger, ...)
+  • 16 bundled skills (gsd-workflow, tdd-workflow, ddd-workflow, ...)
   • Workflow hook scripts (pre-execute, post-task, post-phase, quality-gate)
-  • Claude Code lifecycle hooks (SessionStart, UserPromptSubmit)
+  • 4 Claude Code lifecycle hooks (SessionStart, UserPromptSubmit, PostToolUse, Stop)
   • Self-contained draht-tools CLI (JS graph engine built in — works out of the box)
 
 Optional, not installed by default:
@@ -512,14 +512,18 @@ function rollbackClaudePlugin(transaction, previousState, pluginSpec) {
 				failures.push("could not reinstall the previously working plugin");
 				return failures;
 			}
-			const stateCommand = previousState.plugin.enabled ? "enable" : "disable";
-			let reinstalled = null;
+			// Same idempotency hazard as the primary install path: reinstalling
+			// already left the plugin enabled, so only call enable/disable when the
+			// reinstalled state actually differs from what is being restored.
+			let reinstalledState;
 			try {
-				reinstalled = claudePluginState(pluginSpec);
-			} catch {
-				reinstalled = null;
+				reinstalledState = claudePluginState(pluginSpec);
+			} catch (error) {
+				failures.push(`could not inspect plugin state after reinstall: ${error.message}`);
+				return failures;
 			}
-			if (!(reinstalled && reinstalled.installed && reinstalled.enabled === previousState.plugin.enabled)) {
+			if (reinstalledState.enabled !== previousState.plugin.enabled) {
+				const stateCommand = previousState.plugin.enabled ? "enable" : "disable";
 				if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
 			}
 		}
@@ -961,12 +965,15 @@ async function cmdInstall(flags) {
 		if (!runClaude(["plugin", "install", pluginSpec, "--scope", "user"], { allowFail: true })) throw new Error("replacement install failed");
 
 		const shouldEnable = previousState.plugin.installed ? previousState.plugin.enabled : true;
-		const stateCommand = shouldEnable ? "enable" : "disable";
-		const stateAfterInstall = claudePluginState(pluginSpec);
-		if (stateAfterInstall.installed && stateAfterInstall.enabled === shouldEnable) {
-			log(`Plugin already ${stateCommand}d after install; skipping ${stateCommand}.`);
-		} else if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) {
-			throw new Error(`plugin ${stateCommand} failed`);
+		// `claude plugin install` leaves the plugin enabled as a side effect, and
+		// the real CLI rejects a redundant `plugin enable`/`disable` call on a
+		// plugin already in that state ("already enabled", non-zero exit) instead
+		// of treating it as a no-op — so only call it when the state actually
+		// needs to change.
+		const postInstallState = claudePluginState(pluginSpec);
+		if (postInstallState.enabled !== shouldEnable) {
+			const stateCommand = shouldEnable ? "enable" : "disable";
+			if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) throw new Error(`plugin ${stateCommand} failed`);
 		}
 		const installedState = claudePluginState(pluginSpec);
 		if (!installedState.installed || installedState.enabled !== shouldEnable) throw new Error("post-install plugin state verification failed");

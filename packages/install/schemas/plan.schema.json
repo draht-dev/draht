@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "draht-install plan --json",
+  "description": "The single document `plan --json` writes. Exit code 2 means `actions` is non-empty; exit code 3 means `blocked` is.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "command": {
+      "type": "string",
+      "const": "plan"
+    },
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "channel": {
+      "type": "string",
+      "const": "latest"
+    },
+    "profile": {
+      "type": "string",
+      "enum": [
+        "default",
+        "full",
+        "explicit"
+      ]
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "install"
+              },
+              "componentId": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "claude-plugin",
+                  "codex-plugin",
+                  "global-cli"
+                ]
+              },
+              "toVersion": {
+                "type": "string"
+              },
+              "source": {
+                "type": "object",
+                "properties": {
+                  "npmName": {
+                    "type": "string"
+                  },
+                  "resolvedVersion": {
+                    "type": "string"
+                  },
+                  "integrity": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "npmName",
+                  "resolvedVersion"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "type",
+              "componentId",
+              "kind",
+              "toVersion",
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "update"
+              },
+              "componentId": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "claude-plugin",
+                  "codex-plugin",
+                  "global-cli"
+                ]
+              },
+              "toVersion": {
+                "type": "string"
+              },
+              "fromVersion": {
+                "type": "string"
+              },
+              "source": {
+                "type": "object",
+                "properties": {
+                  "npmName": {
+                    "type": "string"
+                  },
+                  "resolvedVersion": {
+                    "type": "string"
+                  },
+                  "integrity": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "npmName",
+                  "resolvedVersion"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "type",
+              "componentId",
+              "kind",
+              "toVersion",
+              "fromVersion",
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "remove"
+              },
+              "componentId": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "claude-plugin",
+                  "codex-plugin",
+                  "global-cli"
+                ]
+              },
+              "fromVersion": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "componentId",
+              "kind",
+              "fromVersion"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "delegate-install"
+              },
+              "componentId": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "claude-plugin",
+                  "codex-plugin",
+                  "global-cli"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "componentId",
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "delegate-uninstall"
+              },
+              "componentId": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "claude-plugin",
+                  "codex-plugin",
+                  "global-cli"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "componentId",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "blocked": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "componentId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "const": "downgrade"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "componentId",
+          "reason",
+          "from",
+          "to"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "const": "host-absent"
+          },
+          "host": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "reason",
+          "host"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "hostMissing": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "host"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "command",
+    "ok",
+    "channel",
+    "profile",
+    "actions",
+    "blocked",
+    "skipped",
+    "hostMissing"
+  ],
+  "additionalProperties": false
+}

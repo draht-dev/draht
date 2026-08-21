@@ -1,0 +1,371 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.1",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer",
+	"normalizedFields": {
+		"pid": 1,
+		"startedAt": "1970-01-01T00:00:00.000Z",
+		"createdAt": "1970-01-01T00:00:00.000Z"
+	},
+	"transcript": [
+		{
+			"seq": 0,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.1",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 1,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.1",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				}
+			}
+		},
+		{
+			"seq": 2,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z"
+					}
+				]
+			}
+		},
+		{
+			"seq": 3,
+			"direction": "client-to-server",
+			"client": "client-a",
+			"frame": {
+				"type": "attach",
+				"sessionId": "conformance",
+				"clientId": "client-a",
+				"mode": "read-write"
+			}
+		},
+		{
+			"seq": 4,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "session_metadata",
+				"sessionId": "conformance",
+				"cwd": "/geist/conformance",
+				"createdAt": "1970-01-01T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 5,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "output",
+				"data": "geist conformance corpus\n",
+				"stream": "stdout"
+			}
+		},
+		{
+			"seq": 6,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.1",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 7,
+			"direction": "server-to-client",
+			"client": "client-b",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.1",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				}
+			}
+		},
+		{
+			"seq": 8,
+			"direction": "server-to-client",
+			"client": "client-b",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z"
+					}
+				]
+			}
+		},
+		{
+			"seq": 9,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "attach",
+				"sessionId": "conformance",
+				"clientId": "client-b",
+				"mode": "read-write"
+			}
+		},
+		{
+			"seq": 10,
+			"direction": "server-to-client",
+			"client": "client-b",
+			"frame": {
+				"type": "session_metadata",
+				"sessionId": "conformance",
+				"cwd": "/geist/conformance",
+				"createdAt": "1970-01-01T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 11,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "client_joined",
+				"clientId": "client-b",
+				"mode": "read-write"
+			}
+		},
+		{
+			"seq": 12,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "input",
+				"data": "ship it\n",
+				"clientId": "client-b"
+			}
+		},
+		{
+			"seq": 13,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "input_echo",
+				"data": "ship it\n",
+				"clientId": "client-b"
+			}
+		},
+		{
+			"seq": 14,
+			"direction": "client-to-server",
+			"client": "client-c",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.1",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 15,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.1",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				}
+			}
+		},
+		{
+			"seq": 16,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z"
+					}
+				]
+			}
+		},
+		{
+			"seq": 17,
+			"direction": "client-to-server",
+			"client": "client-c",
+			"frame": {
+				"type": "attach",
+				"sessionId": "conformance",
+				"clientId": "client-c",
+				"mode": "read-only"
+			}
+		},
+		{
+			"seq": 18,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "session_metadata",
+				"sessionId": "conformance",
+				"cwd": "/geist/conformance",
+				"createdAt": "1970-01-01T00:00:00.000Z"
+			}
+		},
+		{
+			"seq": 19,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "client_joined",
+				"clientId": "client-c",
+				"mode": "read-only"
+			}
+		},
+		{
+			"seq": 20,
+			"direction": "client-to-server",
+			"client": "client-c",
+			"frame": {
+				"type": "input",
+				"data": "let me in\n",
+				"clientId": "client-c"
+			}
+		},
+		{
+			"seq": 21,
+			"direction": "server-to-client",
+			"client": "client-c",
+			"frame": {
+				"type": "error",
+				"message": "Read-only clients cannot send input"
+			}
+		},
+		{
+			"seq": 22,
+			"direction": "client-to-server",
+			"client": "client-b",
+			"frame": {
+				"type": "detach",
+				"clientId": "client-b"
+			}
+		},
+		{
+			"seq": 23,
+			"direction": "server-to-client",
+			"client": "client-a",
+			"frame": {
+				"type": "client_left",
+				"clientId": "client-b"
+			}
+		},
+		{
+			"seq": 24,
+			"direction": "client-to-server",
+			"client": "client-d",
+			"frame": {
+				"type": "hello",
+				"protocol": "geist/0.x",
+				"version": "0.1",
+				"client": {
+					"name": "geist-conformance-recorder",
+					"version": "0.1.0"
+				}
+			}
+		},
+		{
+			"seq": 25,
+			"direction": "server-to-client",
+			"client": "client-d",
+			"frame": {
+				"type": "server_hello",
+				"protocol": "geist/0.x",
+				"version": "0.1",
+				"server": {
+					"name": "geist-reference-daemon",
+					"version": "0.1.0"
+				},
+				"limits": {
+					"maxFrameBytes": 65536,
+					"maxOutboundFrames": 1024,
+					"maxBufferedOutputBytes": 4194304
+				}
+			}
+		},
+		{
+			"seq": 26,
+			"direction": "server-to-client",
+			"client": "client-d",
+			"frame": {
+				"type": "fleet",
+				"sessions": [
+					{
+						"id": "conformance",
+						"cwd": "/geist/conformance",
+						"pid": 1,
+						"startedAt": "1970-01-01T00:00:00.000Z"
+					}
+				]
+			}
+		},
+		{
+			"seq": 27,
+			"direction": "server-to-client",
+			"client": "client-d",
+			"frame": {
+				"type": "protocol_error",
+				"code": "frame_too_large",
+				"message": "frame is 65584 bytes, cap is 65536"
+			}
+		}
+	]
+}

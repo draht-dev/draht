@@ -36,7 +36,7 @@ export class SocketClient {
 	#onClientJoined: ((clientId: string, mode: ClientMode) => void) | null = null;
 	#onClientLeft: ((clientId: string) => void) | null = null;
 	#onInputEcho: ((data: string, clientId: string) => void) | null = null;
-	#onError: ((message: string) => void) | null = null;
+	#onError: ((message: string, code?: string) => void) | null = null;
 	#onDisconnect: (() => void) | null = null;
 
 	constructor(options: SocketClientOptions) {
@@ -147,8 +147,11 @@ export class SocketClient {
 
 	/**
 	 * Set callback for errors.
+	 *
+	 * `code` identifies the frame: the caller needs it to tell a recoverable condition
+	 * (a rejected prompt, a replaced session) from a fatal one.
 	 */
-	onError(callback: (message: string) => void): void {
+	onError(callback: (message: string, code?: string) => void): void {
 		this.#onError = callback;
 	}
 
@@ -216,7 +219,7 @@ export class SocketClient {
 
 			case "error":
 				if (this.#onError) {
-					this.#onError(message.message);
+					this.#onError(message.message, message.code);
 				}
 				break;
 		}

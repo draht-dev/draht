@@ -194,6 +194,44 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("attachable session flags", () => {
+		test("parses --attachable flag", () => {
+			const result = parseArgs(["--attachable"]);
+			expect(result.attachable).toBe(true);
+			expect(result.unknownFlags.size).toBe(0);
+		});
+
+		test("--attachable is opt-in (absent by default)", () => {
+			const result = parseArgs([]);
+			expect(result.attachable).toBeUndefined();
+		});
+
+		test("parses --attach with a session id", () => {
+			const result = parseArgs(["--attach", "abc-123"]);
+			expect(result.attach).toBe("abc-123");
+			expect(result.messages).toEqual([]);
+		});
+
+		test("reports missing value for --attach", () => {
+			const result = parseArgs(["--attach"]);
+			expect(result.attach).toBeUndefined();
+			expect(result.diagnostics).toEqual([{ type: "error", message: "--attach requires a value" }]);
+		});
+
+		test("parses --list-sessions flag", () => {
+			const result = parseArgs(["--list-sessions"]);
+			expect(result.listSessions).toBe(true);
+			expect(result.unknownFlags.size).toBe(0);
+		});
+
+		test("works alongside other flags", () => {
+			const result = parseArgs(["--attachable", "--name", "shared-run", "hello"]);
+			expect(result.attachable).toBe(true);
+			expect(result.name).toBe("shared-run");
+			expect(result.messages).toEqual(["hello"]);
+		});
+	});
+
 	describe("--extension flag", () => {
 		test("parses single --extension", () => {
 			const result = parseArgs(["--extension", "./my-extension.ts"]);

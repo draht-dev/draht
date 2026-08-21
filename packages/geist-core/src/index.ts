@@ -1,4 +1,22 @@
 export type {
+	AttachBridgeOptions,
+	AttachIdentity,
+	AuthorizationRequest,
+	AuthorizationVerdict,
+	DeviceAuthenticator,
+	DeviceAuthResult,
+	PresentedCredential,
+	RendererConnection,
+} from "./attach/attach-bridge.js";
+export { AttachBridge, DEFAULT_AUTH_DEADLINE_MS } from "./attach/attach-bridge.js";
+export {
+	AGENT_DIR_ENV,
+	buildFleetFrame,
+	listAttachableSessions,
+	resolveSocketDir,
+	SOCKETS_DIR_NAME,
+} from "./attach/socket-sessions.js";
+export type {
 	ComposeElementContextInput,
 	ElementBoundingRect,
 	ElementContext,
@@ -52,6 +70,24 @@ export type {
 	ShaLedgerUndoResult,
 } from "./ledger/sha-ledger.js";
 export { isDirtyOrAhead, ShaLedger, ShaLedgerError } from "./ledger/sha-ledger.js";
+export type {
+	BootstrapToken,
+	DeviceMeta,
+	DeviceRegistryEvent,
+	DeviceRegistryOptions,
+	DeviceSummary,
+	ExchangeResult,
+	RevokeResult,
+	RotateResult,
+	VerifyResult,
+} from "./pairing/device-registry.js";
+export {
+	DEFAULT_BOOTSTRAP_TTL_MS,
+	DEVICE_REGISTRY_PATH_ENV,
+	DeviceRegistry,
+	DeviceRegistryError,
+	resolveDeviceRegistryPath,
+} from "./pairing/device-registry.js";
 export type {
 	PairingAttemptResult,
 	PairingStateOptions,

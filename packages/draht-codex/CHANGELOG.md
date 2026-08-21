@@ -34,6 +34,11 @@
 
 - implementer agent TDD commit prefixes now follow the enforced `red:`/`green:`/`refactor:` convention (previously `test:`/`feat:`, which the gsd-post-task hook's `red:`/`green:` cycle check could never match)
 
+### Fixed
+
+- plugin manifest version lockstep — `.codex-plugin/plugin.json` is now stamped by the automated release path (`setVersion` in `scripts/release-helpers.mjs`) as well as the manual `npm run version:*` path. The 2026.7.11 lockstep fix only patched the manual path, which the release pipeline never calls, so the manifest froze at `2026.7.7-1` while this package advanced from `2026.7.11` through `2026.7.30`. Both plugin manifests now read `2026.7.30`, matching their `package.json`
+- the two writers remain separate — the manual path stamps manifests through `scripts/lib/version-stamp.mjs`, while the automated path stamps them from its own path list in `scripts/release-helpers.mjs` — so two gates make any future divergence loud: `scripts/check-draht-customizations.mjs` fails when `.codex-plugin/plugin.json` disagrees with this package's `package.json` version, and `assertReleaseVersions` re-reads every stamped surface after a release writes it
+
 ## [2026.7.12] - 2026-07-12
 
 ### Changed

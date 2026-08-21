@@ -7,6 +7,13 @@ The Draht installer engine. One package, two bins:
 
 Both bins are the same entry point (`dist/cli.js`); the behavior is selected by the invoked basename.
 
+**`draht-install` is not `draht install`.** `draht` is the bin of the `coding-agent`
+component (the `@draht/coding-agent` package), and `draht install <source>` is that
+agent's own extension manager: it adds an extension source to the agent's settings.
+`draht-install <command>` — this package — manages machine-level components. The two
+share no state and neither can do the other's job. Both bins state the distinction in
+`--help`.
+
 > **Not published.** This package is `private: true`. Publication is gated by
 > `scripts/check-install-publishable.mjs`, which fails the repo-wide check and
 > the release script if `private` is removed while the exact package build and
@@ -127,6 +134,27 @@ Payload targets live outside the install root:
 - Human prose is never mixed into stdout in JSON mode. In human mode errors go to stderr; in JSON mode a schema-stable `{ ok: false, error: { code, message } }` record goes to stdout and the message is repeated on stderr. Mutation failures remain one-line NDJSON even after progress events have already streamed.
 - `error.code` is the stable machine-readable discriminator (`usage`, `lock-held`, `unsafe`, `integrity-mismatch`, …). `error.message` is prose and may change between releases — do not parse it.
 - No environment dump, no credentials, and no registry auth material appears in any output.
+
+Every one of those shapes is pinned by a checked-in JSON Schema (draft 2020-12) shipped
+in [`schemas/`](./schemas):
+
+| Schema | Emitted by |
+| --- | --- |
+| `version.schema.json` | `--version --json`, either bin |
+| `plan.schema.json` | `plan --json` |
+| `status.schema.json` | `status --json` |
+| `doctor.schema.json` | `doctor --json` |
+| `error.schema.json` | any `--json` command that fails |
+| `apply-stream.schema.json` | every line of `install --json` / `update --json` |
+| `uninstall-stream.schema.json` | every line of `uninstall --json` |
+| `init-stream.schema.json` | every line of `draht-init --json` |
+
+The schemas are strict — `additionalProperties: false` throughout — and are generated
+from `src/json-schema.ts`, which `test/json-contract.test.ts` holds to the checked-in
+artifacts while also validating real CLI output against it and snapshotting the observed
+shape of every verb. A change to any emitted shape fails that test rather than reaching
+consumers silently. `checkJsonContract(name, value)` is exported for consumers who want
+the same validation at runtime.
 
 ## Environment variables
 

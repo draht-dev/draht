@@ -5,49 +5,257 @@
  */
 
 import path from "node:path";
-import { getAgentDir } from "../../config.js";
+import { APP_NAME, getAgentDir } from "../../config.js";
 import type { AgentSession } from "../agent-session.js";
 import { SocketServer } from "./socket-server.js";
 
 export interface AttachableSessionOptions {
 	session: AgentSession;
 	enabled: boolean;
+	/**
+	 * Working directory of the session, recorded in the lock file so discovery can
+	 * report which project a session belongs to. This is the session's resolved cwd,
+	 * which differs from `process.cwd()` when a session from another project is
+	 * selected via --session/--resume.
+	 */
+	cwd: string;
+	/** Reports non-fatal problems (default: stderr). */
+	onWarning?: (message: string) => void;
+	/** Prints the startup banner (default: stdout). */
+	log?: (message: string) => void;
 }
+
+/**
+ * Handle for a session exposed on a Unix socket.
+ *
+ * The socket is bound to one session at a time. When the runtime replaces the session
+ * (/new, /resume, /fork, /import) the old session object is disposed, so the handle has
+ * to follow along via {@link AttachableSession.rebind}.
+ */
+export interface AttachableSession {
+	/** Path of the socket currently bound, or null when attachable mode is off or stopped. */
+	readonly socketPath: string | null;
+	/** Session id the socket currently advertises, or null when nothing is bound. */
+	readonly sessionId: string | null;
+	/** Follow a session replacement: close the old socket and bind one for the new session. */
+	rebind(session: AgentSession, cwd: string): Promise<void>;
+	/** Close the socket and remove the .sock/.lock files. */
+	stop(): Promise<void>;
+	/** Same as {@link stop}, for synchronous exit paths (`process.on("exit")`, signals). */
+	stopSync(): void;
+}
+
+const DISABLED_SESSION: AttachableSession = {
+	socketPath: null,
+	sessionId: null,
+	rebind: async () => {},
+	stop: async () => {},
+	stopSync: () => {},
+};
 
 /**
  * Wrap an agent session with a socket server if attachable mode is enabled.
  *
- * Returns cleanup function to stop the socket server.
+ * Returns a handle that owns the socket's lifetime.
  */
-export async function makeSessionAttachable(options: AttachableSessionOptions): Promise<() => Promise<void>> {
+export async function makeSessionAttachable(options: AttachableSessionOptions): Promise<AttachableSession> {
 	if (!options.enabled) {
-		return async () => {}; // No-op cleanup
+		return DISABLED_SESSION;
 	}
 
-	const session = options.session;
 	const agentDir = getAgentDir();
 	const socketDir = path.join(agentDir, "sockets");
+	const warn = options.onWarning ?? ((message: string) => console.error(message));
+	const log = options.log ?? ((message: string) => console.log(message));
 
-	// Get session ID from the session manager header
-	const header = session.sessionManager.getHeader();
-	if (!header) {
-		throw new Error("Cannot make session attachable: no session header found");
+	let server: SocketServer | null = null;
+	let unsubscribe: (() => void) | null = null;
+	let stopped = false;
+
+	const bind = async (session: AgentSession, cwd: string): Promise<SocketServer> => {
+		// Get session ID from the session manager header
+		const header = session.sessionManager.getHeader();
+		if (!header) {
+			throw new Error("Cannot make session attachable: no session header found");
+		}
+
+		const next = new SocketServer({
+			sessionId: header.id,
+			socketDir,
+			cwd,
+			maxClients: 10,
+			broadcastInputEcho: true,
+		});
+
+		await next.start();
+		unsubscribe = subscribeToSession(session, next);
+
+		// Forward input from socket clients to session
+		next.onInput((data: string, clientId: string) => {
+			// Concurrent-writer policy (R32-FLEET.7): QUEUE, and say so.
+			//
+			// Without a `streamingBehavior`, AgentSession.prompt() refuses outright while the
+			// agent is mid-turn. Over a socket that refusal reached only the sender, while every
+			// OTHER attached client had already been shown the prompt as an `input_echo` - so on
+			// a second screen the message appeared, was never answered, and was never explained.
+			// That is precisely the "vanished message" a phone must never be shown.
+			//
+			// `followUp` is the queueing mode chosen over `steer`: the running turn finishes
+			// exactly as it would have (steering rewrites what the agent is currently doing,
+			// which no remote client can see well enough to intend), the queued prompt runs next,
+			// and its output streams to every attached client like any other turn. Order is
+			// preserved, and nothing is dropped.
+			//
+			// Queuing silently would trade a vanished message for an unexplained pause, so the
+			// client that sent it is told on the relayed error channel, under a code a renderer
+			// can switch on rather than prose it would have to match.
+			const queueing = session.isStreaming;
+			// An unhandled rejection here would take the whole agent down under Node's default
+			// --unhandled-rejections=throw, so remote input is never left floating: genuine
+			// failures (no model, no credentials) are reported to the client that sent them and
+			// the session keeps running.
+			void Promise.resolve()
+				.then(() => session.prompt(data, { streamingBehavior: "followUp" }))
+				.then(() => {
+					// `queueing` is sampled before the call and confirmed after it: a prompt that
+					// was accepted immediately must not be announced as deferred, and a turn that
+					// ended in between needs no notice because nothing is waiting.
+					if (!queueing || !session.isStreaming) return;
+					next.sendErrorToClient(
+						clientId,
+						"The agent is mid-turn. Your prompt was queued and runs when the current turn finishes.",
+						"PROMPT_QUEUED",
+					);
+				})
+				.catch((error: unknown) => {
+					const message = error instanceof Error ? error.message : String(error);
+					next.sendErrorToClient(clientId, `Prompt failed: ${message}`, "PROMPT_FAILED");
+				});
+		});
+
+		return next;
+	};
+
+	server = await bind(options.session, options.cwd);
+
+	log(`\n🔗 Attachable session started: ${server.sessionId}`);
+	log(`   Socket: ${server.socketPath}`);
+	log(`   Attach: ${APP_NAME} --attach ${server.sessionId}\n`);
+
+	return {
+		get socketPath(): string | null {
+			return server?.socketPath ?? null;
+		},
+		get sessionId(): string | null {
+			return server?.sessionId ?? null;
+		},
+
+		async rebind(nextSession: AgentSession, nextCwd: string): Promise<void> {
+			if (stopped) return;
+			try {
+				unsubscribe?.();
+				unsubscribe = null;
+
+				const previous = server;
+				server = null;
+				if (previous) {
+					// Attached clients are watching a session that no longer exists; tell them
+					// before the socket goes away so they can re-attach to the new one.
+					previous.broadcastError(
+						`Session replaced. Re-attach with: ${APP_NAME} --list-sessions`,
+						"SESSION_REPLACED",
+					);
+					await previous.stop();
+				}
+
+				server = await bind(nextSession, nextCwd);
+			} catch (error) {
+				// A failed rebind must not break the session switch itself. The socket stays
+				// closed, so the session simply stops being attachable.
+				server = null;
+				const message = error instanceof Error ? error.message : String(error);
+				warn(`Attachable session could not follow the session switch: ${message}`);
+			}
+		},
+
+		async stop(): Promise<void> {
+			if (stopped) return;
+			stopped = true;
+			unsubscribe?.();
+			unsubscribe = null;
+			const current = server;
+			server = null;
+			await current?.stop();
+		},
+
+		stopSync(): void {
+			if (stopped) return;
+			stopped = true;
+			try {
+				unsubscribe?.();
+			} catch {}
+			unsubscribe = null;
+			const current = server;
+			server = null;
+			current?.stopSync();
+		},
+	};
+}
+
+/**
+ * Remove the socket on process exit and on signals.
+ *
+ * The mode run loops (interactive, print, rpc) end in `process.exit()` and never return
+ * to their caller, so a `finally` around them is not enough: without this the .sock and
+ * .lock files outlive the process and keep showing up in `--list-sessions`.
+ *
+ * @returns unregister function
+ */
+export function registerAttachableSessionCleanup(handle: Pick<AttachableSession, "stopSync">): () => void {
+	const onExit = (): void => {
+		handle.stopSync();
+	};
+	process.on("exit", onExit);
+
+	const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
+	if (process.platform !== "win32") {
+		signals.push("SIGHUP");
 	}
-	const sessionId = header.id;
 
-	const socketServer = new SocketServer({
-		sessionId,
-		socketDir,
-		cwd: process.cwd(),
-		maxClients: 10,
-		broadcastInputEcho: true,
-	});
+	const handlers = new Map<NodeJS.Signals, () => void>();
+	for (const signal of signals) {
+		const handler = (): void => {
+			// Another listener owns this signal (interactive/print/rpc mode's graceful
+			// shutdown, or the Ctrl+Z SIGINT guard). Those paths either end in process.exit(),
+			// where the "exit" listener above removes the files, or deliberately keep the
+			// process alive - in which case deleting the socket here would be wrong.
+			if (process.listenerCount(signal) > 1) return;
+			handle.stopSync();
+			// Nobody else handles this signal: restore the default disposition and re-raise it
+			// so the process still dies from the signal it was sent.
+			process.off(signal, handler);
+			process.kill(process.pid, signal);
+		};
+		process.on(signal, handler);
+		handlers.set(signal, handler);
+	}
 
-	// Start socket server
-	await socketServer.start();
+	return () => {
+		process.off("exit", onExit);
+		for (const [signal, handler] of handlers) {
+			process.off(signal, handler);
+		}
+		handlers.clear();
+	};
+}
 
-	// Subscribe to session events to broadcast output
-	session.subscribe((event) => {
+/**
+ * Mirror session output onto the socket.
+ *
+ * @returns unsubscribe function
+ */
+function subscribeToSession(session: AgentSession, socketServer: SocketServer): () => void {
+	return session.subscribe((event) => {
 		// Broadcast different event types
 		if (event.type === "message_update") {
 			// Handle streaming updates (text and thinking deltas)
@@ -71,19 +279,4 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 			}
 		}
 	});
-
-	// Forward input from socket clients to session
-	socketServer.onInput((data: string, _clientId: string) => {
-		// Send message to session
-		void session.prompt(data);
-	});
-
-	console.log(`\n🔗 Attachable session started: ${sessionId}`);
-	console.log(`   Socket: ${socketServer.socketPath}`);
-	console.log(`   Attach: draht --attach ${sessionId}\n`);
-
-	// Return cleanup function
-	return async () => {
-		await socketServer.stop();
-	};
 }

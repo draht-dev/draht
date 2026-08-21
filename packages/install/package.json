@@ -12,6 +12,7 @@
 	},
 	"files": [
 		"dist",
+		"schemas",
 		"README.md",
 		"CHANGELOG.md"
 	],

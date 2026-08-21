@@ -27,6 +27,9 @@ export interface Args {
 	sessionId?: string;
 	fork?: string;
 	sessionDir?: string;
+	attachable?: boolean;
+	attach?: string;
+	listSessions?: boolean;
 	models?: string[];
 	tools?: string[];
 	excludeTools?: string[];
@@ -111,6 +114,16 @@ export function parseArgs(args: string[]): Args {
 			result.fork = args[++i];
 		} else if (arg === "--session-dir" && i + 1 < args.length) {
 			result.sessionDir = args[++i];
+		} else if (arg === "--attachable") {
+			result.attachable = true;
+		} else if (arg === "--attach") {
+			if (i + 1 < args.length) {
+				result.attach = args[++i];
+			} else {
+				result.diagnostics.push({ type: "error", message: "--attach requires a value" });
+			}
+		} else if (arg === "--list-sessions") {
+			result.listSessions = true;
 		} else if (arg === "--models" && i + 1 < args.length) {
 			result.models = args[++i].split(",").map((s) => s.trim());
 		} else if (arg === "--no-tools" || arg === "-nt") {
@@ -251,6 +264,9 @@ ${chalk.bold("Options:")}
   --session-dir <dir>            Directory for session storage and lookup
   --no-session                   Don't save session (ephemeral)
   --name, -n <name>              Set session display name
+  --attachable                   Expose this session on an owner-only Unix socket (attach from your other terminals)
+  --attach <session-id>          Attach to a running attachable session (tmux-style)
+  --list-sessions                List running attachable sessions and exit
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching
   --no-tools, -nt                Disable all tools by default (built-in and extension)
@@ -307,6 +323,13 @@ ${chalk.bold("Examples:")}
 
   # Start a named session
   ${APP_NAME} --name "Refactor auth module"
+
+  # Start a session you can attach to from your other terminals
+  ${APP_NAME} --attachable "Refactor auth module"
+
+  # List running attachable sessions, then attach to one
+  ${APP_NAME} --list-sessions
+  ${APP_NAME} --attach <session-id>
 
   # Use different model
   ${APP_NAME} --provider openai --model gpt-4o-mini "Help me refactor this code"

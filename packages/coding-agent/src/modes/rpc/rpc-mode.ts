@@ -81,6 +81,29 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		{ resolve: (value: any) => void; reject: (error: Error) => void }
 	>();
 
+	/**
+	 * Resolve every outstanding extension UI dialog as cancelled.
+	 *
+	 * Without this, an abort issued while a dialog is open (the permission gate's
+	 * `ctx.ui.confirm`, say) leaves its promise unsettled forever: the agent loop
+	 * stays parked in `beforeToolCall`, `session.abort()` never observes idle, and
+	 * the session is wedged for the life of the process. Interactive mode has no
+	 * equivalent hole because Esc reaches the selector's own onCancel.
+	 *
+	 * Fail closed: each dialog resolves to its *negative* default — `confirm` to
+	 * `false`, `select`/`input`/`editor` to `undefined` — exactly as the existing
+	 * `{ cancelled: true }` wire response resolves them. A cancellation can never
+	 * be mistaken for an approval.
+	 */
+	const cancelPendingExtensionRequests = (): void => {
+		if (pendingExtensionRequests.size === 0) return;
+		const cancelled = [...pendingExtensionRequests.entries()];
+		pendingExtensionRequests.clear();
+		for (const [id, pending] of cancelled) {
+			pending.resolve({ type: "extension_ui_response", id, cancelled: true } satisfies RpcExtensionUIResponse);
+		}
+	};
+
 	// Shutdown request flag
 	let shutdownRequested = false;
 	let shuttingDown = false;
@@ -425,7 +448,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 
 			case "abort": {
-				await session.abort();
+				// Start the abort first so the agent's signal is already set by the time
+				// the parked continuation resumes. The loop then reports the tool call as
+				// "Operation aborted" instead of falling through to the dialog's own block
+				// reason, which is what lets a surface tell an abort from a user pressing
+				// "No". Resolving the dialogs is in turn what lets the idle that
+				// `session.abort()` awaits ever arrive.
+				const aborted = session.abort();
+				cancelPendingExtensionRequests();
+				await aborted;
 				return success(id, "abort");
 			}
 
@@ -720,6 +751,59 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	 */
 	let detachInput = () => {};
 
+	/**
+	 * Upper bound on the unwind in {@link settlePendingDialogsForShutdown}. Nothing
+	 * should come close: resolving the dialogs releases the parked continuation
+	 * immediately. The bound exists so that a wedge somewhere else in the loop can
+	 * never turn "the bridge died" into "the process never exits".
+	 */
+	const SHUTDOWN_DIALOG_UNWIND_TIMEOUT_MS = 5000;
+
+	/**
+	 * Settle every outstanding dialog before the process goes away.
+	 *
+	 * Shutdown has three doorways — an extension's `shutdownHandler`, SIGTERM /
+	 * SIGHUP, and stdin EOF — and all three land here. The last one is the one
+	 * that bites: stdin EOF is how a child learns its parent died, so if the relay
+	 * bridge crashes while Oskar is away with a permission ask outstanding, this
+	 * runs with a live `extension_ui_request` on the wire and the agent loop parked
+	 * in `beforeToolCall` waiting for an answer that can no longer arrive.
+	 *
+	 * Exiting from under that promise is not merely untidy: the dialog is garbage
+	 * collected unsettled, so the ask is lost with no record of it, and the session
+	 * is persisted with a tool call that neither ran nor was refused. Resolving the
+	 * dialogs fail-closed (`cancelPendingExtensionRequests`) and letting the loop
+	 * unwind to idle first means the transcript shows the call as aborted, and no
+	 * tool can execute on the way out.
+	 *
+	 * Deliberately *not* in scope: keeping the agent alive past its bridge. That is
+	 * a product decision (DECISIONS-PENDING #5), not a bug fix — stdin EOF stays a
+	 * termination signal here, exactly as it has always been.
+	 *
+	 * No pending dialogs means no work: the ordinary teardown path is untouched.
+	 */
+	const settlePendingDialogsForShutdown = async (): Promise<void> => {
+		if (pendingExtensionRequests.size === 0) return;
+		// Same ordering as the `abort` command: arm the signal first so the resumed
+		// continuation reports "Operation aborted" rather than the dialog's own
+		// block reason, then release the dialogs so idle can actually arrive.
+		const aborted = session.abort();
+		cancelPendingExtensionRequests();
+		let unwindTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				aborted,
+				new Promise<void>((resolve) => {
+					unwindTimer = setTimeout(resolve, SHUTDOWN_DIALOG_UNWIND_TIMEOUT_MS);
+				}),
+			]);
+		} catch {
+			// A failed abort must not strand the shutdown; we are exiting regardless.
+		} finally {
+			if (unwindTimer) clearTimeout(unwindTimer);
+		}
+	};
+
 	async function shutdown(exitCode = 0, signal?: NodeJS.Signals): Promise<never> {
 		if (shuttingDown) {
 			process.exit(exitCode);
@@ -728,6 +812,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
+		await settlePendingDialogsForShutdown();
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		await runtimeHost.dispose();

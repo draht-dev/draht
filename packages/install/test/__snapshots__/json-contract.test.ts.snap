@@ -1,0 +1,351 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`doctor --json > matches the doctor contract for an installed machine 1`] = `
+"$.command: "doctor"
+$.findings[].id: string
+$.findings[].message: string
+$.findings[].repairable: false
+$.findings[].severity: "info"
+$.ok: true
+$.root: string
+$.schemaVersion: 1"
+`;
+
+exports[`doctor --json > matches the doctor contract for environment findings 1`] = `
+"$.command: "doctor"
+$.findings[].id: string
+$.findings[].message: string
+$.findings[].repairable: false
+$.findings[].severity: "error"
+$.findings[].severity: "warn"
+$.ok: true
+$.root: string
+$.schemaVersion: 1"
+`;
+
+exports[`draht-init --json > matches the error contract when the target already has a scaffold 1`] = `
+"$.command: "init"
+$.error.code: string
+$.error.detail.project: string
+$.error.message: string
+$.ok: false
+$.schemaVersion: 1"
+`;
+
+exports[`draht-init --json > matches the init-stream contract for a dry run 1`] = `
+"# record 1
+$.actions[].componentId: string
+$.actions[].kind: "claude-plugin"
+$.actions[].kind: "global-cli"
+$.actions[].source.npmName: string
+$.actions[].source.resolvedVersion: string
+$.actions[].toVersion: string
+$.actions[].type: "delegate-install"
+$.actions[].type: "install"
+$.command: "init"
+$.dryRun: true
+$.event: "summary"
+$.ok: true
+$.project: string
+$.schemaVersion: 1"
+`;
+
+exports[`draht-init --json > matches the init-stream contract for a full bootstrap 1`] = `
+"# record 1
+$.command: "init"
+$.componentId: string
+$.event: "action-start"
+$.schemaVersion: 1
+$.type: "install"
+
+# record 2
+$.command: "init"
+$.componentId: string
+$.event: "action-done"
+$.notes: []
+$.schemaVersion: 1
+$.type: "install"
+$.version: string
+
+# record 3
+$.command: "init"
+$.componentId: string
+$.event: "action-start"
+$.schemaVersion: 1
+$.type: "delegate-install"
+
+# record 4
+$.command: "init"
+$.componentId: string
+$.event: "action-done"
+$.notes[]: string
+$.schemaVersion: 1
+$.type: "delegate-install"
+$.version: string
+
+# record 5
+$.argv[]: string
+$.command: "init"
+$.event: "scaffold-start"
+$.schemaVersion: 1
+
+# record 6
+$.argv[]: string
+$.command: "init"
+$.event: "scaffold-start"
+$.schemaVersion: 1
+
+# record 7
+$.command: "init"
+$.event: "summary"
+$.handoff: string
+$.ok: true
+$.project: string
+$.schemaVersion: 1"
+`;
+
+exports[`install --json / update --json > matches the apply-stream contract for a dry run 1`] = `
+"# record 1
+$.actions[].componentId: string
+$.actions[].kind: "claude-plugin"
+$.actions[].kind: "global-cli"
+$.actions[].source.npmName: string
+$.actions[].source.resolvedVersion: string
+$.actions[].toVersion: string
+$.actions[].type: "delegate-install"
+$.actions[].type: "install"
+$.blocked: []
+$.command: "install"
+$.dryRun: true
+$.event: "summary"
+$.ok: true
+$.schemaVersion: 1"
+`;
+
+exports[`install --json / update --json > matches the apply-stream contract for a transaction that runs 1`] = `
+"# record 1
+$.command: "install"
+$.componentId: string
+$.event: "action-start"
+$.schemaVersion: 1
+$.type: "install"
+
+# record 2
+$.command: "install"
+$.componentId: string
+$.event: "action-done"
+$.notes: []
+$.schemaVersion: 1
+$.type: "install"
+$.version: string
+
+# record 3
+$.command: "install"
+$.componentId: string
+$.event: "action-start"
+$.schemaVersion: 1
+$.type: "delegate-install"
+
+# record 4
+$.command: "install"
+$.componentId: string
+$.event: "action-done"
+$.notes[]: string
+$.schemaVersion: 1
+$.type: "delegate-install"
+$.version: string
+
+# record 5
+$.actions[].componentId: string
+$.actions[].kind: "claude-plugin"
+$.actions[].kind: "global-cli"
+$.actions[].source.integrity: string
+$.actions[].source.npmName: string
+$.actions[].source.resolvedVersion: string
+$.actions[].toVersion: string
+$.actions[].type: "delegate-install"
+$.actions[].type: "install"
+$.blocked: []
+$.command: "install"
+$.event: "summary"
+$.notes[]: string
+$.ok: true
+$.schemaVersion: 1
+$.tx: string"
+`;
+
+exports[`install --json / update --json > matches the apply-stream contract when an update is blocked as a downgrade 1`] = `
+"# record 1
+$.actions: []
+$.blocked[].componentId: string
+$.blocked[].from: string
+$.blocked[].reason: "downgrade"
+$.blocked[].to: string
+$.command: "update"
+$.event: "summary"
+$.ok: true
+$.schemaVersion: 1"
+`;
+
+exports[`install --json / update --json > matches the apply-stream contract when there is nothing to do 1`] = `
+"# record 1
+$.actions: []
+$.blocked: []
+$.command: "install"
+$.event: "summary"
+$.ok: true
+$.schemaVersion: 1"
+`;
+
+exports[`install --json / update --json > matches the error contract when a mutation is refused without a TTY 1`] = `
+"$.command: "install"
+$.error.code: string
+$.error.message: string
+$.ok: false
+$.schemaVersion: 1"
+`;
+
+exports[`plan --json > matches the plan contract when an explicitly-selected component has no host 1`] = `
+"$.actions[].componentId: string
+$.actions[].kind: "claude-plugin"
+$.actions[].source.integrity: string
+$.actions[].source.npmName: string
+$.actions[].source.resolvedVersion: string
+$.actions[].toVersion: string
+$.actions[].type: "install"
+$.blocked: []
+$.channel: "latest"
+$.command: "plan"
+$.hostMissing[].host: string
+$.hostMissing[].id: string
+$.ok: true
+$.profile: "explicit"
+$.schemaVersion: 1
+$.skipped: []"
+`;
+
+exports[`plan --json > matches the plan contract with pending actions and a host-skipped component 1`] = `
+"$.actions[].componentId: string
+$.actions[].kind: "claude-plugin"
+$.actions[].kind: "global-cli"
+$.actions[].source.integrity: string
+$.actions[].source.npmName: string
+$.actions[].source.resolvedVersion: string
+$.actions[].toVersion: string
+$.actions[].type: "delegate-install"
+$.actions[].type: "install"
+$.blocked: []
+$.channel: "latest"
+$.command: "plan"
+$.hostMissing: []
+$.ok: true
+$.profile: "default"
+$.schemaVersion: 1
+$.skipped[].host: string
+$.skipped[].id: string
+$.skipped[].reason: "host-absent""
+`;
+
+exports[`read-verb error documents > matches the error contract for an unknown verb 1`] = `
+"$.command: "frobnicate"
+$.error.code: string
+$.error.detail.command: "frobnicate"
+$.error.message: string
+$.ok: false
+$.schemaVersion: 1"
+`;
+
+exports[`read-verb error documents > matches the error contract when the failure carries structured detail 1`] = `
+"$.command: "plan"
+$.error.code: string
+$.error.detail.channel: "next"
+$.error.message: string
+$.ok: false
+$.schemaVersion: 1"
+`;
+
+exports[`status --json > matches the status contract with a file-backed and a delegated component 1`] = `
+"$.channel: "latest"
+$.command: "status"
+$.components[].delegated.method: string
+$.components[].delegated.packageName: string
+$.components[].drift: "clean"
+$.components[].drift: "delegated"
+$.components[].effectiveness: "next-session"
+$.components[].effectiveness: "restart-required"
+$.components[].id: string
+$.components[].kind: "claude-plugin"
+$.components[].kind: "global-cli"
+$.components[].targetDir: null
+$.components[].targetDir: string
+$.components[].version: string
+$.ok: true
+$.pendingChanges: number
+$.root: string
+$.schemaVersion: 1"
+`;
+
+exports[`uninstall --json > matches the uninstall-stream contract for a dry run 1`] = `
+"# record 1
+$.actions[].componentId: string
+$.actions[].fromVersion: string
+$.actions[].kind: "claude-plugin"
+$.actions[].type: "remove"
+$.command: "uninstall"
+$.dryRun: true
+$.event: "summary"
+$.ok: true
+$.schemaVersion: 1"
+`;
+
+exports[`uninstall --json > matches the uninstall-stream contract for a transaction that runs 1`] = `
+"# record 1
+$.command: "uninstall"
+$.componentId: string
+$.event: "action-start"
+$.schemaVersion: 1
+$.type: "remove"
+
+# record 2
+$.command: "uninstall"
+$.componentId: string
+$.event: "action-done"
+$.notes: []
+$.schemaVersion: 1
+$.type: "remove"
+
+# record 3
+$.actions[].componentId: string
+$.actions[].fromVersion: string
+$.actions[].kind: "claude-plugin"
+$.actions[].type: "remove"
+$.command: "uninstall"
+$.event: "summary"
+$.notes: []
+$.ok: true
+$.schemaVersion: 1
+$.tx: string"
+`;
+
+exports[`uninstall --json > matches the uninstall-stream contract when nothing is installed 1`] = `
+"# record 1
+$.actions: []
+$.command: "uninstall"
+$.event: "summary"
+$.ok: true
+$.schemaVersion: 1"
+`;
+
+exports[`version --json > matches the version contract from draht-init 1`] = `
+"$.bin: "draht-init"
+$.command: "version"
+$.schemaVersion: 1
+$.version: string"
+`;
+
+exports[`version --json > matches the version contract from draht-install 1`] = `
+"$.bin: "draht-install"
+$.command: "version"
+$.schemaVersion: 1
+$.version: string"
+`;

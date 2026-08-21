@@ -95,6 +95,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 |--------|---------|-------------|
 | `app.session.new` | *(none)* | Start a new session (`/new`) |
 | `app.session.tree` | *(none)* | Open session tree navigator (`/tree`) |
+| `app.session.rewind` | *(none)* | Rewind conversation and/or files (`/rewind`) |
 | `app.session.fork` | *(none)* | Fork current session (`/fork`) |
 | `app.session.resume` | *(none)* | Open session resume picker (`/resume`) |
 | `app.session.togglePath` | `ctrl+p` | Toggle path display |

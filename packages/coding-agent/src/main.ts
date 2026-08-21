@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual, supportsMax, supportsXhigh } from "@draht/ai";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
+import { runAttachMode } from "./cli/attach-mode.ts";
 import {
 	type CredentialPrintCommand,
 	CredentialPrintError,
@@ -21,6 +22,7 @@ import {
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
+import { listSessions } from "./cli/list-sessions.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
@@ -49,6 +51,11 @@ import {
 } from "./core/session-cwd.ts";
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
+import {
+	type AttachableSession,
+	makeSessionAttachable,
+	registerAttachableSessionCleanup,
+} from "./core/socket-server/index.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
@@ -587,6 +594,19 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	// Attachable-session commands are pure socket/filesystem operations. They run before any
+	// runtime construction so they never pay for provider discovery, extensions, or sessions.
+	if (parsed.listSessions) {
+		await listSessions();
+		process.exit(0);
+	}
+
+	if (parsed.attach !== undefined) {
+		// runAttachMode owns its own lifetime: it exits the process on detach or error.
+		await runAttachMode(parsed.attach);
+		return;
+	}
+
 	if (parsed.export) {
 		let result: string;
 		try {
@@ -887,52 +907,90 @@ export async function main(args: string[], options?: MainOptions) {
 		void modelRuntime.refresh().catch(() => {});
 	}
 
-	if (appMode === "rpc") {
-		printTimings();
-		await runRpcMode(runtime);
-	} else if (appMode === "interactive") {
-		const interactiveMode = new InteractiveMode(runtime, {
-			migratedProviders,
-			modelFallbackMessage,
-			autoTrustOnReloadCwd,
-			initialMessage,
-			initialImages,
-			initialMessages: parsed.messages,
-			verbose: parsed.verbose,
-		});
-		if (startupBenchmark) {
-			await interactiveMode.init();
-			time("interactiveMode.init");
-			// Give the TUI's stdin handler a brief chance to consume terminal query replies
-			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
-			await new Promise((resolve) => setTimeout(resolve, 150));
-			interactiveMode.stop();
-			stopThemeWatcher();
+	// --attachable is opt-in: only bind the Unix socket when the user asks for it. The lock file
+	// records the session's resolved cwd (not process.cwd()), which is what identifies the project
+	// a session belongs to when --session/--resume selected a session from elsewhere.
+	let attachableSession: AttachableSession | undefined;
+	if (parsed.attachable) {
+		try {
+			attachableSession = await makeSessionAttachable({
+				session,
+				enabled: true,
+				cwd: session.sessionManager.getCwd(),
+			});
+		} catch (error) {
+			// Most likely another live process already owns this session's socket. Report it
+			// as a normal CLI error instead of crashing with a stack trace.
+			const message = error instanceof Error ? error.message : "Failed to start attachable session";
+			console.error(chalk.red(`Error: ${message}`));
+			process.exit(1);
+		}
+	}
+	// The mode run loops end in process.exit() and never return here, so the finally below
+	// is not enough on its own: exit and signal paths need their own synchronous cleanup.
+	const releaseAttachableCleanup = attachableSession ? registerAttachableSessionCleanup(attachableSession) : undefined;
+	// /new, /resume, /fork and /import dispose this session object and install a new one.
+	// Without following that, the socket would keep advertising a dead session id and route
+	// client input into a disposed session.
+	const releaseAttachableRebind = attachableSession
+		? runtime.addSessionReplacedListener(async (nextSession) => {
+				await attachableSession.rebind(nextSession, nextSession.sessionManager.getCwd());
+			})
+		: undefined;
+
+	try {
+		if (appMode === "rpc") {
 			printTimings();
-			if (process.stdout.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+			await runRpcMode(runtime);
+		} else if (appMode === "interactive") {
+			const interactiveMode = new InteractiveMode(runtime, {
+				migratedProviders,
+				modelFallbackMessage,
+				autoTrustOnReloadCwd,
+				initialMessage,
+				initialImages,
+				initialMessages: parsed.messages,
+				verbose: parsed.verbose,
+			});
+			if (startupBenchmark) {
+				await interactiveMode.init();
+				time("interactiveMode.init");
+				// Give the TUI's stdin handler a brief chance to consume terminal query replies
+				// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
+				await new Promise((resolve) => setTimeout(resolve, 150));
+				interactiveMode.stop();
+				stopThemeWatcher();
+				printTimings();
+				if (process.stdout.writableLength > 0) {
+					await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+				}
+				if (process.stderr.writableLength > 0) {
+					await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
+				}
+				return;
 			}
-			if (process.stderr.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
+
+			printTimings();
+			await interactiveMode.run();
+		} else {
+			printTimings();
+			const exitCode = await runPrintMode(runtime, {
+				mode: toPrintOutputMode(appMode),
+				messages: parsed.messages,
+				initialMessage,
+				initialImages,
+			});
+			stopThemeWatcher();
+			restoreStdout();
+			if (exitCode !== 0) {
+				process.exitCode = exitCode;
 			}
 			return;
 		}
-
-		printTimings();
-		await interactiveMode.run();
-	} else {
-		printTimings();
-		const exitCode = await runPrintMode(runtime, {
-			mode: toPrintOutputMode(appMode),
-			messages: parsed.messages,
-			initialMessage,
-			initialImages,
-		});
-		stopThemeWatcher();
-		restoreStdout();
-		if (exitCode !== 0) {
-			process.exitCode = exitCode;
-		}
-		return;
+	} finally {
+		// Removes the .sock and .lock files so the session stops showing up in --list-sessions.
+		releaseAttachableRebind?.();
+		releaseAttachableCleanup?.();
+		await attachableSession?.stop();
 	}
 }

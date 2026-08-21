@@ -25,9 +25,9 @@ A WebSocket/HTTP server that:
 - REST API: `POST /sessions`, `GET /sessions`, `DELETE /sessions/:id`
 - WebSocket: per-session bidirectional stream
 - SSE: event stream for session lifecycle events
-- CLI: `draht-gateway --port 7878 --host 0.0.0.0 --auth <token>`
-- Binds to `0.0.0.0` by default (accessible over Tailscale)
-- Designed to run over Tailscale (remote access from Quest/mobile)
+- CLI: `draht-gateway --port 7878 --auth <token>`
+- Binds to `127.0.0.1` (loopback) by default; a non-loopback bind requires the explicit `--allow-non-loopback` flag, enforced both in the CLI and in `createServer`/`startGateway`
+- Designed to run over Tailscale (remote access from Quest/mobile) via `tailscale serve` in front of the loopback listener
 
 ### 2. Draht Flutter Client
 

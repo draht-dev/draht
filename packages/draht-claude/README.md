@@ -12,7 +12,7 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 
 ## What you get
 
-### 22 slash commands
+### 23 slash commands
 
 **Project lifecycle**
 - `/new-project` — greenfield: questioning → domain model → requirements → roadmap
@@ -43,13 +43,15 @@ This bundles everything draht gives its own CLI — slash commands, specialist s
 - `/why <question>` — code archaeology: parallel `investigator` subagents gather evidence per category, synthesized into a confidence-tiered, citation-backed answer
 - `/triage <report>` — classify an external issue report after a bounded cause trace, dedupe against GitHub Issues, create a ticket only behind a fail-closed gate
 - `/create-verification-skill [app]` — generate a committed project-local `verify-<app>` skill that drives the real app the way a user does and captures proof artifacts
+- `/speak [text]` — speak text aloud via the ElevenLabs text-to-speech helper; with no text, voices a short summary of the latest result
 
-### 10 specialist subagents
+### 11 specialist subagents
 
 All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 
 | Agent | Use |
 |---|---|
+| `advisor` | Strategic guidance on the strongest tier — consulted rarely, steers, never implements |
 | `architect` | Reads codebase, produces structured implementation plans |
 | `implementer` | Writes code following TDD cycle from plan tasks |
 | `reviewer` | Reviews changes for correctness, types, conventions, domain language |
@@ -57,6 +59,7 @@ All usable via Claude Code's `Task` tool (`subagent_type: <name>`):
 | `debugger` | Reproduces and diagnoses bugs to root cause |
 | `verifier` | Runs lint + typecheck + tests, reports results without fixing |
 | `investigator` | Searches one assigned evidence category (git history, review/planning/decision records) and returns verbatim-cited findings for `/why` |
+| `speaker` | Voices a summary or message aloud via the ElevenLabs helper; degrades to a text report without an API key or audio device |
 | `git-committer` | Stages and commits with conventional commit messages |
 | `security-auditor` | Scans for injection, auth, secrets, unsafe patterns |
 | `advisor` | Strongest-tier strategic steer, consulted rarely when stuck or before committing to an approach |
@@ -89,10 +92,12 @@ Invoked from inside commands (not Claude Code lifecycle hooks):
 - `gsd-post-phase.cjs <phase>` — generate phase report, update ROADMAP status
 - `gsd-quality-gate.cjs [--strict]` — lint + typecheck + test + coverage enforcement
 
-### 2 Claude Code lifecycle hooks
+### 4 Claude Code lifecycle hooks
 
-- **SessionStart** — surfaces current phase, status, and CONTINUE-HERE marker when a session opens in a draht project
-- **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt
+- **SessionStart** — surfaces current phase, status, and CONTINUE-HERE marker when a session opens in a draht project (`session-start.cjs`)
+- **UserPromptSubmit** — prepends a tiny `[draht]` reminder of phase/status before each prompt (`prompt-context.cjs`)
+- **PostToolUse** — after `Edit`/`Write`/`MultiEdit`, runs a fast check over the touched files (`post-edit-check.cjs`)
+- **Stop** — runs the quality gate when a session ends (`stop-quality-gate.cjs`)
 
 ### Bundled `draht-tools` CLI
 
@@ -191,14 +196,16 @@ Each specialist subagent ships with a default model tuned to its workload:
 
 | Agent | Default | Used by |
 |---|---|---|
+| `advisor` | `fable` | any command — rare, high-leverage course correction |
 | `architect` | `opus` | `/plan-phase` — deep reasoning for architectural plans |
 | `implementer` | `sonnet` | `/execute-phase` — fast, reliable code changes |
 | `verifier` | `sonnet` | `/verify-work` — lint, typecheck, test runs |
 | `security-auditor` | `opus` | `/verify-work` — security audit and CVE analysis |
-| `reviewer` | `inherit` | `/verify-work`, `/review` — code review |
+| `reviewer` | `opus` | `/verify-work`, `/review` — code review |
 | `spec-reviewer` | `opus` | `/execute-phase`, `/verify-work`, `/review`, `/quick` — spec compliance |
 | `debugger` | `inherit` | `/fix` — bug diagnosis |
 | `investigator` | `sonnet` | `/why` — parallel single-category evidence gathering |
+| `speaker` | `haiku` | `/speak` — voice output via ElevenLabs |
 | `git-committer` | `inherit` | `/atomic-commit` — commit staging |
 | `advisor` | `fable` | any command — rare high-leverage strategic consults |
 

@@ -40,6 +40,8 @@ export type {
 	BeforeProviderRequestEvent,
 	BeforeProviderRequestEventResult,
 	BuildSystemPromptOptions,
+	// Events - Checkpoints
+	CheckpointCreatedEvent,
 	// Context
 	CompactOptions,
 	// Events - Agent
@@ -61,6 +63,7 @@ export type {
 	ExtensionActions,
 	// API
 	ExtensionAPI,
+	ExtensionCheckpointsAPI,
 	ExtensionCommandContext,
 	ExtensionCommandContextActions,
 	ExtensionContext,
@@ -128,6 +131,8 @@ export type {
 	SessionBeforeCompactResult,
 	SessionBeforeForkEvent,
 	SessionBeforeForkResult,
+	SessionBeforeRewindEvent,
+	SessionBeforeRewindResult,
 	SessionBeforeSwitchEvent,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeEvent,

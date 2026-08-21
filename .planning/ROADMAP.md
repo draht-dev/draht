@@ -276,14 +276,38 @@ timeouts only), and no reaper in session-manager, agent-session or socket-server
 emitted binary at 30s / 120s / 600s / 1500s — four rungs, zero degradation.** Phase 34 MAY keep
 "hold the turn" as its primary mechanism; do NOT build park/auto-deny/retry as the primary design.
 
-*But answer latency is bounded by the TRANSPORT at 255 seconds, not by the agent.* `config.ts:67`
-`idleTimeout: 255` (Bun's per-socket maximum, hard-capped at `:213`) goes straight to the WebSocket server
-at `server.ts:314`. There is **no keepalive anywhere in `packages/gateway/src`** — zero `setInterval`, zero
-ping/pong/heartbeat outside tests — and attach traffic is purely output-driven (`routes/ws.ts`
-`proc.onOutput(...)`). **A pending ask is by definition a period with no output**, so the phone's socket
-goes silent the instant the ask is raised and is closed ~4m15s later. Combined with the core's infinite
-patience, the real failure mode is: the phone drops silently at 4m15s while the agent sits blocked in
-`beforeToolCall` forever.
+*But answer latency is bounded by the TRANSPORT, not by the agent.* **CORRECTED 2026-08-21 by
+measurement — the first version of this note, and the adjudication behind it, were right that the
+transport is the binding layer and wrong about the mechanism. Recorded here in full because the wrong
+version was committed and acted on.**
+
+What was actually true, measured against a real listener:
+- `Bun.serve({ idleTimeout })` — where `config.idleTimeout: 255` was being passed — **does not govern
+  WebSockets at all.** A server with a top-level `idleTimeout: 3` held a silent socket for 12s and 20s.
+  The 255 an operator could configure never described `/attach` in either direction.
+- The window that governs `/attach` is `Bun.serve({ websocket: { idleTimeout } })`, which this package
+  never set, so it ran on Bun's unset default of **120s — not 255s**.
+- Bun's reaper is a **liveness probe, not a plain timer**: it emits one PING near the end of the window
+  (t≈104s) and closes at t=120s only if no PONG returns. A client that pongs was never reaped (measured
+  open at 200s). **So "the socket goes silent and Bun closes it ~4m15s later" is not reproducible for a
+  compliant browser**, which answers pings in its network stack. An awake phone on a healthy path likely
+  already survived a held ask — by accident.
+
+What was genuinely wrong, and what the fix addresses: the connection's life rested entirely on the peer's
+PONG arriving inside a ~16s grace, during the one interval when nothing else is on the wire to keep the
+path warm — and a phone on a radio is exactly the peer most likely to be late. The window was also an
+unset upstream default that no configuration could move and no test pinned. The fix (a) sets
+`websocket.idleTimeout` explicitly from the effective config so `GatewaySettings.idleTimeout` finally
+means what it says, and (b) adds a server-side ping at `idleTimeout / 3` that resets the window on SEND,
+so survival no longer depends on the peer answering anything — measured surviving 10x the window against
+a client that never ponged once. The divisor is 3, not 2, so two consecutive missed keepalives are still
+survivable.
+
+**Scope, stated plainly:** this fixes the connection being reaped while both ends are AWAKE. It does
+nothing for a phone that is asleep, in a tunnel, or handed between networks — there the socket genuinely
+dies and no server-side pinging helps. That case needs a durable pending ask a reconnecting client
+re-reads, which depends on decision 5 in `.planning/DECISIONS-PENDING.md`. **The walk-away case is not
+fully solved.**
 
 **Phase 34 prerequisites that follow, not nice-to-haves:**
 1. An application-level heartbeat on `/attach` well under 255s, or a durable pending ask a reconnecting
@@ -292,10 +316,14 @@ patience, the real failure mode is: the phone drops silently at 4m15s while the 
    `timeout` (an hour, not 30s) and a `signal`. Today it inherits "wait forever", making an unanswered ask
    an immortal wedged turn. Timeout defaults to DENY (`rpc-mode.ts:142`), the right fail-safe direction —
    surface "timed out, denied" as distinct from "user said no".
-3. **Defect:** `rpc-mode.ts:428` `session.abort()` never clears `pendingExtensionRequests` (`:79`), so
-   aborting during a pending ask wedges the loop permanently.
-4. **Defect:** `rpc-mode.ts:799-802` shuts the whole agent down on stdin `end` — if the relay bridge dies
-   while Oskar is away, the ask dies with it.
+3. ~~**Defect:** abort wedges the loop~~ — **FIXED 2026-08-21.** `cancelPendingExtensionRequests()`
+   resolves every pending dialog through the protocol's own `{cancelled: true}` shape, so fail-closed is
+   automaticrather than a bespoke path: each dialog's `parseResponse` already maps `cancelled` to that
+   method's negative default.
+4. ~~**Defect:** stdin `end` kills a pending ask~~ — **FIXED 2026-08-21**, shutdown now resolves pending
+   dialogs fail-closed before exiting. The existing lifecycle is unchanged and regression-tested; whether
+   an attachable agent should OUTLIVE the bridge that spawned it is a product question tied to decision 5
+   and was deliberately not decided.
 5. Render pending-approval from `extension_ui_request`, never from `tool_execution_start` — the latter
    fires BEFORE the gate in both sequential and parallel paths, so a naive surface shows a blocked tool as
    "running".

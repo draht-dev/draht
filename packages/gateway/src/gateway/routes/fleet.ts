@@ -110,6 +110,15 @@ export interface FleetRoutesOptions {
 	 * presence changes who the authority is, never whether there is one.
 	 */
 	devices?: AttachDeviceProvider;
+	/**
+	 * How often an idle `/attach` socket is sent a WebSocket protocol PING, in ms.
+	 *
+	 * `0` or absent means no keepalive, which is the pre-Phase-33 behaviour and
+	 * is only correct for a host that wants idle attach sockets reaped. See
+	 * {@link keepAlive} for what the pings are defending against and why the
+	 * period has to be a fraction of the idle window rather than a free setting.
+	 */
+	keepaliveMs?: number;
 }
 
 /**
@@ -311,6 +320,76 @@ function rendererConnection(ws: WSContext): RendererConnection {
 	};
 }
 
+/**
+ * Hold one `/attach` socket open across a stretch with nothing to say.
+ *
+ * ## What this is defending against
+ *
+ * A pending permission ask is, by definition, a period with no session output,
+ * and `/attach` traffic is purely output-driven. So the instant an ask is raised
+ * the phone's socket goes silent — for as long as it takes somebody to pick the
+ * phone up. The agent core waits for that answer indefinitely (measured to 25
+ * minutes with no degradation). The transport did not.
+ *
+ * Not for the reason it looked like, though, and the difference decided the fix.
+ * `GatewaySettings.idleTimeout` reaches `Bun.serve`'s *top-level* timer, and
+ * that timer was measured not to govern WebSocket connections at all. The window
+ * that governs them is `Bun.serve({ websocket: { idleTimeout } })`, which this
+ * package never set — so `/attach` ran on Bun's unset default of 120s, and Bun's
+ * reaper is a liveness probe: it emits one PING near the end of the window
+ * (measured t=104s) and closes at the window (t=120.00s) unless a PONG comes
+ * back. A peer that answered survived indefinitely; a peer whose answer did not
+ * arrive inside that ~16s grace was dropped. The connection's life rested
+ * entirely on a phone on a radio being prompt — during the one interval where
+ * nothing else is travelling to keep the path warm.
+ *
+ * ## Why a protocol ping, and not a frame
+ *
+ * A **server-initiated** ping resets the window on send and needs no answer at
+ * all: measured, a socket with a 2s window pinged every 1000ms survived 20s —
+ * ten windows — against a client that never ponged once. That is the whole
+ * mechanism, and it is the cheap one. These are RFC 6455 control frames, so
+ * nothing is added to the geist wire: no new frame type, no
+ * `GEIST_PROTOCOL_VERSION` bump, no conformance corpus to regenerate, nothing
+ * for `MIRRORED_FRAMES` to argue about. And unlike an application-level
+ * heartbeat driven from page script, it keeps working when the phone's tab is
+ * backgrounded, because a browser answers protocol pings in its network stack
+ * rather than on a JS timer that a backgrounded tab has had throttled — which is
+ * precisely the walk-away case this feature exists for.
+ *
+ * ## What it does not fix
+ *
+ * Both ends still have to be awake. This holds a connection whose *server* is
+ * alive and whose path is intact; it cannot help a phone that is asleep, in a
+ * tunnel, or handed off between networks, where the socket genuinely dies. That
+ * case needs a durable pending ask that a reconnecting client re-reads, which
+ * waits on the Phase 34 decision about which seam relays permissions.
+ *
+ * @param ws - The connection to keep warm.
+ * @param intervalMs - Period between pings. `0` or less arms nothing.
+ * @returns A function that stops the keepalive. Always safe to call twice.
+ */
+function keepAlive(ws: WSContext, intervalMs: number): () => void {
+	// A host that cannot ping is not a host this can pretend to defend. Reporting
+	// "nothing armed" is honest; a no-op interval would look identical to a
+	// working keepalive in every log and every test.
+	const raw = ws.raw as { ping?: () => unknown } | undefined;
+	if (intervalMs <= 0 || typeof raw?.ping !== "function") return () => {};
+
+	const timer = setInterval(() => {
+		try {
+			raw.ping?.();
+		} catch {
+			// The socket is closing; the close path clears this timer.
+		}
+	}, intervalMs);
+	// A keepalive must never be the reason the process cannot exit: it exists to
+	// outlive silence, not to outlive the server.
+	timer.unref?.();
+
+	return () => clearInterval(timer);
+}
+
 export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 	const app = new Hono();
 	const limits = options.limits ?? DEFAULT_TRANSPORT_LIMITS;
@@ -381,6 +460,7 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 			);
 			let bridge: AttachBridge | null = null;
 			let unobserve: (() => void) | null = null;
+			let stopKeepalive: (() => void) | null = null;
 
 			const stopObserving = (): void => {
 				const stop = unobserve;
@@ -411,12 +491,20 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 
 			const release = (): void => {
 				stopObserving();
+				stopKeepalive?.();
+				stopKeepalive = null;
 				bridge?.close();
 				bridge = null;
 			};
 
 			return {
 				onOpen(_evt, ws) {
+					// Armed before the bridge, and for the whole connection rather than
+					// from the moment it authenticates: the transport's window starts at
+					// the 101, so a keepalive that waited for `hello` would leave the
+					// pre-authentication stretch — the one a phone spends on a cold
+					// radio — defended by nothing.
+					stopKeepalive = keepAlive(ws, options.keepaliveMs ?? 0);
 					bridge = new AttachBridge({
 						socketDir: options.socketDir,
 						connection: rendererConnection(ws),

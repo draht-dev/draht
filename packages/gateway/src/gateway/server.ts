@@ -4,7 +4,7 @@ import { websocket } from "hono/bun";
 import { except } from "hono/combine";
 import { cors } from "hono/cors";
 import pkg from "../../package.json" with { type: "json" };
-import { DEFAULT_CONFIG, type GatewaySettings } from "../config/config";
+import { attachKeepaliveIntervalMs, DEFAULT_CONFIG, type GatewaySettings } from "../config/config";
 import { EventBus } from "../session/event-bus";
 import { SessionManager } from "../session/session-manager";
 import { assertBindHostAllowed, isLoopbackPeer, nonLoopbackPeerRefusal } from "./bind-host";
@@ -78,6 +78,38 @@ export interface GatewayConfig {
 	 * the first refusal of an off-box request. Defaults to `console.warn`.
 	 */
 	warn?: (message: string) => void;
+	/**
+	 * Idle timeout in seconds (max 255). Defaults to the config value.
+	 *
+	 * It reaches `Bun.serve` twice — once at the top level for HTTP, once under
+	 * `websocket` — because those are two independent timers and only the second
+	 * one has ever governed `/attach`. See {@link GatewaySettings.idleTimeout}.
+	 */
+	idleTimeout?: number;
+	/**
+	 * How often an idle `/attach` socket is pinged, in ms.
+	 *
+	 * Defaults to {@link attachKeepaliveIntervalMs} of the effective idle timeout,
+	 * which is the only value that is correct by construction. `0` turns the
+	 * keepalive off, leaving the connection to live or die by whether the peer
+	 * answers Bun's own end-of-window PING in time — the behaviour before this
+	 * option existed. It is spelled out as an option rather than hidden because a
+	 * host that genuinely wants idle attach sockets reaped needs a way to say so,
+	 * and because a keepalive nothing can switch off is a keepalive nothing can
+	 * prove is load-bearing.
+	 */
+	attachKeepaliveMs?: number;
+}
+
+/**
+ * The idle window this server will actually enforce, in seconds.
+ *
+ * One resolution used by both `createServer` and `startGateway`, so the HTTP
+ * timer and the WebSocket timer cannot be handed different numbers — which is
+ * the drift that let the configured value govern one of them and not the other.
+ */
+function resolveIdleTimeout(config: GatewayConfig): number {
+	return config.idleTimeout ?? config.config?.idleTimeout ?? DEFAULT_CONFIG.idleTimeout;
 }
 
 /**
@@ -100,10 +132,19 @@ export interface GatewayConfig {
  */
 export interface ServerHandle {
 	app: Hono;
-	websocket: typeof websocket;
+	websocket: GatewayWebSocketHandler;
 	eventBus: EventBus;
 	hostname: string;
 }
+
+/**
+ * Hono's Bun WebSocket handler, carrying the idle window this daemon chose.
+ *
+ * `idleTimeout` is a required property rather than an optional one so that a
+ * caller assembling `Bun.serve` by hand cannot quietly drop it and fall back to
+ * Bun's unset default — which is the state `/attach` was in.
+ */
+export type GatewayWebSocketHandler = typeof websocket & { idleTimeout: number };
 
 /**
  * The parts of a listening server that describe what is actually exposed.
@@ -165,6 +206,7 @@ export function createServer(config: GatewayConfig): ServerHandle {
 
 	const app = new Hono();
 	const startedAt = Date.now();
+	const idleTimeout = resolveIdleTimeout(config);
 
 	// The host guard above cannot stand on its own: `createServer` hands back an
 	// `app` that the *caller* binds, so an embedder can ignore the vetted
@@ -267,6 +309,10 @@ export function createServer(config: GatewayConfig): ServerHandle {
 			socketDir: config.socketDir ?? resolveSocketDir(),
 			authToken: config.authToken,
 			devices: deviceProvider(config.devices),
+			// Derived from the same window the handler above enforces, so the two
+			// cannot be configured apart: the period is a function of the timeout,
+			// never a second setting an operator can put out of step with it.
+			keepaliveMs: config.attachKeepaliveMs ?? attachKeepaliveIntervalMs(idleTimeout),
 		}),
 	);
 	app.route("/sessions", createSessionRoutes(manager, config.config));
@@ -277,14 +323,26 @@ export function createServer(config: GatewayConfig): ServerHandle {
 	app.onError(errorHandler);
 	app.notFound(notFoundHandler);
 
-	return { app, websocket, eventBus, hostname };
+	// The WebSocket idle window is set here, explicitly, rather than left to
+	// Bun's default. It is a *different timer* from `Bun.serve`'s top-level
+	// `idleTimeout` — measured on Bun 1.4.0, the top-level value does not govern
+	// WebSocket connections at all — so leaving this unset ran every attach and
+	// session socket on an unset 120s default that no configuration could move.
+	// Spread rather than mutated: `websocket` is the shared handler object hono
+	// exports, and writing a per-server field onto it would make the last server
+	// constructed decide the window for every other one in the process.
+	return { app, websocket: { ...websocket, idleTimeout }, eventBus, hostname };
 }
 
-/** Options for {@link startGateway}. */
-export interface StartGatewayOptions extends GatewayConfig {
-	/** Idle timeout in seconds (max 255). Defaults to the config value. */
-	idleTimeout?: number;
-}
+/**
+ * Options for {@link startGateway}.
+ *
+ * `idleTimeout` and `attachKeepaliveMs` live on {@link GatewayConfig} itself:
+ * `createServer` needs both — one for the WebSocket handler it returns, one for
+ * the attach route it mounts — and a knob that only the bind wrapper could see
+ * was a knob the socket never heard about.
+ */
+export type StartGatewayOptions = GatewayConfig;
 
 /** The result of {@link startGateway}. */
 export interface StartedGateway {
@@ -311,7 +369,9 @@ export function startGateway(options: StartGatewayOptions): StartedGateway {
 		hostname,
 		fetch: app.fetch,
 		websocket: ws,
-		idleTimeout: options.idleTimeout ?? options.config?.idleTimeout ?? DEFAULT_CONFIG.idleTimeout,
+		// The HTTP idle timer. The WebSocket one rides on `ws` itself, set by
+		// `createServer` from this same resolution — see `resolveIdleTimeout`.
+		idleTimeout: resolveIdleTimeout(options),
 	});
 
 	return { server, eventBus };

@@ -36,7 +36,26 @@ export interface GatewaySettings {
 	/** Maximum number of concurrent sessions (default: 100) */
 	maxSessions: number;
 
-	/** Idle timeout for connections in seconds (max 255) */
+	/**
+	 * Idle timeout for connections in seconds (max 255).
+	 *
+	 * It reaches two places, and until Phase 33 it only reached the first:
+	 *
+	 *  - `Bun.serve({ idleTimeout })`, which governs HTTP requests;
+	 *  - `Bun.serve({ websocket: { idleTimeout } })`, which governs `/attach` and
+	 *    `/sessions/:id/ws`.
+	 *
+	 * The second wiring is not cosmetic. Measured on Bun 1.4.0, the top-level
+	 * value does **not** govern WebSocket connections — a socket on a server with
+	 * `idleTimeout: 3` and no `websocket.idleTimeout` sat silent for 20s and was
+	 * sent no pings at all — so this setting used to say nothing whatsoever about
+	 * the connection a phone holds, which then ran on Bun's unset default of
+	 * 120s. An operator who raised this number to keep a long-running attach
+	 * alive was changing a value that could not affect it.
+	 *
+	 * See {@link attachKeepaliveIntervalMs} for the other half: a window is only
+	 * as good as the traffic that resets it.
+	 */
 	idleTimeout: number;
 
 	/**
@@ -66,6 +85,62 @@ export const DEFAULT_CONFIG: GatewaySettings = {
 	maxSessions: 100,
 	idleTimeout: 255,
 };
+
+/**
+ * The largest idle timeout Bun's per-socket timer accepts, in seconds.
+ *
+ * Also the value config validation clamps to, so the two cannot drift.
+ */
+export const MAX_IDLE_TIMEOUT_SECONDS = 255;
+
+/**
+ * How many keepalive periods must fit inside the idle window they defend.
+ *
+ * Three, not two: the connection has to be able to lose two consecutive
+ * keepalives — a scheduler stall, a GC pause, a write that lands late — and
+ * still not be reaped. A divisor of two makes a single missed period a
+ * coin-flip, which is the shape of a test that passes locally and drops a phone
+ * in the field.
+ */
+export const ATTACH_KEEPALIVE_DIVISOR = 3;
+
+/**
+ * How often an idle `/attach` socket is pinged, for a given idle window.
+ *
+ * **Why a ping at all, when Bun already sends one.** Bun's reaper is a liveness
+ * probe, not a keepalive: near the end of the window it emits a PING and closes
+ * the connection if no PONG comes back. Measured on the shipped configuration,
+ * that is a ping at t=104s and a close at t=120s — so a connection's survival
+ * rested entirely on the peer's answer arriving inside a ~16s grace. A client
+ * that answered lived (200s and counting); a client that did not was dropped at
+ * exactly 120.00s. That is a fine way to garbage-collect dead sockets and a poor
+ * way to hold a live one, because the connection this exists for is a phone on a
+ * radio that may well be the thing that is slow.
+ *
+ * A *server-initiated* ping resets the window on send, before the reaper ever
+ * arms, and needs no answer: measured, a socket with a 2s window pinged every
+ * 1000ms by the server survived 20s — ten windows — against a client that never
+ * ponged once. So the connection stops depending on the peer being prompt and
+ * starts depending only on the server still running.
+ *
+ * These are protocol control frames, not application frames: nothing is added to
+ * the geist wire, no `GEIST_PROTOCOL_VERSION` bump, no conformance corpus
+ * regeneration. And they work against a backgrounded browser tab, which answers
+ * pings in its network stack rather than in JavaScript — the case a
+ * `setInterval` heartbeat in page script would fail exactly when it mattered.
+ *
+ * @param idleTimeoutSeconds - The window to defend, in seconds.
+ * @returns The keepalive period in ms, or `0` when there is no window to defend
+ *          (a zero, negative, or unusable timeout) and therefore no timer worth
+ *          arming.
+ */
+export function attachKeepaliveIntervalMs(idleTimeoutSeconds: number): number {
+	if (!Number.isFinite(idleTimeoutSeconds) || idleTimeoutSeconds <= 0) return 0;
+	const seconds = Math.min(idleTimeoutSeconds, MAX_IDLE_TIMEOUT_SECONDS);
+	// Floor, never round: rounding up on an odd window is how a period ends up a
+	// millisecond inside a bound it was supposed to clear by a third.
+	return Math.max(1, Math.floor((seconds * 1000) / ATTACH_KEEPALIVE_DIVISOR));
+}
 
 /**
  * Name of the directory this package creates and therefore may tighten.

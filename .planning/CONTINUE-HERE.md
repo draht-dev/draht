@@ -98,14 +98,24 @@ leftover — and would relay permissions only for geist-*spawned* sessions, leav
 in your own terminal with no relay at all. It recommends a `RelayUIContext` decorator at the mode-agnostic
 injection point instead.
 
-**R34-PERM.8 is measured, and its result reshapes Phase 34.** The agent core imposes no deadline on a
-permission ask — verified at every layer, measured to 25 minutes against the emitted binary with zero
-degradation. But the gateway's WebSocket closes any silent connection at **255 seconds**
-(`config.ts:67`), there is no keepalive anywhere in `packages/gateway/src`, and a pending ask produces no
-output by definition. So the phone drops at ~4m15s while the agent waits forever. Phase 34's real latency
-work is a heartbeat or a durable pending ask — a prerequisite, not a nice-to-have. Two shipped defects
-also wedge or kill a pending ask (`rpc-mode.ts:428` and `:799-802`). Full detail and the seven
-prerequisites are in `.planning/ROADMAP.md` under Phase 34.
+**R34-PERM.8 is measured.** The agent core imposes no deadline on a permission ask — verified at every
+layer, measured to 25 minutes against the emitted binary with zero degradation. Phase 34 may keep "hold
+the turn" as its primary mechanism.
+
+The transport is the binding layer, but **an earlier version of this handoff got the mechanism wrong and
+said 255 seconds — see the corrected note in `.planning/ROADMAP.md` under Phase 34.** Measured truth:
+`Bun.serve({ idleTimeout })` never governed WebSockets at all, the real window was Bun's unset 120s
+default, and Bun's reaper is a liveness probe that pings first — so a compliant browser was never reaped.
+What was fragile was that survival depended entirely on the peer's PONG landing inside a ~16s grace, on
+exactly the kind of link a phone has. **Fixed 2026-08-21**: `websocket.idleTimeout` is set explicitly
+from config, plus a server-side ping at `idleTimeout / 3` so survival no longer depends on the peer.
+
+Also fixed 2026-08-21: both rpc-mode defects. Abort and shutdown now resolve pending dialogs fail-closed
+through the protocol's own `{cancelled: true}` shape.
+
+**Still not solved:** a phone that is asleep, in a tunnel, or switching networks. There the socket really
+dies, and that needs a durable pending ask a reconnecting client re-reads — decision 5. Do not read the
+keepalive as solving the walk-away case.
 
 ## Uncommitted
 

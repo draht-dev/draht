@@ -7,6 +7,10 @@
 import path from "node:path";
 import { APP_NAME, getAgentDir } from "../../config.js";
 import type { AgentSession } from "../agent-session.js";
+import type { PermissionRelay } from "../permission-relay/types.js";
+import { PermissionDelivery } from "./permission-delivery.js";
+import { type PermissionEntry, PermissionRegistry } from "./permission-registry.js";
+import { createSocketPermissionRelay, type SocketPermissionRelay } from "./permission-relay.js";
 import { SocketServer } from "./socket-server.js";
 
 export interface AttachableSessionOptions {
@@ -37,6 +41,17 @@ export interface AttachableSession {
 	readonly socketPath: string | null;
 	/** Session id the socket currently advertises, or null when nothing is bound. */
 	readonly sessionId: string | null;
+	/**
+	 * The pending-ask registry's public face, or null when nothing is bound.
+	 *
+	 * Hand this to {@link AgentSession.setPermissionRelay} — and hand the CURRENT one over again
+	 * after every {@link AttachableSession.rebind}, because a rebind builds a new registry for the
+	 * new session and the old handle is dead. The relay lives here, in this closure, and NOT in the
+	 * UI decorator: a new `ExtensionRunner` (and therefore a new decorator) is built on every
+	 * extension reload, which would orphan every ask raised before it with the agent still parked
+	 * on the answer.
+	 */
+	readonly relay: PermissionRelay | null;
 	/** Follow a session replacement: close the old socket and bind one for the new session. */
 	rebind(session: AgentSession, cwd: string): Promise<void>;
 	/** Close the socket and remove the .sock/.lock files. */
@@ -48,6 +63,9 @@ export interface AttachableSession {
 const DISABLED_SESSION: AttachableSession = {
 	socketPath: null,
 	sessionId: null,
+	// No socket, so nobody can be asked anything remotely. Handing this to a session would make
+	// `hasUI()` claim a surface that does not exist.
+	relay: null,
 	rebind: async () => {},
 	stop: async () => {},
 	stopSync: () => {},
@@ -71,6 +89,19 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 	let server: SocketServer | null = null;
 	let unsubscribe: (() => void) | null = null;
 	let stopped = false;
+	/**
+	 * The relay for the session currently bound.
+	 *
+	 * It lives HERE, in the bind closure, for one reason each way: it must die with the session
+	 * (an ask belongs to the session that raised it and may not survive into its replacement), and
+	 * it must survive CLIENT CHURN (`#handleClientDisconnect` only removes a client, so a phone
+	 * that drops its connection mid-ask must be able to reconnect and be shown the same ask). A
+	 * relay in the UI decorator would satisfy neither: that object is rebuilt on every extension
+	 * reload.
+	 */
+	let relay: SocketPermissionRelay | null = null;
+	/** Ends every pending ask fail-closed. Set alongside {@link relay}; null when nothing is bound. */
+	let cancelPending: (() => void) | null = null;
 
 	const bind = async (session: AgentSession, cwd: string): Promise<SocketServer> => {
 		// Get session ID from the session manager header
@@ -89,6 +120,51 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 
 		await next.start();
 		unsubscribe = subscribeToSession(session, next);
+
+		// ── the permission relay for THIS session ──────────────────────────────────────────────
+		const registry = new PermissionRegistry({ sessionId: header.id });
+		const delivery = new PermissionDelivery<PermissionEntry>({ pending: () => registry.pending() });
+		/**
+		 * Whether THIS bind still owns the socket. A relay whose session was replaced or stopped
+		 * must write nothing: a late timer or a straggling socket callback would otherwise reach a
+		 * server that has already been torn down.
+		 */
+		let boundLive = true;
+		const bound = createSocketPermissionRelay({
+			registry,
+			delivery,
+			server: () => (boundLive ? next : null),
+			recorder: () => session.sessionManager,
+			sessionId: header.id,
+			cwd,
+			onWarning: warn,
+		});
+		relay = bound;
+		cancelPending = () => {
+			// Cancel FIRST — the announcement has to go out while the socket is still up — and only
+			// then close the door behind it.
+			bound.cancelAll();
+			boundLive = false;
+		};
+
+		// An answer is NOT input. It must never reach the `onInput` funnel below, which hands
+		// everything it receives to `session.prompt(...)` — that is exactly how a "Yes" tapped on
+		// a phone became a queued chat message while the agent sat waiting for a decision nobody
+		// could deliver.
+		next.onPermissionResponse((message, clientId) => {
+			bound.handleResponse(message, clientId);
+		});
+		// Fired right after `session_metadata`, so a client that attached mid-ask is shown it on a
+		// surface that already knows which session it is looking at. Replay is a SEND, not a state
+		// transition: the ask stays pending until somebody actually answers it.
+		next.onAttachReplay((clientId) => {
+			bound.replayTo(clientId);
+		});
+		// Per-connection bookkeeping only. The ask itself is untouched: a client that was shown an
+		// ask and then died must not take that ask with it.
+		next.onClientDisconnect((clientId) => {
+			bound.forgetClient(clientId);
+		});
 
 		// Forward input from socket clients to session
 		next.onInput((data: string, clientId: string) => {
@@ -149,12 +225,24 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 		get sessionId(): string | null {
 			return server?.sessionId ?? null;
 		},
+		get relay(): PermissionRelay | null {
+			return relay;
+		},
 
 		async rebind(nextSession: AgentSession, nextCwd: string): Promise<void> {
 			if (stopped) return;
 			try {
 				unsubscribe?.();
 				unsubscribe = null;
+
+				// FAIL CLOSED FIRST, while the old socket is still open. These asks gate tool calls
+				// in a session that is being replaced: nothing they authorise may proceed, the
+				// agent arm holding each one has to be released rather than left dangling, and the
+				// clients watching them have to be told — which is only possible before the server
+				// they are attached to is stopped.
+				cancelPending?.();
+				cancelPending = null;
+				relay = null;
 
 				const previous = server;
 				server = null;
@@ -173,6 +261,8 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 				// A failed rebind must not break the session switch itself. The socket stays
 				// closed, so the session simply stops being attachable.
 				server = null;
+				relay = null;
+				cancelPending = null;
 				const message = error instanceof Error ? error.message : String(error);
 				warn(`Attachable session could not follow the session switch: ${message}`);
 			}
@@ -183,6 +273,11 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 			stopped = true;
 			unsubscribe?.();
 			unsubscribe = null;
+			// Before the socket goes away: an unanswered ask fails closed, is announced, and is
+			// recorded. Anything still parked on one gets its `undefined` instead of hanging.
+			cancelPending?.();
+			cancelPending = null;
+			relay = null;
 			const current = server;
 			server = null;
 			await current?.stop();
@@ -195,6 +290,13 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 				unsubscribe?.();
 			} catch {}
 			unsubscribe = null;
+			// Synchronous by construction — settle, announce and append are all synchronous — so
+			// this works from `process.on("exit")` and from a signal handler.
+			try {
+				cancelPending?.();
+			} catch {}
+			cancelPending = null;
+			relay = null;
 			const current = server;
 			server = null;
 			current?.stopSync();

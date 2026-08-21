@@ -26,6 +26,7 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import type { RelayOutcome } from "../../core/permission-relay/types.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -90,6 +91,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			resolve: (value: any) => void;
 			reject: (error: Error) => void;
 			offeredOptions?: readonly OfferedOption[];
+			/**
+			 * How this surface tells the caller what it ACTUALLY did (T8-FIX2).
+			 *
+			 * `ExtensionUIContext.confirm` returns a bare `Promise<boolean>`, so the `false` this
+			 * mode resolves on shutdown, on stdin EOF and on `abort` is indistinguishable from a
+			 * human pressing "No" — and it was recorded as one: `{decision: "denied", decidedBy:
+			 * {surface: "rpc"}}` for asks nobody ever saw. This is where that stops being a guess.
+			 */
+			reportOutcome?: (outcome: RelayOutcome) => void;
 		}
 	>();
 
@@ -112,6 +122,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		const cancelled = [...pendingExtensionRequests.entries()];
 		pendingExtensionRequests.clear();
 		for (const [id, pending] of cancelled) {
+			// SAID BEFORE IT IS RESOLVED. Nobody answered this dialog — the process is shutting
+			// down, stdin reached EOF, or an `abort` came in — and the `false` below cannot carry
+			// that. Without this line the audit row reads as a human at this surface refusing a
+			// tool call they were never shown.
+			pending.reportOutcome?.({ kind: "cancelled" });
 			pending.resolve({ type: "extension_ui_response", id, cancelled: true } satisfies RpcExtensionUIResponse);
 		}
 	};
@@ -142,6 +157,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			const onAbort = () => {
 				cleanup();
+				// An abort is not an answer. Same reasoning as `cancelPendingExtensionRequests`.
+				opts?.reportOutcome?.({ kind: "cancelled" });
 				resolve(defaultValue);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
@@ -149,6 +166,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			if (opts?.timeout) {
 				timeoutId = setTimeout(() => {
 					cleanup();
+					// Nor is a timeout: the human simply never got to it.
+					opts.reportOutcome?.({ kind: "cancelled" });
 					resolve(defaultValue);
 				}, opts.timeout);
 			}
@@ -160,6 +179,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				},
 				reject,
 				offeredOptions: opts?.detail?.options,
+				reportOutcome: opts?.reportOutcome,
 			});
 			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 		});
@@ -924,6 +944,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				// confused about its own answer, and only one of the two was ever offered to it.
 				const chosen = matches[0] as OfferedOption;
 				pendingExtensionRequests.delete(response.id);
+				// THE ID THE OPERATOR ACTUALLY NAMED, carried through instead of being flattened
+				// into a boolean. `confirmed` below is the same fact for a caller that can only
+				// read a boolean; this is the same fact for a caller that can record which of
+				// `deny-once` and `deny-always` was pressed. Said BEFORE the resolve.
+				pending.reportOutcome?.({
+					kind: chosen.decision === "approve" ? "approved" : "denied",
+					chosenOptionId: chosen.id,
+				});
 				pending.resolve({ ...response, confirmed: chosen.decision === "approve" } as RpcExtensionUIResponse);
 				return;
 			}

@@ -7,7 +7,16 @@ import { theme } from "../../modes/interactive/theme/theme.ts";
 import type { ExtensionUIContext } from "../extensions/types.ts";
 
 export { APPROVE_OPTION_ID, createRelayUIContext, DENY_OPTION_ID } from "./relay-ui-context.ts";
-export type { PermissionRelay, RelayAnswer, RelayAsk, RelayDecider } from "./types.ts";
+export type {
+	LocalSurface,
+	PermissionRelay,
+	RelayAnswer,
+	RelayAsk,
+	RelayDecider,
+	RelayEnded,
+	RelayOutcome,
+} from "./types.ts";
+export { isRelayEnded, RELAY_ANSWERED, RELAY_CANCELLED } from "./types.ts";
 
 /**
  * The base context to decorate when a mode bound none of its own.

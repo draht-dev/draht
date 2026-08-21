@@ -13,6 +13,54 @@ export interface RelayDecider {
 	clientId: string | null;
 }
 
+/**
+ * The surface a LOCALLY raised dialog belongs to.
+ *
+ * `attach` is excluded because it is the REMOTE side by definition — an attached client's answer
+ * comes back through {@link RelayAnswer.decidedBy} and is never what the decorator is describing.
+ * `system` IS allowed and is the truthful value for a binding mode that shows no dialog to anybody
+ * (`print`, `json`): if such a mode ever ends an ask, nobody acted.
+ *
+ * There is no default. The decorator is built at ONE seam that knows the mode, and a default here
+ * would be exactly the hardcoded `tui` this type exists to abolish — an answer typed into the RPC
+ * surface, and a process shutdown, both recorded as a human at a terminal that does not exist.
+ */
+export type LocalSurface = Exclude<RelayDecider["surface"], "attach">;
+
+/**
+ * WHAT ACTUALLY HAPPENED to an ask, as the surface that ended it knows it.
+ *
+ * This exists because a relay cannot GUESS. `withdraw` used to carry only the decider, so the
+ * implementation hardcoded `cancelled` — and an approved, EXECUTED command was written into the
+ * durable record and put on the wire as `cancelled`, with `chosenOptionId: null`. The decision was
+ * known to the caller of `withdraw` all along; it simply had nowhere to put it.
+ *
+ *  - `approved` / `denied` — a surface ANSWERED, and the answer's own vocabulary says what that
+ *    meant. `chosenOptionId` names the offered option when one was named, and is `null` when the
+ *    answering surface did not name one (see below).
+ *  - `answered` — a `select` or `input` was answered. Those methods carry NO permission semantics:
+ *    nothing was approved and nothing was denied, so neither word may be used for them.
+ *  - `cancelled` — the ask ended with NO answer at all: an abort, a shutdown, a session
+ *    replacement, a declared timeout, or a relay that was spent before anybody could act.
+ *
+ * `chosenOptionId: null` on an `approved`/`denied` outcome is not a hole, it is the honest report
+ * of a surface that answered WITHOUT naming an option — the local `ExtensionUIContext.confirm`
+ * returns a bare `Promise<boolean>` and draws its own Yes/No, so it never chose one of the offered
+ * ids. Reverse-mapping that boolean onto the offered set would be a derivation, and with a
+ * vocabulary like `[allow, deny-once, deny-always]` it would name an option nobody touched.
+ */
+export type RelayOutcome =
+	| { readonly kind: "approved"; readonly chosenOptionId: string | null }
+	| { readonly kind: "denied"; readonly chosenOptionId: string | null }
+	| { readonly kind: "answered" }
+	| { readonly kind: "cancelled" };
+
+/** The outcome of an ask that ended without anybody answering it. Shared, frozen, allocation-free. */
+export const RELAY_CANCELLED: RelayOutcome = Object.freeze({ kind: "cancelled" as const });
+
+/** The outcome of a `select` or `input` that WAS answered — no permission was granted or refused. */
+export const RELAY_ANSWERED: RelayOutcome = Object.freeze({ kind: "answered" as const });
+
 /** A single ask broadcast to every attached read-write client. */
 export interface RelayAsk {
 	/** Stable id for this ask, minted once per raised dialog. */
@@ -79,6 +127,39 @@ export interface RelayAsk {
 	deadline: string | null;
 }
 
+/**
+ * The relay ITSELF ended the ask. Nobody answered, and nobody still can.
+ *
+ * THIS IS NOT THE SAME AS `raise()` RESOLVING `undefined`, and conflating the two was a FAIL-OPEN
+ * defect. `undefined` means "the relay is spent" — it refused the ask at a bound, its socket was
+ * already gone, or an answer named an option nobody offered. In every one of those the ask itself
+ * is still live and a human at the LOCAL surface must still get to answer it.
+ *
+ * This value means the opposite: the ask is OVER. The registry's fail-closed clock ran out, or the
+ * session it belonged to was stopped or replaced. The relay has already broadcast the ending and
+ * written it down, so a surface that kept its dialog on screen after this would be offering a human
+ * a button that can still run the command an audit row already records as expired — which is
+ * exactly what happened: the durable record said `expired`, the human tapped Approve on the local
+ * dialog nobody had taken down, and the command RAN.
+ *
+ * A decorator receiving this must settle its ask on the raising method's own fail-closed default,
+ * abort the local surface, and attribute the ending to {@link RelayEnded.decidedBy} — which names
+ * `system`, because nobody decided anything.
+ */
+export interface RelayEnded {
+	/** The ask that ended. An `ended` naming any other ask is ignored, exactly as an answer is. */
+	requestId: string;
+	/** WHAT ended it. Never `approved`/`denied`: nobody answered, so nothing was granted or refused. */
+	ended: "expired" | "cancelled";
+	/** Who ended it. Always the system — an ask nobody answered may not be attributed to a person. */
+	decidedBy: RelayDecider;
+}
+
+/** Whether a settled `raise()` is the relay reporting that the ask itself is OVER. */
+export function isRelayEnded(value: RelayAnswer | RelayEnded | undefined): value is RelayEnded {
+	return value !== undefined && "ended" in value;
+}
+
 /** An answer that came back from some surface. */
 export interface RelayAnswer {
 	/** The ask being answered. An answer naming any other ask is ignored. */
@@ -109,15 +190,35 @@ export interface PermissionRelay {
 	/** How many attached clients could answer right now. Evaluated live, never cached. */
 	readWriteClientCount(): number;
 	/**
-	 * Broadcast an ask and resolve with the first valid answer.
+	 * Broadcast an ask and resolve with the first valid answer — or with how the ask ENDED.
 	 *
-	 * Resolves with `undefined` when the relay gives up without an answer (no client, withdrawn,
-	 * or expired). What follows depends on whether a local surface exists: with one, the decorator
-	 * keeps waiting on it and the human at the terminal still decides; WITHOUT one — the headless
-	 * case a registry implementer is usually writing for — the decorator settles the ask on the
-	 * method's own fail-closed default, attributed to the system rather than to any person.
+	 * THREE outcomes, and the last two are not the same thing:
+	 *
+	 *  - a {@link RelayAnswer}: somebody answered.
+	 *  - a {@link RelayEnded}: the RELAY ended the ask. Its clock ran out, or the session was
+	 *    stopped or replaced. The ask is over on every surface, the ending is already broadcast and
+	 *    recorded, and the decorator must settle on the method's fail-closed default and take the
+	 *    local dialog down. A decorator that kept waiting here leaves a live Approve button on an
+	 *    ask the durable record already says expired — the fail-OPEN defect this member exists to
+	 *    make unrepresentable.
+	 *  - `undefined`: the relay is SPENT, but the ask is not over. It was refused at a bound, its
+	 *    socket was already gone, or the answer named an option nobody offered. With a live local
+	 *    surface the decorator keeps waiting and the human at the terminal still decides; WITHOUT
+	 *    one — the headless case — it settles on the method's own fail-closed default, attributed
+	 *    to the system rather than to any person.
 	 */
-	raise(ask: RelayAsk): Promise<RelayAnswer | undefined>;
-	/** Tell the relay this ask is over, and who decided it, so it can echo the resolution. */
-	withdraw(requestId: string, decidedBy: RelayDecider): void;
+	raise(ask: RelayAsk): Promise<RelayAnswer | RelayEnded | undefined>;
+	/**
+	 * Tell the relay this ask is over: WHO ended it, and WHAT HAPPENED.
+	 *
+	 * Both halves are required and neither may be inferred by the implementation. The caller has
+	 * just settled the ask and holds the value; an implementation that reconstructs the outcome
+	 * from anything else is guessing, and a guess written into the session's durable record is a
+	 * decision that never happened.
+	 *
+	 * Withdrawing an ask that is already over MUST be silent — no second broadcast, no second audit
+	 * row. The decorator withdraws every ask it settles, including the ones a remote answer already
+	 * settled inside the relay.
+	 */
+	withdraw(requestId: string, decidedBy: RelayDecider, outcome: RelayOutcome): void;
 }

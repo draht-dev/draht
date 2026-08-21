@@ -14,7 +14,15 @@ import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../src/core/extensions/index.ts";
 import type { PermissionAskDetail } from "../src/core/extensions/types.ts";
-import type { PermissionRelay, RelayAnswer, RelayAsk, RelayDecider } from "../src/core/permission-relay/index.ts";
+import type {
+	LocalSurface,
+	PermissionRelay,
+	RelayAnswer,
+	RelayAsk,
+	RelayDecider,
+	RelayEnded,
+	RelayOutcome,
+} from "../src/core/permission-relay/index.ts";
 import { createRelayUIContext, noOpRelayBaseUIContext } from "../src/core/permission-relay/index.ts";
 import { theme } from "../src/modes/interactive/theme/theme.ts";
 import { createHarness, type Harness } from "./suite/harness.ts";
@@ -50,8 +58,18 @@ interface FakeRelay extends PermissionRelay {
 	events: string[];
 	asks: RelayAsk[];
 	withdrawals: { requestId: string; decidedBy: RelayDecider }[];
-	/** Resolve the pending `raise()` with an answer, or with `undefined` for "no answer". */
+	/**
+	 * WHAT each withdrawal said happened, in the same order as {@link FakeRelay.withdrawals}.
+	 *
+	 * Kept as a parallel array so the pre-existing ordering assertions keep asserting exactly what
+	 * they always did, while the new contract — a relay is TOLD the outcome and never guesses it —
+	 * gets its own assertions.
+	 */
+	outcomes: RelayOutcome[];
+	/** Resolve the pending `raise()` with an answer, or with `undefined` for "the relay is spent". */
 	answer(answer: RelayAnswer | undefined): void;
+	/** Resolve the pending `raise()` by saying the ASK ITSELF ended — expired, or cancelled. */
+	end(ended: RelayEnded): void;
 	/** Reject the pending `raise()` — the losing-side rejection case. */
 	fail(error: unknown): void;
 	setClientCount(count: number): void;
@@ -69,27 +87,30 @@ function createFakeRelay(
 ): FakeRelay {
 	const events = options.events ?? [];
 	let clients = options.clients ?? 1;
-	let resolveRaise: ((answer: RelayAnswer | undefined) => void) | undefined;
+	let resolveRaise: ((answer: RelayAnswer | RelayEnded | undefined) => void) | undefined;
 	let rejectRaise: ((error: unknown) => void) | undefined;
 	const asks: RelayAsk[] = [];
 	const withdrawals: { requestId: string; decidedBy: RelayDecider }[] = [];
+	const outcomes: RelayOutcome[] = [];
 
 	return {
 		events,
 		asks,
 		withdrawals,
+		outcomes,
 		readWriteClientCount: () => clients,
 		raise(ask) {
 			events.push("relay-raise");
 			asks.push(ask);
-			return new Promise<RelayAnswer | undefined>((resolve, reject) => {
+			return new Promise<RelayAnswer | RelayEnded | undefined>((resolve, reject) => {
 				resolveRaise = resolve;
 				rejectRaise = reject;
 			});
 		},
-		withdraw(requestId, decidedBy) {
+		withdraw(requestId, decidedBy, outcome) {
 			events.push("relay-withdraw");
 			withdrawals.push({ requestId, decidedBy });
+			outcomes.push(outcome);
 			if (options.withdrawThrows === true) {
 				throw new Error("relay socket closed");
 			}
@@ -101,6 +122,9 @@ function createFakeRelay(
 		},
 		answer(answer) {
 			resolveRaise?.(answer);
+		},
+		end(ended) {
+			resolveRaise?.(ended);
 		},
 		fail(error) {
 			rejectRaise?.(error);
@@ -292,7 +316,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("reports an answer surface whenever the mode bound a live context", () => {
 			const base = createBaseSpy();
 			const relay = createFakeRelay({ clients: 0 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			expect(wrapped.hasAnswerSurface?.()).toBe(true);
 		});
@@ -303,7 +327,7 @@ describe("RelayUIContext surface arbitration", () => {
 			const events: string[] = [];
 			const base = createBaseSpy({ onAbort: "ignore", events });
 			const relay = createFakeRelay({ clients: 1, events });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build");
 			await tick();
@@ -329,7 +353,7 @@ describe("RelayUIContext surface arbitration", () => {
 			// This base mimics interactive mode: an abort resolves the confirm to `false`.
 			const base = createBaseSpy({ onAbort: "resolve-false", events });
 			const relay = createFakeRelay({ clients: 1, events });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build");
 			await tick();
@@ -348,7 +372,7 @@ describe("RelayUIContext surface arbitration", () => {
 			const events: string[] = [];
 			const base = createBaseSpy({ events });
 			const relay = createFakeRelay({ clients: 1, events });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: ls");
 			await tick();
@@ -370,7 +394,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("asks nobody when there is no live base and no client", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 0 });
-			const wrapped = createRelayUIContext(base.context, relay, false);
+			const wrapped = createRelayUIContext(base.context, relay, false, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: ls");
 			await tick();
@@ -394,7 +418,7 @@ describe("RelayUIContext surface arbitration", () => {
 			try {
 				const base = createBaseSpy({ onAbort: "ignore" });
 				const relay = createFakeRelay({ clients: 1 });
-				const wrapped = createRelayUIContext(base.context, relay, true);
+				const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 				const pending = wrapped.confirm("Approve tool call?", "bash: ls");
 				await tick();
@@ -421,7 +445,7 @@ describe("RelayUIContext surface arbitration", () => {
 			try {
 				const base = createBaseSpy();
 				const relay = createFakeRelay({ clients: 1 });
-				const wrapped = createRelayUIContext(base.context, relay, true);
+				const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 				const pending = wrapped.confirm("Approve tool call?", "bash: ls");
 				await tick();
@@ -444,7 +468,7 @@ describe("RelayUIContext surface arbitration", () => {
 			const events: string[] = [];
 			// Exactly the shape print/json, SDK and draht-acp sessions get: no mode context at all.
 			const relay = createFakeRelay({ clients: 1, events });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build");
 			const isSettled = watch(pending);
@@ -466,7 +490,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("falls back to the fail-closed default, attributed to nobody, when the relay gives up", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build");
 			await tick();
@@ -501,7 +525,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("mints a select's offered set from the CALLER's options, never from detail.options", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			// Probe 2f, ported: a same-length detail array in a DIFFERENT order from the labels. The
 			// old positional/label matching answered "deny" with the caller-side string "Allow".
@@ -532,7 +556,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("keeps two identical select labels two distinct answers", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.select("Pick a branch", ["main", "main"]);
 			await tick();
@@ -549,7 +573,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("reads a confirm answer off the option's declared decision, not its position", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: ls", {
 				detail: permissionDetail([
@@ -582,7 +606,7 @@ describe("RelayUIContext surface arbitration", () => {
 			] as const) {
 				const base = createBaseSpy({ onAbort: "ignore" });
 				const relay = createFakeRelay({ clients: 1 });
-				const wrapped = createRelayUIContext(base.context, relay, true);
+				const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 				const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
 					detail: permissionDetail([...vocabulary]),
@@ -601,7 +625,7 @@ describe("RelayUIContext surface arbitration", () => {
 			] as const) {
 				const base = createBaseSpy({ onAbort: "ignore" });
 				const relay = createFakeRelay({ clients: 1 });
-				const wrapped = createRelayUIContext(base.context, relay, true);
+				const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 				const pending = wrapped.confirm("Approve tool call?", "bash: ls", {
 					detail: permissionDetail([option]),
@@ -663,7 +687,7 @@ describe("RelayUIContext surface arbitration", () => {
 				// Discover the broadcast set once...
 				const probeBase = createBaseSpy({ onAbort: "ignore" });
 				const probeRelay = createFakeRelay({ clients: 1 });
-				const probeUi = createRelayUIContext(probeBase.context, probeRelay, true);
+				const probeUi = createRelayUIContext(probeBase.context, probeRelay, true, "tui");
 				void testCase.run(probeUi);
 				await tick();
 				const broadcast = probeRelay.asks[0].options;
@@ -679,7 +703,7 @@ describe("RelayUIContext surface arbitration", () => {
 				for (const option of broadcast) {
 					const base = createBaseSpy({ onAbort: "ignore" });
 					const relay = createFakeRelay({ clients: 1 });
-					const ui = createRelayUIContext(base.context, relay, true);
+					const ui = createRelayUIContext(base.context, relay, true, "tui");
 					const pending = testCase.run(ui);
 					const isSettled = watch(pending);
 					await tick();
@@ -698,7 +722,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("treats an id outside the offered set as silence, never as a dismissal", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build");
 			const isSettled = watch(pending);
@@ -757,7 +781,7 @@ describe("RelayUIContext surface arbitration", () => {
 		for (const testCase of invalid) {
 			it(`offers nothing remotely and fails closed for ${testCase.name}`, async () => {
 				const relay = createFakeRelay({ clients: 1 });
-				const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+				const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 				const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
 					detail: permissionDetail(testCase.options),
@@ -785,7 +809,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("falls through to the live local surface rather than denying on its own", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: ls", {
 				detail: permissionDetail([]),
@@ -809,7 +833,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("still mints the default pair when the caller supplied no vocabulary at all", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			// Absent is not invalid: the existing, correct behaviour must survive the new gate.
 			const pending = wrapped.confirm("Approve tool call?", "bash: ls");
@@ -831,7 +855,7 @@ describe("RelayUIContext surface arbitration", () => {
 		] as const) {
 			it(`denies rather than throwing a RangeError for a ${name} timeout`, async () => {
 				const relay = createFakeRelay({ clients: 1 });
-				const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+				const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 				// A synchronous throw here never reaches the relay and never fails closed: the
 				// permission gate reports it as a TOOL ERROR, not as a denial.
@@ -852,7 +876,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("still advertises a deadline for a real, finite timeout", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const before = Date.now();
 			const pending = wrapped.confirm("Approve tool call?", "bash: ls", { timeout: 60_000 });
@@ -871,7 +895,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("returns the text a human TYPED even when it equals a suggestion's id", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.input("Name?", "placeholder", {
 				detail: permissionDetail([{ id: "allow-once", label: "Allow once", decision: "approve" }]),
@@ -894,7 +918,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("puts `decision` on every confirm option and on no select option", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			// A client rendering a destructive deny button must not have to join two arrays by id —
 			// and for `select` the two arrays share no ids at all, so the join is impossible.
@@ -915,7 +939,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 			const bareBase = createBaseSpy({ onAbort: "ignore" });
 			const bareRelay = createFakeRelay({ clients: 1 });
-			const bare = createRelayUIContext(bareBase.context, bareRelay, true);
+			const bare = createRelayUIContext(bareBase.context, bareRelay, true, "tui");
 			void bare.confirm("Approve tool call?", "bash: ls");
 			await tick();
 
@@ -924,7 +948,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 			const selectBase = createBaseSpy({ onAbort: "ignore" });
 			const selectRelay = createFakeRelay({ clients: 1 });
-			const selectUi = createRelayUIContext(selectBase.context, selectRelay, true);
+			const selectUi = createRelayUIContext(selectBase.context, selectRelay, true, "tui");
 			void selectUi.select("Pick", ["Allow", "Deny"], {
 				detail: permissionDetail([
 					{ id: "deny", label: "Deny", decision: "deny" },
@@ -951,7 +975,7 @@ describe("RelayUIContext surface arbitration", () => {
 			try {
 				const base = createBaseSpy({ onAbort: "ignore" });
 				const relay = createFakeRelay({ clients: 1, withdrawThrows: true });
-				const wrapped = createRelayUIContext(base.context, relay, true);
+				const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 				const pending = wrapped.confirm("Approve tool call?", "bash: ls");
 				await tick();
@@ -978,7 +1002,7 @@ describe("RelayUIContext surface arbitration", () => {
 				const base = createBaseSpy({ onAbort: "ignore" });
 				// The obvious shape once the registry writes to a socket: `async withdraw()`.
 				const relay = createFakeRelay({ clients: 1, withdrawRejects: true });
-				const wrapped = createRelayUIContext(base.context, relay, true);
+				const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 				const pending = wrapped.confirm("Approve tool call?", "bash: ls");
 				await tick();
@@ -999,7 +1023,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("removes its abort listener from a caller-owned signal that outlives the ask", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 			// One long-lived signal, many asks — a subagent run reuses its abort signal like this.
 			const caller = new AbortController();
 
@@ -1017,7 +1041,7 @@ describe("RelayUIContext surface arbitration", () => {
 	describe("the caller's declared timeout is a real bound when nothing else is", () => {
 		it("settles on the method's fail-closed default, attributed to nobody, when it expires", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			// No live base: this decorator holds the only arm. Without honouring `timeout`, a relay
 			// that never resolves leaves the caller waiting forever, where the same session with no
@@ -1030,7 +1054,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("uses each method's own fail-closed default on expiry", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			await expect(wrapped.select("Pick", ["One", "Two"], { timeout: 20 })).resolves.toBeUndefined();
 			expect(relay.withdrawals).toEqual([{ requestId: relay.asks[0].requestId, decidedBy: SYSTEM_DECIDER }]);
@@ -1038,7 +1062,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("adds NO clock of its own when the caller declared none", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build");
 			const isSettled = watch(pending);
@@ -1056,7 +1080,7 @@ describe("RelayUIContext surface arbitration", () => {
 		it("leaves the timeout to the live local surface when there is one", async () => {
 			const base = createBaseSpy({ onAbort: "ignore" });
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: ls", { timeout: 10 });
 			const isSettled = watch(pending);
@@ -1070,7 +1094,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("disarms the expiry once the ask is answered", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: ls", { timeout: 20 });
 			await tick();
@@ -1126,7 +1150,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("cannot be told one decision at validation and another at mint", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
 				detail: permissionDetail([flippingDecision()]),
@@ -1146,7 +1170,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("cannot prove uniqueness on one set of ids and mint another", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
 				detail: permissionDetail([
@@ -1190,7 +1214,7 @@ describe("RelayUIContext surface arbitration", () => {
 		for (const testCase of malformed) {
 			it(`treats ${testCase.name} as an invalid vocabulary rather than throwing`, async () => {
 				const relay = createFakeRelay({ clients: 1 });
-				const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+				const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 				let pending: Promise<boolean> | undefined;
 				expect(() => {
@@ -1211,7 +1235,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("rejects a numeric id whose String() form names its sibling", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			// SameValueZero says `1 !== "1"`, so this passed the uniqueness proof and both options were
 			// broadcast. A client honouring its own wire type — `RelayAnswer.optionId` is `string` —
@@ -1232,7 +1256,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("ignores a `decision` inherited from Object.prototype", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			// Non-enumerable on purpose: an enumerable prototype property would break `for...in`
 			// everywhere in the process, including inside vitest.
@@ -1262,7 +1286,7 @@ describe("RelayUIContext surface arbitration", () => {
 	describe("a declared timeout beyond what can be armed is no timeout at all", () => {
 		it("does not throw for the idiomatic Number.MAX_SAFE_INTEGER 'never expire'", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			let pending: Promise<boolean> | undefined;
 			expect(() => {
@@ -1284,7 +1308,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("never fabricates a system denial milliseconds into a 30-day timeout", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			// Above 2^31-1 ms `setTimeout` clamps the delay to 1 and warns. Armed, this advertised a
 			// deadline a month out and settled `false` two milliseconds later, attributed to nobody —
@@ -1307,7 +1331,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("still arms the largest timeout setTimeout will honour", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const before = Date.now();
 			// The boundary itself: a real clock, and a representable instant to advertise.
@@ -1343,7 +1367,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("offers only the positions that hold a label, keeping their own index", async () => {
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			const labels = sparseLabels();
 			expect(Object.keys(labels)).toEqual(["0", "2"]);
@@ -1364,7 +1388,7 @@ describe("RelayUIContext surface arbitration", () => {
 
 		it("does not throw on the no-surface path, where the decorator must be transparent", async () => {
 			const relay = createFakeRelay({ clients: 0 });
-			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false);
+			const wrapped = createRelayUIContext(noOpRelayBaseUIContext, relay, false, "tui");
 
 			// Requirement (f): nobody can answer, so the relay is never raised and the base decides.
 			await expect(wrapped.select("Pick one", sparseLabels())).resolves.toBeUndefined();
@@ -1372,11 +1396,464 @@ describe("RelayUIContext surface arbitration", () => {
 		});
 	});
 
+	/**
+	 * T8-FIX defects 1 and 2: the decorator must TELL the relay what happened and WHO did it.
+	 *
+	 * Both used to be guessed. `withdraw` carried only a decider, so the relay hardcoded
+	 * `cancelled` — an approved, executed command was recorded as a cancellation — and the decider
+	 * itself was the literal `{surface: "tui"}`, so an answer typed into the RPC surface, and a
+	 * shutdown, were both attributed to a human at a terminal.
+	 */
+	describe("what the decorator tells the relay", () => {
+		const vocabulary: PermissionAskDetail["options"] = [
+			{ id: "allow", label: "Allow", decision: "approve" },
+			{ id: "deny-once", label: "Deny once", decision: "deny" },
+			{ id: "deny-always", label: "Deny always", decision: "deny" },
+		];
+
+		it("reports a local APPROVAL as approved, never as cancelled", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+			base.resolveConfirm(true);
+
+			await expect(pending).resolves.toBe(true);
+			await tick();
+			// The command RAN. Anything but `approved` here is a decision that did not happen.
+			expect(relay.outcomes).toEqual([{ kind: "approved", chosenOptionId: null }]);
+			// `chosenOptionId` is null on purpose: `ExtensionUIContext.confirm` returns a bare
+			// boolean and draws its own Yes/No, so no offered id was ever named. Reverse-mapping
+			// `true` onto this vocabulary would have to pick between two `false` denials.
+			expect(relay.withdrawals).toEqual([{ requestId: relay.asks[0].requestId, decidedBy: LOCAL_DECIDER }]);
+		});
+
+		it("reports a local DENIAL as denied", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+			base.resolveConfirm(false);
+
+			await expect(pending).resolves.toBe(false);
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "denied", chosenOptionId: null }]);
+		});
+
+		it("names the SURFACE it was built for, not a hardcoded tui", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			// An RPC session: a process with no terminal UI at all.
+			const wrapped = createRelayUIContext(base.context, relay, true, "rpc");
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+			base.resolveConfirm(true);
+			await pending;
+			await tick();
+
+			expect(relay.withdrawals).toEqual([
+				{ requestId: relay.asks[0].requestId, decidedBy: { surface: "rpc", clientId: null } },
+			]);
+		});
+
+		it("reads a REMOTE answer's meaning off the answered option, id and all", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+			// The SECOND denial of three: a position rule or a value-to-option guess would name
+			// "deny-once" here, or nothing at all.
+			relay.answer({
+				requestId: relay.asks[0].requestId,
+				optionId: "deny-always",
+				decidedBy: REMOTE_DECIDER,
+			});
+
+			await expect(pending).resolves.toBe(false);
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "denied", chosenOptionId: "deny-always" }]);
+		});
+
+		it("reports a remote APPROVAL with the id that was tapped", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+			relay.answer({ requestId: relay.asks[0].requestId, optionId: "allow", decidedBy: REMOTE_DECIDER });
+
+			await expect(pending).resolves.toBe(true);
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "approved", chosenOptionId: "allow" }]);
+		});
+
+		it("says a select was ANSWERED — never approved, because nothing was", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
+
+			const pending = wrapped.select("Pick one", ["alpha", "beta"]);
+			await tick();
+			base.resolveSelect("beta");
+
+			await expect(pending).resolves.toBe("beta");
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "answered" }]);
+		});
+
+		it("says a select DISMISSED locally was cancelled", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
+
+			const pending = wrapped.select("Pick one", ["alpha", "beta"]);
+			await tick();
+			base.resolveSelect(undefined);
+
+			await expect(pending).resolves.toBeUndefined();
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "cancelled" }]);
+			// And attributed to NOBODY. `undefined` is this surface's value for BOTH "the human
+			// dismissed it" and "I gave up", so naming the surface asserts an act we cannot know
+			// happened. One rule, everywhere: cancelled is the system's.
+			expect(relay.withdrawals).toEqual([{ requestId: relay.asks[0].requestId, decidedBy: SYSTEM_DECIDER }]);
+		});
+
+		it("says free text was ANSWERED, including the empty string", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
+
+			const pending = wrapped.input("Name it", "placeholder");
+			await tick();
+			relay.answer({ requestId: relay.asks[0].requestId, optionId: "", decidedBy: REMOTE_DECIDER });
+
+			await expect(pending).resolves.toBe("");
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "answered" }]);
+		});
+
+		it("reserves cancelled for an ask nobody answered: the caller's own abort", async () => {
+			const base = createBaseSpy();
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
+			const controller = new AbortController();
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+				signal: controller.signal,
+			});
+			await tick();
+			controller.abort();
+
+			// The fail-closed value is `false`, the SAME value a human pressing "No" produces — and
+			// this must NOT be reported as a denial. Only the call site knows which one it holds.
+			await expect(pending).resolves.toBe(false);
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "cancelled" }]);
+			expect(relay.withdrawals).toEqual([{ requestId: relay.asks[0].requestId, decidedBy: SYSTEM_DECIDER }]);
+		});
+
+		/**
+		 * T8-FIX2 (1) — WITH A LIVE LOCAL BASE, which is the shape an attachable session has.
+		 *
+		 * This test used to be written with `baseIsLive: false`, a state unreachable in the session
+		 * this decorator ships in: an attachable session always has a local surface bound. It
+		 * therefore passed while the reachable version of the same case FAILED OPEN — the relay
+		 * ended the ask, broadcast `expired` and wrote the audit row, and the local dialog stayed on
+		 * screen with a live Approve button that still ran the command.
+		 *
+		 * `relay.end(...)` is the value that distinguishes "this ask is OVER" from "this relay is
+		 * spent"; the second one still belongs to the local human and is pinned separately below.
+		 */
+		it("ends a LIVE local dialog when the relay says the ask expired", async () => {
+			const base = createBaseSpy({ onAbort: "resolve-false" });
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "rpc");
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+			expect(base.events).toContain("base-confirm");
+
+			relay.end({ requestId: relay.asks[0].requestId, ended: "expired", decidedBy: SYSTEM_DECIDER });
+
+			// The caller is released on the fail-closed default, and the local dialog is taken down.
+			await expect(pending).resolves.toBe(false);
+			await tick();
+			expect(base.events).toContain("base-abort");
+			expect(relay.outcomes).toEqual([{ kind: "cancelled" }]);
+			expect(relay.withdrawals).toEqual([{ requestId: relay.asks[0].requestId, decidedBy: SYSTEM_DECIDER }]);
+
+			// THE FAIL-OPEN: the human answers the dialog that used to still be tappable.
+			base.resolveConfirm(true);
+			await tick();
+			await expect(pending).resolves.toBe(false);
+			// And nothing is said twice.
+			expect(relay.withdrawals).toHaveLength(1);
+		});
+
+		it("still leaves the ask to a live local human when the relay is merely SPENT", async () => {
+			// `undefined` is a relay that gave up — a bound refused the raise, its socket is gone,
+			// or an answer named an option nobody offered. The ask itself is NOT over, and eating
+			// it here would turn every resource bound into a fabricated denial.
+			const base = createBaseSpy({ onAbort: "resolve-false" });
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "rpc");
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+			relay.answer(undefined);
+			await tick();
+
+			expect(base.events).not.toContain("base-abort");
+			base.resolveConfirm(true);
+			await expect(pending).resolves.toBe(true);
+		});
+
+		it("ignores an `ended` for some other ask", async () => {
+			const base = createBaseSpy({ onAbort: "resolve-false" });
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "rpc");
+
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+			relay.end({ requestId: "some-other-ask", ended: "expired", decidedBy: SYSTEM_DECIDER });
+			await tick();
+
+			// Not this ask: the local surface keeps it.
+			expect(base.events).not.toContain("base-abort");
+			base.resolveConfirm(true);
+			await expect(pending).resolves.toBe(true);
+		});
+	});
+
+	/**
+	 * T8-FIX2 (2) — a shutdown, an abort and a stdin EOF were recorded as a human's refusal.
+	 *
+	 * `ExtensionUIContext.confirm` returns a bare `Promise<boolean>`, so a human pressing "No" and a
+	 * surface giving up are THE SAME VALUE. Every derivation from that boolean therefore fabricates
+	 * something, and what it fabricated was `{decision: "denied", decidedBy: {surface: "rpc"}}` for
+	 * asks nobody had answered — deterministic on every shutdown, every stdin EOF and every `abort`.
+	 *
+	 * The fix is not a cleverer reading of the boolean. The surface STATES what it did, through an
+	 * optional `reportOutcome` on the dialog options, and the decorator believes it. A base that
+	 * never calls it keeps today's behaviour exactly, which is what makes this additive for the
+	 * third parties that implement `ExtensionUIContext`.
+	 */
+	describe("a surface that states its own outcome is believed over the boolean", () => {
+		const vocabulary: PermissionAskDetail["options"] = [
+			{ id: "allow", label: "Allow", decision: "approve" },
+			{ id: "deny-once", label: "Deny once", decision: "deny" },
+			{ id: "deny-always", label: "Deny always", decision: "deny" },
+		];
+
+		function raise(surface: LocalSurface = "rpc"): {
+			base: BaseSpy;
+			relay: FakeRelay;
+			pending: Promise<boolean>;
+		} {
+			const base = createBaseSpy({ onAbort: "ignore" });
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, surface);
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			return { base, relay, pending };
+		}
+
+		it("hands every dialog a reportOutcome to speak through", async () => {
+			const { base } = raise();
+			await tick();
+			expect(typeof base.lastConfirmOptions()?.reportOutcome).toBe("function");
+		});
+
+		it("records a shutdown as cancelled BY THE SYSTEM, not as a denial by the surface", async () => {
+			const { base, relay, pending } = raise("rpc");
+			await tick();
+
+			// Exactly what rpc-mode's `cancelPendingExtensionRequests` does on shutdown, on stdin
+			// EOF and on `abort`: state the outcome, then resolve the dialog fail-closed.
+			base.lastConfirmOptions()?.reportOutcome?.({ kind: "cancelled" });
+			base.resolveConfirm(false);
+
+			// The caller still gets `false` — the gate must still block the call.
+			await expect(pending).resolves.toBe(false);
+			await tick();
+			// But the RECORD says nobody answered, and names nobody.
+			expect(relay.outcomes).toEqual([{ kind: "cancelled" }]);
+			expect(relay.withdrawals).toEqual([{ requestId: relay.asks[0].requestId, decidedBy: SYSTEM_DECIDER }]);
+		});
+
+		it("carries the option the operator actually named into the record", async () => {
+			// The fidelity loss: rpc-mode DOES validate an `optionId` against the offered set and
+			// DOES let it override `confirmed` — and then only the boolean survived, so an operator
+			// who tapped `deny-once` was recorded with `chosenOptionId: null`.
+			const { base, relay, pending } = raise("rpc");
+			await tick();
+
+			base.lastConfirmOptions()?.reportOutcome?.({ kind: "denied", chosenOptionId: "deny-once" });
+			base.resolveConfirm(false);
+
+			await expect(pending).resolves.toBe(false);
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "denied", chosenOptionId: "deny-once" }]);
+			// A denial IS an act by that surface: it is attributed to it, unlike a cancellation.
+			expect(relay.withdrawals).toEqual([
+				{ requestId: relay.asks[0].requestId, decidedBy: { surface: "rpc", clientId: null } },
+			]);
+		});
+
+		it("carries a named approval too", async () => {
+			const { base, relay, pending } = raise("rpc");
+			await tick();
+
+			base.lastConfirmOptions()?.reportOutcome?.({ kind: "approved", chosenOptionId: "allow" });
+			base.resolveConfirm(true);
+
+			await expect(pending).resolves.toBe(true);
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "approved", chosenOptionId: "allow" }]);
+		});
+
+		it("leaves a base that says NOTHING behaving exactly as it does today", async () => {
+			const { base, relay, pending } = raise("tui");
+			await tick();
+			base.resolveConfirm(false);
+
+			await expect(pending).resolves.toBe(false);
+			await tick();
+			// The documented fallback reading of an ambiguous `false`, unchanged.
+			expect(relay.outcomes).toEqual([{ kind: "denied", chosenOptionId: null }]);
+			expect(relay.withdrawals).toEqual([{ requestId: relay.asks[0].requestId, decidedBy: LOCAL_DECIDER }]);
+		});
+
+		it("ignores a malformed report rather than putting a word nothing can read into the record", async () => {
+			// `ExtensionUIContext` is implemented by third parties and by untyped JS extensions.
+			const { base, relay, pending } = raise("tui");
+			await tick();
+
+			const report = base.lastConfirmOptions()?.reportOutcome as unknown as (value: unknown) => void;
+			report("denied");
+			report({ kind: "maybe" });
+			// `approved`/`denied` must carry the field, even as an explicit null.
+			report({ kind: "approved" });
+			base.resolveConfirm(false);
+
+			await expect(pending).resolves.toBe(false);
+			await tick();
+			expect(relay.outcomes).toEqual([{ kind: "denied", chosenOptionId: null }]);
+		});
+
+		it("ignores a LATE report from a surface being torn down", async () => {
+			// The decorator aborts the losing surface as part of settling, and rpc-mode reports
+			// `cancelled` from its own abort handler. That must never overwrite the winner.
+			const base = createBaseSpy({ onAbort: "ignore" });
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "rpc");
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+			});
+			await tick();
+
+			relay.answer({ requestId: relay.asks[0].requestId, optionId: "allow", decidedBy: REMOTE_DECIDER });
+			await expect(pending).resolves.toBe(true);
+			await tick();
+
+			base.lastConfirmOptions()?.reportOutcome?.({ kind: "cancelled" });
+			base.resolveConfirm(false);
+			await tick();
+
+			expect(relay.outcomes).toEqual([{ kind: "approved", chosenOptionId: "allow" }]);
+			expect(relay.withdrawals).toEqual([{ requestId: relay.asks[0].requestId, decidedBy: REMOTE_DECIDER }]);
+		});
+
+		it("still forwards the report to a caller that supplied its own callback", async () => {
+			const heard: RelayOutcome[] = [];
+			const base = createBaseSpy({ onAbort: "ignore" });
+			const relay = createFakeRelay({ clients: 1 });
+			const wrapped = createRelayUIContext(base.context, relay, true, "rpc");
+			const pending = wrapped.confirm("Approve tool call?", "bash: rm -rf build", {
+				detail: permissionDetail(vocabulary),
+				reportOutcome: (outcome) => {
+					heard.push(outcome);
+					throw new Error("a caller callback must not break the surface that called it");
+				},
+			});
+			await tick();
+
+			base.lastConfirmOptions()?.reportOutcome?.({ kind: "cancelled" });
+			base.resolveConfirm(false);
+
+			await expect(pending).resolves.toBe(false);
+			expect(heard).toEqual([{ kind: "cancelled" }]);
+		});
+	});
+
+	/**
+	 * The SEAM, not the decorator: `AgentSession._wrapUIContext` is the one mode-agnostic place the
+	 * decorator is built, and it is where the surface has to come from. Proving the decorator alone
+	 * would leave the hardcode intact one call up.
+	 */
+	describe("AgentSession names the surface it bound", () => {
+		it("hands the decorator the mode's own surface for every mode it binds", async () => {
+			for (const [mode, surface] of [
+				["tui", "tui"],
+				["rpc", "rpc"],
+			] as const) {
+				const harness = await createHarness();
+				harnesses.push(harness);
+				const base = createBaseSpy();
+				const relay = createFakeRelay({ clients: 1 });
+
+				await harness.session.bindExtensions({ uiContext: base.context, mode });
+				harness.session.setPermissionRelay(relay);
+
+				const pending = harness.session.extensionRunner
+					.getUIContext()
+					.confirm("Approve tool call?", "bash: touch /tmp/marker");
+				await tick();
+				base.resolveConfirm(true);
+				await expect(pending).resolves.toBe(true);
+				await tick();
+
+				expect(relay.withdrawals).toEqual([
+					{ requestId: relay.asks[0].requestId, decidedBy: { surface, clientId: null } },
+				]);
+				// And the approval is reported AS an approval — the command has already run.
+				expect(relay.outcomes).toEqual([{ kind: "approved", chosenOptionId: null }]);
+			}
+		});
+	});
+
 	describe("hand-delegation of the non-decorated members", () => {
 		it("forwards synchronous getters, the theme and component factories to the base", () => {
 			const base = createBaseSpy();
 			const relay = createFakeRelay({ clients: 1 });
-			const wrapped = createRelayUIContext(base.context, relay, true);
+			const wrapped = createRelayUIContext(base.context, relay, true, "tui");
 
 			expect(wrapped.getEditorText()).toBe("base editor text");
 			expect(base.getEditorText).toHaveBeenCalledTimes(1);

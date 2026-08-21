@@ -39,7 +39,18 @@ import type {
 } from "../extensions/types.ts";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
 import type { KeybindingsManager } from "../keybindings.ts";
-import type { PermissionRelay, RelayAnswer, RelayAsk, RelayDecider } from "./types.ts";
+import {
+	isRelayEnded,
+	type LocalSurface,
+	type PermissionRelay,
+	RELAY_ANSWERED,
+	RELAY_CANCELLED,
+	type RelayAnswer,
+	type RelayAsk,
+	type RelayDecider,
+	type RelayEnded,
+	type RelayOutcome,
+} from "./types.ts";
 
 /** One entry of a permission vocabulary: an id, a label, and the decision it DECLARES. */
 type PermissionOption = PermissionAskDetail["options"][number];
@@ -88,8 +99,6 @@ const DEFAULT_CONFIRM_OPTIONS: readonly ValidatedOption[] = Object.freeze([
 	Object.freeze({ id: DENY_OPTION_ID, label: "No", decision: "deny" as const }),
 ]);
 
-/** The local surface, whoever it is, decided. */
-const LOCAL_DECIDER: RelayDecider = { surface: "tui", clientId: null };
 /**
  * Nobody decided: the ask was dismissed from outside via the caller's own AbortSignal, the relay
  * gave up while no local surface existed to fall back to, or the caller's own declared timeout
@@ -181,14 +190,89 @@ interface RaceSpec<T> {
 	opts: ExtensionUIDialogOptions | undefined;
 	/** Value returned when the ask ends without an answer. Always the fail-closed value. */
 	fallback: T;
+	/**
+	 * What a value the LOCAL surface produced means, stated per method — the FALLBACK reading.
+	 *
+	 * Used only when the base did not state its own outcome through
+	 * {@link ExtensionUIDialogOptions.reportOutcome}. A base that did is believed instead: it is
+	 * the only party that knows whether its `false` was a human pressing "No" or its own shutdown.
+	 *
+	 * Applied ONLY to a value the base actually handed back — never to {@link RaceSpec.fallback}
+	 * when the ask was aborted, timed out or exhausted, because for `confirm` the two are the same
+	 * `false` and only the call site knows which one it is holding. That distinction is the whole
+	 * reason `settle` takes the outcome as an argument instead of deriving it.
+	 *
+	 * TOTAL and non-throwing: it is evaluated as an argument inside a discarded `.then`, so a throw
+	 * here would escape as an unhandled rejection. Only this file's own three methods set it, and
+	 * both implementations are a single comparison.
+	 */
+	localOutcome: (value: T) => RelayOutcome;
 	runBase: (opts: ExtensionUIDialogOptions | undefined) => Promise<T>;
+}
+
+/**
+ * What a `confirm` answered on the LOCAL surface means, when the surface DID NOT SAY.
+ *
+ * `true` is unambiguous: no fail-closed path in this file, in the barrel's no-op, in interactive
+ * mode or in RPC mode ever produces `true`, so a `true` is always somebody approving.
+ *
+ * `false` is NOT unambiguous, and no cleverness about the boolean can make it so:
+ * `ExtensionUIContext.confirm` returns `Promise<boolean>`, so a human pressing "No" and a surface
+ * GIVING UP (RPC's `cancelPendingExtensionRequests` on shutdown, on stdin EOF, on abort;
+ * interactive's Esc) arrive here as the same value. ANY derivation from that boolean fabricates
+ * something, and this one fabricated a human's refusal for asks nobody ever saw.
+ *
+ * That is why this function is now the FALLBACK and not the rule. A surface states its own outcome
+ * through {@link ExtensionUIDialogOptions.reportOutcome} — the honest four-way `RelayOutcome` —
+ * and {@link race} prefers what it was told over what can be guessed. This runs only for a base
+ * that never called it, where today's behaviour is kept exactly as it was rather than replaced by
+ * a different guess. `chosenOptionId` is null because a surface that answered with a bare boolean
+ * never named one of the offered ids.
+ */
+function confirmOutcome(value: boolean): RelayOutcome {
+	return value ? { kind: "approved", chosenOptionId: null } : { kind: "denied", chosenOptionId: null };
+}
+
+/**
+ * What a `select` or `input` answered on the LOCAL surface means.
+ *
+ * These two methods have NO permission semantics, so neither `approved` nor `denied` may be said
+ * about them. `undefined` is both surfaces' documented "dismissed" value and is also this file's
+ * fail-closed fallback, so the two coincide honestly: either way nobody answered.
+ */
+function choiceOutcome(value: string | undefined): RelayOutcome {
+	return value === undefined ? RELAY_CANCELLED : RELAY_ANSWERED;
+}
+
+/**
+ * What an ANSWERED offered option means, read off that option and nothing else.
+ *
+ * `declares` is the option's own `decision` word, copied out when the option was minted and frozen
+ * with it — the same word the registry reads on its own side, so the two halves of a round trip
+ * cannot disagree. An option that declares nothing is a `select` entry: it ends the ask by being
+ * answered, and says nothing about permission.
+ */
+function answeredOutcome(declares: PermissionOption["decision"] | undefined, chosenOptionId: string): RelayOutcome {
+	if (declares === "approve") return { kind: "approved", chosenOptionId };
+	if (declares === "deny") return { kind: "denied", chosenOptionId };
+	return RELAY_ANSWERED;
 }
 
 export function createRelayUIContext(
 	base: ExtensionUIContext,
 	relay: PermissionRelay,
 	baseIsLive: boolean,
+	localSurface: LocalSurface,
 ): ExtensionUIContext {
+	/**
+	 * The local surface, named for what it ACTUALLY is.
+	 *
+	 * Passed in rather than hardcoded: this decorator wraps whatever context the binding mode
+	 * installed, and a literal `tui` here recorded an answer typed into the RPC surface — a process
+	 * with no terminal UI at all — as a human at a terminal.
+	 */
+	const localDecider: RelayDecider = { surface: localSurface, clientId: null };
+
 	/** Evaluated LIVE on every call: clients attach and detach while a session is running. */
 	const hasAnswerSurface = (): boolean => baseIsLive || relay.readWriteClientCount() > 0;
 
@@ -222,7 +306,7 @@ export function createRelayUIContext(
 		// again the moment the ask settles: a caller-owned signal outlives the ask and would
 		// otherwise collect one dead listener per dialog.
 		const onExternalAbort = (): void => {
-			settle(SYSTEM_DECIDER, spec.fallback);
+			settle(SYSTEM_DECIDER, spec.fallback, RELAY_CANCELLED);
 		};
 		const releaseExternalSignal = (): void => {
 			externalSignal?.removeEventListener("abort", onExternalAbort);
@@ -262,7 +346,7 @@ export function createRelayUIContext(
 		 * propagates to the `abort()` call site, so neither try/catch nor `.catch()` can see it. That
 		 * is inherent to EventTarget dispatch and is not something this decorator can fix.
 		 */
-		const settle = (decidedBy: RelayDecider, value: T): void => {
+		const settle = (decidedBy: RelayDecider, value: T, outcome: RelayOutcome): void => {
 			if (settled) {
 				return;
 			}
@@ -271,7 +355,10 @@ export function createRelayUIContext(
 			quietly(releaseExternalSignal);
 			quietly(releaseTimeout);
 			quietly(() => controller.abort());
-			quietly(() => relay.withdraw(requestId, decidedBy));
+			// The outcome is an ARGUMENT, never something the relay may reconstruct. THIS call site
+			// has just settled the ask and holds the value; the relay holds neither, and when it
+			// guessed it wrote `cancelled` over an approval whose command had already run.
+			quietly(() => relay.withdraw(requestId, decidedBy, outcome));
 		};
 
 		let relayDone = false;
@@ -298,7 +385,7 @@ export function createRelayUIContext(
 		 */
 		const relayExhausted = (): void => {
 			if (!baseIsLive) {
-				settle(SYSTEM_DECIDER, spec.fallback);
+				settle(SYSTEM_DECIDER, spec.fallback, RELAY_CANCELLED);
 				return;
 			}
 			rejectIfExhausted();
@@ -308,20 +395,80 @@ export function createRelayUIContext(
 		 * The offered set is the ONLY interpreter, and it is a plain lookup by the id that was
 		 * broadcast: the answered option already carries its caller-side value. A free-text ask
 		 * carries its answer verbatim instead.
+		 *
+		 * The OUTCOME comes back with the value, read off the very option that was answered — its own
+		 * `declares` word and its own id. It is not derived from the value: two options of one
+		 * vocabulary can share a caller-side value (`[allow, deny-once, deny-always]` has two `false`
+		 * denials), so a value can never name the option that produced it. An option that declares
+		 * nothing is a plain `select` entry and a free-text answer is an `input`: neither approves nor
+		 * denies anything, and both report `answered`.
 		 */
-		const interpret = (optionId: string): { value: T } | undefined => {
+		const interpret = (optionId: string): { value: T; outcome: RelayOutcome } | undefined => {
 			const chosen = spec.offered.get(optionId);
 			if (chosen !== undefined) {
-				return chosen.resolution;
+				return { value: chosen.resolution.value, outcome: answeredOutcome(chosen.declares, chosen.id) };
 			}
 			try {
-				return spec.fromFreeText === undefined ? undefined : { value: spec.fromFreeText(optionId) };
+				return spec.fromFreeText === undefined
+					? undefined
+					: { value: spec.fromFreeText(optionId), outcome: RELAY_ANSWERED };
 			} catch {
 				// An interpreter that blows up produced no answer. It must not settle the ask, and
 				// it must not escape this discarded `.then` as an unhandled rejection.
 				return undefined;
 			}
 		};
+
+		/**
+		 * WHAT THE LOCAL SURFACE SAYS IT DID, when it is willing to say.
+		 *
+		 * `ExtensionUIContext.confirm` returns a bare `Promise<boolean>`: a human's "no" and a
+		 * surface giving up are the same value, so anything derived from it fabricates something.
+		 * The fix is not a cleverer derivation, it is asking. A surface calls `reportOutcome` with
+		 * its own honest {@link RelayOutcome} just before it resolves, and that is what gets
+		 * recorded — an rpc-mode shutdown becomes `cancelled` by the system instead of a human's
+		 * refusal, and an operator who tapped `deny-once` gets that very id into the audit row
+		 * instead of a `null` the boolean could never have carried.
+		 *
+		 * FIRST STATEMENT WINS, and a late one is ignored: this decorator aborts the losing surface
+		 * as part of settling, and a surface that reports `cancelled` from its own abort listener
+		 * must not overwrite the answer that just won. Totally non-throwing, because the base calls
+		 * it synchronously from inside its own code.
+		 */
+		let reported: RelayOutcome | undefined;
+		const callerReport = spec.opts?.reportOutcome;
+		const reportOutcome = (outcome: RelayOutcome): void => {
+			if (reported === undefined && isRelayOutcome(outcome)) {
+				reported = outcome;
+			}
+			// A caller that supplied its own callback still hears from its surface: this decorator
+			// replaces the field on the way down and would otherwise silently swallow it.
+			if (callerReport !== undefined) {
+				try {
+					callerReport(outcome);
+				} catch {
+					// A caller's own callback must not break the surface that called it.
+				}
+			}
+		};
+
+		/**
+		 * WHO to name for an ask the local side settled. ONE rule, and it is total.
+		 *
+		 * `cancelled` means NOBODY ANSWERED — a shutdown, a stdin EOF, an abort, a surface's own
+		 * timeout, a dismissal. Naming the surface for one of those puts a decision in the audit
+		 * trail against a person who never made it, which is the same falsehood as calling it a
+		 * denial, merely moved into a different field. It is the rule this module already applies
+		 * to every OTHER cancellation — the caller's own abort, the declared timeout, an exhausted
+		 * relay all settle with {@link SYSTEM_DECIDER} — so applying it here too is what makes
+		 * "cancelled is attributed to the system, never to a surface that did not act" a property
+		 * of this file rather than a habit of four call sites.
+		 *
+		 * Every other outcome names the surface that produced it: `approved`, `denied` and
+		 * `answered` all report that somebody DID act, on this surface.
+		 */
+		const deciderFor = (outcome: RelayOutcome): RelayDecider =>
+			outcome.kind === "cancelled" ? SYSTEM_DECIDER : localDecider;
 
 		externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
 
@@ -359,8 +506,14 @@ export function createRelayUIContext(
 		// even render the ask. (e) Both handlers swallow late results and late REJECTIONS against a
 		// settled ask — an unswallowed rejection is fatal under --unhandled-rejections=throw.
 		if (baseIsLive) {
-			callSafely(() => spec.runBase({ ...spec.opts, signal: controller.signal })).then(
-				(value) => settle(LOCAL_DECIDER, value),
+			callSafely(() => spec.runBase({ ...spec.opts, signal: controller.signal, reportOutcome })).then(
+				(value) => {
+					// TOLD beats DERIVED. `spec.localOutcome` is a reading of an ambiguous value and
+					// runs only for a base that stated nothing, which is what keeps every existing
+					// `ExtensionUIContext` implementer behaving exactly as it does today.
+					const outcome = reported ?? spec.localOutcome(value);
+					settle(deciderFor(outcome), value, outcome);
+				},
 				(error: unknown) => {
 					baseFailure = { error };
 					rejectIfExhausted();
@@ -368,10 +521,19 @@ export function createRelayUIContext(
 			);
 		}
 
-		callSafely<RelayAnswer | undefined>(() => relay.raise(ask)).then(
+		callSafely<RelayAnswer | RelayEnded | undefined>(() => relay.raise(ask)).then(
 			(answer) => {
 				relayDone = true;
-				if (answer === undefined || answer.requestId !== requestId) {
+				if (isRelayEnded(answer) && answer.requestId === requestId) {
+					// THE ASK IS OVER, not merely unanswerable HERE. The relay's clock ran out, or
+					// the session was stopped: it has already broadcast the ending and written the
+					// audit row. Waiting on the local surface now is the fail-OPEN defect — the
+					// dialog stayed on screen, a human tapped Approve, and the command ran against
+					// a durable record that says `expired`. `settle` aborts the local surface.
+					settle(answer.decidedBy, spec.fallback, RELAY_CANCELLED);
+					return;
+				}
+				if (answer === undefined || isRelayEnded(answer) || answer.requestId !== requestId) {
 					relayExhausted();
 					return;
 				}
@@ -381,7 +543,7 @@ export function createRelayUIContext(
 					relayExhausted();
 					return;
 				}
-				settle(answer.decidedBy, decided.value);
+				settle(answer.decidedBy, decided.value, decided.outcome);
 			},
 			() => {
 				relayDone = true;
@@ -402,7 +564,7 @@ export function createRelayUIContext(
 		// is that the caller's OWN declared timeout is respected, when it is a duration we can keep.
 		if (!baseIsLive && declaredTimeout !== undefined) {
 			expiry = setTimeout(() => {
-				settle(SYSTEM_DECIDER, spec.fallback);
+				settle(SYSTEM_DECIDER, spec.fallback, RELAY_CANCELLED);
 			}, declaredTimeout);
 		}
 
@@ -417,6 +579,7 @@ export function createRelayUIContext(
 				offered: mintSelectOptions(options),
 				opts,
 				fallback: undefined,
+				localOutcome: choiceOutcome,
 				runBase: (baseOpts) => base.select(title, options, baseOpts),
 			});
 		},
@@ -429,6 +592,7 @@ export function createRelayUIContext(
 				offered: mintConfirmOptions(opts?.detail?.options),
 				opts,
 				fallback: false,
+				localOutcome: confirmOutcome,
 				runBase: (baseOpts) => base.confirm(title, message, baseOpts),
 			});
 		},
@@ -448,6 +612,7 @@ export function createRelayUIContext(
 				fromFreeText: (text) => text,
 				opts,
 				fallback: undefined,
+				localOutcome: choiceOutcome,
 				runBase: (baseOpts) => base.input(title, placeholder, baseOpts),
 			});
 		},
@@ -553,6 +718,31 @@ export function createRelayUIContext(
 
 		hasAnswerSurface,
 	};
+}
+
+/**
+ * Whether a surface's self-reported outcome is a {@link RelayOutcome} AT ALL.
+ *
+ * A VALIDITY test, not a meaning rule — the same discipline {@link classifyVocabulary} applies to a
+ * caller's vocabulary. `ExtensionUIContext` is implemented by third parties and by untyped JS
+ * extensions, so `reportOutcome("approved")` or `reportOutcome({kind: "maybe"})` is reachable, and
+ * a malformed report must fall back to today's derivation rather than become a decision word
+ * nothing downstream can read.
+ *
+ * What it deliberately does NOT do is cross-check the report against the value the surface
+ * resolved with. They are two different facts about the same act, the surface owns both, and
+ * inventing a tie-breaker between them would be exactly the derivation this file exists to
+ * abolish. A surface that lies about itself is a bug in that surface, not something a decorator
+ * can adjudicate.
+ */
+function isRelayOutcome(value: unknown): value is RelayOutcome {
+	if (typeof value !== "object" || value === null) return false;
+	const { kind, chosenOptionId } = value as { kind?: unknown; chosenOptionId?: unknown };
+	if (kind === "answered" || kind === "cancelled") return true;
+	if (kind !== "approved" && kind !== "denied") return false;
+	// `chosenOptionId` is REQUIRED on these two — `null` is the honest report of a surface that
+	// answered without naming an offered id, and `undefined` is a field somebody forgot.
+	return chosenOptionId === null || typeof chosenOptionId === "string";
 }
 
 /** Turn a synchronous throw into a rejected promise so both race arms behave identically. */

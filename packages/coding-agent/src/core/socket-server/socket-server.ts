@@ -137,6 +137,12 @@ export class SocketServer {
 	 */
 	#onAttachReplay: ((clientId: string) => void) | null = null;
 
+	/**
+	 * Fired when an attached client's connection ends. Everything that keeps
+	 * per-connection state outside this class resets it here.
+	 */
+	#onClientDisconnect: ((clientId: string) => void) | null = null;
+
 	constructor(options: SocketServerOptions) {
 		// The id becomes a path component of the .sock and .lock files, and it arrives here
 		// straight from a session file on disk, so it is untrusted input. Reject anything
@@ -372,6 +378,25 @@ export class SocketServer {
 	}
 
 	/**
+	 * How many attached clients could answer a permission ask RIGHT NOW.
+	 *
+	 * Gated by exactly the predicate emission is gated by, so the count and the
+	 * fan-out can never disagree. This is what `ExtensionRunner.hasUI()` becomes
+	 * for a headless attachable session, and it must therefore stay honest in
+	 * both directions: reporting a client that cannot be asked turns today's loud
+	 * "no UI available to request approval" block into an instant `false` that
+	 * the permission gate reports as "User denied approval" — a user action in
+	 * the transcript that no user took.
+	 */
+	get permissionCapableClientCount(): number {
+		let count = 0;
+		for (const client of this.#clients.values()) {
+			if (this.#mayReceivePermissionFrames(client)) count++;
+		}
+		return count;
+	}
+
+	/**
 	 * Whether this client is eligible for permission frames at all: read-write
 	 * (a read-only peer may watch but never decide) and capability-declaring.
 	 */
@@ -398,6 +423,20 @@ export class SocketServer {
 	 */
 	onAttachReplay(callback: (clientId: string) => void): void {
 		this.#onAttachReplay = callback;
+	}
+
+	/**
+	 * Set callback fired when an attached client's connection ends, however it
+	 * ended — a graceful `detach`, a closed socket, or a socket error.
+	 *
+	 * Per-connection bookkeeping outside this class needs the same signal the
+	 * `client_left` broadcast carries, and it needs it for the same reason: a
+	 * client that reconnects under the same id is a NEW connection with nothing
+	 * on its screen. Whatever tracked what that client had already been shown has
+	 * to forget it here, or the reconnecting peer is never shown it again.
+	 */
+	onClientDisconnect(callback: (clientId: string) => void): void {
+		this.#onClientDisconnect = callback;
 	}
 
 	/**
@@ -702,6 +741,11 @@ export class SocketServer {
 		if (!client) return;
 
 		this.#clients.delete(clientId);
+
+		// Before the other clients are told, because a listener that keeps
+		// per-connection state has to have dropped it by the time anything
+		// observable about this session changes.
+		this.#onClientDisconnect?.(clientId);
 
 		// Notify other clients
 		const left: ServerMessage = {

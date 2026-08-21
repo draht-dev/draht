@@ -309,10 +309,18 @@ describe("describeMergeFailure", () => {
 });
 
 describe("multi-agent integration: permission gate hook point", () => {
-	function makeCtx(overrides: Partial<{ hasUI: boolean; confirm: ReturnType<typeof vi.fn> }> = {}): ExtensionContext {
+	function makeCtx(
+		overrides: Partial<{ hasUI: boolean; confirm: ReturnType<typeof vi.fn>; signal: AbortSignal | undefined }> = {},
+	): ExtensionContext {
 		const confirm = overrides.confirm ?? vi.fn().mockResolvedValue(true);
 		return {
 			hasUI: overrides.hasUI ?? true,
+			signal: "signal" in overrides ? overrides.signal : undefined,
+			// The gate canonicalizes this into the ask's `detail`. A fake without it made
+			// `buildPermissionAskDetail` throw a TypeError out of the gate, which the agent loop
+			// reports as a TOOL ERROR rather than as a decision — the two approve-tier tests below
+			// were failing on exactly that before this was added.
+			cwd: process.cwd(),
 			ui: { confirm },
 		} as unknown as ExtensionContext;
 	}
@@ -398,6 +406,40 @@ rules:
 		);
 
 		expect(result?.block).toBe(true);
+	});
+
+	/**
+	 * T8-FIX2 — the ask must be DISMISSABLE.
+	 *
+	 * The gate parks the agent loop inside `beforeToolCall` on a `Promise<boolean>`. With no
+	 * `signal` the only two things that could ever end it were a human answering and the relay's
+	 * own backstop clock (an hour by default) — an abort could not reach it at all, which is how a
+	 * session ended up wedged with a dialog nobody could take down. This pins the call site, not
+	 * the decorator: a decorator test can construct its own AbortController and pass while the
+	 * shipped ask still inherits "wait forever".
+	 */
+	it("passes the turn's own abort signal to the confirm, so the ask can be dismissed", async () => {
+		const gate = new PermissionGate(
+			parseRules(`
+rules:
+  - tool: bash
+    pattern: "git push *"
+    action: approve
+`),
+		);
+		const controller = new AbortController();
+		const confirm = vi.fn().mockResolvedValue(true);
+		const handler = createPermissionGateToolCallHandler(gate);
+
+		await handler(
+			{ type: "tool_call", toolCallId: "6", toolName: "bash", input: { command: "git push origin main" } } as never,
+			makeCtx({ confirm, signal: controller.signal }),
+		);
+
+		const opts = confirm.mock.calls[0]?.[2] as { signal?: AbortSignal; detail?: unknown } | undefined;
+		expect(opts?.signal).toBe(controller.signal);
+		// And the canonical detail still rides alongside it.
+		expect(opts?.detail).toMatchObject({ kind: "tool_permission", toolName: "bash" });
 	});
 
 	it("allows a tool call with no matching rule to proceed", async () => {

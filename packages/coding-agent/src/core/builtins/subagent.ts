@@ -707,10 +707,28 @@ export function createPermissionGateToolCallHandler(
 			const detail = buildPermissionAskDetail(event, ctx, decision.reason);
 			// Both positional strings are unchanged so every existing renderer keeps working; the
 			// canonical facts ride alongside them for surfaces that can render structure.
+			//
+			// `signal` is the turn's OWN abort signal, read live off the context (it is the active
+			// run's controller, minted fresh per run, so it is never a stale aborted one). A
+			// permission ask that inherits "wait forever" with no way to be dismissed is its own
+			// hazard: this ask parks the agent loop inside `beforeToolCall`, and before this the
+			// only things that could end it were a human answering and the relay's own backstop
+			// clock. Aborting the turn now takes the dialog down on every surface, and — because
+			// nobody answered — it is recorded as `cancelled` by the system rather than as this
+			// human's refusal.
 			const approved = await ctx.ui.confirm("Approve tool call?", `${event.toolName}: ${decision.reason}`, {
 				detail,
+				signal: ctx.signal,
 			});
 			if (!approved) {
+				// The turn being aborted is NOT a refusal, and saying so in the transcript would put the
+				// same fabrication in front of the model that the durable record was just cleared of:
+				// the JSONL reads `cancelled` by `system`, so the reason the model sees must not read
+				// `User denied approval`. This branch became reachable the moment `signal` started being
+				// passed above — before that, an abort could not end an ask at all.
+				if (ctx.signal?.aborted) {
+					return { block: true, reason: "the turn was aborted before this call was approved" };
+				}
 				return { block: true, reason: "User denied approval" };
 			}
 			return undefined;

@@ -62,6 +62,7 @@ import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
+import type { RelayOutcome } from "../permission-relay/types.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -153,6 +154,32 @@ export interface ExtensionUIDialogOptions {
 	 * so widening the options object is the only backwards-compatible way to carry it.
 	 */
 	detail?: PermissionAskDetail;
+	/**
+	 * The surface STATES ITS OWN OUTCOME, just before it resolves.
+	 *
+	 * {@link ExtensionUIContext.confirm} returns a bare `Promise<boolean>`, and that is the whole
+	 * problem: a human pressing "No" and a surface GIVING UP — a shutdown, a stdin EOF, an abort,
+	 * the surface's own timeout — resolve to the same `false`. Anything derived from that boolean
+	 * therefore fabricates something, and what it fabricated was a human's refusal recorded against
+	 * asks nobody ever answered. There is no cleverer reading of a boolean that fixes this; the
+	 * only fix is for the party that knows to say so.
+	 *
+	 * Call it with what ACTUALLY happened:
+	 *
+	 *  - `{kind: "approved" | "denied", chosenOptionId}` — somebody answered. `chosenOptionId` names
+	 *    the offered option when the surface validated one (this is how a `deny-once` an operator
+	 *    actually named reaches the audit row instead of a `null`), and is `null` for a surface that
+	 *    drew its own Yes/No and never named one.
+	 *  - `{kind: "answered"}` — a `select` or `input` was answered. Neither grants nor refuses.
+	 *  - `{kind: "cancelled"}` — NOBODY ANSWERED. Shutdown, abort, EOF, dismissal, timeout. An
+	 *    ending reported this way is attributed to the system, never to the surface.
+	 *
+	 * OPTIONAL, AND ADDITIVE ON PURPOSE. Third parties implement `ExtensionUIContext`, so a base
+	 * that never calls this keeps today's behaviour exactly — the caller falls back to reading the
+	 * resolved value. Only the FIRST call is used; a surface that reports again while being torn
+	 * down cannot overwrite the answer that already won.
+	 */
+	reportOutcome?: (outcome: RelayOutcome) => void;
 }
 
 /** Placement for extension widgets. */

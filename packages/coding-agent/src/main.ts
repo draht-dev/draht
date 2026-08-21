@@ -925,6 +925,12 @@ export async function main(args: string[], options?: MainOptions) {
 			console.error(chalk.red(`Error: ${message}`));
 			process.exit(1);
 		}
+		// Hand the session the pending-ask registry, so a dialog raised by the agent reaches every
+		// attached client and can be answered from one. This only HANDS THE HANDLE OVER: the wrap
+		// itself is installed inside `_applyExtensionBindings`, the one mode-agnostic seam every
+		// session passes through. Installing it here instead would be silently overwritten —
+		// interactive and rpc bind their own UI context later, and `bindExtensions` re-pushes it.
+		session.setPermissionRelay(attachableSession.relay ?? undefined);
 	}
 	// The mode run loops end in process.exit() and never return here, so the finally below
 	// is not enough on its own: exit and signal paths need their own synchronous cleanup.
@@ -935,6 +941,12 @@ export async function main(args: string[], options?: MainOptions) {
 	const releaseAttachableRebind = attachableSession
 		? runtime.addSessionReplacedListener(async (nextSession) => {
 				await attachableSession.rebind(nextSession, nextSession.sessionManager.getCwd());
+				// The rebind swept the old session's pending asks fail-closed and built a fresh
+				// registry for the new one. Without re-handing it here the relay would silently
+				// die on /new, /resume, /fork and /import: the new session would keep an
+				// undecorated UI context, `hasUI()` would stop counting attached clients, and a
+				// phone would watch a session it can no longer answer.
+				nextSession.setPermissionRelay(attachableSession.relay ?? undefined);
 			})
 		: undefined;
 

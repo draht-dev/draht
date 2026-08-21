@@ -98,7 +98,12 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
-import { createRelayUIContext, noOpRelayBaseUIContext, type PermissionRelay } from "./permission-relay/index.ts";
+import {
+	createRelayUIContext,
+	type LocalSurface,
+	noOpRelayBaseUIContext,
+	type PermissionRelay,
+} from "./permission-relay/index.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
@@ -300,6 +305,26 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+
+/**
+ * Which SURFACE a dialog answered locally belongs to, per binding mode.
+ *
+ * Total over {@link ExtensionMode} on purpose — a `Record`, not a lookup with a fallback — because
+ * the fallback is what the defect was: the relay decorator hardcoded `tui`, so an answer typed into
+ * the RPC surface, and a SIGTERM that cancelled a pending dialog, were both recorded in the
+ * session's durable log as a human sitting at a terminal that does not exist.
+ *
+ * `json` and `print` bind no UI context at all (see `runPrintMode`), so the decorator wraps the
+ * barrel's no-op with `baseIsLive: false` and nothing is ever answered locally in them. `system` is
+ * therefore both unreachable and the truthful value: if such a mode somehow ended an ask, no person
+ * acted. It is deliberately not `tui`.
+ */
+const LOCAL_SURFACE_BY_MODE: Readonly<Record<ExtensionMode, LocalSurface>> = Object.freeze({
+	tui: "tui",
+	rpc: "rpc",
+	json: "system",
+	print: "system",
+});
 
 // ============================================================================
 // AgentSession Class
@@ -2382,7 +2407,18 @@ export class AgentSession {
 		if (this._permissionRelay === undefined) {
 			return base;
 		}
-		return createRelayUIContext(base ?? noOpRelayBaseUIContext, this._permissionRelay, base !== undefined);
+		return createRelayUIContext(
+			base ?? noOpRelayBaseUIContext,
+			this._permissionRelay,
+			base !== undefined,
+			// The TRUTH about which surface a locally answered dialog came from, and the reason this
+			// seam is the only place the decorator may be built: `_extensionMode` is set by
+			// `bindExtensions` immediately before `_applyExtensionBindings` calls this, so the mode
+			// and the context it wraps are always the same binding. A literal `tui` inside the
+			// decorator recorded an answer typed into the RPC surface as a human at a terminal that
+			// does not exist.
+			LOCAL_SURFACE_BY_MODE[this._extensionMode],
+		);
 	}
 
 	private _applyExtensionBindings(runner: ExtensionRunner): void {

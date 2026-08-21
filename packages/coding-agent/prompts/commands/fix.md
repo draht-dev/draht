@@ -27,7 +27,7 @@ Symptom fixes are failure. If you find yourself proposing a "quick fix for now, 
 
 **Prevents:** shipping a correct fix to the wrong component.
 
-Not every why is a bug: if the user is asking why the code is *shaped* the way it is — intent, history, design rationale — and nothing is misbehaving, route to `/why` instead. `/fix` answers defects; `/why` answers intent. When Phase 1 needs design intent (is this behaviour a decision or an accident?), consult `/why` and feed its Preserve/Avoid constraints into the hypothesis ranking.
+Not every why is a bug: if the user is asking why the code is *shaped* the way it is — intent, history, design rationale — and nothing is misbehaving, route to `/why` instead. `/fix` answers defects; `/why` answers intent. When Phase 1 needs design intent (is this behaviour a decision or an accident?), consult `/why` and feed its Preserve/Avoid constraints into the hypothesis ranking. A `/triage` verdict ending in `[triage:bug]` or `[triage:performance]` is a ready entry here: take the linked tracker issue as the report and treat triage's cause-trace findings as ranked-hypothesis material — labeled hypotheses, not a diagnosis.
 
 ## Red Flags — STOP
 

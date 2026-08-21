@@ -10,20 +10,20 @@ Draht is a methodology for running agentic coding work through a milestone → p
 ## Two Kinds of Sibling Skills
 
 - **14 discipline skills** — transversal habits that apply regardless of which command is running: `atomic-reasoning`, `blast-radius`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `epistemics`, `gsd-workflow`, `loop-workflow`, `model-tiering`, `saga-spawner`, `tdd-workflow`, `typescript-discipline`, `unslop`, `verification-gate`.
-- **21 command skills** — one per stage of the GSD lifecycle, from greenfield questioning through milestone completion: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`, `why`, `create-verification-skill`.
+- **22 command skills** — one per stage of the GSD lifecycle, from greenfield questioning through milestone completion: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`, `why`, `create-verification-skill`, `triage`.
 
 Every skill's frontmatter `name` matches its directory name, so `skills/<name>/` and the name you invoke are always the same string.
 
 ## Repository Layout
 
 - `skills/<name>/SKILL.md` — every skill has one; frontmatter (`name`, `description`) plus instructions.
-- `skills/<name>/command.md` — the 21 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
+- `skills/<name>/command.md` — the 22 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
 - The 14 discipline skills have no `command.md` — their `SKILL.md` is self-contained.
 - This file, `skills/draht/SKILL.md`, is itself a plain skill (no `command.md`) — it is discovered and loaded the same way any discipline skill is.
 
 ## How the Catalog Composes
 
-Command skills and discipline skills are not independent choices — most command skills lean on two or three disciplines while they run. `plan-phase` and `execute-phase` both assume `atomic-reasoning` and `tdd-workflow`; every command that ends with a completion claim assumes `verification-gate`; `fix` is a tracked wrapper around the `debugging-workflow` protocol; `orchestrate-loop` is `loop-workflow` applied to one goal; `why` leans on `epistemics` for every claim it reports; `create-verification-skill` generates the project-local harness whose evidence `verification-gate` demands and `verify-work`'s verifier drives; `review`'s refutation step escalates to `blast-radius`'s rung-4 script when a Critical finding hinges on library or runtime behavior. When in doubt about which disciplines a command skill pulls in, open that command skill's `command.md` — the disciplines it expects are named in its own text.
+Command skills and discipline skills are not independent choices — most command skills lean on two or three disciplines while they run. `plan-phase` and `execute-phase` both assume `atomic-reasoning` and `tdd-workflow`; every command that ends with a completion claim assumes `verification-gate`; `fix` is a tracked wrapper around the `debugging-workflow` protocol; `orchestrate-loop` is `loop-workflow` applied to one goal; `why` leans on `epistemics` for every claim it reports; `triage` borrows `debugging-workflow`'s cause-first discipline for its bounded trace and `epistemics` for labeling what it carries into a ticket; `create-verification-skill` generates the project-local harness whose evidence `verification-gate` demands and `verify-work`'s verifier drives; `review`'s refutation step escalates to `blast-radius`'s rung-4 script when a Critical finding hinges on library or runtime behavior. When in doubt about which disciplines a command skill pulls in, open that command skill's `command.md` — the disciplines it expects are named in its own text.
 
 ## Situation → Skill
 
@@ -59,6 +59,7 @@ Command skills and discipline skills are not independent choices — most comman
 | Stress-testing any subject — an idea, a spec, tickets, a decision — in whole-frontier question rounds | `grill` |
 | Recovering why code is the way it is — design rationale, decision history, rejected alternatives | `why` |
 | Generating a committed project-local `verify-<app>` skill that drives the real app as a user and captures proof artifacts | `create-verification-skill` |
+| Classifying an external issue report — dedupe, file, reroute, or answer — without fixing it | `triage` |
 
 ### Transversal disciplines
 
@@ -89,13 +90,14 @@ A few sibling pairs are easy to reach for incorrectly:
 - `why` vs `fix`/`debugging-workflow` — `why` reconstructs intent and history when nothing is misbehaving ("why is it built this way"); `fix` and the debugging protocol answer defects ("why is it doing the wrong thing right now"). A `why` run that uncovers a live defect hands off to `fix`; a `fix` that needs design intent consults `why`.
 - `blast-radius` vs `review` — `review` audits a diff for defects across the board and merges subagent findings; `blast-radius` investigates one change's impact beyond the diff, reducing its safety to a single fact proven by running real code. `review`'s refutation step borrows blast-radius's rung-4 bar for Critical findings; the phrase "uncertainty × blast radius" in the planning commands is a risk-ordering heuristic, not this skill.
 - `create-verification-skill` vs `verify-work` — `verify-work` is the recurring phase acceptance gate; `create-verification-skill` is the one-time generator of the committed `verify-<app>` skill that `verify-work`'s verifier then drives. Generate once, drive every phase.
+- `triage` vs `fix` — `fix` starts from a bug you already own and ends in a landed fix; `triage` starts from someone else's report and ends in one verdict: a classification, a typed dedupe outcome, and at most one tracker issue. A `[triage:bug]` marker with its tracker link is a ready entry into `fix`; `triage` never fixes, and `fix` never files tickets.
 
 ## Host Invocation
 
 | Host | How to invoke a draht skill |
 |---|---|
-| Claude Code | `/draht:<command>` slash commands for the 21 command skills (for example `/draht:plan-phase`); the 14 discipline skills load automatically by description match or on request |
-| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 21 command skills; discipline skills load automatically or by name |
+| Claude Code | `/draht:<command>` slash commands for the 22 command skills (for example `/draht:plan-phase`); the 14 discipline skills load automatically by description match or on request |
+| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 22 command skills; discipline skills load automatically or by name |
 | Any Agent-Skills-compatible host | invoke the sibling skill directly by name — every `SKILL.md` in this tree is self-contained and portable |
 | draht CLI (`@draht/coding-agent`) | runs the GSD workflow natively; no skill indirection needed |
 

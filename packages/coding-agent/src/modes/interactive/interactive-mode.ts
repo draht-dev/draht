@@ -10,6 +10,7 @@ import * as path from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@draht/agent-core";
 import type { AuthEvent, AuthPrompt } from "@draht/ai";
 import type { AssistantMessage, ImageContent, Message, Model, Usage } from "@draht/ai/compat";
+import { DEFAULT_RADIUS_GATEWAY } from "@draht/ai/providers/radius-config";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -45,6 +46,7 @@ import {
 } from "@draht/tui";
 import chalk from "chalk";
 import { spawn, spawnSync } from "child_process";
+import { getAuthCredential } from "../../cli/auth-command.ts";
 import {
 	APP_NAME,
 	APP_TITLE,
@@ -6573,6 +6575,126 @@ export class InteractiveMode {
 	}
 
 	private async handleShareCommand(): Promise<void> {
+		// Radius artifacts natively support JSONL sessions. Gist fallback keeps the legacy HTML upload.
+		const jsonlFile = path.join(os.tmpdir(), "session.jsonl");
+		const htmlFile = path.join(os.tmpdir(), "session.html");
+		const useRadiusShare = process.env.PI_EXPERIMENTAL === "1";
+
+		try {
+			if (useRadiusShare) {
+				try {
+					this.session.exportToJsonl(jsonlFile);
+				} catch (error: unknown) {
+					this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
+					return;
+				}
+				const radiusResult = await this.tryShareViaRadius(jsonlFile);
+				if (radiusResult !== "radius-unavailable") return;
+			}
+
+			try {
+				await this.session.exportToHtml(htmlFile, { themeName: theme.name });
+			} catch (error: unknown) {
+				this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
+				return;
+			}
+			await this.shareViaGist(htmlFile);
+		} finally {
+			for (const tmpFile of [jsonlFile, htmlFile]) {
+				try {
+					fs.unlinkSync(tmpFile);
+				} catch {
+					// Ignore cleanup errors
+				}
+			}
+		}
+	}
+
+	private async tryShareViaRadius(tmpFile: string): Promise<"shared" | "radius-unavailable"> {
+		const provider = this.session.modelRuntime.getProvider("radius");
+		if (!provider) return "radius-unavailable";
+
+		const gatewayUrl = DEFAULT_RADIUS_GATEWAY;
+
+		let token = getAuthCredential(
+			await this.session.modelRuntime.getAuth("radius", { minOAuthValidityMs: 30 * 60_000 }),
+		);
+		if (!token) {
+			this.showStatus("Signing in to Radius...");
+			await this.showLoginDialog("radius", provider.name || "Radius");
+			token = getAuthCredential(
+				await this.session.modelRuntime.getAuth("radius", { minOAuthValidityMs: 30 * 60_000 }),
+			);
+		}
+		if (!token) {
+			this.showError("Radius is not logged in. Run `/login radius` and try /share again.");
+			return "shared";
+		}
+
+		const loader = new BorderedLoader(this.ui, theme, "Uploading to Radius...");
+		this.editorContainer.clear();
+		this.editorContainer.addChild(loader);
+		this.ui.setFocus(loader);
+		this.ui.requestRender();
+		loader.onAbort = () => {
+			this.restoreShareEditor(loader);
+			this.showStatus("Share cancelled");
+		};
+
+		try {
+			const body = fs.readFileSync(tmpFile);
+			const url = new URL("/v1/artifacts", gatewayUrl);
+			url.searchParams.set("visibility", "organization");
+			url.searchParams.set("title", "Pi session");
+			const response = await fetch(url, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/x-ndjson",
+					"Content-Length": String(body.byteLength),
+				},
+				body,
+				signal: loader.signal,
+			});
+			if (loader.signal.aborted) return "shared";
+			const json = (await response.json().catch(() => null)) as {
+				artifact?: { canonical_url?: string; url?: string; visibility?: string };
+				error?: string;
+			} | null;
+			if (loader.signal.aborted) return "shared";
+			this.restoreShareEditor(loader);
+			if (!response.ok || !json?.artifact) {
+				this.showError(
+					`Failed to upload Radius artifact: ${json?.error || response.statusText || response.status}`,
+				);
+				return "shared";
+			}
+			const shareUrl = json.artifact.canonical_url || json.artifact.url;
+			if (!shareUrl) {
+				this.showError("Failed to upload Radius artifact: response did not include a share URL");
+				return "shared";
+			}
+			const themedShareUrl = this.withUrlParam(shareUrl, "theme", "dark");
+			const artifactId = this.radiusArtifactIdFromUrl(shareUrl);
+			const previewUrl =
+				json.artifact.visibility === "public" && artifactId
+					? getShareViewerUrl(`radius/${artifactId}&theme=dark`)
+					: themedShareUrl;
+			const visibilityNote = json.artifact.visibility === "public" ? "" : " (private; sign-in required)";
+			this.showStatus(`Share URL: ${previewUrl}${visibilityNote}\nRadius artifact: ${themedShareUrl}`);
+			return "shared";
+		} catch (error: unknown) {
+			if (!loader.signal.aborted) {
+				this.restoreShareEditor(loader);
+				this.showError(
+					`Failed to upload Radius artifact: ${error instanceof Error ? error.message : "Unknown error"}`,
+				);
+			}
+			return "shared";
+		}
+	}
+
+	private async shareViaGist(tmpFile: string): Promise<void> {
 		// Check if gh is available and logged in
 		try {
 			const authResult = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
@@ -6585,15 +6707,6 @@ export class InteractiveMode {
 			return;
 		}
 
-		// Export to a temp file
-		const tmpFile = path.join(os.tmpdir(), "session.html");
-		try {
-			await this.session.exportToHtml(tmpFile, { themeName: theme.name });
-		} catch (error: unknown) {
-			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-			return;
-		}
-
 		// Show cancellable loader, replacing the editor
 		const loader = new BorderedLoader(this.ui, theme, "Creating gist...");
 		this.editorContainer.clear();
@@ -6601,24 +6714,12 @@ export class InteractiveMode {
 		this.ui.setFocus(loader);
 		this.ui.requestRender();
 
-		const restoreEditor = () => {
-			loader.dispose();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			try {
-				fs.unlinkSync(tmpFile);
-			} catch {
-				// Ignore cleanup errors
-			}
-		};
-
 		// Create a secret gist asynchronously
 		let proc: ReturnType<typeof spawn> | null = null;
 
 		loader.onAbort = () => {
 			proc?.kill();
-			restoreEditor();
+			this.restoreShareEditor(loader);
 			this.showStatus("Share cancelled");
 		};
 
@@ -6638,7 +6739,7 @@ export class InteractiveMode {
 
 			if (loader.signal.aborted) return;
 
-			restoreEditor();
+			this.restoreShareEditor(loader);
 
 			if (result.code !== 0) {
 				const errorMsg = result.stderr?.trim() || "Unknown error";
@@ -6660,9 +6761,36 @@ export class InteractiveMode {
 			this.showStatus(`Share URL: ${previewUrl}\nGist: ${gistUrl}`);
 		} catch (error: unknown) {
 			if (!loader.signal.aborted) {
-				restoreEditor();
+				this.restoreShareEditor(loader);
 				this.showError(`Failed to create gist: ${error instanceof Error ? error.message : "Unknown error"}`);
 			}
+		}
+	}
+
+	private restoreShareEditor(loader: BorderedLoader): void {
+		loader.dispose();
+		this.editorContainer.clear();
+		this.editorContainer.addChild(this.editor);
+		this.ui.setFocus(this.editor);
+	}
+
+	private withUrlParam(value: string, name: string, paramValue: string): string {
+		try {
+			const url = new URL(value);
+			url.searchParams.set(name, paramValue);
+			return url.toString();
+		} catch {
+			return value;
+		}
+	}
+
+	private radiusArtifactIdFromUrl(value: string): string | null {
+		try {
+			const url = new URL(value);
+			const match = /^\/artifact\/([^/?#]+)\/?$/iu.exec(url.pathname);
+			return match ? match[1] : null;
+		} catch {
+			return null;
 		}
 	}
 

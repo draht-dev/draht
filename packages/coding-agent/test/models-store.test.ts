@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@draht/ai";
@@ -47,5 +47,18 @@ describe("FileModelsStore", () => {
 		await reloaded.delete("one");
 		expect(await reloaded.read("one")).toBeUndefined();
 		expect((await reloaded.read("two"))?.models.map((entry) => entry.id)).toEqual(["m2"]);
+	});
+	it.skipIf(process.platform === "win32")("preserves the mode of an existing models file", async () => {
+		const dir = join(tmpdir(), `pi-models-store-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDirs.push(dir);
+		mkdirSync(dir, { recursive: true });
+		const managedModelsPath = join(dir, "managed-mode.json");
+		writeFileSync(managedModelsPath, "{}");
+		chmodSync(managedModelsPath, 0o660);
+		const store = new FileModelsStore(managedModelsPath);
+
+		await store.write("one", { models: [model("one", "m1")], checkedAt: 100 });
+
+		expect(statSync(managedModelsPath).mode & 0o777).toBe(0o660);
 	});
 });

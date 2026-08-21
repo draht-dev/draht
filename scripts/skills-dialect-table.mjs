@@ -27,9 +27,10 @@ export const PLUGIN_ROOT_RENDER = {
 	codex: "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$HOME/.draht/codex-marketplace/plugins/draht}}",
 };
 
-// ── 10 discipline skills — line-scoped dialect spans ────────────────────────
-// Only 5 of the 10 discipline skills have any host-specific span; the other 5
-// (brainstorming, ddd-workflow, loop-workflow, model-tiering, tdd-workflow)
+// ── 11 discipline skills — line-scoped dialect spans ────────────────────────
+// Only 5 of the 11 discipline skills have any host-specific span; the other 6
+// (brainstorming, ddd-workflow, loop-workflow, model-tiering, tdd-workflow,
+// unslop)
 // render identically for every host and have no entry here. saga-spawner
 // carries the table's one asymmetric pair: the canonical "strongest tier"
 // line renders with a Claude model example on the claude side but a generic

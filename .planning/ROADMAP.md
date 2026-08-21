@@ -339,6 +339,81 @@ run. The interactive TUI path was not held (SSH idle, tmux, sleep/wake unexercis
 WebSocket transport was not run — a >5-min hold there is correctness-safe but discards the continuation
 delta and forces a full-context resend, so it is a real token COST the measurement wrongly excluded.
 
+**SEAM RESOLVED and DESIGN OF RECORD — 2026-08-21.** Workflow `wf_08536a00-ffc`: six read-only lenses over
+the permission, attach, durability, sanitization and tool-registry code, then two Fable 5 advisors at max
+effort. Both returned `high` confidence, both ran their own probes, and they converge. Decision 5 in
+`.planning/DECISIONS-PENDING.md` is closed: **the relay hooks the attach wire**, because rev-8 §4 already
+requires it ("a session appears because it is *running*, not because it was started by geist").
+
+*The named seam in R34-PERM.2 is wrong and this is the correction.* `createExtensionUIContext()` is a
+producer, not a chokepoint. The single production `setUIContext` call site — verified by repo-wide scan —
+is `agent-session.ts:2360` inside `_applyExtensionBindings`, reached by all four modes (interactive and rpc
+via `bindExtensions`; draht-acp and the SDK via the constructor's `_buildRuntime`) and re-run on reload.
+A `RelayUIContext` decorator composed there survives `/new`, `/resume`, `/fork`, `/import` and extension
+reload. Installing it at the attach seam (`main.ts:916`) does **not** work: interactive and rpc later bind
+their own context and silently overwrite it.
+
+Five findings that change the implementation, each from a probe rather than a reading:
+
+1. **`hasUI()` must become surface-aware in the same commit as the decorator.** It is an identity check
+   against `noOpUIContext` (`runner.ts:464-466`), so *any* decorator flips it true. For an `--attachable`
+   session with zero clients attached, that converts today's loud fail-closed block into either an eternal
+   hang or the wrapped noOp's instant `false` — which `subagent.ts:606-608` reports as **"User denied
+   approval"**, a fabricated user action written into the transcript. Contract: `hasUI` becomes "at least
+   one surface can answer right now"; the no-surface case keeps blocking.
+2. **Ordering is `settle → resolve → abort losing surfaces → broadcast → append JSONL`.** Reversed, the
+   abort resolves the losing TUI dialog to `false` (`interactive-mode.ts:2307` maps abort to false), which
+   re-enters the decorator as an apparent TUI **deny** and overwrites the phone's approve.
+3. **`settle()` is synchronous** from pending-check through `resolve()`. A single `await` between the
+   pending-check and the settled-mark lets both answers pass validation, double-appending the JSONL with
+   conflicting `decidedBy` — and it is silent, because the second `resolve()` is a no-op.
+4. **The pending registry cannot live in the decorator.** `_buildRuntime` constructs a new
+   `ExtensionRunner` per reload and recreates the decorator. It lives on the relay object inside
+   `makeSessionAttachable`'s bind closure — which also dies with the session (correct for "removed on
+   session exit") while surviving client churn (correct for "survives client disconnect").
+5. **The protocol change is ONE atomic commit, not a sequence.** `MIRRORED_UNIONS` fails the build on any
+   unmirrored socket-wire union member; `missingGoldens` fails on any declared-but-unrecorded type; and
+   `attach-bridge.ts:707-714` answers an undeclared frame by closing **every** attached phone with 1008.
+   The train is: socket `types.ts` frames + `wire.ts` schemas + `GEIST_PROTOCOL_VERSION` 0.2→0.3 +
+   `MIRRORED_FRAMES` rows + a `## geist/0.3` section in `MIGRATIONS.md` + regenerated
+   `conformance/geist-0.3/` + the recorder scripts + the one literal pin at `wire-auth-frames.test.ts:100`.
+
+**Requirement corrections, recorded because the requirements as written would produce defects:**
+
+- **R34-PERM.1's frame `deadline` ships nullable and advisory.** An enforced frame deadline is a *new*
+  denial path that did not exist before Phase 34, and it contradicts the archived PERM.8 finding that the
+  agent core imposes none. Real expiry binds solely to the registry's fail-closed timer — one clock.
+- **R34-PERM.2 needs the ask widened, not just decorated.** A pure decorator sees only what the caller
+  passed, and `subagent.ts:605` passes a prose sentence — so the decorator alone would relay a summary and
+  violate R34-PERM.3 in the same breath. The decorator and an optional `detail` on
+  `ExtensionUIDialogOptions` are one change.
+- **R34-PERM.4's "protocol layer" means the socket wire, at frame construction.** Read as geist-protocol
+  it silently leaves `draht --attach` unprotected — that client is a bare `JSON.parse(line) as
+  ServerMessage` cast (`socket-client.ts:177`). Neutralize where the frame is built; re-assert downstream
+  in `wire.ts` with `.refine()`, never `.transform()` (a transform makes decode/encode non-idempotent and
+  the conformance goldens compare byte-wise).
+- **R34-PERM.7 is vacuous until the surface fix lands, and its subagent leg is unsatisfiable as written.**
+  Under shipped defaults no local prompt is raised headless at all, so "every execution that raises a local
+  prompt raises a remote one" enumerates the empty set. Subagents are separate `--mode json -p
+  --no-session` processes with no socket, no UI and no env channel; the leg needs either a relay endpoint
+  passed to the child or an explicit re-scope. **It must not block the phase.** The project-trust prompt
+  (`main.ts:738`) is out of scope by construction — it runs before the session exists.
+- **The shipped defect is fixed in-phase and first, not as a standalone patch.** Without a surface there is
+  no correct behaviour to ship: flipping `hasUI` true yields a silent denial, a hang, or fail-open. The
+  only real fix is giving sessions surfaces, which is this phase. Note it is wider than first reported —
+  under `auto`, every *non-built-in* tool still hard-fails (`permission-gate.ts:755` defaults unknown tools
+  to the approval tier).
+
+**Skew, in both directions, measured:** an old `draht --attach` client silently ignores unknown server
+frames (`socket-client.ts:188-226` has no default case), so that direction degrades gracefully. The lethal
+direction is a new draht emitting to an old geist-core bridge — close 1008, every phone dropped. Emission
+is therefore **capability-gated**: permission frames go only to clients whose `attach` declared support.
+
+**Also found, worth fixing while here:** `mode: "banana"` currently attaches successfully and its input
+reaches the session — the read-only check at `socket-server.ts:502` is a negative `=== "read-only"` test
+over an unvalidated field. Answer authority cannot rest on that field until it is a closed set.
+
+
 ## Phase 35: Every Session Is There — Default-On, History, Honest Liveness — `pending`
 **Why here:** this is the phase that makes "just automatically" literally true, and it is deliberately after the wire settles because turning sockets on by default multiplies per-host session state and collides with a known open Phase 42 residual.
 **Goal:** Oskar stops typing `--attachable`. Any draht he starts shows up on the phone; past sessions show up as history, honestly labelled and resumable.

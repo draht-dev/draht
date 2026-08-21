@@ -3,8 +3,51 @@
 > Generated 2026-08-20 by three Fable 5 advisors at max effort (workflow `wf_009fd829-6b8`).
 > Each carries a recommendation. Approving means: reply with the decision number and `approve`,
 > or name the alternative you want instead. None of these blocks Phase 33.
+>
+> **Status 2026-08-21:** the Phase 34 seam question is **resolved from the spec** and no longer blocks —
+> rev-8 §4 already answered it. Four decisions remain open for Oskar: Phase 42 batching, GSEC-04/05
+> amendment sign-off, and the Phase 44 threat model.
 
-## Phase 34 — which seam relays a permission ask to the phone (NEW, 2026-08-21)
+## Phase 34 — which seam relays a permission ask to the phone (RESOLVED 2026-08-21, see below)
+
+> **RESOLVED — the attach wire.** Not by a fresh product call: `.planning/specs/2026-08-18-geist-remote-control-rev8.md`
+> §4 already settles it. *"A session appears because it is **running**, not because it was started by
+> geist. This is the whole point."* An ACP-seam relay covers only geist-**spawned** headless sessions,
+> so it contradicts §4 outright, and §5.2 makes the relay the mobile app's reason to exist. That is the
+> same answer the Fable 5 advisor gave and the same one recorded as `Recommended` below.
+>
+> **Reversible.** If geist-owned ACP sessions become the product's future, this flips — but the shipped
+> spec says otherwise today. Oskar's sign-off is welcome, not required, and nothing was built on the
+> rejected seam.
+>
+> The seam **within** the attach wire was then mapped and adjudicated (workflow `wf_08536a00-ffc`:
+> six read-only lenses, two Fable 5 advisors at max effort, both `high` confidence, both running their
+> own probes). Design of record — see `.planning/ROADMAP.md` under Phase 34 for the full note:
+>
+> - **The decorator goes at `agent-session.ts:2360`** (`_applyExtensionBindings` → `runner.setUIContext`),
+>   verified by scan to be the **only** production `setUIContext` call site, reached by all four modes and
+>   re-run on reload — so it survives `/new`, `/resume`, `/fork`, `/import`. **Not** at `main.ts:916`: a wrap
+>   installed at the attach seam is overwritten when interactive or rpc later binds its own context.
+> - **The pending registry does NOT live in the decorator.** `_buildRuntime` builds a new `ExtensionRunner`
+>   on every reload and so recreates the decorator; entries would be orphaned. It lives on the relay object
+>   in `makeSessionAttachable`'s bind closure, which is also the only place the socket attach/disconnect
+>   handlers can reach for PERM.6 replay.
+> - **`hasUI()` must become surface-aware in the same commit as the decorator.** It is an identity check
+>   against `noOpUIContext` (`runner.ts:464-466`), so any decorator flips it true — which for an
+>   `--attachable` session with zero clients turns today's loud fail-closed block into either an eternal
+>   hang or the wrapped noOp's instant `false`, reported as **"User denied approval"**: a fabricated user
+>   action in the transcript.
+> - **Ordering rule, from a probe:** `settle → resolve → abort the losing surfaces → broadcast → append
+>   JSONL`. Reversed, the abort resolves the losing TUI dialog to `false` (`interactive-mode.ts:2307`),
+>   which re-enters the decorator as an apparent TUI **deny** and overwrites the phone's approve.
+> - **`settle()` is synchronous** from pending-check through `resolve()`. One `await` inside lets both
+>   answers pass validation — and the bug is silent, because the second `resolve()` is a no-op.
+> - **The protocol change is ONE atomic commit**, not a sequence: the mirror gate fails on any unmirrored
+>   union member, the goldens gate fails on any declared-but-unrecorded type, and the bridge answers an
+>   undeclared frame by closing every phone's connection with 1008.
+
+<details>
+<summary>Original framing, 2026-08-21 — kept as the record of what was decided against</summary>
 
 **Confidence:** the probe and the advisor disagree. Both agree R34-PERM.2 as written is wrong.
 
@@ -50,6 +93,8 @@ Running the R34-PERM.8 turn-hold measurement, which is seam-agnostic and is the 
 invalidate the product premise: if a provider turn tolerates *less* delay than a human walking away
 needs, Phase 34 changes from hold-the-turn to park/auto-deny/notify/retry. Not building the relay until
 the seam is settled.
+
+</details>
 
 ---
 

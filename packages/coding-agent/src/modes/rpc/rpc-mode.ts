@@ -156,14 +156,22 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	 * Create an extension UI context that uses the RPC protocol.
 	 */
 	const createExtensionUIContext = (): ExtensionUIContext => ({
+		// `detail` is threaded through verbatim so an RPC client sees the same canonical facts the
+		// TUI does. It is already neutralized and bounded at construction; nothing is reshaped here.
 		select: (title, options, opts) =>
-			createDialogPromise(opts, undefined, { method: "select", title, options, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
+			createDialogPromise(
+				opts,
+				undefined,
+				{ method: "select", title, options, timeout: opts?.timeout, detail: opts?.detail },
+				(r) => ("cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined),
 			),
 
 		confirm: (title, message, opts) =>
-			createDialogPromise(opts, false, { method: "confirm", title, message, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false,
+			createDialogPromise(
+				opts,
+				false,
+				{ method: "confirm", title, message, timeout: opts?.timeout, detail: opts?.detail },
+				(r) => ("cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false),
 			),
 
 		input: (title, placeholder, opts) =>

@@ -234,10 +234,57 @@ export type RpcResponse =
 // Extension UI Events (stdout)
 // ============================================================================
 
+/**
+ * Structured detail for a tool permission ask, as carried by the PUBLIC RPC protocol.
+ *
+ * A structural mirror of the coding-agent core's `PermissionAskDetail`, declared here on purpose:
+ * this file is a protocol declaration, so importing the core type would let an internal refactor
+ * silently change the shape clients parse. The two must be kept equivalent by hand.
+ *
+ * Every string here has already been neutralized and length-bounded at construction — a client may
+ * render it verbatim. `options` is the immutable set of choices the agent offered; each states its
+ * own `decision`, and nothing may infer an option's meaning from its position or its id.
+ */
+export interface RpcPermissionDetail {
+	kind: "tool_permission";
+	/** Id of the tool call this ask gates. */
+	toolCallId: string;
+	/** Name of the tool being gated (e.g. "bash", "write"). */
+	toolName: string;
+	/** Canonical (realpath) working directory the tool call would run in. */
+	cwd: string;
+	/** The command line, for command-shaped tools. */
+	command?: string;
+	/** The target path, for file-shaped tools. */
+	path?: string;
+	/** The operation being performed, when the tool distinguishes several. */
+	operation?: string;
+	/** Why the permission gate stopped this call. */
+	reason: string;
+	/** The immutable set of options offered for this request, each stating its own semantics. */
+	options: readonly { id: string; label: string; decision: "approve" | "deny" }[];
+}
+
 /** Emitted when an extension needs user input */
 export type RpcExtensionUIRequest =
-	| { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number }
-	| { type: "extension_ui_request"; id: string; method: "confirm"; title: string; message: string; timeout?: number }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "select";
+			title: string;
+			options: string[];
+			timeout?: number;
+			detail?: RpcPermissionDetail;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "confirm";
+			title: string;
+			message: string;
+			timeout?: number;
+			detail?: RpcPermissionDetail;
+	  }
 	| {
 			type: "extension_ui_request";
 			id: string;
@@ -279,7 +326,12 @@ export type RpcExtensionUIRequest =
 /** Response to an extension UI request */
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
-	| { type: "extension_ui_response"; id: string; confirmed: boolean }
+	/**
+	 * `optionId` names WHICH offered option the answer chose. It is optional for backwards
+	 * compatibility with clients that only know yes/no; when present it must be one of the ids the
+	 * matching request offered in `detail.options`.
+	 */
+	| { type: "extension_ui_response"; id: string; confirmed: boolean; optionId?: string }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
 // ============================================================================

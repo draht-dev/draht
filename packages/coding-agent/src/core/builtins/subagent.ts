@@ -20,7 +20,14 @@ import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
 import { getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
 import { parseFrontmatter } from "../../utils/frontmatter.js";
-import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult } from "../extensions/types.js";
+import { canonicalizePath } from "../../utils/paths.js";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	PermissionAskDetail,
+	ToolCallEvent,
+	ToolCallEventResult,
+} from "../extensions/types.js";
 import {
 	AgentFSM,
 	type AgentFSMTransitionEvent,
@@ -35,6 +42,7 @@ import {
 	TaskBoard,
 	WorktreeIsolator,
 } from "../multi-agent/index.ts";
+import { boundedSafeText } from "../socket-server/safe-text.js";
 
 const MAX_PARALLEL = 8;
 const MAX_CONCURRENCY = 4;
@@ -589,6 +597,74 @@ export async function runChainTasks(
 	return results;
 }
 
+/** Grapheme budget for every attacker-influenced string that travels in a permission ask. */
+const PERMISSION_DETAIL_MAX_GRAPHEMES = 512;
+
+/**
+ * The vocabulary this phase offers for a tool permission ask.
+ *
+ * Frozen and shared: the same object identity is handed to every surface, so no renderer can
+ * quietly widen or reorder it. Each option states its OWN decision — nothing may infer approval
+ * from an option's position, id, or the array's length.
+ */
+const TOOL_PERMISSION_OPTIONS: readonly { id: string; label: string; decision: "approve" | "deny" }[] = Object.freeze([
+	Object.freeze({ id: "approve", label: "Yes", decision: "approve" as const }),
+	Object.freeze({ id: "deny", label: "No", decision: "deny" as const }),
+]);
+
+/** Neutralize-and-bound a single wire-bound string, keeping only the safe value. */
+function safeField(raw: string): string {
+	return boundedSafeText(raw, PERMISSION_DETAIL_MAX_GRAPHEMES).value;
+}
+
+/**
+ * Build the canonical detail for a tool permission ask.
+ *
+ * Neutralization happens HERE, at construction, not at any protocol layer: three renderers
+ * (TUI, `draht --attach`, RPC) inherit this object, and the attach client is a bare `JSON.parse`
+ * cast that never passes through a schema. Constructing it safe is what makes all three safe.
+ */
+function buildPermissionAskDetail(event: ToolCallEvent, ctx: ExtensionContext, reason: string): PermissionAskDetail {
+	const input = (event.input ?? {}) as Record<string, unknown>;
+	const detail: PermissionAskDetail = {
+		kind: "tool_permission",
+		toolCallId: safeField(event.toolCallId),
+		toolName: safeField(event.toolName),
+		// `ctx.cwd` is the raw, un-normalised `config.cwd`; a symlinked worktree would otherwise
+		// read as a different project on the answering surface.
+		cwd: safeField(canonicalizePath(ctx.cwd)),
+		reason: safeField(reason),
+		options: TOOL_PERMISSION_OPTIONS,
+	};
+
+	const command = typeof input.command === "string" ? input.command : undefined;
+	const filePath = typeof input.file_path === "string" ? input.file_path : undefined;
+	const plainPath = typeof input.path === "string" ? input.path : undefined;
+
+	if (command !== undefined) {
+		detail.command = safeField(command);
+	} else if (filePath !== undefined || plainPath !== undefined) {
+		detail.path = safeField((filePath ?? plainPath) as string);
+	} else {
+		// Every extension tool takes `Record<string, unknown>`, so there is always SOMETHING to
+		// show. Serializing the whole argument object beats an empty ask that asks the human to
+		// approve an unknown action.
+		detail.operation = safeField(serializeToolInput(input));
+	}
+
+	return detail;
+}
+
+/** JSON-serialize a tool's argument object, degrading to a readable form rather than throwing. */
+function serializeToolInput(input: Record<string, unknown>): string {
+	try {
+		return JSON.stringify(input) ?? String(input);
+	} catch {
+		// Cyclic or otherwise unserializable input must not crash the permission gate.
+		return Object.keys(input).join(", ");
+	}
+}
+
 /**
  * Permission-gate hook point: builds a `tool_call` handler that consults a
  * `PermissionGate` before a tool executes. `deny` blocks the call outright;
@@ -608,10 +684,18 @@ export function createPermissionGateToolCallHandler(
 		}
 
 		if (decision.action === "approve") {
+			// No answering surface at all: keep today's loud, operator-facing block verbatim rather
+			// than letting a no-op UI resolve `false` and be recorded as a user's denial.
 			if (!ctx.hasUI) {
 				return { block: true, reason: `${decision.reason} (no UI available to request approval)` };
 			}
-			const approved = await ctx.ui.confirm("Approve tool call?", `${event.toolName}: ${decision.reason}`);
+
+			const detail = buildPermissionAskDetail(event, ctx, decision.reason);
+			// Both positional strings are unchanged so every existing renderer keeps working; the
+			// canonical facts ride alongside them for surfaces that can render structure.
+			const approved = await ctx.ui.confirm("Approve tool call?", `${event.toolName}: ${decision.reason}`, {
+				detail,
+			});
 			if (!approved) {
 				return { block: true, reason: "User denied approval" };
 			}

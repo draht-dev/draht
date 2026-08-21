@@ -25,6 +25,8 @@
  *   9. GSD hooks exist in packages/coding-agent/hooks/gsd/
  *  10. GSD command prompt templates exist in packages/coding-agent/prompts/commands/
  *      (and the legacy prompts/agents/ templates stay retired)
+ *  10b. Dual-channel skills (root skills/<name>/ + shipped
+ *      packages/coding-agent/skills/<name>/) stay byte-identical copies
  *  11. Built-in agents exist in packages/coding-agent/agents/, and the set of
  *      agent names dispatched by prompts/commands/*.md matches the shipped
  *      roster in both directions (no command routes to an unshipped agent,
@@ -633,6 +635,39 @@ check(
 	!existsSync(resolve(root, retiredAgentPromptsDir)),
 	`${retiredAgentPromptsDir}/ stays retired (legacy build/plan/verify templates)`,
 );
+
+// ── 10b. Dual-channel skill byte-copies stay in sync ───────────────
+//
+// A discipline that exists in both channels — root skills/<name>/ as the
+// canonical source, packages/coding-agent/skills/<name>/ as the shipped
+// fallback so shipped prompts resolve the name with nothing installed —
+// must be a byte-copy, not an adaptation (ADR 0003). Without this gate the
+// pair drifts silently: no generator emits the shipped copy and no mirror
+// check covers it. Extend DUAL_CHANNEL_SKILLS in the same change as any new
+// dual-channel occupant. hexagon-animation is deliberately excluded: it is
+// an asset-bearing product default with no root twin.
+
+console.log("\nDual-channel skill byte-copies (root skills/ ↔ shipped builtin)");
+
+const DUAL_CHANNEL_SKILLS = ["atomic-reasoning", "unslop"];
+
+for (const name of DUAL_CHANNEL_SKILLS) {
+	const rootCopyPath = `skills/${name}/SKILL.md`;
+	const shippedCopyPath = `packages/coding-agent/skills/${name}/SKILL.md`;
+	const rootCopyAbs = resolve(root, rootCopyPath);
+	const shippedCopyAbs = resolve(root, shippedCopyPath);
+	if (!existsSync(rootCopyAbs) || !existsSync(shippedCopyAbs)) {
+		fail(
+			`${shippedCopyPath} and ${rootCopyPath} both exist (dual-channel occupant "${name}")`,
+		);
+		continue;
+	}
+	check(
+		readFileSync(shippedCopyAbs, "utf-8") === readFileSync(rootCopyAbs, "utf-8"),
+		`${shippedCopyPath} is byte-equal to ${rootCopyPath}` +
+			` (fix: cp ${rootCopyPath} ${shippedCopyPath})`,
+	);
+}
 
 // ── 11. Built-in agents ─────────────────────────────────────────────
 

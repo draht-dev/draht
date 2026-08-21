@@ -22,3 +22,9 @@ A discipline may exist in both channels under one name. Root is the content sour
 ## Known gap
 
 No check pins a dual-channel skill's shipped copy to its canonical root source — the pair drifts silently. Adding that gate is the first revisit trigger for this record.
+
+## Update (2026-08-21)
+
+`unslop` is admitted as a runtime-referenced dual-channel discipline: the shipped pause-work, verify-work, grill, and brainstorm prompts and the git-committer agent point at it by name, and the pointer must resolve with nothing installed. Dual-channel occupants as of this update: `atomic-reasoning`, `unslop`.
+
+The Known gap above is closed by "feat(scripts): gate dual-channel skill byte-copies in check:draht": scripts/check-draht-customizations.mjs section 10b byte-compares each dual-channel skill's shipped copy against its root source over the `DUAL_CHANNEL_SKILLS` allowlist; the allowlist must be extended in the same change as any new dual-channel occupant. `hexagon-animation` stays outside the gate — it is an asset-bearing product default with no root twin.

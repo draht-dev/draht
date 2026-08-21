@@ -9,21 +9,21 @@ Draht is a methodology for running agentic coding work through a milestone → p
 
 ## Two Kinds of Sibling Skills
 
-- **11 discipline skills** — transversal habits that apply regardless of which command is running: `atomic-reasoning`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `gsd-workflow`, `loop-workflow`, `model-tiering`, `saga-spawner`, `tdd-workflow`, `unslop`, `verification-gate`.
-- **19 command skills** — one per stage of the GSD lifecycle, from greenfield questioning through milestone completion: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`.
+- **12 discipline skills** — transversal habits that apply regardless of which command is running: `atomic-reasoning`, `brainstorming`, `ddd-workflow`, `debugging-workflow`, `epistemics`, `gsd-workflow`, `loop-workflow`, `model-tiering`, `saga-spawner`, `tdd-workflow`, `unslop`, `verification-gate`.
+- **20 command skills** — one per stage of the GSD lifecycle, from greenfield questioning through milestone completion: `new-project`, `init-project`, `map-codebase`, `discuss-phase`, `plan-phase`, `execute-phase`, `verify-work`, `next-milestone`, `pause-work`, `resume-work`, `progress`, `quick`, `fix`, `review`, `atomic-commit`, `orchestrate`, `orchestrate-loop`, `resolve-conflicts`, `grill`, `why`.
 
 Every skill's frontmatter `name` matches its directory name, so `skills/<name>/` and the name you invoke are always the same string.
 
 ## Repository Layout
 
 - `skills/<name>/SKILL.md` — every skill has one; frontmatter (`name`, `description`) plus instructions.
-- `skills/<name>/command.md` — the 19 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
-- The 11 discipline skills have no `command.md` — their `SKILL.md` is self-contained.
+- `skills/<name>/command.md` — the 20 command skills only. This is the full prompt template; the command skill's `SKILL.md` is a thin wrapper that reads it.
+- The 12 discipline skills have no `command.md` — their `SKILL.md` is self-contained.
 - This file, `skills/draht/SKILL.md`, is itself a plain skill (no `command.md`) — it is discovered and loaded the same way any discipline skill is.
 
 ## How the Catalog Composes
 
-Command skills and discipline skills are not independent choices — most command skills lean on two or three disciplines while they run. `plan-phase` and `execute-phase` both assume `atomic-reasoning` and `tdd-workflow`; every command that ends with a completion claim assumes `verification-gate`; `fix` is a tracked wrapper around the `debugging-workflow` protocol; `orchestrate-loop` is `loop-workflow` applied to one goal. When in doubt about which disciplines a command skill pulls in, open that command skill's `command.md` — the disciplines it expects are named in its own text.
+Command skills and discipline skills are not independent choices — most command skills lean on two or three disciplines while they run. `plan-phase` and `execute-phase` both assume `atomic-reasoning` and `tdd-workflow`; every command that ends with a completion claim assumes `verification-gate`; `fix` is a tracked wrapper around the `debugging-workflow` protocol; `orchestrate-loop` is `loop-workflow` applied to one goal; `why` leans on `epistemics` for every claim it reports. When in doubt about which disciplines a command skill pulls in, open that command skill's `command.md` — the disciplines it expects are named in its own text.
 
 ## Situation → Skill
 
@@ -57,6 +57,7 @@ Command skills and discipline skills are not independent choices — most comman
 | Running one goal in a deterministic-check-gated loop until it passes | `orchestrate-loop` |
 | Resolving an in-progress merge/rebase conflict — including a failed `agent/<taskId>` worktree merge-back | `resolve-conflicts` |
 | Stress-testing any subject — an idea, a spec, tickets, a decision — in whole-frontier question rounds | `grill` |
+| Recovering why code is the way it is — design rationale, decision history, rejected alternatives | `why` |
 
 ### Transversal disciplines
 
@@ -65,6 +66,7 @@ Command skills and discipline skills are not independent choices — most comman
 | Decomposing work into atomic, independently-verifiable units | `atomic-reasoning` |
 | Domain modelling — bounded contexts, ubiquitous language, naming | `ddd-workflow` |
 | Investigating any failure transversally (the protocol behind `fix`) | `debugging-workflow` |
+| Calibrating confidence, citations, and gaps when reporting investigation findings | `epistemics` |
 | Designing or reasoning about iterate-until-a-check-passes loops | `loop-workflow` |
 | Choosing which model tier should run a session vs its subagents | `model-tiering` |
 | Unattended repo advancement — reconciling the saga graph one beat at a time as a cloud routine | `saga-spawner` |
@@ -81,13 +83,14 @@ A few sibling pairs are easy to reach for incorrectly:
 - `orchestrate` vs `orchestrate-loop` — `orchestrate` fans a task out to specialists once; `orchestrate-loop` re-runs one worker against a deterministic check until it passes or a bound is hit.
 - `review` vs `verify-work` — `review` is ad hoc, any time; `verify-work` is the phase-level acceptance gate and additionally checks the diff against the phase's plan files.
 - `grill` vs `brainstorming` — `brainstorming` is the project-creation gate: it ends in a written spec and a handoff to `/new-project` or `/init-project`; `grill` interrogates any subject with no presumed outcome — the artifact (spec, tickets, decision record, notes, or nothing) is chosen only when the frontier is empty.
+- `why` vs `fix`/`debugging-workflow` — `why` reconstructs intent and history when nothing is misbehaving ("why is it built this way"); `fix` and the debugging protocol answer defects ("why is it doing the wrong thing right now"). A `why` run that uncovers a live defect hands off to `fix`; a `fix` that needs design intent consults `why`.
 
 ## Host Invocation
 
 | Host | How to invoke a draht skill |
 |---|---|
-| Claude Code | `/draht:<command>` slash commands for the 19 command skills (for example `/draht:plan-phase`); the 11 discipline skills load automatically by description match or on request |
-| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 19 command skills; discipline skills load automatically or by name |
+| Claude Code | `/draht:<command>` slash commands for the 20 command skills (for example `/draht:plan-phase`); the 12 discipline skills load automatically by description match or on request |
+| Codex | `$draht:<command>` prompts, or `/skills` and pick the wrapper, for the 20 command skills; discipline skills load automatically or by name |
 | Any Agent-Skills-compatible host | invoke the sibling skill directly by name — every `SKILL.md` in this tree is self-contained and portable |
 | draht CLI (`@draht/coding-agent`) | runs the GSD workflow natively; no skill indirection needed |
 

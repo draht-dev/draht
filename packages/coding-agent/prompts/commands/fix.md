@@ -27,6 +27,8 @@ Symptom fixes are failure. If you find yourself proposing a "quick fix for now, 
 
 **Prevents:** shipping a correct fix to the wrong component.
 
+Not every why is a bug: if the user is asking why the code is *shaped* the way it is — intent, history, design rationale — and nothing is misbehaving, route to `/why` instead. `/fix` answers defects; `/why` answers intent. When Phase 1 needs design intent (is this behaviour a decision or an accident?), consult `/why` and feed its Preserve/Avoid constraints into the hypothesis ranking.
+
 ## Red Flags — STOP
 
 Stop immediately if you catch yourself:

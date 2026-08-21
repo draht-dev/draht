@@ -129,6 +129,10 @@ Stop immediately if you catch yourself:
 
 This skill is the *protocol*. `/fix` is the *command* that runs it with subagent delegation, commit conventions, and state updates. Use the skill transversally; use `/fix` when you want the full workflow with tracking.
 
+## Relationship to /why
+
+This protocol answers "why is X doing the wrong thing right now" — a live defect with a reproduction loop. The `why` command answers "why is X built this way" — intent, history, and rejected alternatives reconstructed from git, the review record, and `.planning/`, with `epistemics`-calibrated confidence. If the investigation shows the surprising behaviour is a recorded decision, not a defect, stop debugging and route to `/why`; if a `/why` investigation surfaces a live defect, hand it to `/fix`.
+
 ## Relationship to verification-gate
 
 After Phase 4, verification-gate kicks in: don't claim "bug fixed" without running the proving command and seeing the output.

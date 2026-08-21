@@ -616,6 +616,7 @@ const requiredCommandPrompts = [
 	"resolve-conflicts",
 	"resume-work",
 	"review",
+	"triage",
 	"verify-work",
 	"why",
 ];

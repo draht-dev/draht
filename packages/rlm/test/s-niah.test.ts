@@ -34,6 +34,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 import type { RlmHistoryEntry } from "../src/index.js";
 import { RlmSession } from "../src/index.js";
+import { HAS_PYTHON3, HAS_USERNS } from "./sandbox-prereqs.js";
 
 /** Assumed mocked root model context window, in characters (see file header). */
 const MOCKED_WINDOW_CHARS = 400_000;
@@ -119,7 +120,9 @@ function scriptedNiahRootLlm(chunkChars: number): (history: RlmHistoryEntry[]) =
 	};
 }
 
-describe("S-NIAH regression suite (Phase 30, Architecture section 2)", () => {
+// Every test constructs an RlmSession, which spawns python3 through the
+// fail-closed OS sandbox (`spawnSandboxed`) -- see sandbox-prereqs.ts.
+describe.skipIf(!HAS_PYTHON3 || !HAS_USERNS)("S-NIAH regression suite (Phase 30, Architecture section 2)", () => {
 	let session: RlmSession | undefined;
 
 	afterEach(() => {

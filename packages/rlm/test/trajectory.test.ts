@@ -18,6 +18,12 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { RlmSession } from "../src/index.js";
 import { appendTrajectoryEntry, createRouterBackedSession, readTrajectory } from "../src/index.js";
 import type { TrajectoryFinalEntry, TrajectoryStepEntry } from "../src/trajectory.js";
+import { HAS_PYTHON3, HAS_USERNS } from "./sandbox-prereqs.js";
+
+// Tests 2-4 spawn a real python3 REPL through the fail-closed OS sandbox
+// (via createRouterBackedSession) -- see sandbox-prereqs.ts. Test 1 and the
+// nonexistent-id test are pure file I/O and run everywhere.
+const SKIP_SANDBOXED = !HAS_PYTHON3 || !HAS_USERNS;
 
 /** Builds a minimally-valid `Model<Api>` -- only `contextWindow` matters to router-session.ts. */
 function fakeModel(contextWindow: number, provider: string, api: Api): Model<Api> {
@@ -182,64 +188,70 @@ describe("trajectory.ts", () => {
 		expect(() => readTrajectory("does-not-exist", logDir)).toThrow(/no trajectory log found/);
 	});
 
-	test("2. a full createRouterBackedSession trajectory produces one step entry per actual step and exactly one final entry", async () => {
-		const logDir = tempLogDir();
-		const router = makeRouter([
-			"```python\nprint('step one')\n```",
-			"```python\nprint('step two')\n```",
-			"```python\nFINAL('the answer')\n```",
-		]);
+	test.skipIf(SKIP_SANDBOXED)(
+		"2. a full createRouterBackedSession trajectory produces one step entry per actual step and exactly one final entry",
+		async () => {
+			const logDir = tempLogDir();
+			const router = makeRouter([
+				"```python\nprint('step one')\n```",
+				"```python\nprint('step two')\n```",
+				"```python\nFINAL('the answer')\n```",
+			]);
 
-		session = createRouterBackedSession({ prompt: "some context", router, trajectoryLogDir: logDir });
-		const result = await session.run();
+			session = createRouterBackedSession({ prompt: "some context", router, trajectoryLogDir: logDir });
+			const result = await session.run();
 
-		expect(result.kind).toBe("final");
-		expect(result.steps).toBe(3);
+			expect(result.kind).toBe("final");
+			expect(result.steps).toBe(3);
 
-		// Recover the trajectoryId `createRouterBackedSession` generated -- it's
-		// the only file written under `logDir`.
-		const trajectoryId = readdirTrajectoryId(logDir);
-		const trajectory = readTrajectory(trajectoryId, logDir);
+			// Recover the trajectoryId `createRouterBackedSession` generated -- it's
+			// the only file written under `logDir`.
+			const trajectoryId = readdirTrajectoryId(logDir);
+			const trajectory = readTrajectory(trajectoryId, logDir);
 
-		expect(trajectory.steps).toHaveLength(3);
-		expect(trajectory.steps.map((s) => s.step)).toEqual([1, 2, 3]);
-		expect(trajectory.final).not.toBeNull();
-		expect(trajectory.final?.kind).toBe("final");
-		expect(trajectory.final?.value).toBe("the answer");
-		expect(trajectory.final?.totalSteps).toBe(3);
-	});
+			expect(trajectory.steps).toHaveLength(3);
+			expect(trajectory.steps.map((s) => s.step)).toEqual([1, 2, 3]);
+			expect(trajectory.final).not.toBeNull();
+			expect(trajectory.final?.kind).toBe("final");
+			expect(trajectory.final?.value).toBe("the answer");
+			expect(trajectory.final?.totalSteps).toBe(3);
+		},
+	);
 
-	test("3. a step that triggers 2 sub-calls has both their costs summed into that step's costUsd and listed in subCalls, not attributed to the wrong step", async () => {
-		const logDir = tempLogDir();
-		const router = makeRouter(
-			["```python\na = llm_query('q1')\nb = llm_query('q2')\nprint(a, b)\n```", "```python\nFINAL('done')\n```"],
-			"sub-response",
-		);
+	test.skipIf(SKIP_SANDBOXED)(
+		"3. a step that triggers 2 sub-calls has both their costs summed into that step's costUsd and listed in subCalls, not attributed to the wrong step",
+		async () => {
+			const logDir = tempLogDir();
+			const router = makeRouter(
+				["```python\na = llm_query('q1')\nb = llm_query('q2')\nprint(a, b)\n```", "```python\nFINAL('done')\n```"],
+				"sub-response",
+			);
 
-		session = createRouterBackedSession({ prompt: "some context", router, trajectoryLogDir: logDir });
-		const result = await session.run();
-		expect(result.kind).toBe("final");
+			session = createRouterBackedSession({ prompt: "some context", router, trajectoryLogDir: logDir });
+			const result = await session.run();
+			expect(result.kind).toBe("final");
 
-		const trajectoryId = readdirTrajectoryId(logDir);
-		const trajectory = readTrajectory(trajectoryId, logDir);
+			const trajectoryId = readdirTrajectoryId(logDir);
+			const trajectory = readTrajectory(trajectoryId, logDir);
 
-		expect(trajectory.steps).toHaveLength(2);
-		const [step1, step2] = trajectory.steps;
+			expect(trajectory.steps).toHaveLength(2);
+			const [step1, step2] = trajectory.steps;
 
-		// Step 1 triggered both sub-calls -- both land on it, not step 2.
-		expect(step1.subCalls).toHaveLength(2);
-		expect(step1.subCalls.every((s) => s.provider === "google" && s.model === "gemini-2.5-flash")).toBe(true);
-		const step1SubCostSum = step1.subCalls.reduce((sum, s) => sum + s.costUsd, 0);
-		expect(step1.costUsd).toBeCloseTo(step1.costUsd, 10); // sanity: costUsd is a finite number
-		expect(step1SubCostSum).toBeGreaterThan(0);
-		// step1.costUsd = its own root cost + the sum of its subCalls' costs.
-		expect(step1.costUsd).toBeGreaterThan(step1SubCostSum);
+			// Step 1 triggered both sub-calls -- both land on it, not step 2.
+			expect(step1.subCalls).toHaveLength(2);
+			expect(step1.subCalls.every((s) => s.provider === "google" && s.model === "gemini-2.5-flash")).toBe(true);
+			const step1SubCostSum = step1.subCalls.reduce((sum, s) => sum + s.costUsd, 0);
+			expect(step1.costUsd).toBeCloseTo(step1.costUsd, 10); // sanity: costUsd is a finite number
+			expect(step1SubCostSum).toBeGreaterThan(0);
+			// step1.costUsd = its own root cost + the sum of its subCalls' costs.
+			expect(step1.costUsd).toBeGreaterThan(step1SubCostSum);
 
-		// Step 2 made no sub-calls -- none of step 1's sub-calls leaked onto it.
-		expect(step2.subCalls).toHaveLength(0);
-	});
+			// Step 2 made no sub-calls -- none of step 1's sub-calls leaked onto it.
+			expect(step2.subCalls).toHaveLength(0);
+		},
+	);
 
-	test("4. the final entry's totalCostUsd equals the sum of all step costs", async () => {
+	test.skipIf(SKIP_SANDBOXED)("4. the final entry's totalCostUsd equals the sum of all step costs", async () => {
 		const logDir = tempLogDir();
 		const router = makeRouter([
 			"```python\na = llm_query('q1')\nb = llm_query('q2')\nprint(a, b)\n```",

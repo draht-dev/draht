@@ -59,9 +59,11 @@ function readRootScripts() {
  * Resolve the root `test` script to the concrete test files it runs.
  *
  * Handles the three shapes this repo's scripts actually use:
- *   `node --test <files...>`, `bun test <files...>`, and `npm run <name>`
- * indirection (including `npm run test --workspaces --if-present`, which is
- * recorded as a workspace fan-out rather than as file paths).
+ *   `node --test <files...>`, `bun test <files...>`, and `npm ... run <name>`
+ * indirection (including `npm --workspaces --if-present run test`, which is
+ * recorded as a workspace fan-out rather than as file paths — the flags sit
+ * before `run` so that `bun run test` does not rewrite the segment into a
+ * recursive `bun run test` invocation of the root script itself).
  *
  * Returns `{ files, workspaceFanOut, unresolved }` where `files` are repo-relative
  * POSIX paths, and `unresolved` holds any segment the parser did not understand —
@@ -84,12 +86,12 @@ function resolveTestScript(scripts, scriptName = "test", seen = new Set()) {
 		if (segment === "") continue;
 		const tokens = segment.split(/\s+/);
 
-		if (tokens[0] === "npm" && tokens[1] === "run") {
+		if (tokens[0] === "npm" && tokens.includes("run")) {
 			if (tokens.includes("--workspaces")) {
 				workspaceFanOut = true;
 				continue;
 			}
-			const nested = resolveTestScript(scripts, tokens[2], seen);
+			const nested = resolveTestScript(scripts, tokens[tokens.indexOf("run") + 1], seen);
 			for (const file of nested.files) files.add(file);
 			workspaceFanOut ||= nested.workspaceFanOut;
 			unresolved.push(...nested.unresolved);

@@ -24,6 +24,8 @@ import {
 	readFileSync,
 	rmdirSync,
 	rmSync,
+	statSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -739,7 +741,18 @@ export class CheckpointManager {
 		try {
 			const realIndex = resolve(this.cwd, await git(this.cwd, ["rev-parse", "--git-path", "index"]));
 			if (existsSync(realIndex)) {
+				// Stat before copying: a copy of an index rewritten mid-stat then
+				// carries a too-old timestamp, which only widens the re-check below.
+				const stat = statSync(realIndex);
 				copyFileSync(realIndex, indexFile);
+				// The copy must not look newer than the index it was taken from.
+				// Git re-checks the content of any entry whose cached mtime is not
+				// older than the index file's own mtime (its racy-timestamp
+				// protection); a fresh-mtimed copy silences that for every entry,
+				// so a file rewritten with the same size within the stat
+				// granularity of its cached entry kept its stale blob and the
+				// stale content leaked into snapshots (and out of restores).
+				utimesSync(indexFile, stat.atime, stat.mtime);
 				return;
 			}
 		} catch {

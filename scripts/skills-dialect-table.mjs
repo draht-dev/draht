@@ -107,7 +107,7 @@ export const DISCIPLINE_DIALECT = {
 	],
 };
 
-// ── 20 command templates — line-scoped dialect spans ────────────────────────
+// ── 21 command templates — line-scoped dialect spans ────────────────────────
 // Lines that differ only by the plugin-root token (e.g. every tool-note line
 // in discuss-phase, init-project, next-milestone, pause-work, progress,
 // resume-work) are not listed — PLUGIN_ROOT_TOKEN handles those generically.
@@ -402,7 +402,7 @@ export const COMMAND_DIALECT = {
 	],
 };
 
-// ── 20 command-wrapper skills (codex-only) — one shared span ────────────────
+// ── 21 command-wrapper skills (codex-only) — one shared span ────────────────
 // Claude never renders these files at all (no wrapper skills on the claude
 // side), so there is no "claude" field: only "codex" is ever read.
 export const WRAPPER_DIALECT = [

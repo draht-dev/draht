@@ -282,7 +282,15 @@ describe("relay", () => {
 		const renderer = new FakeRenderer();
 		await attached(renderer);
 
-		expect(JSON.parse(sessionLines[0]!)).toEqual({ type: "attach", clientId: "c1", mode: "read-write" });
+		// `capabilities` is the bridge's own declaration (geist/0.3): it says this
+		// process can relay permission frames, which is what makes the session
+		// willing to emit them. `sessionId` still does not travel down.
+		expect(JSON.parse(sessionLines[0]!)).toEqual({
+			type: "attach",
+			clientId: "c1",
+			mode: "read-write",
+			capabilities: ["permission-relay"],
+		});
 	});
 
 	test("input is relayed verbatim, newline-framed", async () => {

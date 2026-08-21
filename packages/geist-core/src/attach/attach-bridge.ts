@@ -68,6 +68,19 @@ import {
 import { buildFleetFrame, listAttachableSessions } from "./socket-sessions.js";
 
 /**
+ * The capability the session gates permission-frame emission on. A literal here
+ * rather than an import: `packages/coding-agent` is on the far side of the
+ * boundary gate, so this bridge cannot import its
+ * `PERMISSION_RELAY_CAPABILITY` — it has to speak the same string.
+ */
+const PERMISSION_RELAY_CAPABILITY = "permission-relay";
+
+/**
+ * The relayed frames that must never be chunked. See {@link AttachBridge.#fit}.
+ */
+const PERMISSION_FRAME_TYPES: ReadonlySet<string> = new Set(["permission_request", "permission_resolved"]);
+
+/**
  * The renderer end of one attached connection, as the bridge needs it.
  *
  * `bufferedBytes` is the whole reason this is a port rather than a `WebSocket`:
@@ -466,7 +479,8 @@ export class AttachBridge {
 				return;
 			}
 			case "input":
-			case "detach": {
+			case "detach":
+			case "permission_response": {
 				const session = this.#session;
 				const clientId = this.#clientId;
 				if (!session || !clientId) {
@@ -477,7 +491,10 @@ export class AttachBridge {
 				// field overwritten. Re-encoding rather than forwarding the received
 				// bytes is what guarantees no undeclared field rides along, and
 				// stamping `clientId` with the id this connection attached with is
-				// what stops one client speaking — or detaching — as another.
+				// what stops one client speaking — or detaching, or ANSWERING A
+				// PERMISSION — as another. An answer that could name someone else's
+				// client id would be an approval attributable to a phone that never
+				// gave it.
 				if (!this.#writeSession(session, `${encodeFrame({ ...frame, clientId })}\n`)) return;
 				if (frame.type === "detach") {
 					this.#detached = true;
@@ -677,7 +694,15 @@ export class AttachBridge {
 
 		// `sessionId` is this wire's one declared addition to the socket wire's
 		// attach: it names which socket to dial and does not travel down it.
-		socket.write(`${JSON.stringify({ type: "attach", clientId: frame.clientId, mode: frame.mode })}\n`);
+		// `capabilities` is THIS BRIDGE's declaration, not the renderer's: it says
+		// this process can decode and relay the geist/0.3 permission frames, which
+		// is what makes the session willing to emit them at all. A bridge built
+		// before 0.3 writes this line without the field, so a newer draht never
+		// sends it a frame it would have to refuse — and never kills it with a
+		// `protocol_error unknown_type` and close 1008.
+		socket.write(
+			`${JSON.stringify({ type: "attach", clientId: frame.clientId, mode: frame.mode, capabilities: [PERMISSION_RELAY_CAPABILITY] })}\n`,
+		);
 
 		socket.on("data", (chunk) => this.#onSessionData(chunk.toString()));
 		socket.on("error", () => {
@@ -731,7 +756,19 @@ export class AttachBridge {
 	 */
 	#fit(frame: GeistServerFrame): GeistServerFrame[] {
 		const cap = this.#limits.maxFrameBytes;
-		if (frame.type !== "output" || Buffer.byteLength(encodeFrame(frame)) <= cap) return [frame];
+		if (frame.type !== "output" || Buffer.byteLength(encodeFrame(frame)) <= cap) {
+			// A permission ask is small BY CONSTRUCTION — every free-text field of
+			// `permission_request` carries a `.max()` bound in the wire schema, and
+			// the sum of them is an order of magnitude under this cap. If one ever is
+			// not, it is REFUSED rather than split: half an ask is a dialog showing
+			// half a command with an Approve button under it, which is worse than no
+			// dialog at all. The refusal drops only this connection.
+			if (PERMISSION_FRAME_TYPES.has(frame.type) && Buffer.byteLength(encodeFrame(frame)) > cap) {
+				this.#refuse("frame_too_large", `a ${frame.type} frame must be small by construction; this one is not`);
+				return [];
+			}
+			return [frame];
+		}
 
 		// Everything but `data`, so the first guess at a slice length is the one
 		// that would be exact for ASCII rather than a binary search from the top.

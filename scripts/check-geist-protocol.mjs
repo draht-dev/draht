@@ -76,7 +76,7 @@ const SCANNED_DIRS = [
  * two sides move apart.
  */
 const MIRRORED_FRAMES = [
-	{ schema: "AttachFrameSchema", socket: "AttachMessage", added: ["sessionId"] },
+	{ schema: "AttachFrameSchema", socket: "AttachMessage", added: ["sessionId"], structural: ["capabilities"] },
 	{ schema: "InputFrameSchema", socket: "InputMessage", added: [] },
 	{ schema: "DetachFrameSchema", socket: "DetachMessage", added: [] },
 	{ schema: "OutputFrameSchema", socket: "OutputMessage", added: [] },
@@ -85,6 +85,19 @@ const MIRRORED_FRAMES = [
 	{ schema: "ClientLeftFrameSchema", socket: "ClientLeftMessage", added: [] },
 	{ schema: "SessionMetadataFrameSchema", socket: "SessionMetadataMessage", added: [] },
 	{ schema: "ErrorFrameSchema", socket: "ErrorMessage", added: [] },
+	{
+		schema: "PermissionRequestFrameSchema",
+		socket: "PermissionRequestMessage",
+		added: [],
+		structural: ["options", "deadline"],
+	},
+	{
+		schema: "PermissionResolvedFrameSchema",
+		socket: "PermissionResolvedMessage",
+		added: [],
+		structural: ["chosenOptionId", "clientId"],
+	},
+	{ schema: "PermissionResponseFrameSchema", socket: "PermissionResponseMessage", added: [] },
 ];
 
 /** Socket-wire string-union aliases the geist wire mirrors as zod enums. */
@@ -168,6 +181,18 @@ function clauseDeclarationLocality(wireTypes, discriminator, dirs = SCANNED_DIRS
 	return problems;
 }
 
+/**
+ * Fields whose type BOTH sides express in a word the shared vocabulary cannot
+ * reduce further — an array element type, a `T | null`. `mirrorShape` collapses
+ * a zod array to `opaque:array` and `parseSocketWireTypes` collapses
+ * `PermissionOption[]` to `opaque:PermissionOption[]`, so comparing the two
+ * words would report drift on two fields that agree.
+ *
+ * Named per row rather than inferred, and deliberately NOT the same escape as
+ * `added`: a structural field must still EXIST on both sides with the same
+ * optionality — only the type word goes uncompared. Everything flat around it,
+ * which is nearly every field on the wire, is still compared exactly.
+ */
 function describeField(field) {
 	const optional = field.optional ? "?" : "";
 	if (field.type === "literal") return `${optional}literal ${JSON.stringify(field.value)}`;
@@ -189,7 +214,7 @@ function clauseMirrorDrift(
 	const problems = [];
 	const socket = parseSocketWireTypes(socketTypesPath);
 
-	for (const { schema, socket: socketName, added } of frames) {
+	for (const { schema, socket: socketName, added, structural = [] } of frames) {
 		const zodSchema = schemas[schema];
 		if (!zodSchema) {
 			problems.push(`"${schema}" is listed as mirrored but is not exported from @draht/geist-protocol`);
@@ -202,6 +227,7 @@ function clauseMirrorDrift(
 		}
 		const geistFields = mirrorFields(zodSchema);
 		const declaredAdditions = new Set(added);
+		const structuralFields = new Set(structural);
 
 		for (const [name, field] of Object.entries(geistFields)) {
 			if (declaredAdditions.has(name)) continue;
@@ -212,9 +238,21 @@ function clauseMirrorDrift(
 				);
 				continue;
 			}
+			if (structuralFields.has(name)) {
+				if (field.optional !== counterpart.optional) {
+					problems.push(
+						`${schema}.${name} is ${field.optional ? "optional" : "required"} but ${socketName}.${name} is ${counterpart.optional ? "optional" : "required"}`,
+					);
+				}
+				continue;
+			}
 			if (!sameField(field, counterpart)) {
 				problems.push(`${schema}.${name} is ${describeField(field)} but ${socketName}.${name} is ${describeField(counterpart)}`);
 			}
+		}
+		for (const name of structuralFields) {
+			if (geistFields[name] && socketFields[name]) continue;
+			problems.push(`the mirror table calls ${schema}.${name} structural, but one of the two sides has no such field`);
 		}
 		for (const name of Object.keys(socketFields)) {
 			if (geistFields[name]) continue;

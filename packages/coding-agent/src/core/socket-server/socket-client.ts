@@ -6,7 +6,14 @@
  */
 
 import { connect, type Socket } from "node:net";
-import type { ClientMessage, ClientMode, ServerMessage } from "./types.js";
+import {
+	type ClientMessage,
+	type ClientMode,
+	PERMISSION_RELAY_CAPABILITY,
+	type PermissionRequestMessage,
+	type PermissionResolvedMessage,
+	type ServerMessage,
+} from "./types.js";
 
 export interface SocketClientOptions {
 	/** Path to the Unix socket */
@@ -38,6 +45,8 @@ export class SocketClient {
 	#onInputEcho: ((data: string, clientId: string) => void) | null = null;
 	#onError: ((message: string, code?: string) => void) | null = null;
 	#onDisconnect: (() => void) | null = null;
+	#onPermissionRequest: ((message: PermissionRequestMessage) => void) | null = null;
+	#onPermissionResolved: ((message: PermissionResolvedMessage) => void) | null = null;
 
 	constructor(options: SocketClientOptions) {
 		this.#socketPath = options.socketPath;
@@ -54,10 +63,14 @@ export class SocketClient {
 
 			this.#socket.on("connect", () => {
 				// Send attach message
+				// Declaring the capability is what makes the session send permission
+				// frames to this client at all — an attach line without it is how an
+				// older client says "do not send me anything I cannot decode".
 				const attach: ClientMessage = {
 					type: "attach",
 					clientId: this.#clientId,
 					mode: this.#mode,
+					capabilities: [PERMISSION_RELAY_CAPABILITY],
 				};
 				this.#send(attach);
 				resolve();
@@ -111,6 +124,27 @@ export class SocketClient {
 	}
 
 	/**
+	 * Answer a permission ask by naming one of the options it offered.
+	 *
+	 * The answer names an option id, never a decision: what an id means is fixed
+	 * by the ask that offered it, so a client cannot approve something it was
+	 * only offered the chance to deny.
+	 */
+	sendPermissionResponse(requestId: string, optionId: string): void {
+		if (!this.#socket) {
+			throw new Error("Not connected");
+		}
+
+		const response: ClientMessage = {
+			type: "permission_response",
+			clientId: this.#clientId,
+			requestId,
+			optionId,
+		};
+		this.#send(response);
+	}
+
+	/**
 	 * Set callback for output received from session.
 	 */
 	onOutput(callback: (data: string, stream: "stdout" | "stderr") => void): void {
@@ -160,6 +194,20 @@ export class SocketClient {
 	 */
 	onDisconnect(callback: () => void): void {
 		this.#onDisconnect = callback;
+	}
+
+	/**
+	 * Set callback for a permission ask raised by the session.
+	 */
+	onPermissionRequest(callback: (message: PermissionRequestMessage) => void): void {
+		this.#onPermissionRequest = callback;
+	}
+
+	/**
+	 * Set callback for the outcome of a permission ask.
+	 */
+	onPermissionResolved(callback: (message: PermissionResolvedMessage) => void): void {
+		this.#onPermissionResolved = callback;
 	}
 
 	/**
@@ -220,6 +268,18 @@ export class SocketClient {
 			case "error":
 				if (this.#onError) {
 					this.#onError(message.message, message.code);
+				}
+				break;
+
+			case "permission_request":
+				if (this.#onPermissionRequest) {
+					this.#onPermissionRequest(message);
+				}
+				break;
+
+			case "permission_resolved":
+				if (this.#onPermissionResolved) {
+					this.#onPermissionResolved(message);
 				}
 				break;
 		}

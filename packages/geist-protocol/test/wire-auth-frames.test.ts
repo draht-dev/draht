@@ -96,7 +96,7 @@ describe("bootstrap exchange frames (R33-REACH.5)", () => {
 		if (smuggled.ok) expect(smuggled.frame).toEqual(pairFrame);
 	});
 
-	test("the bootstrap exchange is a 0.2 addition, so the published member moved", () => {
-		expect(GEIST_PROTOCOL_VERSION).toBe("0.2");
+	test("the published 0.x member is 0.3 — the permission relay frames moved it again", () => {
+		expect(GEIST_PROTOCOL_VERSION).toBe("0.3");
 	});
 });

@@ -14,7 +14,17 @@ import { createServer, type Server, type Socket } from "node:net";
 import path from "node:path";
 import { assertValidSessionId } from "../session-manager.js";
 import { isProcessRunning } from "./discovery.js";
-import type { ClientMessage, ClientMode, ConnectedClient, ServerMessage } from "./types.js";
+import {
+	CLIENT_MODES,
+	type ClientMessage,
+	type ClientMode,
+	type ConnectedClient,
+	PERMISSION_RELAY_CAPABILITY,
+	type PermissionRequestMessage,
+	type PermissionResolvedMessage,
+	type PermissionResponseMessage,
+	type ServerMessage,
+} from "./types.js";
 
 /**
  * How long {@link SocketServer.stop} waits for peers to close their end before it
@@ -108,6 +118,24 @@ export class SocketServer {
 
 	/** Callback for input received from any client */
 	#onInput: ((data: string, clientId: string) => void) | null = null;
+
+	/**
+	 * Callback for a permission answer from a client. Nothing here decides
+	 * anything: this class is plumbing, and the pending-ask registry that owns
+	 * validation, first-answer-wins and expiry lives on the session side.
+	 *
+	 * With no callback registered, an answer is refused with a targeted
+	 * `PERMISSION_UNKNOWN_REQUEST` error rather than swallowed — a phone must be
+	 * able to tell "answered" from "this draht is too old to have asked".
+	 */
+	#onPermissionResponse: ((message: PermissionResponseMessage, clientId: string) => void) | null = null;
+
+	/**
+	 * Fired immediately after a newly attached client has been sent
+	 * `session_metadata`, so whatever holds unanswered asks can replay them to a
+	 * client that arrived after they were raised.
+	 */
+	#onAttachReplay: ((clientId: string) => void) | null = null;
 
 	constructor(options: SocketServerOptions) {
 		// The id becomes a path component of the .sock and .lock files, and it arrives here
@@ -299,10 +327,77 @@ export class SocketServer {
 	}
 
 	/**
+	 * Send a permission ask to one client, if it is still connected and may have it.
+	 *
+	 * Silently does nothing for a client that is gone, read-only, or never
+	 * declared {@link PERMISSION_RELAY_CAPABILITY}: not being asked is the
+	 * correct outcome for all three, and none of them is an error the asker can
+	 * act on.
+	 */
+	sendPermissionRequest(clientId: string, message: PermissionRequestMessage): void {
+		const client = this.#clients.get(clientId);
+		if (!client || !this.#mayReceivePermissionFrames(client)) return;
+		this.#send(client.socket, message);
+	}
+
+	/**
+	 * Broadcast a permission ask to every client that may answer it.
+	 *
+	 * @returns the ids that were actually sent the ask — the asker needs to know
+	 *          whether anybody at all can answer, and an empty result is the
+	 *          honest answer "nobody remote is listening".
+	 */
+	broadcastPermissionRequest(message: PermissionRequestMessage): string[] {
+		const reached: string[] = [];
+		for (const client of this.#clients.values()) {
+			if (!this.#mayReceivePermissionFrames(client)) continue;
+			this.#send(client.socket, message);
+			reached.push(client.id);
+		}
+		return reached;
+	}
+
+	/**
+	 * Broadcast the outcome of a permission ask.
+	 *
+	 * Gated exactly like the ask itself: a client that could not have been asked
+	 * is not told how somebody else's ask ended, and a client that never declared
+	 * the capability is never sent a frame it cannot decode.
+	 */
+	broadcastPermissionResolved(message: PermissionResolvedMessage): void {
+		for (const client of this.#clients.values()) {
+			if (!this.#mayReceivePermissionFrames(client)) continue;
+			this.#send(client.socket, message);
+		}
+	}
+
+	/**
+	 * Whether this client is eligible for permission frames at all: read-write
+	 * (a read-only peer may watch but never decide) and capability-declaring.
+	 */
+	#mayReceivePermissionFrames(client: ConnectedClient): boolean {
+		return client.mode !== "read-only" && client.capabilities.includes(PERMISSION_RELAY_CAPABILITY);
+	}
+
+	/**
 	 * Set callback for input received from clients.
 	 */
 	onInput(callback: (data: string, clientId: string) => void): void {
 		this.#onInput = callback;
+	}
+
+	/**
+	 * Set callback for a permission answer received from a client.
+	 */
+	onPermissionResponse(callback: (message: PermissionResponseMessage, clientId: string) => void): void {
+		this.#onPermissionResponse = callback;
+	}
+
+	/**
+	 * Set callback fired right after a client has been sent `session_metadata`.
+	 */
+	onAttachReplay(callback: (clientId: string) => void): void {
+		this.#onAttachReplay = callback;
 	}
 
 	/**
@@ -460,6 +555,17 @@ export class SocketServer {
 					return;
 				}
 
+				// The mode decides whether this peer's keystrokes reach the session, so
+				// it is validated against the closed set rather than tested for one
+				// value. A negative `=== "read-only"` check would let `mode: "banana"`
+				// attach with full write access on the strength of not being the one
+				// string that is refused.
+				if (!CLIENT_MODES.includes(message.mode)) {
+					this.#sendError(socket, `Unknown client mode ${JSON.stringify(message.mode)}`, "UNKNOWN_CLIENT_MODE");
+					socket.end();
+					return;
+				}
+
 				// Check for duplicate client ID
 				if (this.#clients.has(message.clientId)) {
 					this.#sendError(socket, "Client ID already connected");
@@ -473,6 +579,12 @@ export class SocketServer {
 					mode: message.mode,
 					socket,
 					connectedAt: new Date(),
+					// Only strings, and only what was actually declared. An absent
+					// `capabilities` is an older client, which is exactly the case the
+					// gating exists for.
+					capabilities: Array.isArray(message.capabilities)
+						? message.capabilities.filter((entry): entry is string => typeof entry === "string")
+						: [],
 				};
 				this.#clients.set(message.clientId, client);
 				onAttach(message.clientId, message.mode);
@@ -485,6 +597,11 @@ export class SocketServer {
 					createdAt: this.#createdAt.toISOString(),
 				};
 				this.#send(socket, metadata);
+
+				// Whatever holds unanswered asks gets its chance now: the client is
+				// registered and has its metadata, so a replayed ask lands on a surface
+				// that already knows which session it is looking at.
+				this.#onAttachReplay?.(message.clientId);
 
 				// Notify other clients
 				const joined: ServerMessage = {
@@ -524,6 +641,54 @@ export class SocketServer {
 			case "detach": {
 				this.#handleClientDisconnect(message.clientId);
 				socket.end();
+				break;
+			}
+
+			case "permission_response": {
+				const client = this.#clients.get(message.clientId);
+				if (!client || client.socket !== socket) {
+					// Either nobody attached under this id, or somebody else did. Both are
+					// "you are not that client", said the same way so neither answer is an
+					// oracle for which.
+					this.#sendError(socket, "Unknown client", "PERMISSION_NOT_ATTACHED");
+					return;
+				}
+				if (client.mode === "read-only") {
+					this.#sendError(socket, "Read-only clients cannot answer permissions", "PERMISSION_READ_ONLY");
+					return;
+				}
+				if (!client.capabilities.includes(PERMISSION_RELAY_CAPABILITY)) {
+					// It was never sent an ask, so it cannot be answering one it saw.
+					this.#sendError(
+						socket,
+						`Client did not declare the ${PERMISSION_RELAY_CAPABILITY} capability on attach`,
+						"PERMISSION_NOT_CAPABLE",
+					);
+					return;
+				}
+				if (!this.#onPermissionResponse) {
+					// Nothing in this process is holding permission asks. Saying so is the
+					// point: silence here is indistinguishable from "accepted", and a phone
+					// would sit forever on a dialog nobody is going to resolve.
+					this.#sendError(
+						socket,
+						`No permission ask ${JSON.stringify(message.requestId)} is pending`,
+						"PERMISSION_UNKNOWN_REQUEST",
+					);
+					return;
+				}
+				this.#onPermissionResponse(message, message.clientId);
+				break;
+			}
+
+			default: {
+				// A client message type this build does not know. Answering is what makes
+				// version skew visible in the client→server direction: without this case
+				// an unknown frame vanished with no reply at all, so a newer renderer
+				// could not tell a draht that had handled its frame from one that had
+				// never heard of it.
+				const unknown = (message as { type?: unknown }).type;
+				this.#sendError(socket, `Unknown message type ${JSON.stringify(unknown)}`, "UNKNOWN_MESSAGE_TYPE");
 				break;
 			}
 		}

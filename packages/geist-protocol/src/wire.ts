@@ -11,10 +11,12 @@ import { z } from "zod";
  * (`packages/coding-agent/src/core/socket-server/types.ts`).
  *
  * Two directions, deliberately disjoint by type name:
- *   client → server  `hello` `pair_device` `authenticate` `attach` `input` `detach`
+ *   client → server  `hello` `pair_device` `authenticate` `attach` `input`
+ *                    `detach` `permission_response`
  *   server → client  `server_hello` `device_credential` `fleet`
  *                    `session_metadata` `output` `input_echo` `client_joined`
  *                    `client_left` `error` `protocol_error`
+ *                    `permission_request` `permission_resolved`
  *
  * `pair_device`, `authenticate` and `device_credential` are the device-credential
  * exchange added in `geist/0.2` (R33-REACH.5). They terminate at the daemon:
@@ -42,7 +44,7 @@ export const GEIST_PROTOCOL_FAMILY = "geist/0.x";
  * to `conformance/MIGRATIONS.md`, and regenerating the conformance corpus
  * (R32-FLEET.5). `check:geist-protocol` fails the build otherwise.
  */
-export const GEIST_PROTOCOL_VERSION = "0.2";
+export const GEIST_PROTOCOL_VERSION = "0.3";
 
 const ProtocolFamilySchema = z.literal(GEIST_PROTOCOL_FAMILY);
 const ProtocolVersionSchema = z.literal(GEIST_PROTOCOL_VERSION);
@@ -109,6 +111,12 @@ export const AttachFrameSchema = z.object({
 	sessionId: z.string().min(1),
 	clientId: z.string().min(1),
 	mode: ClientModeSchema,
+	/**
+	 * What this connection understands beyond the frames every renderer has
+	 * always received — the socket wire's `AttachMessage.capabilities`, mirrored.
+	 * Absent means "an older renderer", and an older renderer is sent nothing new.
+	 */
+	capabilities: z.array(z.string().min(1).max(64)).max(16).optional(),
 });
 export type AttachFrame = z.infer<typeof AttachFrameSchema>;
 
@@ -329,6 +337,141 @@ export const ProtocolErrorFrameSchema = z.object({
 });
 export type ProtocolErrorFrame = z.infer<typeof ProtocolErrorFrameSchema>;
 
+/**
+ * The one-for-one hand mirror of `NEUTRALIZED_FORBIDDEN_RANGES` in
+ * `packages/coding-agent/src/core/socket-server/safe-text.ts` — THAT FILE IS THE
+ * SOURCE OF TRUTH. This package must keep zero `@draht/*` dependencies, so the
+ * table cannot be imported; any edit there has to be repeated here by hand and
+ * the two must stay equivalent code point for code point.
+ *
+ * C0 + DEL + C1, soft hyphen, the Arabic letter mark, the zero-width and
+ * directional-marker blocks, the bidi isolates and overrides, the variation
+ * selectors, the BOM, the interlinear annotation anchors and the tag characters.
+ *
+ * Expressed as a `.regex()` CHECK rather than a `.refine()` on purpose, and it
+ * matters twice over:
+ *
+ *   - it is a PREDICATE, never a `.transform()`. A transform would rewrite the
+ *     value, which changes the inferred type and makes decode→encode
+ *     non-idempotent, and the conformance goldens compare byte-wise.
+ *   - a `.refine()` wraps the field in `ZodEffects`, whose structure the mirror
+ *     gate (`scripts/check-geist-protocol.mjs`) cannot compare against a socket
+ *     wire `string` — every refined field would silently degrade to an opaque
+ *     shape. A regex check leaves the field a `ZodString`, so the gate keeps
+ *     comparing it field-for-field while the predicate is still enforced.
+ */
+const NEUTRALIZED_FORBIDDEN_RANGES: readonly (readonly [number, number])[] = [
+	[0x0000, 0x001f], // C0 controls, including TAB, LF, CR and ESC
+	[0x007f, 0x007f], // DEL
+	[0x0080, 0x009f], // C1 controls, including CSI (U+009B)
+	[0x00ad, 0x00ad], // SOFT HYPHEN
+	[0x061c, 0x061c], // ARABIC LETTER MARK
+	[0x200b, 0x200d], // ZWSP, ZWNJ, ZWJ
+	[0x200e, 0x200f], // LRM, RLM
+	[0x202a, 0x202e], // LRE, RLE, PDF, LRO, RLO
+	[0x2060, 0x2060], // WORD JOINER
+	[0x2066, 0x2069], // LRI, RLI, FSI, PDI
+	[0xfe00, 0xfe0f], // variation selectors VS1..VS16
+	[0xfeff, 0xfeff], // ZWNBSP / BOM
+	[0xfff9, 0xfffb], // interlinear annotation anchor/separator/terminator
+	[0xe0000, 0xe007f], // tag characters
+];
+
+/**
+ * The forbidden table as one negated, `u`-flagged character class: "this string
+ * carries no code point from the table above".
+ *
+ * Built from the table rather than typed out as a regex literal so the two
+ * cannot drift from each other by a keystroke — and so a reader comparing this
+ * file against `safe-text.ts` is comparing two tables, not a table against a
+ * wall of escapes.
+ */
+const NEUTRALIZED_TEXT = new RegExp(
+	`^[^${NEUTRALIZED_FORBIDDEN_RANGES.map(([first, last]) =>
+		first === last ? codePointEscape(first) : `${codePointEscape(first)}-${codePointEscape(last)}`,
+	).join("")}]*$`,
+	"u",
+);
+
+function codePointEscape(codePoint: number): string {
+	return `\\u{${codePoint.toString(16)}}`;
+}
+
+const NEUTRALIZED_MESSAGE = "carries a control, bidi or invisible code point that must be neutralized before the wire";
+
+/** Attacker-influenced free text: bounded, and neutralized before it got here. */
+function safeText(max: number) {
+	return z.string().max(max).regex(NEUTRALIZED_TEXT, NEUTRALIZED_MESSAGE);
+}
+
+/**
+ * One answer a permission ask offers. Mirror of the socket wire's
+ * `PermissionOption`.
+ *
+ * Named `…Relay…` only to stay out of the way of the unrelated, rejected-seam
+ * `PermissionOptionSchema` this package still exports from `messages.ts`.
+ */
+export const PermissionRelayOptionSchema = z.object({
+	id: z.string().min(1).max(128),
+	label: safeText(200),
+});
+export type PermissionRelayOption = z.infer<typeof PermissionRelayOptionSchema>;
+
+/**
+ * `permission_request` — relayed. Exact mirror of `PermissionRequestMessage`.
+ *
+ * Every free-text field is bounded well under `maxFrameBytes`, so this frame is
+ * small BY CONSTRUCTION: the bridge splits only `output`, and a permission frame
+ * that did not fit would be refused rather than chunked into halves a renderer
+ * would have to reassemble before it could show anybody what it is approving.
+ */
+export const PermissionRequestFrameSchema = z.object({
+	type: z.literal("permission_request"),
+	requestId: z.string().min(1).max(128),
+	method: z.enum(["confirm", "select", "input"]),
+	toolCallId: z.string().min(1).max(128),
+	toolName: safeText(128),
+	cwd: safeText(1024),
+	title: safeText(200),
+	message: safeText(4000),
+	command: safeText(4000).optional(),
+	path: safeText(1024).optional(),
+	operation: safeText(128).optional(),
+	/** True when any field above had to be elided to fit its bound. */
+	truncated: z.boolean(),
+	options: z.array(PermissionRelayOptionSchema).max(16),
+	requestedAt: z.string().min(1).max(64),
+	/** Advisory rendering data only — the session's own timer is the one clock. */
+	deadline: z.string().max(64).nullable(),
+});
+export type PermissionRequestFrame = z.infer<typeof PermissionRequestFrameSchema>;
+
+/** `permission_resolved` — relayed. Exact mirror of `PermissionResolvedMessage`. */
+export const PermissionResolvedFrameSchema = z.object({
+	type: z.literal("permission_resolved"),
+	requestId: z.string().min(1).max(128),
+	decision: z.enum(["approved", "denied", "cancelled", "expired"]),
+	chosenOptionId: z.string().max(128).nullable(),
+	surface: safeText(64),
+	clientId: z.string().max(128).nullable(),
+});
+export type PermissionResolvedFrame = z.infer<typeof PermissionResolvedFrameSchema>;
+
+/**
+ * `permission_response` — relayed. Exact mirror of `PermissionResponseMessage`.
+ *
+ * `clientId` is overwritten by the bridge with the id this connection attached
+ * with, exactly as `input` and `detach` are, so one client cannot answer as
+ * another.
+ */
+export const PermissionResponseFrameSchema = z.object({
+	type: z.literal("permission_response"),
+	clientId: z.string().min(1).max(128),
+	requestId: z.string().min(1).max(128),
+	optionId: z.string().min(1).max(128),
+});
+export type PermissionResponseFrame = z.infer<typeof PermissionResponseFrameSchema>;
+
 // ---------------------------------------------------------------------------
 // unions, decoding, encoding
 // ---------------------------------------------------------------------------
@@ -340,6 +483,7 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
 	AttachFrameSchema,
 	InputFrameSchema,
 	DetachFrameSchema,
+	PermissionResponseFrameSchema,
 ]);
 export type GeistClientFrame = z.infer<typeof ClientFrameSchema>;
 
@@ -354,6 +498,8 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
 	ClientLeftFrameSchema,
 	ErrorFrameSchema,
 	ProtocolErrorFrameSchema,
+	PermissionRequestFrameSchema,
+	PermissionResolvedFrameSchema,
 ]);
 export type GeistServerFrame = z.infer<typeof ServerFrameSchema>;
 

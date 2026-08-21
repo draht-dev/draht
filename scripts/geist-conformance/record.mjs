@@ -406,7 +406,26 @@ export async function recordCorpus() {
 		b.send({ type: "detach", clientId: "client-b" });
 		await a.expect("client_left");
 
-		// 7a. device-a comes back on a fresh socket and authenticates with the
+		// 7a. The permission arm, end to end (R34-PERM.1). The session raises a
+		//     fixed ask; only client-a sees it, because client-c is read-only and
+		//     the socket wire never asks a client that could not answer. client-a
+		//     answers by naming an option id it was actually offered, the session
+		//     routes that answer through its `onPermissionResponse` hook, and the
+		//     resolution is broadcast back. Three goldens, all recorded, none
+		//     authored, and nothing normalized: every field of the ask is a fixed
+		//     literal in the socket daemon.
+		socketDaemon.child.stdin.write(`${JSON.stringify({ cmd: "permission_request" })}\n`);
+		const ask = await a.expect("permission_request");
+		if (!ask.options.some((option) => option.id === "approve")) {
+			throw new Error(`the recorded ask offered no "approve" option: ${JSON.stringify(ask)}`);
+		}
+		a.send({ type: "permission_response", clientId: "client-a", requestId: ask.requestId, optionId: "approve" });
+		const resolved = await a.expect("permission_resolved");
+		if (resolved.decision !== "approved" || resolved.chosenOptionId !== "approve") {
+			throw new Error(`the answer did not decide the ask: ${JSON.stringify(resolved)}`);
+		}
+
+		// 7b. device-a comes back on a fresh socket and authenticates with the
 		//     credential it was issued in step 1. The daemon answers with a
 		//     ROTATED value, so the credential just presented is already dead —
 		//     this is `authenticate` recorded under its real conditions, not

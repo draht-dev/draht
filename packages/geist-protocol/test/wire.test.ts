@@ -75,9 +75,12 @@ describe("frame unions", () => {
 		// session's Unix socket, and the mirror clause in
 		// `scripts/check-geist-protocol.mjs` checks them against the socket wire.
 		// Phase 33's device-exchange frames are deliberately NOT here — they
-		// terminate at the daemon (R33-REACH.5) — so they are asserted separately
-		// below rather than being quietly folded into the relayed list.
-		expect([...SERVER_FRAME_TYPES].filter((t) => t !== "device_credential").sort()).toEqual(
+		// terminate at the daemon (R33-REACH.5) — and Phase 34's permission frames
+		// are relayed but arrived later, so both sets are asserted separately below
+		// rather than being quietly folded into this list.
+		const laterServerFrames = new Set(["device_credential", "permission_request", "permission_resolved"]);
+		const laterClientFrames = new Set(["pair_device", "authenticate", "permission_response"]);
+		expect([...SERVER_FRAME_TYPES].filter((t) => !laterServerFrames.has(t)).sort()).toEqual(
 			[
 				"client_joined",
 				"client_left",
@@ -90,9 +93,18 @@ describe("frame unions", () => {
 				"session_metadata",
 			].sort(),
 		);
-		expect([...CLIENT_FRAME_TYPES].filter((t) => t !== "pair_device" && t !== "authenticate").sort()).toEqual(
+		expect([...CLIENT_FRAME_TYPES].filter((t) => !laterClientFrames.has(t)).sort()).toEqual(
 			["attach", "detach", "hello", "input"].sort(),
 		);
+	});
+
+	test("the geist/0.3 permission frames exist and ARE relayed", () => {
+		// Unlike the device exchange, these three cross to a draht session's Unix
+		// socket, so each has a row in MIRRORED_FRAMES and the mirror clause holds
+		// them field-for-field against `socket-server/types.ts`.
+		expect([...SERVER_FRAME_TYPES]).toContain("permission_request");
+		expect([...SERVER_FRAME_TYPES]).toContain("permission_resolved");
+		expect([...CLIENT_FRAME_TYPES]).toContain("permission_response");
 	});
 
 	test("the geist/0.2 device-exchange frames exist and are not relayed", () => {

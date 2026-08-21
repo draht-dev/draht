@@ -18,6 +18,58 @@ Adding a member:
 Older members' directories stay committed. They are the record of what the wire
 actually was, not scaffolding.
 
+## geist/0.3
+
+The permission relay (R34-PERM.1, R34-PERM.4). Three added message types, one
+changed one, none removed:
+
+- server → client: `permission_request` (`requestId`, `method`, `toolCallId`,
+  `toolName`, `cwd`, `title`, `message`, optional `command` / `path` /
+  `operation`, `truncated`, `options[]`, `requestedAt`, `deadline`) and
+  `permission_resolved` (`requestId`, `decision`, `chosenOptionId`, `surface`,
+  `clientId`)
+- client → server: `permission_response` (`clientId`, `requestId`, `optionId`)
+- changed: `attach` gains an optional `capabilities: string[]`
+
+All three ARE relayed — unlike the `0.2` device exchange, they cross to a draht
+session's Unix socket — so each has a row in `MIRRORED_FRAMES` and the mirror
+clause holds it field-for-field against
+`packages/coding-agent/src/core/socket-server/types.ts`.
+
+**What a renderer has to do.**
+
+1. Send `capabilities: ["permission-relay"]` in `attach`. This is not decoration:
+   a session sends `permission_request` and `permission_resolved` **only** to
+   clients that declared it. A renderer that omits it keeps exactly the `0.2`
+   frame set and is never sent a frame it cannot decode — which is the point, in
+   the other direction too. A bridge built before `0.3` writes an attach line
+   with no `capabilities` at all, so a new draht never kills it with a
+   `protocol_error unknown_type` and close 1008.
+2. Render `permission_request` and answer with `permission_response` naming one
+   of the `options[].id` values that ask carried. An answer never names a
+   decision — what an id means is fixed by the ask that offered it — and the
+   `clientId` a renderer writes is overwritten by the bridge with the id this
+   connection attached with, so one client cannot answer as another.
+3. Take the dialog down on `permission_resolved`, whoever won. `decision` is
+   `approved` | `denied` | `cancelled` | `expired`; `chosenOptionId` and
+   `clientId` are null for the two outcomes no client chose.
+4. Treat `deadline` as rendering data. It is advisory: real expiry binds to the
+   session's own fail-closed timer, and a renderer that ignores the field changes
+   no outcome.
+5. Expect a reply to an unknown client frame. The socket wire gained a default
+   case, so an answer for a request that is not pending comes back as a relayed
+   `error` with code `PERMISSION_UNKNOWN_REQUEST`, and an undeclared client
+   message type as `UNKNOWN_MESSAGE_TYPE`, instead of vanishing silently.
+
+Every free-text field of the two server frames is bounded and carries a
+neutralization predicate: no C0/DEL/C1 control, bidi override or invisible code
+point survives to a surface. The predicate is a `.regex()` check hand-mirrored
+from `NEUTRALIZED_FORBIDDEN_RANGES` in
+`packages/coding-agent/src/core/socket-server/safe-text.ts` (this package keeps
+zero `@draht/*` dependencies). It is a predicate, never a transform — a
+transform would make decode→encode non-idempotent and these goldens compare
+byte-wise.
+
 ## geist/0.2
 
 The device-credential exchange (R33-REACH.3, R33-REACH.5). Three added message

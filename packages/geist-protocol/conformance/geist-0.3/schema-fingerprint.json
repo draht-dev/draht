@@ -1,0 +1,1687 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.3",
+	"schemas": {
+		"AttachFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"capabilities": {
+					"kind": "optional",
+					"inner": {
+						"kind": "array",
+						"element": {
+							"kind": "string",
+							"checks": [
+								"max:64",
+								"min:1"
+							]
+						}
+					}
+				},
+				"clientId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"mode": {
+					"kind": "enum",
+					"values": [
+						"read-write",
+						"read-only"
+					]
+				},
+				"sessionId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "attach"
+				}
+			}
+		},
+		"AttachableSessionSchema": {
+			"kind": "object",
+			"fields": {
+				"cwd": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"id": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"pid": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				},
+				"startedAt": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				}
+			}
+		},
+		"AuthenticateFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"credential": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"deviceId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "authenticate"
+				}
+			}
+		},
+		"ClientFrameSchema": {
+			"kind": "discriminatedUnion",
+			"discriminator": "type",
+			"options": [
+				{
+					"kind": "object",
+					"fields": {
+						"client": {
+							"kind": "object",
+							"fields": {
+								"name": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"version": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								}
+							}
+						},
+						"protocol": {
+							"kind": "literal",
+							"value": "geist/0.x"
+						},
+						"type": {
+							"kind": "literal",
+							"value": "hello"
+						},
+						"version": {
+							"kind": "literal",
+							"value": "0.3"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"bootstrapToken": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"device": {
+							"kind": "object",
+							"fields": {
+								"name": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"platform": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								}
+							}
+						},
+						"type": {
+							"kind": "literal",
+							"value": "pair_device"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"credential": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"deviceId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "authenticate"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"capabilities": {
+							"kind": "optional",
+							"inner": {
+								"kind": "array",
+								"element": {
+									"kind": "string",
+									"checks": [
+										"max:64",
+										"min:1"
+									]
+								}
+							}
+						},
+						"clientId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"mode": {
+							"kind": "enum",
+							"values": [
+								"read-write",
+								"read-only"
+							]
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "attach"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"data": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "input"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "detach"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"optionId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "permission_response"
+						}
+					}
+				}
+			]
+		},
+		"ClientJoinedFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": []
+				},
+				"mode": {
+					"kind": "enum",
+					"values": [
+						"read-write",
+						"read-only"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "client_joined"
+				}
+			}
+		},
+		"ClientLeftFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "client_left"
+				}
+			}
+		},
+		"ClientModeSchema": {
+			"kind": "enum",
+			"values": [
+				"read-write",
+				"read-only"
+			]
+		},
+		"DetachFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "detach"
+				}
+			}
+		},
+		"DeviceCredentialFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"credential": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"deviceId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"expiresAt": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"issuedAt": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "device_credential"
+				}
+			}
+		},
+		"ErrorFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"code": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": []
+					}
+				},
+				"message": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "error"
+				}
+			}
+		},
+		"FleetAgentSchema": {
+			"kind": "object",
+			"fields": {
+				"authOk": {
+					"kind": "boolean"
+				},
+				"name": {
+					"kind": "string",
+					"checks": []
+				}
+			}
+		},
+		"FleetFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"sessions": {
+					"kind": "array",
+					"element": {
+						"kind": "object",
+						"fields": {
+							"cwd": {
+								"kind": "string",
+								"checks": [
+									"min:1"
+								]
+							},
+							"id": {
+								"kind": "string",
+								"checks": [
+									"min:1"
+								]
+							},
+							"pid": {
+								"kind": "number",
+								"checks": [
+									"int",
+									"min:0"
+								]
+							},
+							"startedAt": {
+								"kind": "string",
+								"checks": [
+									"min:1"
+								]
+							}
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "fleet"
+				}
+			}
+		},
+		"FleetSessionCapabilitiesSchema": {
+			"kind": "object",
+			"fields": {
+				"commands": {
+					"kind": "boolean"
+				},
+				"images": {
+					"kind": "boolean"
+				},
+				"modes": {
+					"kind": "boolean"
+				},
+				"resume": {
+					"kind": "boolean"
+				}
+			}
+		},
+		"FleetSessionSchema": {
+			"kind": "object",
+			"fields": {
+				"capabilities": {
+					"kind": "object",
+					"fields": {
+						"commands": {
+							"kind": "boolean"
+						},
+						"images": {
+							"kind": "boolean"
+						},
+						"modes": {
+							"kind": "boolean"
+						},
+						"resume": {
+							"kind": "boolean"
+						}
+					}
+				},
+				"harness": {
+					"kind": "string",
+					"checks": []
+				},
+				"id": {
+					"kind": "string",
+					"checks": []
+				},
+				"projectSlug": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": []
+					}
+				},
+				"status": {
+					"kind": "enum",
+					"values": [
+						"running",
+						"awaiting_review",
+						"stopped"
+					]
+				}
+			}
+		},
+		"FleetStateMessageSchema": {
+			"kind": "object",
+			"fields": {
+				"payload": {
+					"kind": "object",
+					"fields": {
+						"agents": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"authOk": {
+										"kind": "boolean"
+									},
+									"name": {
+										"kind": "string",
+										"checks": []
+									}
+								}
+							}
+						},
+						"sessions": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"capabilities": {
+										"kind": "object",
+										"fields": {
+											"commands": {
+												"kind": "boolean"
+											},
+											"images": {
+												"kind": "boolean"
+											},
+											"modes": {
+												"kind": "boolean"
+											},
+											"resume": {
+												"kind": "boolean"
+											}
+										}
+									},
+									"harness": {
+										"kind": "string",
+										"checks": []
+									},
+									"id": {
+										"kind": "string",
+										"checks": []
+									},
+									"projectSlug": {
+										"kind": "optional",
+										"inner": {
+											"kind": "string",
+											"checks": []
+										}
+									},
+									"status": {
+										"kind": "enum",
+										"values": [
+											"running",
+											"awaiting_review",
+											"stopped"
+										]
+									}
+								}
+							}
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "fleet_state"
+				}
+			}
+		},
+		"HelloFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"client": {
+					"kind": "object",
+					"fields": {
+						"name": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"version": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"protocol": {
+					"kind": "literal",
+					"value": "geist/0.x"
+				},
+				"type": {
+					"kind": "literal",
+					"value": "hello"
+				},
+				"version": {
+					"kind": "literal",
+					"value": "0.3"
+				}
+			}
+		},
+		"InputEchoFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": []
+				},
+				"data": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "input_echo"
+				}
+			}
+		},
+		"InputFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"data": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "input"
+				}
+			}
+		},
+		"OutputFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"data": {
+					"kind": "string",
+					"checks": []
+				},
+				"stream": {
+					"kind": "enum",
+					"values": [
+						"stdout",
+						"stderr"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "output"
+				}
+			}
+		},
+		"PairDeviceFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"bootstrapToken": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"device": {
+					"kind": "object",
+					"fields": {
+						"name": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"platform": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "pair_device"
+				}
+			}
+		},
+		"PermissionAnswerMessageSchema": {
+			"kind": "object",
+			"fields": {
+				"payload": {
+					"kind": "object",
+					"fields": {
+						"optionId": {
+							"kind": "string",
+							"checks": []
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": []
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": []
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_answer"
+				}
+			}
+		},
+		"PermissionOptionSchema": {
+			"kind": "object",
+			"fields": {
+				"id": {
+					"kind": "string",
+					"checks": []
+				},
+				"kind": {
+					"kind": "string",
+					"checks": []
+				},
+				"label": {
+					"kind": "string",
+					"checks": []
+				}
+			}
+		},
+		"PermissionRelayOptionSchema": {
+			"kind": "object",
+			"fields": {
+				"id": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"label": {
+					"kind": "string",
+					"checks": [
+						"max:200",
+						"regex"
+					]
+				}
+			}
+		},
+		"PermissionRequestFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"command": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:4000",
+							"regex"
+						]
+					}
+				},
+				"cwd": {
+					"kind": "string",
+					"checks": [
+						"max:1024",
+						"regex"
+					]
+				},
+				"deadline": {
+					"kind": "nullable",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:64"
+						]
+					}
+				},
+				"message": {
+					"kind": "string",
+					"checks": [
+						"max:4000",
+						"regex"
+					]
+				},
+				"method": {
+					"kind": "enum",
+					"values": [
+						"confirm",
+						"select",
+						"input"
+					]
+				},
+				"operation": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:128",
+							"regex"
+						]
+					}
+				},
+				"options": {
+					"kind": "array",
+					"element": {
+						"kind": "object",
+						"fields": {
+							"id": {
+								"kind": "string",
+								"checks": [
+									"max:128",
+									"min:1"
+								]
+							},
+							"label": {
+								"kind": "string",
+								"checks": [
+									"max:200",
+									"regex"
+								]
+							}
+						}
+					}
+				},
+				"path": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:1024",
+							"regex"
+						]
+					}
+				},
+				"requestId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"requestedAt": {
+					"kind": "string",
+					"checks": [
+						"max:64",
+						"min:1"
+					]
+				},
+				"title": {
+					"kind": "string",
+					"checks": [
+						"max:200",
+						"regex"
+					]
+				},
+				"toolCallId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"toolName": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"regex"
+					]
+				},
+				"truncated": {
+					"kind": "boolean"
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_request"
+				}
+			}
+		},
+		"PermissionRequestMessageSchema": {
+			"kind": "object",
+			"fields": {
+				"payload": {
+					"kind": "object",
+					"fields": {
+						"options": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"id": {
+										"kind": "string",
+										"checks": []
+									},
+									"kind": {
+										"kind": "string",
+										"checks": []
+									},
+									"label": {
+										"kind": "string",
+										"checks": []
+									}
+								}
+							}
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": []
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": []
+						},
+						"title": {
+							"kind": "string",
+							"checks": []
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_request"
+				}
+			}
+		},
+		"PermissionResolvedFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"chosenOptionId": {
+					"kind": "nullable",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:128"
+						]
+					}
+				},
+				"clientId": {
+					"kind": "nullable",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:128"
+						]
+					}
+				},
+				"decision": {
+					"kind": "enum",
+					"values": [
+						"approved",
+						"denied",
+						"cancelled",
+						"expired"
+					]
+				},
+				"requestId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"surface": {
+					"kind": "string",
+					"checks": [
+						"max:64",
+						"regex"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_resolved"
+				}
+			}
+		},
+		"PermissionResponseFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"optionId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"requestId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_response"
+				}
+			}
+		},
+		"ProtocolErrorCodeSchema": {
+			"kind": "enum",
+			"values": [
+				"frame_too_large",
+				"invalid_frame",
+				"unknown_type",
+				"handshake_required",
+				"version_mismatch",
+				"not_authenticated",
+				"unknown_session",
+				"outbound_queue_overflow",
+				"buffered_output_overflow"
+			]
+		},
+		"ProtocolErrorFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"code": {
+					"kind": "enum",
+					"values": [
+						"frame_too_large",
+						"invalid_frame",
+						"unknown_type",
+						"handshake_required",
+						"version_mismatch",
+						"not_authenticated",
+						"unknown_session",
+						"outbound_queue_overflow",
+						"buffered_output_overflow"
+					]
+				},
+				"message": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "protocol_error"
+				}
+			}
+		},
+		"ServerFrameSchema": {
+			"kind": "discriminatedUnion",
+			"discriminator": "type",
+			"options": [
+				{
+					"kind": "object",
+					"fields": {
+						"limits": {
+							"kind": "object",
+							"fields": {
+								"maxBufferedOutputBytes": {
+									"kind": "number",
+									"checks": [
+										"int",
+										"min:0"
+									]
+								},
+								"maxFrameBytes": {
+									"kind": "number",
+									"checks": [
+										"int",
+										"min:0"
+									]
+								},
+								"maxOutboundFrames": {
+									"kind": "number",
+									"checks": [
+										"int",
+										"min:0"
+									]
+								}
+							}
+						},
+						"protocol": {
+							"kind": "literal",
+							"value": "geist/0.x"
+						},
+						"server": {
+							"kind": "object",
+							"fields": {
+								"name": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"version": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								}
+							}
+						},
+						"type": {
+							"kind": "literal",
+							"value": "server_hello"
+						},
+						"version": {
+							"kind": "literal",
+							"value": "0.3"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"credential": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"deviceId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"expiresAt": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"issuedAt": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "device_credential"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"sessions": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"cwd": {
+										"kind": "string",
+										"checks": [
+											"min:1"
+										]
+									},
+									"id": {
+										"kind": "string",
+										"checks": [
+											"min:1"
+										]
+									},
+									"pid": {
+										"kind": "number",
+										"checks": [
+											"int",
+											"min:0"
+										]
+									},
+									"startedAt": {
+										"kind": "string",
+										"checks": [
+											"min:1"
+										]
+									}
+								}
+							}
+						},
+						"type": {
+							"kind": "literal",
+							"value": "fleet"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"createdAt": {
+							"kind": "string",
+							"checks": []
+						},
+						"cwd": {
+							"kind": "string",
+							"checks": []
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "session_metadata"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"data": {
+							"kind": "string",
+							"checks": []
+						},
+						"stream": {
+							"kind": "enum",
+							"values": [
+								"stdout",
+								"stderr"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "output"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": []
+						},
+						"data": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "input_echo"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": []
+						},
+						"mode": {
+							"kind": "enum",
+							"values": [
+								"read-write",
+								"read-only"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "client_joined"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "client_left"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"code": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": []
+							}
+						},
+						"message": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "error"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"code": {
+							"kind": "enum",
+							"values": [
+								"frame_too_large",
+								"invalid_frame",
+								"unknown_type",
+								"handshake_required",
+								"version_mismatch",
+								"not_authenticated",
+								"unknown_session",
+								"outbound_queue_overflow",
+								"buffered_output_overflow"
+							]
+						},
+						"message": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "protocol_error"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"command": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:4000",
+									"regex"
+								]
+							}
+						},
+						"cwd": {
+							"kind": "string",
+							"checks": [
+								"max:1024",
+								"regex"
+							]
+						},
+						"deadline": {
+							"kind": "nullable",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:64"
+								]
+							}
+						},
+						"message": {
+							"kind": "string",
+							"checks": [
+								"max:4000",
+								"regex"
+							]
+						},
+						"method": {
+							"kind": "enum",
+							"values": [
+								"confirm",
+								"select",
+								"input"
+							]
+						},
+						"operation": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:128",
+									"regex"
+								]
+							}
+						},
+						"options": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"id": {
+										"kind": "string",
+										"checks": [
+											"max:128",
+											"min:1"
+										]
+									},
+									"label": {
+										"kind": "string",
+										"checks": [
+											"max:200",
+											"regex"
+										]
+									}
+								}
+							}
+						},
+						"path": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:1024",
+									"regex"
+								]
+							}
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"requestedAt": {
+							"kind": "string",
+							"checks": [
+								"max:64",
+								"min:1"
+							]
+						},
+						"title": {
+							"kind": "string",
+							"checks": [
+								"max:200",
+								"regex"
+							]
+						},
+						"toolCallId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"toolName": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"regex"
+							]
+						},
+						"truncated": {
+							"kind": "boolean"
+						},
+						"type": {
+							"kind": "literal",
+							"value": "permission_request"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"chosenOptionId": {
+							"kind": "nullable",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:128"
+								]
+							}
+						},
+						"clientId": {
+							"kind": "nullable",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:128"
+								]
+							}
+						},
+						"decision": {
+							"kind": "enum",
+							"values": [
+								"approved",
+								"denied",
+								"cancelled",
+								"expired"
+							]
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"surface": {
+							"kind": "string",
+							"checks": [
+								"max:64",
+								"regex"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "permission_resolved"
+						}
+					}
+				}
+			]
+		},
+		"ServerHelloFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"limits": {
+					"kind": "object",
+					"fields": {
+						"maxBufferedOutputBytes": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						},
+						"maxFrameBytes": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						},
+						"maxOutboundFrames": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						}
+					}
+				},
+				"protocol": {
+					"kind": "literal",
+					"value": "geist/0.x"
+				},
+				"server": {
+					"kind": "object",
+					"fields": {
+						"name": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"version": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "server_hello"
+				},
+				"version": {
+					"kind": "literal",
+					"value": "0.3"
+				}
+			}
+		},
+		"SessionMetadataFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"createdAt": {
+					"kind": "string",
+					"checks": []
+				},
+				"cwd": {
+					"kind": "string",
+					"checks": []
+				},
+				"sessionId": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "session_metadata"
+				}
+			}
+		},
+		"TransportLimitsSchema": {
+			"kind": "object",
+			"fields": {
+				"maxBufferedOutputBytes": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				},
+				"maxFrameBytes": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				},
+				"maxOutboundFrames": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				}
+			}
+		},
+		"VariantsNewMessageSchema": {
+			"kind": "object",
+			"fields": {
+				"payload": {
+					"kind": "object",
+					"fields": {
+						"count": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						},
+						"harnesses": {
+							"kind": "optional",
+							"inner": {
+								"kind": "array",
+								"element": {
+									"kind": "string",
+									"checks": []
+								}
+							}
+						},
+						"project": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"text": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "variants_new"
+				}
+			}
+		}
+	}
+}

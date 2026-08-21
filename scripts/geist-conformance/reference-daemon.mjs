@@ -41,6 +41,10 @@
  *     completes: `fleet` is sent only after a credential is issued, and an
  *     `attach` on an unauthenticated connection is refused `not_authenticated`.
  *
+ * Since `geist/0.3` it also relays the permission arm (R34-PERM.1): the attach
+ * line it writes to the session declares the `permission-relay` capability, and
+ * `permission_response` is relayed to the session exactly as `input` is.
+ *
  * No credential is ever written to stdout, stderr or a URL (R33-REACH.3): it
  * crosses this wire as a first message and nowhere else.
  *
@@ -195,7 +199,14 @@ function openUpstream(state, ws, frame) {
 	upstream.on("connect", () => {
 		// `sessionId` is this wire's one declared addition to the socket wire's
 		// `attach`; it names which socket to dial and does not travel down it.
-		upstream.write(`${JSON.stringify({ type: "attach", clientId: frame.clientId, mode: frame.mode })}\n`);
+		//
+		// The capability is the BRIDGE's, not the renderer's: this process can
+		// decode and relay permission frames, so it says so. A daemon built before
+		// geist/0.3 writes this line without `capabilities` and the session
+		// therefore never sends it a frame it would have to refuse.
+		upstream.write(
+			`${JSON.stringify({ type: "attach", clientId: frame.clientId, mode: frame.mode, capabilities: ["permission-relay"] })}\n`,
+		);
 	});
 	upstream.on("data", (chunk) => {
 		state.upstreamBuffer += chunk.toString();
@@ -320,7 +331,8 @@ const server = Bun.serve({
 					return;
 				}
 				case "input":
-				case "detach": {
+				case "detach":
+				case "permission_response": {
 					if (!state.deviceId) {
 						refuse(ws, "not_authenticated", `${frame.type} before the device exchange`);
 						return;

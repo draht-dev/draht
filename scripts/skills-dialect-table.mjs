@@ -107,7 +107,7 @@ export const DISCIPLINE_DIALECT = {
 	],
 };
 
-// ── 21 command templates — line-scoped dialect spans ────────────────────────
+// ── 22 command templates — line-scoped dialect spans ────────────────────────
 // Lines that differ only by the plugin-root token (e.g. every tool-note line
 // in discuss-phase, init-project, next-milestone, pause-work, progress,
 // resume-work) are not listed — PLUGIN_ROOT_TOKEN handles those generically.
@@ -355,6 +355,15 @@ export const COMMAND_DIALECT = {
 			codex: "   - **(If spec context exists)** Codex subagent using the `spec-reviewer` agent prompt and prompt:",
 		},
 	],
+	triage: [
+		{
+			canonical:
+				"> **Tool note**: For the bounded cause trace, dispatch the `debugger` agent the way your host runs subagents — findings-only diagnosis (no fixes, no writes); classification and every tracker write stay with the orchestrator.",
+			claude:
+				'> **Tool note**: For the bounded cause trace, use the **Task tool** with `subagent_type: "debugger"` — findings-only diagnosis (no fixes, no writes); classification and every tracker write stay with the orchestrator.',
+			codex: "> **Tool note**: For the bounded cause trace, spawn a Codex subagent using the `debugger` agent prompt — findings-only diagnosis (no fixes, no writes); classification and every tracker write stay with the orchestrator.",
+		},
+	],
 	"verify-work": [
 		{
 			canonical:
@@ -402,7 +411,7 @@ export const COMMAND_DIALECT = {
 	],
 };
 
-// ── 21 command-wrapper skills (codex-only) — one shared span ────────────────
+// ── 22 command-wrapper skills (codex-only) — one shared span ────────────────
 // Claude never renders these files at all (no wrapper skills on the claude
 // side), so there is no "claude" field: only "codex" is ever read.
 export const WRAPPER_DIALECT = [

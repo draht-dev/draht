@@ -16,6 +16,7 @@
 - portable `blast-radius` skill — impact analysis beyond the diff: reduce a change's safety argument to the one falsifiable fact it rests on, prove it on a five-rung evidence ladder (said so → pointed at the line → walked the failure → ran it → reproduced in the running app) with mandatory stop-rung disclosure, hunt where grep stops (wire formats, pinned library source, cross-language readers, feature flags), and report confirmed Risks separately from checked-and-Cleared items
 - `/resolve-conflicts` command: resolve an in-progress git merge, rebase, or cherry-pick by reconstructing both sides' intent — never by picking a side blind
 - `/create-verification-skill` command: interviews the target repo (surface, run, drive, observe, isolate) and generates a committed project-local `verify-<app>` skill — Launch/Doctor/Drive/Evidence/Cleanup/Helpers sections plus a per-feature verification map — that drives the real app the way a user does and captures proof artifacts, proven end to end once before handover
+- `/triage` command: external issue-report triage — classify (bug / performance / feature request / question / reroute) after a bounded findings-only `debugger` cause trace, dedupe against GitHub Issues with four typed outcomes (confident duplicate / possibly related / weak resemblance / no match), create a ticket only behind a seven-condition fail-closed gate with `gh issue close` compensation, and end with one typed `[triage:*]` verdict marker that a follow-up `/fix` run can consume
 
 ### Changed
 

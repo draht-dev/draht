@@ -6,7 +6,7 @@
  * the two plugin packages by hand-editing one and forgetting the other.
  *
  * Source of truth: skills/<name>/SKILL.md (+ skills/<name>/command.md for
- * the 21 command-template skills, + any additional files under a plain
+ * the 22 command-template skills, + any additional files under a plain
  * skill dir — e.g. references/ — mirrored to both hosts modulo the generic
  * <PLUGIN_ROOT> token substitution; command skills may not carry extra
  * files because the claude side has no skills/<cmd>/ dir to receive them).

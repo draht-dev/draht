@@ -53,6 +53,8 @@ The grill is done when the frontier is empty: every branch of the tree visited, 
 3. **Decision record** → `.planning/decisions/YYYY-MM-DD-<slug>.md`
 4. **Plain notes** → a file the user names
 
+Whatever form is chosen, write the artifact through the `unslop` skill; the user's own words in quoted decisions stay verbatim.
+
 When no `.planning/` directory exists, every mode becomes a standalone file the user names. "No artifact" is a valid answer — sometimes the conversation was the point. Never start implementing or invoke a planning command without the user's explicit go-ahead.
 
 ## Anti-Patterns — STOP

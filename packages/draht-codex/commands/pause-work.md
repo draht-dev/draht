@@ -29,3 +29,4 @@ Create a handoff document for session continuity.
 - Be specific — "fix bug in auth" is useless; "null check in src/auth/session.ts:42, test reproducing in test/auth-null.test.ts" is useful
 - Include exact commands, not vague directions
 - Capture any in-flight decisions or trade-offs being weighed
+- Handoff and lesson prose follows the `unslop` skill — plain words, no filler, specifics over vibes; commands, paths, and quoted output stay verbatim.

@@ -6,6 +6,7 @@
 
 - shipped (builtin) skills: the package now bundles a `skills/` directory that is always discovered (disabled by `--no-skills`; user/project skills with the same name win). First builtin skill: `hexagon-animation`, which generates a randomized 3D hexagon grid animation as a self-contained HTML file
 - shipped builtin skill `atomic-reasoning` — the decomposition discipline the slash commands point at instead of restating it
+- shipped builtin skill `unslop` — a prose-discipline pass that cuts AI tells from deliverables the agent writes (docs, reports, handoffs, commit bodies) and adds voice back, register-aware, with a German-prose section; byte-copy of the canonical root skill so the shipped prompts' pointers resolve with nothing installed
 - working-tree checkpoints: every turn snapshots the tree into `refs/draht/checkpoints/<session>/<entry>` via a temporary index, so the user's index, `HEAD`, stash and reflog are never touched and no `git stash` is used; identical trees dedup, metadata lands in a `<session-file>.checkpoints.jsonl` sidecar that survives `/fork` and `/clone`, non-git directories degrade to a one-time notice, and `draht checkpoint prune [--days <n>] [--max-per-session <n>] [--dry-run]` applies the `checkpoints.*` retention policy
 - duet mode for shared-session model turn-taking and lead/teammate triage with parallel read-only delegation
 - `/grill` command: subject-agnostic whole-frontier interrogation (numbered question rounds with recommended answers, non-blocking fact-finding subagents, output form — spec, tickets, decision record, or notes — chosen at the end)
@@ -20,6 +21,7 @@
 - `/fix` Phase 1 now gates on a red-capable reproduction loop: ONE named command, already run at least once, invocation and output shown, asserting the exact symptom — built by working down a ladder from failing test to human-in-the-loop steps; no causal theorising until it exists. Phase 3 generates 3-5 ranked falsifiable hypotheses (the user's diagnosis enters as Hypothesis #0) instead of testing a single one, and Phase 4 sweeps tagged `[DEBUG-*]` instrumentation before done. The `debugger` builtin agent carries the same reproduction-first, ranked-hypotheses operating brief
 - `/verify-work` fix plans now hold their reproducing tests to the same red-capable standard as `/fix` Phase 1 (named command, already run, output shown, asserting the exact failing symptom)
 - the `implementer` and `reviewer` builtin agents and the code-writing command prompts (`/execute-phase`, `/fix`, `/quick`, `/review`) now enforce comment discipline: comments only for constraints the code cannot express; above-norm comment density is a review defect
+- the `/pause-work`, `/verify-work`, `/grill`, and `/brainstorm` prompts and the `git-committer` builtin agent now point their prose-producing steps (handoffs and lessons, UAT reports, grill artifacts, spec writing, commit bodies) at the `unslop` skill — one-line pointers, no pattern lists duplicated
 
 ### Fixed
 

@@ -99,6 +99,8 @@ Once all sections are approved:
 .planning/specs/YYYY-MM-DD-<topic-slug>-design.md
 ```
 
+Write spec prose through the `unslop` skill — name mechanisms, not feelings; the spec structure below stays as specified.
+
 The file should include:
 - Header with date and approver
 - All approved sections

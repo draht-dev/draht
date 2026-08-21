@@ -44,4 +44,5 @@ Use the package directory name (e.g., `ai`, `tui`, `agent`, `coding-agent`).
 - One commit per logical change — split unrelated changes into separate commits
 - Keep the first line under 72 characters
 - No emojis in commit messages
+- Commit body prose follows the `unslop` skill — plain words, active voice, no filler; the subject line format is fixed and is never reworded.
 - If there is a related issue, include `fixes #<number>` or `closes #<number>`

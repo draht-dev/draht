@@ -80,7 +80,7 @@ export class RemoteServiceProvider {
 		this.#allowlist = new Set(ids);
 	}
 
-	provide<T>(service: Service<T>, implementation: T): void {
+	provide<T>(service: Service<T>, implementation: NoInfer<T>): void {
 		this.#assertActive();
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton", true);
@@ -101,7 +101,7 @@ export class RemoteServiceProvider {
 		return registration.singleton.implementation as T;
 	}
 
-	spawn<T>(service: Service<T>, key: string, implementation: T): () => void {
+	spawn<T>(service: Service<T>, key: string, implementation: NoInfer<T>): () => void {
 		this.#assertActive();
 		this.#assertAllowed(service.id);
 		if (key.length === 0) throw new TypeError("Remote service instance key must not be empty");

@@ -32,6 +32,7 @@
 
 ### Fixed
 
+- the installer now tolerates Claude Code auto-enabling the plugin on install: the unconditional `plugin enable` failed on an already-enabled plugin, was treated as fatal, and rolled the marketplace back to stale content — so `npx draht-claude install --force` silently never delivered updated commands, agents, or skills; enable/disable is now skipped when the plugin is already in the desired state, in both the install and rollback paths
 - implementer agent TDD commit prefixes now follow the enforced `red:`/`green:`/`refactor:` convention (previously `test:`/`feat:`, which the gsd-post-task hook's `red:`/`green:` cycle check could never match)
 
 ## [2026.7.12] - 2026-07-12

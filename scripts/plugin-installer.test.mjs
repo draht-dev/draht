@@ -59,8 +59,10 @@ function fixture(implementation, {
 	const log = join(root, "commands.log");
 	const failState = join(root, "fail-state");
 	const pluginState = join(root, "plugin-state");
+	const enabledState = join(root, "enabled-state");
 	const registrationState = join(root, "registration-state");
 	writeFileSync(pluginState, pluginInstalled ? "1" : "0");
+	writeFileSync(enabledState, "1");
 	writeFileSync(registrationState, marketplaceRegistered ? "1" : "0");
 	cpSync(join(ROOT, "packages", implementation), source, { recursive: true });
 	writeFileSync(join(source, "version-marker.txt"), "new");
@@ -95,7 +97,12 @@ if [ -n "\${DRAHT_TEST_MARKETPLACE_LIST_COMMAND:-}" ] && [ "$command" = "$DRAHT_
 fi
 if [ "$command" = "$DRAHT_TEST_LIST_COMMAND" ]; then
   if [ "$(cat "$DRAHT_TEST_PLUGIN_STATE")" = 1 ]; then
-    printf '%s\\n' "$DRAHT_TEST_INSTALLED_LIST"
+    if [ "\${DRAHT_TEST_ENABLED_DYNAMIC:-0}" = 1 ]; then
+      if [ "$(cat "$DRAHT_TEST_ENABLED_STATE")" = 1 ]; then enabled=true; else enabled=false; fi
+      printf '[{"id":"draht@draht","enabled":%s}]\\n' "$enabled"
+    else
+      printf '%s\\n' "$DRAHT_TEST_INSTALLED_LIST"
+    fi
   else
     printf '%s\\n' "$DRAHT_TEST_ABSENT_LIST"
   fi
@@ -114,7 +121,12 @@ if [ "\${DRAHT_TEST_LOG_REGISTRATION_LOCK:-0}" = 1 ] && { [ "$command" = "$DRAHT
 fi
 if [ "\${DRAHT_TEST_NO_MUTATE:-0}" != 1 ]; then
   if [ "$command" = "$DRAHT_TEST_REMOVE_COMMAND" ]; then printf '0' > "$DRAHT_TEST_PLUGIN_STATE"; fi
-  if [ "$command" = "$DRAHT_TEST_INSTALL_COMMAND" ]; then printf '1' > "$DRAHT_TEST_PLUGIN_STATE"; fi
+  if [ "$command" = "$DRAHT_TEST_INSTALL_COMMAND" ]; then
+    printf '1' > "$DRAHT_TEST_PLUGIN_STATE"
+    if [ "\${DRAHT_TEST_AUTO_ENABLE:-0}" = 1 ]; then printf '1' > "$DRAHT_TEST_ENABLED_STATE"; else printf '0' > "$DRAHT_TEST_ENABLED_STATE"; fi
+  fi
+  if [ -n "\${DRAHT_TEST_ENABLE_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_ENABLE_COMMAND" ]; then printf '1' > "$DRAHT_TEST_ENABLED_STATE"; fi
+  if [ -n "\${DRAHT_TEST_DISABLE_COMMAND:-}" ] && [ "$command" = "$DRAHT_TEST_DISABLE_COMMAND" ]; then printf '0' > "$DRAHT_TEST_ENABLED_STATE"; fi
   if [ "$command" = "$DRAHT_TEST_MARKETPLACE_ADD_COMMAND" ]; then printf '1' > "$DRAHT_TEST_REGISTRATION_STATE"; fi
   if [ "$command" = "$DRAHT_TEST_MARKETPLACE_UPDATE_COMMAND" ]; then printf '1' > "$DRAHT_TEST_REGISTRATION_STATE"; fi
   if [ "$command" = "$DRAHT_TEST_MARKETPLACE_REMOVE_COMMAND" ]; then printf '0' > "$DRAHT_TEST_REGISTRATION_STATE"; fi
@@ -128,7 +140,7 @@ exit 0
 	config.marketplaceRemove = "plugin marketplace remove draht";
 	return {
 		config, root, source, fakeBin, home, marketplace, log, failState,
-		pluginState, registrationState, pluginInstalled,
+		pluginState, enabledState, registrationState, pluginInstalled,
 	};
 }
 
@@ -162,6 +174,9 @@ function runEnvironment(f, extraEnv = {}) {
 		DRAHT_TEST_ABSENT_LIST: f.config.absentList,
 		DRAHT_TEST_PLUGIN_INSTALLED: f.pluginInstalled ? "1" : "0",
 		DRAHT_TEST_PLUGIN_STATE: f.pluginState,
+		DRAHT_TEST_ENABLED_STATE: f.enabledState,
+		DRAHT_TEST_ENABLE_COMMAND: f.config.enable || "",
+		DRAHT_TEST_DISABLE_COMMAND: f.config.disable || "",
 		DRAHT_TEST_REGISTRATION_STATE: f.registrationState,
 		DRAHT_TEST_MARKETPLACE_LIST_COMMAND: f.config.marketplaceList || "",
 		DRAHT_TEST_MARKETPLACE_ADD_COMMAND: f.config.marketplaceAdd,
@@ -371,9 +386,11 @@ exit 0
 
 test("draht-claude failed replacement preserves a previously disabled plugin state", () => {
 	const f = fixture("draht-claude", { pluginInstalled: true });
+	writeFileSync(f.enabledState, "0");
 	const result = run(f, {
 		DRAHT_TEST_FAIL_COMMAND: f.config.install,
-		DRAHT_TEST_INSTALLED_LIST: '[{"id":"draht@draht","enabled":false}]',
+		DRAHT_TEST_ENABLED_DYNAMIC: "1",
+		DRAHT_TEST_AUTO_ENABLE: "1",
 	});
 	assert.notEqual(result.status, 0);
 	const log = commands(f);
@@ -392,10 +409,13 @@ for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 			await t.test(commandKey, () => {
 				const f = fixture(implementation, { pluginInstalled: true });
 				const failedCommand = f.config[commandKey];
-				const installedList = commandKey === "disable"
-					? '[{"id":"draht@draht","enabled":false}]'
-					: f.config.installedList;
-				const result = run(f, { DRAHT_TEST_FAIL_COMMAND: failedCommand, DRAHT_TEST_INSTALLED_LIST: installedList });
+				const stateEnv = commandKey === "enable"
+					? { DRAHT_TEST_ENABLED_DYNAMIC: "1" }
+					: commandKey === "disable"
+						? { DRAHT_TEST_ENABLED_DYNAMIC: "1", DRAHT_TEST_AUTO_ENABLE: "1" }
+						: {};
+				if (commandKey === "disable") writeFileSync(f.enabledState, "0");
+				const result = run(f, { DRAHT_TEST_FAIL_COMMAND: failedCommand, ...stateEnv });
 				assert.notEqual(result.status, 0, `reported success when ${failedCommand} failed`);
 				assert.doesNotMatch(result.stdout, /(?:✓ installed|^installed draht@draht)/m);
 				assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "old");
@@ -431,10 +451,24 @@ for (const implementation of Object.keys(IMPLEMENTATIONS)) {
 
 test("draht-claude successful update preserves a previously disabled plugin", () => {
 	const f = fixture("draht-claude", { pluginInstalled: true });
-	const result = run(f, { DRAHT_TEST_INSTALLED_LIST: '[{"id":"draht@draht","enabled":false}]' });
+	writeFileSync(f.enabledState, "0");
+	const result = run(f, { DRAHT_TEST_ENABLED_DYNAMIC: "1", DRAHT_TEST_AUTO_ENABLE: "1" });
 	assert.equal(result.status, 0, result.stderr || result.stdout);
 	assert.equal(commands(f).includes(f.config.enable), false);
 	assert.equal(commands(f).includes(f.config.disable), true);
+});
+
+test("draht-claude tolerates claude auto-enabling the plugin on install", () => {
+	const f = fixture("draht-claude", { pluginInstalled: true });
+	const result = run(f, {
+		DRAHT_TEST_ENABLED_DYNAMIC: "1",
+		DRAHT_TEST_AUTO_ENABLE: "1",
+		DRAHT_TEST_FAIL_ALWAYS_COMMAND: f.config.enable,
+	});
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	assert.equal(commands(f).includes(f.config.enable), false);
+	assert.equal(readFileSync(join(f.marketplace, "plugins", "draht", "version-marker.txt"), "utf8"), "new");
+	assert.deepEqual(transactionSiblings(f.marketplace), []);
 });
 
 for (const implementation of Object.keys(IMPLEMENTATIONS)) {

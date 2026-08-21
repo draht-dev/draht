@@ -513,7 +513,15 @@ function rollbackClaudePlugin(transaction, previousState, pluginSpec) {
 				return failures;
 			}
 			const stateCommand = previousState.plugin.enabled ? "enable" : "disable";
-			if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
+			let reinstalled = null;
+			try {
+				reinstalled = claudePluginState(pluginSpec);
+			} catch {
+				reinstalled = null;
+			}
+			if (!(reinstalled && reinstalled.installed && reinstalled.enabled === previousState.plugin.enabled)) {
+				if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) failures.push(`could not restore the previously ${stateCommand}d plugin state`);
+			}
 		}
 		try {
 			const restored = claudePluginState(pluginSpec);
@@ -954,7 +962,12 @@ async function cmdInstall(flags) {
 
 		const shouldEnable = previousState.plugin.installed ? previousState.plugin.enabled : true;
 		const stateCommand = shouldEnable ? "enable" : "disable";
-		if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) throw new Error(`plugin ${stateCommand} failed`);
+		const stateAfterInstall = claudePluginState(pluginSpec);
+		if (stateAfterInstall.installed && stateAfterInstall.enabled === shouldEnable) {
+			log(`Plugin already ${stateCommand}d after install; skipping ${stateCommand}.`);
+		} else if (!runClaude(["plugin", stateCommand, pluginSpec], { allowFail: true })) {
+			throw new Error(`plugin ${stateCommand} failed`);
+		}
 		const installedState = claudePluginState(pluginSpec);
 		if (!installedState.installed || installedState.enabled !== shouldEnable) throw new Error("post-install plugin state verification failed");
 	} catch (error) {

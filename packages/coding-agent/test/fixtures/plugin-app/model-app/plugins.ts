@@ -1,6 +1,6 @@
 import { type AppPlugin, definePlugin, defineService, type SessionContext } from "../lib/index.ts";
 import { ProviderRegistry } from "./providers.ts";
-import { type ModelSpec, Models, type ModelsService, type ModelsState, type ThinkingLevel } from "./services.ts";
+import { type ModelSpec, Models, type ModelsState, type ThinkingLevel } from "./services.ts";
 import { registerModelTui } from "./tui/model-selector.ts";
 import type { TuiContext } from "./tui/shared.ts";
 
@@ -30,7 +30,7 @@ export const providersBuiltin = definePlugin<SessionContext, TuiContext>({
 		});
 		const sessionController = new AbortController();
 		const stop = providers.subscribe((catalog) => state.set({ ...state.value, catalog }));
-		const models: ModelsService = {
+		const models: Models = {
 			state,
 			async cycleThinking() {
 				const current = state.value.configuration;

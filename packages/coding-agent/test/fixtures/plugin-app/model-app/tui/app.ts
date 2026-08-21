@@ -12,7 +12,7 @@ import { type AppKeybinding, KeybindingsManager } from "../../../../../src/core/
 import { CustomEditor } from "../../../../../src/modes/interactive/components/custom-editor.ts";
 import type { SessionClient } from "../../lib/index.ts";
 import type { CodingAgentPlugin } from "../plugins.ts";
-import { type LaneConfiguration, Models, type ModelsService } from "../services.ts";
+import { type LaneConfiguration, Models } from "../services.ts";
 import { PluginFooter } from "./footer.ts";
 import {
 	accent,
@@ -34,7 +34,7 @@ export class MinimalCodingAgentTui {
 	private readonly commands = new Map<string, TuiCommand>();
 	private readonly editor: CustomEditor;
 	private readonly editorContainer = new Container();
-	private readonly models: ModelsService;
+	private readonly models: Models;
 	private readonly renderers = new Map<string, ViewRenderer>();
 	private readonly resolveDone: () => void;
 	private readonly root: VStack;

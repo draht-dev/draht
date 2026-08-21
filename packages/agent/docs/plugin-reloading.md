@@ -39,7 +39,7 @@ A reload divides state into three layers:
 
 1. **Durable authority** survives reload. It includes Session records, durable Harness control, accepted operation IDs, plugin-owned durable records, and persisted server intentions.
 2. **Host runtime state** is reconstructed. It includes Harness instances, extension runners, service providers, contribution drafts, listeners, timers, caches, open files, and subprocess handles.
-3. **Presentation replicas** are rebound. They include `RemoteState` values, event listeners, keyed observer tasks, widgets, and attachment routes.
+3. **Presentation replicas** are rebound. They include `ReplicatedState` values, event listeners, keyed observer tasks, widgets, and attachment routes.
 
 Reload never reverses committed durable state. Cordis-style inverse tracking is useful for orderly release of process-local resources, but it is not a transaction over Session history, filesystem emissions, subprocess effects, or network effects. A plugin that needs durable recovery must express it through the Session durability model rather than rely on a disposer.
 
@@ -223,20 +223,20 @@ The experimental core services already illustrate the reconstruction rules:
 | `SessionManagement` | Server provider closure bound to one presentation | Recreate the per-presentation implementation after reconnect. In-flight management calls follow ordinary uncertain-disconnect semantics. |
 | `Models` | Session worker over Harness and `ModelRuntime` | Read selected model and thinking level from the Harness and rebuild the catalog from the model runtime. Process-local refresh status is discarded. |
 | `Chat` | Session worker over the Harness | Durable accepted work remains in the Session. A call interrupted before receiving its operation ID has an uncertain outcome and must not be blindly retried. |
-| `Accounts` | Session worker facade over credential authority | Rebuild presentation-safe account summaries from the credential source. Credentials never live in `RemoteState`. |
+| `Accounts` | Session worker facade over credential authority | Rebuild presentation-safe account summaries from the credential source. Credentials never live in `ReplicatedState`. |
 | `Transcript` | Session worker projection of durable lane state | Hydrate an authoritative revisioned snapshot, then resume semantic event delivery. Snapshot/event gap handling is required before removing the compatibility watch. |
 
 `Accounts` and `Transcript` are currently incomplete scaffolds, but their reload ownership follows the same rule.
 
-Provider-local counters are not automatically durable. `RemoteState` transport sequences, keyed generations, model-catalog revisions, and directory revisions may restart with a new provider binding unless their application contract explicitly makes them durable. Consumers must not compare binding-scoped revisions across a rebind as if they were globally monotonic.
+Provider-local counters are not automatically durable. `ReplicatedState` transport sequences, keyed generations, model-catalog revisions, and directory revisions may restart with a new provider binding unless their application contract explicitly makes them durable. Consumers must not compare binding-scoped revisions across a rebind as if they were globally monotonic.
 
 ## Replicated state and events
 
-`RemoteState` is a projection, not storage. Every state needed after reload must be reconstructible from durable authority, configuration, or another owned source. On provider replacement, the consumer becomes unready and installs a fresh complete snapshot before later updates.
+`ReplicatedState` is a projection, not storage. Every state needed after reload must be reconstructible from durable authority, configuration, or another owned source. On provider replacement, the consumer becomes unready and installs a fresh complete snapshot before later updates.
 
 `RemoteEvents` is non-durable and non-replayed. Events emitted while no subscription is active are lost. A consumer that must recover after reload needs one of:
 
-- a `RemoteState` snapshot;
+- a `ReplicatedState` snapshot;
 - a pull method returning current authority; or
 - an application-level revisioned snapshot/event protocol such as `Transcript`.
 
@@ -284,7 +284,7 @@ This also follows Cordis's system-boundary caveat: acquiring and releasing a pro
 - Implementing `/reload` inside the plugin or service runtime it destroys.
 - Loading only one facet of a multi-facet plugin on new source bytes.
 - Opening the same Session in old and replacement workers concurrently.
-- Treating `RemoteState` as the durable source rather than a reconstructible projection.
+- Treating `ReplicatedState` as the durable source rather than a reconstructible projection.
 - Depending on `RemoteEvents` to repair missed state after restart.
 - Reusing an attachment ID across worker generations and weakening stale-route fencing.
 - Automatically retrying a call after reload when its durable outcome is uncertain.

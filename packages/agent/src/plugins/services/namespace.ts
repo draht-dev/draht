@@ -8,13 +8,13 @@ import {
 	type RemoteEventListener,
 	type RemoteEvents,
 	type RemoteEventType,
-	type RemoteService,
 	type RemoteServiceConnection,
 	type RemoteServiceInstance,
 	type RemoteServiceNamespaceApi,
 	type RemoteServiceNamespaceOptions,
 	type RemoteServiceSubscription,
-	type RemoteState,
+	type ReplicatedState,
+	type Service,
 	type ServiceInstanceAddress,
 	type ServiceInstanceSnapshot,
 	type ServiceMemberDescription,
@@ -25,7 +25,7 @@ import {
 
 type ErrorReporter = (error: Error) => void;
 
-class RemoteStateReplica implements RemoteState<JsonValue> {
+class RemoteStateReplica implements ReplicatedState<JsonValue> {
 	readonly #listeners = new Set<(value: JsonValue, context: Context) => void>();
 	readonly #reportError: ErrorReporter;
 	#value: JsonValue | undefined;
@@ -52,9 +52,9 @@ class RemoteStateReplica implements RemoteState<JsonValue> {
 	}
 
 	update(sequence: number, value: JsonValue, context: Context): void {
-		if (this.#sequence === undefined) throw new Error("Remote state received an update before hydration");
+		if (this.#sequence === undefined) throw new Error("Replicated state received an update before hydration");
 		if (sequence <= this.#sequence) return;
-		if (sequence !== this.#sequence + 1) throw new Error("Remote state update sequence has a gap");
+		if (sequence !== this.#sequence + 1) throw new Error("Replicated state update sequence has a gap");
 		this.#sequence = sequence;
 		this.#value = value;
 		this.#deliverAll(context);
@@ -416,7 +416,7 @@ interface ObserverRegistration<T> {
 }
 
 class KeyedBinding<T> {
-	readonly #service: RemoteService<T>;
+	readonly #service: Service<T>;
 	readonly #connection: RemoteServiceConnection;
 	readonly #reportError: ErrorReporter;
 	readonly #onEmpty: () => void;
@@ -430,7 +430,7 @@ class KeyedBinding<T> {
 	#revision = 0;
 
 	constructor(
-		service: RemoteService<T>,
+		service: Service<T>,
 		connection: RemoteServiceConnection,
 		reportError: ErrorReporter,
 		onEmpty: () => void,
@@ -633,7 +633,7 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 		this.#bound = options.bound ?? true;
 	}
 
-	use<T>(service: RemoteService<T>): T {
+	use<T>(service: Service<T>): T {
 		this.#assertAvailable(service.id, "singleton");
 		let binding = this.#singletons.get(service.id);
 		if (binding !== undefined) return binding.facade.proxy as T;
@@ -651,7 +651,7 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 	}
 
 	observe<T>(
-		service: RemoteService<T>,
+		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void {
 		this.#assertAvailable(service.id, "keyed");

@@ -22,7 +22,7 @@ Do not serialize `Context`, `AbortSignal`, telemetry objects, callbacks, tools, 
 
 A remote-service token is a shared TypeScript contract and stable service ID. It is not a generated descriptor and creates no provider. `provide()` exposes one singleton implementation. `provideKeyed()` registers one keyed-service owner during facet setup and returns a scoped handle whose later `spawn()` calls expose instances. A token has one mode in one namespace: mixing singleton and keyed use is an error.
 
-The provider must make enough control-plane information available for the host to validate an accessed member as a method, `RemoteState`, or `RemoteEvents`. The consumer must be able to obtain the member name from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. How a disconnected lazy proxy represents an unresolved member, and the exact provider-kind validation exchange, are implementation details.
+The provider must make enough control-plane information available for the host to validate an accessed member as a method, `ReplicatedState`, or `RemoteEvents`. The consumer must be able to obtain the member name from ordinary property access—for example, a JavaScript `Proxy` receives `"state"` for `models.state` and `"refresh"` for `models.refresh(context)`. How a disconnected lazy proxy represents an unresolved member, and the exact provider-kind validation exchange, are implementation details.
 
 A local `use()` returns the actual implementation. A remote `use()` returns one stable, lazy typed facade shared by local consumers of that token. While disconnected, invoking a method fails and state remains unhydrated; no call is queued merely because it was made through a proxy.
 
@@ -80,13 +80,13 @@ The client maps `context.abortSignal` to cancellation of that one request. Disco
 
 ## Replicated state, events, and keyed instances
 
-`RemoteState` is authoritative latest-value replication, not event history, durable storage, a CRDT, or multi-writer state. A cold replica has `value === undefined`; subscribing before hydration records a listener without invoking it. Hydration installs a complete snapshot atomically before later updates are delivered, so there is no snapshot/update gap. Once hydrated, `value` is synchronous and subscribing reports the current value followed by later updates. The first snapshot callback uses a fresh hydration context; an already hydrated replica uses a fresh local delivery context rather than retaining the original write context. State values are borrowed immutable JSON and are not defensively cloned; callers must not mutate or retain them.
+`ReplicatedState` is authoritative latest-value replication, not event history, durable storage, a CRDT, or multi-writer state. A cold replica has `value === undefined`; subscribing before hydration records a listener without invoking it. Hydration installs a complete snapshot atomically before later updates are delivered, so there is no snapshot/update gap. Once hydrated, `value` is synchronous and subscribing reports the current value followed by later updates. The first snapshot callback uses a fresh hydration context; an already hydrated replica uses a fresh local delivery context rather than retaining the original write context. State values are borrowed immutable JSON and are not defensively cloned; callers must not mutate or retain them.
 
 The providing host attaches source trace metadata to updates. The consumer reconstructs fresh delivery contexts; hydration uses a fresh context parented to the subscription. Disconnect may retain a value as stale display data. Reconnect replaces it from a complete snapshot, while a switch to a different provider clears readiness and disposes binding-specific resources. The precise subscription, buffering, sequence, acknowledgement, and flow-control frames are transport mechanics.
 
 `RemoteEvents` is a projection of provider-local events. Listeners run only in the consuming process; callbacks never cross the wire. Events are non-durable and never replayed after reconnect. Event delivery carries source trace metadata. State subscriptions, event subscriptions, and their cleanup are host-owned resources, not retained caller contexts.
 
-`observe()` is keyed-instance discovery, not a `RemoteState` containing proxies. It reconciles a complete initial directory with ordered additions, replacements, and removals. Each instance's initial state members hydrate before its observer task starts. Closing an instance rejects new calls, aborts only that instance's observer task, and allows admitted calls to settle. A stable `session.observe()` registration aborts old tasks and reconciles the fresh directory on a binding switch.
+`observe()` is keyed-instance discovery, not a `ReplicatedState` containing proxies. It reconciles a complete initial directory with ordered additions, replacements, and removals. Each instance's initial state members hydrate before its observer task starts. Closing an instance rejects new calls, aborts only that instance's observer task, and allows admitted calls to settle. A stable `session.observe()` registration aborts old tasks and reconciles the fresh directory on a binding switch.
 
 ## Private returned references
 
@@ -124,7 +124,7 @@ Test the plugin-facing semantics over loopback and a real framed transport:
 - setup-time dependency-ledger ownership, rejection of late acquisition, local and remote `use()`, keyed-provider ownership, singleton/keyed mode validation, manifest allowlisting, lazy member access, and local services remaining unreachable remotely;
 - strict JSON boundaries, method context reconstruction, request cancellation isolation, and trace propagation without serializing context values;
 - server/session namespace isolation, authorized attach, selected-session switching, stale-frame rejection, and worker-side per-client request correlation;
-- cold and hydrated `RemoteState`, snapshot/update race freedom, delivery contexts, stale display on reconnect, and clearing on provider switch;
+- cold and hydrated `ReplicatedState`, snapshot/update race freedom, delivery contexts, stale display on reconnect, and clearing on provider switch;
 - event subscription setup, non-replay, ordering, cleanup, and bounded flow control;
 - instance directory hydration, ordered reconciliation, state hydration before observer tasks, generation-based stale rejection, and task cleanup on close or switch;
 - private returned-reference lifetime distinct from keyed-service discovery; and
@@ -151,18 +151,18 @@ type SessionDirectoryEvent =
 	| { type: "created" | "changed"; session: SessionSummary }
 	| { type: "deleted"; sessionId: string };
 
-interface SessionDirectoryService {
-	readonly state: RemoteState<{ revision: number; sessions: SessionSummary[] }>;
+interface SessionDirectory {
+	readonly state: ReplicatedState<{ revision: number; sessions: SessionSummary[] }>;
 	readonly events: RemoteEvents<SessionDirectoryEvent>;
 }
 
-interface SessionManagementService {
+interface SessionManagement {
 	attach(sessionId: string, context: Context): Promise<void>;
 	detach(context: Context): Promise<void>;
 }
 
-const SessionDirectory = defineRemoteService<SessionDirectoryService>("session-directory");
-const SessionManagement = defineRemoteService<SessionManagementService>("session-management");
+const SessionDirectory = defineService<SessionDirectory>("pi.session-directory");
+const SessionManagement = defineService<SessionManagement>("pi.session-management");
 ```
 
 A server facet supplies the services. The host-local attachment capability derives the client from `Context`, authorizes the requested session, and performs the binding transition:

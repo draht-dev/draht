@@ -1,7 +1,7 @@
 import type { Context } from "../../harness/context.ts";
 import type { JsonValue } from "../../harness/session/types.ts";
 
-const REMOTE_SERVICE_TYPE = Symbol("pi.remoteService.type");
+const SERVICE_TYPE = Symbol("pi.service.type");
 
 export type ServiceMode = "singleton" | "keyed";
 export type ServiceMemberKind = "method" | "state" | "events";
@@ -15,14 +15,14 @@ export class ServiceSliceNotImplemented extends Error {
 	}
 }
 
-export interface RemoteState<T> {
+export interface ReplicatedState<T> {
 	/** Borrowed immutable value, or undefined until hydration. Do not mutate or retain it. */
 	readonly value: T | undefined;
 	/** Listener values are borrowed and must not be mutated or retained. */
 	subscribe(listener: (value: T, context: Context) => void): () => void;
 }
 
-export interface MutableRemoteState<T> extends RemoteState<T> {
+export interface MutableReplicatedState<T> extends ReplicatedState<T> {
 	readonly value: T;
 	/** Transfers the JSON value to the state; the caller must not subsequently mutate it. */
 	set(value: T, context: Context): void;
@@ -61,7 +61,7 @@ type InvalidJsonPart<T> = typeof REMOTE_JSON_TYPE extends keyof T
 					? { [TKey in keyof T]-?: InvalidJsonPart<T[TKey]> }[keyof T]
 					: T;
 
-type InvalidRemoteMember<T> = T extends RemoteState<infer TValue>
+type InvalidRemoteMember<T> = T extends ReplicatedState<infer TValue>
 	? InvalidJsonPart<TValue> extends never
 		? never
 		: "state value is not JSON"
@@ -77,7 +77,7 @@ type InvalidRemoteMember<T> = T extends RemoteState<infer TValue>
 						? never
 						: "method result is not JSON or void"
 				: "method argument is not JSON"
-			: "member is not a remote method, RemoteState, or RemoteEvents";
+			: "member is not a remote method, ReplicatedState, or RemoteEvents";
 
 type InvalidRemoteMemberNames<T> = {
 	[TKey in keyof T]-?: InvalidRemoteMember<T[TKey]> extends never ? never : TKey;
@@ -86,14 +86,14 @@ type InvalidRemoteMemberNames<T> = {
 type CheckedRemoteContract<T> = InvalidRemoteMemberNames<T> extends never ? T : never;
 
 /** Stable identity for one shared TypeScript service contract. */
-export interface RemoteService<T> {
+export interface Service<T> {
 	readonly id: string;
-	readonly [REMOTE_SERVICE_TYPE]?: (value: T) => T;
+	readonly [SERVICE_TYPE]?: (value: T) => T;
 }
 
-export type RemoteServiceType<TService> = TService extends RemoteService<infer T> ? T : never;
+export type ServiceType<TService> = TService extends Service<infer T> ? T : never;
 
-export function defineRemoteService<T>(id: string): RemoteService<CheckedRemoteContract<T>> {
+export function defineService<T>(id: string): Service<CheckedRemoteContract<T>> {
 	if (id.length === 0) throw new TypeError("Remote service ID must not be empty");
 	if (id.startsWith("$pi.")) throw new TypeError("Remote service IDs beginning with $pi. are reserved");
 	return Object.freeze({ id });
@@ -186,9 +186,9 @@ export interface RemoteServiceNamespaceOptions {
 }
 
 export interface RemoteServiceNamespaceApi {
-	use<T>(service: RemoteService<T>): T;
+	use<T>(service: Service<T>): T;
 	observe<T>(
-		service: RemoteService<T>,
+		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void;
 	dispose(context: Context): Promise<void>;

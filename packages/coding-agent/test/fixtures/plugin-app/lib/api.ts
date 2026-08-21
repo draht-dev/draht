@@ -1,6 +1,6 @@
 /**
  * Shared tokens and two-sided plugin shape.
- * Remote state values and ordinary remote method arguments/results must be JSON-serializable.
+ * Replicated state values and ordinary remote method arguments/results must be JSON-serializable.
  * RpcOptions are recognized by the proxy and sent through the transport control plane.
  */
 
@@ -30,12 +30,12 @@ export function isRpcOptions(value: unknown): value is RpcOptions {
 	return typeof value === "object" && value !== null && rpcOptionsMarker in value;
 }
 
-export interface RemoteState<T> {
+export interface ReplicatedState<T> {
 	readonly value: T;
 	subscribe(listener: (value: T) => void): () => void;
 }
 
-export interface MutableRemoteState<T> extends RemoteState<T> {
+export interface MutableReplicatedState<T> extends ReplicatedState<T> {
 	set(value: T): void;
 }
 

@@ -1,6 +1,6 @@
 import { type Component, Container, type Focusable, getKeybindings, Input, Spacer, Text } from "@draht/tui";
 import { rpcOptions } from "../../lib/index.ts";
-import type { ModelSpec, ModelsService, ModelsState } from "../services.ts";
+import type { ModelSpec, Models, ModelsState } from "../services.ts";
 import { accent, border, dim, success, type TuiContext, warning } from "./shared.ts";
 
 class Rule implements Component {
@@ -10,7 +10,7 @@ class Rule implements Component {
 	}
 }
 
-export function registerModelTui(context: TuiContext, models: ModelsService): void {
+export function registerModelTui(context: TuiContext, models: Models): void {
 	let refreshController: AbortController | undefined;
 	const resolve = (query: string): ModelSpec | undefined => {
 		const available = models.state.value.catalog.availableModels;

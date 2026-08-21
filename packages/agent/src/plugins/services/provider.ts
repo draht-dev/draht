@@ -5,8 +5,8 @@ import { freshDeliveryContext, getRemoteStateInternals, type RemoteStateInternal
 import {
 	cloneJson,
 	isJsonValue,
-	type RemoteService,
 	type RemoteServiceConnection,
+	type Service,
 	type ServiceCall,
 	type ServiceInstanceAddress,
 	type ServiceInstanceSnapshot,
@@ -80,7 +80,7 @@ export class RemoteServiceProvider {
 		this.#allowlist = new Set(ids);
 	}
 
-	provide<T>(service: RemoteService<T>, implementation: T): void {
+	provide<T>(service: Service<T>, implementation: T): void {
 		this.#assertActive();
 		this.#assertAllowed(service.id);
 		const registration = this.#registration(service.id, "singleton", true);
@@ -91,7 +91,7 @@ export class RemoteServiceProvider {
 		registration.singleton = instance;
 	}
 
-	use<T>(service: RemoteService<T>): T {
+	use<T>(service: Service<T>): T {
 		this.#assertActive();
 		this.#assertAllowed(service.id);
 		const registration = this.#registrations.get(service.id);
@@ -101,7 +101,7 @@ export class RemoteServiceProvider {
 		return registration.singleton.implementation as T;
 	}
 
-	spawn<T>(service: RemoteService<T>, key: string, implementation: T): () => void {
+	spawn<T>(service: Service<T>, key: string, implementation: T): () => void {
 		this.#assertActive();
 		this.#assertAllowed(service.id);
 		if (key.length === 0) throw new TypeError("Remote service instance key must not be empty");
@@ -270,7 +270,10 @@ export class RemoteServiceProvider {
 					state.subscribe((value, sequence, context) => {
 						if (!instance.active) return;
 						if (!isJsonValue(value)) {
-							throw new RemoteServiceError("service_invalid_value", "Remote state update must be strict JSON");
+							throw new RemoteServiceError(
+								"service_invalid_value",
+								"Replicated state update must be strict JSON",
+							);
 						}
 						this.#emit(
 							registration,
@@ -370,7 +373,7 @@ export class RemoteServiceProvider {
 			members.push({ name, kind: member.kind });
 			if (member.kind === "state") {
 				if (!isJsonValue(member.state.value)) {
-					throw new RemoteServiceError("service_invalid_value", "Remote state snapshot must be strict JSON");
+					throw new RemoteServiceError("service_invalid_value", "Replicated state snapshot must be strict JSON");
 				}
 				states[name] = { sequence: member.state.sequence, value: member.state.value };
 			}

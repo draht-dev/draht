@@ -19,7 +19,7 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 describe("app-as-plugins model service", () => {
-	it("replicates RemoteState and invokes typed methods over a serializable boundary", async () => {
+	it("replicates ReplicatedState and invokes typed methods over a serializable boundary", async () => {
 		const catalogue = createDeferred<readonly ModelSpec[]>();
 		let refreshCalls = 0;
 		const plugins = createCodingAgentPlugins(() => {
@@ -61,7 +61,7 @@ describe("app-as-plugins model service", () => {
 		});
 		expect(runtime.driver.use(Settings).get("defaultModel")).toEqual({ provider: "acme", modelId: "fresh" });
 		expect(observed).toEqual(["idle", "refreshing", "refreshing", "done", "done"]);
-		expect(runtime.driver.trace).toEqual(["rpc:models.refresh", "rpc:models.select"]);
+		expect(runtime.driver.trace).toEqual(["rpc:pi.models.refresh", "rpc:pi.models.select"]);
 		unsubscribe();
 		client.close();
 		runtime.close();

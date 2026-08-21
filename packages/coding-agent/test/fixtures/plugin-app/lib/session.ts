@@ -1,7 +1,7 @@
-import { type AppPlugin, type MutableRemoteState, rpcOptions, type Service } from "./api.ts";
+import { type AppPlugin, type MutableReplicatedState, rpcOptions, type Service } from "./api.ts";
 import type { ServerWireMessage, SessionRequest, StateSnapshot } from "./protocol.ts";
 
-class SessionRemoteState<T> implements MutableRemoteState<T> {
+class SessionRemoteState<T> implements MutableReplicatedState<T> {
 	private readonly listeners = new Set<(value: T) => void>();
 	private current: T;
 
@@ -55,7 +55,7 @@ export interface SessionContext {
 	onClientDisconnect(callback: (clientId: string) => void): void;
 	onClose(callback: () => void): void;
 	provide<T>(service: Service<T>, implementation: T): void;
-	remoteState<T>(initial: T): MutableRemoteState<T>;
+	remoteState<T>(initial: T): MutableReplicatedState<T>;
 	use<T>(service: Service<T>): T;
 }
 

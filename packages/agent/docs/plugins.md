@@ -1,6 +1,6 @@
 # Coding-Agent Application Hosts and Plugin Facets
 
-> **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `RemoteState` substrate now have an experimental implementation, including a `Models` vertical slice. `RemoteEvents` now has an experimental transport-neutral implementation with ordered non-replayed delivery. The application host contexts, plugin kernel, references, telemetry propagation, and most other example facets remain illustrative. Plugin reload semantics are specified separately in [`plugin-reloading.md`](plugin-reloading.md). Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
+> **Status:** Tentative design input, not a normative contract or implementation handoff. The transport-neutral service token, provider, singleton `use()`, keyed `observe()`, and `ReplicatedState` substrate now have an experimental implementation, including a `Models` vertical slice. `RemoteEvents` now has an experimental transport-neutral implementation with ordered non-replayed delivery. The application host contexts, plugin kernel, references, telemetry propagation, and most other example facets remain illustrative. Plugin reload semantics are specified separately in [`plugin-reloading.md`](plugin-reloading.md). Reconcile this design with `rpc.md`, `telemetry.md`, and the final harness contract before adding it to `harness.md` or creating a work package.
 
 This document assumes you already understand `AgentHarness`, `AgentLane`, `Session`, `SessionTree`, `SessionRepo`, invocation `Context`, and telemetry. Read `rpc.md` for wire frames, remote references, subscriptions, and trace carriers, `telemetry.md` for context propagation and cancellation semantics, and `plugin-reloading.md` for manifest-generation replacement and durable reconstruction.
 
@@ -126,7 +126,7 @@ declare const serverAppHost: {
 };
 
 interface RunningHost {
-	readonly connection: RemoteState<ConnectionState>;
+	readonly connection: ReplicatedState<ConnectionState>;
 	stop(): Promise<void>;
 }
 
@@ -188,7 +188,7 @@ Out of scope: arbitrary undeclared object remoting, serialized functions/classes
 Facets communicate across processes through **services**. One token type gives a service contract its identity:
 
 ```ts
-function defineRemoteService<T>(id: string): RemoteService<T>;
+function defineService<T>(id: string): Service<T>;
 ```
 
 The declaration lives in the shared contract module and creates nothing. `provide(service, implementation)` exposes one singleton. `provideKeyed(service)` registers ownership of a keyed service during facet setup and returns a scoped provider whose later `spawn(key, implementation)` calls expose instances. Consumers select the same modes with `use(service)` or `observe(service, handler)`. Within one host namespace, a token must stay in one mode: mixing `provide`/`use` with `provideKeyed`/`observe` is an assembly or protocol error.
@@ -199,28 +199,28 @@ interface KeyedServiceProvider<T> {
 }
 ```
 
-TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel member descriptor. When `provide()` or a keyed provider's `spawn()` receives an implementation, the host classifies functions as remote methods and recognizes branded `RemoteState` and `RemoteEvents` values. It rejects unsupported members and announces the resulting member table over the transport.
+TypeScript types cannot produce runtime member metadata. Plugin authors nevertheless declare no parallel member descriptor. When `provide()` or a keyed provider's `spawn()` receives an implementation, the host classifies functions as remote methods and recognizes branded `ReplicatedState` and `RemoteEvents` values. It rejects unsupported members and announces the resulting member table over the transport.
 
 `use()` on a singleton returns a stable lazy proxy synchronously, even before a remote provider is attached. Member access creates local method, state, or event slots as they are used; attachment validates those slots against the provider-announced kinds. A mismatch is an assembly or protocol error. This runtime mechanism is implemented once by the host rather than repeated in every service declaration.
 
 ### Dependency declaration and assembly
 
-Service API calls made during facet setup are the dependency declarations. The kernel does not reflect on erased TypeScript interfaces, and plugin authors do not maintain parallel `requires` and `provides` lists. A `RemoteService<T>` or `LocalService<T>` retains its stable ID at runtime; the API call supplies the mode and namespace; and the facet context closes over the host-assigned plugin and facet identity.
+Service API calls made during facet setup are the dependency declarations. The kernel does not reflect on erased TypeScript interfaces, and plugin authors do not maintain parallel `requires` and `provides` lists. A `Service<T>` or `LocalService<T>` retains its stable ID at runtime; the API call supplies the mode and namespace; and the facet context closes over the host-assigned plugin and facet identity.
 
 The host records a generation-scoped ledger:
 
 ```text
 provide(Models, implementation)
-→ @pi/providers-builtin:session provides session/models/singleton
+→ @pi/providers-builtin:session provides session/pi.models/singleton
 
 session.use(Models)
-→ @pi/model-selection:tui requires session/models/singleton
+→ @pi/model-selection:tui requires session/pi.models/singleton
 
 provideKeyed(QuestionDialogs)
-→ @pi/question:session provides session/question-dialog/keyed
+→ @pi/question:session provides session/pi.question-dialog/keyed
 
 session.observe(QuestionDialogs, handler)
-→ @pi/question:tui requires session/question-dialog/keyed
+→ @pi/question:tui requires session/pi.question-dialog/keyed
 ```
 
 The first `provide()`, `provideKeyed()`, `use()`, or `observe()` for a token must occur during facet setup. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup; they cannot introduce an undeclared service dependency later. Dynamic keyed instances use the setup-owned `KeyedServiceProvider`, so spawning and closing instances do not change the graph.
@@ -247,17 +247,17 @@ export interface ModelsState {
 		| { status: "warning"; errors: Record<string, string> };
 }
 
-export interface ModelsService {
-	readonly state: RemoteState<ModelsState>;
+export interface Models {
+	readonly state: ReplicatedState<ModelsState>;
 	cycleThinking(context: Context): Promise<void>;
 	refresh(context: Context): Promise<void>;
 	select(model: ModelRef, context: Context): Promise<void>;
 }
 
-export const Models = defineRemoteService<ModelsService>("models");
+export const Models = defineService<Models>("pi.models");
 ```
 
-Everything transported in a remote contract is strict JSON: arguments, results, replicated state, and events. Business-level absence uses JSON `null`, never `undefined`. An unhydrated `RemoteState.value === undefined` is local control-plane readiness, not a transported state value. `Context` is control-plane data in a declared position; the proxy strips it and it is never serialized.
+Everything transported in a remote contract is strict JSON: arguments, results, replicated state, and events. Business-level absence uses JSON `null`, never `undefined`. An unhydrated `ReplicatedState.value === undefined` is local control-plane readiness, not a transported state value. `Context` is control-plane data in a declared position; the proxy strips it and it is never serialized.
 
 ### Session facet
 
@@ -349,7 +349,7 @@ A service has **one owner and many consumers**. In singleton mode, `providersBui
 
 Keyed services use `provideKeyed()` and `observe()`. A keyed service is empty until its setup-owned provider handle calls `spawn()`; observing it never creates an instance. `provider.spawn(key, implementation)` returns an idempotent close function, and the key must be unique among that service's live instances. `observe(service, handler)` reconciles a snapshot of current instances and then ordered additions, replacements, and removals. After an instance's initial state members hydrate, the host starts one handler task with a fresh `Context`. Closing the instance aborts that context, rejects new calls, and lets already-admitted calls return. Cancellation from the instance context is normal task cleanup; other handler failures follow host failure policy. Reusing a closed key creates a new host-owned generation, so stale proxies cannot address the replacement.
 
-A spawned member has structural identity `(service, key, generation, member)`. Its `RemoteState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a plugin-visible `RemoteState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
+A spawned member has structural identity `(service, key, generation, member)`. Its `ReplicatedState` members therefore need no independent IDs. The instance directory is control-plane metadata, not a plugin-visible `ReplicatedState` containing proxies. Switching sessions aborts all observed instance tasks before hydrating the selected session's current instances.
 
 Presentation facets consume remotely through two explicit namespaces — `server.use()`/`server.observe()` and `session.use()`/`session.observe()`, defined below. Session facets consume their own process's services locally and server services remotely. These bindings are host infrastructure layered over the kernel scope, not kernel API.
 
@@ -373,14 +373,14 @@ interface CodingAgentSessionPluginContext extends PluginLifecycleScope {
 	readonly agent: AgentPluginScope; // scoped local session authority
 
 	// service/state infrastructure (session-host owned)
-	provide<T>(service: RemoteService<T> | LocalService<T>, implementation: T): void;
-	provideKeyed<T>(service: RemoteService<T>): KeyedServiceProvider<T>;
-	use<T>(service: RemoteService<T> | LocalService<T>): T;
+	provide<T>(service: Service<T> | LocalService<T>, implementation: T): void;
+	provideKeyed<T>(service: Service<T>): KeyedServiceProvider<T>;
+	use<T>(service: Service<T> | LocalService<T>): T;
 	observe<T>(
-		service: RemoteService<T>,
+		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void;
-	remoteState<T extends JsonValue>(initial: T): MutableRemoteState<T>;
+	remoteState<T extends JsonValue>(initial: T): MutableReplicatedState<T>;
 	remoteEvents<T extends JsonValue>(): MutableRemoteEvents<T>;
 
 	readonly server: ServerServices; // remote access to the managing server
@@ -406,21 +406,21 @@ interface RemoteServiceInstance<T> {
 }
 
 interface RemoteServiceNamespace {
-	use<T>(service: RemoteService<T>): T;
+	use<T>(service: Service<T>): T;
 	observe<T>(
-		service: RemoteService<T>,
+		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void;
 }
 
 interface ServerServices extends RemoteServiceNamespace {
-	readonly connection: RemoteState<ConnectionState>;
+	readonly connection: ReplicatedState<ConnectionState>;
 }
 
 type AttachmentState = { status: "detached" } | { status: "attaching" | "attached" | "degraded"; sessionId: string };
 
 interface SessionServices extends RemoteServiceNamespace {
-	readonly attachment: RemoteState<AttachmentState>;
+	readonly attachment: ReplicatedState<AttachmentState>;
 }
 
 interface SelectItem<T> {
@@ -485,28 +485,28 @@ Not every dependency should be remotely reachable. A **local service** is a toke
 ```ts
 const Credentials = defineLocalService<CredentialStore>("credentials"); // get/set provider secrets
 
-interface AccountsService {
-	readonly state: RemoteState<{ providers: Array<{ provider: string; configured: boolean }> }>;
+interface Accounts {
+	readonly state: ReplicatedState<{ providers: Array<{ provider: string; configured: boolean }> }>;
 	remove(provider: string, context: Context): Promise<void>;
 }
-const Accounts = defineRemoteService<AccountsService>("accounts");
+const Accounts = defineService<Accounts>("pi.accounts");
 ```
 
 The auth plugin's session facet uses `Credentials` directly; presentations see provider IDs and `configured` booleans — never secrets. If some settings must not be remotely writable, split them the same way; do not rely on presentation-side convention.
 
-## Replicated state: `RemoteState`
+## Replicated state: `ReplicatedState`
 
-`ModelsService.state` is a `RemoteState<ModelsState>`: **authoritative latest-value replication** — not event history, durable storage, a CRDT, or a multi-writer mechanism.
+`Models.state` is a `ReplicatedState<ModelsState>`: **authoritative latest-value replication** — not event history, durable storage, a CRDT, or a multi-writer mechanism.
 
 ```ts
-interface RemoteState<T> {
+interface ReplicatedState<T> {
 	/** Borrowed immutable value, or `undefined` until hydration. Do not mutate or retain it. */
 	readonly value: T | undefined;
 	/** Listener values are borrowed and must not be mutated or retained. */
 	subscribe(listener: (value: T, context: Context) => void): () => void;
 }
 
-interface MutableRemoteState<T> extends RemoteState<T> {
+interface MutableReplicatedState<T> extends ReplicatedState<T> {
 	/** A providing state is always initialized. */
 	readonly value: T;
 	/** Transfers the JSON value to the state; the caller must not subsequently mutate it. */
@@ -524,7 +524,7 @@ Required behavior:
 6. Disconnect may retain the last value as stale display data alongside connection or attachment state. Reconnecting to the same provider replaces it with a fresh snapshot. Switching to a different provider or host generation clears readiness and `.value` becomes `undefined` until that provider hydrates; service-bound presentation resources are disposed as part of the switch.
 7. `set(value, context)` carries source trace metadata; each live delivery invokes listeners with a reconstructed delivery `Context`. Background updates use an intentional background or lifecycle context, never a retained caller context.
 
-Anything a consumer must recover after reconnect is exposed as remote state or pulled through a remote method. Remote state is latest-value replication, not by itself durable session storage; the providing facet must reconstruct its authoritative value after a worker restart.
+Anything a consumer must recover after reconnect is exposed as replicated state or pulled through a remote method. Replicated state is latest-value replication, not by itself durable session storage; the providing facet must reconstruct its authoritative value after a worker restart.
 
 Prefer several coarse independent cells over one giant value or a universal patch language, so a catalogue refresh does not retransmit unrelated configuration. High-frequency data such as transcript streaming should use semantic deltas plus a final authoritative replacement. Revision metadata, gap recovery, unchanged-value suppression, and demand-driven subscription are protocol concerns, not plugin-author concerns.
 
@@ -597,15 +597,15 @@ A transport disconnect performs only the first for active requests and closes th
 A remotely exposed event source is a projection of host-local events, not a remotely invoked callback. A Git plugin:
 
 ```ts
-interface GitService {
-	readonly status: RemoteState<GitStatus>;
+interface Git {
+	readonly status: ReplicatedState<GitStatus>;
 	readonly events: RemoteEvents<GitEvent>;   // { type: "status_changed" | "head_changed" }
 	refresh(context: Context): Promise<void>;
 }
-const Git = defineRemoteService<GitService>("git");
+const Git = defineService<Git>("pi.git");
 ```
 
-Server-side, the exposure adapter subscribes to the host-local source once per remote subscription and forwards frames. Client-side, `events` is a local facade whose listeners run in the client process — callbacks never cross the wire; `on(type, listener)` filters by discriminator, `subscribe(listener)` observes everything. Each event carries source trace metadata from the providing host's context, so client-side handling stays correlated with the originating operation. The adapter owns subscribe/unsubscribe frames, sequencing, buffering, flow control, and disconnect cleanup (`rpc.md`). Remote events are non-durable and never replayed: a new or reconnected consumer sees only events emitted after its subscription becomes active. Anything needed to reconstruct current behavior after reconnect belongs in remote state or a pull method.
+Server-side, the exposure adapter subscribes to the host-local source once per remote subscription and forwards frames. Client-side, `events` is a local facade whose listeners run in the client process — callbacks never cross the wire; `on(type, listener)` filters by discriminator, `subscribe(listener)` observes everything. Each event carries source trace metadata from the providing host's context, so client-side handling stays correlated with the originating operation. The adapter owns subscribe/unsubscribe frames, sequencing, buffering, flow control, and disconnect cleanup (`rpc.md`). Remote events are non-durable and never replayed: a new or reconnected consumer sees only events emitted after its subscription becomes active. Anything needed to reconstruct current behavior after reconnect belongs in replicated state or a pull method.
 
 ## Service-owned jobs
 
@@ -613,7 +613,7 @@ Long-running work should return a capability rather than one method that blocks 
 
 ```ts
 interface IndexJob {
-	readonly progress: RemoteState<IndexProgress>;
+	readonly progress: ReplicatedState<IndexProgress>;
 	wait(context: Context): Promise<IndexProgress>; // aborting this context cancels only this wait
 	cancel(context: Context): Promise<void>;        // cancels the job itself, for everyone
 }
@@ -681,21 +681,21 @@ export type SessionDirectoryEvent =
 	| { type: "created" | "changed"; session: SessionRecordSummary }
 	| { type: "deleted"; sessionId: string };
 
-export interface SessionDirectoryService {
-	readonly state: RemoteState<{ revision: number; sessions: SessionRecordSummary[] }>;
+export interface SessionDirectory {
+	readonly state: ReplicatedState<{ revision: number; sessions: SessionRecordSummary[] }>;
 	readonly events: RemoteEvents<SessionDirectoryEvent>;
 }
 
-export const SessionDirectory = defineRemoteService<SessionDirectoryService>("session-directory");
+export const SessionDirectory = defineService<SessionDirectory>("pi.session-directory");
 
-export interface SessionManagementService {
+export interface SessionManagement {
 	create(options: { title: string }, context: Context): Promise<SessionRecordSummary>;
 	remove(sessionId: string, context: Context): Promise<void>;
 	attach(sessionId: string, context: Context): Promise<void>;
 	detach(context: Context): Promise<void>;
 }
 
-export const SessionManagement = defineRemoteService<SessionManagementService>("session-management");
+export const SessionManagement = defineService<SessionManagement>("pi.session-management");
 ```
 
 ### Server facet
@@ -841,12 +841,12 @@ interface QuestionDetails {
 	wasCustom: boolean;
 }
 
-interface QuestionDialogService {
-	readonly request: RemoteState<QuestionRequest>;
+interface QuestionDialogs {
+	readonly request: ReplicatedState<QuestionRequest>;
 	submitAnswer(response: QuestionResponse, context: Context): Promise<void>;
 }
 
-const QuestionDialogs = defineRemoteService<QuestionDialogService>("question-dialog");
+const QuestionDialogs = defineService<QuestionDialogs>("pi.question-dialog");
 ```
 
 `QuestionDialogs` declares only the contract. Each invocation explicitly spawns one keyed instance. Its `request` state is addressed by the service, invocation key, hidden generation, and member name.
@@ -1002,7 +1002,7 @@ Errors cross the wire as a JSON envelope `{ code, message, data? }` with stable 
 
 Security rules every providing host (session and server alike) must enforce:
 
-- service IDs are allowlisted by trusted manifests; `provide()`, `provideKeyed()`, and scoped provider handles expose only implementation functions and branded remote-state/event members, instance generations are host-owned, and local services are never discoverable remotely;
+- service IDs are allowlisted by trusted manifests; `provide()`, `provideKeyed()`, and scoped provider handles expose only implementation functions and branded replicated-state/event members, instance generations are host-owned, and local services are never discoverable remotely;
 - business arguments, results, state, and events are validated as JSON; protocol envelopes cannot be forged as ordinary values;
 - clients cannot choose context position, server typed values, telemetry parents, or cancellation targets other than their own request IDs;
 - credentials, prompts, completions, tool arguments/results, and filesystem contents are not exposed unless an explicit contract permits them; state snapshots contain only client-safe data;
@@ -1023,8 +1023,8 @@ Before this becomes normative:
 - whether directory state is projected per client (workspace-scoped snapshots) or one presentation-safe value plus method authorization;
 - multiple selected sessions per presentation connection (a multi-pane web UI) — deferred; it changes the session-namespace API;
 - authentication of presentations and session workers, and protocol version negotiation;
-- the exact lazy `RemoteService` member-discovery and provider-kind-validation API, and the context-position and JSON-safe optional-argument policy from `rpc.md`;
-- whether `RemoteState` is generic RPC infrastructure or host infrastructure; snapshot granularity; exact hydration/delivery-context semantics;
+- the exact lazy `Service` member-discovery and provider-kind-validation API, and the context-position and JSON-safe optional-argument policy from `rpc.md`;
+- whether `ReplicatedState` is generic RPC infrastructure or host infrastructure; snapshot granularity; exact hydration/delivery-context semantics;
 - state/event flow control and per-client buffering at the server; reference lifetime and garbage collection;
 - the stable error envelope and expected-error registration; activation/disposal ordering, optional dependencies, and shared-proxy lifetime;
 - the exact singleton/keyed mode validation, keyed provider/observe APIs, instance-key and generation rules, instance hydration protocol, and answer authorization; general memo-name ownership remains with the invocation-memo design;
@@ -1092,19 +1092,19 @@ interface DiffReviewActivity {
 	status: "open" | "submitting";
 }
 
-interface DiffReviewManagerService {
+interface DiffReviewManager {
 	createReview(context: Context): Promise<void>;
 }
 
-interface DiffReviewService {
-	readonly document: RemoteState<DiffReviewDocument>;
-	readonly activity: RemoteState<DiffReviewActivity>;
+interface DiffReviews {
+	readonly document: ReplicatedState<DiffReviewDocument>;
+	readonly activity: ReplicatedState<DiffReviewActivity>;
 	addComment(input: DiffCommentInput, context: Context): Promise<void>;
 	submit(context: Context): Promise<void>;
 }
 
-const DiffReviewManager = defineRemoteService<DiffReviewManagerService>("diff-review-manager");
-const DiffReviews = defineRemoteService<DiffReviewService>("diff-review");
+const DiffReviewManager = defineService<DiffReviewManager>("pi.diff-review-manager");
+const DiffReviews = defineService<DiffReviews>("pi.diff-review");
 ```
 
 The client never supplies a patch, author, or review ID. The session computes a bounded immutable patch, creates the ID, and derives each author from the authenticated identity in `Context`. `commentId` is only an idempotency key; it grants no authority.
@@ -1353,9 +1353,9 @@ This is a shared review, not a generic room primitive. Keyed services provide di
 
 ## Deferred: delta-based replicated state
 
-> **Deferred:** `DeltaState` is not part of the initial plugin or RPC contract. Add it only after a concrete feature demonstrates that full-value `RemoteState` updates are too expensive and the same pattern appears in more than one feature.
+> **Deferred:** `DeltaState` is not part of the initial plugin or RPC contract. Add it only after a concrete feature demonstrates that full-value `ReplicatedState` updates are too expensive and the same pattern appears in more than one feature.
 
-A real replication gap remains. Some authoritative values are large, change frequently, and must support late joiners. `RemoteState` hydrates and reconnects correctly but sends a complete value on every update. `RemoteEvents` can send small deltas but has no snapshot, replay, or automatic gap recovery.
+A real replication gap remains. Some authoritative values are large, change frequently, and must support late joiners. `ReplicatedState` hydrates and reconnects correctly but sends a complete value on every update. `RemoteEvents` can send small deltas but has no snapshot, replay, or automatic gap recovery.
 
 A canvas is one possible example: joining requires the complete document, while dragging a shape should send only that operation. With today's primitives, the plugin can expose `getSnapshot()` plus revisioned `RemoteEvents` and implement the join protocol itself:
 
@@ -1371,7 +1371,7 @@ That feature-local protocol is the preferred initial solution. It keeps a hypoth
 
 ### Possible future primitive
 
-If repeated implementations justify extraction, a future `DeltaState` could provide `RemoteState` hydration while using deltas for steady-state transport:
+If repeated implementations justify extraction, a future `DeltaState` could provide `ReplicatedState` hydration while using deltas for steady-state transport:
 
 ```ts
 interface CanvasShape {

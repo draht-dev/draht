@@ -3,12 +3,12 @@ import type { Context } from "../../src/harness/context.ts";
 import {
 	BACKGROUND_CONTEXT,
 	createLoopbackServiceConnection,
-	defineRemoteService,
+	defineService,
 	type RemoteEvents,
 	type RemoteServiceConnection,
 	RemoteServiceNamespace,
 	RemoteServiceProvider,
-	type RemoteState,
+	type ReplicatedState,
 	remoteEvents,
 	remoteState,
 } from "../../src/index.ts";
@@ -18,27 +18,27 @@ type ModelsState = {
 	selected: ModelRef | null;
 	revision: number;
 };
-interface ModelsService {
-	readonly state: RemoteState<ModelsState>;
+interface Models {
+	readonly state: ReplicatedState<ModelsState>;
 	select(model: ModelRef, context: Context): Promise<void>;
 }
 
-const Models = defineRemoteService<ModelsService>("models");
+const Models = defineService<Models>("test.models");
 
 type Question = { question: string };
-interface QuestionDialogService {
-	readonly request: RemoteState<Question>;
+interface QuestionDialogs {
+	readonly request: ReplicatedState<Question>;
 	submit(answer: string, context: Context): Promise<{ accepted: boolean }>;
 }
 
-const QuestionDialogs = defineRemoteService<QuestionDialogService>("question-dialog");
+const QuestionDialogs = defineService<QuestionDialogs>("test.question-dialog");
 
 type ActivityEvent = { type: "changed"; revision: number } | { type: "ignored"; revision: number };
-interface ActivityService {
+interface Activity {
 	readonly events: RemoteEvents<ActivityEvent>;
 }
 
-const Activity = defineRemoteService<ActivityService>("activity");
+const Activity = defineService<Activity>("test.activity");
 
 describe("plugin remote services", () => {
 	test("does not defensively clone borrowed state values", () => {
@@ -139,7 +139,7 @@ describe("plugin remote services", () => {
 		provider.dispose();
 	});
 
-	test("hydrates cold RemoteState replicas and replaces them across rebinds", async () => {
+	test("hydrates cold ReplicatedState replicas and replaces them across rebinds", async () => {
 		const provider = new RemoteServiceProvider([Models]);
 		const state = remoteState<ModelsState>({ selected: null, revision: 0 });
 		provider.provide(Models, {
@@ -188,7 +188,7 @@ describe("plugin remote services", () => {
 		const observed: {
 			key: string;
 			question: Question | undefined;
-			service: QuestionDialogService;
+			service: QuestionDialogs;
 			context: Context;
 		}[] = [];
 		const stop = namespace.observe(QuestionDialogs, (instance, context) => {
@@ -308,7 +308,7 @@ describe("plugin remote services", () => {
 			services: [Activity],
 			connection: createLoopbackServiceConnection(provider),
 		});
-		let observed: ActivityService | undefined;
+		let observed: Activity | undefined;
 		const stop = namespace.observe(Activity, (instance) => {
 			observed = instance.service;
 		});
@@ -334,10 +334,10 @@ describe("plugin remote services", () => {
 			state: remoteState<ModelsState>({ selected: null, revision: 0 }),
 			async select() {},
 		});
-		expect(() => provider.spawn(Models, "wrong", {} as ModelsService)).toThrow(/singleton/);
+		expect(() => provider.spawn(Models, "wrong", {} as Models)).toThrow(/singleton/);
 		expect(() =>
 			provider.spawn(QuestionDialogs, "invalid", {
-				request: new Date() as unknown as RemoteState<Question>,
+				request: new Date() as unknown as ReplicatedState<Question>,
 				async submit() {
 					return { accepted: true };
 				},
@@ -346,7 +346,7 @@ describe("plugin remote services", () => {
 		await expect(
 			provider.invoke(
 				{
-					serviceId: "models",
+					serviceId: "test.models",
 					member: "select",
 					args: [Number.NaN as unknown as number],
 				},

@@ -1,4 +1,4 @@
-import { isRpcOptions, type RemoteState, type Service } from "./api.ts";
+import { isRpcOptions, type ReplicatedState, type Service } from "./api.ts";
 import type { ServerWireMessage, SessionRequest, StateSnapshot } from "./protocol.ts";
 
 export interface ClientTransport {
@@ -12,7 +12,7 @@ export type ConnectionState =
 	| { status: "connected" }
 	| { status: "disconnected"; reason: string };
 
-class ClientRemoteState<T> implements RemoteState<T> {
+class ClientRemoteState<T> implements ReplicatedState<T> {
 	private readonly listeners = new Set<(value: T) => void>();
 	private current: T;
 
@@ -59,10 +59,10 @@ export class ClientStateStore {
 		this.notify();
 	}
 
-	get<T>(service: string, property: string): RemoteState<T> {
+	get<T>(service: string, property: string): ReplicatedState<T> {
 		const state = this.states.get(`${service}.${property}`);
-		if (!state) throw new Error(`Remote state not provided: ${service}.${property}`);
-		return state as RemoteState<T>;
+		if (!state) throw new Error(`Replicated state not provided: ${service}.${property}`);
+		return state as ReplicatedState<T>;
 	}
 
 	subscribe(listener: () => void): () => void {

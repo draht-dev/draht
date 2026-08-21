@@ -1,4 +1,4 @@
-import { type Context, defineRemoteService, type RemoteState, type ThinkingLevel } from "@draht/agent-core";
+import { type Context, defineService, type ReplicatedState, type ThinkingLevel } from "@draht/agent-core";
 
 export interface ModelRef {
 	provider: string;
@@ -22,11 +22,11 @@ export interface ModelsState {
 	refresh: { status: "idle" | "refreshing" | "done" } | { status: "warning"; errors: Record<string, string> };
 }
 
-export interface ModelsService {
-	readonly state: RemoteState<ModelsState>;
+export interface Models {
+	readonly state: ReplicatedState<ModelsState>;
 	cycleThinking(context: Context): Promise<void>;
 	refresh(context: Context): Promise<void>;
 	select(model: ModelRef, context: Context): Promise<void>;
 }
 
-export const Models = defineRemoteService<ModelsService>("models");
+export const Models = defineService<Models>("pi.models");

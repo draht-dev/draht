@@ -1,14 +1,14 @@
 import { homedir } from "node:os";
 import { type Component, truncateToWidth, visibleWidth } from "@draht/tui";
-import type { RemoteState } from "../../lib/index.ts";
+import type { ReplicatedState } from "../../lib/index.ts";
 import type { ModelsState } from "../services.ts";
 import { dim } from "./shared.ts";
 
 export class PluginFooter implements Component {
-	private readonly models: RemoteState<ModelsState>;
+	private readonly models: ReplicatedState<ModelsState>;
 	private readonly updateCount: () => number;
 
-	constructor(models: RemoteState<ModelsState>, updateCount: () => number) {
+	constructor(models: ReplicatedState<ModelsState>, updateCount: () => number) {
 		this.models = models;
 		this.updateCount = updateCount;
 	}

@@ -1,9 +1,9 @@
-import { type Context, defineRemoteService, type RemoteState } from "@draht/agent-core";
+import { type Context, defineService, type ReplicatedState } from "@draht/agent-core";
 
-export interface KeyedProbeService {
-	readonly state: RemoteState<{ value: string }>;
+export interface KeyedProbe {
+	readonly state: ReplicatedState<{ value: string }>;
 	replace(value: string, context: Context): Promise<void>;
 	wait(context: Context): Promise<void>;
 }
 
-export const KeyedProbe = defineRemoteService<KeyedProbeService>("test.keyed-probe");
+export const KeyedProbe = defineService<KeyedProbe>("test.keyed-probe");

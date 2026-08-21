@@ -1,4 +1,4 @@
-import { defineService, type RemoteState, type RpcOptions } from "../lib/index.ts";
+import { defineService, type ReplicatedState, type RpcOptions } from "../lib/index.ts";
 
 export type ThinkingLevel = "off" | "low" | "high";
 
@@ -35,11 +35,11 @@ export interface ModelsState {
 	refresh: RefreshState;
 }
 
-export interface ModelsService {
-	state: RemoteState<ModelsState>;
+export interface Models {
+	state: ReplicatedState<ModelsState>;
 	cycleThinking(): Promise<void>;
 	refresh(options?: RpcOptions): Promise<void>;
 	select(model: ModelRef): Promise<void>;
 }
 
-export const Models = defineService<ModelsService>("models");
+export const Models = defineService<Models>("pi.models");

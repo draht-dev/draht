@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT, type Context, withCancel } from "../../harness/context.ts";
-import { isJsonValue, type MutableRemoteState, type RemoteState } from "./types.ts";
+import { isJsonValue, type MutableReplicatedState, type ReplicatedState } from "./types.ts";
 
 export const REMOTE_STATE_INTERNALS = Symbol("pi.remoteState.internals");
 
@@ -9,7 +9,7 @@ export interface RemoteStateInternals<T = unknown> {
 	subscribe(listener: (value: T, sequence: number, context: Context) => void): () => void;
 }
 
-export interface RemoteStateSource<T = unknown> extends MutableRemoteState<T> {
+export interface RemoteStateSource<T = unknown> extends MutableReplicatedState<T> {
 	readonly [REMOTE_STATE_INTERNALS]: RemoteStateInternals<T>;
 }
 
@@ -59,7 +59,7 @@ class MutableRemoteStateImpl<T> implements RemoteStateSource<T> {
 	}
 }
 
-export function remoteState<T>(initial: T): MutableRemoteState<T> {
+export function remoteState<T>(initial: T): MutableReplicatedState<T> {
 	return new MutableRemoteStateImpl(initial);
 }
 
@@ -79,4 +79,4 @@ function assertStateValue(value: unknown): void {
 	if (!isJsonValue(value)) throw new TypeError("Remote service value must be strict JSON");
 }
 
-export type { RemoteState };
+export type { ReplicatedState };

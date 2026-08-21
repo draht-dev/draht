@@ -84,6 +84,7 @@ import type {
 	ProjectTrustContext,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import type { PermissionAskDetail } from "../../core/extensions/types.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
@@ -99,6 +100,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
+import { boundedSafeText } from "../../core/socket-server/safe-text.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -423,6 +425,16 @@ export class InteractiveMode {
 
 	// Extension UI state
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
+	/**
+	 * Settles the promise of the dialog currently occupying {@link extensionSelector}.
+	 *
+	 * The slot holds at most one dialog, so opening a second one used to overwrite the first without
+	 * settling it — stranding a promise that `beforeToolCall` is awaiting, which wedges the agent
+	 * loop forever. Keeping the settle function beside the component makes the slot non-clobbering.
+	 */
+	private extensionSelectorSettle: ((value: string | undefined) => void) | undefined = undefined;
+	/** Label of the surface that decided the open ask elsewhere, pending a one-line notice. */
+	private extensionDialogDecidedBy: string | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
@@ -2248,6 +2260,7 @@ export class InteractiveMode {
 		title: string,
 		options: string[],
 		opts?: ExtensionUIDialogOptions,
+		detailRows?: readonly string[],
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -2255,33 +2268,83 @@ export class InteractiveMode {
 				return;
 			}
 
+			let settled = false;
+			const settle = (value: string | undefined): void => {
+				if (settled) return;
+				settled = true;
+				opts?.signal?.removeEventListener("abort", onAbort);
+				if (this.extensionSelectorSettle === settle) this.extensionSelectorSettle = undefined;
+				resolve(value);
+			};
+
 			const onAbort = () => {
-				this.hideExtensionSelector();
-				resolve(undefined);
+				// A dialog that was already displaced by a newer one must not tear the newer one down.
+				if (!settled) {
+					this.hideExtensionSelector();
+					this.flushExtensionDialogDecidedNotice();
+				}
+				settle(undefined);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
+
+			// Non-clobbering slot. Whatever is already in it is disposed and its promise settled as
+			// cancelled BEFORE the replacement takes over; the previous code overwrote the field and
+			// left the earlier caller awaiting a promise nothing could ever resolve.
+			const displaced = this.extensionSelectorSettle;
+			this.extensionSelector?.dispose();
+			this.extensionSelector = undefined;
+			this.extensionSelectorSettle = undefined;
 
 			this.extensionSelector = new ExtensionSelectorComponent(
 				title,
 				options,
 				(option) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
 					this.hideExtensionSelector();
-					resolve(option);
+					settle(option);
 				},
 				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
 					this.hideExtensionSelector();
-					resolve(undefined);
+					settle(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
+				{
+					tui: this.ui,
+					timeout: opts?.timeout,
+					detailRows,
+					onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
+				},
 			);
+			this.extensionSelectorSettle = settle;
 
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionSelector);
 			this.ui.setFocus(this.extensionSelector);
 			this.ui.requestRender();
+
+			// Settle the displaced caller only once the replacement is installed, so its continuation
+			// cannot observe an empty dialog slot.
+			displaced?.(undefined);
 		});
+	}
+
+	/**
+	 * Record that the open ask was decided by another surface (an attached client, the RPC caller).
+	 *
+	 * This does NOT dismiss the dialog: `opts.signal` already does that, and the relay aborts it
+	 * right after calling this. All that is added here is the RENDERING — the operator otherwise
+	 * watches a permission dialog vanish with no account of who answered it.
+	 */
+	noteExtensionDialogResolvedElsewhere(label: string): void {
+		this.extensionDialogDecidedBy = label;
+		// Nothing is open to abort, so no teardown will flush the notice — emit it now.
+		if (!this.extensionSelector) this.flushExtensionDialogDecidedNotice();
+	}
+
+	/** Emit the pending deciding-surface notice at most once, then forget it. */
+	private flushExtensionDialogDecidedNotice(): void {
+		const label = this.extensionDialogDecidedBy;
+		if (label === undefined) return;
+		this.extensionDialogDecidedBy = undefined;
+		this.showExtensionNotify(`Permission resolved by ${label}`, "info");
 	}
 
 	/**
@@ -2304,8 +2367,46 @@ export class InteractiveMode {
 		message: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<boolean> {
+		const detail = opts?.detail;
+		if (detail !== undefined) {
+			// A permission ask arrives with typed fields, so it is rendered as typed rows. Flattening
+			// it back into `${title}\n${message}` would hand the attacker-influenced command a way to
+			// forge rows, and the human would be deciding about a string rather than about a call.
+			const rows = this.buildPermissionDetailRows(detail);
+			const result = await this.showExtensionSelector(title, ["Yes", "No"], opts, rows);
+			return result === "Yes";
+		}
 		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
 		return result === "Yes";
+	}
+
+	/**
+	 * Turn a {@link PermissionAskDetail} into one bounded, neutralized row per fact.
+	 *
+	 * The protocol layer neutralizes what arrives from a remote surface, but a LOCALLY raised ask
+	 * never crosses the wire — so the rule is applied here too. Note the ORDER: neutralize, then
+	 * measure. `visibleWidth` strips ANSI for measurement only and reports zero width for bidi
+	 * controls and DEL, so any width budget computed over raw text is a fiction.
+	 */
+	private buildPermissionDetailRows(detail: PermissionAskDetail): string[] {
+		const labels: [string, string | undefined][] = [
+			["Tool", detail.toolName],
+			["Directory", detail.cwd],
+			["Command", detail.command],
+			["Path", detail.path],
+			["Operation", detail.operation],
+			["Reason", detail.reason],
+		];
+		const present = labels.filter((entry): entry is [string, string] => {
+			const value = entry[1];
+			return value !== undefined && value.length > 0;
+		});
+		const labelWidth = present.reduce((max, [label]) => Math.max(max, label.length), 0);
+		// Terminal width minus the row margins, the label column and its ": " separator. The floor
+		// keeps a narrow terminal from producing a zero or negative budget.
+		const columns = this.ui?.terminal?.columns ?? 80;
+		const budget = Math.max(16, columns - 2 - labelWidth - 2);
+		return present.map(([label, value]) => `${label.padEnd(labelWidth)}: ${boundedSafeText(value, budget).value}`);
 	}
 
 	private async promptForMissingSessionCwd(error: MissingSessionCwdError): Promise<string | undefined> {

@@ -34,9 +34,9 @@ describe("generate-skills-artifacts: computeArtifacts is a pure function", () =>
 		expect(second).toEqual(first);
 	});
 
-	it("discovers 102 artifacts from the 32 canonical skills", () => {
+	it("discovers 106 artifacts from the 33 canonical skills", () => {
 		const artifacts = computeArtifacts(SKILLS_ROOT);
-		expect(artifacts.length).toBe(102);
+		expect(artifacts.length).toBe(106);
 	});
 
 	it("emits no packages/draht-claude skills/<cmd>/ wrapper artifacts (no wrapper skills on the claude side)", () => {
@@ -87,7 +87,7 @@ describe("generate-skills-artifacts: CLI, isolated in a temp output root", () =>
 	it("regenerated output into a temp root matches the real committed package files", () => {
 		run(["--output-root", tmpRoot]);
 		const generated = collectFiles(join(tmpRoot, "packages"));
-		expect(Object.keys(generated).length).toBe(102);
+		expect(Object.keys(generated).length).toBe(106);
 		for (const [relPath, content] of Object.entries(generated)) {
 			const committedPath = join(REPO_ROOT, "packages", relPath);
 			expect(readFileSync(committedPath, "utf8"), `${relPath} differs from the committed file`).toBe(content);

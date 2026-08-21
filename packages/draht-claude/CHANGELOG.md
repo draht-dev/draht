@@ -8,6 +8,9 @@
 - `--no-graph-engine` install flag and `DRAHT_SKIP_GRAPH_ENGINE` env var to skip the automatic fetch
 - portable `cinematic-continuation` skill with bundled style/continuity references, a neutral sequence template, Seedance adapter boundary, and offline timeline compiler
 - `/grill` command for whole-frontier interrogation of any subject
+- `/why` command: code archaeology for intent and history — one read-only `investigator` subagent per available evidence category in parallel, synthesized into a confidence-tiered, citation-backed answer with a Sources Consulted coverage map
+- `investigator` agent — single-category evidence gathering with verbatim citations, null results, contradictions, and cross-category leads
+- portable `epistemics` skill — the confidence-calibration discipline `/why` synthesizes with (five tiers, cite-or-label-as-inference, null results as evidence, competing hypotheses, coverage-map contract)
 - portable `unslop` prose-discipline skill — cuts AI tells from prose deliverables (docs, reports, handoffs, commit bodies), adds voice back register-aware, and covers German prose by category (Füllwörter, Werbesprache, Anglizismen)
 - `/resolve-conflicts` command: resolve an in-progress git merge, rebase, or cherry-pick by reconstructing both sides' intent — never by picking a side blind
 

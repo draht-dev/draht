@@ -28,3 +28,7 @@ No check pins a dual-channel skill's shipped copy to its canonical root source �
 `unslop` is admitted as a runtime-referenced dual-channel discipline: the shipped pause-work, verify-work, grill, and brainstorm prompts and the git-committer agent point at it by name, and the pointer must resolve with nothing installed. Dual-channel occupants as of this update: `atomic-reasoning`, `unslop`.
 
 The Known gap above is closed by "feat(scripts): gate dual-channel skill byte-copies in check:draht": scripts/check-draht-customizations.mjs section 10b byte-compares each dual-channel skill's shipped copy against its root source over the `DUAL_CHANNEL_SKILLS` allowlist; the allowlist must be extended in the same change as any new dual-channel occupant. `hexagon-animation` stays outside the gate — it is an asset-bearing product default with no root twin.
+
+## Update (2026-08-21): epistemics admitted
+
+`epistemics` is admitted as a runtime-referenced dual-channel discipline: the shipped `prompts/commands/why.md` points at it by name for its synthesis step, and the pointer must resolve with nothing installed — the same admission test `atomic-reasoning` and `unslop` passed. The section-10b `DUAL_CHANNEL_SKILLS` allowlist is extended in the same change that creates the shipped copy. Dual-channel occupants as of this update: `atomic-reasoning`, `epistemics`, `unslop`.

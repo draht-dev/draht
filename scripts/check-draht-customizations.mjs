@@ -616,6 +616,7 @@ const requiredCommandPrompts = [
 	"resume-work",
 	"review",
 	"verify-work",
+	"why",
 ];
 for (const name of requiredCommandPrompts) {
 	check(
@@ -649,7 +650,7 @@ check(
 
 console.log("\nDual-channel skill byte-copies (root skills/ ↔ shipped builtin)");
 
-const DUAL_CHANNEL_SKILLS = ["atomic-reasoning", "unslop"];
+const DUAL_CHANNEL_SKILLS = ["atomic-reasoning", "epistemics", "unslop"];
 
 for (const name of DUAL_CHANNEL_SKILLS) {
 	const rootCopyPath = `skills/${name}/SKILL.md`;
@@ -679,6 +680,7 @@ const requiredBuiltinAgents = [
 	"debugger",
 	"git-committer",
 	"implementer",
+	"investigator",
 	"reviewer",
 	"security-auditor",
 	"spec-reviewer",

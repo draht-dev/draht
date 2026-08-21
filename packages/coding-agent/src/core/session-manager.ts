@@ -142,6 +142,44 @@ export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
 	display: boolean;
 }
 
+/**
+ * Audit record of a resolved tool-permission request: what was asked, which options were
+ * offered, what was decided, and which surface decided it.
+ *
+ * Does NOT participate in LLM context (ignored by buildSessionContext).
+ *
+ * This is a RECORD ONLY. It must never be treated as answerable or authoritative state,
+ * for three reasons:
+ * - `_buildIndex` sets `leafId` to the last entry unconditionally, so this entry becomes
+ *   the leaf on reload and the next appended message parents off it.
+ * - `createBranchedSession` copies path entries verbatim into a fork, so `requestId` and
+ *   `toolCallId` can appear more than once across sessions.
+ * - The RPC `get_entries` command ships `SessionEntry[]` verbatim, so everything written
+ *   here is visible to any connected RPC client.
+ */
+export interface PermissionResolutionEntry extends SessionEntryBase {
+	type: "permission_resolution";
+	/** Relay-scoped id of the permission request this resolves. */
+	requestId: string;
+	toolCallId: string;
+	toolName: string;
+	/** Canonical (realpath) working directory the tool call was evaluated against. */
+	cwd: string;
+	detail: { command?: string; path?: string; operation?: string };
+	/** The immutable option set that was offered, in the order it was offered. */
+	offeredOptionIds: string[];
+	decision: "approved" | "denied" | "cancelled" | "expired";
+	/** null when nothing was chosen (cancelled/expired). */
+	chosenOptionId: string | null;
+	decidedBy: { surface: "tui" | "attach" | "rpc" | "acp" | "system"; clientId: string | null };
+	requestedAt: string;
+	/** Advisory expiry that was communicated with the ask, if any. */
+	deadline: string | null;
+}
+
+/** Payload for {@link SessionManager.appendPermissionResolution} - the entry minus its tree fields. */
+export type PermissionResolution = Omit<PermissionResolutionEntry, "type" | "id" | "parentId" | "timestamp">;
+
 /** Session entry - has id/parentId for tree structure (returned by "read" methods in SessionManager) */
 export type SessionEntry =
 	| SessionMessageEntry
@@ -152,7 +190,8 @@ export type SessionEntry =
 	| CustomEntry
 	| CustomMessageEntry
 	| LabelEntry
-	| SessionInfoEntry;
+	| SessionInfoEntry
+	| PermissionResolutionEntry;
 
 /** Raw file entry (includes header) */
 export type FileEntry = SessionHeader | SessionEntry;
@@ -1156,6 +1195,35 @@ export class SessionManager {
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			name: sanitizedName,
+		};
+		this._appendEntry(entry);
+		return entry.id;
+	}
+
+	/**
+	 * Append a resolved permission request as child of current leaf, then advance leaf.
+	 * Returns entry id.
+	 *
+	 * Audit record only - see {@link PermissionResolutionEntry} for the accepted side effects
+	 * (leaf move on reload, verbatim duplication into forks, RPC visibility).
+	 */
+	appendPermissionResolution(resolution: PermissionResolution): string {
+		const entry: PermissionResolutionEntry = {
+			type: "permission_resolution",
+			requestId: resolution.requestId,
+			toolCallId: resolution.toolCallId,
+			toolName: resolution.toolName,
+			cwd: resolution.cwd,
+			detail: resolution.detail,
+			offeredOptionIds: resolution.offeredOptionIds,
+			decision: resolution.decision,
+			chosenOptionId: resolution.chosenOptionId,
+			decidedBy: resolution.decidedBy,
+			requestedAt: resolution.requestedAt,
+			deadline: resolution.deadline,
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
 		};
 		this._appendEntry(entry);
 		return entry.id;

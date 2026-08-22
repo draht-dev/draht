@@ -1,46 +1,12 @@
 /**
- * R36-SPAWN.4 and R36-SPAWN.1/.3 each end in a clause no code can satisfy: the
- * environment exemption and the registry's scope must be **stated in the docs**.
- * Before this file, both statements lived in `.planning/phases/35-default-on/PLAN.md`
- * and in the module comment of `spawn-primitive.ts` — a planning file nobody
- * operating this daemon reads, and a comment you have to already be inside the
- * implementation to find. This file is the failing mode of that clause.
- *
- * It guards `docs/geist/spec.md` §15.1 and §15.2 in two layers, because either
- * one alone is a gate with a hole in it:
- *
- *  1. **The statements are there.** Each section is located by its heading and
- *     asserted on its OWN body, so a phrase that happens to appear elsewhere in
- *     a 250-line spec cannot stand in for a deleted section. The anchors are the
- *     requirements' own load-bearing words — "out of scope", "no project-supplied
- *     config", "every load" — not prose that ordinary editing would touch.
- *  2. **The statements are still TRUE of the code they describe.** A doc is a
- *     claim about a system, and a claim nobody re-checks decays into a lie that
- *     reads authoritatively. So the symbols §15.1 cites are asserted to exist in
- *     `spawn-primitive.ts`, `buildChildEnvironment` is asserted to still contain
- *     no `...process.env`, every name the doc says is blocked is asserted to be
- *     in `NEVER_FORWARDED`, and `resolveConfigPath` — which §15.2 names as the
- *     resolver deliberately kept OFF the daemon path — is asserted to still
- *     exist under that name in `packages/geist/src/index.ts`. Layer 2 is what
- *     stops this from being a spell-checker.
- *
- * DELIBERATE DEVIATION FROM THE TASK BRIEF, and it is enforced below: the doc
- * cites implementation by SYMBOL, never by `file.ts:390`. Three tasks are
- * editing `spawn-primitive.ts` across this phase's waves; a line number written
- * into a public-facing spec is wrong before the phase lands, and a wrong
- * citation is worse than none because it sends a reader to unrelated code.
- * `assertNoLineCitations` keeps the next editor honest about that.
- *
- * **Evidence class 2** (`.planning/TEST-STRATEGY.md`): this file reads files off
- * disk. It spawns nothing. The behaviour these documents describe is proven by
- * the spawn suites; what is proven HERE is only that the documents say it.
+ * R36-SPAWN.4 and R36-SPAWN.1/.3 each end in a clause only docs can satisfy. This file guards
+ * `docs/geist/spec.md` §15.1/§15.2 in two layers: the statements are there, and they are still true of the code.
  */
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** `packages/gateway/src/__tests__` → the repo root. */
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
 const SPEC = join(REPO, "docs", "geist", "spec.md");
 const SPAWN_PRIMITIVE = join(REPO, "packages", "gateway", "src", "session", "spawn-primitive.ts");
@@ -48,14 +14,7 @@ const GEIST_INDEX = join(REPO, "packages", "geist", "src", "index.ts");
 
 const spec = (): string => readFileSync(SPEC, "utf-8");
 
-/**
- * The body of one `### <number> …` section: everything from its heading to the
- * next heading of the same or a higher level.
- *
- * Sectioning matters. `expect(wholeSpec).toMatch(/out of scope/)` passes for a
- * spec that says it about something else entirely, and keeps passing after the
- * section this file exists to protect has been deleted.
- */
+/** The body of one `### <number> …` section: its heading to the next heading of the same or a higher level. */
 function section(text: string, number: string): { heading: string; body: string } {
 	const lines = text.split("\n");
 	const start = lines.findIndex((line) => line.startsWith(`### ${number} `));
@@ -72,15 +31,8 @@ function section(text: string, number: string): { heading: string; body: string 
 	}
 	const body = lines.slice(start + 1, end).join("\n");
 
-	// A HEADING IS NOT A STATEMENT. This scans raw lines, so `<!--` before the
-	// heading and `-->` after the section leaves every assertion below green
-	// while the requirement's "stated in the docs" clause is false: GitHub and
-	// every other viewer render exactly nothing. Measured — wrapping §15.1
-	// through §15.2 in one comment kept this file at 11 pass / 0 fail.
-	//
-	// Counting delimiters over the whole prefix is what catches it: an unclosed
-	// `<!--` anywhere above this heading means the heading itself is inside a
-	// comment, however far away the opener is.
+	// An unclosed `<!--` ANYWHERE above the heading, however far away, renders this section as nothing —
+	// every assertion below stays green while "stated in the docs" is false. Hence counting over the whole prefix.
 	const prefix = lines.slice(0, start).join("\n");
 	const opened = (prefix.match(/<!--/g) ?? []).length;
 	const closed = (prefix.match(/-->/g) ?? []).length;
@@ -93,7 +45,6 @@ function section(text: string, number: string): { heading: string; body: string 
 	return { heading: lines[start] ?? "", body };
 }
 
-/** The paragraph of `body` that mentions `needle`, so a claim can be asserted whole. */
 function paragraphWith(body: string, needle: RegExp, label: string): string {
 	const paragraphs = body.split(/\n\s*\n/);
 	const hit = paragraphs.find((p) => needle.test(p));
@@ -101,7 +52,7 @@ function paragraphWith(body: string, needle: RegExp, label: string): string {
 	return hit ?? "";
 }
 
-/** A citation like `spawn-primitive.ts:390` rots; see the header. */
+/** Several tasks edit these files per phase, so a `spawn-primitive.ts:390` in the spec is wrong before the phase lands. */
 function assertNoLineCitations(body: string, where: string): void {
 	const rotten = body.match(/[A-Za-z0-9_-]+\.ts:\d+/g) ?? [];
 	expect(
@@ -110,7 +61,6 @@ function assertNoLineCitations(body: string, where: string): void {
 	).toEqual([]);
 }
 
-/** The body of a top-level `export function <name>(…) {…}`, by brace matching. */
 function functionBody(source: string, name: string): string {
 	const signature = source.indexOf(`export function ${name}(`);
 	expect(signature, `${name} is no longer an exported function — the doc cites it`).toBeGreaterThanOrEqual(0);
@@ -126,16 +76,11 @@ function functionBody(source: string, name: string): string {
 	throw new Error(`unbalanced braces reading ${name}`);
 }
 
-// ---------------------------------------------------------------------------
-// R36-SPAWN.4 — the environment exemption
-// ---------------------------------------------------------------------------
-
 describe("spec §15.1 states the spawned/discovered environment split (R36-SPAWN.4)", () => {
 	test("the section exists and is reachable from the sessions chapter", () => {
 		const text = spec();
 		const { heading } = section(text, "15.1");
 		expect(heading.toLowerCase()).toContain("environment");
-		// §12 is where a reader looking for spawn semantics lands first.
 		expect(
 			text,
 			"§12 no longer points at §15.1/§15.2 — the statements are unreachable from the spawn chapter",
@@ -153,9 +98,6 @@ describe("spec §15.1 states the spawned/discovered environment split (R36-SPAWN
 
 	test("it states that DISCOVERED sessions inherit the user's own shell environment and are out of scope", () => {
 		const { body } = section(spec(), "15.1");
-		// All three clauses in ONE paragraph: an "out of scope" floating three
-		// paragraphs away from "discovers" is not the statement the requirement
-		// asked for.
 		const p = paragraphWith(body, /DISCOVERS/, "sessions geist discovers");
 		expect(p, "the exemption does not say discovered sessions INHERIT").toMatch(/inherit/i);
 		expect(p, "the exemption does not name the user's own shell as the source").toMatch(/shell/i);
@@ -166,12 +108,9 @@ describe("spec §15.1 states the spawned/discovered environment split (R36-SPAWN
 	test("the exemption is stated as scope, not as a gap someone will close later", () => {
 		const { body } = section(spec(), "15.1");
 		const p = paragraphWith(body, /DISCOVERS/, "sessions geist discovers");
-		// A "for now" turns a scope statement into a promise, and a promise in a
-		// spec is what a later reader files a bug against.
 		expect(p, "the exemption is hedged into a temporary state").not.toMatch(
 			/\b(for now|until we|todo|planned for|v2 will)\b/i,
 		);
-		// And it must tell the reader what to do instead, or it is a disclaimer.
 		expect(p, "the exemption gives the reader no action").toMatch(/spawn the session from the board/i);
 	});
 
@@ -180,8 +119,6 @@ describe("spec §15.1 states the spawned/discovered environment split (R36-SPAWN
 		assertNoLineCitations(body, "§15.1");
 
 		const source = readFileSync(SPAWN_PRIMITIVE, "utf-8");
-		// Every symbol the section names must exist, or the doc is sending a
-		// reader to something that is not there.
 		for (const symbol of [
 			"buildChildEnvironment",
 			"DEFAULT_RESUME_PATH",
@@ -189,27 +126,20 @@ describe("spec §15.1 states the spawned/discovered environment split (R36-SPAWN
 			"DECLARED_CREDENTIAL_ENV",
 			"NEVER_FORWARDED",
 		]) {
-			// UNCONDITIONAL, AND IN THIS DIRECTION ON PURPOSE. `if (!body.includes(…))
-			// continue` let an ordinary prose rewrite delete the guard: a §15.1 that
-			// keeps every asserted phrase but drops the backticked symbol names left a
-			// gutted NEVER_FORWARDED passing 11/0, with the expect() count quietly
-			// falling 69 → 58 as the only trace. The doc must NAME the symbol, and the
-			// code must HAVE it — neither half optional.
+			// Both halves unconditional on purpose: skipping the code check when the doc stops naming the symbol
+			// let an ordinary prose rewrite disarm this loop entirely.
 			expect(body.includes(symbol), `§15.1 no longer names ${symbol}; it must, or this guard is silent`).toBe(true);
 			expect(source.includes(symbol), `§15.1 cites ${symbol}, which spawn-primitive.ts no longer defines`).toBe(
 				true,
 			);
 		}
 
-		// The doc's central claim about the built environment, checked against
-		// the function rather than believed.
 		const built = functionBody(source, "buildChildEnvironment");
 		expect(
 			built,
 			"buildChildEnvironment spreads process.env — §15.1's 'built from nothing' is now false",
 		).not.toMatch(/\.\.\.\s*process\.env/);
 
-		// Every name §15.1 tells an operator is refused had better be refused.
 		const blocklist = source.slice(source.indexOf("const NEVER_FORWARDED"), source.indexOf("const ENV_NAME"));
 		expect(blocklist.length, "NEVER_FORWARDED could not be located in spawn-primitive.ts").toBeGreaterThan(0);
 		for (const name of ["PATH", "LD_", "DYLD_", "NODE_OPTIONS", "NODE_PATH", "BASH_ENV", "IFS"]) {
@@ -224,10 +154,6 @@ describe("spec §15.1 states the spawned/discovered environment split (R36-SPAWN
 		}
 	});
 });
-
-// ---------------------------------------------------------------------------
-// R36-SPAWN.1 / R36-SPAWN.3 — the registry is user-owned and names what launches
-// ---------------------------------------------------------------------------
 
 describe("spec §15.2 states the registry's ownership and scope (R36-SPAWN.1, R36-SPAWN.3)", () => {
 	test("its heading says the registry is user-owned and is the ONLY thing that names what may be launched", () => {
@@ -250,10 +176,6 @@ describe("spec §15.2 states the registry's ownership and scope (R36-SPAWN.1, R3
 		expect(p, "the doc does not name the CLI resolver kept off the daemon path").toMatch(/resolveConfigPath/);
 		expect(p).toMatch(/packages\/geist\/src\/index\.ts/);
 		expect(p, "the doc does not say resolveConfigPath is not on the daemon path").toMatch(/not on the daemon path/i);
-		// The vacuous-satisfaction trap: R36-SPAWN.3's second clause is met
-		// because no project config is read AT ALL. If that ever softens into
-		// "a project config may name only approved ids", this assertion is the
-		// thing that notices.
 		expect(p, "a repo-local geist.yaml is no longer documented as IGNORED").toMatch(/\bignored\b/i);
 		expect(p, "the doc now suggests the daemon merges a project config").not.toMatch(
 			/\bmerged with\b|\bis merged\b/i,

@@ -6,7 +6,7 @@
  * sends prompts. Plain ES modules: the daemon serves this file byte for byte and
  * the browser runs it, so the file the acceptance drives is the file that ships.
  *
- * Three things here are load-bearing and deliberately not obvious:
+ * Seven things here are load-bearing and deliberately not obvious:
  *
  *  1. **Authentication is a frame, not a header and never a query string.**
  *     The page opens `/attach` with no credential at all — no `Authorization`
@@ -49,9 +49,39 @@
  *     Safari does not shrink for a keyboard, so `dvh` alone puts the
  *     composer behind one on half the browsers this phase has to serve.
  *
+ *  6. **The fleet is a MODEL here, not the DOM** (R35-ALWAYS.7/.10). Until
+ *     `geist/0.4` the fleet lived only as `<li>` elements and every refresh was
+ *     a full reconnect. It now lives in {@link fleet}, keyed by session id and
+ *     ordered against `epoch`/`seq`; {@link renderFleet} is a projection of that
+ *     map and nothing else reads the DOM to find out what the fleet is. A
+ *     `fleet_delta` is applied in place, a gap or an unseen epoch sends
+ *     `fleet_resync` **on the same socket**, and an `appeared`/`changed` row
+ *     REPLACES the row it lands on rather than merging into it — a resume reuses
+ *     the session id with a new pid, so a merge would render a dead process as
+ *     the one you are talking to.
+ *
+ *  7. **A history row is not steerable, and this page cannot be made to steer
+ *     one.** `attachable === true` is the only case that becomes a `<button>`
+ *     bound to {@link openSession}; everything else is an inert element that
+ *     says "history" in words rather than in styling, and {@link openSession}
+ *     refuses a known non-attachable id a second time. Both locks are
+ *     deliberate: the wire says `attachable:false, resumable:true` for such a
+ *     row, and R35-ALWAYS.7's last clause is about what the UI OFFERS.
+ *
  * There is no HTTP fleet read here either. The fleet is session data: the
  * daemon withholds it until this connection is somebody and then pushes it on
- * the wire, so "refresh" means "reconnect", not "GET /fleet with a bearer".
+ * the wire, so a refresh is `fleet_resync` on the live socket — or, against a
+ * daemon with no observer to resync from, a fresh authenticated connection.
+ * Never a bearer-authorized `GET /fleet` that would put the credential back
+ * into an HTTP header.
+ *
+ * SCOPE OF "WITHOUT RECONNECTING", stated so a later reader does not widen it:
+ * R35-ALWAYS.10 is scoped to the FLEET LIST for Phase 35. `detach` still closes
+ * the WebSocket at the bridge and {@link openSession} / {@link backToFleet}
+ * still use it to navigate. Making `attach` re-callable is a second
+ * wire-semantics change and is out of scope; what is in scope is that the list
+ * of sessions stays current without the page dropping its socket — which also
+ * stops every "refresh" from burning a `DeviceRegistry` credential rotation.
  */
 
 /** Where the rotated device credential lives, as `{deviceId, credential}`. */
@@ -61,6 +91,20 @@ const CLIENT_NAME = "geist-console";
 const CLIENT_ID = `${CLIENT_NAME}-${Math.random().toString(36).slice(2, 10)}`;
 /** Reconnect attempts spent before the page stops and says so. */
 const MAX_RETRIES = 8;
+/**
+ * What this renderer declares in `attach` to be sent `fleet_delta` (R35-ALWAYS.10).
+ *
+ * A literal, matching `FLEET_DELTA_CAPABILITY` in
+ * `packages/geist-core/src/attach/attach-bridge.ts` — this file has no imports
+ * and never will, so the two spell the same string on purpose.
+ *
+ * It is declared in `attach` because `attach` is the only client frame carrying
+ * a `capabilities` field; `hello` has none. The consequence is real and is not a
+ * bug in this page: a connection that has not attached to a session is not sent
+ * deltas by the daemon, so the fleet list is kept current by `fleet_resync` —
+ * the pull half of the same mechanism, on the same socket — until it has.
+ */
+const FLEET_DELTA_CAPABILITY = "fleet-delta";
 /** How often the diagnostics readout re-renders its live measurements. */
 const DIAGNOSTICS_TICK_MS = 500;
 /**
@@ -136,6 +180,31 @@ let agentEntry = null;
  * that element rather than stack a second Approve button under the first.
  */
 const permissionAsks = new Map();
+/**
+ * The fleet, keyed by session id — the model {@link renderFleet} projects.
+ *
+ * Values are whole `AttachableSession` bodies exactly as the wire delivered
+ * them, never patched: see {@link applyFleetDelta} for why a merge is the one
+ * thing that must never happen here.
+ */
+const fleet = new Map();
+/** The observer run {@link fleet} was built from, or null before any snapshot. */
+let fleetEpoch = null;
+/** The `seq` of the last fleet frame applied, or -1 before any. */
+let fleetSeq = -1;
+/** True between sending `fleet_resync` and the snapshot that answers it. */
+let resyncing = false;
+/** What the daemon said it will answer, from `server_hello.capabilities` (0.4). */
+let serverCapabilities = [];
+/**
+ * True once the daemon has refused this bundle's protocol member.
+ *
+ * A `version_mismatch` is refused at `hello`, on every connection, forever — so
+ * unlike every other close this one must not be retried, and the operator has
+ * to be told that reloading is the actual fix rather than watching eight
+ * backoffs end in "disconnected".
+ */
+let staleBundle = false;
 /** True while a close is one we asked for, so it reconnects instead of retrying. */
 let deliberateClose = false;
 let retries = 0;
@@ -223,9 +292,113 @@ function setStatus(text, state) {
 	statusEl.dataset.state = state;
 }
 
+/**
+ * A wall-clock time, or the word `unknown` — never the string `undefined`.
+ *
+ * The guard is not paranoia about the schema: `pid` became optional in
+ * `geist/0.4` and `statusAt` is `nullable`, so this file now renders fields that
+ * are legitimately absent, and a template that interpolates one of them prints
+ * `undefined` into a row a human is meant to act on.
+ */
 function shortTime(iso) {
+	if (typeof iso !== "string" || iso === "") return "unknown";
 	const at = Date.parse(iso);
 	return Number.isFinite(at) ? new Date(at).toLocaleTimeString() : iso;
+}
+
+/**
+ * Whether this row may be steered, and the ONE test for it (R35-ALWAYS.7).
+ *
+ * FAIL CLOSED, deliberately: `attachable === true` and nothing else. Not
+ * `!== false`, not `origin === "socket"`, not "has a pid". A row whose
+ * `attachable` is missing, or is a string, or arrived from a daemon that does
+ * not carry the field is presented as history — because the failure of "assume
+ * steerable" is a human sending a prompt to a process that does not exist, and
+ * the failure of "assume history" is a visible row they cannot open.
+ */
+function isAttachable(session) {
+	return session?.attachable === true;
+}
+
+/**
+ * The quad-state, said out loud, with when it was seen (R35-ALWAYS.8).
+ *
+ * `unknown` is printed as `unknown`. It is never rendered as `clean`, never
+ * dropped, and never turned into a terminal-looking failure: the four values
+ * exist precisely so a probe that timed out cannot read as the one answer a
+ * human acts on. A null `statusAt` is said as well — a status with no timestamp
+ * is a claim about an unstated moment, and this page has the timestamp.
+ */
+function statusFact(session) {
+	const status = typeof session.status === "string" && session.status !== "" ? session.status : "unknown";
+	const at = session.statusAt;
+	return typeof at === "string" && at !== "" ? `${status} at ${shortTime(at)}` : `${status} · never observed`;
+}
+
+/**
+ * The subtitle facts of one row, in order.
+ *
+ * `pid` is pushed only when it really is a number. The line this replaces was
+ * `` `pid ${session.pid} · …` `` and it printed `pid undefined` on every history
+ * row the moment `pid` became optional — which is the whole difference between
+ * a list that says what it knows and one that invents a process.
+ */
+function sessionFacts(session) {
+	const facts = [];
+	if (typeof session.pid === "number") facts.push(`pid ${session.pid}`);
+	else facts.push(session.resumable === true ? "no process · resumable" : "no process");
+	facts.push(`started ${shortTime(session.startedAt)}`);
+	facts.push(String(session.id ?? "").slice(0, 8));
+	facts.push(statusFact(session));
+	return facts;
+}
+
+/**
+ * One fleet row — a `<button>` only when the wire says it can be steered.
+ *
+ * A history row is a `<div>`, binds no click handler, and carries `history` and
+ * its resumable state AS TEXT rather than as a shade of grey: "no renderer may
+ * present it as steerable" is a claim about what the UI offers, and a styling
+ * difference is not an offer withdrawn. The `data-*` attributes carry the three
+ * wire fields verbatim so a surface test can name one without matching prose.
+ *
+ * Every value goes in through `textContent`. A `cwd` is a path this page did not
+ * choose and a session on this machine may have been started anywhere.
+ */
+function sessionItem(session) {
+	const attachable = isAttachable(session);
+	const row = document.createElement(attachable ? "button" : "div");
+	row.className = attachable ? "session-row" : "session-row session-row-history";
+	row.dataset.sessionId = session.id;
+	row.dataset.origin = typeof session.origin === "string" ? session.origin : "history";
+	row.dataset.attachable = attachable ? "true" : "false";
+	row.dataset.resumable = session.resumable === true ? "true" : "false";
+	if (attachable) {
+		row.type = "button";
+		row.addEventListener("click", () => openSession(session.id));
+	}
+
+	const cwd = document.createElement("span");
+	cwd.className = "session-cwd";
+	cwd.textContent = session.cwd;
+
+	const kind = document.createElement("span");
+	kind.className = "session-kind";
+	kind.textContent = attachable
+		? "live · attachable"
+		: session.resumable === true
+			? "history · not attachable · resumable"
+			: "history · not attachable · not resumable";
+
+	const sub = document.createElement("span");
+	sub.className = "session-sub";
+	sub.textContent = sessionFacts(session).join(" · ");
+
+	row.append(cwd, kind, sub);
+
+	const item = document.createElement("li");
+	item.append(row);
+	return item;
 }
 
 function markCurrent() {
@@ -235,31 +408,119 @@ function markCurrent() {
 	}
 }
 
-function renderFleet(sessions) {
+/**
+ * Draw {@link fleet}. A PROJECTION — it reads the model and nothing else.
+ *
+ * Attachable rows first, history after, each group in the order the model holds
+ * them (which is the daemon's: live sorted by id, history newest file first).
+ * Grouping here rather than sorting wholesale keeps a row from jumping the list
+ * when only its `status` moved, and keeps the things that can be opened at the
+ * top of a phone screen.
+ */
+function renderFleet() {
 	fleetEl.textContent = "";
-	for (const session of sessions) {
-		const row = document.createElement("button");
-		row.type = "button";
-		row.className = "session-row";
-		row.dataset.sessionId = session.id;
-
-		const cwd = document.createElement("span");
-		cwd.className = "session-cwd";
-		cwd.textContent = session.cwd;
-
-		const sub = document.createElement("span");
-		sub.className = "session-sub";
-		sub.textContent = `pid ${session.pid} · ${shortTime(session.startedAt)} · ${session.id.slice(0, 8)}`;
-
-		row.append(cwd, sub);
-		row.addEventListener("click", () => openSession(session.id));
-
-		const item = document.createElement("li");
-		item.append(row);
-		fleetEl.append(item);
-	}
-	fleetEmptyEl.hidden = sessions.length > 0;
+	const live = [];
+	const past = [];
+	for (const session of fleet.values()) (isAttachable(session) ? live : past).push(session);
+	for (const session of [...live, ...past]) fleetEl.append(sessionItem(session));
+	fleetEmptyEl.hidden = fleet.size > 0;
 	markCurrent();
+}
+
+/**
+ * Take a `fleet` snapshot as the truth, discarding everything held before it.
+ *
+ * Wholesale, including the epoch and seq: a snapshot is what the daemon sends
+ * at `hello`, at `attach` and in answer to `fleet_resync`, and in all three
+ * cases anything this page was holding is by definition older.
+ */
+function applyFleetSnapshot(frame) {
+	fleetEpoch = typeof frame.epoch === "string" ? frame.epoch : null;
+	fleetSeq = typeof frame.seq === "number" ? frame.seq : -1;
+	fleet.clear();
+	for (const session of frame.sessions ?? []) {
+		if (session && typeof session.id === "string") fleet.set(session.id, session);
+	}
+	const answered = resyncing;
+	resyncing = false;
+	renderFleet();
+	// Only the resync's own notice is taken back down, and only by the frame
+	// that answers it: a "connected" written here on an ordinary snapshot would
+	// overwrite whatever the connection is really saying.
+	if (answered && authenticated) setStatus("connected", "connected");
+}
+
+/**
+ * Apply one `fleet_delta`, or ask for a snapshot instead.
+ *
+ * Three refusals, and each one is a different fact about the frame:
+ *
+ *   - an `epoch` this page has not seen means the observer restarted and the
+ *     rows here describe a world that no longer exists — resync;
+ *   - a `seq` at or below the last applied one is a frame that was already
+ *     superseded (a snapshot overtook it), and is dropped SILENTLY: asking for
+ *     a resync here would answer with the snapshot that caused it;
+ *   - anything else that is not exactly `last + 1` is a gap — resync.
+ *
+ * REPLACE, NEVER MERGE. `appeared` and `changed` carry the whole session body
+ * and `Map.set` overwrites the value at that key: a resumed session reuses its
+ * id with a NEW pid and startedAt, so a merge would keep the dead pid on screen
+ * and label a process that no longer exists as the one being steered.
+ */
+function applyFleetDelta(frame) {
+	// Buffered deltas below the snapshot we asked for are exactly what the
+	// snapshot replaces; applying one would put back a row it has removed.
+	if (resyncing) return;
+	if (fleetEpoch === null || frame.epoch !== fleetEpoch) {
+		// A daemon that sent a delta can answer a resync, so the fallback below is
+		// for the impossible case rather than the expected one — and it is spelled
+		// out because "silently stop updating" is the failure this whole path
+		// exists to remove.
+		if (!resyncFleet("resyncing — the fleet observer restarted")) reconnectForFleet();
+		return;
+	}
+	if (typeof frame.seq !== "number" || frame.seq <= fleetSeq) return;
+	if (frame.seq !== fleetSeq + 1) {
+		if (!resyncFleet("resyncing — missed a fleet update")) reconnectForFleet();
+		return;
+	}
+	fleetSeq = frame.seq;
+	for (const change of frame.changes ?? []) {
+		if (change.kind === "disappeared") {
+			fleet.delete(change.id);
+			continue;
+		}
+		const session = change.session;
+		if (!session || typeof session.id !== "string") continue;
+		fleet.set(session.id, session);
+	}
+	renderFleet();
+}
+
+/** Whether this connection can ask the daemon for the fleet again, right now. */
+function canPullFleet() {
+	return (
+		authenticated && socket?.readyState === WebSocket.OPEN && serverCapabilities.includes(FLEET_DELTA_CAPABILITY)
+	);
+}
+
+/**
+ * Ask for the fleet again ON THIS SOCKET, and say so while it is in flight.
+ *
+ * `fleet_resync` is a distinct post-authentication verb precisely so this does
+ * not cost the connection: a repeated `hello` is refused `invalid_frame` and an
+ * unknown type is refused `unknown_type`, both with close 1008.
+ *
+ * @returns false when this connection cannot ask — no capability, no socket, or
+ *          not yet authenticated — so the caller can fall back to a reconnect.
+ */
+function resyncFleet(why) {
+	if (resyncing) return true;
+	if (!canPullFleet()) return false;
+	if (!send({ type: "fleet_resync" })) return false;
+	resyncing = true;
+	setStatus(why, "resyncing");
+	return true;
 }
 
 function addEntry(kind, text) {
@@ -570,8 +831,23 @@ function send(frame) {
 	return true;
 }
 
+/**
+ * Bind this connection to one session, and declare what it can be sent.
+ *
+ * `capabilities` is the renderer's half of the negotiation the daemon answers
+ * in `server_hello.capabilities`. Declaring `fleet-delta` is what turns the
+ * daemon's fleet observer into a stream for this connection; without it the
+ * page would receive exactly one snapshot and nothing after, which is what
+ * every renderer built before `geist/0.4` still gets.
+ */
 function sendAttach(sessionId) {
-	send({ type: "attach", sessionId, clientId: CLIENT_ID, mode: "read-write" });
+	send({
+		type: "attach",
+		sessionId,
+		clientId: CLIENT_ID,
+		mode: "read-write",
+		capabilities: [FLEET_DELTA_CAPABILITY],
+	});
 }
 
 /**
@@ -597,6 +873,11 @@ function connect() {
 	if (!protocol || (!bootstrap && !device)) return;
 	authenticated = false;
 	attachedId = null;
+	// A resync in flight belongs to the socket that is gone; the new connection
+	// opens with a snapshot of its own, so leaving this set would make the page
+	// drop that snapshot's successors on the floor.
+	resyncing = false;
+	serverCapabilities = [];
 	setStatus("connecting…", "connecting");
 
 	const url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/attach`;
@@ -657,6 +938,17 @@ function closed(event) {
 		needsPairing("not paired — open the link from `geist pair`");
 		return;
 	}
+	// The daemon refused this bundle's protocol member. Every reconnect will be
+	// refused at `hello` in exactly the same way — including one we asked for —
+	// so retrying is spending eight backoffs to arrive at a sentence the page can
+	// say now. Checked here rather than left to the retry budget because the
+	// budget's message ("reload to reconnect") is advice that does not work:
+	// reloading is the fix, and it is the fix because it fetches new bytes.
+	if (staleBundle) {
+		deliberateClose = false;
+		setStatus("this console is out of date — reload the page to load the current one", "error");
+		return;
+	}
 	if (deliberateClose) {
 		deliberateClose = false;
 		connect();
@@ -685,6 +977,11 @@ function receive(frame) {
 		// connection is still anonymous, and the daemon has deliberately sent no
 		// fleet. Present the credential and wait.
 		case "server_hello":
+			// What this daemon says it will ANSWER (`geist/0.4`). A daemon with no
+			// fleet observer declares nothing, and this page must then not send
+			// `fleet_resync` at it: an unknown type is refused `unknown_type` with
+			// close 1008, which costs the connection the resync existed to save.
+			serverCapabilities = Array.isArray(frame.capabilities) ? frame.capabilities : [];
 			setStatus("authenticating…", "connecting");
 			presentCredential();
 			break;
@@ -713,7 +1010,14 @@ function receive(frame) {
 		// Session data, and the daemon's proof that it accepted us: it is not
 		// sent to a connection that has not authenticated.
 		case "fleet":
-			renderFleet(frame.sessions);
+			applyFleetSnapshot(frame);
+			break;
+
+		// What moved since the last fleet frame on THIS socket (R35-ALWAYS.10).
+		// Sent only because `attach` declared `fleet-delta`; ordered against the
+		// snapshot by `epoch` + `seq`.
+		case "fleet_delta":
+			applyFleetDelta(frame);
 			break;
 
 		// The attach worked, which is the whole of what a connection that wanted a
@@ -780,6 +1084,12 @@ function receive(frame) {
 			addEntry("fatal", `${frame.code}: ${frame.message}`);
 			setStatus(`refused: ${frame.code}`, "error");
 			if (frame.code === "not_authenticated") forgetDevice();
+			// A daemon that has moved to a newer 0.x member hard-refuses this
+			// bundle at `hello` — every 0.x member is mutually incompatible and
+			// `ProtocolVersionSchema` is a literal. The bytes in this tab are the
+			// stale thing, so the reconnect loop is stopped in {@link closed} and
+			// the operator is told what actually helps.
+			if (frame.code === "version_mismatch") staleBundle = true;
 			break;
 	}
 }
@@ -792,6 +1102,15 @@ function receive(frame) {
  * socket rather than pretending the wire allows something it does not.
  */
 function openSession(sessionId) {
+	// The second lock (R35-ALWAYS.7). {@link sessionItem} never binds this to a
+	// history row, and this refuses one anyway: "no renderer may present it as
+	// steerable" is about the offer, and an offer that only a stylesheet
+	// withdraws is one bad selector away from being made again. An id the model
+	// has never heard of is still allowed through — `wantedId` is legitimately
+	// set for a session the fleet has not caught up with, and the daemon refuses
+	// what does not exist.
+	const known = fleet.get(sessionId);
+	if (known !== undefined && !isAttachable(known)) return;
 	if (attachedId === sessionId) {
 		document.body.dataset.view = "session";
 		return;
@@ -838,14 +1157,15 @@ function sendPrompt() {
 }
 
 /**
- * Re-read the fleet — which, on this wire, means reconnecting.
+ * Re-read the fleet the way this wire used to require: by reconnecting.
  *
- * There is no client frame that asks for the fleet: the daemon pushes it once,
- * to a connection that has authenticated, because it is session data. So the
- * honest refresh is a fresh authenticated connection, not a bearer-authorized
- * `GET /fleet` that would put the credential back into an HTTP header.
+ * Kept, and kept honest about what it costs. `DeviceRegistry` ROTATES the device
+ * credential on every exchange and only a bounded handful of predecessors stay
+ * recognisable, so each of these burns a rotation and a disk write, and a flaky
+ * phone can race its own rotations. It is now the FALLBACK — for a daemon with
+ * no fleet observer to resync from, and for a page whose socket is already gone.
  */
-function refreshFleet() {
+function reconnectForFleet() {
 	if (!socket) {
 		retries = 0;
 		connect();
@@ -853,6 +1173,20 @@ function refreshFleet() {
 	}
 	deliberateClose = true;
 	socket.close();
+}
+
+/**
+ * Re-read the fleet (R35-ALWAYS.10).
+ *
+ * `fleet_resync` first, on the socket that is already open and already
+ * authenticated: there is still no `GET /fleet with a bearer` here — the fleet
+ * is session data and the credential stays a frame — but since `geist/0.4` the
+ * wire has a verb for asking again, so a refresh no longer has to throw the
+ * connection away to use it.
+ */
+function refreshFleet() {
+	if (resyncFleet("refreshing the fleet…")) return;
+	reconnectForFleet();
 }
 
 function resizePrompt() {

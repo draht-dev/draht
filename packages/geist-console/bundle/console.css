@@ -126,6 +126,16 @@ body {
 	color: var(--status-danger);
 }
 
+/*
+ * A resync is not a disconnection and must not read as one: the socket is up,
+ * the session is still attached, and the only thing being replaced is the fleet
+ * listing. It gets the warning colour rather than the danger one, because what
+ * it says is "this list is a moment out of date", not "you have lost the page".
+ */
+#status[data-state="resyncing"] {
+	color: var(--status-warn);
+}
+
 /* --- shell --------------------------------------------------------------- */
 #shell {
 	display: grid;
@@ -209,6 +219,45 @@ body[data-keyboard="up"] #decision-record {
 
 .session-row:hover {
 	background: var(--hover);
+}
+
+/*
+ * A history row (R35-ALWAYS.7).
+ *
+ * It is a `<div>`, not a `<button>` — console.js never builds one as a button
+ * and binds no handler to it — so these rules are the *appearance* of a
+ * decision that was already made in the DOM, never the decision itself. Nothing
+ * here may be the only thing saying a row cannot be steered: the row also
+ * carries the word "history" in its own text, because a stylesheet that failed
+ * to load must not turn an inert row into an inviting one.
+ */
+.session-row-history {
+	cursor: default;
+	border-style: dashed;
+	background: transparent;
+	color: var(--ink-dim);
+}
+
+.session-row-history:hover {
+	background: transparent;
+}
+
+/*
+ * What kind of row this is, in words. Not a colour, not an icon, not a shade:
+ * "live · attachable" or "history · not attachable · resumable", set as text by
+ * console.js so it survives a stylesheet that never arrived.
+ */
+.session-kind {
+	display: block;
+	margin-top: 2px;
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--ink-dim);
+}
+
+.session-row:not(.session-row-history) .session-kind {
+	color: var(--status-ok);
 }
 
 .session-row[aria-current="true"] {

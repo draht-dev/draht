@@ -24,6 +24,17 @@ export interface ConfigPathOptions {
  *
  * Only resolves the path — reading and validating the file against the
  * config contract is `@draht/geist-protocol`'s job (spec §9.1).
+ *
+ * THIS IS THE CLI's RESOLVER AND THE DAEMON MUST NEVER CALL IT. It prefers
+ * `<cwd>/geist.yaml`, i.e. a checked-out repository's own config outranks the
+ * user's — which is exactly right for a human running `geist` inside a project
+ * they already trust, and exactly wrong for a daemon acting on a frame from a
+ * phone. R36-SPAWN.3 requires that the harness/project registry the daemon
+ * resolves spawns against be USER-OWNED and never project-supplied; the daemon
+ * uses `resolveUserRegistryPath` from `@draht/geist-protocol`, which considers
+ * only `--registry`/`--config` and `~/.geist/config.yaml` and never reads the
+ * current directory at all. The behaviour here is deliberately unchanged: two
+ * consumers, two resolvers, and the difference between them is the requirement.
  */
 export function resolveConfigPath(options: ConfigPathOptions = {}): string {
 	if (options.explicit) {

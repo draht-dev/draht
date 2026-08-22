@@ -8,6 +8,16 @@ export {
 	parseGeistConfig,
 } from "./config.js";
 export {
+	assertPrivateRegistryFile,
+	loadGeistConfigFile,
+	RegistryFileRefusedError,
+	type RegistryPathScope,
+	type RegistryRefusalRule,
+	resolveUserRegistryPath,
+	USER_REGISTRY_PATH_SEGMENTS,
+	type UserRegistryPathOptions,
+} from "./config-load.js";
+export {
 	type FleetAgent,
 	FleetAgentSchema,
 	type FleetSession,

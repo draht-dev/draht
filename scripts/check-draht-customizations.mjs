@@ -513,12 +513,14 @@ check(
 console.log("\n.planning/ integrity");
 
 try {
-	const diffOutput = execSync("git diff main -- .planning/", {
-		cwd: root,
-		encoding: "utf-8",
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-	check(diffOutput.trim() === "", `.planning/ unchanged vs main`);
+	const run = (cmd) => execSync(cmd, { cwd: root, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+	// `git diff main` reads the WORKING TREE, so on the branch that authors planning
+	// docs this fires on every edit and the pre-commit hook can never commit one.
+	if (run("git rev-parse --abbrev-ref HEAD") === "main" || run("git rev-parse HEAD") === run("git rev-parse main")) {
+		pass(`.planning/ check skipped (authoring branch)`);
+	} else {
+		check(run("git diff main -- .planning/") === "", `.planning/ unchanged vs main`);
+	}
 } catch {
 	// If not on a branch or main doesn't exist, skip
 	pass(`.planning/ check skipped (no main ref)`);

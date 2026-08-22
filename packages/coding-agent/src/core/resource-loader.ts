@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.ts";
@@ -67,22 +67,79 @@ function resolvePromptInput(input: string | undefined, description: string): str
 	return input;
 }
 
-function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
+/**
+ * Canonical-path containment with a separator boundary (GSEC-13).
+ *
+ * `child.startsWith(root)` alone counts `/x/projects-evil` as inside `/x/projects`,
+ * which is the defect this helper exists to avoid. Both arguments must already be
+ * canonical (realpath'd) — a containment test over uncanonicalized paths can be
+ * walked out of with `..` or a symlinked component.
+ */
+function isCanonicallyContained(child: string, root: string): boolean {
+	if (child === root) return true;
+	const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+	return child.startsWith(prefix);
+}
+
+/**
+ * Load the context file (AGENTS.md / CLAUDE.md) sitting directly in `dir`, if any.
+ *
+ * SECURITY (GSEC-13, R36-SPAWN.6): project context is read automatically and its bytes
+ * land verbatim in the system prompt (see `buildSystemPrompt`), so it is attacker-reachable
+ * input on any repository a session is pointed at. Three properties, in this order:
+ *
+ *  1. NO-FOLLOW. `lstatSync` first, and a symbolic link is refused outright rather than
+ *     resolved. `statSync` follows, so the previous version read an `AGENTS.md` that was a
+ *     symlink to `~/.ssh/id_rsa` and handed it to the provider. Do not "simplify" this back
+ *     to `statSync` — the check and the read must both be about the same inode we lstat'd.
+ *  2. REGULAR FILE ONLY. A fifo, device, socket or directory named `AGENTS.md` is skipped
+ *     (a fifo would otherwise block `readFileSync` forever).
+ *  3. CONTAINMENT. When `canonicalRoot` is set, the realpath of the file must be inside it,
+ *     with a separator boundary. This is belt-and-braces against a hardlink or a race that
+ *     survives (1): the no-follow check is what makes it cheap, the containment check is
+ *     what makes it sound.
+ *
+ * `canonicalRoot` undefined means "no constraint", which is exactly today's behaviour for
+ * every discovered session, and for the agent-dir global context file, which is a USER
+ * resource rather than a project one and stays exempt.
+ */
+function loadContextFileFromDir(dir: string, canonicalRoot?: string): { path: string; content: string } | null {
 	const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
-		if (existsSync(filePath)) {
-			try {
-				if (!statSync(filePath).isFile()) {
+		// lstat, never stat: a symlink must be refused, not resolved. Its failure is the
+		// old `existsSync` guard and stays silent — the ancestor walk crosses directories
+		// this process cannot read (EACCES) on the way to `/`, and warning about each of
+		// four candidates in each of them would be noise, not a finding.
+		let stats: ReturnType<typeof lstatSync>;
+		try {
+			stats = lstatSync(filePath);
+		} catch {
+			continue;
+		}
+		if (stats.isSymbolicLink()) {
+			console.error(chalk.yellow(`Warning: Ignoring context file ${filePath}: symbolic links are not followed`));
+			continue;
+		}
+		if (!stats.isFile()) {
+			continue;
+		}
+		try {
+			if (canonicalRoot !== undefined) {
+				const canonical = realpathSync(filePath);
+				if (!isCanonicallyContained(canonical, canonicalRoot)) {
+					console.error(
+						chalk.yellow(`Warning: Ignoring context file ${filePath}: outside context root ${canonicalRoot}`),
+					);
 					continue;
 				}
-				return {
-					path: filePath,
-					content: readFileSync(filePath, "utf-8"),
-				};
-			} catch (error) {
-				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
 			}
+			return {
+				path: filePath,
+				content: readFileSync(filePath, "utf-8"),
+			};
+		} catch (error) {
+			console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
 		}
 	}
 	return null;
@@ -118,9 +175,23 @@ function findShadowedContextFile(cwd: string): string | undefined {
 export function loadProjectContextFiles(options: {
 	cwd: string;
 	agentDir: string;
+	/**
+	 * Absolute path the ancestor walk stops at, and the root every discovered project
+	 * context file must be canonically contained under (R36-SPAWN.6).
+	 *
+	 * This is the PROJECT ROOT, not the session cwd: draht-mono itself keeps an AGENTS.md
+	 * at the repo root that subdirectory sessions are meant to inherit, so rooting at cwd
+	 * would silently drop it.
+	 *
+	 * Left unset the walk runs to `/` and nothing is refused on containment grounds, which
+	 * is byte-identical to the behaviour every discovered session has today.
+	 */
+	contextRoot?: string;
 }): Array<{ path: string; content: string }> {
 	const resolvedCwd = resolvePath(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
+	const canonicalRoot =
+		options.contextRoot === undefined ? undefined : canonicalizePath(resolvePath(options.contextRoot));
 
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
@@ -137,7 +208,12 @@ export function loadProjectContextFiles(options: {
 	let currentDir = resolvedCwd;
 
 	while (true) {
-		const contextFile = loadContextFileFromDir(currentDir);
+		// Stops the walk at the context root: one step above it containment fails, which is
+		// also what refuses a cwd that lies outside the root entirely.
+		if (canonicalRoot !== undefined && !isCanonicallyContained(canonicalizePath(currentDir), canonicalRoot)) {
+			break;
+		}
+		const contextFile = loadContextFileFromDir(currentDir, canonicalRoot);
 		const isShadowed =
 			shadowedContextFile !== undefined && canonicalizePath(contextFile?.path ?? "") === shadowedContextFile;
 		if (contextFile && !isShadowed && !seenPaths.has(contextFile.path)) {
@@ -170,6 +246,8 @@ export interface DefaultResourceLoaderOptions {
 	noPromptTemplates?: boolean;
 	noThemes?: boolean;
 	noContextFiles?: boolean;
+	/** Absolute project root that automatically-read context files must stay inside (R36-SPAWN.6). */
+	contextRoot?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string[];
 	extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
@@ -208,6 +286,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private noPromptTemplates: boolean;
 	private noThemes: boolean;
 	private noContextFiles: boolean;
+	private contextRoot?: string;
 	private systemPromptSource?: string;
 	private appendSystemPromptSource?: string[];
 	private extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
@@ -270,6 +349,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.noPromptTemplates = options.noPromptTemplates ?? false;
 		this.noThemes = options.noThemes ?? false;
 		this.noContextFiles = options.noContextFiles ?? false;
+		this.contextRoot = options.contextRoot;
 		this.systemPromptSource = options.systemPrompt;
 		this.appendSystemPromptSource = options.appendSystemPrompt;
 		this.extensionsOverride = options.extensionsOverride;
@@ -517,6 +597,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				: loadProjectContextFiles({
 						cwd: this.cwd,
 						agentDir: this.agentDir,
+						contextRoot: this.contextRoot,
 					}),
 		};
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;

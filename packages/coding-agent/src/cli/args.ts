@@ -2,6 +2,7 @@
  * CLI argument parsing and help display
  */
 
+import { isAbsolute } from "node:path";
 import type { ThinkingLevel } from "@draht/agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
@@ -46,6 +47,13 @@ export interface Args {
 	themes?: string[];
 	noThemes?: boolean;
 	noContextFiles?: boolean;
+	/**
+	 * Absolute project root that automatically-read AGENTS.md / CLAUDE.md discovery is
+	 * confined to (R36-SPAWN.6). Non-absolute values are refused, not resolved against
+	 * cwd: a relative root is meaningless to a daemon-spawned child whose cwd is chosen
+	 * by the caller being confined.
+	 */
+	contextRoot?: string;
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
@@ -189,6 +197,20 @@ export function parseArgs(args: string[]): Args {
 			result.noThemes = true;
 		} else if (arg === "--no-context-files" || arg === "-nc") {
 			result.noContextFiles = true;
+		} else if (arg === "--context-root") {
+			if (i + 1 < args.length) {
+				const value = args[++i];
+				if (!isAbsolute(value)) {
+					result.diagnostics.push({
+						type: "error",
+						message: `--context-root requires an absolute path (got "${value}")`,
+					});
+				} else {
+					result.contextRoot = value;
+				}
+			} else {
+				result.diagnostics.push({ type: "error", message: "--context-root requires a value" });
+			}
 		} else if (arg === "--list-models") {
 			// Check if next arg is a search pattern (not a flag or file arg)
 			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
@@ -297,6 +319,7 @@ ${chalk.bold("Options:")}
   --theme <path>                 Load a theme file or directory (can be used multiple times)
   --no-themes                    Disable theme discovery and loading
   --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
+  --context-root <path>          Confine AGENTS.md/CLAUDE.md discovery to an absolute project root
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)

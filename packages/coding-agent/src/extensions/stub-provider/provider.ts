@@ -14,6 +14,7 @@
  * queue into another process.
  */
 
+import { writeFileSync } from "node:fs";
 import type { Provider } from "@draht/ai";
 import {
 	type FauxContentBlock,
@@ -43,6 +44,25 @@ export const STUB_PROVIDER_TOKENS_PER_SECOND_ENV = "DRAHT_STUB_PROVIDER_TOKENS_P
  * which is what ends a turn after the scripted call has run.
  */
 export const STUB_PROVIDER_TOOL_CALLS_ENV = "DRAHT_STUB_TOOL_CALLS";
+
+/**
+ * Optional recording seam (R36-SPAWN.6). Set to an absolute path and the stub writes the
+ * `systemPrompt` of the FIRST provider request — and only the first — to that file, so an
+ * acceptance test can assert what did and did not reach the provider before any answer came
+ * back. The file is the whole assertion surface: an out-of-root canary must be absent from
+ * it, and an in-root canary must be PRESENT, or "absent" is satisfied by a recorder that
+ * recorded nothing.
+ *
+ * WHY HERE, and not the `before_provider_request` extension event: that event never fires
+ * under this provider. sdk.ts wires it to the api layer's `onPayload`, every real adapter
+ * calls `onPayload`, and packages/ai/src/providers/faux.ts never does — a recorder extension
+ * loads and its factory runs, but the payload hook stays silent. Reaching for it costs hours
+ * and yields a vacuously green test.
+ *
+ * Carried into a daemon-spawned child by naming it in `DRAHT_RESUME_ENV_ALLOW`, exactly as
+ * DRAHT_STUB_TOOL_CALLS already is.
+ */
+export const STUB_PROVIDER_RECORD_CONTEXT_ENV = "DRAHT_STUB_RECORD_CONTEXT";
 
 export function isStubProviderEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const value = env[STUB_PROVIDER_ENV];
@@ -155,8 +175,23 @@ export function createStubProvider(env: NodeJS.ProcessEnv = process.env): Provid
 	const scripts = parseStubToolCallScripts(env);
 	let turn = 0;
 
+	const recordContextPath = env[STUB_PROVIDER_RECORD_CONTEXT_ENV];
+	let recorded = false;
+
 	const respond: FauxResponseFactory = (context) => {
 		handle.appendResponses([respond]);
+		if (recordContextPath && !recorded) {
+			// Set before the write, so a throwing write cannot turn this into a per-turn
+			// recorder that overwrites the first request's evidence with a later one.
+			recorded = true;
+			try {
+				writeFileSync(recordContextPath, context.systemPrompt ?? "", "utf-8");
+			} catch {
+				// Never throw out of the response factory: a broken recorder must not change
+				// what the provider answers, or the test it exists to serve stops being about
+				// the thing under test.
+			}
+		}
 		const script = scripts?.[turn++];
 		if (!script || script.toolCalls.length === 0) {
 			return fauxAssistantMessage(script?.text ?? stubReplyFor(lastUserText(context.messages)));

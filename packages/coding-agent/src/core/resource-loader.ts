@@ -95,9 +95,9 @@ function isCanonicallyContained(child: string, root: string): boolean {
  *  2. REGULAR FILE ONLY. A fifo, device, socket or directory named `AGENTS.md` is skipped
  *     (a fifo would otherwise block `readFileSync` forever).
  *  3. CONTAINMENT. When `canonicalRoot` is set, the realpath of the file must be inside it,
- *     with a separator boundary. This is belt-and-braces against a hardlink or a race that
- *     survives (1): the no-follow check is what makes it cheap, the containment check is
- *     what makes it sound.
+ *     with a separator boundary. Not redundant with the walk break in `loadProjectContextFiles`:
+ *     that one canonicalizes through `canonicalizePath`, which fails OPEN on a realpath error,
+ *     while this bare `realpathSync` fails CLOSED. Do not "simplify" it away.
  *
  * `canonicalRoot` undefined means "no constraint", which is exactly today's behaviour for
  * every discovered session, and for the agent-dir global context file, which is a USER

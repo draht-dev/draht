@@ -1,40 +1,22 @@
 /**
  * R36-SPAWN.6 / GSEC-13 — automatically-read project context is a NO-FOLLOW regular file
- * that is canonically contained under an approved root.
+ * canonically contained under an approved root. Its bytes land verbatim in the system prompt.
  *
- * Project context (AGENTS.md / CLAUDE.md) is read without anyone asking, and its bytes land
- * verbatim inside `buildSystemPrompt` and therefore inside the very first provider request.
- * That makes it attacker-reachable input on any repository a session is pointed at, so the
- * loader owes three properties: symlinks are refused rather than followed, special files are
- * skipped rather than read, and the ancestor walk stops at the project root instead of
- * running to `/`.
- *
- * EVERY containment assertion here pairs "the out-of-root canary is absent" with "the in-root
- * canary IS present". Without the positive half a loader that returns nothing at all passes
- * this file forever.
- *
- * ## What the containment cases below can and cannot witness (MEASURED, not reasoned)
- *
- * `resource-loader.ts` enforces containment TWICE — a walk break at the top of the ancestor
- * loop, and a per-file `realpathSync` check inside `loadContextFileFromDir` — and the second
- * one's refusal branch IS UNREACHABLE through this module's exported surface. Proof, by
- * tripwire: with `process.stderr.write` on both branches, five shapes were driven through
- * `loadProjectContextFiles` (a symlinked cwd, a symlinked directory component walked from
- * below, a hardlink into the root, a self-referential symlink whose `realpath` fails, and a
- * root reached through a symlinked prefix). The walk break fired every time; the per-file
- * branch fired NEVER. It cannot: the walk break tests `realpath(dir)` and the per-file check
- * tests `realpath(dir/AGENTS.md)`, the leaf is never itself a symlink (that is refused one
- * check earlier), so the second is implied by the first.
- *
- * So the two are not two layers. `the ancestor walk stops at the context root` below witnesses
- * the walk break ALONE — by asserting nothing above the root was ever inspected, which the
- * per-file check cannot make true — and the per-file check is left deliberately unwitnessed
- * rather than covered by a case that would pass with it deleted. See the report accompanying
- * this change for the source change that would make it independently reachable.
+ * Every containment assertion pairs "the out-of-root canary is absent" with "the in-root canary
+ * IS present". Without the positive half a loader that returns nothing at all passes forever.
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
@@ -50,26 +32,18 @@ import {
 const OUT_OF_ROOT_CANARY = "OUT-OF-ROOT-CANARY-4f1a9c";
 const IN_ROOT_CANARY = "IN-ROOT-CANARY-7b23de";
 
-/**
- * The CLI entry as SOURCE, run under bun.
- *
- * Deliberately not `dist/cli.js`: a test that asserts the flag is wired would otherwise be
- * asserting it about whatever was last built, and would stay green against a `main.ts` in
- * this checkout that no longer passes it.
- */
+/** SOURCE, not `dist/cli.js`: a dist entry asserts about whatever was last built. */
 const CLI_SOURCE_ENTRY = resolve(__dirname, "..", "src", "cli.ts");
 
 let tmp: string;
 let agentDir: string;
 
-/** Concatenated content of everything the loader decided to hand to the system prompt. */
 function contentOf(files: Array<{ path: string; content: string }>): string {
 	return files.map((f) => f.content).join("\n");
 }
 
 beforeEach(() => {
-	// /private/tmp, not /tmp: /tmp is a symlink on macOS and every containment comparison
-	// here is against canonical paths.
+	// /private/tmp, not /tmp: /tmp is a symlink on macOS, and comparisons here are canonical.
 	tmp = mkdtempSync("/private/tmp/ctx-root-");
 	agentDir = join(tmp, "agent");
 	mkdirSync(agentDir, { recursive: true });
@@ -94,7 +68,6 @@ describe("project context files are no-follow", () => {
 		const text = contentOf(files);
 
 		expect(text).not.toContain(OUT_OF_ROOT_CANARY);
-		// POSITIVE CONTROL: a loader that returned nothing would satisfy the line above.
 		expect(text).toContain(IN_ROOT_CANARY);
 		expect(files.map((f) => f.path)).not.toContain(join(project, "AGENTS.md"));
 	});
@@ -151,25 +124,13 @@ describe("the ancestor walk stops at the context root", () => {
 		const text = contentOf(files);
 
 		expect(text).not.toContain(OUT_OF_ROOT_CANARY);
-		// POSITIVE CONTROL and the BOUNDARY CHOICE: the root is the PROJECT root, not the
-		// session cwd, so a subdirectory session still inherits the repo-root AGENTS.md.
 		expect(text).toContain(IN_ROOT_CANARY);
 		expect(files.map((f) => f.path)).toEqual([join(root, "AGENTS.md")]);
 	});
 
 	it("STOPS at the root rather than walking to / and filtering — nothing above it is inspected", () => {
-		// THE INDEPENDENT WITNESS FOR THE WALK BREAK (resource-loader.ts, top of the ancestor
-		// loop). Every other containment case here is satisfied by EITHER enforcement point,
-		// so deleting the break alone leaves them all green: the walk runs on to `/` and the
-		// per-file check refuses each ancestor, and the CONTENT is identical.
-		//
-		// What is not identical is whether anything above the root was looked at. The break
-		// means the loader never lstats, never realpaths and never reports a path outside the
-		// project — the per-file check cannot make that true, because it only runs after a
-		// candidate has been stat'd. So the assertion is on the loader's own warnings: with
-		// the break in place there is NO complaint about the ancestor, because the ancestor
-		// was never reached; with it deleted, `Ignoring context file …: outside context root`
-		// names it.
+		// Deleting the walk break leaves CONTENT identical — the per-file check refuses each
+		// ancestor — so the only witness is the missing warning about a path above the root.
 		const above = join(tmp, "above");
 		const root = join(above, "root");
 		const deep = join(root, "packages", "thing");
@@ -188,8 +149,6 @@ describe("the ancestor walk stops at the context root", () => {
 			spy.mockRestore();
 		}
 
-		// POSITIVE CONTROL: the walk really ran and really loaded the in-root file, so
-		// "nothing was said about the ancestor" is not "nothing happened".
 		expect(files.map((f) => f.path)).toEqual([join(root, "AGENTS.md")]);
 		expect(contentOf(files)).toContain(IN_ROOT_CANARY);
 
@@ -197,8 +156,6 @@ describe("the ancestor walk stops at the context root", () => {
 	});
 
 	it("treats a sibling directory whose name merely prefixes the root as outside it", () => {
-		// `startsWith(root)` without a separator boundary counts `/x/root-evil` as inside
-		// `/x/root`. Contained-with-a-boundary does not.
 		const root = join(tmp, "root");
 		const evil = join(tmp, "root-evil");
 		mkdirSync(root, { recursive: true });
@@ -212,6 +169,23 @@ describe("the ancestor walk stops at the context root", () => {
 		expect(contentOf(loadProjectContextFiles({ cwd: root, agentDir, contextRoot: root }))).toContain(IN_ROOT_CANARY);
 	});
 
+	it("keeps the root's own context file when cwd and root are spelled through a symlinked prefix", () => {
+		// Why the walk break must keep CANONICALIZING `currentDir`: compared lexically against
+		// the realpath'd root, `alias/root` is not inside `real/root`.
+		const real = join(tmp, "real");
+		const root = join(real, "root");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(real, "AGENTS.md"), `${OUT_OF_ROOT_CANARY}\n`);
+		writeFileSync(join(root, "AGENTS.md"), `${IN_ROOT_CANARY}\n`);
+		symlinkSync(real, join(tmp, "alias"));
+		const aliasRoot = join(tmp, "alias", "root");
+
+		const text = contentOf(loadProjectContextFiles({ cwd: aliasRoot, agentDir, contextRoot: aliasRoot }));
+
+		expect(text).not.toContain(OUT_OF_ROOT_CANARY);
+		expect(text).toContain(IN_ROOT_CANARY);
+	});
+
 	it("still walks past the project root to distant ancestors when no root is configured", () => {
 		const above = join(tmp, "above");
 		const root = join(above, "root");
@@ -223,7 +197,6 @@ describe("the ancestor walk stops at the context root", () => {
 
 		const files = loadProjectContextFiles({ cwd: deep, agentDir });
 
-		// Unchanged behaviour for every discovered session: outermost first, all the way up.
 		expect(files.map((f) => f.path)).toEqual([
 			join(tmp, "AGENTS.md"),
 			join(above, "AGENTS.md"),
@@ -235,13 +208,97 @@ describe("the ancestor walk stops at the context root", () => {
 		const root = join(tmp, "root");
 		mkdirSync(root, { recursive: true });
 		writeFileSync(join(root, "AGENTS.md"), `${IN_ROOT_CANARY}\n`);
-		// agentDir is a sibling of root, i.e. outside it.
 		writeFileSync(join(agentDir, "AGENTS.md"), "global-user-context\n");
 
 		const files = loadProjectContextFiles({ cwd: root, agentDir, contextRoot: root });
 
 		expect(files.map((f) => f.path)).toEqual([join(agentDir, "AGENTS.md"), join(root, "AGENTS.md")]);
 	});
+});
+
+describe("the per-file containment gate refuses what the walk break waved through", () => {
+	// Driven under BUN, which draht ships as: bun's realpath is realpath(3)-shaped and wants
+	// read permission on the directory, node's walks it with lstat and succeeds. Only where
+	// `realpath(dir)` THROWS does the fail-open walk break diverge from the fail-closed gate.
+	const WITNESS_SCRIPT = (loaderPath: string) => `
+import { realpathSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { loadProjectContextFiles } from ${JSON.stringify(loaderPath)};
+
+const [cwd, agentDir, root, outPath] = process.argv.slice(2);
+
+const threw = (fn) => { try { fn(); return false; } catch { return true; } };
+const asymmetry = threw(() => realpathSync(cwd)) && !threw(() => realpathSync(join(cwd, "AGENTS.md")));
+
+const warnings = [];
+const realError = console.error;
+console.error = (...args) => warnings.push(args.map(String).join(" "));
+let files;
+try {
+	files = loadProjectContextFiles({ cwd, agentDir, contextRoot: root });
+} finally {
+	console.error = realError;
+}
+writeFileSync(outPath, JSON.stringify({
+	asymmetry,
+	paths: files.map((f) => f.path),
+	content: files.map((f) => f.content).join("\\n"),
+	warnings,
+}));
+`;
+
+	it("refuses an out-of-root context file that the walk break waved through", () => {
+		const root = join(tmp, "root");
+		const outside = join(tmp, "xonly");
+		mkdirSync(root, { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(join(outside, "AGENTS.md"), `${OUT_OF_ROOT_CANARY}\n`);
+		writeFileSync(join(root, "AGENTS.md"), `${IN_ROOT_CANARY}\n`);
+		const link = join(root, "link");
+		symlinkSync(outside, link);
+		// Execute-only: `realpath` of the directory is refused, its contents stay reachable by
+		// name, so the walk break falls back to the lexical `root/link` — which IS inside the root.
+		chmodSync(outside, 0o111);
+
+		const scriptPath = join(tmp, "witness.mjs");
+		const outPath = join(tmp, "witness.json");
+		writeFileSync(scriptPath, WITNESS_SCRIPT(resolve(__dirname, "..", "src", "core", "resource-loader.ts")));
+
+		const env = { ...process.env } as NodeJS.ProcessEnv;
+		delete env.DRAHT_PERMISSION_MODE;
+		let spawned: ReturnType<typeof spawnSync>;
+		try {
+			spawned = spawnSync("bun", [scriptPath, link, agentDir, root, outPath], {
+				encoding: "utf-8",
+				env,
+				timeout: 60_000,
+			});
+		} finally {
+			// Before afterEach tries to remove it.
+			chmodSync(outside, 0o755);
+		}
+		if (spawned.error) throw spawned.error;
+		expect(spawned.status, `bun exited ${spawned.status}\n${spawned.stdout}\n${spawned.stderr}`).toBe(0);
+
+		const result = JSON.parse(readFileSync(outPath, "utf-8")) as {
+			asymmetry: boolean;
+			paths: string[];
+			content: string;
+			warnings: string[];
+		};
+
+		expect(result.content).not.toContain(OUT_OF_ROOT_CANARY);
+
+		if (process.platform === "darwin") {
+			expect(result.asymmetry, "bun no longer refuses realpath() on an execute-only directory").toBe(true);
+		}
+		if (!result.asymmetry) return;
+
+		// Only `loadContextFileFromDir`'s own refusal emits this line.
+		expect(result.warnings.join("\n")).toContain(`${join(link, "AGENTS.md")}: outside context root`);
+		expect(result.content).toContain(IN_ROOT_CANARY);
+		expect(result.paths).toEqual([join(root, "AGENTS.md")]);
+	}, 120_000);
 });
 
 describe("the --context-root flag reaches the loader", () => {
@@ -272,30 +329,13 @@ describe("the --context-root flag reaches the loader", () => {
 		expect(confinedText).not.toContain(OUT_OF_ROOT_CANARY);
 		expect(confinedText).toContain(IN_ROOT_CANARY);
 
-		// POSITIVE CONTROL for the plumbing itself: without the option the same tree yields
-		// the ancestor, so the assertion above is about the root and not about an empty loader.
 		const unconfined = new DefaultResourceLoader({ cwd: root, agentDir });
 		await unconfined.reload();
 		expect(contentOf(unconfined.getAgentsFiles().agentsFiles)).toContain(OUT_OF_ROOT_CANARY);
 	});
 
-	/**
-	 * THE FLAG'S ONE WIRE, driven through the real CLI.
-	 *
-	 * `parseArgs` produces `contextRoot` and `DefaultResourceLoader` consumes it; between
-	 * them sits ONE line in `main.ts` — `contextRoot: parsed.contextRoot` in the
-	 * `resourceLoaderOptions` handed to `createAgentSessionServices`. Deleting that line
-	 * makes the whole flag a no-op and left every other case in this file green, because
-	 * every other case constructs the loader itself.
-	 *
-	 * So this runs `src/cli.ts` — the SOURCE entry, under bun, so the assertion is about
-	 * the code in this checkout and not about whatever `dist/` was last built from — with
-	 * `--context-root` and the keyless stub provider's recording seam, and reads what
-	 * actually reached the provider off disk.
-	 *
-	 * Print mode, not `--mode rpc`: the first provider request is all this needs and `-p`
-	 * makes it in ~300 ms, with no socket and no second process.
-	 */
+	// The flag's one wire is `contextRoot: parsed.contextRoot` in `main.ts`; deleting it leaves
+	// every other case here green, because they all construct the loader themselves.
 	it("reaches a REAL `draht --context-root` run: the ancestor's bytes never reach the provider", () => {
 		const above = join(tmp, "above");
 		const root = join(above, "root");
@@ -306,16 +346,13 @@ describe("the --context-root flag reaches the loader", () => {
 
 		function run(extraArgs: string[], recordPath: string): string {
 			const env = { ...process.env } as NodeJS.ProcessEnv;
-			// This repo's interactive shell exports `auto`; a spawned draht must never
-			// inherit a permission mode from whoever happened to launch the test.
+			// This repo's interactive shell exports `auto`; never inherit it.
 			delete env.DRAHT_PERMISSION_MODE;
 			env[STUB_PROVIDER_ENV] = "1";
 			env[STUB_PROVIDER_RECORD_CONTEXT_ENV] = recordPath;
 			env.DRAHT_CODING_AGENT_DIR = agentDir;
-			// HOME too, and not only the agent dir: a draht run reads user-level resources
-			// from the home directory, and the developer's own skills and agents were landing
-			// in the recorded prompt. Noise there is not neutral — it is other people's text
-			// in the assertion surface.
+			// HOME too, not only the agent dir: draht reads user-level resources from it, and
+			// the developer's own skills were landing in the recorded prompt.
 			env.HOME = tmp;
 
 			const result = spawnSync(
@@ -334,7 +371,6 @@ describe("the --context-root flag reaches the loader", () => {
 				{ cwd: deep, env, encoding: "utf-8", timeout: 60_000 },
 			);
 			if (result.error) throw result.error;
-			// A skip here would delete the assertion, and this repo builds with bun already.
 			expect(result.status, `draht exited ${result.status}\n${result.stdout}\n${result.stderr}`).toBe(0);
 			return readFileSync(recordPath, "utf-8");
 		}
@@ -343,9 +379,6 @@ describe("the --context-root flag reaches the loader", () => {
 		expect(confined).toContain(IN_ROOT_CANARY);
 		expect(confined).not.toContain(OUT_OF_ROOT_CANARY);
 
-		// POSITIVE CONTROL on the SAME tree and the SAME binary: without the flag the
-		// ancestor's bytes DO reach the provider. Without it, a run that loaded no context
-		// at all — or a recording seam that recorded nothing — would satisfy the line above.
 		const unconfined = run([], join(tmp, "cli-unconfined.txt"));
 		expect(unconfined).toContain(IN_ROOT_CANARY);
 		expect(unconfined).toContain(OUT_OF_ROOT_CANARY);
@@ -353,7 +386,6 @@ describe("the --context-root flag reaches the loader", () => {
 });
 
 describe("the stub provider context recording seam", () => {
-	/** Drive one turn and return the assistant's answer, so "unchanged behaviour" is assertable. */
 	async function driveOnce(env: NodeJS.ProcessEnv, systemPrompt: string): Promise<string> {
 		const provider = createStubProvider(env);
 		const model = provider.getModels().find((m) => m.id === STUB_MODEL_ID);
@@ -393,41 +425,20 @@ describe("the stub provider context recording seam", () => {
 
 		const recorded = readFileSync(recordPath, "utf-8");
 		expect(recorded).toContain(IN_ROOT_CANARY);
-		// FIRST call only: a per-turn recorder would have overwritten the evidence the
-		// acceptance depends on with a later, post-tool-call prompt.
 		expect(recorded).not.toContain(OUT_OF_ROOT_CANARY);
 	});
 
-	/**
-	 * Replaces a case that could not fail: it drove the provider with `env = {}` and then
-	 * asserted `readFileSync(join(tmp, "unset-context.txt"))` threw — a path the provider had
-	 * never been told about and that no implementation would ever pick, so the assertion held
-	 * for a recorder that wrote everywhere. Deleting the `recordContextPath &&` guard outright
-	 * left it green.
-	 *
-	 * The reachable property is the one that costs something to get wrong: the seam records
-	 * where THE ENV IT WAS HANDED says, and nowhere else. `createStubProvider`'s parameter
-	 * defaults to `process.env`, so `env[X] ?? process.env[X]` is a one-character change that
-	 * turns a spawned-child seam into one that fires in-process for every test that happens to
-	 * run with the variable exported — and it survived the old case.
-	 *
-	 * MEASURED, and reported rather than papered over: deleting the `recordContextPath &&`
-	 * guard itself is BEHAVIOURALLY INERT and cannot be witnessed by any test. With the guard
-	 * gone `writeFileSync(undefined, …)` throws, and the factory's `catch {}` — which exists so
-	 * a broken recorder cannot change what the provider answers — swallows it. Nothing is
-	 * written either way. That is a property of the code, not a gap in this file.
-	 */
+	// Deleting the `recordContextPath &&` guard is behaviourally inert and unwitnessable: the
+	// factory's `catch {}` swallows the resulting throw. This covers the reachable property.
 	it("records where the env it was GIVEN says, and never where the ambient process env says", async () => {
 		const recordPath = join(tmp, "opt-in-context.txt");
 
-		// (1) The path is one this provider DOES write, so "absent" below is about the opt-in
-		// and not about a path nobody would ever choose.
+		// (1) A path this provider DOES write, so "absent" below is about the opt-in.
 		await driveOnce({ [STUB_PROVIDER_RECORD_CONTEXT_ENV]: recordPath }, `told ${IN_ROOT_CANARY}`);
 		expect(readFileSync(recordPath, "utf-8")).toContain(IN_ROOT_CANARY);
 		rmSync(recordPath);
 
-		// (2) The same path, advertised in the AMBIENT process env, with `{}` handed to the
-		// provider. The seam must honour its argument.
+		// (2) Same path, but only in the AMBIENT env, with `{}` handed to the provider.
 		const previous = process.env[STUB_PROVIDER_RECORD_CONTEXT_ENV];
 		process.env[STUB_PROVIDER_RECORD_CONTEXT_ENV] = recordPath;
 		let answer: string;
@@ -439,8 +450,6 @@ describe("the stub provider context recording seam", () => {
 		}
 
 		expect(existsSync(recordPath)).toBe(false);
-		// POSITIVE CONTROL: the un-instrumented run still answered, so "nothing was written"
-		// is not "nothing ran".
 		expect(answer).toContain("hi");
 	});
 

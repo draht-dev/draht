@@ -40,6 +40,8 @@
  *  - **R36-SPAWN.7 — numeric deadlines, and TERM→KILL of the PROCESS TREE.** The
  *    child is spawned into its own process group precisely so a teardown can
  *    reach what it started, and a signal-trapping child is killed anyway.
+ *  - **stdout stays `"ignore"`, so "first output" is stderr alone.** MEASURED: an rpc
+ *    session writes 444 B to stdout before it binds and 9 132 after one turn, 0 to stderr.
  *
  * ## Two things this file deliberately does NOT do
  *
@@ -102,6 +104,9 @@ export const RESUME_PATH_ENV = "DRAHT_RESUME_PATH";
  */
 export const DEFAULT_RESUME_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
+/** `spawn()` to a live pid — a bound on a call that normally returns one synchronously. Fatal: `spawn_failed`. */
+export const DEFAULT_SPAWN_DEADLINE_MS = 2_000;
+
 /**
  * How long a resumed session has to publish its socket before it is torn down.
  *
@@ -111,10 +116,13 @@ export const DEFAULT_RESUME_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
  * a bound rather than a hope — the point of R36-SPAWN.7 is that the number
  * exists and that something happens when it elapses.
  */
-export const DEFAULT_RESUME_DEADLINE_MS = 30_000;
+export const DEFAULT_HANDSHAKE_DEADLINE_MS = 30_000;
 
-/** How long a `SIGTERM`ed process group has before it is `SIGKILL`ed. */
-export const DEFAULT_TEARDOWN_GRACE_MS = 2_000;
+/** Pid to the first byte of stderr. Fatal: `timeout`. */
+// KEEP IT EQUAL to the handshake deadline: a healthy session is silent for the 3–6 s it takes to bind.
+export const DEFAULT_FIRST_OUTPUT_DEADLINE_MS = DEFAULT_HANDSHAKE_DEADLINE_MS;
+
+export const DEFAULT_STOP_DEADLINE_MS = 2_000;
 
 /** How often a pending resume checks whether the socket has appeared. */
 const READY_POLL_MS = 100;
@@ -711,10 +719,14 @@ export interface SessionSpawnerOptions {
 	agentDir: string;
 	/** The daemon's environment. Read for the declared names only. */
 	env?: NodeJS.ProcessEnv;
-	/** How long a child has to publish its socket. Defaults to 30 s. */
+	spawnDeadlineMs?: number;
+	handshakeDeadlineMs?: number;
+	firstOutputDeadlineMs?: number;
+	stopDeadlineMs?: number;
+	/** Aliases for the handshake and stop deadlines, kept working for callers that pass them. */
 	deadlineMs?: number;
-	/** How long a `SIGTERM`ed group has before `SIGKILL`. Defaults to 2 s. */
 	teardownGraceMs?: number;
+	detached?: boolean;
 	/** Resolution seam. Tests inject one; nothing else should. */
 	resolveExecutable?: () => ResolvedExecutable;
 }
@@ -722,6 +734,12 @@ export interface SessionSpawnerOptions {
 /** What one spawn produced. */
 export interface SpawnOutcome {
 	pid: number;
+}
+
+interface SpawnedProcess {
+	/** The `detached` option AS PASSED. Without it the child sits in the DAEMON'S group. */
+	groupSignallable: boolean;
+	stopping?: Promise<void>;
 }
 
 /**
@@ -733,16 +751,23 @@ export class SessionSpawner {
 	readonly #socketDir: string;
 	readonly #agentDir: string;
 	readonly #env: NodeJS.ProcessEnv;
-	readonly #deadlineMs: number;
-	readonly #teardownGraceMs: number;
+	readonly #spawnDeadlineMs: number;
+	readonly #handshakeDeadlineMs: number;
+	readonly #firstOutputDeadlineMs: number;
+	readonly #stopDeadlineMs: number;
+	readonly #detached: boolean;
 	readonly #resolveExecutable: () => ResolvedExecutable;
+	readonly #spawned = new Map<number, SpawnedProcess>();
 
 	constructor(options: SessionSpawnerOptions) {
 		this.#socketDir = options.socketDir;
 		this.#agentDir = options.agentDir;
 		this.#env = options.env ?? process.env;
-		this.#deadlineMs = options.deadlineMs ?? DEFAULT_RESUME_DEADLINE_MS;
-		this.#teardownGraceMs = options.teardownGraceMs ?? DEFAULT_TEARDOWN_GRACE_MS;
+		this.#spawnDeadlineMs = options.spawnDeadlineMs ?? DEFAULT_SPAWN_DEADLINE_MS;
+		this.#handshakeDeadlineMs = options.handshakeDeadlineMs ?? options.deadlineMs ?? DEFAULT_HANDSHAKE_DEADLINE_MS;
+		this.#firstOutputDeadlineMs = options.firstOutputDeadlineMs ?? DEFAULT_FIRST_OUTPUT_DEADLINE_MS;
+		this.#stopDeadlineMs = options.stopDeadlineMs ?? options.teardownGraceMs ?? DEFAULT_STOP_DEADLINE_MS;
+		this.#detached = options.detached ?? true;
 		this.#resolveExecutable = options.resolveExecutable ?? (() => resolveDrahtExecutable(this.#env));
 	}
 
@@ -808,7 +833,7 @@ export class SessionSpawner {
 				// It also means the child outlives a daemon restart, which is the
 				// posture recorded as still-open in the plan: a resumed session is a
 				// session, not a daemon worker.
-				detached: true,
+				detached: this.#detached,
 				stdio: ["pipe", "ignore", "pipe"],
 				shell: false,
 			});
@@ -828,11 +853,13 @@ export class SessionSpawner {
 		// pipes: a child that dies with our write end open surfaces as EPIPE on
 		// `stdin`, which is also an unhandled `error` event.
 		let stderr = "";
+		let saidAnything = false;
 		// Drained forever, retaining only a bounded prefix. Closing the read end
 		// instead would give the child EPIPE on stderr, and the default disposition
 		// of SIGPIPE is to terminate — a "cleanup" that kills the session we just
 		// started.
 		child.stderr?.on("data", (chunk: Buffer) => {
+			saidAnything = true;
 			if (stderr.length < 2048) stderr += chunk.toString("utf8");
 		});
 		child.stderr?.on("error", () => {});
@@ -847,15 +874,27 @@ export class SessionSpawner {
 			stderr += String(error);
 		});
 
+		const spawnDeadline = Date.now() + this.#spawnDeadlineMs;
+		while (child.pid === undefined && exited === null && Date.now() < spawnDeadline) {
+			await sleep(READY_POLL_MS);
+		}
 		const pid = child.pid;
 		if (pid === undefined) {
-			// The listeners above are already attached, so the `error` event that is
-			// about to arrive is swallowed rather than thrown into the event loop.
-			throw new SpawnRefusedError("spawn_failed", "the child process was created with no pid");
+			throw new SpawnRefusedError(
+				"spawn_failed",
+				`the child process was created with no pid within ${this.#spawnDeadlineMs} ms${describeChildOutput(stderr)}`,
+			);
 		}
+		// Held locally too: the teardown below must reach the group of a child that has already been forgotten.
+		const record: SpawnedProcess = { groupSignallable: this.#detached };
+		this.#spawned.set(pid, record);
+		if (exited === null) child.once("exit", () => this.#spawned.delete(pid));
+		else this.#spawned.delete(pid);
 
 		const socketPath = join(this.#socketDir, `${session.id}.sock`);
-		const deadline = Date.now() + this.#deadlineMs;
+		const startedAt = Date.now();
+		const deadline = startedAt + this.#handshakeDeadlineMs;
+		const firstOutputDeadline = startedAt + this.#firstOutputDeadlineMs;
 		try {
 			while (Date.now() < deadline) {
 				// ── WHOSE SOCKET IS IT ───────────────────────────────────────────────
@@ -898,17 +937,23 @@ export class SessionSpawner {
 						`the resumed session exited before publishing its socket: ${describeExit(exited)} ${stderr.trim()}`.trim(),
 					);
 				}
+				if (!saidAnything && Date.now() >= firstOutputDeadline) {
+					throw new SpawnRefusedError(
+						"timeout",
+						`the resumed session published no socket and never said a word within ${this.#firstOutputDeadlineMs} ms`,
+					);
+				}
 				await sleep(READY_POLL_MS);
 			}
 		} catch (error) {
-			await this.#teardown(pid);
+			await this.#stopRecorded(pid, record);
 			throw error;
 		}
 
-		await this.#teardown(pid);
+		await this.#stopRecorded(pid, record);
 		throw new SpawnRefusedError(
 			"timeout",
-			`the resumed session did not publish its socket within ${this.#deadlineMs} ms`,
+			`the resumed session did not publish its socket within ${this.#handshakeDeadlineMs} ms${describeChildOutput(stderr)}`,
 		);
 	}
 
@@ -929,7 +974,7 @@ export class SessionSpawner {
 	}
 
 	/**
-	 * TERM, then KILL, and both to the PROCESS GROUP (R36-SPAWN.7).
+	 * TERM, then KILL, to the PROCESS GROUP when this spawner made one (R36-SPAWN.7).
 	 *
 	 * The negative pid is the whole point: a draht session spawns tools, and
 	 * signalling only the pid we hold leaves them running with the socket
@@ -937,20 +982,41 @@ export class SessionSpawner {
 	 * rather than conditional on the process still existing, because a child that
 	 * traps TERM is exactly the case a deadline exists for — a measured
 	 * `trap '' TERM; sleep 3600` survives TERM for as long as you care to wait.
+	 * @throws {RangeError} for a pid no process can have: `kill(0)` signals the CALLER'S own group and `kill(-1)` every process this uid owns.
 	 */
-	async #teardown(pid: number): Promise<void> {
-		try {
-			process.kill(-pid, "SIGTERM");
-		} catch {
-			// Already gone, or never had a group; the KILL below is still tried.
+	async stop(pid: number): Promise<void> {
+		if (!Number.isInteger(pid) || pid <= 1) {
+			throw new RangeError(`stop() takes the pid of a spawned process; ${pid} names no process`);
 		}
-		await sleep(this.#teardownGraceMs);
+		const known = this.#spawned.get(pid);
+		return known === undefined ? this.#signalDown(pid, false) : this.#stopRecorded(pid, known);
+	}
+
+	#stopRecorded(pid: number, record: SpawnedProcess): Promise<void> {
+		record.stopping ??= this.#signalDown(pid, record.groupSignallable);
+		return record.stopping;
+	}
+
+	async #signalDown(pid: number, groupSignallable: boolean): Promise<void> {
+		const target = groupSignallable ? -pid : pid;
 		try {
-			process.kill(-pid, "SIGKILL");
+			process.kill(target, "SIGTERM");
+		} catch (error) {
+			// Nothing there to escalate against. `EPERM` still gets the KILL: the target exists.
+			if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+		}
+		await sleep(this.#stopDeadlineMs);
+		try {
+			process.kill(target, "SIGKILL");
 		} catch {
 			// Gone, which is the outcome this wanted.
 		}
 	}
+}
+
+function describeChildOutput(stderr: string): string {
+	const said = stderr.trim();
+	return said.length === 0 ? " and never said a word" : ` after printing: ${said}`;
 }
 
 function describeExit(exit: { code: number | null; signal: NodeJS.Signals | null }): string {

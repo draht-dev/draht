@@ -285,27 +285,148 @@ export function assertSafeExecutablePath(canonical: string, uid: number): void {
 		if (stats.isSymbolicLink()) {
 			// Unreachable for a realpath, and asserted anyway: this whole check is
 			// worthless the moment one component is a link somebody else can move.
+			// It is NOT the link refusal a declared path gets — that one has to run
+			// BEFORE `realpath` to see anything, and lives in
+			// {@link assertNoSymlinkComponents}. This branch stays as a floor for a
+			// future caller that reaches here without canonicalising first.
 			throw new SpawnRefusedError("refused", `symlink on the path to the draht binary: ${current}`);
 		}
 		const ownedByUs = stats.uid === uid || stats.uid === 0;
 		if (!ownedByUs) {
 			throw new SpawnRefusedError("refused", `not owned by this user or root: ${current}`);
 		}
-		const sticky = (stats.mode & 0o1000) !== 0;
+		// The sticky exemption is a statement about DIRECTORIES and nothing else.
+		// `chmod 1777` on a regular file means "save text image", a no-op on every
+		// system this runs on — it does not stop another user from opening that
+		// file for writing and replacing the program we are about to exec. Before
+		// this predicate was gated, a leaf at mode 1777 was ALLOWED while the same
+		// leaf at 0777 was refused, which is the wrong way round.
+		const sticky = (stats.mode & 0o1000) !== 0 && stats.isDirectory();
 		if ((stats.mode & 0o022) !== 0 && !sticky) {
 			throw new SpawnRefusedError("refused", `writable by others: ${current}`);
 		}
 	}
-	if (!statSync(canonical).isFile()) {
+	const leaf = statSync(canonical);
+	if (!leaf.isFile()) {
 		throw new SpawnRefusedError("refused", `not a regular file: ${canonical}`);
+	}
+	// setuid/setgid on the thing we exec means the child does not run as this
+	// user, so every ownership conclusion the walk just reached stops describing
+	// the process that actually results. Refuse rather than reason about it.
+	if ((leaf.mode & 0o6000) !== 0) {
+		throw new SpawnRefusedError("refused", `setuid or setgid: ${canonical}`);
 	}
 }
 
-/** `realpath` + the ownership walk, as one step, because neither is safe alone. */
-function canonicalize(candidate: string, uid: number, what: string): string {
+/** Constraints on WHERE a resolved path may live and whether links may be followed to it. */
+export interface PathConstraints {
+	/**
+	 * Whether a symbolic link ON THE SUPPLIED PATH may be followed (default `true`).
+	 *
+	 * `false` lstat-walks the supplied path BEFORE `realpath` and refuses a link at
+	 * any component it is not root that owns (see {@link assertNoSymlinkComponents}
+	 * for why root is exempt). Before `realpath` is the only order that can notice
+	 * one: `realpath` erases every link, so the walk's own symlink branch can never
+	 * fire.
+	 *
+	 * This must stay OPT-IN. `process.execPath` under a version manager is a
+	 * user-owned symlink on many machines — a daemon that refused those would
+	 * resolve no interpreter at all.
+	 */
+	followSymlinks?: boolean;
+	/** If non-empty, the canonical result must live under one of these. */
+	approvedRoots?: readonly string[];
+	/** The canonical result must not live under any of these. */
+	forbiddenRoots?: readonly string[];
+}
+
+/** Where an executable may and may not live. {@link PathConstraints} minus the link policy. */
+export type ExecutableRoots = Omit<PathConstraints, "followSymlinks">;
+
+/**
+ * Refuse a symbolic link at ANY component of the path as supplied, with ONE
+ * exemption: a link owned by root.
+ *
+ * Called before `realpath`, because after it there is nothing left to see. The
+ * point is that a declaration names a FILE, and a link is an indirection that
+ * decides — at exec time, not at check time — which file that is.
+ *
+ * THE ROOT EXEMPTION IS NOT A CONVENIENCE, IT IS THE PLATFORM. `/tmp`, `/var`
+ * and `/etc` are root-owned symbolic links on every macOS machine, so a rule
+ * without it refuses `/tmp/…` and `/var/folders/…` — i.e. every throwaway
+ * install and the whole of `os.tmpdir()`. Only root can re-point a root-owned
+ * link, and root can replace the target outright, which is the same reason the
+ * ownership walk already accepts a root-owned component. A link owned by anyone
+ * else — including US, because an operator's declaration should be exact — is
+ * refused.
+ *
+ * A symlink's own permission bits are deliberately NOT consulted: they are
+ * unenforced on macOS and meaningless on Linux (0777 by construction). What
+ * bounds who can re-point a link is write access to its PARENT directory, and
+ * every parent is checked by {@link assertSafeExecutablePath} on the resolved
+ * path.
+ */
+function assertNoSymlinkComponents(supplied: string, what: string): void {
+	// Lexical normalisation is safe HERE and only here: it is wrong in general
+	// (`a/b/../c` differs from realpath when `b` is a link) and this walk refuses
+	// exactly that case, so by the time it returns the two agree.
+	const lexical = resolvePath(supplied);
+	const parts = lexical.split(sep).filter((part) => part.length > 0);
+	let current: string = sep;
+	for (let index = 0; index < parts.length; index++) {
+		current = index === 0 ? sep + parts[0] : `${current}${sep}${parts[index]}`;
+		let stats: ReturnType<typeof lstatSync>;
+		try {
+			stats = lstatSync(current);
+		} catch {
+			throw new SpawnRefusedError("refused", `${what} does not exist: ${supplied}`);
+		}
+		if (stats.isSymbolicLink() && stats.uid !== 0) {
+			throw new SpawnRefusedError("refused", `symlink on the path to ${what}: ${current}`);
+		}
+	}
+}
+
+/** A root as a canonical absolute prefix. Unresolvable roots normalise lexically rather than vanish. */
+function canonicalRoot(root: string): string {
+	if (!isAbsolute(root)) {
+		throw new SpawnRefusedError("refused", `a containment root must be an absolute path, got ${root}`);
+	}
+	try {
+		return realpathSync(root);
+	} catch {
+		return resolvePath(root);
+	}
+}
+
+/**
+ * Canonical-path containment WITH a separator boundary.
+ *
+ * `startsWith(root)` alone says `/x/projects-evil` is inside `/x/projects`,
+ * which is the live defect in this daemon's `isPathAllowed`
+ * (`gateway/src/config/config.ts`). Do not copy that here.
+ */
+function isInsideRoot(canonical: string, root: string): boolean {
+	if (canonical === root) return true;
+	const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+	return canonical.startsWith(prefix);
+}
+
+/**
+ * `realpath` + the ownership walk, as one step, because neither is safe alone.
+ *
+ * Exported because harness executables named by the user registry resolve
+ * through this and nothing else: one gate, one set of refusals.
+ *
+ * Constraints are all opt-in and every default is today's behaviour — links are
+ * followed, both root lists are empty and empty means "no constraint" — so a
+ * caller that passes none gets exactly what it got before they existed.
+ */
+export function canonicalize(candidate: string, uid: number, what: string, constraints: PathConstraints = {}): string {
 	if (!isAbsolute(candidate)) {
 		throw new SpawnRefusedError("refused", `${what} must be an absolute path, got ${candidate}`);
 	}
+	if (constraints.followSymlinks === false) assertNoSymlinkComponents(candidate, what);
 	let canonical: string;
 	try {
 		canonical = realpathSync(candidate);
@@ -313,6 +434,17 @@ function canonicalize(candidate: string, uid: number, what: string): string {
 		throw new SpawnRefusedError("refused", `${what} does not exist: ${candidate}`);
 	}
 	assertSafeExecutablePath(canonical, uid);
+	// Containment is asserted on the CANONICAL result, never on what was supplied:
+	// a root check against an uncanonicalised string is one `..` away from useless.
+	for (const root of constraints.forbiddenRoots ?? []) {
+		if (isInsideRoot(canonical, canonicalRoot(root))) {
+			throw new SpawnRefusedError("refused", `${what} is inside a forbidden root: ${canonical}`);
+		}
+	}
+	const approved = constraints.approvedRoots ?? [];
+	if (approved.length > 0 && !approved.some((root) => isInsideRoot(canonical, canonicalRoot(root)))) {
+		throw new SpawnRefusedError("refused", `${what} is not inside an approved root: ${canonical}`);
+	}
 	return canonical;
 }
 
@@ -327,7 +459,9 @@ function isScript(path: string): boolean {
  * Order, and every candidate goes through {@link canonicalize}:
  *
  *  1. `DRAHT_BIN`, if an operator declared one. A declaration that does not
- *     resolve is an error, never a reason to look elsewhere.
+ *     resolve is an error, never a reason to look elsewhere. It is resolved
+ *     NO-FOLLOW: a symbolic link at any component of the declared path is a
+ *     refusal, not something to `realpath` away.
  *  2. The sibling package in a monorepo checkout —
  *     `packages/coding-agent/dist/cli.js` relative to this file.
  *  3. `@draht/coding-agent/dist/cli.js` under a `node_modules` above this file,
@@ -342,6 +476,7 @@ function isScript(path: string): boolean {
 export function resolveDrahtExecutable(
 	env: NodeJS.ProcessEnv = process.env,
 	uid: number = process.getuid?.() ?? 0,
+	roots: ExecutableRoots = {},
 ): ResolvedExecutable {
 	const declared = env[DRAHT_BIN_ENV];
 	const here = dirname(new URL(import.meta.url).pathname);
@@ -357,8 +492,21 @@ export function resolveDrahtExecutable(
 	let lastError: SpawnRefusedError | null = null;
 	for (const candidate of candidates) {
 		try {
-			const target = canonicalize(candidate, uid, "the draht binary");
+			// The DECLARED path is the one an operator (or, later, a registry entry)
+			// names, so it is the one that must not be reachable through a directory
+			// somebody else can re-point. The built-in monorepo candidates keep
+			// following links: they are derived from this module's own location, and
+			// a checkout under a symlinked prefix — `/tmp` on every macOS box — is an
+			// ordinary dev tree, not an attack.
+			const target = canonicalize(candidate, uid, "the draht binary", {
+				...roots,
+				followSymlinks: declared ? false : undefined,
+			});
 			if (!isScript(target)) return { executable: target, leadingArgs: [], target };
+			// Deliberately UNCONSTRAINED: no roots and links followed. The interpreter
+			// is `process.execPath`, which under a version manager is a symlink and
+			// lives nowhere near an approved root for project code. Constrain it and
+			// this daemon resolves no runtime at all.
 			const interpreter = canonicalize(realpathSync(process.execPath), uid, "the javascript runtime");
 			return { executable: interpreter, leadingArgs: [target], target };
 		} catch (error) {

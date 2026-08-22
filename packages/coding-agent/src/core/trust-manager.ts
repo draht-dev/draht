@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
-import { canonicalizePath, resolvePath } from "../utils/paths.ts";
+import { canonicalizePath, normalizePath, resolvePath } from "../utils/paths.ts";
 
 export type ProjectTrustDecision = boolean | null;
 
@@ -174,17 +174,30 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
 	}
 }
 
+function realPathOrUndefined(path: string): string | undefined {
+	try {
+		return realpathSync(normalizePath(path));
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Returns true when cwd has project-local resources that must be gated by
  * project trust: trust-requiring entries under cwd/.pi, or .agents/skills in
- * cwd or one of its ancestors. Returns false when no such project resources
- * exist. The user/global ~/.agents/skills directory is always treated as a
- * trusted user resource and is ignored here, even when cwd is $HOME.
+ * cwd or one of its ancestors, or when the real cwd cannot be determined.
+ * Returns false when no such project resources exist. The user/global
+ * ~/.agents/skills directory is always treated as a trusted user resource and
+ * is ignored here, even when cwd is $HOME.
  */
 export function hasTrustRequiringProjectResources(cwd: string): boolean {
-	const homeDir = canonicalizePath(resolvePath(process.env.HOME || homedir()));
-	const userAgentsSkillsDir = join(homeDir, ".agents", "skills");
-	let currentDir = canonicalizePath(resolvePath(cwd));
+	let currentDir = realPathOrUndefined(cwd);
+	if (currentDir === undefined) {
+		// Not canonicalizePath: it degrades to the lexical chain, which can skip the real ancestor holding the resources.
+		return true;
+	}
+	const realHomeDir = realPathOrUndefined(process.env.HOME || homedir());
+	const userAgentsSkillsDir = realHomeDir === undefined ? undefined : join(realHomeDir, ".agents", "skills");
 
 	const configDir = join(currentDir, CONFIG_DIR_NAME);
 	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {

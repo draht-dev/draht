@@ -1341,7 +1341,13 @@ function walkDir(dir, visit) {
 				entry.name === "node_modules" ||
 				entry.name === ".git" ||
 				entry.name === "dist" ||
-				entry.name === ".next"
+				entry.name === ".next" ||
+				// `.claude/worktrees/<name>` holds FULL checkouts of other branches
+				// (`git worktree list` shows them), and `.gitignore` excludes `.claude/*`.
+				// Walking in audits some other branch's tree as if it were this one:
+				// six `pi-extension-*` packages renamed on main still fail from a
+				// worktree pinned before the rename, and no edit here can green it.
+				entry.name === ".claude"
 			)
 				continue;
 			walkDir(fullPath, visit);

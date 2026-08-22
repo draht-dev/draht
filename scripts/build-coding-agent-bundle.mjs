@@ -19,6 +19,8 @@ const allowedExternalPackages = new Set([
 	"@silvia-odwyer/photon-node",
 	// Optional native clipboard addon; callers fall back to platform tools when absent.
 	"@mariozechner/clipboard",
+	// Loaded through the jiti/static -> jiti external rewrite below.
+	"jiti",
 	// Optional native accelerators. Their callers fall back to JavaScript when absent.
 	"bufferutil",
 	"utf-8-validate",
@@ -29,6 +31,13 @@ const allowedExternalPackages = new Set([
 	"better-sqlite3",
 	"bindings",
 ]);
+
+const lazyJitiPlugin = {
+	name: "lazy-jiti-transform",
+	setup(build) {
+		build.onResolve({ filter: /^jiti\/static$/ }, () => ({ external: true, path: "jiti" }));
+	},
+};
 
 function commonBuildOptions() {
 	return {
@@ -44,6 +53,10 @@ function commonBuildOptions() {
 		minifySyntax: true,
 		minifyWhitespace: true,
 		platform: "node",
+		// The source uses jiti/static so Bun embeds its Babel transform. The Node
+		// package can use regular jiti from its direct dependency and load Babel
+		// only when an extension actually needs transformation.
+		plugins: [lazyJitiPlugin],
 		sourcemap: false,
 		target: "node22.19",
 		// Do not apply the monorepo's source-oriented path aliases while bundling

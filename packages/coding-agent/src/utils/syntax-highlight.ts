@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import hljs from "highlight.js/lib/core.js";
 import bash from "highlight.js/lib/languages/bash.js";
 import c from "highlight.js/lib/languages/c.js";
@@ -21,11 +20,6 @@ import scala from "highlight.js/lib/languages/scala.js";
 import swift from "highlight.js/lib/languages/swift.js";
 import typescript from "highlight.js/lib/languages/typescript.js";
 import { decodeHtmlEntityAt } from "./html.ts";
-
-const moduleRequire = createRequire(import.meta.url);
-declare const PI_BUNDLED_NODE: boolean;
-declare const Bun: unknown;
-declare const require: (specifier: string) => unknown;
 
 const eagerLanguages = {
 	python,
@@ -60,18 +54,13 @@ export function loadAllHighlightLanguages(): Promise<void> {
 	if (!allLanguagesPromise) {
 		allLanguagesPromise = new Promise((resolve) => {
 			setImmediate(() => {
-				try {
-					// Static require lets esbuild and Bun include this deferred module in
-					// standalone bundles. Source and unbundled Node runtimes need createRequire.
-					if ((typeof PI_BUNDLED_NODE !== "undefined" && PI_BUNDLED_NODE) || typeof Bun !== "undefined") {
-						require("highlight.js/lib/index.js");
-					} else {
-						moduleRequire("highlight.js/lib/index.js");
-					}
-				} catch {
-					// Eager languages and plaintext fallback remain available.
-				}
-				resolve();
+				void import("highlight.js/lib/index.js").then(
+					() => resolve(),
+					() => {
+						// Eager languages and plaintext fallback remain available.
+						resolve();
+					},
+				);
 			});
 		});
 	}

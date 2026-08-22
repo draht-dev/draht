@@ -88,8 +88,8 @@
       "name": "@draht/coding-agent",
       "version": "2026.7.30",
       "bin": {
-        "coding-agent": "dist/cli.js",
-        "draht": "dist/cli.js",
+        "coding-agent": "dist/bundle/cli.js",
+        "draht": "dist/bundle/cli.js",
         "draht-tools": "bin/draht-tools.cjs",
       },
       "dependencies": {
@@ -124,9 +124,7 @@
       },
       "devDependencies": {
         "@types/cross-spawn": "6.0.6",
-        "@types/diff": "^7.0.2",
         "@types/hosted-git-info": "^3.0.5",
-        "@types/ms": "^2.1.0",
         "@types/node": "^24.3.0",
         "@types/proper-lockfile": "^4.1.4",
         "@types/semver": "^7.7.1",

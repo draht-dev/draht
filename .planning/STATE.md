@@ -1,7 +1,7 @@
 # State
 
-## Current Phase: Phase 36 — Start Work From the Phone, Without Handing Out a Shell — `pending`
-## Status: active — Phase 35 landed COMPLETE (13 commits): default-on is live, history is honest, status stops guessing clean, and a phone that slept converges by delta. Phase 34 also COMPLETE (16 commits). Phase 36 inherits a hardened spawn primitive that Phase 35 built early.
+## Current Phase: Phase 36 — Start Work From the Phone, Without Handing Out a Shell — `in-progress`
+## Status: active — **wave 1 of 5 complete and committed** (6 tasks, 6 commits). The executable-path walk, the user-owned registry loader, `--context-root`, the acceptance helpers, the spec sections and the repaired status-honesty suite all landed. Two things are deliberately NOT closed and must not be read as done: executable containment ships with ZERO production callers (R36-SPAWN.2 refusal #2 stays open until the harness resolver configures roots), and `resolveUserRegistryPath` has no production caller either. Wave 2 is being planned. Phases 34 and 35 are COMPLETE (16 and 13 commits).
 
 ## Decisions
 - Phase 34's relay seam was settled from the SPEC, not by a fresh product call (Claude, 2026-08-21). Decision 5 framed it as Oskar's to make, but rev-8 §4 already says a session appears "because it is *running*, not because it was started by geist — this is the whole point". An ACP-seam relay only ever sees geist-spawned sessions, so it fails that sentence. Reversible if geist-owned ACP sessions become the product's future; nothing was built on the rejected seam.
@@ -29,16 +29,11 @@
 - Milestone 4 re-planned 2026-08-19: Phases 32-40 and ids R32-M0..R40-M8 retired wholesale, replaced by R32-FLEET..R40-SPATIAL. Spine is shortest-path-to-a-phone; the substrate argument is paid structurally (desktop and mobile are ONE responsive bundle at two viewports; the protocol carries a recorded corpus and a mutation-proven drift gate from Phase 32, frozen to 1.0 at Phase 38 before the Quest client exists) and the risk argument by pulling the tailscale-serve and permission-fan-out spikes into the phases that ship them. Quest is Phase 40, off the critical path. (Oskar, 2026-08-19)
 
 ## Pending Geist Phases
-- Phase 31: Foundation — layout retained; privileged-shim boundary loophole and mutation regression pending
-- Phase 32: M0 — partial ray/math scaffold; real Spatial SDK panel/input/H0 pending
-- Phase 33: M1 — isolated pairing/ASR helpers; production bridge↔Quest voice wire/H1 pending
-- Phase 34: M2 — pure context composition; picker/crop/dispatch/H2 pending
-- Phase 35: M3 — ACP backend spine retained; product composition, permission UX, security fixes, and H3 pending
-- Phase 36: M4 — grammar/registry retained; real command/mode/spawn UX and H4 pending
-- Phase 37: M5 — fleet domain retained; board/cards/live fleet/H5 pending
-- Phase 38: M6 — variant domain retained; worktree fan-out/compare UI/H6 pending
-- Phase 39: M7 — lane transforms retained; live event transport/rendering/H7 pending
-- Phase 40: M8 — not started; implementation and H8 pending
+> The `M0`..`M8` breakdown that stood here was RETIRED WHOLESALE on 2026-08-19 along with ids
+> `R32-M0`..`R40-M8` (see the re-planning decision above). It is deleted rather than kept, because it
+> described Phase 36 as "M4 — grammar/registry retained" while Phase 36 is now "Start Work From the
+> Phone" — a reader checking status against it would have been misled about every phase 32-40.
+> The live breakdown is `.planning/ROADMAP.md`, keyed `R32-FLEET`..`R40-SPATIAL`.
 
 ## Completed Phases
 - Phase 30: Evaluation, Observability & Docs (1 plan, verified 2026-07-12)
@@ -73,6 +68,10 @@
 - Phase 18: draht.dev Website Content (2 commits)
 
 ## Lessons
+- 2026-08-22: **The root `tsc` does not cover every package's tests, so "root typecheck clean" is not "typecheck clean".** An agent verified its new gateway test with `rtk proxy npx tsc --noEmit -p tsconfig.json` from the root and reported no diagnostics; the root tsconfig EXCLUDES `packages/gateway/src/__tests__/`, and `npm run check` then failed on a TS2769 in exactly that file via the package's own `check:gateway-types`. The root run was honest about what it checked — it just checked less than the gate does. Whenever a task touches a package with its own `typecheck` script, run that script too, not just the root.
+- 2026-08-22: **"Needs privilege to test" is usually a claim about imagination, not about the OS.** Two registry-loader clauses (a foreign-owned parent, a foreign-uid ancestor) were carried as untestable-without-sudo. Both are testable with no privilege at all: `/private/tmp` is root-owned 1777 on every macOS box, and `/private/var/db` is full of service-uid directories — real foreign-owned inodes, not stand-ins. This is the third time a "needs a second uid" claim in this repo fell to an existing system object (the first was `link(2)` against a root-owned socket). Before recording a security clause as covered-by-reading-only, go looking for an inode the system already owns.
+- 2026-08-22: **Assert the RULE, not that something threw.** With the registry loader's parent-ownership clause DELETED, the loader still refuses — one clause later, on `mode`, because the root-owned parent is 1777. A `toThrow()` assertion stays green straight through the deletion; only `expect(refusal.rule).toBe("foreign-owner")` kills it. Any test over layered refusals that asserts merely "it refused" is measuring the union of the layers, which is exactly what mutation testing is for and exactly what it will not catch.
+- 2026-08-22: **Redundant enforcement is not defence in depth until each layer is witnessed alone.** `--context-root` containment was enforced in two places; every single-layer deletion survived 12/12, and only killing containment outright failed. A tripwire over five escape shapes then showed the second layer was UNREACHABLE — strictly implied by the first — so the "belt and braces" was one layer plus dead code, and its comment claimed hardlink protection that measurement disproved. When two checks can only be witnessed together, the honest reading is that you have one check and an untested claim.
 - 2026-08-21: **A fix round in a decision-bearing file inverts a decision more often than it fixes one.** Four adversarial rounds on the RelayUIContext decorator: round 1 turned approvals into denials; round 2 turned denials into approvals (a tapped "Deny" ran the tool); round 3 made a permission ask THROW instead of denying, and clamped a 30-day timeout to 1ms so it self-denied before a phone could render. Each round closed its named vectors and introduced new ones, exactly as the Phase 42/44 lesson predicted. What finally converged was not a better patch but a STRUCTURAL mandate — delete the inference rather than correct it — after which the residuals were enumerable input-validation gaps instead of new inversions.
 - 2026-08-21: **A green suite written by the author tests where the author's assumptions hold.** Round 1's suite passed 17/17 with a fail-open inversion live, because its confirm case used a two-option deny-last vocabulary — precisely the region where its positional heuristic happened to agree. A consent-dialog test passed while the `/rewind --fork` dialog lost 215 of 273 characters, because every title in the suite was under 20 characters. Ask an adversary to REFUTE, and require it to execute rather than read.
 - 2026-08-21: **Choose an instrument that could fail.** Round 2 claimed no inference remained and backed it with a grep whose pattern set omitted `.length` — so it returned zero matches by construction while a line decided meaning by sibling count. The fix is a negative control: feed the KNOWN-BAD input through the instrument first and watch it fire, before trusting its silence.

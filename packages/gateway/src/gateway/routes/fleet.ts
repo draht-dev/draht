@@ -4,7 +4,7 @@ import {
 	type AttachBridgeOptions,
 	type AuthorizationRequest,
 	type AuthorizationVerdict,
-	buildFleetFrameWithStatus,
+	FleetObserver,
 	GitStatusProbe,
 	HistoryCursorError,
 	HistoryIndex,
@@ -133,6 +133,18 @@ export interface FleetRoutesOptions {
 	 * period has to be a fraction of the idle window rather than a free setting.
 	 */
 	keepaliveMs?: number;
+	/**
+	 * The daemon's single fleet observer (R35-ALWAYS.10).
+	 *
+	 * Optional so a test can inject one it drives by hand. When absent this
+	 * surface builds its own, over the history index and status cache it already
+	 * owns — those two are what the observer needs, and moving their ownership
+	 * out to `createServer` just to construct the observer there would have put
+	 * `GET /history`'s index and `GET /fleet`'s projection in two different
+	 * places. One surface per `createServer` call means one observer per daemon
+	 * process either way, which is the property the epoch depends on.
+	 */
+	fleet?: FleetObserver;
 }
 
 /**
@@ -476,30 +488,59 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 	const FLEET_HISTORY_ROWS = 50;
 
 	/**
+	 * THE daemon's fleet observer — one scanner, one reaper, one `epoch`
+	 * (R35-ALWAYS.10).
+	 *
+	 * Everything that used to scan the socket directory for itself now reads
+	 * this: `GET /fleet` below, the snapshot every `/attach` connection is sent
+	 * after `hello`, the answer to `fleet_resync`, and the `fleet_delta` stream.
+	 * That is what makes the HTTP body and the pushed frame ONE SHAPE with one
+	 * `epoch` and one ordered `seq`, rather than two projections that happen to
+	 * be built from the same directory.
+	 *
+	 * EPOCH SCOPE IS THE DAEMON PROCESS. A restart is a new epoch, which leaks
+	 * the restart onto the wire — honestly, and on purpose: it is exactly what a
+	 * renderer needs in order to know the deltas it holds are worthless.
+	 */
+	const fleet =
+		options.fleet ??
+		new FleetObserver({
+			socketDir: options.socketDir,
+			// The same page `GET /fleet` used to merge by hand. Read on the
+			// observer's own slower cadence — see `DEFAULT_FLEET_HISTORY_REFRESH_MS`
+			// for why the session store may not be walked at the socket cadence.
+			history: () => history.page({ limit: FLEET_HISTORY_ROWS }).sessions,
+			statuses,
+		});
+
+	/**
 	 * `GET /fleet` — the live fleet, plus the newest resumable history rows
 	 * (R35-ALWAYS.7), each row carrying the quad-state `status` the git probe
-	 * last observed (R35-ALWAYS.8).
+	 * last observed (R35-ALWAYS.8), stamped with the observer's `epoch`/`seq`.
 	 *
-	 * ASYNC ON PURPOSE, AND ONLY HERE. `buildFleetFrameWithStatus` is the one
-	 * door a git probe comes through: it refreshes the live rows' cwds in
-	 * parallel, each bounded by its own 500 ms deadline and all of them by one
-	 * budget, and it is awaited by THIS handler — an HTTP request that can wait —
-	 * and by nothing on the `hello` path. The frame pushed after `hello` is still
-	 * built synchronously from whatever the cache already holds, because a
-	 * synchronous probe there would let one wedged repository stall the daemon
-	 * for every connected phone.
+	 * ASYNC ON PURPOSE, AND ONLY HERE. `refreshStatuses()` is the one door a git
+	 * probe comes through: it refreshes the live rows' cwds in parallel, each
+	 * bounded by its own 500 ms deadline and all of them by one budget, and it is
+	 * awaited by THIS handler — an HTTP request that can wait — and by nothing on
+	 * the `hello` path. The frame pushed after `hello` is built from whatever the
+	 * cache already holds, because a synchronous probe there would let one wedged
+	 * repository stall the daemon for every connected phone.
 	 *
-	 * The body is the same shape the `fleet` frame carries, so a renderer parses
-	 * one shape whether the list arrived over HTTP or was pushed down the socket.
+	 * IT DOES NOT SCAN. `tick()` is the observer's scan, and the observer is the
+	 * only thing in this process that calls it — which matters because the scan
+	 * REAPS. A handler that built its own projection would be a second reaper
+	 * armed by however many clients were polling, and its `epoch`/`seq` would
+	 * describe a different world from the one the open sockets are being told
+	 * about.
+	 *
+	 * `freshHistory` is set because an HTTP caller asked for the list and is
+	 * paying for the answer; the background poll is not, and does not.
 	 */
-	app.get("/fleet", async (c) =>
-		c.json(
-			await buildFleetFrameWithStatus(options.socketDir, {
-				history: history.page({ limit: FLEET_HISTORY_ROWS }).sessions,
-				statuses,
-			}),
-		),
-	);
+	app.get("/fleet", async (c) => {
+		await fleet.refreshStatuses();
+		fleet.tick({ freshHistory: true });
+		return c.json(fleet.snapshot());
+	});
 
 	/**
 	 * `GET /history` — every session this machine has recorded (R35-ALWAYS.6).
@@ -640,6 +681,10 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 					bridge = new AttachBridge({
 						socketDir: options.socketDir,
 						connection: rendererConnection(ws),
+						// The daemon's one observer, shared by every connection. Each
+						// bridge subscribes for its own lifetime and unsubscribes in
+						// `close()`; the observer polls only while somebody is subscribed.
+						fleet,
 						limits,
 						server: { name: "draht-gateway", version: pkg.version },
 						authorize: revocationPolicy(authentication.devices),

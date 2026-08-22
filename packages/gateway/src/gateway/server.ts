@@ -1,4 +1,4 @@
-import { resolveSessionsDir, resolveSocketDir } from "@draht/geist-core";
+import { type FleetObserver, resolveSessionsDir, resolveSocketDir } from "@draht/geist-core";
 import { Hono } from "hono";
 import { websocket } from "hono/bun";
 import { except } from "hono/combine";
@@ -109,6 +109,20 @@ export interface GatewayConfig {
 	 * prove is load-bearing.
 	 */
 	attachKeepaliveMs?: number;
+	/**
+	 * The fleet observer this daemon reads its fleet through (R35-ALWAYS.10).
+	 *
+	 * ONE PER DAEMON PROCESS, and that is not a convenience — it is what the
+	 * `epoch` on `fleet` and `fleet_delta` means. `GET /fleet` and every open
+	 * `/attach` socket answer from the same observer, so they share an `epoch`
+	 * and an ordered `seq`; a second observer in one process would hand two
+	 * clients two unrelated numberings of one machine, and neither could tell.
+	 *
+	 * Optional because the fleet surface builds one over the history index and
+	 * status cache it already owns. Passing one here is for an embedder or a test
+	 * that needs to drive the ticks itself.
+	 */
+	fleet?: FleetObserver;
 }
 
 /**
@@ -320,6 +334,9 @@ export function createServer(config: GatewayConfig): ServerHandle {
 			sessionsDir: config.sessionsDir ?? resolveSessionsDir(),
 			authToken: config.authToken,
 			devices: deviceProvider(config.devices),
+			// Mounted exactly once per `createServer`, so the observer this surface
+			// builds — or the one handed in here — is the process's only one.
+			fleet: config.fleet,
 			// Derived from the same window the handler above enforces, so the two
 			// cannot be configured apart: the period is a function of the timeout,
 			// never a second setting an operator can put out of step with it.

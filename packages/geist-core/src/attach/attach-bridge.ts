@@ -65,6 +65,7 @@ import {
 	ServerFrameSchema,
 	type TransportLimits,
 } from "@draht/geist-protocol";
+import type { FleetSource, FleetUpdate } from "./fleet-observer.js";
 import { buildFleetFrame, listAttachableSessions, sessionFilesAreOurs } from "./socket-sessions.js";
 
 /**
@@ -74,6 +75,25 @@ import { buildFleetFrame, listAttachableSessions, sessionFilesAreOurs } from "./
  * `PERMISSION_RELAY_CAPABILITY` — it has to speak the same string.
  */
 const PERMISSION_RELAY_CAPABILITY = "permission-relay";
+
+/**
+ * The capability a RENDERER declares in `attach` to be sent `fleet_delta`
+ * (R35-ALWAYS.10).
+ *
+ * Gated rather than unconditional, and gated on the renderer's own declaration,
+ * for the reason every other addition to this wire has been: a client built
+ * before this frame existed re-validates everything the daemon sends and
+ * `ServerFrameSchema.parse` of a type it does not know is a decode failure. An
+ * old renderer therefore keeps receiving exactly one snapshot and nothing else,
+ * which is precisely what it received before.
+ *
+ * `attach` is where it is declared because `attach` is the only client frame
+ * with a `capabilities` field — `hello` has none. The consequence is deliberate
+ * and stated so a reader does not mistake it for an oversight: a connection that
+ * never attaches to a session is never sent deltas. It still has `fleet_resync`,
+ * which is the pull half of the same mechanism.
+ */
+const FLEET_DELTA_CAPABILITY = "fleet-delta";
 
 /**
  * The relayed frames that must never be chunked. See {@link AttachBridge.#fit}.
@@ -263,6 +283,19 @@ export interface AttachBridgeOptions {
 	 * policy; nothing here can prove another runtime's bookkeeping.
 	 */
 	backlogBytes?: (socket: Socket) => number;
+	/**
+	 * The daemon's single fleet observer (R35-ALWAYS.10).
+	 *
+	 * Its ABSENCE is the switch, exactly as `devices` is. Given one, this bridge
+	 * never scans the socket directory itself: the `hello` snapshot, the answer
+	 * to `fleet_resync` and every `fleet_delta` come from that one observer, so
+	 * they share an `epoch`, their `seq` values are consecutive, and the daemon
+	 * has ONE reader — and therefore one reaper — of a directory whose reader
+	 * deletes files. Given none, the bridge falls back to `buildFleetFrame`,
+	 * which is what it did before the observer existed: one snapshot at `hello`
+	 * and nothing after it.
+	 */
+	fleet?: FleetSource;
 }
 
 /** WebSocket close code for a policy violation — every typed refusal uses it. */
@@ -342,6 +375,22 @@ export class AttachBridge {
 	/** The same count, for frames this client has queued toward the session. */
 	#queuedSessionFrames = 0;
 
+	/** The daemon's one fleet observer, or null on a bridge given none. */
+	readonly #fleet: FleetSource | null;
+	/** Drops this connection's delta subscription. Null while not subscribed. */
+	#unsubscribeFleet: (() => void) | null = null;
+	/**
+	 * The `seq` of the last fleet frame — snapshot or delta — this connection was
+	 * sent, or -1 before any.
+	 *
+	 * Kept so the moment a connection SUBSCRIBES cannot open a gap. `hello`
+	 * snapshots and `attach` subscribes, and the fleet may well have moved
+	 * between them; without this the client's first delta would carry a `seq`
+	 * two or more past its snapshot, and its only correct response would be the
+	 * `fleet_resync` this field makes unnecessary.
+	 */
+	#fleetSeqSent = -1;
+
 	constructor(options: AttachBridgeOptions) {
 		this.#socketDir = options.socketDir;
 		this.#conn = options.connection;
@@ -357,6 +406,7 @@ export class AttachBridge {
 		this.#presented = options.presentedCredential ?? null;
 		this.#authDeadlineMs = options.authDeadlineMs ?? DEFAULT_AUTH_DEADLINE_MS;
 		this.#authorize = options.authorize ?? null;
+		this.#fleet = options.fleet ?? null;
 		// No device store means the host authenticated the upgrade request; see
 		// `AttachBridgeOptions.devices`. Anything else and this connection starts
 		// out as nobody, on a clock.
@@ -451,18 +501,19 @@ export class AttachBridge {
 					server: this.#server,
 					limits: this.#limits,
 					// `geist/0.4` requires the field and forbids omitting it: absent would
-					// mean "pre-0.4", and there is no pre-0.4 daemon that speaks 0.4. This
-					// bridge has no extra verb to declare yet, so it declares none — the
-					// empty list is the honest answer, and a daemon that later accepts
-					// something beyond the base wire (`fleet_resync` is the first one queued)
-					// advertises it here instead of forcing another version cliff.
-					capabilities: [],
+					// mean "pre-0.4", and there is no pre-0.4 daemon that speaks 0.4. What
+					// is declared here is exactly what this daemon WILL ANSWER, never what
+					// a later task intends to: advertising a verb that is not wired yet
+					// buys a renderer a frame that is silently ignored, which is worse
+					// than the renderer knowing it cannot ask. `session-resume` joins this
+					// list in the task that implements it.
+					capabilities: this.#capabilities(),
 				});
 				if (credential !== null) this.#emit(credential);
 				// The fleet is session data: which sessions exist, where they run
 				// and under which pid. It goes out once this connection is somebody
 				// and not a frame earlier.
-				if (this.#authenticated) this.#emit(buildFleetFrame(this.#socketDir));
+				if (this.#authenticated) this.#emitFleetSnapshot();
 				return;
 			}
 			case "pair_device": {
@@ -483,6 +534,21 @@ export class AttachBridge {
 					return;
 				}
 				this.#attach(frame);
+				return;
+			}
+			case "fleet_resync": {
+				// A DISTINCT VERB, and it has to be one: a repeated `hello` is refused
+				// `invalid_frame` and an unknown type is refused `unknown_type`, both
+				// with close 1008 — and killing the connection is the exact outcome a
+				// resync exists to avoid. So this case answers and RETURNS: nothing
+				// below closes anything, and a client that has lost the thread keeps
+				// the socket, the session it is attached to, and its place in the
+				// stream.
+				//
+				// Accepted at any point after authentication, including while
+				// attached, because that is when it is needed: a phone that slept
+				// through a delta is still attached to a session it is watching.
+				this.#emitFleetSnapshot();
 				return;
 			}
 			case "input":
@@ -507,6 +573,7 @@ export class AttachBridge {
 					this.#detached = true;
 					session.end();
 					this.#session = null;
+					this.#unsubscribe();
 					this.#conn.close(CLOSE_NORMAL, "detached");
 					this.#closed = true;
 				}
@@ -547,6 +614,10 @@ export class AttachBridge {
 		this.#closed = true;
 		this.#clearDrainTimer();
 		this.#clearAuthTimer();
+		// Alongside the session socket, and for the same reason: a listener held
+		// by the observer for a connection that is gone is a leak that also keeps
+		// the observer's poll armed.
+		this.#unsubscribe();
 		const session = this.#session;
 		this.#session = null;
 		try {
@@ -584,7 +655,97 @@ export class AttachBridge {
 		if (credential === null) return;
 
 		this.#emit(credential);
-		this.#emit(buildFleetFrame(this.#socketDir));
+		this.#emitFleetSnapshot();
+	}
+
+	/** What this daemon will answer, as `server_hello.capabilities` (`geist/0.4`). */
+	#capabilities(): string[] {
+		// Conditional on the observer, because without one there is no delta
+		// stream and no state for a resync to answer FROM — the fallback path
+		// emits one snapshot at `hello` and nothing after it. A daemon that
+		// declared `fleet-delta` anyway would be promising a stream it has no
+		// producer for.
+		return this.#fleet === null ? [] : [FLEET_DELTA_CAPABILITY];
+	}
+
+	/**
+	 * Send the current fleet, and remember where in the stream that left this
+	 * client.
+	 *
+	 * The observer's `refreshNow()` is the ONE scan in this daemon; a bridge with
+	 * no observer falls back to `buildFleetFrame`, which scans per connection —
+	 * the behaviour this class had before, kept so a host that constructs a
+	 * bridge alone still gets a fleet listing.
+	 */
+	#emitFleetSnapshot(): void {
+		const frame = this.#fleet === null ? buildFleetFrame(this.#socketDir) : this.#fleet.refreshNow();
+		this.#fleetSeqSent = frame.seq;
+		this.#emit(frame);
+	}
+
+	/**
+	 * Start feeding this connection `fleet_delta` frames.
+	 *
+	 * Called from `attach`, which is where the renderer declares it understands
+	 * them. The snapshot-first step is the ordering guarantee at the seam: if the
+	 * fleet moved between this connection's `hello` and its `attach`, the client
+	 * is re-based on a fresh snapshot BEFORE the subscription, so the first delta
+	 * it sees carries `snapshot.seq + 1` rather than a gap it would have to
+	 * recover from.
+	 */
+	#subscribeToFleet(): void {
+		const fleet = this.#fleet;
+		if (fleet === null || this.#unsubscribeFleet !== null) return;
+		// Both of these are synchronous, and the runtime is single-threaded, so no
+		// tick can land between them. That is what makes "the snapshot and the
+		// deltas that follow it come from the same observer" true by construction
+		// rather than by a lock.
+		if (fleet.seq !== this.#fleetSeqSent) this.#emitFleetSnapshot();
+		if (this.#closed) return;
+		this.#unsubscribeFleet = fleet.subscribe((update) => this.#onFleetUpdate(update));
+	}
+
+	/** Release this connection's delta subscription. Idempotent. */
+	#unsubscribe(): void {
+		const stop = this.#unsubscribeFleet;
+		this.#unsubscribeFleet = null;
+		try {
+			stop?.();
+		} catch {
+			// A subscription that cannot be released is not a reason to fail a close.
+		}
+	}
+
+	/**
+	 * One observer transition, as this connection sees it.
+	 *
+	 * FAN-OUT BUDGET (R32-FLEET.6). A burst of session churn must not spend a
+	 * phone's output budget and get the phone disconnected for it. Two bounds,
+	 * and both of them replace a backlog with a single authoritative frame rather
+	 * than dropping anything:
+	 *
+	 *   - the observer already coalesces a whole tick into ONE delta, and hands
+	 *     over a snapshot instead when a tick moved more rows than one delta frame
+	 *     may carry;
+	 *   - here, a connection whose buffer is already half the cap is sent the
+	 *     snapshot rather than the delta. A renderer replaces wholesale on a
+	 *     snapshot, so the frames it did not receive cost it nothing — and one
+	 *     snapshot is bounded by the fleet size, while a backlog of deltas is
+	 *     bounded by how long the phone has been slow.
+	 */
+	#onFleetUpdate(update: FleetUpdate): void {
+		if (this.#closed) return;
+		if (update.kind === "snapshot") {
+			this.#fleetSeqSent = update.snapshot.seq;
+			this.#emit(update.snapshot);
+			return;
+		}
+		if (this.#conn.bufferedBytes() >= Math.floor(this.#limits.maxBufferedOutputBytes / 2)) {
+			this.#emitFleetSnapshot();
+			return;
+		}
+		this.#fleetSeqSent = update.delta.seq;
+		this.#emit(update.delta);
 	}
 
 	/** Verify a credential the host read off the upgrade request. */
@@ -726,6 +887,20 @@ export class AttachBridge {
 			if (this.#closed) return;
 			this.#refuse("unknown_session", `session ${JSON.stringify(frame.sessionId)} is not accepting connections`);
 		});
+		// The fleet subscription is armed here and NOT at `hello`, because `attach`
+		// is the only client frame carrying `capabilities` — see
+		// `FLEET_DELTA_CAPABILITY`. Armed after the dial, so a connection refused
+		// above never becomes a subscriber.
+		//
+		// SCOPE, stated here so a later reader does not widen it by accident:
+		// R35-ALWAYS.10's "without reconnecting" is scoped to the FLEET LIST for
+		// Phase 35. This bridge still allows one `attach` per connection and still
+		// CLOSES the WebSocket on `detach` (see the `detach` case above). Making
+		// `attach` re-callable is a second wire-semantics change and is out of
+		// scope; what is in scope is that a connection learns the fleet moved
+		// without dropping the socket, which is what the subscription below does.
+		if (frame.capabilities?.includes(FLEET_DELTA_CAPABILITY) === true) this.#subscribeToFleet();
+
 		socket.on("close", () => {
 			if (this.#closed || this.#detached) return;
 			// Not a protocol failure — the agent process ended. Say so on the
@@ -733,6 +908,7 @@ export class AttachBridge {
 			this.#emit({ type: "error", message: "the session ended", code: "SESSION_ENDED" });
 			this.#closed = true;
 			this.#clearDrainTimer();
+			this.#unsubscribe();
 			this.#conn.close(CLOSE_GOING_AWAY, "session_ended");
 		});
 	}
@@ -952,6 +1128,7 @@ export class AttachBridge {
 		this.#closed = true;
 		this.#clearDrainTimer();
 		this.#clearAuthTimer();
+		this.#unsubscribe();
 		try {
 			this.#conn.send(encodeFrame(protocolError(code, message)));
 		} catch {

@@ -9,6 +9,19 @@ export type {
 	RendererConnection,
 } from "./attach/attach-bridge.js";
 export { AttachBridge, DEFAULT_AUTH_DEADLINE_MS } from "./attach/attach-bridge.js";
+export type {
+	FleetObserverOptions,
+	FleetSource,
+	FleetUpdate,
+	FleetUpdateListener,
+} from "./attach/fleet-observer.js";
+export {
+	DEFAULT_FLEET_COALESCE_MS,
+	DEFAULT_FLEET_HISTORY_REFRESH_MS,
+	DEFAULT_FLEET_POLL_MS,
+	FleetObserver,
+	MAX_FLEET_DELTA_CHANGES,
+} from "./attach/fleet-observer.js";
 export type { HistoryPage, HistoryPageQuery, HistoryScanCounters, HistorySession } from "./attach/history-sessions.js";
 export {
 	DEFAULT_HISTORY_LIMIT,

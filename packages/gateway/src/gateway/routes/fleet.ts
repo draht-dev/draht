@@ -4,7 +4,8 @@ import {
 	type AttachBridgeOptions,
 	type AuthorizationRequest,
 	type AuthorizationVerdict,
-	buildFleetFrame,
+	buildFleetFrameWithStatus,
+	GitStatusProbe,
 	HistoryCursorError,
 	HistoryIndex,
 	type RendererConnection,
@@ -445,10 +446,6 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 		return devices;
 	};
 
-	// The same body the `fleet` frame carries, so a renderer parses one shape
-	// whether the list arrived over HTTP or was pushed after `hello`.
-	app.get("/fleet", (c) => c.json(buildFleetFrame(options.socketDir)));
-
 	/**
 	 * One index per surface, and therefore one per daemon process.
 	 *
@@ -458,6 +455,51 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 	 * roughly 0.5–2 s once, at daemon start.
 	 */
 	const history = new HistoryIndex(options.sessionsDir);
+
+	/**
+	 * The status cache, owned here so it lives exactly as long as this surface.
+	 *
+	 * One per daemon rather than a module global: two surfaces in one process
+	 * (the tests build several) must not share a cache, and a global is a thing
+	 * no test can reset.
+	 */
+	const statuses = new GitStatusProbe();
+
+	/**
+	 * How many history rows ride along on a fleet frame.
+	 *
+	 * The fleet is a SNAPSHOT for a renderer to show, not the archive: the real
+	 * store holds 1,854 sessions and this frame reaches a phone over a
+	 * possibly-cellular link. The newest 50 resumable rows are what a renderer
+	 * can act on; `GET /history` pages the rest.
+	 */
+	const FLEET_HISTORY_ROWS = 50;
+
+	/**
+	 * `GET /fleet` — the live fleet, plus the newest resumable history rows
+	 * (R35-ALWAYS.7), each row carrying the quad-state `status` the git probe
+	 * last observed (R35-ALWAYS.8).
+	 *
+	 * ASYNC ON PURPOSE, AND ONLY HERE. `buildFleetFrameWithStatus` is the one
+	 * door a git probe comes through: it refreshes the live rows' cwds in
+	 * parallel, each bounded by its own 500 ms deadline and all of them by one
+	 * budget, and it is awaited by THIS handler — an HTTP request that can wait —
+	 * and by nothing on the `hello` path. The frame pushed after `hello` is still
+	 * built synchronously from whatever the cache already holds, because a
+	 * synchronous probe there would let one wedged repository stall the daemon
+	 * for every connected phone.
+	 *
+	 * The body is the same shape the `fleet` frame carries, so a renderer parses
+	 * one shape whether the list arrived over HTTP or was pushed down the socket.
+	 */
+	app.get("/fleet", async (c) =>
+		c.json(
+			await buildFleetFrameWithStatus(options.socketDir, {
+				history: history.page({ limit: FLEET_HISTORY_ROWS }).sessions,
+				statuses,
+			}),
+		),
+	);
 
 	/**
 	 * `GET /history` — every session this machine has recorded (R35-ALWAYS.6).

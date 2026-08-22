@@ -18,9 +18,25 @@
  * The duplication is the price of the boundary, and `check:geist-protocol`'s
  * mirror clause is what keeps the two readings from drifting.
  *
- * Everything here is synchronous. A fleet read happens on an HTTP request and
- * on every `hello`; it touches a handful of small files in one directory, and a
- * synchronous read cannot interleave with a concurrent reaper mid-scan.
+ * ## The synchrony contract, restated for `geist/0.4` (R35-ALWAYS.8)
+ *
+ * This header used to say "everything here is synchronous", and the SCAN still
+ * is: reading the socket directory touches a handful of small files, and a
+ * synchronous read cannot interleave with a concurrent reaper mid-scan. That
+ * has not changed and must not.
+ *
+ * What changed is that a row now carries a `status` derived from a git probe,
+ * and a probe is a subprocess with a deadline. The contract is therefore split
+ * rather than abandoned:
+ *
+ *   - {@link listAttachableSessions} and {@link buildFleetFrame} stay
+ *     SYNCHRONOUS and NEVER spawn. Given a {@link FleetStatusSource} they read
+ *     its cache; given none they report `unknown`. This is what the `hello`
+ *     path calls, and it is why one wedged repository cannot stall the daemon
+ *     for every connected phone.
+ *   - {@link buildFleetFrameWithStatus} is the async door: it refreshes the
+ *     status cache first — off the `hello` path, in parallel, inside a budget —
+ *     and then does the same synchronous scan.
  */
 
 import { randomUUID } from "node:crypto";
@@ -28,6 +44,8 @@ import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, type Stats } 
 import { homedir, uptime } from "node:os";
 import { join } from "node:path";
 import type { AttachableSession, FleetFrame } from "@draht/geist-protocol";
+import type { HistorySession } from "./history-sessions.js";
+import type { FleetStatusSource } from "./status-probe.js";
 
 /**
  * The environment variable the draht binary itself reads to relocate its agent
@@ -166,6 +184,78 @@ function readLock(
 }
 
 /**
+ * What a fleet projection needs beyond the socket directory itself.
+ *
+ * Both halves are OPTIONAL and both default to "say less rather than guess":
+ * with no history the frame is the live fleet exactly as it always was, and
+ * with no status source every row reports `unknown` with a null `statusAt`.
+ */
+export interface FleetProjectionOptions {
+	/**
+	 * Rows from the history index to merge in as `origin: "history"`.
+	 *
+	 * Passed in rather than read here: enumerating the session store is the
+	 * history index's job and its budget, and this module must not acquire a
+	 * second opinion about how much of a 1,854-file store belongs in one frame.
+	 */
+	history?: readonly HistorySession[] | undefined;
+	/**
+	 * Where `status` comes from. Read-only and synchronous by construction — see
+	 * this file's header for why the scan may not spawn a probe.
+	 */
+	statuses?: FleetStatusSource | undefined;
+}
+
+/** The `status` / `statusAt` pair for one cwd, straight off the cache. */
+function readStatus(
+	statuses: FleetStatusSource | undefined,
+	cwd: string,
+): Pick<AttachableSession, "status" | "statusAt"> {
+	const reading = statuses?.read(cwd) ?? null;
+	// No source, or nothing cached for this cwd: nobody has looked. `unknown`
+	// with a null `statusAt` says exactly that, and is the one answer that
+	// cannot be mistaken for an observation.
+	if (reading === null) return { status: "unknown", statusAt: null };
+	return { status: reading.status, statusAt: reading.statusAt };
+}
+
+/**
+ * Append the history rows that no live socket already covers.
+ *
+ * Live wins on a collision, and a collision is the NORMAL case for a session
+ * that has exchanged at least one message: the `.sock` is named with the
+ * session header's own id, so the same session appears in both halves. It is
+ * listed once, as `origin: "socket"`, because "you can attach to this" is the
+ * stronger and more useful of the two truths.
+ *
+ * History rows carry NO `pid` — there is no process — and no status: they are
+ * never probed, because 945 of the 1,052 cwds in the real corpus no longer
+ * exist and a probe per history row per request is ~90% doomed spawns.
+ */
+function withHistory(live: AttachableSession[], options: FleetProjectionOptions): AttachableSession[] {
+	const history = options.history;
+	if (history === undefined || history.length === 0) return live;
+	const seen = new Set(live.map((session) => session.id));
+	const rows: AttachableSession[] = [...live];
+	for (const row of history) {
+		if (seen.has(row.id)) continue;
+		seen.add(row.id);
+		rows.push({
+			id: row.id,
+			cwd: row.cwd,
+			startedAt: row.startedAt,
+			origin: "history",
+			// Nothing is listening. `session_resume` is the verb for this row.
+			attachable: false,
+			resumable: true,
+			status: "unknown",
+			statusAt: null,
+		});
+	}
+	return rows;
+}
+
+/**
  * Every live attachable draht session **of this user** on this machine.
  *
  * A session appears only when all of these hold: `<id>.sock` really is a socket
@@ -195,18 +285,38 @@ function readLock(
  * established the entry was a socket, which shielded the lock of a non-socket
  * `<id>.sock` from the orphan sweep and is precisely why that class never died.
  *
+ * ── ORIGIN, AND THE DISCRIMINATOR THAT DOES NOT EXIST (R35-ALWAYS.7) ─────────
+ *
+ * The requirement says "a session from a build predating socket registration is
+ * `history`". THERE IS NO SUCH DISCRIMINATOR. Every session header carries only
+ * `{type, version, id, timestamp, cwd}`, and `version` is the FILE FORMAT
+ * version — 3 on all 1,854 files in the real store, on every build that has
+ * ever written one. Nothing on disk says which build wrote a session.
+ *
+ * The observable truth, which is what is implemented here and what the wire
+ * documents: NO live `<id>.sock` + `<id>.lock` pair for a header's id ⇒
+ * `origin: "history"`, `attachable: false`, `resumable: true`. A pair ⇒
+ * `origin: "socket"`, `attachable: true`, `resumable: false`.
+ *
+ * THE JOIN MISSES IN BOTH DIRECTIONS and neither miss is corruption: both
+ * `.sock` files on the real machine name ids with no session file anywhere in
+ * the store (a session JSONL is not written until the first message), and most
+ * of the store has no socket. So a socket row never assumes a history record
+ * exists, and a history row never assumes no socket does.
+ *
  * @param socketDir - Directory to scan. See {@link resolveSocketDir}.
+ * @param options - History rows to merge in, and where to read status from.
  */
-export function listAttachableSessions(socketDir: string): AttachableSession[] {
-	if (!existsSync(socketDir)) return [];
+export function listAttachableSessions(socketDir: string, options: FleetProjectionOptions = {}): AttachableSession[] {
+	if (!existsSync(socketDir)) return withHistory([], options);
 
 	let entries: string[];
 	try {
 		entries = readdirSync(socketDir);
 	} catch {
-		// Unreadable directory: report an empty fleet rather than failing the
+		// Unreadable directory: report the history half rather than failing the
 		// request that asked for it.
-		return [];
+		return withHistory([], options);
 	}
 
 	const sessions: AttachableSession[] = [];
@@ -277,39 +387,30 @@ export function listAttachableSessions(socketDir: string): AttachableSession[] {
 		// never reaped from here.
 		if (ownership === "foreign") continue;
 
+		// `pid` is spelled explicitly rather than spread, because the schema made it
+		// OPTIONAL for history rows and a socket row is the one kind that always
+		// has one.
 		sessions.push({
 			id,
 			cwd: lock.cwd,
 			pid: lock.pid,
 			startedAt: lock.startedAt,
-			// ── STOP-GAP, OWNED BY THE STATUS TASK ────────────────────────────────
-			// `geist/0.4` made these five fields REQUIRED on every session row, and a
-			// frame without them fails validation at the bridge — the daemon closes
-			// every connection at `hello`. They are filled here with what is literally
-			// true of a row this scan produced, and nothing more:
 			//   origin     'socket' — by construction; this function only reads sockets.
 			//   attachable  true    — it was just proved live and same-owner.
 			//   resumable   false   — you ATTACH to a live session. Resuming one would
 			//                         start a second process appending to one session
 			//                         JSONL, which is the hazard the busy lock exists
 			//                         for. A history row is the resumable kind.
-			//                         NOT a stop-gap, unlike its neighbours: this is the
-			//                         ruling. `attachable` and `resumable` are the two
-			//                         VERBS a renderer offers, and a renderer showing
-			//                         "Resume" on a live row offers the wrong one. The
-			//                         conformance corpus once froze `resumable: true`
-			//                         here and has been regenerated to agree; the daemon
+			//                         `attachable` and `resumable` are the two VERBS a
+			//                         renderer offers, and a renderer showing "Resume"
+			//                         on a live row offers the wrong one. The daemon
 			//                         still answers `session_resume` on a live id with
 			//                         `already_live`, but that refusal is defence in
 			//                         depth, not the invitation's excuse.
-			//   status/statusAt — no probe has run in this process, and `unknown` with
-			//                         no timestamp is the honest way to say so. The
-			//                         deadline-bounded quad-state probe replaces both.
 			origin: "socket",
 			attachable: true,
 			resumable: false,
-			status: "unknown",
-			statusAt: null,
+			...readStatus(options.statuses, lock.cwd),
 		});
 	}
 
@@ -334,7 +435,7 @@ export function listAttachableSessions(socketDir: string): AttachableSession[] {
 	}
 
 	sessions.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
-	return sessions;
+	return withHistory(sessions, options);
 }
 
 /**
@@ -380,6 +481,42 @@ let fleetSeq = 0;
  * simply the count of snapshots this process has emitted — monotonic, which is
  * all the schema claims, and honest about there being one scanner per read.
  */
-export function buildFleetFrame(socketDir: string): FleetFrame {
-	return { type: "fleet", sessions: listAttachableSessions(socketDir), epoch: FLEET_EPOCH, seq: fleetSeq++ };
+export function buildFleetFrame(socketDir: string, options: FleetProjectionOptions = {}): FleetFrame {
+	return {
+		type: "fleet",
+		sessions: listAttachableSessions(socketDir, options),
+		epoch: FLEET_EPOCH,
+		seq: fleetSeq++,
+	};
+}
+
+/**
+ * The same frame, with the status cache brought up to date first.
+ *
+ * THIS IS THE ONLY DOOR A PROBE COMES THROUGH. `refresh` spawns; it runs the
+ * live rows' cwds in parallel, each bounded by its own deadline and all of them
+ * by one budget, and then the scan below is the same synchronous scan
+ * {@link buildFleetFrame} does. Callers that cannot afford to wait — anything on
+ * the `hello` path — call {@link buildFleetFrame} instead and get whatever the
+ * cache already holds.
+ *
+ * Only `origin: "socket"` rows are refreshed. History rows are never probed;
+ * see {@link withHistory}.
+ */
+export async function buildFleetFrameWithStatus(
+	socketDir: string,
+	options: FleetProjectionOptions = {},
+): Promise<FleetFrame> {
+	const refresh = options.statuses?.refresh;
+	if (refresh !== undefined) {
+		// The scan is cheap (one readdir and a few lstats) and it is the only way
+		// to learn which cwds are live. Running it twice per request costs less
+		// than probing a cwd nothing is attached to.
+		const live = listAttachableSessions(socketDir);
+		await refresh.call(
+			options.statuses,
+			live.map((session) => session.cwd),
+		);
+	}
+	return buildFleetFrame(socketDir, options);
 }

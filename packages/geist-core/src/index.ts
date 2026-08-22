@@ -19,13 +19,22 @@ export {
 	resolveSessionsDir,
 	SESSIONS_DIR_NAME,
 } from "./attach/history-sessions.js";
+export type { FleetProjectionOptions } from "./attach/socket-sessions.js";
 export {
 	AGENT_DIR_ENV,
 	buildFleetFrame,
+	buildFleetFrameWithStatus,
 	listAttachableSessions,
 	resolveSocketDir,
 	SOCKETS_DIR_NAME,
 } from "./attach/socket-sessions.js";
+export type {
+	FleetStatusReading,
+	FleetStatusSource,
+	GitStatusProbeResult,
+	ProbeFailure,
+} from "./attach/status-probe.js";
+export { DEFAULT_STATUS_PROBE_DEADLINE_MS, GitStatusProbe, probeGitStatus } from "./attach/status-probe.js";
 export type {
 	ComposeElementContextInput,
 	ElementBoundingRect,
@@ -78,8 +87,9 @@ export type {
 	ShaLedgerEntry,
 	ShaLedgerRecordResult,
 	ShaLedgerUndoResult,
+	WorktreeReviewState,
 } from "./ledger/sha-ledger.js";
-export { isDirtyOrAhead, ShaLedger, ShaLedgerError } from "./ledger/sha-ledger.js";
+export { ShaLedger, ShaLedgerError, worktreeReviewState } from "./ledger/sha-ledger.js";
 export type {
 	BootstrapToken,
 	DeviceMeta,

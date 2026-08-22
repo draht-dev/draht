@@ -359,12 +359,6 @@ export function getUpdateInstruction(packageName: string): string {
 // Package Asset Paths (shipped with executable)
 // =============================================================================
 
-/**
- * Get the base directory for resolving package assets (themes, package.json, README.md, CHANGELOG.md).
- * - For Bun binary: returns the directory containing the executable
- * - For Node.js (dist/): returns __dirname (the dist/ directory)
- * - For tsx (src/): returns parent directory (the package root)
- */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
 	const envDir = process.env.DRAHT_PACKAGE_DIR;

@@ -82,6 +82,8 @@ const require = createRequire(import.meta.url);
 const isNodeSeaBinary =
 	("sea" in process.features && process.features.sea === true) ||
 	process.getBuiltinModule("node:sea")?.isSea() === true;
+declare const DRAHT_BUNDLED_NODE: boolean;
+const isBundledNode = typeof DRAHT_BUNDLED_NODE !== "undefined" && DRAHT_BUNDLED_NODE;
 const isTypeScriptSourceRuntime = !isBunBinary && path.extname(fileURLToPath(import.meta.url)) === ".ts";
 
 /**
@@ -468,9 +470,10 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 
 	const jiti = createJiti(import.meta.url, {
 		moduleCache: false,
-		// Compiled binaries use modules embedded in the executable. Source TypeScript
-		// reuses host modules and root tsconfig paths. Built Node uses dist aliases.
-		...(isBunBinary || isNodeSeaBinary
+		// Compiled binaries and the bundled Node distribution use embedded modules.
+		// Source TypeScript reuses host modules and root tsconfig paths. Unbundled
+		// Node builds use dist aliases.
+		...(isBunBinary || isNodeSeaBinary || isBundledNode
 			? { virtualModules: VIRTUAL_MODULES, tryNative: false }
 			: isTypeScriptSourceRuntime
 				? { virtualModules: VIRTUAL_MODULES, tsconfigPaths: true }

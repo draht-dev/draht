@@ -305,7 +305,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
 
 ${chalk.bold("Usage:")}
-  ${APP_NAME} [options] [@files...] [messages...]
+  ${APP_NAME} [options] [--] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
   ${APP_NAME} install <source> [-l]     Install extension source and add to settings
@@ -367,6 +367,7 @@ ${chalk.bold("Options:")}
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
   --offline                      Disable startup network operations (same as DRAHT_OFFLINE=1)
+  --                             End option parsing; treat remaining arguments as messages/files
   --help, -h                     Show this help
   --version, -v                  Show version number
 
@@ -390,6 +391,9 @@ ${chalk.bold("Examples:")}
 
   # Non-interactive mode (process and exit)
   ${APP_NAME} -p "List all .ts files in src/"
+
+  # Prompt beginning with a dash
+  ${APP_NAME} -p -- "- Summarize these points"
 
   # Multiple messages (interactive)
   ${APP_NAME} "Read package.json" "What dependencies do we have?"

@@ -271,6 +271,71 @@ describe("one pair, one spawn in flight, daemon-wide", () => {
 		expect(spawner.requests).toHaveLength(2);
 	});
 
+	test("two harnesses on ONE project are two pairs", async () => {
+		const { cmd, config } = world("sl-2h-");
+		config.harness = { default: "draht", agents: { draht: { cmd }, other: { cmd } } };
+		let release = (): void => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const spawner = recordingSpawner(async () => {
+			await gate;
+			return { pid: 9 };
+		});
+		const launcher = new SessionLauncher({ spawner, registry: () => config });
+
+		const first = launcher.launch("draht", "fr3n");
+		const second = launcher.launch("other", "fr3n");
+		release();
+
+		expect((await first).code).toBe("spawned");
+		expect((await second).code).toBe("spawned");
+		expect(spawner.requests).toHaveLength(2);
+	});
+
+	test("a third asker is refused while the first is still in flight", async () => {
+		const { config } = world("sl-3rd-");
+		let release = (): void => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const spawner = recordingSpawner(async () => {
+			await gate;
+			return { pid: 10 };
+		});
+		const launcher = new SessionLauncher({ spawner, registry: () => config });
+
+		const first = launcher.launch("draht", "fr3n");
+		expect((await launcher.launch("draht", "fr3n")).code).toBe("refused");
+		expect((await launcher.launch("draht", "fr3n")).code).toBe("refused");
+		expect(spawner.requests).toHaveLength(1);
+
+		release();
+		expect((await first).code).toBe("spawned");
+	});
+
+	test("one pair completing leaves another pair's claim standing", async () => {
+		const { base, config } = world("sl-keep-");
+		config.projects = { fr3n: config.projects?.fr3n ?? { root: base }, other: { root: directory(join(base, "o")) } };
+		let release = (): void => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const spawner = recordingSpawner(async (request) => {
+			if (request.projectRoot.endsWith("/o")) return { pid: 12 };
+			await gate;
+			return { pid: 11 };
+		});
+		const launcher = new SessionLauncher({ spawner, registry: () => config });
+
+		const slow = launcher.launch("draht", "fr3n");
+		expect((await launcher.launch("draht", "other")).code).toBe("spawned");
+		expect((await launcher.launch("draht", "fr3n")).code).toBe("refused");
+
+		release();
+		expect((await slow).code).toBe("spawned");
+	});
+
 	test("two pairs that would concatenate to one key are still two pairs", async () => {
 		const base = tempRoot("sl-sep-");
 		const config: GeistConfig = {

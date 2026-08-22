@@ -29,9 +29,10 @@ import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
 import { CONFIG_DIR_NAME } from "../config.ts";
+import { comparablePath, realHomeDir, realPathStrict } from "../utils/canonical-path.ts";
 import { spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
-import { canonicalizePath, isLocalPath, markPathIgnoredByCloudSync, resolvePath } from "../utils/paths.ts";
+import { isLocalPath, markPathIgnoredByCloudSync, resolvePath } from "../utils/paths.ts";
 import { isStdoutTakenOver } from "./output-guard.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
 
@@ -117,7 +118,13 @@ export interface PackageManager {
 }
 
 interface PackageManagerOptions {
+	/** Lexically resolved: where the cwd's OWN config resources live. */
 	cwd: string;
+	/**
+	 * As the caller spelled it, before `path.resolve` collapsed any `..`. The ancestor
+	 * skill walk resolves it physically, which is the chain the trust gate walks.
+	 */
+	cwdSpelling?: string;
 	agentDir: string;
 	settingsManager: SettingsManager;
 }
@@ -440,10 +447,12 @@ function findGitRepoRoot(startDir: string): string | null {
 
 function collectAncestorAgentsSkillDirs(startDir: string): string[] {
 	const skillDirs: string[] = [];
-	const resolvedStartDir = resolve(startDir);
-	const gitRepoRoot = findGitRepoRoot(resolvedStartDir);
+	// The gate's own chain; an unresolvable cwd contributes no skill dirs.
+	const canonicalStartDir = realPathStrict(startDir);
+	if (canonicalStartDir === undefined) return skillDirs;
+	const gitRepoRoot = findGitRepoRoot(canonicalStartDir);
 
-	let dir = resolvedStartDir;
+	let dir = canonicalStartDir;
 	while (true) {
 		skillDirs.push(join(dir, ".agents", "skills"));
 		if (gitRepoRoot && dir === gitRepoRoot) {
@@ -803,6 +812,7 @@ function applyAutoloadDisabledPatterns(allPaths: string[], patterns: string[], b
 
 export class DefaultPackageManager implements PackageManager {
 	private cwd: string;
+	private cwdSpelling: string;
 	private agentDir: string;
 	private settingsManager: SettingsManager;
 	private globalNpmRoot: string | undefined;
@@ -811,6 +821,7 @@ export class DefaultPackageManager implements PackageManager {
 
 	constructor(options: PackageManagerOptions) {
 		this.cwd = resolvePath(options.cwd);
+		this.cwdSpelling = options.cwdSpelling ?? options.cwd;
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager;
 	}
@@ -2360,9 +2371,11 @@ export class DefaultPackageManager implements PackageManager {
 			themes: join(projectBaseDir, "themes"),
 		};
 		const userAgentsSkillsDir = join(getHomeDir(), ".agents", "skills");
+		const realHome = realHomeDir();
+		const canonicalUserAgentsSkillsDir = realHome === undefined ? undefined : join(realHome, ".agents", "skills");
 		const projectTrusted = this.settingsManager.isProjectTrusted();
 		const projectAgentsSkillDirs = projectTrusted
-			? collectAncestorAgentsSkillDirs(this.cwd).filter((dir) => resolve(dir) !== resolve(userAgentsSkillsDir))
+			? collectAncestorAgentsSkillDirs(this.cwdSpelling).filter((dir) => dir !== canonicalUserAgentsSkillsDir)
 			: [];
 
 		const addResources = (
@@ -2551,7 +2564,7 @@ export class DefaultPackageManager implements PackageManager {
 
 			const seen = new Set<string>();
 			return resolved.filter((entry) => {
-				const canonicalPath = canonicalizePath(entry.path);
+				const canonicalPath = comparablePath(entry.path);
 				if (seen.has(canonicalPath)) return false;
 				seen.add(canonicalPath);
 				return true;

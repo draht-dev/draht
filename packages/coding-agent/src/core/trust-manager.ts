@@ -1,9 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
-import { canonicalizePath, normalizePath, resolvePath } from "../utils/paths.ts";
+import {
+	realHomeDir,
+	realPathStrict,
+	resolveRealPrefix,
+	spellRealPrefix,
+	trustKeyPath,
+} from "../utils/canonical-path.ts";
+import { resolvePath } from "../utils/paths.ts";
 
 export type ProjectTrustDecision = boolean | null;
 
@@ -28,6 +34,7 @@ type TrustFile = Record<string, boolean | null | undefined>;
 
 const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 	"settings.json",
+	"permissions.yml",
 	"extensions",
 	"skills",
 	"prompts",
@@ -36,15 +43,19 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 	"APPEND_SYSTEM.md",
 ] as const;
 
-function normalizeCwd(cwd: string): string {
-	return canonicalizePath(resolvePath(cwd));
-}
+// Loaded from cwd *and every ancestor*, so the gate has to walk the whole chain, not just cwd.
+const TRUST_REQUIRING_ANCESTOR_PROJECT_RESOURCES = [
+	join(".agents", "skills"),
+	join(CONFIG_DIR_NAME, "agents"),
+] as const;
 
 function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreEntry | null {
-	let currentDir = normalizeCwd(cwd);
+	const prefix = resolveRealPrefix(cwd);
+	let currentDir = spellRealPrefix(prefix);
 	while (true) {
+		// An unresolved suffix is spelled lexically, so this key may name a directory we are not in: a stored refusal still binds, a stored trust must not.
 		const value = data[currentDir];
-		if (value === true || value === false) {
+		if (value === false || (value === true && !prefix.failed)) {
 			return { path: currentDir, decision: value };
 		}
 
@@ -57,13 +68,13 @@ function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreE
 }
 
 export function getProjectTrustParentPath(cwd: string): string | undefined {
-	const trustPath = normalizeCwd(cwd);
+	const trustPath = trustKeyPath(cwd);
 	const parentDir = dirname(trustPath);
 	return parentDir === trustPath ? undefined : parentDir;
 }
 
 export function getProjectTrustOptions(cwd: string, options?: { includeSessionOnly?: boolean }): ProjectTrustOption[] {
-	const trustPath = normalizeCwd(cwd);
+	const trustPath = trustKeyPath(cwd);
 	const trustOptions: ProjectTrustOption[] = [
 		{ label: "Trust", trusted: true, updates: [{ path: trustPath, decision: true }], savedPath: trustPath },
 	];
@@ -174,40 +185,48 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
 	}
 }
 
-function realPathOrUndefined(path: string): string | undefined {
-	try {
-		return realpathSync(normalizePath(path));
-	} catch {
-		return undefined;
-	}
-}
-
 /**
  * Returns true when cwd has project-local resources that must be gated by
- * project trust: trust-requiring entries under cwd/.pi, or .agents/skills in
- * cwd or one of its ancestors, or when the real cwd cannot be determined.
+ * project trust: trust-requiring entries under the cwd's config dir, or an
+ * ancestor-loaded resource (.agents/skills, <config dir>/agents) in cwd or one
+ * of its ancestors, or when the real cwd cannot be determined.
  * Returns false when no such project resources exist. The user/global
  * ~/.agents/skills directory is always treated as a trusted user resource and
  * is ignored here, even when cwd is $HOME.
  */
 export function hasTrustRequiringProjectResources(cwd: string): boolean {
-	let currentDir = realPathOrUndefined(cwd);
-	if (currentDir === undefined) {
-		// Not canonicalizePath: it degrades to the lexical chain, which can skip the real ancestor holding the resources.
+	const realCwd = realPathStrict(cwd);
+	if (realCwd === undefined) {
 		return true;
 	}
-	const realHomeDir = realPathOrUndefined(process.env.HOME || homedir());
-	const userAgentsSkillsDir = realHomeDir === undefined ? undefined : join(realHomeDir, ".agents", "skills");
+	const realHome = realHomeDir();
+	const userAgentsSkillsDir = realHome === undefined ? undefined : join(realHome, ".agents", "skills");
+	if (hasProjectResourcesAtOrAbove(realCwd, userAgentsSkillsDir)) {
+		return true;
+	}
+	// The ancestor loaders walk `realCwd` now, but the loaders that read the cwd's OWN
+	// config dir still spell it `resolvePath(config.cwd)`, which collapses `..` lexically.
+	const lexicalCwd = resolvePath(cwd);
+	return lexicalCwd !== realCwd && hasProjectConfigResources(lexicalCwd);
+}
 
-	const configDir = join(currentDir, CONFIG_DIR_NAME);
-	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
+function hasProjectConfigResources(dir: string): boolean {
+	const configDir = join(dir, CONFIG_DIR_NAME);
+	return TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)));
+}
+
+function hasProjectResourcesAtOrAbove(startDir: string, userAgentsSkillsDir: string | undefined): boolean {
+	if (hasProjectConfigResources(startDir)) {
 		return true;
 	}
 
+	let currentDir = startDir;
 	while (true) {
-		const agentsSkillsDir = join(currentDir, ".agents", "skills");
-		if (agentsSkillsDir !== userAgentsSkillsDir && existsSync(agentsSkillsDir)) {
-			return true;
+		for (const entry of TRUST_REQUIRING_ANCESTOR_PROJECT_RESOURCES) {
+			const resourceDir = join(currentDir, entry);
+			if (resourceDir !== userAgentsSkillsDir && existsSync(resourceDir)) {
+				return true;
+			}
 		}
 
 		const parentDir = dirname(currentDir);
@@ -244,7 +263,7 @@ export class ProjectTrustStore {
 		withTrustFileLock(this.trustPath, () => {
 			const data = readTrustFile(this.trustPath);
 			for (const { path, decision } of decisions) {
-				const key = normalizeCwd(path);
+				const key = trustKeyPath(path);
 				if (decision === null) {
 					delete data[key];
 				} else {

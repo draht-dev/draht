@@ -18,9 +18,9 @@ import * as path from "node:path";
 import type { Message, Usage } from "@draht/ai";
 import { Text } from "@draht/tui";
 import { Type } from "@sinclair/typebox";
-import { getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
+import { CONFIG_DIR_NAME, getAgentDir, getPackageDir, isBunBinary } from "../../config.js";
+import { comparablePath, realPathStrict } from "../../utils/canonical-path.js";
 import { parseFrontmatter } from "../../utils/frontmatter.js";
-import { canonicalizePath } from "../../utils/paths.js";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -39,6 +39,8 @@ import {
 	PERMISSION_MODES,
 	PermissionGate,
 	type PermissionMode,
+	type PermissionRule,
+	parseRules,
 	TaskBoard,
 	WorktreeIsolator,
 } from "../multi-agent/index.ts";
@@ -129,9 +131,13 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 }
 
 function findProjectAgentsDir(cwd: string): string | null {
-	let dir = cwd;
+	// The gate's own chain, from the raw spelling: `resolvePath` first would collapse `..`
+	// lexically, and a cwd that will not resolve has unknown ancestors to load from.
+	const realCwd = realPathStrict(cwd);
+	if (realCwd === undefined) return null;
+	let dir = realCwd;
 	while (true) {
-		const candidate = path.join(dir, ".draht", "agents");
+		const candidate = path.join(dir, CONFIG_DIR_NAME, "agents");
 		try {
 			if (fs.statSync(candidate).isDirectory()) return candidate;
 		} catch {}
@@ -143,13 +149,13 @@ function findProjectAgentsDir(cwd: string): string | null {
 
 type AgentScope = "user" | "project" | "both";
 
-function discoverAgents(cwd: string, scope: AgentScope): AgentConfig[] {
+export function discoverAgents(cwd: string, scope: AgentScope, projectTrusted: boolean): AgentConfig[] {
 	// Shipped agents (bundled with the package) — lowest priority
 	const shippedDir = path.join(getPackageDir(), "agents");
 	const shippedAgents = loadAgentsFromDir(shippedDir, "user");
 
 	const userDir = path.join(getAgentDir(), "agents");
-	const projectDir = findProjectAgentsDir(cwd);
+	const projectDir = projectTrusted ? findProjectAgentsDir(cwd) : null;
 	const userAgents = scope !== "project" ? loadAgentsFromDir(userDir, "user") : [];
 	const projectAgents = scope !== "user" && projectDir ? loadAgentsFromDir(projectDir, "project") : [];
 
@@ -665,7 +671,7 @@ function buildPermissionAskDetail(event: ToolCallEvent, ctx: ExtensionContext, r
 		toolName: safeField(event.toolName, verdict),
 		// `ctx.cwd` is the raw, un-normalised `config.cwd`; a symlinked worktree would otherwise
 		// read as a different project on the answering surface.
-		cwd: safeField(canonicalizePath(ctx.cwd), verdict),
+		cwd: safeField(comparablePath(ctx.cwd), verdict),
 		reason: safeField(reason, verdict),
 		options: TOOL_PERMISSION_OPTIONS,
 		truncated: false,
@@ -701,6 +707,17 @@ function serializeToolInput(input: Record<string, unknown>): string {
 		// Cyclic or otherwise unserializable input must not crash the permission gate.
 		return Object.keys(input).join(", ");
 	}
+}
+
+const PERMISSION_RULES_FILE = "permissions.yml";
+
+export function loadPermissionRules(projectDir: string, projectTrusted: boolean, globalDir?: string): PermissionRule[] {
+	if (projectTrusted) {
+		return loadRules(projectDir, globalDir);
+	}
+	// Not loadRules(projectDir=undefined): that default is process.cwd(), i.e. the untrusted project itself.
+	const globalRulesPath = path.join(globalDir ?? getAgentDir(), PERMISSION_RULES_FILE);
+	return fs.existsSync(globalRulesPath) ? parseRules(fs.readFileSync(globalRulesPath, "utf-8")) : [];
 }
 
 /**
@@ -812,6 +829,14 @@ function truncateTask(task: string, maxLen = 120): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	// Autocomplete gets no ctx, so the last trust answer a ctx gave for this cwd stands in; unseen cwds count as untrusted.
+	let lastProjectTrust: { cwd: string; trusted: boolean } | undefined;
+	const noteProjectTrust = (ctx: ExtensionContext) => {
+		lastProjectTrust = { cwd: ctx.cwd, trusted: ctx.isProjectTrusted() };
+	};
+	const rememberedProjectTrust = (cwd: string): boolean =>
+		lastProjectTrust?.cwd === cwd ? lastProjectTrust.trusted : false;
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
@@ -892,7 +917,8 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const scope: AgentScope = (params.agentScope as string as AgentScope) ?? "both";
-			const agents = discoverAgents(ctx.cwd, scope);
+			noteProjectTrust(ctx);
+			const agents = discoverAgents(ctx.cwd, scope, ctx.isProjectTrusted());
 			const available = agents.map((a) => a.name).join(", ") || "none";
 
 			const find = (name: string) => agents.find((a) => a.name === name);
@@ -1049,8 +1075,9 @@ export default function (pi: ExtensionAPI) {
 	// ── Permission gate hook point ────────────────────────────────────────────
 	// Prepares the wiring point for the multi-agent permission gate: every tool
 	// call in this process is offered to the gate before it runs. Rules are
-	// (re)loaded per call so project-local `.draht/permissions.yml` edits and
-	// per-session cwd changes take effect without an extension reload.
+	// (re)loaded per call so project-local `.draht/permissions.yml` edits — read
+	// only for a trusted project — and per-session cwd changes take effect
+	// without an extension reload.
 	//
 	// The session permission mode (default/auto/yolo) is session-scoped state,
 	// settable via /permissions and /yolo below and seeded from
@@ -1069,11 +1096,15 @@ export default function (pi: ExtensionAPI) {
 		yolo: "no approval prompts this session (deny rules still block)",
 	};
 
-	pi.on("tool_call", (event, ctx) =>
-		createPermissionGateToolCallHandler(
-			new PermissionGate(loadRules(ctx.cwd), { cwd: ctx.cwd, mode: permissionMode }),
-		)(event, ctx),
-	);
+	pi.on("tool_call", (event, ctx) => {
+		noteProjectTrust(ctx);
+		return createPermissionGateToolCallHandler(
+			new PermissionGate(loadPermissionRules(ctx.cwd, ctx.isProjectTrusted()), {
+				cwd: ctx.cwd,
+				mode: permissionMode,
+			}),
+		)(event, ctx);
+	});
 
 	// /permissions command — show or set the session permission mode
 	pi.registerCommand("permissions", {
@@ -1121,7 +1152,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("agent", {
 		description: "Select an agent to handle your next prompts, or clear selection. Usage: /agent [name]",
 		handler: async (args, ctx) => {
-			const agents = discoverAgents(ctx.cwd, "both");
+			noteProjectTrust(ctx);
+			const agents = discoverAgents(ctx.cwd, "both", ctx.isProjectTrusted());
 
 			if (args.trim()) {
 				// Direct selection: /agent architect
@@ -1166,14 +1198,16 @@ export default function (pi: ExtensionAPI) {
 			}
 		},
 		getArgumentCompletions: (partial) => {
-			const agents = discoverAgents(process.cwd(), "both");
+			const cwd = process.cwd();
+			const agents = discoverAgents(cwd, "both", rememberedProjectTrust(cwd));
 			const names = ["none", ...agents.map((a) => a.name)];
 			return names.filter((n) => n.startsWith(partial)).map((n) => ({ value: n, label: n }));
 		},
 	});
 
 	// Intercept user input when an agent is selected
-	pi.on("input", (event) => {
+	pi.on("input", (event, ctx) => {
+		noteProjectTrust(ctx);
 		if (!selectedAgent) return { action: "continue" as const };
 		// Don't intercept slash commands
 		if (event.text.startsWith("/") || event.text.startsWith("!")) return { action: "continue" as const };

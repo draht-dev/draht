@@ -57,6 +57,98 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+
+/**
+ * The PATH a probe runs with — absolute, system-owned, and nothing of the
+ * daemon's own.
+ *
+ * git shells out to its own subcommands and, on macOS, to `xcrun`, so it needs
+ * a PATH. It does not need the operator's, which may have a project-local
+ * `node_modules/.bin` or a per-user shim directory ahead of the system one.
+ */
+const TRUSTED_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+/** Where a system git actually lives, in the order a trusted PATH would find it. */
+const GIT_CANDIDATES = ["/usr/bin/git", "/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"] as const;
+
+/**
+ * The complete environment a probe child receives — an allowlist, exported so a
+ * test asserts what this function BUILDS rather than re-declaring the same keys
+ * and asserting its own copy.
+ *
+ * That distinction is the point. A test that spawns git with a hardcoded
+ * allowlist proves the allowlist works; it says nothing about whether this
+ * module still uses one, and would go on passing if the call site became
+ * `{...process.env}` again — which is the defect it exists to prevent. Measured:
+ * with the allowlist reverted, exactly that test still passed.
+ *
+ * Nothing here is secret. Anything added needs a reason beside it, because
+ * whatever is in here is readable by a program the REPOSITORY chose.
+ */
+export function probeEnvironment(): Record<string, string> {
+	return {
+		// git needs to find its own subcommands and, on macOS, xcrun.
+		PATH: TRUSTED_PATH,
+		// A probe must never sit waiting for a credential prompt.
+		GIT_TERMINAL_PROMPT: "0",
+		// ...nor for an askpass helper, nor an SSH agent it should not have.
+		GIT_ASKPASS: "",
+		SSH_ASKPASS: "",
+		// `no_repo` is classified by matching git's own wording, and git translates
+		// its messages. Under a localized shell "not a git repository" never matches
+		// and the ordinary case reads `unknown`. Pinning the locale keeps the one
+		// string this depends on stable.
+		LC_ALL: "C",
+	};
+}
+
+let resolvedGit: string | undefined;
+
+/**
+ * The absolute git to run, resolved once.
+ *
+ * `spawn("git", …)` is a PATH lookup, and the PATH it looks in is whatever the
+ * daemon inherited — so a directory earlier in it could supply the binary that
+ * then runs in every session cwd the daemon knows about. Resolving to an
+ * absolute system path removes the lookup entirely.
+ *
+ * Falls back to the bare name only when no candidate exists, which is a machine
+ * with git somewhere unusual: the probe already treats ENOENT as `unavailable`
+ * rather than as a clean tree, so the failure stays honest either way.
+ */
+function gitExecutable(): string {
+	if (resolvedGit !== undefined) return resolvedGit;
+
+	// An explicit override, read from the DAEMON's own environment.
+	//
+	// This does not reopen what the absolute resolution closes. The threat this
+	// module defends against is REPOSITORY-controlled input — a `.git/config` in
+	// a cwd the daemon merely observes — and a repository cannot set the
+	// daemon's environment. An operator who exports this has chosen their own
+	// git, which they could equally do by installing one.
+	//
+	// It exists because the alternative is worse: without it the only way to
+	// point the probe at a different git is to shadow it on PATH, which is
+	// precisely the injection this resolution removes. A test that needs a git
+	// which fails, hangs, or ignores TERM needs SOME seam, and an explicit
+	// operator-set variable is the one that does not also serve an attacker.
+	const override = process.env.DRAHT_GIT_BINARY;
+	if (override !== undefined && override.length > 0) {
+		resolvedGit = override;
+		return resolvedGit;
+	}
+	for (const candidate of GIT_CANDIDATES) {
+		try {
+			if (existsSync(candidate) && statSync(candidate).isFile()) {
+				resolvedGit = candidate;
+				return resolvedGit;
+			}
+		} catch {}
+	}
+	resolvedGit = "git";
+	return resolvedGit;
+}
+
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionStatus } from "@draht/geist-protocol";
@@ -223,22 +315,45 @@ export function probeGitStatus(cwd: string, options: { deadlineMs?: number } = {
 		let timedOut = false;
 		let child: ChildProcess;
 		try {
-			child = spawn("git", ["--no-optional-locks", "status", "--porcelain"], {
-				cwd,
-				// Its own process group, so the deadline can take the whole tree.
-				detached: true,
-				stdio: ["ignore", "pipe", "pipe"],
-				env: {
-					...process.env,
-					// A probe must never sit waiting for a credential prompt.
-					GIT_TERMINAL_PROMPT: "0",
-					// `no_repo` is classified by matching git's own wording, and git
-					// translates its messages. Under a localized shell "not a git
-					// repository" never matches and the ordinary case reads `unknown`.
-					// Pinning the locale keeps the one string this depends on stable.
-					LC_ALL: "C",
+			child = spawn(
+				gitExecutable(),
+				[
+					// `status` RUNS PROGRAMS THE REPOSITORY CHOOSES. `core.fsmonitor` is a
+					// path git executes on every status, and `.git/config` belongs to
+					// whoever wrote the repository — so a cwd this daemon merely OBSERVES
+					// could run code, and before this line it ran with the daemon's whole
+					// environment. Demonstrated, not theorised: a fixture repo with
+					// `core.fsmonitor` set to a shell script saw an exported secret in its
+					// own env, twice per status. Both halves are now closed — these `-c`
+					// overrides win over any repository config, and the environment below
+					// is an allowlist. The overrides come FIRST because a later `-c` wins
+					// and these must not be overridable by anything.
+					"-c",
+					"core.fsmonitor=",
+					"-c",
+					"core.hooksPath=/dev/null",
+					"-c",
+					"uploadpack.packObjectsHook=",
+					"-c",
+					"diff.external=",
+					"--no-optional-locks",
+					"status",
+					"--porcelain",
+				],
+				{
+					cwd,
+					// Its own process group, so the deadline can take the whole tree.
+					detached: true,
+					stdio: ["ignore", "pipe", "pipe"],
+					// AN ALLOWLIST, NOT `{...process.env}`. This probe runs in every cwd
+					// the daemon knows about, on every fleet refresh, so anything it
+					// inherits is exposed to every repository the operator has ever opened
+					// a session in — including whatever credentials the daemon was started
+					// with. Nothing here is secret, and nothing is added without a reason
+					// written next to it.
+					env: probeEnvironment(),
 				},
-			});
+			);
 		} catch {
 			// A spawn that throws synchronously (a cwd that vanished between the
 			// existence check and here) is not evidence of a clean tree.

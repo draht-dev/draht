@@ -285,13 +285,31 @@ function seedHistorySession(cwd: string): { id: string; cwd: string } {
 	return { id, cwd };
 }
 
-/** One daemon, with `shimDir` prepended to the PATH every probe resolves against. */
+/**
+ * One daemon, told explicitly which `git` its probes must run.
+ *
+ * This used to prepend `shimDir` to PATH, which worked because the probe
+ * spawned `git` by bare name. That is no longer true and the change was
+ * deliberate: `git status` executes programs the REPOSITORY chooses
+ * (`core.fsmonitor`), so a probe that resolves its binary through an inherited
+ * PATH lets anything earlier in that PATH run in every cwd the daemon knows
+ * about. The probe now resolves an absolute system git.
+ *
+ * The seam that remains is `DRAHT_GIT_BINARY`, read from the DAEMON's own
+ * environment — which a repository cannot set, so it serves a test without
+ * serving an attacker. A shim is now named, not merely made findable.
+ */
 async function startDaemon(shimDir: string | null): Promise<{ base: string; stop: () => void }> {
 	const port = freeLoopbackPort();
 	const stderr = { text: "" };
-	const path = shimDir === null ? process.env.PATH : `${shimDir}:${process.env.PATH}`;
+	const gitBinary = shimDir === null ? undefined : join(shimDir, "git");
 	const proc = Bun.spawn(["bun", GATEWAY_CLI, "--port", String(port), "--auth", TOKEN], {
-		env: { ...process.env, PATH: path, HOME: home, DRAHT_CODING_AGENT_DIR: agentDir },
+		env: {
+			...process.env,
+			HOME: home,
+			DRAHT_CODING_AGENT_DIR: agentDir,
+			...(gitBinary === undefined ? {} : { DRAHT_GIT_BINARY: gitBinary }),
+		},
 		stdin: "ignore",
 		stdout: "ignore",
 		stderr: "pipe",

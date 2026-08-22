@@ -1,0 +1,24 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.5",
+	"direction": "server-to-client",
+	"type": "registry",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": [],
+	"frame": {
+		"type": "registry",
+		"harnesses": [
+			{
+				"id": "draht",
+				"isDefault": true
+			}
+		],
+		"projects": [
+			{
+				"id": "conformance",
+				"name": "conformance",
+				"root": "/geist/conformance"
+			}
+		]
+	}
+}

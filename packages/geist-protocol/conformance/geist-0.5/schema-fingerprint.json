@@ -1,0 +1,2846 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.5",
+	"schemas": {
+		"AttachFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"capabilities": {
+					"kind": "optional",
+					"inner": {
+						"kind": "array",
+						"element": {
+							"kind": "string",
+							"checks": [
+								"max:64",
+								"min:1"
+							]
+						}
+					}
+				},
+				"clientId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"mode": {
+					"kind": "enum",
+					"values": [
+						"read-write",
+						"read-only"
+					]
+				},
+				"sessionId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "attach"
+				}
+			}
+		},
+		"AttachableSessionSchema": {
+			"kind": "object",
+			"fields": {
+				"attachable": {
+					"kind": "boolean"
+				},
+				"cwd": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"id": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"origin": {
+					"kind": "enum",
+					"values": [
+						"socket",
+						"history"
+					]
+				},
+				"pid": {
+					"kind": "optional",
+					"inner": {
+						"kind": "number",
+						"checks": [
+							"int",
+							"min:0"
+						]
+					}
+				},
+				"resumable": {
+					"kind": "boolean"
+				},
+				"startedAt": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"status": {
+					"kind": "enum",
+					"values": [
+						"clean",
+						"dirty",
+						"no_repo",
+						"unknown"
+					]
+				},
+				"statusAt": {
+					"kind": "nullable",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:64",
+							"min:1"
+						]
+					}
+				}
+			}
+		},
+		"AuthenticateFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"credential": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"deviceId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "authenticate"
+				}
+			}
+		},
+		"ClientFrameSchema": {
+			"kind": "discriminatedUnion",
+			"discriminator": "type",
+			"options": [
+				{
+					"kind": "object",
+					"fields": {
+						"client": {
+							"kind": "object",
+							"fields": {
+								"name": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"version": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								}
+							}
+						},
+						"protocol": {
+							"kind": "literal",
+							"value": "geist/0.x"
+						},
+						"type": {
+							"kind": "literal",
+							"value": "hello"
+						},
+						"version": {
+							"kind": "literal",
+							"value": "0.5"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"bootstrapToken": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"device": {
+							"kind": "object",
+							"fields": {
+								"name": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"platform": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								}
+							}
+						},
+						"type": {
+							"kind": "literal",
+							"value": "pair_device"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"credential": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"deviceId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "authenticate"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"capabilities": {
+							"kind": "optional",
+							"inner": {
+								"kind": "array",
+								"element": {
+									"kind": "string",
+									"checks": [
+										"max:64",
+										"min:1"
+									]
+								}
+							}
+						},
+						"clientId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"mode": {
+							"kind": "enum",
+							"values": [
+								"read-write",
+								"read-only"
+							]
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "attach"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"data": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "input"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "detach"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"optionId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "permission_response"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"type": {
+							"kind": "literal",
+							"value": "fleet_resync"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"sessionId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "session_resume"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"harnessId": {
+							"kind": "string",
+							"checks": [
+								"max:64",
+								"min:1",
+								"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+							]
+						},
+						"projectId": {
+							"kind": "string",
+							"checks": [
+								"max:64",
+								"min:1",
+								"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "session_spawn"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"type": {
+							"kind": "literal",
+							"value": "registry_resync"
+						}
+					}
+				}
+			]
+		},
+		"ClientJoinedFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": []
+				},
+				"mode": {
+					"kind": "enum",
+					"values": [
+						"read-write",
+						"read-only"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "client_joined"
+				}
+			}
+		},
+		"ClientLeftFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "client_left"
+				}
+			}
+		},
+		"ClientModeSchema": {
+			"kind": "enum",
+			"values": [
+				"read-write",
+				"read-only"
+			]
+		},
+		"DetachFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "detach"
+				}
+			}
+		},
+		"DeviceCredentialFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"credential": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"deviceId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"expiresAt": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"issuedAt": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "device_credential"
+				}
+			}
+		},
+		"ErrorFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"code": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": []
+					}
+				},
+				"message": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "error"
+				}
+			}
+		},
+		"FleetAgentSchema": {
+			"kind": "object",
+			"fields": {
+				"authOk": {
+					"kind": "boolean"
+				},
+				"name": {
+					"kind": "string",
+					"checks": []
+				}
+			}
+		},
+		"FleetDeltaChangeSchema": {
+			"kind": "discriminatedUnion",
+			"discriminator": "kind",
+			"options": [
+				{
+					"kind": "object",
+					"fields": {
+						"kind": {
+							"kind": "literal",
+							"value": "appeared"
+						},
+						"session": {
+							"kind": "object",
+							"fields": {
+								"attachable": {
+									"kind": "boolean"
+								},
+								"cwd": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"id": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"origin": {
+									"kind": "enum",
+									"values": [
+										"socket",
+										"history"
+									]
+								},
+								"pid": {
+									"kind": "optional",
+									"inner": {
+										"kind": "number",
+										"checks": [
+											"int",
+											"min:0"
+										]
+									}
+								},
+								"resumable": {
+									"kind": "boolean"
+								},
+								"startedAt": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"status": {
+									"kind": "enum",
+									"values": [
+										"clean",
+										"dirty",
+										"no_repo",
+										"unknown"
+									]
+								},
+								"statusAt": {
+									"kind": "nullable",
+									"inner": {
+										"kind": "string",
+										"checks": [
+											"max:64",
+											"min:1"
+										]
+									}
+								}
+							}
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"id": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"kind": {
+							"kind": "literal",
+							"value": "disappeared"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"kind": {
+							"kind": "literal",
+							"value": "changed"
+						},
+						"session": {
+							"kind": "object",
+							"fields": {
+								"attachable": {
+									"kind": "boolean"
+								},
+								"cwd": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"id": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"origin": {
+									"kind": "enum",
+									"values": [
+										"socket",
+										"history"
+									]
+								},
+								"pid": {
+									"kind": "optional",
+									"inner": {
+										"kind": "number",
+										"checks": [
+											"int",
+											"min:0"
+										]
+									}
+								},
+								"resumable": {
+									"kind": "boolean"
+								},
+								"startedAt": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"status": {
+									"kind": "enum",
+									"values": [
+										"clean",
+										"dirty",
+										"no_repo",
+										"unknown"
+									]
+								},
+								"statusAt": {
+									"kind": "nullable",
+									"inner": {
+										"kind": "string",
+										"checks": [
+											"max:64",
+											"min:1"
+										]
+									}
+								}
+							}
+						}
+					}
+				}
+			]
+		},
+		"FleetDeltaFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"changes": {
+					"kind": "array",
+					"element": {
+						"kind": "discriminatedUnion",
+						"discriminator": "kind",
+						"options": [
+							{
+								"kind": "object",
+								"fields": {
+									"kind": {
+										"kind": "literal",
+										"value": "appeared"
+									},
+									"session": {
+										"kind": "object",
+										"fields": {
+											"attachable": {
+												"kind": "boolean"
+											},
+											"cwd": {
+												"kind": "string",
+												"checks": [
+													"min:1"
+												]
+											},
+											"id": {
+												"kind": "string",
+												"checks": [
+													"min:1"
+												]
+											},
+											"origin": {
+												"kind": "enum",
+												"values": [
+													"socket",
+													"history"
+												]
+											},
+											"pid": {
+												"kind": "optional",
+												"inner": {
+													"kind": "number",
+													"checks": [
+														"int",
+														"min:0"
+													]
+												}
+											},
+											"resumable": {
+												"kind": "boolean"
+											},
+											"startedAt": {
+												"kind": "string",
+												"checks": [
+													"min:1"
+												]
+											},
+											"status": {
+												"kind": "enum",
+												"values": [
+													"clean",
+													"dirty",
+													"no_repo",
+													"unknown"
+												]
+											},
+											"statusAt": {
+												"kind": "nullable",
+												"inner": {
+													"kind": "string",
+													"checks": [
+														"max:64",
+														"min:1"
+													]
+												}
+											}
+										}
+									}
+								}
+							},
+							{
+								"kind": "object",
+								"fields": {
+									"id": {
+										"kind": "string",
+										"checks": [
+											"min:1"
+										]
+									},
+									"kind": {
+										"kind": "literal",
+										"value": "disappeared"
+									}
+								}
+							},
+							{
+								"kind": "object",
+								"fields": {
+									"kind": {
+										"kind": "literal",
+										"value": "changed"
+									},
+									"session": {
+										"kind": "object",
+										"fields": {
+											"attachable": {
+												"kind": "boolean"
+											},
+											"cwd": {
+												"kind": "string",
+												"checks": [
+													"min:1"
+												]
+											},
+											"id": {
+												"kind": "string",
+												"checks": [
+													"min:1"
+												]
+											},
+											"origin": {
+												"kind": "enum",
+												"values": [
+													"socket",
+													"history"
+												]
+											},
+											"pid": {
+												"kind": "optional",
+												"inner": {
+													"kind": "number",
+													"checks": [
+														"int",
+														"min:0"
+													]
+												}
+											},
+											"resumable": {
+												"kind": "boolean"
+											},
+											"startedAt": {
+												"kind": "string",
+												"checks": [
+													"min:1"
+												]
+											},
+											"status": {
+												"kind": "enum",
+												"values": [
+													"clean",
+													"dirty",
+													"no_repo",
+													"unknown"
+												]
+											},
+											"statusAt": {
+												"kind": "nullable",
+												"inner": {
+													"kind": "string",
+													"checks": [
+														"max:64",
+														"min:1"
+													]
+												}
+											}
+										}
+									}
+								}
+							}
+						]
+					}
+				},
+				"epoch": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"seq": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "fleet_delta"
+				}
+			}
+		},
+		"FleetFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"epoch": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"seq": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				},
+				"sessions": {
+					"kind": "array",
+					"element": {
+						"kind": "object",
+						"fields": {
+							"attachable": {
+								"kind": "boolean"
+							},
+							"cwd": {
+								"kind": "string",
+								"checks": [
+									"min:1"
+								]
+							},
+							"id": {
+								"kind": "string",
+								"checks": [
+									"min:1"
+								]
+							},
+							"origin": {
+								"kind": "enum",
+								"values": [
+									"socket",
+									"history"
+								]
+							},
+							"pid": {
+								"kind": "optional",
+								"inner": {
+									"kind": "number",
+									"checks": [
+										"int",
+										"min:0"
+									]
+								}
+							},
+							"resumable": {
+								"kind": "boolean"
+							},
+							"startedAt": {
+								"kind": "string",
+								"checks": [
+									"min:1"
+								]
+							},
+							"status": {
+								"kind": "enum",
+								"values": [
+									"clean",
+									"dirty",
+									"no_repo",
+									"unknown"
+								]
+							},
+							"statusAt": {
+								"kind": "nullable",
+								"inner": {
+									"kind": "string",
+									"checks": [
+										"max:64",
+										"min:1"
+									]
+								}
+							}
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "fleet"
+				}
+			}
+		},
+		"FleetResyncFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"type": {
+					"kind": "literal",
+					"value": "fleet_resync"
+				}
+			}
+		},
+		"FleetSessionCapabilitiesSchema": {
+			"kind": "object",
+			"fields": {
+				"commands": {
+					"kind": "boolean"
+				},
+				"images": {
+					"kind": "boolean"
+				},
+				"modes": {
+					"kind": "boolean"
+				},
+				"resume": {
+					"kind": "boolean"
+				}
+			}
+		},
+		"FleetSessionSchema": {
+			"kind": "object",
+			"fields": {
+				"capabilities": {
+					"kind": "object",
+					"fields": {
+						"commands": {
+							"kind": "boolean"
+						},
+						"images": {
+							"kind": "boolean"
+						},
+						"modes": {
+							"kind": "boolean"
+						},
+						"resume": {
+							"kind": "boolean"
+						}
+					}
+				},
+				"harness": {
+					"kind": "string",
+					"checks": []
+				},
+				"id": {
+					"kind": "string",
+					"checks": []
+				},
+				"projectSlug": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": []
+					}
+				},
+				"status": {
+					"kind": "enum",
+					"values": [
+						"running",
+						"awaiting_review",
+						"stopped"
+					]
+				}
+			}
+		},
+		"FleetStateMessageSchema": {
+			"kind": "object",
+			"fields": {
+				"payload": {
+					"kind": "object",
+					"fields": {
+						"agents": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"authOk": {
+										"kind": "boolean"
+									},
+									"name": {
+										"kind": "string",
+										"checks": []
+									}
+								}
+							}
+						},
+						"sessions": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"capabilities": {
+										"kind": "object",
+										"fields": {
+											"commands": {
+												"kind": "boolean"
+											},
+											"images": {
+												"kind": "boolean"
+											},
+											"modes": {
+												"kind": "boolean"
+											},
+											"resume": {
+												"kind": "boolean"
+											}
+										}
+									},
+									"harness": {
+										"kind": "string",
+										"checks": []
+									},
+									"id": {
+										"kind": "string",
+										"checks": []
+									},
+									"projectSlug": {
+										"kind": "optional",
+										"inner": {
+											"kind": "string",
+											"checks": []
+										}
+									},
+									"status": {
+										"kind": "enum",
+										"values": [
+											"running",
+											"awaiting_review",
+											"stopped"
+										]
+									}
+								}
+							}
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "fleet_state"
+				}
+			}
+		},
+		"HelloFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"client": {
+					"kind": "object",
+					"fields": {
+						"name": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"version": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"protocol": {
+					"kind": "literal",
+					"value": "geist/0.x"
+				},
+				"type": {
+					"kind": "literal",
+					"value": "hello"
+				},
+				"version": {
+					"kind": "literal",
+					"value": "0.5"
+				}
+			}
+		},
+		"InputEchoFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": []
+				},
+				"data": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "input_echo"
+				}
+			}
+		},
+		"InputFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"data": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "input"
+				}
+			}
+		},
+		"OutputFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"data": {
+					"kind": "string",
+					"checks": []
+				},
+				"stream": {
+					"kind": "enum",
+					"values": [
+						"stdout",
+						"stderr"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "output"
+				}
+			}
+		},
+		"PairDeviceFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"bootstrapToken": {
+					"kind": "string",
+					"checks": [
+						"min:1"
+					]
+				},
+				"device": {
+					"kind": "object",
+					"fields": {
+						"name": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"platform": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "pair_device"
+				}
+			}
+		},
+		"PermissionAnswerMessageSchema": {
+			"kind": "object",
+			"fields": {
+				"payload": {
+					"kind": "object",
+					"fields": {
+						"optionId": {
+							"kind": "string",
+							"checks": []
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": []
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": []
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_answer"
+				}
+			}
+		},
+		"PermissionOptionSchema": {
+			"kind": "object",
+			"fields": {
+				"id": {
+					"kind": "string",
+					"checks": []
+				},
+				"kind": {
+					"kind": "string",
+					"checks": []
+				},
+				"label": {
+					"kind": "string",
+					"checks": []
+				}
+			}
+		},
+		"PermissionRelayOptionSchema": {
+			"kind": "object",
+			"fields": {
+				"id": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"label": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
+					]
+				}
+			}
+		},
+		"PermissionRequestFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"command": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=4000"
+						]
+					}
+				},
+				"cwd": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
+					]
+				},
+				"deadline": {
+					"kind": "nullable",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:64"
+						]
+					}
+				},
+				"message": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=4000"
+					]
+				},
+				"method": {
+					"kind": "enum",
+					"values": [
+						"confirm",
+						"select",
+						"input"
+					]
+				},
+				"operation": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=128"
+						]
+					}
+				},
+				"options": {
+					"kind": "array",
+					"element": {
+						"kind": "object",
+						"fields": {
+							"id": {
+								"kind": "string",
+								"checks": [
+									"max:128",
+									"min:1"
+								]
+							},
+							"label": {
+								"kind": "string",
+								"checks": [
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
+								]
+							}
+						}
+					}
+				},
+				"path": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
+						]
+					}
+				},
+				"requestId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"requestedAt": {
+					"kind": "string",
+					"checks": [
+						"max:64",
+						"min:1"
+					]
+				},
+				"title": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
+					]
+				},
+				"toolCallId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"toolName": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=128"
+					]
+				},
+				"truncated": {
+					"kind": "boolean"
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_request"
+				}
+			}
+		},
+		"PermissionRequestMessageSchema": {
+			"kind": "object",
+			"fields": {
+				"payload": {
+					"kind": "object",
+					"fields": {
+						"options": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"id": {
+										"kind": "string",
+										"checks": []
+									},
+									"kind": {
+										"kind": "string",
+										"checks": []
+									},
+									"label": {
+										"kind": "string",
+										"checks": []
+									}
+								}
+							}
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": []
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": []
+						},
+						"title": {
+							"kind": "string",
+							"checks": []
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_request"
+				}
+			}
+		},
+		"PermissionResolvedFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"chosenOptionId": {
+					"kind": "nullable",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:128"
+						]
+					}
+				},
+				"clientId": {
+					"kind": "nullable",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:128"
+						]
+					}
+				},
+				"decision": {
+					"kind": "enum",
+					"values": [
+						"approved",
+						"denied",
+						"cancelled",
+						"expired",
+						"answered"
+					]
+				},
+				"requestId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"surface": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=64"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_resolved"
+				}
+			}
+		},
+		"PermissionResponseFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"clientId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"optionId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"requestId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "permission_response"
+				}
+			}
+		},
+		"ProtocolErrorCodeSchema": {
+			"kind": "enum",
+			"values": [
+				"frame_too_large",
+				"invalid_frame",
+				"unknown_type",
+				"handshake_required",
+				"version_mismatch",
+				"not_authenticated",
+				"unknown_session",
+				"outbound_queue_overflow",
+				"buffered_output_overflow"
+			]
+		},
+		"ProtocolErrorFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"code": {
+					"kind": "enum",
+					"values": [
+						"frame_too_large",
+						"invalid_frame",
+						"unknown_type",
+						"handshake_required",
+						"version_mismatch",
+						"not_authenticated",
+						"unknown_session",
+						"outbound_queue_overflow",
+						"buffered_output_overflow"
+					]
+				},
+				"message": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "protocol_error"
+				}
+			}
+		},
+		"RegistryFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"harnesses": {
+					"kind": "array",
+					"element": {
+						"kind": "object",
+						"fields": {
+							"id": {
+								"kind": "string",
+								"checks": [
+									"max:64",
+									"min:1",
+									"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+								]
+							},
+							"isDefault": {
+								"kind": "boolean"
+							}
+						}
+					}
+				},
+				"projects": {
+					"kind": "array",
+					"element": {
+						"kind": "object",
+						"fields": {
+							"id": {
+								"kind": "string",
+								"checks": [
+									"max:64",
+									"min:1",
+									"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+								]
+							},
+							"name": {
+								"kind": "string",
+								"checks": [
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
+								]
+							},
+							"root": {
+								"kind": "string",
+								"checks": [
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
+								]
+							}
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "registry"
+				}
+			}
+		},
+		"RegistryHarnessSchema": {
+			"kind": "object",
+			"fields": {
+				"id": {
+					"kind": "string",
+					"checks": [
+						"max:64",
+						"min:1",
+						"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+					]
+				},
+				"isDefault": {
+					"kind": "boolean"
+				}
+			}
+		},
+		"RegistryIdSchema": {
+			"kind": "string",
+			"checks": [
+				"max:64",
+				"min:1",
+				"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+			]
+		},
+		"RegistryProjectSchema": {
+			"kind": "object",
+			"fields": {
+				"id": {
+					"kind": "string",
+					"checks": [
+						"max:64",
+						"min:1",
+						"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+					]
+				},
+				"name": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
+					]
+				},
+				"root": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
+					]
+				}
+			}
+		},
+		"RegistryResyncFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"type": {
+					"kind": "literal",
+					"value": "registry_resync"
+				}
+			}
+		},
+		"ServerFrameSchema": {
+			"kind": "discriminatedUnion",
+			"discriminator": "type",
+			"options": [
+				{
+					"kind": "object",
+					"fields": {
+						"capabilities": {
+							"kind": "array",
+							"element": {
+								"kind": "string",
+								"checks": [
+									"max:64"
+								]
+							}
+						},
+						"limits": {
+							"kind": "object",
+							"fields": {
+								"maxBufferedOutputBytes": {
+									"kind": "number",
+									"checks": [
+										"int",
+										"min:0"
+									]
+								},
+								"maxFrameBytes": {
+									"kind": "number",
+									"checks": [
+										"int",
+										"min:0"
+									]
+								},
+								"maxOutboundFrames": {
+									"kind": "number",
+									"checks": [
+										"int",
+										"min:0"
+									]
+								}
+							}
+						},
+						"protocol": {
+							"kind": "literal",
+							"value": "geist/0.x"
+						},
+						"server": {
+							"kind": "object",
+							"fields": {
+								"name": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								},
+								"version": {
+									"kind": "string",
+									"checks": [
+										"min:1"
+									]
+								}
+							}
+						},
+						"type": {
+							"kind": "literal",
+							"value": "server_hello"
+						},
+						"version": {
+							"kind": "literal",
+							"value": "0.5"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"credential": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"deviceId": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"expiresAt": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"issuedAt": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "device_credential"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"epoch": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"seq": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						},
+						"sessions": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"attachable": {
+										"kind": "boolean"
+									},
+									"cwd": {
+										"kind": "string",
+										"checks": [
+											"min:1"
+										]
+									},
+									"id": {
+										"kind": "string",
+										"checks": [
+											"min:1"
+										]
+									},
+									"origin": {
+										"kind": "enum",
+										"values": [
+											"socket",
+											"history"
+										]
+									},
+									"pid": {
+										"kind": "optional",
+										"inner": {
+											"kind": "number",
+											"checks": [
+												"int",
+												"min:0"
+											]
+										}
+									},
+									"resumable": {
+										"kind": "boolean"
+									},
+									"startedAt": {
+										"kind": "string",
+										"checks": [
+											"min:1"
+										]
+									},
+									"status": {
+										"kind": "enum",
+										"values": [
+											"clean",
+											"dirty",
+											"no_repo",
+											"unknown"
+										]
+									},
+									"statusAt": {
+										"kind": "nullable",
+										"inner": {
+											"kind": "string",
+											"checks": [
+												"max:64",
+												"min:1"
+											]
+										}
+									}
+								}
+							}
+						},
+						"type": {
+							"kind": "literal",
+							"value": "fleet"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"createdAt": {
+							"kind": "string",
+							"checks": []
+						},
+						"cwd": {
+							"kind": "string",
+							"checks": []
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "session_metadata"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"data": {
+							"kind": "string",
+							"checks": []
+						},
+						"stream": {
+							"kind": "enum",
+							"values": [
+								"stdout",
+								"stderr"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "output"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": []
+						},
+						"data": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "input_echo"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": []
+						},
+						"mode": {
+							"kind": "enum",
+							"values": [
+								"read-write",
+								"read-only"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "client_joined"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"clientId": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "client_left"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"code": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": []
+							}
+						},
+						"message": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "error"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"code": {
+							"kind": "enum",
+							"values": [
+								"frame_too_large",
+								"invalid_frame",
+								"unknown_type",
+								"handshake_required",
+								"version_mismatch",
+								"not_authenticated",
+								"unknown_session",
+								"outbound_queue_overflow",
+								"buffered_output_overflow"
+							]
+						},
+						"message": {
+							"kind": "string",
+							"checks": []
+						},
+						"type": {
+							"kind": "literal",
+							"value": "protocol_error"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"command": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=4000"
+								]
+							}
+						},
+						"cwd": {
+							"kind": "string",
+							"checks": [
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
+							]
+						},
+						"deadline": {
+							"kind": "nullable",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:64"
+								]
+							}
+						},
+						"message": {
+							"kind": "string",
+							"checks": [
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=4000"
+							]
+						},
+						"method": {
+							"kind": "enum",
+							"values": [
+								"confirm",
+								"select",
+								"input"
+							]
+						},
+						"operation": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=128"
+								]
+							}
+						},
+						"options": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"id": {
+										"kind": "string",
+										"checks": [
+											"max:128",
+											"min:1"
+										]
+									},
+									"label": {
+										"kind": "string",
+										"checks": [
+											"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
+										]
+									}
+								}
+							}
+						},
+						"path": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
+								]
+							}
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"requestedAt": {
+							"kind": "string",
+							"checks": [
+								"max:64",
+								"min:1"
+							]
+						},
+						"title": {
+							"kind": "string",
+							"checks": [
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
+							]
+						},
+						"toolCallId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"toolName": {
+							"kind": "string",
+							"checks": [
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=128"
+							]
+						},
+						"truncated": {
+							"kind": "boolean"
+						},
+						"type": {
+							"kind": "literal",
+							"value": "permission_request"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"chosenOptionId": {
+							"kind": "nullable",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:128"
+								]
+							}
+						},
+						"clientId": {
+							"kind": "nullable",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:128"
+								]
+							}
+						},
+						"decision": {
+							"kind": "enum",
+							"values": [
+								"approved",
+								"denied",
+								"cancelled",
+								"expired",
+								"answered"
+							]
+						},
+						"requestId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"surface": {
+							"kind": "string",
+							"checks": [
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=64"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "permission_resolved"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"changes": {
+							"kind": "array",
+							"element": {
+								"kind": "discriminatedUnion",
+								"discriminator": "kind",
+								"options": [
+									{
+										"kind": "object",
+										"fields": {
+											"kind": {
+												"kind": "literal",
+												"value": "appeared"
+											},
+											"session": {
+												"kind": "object",
+												"fields": {
+													"attachable": {
+														"kind": "boolean"
+													},
+													"cwd": {
+														"kind": "string",
+														"checks": [
+															"min:1"
+														]
+													},
+													"id": {
+														"kind": "string",
+														"checks": [
+															"min:1"
+														]
+													},
+													"origin": {
+														"kind": "enum",
+														"values": [
+															"socket",
+															"history"
+														]
+													},
+													"pid": {
+														"kind": "optional",
+														"inner": {
+															"kind": "number",
+															"checks": [
+																"int",
+																"min:0"
+															]
+														}
+													},
+													"resumable": {
+														"kind": "boolean"
+													},
+													"startedAt": {
+														"kind": "string",
+														"checks": [
+															"min:1"
+														]
+													},
+													"status": {
+														"kind": "enum",
+														"values": [
+															"clean",
+															"dirty",
+															"no_repo",
+															"unknown"
+														]
+													},
+													"statusAt": {
+														"kind": "nullable",
+														"inner": {
+															"kind": "string",
+															"checks": [
+																"max:64",
+																"min:1"
+															]
+														}
+													}
+												}
+											}
+										}
+									},
+									{
+										"kind": "object",
+										"fields": {
+											"id": {
+												"kind": "string",
+												"checks": [
+													"min:1"
+												]
+											},
+											"kind": {
+												"kind": "literal",
+												"value": "disappeared"
+											}
+										}
+									},
+									{
+										"kind": "object",
+										"fields": {
+											"kind": {
+												"kind": "literal",
+												"value": "changed"
+											},
+											"session": {
+												"kind": "object",
+												"fields": {
+													"attachable": {
+														"kind": "boolean"
+													},
+													"cwd": {
+														"kind": "string",
+														"checks": [
+															"min:1"
+														]
+													},
+													"id": {
+														"kind": "string",
+														"checks": [
+															"min:1"
+														]
+													},
+													"origin": {
+														"kind": "enum",
+														"values": [
+															"socket",
+															"history"
+														]
+													},
+													"pid": {
+														"kind": "optional",
+														"inner": {
+															"kind": "number",
+															"checks": [
+																"int",
+																"min:0"
+															]
+														}
+													},
+													"resumable": {
+														"kind": "boolean"
+													},
+													"startedAt": {
+														"kind": "string",
+														"checks": [
+															"min:1"
+														]
+													},
+													"status": {
+														"kind": "enum",
+														"values": [
+															"clean",
+															"dirty",
+															"no_repo",
+															"unknown"
+														]
+													},
+													"statusAt": {
+														"kind": "nullable",
+														"inner": {
+															"kind": "string",
+															"checks": [
+																"max:64",
+																"min:1"
+															]
+														}
+													}
+												}
+											}
+										}
+									}
+								]
+							}
+						},
+						"epoch": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"seq": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "fleet_delta"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"code": {
+							"kind": "enum",
+							"values": [
+								"resumed",
+								"already_live",
+								"not_found",
+								"cwd_missing",
+								"refused",
+								"spawn_failed",
+								"timeout"
+							]
+						},
+						"message": {
+							"kind": "string",
+							"checks": [
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=512"
+							]
+						},
+						"ok": {
+							"kind": "boolean"
+						},
+						"sessionId": {
+							"kind": "string",
+							"checks": [
+								"max:128",
+								"min:1"
+							]
+						},
+						"type": {
+							"kind": "literal",
+							"value": "session_resumed"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"code": {
+							"kind": "enum",
+							"values": [
+								"spawned",
+								"unknown_harness",
+								"unknown_project",
+								"refused",
+								"spawn_failed",
+								"timeout"
+							]
+						},
+						"message": {
+							"kind": "string",
+							"checks": [
+								"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=512"
+							]
+						},
+						"ok": {
+							"kind": "boolean"
+						},
+						"sessionId": {
+							"kind": "optional",
+							"inner": {
+								"kind": "string",
+								"checks": [
+									"max:128",
+									"min:1"
+								]
+							}
+						},
+						"type": {
+							"kind": "literal",
+							"value": "session_spawned"
+						}
+					}
+				},
+				{
+					"kind": "object",
+					"fields": {
+						"harnesses": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"id": {
+										"kind": "string",
+										"checks": [
+											"max:64",
+											"min:1",
+											"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+										]
+									},
+									"isDefault": {
+										"kind": "boolean"
+									}
+								}
+							}
+						},
+						"projects": {
+							"kind": "array",
+							"element": {
+								"kind": "object",
+								"fields": {
+									"id": {
+										"kind": "string",
+										"checks": [
+											"max:64",
+											"min:1",
+											"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+										]
+									},
+									"name": {
+										"kind": "string",
+										"checks": [
+											"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=200"
+										]
+									},
+									"root": {
+										"kind": "string",
+										"checks": [
+											"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=1024"
+										]
+									}
+								}
+							}
+						},
+						"type": {
+							"kind": "literal",
+							"value": "registry"
+						}
+					}
+				}
+			]
+		},
+		"ServerHelloFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"capabilities": {
+					"kind": "array",
+					"element": {
+						"kind": "string",
+						"checks": [
+							"max:64"
+						]
+					}
+				},
+				"limits": {
+					"kind": "object",
+					"fields": {
+						"maxBufferedOutputBytes": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						},
+						"maxFrameBytes": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						},
+						"maxOutboundFrames": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						}
+					}
+				},
+				"protocol": {
+					"kind": "literal",
+					"value": "geist/0.x"
+				},
+				"server": {
+					"kind": "object",
+					"fields": {
+						"name": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"version": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "server_hello"
+				},
+				"version": {
+					"kind": "literal",
+					"value": "0.5"
+				}
+			}
+		},
+		"SessionMetadataFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"createdAt": {
+					"kind": "string",
+					"checks": []
+				},
+				"cwd": {
+					"kind": "string",
+					"checks": []
+				},
+				"sessionId": {
+					"kind": "string",
+					"checks": []
+				},
+				"type": {
+					"kind": "literal",
+					"value": "session_metadata"
+				}
+			}
+		},
+		"SessionOriginSchema": {
+			"kind": "enum",
+			"values": [
+				"socket",
+				"history"
+			]
+		},
+		"SessionResumeCodeSchema": {
+			"kind": "enum",
+			"values": [
+				"resumed",
+				"already_live",
+				"not_found",
+				"cwd_missing",
+				"refused",
+				"spawn_failed",
+				"timeout"
+			]
+		},
+		"SessionResumeFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"sessionId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "session_resume"
+				}
+			}
+		},
+		"SessionResumedFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"code": {
+					"kind": "enum",
+					"values": [
+						"resumed",
+						"already_live",
+						"not_found",
+						"cwd_missing",
+						"refused",
+						"spawn_failed",
+						"timeout"
+					]
+				},
+				"message": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=512"
+					]
+				},
+				"ok": {
+					"kind": "boolean"
+				},
+				"sessionId": {
+					"kind": "string",
+					"checks": [
+						"max:128",
+						"min:1"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "session_resumed"
+				}
+			}
+		},
+		"SessionSpawnCodeSchema": {
+			"kind": "enum",
+			"values": [
+				"spawned",
+				"unknown_harness",
+				"unknown_project",
+				"refused",
+				"spawn_failed",
+				"timeout"
+			]
+		},
+		"SessionSpawnFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"harnessId": {
+					"kind": "string",
+					"checks": [
+						"max:64",
+						"min:1",
+						"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+					]
+				},
+				"projectId": {
+					"kind": "string",
+					"checks": [
+						"max:64",
+						"min:1",
+						"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*$/"
+					]
+				},
+				"type": {
+					"kind": "literal",
+					"value": "session_spawn"
+				}
+			}
+		},
+		"SessionSpawnedFrameSchema": {
+			"kind": "object",
+			"fields": {
+				"code": {
+					"kind": "enum",
+					"values": [
+						"spawned",
+						"unknown_harness",
+						"unknown_project",
+						"refused",
+						"spawn_failed",
+						"timeout"
+					]
+				},
+				"message": {
+					"kind": "string",
+					"checks": [
+						"regex:/^[^\\u{0}-\\u{1f}\\u{7f}\\u{80}-\\u{9f}\\u{ad}\\u{61c}\\u{200b}-\\u{200d}\\u{200e}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}\\u{2066}-\\u{2069}\\u{fe00}-\\u{fe0f}\\u{feff}\\u{fff9}-\\u{fffb}\\u{e0000}-\\u{e007f}]*$/u maxGraphemes=512"
+					]
+				},
+				"ok": {
+					"kind": "boolean"
+				},
+				"sessionId": {
+					"kind": "optional",
+					"inner": {
+						"kind": "string",
+						"checks": [
+							"max:128",
+							"min:1"
+						]
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "session_spawned"
+				}
+			}
+		},
+		"SessionStatusSchema": {
+			"kind": "enum",
+			"values": [
+				"clean",
+				"dirty",
+				"no_repo",
+				"unknown"
+			]
+		},
+		"TransportLimitsSchema": {
+			"kind": "object",
+			"fields": {
+				"maxBufferedOutputBytes": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				},
+				"maxFrameBytes": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				},
+				"maxOutboundFrames": {
+					"kind": "number",
+					"checks": [
+						"int",
+						"min:0"
+					]
+				}
+			}
+		},
+		"VariantsNewMessageSchema": {
+			"kind": "object",
+			"fields": {
+				"payload": {
+					"kind": "object",
+					"fields": {
+						"count": {
+							"kind": "number",
+							"checks": [
+								"int",
+								"min:0"
+							]
+						},
+						"harnesses": {
+							"kind": "optional",
+							"inner": {
+								"kind": "array",
+								"element": {
+									"kind": "string",
+									"checks": []
+								}
+							}
+						},
+						"project": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						},
+						"text": {
+							"kind": "string",
+							"checks": [
+								"min:1"
+							]
+						}
+					}
+				},
+				"type": {
+					"kind": "literal",
+					"value": "variants_new"
+				}
+			}
+		}
+	}
+}

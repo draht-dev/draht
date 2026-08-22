@@ -71,12 +71,12 @@ const historySession = {
 	statusAt: null,
 };
 
-describe("the published member is 0.4", () => {
-	test("GEIST_PROTOCOL_VERSION is 0.4 and the family did not move", () => {
+describe("the published member is 0.5", () => {
+	test("GEIST_PROTOCOL_VERSION is the current member and the family did not move", () => {
 		// The literal every renderer's `hello` is matched against. Moving it is the
-		// whole cliff: a cached 0.3 renderer is refused here, not at the first field
-		// it cannot find.
-		expect(GEIST_PROTOCOL_VERSION).toBe("0.4");
+		// whole cliff: a cached renderer is refused here, not at the first field it
+		// cannot find. This pin tracks the CURRENT member — it is not "0.4 forever".
+		expect(GEIST_PROTOCOL_VERSION).toBe("0.5");
 		expect(GEIST_PROTOCOL_FAMILY).toBe("geist/0.x");
 	});
 

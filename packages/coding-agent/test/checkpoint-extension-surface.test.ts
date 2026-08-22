@@ -97,11 +97,22 @@ const extensionContextActions: ExtensionContextActions = {
 	getSystemPrompt: () => "",
 };
 
-/** UI context that answers the restore prompt with `answer` and records notifications. */
-function stubUI(answer: boolean, notifications: string[]): ExtensionUIContext {
+/**
+ * UI context that answers the restore prompt with `answer` and records
+ * notifications; `asks` collects the confirm TITLES.
+ *
+ * Recording the asks matters wherever the expected outcome is "nothing
+ * happened": a declined offer leaves the same working tree and the same refs
+ * as an offer that was never made, so without the asks those tests would pass
+ * against an extension that never loaded.
+ */
+function stubUI(answer: boolean, notifications: string[], asks: string[] = []): ExtensionUIContext {
 	return {
 		select: async () => undefined,
-		confirm: async () => answer,
+		confirm: async (title: string) => {
+			asks.push(title);
+			return answer;
+		},
 		input: async () => undefined,
 		notify: (message: string) => {
 			notifications.push(message);
@@ -221,7 +232,20 @@ describe("checkpoint extension surface (R42-RWD.7, R42-RWD.8)", () => {
 		return { type: "session_tree", newLeafId, oldLeafId } as const;
 	}
 
-	/** Loads the real always-on checkpoints builtin as an extension. */
+	/**
+	 * Loads the real always-on checkpoints builtin as an extension.
+	 *
+	 * NOTE, before adding a case here that asserts on MODULE STATE the builtin
+	 * shares with this file: `loadExtensions(path)` goes through jiti, which
+	 * gives the extension its own module registry. The builtin's
+	 * `checkpoints/rewind.ts` is therefore a SECOND instance with its own
+	 * `activeRewinds` map, and any assertion about the in-progress gate would
+	 * read a map this file never writes to - i.e. pass vacuously. That is why
+	 * the writer/reader round trip for the session-scoped rewind gate lives in
+	 * `rewind-session-scope.test.ts`, which loads the builtin from an inline
+	 * factory so there is exactly one module instance. Everything asserted here
+	 * is observable through the filesystem or the UI stub instead.
+	 */
 	const builtinReexport = `export { default } from ${JSON.stringify(CHECKPOINTS_BUILTIN)};`;
 
 	// ── R42-RWD.7 ────────────────────────────────────────────────────────────
@@ -249,18 +273,23 @@ describe("checkpoint extension surface (R42-RWD.7, R42-RWD.8)", () => {
 		const fixture = await buildFixture();
 		const refsBefore = listCheckpointRefs(fixture.repo);
 		const notifications: string[] = [];
+		const asks: string[] = [];
 		const runner = await createRunner({
 			repo: fixture.repo,
 			extensionsDir: fixture.extensionsDir,
 			sessionManager: fixture.sessionManager,
 			files: { "builtin.ts": builtinReexport },
-			ui: stubUI(false, notifications),
+			ui: stubUI(false, notifications, asks),
 		});
 
 		const result = await runner.emit(beforeTreeEvent(fixture.u1, fixture.u2));
 		await runner.emit(treeEvent(fixture.u1, fixture.u2));
 
-		expect(result?.cancel).toBeFalsy();
+		// The offer was made and declined - not silently skipped. `emit` returns
+		// undefined when nothing vetoed, so `result?.cancel` being falsy would
+		// hold identically if the handler had never run.
+		expect(asks).toEqual(["Restore files?"]);
+		expect(result).toBeUndefined();
 		expect(snapshotWorkingTree(fixture.repo)).toEqual(fixture.editedTree);
 		// Declining must not even take a safety snapshot.
 		expect(listCheckpointRefs(fixture.repo)).toEqual(refsBefore);
@@ -270,20 +299,24 @@ describe("checkpoint extension surface (R42-RWD.7, R42-RWD.8)", () => {
 		const fixture = await buildFixture();
 		const refsBefore = listCheckpointRefs(fixture.repo);
 		const notifications: string[] = [];
+		const declinedAsks: string[] = [];
 
 		const declining = await createRunner({
 			repo: fixture.repo,
 			extensionsDir: fixture.extensionsDir,
 			sessionManager: fixture.sessionManager,
 			files: { "builtin.ts": builtinReexport },
-			ui: stubUI(false, notifications),
+			ui: stubUI(false, notifications, declinedAsks),
 		});
 		const declined = await declining.emit({
 			type: "session_before_fork",
 			entryId: fixture.u1,
 			position: "before",
 		});
-		expect(declined?.cancel).toBeFalsy();
+		// Asked, declined, and the fork continued: three different facts, and the
+		// two below hold for an extension that never ran unless this one is here.
+		expect(declinedAsks).toEqual(["Restore files?"]);
+		expect(declined).toBeUndefined();
 		expect(snapshotWorkingTree(fixture.repo)).toEqual(fixture.editedTree);
 		expect(listCheckpointRefs(fixture.repo)).toEqual(refsBefore);
 
@@ -595,6 +628,7 @@ export default function (pi) {
 
 		const result = await performRewind({
 			scope: "conversation-and-files",
+			sessionId: fixture.sessionManager.getSessionId(),
 			targetEntryId: fixture.u1,
 			currentEntryId: fixture.u2,
 			manager,
@@ -636,6 +670,7 @@ export default function (pi) {
 
 		const result = await performRewind({
 			scope: "conversation-and-files",
+			sessionId: fixture.sessionManager.getSessionId(),
 			targetEntryId: fixture.u1,
 			currentEntryId: fixture.u2,
 			manager,

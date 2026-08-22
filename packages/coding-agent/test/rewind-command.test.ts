@@ -123,6 +123,7 @@ describe("performRewind scopes (R42-RWD.2, R42-RWD.5, R42-RWD.6)", () => {
 
 		const back = await performRewind({
 			manager,
+			sessionId: "session-1",
 			scope: "conversation-and-files",
 			targetEntryId: "u1",
 			currentEntryId: leaf,
@@ -139,6 +140,7 @@ describe("performRewind scopes (R42-RWD.2, R42-RWD.5, R42-RWD.6)", () => {
 		// so rewinding forward to it restores exactly the state we just left.
 		const forward = await performRewind({
 			manager,
+			sessionId: "session-1",
 			scope: "conversation-and-files",
 			targetEntryId: "u2",
 			currentEntryId: leaf,
@@ -160,6 +162,7 @@ describe("performRewind scopes (R42-RWD.2, R42-RWD.5, R42-RWD.6)", () => {
 
 		const result = await performRewind({
 			manager,
+			sessionId: "session-1",
 			scope: "conversation-only",
 			targetEntryId: "u1",
 			currentEntryId: leaf,
@@ -179,6 +182,7 @@ describe("performRewind scopes (R42-RWD.2, R42-RWD.5, R42-RWD.6)", () => {
 
 		const result = await performRewind({
 			manager,
+			sessionId: "session-1",
 			scope: "files-only",
 			targetEntryId: "u1",
 			currentEntryId: leaf,
@@ -201,6 +205,7 @@ describe("performRewind scopes (R42-RWD.2, R42-RWD.5, R42-RWD.6)", () => {
 
 		const result = await performRewind({
 			manager,
+			sessionId: "session-1",
 			scope: "conversation-and-files",
 			targetEntryId: "u1",
 			currentEntryId: leaf,

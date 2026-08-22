@@ -86,7 +86,10 @@ export default function checkpointsBuiltin(pi: ExtensionAPI) {
 	): Promise<AcceptedRestore | undefined> {
 		// `/rewind` already asked for a scope and moves the leaf through
 		// navigateTree; without this it would be asked a second time here.
-		if (isRewindInProgress()) return undefined;
+		// Read the session id AT CALL TIME, and scope the question to it: the
+		// gate must survive session replacement, and one process can host
+		// several sessions, only one of which may be rewinding (R35-ALWAYS.5).
+		if (isRewindInProgress(ctx.sessionManager.getSessionId())) return undefined;
 		// Nothing to ask with, and files are never restored unprompted.
 		if (!ctx.hasUI) return undefined;
 

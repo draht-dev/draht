@@ -77,26 +77,47 @@ export interface RewindEventEmitter {
 }
 
 /**
- * Depth counter rather than a boolean so nesting can never clear the flag
- * early; `performRewind` is the only writer and always restores it.
+ * In-flight rewinds per session id (R35-ALWAYS.5).
+ *
+ * A depth counter rather than a boolean so nesting can never clear the flag
+ * early; keyed by session id rather than process-global because one process can
+ * host more than one session — the SDK builds them directly, and under
+ * default-on socket registration each is separately attachable. A process-wide
+ * counter let session A's rewind suppress session B's restore offer, and
+ * `confirmRestore` reports that suppression as `undefined`, which is
+ * indistinguishable from "the user declined".
+ *
+ * `performRewind` is the only writer, always restores the count in a `finally`,
+ * and DELETES the key at zero so a long-lived process cannot accumulate one
+ * entry per session replacement.
  */
-let activeRewinds = 0;
+const activeRewinds = new Map<string, number>();
 
 /**
- * True while a `performRewind` call is in flight.
+ * True while a `performRewind` call for `sessionId` is in flight.
  *
  * `/rewind` moves the conversation leaf through `navigateTree`, which fires
  * `session_before_tree` — the same seam the checkpoints builtin uses to offer a
  * file restore on plain `/tree` navigation (R42-RWD.7). Without this guard the
  * user would be asked to restore files again in the middle of a rewind whose
  * scope they already chose.
+ *
+ * `sessionId` is REQUIRED on purpose: an optional parameter would silently keep
+ * answering the old process-wide question at any call site a migration missed,
+ * which is the exact defect this is removing.
  */
-export function isRewindInProgress(): boolean {
-	return activeRewinds > 0;
+export function isRewindInProgress(sessionId: string): boolean {
+	return (activeRewinds.get(sessionId) ?? 0) > 0;
 }
 
 export interface PerformRewindOptions {
 	scope: RewindScope;
+	/**
+	 * Session this rewind belongs to. Scopes {@link isRewindInProgress} so a
+	 * rewind in one session cannot suppress another session's restore offer
+	 * (R35-ALWAYS.5). Required — see the note on `isRewindInProgress`.
+	 */
+	sessionId: string;
 	/** Entry to rewind to. */
 	targetEntryId: string;
 	/** Current conversation leaf; the safety snapshot is keyed to it. */
@@ -222,11 +243,14 @@ async function runNavigate(navigate: () => void | Promise<void>): Promise<string
  * Never throws: failures are reported on the result.
  */
 export async function performRewind(options: PerformRewindOptions): Promise<PerformRewindResult> {
-	activeRewinds++;
+	const { sessionId } = options;
+	activeRewinds.set(sessionId, (activeRewinds.get(sessionId) ?? 0) + 1);
 	try {
 		return await runRewind(options);
 	} finally {
-		activeRewinds--;
+		const remaining = (activeRewinds.get(sessionId) ?? 1) - 1;
+		if (remaining > 0) activeRewinds.set(sessionId, remaining);
+		else activeRewinds.delete(sessionId);
 	}
 }
 

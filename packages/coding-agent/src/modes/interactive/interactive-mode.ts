@@ -5235,6 +5235,9 @@ export class InteractiveMode {
 			result = await performRewind({
 				manager,
 				scope,
+				// Scopes the in-progress gate to this session (R35-ALWAYS.5).
+				// Read at call time so it follows a session replacement.
+				sessionId: this.sessionManager.getSessionId(),
 				targetEntryId,
 				currentEntryId,
 				// Gives extensions the `session_before_rewind` veto (R42-RWD.8).

@@ -41,7 +41,7 @@ export interface CreateAgentSessionServicesOptions {
 	settingsManager?: SettingsManager;
 	modelRuntime?: ModelRuntime;
 	extensionFlagValues?: Map<string, boolean | string>;
-	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
+	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "cwdSpelling" | "agentDir" | "settingsManager">;
 	resourceLoaderReloadOptions?: ResourceLoaderReloadOptions;
 }
 
@@ -147,6 +147,7 @@ export async function createAgentSessionServices(
 	const resourceLoader = new DefaultResourceLoader({
 		...(options.resourceLoaderOptions ?? {}),
 		cwd,
+		cwdSpelling: options.cwd,
 		agentDir,
 		settingsManager,
 		extensionFactories: [...CORE_BUILTIN_EXTENSIONS, ...(options.resourceLoaderOptions?.extensionFactories ?? [])],

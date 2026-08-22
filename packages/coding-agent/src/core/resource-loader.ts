@@ -241,6 +241,11 @@ export function loadProjectContextFiles(options: {
 
 export interface DefaultResourceLoaderOptions {
 	cwd: string;
+	/**
+	 * `cwd` before `path.resolve` collapsed any `..`, for callers that resolve first.
+	 * The ancestor skill walk needs the uncollapsed spelling to resolve it physically.
+	 */
+	cwdSpelling?: string;
 	agentDir: string;
 	settingsManager?: SettingsManager;
 	eventBus?: EventBus;
@@ -344,7 +349,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.eventBus = options.eventBus ?? createEventBus();
 		this.packageManager = new DefaultPackageManager({
 			cwd: this.cwd,
-			cwdSpelling: options.cwd,
+			cwdSpelling: options.cwdSpelling ?? options.cwd,
 			agentDir: this.agentDir,
 			settingsManager: this.settingsManager,
 		});

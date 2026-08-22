@@ -1,7 +1,7 @@
 # State
 
-## Current Phase: Phase 35 — Every Session Is There (Default-On, History, Honest Liveness) — `pending`
-## Status: active — Phase 34 landed COMPLETE (15 commits): an agent asks on the Mac, the ask reaches a phone, a tap answers it, and the session's own JSONL records what happened and who did it. Class 3 over two independent transports. One protocol-level gap carried forward to Phases 37/38.
+## Current Phase: Phase 36 — Start Work From the Phone, Without Handing Out a Shell — `pending`
+## Status: active — Phase 35 landed COMPLETE (13 commits): default-on is live, history is honest, status stops guessing clean, and a phone that slept converges by delta. Phase 34 also COMPLETE (16 commits). Phase 36 inherits a hardened spawn primitive that Phase 35 built early.
 
 ## Decisions
 - Phase 34's relay seam was settled from the SPEC, not by a fresh product call (Claude, 2026-08-21). Decision 5 framed it as Oskar's to make, but rev-8 §4 already says a session appears "because it is *running*, not because it was started by geist — this is the whole point". An ACP-seam relay only ever sees geist-spawned sessions, so it fails that sentence. Reversible if geist-owned ACP sessions become the product's future; nothing was built on the rejected seam.

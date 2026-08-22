@@ -439,7 +439,7 @@ remote one, so it is not fail-open for the gate — but it is exactly the class 
 three rounds removing from `confirm`.
 
 
-## Phase 35: Every Session Is There — Default-On, History, Honest Liveness — `pending`
+## Phase 35: Every Session Is There — Default-On, History, Honest Liveness — `complete`
 **Why here:** this is the phase that makes "just automatically" literally true, and it is deliberately after the wire settles because turning sockets on by default multiplies per-host session state and collides with a known open Phase 42 residual.
 **Goal:** Oskar stops typing `--attachable`. Any draht he starts shows up on the phone; past sessions show up as history, honestly labelled and resumable.
 **Requirements:** R35-ALWAYS.1, R35-ALWAYS.2, R35-ALWAYS.3, R35-ALWAYS.4, R35-ALWAYS.5, R35-ALWAYS.6, R35-ALWAYS.7, R35-ALWAYS.8, R35-ALWAYS.9, R35-ALWAYS.10, R35-ALWAYS.11

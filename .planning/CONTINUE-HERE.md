@@ -1,90 +1,84 @@
 # CONTINUE HERE
 
-> Handoff written 2026-08-22. **15 commits** from an autonomous `/loop` run. Phase 34 is **complete**.
-> `npm run check` is green. `npm test` still fails on **exactly one** test, deliberately — the tailnet
-> identity tripwire from Phase 33, described below. Nothing else is red.
+> Handoff written 2026-08-22. **29 commits** from one autonomous `/loop` run. **Phases 34 AND 35 are
+> complete.** `npm run check` is green. `npm test` still fails on **exactly one** test, deliberately —
+> the tailnet identity tripwire from Phase 33. Nothing else is red.
 
-## What landed
+## What is true now that was not
 
-**Phase 34 — The Ask Reaches the Phone (Permission Relay) — `complete`.** An agent asks for permission
-on the Mac, the ask reaches a phone, a tap answers it, the tool runs, and the session's own JSONL records
-what actually happened and who actually did it. Proven class 3 over **two independent transports**: the
-gateway's WebSocket, and a raw `net.Socket` speaking newline-JSON straight to the published `.sock`.
+**Open the app; every draht session running on your machine is there; steer any of them.** That sentence —
+rev-8 §1, the one the product is defined by — now holds end to end:
 
-| Suite | Result |
-|---|---|
-| permission unit suites (7 files) | 202 pass |
-| `permission-relay-roundtrip.e2e` | 7 pass — incl. an expired ask that cannot be revived |
-| `permission-answer-validation.e2e` | 1 pass, 65 expects — four bad answers, none consuming |
-| `permission-durability.e2e` | 6 pass |
-| `permission-enumeration.e2e` | 12 pass — incl. two fail-open negative controls |
-| `permission-safe-text.e2e` | 5 pass |
-| `attach-mode-permission.e2e` | 9 pass |
-| `geist-console-permission.e2e` | 7 pass — real browser |
+- Oskar types `draht`. It registers a socket by default and appears on the phone.
+- An agent asks for permission on the Mac; the ask reaches the phone; a tap answers it; the tool runs; and
+  the session's own JSONL records what happened and who did it.
+- Past sessions appear as history, honestly labelled, and resume over the wire.
+- A phone that slept converges by delta on the same socket, without reconnecting.
 
-The seam question that blocked this phase (decision 5) was **resolved from the spec, not by a product
-call**: rev-8 §4 says a session appears "because it is *running*, not because it was started by geist —
-this is the whole point", so an ACP-seam relay fails the sentence the product is defined by. Recorded in
-`.planning/DECISIONS-PENDING.md`.
+| Phase | Commits | State |
+|---|---|---|
+| 34 — The Ask Reaches the Phone | 16 | `complete` |
+| 35 — Every Session Is There | 13 | `complete` |
 
-## Read this before trusting any green suite here
+## Read this before trusting any green suite in this repo
 
-**Four separate suites passed while the thing they named was broken.** Every one was caught by mutation —
-breaking the feature on purpose and checking the test noticed — and none by reading a passing run:
+**Nine separate suites in these two phases passed while the thing they named was broken.** Every one was
+caught by mutation — breaking the feature on purpose and checking the test noticed — and none by reading a
+passing run. The list, because the pattern is more useful than any single instance:
 
-- The enumeration proved a tool *ran*, not that an *answer made it run*. `raise()` self-resolving as
-  approved without waiting left all five approve tests green.
-- `truncated` was a lie: a 5000-character command arrived elided to ~530 and reported that nothing was
-  abbreviated. The test asserting `truncated: false` was pinning the defect as correct.
-- Both of T10's build items (replay cap, its capability gate) survived deletion.
-- `console.css`'s entire bidi defence could be deleted unnoticed.
+- A permission relay suite passed **141/141** with the relay's decision hardcoded.
+- A decorator suite passed **17/17** with a fail-open inversion live.
+- A history reader that consumed all **376 MB** passed 21/21 **faster than baseline**, because every
+  assertion read counters the code kept about itself.
+- A status probe hardcoded to `unknown` passed **7/7** — nothing asserted the honest positive.
+- Half a split catch passed **10/10** — every explicit-flag test drove a bind that succeeded.
+- `fleet_resync` returning an **empty payload** passed 6/6, because the assertion waited long enough for
+  the delta stream to repair the view.
+- **Nine** hardening properties on the spawn primitive were deletable in ONE edit, suite green.
+- The lock format's readers were pinned and its only **writer** was not.
+- The soak log's `client_attach` relocation — the fix for a real asymmetry — was invisible because every
+  test client happened to carry the capability.
 
-A suite passed **141/141** with the relay's decision argument hardcoded. Another passed **17/17** with a
-fail-open inversion live. Treat "the tests pass" as the beginning of verification here, not the end.
+**Mutate in an isolated rsync copy, never a `git worktree` and never the shared tree.** A worktree does not
+isolate this monorepo: `packages/<x>/node_modules/@draht/<y>` is a RELATIVE symlink resolved against its
+target's real path, so `@draht/*` imports run the shared tree's code — wrong in BOTH directions, which is
+worse than no mutation testing. And **copy `packages/*/dist`, never symlink it**: suites run `npm run
+build` in `beforeAll` and tsc follows a dist symlink back into the real tree. Both mistakes were mine, both
+are in `~/.claude/.../memory/parallel-wave-orchestration.md`, and the second one silently overwrote real
+build artifacts before it was caught.
 
-**Mutate in an isolated worktree or an rsync'd copy under `/tmp`, never in the shared tree.** A wave-4
-agent left `// MUTATION 4: bidi overrides are no longer neutralized` live in `safe-text.ts`, deleting the
-RLO range the spoof defence exists for. HEAD was clean; the working tree was not. The later wave was told
-to isolate and all four did, leaving zero markers. Before committing anything a mutation-testing agent
-touched, grep the diff for `MUTATION`.
+**Sanity-check isolation before trusting any mutation result** — make a change you know must fail and
+confirm it fails.
 
-## The one defect that failed OPEN
+## The two defects that failed OPEN
 
-Everything else in this phase failed closed. This one did not, and it was found by a test written for
-something else: **an ask recorded as `expired` still ran its command.** The registry ended it, the wire
-and the JSONL both said `expired`, and the local dialog stayed on screen — so a late answer executed
-against a durable record saying it was refused.
+Everything else in both phases failed closed. These did not:
 
-Cause: `undefined` from the relay meant "spent, keep waiting", which is right for a refused raise and
-catastrophic for an ended ask. Those are now two different values (`RelayEnded`), and an ending is
-honoured whether or not a local surface is live.
+1. **An ask recorded as `expired` still ran its command.** The registry ended it, the wire and the JSONL
+   said `expired`, and the local dialog stayed on screen — so a late answer executed against a durable
+   record saying it was refused. Cause: `undefined` from the relay meant "spent, keep waiting", which is
+   right for a refused raise and catastrophic for an ended ask. Now two different values.
+2. **Two connections could both resume one session id, and both start a process.** Measured on the shipped
+   daemon: `{ok:true, code:"resumed"}` twice, two draht processes on one session JSONL. The in-flight guard
+   was per-connection, and the spawner read "a socket exists" as its own success — so the loser saw the
+   winner's socket and reported success with its own dead child's pid.
 
-## Carried forward — one unclosed falsehood, with an owner
+## Still open — needs Oskar
 
-A `select` or `input` carrying a `tool_permission` detail still writes the **wrong decision word**:
-under-reporting locally (`cancelled` for a command that ran), a fabricated grant remotely (`approved`).
-Proven live with a probe extension, which also falsified the earlier containment argument that
-`select`/`input` never carry such a detail.
+**Two product decisions from Phase 35, recorded in `.planning/phases/35-default-on/PLAN.md`:**
 
-`RelayOutcome` already carries the honest `answered` kind; what is missing is a neutral member in the
-wire's `TerminalDecision`. Closing it is a **protocol revision** no single task's file set can reach:
-`socket-server/types.ts`, `PermissionResolutionEntry.decision`, `geist-protocol/src/wire.ts`, its geist
-mirror, `MIRRORED_FRAMES`, the regenerated `geist-0.3` corpus and `MIGRATIONS.md`.
+1. **The `--continue` twin.** `continueRecent` reopens the most recent session FILE, so a second
+   `draht -c` in one project reuses the header id and therefore the socket name. It degrades with a notice
+   now instead of refusing to start — but the second window is silently NOT on your phone. Decoupling
+   socket identity from session identity is recorded as named debt.
+2. **Is a resumed session the daemon's child?** A daemon restart during Phase 39's 7-day soak takes every
+   resumed session with it if they are children; detaching them means the daemon cannot enforce TERM→KILL.
+   Related: a resumed session is an rpc-mode headless process, not the interactive draht a terminal runs.
 
-**Owner: whoever next opens the wire — Phase 37 changes it for run lanes, Phase 38 freezes it at 1.0.
-It must not survive the freeze.** Recorded in `.planning/ROADMAP.md` under Phase 34.
+**Four decisions still in `.planning/DECISIONS-PENDING.md`:** Phase 42 batching, GSEC-04 and GSEC-05
+amendment sign-off, the Phase 44 threat model.
 
-## Known-weak, recorded rather than fixed
-
-- The **capability gate on replay** is unwitnessed in the negative direction: removing it ships green.
-  The gate is present and correct; a future edit deleting it will not be caught.
-- **Replay starvation**: `pendingFor` truncates at 16 and nothing re-drives the remainder, so a client at
-  the cap sees the same first 16 on every reconnect. Verified unreachable today — the gate parks the turn
-  on one ask per session — but the doc comment reads as if a later burst carries them.
-- `SettleRefusal "cross_session"` is unreachable from the socket path (`handleResponse` always passes its
-  own bound sessionId). It is a guard on direct registry use, not a wire-reachable state.
-
-## What still needs Oskar — unchanged from Phase 33
+**The hardware residuals, unchanged since Phase 33:**
 
 ```bash
 # THIS CLEARS THE RED TEST
@@ -98,22 +92,32 @@ node scripts/geist-device-evidence.mjs                          # class-4 device
 ```
 
 `~/.draht/gateway.config.json` still holds `host: "0.0.0.0"` with `tokens.default: "test"`. Nothing
-listens on 7878 and Phase 32's bind refusal prevents a wide bind at next start — but the token is the
-literal string `test`.
+listens on 7878 and the bind refusal prevents a wide bind — but the token is the literal string `test`.
 
-**Four decisions remain open** in `.planning/DECISIONS-PENDING.md`: Phase 42 batching, GSEC-04 and
-GSEC-05 amendment sign-off, and the Phase 44 threat model.
+## Carried forward, with owners
+
+- **A `select`/`input` carrying a `tool_permission` detail still writes the wrong decision word** —
+  under-reporting locally, a fabricated grant remotely. Closing it is a protocol revision.
+  **Owner: Phase 37 opens the wire, Phase 38 freezes it at 1.0. It must not survive the freeze.**
+- **The foreign-uid busy-lock refusal is unwitnessed** — it needs a second uid. Three ways to close it are
+  costed in `session-resume.e2e.test.ts`'s notes; none is free.
+- **The sockets-directory uid refusal is covered by reading only** — stated plainly in
+  `socket-ownership-hygiene.e2e.test.ts` with the reason.
+- **Replay starvation**: `pendingFor` truncates at 16 and nothing re-drives the remainder, so a client at
+  the cap sees the same first 16 on every reconnect. Verified unreachable today (one pending ask per
+  session), but the doc comment reads as if a later burst carries them.
 
 ## Next
 
-**Phase 35 — Every Session Is There (Default-On, History, Honest Liveness).** It is the phase that makes
-"just automatically" literally true: `draht` with no flags shows up on the phone. Note R35-ALWAYS.5 is a
-prerequisite — `activeRewinds` in `coding-agent/src/core/checkpoints/rewind.ts` is module-global and
-default-on multiplies attachable sessions per host.
+**Phase 36 — Start Work From the Phone, Without Handing Out a Shell.** It inherits a large head start:
+Phase 35 built the hardened spawn primitive early, because `session_resume` is already a client naming an
+id and causing a process to start. `packages/gateway/src/session/spawn-primitive.ts` exists, the unguarded
+`["draht","start"]` PATH spawn is gone, and **no route on the daemon creates a process from an HTTP
+request**. What Phase 36 adds is the harness/project registry and `session_spawn` on top of it.
 
 ```bash
 cd /Users/exe008/draht/draht-mono
-git log --oneline -15
+git log --oneline -29
 npm run check                 # expect exit 0
 ```
 

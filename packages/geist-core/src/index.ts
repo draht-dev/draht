@@ -9,6 +9,16 @@ export type {
 	RendererConnection,
 } from "./attach/attach-bridge.js";
 export { AttachBridge, DEFAULT_AUTH_DEADLINE_MS } from "./attach/attach-bridge.js";
+export type { HistoryPage, HistoryPageQuery, HistoryScanCounters, HistorySession } from "./attach/history-sessions.js";
+export {
+	DEFAULT_HISTORY_LIMIT,
+	HISTORY_HEADER_READ_BYTES,
+	HistoryCursorError,
+	HistoryIndex,
+	MAX_HISTORY_LIMIT,
+	resolveSessionsDir,
+	SESSIONS_DIR_NAME,
+} from "./attach/history-sessions.js";
 export {
 	AGENT_DIR_ENV,
 	buildFleetFrame,

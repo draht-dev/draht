@@ -12,7 +12,9 @@
  * Control plane is newline-JSON on stdin (the socket wire itself is the thing
  * under test, so it is never used for control):
  *   {"cmd":"output","data":"…","stream":"stdout"}   → broadcast to attached clients
- *   {"cmd":"permission_request"}                     → broadcast the fixed ask below
+ *   {"cmd":"permission_request"}                     → broadcast the fixed confirm ask below
+ *   {"cmd":"permission_select"}                      → broadcast the fixed SELECT ask below
+ *   {"cmd":"permission_answered"}                    → resolve the select ask `answered`
  *   {"cmd":"permission_resolved"}                    → broadcast a fixed cancellation
  *   {"cmd":"stop"}                                   → clean shutdown
  * Readiness is one newline-JSON line on stdout: {"ready":true,"pid":N}
@@ -72,6 +74,35 @@ const PERMISSION_REQUEST = {
 	deadline: null,
 };
 
+/**
+ * The fixed SELECT ask. It exists to record the one case the wire had no true word
+ * for until `geist/0.4`: a `select` grants nothing and refuses nothing — no option
+ * of it declares a permission — so an answer to it is `answered`, neither
+ * `approved` nor `cancelled`. It carries a `command`, i.e. a `tool_permission`
+ * detail, because that is exactly the shape that made the old falsehood DURABLE:
+ * the audit row is written for a detail like this one, and the row said either
+ * "cancelled" about an ask that was answered or "approved" about a grant nobody
+ * made.
+ */
+const PERMISSION_SELECT_REQUEST = {
+	type: "permission_request",
+	requestId: "conformance-permission-2",
+	method: "select",
+	toolCallId: "conformance-tool-call-2",
+	toolName: "bash",
+	cwd: "/geist/conformance",
+	title: "Which branch should the command run against?",
+	message: "git wants to know which branch to switch to before running",
+	command: "git switch <branch>",
+	truncated: false,
+	options: [
+		{ id: "opt-main", label: "main" },
+		{ id: "opt-next", label: "next" },
+	],
+	requestedAt: "1970-01-01T00:00:00.000Z",
+	deadline: null,
+};
+
 server.onPermissionResponse((message, clientId) => {
 	// Plumbing only, exactly like the real session-side registry would be reached:
 	// the id comes from the server's view of who is connected, never from the
@@ -102,6 +133,21 @@ process.stdin.on("data", (chunk) => {
 			server.broadcastOutput(command.data ?? "", command.stream ?? "stdout");
 		} else if (command.cmd === "permission_request") {
 			server.broadcastPermissionRequest(PERMISSION_REQUEST);
+		} else if (command.cmd === "permission_select") {
+			server.broadcastPermissionRequest(PERMISSION_SELECT_REQUEST);
+		} else if (command.cmd === "permission_answered") {
+			// The LOCAL surface answered the select, so every remote copy comes down and
+			// the ending is stated neutrally. `chosenOptionId` carries what was actually
+			// chosen — which is the whole of what an answered select means — and
+			// `decision` grants nothing.
+			server.broadcastPermissionResolved({
+				type: "permission_resolved",
+				requestId: PERMISSION_SELECT_REQUEST.requestId,
+				decision: "answered",
+				chosenOptionId: "opt-next",
+				surface: "tui",
+				clientId: null,
+			});
 		} else if (command.cmd === "permission_resolved") {
 			server.broadcastPermissionResolved({
 				type: "permission_resolved",

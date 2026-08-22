@@ -18,6 +18,98 @@ Adding a member:
 Older members' directories stay committed. They are the record of what the wire
 actually was, not scaffolding.
 
+## geist/0.4
+
+Default-on, history and honest liveness (R35-ALWAYS.7, R35-ALWAYS.8,
+R35-ALWAYS.10, R35-ALWAYS.9), plus the neutral permission member Phase 34 shipped
+without. Four added message types, four changed ones, none removed:
+
+- server → client: `fleet_delta` (`epoch`, `seq`, `changes[]` of
+  `appeared` / `changed` / `disappeared`) and `session_resumed` (`sessionId`,
+  `ok`, `code`, `message`)
+- client → server: `fleet_resync` (no fields) and `session_resume` (`sessionId`,
+  and nothing else)
+- changed: `server_hello` gains a REQUIRED `capabilities: string[]`; `fleet`
+  gains `epoch` and `seq`; every fleet row gains `origin`, `attachable`,
+  `resumable`, `status` and `statusAt` **and its `pid` becomes optional**;
+  `permission_resolved.decision` gains `answered`
+
+None of the four new types is relayed — they are answered by the daemon and never
+cross to a draht session's Unix socket — so none has a row in `MIRRORED_FRAMES`.
+`permission_resolved` does, and its socket-wire counterpart
+(`packages/coding-agent/src/core/socket-server/types.ts`) moved with it.
+
+**THE CLIFF, STATED PLAINLY.** `ProtocolVersionSchema` is a `z.literal`, so a
+daemon speaking `0.4` refuses a cached `0.3` renderer at `hello` with
+`version_mismatch` and closes 1008. There is no negotiation and no fallback. The
+console's forget-credential path handles `not_authenticated` only, so it does not
+recover from this: **the fix is a page reload**, which fetches the new bundle.
+Anyone holding an old tab open at the moment of deploy sees a connection that
+closes immediately until they reload.
+
+`capabilities` on `server_hello` exists so this is the LAST such cliff for a
+while. It is the daemon-side counterpart of the `attach.capabilities` `0.3`
+introduced for renderers: from here a daemon that gains a verb advertises the
+string, a renderer that does not know the string does not send it, and neither
+side needs a version bump. It is required rather than optional on purpose —
+"absent" would have to mean "pre-0.4", and there is no pre-0.4 daemon that speaks
+0.4. A daemon with nothing extra to say sends `[]`. A capability is never a
+permission: it says a frame will be understood, not that the connection sending
+it has earned anything.
+
+**What a renderer has to do.**
+
+1. Reload, once. See the cliff above.
+2. Read `server_hello.capabilities` before sending `fleet_resync` or
+   `session_resume`. An undeclared type is refused `unknown_type` and the
+   connection is CLOSED, so probing for a verb costs the connection.
+3. Stop assuming a fleet row is live. `origin` is `"socket"` or `"history"` —
+   never `"live"`, which was a drafting word and is not on this wire — and
+   `attachable` / `resumable` say what may be done with the row. **`pid` is now
+   optional**: a history row has no process, and code that read `session.pid`
+   unconditionally is the thing this bump breaks quietest.
+4. Treat `status` as four values, never a boolean, and never coerce `unknown`
+   into `clean`. `no_repo` is the ORDINARY case, not a failure — on the machine
+   this was measured against, 54 of 55 non-zero `git status` exits across 107
+   live cwds were "not a git repository" — and `unknown` means a repository
+   exists but git refused or did not answer inside the probe deadline. Show
+   `statusAt` with it: every value is cached and therefore ages, and `null` means
+   never observed.
+5. Order `fleet` and `fleet_delta` by `epoch` + `seq`. A frame whose `epoch` you
+   have not seen means "discard everything and take this snapshot"; a gap in
+   `seq` means send `fleet_resync` and take the snapshot that answers it. Do not
+   patch over a gap.
+6. **REPLACE rows on a delta, never merge them, and never coalesce on id.**
+   `appeared` and `changed` carry the full session body for exactly this reason:
+   resuming a session reuses the SAME id with a NEW pid and `startedAt`, so the
+   ordinary trace across a resume is `disappeared(X)` then `appeared(X)`. A
+   client that merges keeps the dead pid and shows a process that no longer
+   exists as the one it is talking to.
+7. Handle `answered` on `permission_resolved`. **It grants nothing** — read it
+   fail-closed, exactly as `denied`; only `approved` is permission. It closes the
+   gap `0.3` shipped and documented at both ends: a `select` or an `input` offers
+   no vocabulary that grants or refuses, so the wire had to state such an ending
+   as `cancelled` (false — the ask was answered and its tool call RAN) or
+   `approved` (false — nobody granted anything). With a `tool_permission` detail
+   attached, which nothing stops an extension doing, that false word reached the
+   durable audit row. What was actually chosen travels, as always, in
+   `chosenOptionId`.
+8. `session_resume` carries an id AND NOTHING ELSE — no path, no argv, no cwd, no
+   environment. That is what keeps it from being an arbitrary-execution surface:
+   the daemon resolves the id against its own index and builds the argv itself.
+   Undeclared fields are dropped by the decoder, so smuggling one changes
+   nothing. The answer is one `session_resumed` with a closed-set `code`; read
+   `ok` rather than inferring success from the code, so a future code does not
+   silently read as a success.
+
+The corpus for this member records a fleet carrying BOTH kinds of row, a real
+`fleet_delta` (a second session is really started and really stopped, and the
+frames are the diff of two observations of a real directory), a `fleet_resync`
+round trip, both honestly-reachable `session_resume` verdicts, and a
+`permission_resolved` carrying `answered`. The reference daemon does not spawn and
+does not probe git, and its header says exactly which parts of the 0.4 projection
+are real and which are modelled.
+
 ## geist/0.3
 
 The permission relay (R34-PERM.1, R34-PERM.4). Three added message types, one

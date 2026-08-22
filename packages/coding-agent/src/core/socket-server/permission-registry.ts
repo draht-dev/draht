@@ -88,8 +88,17 @@ export const DEFAULT_TOMBSTONE_TTL_MS = 120_000;
 /** How many tombstones are kept. Oldest first out. */
 export const DEFAULT_MAX_TOMBSTONES = 128;
 
-/** Every way an ask can end. Mirrors the wire's `permission_resolved.decision`. */
-export type TerminalDecision = "approved" | "denied" | "cancelled" | "expired";
+/**
+ * Every way an ask can end. Mirrors the wire's `permission_resolved.decision`
+ * member for member — `socket-server/types.ts`, and through it
+ * `geist-protocol`'s `PermissionResolvedFrameSchema`.
+ *
+ * `answered` is the NEUTRAL member, added with `geist/0.4`. It says an ask was
+ * ANSWERED and says nothing about permission, which is the only true thing to say
+ * about a `select` or an `input`: they offer no vocabulary that grants or refuses.
+ * It GRANTS NOTHING — read it fail-closed everywhere, exactly as `denied`.
+ */
+export type TerminalDecision = "approved" | "denied" | "cancelled" | "expired" | "answered";
 
 /**
  * WHO ended an ask nobody answered, and WHAT that ending was — as ONE value.
@@ -524,29 +533,29 @@ export class PermissionRegistry {
  *  - otherwise the id must be one of the ids that were OFFERED, and what it means is that option's
  *    OWN `decision` — read off the option, never derived from its index, its id or its label.
  *  - an offered option that declares no `decision` (a plain `select`, whose entries are choices
- *    rather than a permission vocabulary) ends the ask by being ANSWERED. `approved` is the wire's
- *    word for that; the choice itself travels as `chosenOptionId`, and no audit record is written
- *    for an ask that gates no tool call — see the relay's `appendResolution`.
+ *    rather than a permission vocabulary) ends the ask by being ANSWERED — `answered`, the wire's
+ *    neutral word. The choice itself travels as `chosenOptionId`.
  *
- * KNOWN GAP — `approved` is the WRONG WORD for those last two, and it is used here only because the
- * wire union has no right one. `select` and `input` grant nothing and refuse nothing, so saying
- * "approved" about them states a decision that was never offered, let alone made. It is contained:
- * no audit row is written for either (both lack a `tool_permission` detail, which is what
- * `appendResolution` gates on), so the false word lives only in the transient `permission_resolved`
- * broadcast and never in the durable record.
+ * GAP CLOSED (geist/0.4). This function used to say `approved` for those last two, because the wire
+ * union had no neutral member. That was a FABRICATED GRANT: `select` and `input` grant nothing and
+ * refuse nothing, so "approved" stated a decision that was never offered, let alone made. The
+ * containment argument that went with it — "no audit row is written for an ask with no
+ * `tool_permission` detail" — was false: nothing stops an extension attaching one, and a probe did,
+ * which put the fabricated word into the DURABLE record. `answered` now exists on
+ * `TerminalDecision`, on `socket-server/types.ts`, on `PermissionResolutionEntry.decision` and on
+ * `geist-protocol`'s `PermissionResolvedFrameSchema`, so the true thing is sayable and is said.
  *
- * Closing it means adding a neutral `answered` member to `TerminalDecision`, to the socket wire in
- * `socket-server/types.ts`, to `PermissionResolutionEntry.decision`, to `geist-protocol`'s
- * `wire.ts` and its geist mirror, to `MIRRORED_FRAMES`, to the `geist-0.3` conformance corpus
- * (`permission_resolved.json`, `transcript.json`, the schema fingerprint) and to `MIGRATIONS.md`.
- * That is a protocol revision. Until it happens, the relay's own `terminalDecisionFor` refuses to
- * SPREAD the word: an ask the local surface answered is reported `cancelled` there rather than
- * `approved`, because `cancelled` grants nothing.
+ * `answered` GRANTS NOTHING. Anything downstream that branches on this value must treat it as it
+ * treats `denied`; only `approved` is permission. What was actually chosen is `chosenOptionId`.
+ *
+ * A `deny` option still yields `denied` and an `approve` option still yields `approved` — the words
+ * for a real permission vocabulary are unchanged, and only the case that HAD no true word moved.
  */
 export function decisionFor(entry: PermissionEntry, optionId: string): TerminalDecision | undefined {
-	if (entry.method === "input" && entry.options.length === 0) return "approved";
+	if (entry.method === "input" && entry.options.length === 0) return "answered";
 	const chosen = entry.options.find((option) => option.id === optionId);
 	if (chosen === undefined) return undefined;
 	if (chosen.decision === "deny") return "denied";
-	return "approved";
+	if (chosen.decision === "approve") return "approved";
+	return "answered";
 }

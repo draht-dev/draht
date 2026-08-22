@@ -168,7 +168,15 @@ export interface PermissionResolutionEntry extends SessionEntryBase {
 	detail: { command?: string; path?: string; operation?: string };
 	/** The immutable option set that was offered, in the order it was offered. */
 	offeredOptionIds: string[];
-	decision: "approved" | "denied" | "cancelled" | "expired";
+	/**
+	 * `answered` is the NEUTRAL member (geist/0.4): a `select` or an `input` was
+	 * answered, which grants nothing and refuses nothing. It exists because this
+	 * row is DURABLE — with a `tool_permission` detail attached, the two words
+	 * available before it (`cancelled`, `approved`) wrote a falsehood into the
+	 * permanent record about whether a tool call was permitted. Anything reading
+	 * this field must treat `answered` fail-closed; it is not `approved`.
+	 */
+	decision: "approved" | "denied" | "cancelled" | "expired" | "answered";
 	/** null when nothing was chosen (cancelled/expired). */
 	chosenOptionId: string | null;
 	decidedBy: { surface: "tui" | "attach" | "rpc" | "acp" | "system"; clientId: string | null };

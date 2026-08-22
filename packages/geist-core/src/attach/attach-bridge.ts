@@ -65,7 +65,7 @@ import {
 	ServerFrameSchema,
 	type TransportLimits,
 } from "@draht/geist-protocol";
-import { buildFleetFrame, listAttachableSessions } from "./socket-sessions.js";
+import { buildFleetFrame, listAttachableSessions, sessionFilesAreOurs } from "./socket-sessions.js";
 
 /**
  * The capability the session gates permission-frame emission on. A literal here
@@ -450,6 +450,13 @@ export class AttachBridge {
 					version: GEIST_PROTOCOL_VERSION,
 					server: this.#server,
 					limits: this.#limits,
+					// `geist/0.4` requires the field and forbids omitting it: absent would
+					// mean "pre-0.4", and there is no pre-0.4 daemon that speaks 0.4. This
+					// bridge has no extra verb to declare yet, so it declares none — the
+					// empty list is the honest answer, and a daemon that later accepts
+					// something beyond the base wire (`fleet_resync` is the first one queued)
+					// advertises it here instead of forcing another version cliff.
+					capabilities: [],
 				});
 				if (credential !== null) this.#emit(credential);
 				// The fleet is session data: which sessions exist, where they run
@@ -681,6 +688,16 @@ export class AttachBridge {
 		}
 		const live = listAttachableSessions(this.#socketDir).some((session) => session.id === frame.sessionId);
 		if (!live) {
+			this.#refuse("unknown_session", `no live attachable session ${JSON.stringify(frame.sessionId)}`);
+			return;
+		}
+		// And the same restatement for ownership (R35-ALWAYS.3): both files this dial
+		// depends on are re-`lstat`ed here, between the liveness answer and the
+		// `connect()`, and must both belong to this uid. `listAttachableSessions` has
+		// already applied that rule — this is the copy that survives a change to how
+		// liveness is decided, in the one place where being wrong means handing another
+		// uid's socket a read-write attachment.
+		if (!sessionFilesAreOurs(this.#socketDir, frame.sessionId)) {
 			this.#refuse("unknown_session", `no live attachable session ${JSON.stringify(frame.sessionId)}`);
 			return;
 		}

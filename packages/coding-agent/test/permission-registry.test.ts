@@ -12,11 +12,15 @@
  * exposes for exactly this, plus tiny `expiryMs` values so the fail-closed timer can be observed in
  * milliseconds rather than in the hour it defaults to.
  *
- * WHAT IS DELIBERATELY ASSERTED AS A KNOWN GAP: `decisionFor` says `approved` for a `select` entry
- * and for an `input`, because the wire union has no neutral member. That word is wrong and is
- * documented as wrong at both ends. It is pinned here so a protocol revision that adds `answered`
- * has to come through this file and say so, rather than changing the meaning of the durable record
- * by accident.
+ * WHAT WAS A KNOWN GAP AND IS NOW CLOSED: `decisionFor` used to say `approved` for a `select` entry
+ * and for an `input`, because the wire union had no neutral member. That word was wrong — it stated
+ * a grant nobody made — and it was pinned here precisely so a protocol revision that added
+ * `answered` had to come through this file and say so rather than changing the meaning of the
+ * durable record by accident. geist/0.4 added it (see `packages/geist-protocol/src/wire.ts` and
+ * ROADMAP.md, "Owner: whoever next opens the wire"), so the assertion below moved, deliberately,
+ * and now pins the neutral word instead. `answered` GRANTS NOTHING: an option that declares
+ * `approve` still yields `approved` and one that declares `deny` still yields `denied`, and only
+ * the case that had no true word moved.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -473,12 +477,17 @@ describe("PermissionRegistry.settle — meaning comes from the option's own word
 		});
 	});
 
-	it("KNOWN GAP: a plain select entry that declares nothing is reported `approved`", () => {
-		// Pinned, not endorsed. `select` grants nothing, but the wire union has no neutral member,
-		// so `decisionFor` says `approved` for it. It is contained — no audit row is written for an
-		// ask with no `tool_permission` detail — and the relay refuses to spread the word (an
-		// answered select withdrawn locally is recorded `cancelled`, see terminalDecisionFor).
-		// A protocol revision that adds `answered` must come through THIS assertion and say so.
+	it("GAP CLOSED: a plain select entry that declares nothing is reported `answered`, not `approved`", () => {
+		// The word this assertion used to pin was `approved`, and it was a FABRICATED GRANT: a
+		// `select` offers no vocabulary that grants or refuses, so "approved" stated a decision
+		// nobody made. The containment argument that let it survive — "no audit row is written for
+		// an ask without a `tool_permission` detail" — was false; nothing stops an extension
+		// attaching one, and then the fabricated word was written into the DURABLE session record.
+		// geist/0.4 added the neutral member and this is where it is pinned.
+		//
+		// `answered` grants nothing. Anything branching on this value must treat it as it treats
+		// `denied`; the choice that was actually made is `chosenOptionId`, which is the whole of
+		// what answering a select means.
 		const registry = new PermissionRegistry({ sessionId: SESSION_ID });
 		registry.insert(
 			insertOf("req-select", {
@@ -491,8 +500,53 @@ describe("PermissionRegistry.settle — meaning comes from the option's own word
 		);
 		expect(registry.settle(SESSION_ID, "req-select", "opt-1", { surface: "attach", clientId: "p" })).toMatchObject({
 			status: "resolved",
-			decision: "approved",
+			decision: "answered",
 			chosenOptionId: "opt-1",
+		});
+	});
+
+	it("a real permission vocabulary still decides: `approve` is approved, `deny` is denied", () => {
+		// The other half of the same change, asserted so "everything is answered now" cannot pass.
+		// An option that DECLARES what choosing it means is read off the option, and those words
+		// did not move — only the case that had none did.
+		const registry = new PermissionRegistry({ sessionId: SESSION_ID });
+		registry.insert(
+			insertOf("req-confirm", {
+				method: "confirm",
+				options: [
+					{ id: "yes", label: "Approve", decision: "approve" },
+					{ id: "no", label: "Deny", decision: "deny" },
+				],
+			}),
+		);
+		expect(registry.settle(SESSION_ID, "req-confirm", "yes", { surface: "attach", clientId: "p" })).toMatchObject({
+			status: "resolved",
+			decision: "approved",
+		});
+		const second = new PermissionRegistry({ sessionId: SESSION_ID });
+		second.insert(
+			insertOf("req-confirm-2", {
+				method: "confirm",
+				options: [
+					{ id: "yes", label: "Approve", decision: "approve" },
+					{ id: "no", label: "Deny", decision: "deny" },
+				],
+			}),
+		);
+		expect(second.settle(SESSION_ID, "req-confirm-2", "no", { surface: "attach", clientId: "p" })).toMatchObject({
+			status: "resolved",
+			decision: "denied",
+		});
+	});
+
+	it("an `input` with no offered set is `answered` — typing a value grants nothing", () => {
+		// The second half of the old gap. An `input` ask has no vocabulary at all, so there was
+		// never anything about it that could be called approval.
+		const registry = new PermissionRegistry({ sessionId: SESSION_ID });
+		registry.insert(insertOf("req-typed", { method: "input", options: [] }));
+		expect(registry.settle(SESSION_ID, "req-typed", "a value", { surface: "attach", clientId: "p" })).toMatchObject({
+			status: "resolved",
+			decision: "answered",
 		});
 	});
 

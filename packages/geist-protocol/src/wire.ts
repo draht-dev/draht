@@ -12,11 +12,13 @@ import { z } from "zod";
  *
  * Two directions, deliberately disjoint by type name:
  *   client → server  `hello` `pair_device` `authenticate` `attach` `input`
- *                    `detach` `permission_response`
- *   server → client  `server_hello` `device_credential` `fleet`
+ *                    `detach` `permission_response` `fleet_resync`
+ *                    `session_resume`
+ *   server → client  `server_hello` `device_credential` `fleet` `fleet_delta`
  *                    `session_metadata` `output` `input_echo` `client_joined`
  *                    `client_left` `error` `protocol_error`
  *                    `permission_request` `permission_resolved`
+ *                    `session_resumed`
  *
  * `pair_device`, `authenticate` and `device_credential` are the device-credential
  * exchange added in `geist/0.2` (R33-REACH.5). They terminate at the daemon:
@@ -44,7 +46,7 @@ export const GEIST_PROTOCOL_FAMILY = "geist/0.x";
  * to `conformance/MIGRATIONS.md`, and regenerating the conformance corpus
  * (R32-FLEET.5). `check:geist-protocol` fails the build otherwise.
  */
-export const GEIST_PROTOCOL_VERSION = "0.3";
+export const GEIST_PROTOCOL_VERSION = "0.4";
 
 const ProtocolFamilySchema = z.literal(GEIST_PROTOCOL_FAMILY);
 const ProtocolVersionSchema = z.literal(GEIST_PROTOCOL_VERSION);
@@ -180,13 +182,36 @@ export type AuthenticateFrame = z.infer<typeof AuthenticateFrameSchema>;
 // server → client
 // ---------------------------------------------------------------------------
 
-/** `server_hello` — the daemon's answer to `hello`, carrying its caps. */
+/**
+ * `server_hello` — the daemon's answer to `hello`, carrying its caps and, since
+ * `geist/0.4`, what it is willing to be asked.
+ *
+ * `capabilities` is the DAEMON's half of the negotiation `attach.capabilities`
+ * already established in `0.3` for the renderer's half: the same pattern, the
+ * other direction. Before it there was no channel through which a daemon could
+ * say it accepts `fleet_resync` — and a renderer discovering that by sending one
+ * to a daemon that does not have it gets `unknown_type` and close 1008, which
+ * kills the connection rather than the frame.
+ *
+ * It is REQUIRED, not optional, and it is required so that the NEXT addition
+ * costs nothing: from `0.4` onward a daemon that gains a verb advertises it here
+ * and a renderer that does not recognize the string simply does not use it — no
+ * `GEIST_PROTOCOL_VERSION` bump, and therefore no `version_mismatch` cliff that
+ * hard-refuses every cached renderer at `hello`. A daemon with nothing extra to
+ * declare sends `[]`; it may not omit the field, because "absent" would mean
+ * "pre-0.4" and there is no pre-0.4 daemon that speaks 0.4.
+ *
+ * Elements are opaque tokens a renderer matches exactly. Nothing here is a
+ * permission: a capability says a frame will be UNDERSTOOD, never that the
+ * connection sending it has earned anything. The auth gate is unchanged.
+ */
 export const ServerHelloFrameSchema = z.object({
 	type: z.literal("server_hello"),
 	protocol: ProtocolFamilySchema,
 	version: ProtocolVersionSchema,
 	server: z.object({ name: z.string().min(1), version: z.string().min(1) }),
 	limits: TransportLimitsSchema,
+	capabilities: z.array(z.string().max(64)).max(32),
 });
 export type ServerHelloFrame = z.infer<typeof ServerHelloFrameSchema>;
 
@@ -215,29 +240,159 @@ export const DeviceCredentialFrameSchema = z.object({
 export type DeviceCredentialFrame = z.infer<typeof DeviceCredentialFrameSchema>;
 
 /**
- * One live attachable draht session as the fleet sees it (R32-FLEET.2): the
- * four fields the `<id>.sock` + `.lock` contract actually knows. The socket
- * path is deliberately absent — a renderer never needs a filesystem path, and
- * this frame reaches a phone.
+ * Where a fleet row came from, and therefore what can be done with it
+ * (R35-ALWAYS.7).
+ *
+ *   - `"socket"` — a live `<id>.sock` + `.lock` pair with a live pid behind it.
+ *   - `"history"` — a session file on disk with no such pair. It was either
+ *     never attachable or its process is gone; either way nothing is listening.
+ *
+ * TWO VALUES, AND NEITHER OF THEM IS `"live"`. The phase acceptance text names
+ * `origin:socket` and `origin:history` verbatim, the corpus freezes those two
+ * strings, and a renderer switches on them. `"live"` was the drafting word and
+ * it is not on this wire.
+ *
+ * The discriminator is OBSERVABLE, not declared: there is no marker in a session
+ * header that says which build wrote it (every header is format version 3), so
+ * "predates socket registration" is not a thing any reader can see. What a reader
+ * CAN see is whether a live socket pair exists for the header's id right now, and
+ * that is exactly what this field reports.
+ */
+export const SessionOriginSchema = z.enum(["socket", "history"]);
+export type SessionOrigin = z.infer<typeof SessionOriginSchema>;
+
+/**
+ * The working tree's state as the last completed probe saw it (R35-ALWAYS.8).
+ *
+ * FOUR VALUES, NEVER A BOOLEAN, and never coerced back into one:
+ *
+ *   - `"clean"` — a git repository with nothing to commit.
+ *   - `"dirty"` — a git repository with changes.
+ *   - `"no_repo"` — the cwd is not inside a git repository. Its own value
+ *     because it is the ordinary case, not a failure: on the machine this was
+ *     measured against, 54 of the 55 non-zero `git status` exits across 107 live
+ *     cwds were "not a git repository". Folding that into `unknown` would make
+ *     the majority of the fleet read as broken.
+ *   - `"unknown"` — a repository exists but git refused or did not answer inside
+ *     the probe deadline. It MUST NOT collapse to `clean`: a probe that timed out
+ *     knows nothing, and "clean" is the one answer a human acts on.
+ */
+export const SessionStatusSchema = z.enum(["clean", "dirty", "no_repo", "unknown"]);
+export type SessionStatus = z.infer<typeof SessionStatusSchema>;
+
+/**
+ * One session as the fleet sees it (R32-FLEET.2, R35-ALWAYS.7). The socket path
+ * is deliberately absent — a renderer never needs a filesystem path, and this
+ * frame reaches a phone.
+ *
+ * Since `geist/0.4` a row is no longer necessarily a LIVE row: `origin` says
+ * where it came from and `attachable` / `resumable` say what may be done with
+ * it. The three are carried separately rather than derived from one another
+ * because a renderer must not have to know the derivation — and because they can
+ * legitimately disagree (a live socket whose session file was deleted is
+ * attachable and not resumable).
+ *
+ * `pid` is OPTIONAL from `0.4`, and that is a BREAKING field change rather than
+ * an addition: a `history` row has no process, so a required `pid` could only be
+ * satisfied by inventing one. Anything reading `pid` must handle its absence.
  */
 export const AttachableSessionSchema = z.object({
 	id: z.string().min(1),
 	cwd: z.string().min(1),
-	pid: z.number().int().positive(),
+	/** Absent for `origin: "history"` — there is no process. Present for a live socket. */
+	pid: z.number().int().positive().optional(),
 	startedAt: z.string().min(1),
+	origin: SessionOriginSchema,
+	/** A live socket is listening and `attach` will reach it. */
+	attachable: z.boolean(),
+	/** A session file exists that `session_resume` could start a new process from. */
+	resumable: z.boolean(),
+	status: SessionStatusSchema,
+	/**
+	 * When `status` was observed, ISO-8601, or null if it never was.
+	 *
+	 * Every status value AGES: the probe is deadline-bounded and its result is
+	 * cached, so "clean" without a timestamp is a claim about an unstated moment.
+	 * This is also the debounce basis for status deltas — a value that has not
+	 * moved does not become a `fleet_delta` just because it was re-read.
+	 */
+	statusAt: z.string().min(1).max(64).nullable(),
 });
 export type AttachableSession = z.infer<typeof AttachableSessionSchema>;
 
 /**
- * `fleet` — every live attachable session, dead PIDs already filtered out.
- * The same body `GET /fleet` returns, so the list has one shape whether it
- * arrived over HTTP or was pushed down the socket.
+ * `fleet` — the whole fleet as one snapshot: live attachable sessions with dead
+ * PIDs already filtered out, plus, since `geist/0.4`, historical rows. The same
+ * body `GET /fleet` returns, so the list has one shape whether it arrived over
+ * HTTP or was pushed down the socket.
+ *
+ * `epoch` + `seq` exist so a snapshot and the `fleet_delta` frames that follow it
+ * are ORDERABLE ON ONE CONNECTION. Without them a renderer that receives a
+ * snapshot and a delta has no way to tell which one describes the later world,
+ * and a resync races the deltas it was meant to replace. `epoch` changes whenever
+ * the observer restarts or loses continuity (its own identity, not a clock);
+ * `seq` increases monotonically within an epoch. A frame carrying an epoch a
+ * renderer has not seen means "throw away what you have and take this snapshot".
  */
 export const FleetFrameSchema = z.object({
 	type: z.literal("fleet"),
 	sessions: z.array(AttachableSessionSchema),
+	/** Identity of the observer run this snapshot came from. Opaque. */
+	epoch: z.string().min(1),
+	/** Monotonic within `epoch`. A delta with a lower `seq` is stale. */
+	seq: z.number().int().nonnegative(),
 });
 export type FleetFrame = z.infer<typeof FleetFrameSchema>;
+
+/**
+ * One change to the fleet since the last frame on this connection.
+ *
+ * `appeared` AND `changed` CARRY THE FULL SESSION BODY, NEVER JUST AN ID — and a
+ * client must REPLACE the row it holds rather than merge into it.
+ *
+ * That is not stylistic. Resuming a session reuses the SAME session id with a NEW
+ * pid and a NEW `startedAt` (verified by running it), so the ordinary trace for
+ * one key across a resume is `disappeared(X)` then `appeared(X)`. A client that
+ * coalesces the pair on id — or that merges the `appeared` body into the row it
+ * already had — keeps the dead pid and shows a process that no longer exists as
+ * the one you are talking to. Replacing wholesale is what makes that impossible.
+ *
+ * `disappeared` carries only an id because there is nothing left to describe.
+ */
+export const FleetDeltaChangeSchema = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("appeared"), session: AttachableSessionSchema }),
+	z.object({ kind: z.literal("disappeared"), id: z.string().min(1) }),
+	z.object({ kind: z.literal("changed"), session: AttachableSessionSchema }),
+]);
+export type FleetDeltaChange = z.infer<typeof FleetDeltaChangeSchema>;
+
+/**
+ * `fleet_delta` — what moved, so a renderer stays current without reconnecting
+ * (R35-ALWAYS.10). Ordered against the `fleet` snapshot by the same
+ * `epoch` + `seq` pair.
+ *
+ * A gap in `seq`, or an `epoch` the renderer has not seen, is not something to
+ * patch over: send `fleet_resync` and take the snapshot that answers it.
+ *
+ * `epoch` AND `seq` ARE REQUIRED HERE EXACTLY AS THEY ARE ON THE SNAPSHOT, and
+ * that symmetry is the ordering property itself, not a tidiness. Optional would
+ * not weaken this frame slightly: a delta with no `seq` cannot be placed against
+ * the snapshot it follows, so "a gap in `seq`" becomes a sentence with no
+ * referent and the `fleet_resync` the paragraph above prescribes can never be
+ * triggered — a renderer would apply deltas in arrival order and call the result
+ * current. The snapshot's pair was pinned by a test from the start and this one
+ * was pinned by nothing; `test/wire-0.4-fields.test.ts` now refuses a
+ * `fleet_delta` missing either, in both spellings a weakening takes.
+ */
+export const FleetDeltaFrameSchema = z.object({
+	type: z.literal("fleet_delta"),
+	/** Required, not optional. See above — the delta is unorderable without it. */
+	epoch: z.string().min(1),
+	/** Required, not optional. Monotonic within `epoch`; a lower `seq` is stale. */
+	seq: z.number().int().nonnegative(),
+	changes: z.array(FleetDeltaChangeSchema).min(1).max(256),
+});
+export type FleetDeltaFrame = z.infer<typeof FleetDeltaFrameSchema>;
 
 /** `session_metadata` — relayed. Exact mirror of `SessionMetadataMessage`. */
 export const SessionMetadataFrameSchema = z.object({
@@ -544,11 +699,28 @@ export const PermissionRequestFrameSchema = z.object({
 });
 export type PermissionRequestFrame = z.infer<typeof PermissionRequestFrameSchema>;
 
-/** `permission_resolved` — relayed. Exact mirror of `PermissionResolvedMessage`. */
+/**
+ * `permission_resolved` — relayed. Exact mirror of `PermissionResolvedMessage`.
+ *
+ * `answered` is the NEUTRAL member, added in `geist/0.4` to close the gap
+ * `geist/0.3` shipped with and documented at both ends (ROADMAP.md, "Owner:
+ * whoever next opens the wire"). A `select` or an `input` carries no permission
+ * semantics — no option of theirs declares a `decision`, and answering one grants
+ * and refuses nothing — so before this member existed the wire had to state such
+ * an ending in a word that was false in one direction or the other: `cancelled`
+ * for an ask that was ANSWERED and whose tool call RAN, or `approved` for a grant
+ * nobody ever made. With a `tool_permission` detail attached — which nothing stops
+ * an extension doing — that false word reached the durable audit row.
+ *
+ * IT GRANTS NOTHING. Every consumer must read it fail-closed: `answered` is not
+ * `approved`, and code that treats "not denied" as permission is wrong about this
+ * member first. `chosenOptionId` carries the choice that was actually made, which
+ * is the whole of what an answered `select` means.
+ */
 export const PermissionResolvedFrameSchema = z.object({
 	type: z.literal("permission_resolved"),
 	requestId: z.string().min(1).max(128),
-	decision: z.enum(["approved", "denied", "cancelled", "expired"]),
+	decision: z.enum(["approved", "denied", "cancelled", "expired", "answered"]),
 	chosenOptionId: z.string().max(128).nullable(),
 	surface: safeText(64),
 	clientId: z.string().max(128).nullable(),
@@ -571,6 +743,97 @@ export const PermissionResponseFrameSchema = z.object({
 export type PermissionResponseFrame = z.infer<typeof PermissionResponseFrameSchema>;
 
 // ---------------------------------------------------------------------------
+// geist/0.4 — resync and resume
+// ---------------------------------------------------------------------------
+
+/**
+ * `fleet_resync` — "I lost the thread; send me the whole fleet again."
+ *
+ * A DISTINCT POST-AUTHENTICATION VERB, and it has to be one. Neither of the two
+ * obvious ways to spell it without a new frame works, both confirmed live against
+ * a running daemon:
+ *
+ *   - a repeated `hello` is refused `invalid_frame` + close 1008, because the
+ *     connection has already completed its handshake;
+ *   - an unknown type is refused `unknown_type` + close 1008, which KILLS the
+ *     connection — the exact outcome a resync exists to avoid.
+ *
+ * It carries no fields. A resync is not a query: there is one fleet, the daemon
+ * knows it, and letting a renderer name a filter would be a second projection to
+ * keep honest. The answer is a `fleet` snapshot carrying the current
+ * `epoch` + `seq`, and everything the renderer held before it is discarded.
+ *
+ * Not relayed. It terminates at the daemon; no draht session has ever heard of it.
+ */
+export const FleetResyncFrameSchema = z.object({
+	type: z.literal("fleet_resync"),
+});
+export type FleetResyncFrame = z.infer<typeof FleetResyncFrameSchema>;
+
+/**
+ * `session_resume` — start a process for a historical session (R35-ALWAYS.9).
+ *
+ * AN ID AND NOTHING ELSE. No path, no command, no argv, no cwd, no environment.
+ * That is the whole of what keeps this from being an arbitrary-execution surface:
+ * the daemon resolves the id against its own history index and constructs the
+ * argv itself, so the worst a caller can name is a session that exists or one
+ * that does not. A `path` field here — even a validated one — would make the
+ * renderer a party to what executes, and this frame reaches a phone.
+ *
+ * Not relayed: it is answered by the daemon, which spawns; it never crosses to a
+ * session's Unix socket.
+ */
+export const SessionResumeFrameSchema = z.object({
+	type: z.literal("session_resume"),
+	sessionId: z.string().min(1).max(128),
+});
+export type SessionResumeFrame = z.infer<typeof SessionResumeFrameSchema>;
+
+/**
+ * Why a `session_resume` ended the way it did. A closed set, for the same reason
+ * `ProtocolErrorCodeSchema` is one: a renderer switches on these, and a free-form
+ * string pushes it back to matching on prose.
+ *
+ *   - `resumed` — a process was started and has joined the fleet.
+ *   - `already_live` — that id is already `origin: "socket"`; attach instead.
+ *   - `not_found` — no session with that id is known.
+ *   - `cwd_missing` — the session exists but the directory it ran in does not.
+ *   - `refused` — policy said no (an untrusted project, a cap, a revoked device).
+ *   - `spawn_failed` — the process could not be started.
+ *   - `timeout` — it was started but did not join the fleet inside the deadline.
+ *
+ * `ok` is carried alongside rather than derived by the renderer: exactly one code
+ * (`resumed`) is a success today, and a renderer that inferred success from the
+ * code would have to be re-taught every time the set grows.
+ */
+export const SessionResumeCodeSchema = z.enum([
+	"resumed",
+	"already_live",
+	"not_found",
+	"cwd_missing",
+	"refused",
+	"spawn_failed",
+	"timeout",
+]);
+export type SessionResumeCode = z.infer<typeof SessionResumeCodeSchema>;
+
+/**
+ * `session_resumed` — the answer to exactly one `session_resume`.
+ *
+ * `message` is human-facing prose and goes through the same `safeText` predicate
+ * every other attacker-influenceable string on this wire does: a spawn failure
+ * quotes a path and an errno, and a path is an attacker-influenceable string.
+ */
+export const SessionResumedFrameSchema = z.object({
+	type: z.literal("session_resumed"),
+	sessionId: z.string().min(1).max(128),
+	ok: z.boolean(),
+	code: SessionResumeCodeSchema,
+	message: safeText(512),
+});
+export type SessionResumedFrame = z.infer<typeof SessionResumedFrameSchema>;
+
+// ---------------------------------------------------------------------------
 // unions, decoding, encoding
 // ---------------------------------------------------------------------------
 
@@ -582,6 +845,8 @@ export const ClientFrameSchema = z.discriminatedUnion("type", [
 	InputFrameSchema,
 	DetachFrameSchema,
 	PermissionResponseFrameSchema,
+	FleetResyncFrameSchema,
+	SessionResumeFrameSchema,
 ]);
 export type GeistClientFrame = z.infer<typeof ClientFrameSchema>;
 
@@ -598,6 +863,8 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
 	ProtocolErrorFrameSchema,
 	PermissionRequestFrameSchema,
 	PermissionResolvedFrameSchema,
+	FleetDeltaFrameSchema,
+	SessionResumedFrameSchema,
 ]);
 export type GeistServerFrame = z.infer<typeof ServerFrameSchema>;
 

@@ -200,6 +200,56 @@ describe("socket permission relay — the outcome it is told is the outcome it r
 		});
 	});
 
+	it("records a locally ANSWERED select as answered — not cancelled, and not approved", async () => {
+		// Phase 34's recorded debt, closed by geist/0.4 (ROADMAP.md, "Owner: whoever next opens the
+		// wire"). `RelayOutcome` has always carried an honest `answered` kind; the wire had no
+		// neutral member, so `terminalDecisionFor` flattened it onto `cancelled` — which said the
+		// ask came down UNANSWERED about an ask a human answered and whose tool call RAN.
+		//
+		// This drives the case that made it DURABLE rather than merely transient: the ask carries a
+		// `tool_permission` detail, which is what `appendResolution` gates on, so the false word
+		// reached the session JSONL. The containment argument Phase 34 relied on — "a select never
+		// carries such a detail" — was false; nothing stops an extension attaching one.
+		//
+		// Asserted at all three edges the relay writes to, because the previous mutation survivor in
+		// this very file was a hardcode that only one of the three could see.
+		const rig = createRig();
+		const pending = rig.relay.raise(toolAsk("req-answered"));
+
+		rig.relay.withdraw("req-answered", { surface: "tui", clientId: null }, { kind: "answered" });
+
+		await expect(pending).resolves.toBeUndefined();
+
+		// 1. the broadcast.
+		expect(rig.resolved).toEqual([
+			{
+				type: "permission_resolved",
+				requestId: "req-answered",
+				decision: "answered",
+				chosenOptionId: null,
+				surface: "tui",
+				clientId: null,
+			},
+		]);
+		// 2. the durable audit row — the half that was a lie in the permanent record.
+		expect(rig.rows).toHaveLength(1);
+		expect(rig.rows[0]).toMatchObject({
+			requestId: "req-answered",
+			toolCallId: "call-1",
+			decision: "answered",
+			chosenOptionId: null,
+			decidedBy: { surface: "tui", clientId: null },
+		});
+		// 3. the argument handed to the registry, and the tombstone it lays — what a late or
+		//    reconnecting answerer is told happened.
+		expect(rig.withdrawals).toEqual([
+			{ requestId: "req-answered", decidedBy: { surface: "tui", clientId: null }, decision: "answered" },
+		]);
+		expect(
+			rig.registry.settle(SESSION_ID, "req-answered", "allow", { surface: "attach", clientId: "phone-2" }),
+		).toMatchObject({ status: "already_resolved", decision: "answered" });
+	});
+
 	it("stays silent for an ask a remote answer already settled — no second row, no second echo", async () => {
 		const rig = createRig();
 		const pending = rig.relay.raise(toolAsk("req-remote"));

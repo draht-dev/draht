@@ -1,0 +1,32 @@
+{
+	"protocol": "geist/0.x",
+	"version": "0.4",
+	"direction": "server-to-client",
+	"type": "permission_request",
+	"recordedFrom": "scripts/geist-conformance/reference-daemon.mjs over ws://127.0.0.1/attach, relaying a real draht SocketServer behind a real device-credential exchange",
+	"normalizedFields": [],
+	"frame": {
+		"type": "permission_request",
+		"requestId": "conformance-permission-1",
+		"method": "confirm",
+		"toolCallId": "conformance-tool-call-1",
+		"toolName": "bash",
+		"cwd": "/geist/conformance",
+		"title": "Run a shell command?",
+		"message": "bash wants to run a command in /geist/conformance",
+		"command": "echo geist conformance corpus",
+		"truncated": false,
+		"options": [
+			{
+				"id": "approve",
+				"label": "Approve"
+			},
+			{
+				"id": "deny",
+				"label": "Deny"
+			}
+		],
+		"requestedAt": "1970-01-01T00:00:00.000Z",
+		"deadline": null
+	}
+}

@@ -30,6 +30,14 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
 
 const SESSION_ID = "conformance";
+/**
+ * A second, short-lived session started and stopped solely so the fleet REALLY
+ * changes under the daemon's feet. The `fleet_delta` goldens are the diff of two
+ * observations of a real directory — nothing pushes a fabricated change.
+ */
+const TRANSIENT_SESSION_ID = "conformance-transient";
+/** The id the reference daemon models as history. It has no socket, by construction. */
+const HISTORY_SESSION_ID = "conformance-history";
 /** Reported as the session's cwd. A literal, so no machine path reaches the corpus. */
 const SESSION_CWD = "/geist/conformance";
 const BEARER_TOKEN = "conformance-bearer-token";
@@ -274,6 +282,24 @@ export const REJECTED_FRAMES = [
 		expect: "handshake_required",
 	},
 	{
+		// `fleet_resync` is post-authentication, exactly like `attach`. It decodes —
+		// it is a declared 0.4 client frame — so this is the auth gate refusing it.
+		name: "fleet-resync-before-auth",
+		handshake: true,
+		raw: JSON.stringify({ type: "fleet_resync" }),
+		expect: "not_authenticated",
+	},
+	{
+		// The reason `session_resume` carries an id and nothing else: the only thing a
+		// caller can name is a session. Here it names one AND has not authenticated,
+		// and the argv-shaped fields it tried to smuggle are dropped by the decoder
+		// before the auth gate is even reached.
+		name: "session-resume-before-auth",
+		handshake: true,
+		raw: JSON.stringify({ type: "session_resume", sessionId: SESSION_ID, command: ["/bin/sh", "-c", "touch $CANARY"] }),
+		expect: "not_authenticated",
+	},
+	{
 		// A perfectly valid `attach` that has simply not earned one: the device
 		// exchange never happened on this connection (R33-REACH.5). The frame
 		// decodes, so this is the auth gate refusing it, not the decoder.
@@ -314,10 +340,39 @@ const HELLO_FRAME = {
  * see the first's echo (`input_echo`), an oversized frame really does drop only
  * its own connection (`protocol_error`).
  */
+/**
+ * A `fleet_delta` is BROADCAST to every connection that completed the device
+ * exchange, so the connections the script is not asserting on must still be read
+ * or their queues desynchronize the next `expect`. Drained rather than recorded:
+ * the transcript's order is the script's order, and four copies of one frame in
+ * it would say the daemon sent four different frames.
+ *
+ * It reads PAST whatever else is queued rather than demanding the delta be next.
+ * Those connections have a genuine backlog — client-b was attached while client-c
+ * joined, so it holds a `client_joined` the script never asserted on — and the
+ * point here is only that the broadcast reached every ready connection, not that
+ * it overtook their relay traffic. Bounded so a daemon that never sends it fails
+ * instead of hanging.
+ */
+async function drainDelta(clients, budget = 16) {
+	for (const client of clients) {
+		let seen = 0;
+		let frame = await client.next();
+		while (frame.type !== "fleet_delta") {
+			if (++seen > budget) {
+				throw new Error(`${client.name} was never sent the broadcast fleet_delta (read ${seen} other frames)`);
+			}
+			frame = await client.next();
+		}
+	}
+}
+
 export async function recordCorpus() {
 	const socketDir = await mkdtemp(join(tmpdir(), "geist-conformance-"));
 	let socketDaemon;
 	let referenceDaemon;
+	/** The short-lived second session of step 9c. Killed in `finally` even if the script throws. */
+	let transientDaemon;
 	const transcript = [];
 	const clients = [];
 
@@ -367,8 +422,54 @@ export async function recordCorpus() {
 		const a = await connect("client-a");
 		const deviceA = await pair(a, BOOTSTRAP_TOKENS.a, { name: "conformance-a", platform: "linux" });
 		const fleet = await a.expect("fleet");
-		if (fleet.sessions.length !== 1 || fleet.sessions[0].id !== SESSION_ID) {
-			throw new Error(`fleet did not report the running session: ${JSON.stringify(fleet)}`);
+		// The 0.4 projection is two rows of two different kinds, and the corpus needs
+		// both: the LIVE one is real (a real socket, a real pid), the HISTORY one is
+		// the reference daemon's one modelled row — see its header. Asserting the
+		// discriminating fields here is what stops a regeneration quietly recording
+		// two rows of the same kind.
+		//
+		// ── THESE HAND-WRITTEN `throw`s ARE THE GUARD ────────────────────────────
+		// Read the corpus honestly: for every daemon property this file does not
+		// explicitly throw on, the golden is a SELF-COMPUTED EXPECTATION. "The corpus
+		// matches the running daemon" then means only "the daemon is deterministic",
+		// never "the daemon is right" — regenerate after changing the daemon and the
+		// goldens follow the change without a word of protest. The assertions below
+		// are the only place a wrong-but-stable answer dies, so a property that
+		// matters belongs on this list rather than in a comment.
+		const live = fleet.sessions.find((session) => session.id === SESSION_ID);
+		const history = fleet.sessions.find((session) => session.id === HISTORY_SESSION_ID);
+		if (!live || live.origin !== "socket" || live.attachable !== true || typeof live.pid !== "number") {
+			throw new Error(`fleet did not report the running session as an attachable socket row: ${JSON.stringify(fleet)}`);
+		}
+		if (!history || history.origin !== "history" || history.attachable !== false) {
+			throw new Error(`fleet did not report a non-attachable history row: ${JSON.stringify(fleet)}`);
+		}
+		// The two verbs, pinned per kind and in BOTH polarities, because `attachable`
+		// and `resumable` are what a renderer turns into buttons:
+		//
+		//   live    ⇒ attachable: true,  resumable: false   → offer ATTACH
+		//   history ⇒ attachable: false, resumable: true    → offer RESUME
+		//
+		// A live row is NOT resumable, and that is the ruling, not a stop-gap: resuming
+		// a live session would start a second process appending to one session JSONL —
+		// the hazard the busy lock exists for — so a renderer showing "Resume" beside a
+		// live session is offering the wrong action. `session_resume` on a live id is
+		// still refused `already_live` (asserted at step 9b-i), but refusal is defence
+		// in depth and must not be the only thing standing between a user and it.
+		//
+		// Asserted here because the schema cannot: `attachable` and `resumable` are two
+		// independent booleans on purpose (a live socket whose session file was deleted
+		// is attachable and not resumable), so every combination parses and only a
+		// recorded projection can say which one this daemon produces.
+		if (live.resumable !== false) {
+			throw new Error(`a LIVE row claimed to be resumable — the verb for a live session is attach: ${JSON.stringify(live)}`);
+		}
+		if (history.resumable !== true) {
+			throw new Error(`a HISTORY row claimed not to be resumable — resume is the only verb it has: ${JSON.stringify(history)}`);
+		}
+		if ("pid" in history) throw new Error(`a history row invented a pid: ${JSON.stringify(history)}`);
+		if (typeof fleet.epoch !== "string" || !Number.isInteger(fleet.seq)) {
+			throw new Error(`the fleet snapshot is not orderable — no epoch/seq: ${JSON.stringify(fleet)}`);
 		}
 
 		// 2. Attach — the daemon dials the real .sock and relays its metadata.
@@ -419,6 +520,31 @@ export async function recordCorpus() {
 		if (!ask.options.some((option) => option.id === "approve")) {
 			throw new Error(`the recorded ask offered no "approve" option: ${JSON.stringify(ask)}`);
 		}
+
+		// 7a-i. THE NEUTRAL MEMBER, recorded before the approval so the golden for
+		//       `permission_resolved` is the case that had no true word until 0.4. A
+		//       `select` carrying a `tool_permission` detail is answered on the
+		//       session's LOCAL surface; the remote copies come down and the ending is
+		//       stated as `answered` — not `cancelled` (the ask WAS answered and its
+		//       command ran) and not `approved` (nobody granted anything). This is the
+		//       Phase 34 debt, closed on the wire, recorded rather than described.
+		socketDaemon.child.stdin.write(`${JSON.stringify({ cmd: "permission_select" })}\n`);
+		const selectAsk = await a.expect("permission_request");
+		if (selectAsk.method !== "select" || selectAsk.options.some((option) => option.id === "approve")) {
+			throw new Error(`the select ask carried a permission vocabulary it should not have: ${JSON.stringify(selectAsk)}`);
+		}
+		socketDaemon.child.stdin.write(`${JSON.stringify({ cmd: "permission_answered" })}\n`);
+		const answered = await a.expect("permission_resolved");
+		if (answered.decision !== "answered" || answered.requestId !== selectAsk.requestId) {
+			throw new Error(`the local answer was not recorded as answered: ${JSON.stringify(answered)}`);
+		}
+		if (answered.chosenOptionId !== "opt-next") {
+			throw new Error(`an answered select lost the choice that was made: ${JSON.stringify(answered)}`);
+		}
+
+		// 7a-ii. …and the confirm, answered REMOTELY, still resolves `approved`. The
+		//        neutral member did not soften a real grant: `approved` still means a
+		//        vocabulary that declares permission was chosen by a client.
 		a.send({ type: "permission_response", clientId: "client-a", requestId: ask.requestId, optionId: "approve" });
 		const resolved = await a.expect("permission_resolved");
 		if (resolved.decision !== "approved" || resolved.chosenOptionId !== "approve") {
@@ -454,6 +580,102 @@ export async function recordCorpus() {
 		// 9. …and the other client's stream is untouched by it.
 		socketDaemon.child.stdin.write(`${JSON.stringify({ cmd: "output", data: "still streaming\n", stream: "stdout" })}\n`);
 		if ((await a.peekType()) !== "output") throw new Error("client-a's stream did not survive client-d's refusal");
+
+		// 9a-pre. A rescan with NOTHING changed must send NOTHING. This is the whole of
+		//     "it never fabricates a change", and it is asserted rather than described
+		//     because a daemon that emitted an empty or invented delta on every tick
+		//     would pass every other assertion in this file. Nothing has moved on disk
+		//     since the snapshot client-a-reconnect took, so a delta here is fabricated.
+		//
+		//     Caught in BOTH orderings, because two processes have no ordering contract:
+		//     if the daemon handles this stdin line before the `fleet_resync` below, a
+		//     fabricated delta arrives first and `expect("fleet")` sees it; if it handles
+		//     the frame first, the fabrication lands next and 9b's
+		//     `expect("session_resumed")` sees it. There is no third order.
+		referenceDaemon.child.stdin.write("rescan\n");
+
+		// 9a. `fleet_resync` — the post-authentication verb, answered with a fresh
+		//     snapshot on the SAME connection. It exists because neither alternative
+		//     spelling survives: a repeated `hello` is refused `invalid_frame` and an
+		//     undeclared type is refused `unknown_type`, and both close the connection.
+		//     The snapshot's `seq` must have advanced past the one client-a first saw,
+		//     or a renderer cannot order the resync against the deltas it replaces.
+		a.send({ type: "fleet_resync" });
+		const resynced = await a.expect("fleet");
+		if (resynced.epoch !== fleet.epoch || !(resynced.seq > fleet.seq)) {
+			throw new Error(`the resync snapshot is not orderable after the first: ${JSON.stringify(resynced)}`);
+		}
+
+		// 9b. `session_resume`, twice, on the two verdicts this daemon can honestly
+		//     reach. The `resumed` path needs a spawn surface the reference daemon
+		//     deliberately does not have (see its header), so it is the shipped
+		//     daemon's Class-3 acceptance and not a corpus golden.
+		a.send({ type: "session_resume", sessionId: HISTORY_SESSION_ID });
+		const refusedResume = await a.expect("session_resumed");
+		if (refusedResume.ok !== false || refusedResume.code !== "refused" || refusedResume.sessionId !== HISTORY_SESSION_ID) {
+			throw new Error(`resume of the history row was not refused honestly: ${JSON.stringify(refusedResume)}`);
+		}
+		a.send({ type: "session_resume", sessionId: "no-such-session" });
+		const unknownResume = await a.expect("session_resumed");
+		if (unknownResume.code !== "not_found") {
+			throw new Error(`resume of an unknown id was not not_found: ${JSON.stringify(unknownResume)}`);
+		}
+
+		// 9b-i. …and the third honest verdict: a LIVE id is refused `already_live`.
+		//     The fleet projection already tells a renderer not to offer resume on a
+		//     live row (`resumable: false`, asserted in step 1), and this is the other
+		//     half of that one decision: the daemon refuses the frame anyway, so a
+		//     renderer that ignores the flag — or an older one that never read it —
+		//     still cannot put a second writer on one session JSONL. Recorded rather
+		//     than described, because "we refuse it" is exactly the kind of claim that
+		//     survives the code that made it true being deleted.
+		a.send({ type: "session_resume", sessionId: SESSION_ID });
+		const liveResume = await a.expect("session_resumed");
+		if (liveResume.ok !== false || liveResume.code !== "already_live" || liveResume.sessionId !== SESSION_ID) {
+			throw new Error(`resume of a LIVE session was not refused already_live: ${JSON.stringify(liveResume)}`);
+		}
+
+		// 9c. `fleet_delta`, and it is a REAL diff. A second draht session is really
+		//     started, the daemon is asked to observe again, and what it sends is the
+		//     difference between two reads of a real directory. Then that session is
+		//     really stopped and the same thing happens in reverse.
+		//
+		//     `appeared` carries the FULL session body, never just an id: a resumed
+		//     session reuses its id with a new pid, so a client that merges on id
+		//     instead of replacing keeps a dead process on screen.
+		transientDaemon = await spawnDaemon("scripts/geist-conformance/socket-daemon.mjs", [
+			"--socket-dir",
+			socketDir,
+			"--session-id",
+			TRANSIENT_SESSION_ID,
+			"--cwd",
+			SESSION_CWD,
+		]);
+		referenceDaemon.child.stdin.write("rescan\n");
+		const appeared = await a.expect("fleet_delta");
+		await drainDelta([b, c, reconnect]);
+		if (appeared.epoch !== fleet.epoch || !(appeared.seq > resynced.seq)) {
+			throw new Error(`the delta is not orderable after the resync: ${JSON.stringify(appeared)}`);
+		}
+		const appearance = appeared.changes.find((change) => change.kind === "appeared");
+		if (!appearance || appearance.session?.id !== TRANSIENT_SESSION_ID) {
+			throw new Error(`starting a session did not produce an "appeared" change: ${JSON.stringify(appeared)}`);
+		}
+		if (appearance.session.origin !== "socket" || typeof appearance.session.pid !== "number") {
+			throw new Error(`an "appeared" change did not carry a full session body: ${JSON.stringify(appearance)}`);
+		}
+
+		transientDaemon.child.stdin.write(`${JSON.stringify({ cmd: "stop" })}\n`);
+		await withDeadline(new Promise((r) => transientDaemon.child.on("exit", r)), FRAME_TIMEOUT_MS, "the transient session to exit");
+		referenceDaemon.child.stdin.write("rescan\n");
+		const disappeared = await a.expect("fleet_delta");
+		await drainDelta([b, c, reconnect]);
+		if (!disappeared.changes.some((change) => change.kind === "disappeared" && change.id === TRANSIENT_SESSION_ID)) {
+			throw new Error(`stopping a session did not produce a "disappeared" change: ${JSON.stringify(disappeared)}`);
+		}
+		if (disappeared.changes.some((change) => change.kind === "disappeared" && change.session !== undefined)) {
+			throw new Error(`a "disappeared" change carried a body it should not have: ${JSON.stringify(disappeared)}`);
+		}
 
 		// 10. The rejection battery — every entry on its own connection.
 		const rejections = [];
@@ -506,6 +728,7 @@ export async function recordCorpus() {
 		}
 		referenceDaemon?.child.kill();
 		socketDaemon?.child.kill();
+		transientDaemon?.child.kill();
 		await rm(socketDir, { recursive: true, force: true });
 	}
 }

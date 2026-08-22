@@ -31,6 +31,10 @@ const serverHelloFrame = {
 	version: GEIST_PROTOCOL_VERSION,
 	server: { name: "geist-daemon", version: "0.1.0" },
 	limits: DEFAULT_TRANSPORT_LIMITS,
+	// Required since geist/0.4 — a daemon with nothing extra to declare says so
+	// with an empty array rather than by omitting the field. See
+	// `wire-0.4-fields.test.ts`, which pins that the omission is refused.
+	capabilities: [],
 };
 
 describe("handshake", () => {
@@ -79,9 +83,24 @@ describe("frame unions", () => {
 		// Phase 33's device-exchange frames are deliberately NOT here — they
 		// terminate at the daemon (R33-REACH.5) — and Phase 34's permission frames
 		// are relayed but arrived later, so both sets are asserted separately below
-		// rather than being quietly folded into this list.
-		const laterServerFrames = new Set(["device_credential", "permission_request", "permission_resolved"]);
-		const laterClientFrames = new Set(["pair_device", "authenticate", "permission_response"]);
+		// rather than being quietly folded into this list. Phase 35's four are
+		// subtracted for the same reason and for one more: none of them is relayed
+		// either, so adding one to the frozen list below would claim a mirror row
+		// that does not exist.
+		const laterServerFrames = new Set([
+			"device_credential",
+			"permission_request",
+			"permission_resolved",
+			"fleet_delta",
+			"session_resumed",
+		]);
+		const laterClientFrames = new Set([
+			"pair_device",
+			"authenticate",
+			"permission_response",
+			"fleet_resync",
+			"session_resume",
+		]);
 		expect([...SERVER_FRAME_TYPES].filter((t) => !laterServerFrames.has(t)).sort()).toEqual(
 			[
 				"client_joined",
@@ -107,6 +126,16 @@ describe("frame unions", () => {
 		expect([...SERVER_FRAME_TYPES]).toContain("permission_request");
 		expect([...SERVER_FRAME_TYPES]).toContain("permission_resolved");
 		expect([...CLIENT_FRAME_TYPES]).toContain("permission_response");
+	});
+
+	test("the geist/0.4 fleet and resume frames exist and are NOT relayed", () => {
+		// Answered by the daemon; none of them reaches a draht session's Unix socket,
+		// so none has a row in MIRRORED_FRAMES. If one ever needs relaying it must be
+		// added there deliberately.
+		expect([...CLIENT_FRAME_TYPES]).toContain("fleet_resync");
+		expect([...CLIENT_FRAME_TYPES]).toContain("session_resume");
+		expect([...SERVER_FRAME_TYPES]).toContain("fleet_delta");
+		expect([...SERVER_FRAME_TYPES]).toContain("session_resumed");
 	});
 
 	test("the geist/0.2 device-exchange frames exist and are not relayed", () => {

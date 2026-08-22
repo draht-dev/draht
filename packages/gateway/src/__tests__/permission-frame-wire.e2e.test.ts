@@ -31,7 +31,8 @@ import { GEIST_PROTOCOL_FAMILY, GEIST_PROTOCOL_VERSION } from "@draht/geist-prot
 const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..", "..");
 const DRAHT_CLI = join(REPO_ROOT, "packages", "coding-agent", "dist", "cli.js");
 const GATEWAY_CLI = join(REPO_ROOT, "packages", "gateway", "src", "cli.ts");
-const CORPUS = join(REPO_ROOT, "packages", "geist-protocol", "conformance", "geist-0.3");
+/** The corpus for the member the wire currently IS, so this file follows a 0.x bump. */
+const CORPUS = join(REPO_ROOT, "packages", "geist-protocol", "conformance", `geist-${GEIST_PROTOCOL_VERSION}`);
 const TOKEN = "permission-frame-wire-e2e-token";
 
 /**
@@ -147,7 +148,16 @@ let session: DrahtSession;
  * event handler instead of failing an assertion.
  */
 class Renderer {
-	readonly frames: { type?: string; code?: string; version?: string; protocol?: string }[] = [];
+	// Deliberately a loose shape rather than the GeistServerFrame union: this harness
+	// asserts on RAW decoded objects so a frame the schema stopped declaring still
+	// arrives here to be seen. `capabilities` joined it at geist/0.4.
+	readonly frames: {
+		type?: string;
+		code?: string;
+		version?: string;
+		protocol?: string;
+		capabilities?: unknown;
+	}[] = [];
 	closed: { code: number; reason: string } | null = null;
 	readonly #ws: WebSocket;
 
@@ -257,20 +267,29 @@ async function attached(clientId: string): Promise<Renderer> {
 	return renderer;
 }
 
-test("server_hello advertises geist/0.x 0.3 — the member the permission frames landed in", async () => {
+test("server_hello advertises geist/0.x 0.4 — the member the fleet projection landed in", async () => {
+	// 0.3 was where the permission frames landed; 0.4 moved the member again for the
+	// fleet projection, `fleet_delta`/`fleet_resync`, `session_resume` and the neutral
+	// `answered` decision. The version this asserts is read from the constant rather
+	// than typed twice, because the point of the test is that the RUNNING daemon and
+	// the constant the tree compiles against are the same member — not what the
+	// number happens to be this month.
 	const renderer = await Renderer.open();
 	renderer.send({
 		type: "hello",
 		protocol: GEIST_PROTOCOL_FAMILY,
-		version: "0.3",
+		version: GEIST_PROTOCOL_VERSION,
 		client: { name: "permission-frame-e2e", version: "0.0.0" },
 	});
 	const hello = await renderer.waitFor((frame) => frame.type === "server_hello", "server_hello");
 
 	expect(hello.protocol).toBe("geist/0.x");
-	expect(hello.version).toBe("0.3");
-	// And the constant the whole tree compiles against agrees with the wire.
-	expect(GEIST_PROTOCOL_VERSION).toBe("0.3");
+	expect(hello.version).toBe(GEIST_PROTOCOL_VERSION);
+	expect(GEIST_PROTOCOL_VERSION).toBe("0.4");
+	// Since 0.4 the daemon also says what it is willing to be ASKED, so the next
+	// verb does not need another hello-refusal cliff. Required, so its absence is a
+	// wire break rather than an older daemon.
+	expect(Array.isArray(hello.capabilities)).toBe(true);
 	renderer.close();
 }, 30_000);
 
@@ -338,7 +357,7 @@ test("a genuinely undeclared frame type is still a protocol error that drops the
 	expect((await until(() => renderer.closed, "the close after the refusal")).code).toBe(1008);
 }, 60_000);
 
-test("the committed geist/0.3 corpus holds a recorded golden per new type per direction", () => {
+test("the committed current-member corpus holds a recorded golden per new type per direction", () => {
 	// Read, never regenerated here: a test that re-recorded the corpus would be
 	// asserting against itself. Recording is the gate's job
 	// (`bun scripts/check-geist-protocol.mjs`); this only proves the evidence was
@@ -347,13 +366,19 @@ test("the committed geist/0.3 corpus holds a recorded golden per new type per di
 		["server-to-client", "permission_request"],
 		["server-to-client", "permission_resolved"],
 		["client-to-server", "permission_response"],
+		// Added by geist/0.4, and here for the same reason as the three above: the
+		// evidence has to be committed next to the schemas that describe it.
+		["server-to-client", "fleet_delta"],
+		["server-to-client", "session_resumed"],
+		["client-to-server", "fleet_resync"],
+		["client-to-server", "session_resume"],
 	] as const;
 
 	for (const [direction, type] of expected) {
 		const path = join(CORPUS, direction, `${type}.json`);
 		expect(existsSync(path)).toBe(true);
 		const golden = JSON.parse(readFileSync(path, "utf8"));
-		expect(golden.version).toBe("0.3");
+		expect(golden.version).toBe(GEIST_PROTOCOL_VERSION);
 		expect(golden.direction).toBe(direction);
 		expect(golden.frame.type).toBe(type);
 	}
@@ -362,4 +387,5 @@ test("the committed geist/0.3 corpus holds a recorded golden per new type per di
 	// actually was, not scaffolding.
 	expect(existsSync(join(REPO_ROOT, "packages/geist-protocol/conformance/geist-0.1"))).toBe(true);
 	expect(existsSync(join(REPO_ROOT, "packages/geist-protocol/conformance/geist-0.2"))).toBe(true);
+	expect(existsSync(join(REPO_ROOT, "packages/geist-protocol/conformance/geist-0.3"))).toBe(true);
 });

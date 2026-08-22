@@ -45,6 +45,46 @@
  * line it writes to the session declares the `permission-relay` capability, and
  * `permission_response` is relayed to the session exactly as `input` is.
  *
+ * Since `geist/0.4` it speaks the fleet-projection half (R35-ALWAYS.7,
+ * R35-ALWAYS.8, R35-ALWAYS.10) and it is worth being precise about which parts of
+ * that are REAL here and which are MODELLED, because the corpus freezes whatever
+ * this process actually emits:
+ *
+ *   - REAL. `origin: "socket"`, `attachable: true`, `resumable: false`, `pid`,
+ *     `cwd` and `startedAt` for a live row still come straight off the
+ *     `<id>.sock` + `.lock` contract, read from disk on every projection, dead
+ *     pids skipped. `resumable: false` on a live row is the SHIPPED projection's
+ *     answer, mirrored here on purpose — see `discoverSessions()`.
+ *   - REAL. `fleet_delta`. This daemon keeps the last fleet it projected and, on
+ *     a `rescan`, DIFFS the new projection against it. The `appeared` and
+ *     `disappeared` frames in the corpus are what really happened to real sockets
+ *     in a real directory — the recorder starts and stops a second session to
+ *     make them happen. It never fabricates a change.
+ *   - REAL. `fleet_resync`, and its answer: a fresh projection with the current
+ *     `epoch` and the next `seq`.
+ *   - MODELLED. The `origin: "history"` row. History lives in a session-file
+ *     index this process deliberately does not have (it imports no
+ *     `@draht/coding-agent`), so ONE fixed synthetic row is projected alongside
+ *     the real sockets, purely so the corpus freezes the shape of a history row —
+ *     `pid` absent, `attachable: false`, `resumable: true`. Fixed, for the same
+ *     reason the socket daemon's permission ask is fixed: a recorder fixture has
+ *     no business being non-deterministic.
+ *   - MODELLED. `status`. There is no git probe here; the deadline-bounded
+ *     quad-state probe is the shipped daemon's. A live row is therefore reported
+ *     `status: "unknown", statusAt: null` — the honest answer for "never
+ *     observed", and the one value that is safe to be wrong about, since
+ *     `unknown` is never actionable. It must never be `clean`.
+ *   - MODELLED. `session_resume`. This process has no spawn surface at all, by
+ *     design — it imports node builtins and `@draht/geist-protocol` and nothing
+ *     else. It resolves the id honestly (`already_live` for a live socket,
+ *     `not_found` for an id it has never heard of) and answers `refused` for a
+ *     history id it could otherwise have started, saying so in the message. The
+ *     `resumed` path belongs to the shipped daemon and to its Class-3 acceptance.
+ *
+ * `epoch` is a fixed literal here. In a shipped daemon it is the observer run's
+ * identity and changes whenever continuity is lost; in a recording there is one
+ * run and the goldens compare byte-wise.
+ *
  * No credential is ever written to stdout, stderr or a URL (R33-REACH.3): it
  * crosses this wire as a first message and nowhere else.
  *
@@ -86,6 +126,48 @@ function arg(name, fallback) {
 const socketDir = arg("socket-dir");
 const token = arg("token");
 const limits = DEFAULT_TRANSPORT_LIMITS;
+
+/**
+ * What this daemon is willing to be ASKED, advertised in `server_hello`
+ * (geist/0.4). The renderer-side counterpart of `attach.capabilities`: it says a
+ * frame will be understood, never that anyone has earned anything.
+ */
+const DAEMON_CAPABILITIES = ["fleet-delta", "fleet-resync", "session-resume"];
+
+/**
+ * This observer run's identity. Fixed, because the corpus compares byte-wise and
+ * there is exactly one run per recording. A shipped daemon mints a fresh one
+ * whenever it loses continuity, which is what tells a renderer to discard.
+ */
+const FLEET_EPOCH = "conformance-epoch";
+
+/**
+ * The one MODELLED history row — see the header. `pid` is absent because there is
+ * no process, `attachable` is false because nothing is listening, and `resumable`
+ * is true because a session file is what resume needs. Its `status` is fixed too,
+ * so the corpus freezes a non-null `statusAt` alongside the live row's null one.
+ */
+const HISTORY_SESSIONS = [
+	{
+		id: "conformance-history",
+		cwd: "/geist/conformance/archived",
+		startedAt: "1970-01-01T00:00:00.000Z",
+		origin: "history",
+		attachable: false,
+		resumable: true,
+		status: "no_repo",
+		statusAt: "1970-01-01T00:00:00.000Z",
+	},
+];
+
+/** Monotonic within `FLEET_EPOCH`. Every `fleet` and every `fleet_delta` takes the next one. */
+let fleetSeq = 0;
+
+/** Connections that have completed the device exchange, so a broadcast has somewhere to go. */
+const readyConnections = new Set();
+
+/** The last projection this daemon emitted, keyed by id — the basis every delta is diffed against. */
+let lastProjection = new Map();
 
 /**
  * The single-use bootstrap tokens this daemon will honour, spent on first use.
@@ -142,9 +224,28 @@ function issueCredential(deviceId, device) {
 }
 
 /**
- * Fleet projection straight off the `<id>.sock` + `.lock` contract: pid on line
- * 1, cwd on line 2, ISO creation time on line 3. A lock naming a dead pid is
- * skipped, so a session whose draht process is gone never reaches a renderer.
+ * Live rows, straight off the `<id>.sock` + `.lock` contract: pid on line 1, cwd
+ * on line 2, ISO creation time on line 3. A lock naming a dead pid is skipped, so
+ * a session whose draht process is gone never reaches a renderer.
+ *
+ * `attachable` is true for every row this returns and that is not decoration: the
+ * whole of what this function does is establish that a socket exists and a live
+ * process is behind it.
+ *
+ * `resumable` is FALSE for a live row, and this daemon says so because the shipped
+ * projection (`geist-core/src/attach/socket-sessions.ts`) says so and the corpus is
+ * the frozen record of what the wire IS — the two disagreed, and a corpus that
+ * disagrees with what ships is worse than no corpus. `resumable` and `attachable`
+ * are the two VERBS a renderer may offer, and for a live session the verb is
+ * ATTACH: offering "Resume" invites an action that would put a second process
+ * appending to one session JSONL, which is the hazard the busy lock exists for. A
+ * `session_resume` on a live id is still refused `already_live` below — defence in
+ * depth — but no renderer should be led to send one. They remain two carried
+ * fields rather than one derived from the other because a history row inverts
+ * them, and nothing here reads a session file to find out.
+ *
+ * `status` is `unknown` with a null `statusAt` because this daemon never probes;
+ * see the header. `unknown` is the safe wrong answer, `clean` would not be.
  */
 function discoverSessions() {
 	if (!existsSync(socketDir)) return [];
@@ -160,12 +261,103 @@ function discoverSessions() {
 			const pid = Number.parseInt(pidLine, 10);
 			if (!Number.isInteger(pid) || pid <= 0) continue;
 			process.kill(pid, 0);
-			sessions.push({ id, cwd, pid, startedAt: createdAt });
+			sessions.push({
+				id,
+				cwd,
+				pid,
+				startedAt: createdAt,
+				origin: "socket",
+				attachable: true,
+				resumable: false,
+				status: "unknown",
+				statusAt: null,
+			});
 		} catch {
 			// Unreadable lock or dead pid — the session is not attachable, so it is not fleet.
 		}
 	}
 	return sessions;
+}
+
+/**
+ * The whole fleet: live sockets plus the modelled history rows, minus any history
+ * row whose id is live right now. A session that is BOTH on disk and listening is
+ * one row, and it is the socket one — `origin` is what the fleet can observe, and
+ * observing a live socket beats observing a file.
+ *
+ * Sorted by id so two projections of the same world are the same list.
+ */
+function projectFleet() {
+	const live = discoverSessions();
+	const liveIds = new Set(live.map((session) => session.id));
+	const history = HISTORY_SESSIONS.filter((session) => !liveIds.has(session.id));
+	return [...live, ...history].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** The projection as a map, so two of them can be diffed by id. */
+function projectionMap(sessions) {
+	return new Map(sessions.map((session) => [session.id, session]));
+}
+
+/**
+ * A `fleet` snapshot, and the projection it describes becomes the new diff basis.
+ * Taking the next `seq` here rather than at the call site is what keeps a snapshot
+ * and the deltas around it on one order.
+ */
+function buildFleetFrame() {
+	const sessions = projectFleet();
+	lastProjection = projectionMap(sessions);
+	return { type: "fleet", sessions, epoch: FLEET_EPOCH, seq: fleetSeq++ };
+}
+
+/**
+ * Re-project, diff against the last projection, and return a `fleet_delta` — or
+ * undefined when nothing moved. NOTHING IS FABRICATED: every change here is a
+ * difference between two reads of a real directory.
+ *
+ * `appeared` and `changed` carry the FULL session body. A renderer must replace
+ * the row it holds rather than merge into it: a resumed session reuses its id with
+ * a new pid, so merging keeps the dead one.
+ */
+function buildFleetDelta() {
+	const before = lastProjection;
+	const sessions = projectFleet();
+	const after = projectionMap(sessions);
+	const changes = [];
+	for (const [id, session] of after) {
+		const previous = before.get(id);
+		if (previous === undefined) changes.push({ kind: "appeared", session });
+		else if (JSON.stringify(previous) !== JSON.stringify(session)) changes.push({ kind: "changed", session });
+	}
+	for (const id of before.keys()) {
+		if (!after.has(id)) changes.push({ kind: "disappeared", id });
+	}
+	lastProjection = after;
+	if (changes.length === 0) return undefined;
+	return { type: "fleet_delta", epoch: FLEET_EPOCH, seq: fleetSeq++, changes };
+}
+
+/**
+ * Answer one `session_resume` — see the header for why this daemon never answers
+ * `resumed`. The id is resolved against what it can actually see, so
+ * `already_live` and `not_found` are real verdicts, not stubs.
+ */
+function resolveResume(sessionId) {
+	if (discoverSessions().some((session) => session.id === sessionId)) {
+		return {
+			ok: false,
+			code: "already_live",
+			message: "that session is already listening on a socket — attach to it instead of resuming it",
+		};
+	}
+	if (HISTORY_SESSIONS.some((session) => session.id === sessionId)) {
+		return {
+			ok: false,
+			code: "refused",
+			message: "the reference daemon has no spawn surface by design; the shipped daemon starts the process",
+		};
+	}
+	return { ok: false, code: "not_found", message: "no session with that id is known to this daemon" };
 }
 
 /** The only way a frame leaves this daemon: validated, then encoded. */
@@ -277,6 +469,7 @@ const server = Bun.serve({
 						version: GEIST_PROTOCOL_VERSION,
 						server: { name: DAEMON_NAME, version: DAEMON_VERSION },
 						limits,
+						capabilities: DAEMON_CAPABILITIES,
 					});
 					// No `fleet` yet: nothing about the fleet reaches a socket that has
 					// not completed the device exchange.
@@ -297,8 +490,9 @@ const server = Bun.serve({
 					const issued = issueCredential(deviceIdFor(frame.device.name), frame.device);
 					state.deviceId = issued.deviceId;
 					state.phase = "ready";
+					readyConnections.add(ws);
 					send(ws, issued);
-					send(ws, { type: "fleet", sessions: discoverSessions() });
+					send(ws, buildFleetFrame());
 					return;
 				}
 				case "authenticate": {
@@ -314,8 +508,9 @@ const server = Bun.serve({
 					const issued = issueCredential(frame.deviceId, record);
 					state.deviceId = issued.deviceId;
 					state.phase = "ready";
+					readyConnections.add(ws);
 					send(ws, issued);
-					send(ws, { type: "fleet", sessions: discoverSessions() });
+					send(ws, buildFleetFrame());
 					return;
 				}
 				case "attach": {
@@ -328,6 +523,28 @@ const server = Bun.serve({
 						return;
 					}
 					openUpstream(state, ws, frame);
+					return;
+				}
+				case "fleet_resync": {
+					// A distinct post-authentication verb, and it has to be one: a repeated
+					// `hello` is refused `invalid_frame` and an undeclared type is refused
+					// `unknown_type`, and both close the connection a resync exists to save.
+					if (!state.deviceId) {
+						refuse(ws, "not_authenticated", "fleet_resync before the device exchange");
+						return;
+					}
+					send(ws, buildFleetFrame());
+					return;
+				}
+				case "session_resume": {
+					if (!state.deviceId) {
+						refuse(ws, "not_authenticated", "session_resume before the device exchange");
+						return;
+					}
+					// An id and nothing else crossed the wire, so an id and nothing else is
+					// resolved: there is no path, argv or environment here to honour.
+					const outcome = resolveResume(frame.sessionId);
+					send(ws, { type: "session_resumed", sessionId: frame.sessionId, ...outcome });
 					return;
 				}
 				case "input":
@@ -352,6 +569,7 @@ const server = Bun.serve({
 			}
 		},
 		close(ws) {
+			readyConnections.delete(ws);
 			const upstream = ws.data.state.upstream;
 			ws.data.state.upstream = null;
 			try {
@@ -370,5 +588,15 @@ process.stdin.on("data", (chunk) => {
 	if (chunk.includes("stop")) {
 		server.stop(true);
 		process.exit(0);
+	}
+	// `rescan` is the recorder asking this daemon to observe again. A shipped
+	// daemon runs this off its own poll; driving it from stdin is what makes the
+	// recording ordered rather than a race between a timer and a script. The DIFF
+	// is real either way — if nothing moved on disk, nothing is sent.
+	if (chunk.includes("rescan")) {
+		const delta = buildFleetDelta();
+		if (delta) {
+			for (const ws of readyConnections) send(ws, delta);
+		}
 	}
 });

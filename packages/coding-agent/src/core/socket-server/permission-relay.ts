@@ -491,27 +491,29 @@ export function createSocketPermissionRelay(options: SocketPermissionRelayOption
 }
 
 /**
- * The wire's word for an outcome.
+ * The wire's word for an outcome. All four map exactly — the gap is closed.
  *
- * Three of the four map exactly. The fourth is a KNOWN, NAMED GAP.
+ * GAP CLOSED (geist/0.4). `RelayOutcome` has always carried an honest `answered` kind; what was
+ * missing was a neutral member on the wire, so this function flattened `answered` onto `cancelled`.
+ * That understated: it said an ask came down UNANSWERED about an ask a human had answered and whose
+ * tool call had already RUN. The mirror-image falsehood lived in the registry's `decisionFor`,
+ * which said `approved` — a grant nobody made — for the remote half of the very same case.
  *
- * KNOWN GAP — `answered` has no wire word. `select` and `input` carry no permission semantics: no
- * option of theirs declares a `decision`, and nothing about answering one grants or refuses
- * anything. The wire's `permission_resolved.decision` is `approved | denied | cancelled | expired`
- * and has no neutral member, so an answered `select` cannot be stated truthfully on it. `approved`
- * is refused here deliberately — it is the fabricated word this whole task exists to remove, and
- * the registry's own `decisionFor` still says it for the REMOTE half of the same case (see
- * `permission-registry.ts`). `cancelled` is what the remote copies of the ask genuinely underwent —
- * they came down unanswered — and, unlike `approved`, it grants nothing and reads fail-closed.
+ * The containment argument that let both survive Phase 34 — "no audit row is written for a `select`
+ * or `input`, because `appendResolution` gates on a `tool_permission` detail and those never carry
+ * one" — IS FALSE. Nothing stops an extension attaching such a detail to a `select`, and a probe
+ * did; at that point the false word was written into the durable session JSONL, not merely
+ * broadcast. See ROADMAP.md, "Owner: whoever next opens the wire".
  *
- * Closing the gap properly means adding a neutral `answered` member to the wire union in
- * `packages/geist-protocol/src/wire.ts`, to its geist mirror, to `MIRRORED_FRAMES`, to the
- * `geist-0.3` conformance corpus (`permission_resolved.json`, `transcript.json`, the schema
- * fingerprint) and to `MIGRATIONS.md`, plus `decisionFor` and `PermissionResolutionEntry.decision`.
- * That is a protocol revision, not a bug fix, and none of those files are in this change's scope.
- * NOTE what the gap does NOT touch: no audit row is written for a `select` or `input` at all —
- * `appendResolution` writes only for a `tool_permission` detail, which those never carry — so the
- * false word never reaches the durable record. It exists solely in the transient broadcast.
+ * `answered` now exists on `TerminalDecision` (`permission-registry.ts`), on
+ * `PermissionResolvedMessage.decision` (`socket-server/types.ts`), on
+ * `PermissionResolutionEntry.decision` (`core/session-manager.ts`) and on
+ * `PermissionResolvedFrameSchema.decision` (`packages/geist-protocol/src/wire.ts`, mirrored through
+ * `MIRRORED_FRAMES` and frozen in the `geist-0.4` conformance corpus).
+ *
+ * IT GRANTS NOTHING. It is neutral, not permissive: any consumer branching on this value must treat
+ * `answered` the way it treats `denied`, and only `approved` as permission. What was chosen travels
+ * as `chosenOptionId`.
  */
 function terminalDecisionFor(outcome: RelayOutcome): TerminalDecision {
 	switch (outcome.kind) {
@@ -520,7 +522,7 @@ function terminalDecisionFor(outcome: RelayOutcome): TerminalDecision {
 		case "denied":
 			return "denied";
 		case "answered":
-			return "cancelled";
+			return "answered";
 		case "cancelled":
 			return "cancelled";
 	}

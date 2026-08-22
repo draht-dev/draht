@@ -169,11 +169,24 @@ export interface PermissionRequestMessage {
  * prompt down and says who decided instead of leaving a dead dialog up.
  * `chosenOptionId` and `clientId` are null for outcomes no client chose —
  * `cancelled` and `expired`.
+ *
+ * `answered` is the NEUTRAL member (geist/0.4). A `select` or an `input` grants
+ * nothing and refuses nothing: no option of theirs declares a `decision`, so
+ * neither `approved` nor `denied` is a true thing to say about one, and the two
+ * words this wire used before it existed were each false in one direction —
+ * `cancelled` about an ask that was answered and whose tool call RAN, `approved`
+ * about a grant nobody made. It GRANTS NOTHING and every consumer must read it
+ * fail-closed; the choice that was actually made travels as `chosenOptionId`.
+ *
+ * MIRRORED: `PermissionResolvedFrameSchema.decision` in
+ * `packages/geist-protocol/src/wire.ts` is this union field for field, and
+ * `MIRRORED_FRAMES` in `scripts/check-geist-protocol.mjs` fails the build if the
+ * two sets ever differ — including by one member.
  */
 export interface PermissionResolvedMessage {
 	type: "permission_resolved";
 	requestId: string;
-	decision: "approved" | "denied" | "cancelled" | "expired";
+	decision: "approved" | "denied" | "cancelled" | "expired" | "answered";
 	chosenOptionId: string | null;
 	surface: string;
 	clientId: string | null;

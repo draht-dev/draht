@@ -27,6 +27,17 @@ export interface AttachableSessionOptions {
 	onWarning?: (message: string) => void;
 	/** Prints the startup banner (default: stdout). */
 	log?: (message: string) => void;
+	/**
+	 * Whether to print the three-line "Attachable session started" banner (default: true).
+	 *
+	 * Interactive mode does NOT take over stdout (main.ts only calls `takeOverStdout()` for
+	 * non-interactive modes), so under default-on this banner would print a socket path into
+	 * every session's scrollback in the instant before the TUI claims the terminal. Measured,
+	 * it is the ENTIRE stdout delta of default-on. The implicit path passes `announce: false`;
+	 * an explicit `--attachable` keeps the banner, because someone who typed the flag is
+	 * entitled to be told the socket exists and where.
+	 */
+	announce?: boolean;
 }
 
 /**
@@ -214,9 +225,11 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 
 	server = await bind(options.session, options.cwd);
 
-	log(`\n🔗 Attachable session started: ${server.sessionId}`);
-	log(`   Socket: ${server.socketPath}`);
-	log(`   Attach: ${APP_NAME} --attach ${server.sessionId}\n`);
+	if (options.announce !== false) {
+		log(`\n🔗 Attachable session started: ${server.sessionId}`);
+		log(`   Socket: ${server.socketPath}`);
+		log(`   Attach: ${APP_NAME} --attach ${server.sessionId}\n`);
+	}
 
 	return {
 		get socketPath(): string | null {
@@ -326,15 +339,40 @@ export function registerAttachableSessionCleanup(handle: Pick<AttachableSession,
 
 	const handlers = new Map<NodeJS.Signals, () => void>();
 	for (const signal of signals) {
+		/**
+		 * Listeners that were ALREADY on this signal when the socket was registered.
+		 *
+		 * The guard below used to be `process.listenerCount(signal) > 1`, and under default-on
+		 * that turned SIGINT into a no-op for every interactive session. Measured against the
+		 * emitted binary: `proper-lockfile` pulls in `signal-exit`, which installs its own
+		 * SIGINT/SIGTERM listener at import time — long before this function runs. That listener
+		 * is a BOOKKEEPER, not an owner: it only acts when it is the sole listener
+		 * (`listeners.length === emitter.count`) and otherwise assumes somebody else will end the
+		 * process. So a plain `kill -INT` found two listeners, each of which deferred to the
+		 * other, and the session survived a signal that killed it before the socket existed
+		 * (control run: signal 2; default-on run: still alive at the 60 s deadline, socket and
+		 * lock left on disk). Node applies the default disposition only when a signal has NO
+		 * listener, so one polite listener is enough to make Ctrl+C stop working.
+		 *
+		 * The snapshot is the discriminator, and it is exact rather than heuristic because of
+		 * WHERE this runs: `registerAttachableSessionCleanup` is called once, after the socket is
+		 * bound and before any mode installs shutdown handling. Anything present at that instant
+		 * came from a library that was already coping without us. Anything added AFTER is draht's
+		 * own — interactive mode's graceful SIGTERM/SIGHUP shutdown, or the Ctrl+Z SIGINT guard —
+		 * and those really do own the signal: the first ends in `process.exit()` (where the
+		 * "exit" listener above removes the files) and the second deliberately keeps the process
+		 * alive, where deleting the socket would be wrong.
+		 */
+		const preexisting = new Set<unknown>(process.listeners(signal));
 		const handler = (): void => {
-			// Another listener owns this signal (interactive/print/rpc mode's graceful
-			// shutdown, or the Ctrl+Z SIGINT guard). Those paths either end in process.exit(),
-			// where the "exit" listener above removes the files, or deliberately keep the
-			// process alive - in which case deleting the socket here would be wrong.
-			if (process.listenerCount(signal) > 1) return;
+			const owners = (process.listeners(signal) as unknown[]).filter(
+				(listener) => listener !== handler && !preexisting.has(listener),
+			);
+			if (owners.length > 0) return;
 			handle.stopSync();
-			// Nobody else handles this signal: restore the default disposition and re-raise it
-			// so the process still dies from the signal it was sent.
+			// Nobody else owns this signal: drop out of the way and re-raise it so the process
+			// still dies from the signal it was sent. The pre-existing bookkeeper now finds
+			// itself alone and does its own re-raise, which reaches the default disposition.
 			process.off(signal, handler);
 			process.kill(process.pid, signal);
 		};

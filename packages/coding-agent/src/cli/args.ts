@@ -116,6 +116,14 @@ export function parseArgs(args: string[]): Args {
 			result.sessionDir = args[++i];
 		} else if (arg === "--attachable") {
 			result.attachable = true;
+		} else if (arg === "--no-attachable") {
+			// Tri-state on purpose: `attachable` stays UNDEFINED when neither flag is given, and
+			// main.ts uses that to tell "the operator asked for a socket" from "the default asked
+			// for one". Explicit failure is fatal; the default degrades. Before this branch existed
+			// `--no-attachable` fell into the unknown-flag path below, which CONSUMES the next
+			// token as the flag's value — so the documented opt-out swallowed the prompt and then
+			// killed the run with "Unknown option: --no-attachable".
+			result.attachable = false;
 		} else if (arg === "--attach") {
 			if (i + 1 < args.length) {
 				result.attach = args[++i];
@@ -265,6 +273,10 @@ ${chalk.bold("Options:")}
   --no-session                   Don't save session (ephemeral)
   --name, -n <name>              Set session display name
   --attachable                   Expose this session on an owner-only Unix socket (attach from your other terminals)
+                                 Interactive sessions do this by default; the flag also forces it on in
+                                 --print/--mode rpc and makes a registration failure fatal
+  --no-attachable                Do not expose this session on a socket (also: DRAHT_NO_ATTACHABLE=1, or
+                                 "attachableSessions": false in global settings)
   --attach <session-id>          Attach to a running attachable session (tmux-style)
   --list-sessions                List running attachable sessions and exit
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling

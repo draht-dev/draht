@@ -4504,6 +4504,7 @@ export class InteractiveMode {
 					outputPad: this.settingsManager.getOutputPad(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
+					attachableSessions: this.settingsManager.getAttachableSessions(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
@@ -4587,6 +4588,10 @@ export class InteractiveMode {
 					},
 					onQuietStartupChange: (enabled) => {
 						this.settingsManager.setQuietStartup(enabled);
+					},
+					onAttachableSessionsChange: (enabled) => {
+						// Takes effect on the next session start: this one already bound (or did not).
+						this.settingsManager.setAttachableSessions(enabled);
 					},
 					onDefaultProjectTrustChange: (defaultProjectTrust) => {
 						this.settingsManager.setDefaultProjectTrust(defaultProjectTrust);

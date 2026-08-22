@@ -26,7 +26,7 @@ import { listSessions } from "./cli/list-sessions.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { DISPLAY_VERSION, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir } from "./config.ts";
+import { APP_NAME, DISPLAY_VERSION, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -55,6 +55,9 @@ import {
 	type AttachableSession,
 	makeSessionAttachable,
 	registerAttachableSessionCleanup,
+	SocketCapReachedError,
+	SocketDirectoryUnsafeError,
+	SocketSessionBusyError,
 } from "./core/socket-server/index.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
@@ -113,6 +116,60 @@ function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]
 function isTruthyEnvFlag(value: string | undefined): boolean {
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+/**
+ * Opt out of default-on socket registration without editing settings (e.g. DRAHT_NO_ATTACHABLE=1).
+ *
+ * CI and scripted spawns need a way to say no that survives a fresh container and does not
+ * require a writable settings file. Overridden by an explicit `--attachable`.
+ */
+const ENV_NO_ATTACHABLE = `${APP_NAME.toUpperCase()}_NO_ATTACHABLE`;
+
+/**
+ * The ONE line an implicit (default-on) registration failure is allowed to print.
+ *
+ * Exactly one line, on stderr, never stdout — the caller relies on both. It says what was lost
+ * (this window is not on the fleet), never what errno said: an `EEXIST` in a startup banner
+ * teaches a user nothing they can act on. Three shapes, kept distinct on purpose so a cap
+ * refusal is never mistaken for a broken sockets directory and a busy twin is never mistaken
+ * for either.
+ */
+function describeAttachableDegradation(error: unknown): string {
+	const tail = "This session runs normally but is not reachable from your other devices.";
+
+	if (error instanceof SocketSessionBusyError) {
+		const owner =
+			error.ownerPid === null
+				? "another process is claiming it right now"
+				: `it is already published by PID ${error.ownerPid}`;
+		return `Not registering this session for remote attach: ${owner}. Run \`${APP_NAME} --attach ${error.sessionId}\` to reach that one. ${tail}`;
+	}
+
+	if (error instanceof SocketCapReachedError) {
+		return `Not registering this session for remote attach: this machine already holds ${error.liveCount} attachable sessions and the limit is ${error.cap}. Close one you are done with. ${tail}`;
+	}
+
+	if (error instanceof SocketDirectoryUnsafeError) {
+		return `Not registering this session for remote attach: ${error.socketDir} is not a private directory belonging to you. ${tail}`;
+	}
+
+	// Node's fs errors carry a `code`. Translate the ones that are actually reachable into a
+	// sentence; EINVAL in particular is not exotic — the default socket path is already ~76 of
+	// the ~104 bytes a Unix socket address holds, so a long $HOME or a long agent-dir override
+	// overflows it.
+	const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+	const reason =
+		code === "EACCES" || code === "EPERM"
+			? "permission was denied"
+			: code === "EEXIST" || code === "ENOTDIR"
+				? "something that is not a directory is in the way"
+				: code === "EINVAL" || code === "ENAMETOOLONG"
+					? "the socket path is too long for this system"
+					: code === "ENOENT"
+						? "its directory could not be created"
+						: "the control socket could not be created";
+	return `Not registering this session for remote attach: ${reason}. ${tail}`;
 }
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
@@ -907,24 +964,82 @@ export async function main(args: string[], options?: MainOptions) {
 		void modelRuntime.refresh().catch(() => {});
 	}
 
-	// --attachable is opt-in: only bind the Unix socket when the user asks for it. The lock file
-	// records the session's resolved cwd (not process.cwd()), which is what identifies the project
-	// a session belongs to when --session/--resume selected a session from elsewhere.
+	// ── DEFAULT-ON (R35-ALWAYS.1) ────────────────────────────────────────────────────────────
+	// Interactive sessions register a control socket unless something says otherwise. The lock
+	// file records the session's resolved cwd (not process.cwd()), which is what identifies the
+	// project a session belongs to when --session/--resume selected a session from elsewhere.
+	//
+	// `parsed.attachable` is a TRI-STATE and the whole split below hangs off it:
+	//   true      the operator typed --attachable       → bind, banner, failure is FATAL
+	//   false     the operator typed --no-attachable    → never bind
+	//   undefined nobody said                           → bind iff interactive, silently,
+	//                                                     and a failure only degrades
+	//
+	// Two things about WHERE this sits, both load-bearing:
+	//  1. `appMode` is read HERE, not at its first computation ~300 lines up, because piped
+	//     stdin DOWNGRADES "interactive" to "print" just above. Reading the earlier value
+	//     would bind a socket for `echo hi | draht`.
+	//  2. The gate is what keeps SUBAGENTS unbound — subagent.ts spawns children with
+	//     ["--mode","json","-p","--no-session"], which is never "interactive". Defaulting
+	//     inside the argument parser instead would put a socket under every subagent and a
+	//     parallel wave would be the first thing to hit the socket cap.
+	// Precedence flag ?? env ?? setting mirrors `sessionDir` above. The setting is read
+	// global-only; see SettingsManager.getAttachableSessions for why.
+	const attachableRequestedExplicitly = parsed.attachable === true;
+	const attachableEnabled =
+		parsed.attachable ??
+		(appMode === "interactive" &&
+			!isTruthyEnvFlag(process.env[ENV_NO_ATTACHABLE]) &&
+			settingsManager.getAttachableSessions());
 	let attachableSession: AttachableSession | undefined;
-	if (parsed.attachable) {
+	if (attachableEnabled) {
 		try {
 			attachableSession = await makeSessionAttachable({
 				session,
 				enabled: true,
 				cwd: session.sessionManager.getCwd(),
+				// The banner is stdout, and interactive mode never took stdout over, so an
+				// implicit bind must not print it into the scrollback.
+				announce: attachableRequestedExplicitly,
 			});
 		} catch (error) {
-			// Most likely another live process already owns this session's socket. Report it
-			// as a normal CLI error instead of crashing with a stack trace.
-			const message = error instanceof Error ? error.message : "Failed to start attachable session";
-			console.error(chalk.red(`Error: ${message}`));
-			process.exit(1);
+			// ── THE SPLIT CATCH ───────────────────────────────────────────────────────────
+			// An EXPLICIT --attachable that fails stays fatal: the operator asked for a
+			// reachable session and would otherwise get an unreachable one without being
+			// told. An IMPLICIT default that fails must NEVER prevent a session starting —
+			// that is the entire point of the requirement. One line on stderr (never stdout,
+			// in any mode), then carry on unattached: everything downstream already tolerates
+			// `attachableSession === undefined`.
+			//
+			// TWO CONSEQUENCES, recorded here because they are decisions and not accidents:
+			//
+			// (i) THE `--continue` TWIN DEGRADES AND IS THEREFORE NOT ON THE PHONE. Under
+			//     default-on the commonest failure is not environmental at all. `continueRecent`
+			//     reopens the most recent session FILE, so a second `draht -c` in the same
+			//     project reuses the header id and therefore the socket name, and loses the
+			//     race for the lock. It gets the busy notice below and runs normally, but it is
+			//     invisible to the fleet. Decoupling socket identity from session identity would
+			//     make both windows reachable; it ripples through the wire, the history join key
+			//     and resume, and is NAMED DEBT for a later phase, deliberately not attempted
+			//     here.
+			//
+			// (ii) REMOVING THE FATAL EXIT REMOVES THE ONLY GUARD ATTACHABLE SESSIONS HAD
+			//      AGAINST TWO PROCESSES APPENDING TO ONE SESSION JSONL. The `process.exit(1)`
+			//      this replaces was never designed as that guard, but it was one: the second
+			//      `draht -c` died before it could write. It now lives, and both processes
+			//      append to the same file. That hazard predates and outlives this change for
+			//      every non-attachable session, and the session store is append-only, but it
+			//      is strictly more reachable now than it was.
+			if (attachableRequestedExplicitly) {
+				const message = error instanceof Error ? error.message : "Failed to start attachable session";
+				console.error(chalk.red(`Error: ${message}`));
+				process.exit(1);
+			}
+			console.error(chalk.yellow(describeAttachableDegradation(error)));
+			attachableSession = undefined;
 		}
+	}
+	if (attachableSession) {
 		// Hand the session the pending-ask registry, so a dialog raised by the agent reaches every
 		// attached client and can be answered from one. This only HANDS THE HANDLE OVER: the wrap
 		// itself is installed inside `_applyExtensionBindings`, the one mode-agnostic seam every

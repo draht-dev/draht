@@ -64,6 +64,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve as resolvePath, sep } from "node:path";
 import type { HistorySession } from "@draht/geist-core";
+import { buildSpawnArgv } from "./spawn-argv.js";
 
 /**
  * Where an operator points this daemon at the draht it should resume with.
@@ -533,6 +534,8 @@ export interface ChildEnvironmentOptions {
 	agentDir: string;
 	/** The session's own working directory, used as the fallback `HOME`/`TMPDIR` are not. */
 	cwd: string;
+	/** Per-harness scoping. `undefined` = every declared credential (resume, unchanged). `[]` = NONE. */
+	credentialEnv?: readonly string[];
 }
 
 /**
@@ -569,7 +572,7 @@ export function buildChildEnvironment(options: ChildEnvironmentOptions): Record<
 		.map((name) => name.trim())
 		.filter((name) => name.length > 0 && ENV_NAME.test(name));
 
-	for (const name of [...DECLARED_CREDENTIAL_ENV, ...extra]) {
+	for (const name of [...(options.credentialEnv ?? DECLARED_CREDENTIAL_ENV), ...extra]) {
 		if (isForbiddenEnvName(name)) continue;
 		const value = env[name];
 		if (typeof value === "string" && value.length > 0) child[name] = value;
@@ -736,6 +739,29 @@ export interface SpawnOutcome {
 	pid: number;
 }
 
+/** Structural, not `harness-resolver.ts`'s `ResolvedHarnessLaunch`: that file already imports from this one. */
+export interface SessionLaunchRequest {
+	/** Minted by the daemon. Never supplied by a client. */
+	sessionId: string;
+	/** Canonical absolute, already ownership-walked and root-contained by the resolver. */
+	executable: string;
+	leadingArgs: readonly string[];
+	/** Canonical absolute. The spawn's cwd AND its `--context-root`. */
+	projectRoot: string;
+	/** Required, so forgetting it is a compile error rather than every key the daemon holds. */
+	credentialEnv: readonly string[];
+}
+
+interface StartRequest {
+	sessionId: string;
+	executable: string;
+	argv: string[];
+	cwd: string;
+	env: Record<string, string>;
+	/** A fixed daemon-side literal naming the origin. Never free text, never a client's. */
+	what: "the resumed session" | "the spawned session";
+}
+
 interface SpawnedProcess {
 	/** The `detached` option AS PASSED. Without it the child sits in the DAEMON'S group. */
 	groupSignallable: boolean;
@@ -823,10 +849,58 @@ export class SessionSpawner {
 		const argv = [...resolved.leadingArgs, "--session", session.path, "--attachable", "--mode", "rpc"];
 		const env = buildChildEnvironment({ env: this.#env, agentDir: this.#agentDir, cwd: session.cwd });
 
+		return this.#startAndAwaitSocket({
+			sessionId: session.id,
+			executable: resolved.executable,
+			argv,
+			cwd: session.cwd,
+			env,
+			what: "the resumed session",
+		});
+	}
+
+	/**
+	 * Start a session nobody has run before, from a registry harness (R36-SPAWN.1).
+	 *
+	 * No `#resolveExecutable`: that seam finds the DAEMON'S OWN draht and is
+	 * resume's. A launch's executable comes from the registry, in the request.
+	 */
+	async launch(request: SessionLaunchRequest): Promise<SpawnOutcome> {
+		if (!existsSync(request.projectRoot)) {
+			throw new SpawnRefusedError("cwd_missing", `this project root no longer exists: ${request.projectRoot}`);
+		}
+		// `--no-approve` only makes the child untrusted; re-entering a directory the operator said no to
+		// is a different refusal, and it belongs before any process exists.
+		if (projectExplicitlyUntrusted(this.#agentDir, request.projectRoot)) {
+			throw new SpawnRefusedError("refused", `this project is marked untrusted: ${request.projectRoot}`);
+		}
+
+		return this.#startAndAwaitSocket({
+			sessionId: request.sessionId,
+			executable: request.executable,
+			argv: buildSpawnArgv(request),
+			cwd: request.projectRoot,
+			env: buildChildEnvironment({
+				env: this.#env,
+				agentDir: this.#agentDir,
+				cwd: request.projectRoot,
+				credentialEnv: request.credentialEnv,
+			}),
+			what: "the spawned session",
+		});
+	}
+
+	/**
+	 * Everything after the argv: spawn, wait for this child's own lock and socket, or refuse.
+	 *
+	 * Shared by both origins, never copied — a second copy is how a resumed
+	 * process and a launched one stop being indistinguishable to the fleet.
+	 */
+	async #startAndAwaitSocket({ sessionId, executable, argv, cwd, env, what }: StartRequest): Promise<SpawnOutcome> {
 		let child: ChildProcess;
 		try {
-			child = spawn(resolved.executable, argv, {
-				cwd: session.cwd,
+			child = spawn(executable, argv, {
+				cwd,
 				env,
 				// Its own process group, so teardown can reach the whole tree rather
 				// than the one pid we happen to hold — a draht session spawns tools.
@@ -891,7 +965,7 @@ export class SessionSpawner {
 		if (exited === null) child.once("exit", () => this.#spawned.delete(pid));
 		else this.#spawned.delete(pid);
 
-		const socketPath = join(this.#socketDir, `${session.id}.sock`);
+		const socketPath = join(this.#socketDir, `${sessionId}.sock`);
 		const startedAt = Date.now();
 		const deadline = startedAt + this.#handshakeDeadlineMs;
 		const firstOutputDeadline = startedAt + this.#firstOutputDeadlineMs;
@@ -909,7 +983,7 @@ export class SessionSpawner {
 				// ONE stat and ONE small read of TWO known names. Not a readdir, and
 				// therefore still not a second reaper racing the fleet observer
 				// (R35-ALWAYS.10).
-				const owner = lockOwnerPid(this.#socketDir, session.id);
+				const owner = lockOwnerPid(this.#socketDir, sessionId);
 				if (owner === pid && existsSync(socketPath)) {
 					this.#release(child);
 					return { pid };
@@ -934,13 +1008,13 @@ export class SessionSpawner {
 					}
 					throw new SpawnRefusedError(
 						"spawn_failed",
-						`the resumed session exited before publishing its socket: ${describeExit(exited)} ${stderr.trim()}`.trim(),
+						`${what} exited before publishing its socket: ${describeExit(exited)} ${stderr.trim()}`.trim(),
 					);
 				}
 				if (!saidAnything && Date.now() >= firstOutputDeadline) {
 					throw new SpawnRefusedError(
 						"timeout",
-						`the resumed session published no socket and never said a word within ${this.#firstOutputDeadlineMs} ms`,
+						`${what} published no socket and never said a word within ${this.#firstOutputDeadlineMs} ms`,
 					);
 				}
 				await sleep(READY_POLL_MS);
@@ -953,7 +1027,7 @@ export class SessionSpawner {
 		await this.#stopRecorded(pid, record);
 		throw new SpawnRefusedError(
 			"timeout",
-			`the resumed session did not publish its socket within ${this.#handshakeDeadlineMs} ms${describeChildOutput(stderr)}`,
+			`${what} did not publish its socket within ${this.#handshakeDeadlineMs} ms${describeChildOutput(stderr)}`,
 		);
 	}
 

@@ -259,7 +259,7 @@ as a real emitted binary starting at login) and **Phase 52** (publish). Whoever 
 whether geist-core/geist-protocol gain a build step or whether geist ships as a bun-compiled single file.
 Verified by reading the three package.json files and confirming no `dist/` exists in geist-core.
 
-## Phase 34: The Ask Reaches the Phone — Permission Relay — `pending`
+## Phase 34: The Ask Reaches the Phone — Permission Relay — `complete`
 **Why here:** this is the mobile companion's whole reason to exist (spec §5.2), and it is the last frame-shaping change the wire needs before default-on multiplies clients — better to shape the wire while it is young and the corpus is small.
 **Goal:** An agent asks for permission on the Mac; the phone shows exactly what it wants; a tap answers it; the terminal and every other surface reflect the same answer.
 **Requirements:** R34-PERM.1, R34-PERM.2, R34-PERM.3, R34-PERM.4, R34-PERM.5, R34-PERM.6, R34-PERM.7, R34-PERM.8

@@ -1,151 +1,124 @@
 # CONTINUE HERE
 
-> Handoff written 2026-08-21. **30 commits** from an autonomous `/loop` run. `npm run check` is green.
-> `npm test` fails on **exactly one** test, deliberately — see "The red test" below before you treat it
-> as a regression.
->
-> Note: another of your sessions committed to `main` concurrently (landing pages, `draht-claude install
-> --force`). No file overlap with this work, but two agents on one working tree is a race, not a design.
+> Handoff written 2026-08-22. **15 commits** from an autonomous `/loop` run. Phase 34 is **complete**.
+> `npm run check` is green. `npm test` still fails on **exactly one** test, deliberately — the tailnet
+> identity tripwire from Phase 33, described below. Nothing else is red.
 
-## Current Phase
+## What landed
 
-**Phase 34 — The Ask Reaches the Phone (Permission Relay)** — `pending`, **blocked on a product decision**.
-Its viability probe ran and found the requirement names the wrong seam. Do not start building until the
-seam is settled — see decision 5 in `.planning/DECISIONS-PENDING.md`.
-
-## Last Completed
-
-**Phase 33 — On the Phone** landed `partial`. **A phone pairs by QR and steers a live draht session over
-TLS**, proven class 3 against the emitted binaries, not asserted in process.
+**Phase 34 — The Ask Reaches the Phone (Permission Relay) — `complete`.** An agent asks for permission
+on the Mac, the ask reaches a phone, a tap answers it, the tool runs, and the session's own JSONL records
+what actually happened and who actually did it. Proven class 3 over **two independent transports**: the
+gateway's WebSocket, and a raw `net.Socket` speaking newline-JSON straight to the published `.sock`.
 
 | Suite | Result |
 |---|---|
-| `reach-transport.e2e.test.ts` | 9/9 — eight acceptance clauses + whole-run 127.0.0.1 bind |
-| `first-pairing-no-restart.e2e.test.ts` | 5/5 — QR pairs an already-running daemon, unchanged pid |
-| `geist-reach-browser.e2e.test.mjs` | 2/2 — full journey + proxy killed mid-stream |
-| `fleet-attach.e2e.test.ts` | 10/10 — Phase 32's invariant preserved through the new path |
-| `geist-console-bundle.e2e.test.mjs` | 29/29 — incl. 390x400 keyboard layout, 44px targets |
-| `packages/gateway` | 364 pass, 1 fail (the deliberate tripwire) |
+| permission unit suites (7 files) | 202 pass |
+| `permission-relay-roundtrip.e2e` | 7 pass — incl. an expired ask that cannot be revived |
+| `permission-answer-validation.e2e` | 1 pass, 65 expects — four bad answers, none consuming |
+| `permission-durability.e2e` | 6 pass |
+| `permission-enumeration.e2e` | 12 pass — incl. two fail-open negative controls |
+| `permission-safe-text.e2e` | 5 pass |
+| `attach-mode-permission.e2e` | 9 pass |
+| `geist-console-permission.e2e` | 7 pass — real browser |
 
-## The red test — read this before "fixing" it
+The seam question that blocked this phase (decision 5) was **resolved from the spec, not by a product
+call**: rev-8 §4 says a session appears "because it is *running*, not because it was started by geist —
+this is the whole point", so an ACP-seam relay fails the sentence the product is defined by. Recorded in
+`.planning/DECISIONS-PENDING.md`.
 
-```
-packages/gateway/src/__tests__/tailnet-identity.test.ts
-  → "the pinned identity-header contract > is a real capture, not the placeholder this repo ships"
-```
+## Read this before trusting any green suite here
 
-The real tailnet identity header **has never been observed on this machine**. The pin ships as a marked
-placeholder and this test fails until a human captures the real one. It is a gate, not a bug. Its failure
-message names the command. **Do not skip, exclude, delete or `continue-on-error` it** — `.planning/ROADMAP.md`
-says so under Phase 33's run-budget note, and CI is knowingly red on it.
+**Four separate suites passed while the thing they named was broken.** Every one was caught by mutation —
+breaking the feature on purpose and checking the test noticed — and none by reading a passing run:
 
-The deny-only policy it guards **is** tested and green. What is unverified is which header name Tailscale
-actually sends.
+- The enumeration proved a tool *ran*, not that an *answer made it run*. `raise()` self-resolving as
+  approved without waiting left all five approve tests green.
+- `truncated` was a lie: a 5000-character command arrived elided to ~530 and reported that nothing was
+  abbreviated. The test asserting `truncated: false` was pinning the defect as correct.
+- Both of T10's build items (replay cap, its capability gate) survived deletion.
+- `console.css`'s entire bidi defence could be deleted unnoticed.
 
-## What needs Oskar — nothing here is more agent work
+A suite passed **141/141** with the relay's decision argument hardcoded. Another passed **17/17** with a
+fail-open inversion live. Treat "the tests pass" as the beginning of verification here, not the end.
 
-### Hardware / tailnet (Phase 33's three residuals)
+**Mutate in an isolated worktree or an rsync'd copy under `/tmp`, never in the shared tree.** A wave-4
+agent left `// MUTATION 4: bidi overrides are no longer neutralized` live in `safe-text.ts`, deleting the
+RLO range the spoof defence exists for. HEAD was clean; the working tree was not. The later wave was told
+to isolate and all four did, leaving zero markers. Before committing anything a mutation-testing agent
+touched, grep the diff for `MUTATION`.
+
+## The one defect that failed OPEN
+
+Everything else in this phase failed closed. This one did not, and it was found by a test written for
+something else: **an ask recorded as `expired` still ran its command.** The registry ended it, the wire
+and the JSONL both said `expired`, and the local dialog stayed on screen — so a late answer executed
+against a durable record saying it was refused.
+
+Cause: `undefined` from the relay meant "spent, keep waiting", which is right for a refused raise and
+catastrophic for an ended ask. Those are now two different values (`RelayEnded`), and an ending is
+honoured whether or not a local surface is live.
+
+## Carried forward — one unclosed falsehood, with an owner
+
+A `select` or `input` carrying a `tool_permission` detail still writes the **wrong decision word**:
+under-reporting locally (`cancelled` for a command that ran), a fabricated grant remotely (`approved`).
+Proven live with a probe extension, which also falsified the earlier containment argument that
+`select`/`input` never carry such a detail.
+
+`RelayOutcome` already carries the honest `answered` kind; what is missing is a neutral member in the
+wire's `TerminalDecision`. Closing it is a **protocol revision** no single task's file set can reach:
+`socket-server/types.ts`, `PermissionResolutionEntry.decision`, `geist-protocol/src/wire.ts`, its geist
+mirror, `MIRRORED_FRAMES`, the regenerated `geist-0.3` corpus and `MIGRATIONS.md`.
+
+**Owner: whoever next opens the wire — Phase 37 changes it for run lanes, Phase 38 freezes it at 1.0.
+It must not survive the freeze.** Recorded in `.planning/ROADMAP.md` under Phase 34.
+
+## Known-weak, recorded rather than fixed
+
+- The **capability gate on replay** is unwitnessed in the negative direction: removing it ships green.
+  The gate is present and correct; a future edit deleting it will not be caught.
+- **Replay starvation**: `pendingFor` truncates at 16 and nothing re-drives the remainder, so a client at
+  the cap sees the same first 16 on every reconnect. Verified unreachable today — the gate parks the turn
+  on one ask per session — but the doc comment reads as if a later burst carries them.
+- `SettleRefusal "cross_session"` is unreachable from the socket path (`handleResponse` always passes its
+  own bound sessionId). It is a guard on direct registry use, not a wire-reachable state.
+
+## What still needs Oskar — unchanged from Phase 33
 
 ```bash
-# 1. the reachability spike — proves tailscale serve carries wss:// to a real browser
-node scripts/geist-tailscale-serve.mjs --verify --peer <node>
-
-# 2. THIS CLEARS THE RED TEST
+# THIS CLEARS THE RED TEST
 node scripts/geist-tailscale-serve.mjs --capture-identity --peer <node> \
   --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json
 #    then set DEFAULT_TAILNET_IDENTITY_HEADER in
-#    packages/gateway/src/gateway/middleware/tailnet-identity.ts to the header it records
+#    packages/gateway/src/gateway/middleware/tailnet-identity.ts
 
-# 3. class-4 device evidence — iOS Safari + Quest 3 (Quest has been offline 36 days, charge it)
-node scripts/geist-device-evidence.mjs            # then --measure for the Phase 39 inputs
+node scripts/geist-tailscale-serve.mjs --verify --peer <node>   # reachability spike
+node scripts/geist-device-evidence.mjs                          # class-4 device evidence
 ```
 
-Recorded skew worth knowing before you run these: tailscale CLI 1.98.8 vs tailscaled 1.102.1, and
-`tailscale serve status` reports no serve config — this is a first publish.
+`~/.draht/gateway.config.json` still holds `host: "0.0.0.0"` with `tokens.default: "test"`. Nothing
+listens on 7878 and Phase 32's bind refusal prevents a wide bind at next start — but the token is the
+literal string `test`.
 
-### Five decisions, all in `.planning/DECISIONS-PENDING.md` with recommendations
+**Four decisions remain open** in `.planning/DECISIONS-PENDING.md`: Phase 42 batching, GSEC-04 and
+GSEC-05 amendment sign-off, and the Phase 44 threat model.
 
-1. **Phase 42 batching-vs-callback** — the dichotomy is false; the callback has no production consumer.
-2. **Phase 44 threat model** — advisor *rejects* the copied-worktree pivot you had recorded.
-3. **GSEC-04 amendment** — sign off with seven conditions.
-4. **GSEC-05 amendment** — sign off, but record it OPEN with owner Phases 42-43.
-5. **Phase 34's seam (NEW)** — the probe and the advisor disagree, and it is a question about what geist
-   *is*, not about code.
+## Next
 
-### Machine state, unchanged and still worth a minute
-
-`~/.draht/gateway.config.json` holds `host: "0.0.0.0"` with `tokens.default: "test"` and
-`allowedPaths: ["~/"]`. Nothing listens on 7878 so it is latent, and Phase 32's bind refusal now prevents
-a wide bind at next start — but the token is the literal string `test`.
-
-## Phase 34's probe — why it is blocked
-
-The probe drove four real sessions rather than reading code. It found:
-
-- **The phone never reaches `createExtensionUIContext`**, which is what R34-PERM.2 tells us to hook. geist
-  spawns `draht-acp` headless — no InteractiveMode, no TUI. Two disconnected permission systems exist and
-  the requirement names the one the phone cannot see.
-- **Under shipped defaults an external ACP client's `bash` call hard-fails with ZERO permission requests
-  raised.** The probe's first run only worked because its shell had `DRAHT_PERMISSION_MODE=auto`. This is
-  a defect in what ships today.
-- **A real approved permission leaves no trace in the session JSONL.** R34-PERM.2 demands the resolution be
-  asserted from the JSONL; nothing writes one. That is a durability task the requirement smuggled in.
-- **On the attach wire, answering "Yes" is swallowed as a queued new prompt.**
-
-The Fable 5 advisor (high confidence) rejects the probe's fallback of re-speccing onto the ACP seam,
-because that path runs through `packages/geist/src/pairing/server.ts` — GSEC-04's named subject and rev-7
-leftover — and would relay permissions only for geist-*spawned* sessions, leaving the sessions you start
-in your own terminal with no relay at all. It recommends a `RelayUIContext` decorator at the mode-agnostic
-injection point instead.
-
-**R34-PERM.8 is measured.** The agent core imposes no deadline on a permission ask — verified at every
-layer, measured to 25 minutes against the emitted binary with zero degradation. Phase 34 may keep "hold
-the turn" as its primary mechanism.
-
-The transport is the binding layer, but **an earlier version of this handoff got the mechanism wrong and
-said 255 seconds — see the corrected note in `.planning/ROADMAP.md` under Phase 34.** Measured truth:
-`Bun.serve({ idleTimeout })` never governed WebSockets at all, the real window was Bun's unset 120s
-default, and Bun's reaper is a liveness probe that pings first — so a compliant browser was never reaped.
-What was fragile was that survival depended entirely on the peer's PONG landing inside a ~16s grace, on
-exactly the kind of link a phone has. **Fixed 2026-08-21**: `websocket.idleTimeout` is set explicitly
-from config, plus a server-side ping at `idleTimeout / 3` so survival no longer depends on the peer.
-
-Also fixed 2026-08-21: both rpc-mode defects. Abort and shutdown now resolve pending dialogs fail-closed
-through the protocol's own `{cancelled: true}` shape.
-
-**Still not solved:** a phone that is asleep, in a tunnel, or switching networks. There the socket really
-dies, and that needs a durable pending ask a reconnecting client re-reads — decision 5. Do not read the
-keepalive as solving the walk-away case.
-
-## Uncommitted
-
-Nothing of this loop's. Your other session left `packages/landing/pnpm-lock.yaml` and
-`packages/landing/pnpm-workspace.yaml` untracked — deliberately not touched.
-
-## Next Steps
+**Phase 35 — Every Session Is There (Default-On, History, Honest Liveness).** It is the phase that makes
+"just automatically" literally true: `draht` with no flags shows up on the phone. Note R35-ALWAYS.5 is a
+prerequisite — `activeRewinds` in `coding-agent/src/core/checkpoints/rewind.ts` is module-global and
+default-on multiplies attachable sessions per host.
 
 ```bash
 cd /Users/exe008/draht/draht-mono
-git log --oneline -1
+git log --oneline -15
 npm run check                 # expect exit 0
-cd packages/gateway && bun test   # expect 364 pass, 1 fail (the tripwire)
 ```
-
-Then either answer the five decisions, or run the three hardware commands above to close Phase 33.
 
 To restart the autonomous loop:
 
 ```
-/loop /draht:orchestrate ultradcode workflows with Fable 5 Advisors for all work left in @.planning/ starting with geist, geist needs to become an app thats just automatically give you remote control over all the draht sessions that you have running on a connected machine (tailscale is the number one connector for now)
+/loop /draht:resume-work with /draht:orchestrate ultracode workflows. they can use fable 5 advisors for difficult problems
 ```
-
-## Lessons worth keeping
-
-- **A class-3 test found what code reading missed.** The daemon could not pair a device at all —
-  `cli.ts` never constructed a `DeviceRegistry` — and the gate that caught it was an acceptance suite
-  driving the emitted binary. Package-level tests would have stayed green.
-- **A feature can pass its own spec while being dormant in production.** Ask reviewers explicitly: is this
-  live, or inert until something else wires it?
-- **Two acceptance clauses asserted the wrong thing.** Both were fixed against verified product behaviour
-  rather than bending the product — but "it's just a test bug" is how broken security ships, so each was
-  checked against the documented design first.

@@ -1,7 +1,7 @@
 # State
 
-## Current Phase: Phase 34 — The Ask Reaches the Phone (Permission Relay) — `pending`, ready to execute
-## Status: active — Phase 33 landed `partial` (29 commits): a phone pairs by QR and steers a live session over TLS, proven class 3 against the emitted binaries. Three residuals need Oskar and hardware, not agent work; one test is deliberately red until the tailnet identity header is captured.
+## Current Phase: Phase 35 — Every Session Is There (Default-On, History, Honest Liveness) — `pending`
+## Status: active — Phase 34 landed COMPLETE (15 commits): an agent asks on the Mac, the ask reaches a phone, a tap answers it, and the session's own JSONL records what happened and who did it. Class 3 over two independent transports. One protocol-level gap carried forward to Phases 37/38.
 
 ## Decisions
 - Phase 34's relay seam was settled from the SPEC, not by a fresh product call (Claude, 2026-08-21). Decision 5 framed it as Oskar's to make, but rev-8 §4 already says a session appears "because it is *running*, not because it was started by geist — this is the whole point". An ACP-seam relay only ever sees geist-spawned sessions, so it fails that sentence. Reversible if geist-owned ACP sessions become the product's future; nothing was built on the rejected seam.

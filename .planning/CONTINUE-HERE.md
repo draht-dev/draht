@@ -1,123 +1,118 @@
 # CONTINUE HERE
 
-> Handoff written 2026-08-22. **29 commits** from one autonomous `/loop` run. **Phases 34 AND 35 are
-> complete.** `npm run check` is green. `npm test` still fails on **exactly one** test, deliberately —
-> the tailnet identity tripwire from Phase 33. Nothing else is red.
+> Rewritten 2026-08-22 after a long autonomous `/loop` run. **Phase 36 waves 1 and 2 are complete and
+> committed**; wave 3 was in flight when this was written. A five-round project-trust repair also landed.
+> `npm run check` is green. `npm test` still fails on exactly one test, deliberately — the tailnet
+> identity tripwire from Phase 33.
 
-## What is true now that was not
+## Read this first: what waves 1 and 2 do NOT close
 
-**Open the app; every draht session running on your machine is there; steer any of them.** That sentence —
-rev-8 §1, the one the product is defined by — now holds end to end:
+Nothing. **Every task in both waves is evidence class 2.** The commit log reads like a working spawn
+path and there isn't one:
 
-- Oskar types `draht`. It registers a socket by default and appears on the phone.
-- An agent asks for permission on the Mac; the ask reaches the phone; a tap answers it; the tool runs; and
-  the session's own JSONL records what happened and who did it.
-- Past sessions appear as history, honestly labelled, and resume over the wire.
-- A phone that slept converges by delta on the same socket, without reconnecting.
+- `AttachBridgeOptions.spawnSession` and `.registry` have **zero production callers**, so the shipped
+  daemon answers `session_spawn` with `{ok:false, code:"refused"}` and `registry_resync` with two empty
+  arrays. `createFleetRoutes` does not even accept the option.
+- `resolveHarnessLaunch` is referenced by exactly two files: itself and its test.
+- `buildSpawnArgv` likewise. Nothing anywhere starts a process from a spawn frame.
 
-| Phase | Commits | State |
-|---|---|---|
-| 34 — The Ask Reaches the Phone | 16 | `complete` |
-| 35 — Every Session Is There | 13 | `complete` |
+Wave 4 wires `fleet.ts`. The class-3 acceptance is wave 5. **If the phase's acceptance is read off waves
+1-3 it will be read wrong.**
 
-## Read this before trusting any green suite in this repo
+## The trust thread — five rounds, and why it took five
 
-**Nine separate suites in these two phases passed while the thing they named was broken.** Every one was
-caught by mutation — breaking the feature on purpose and checking the test noticed — and none by reading a
-passing run. The list, because the pattern is more useful than any single instance:
+`hasTrustRequiringProjectResources` could be made to return false for a project it should gate, so a
+saved "Do not trust" was silently overridden. Reachable because `SessionManager.open` takes cwd verbatim
+from the session file header (`--resume`, `--session`), and — found only at the end — because
+`draht-acp-agent.ts:258` passes client-supplied `params.cwd` raw into `createAgentSession`.
 
-- A permission relay suite passed **141/141** with the relay's decision hardcoded.
-- A decorator suite passed **17/17** with a fail-open inversion live.
-- A history reader that consumed all **376 MB** passed 21/21 **faster than baseline**, because every
-  assertion read counters the code kept about itself.
-- A status probe hardcoded to `unknown` passed **7/7** — nothing asserted the honest positive.
-- Half a split catch passed **10/10** — every explicit-flag test drove a bind that succeeded.
-- `fleet_resync` returning an **empty payload** passed 6/6, because the assertion waited long enough for
-  the delta stream to repair the view.
-- **Nine** hardening properties on the spawn primitive were deletable in ONE edit, suite green.
-- The lock format's readers were pinned and its only **writer** was not.
-- The soak log's `client_attach` relocation — the fix for a real asymmetry — was invisible because every
-  test client happened to carry the capability.
+**Rounds 2, 3 and 4 each closed their target and left some shape worse than HEAD.** All four regressions
+were found by the adversarial verifier, never the implementer. The cause was one decision: round 1
+declined to touch `utils/paths.ts`, reasoning ~20 callers made a shared-helper change riskier than fixing
+the one security caller. The real number was **16 call sites in 8 files, all in one package, never
+exported from its index**. Every later regression landed in a different caller of that same function.
 
-**Mutate in an isolated rsync copy, never a `git worktree` and never the shared tree.** A worktree does not
-isolate this monorepo: `packages/<x>/node_modules/@draht/<y>` is a RELATIVE symlink resolved against its
-target's real path, so `@draht/*` imports run the shared tree's code — wrong in BOTH directions, which is
-worse than no mutation testing. And **copy `packages/*/dist`, never symlink it**: suites run `npm run
-build` in `beforeAll` and tsc follows a dist symlink back into the real tree. Both mistakes were mine, both
-are in `~/.claude/.../memory/parallel-wave-orchestration.md`, and the second one silently overwrote real
-build artifacts before it was caught.
+Round 5 deleted `canonicalizePath` outright so the compiler enumerates callers, and promoted the segment
+walk into `src/utils/canonical-path.ts`: one core plus `realPathStrict` (the only one a trust,
+containment or load decision may use), `trustKeyPath`, `comparablePath`, `realHomeDir`.
 
-**Sanity-check isolation before trusting any mutation result** — make a change you know must fail and
-confirm it fails.
+**If you touch this area, A/B against a reconstructed HEAD (`git archive HEAD | tar -x` into a clone —
+never `git stash`, other agents work this tree), not only against the shape you set out to fix.**
 
-## The two defects that failed OPEN
+## Runtime facts worth keeping
 
-Everything else in both phases failed closed. These did not:
+- **Bun 1.4's `realpathSync` (and `.native`) rewrites `\` to `/` before the syscall.** `<dir>/a\b`
+  silently returns `<dir>/a/b` when that exists, aliasing two different directories. A character sweep
+  found backslash is the ONLY affected byte; `existsSync`/`statSync`/`lstatSync`/`readdirSync` are correct
+  and node 26 is correct. The shipped binary is `bun build --compile`, so this is production behaviour.
+- **windows-x64 IS a shipped target** (`scripts/build-binaries.sh --target=bun-windows-x64`, plus the CI
+  matrix). `canonical-path.ts` is POSIX-only: on win32 a native path is one segment handled by `lstat`, so
+  junctions never resolve and a junction under a trusted root inherits its trust.
+- `kill(pid, 0)` succeeds on a zombie. `ps` without `-A` lists only processes sharing the caller's
+  controlling terminal, so a detached child reads as absent and every negative assertion goes vacuously
+  green. macOS exposes a child's environment via `ps -Eww` for bun/node but **nothing** for SIP-protected
+  binaries, so an env canary asserted against a `/bin/sh` grandchild is vacuously green forever.
+- zsh has no `PIPESTATUS` (it is `pipestatus`, 1-indexed) — `cmd > /tmp/out 2>&1; echo $?` instead.
+- `rtk` mangles `grep`/`ls`/`git diff`/`git show` through a pipe. Use `rtk proxy git ...` redirected to a
+  file, or `sed -n`/`python3`.
 
-1. **An ask recorded as `expired` still ran its command.** The registry ended it, the wire and the JSONL
-   said `expired`, and the local dialog stayed on screen — so a late answer executed against a durable
-   record saying it was refused. Cause: `undefined` from the relay meant "spent, keep waiting", which is
-   right for a refused raise and catastrophic for an ended ask. Now two different values.
-2. **Two connections could both resume one session id, and both start a process.** Measured on the shipped
-   daemon: `{ok:true, code:"resumed"}` twice, two draht processes on one session JSONL. The in-flight guard
-   was per-connection, and the spawner read "a socket exists" as its own success — so the loser saw the
-   winner's socket and reported success with its own dead child's pid.
+## Process lessons that cost real time today
+
+- **"No surviving mutations" from the agent that wrote the code is worth nothing.** All five wave-2
+  implementers reported none; all five were wrong — 47 undisclosed survivors and 18 vacuous assertions.
+  An author mutates where their own assumptions hold. Budget an adversarial pass per task.
+- **A gate that scans nothing passes its own tests.** `scanRepo() { return []; }` left the command-gate
+  suite 15/15 green with the gate printing `ok`, because every case fed it a fixture the test wrote.
+- **A prose assertion matching a WORD lets the document state the opposite.** `/deliberate/i` guarding
+  "there is no stop verb, and that is deliberate" passes "not deliberate — it is an oversight".
+- **A comment is not a fix.** One agent's entire deliverable was 39 added lines, all comment, zero code.
+  Repo baseline is 13.7% src / 5.9% tests; keep to it and put the reasoning in the commit message.
 
 ## Still open — needs Oskar
 
-**Two product decisions from Phase 35, recorded in `.planning/phases/35-default-on/PLAN.md`:**
+**Four spawn questions, unanswered since before wave 2 and NOT planned around:**
 
-1. **The `--continue` twin.** `continueRecent` reopens the most recent session FILE, so a second
-   `draht -c` in one project reuses the header id and therefore the socket name. It degrades with a notice
-   now instead of refusing to start — but the second window is silently NOT on your phone. Decoupling
-   socket identity from session identity is recorded as named debt.
-2. **Is a resumed session the daemon's child?** A daemon restart during Phase 39's 7-day soak takes every
-   resumed session with it if they are children; detaching them means the daemon cannot enforce TERM→KILL.
-   Related: a resumed session is an rpc-mode headless process, not the interactive draht a terminal runs.
+1. Does RESUME also get `--no-approve`, or only spawn? One-line change either way; the resume argv is in
+   `spawn-primitive.ts`.
+2. What is the local re-grant path for a phone-spawned session? Nothing turns a running untrusted session
+   into a trusted one without restarting it.
+3. `DRAHT_CODING_AGENT_DIR` crosses into the child by design and is the root for `auth.json`, which holds
+   every provider's credential. Per-harness `credentialEnv` fixes the ENVIRONMENT half only.
+4. Is a spawned session the daemon's child? Deciding it for resume decides it for spawn.
 
-**Four decisions still in `.planning/DECISIONS-PENDING.md`:** Phase 42 batching, GSEC-04 and GSEC-05
-amendment sign-off, the Phase 44 threat model.
-
-**The hardware residuals, unchanged since Phase 33:**
-
-```bash
-# THIS CLEARS THE RED TEST
-node scripts/geist-tailscale-serve.mjs --capture-identity --peer <node> \
-  --out packages/gateway/src/__tests__/fixtures/tailnet-identity.captured.json
-#    then set DEFAULT_TAILNET_IDENTITY_HEADER in
-#    packages/gateway/src/gateway/middleware/tailnet-identity.ts
-
-node scripts/geist-tailscale-serve.mjs --verify --peer <node>   # reachability spike
-node scripts/geist-device-evidence.mjs                          # class-4 device evidence
-```
+**Also open:** the two Phase 35 product decisions, four in `DECISIONS-PENDING.md`, and the three hardware
+residuals (unchanged — see the commands in git history for the tailnet capture).
 
 `~/.draht/gateway.config.json` still holds `host: "0.0.0.0"` with `tokens.default: "test"`. Nothing
-listens on 7878 and the bind refusal prevents a wide bind — but the token is the literal string `test`.
+listens on 7878 and the bind refusal prevents a wide bind, but the token is the literal string `test`.
+Not modified — it is your machine config.
 
 ## Carried forward, with owners
 
-- **A `select`/`input` carrying a `tool_permission` detail still writes the wrong decision word** —
-  under-reporting locally, a fabricated grant remotely. Closing it is a protocol revision.
+- A `select`/`input` carrying a `tool_permission` detail still writes the wrong decision word.
   **Owner: Phase 37 opens the wire, Phase 38 freezes it at 1.0. It must not survive the freeze.**
-- **The foreign-uid busy-lock refusal is unwitnessed** — it needs a second uid. Three ways to close it are
-  costed in `session-resume.e2e.test.ts`'s notes; none is free.
-- **The sockets-directory uid refusal is covered by reading only** — stated plainly in
-  `socket-ownership-hygiene.e2e.test.ts` with the reason.
-- **Replay starvation**: `pendingFor` truncates at 16 and nothing re-drives the remainder, so a client at
-  the cap sees the same first 16 on every reconnect. Verified unreachable today (one pending ask per
-  session), but the doc comment reads as if a later burst carries them.
+- `loadProjectContextFiles` walks cwd and every ancestor with no trust parameter, injecting
+  attacker-authored AGENTS.md/CLAUDE.md into the system prompt from a merely-opened checkout. Accepted
+  bounded risk: gating it would gate essentially every repository.
+- The foreign-uid busy-lock refusal and the sockets-directory uid refusal remain covered by reading only.
+- Replay starvation: `pendingFor` truncates at 16 and nothing re-drives the remainder.
+
+## Branch note
+
+This checkout is shared with another session, which put HEAD on `upstream-sync`. `check:draht` asserts
+`.planning/ unchanged vs main` by diffing the WORKING TREE, so planning docs must be committed to `main`
+— do that with a temporary worktree (`git worktree add /tmp/mainwt main`), never by moving a ref. Code
+commits go on the current branch with **explicit pathspecs**: the tree carries ~55 files belonging to the
+other session, and `git add -A` would sweep them in.
 
 ## Next
 
-**Phase 36 — Start Work From the Phone, Without Handing Out a Shell.** It inherits a large head start:
-Phase 35 built the hardened spawn primitive early, because `session_resume` is already a client naming an
-id and causing a process to start. `packages/gateway/src/session/spawn-primitive.ts` exists, the unguarded
-`["draht","start"]` PATH spawn is gone, and **no route on the daemon creates a process from an HTTP
-request**. What Phase 36 adds is the harness/project registry and `session_spawn` on top of it.
+**Phase 36 wave 3**: `SessionSpawner.launch()` sharing the whole post-spawn block with `resume()`, the
+launcher composition, and the fleet-join proof. Then wave 4 wires `fleet.ts` — the first point at which
+anything can be class 3.
 
 ```bash
 cd /Users/exe008/draht/draht-mono
-git log --oneline -29
 npm run check                 # expect exit 0
 ```
 

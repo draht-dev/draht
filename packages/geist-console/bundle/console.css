@@ -323,6 +323,131 @@ body[data-keyboard="up"] #decision-record {
 	font-size: 12px;
 }
 
+/* --- permission ask ------------------------------------------------------ */
+
+/*
+ * A decision the agent is parked on (R34-PERM.1/.2), and the one entry in the
+ * transcript whose text an attacker chose: the tool name, the command, the path
+ * are all the model's words. They arrive ALREADY neutralized — every C0, DEL,
+ * C1, bidi control and invisible replaced one for one before the wire — so
+ * nothing here has to sanitize. What is left to CSS is the residual direction
+ * problem those replacements do not touch: a right-to-left SCRIPT still flips
+ * the run it sits in, and a flipped run inside this box would reorder the words
+ * of the command above the buttons that approve it.
+ *
+ * So `dir="ltr"` (set on the element in console.js) plus `unicode-bidi:
+ * isolate-override` here. `isolate` alone would only stop the run leaking OUT
+ * into the surrounding UI; `override` is what forces every character inside to
+ * be laid out in the base direction, so the order on screen is the order in the
+ * string. Both halves are on the container AND on each value, because the value
+ * is the part that gets read as an instruction.
+ */
+.entry[data-kind="permission"] {
+	align-self: stretch;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	background: color-mix(in srgb, var(--status-warn) 12%, transparent);
+	border: 1px solid color-mix(in srgb, var(--status-warn) 40%, transparent);
+	/* The `.entry` default is `pre-wrap`, which is right for a bubble of streamed
+	   text and wrong for a box built out of elements: it would print the newline
+	   between rows as blank space. Each value re-declares it for itself. */
+	white-space: normal;
+	direction: ltr;
+	unicode-bidi: isolate-override;
+}
+
+.entry[data-kind="permission"][data-decision] {
+	/* Settled: it is a record of what happened, not a question. */
+	background: var(--field);
+	border-color: var(--hairline);
+}
+
+.permission-heading {
+	font-weight: 600;
+}
+
+.permission-facts {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.permission-row {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	min-width: 0;
+}
+
+.permission-label {
+	flex: none;
+	width: 68px;
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ink-dim);
+}
+
+.permission-value {
+	flex: 1;
+	min-width: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 13px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	direction: ltr;
+	unicode-bidi: isolate-override;
+}
+
+.permission-notice {
+	margin: 0;
+	font-size: 12px;
+	color: var(--status-warn);
+}
+
+.permission-options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.permission-option {
+	/* A thumb target in both dimensions, like every other control here: this is
+	   the one button on the page where a miss has consequences. */
+	min-height: var(--touch);
+	min-width: var(--touch);
+	padding: 8px 18px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: var(--field);
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+
+.permission-option:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+.permission-option[data-chosen="true"] {
+	background: var(--selected);
+	border-color: color-mix(in srgb, var(--spectra-a) 45%, transparent);
+}
+
+.permission-option:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+
+.permission-outcome {
+	margin: 0;
+	font-size: 12px;
+	color: var(--ink-dim);
+	overflow-wrap: anywhere;
+}
+
 /* --- composer ------------------------------------------------------------ */
 #composer {
 	display: flex;

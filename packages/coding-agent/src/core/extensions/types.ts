@@ -125,6 +125,25 @@ export interface PermissionAskDetail {
 	/** Why the permission gate stopped this call. */
 	reason: string;
 	/**
+	 * True when ANY free-text field above was elided to fit its budget.
+	 *
+	 * A human is entitled to know they are approving an abbreviated string. This field is the only
+	 * carrier of that fact: the producer bounds by graphemes AND bytes, and the elision is not
+	 * recoverable from the value afterwards — a 5000-character command arrives here already cut to
+	 * ~530 characters, comfortably inside every downstream budget, so nothing later can rediscover
+	 * that anything was dropped.
+	 *
+	 * It lives on the SHARED type rather than as a structural widening at each end on purpose. It was
+	 * first added as two independent optional widenings — one in the producer, one in the relay — and
+	 * an adversarial reviewer pointed out that renaming or dropping either side would typecheck clean
+	 * and silently degrade to `false`, which is exactly the defect it was added to fix, restored in
+	 * silence. Declared here, both ends refer to one name and the compiler notices.
+	 *
+	 * Still optional, so a producer that does not bound anything is unaffected and can never
+	 * fabricate a `true`. Hand-mirrored in `RpcPermissionDetail` (`modes/rpc/rpc-types.ts`).
+	 */
+	truncated?: boolean;
+	/**
 	 * The immutable set of options offered for this request, each stating its OWN semantics.
 	 *
 	 * `decision` is what makes this a permission vocabulary rather than a list of words: it says,

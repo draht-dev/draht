@@ -263,6 +263,14 @@ export interface RpcPermissionDetail {
 	reason: string;
 	/** The immutable set of options offered for this request, each stating its own semantics. */
 	options: readonly { id: string; label: string; decision: "approve" | "deny" }[];
+	/**
+	 * True when any free-text field above was elided to fit its budget.
+	 *
+	 * Mirrors `PermissionAskDetail.truncated`. The detail object reaches an RPC client by reference,
+	 * so this field was already on the wire at runtime while the type documenting that wire did not
+	 * mention it — a hand-mirror one field behind is how a client learns to distrust the type.
+	 */
+	truncated?: boolean;
 }
 
 /** Emitted when an extension needs user input */

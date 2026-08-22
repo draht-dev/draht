@@ -125,6 +125,17 @@ let wantedId = null;
 let transcriptId = null;
 /** The streaming assistant bubble; nulled whenever a new turn starts. */
 let agentEntry = null;
+/**
+ * Permission asks on screen, keyed by `requestId` (R34-PERM.1/.2).
+ *
+ * Keyed rather than appended because the session REPLAYS every still-pending ask
+ * to a client that (re)attaches — `PermissionDelivery.forgetClient` deliberately
+ * forgets what a dead connection was shown, since a reconnecting phone has
+ * nothing on its screen. This page's transcript survives a reconnect, so it
+ * does, and a second `permission_request` for an id already drawn has to update
+ * that element rather than stack a second Approve button under the first.
+ */
+const permissionAsks = new Map();
 /** True while a close is one we asked for, so it reconnects instead of retrying. */
 let deliberateClose = false;
 let retries = 0;
@@ -273,10 +284,13 @@ function addOutput(text) {
  * Throw the conversation away. Called from exactly one place, on purpose.
  *
  * **There is no scrollback anywhere to get it back from.** The geist wire has
- * no replay frame and neither does the session's own protocol
+ * no replay frame for CONVERSATION and neither does the session's own protocol
  * (`coding-agent/src/core/socket-server/types.ts`: output, input_echo,
  * client_joined, client_left, session_metadata, error) — a session streams to
- * whoever is attached at the time and remembers nothing for whoever is not. So
+ * whoever is attached at the time and remembers nothing for whoever is not.
+ * (A still-pending `permission_request` is the one exception, and it is not
+ * scrollback: the agent is parked on it, so it is re-sent to a client that
+ * attaches — see {@link permissionAsks}.) So
  * what this clears is the only copy, and clearing it because a socket died
  * would lose the conversation for good (R33-REACH.9). A reconnect therefore
  * preserves the transcript and re-attaches; only a deliberate switch to a
@@ -288,6 +302,177 @@ function clearTranscript() {
 	transcriptEl.append(transcriptEmptyEl);
 	transcriptEmptyEl.hidden = false;
 	agentEntry = null;
+	// The elements those entries point at have just been thrown away; keeping the
+	// index would make a replayed ask "update" a node that is no longer in the
+	// document, which renders as the ask silently not arriving.
+	permissionAsks.clear();
+}
+
+/* ------------------------------------------------------------ permission -- */
+
+/**
+ * One labelled fact of a permission ask.
+ *
+ * Two elements, both filled with `textContent`, because the value is the part an
+ * attacker chose: it is the model's tool name, the model's command, the model's
+ * path. It arrives ALREADY neutralized and bounded — every forbidden code point
+ * replaced one for one, the middle elided with a `…[n chars elided]…` marker so
+ * the decisive tail survives — and this page must not re-derive, re-sanitize or
+ * re-elide any of it. Rendering it verbatim into a text node is the whole job.
+ */
+function permissionFact(parent, label, value) {
+	const row = document.createElement("div");
+	row.className = "permission-row";
+	// Which typed field this row IS, kept out of the rendered text so a surface
+	// test can name one without pattern-matching a label a translator may change.
+	row.dataset.fact = label;
+
+	const name = document.createElement("span");
+	name.className = "permission-label";
+	name.textContent = label;
+
+	const shown = document.createElement("span");
+	shown.className = "permission-value";
+	shown.textContent = value;
+
+	row.append(name, shown);
+	parent.append(row);
+	return row;
+}
+
+/**
+ * Draw — or redraw — a permission ask (R34-PERM.1).
+ *
+ * **Its own element, never the assistant bubble.** `addOutput` concatenates
+ * streamed text into one shared `.entry[data-kind="agent"]`, so an ask appended
+ * there would inherit that bubble's direction and typography and read as
+ * something the agent said. What is being approved is not narration: it gets a
+ * container of its own, with its own `dir="ltr"` (console.css pairs that with
+ * `unicode-bidi: isolate-override`) so no residual direction in an
+ * attacker-chosen string can reorder the button labels underneath it.
+ *
+ * **The buttons come from `options`, never from the text.** Each is one member
+ * of the frozen set the session offered, labelled with `option.label` and
+ * carrying `option.id` — the only thing an answer may name. Parsing choices out
+ * of a rendered sentence would let the sentence invent one.
+ */
+function renderPermissionRequest(frame) {
+	transcriptEmptyEl.hidden = true;
+	let ask = permissionAsks.get(frame.requestId);
+	if (!ask) {
+		const root = document.createElement("div");
+		root.className = "entry permission";
+		root.dataset.kind = "permission";
+		root.dataset.requestId = frame.requestId;
+		// An attribute, not a style: `dir` is what gives the element a base
+		// direction for the CSS override to isolate against.
+		root.dir = "ltr";
+
+		const heading = document.createElement("div");
+		heading.className = "permission-heading";
+
+		const facts = document.createElement("div");
+		facts.className = "permission-facts";
+
+		const notice = document.createElement("p");
+		notice.className = "permission-notice";
+		notice.hidden = true;
+
+		const options = document.createElement("div");
+		options.className = "permission-options";
+
+		const outcome = document.createElement("p");
+		outcome.className = "permission-outcome";
+		outcome.hidden = true;
+
+		root.append(heading, facts, notice, options, outcome);
+		transcriptEl.append(root);
+		ask = { root, heading, facts, notice, options, outcome, resolved: false };
+		permissionAsks.set(frame.requestId, ask);
+	}
+
+	ask.heading.textContent = frame.title;
+
+	// Rebuilt rather than patched: a replay carries the same frame the first
+	// delivery did, so "update in place" is the same rows written again.
+	ask.facts.textContent = "";
+	permissionFact(ask.facts, "tool", frame.toolName);
+	permissionFact(ask.facts, "cwd", frame.cwd);
+	if (typeof frame.command === "string") permissionFact(ask.facts, "command", frame.command);
+	if (typeof frame.path === "string") permissionFact(ask.facts, "path", frame.path);
+	if (typeof frame.operation === "string") permissionFact(ask.facts, "operation", frame.operation);
+	if (frame.message) permissionFact(ask.facts, "reason", frame.message);
+
+	// Said out loud, because the decision is being made on an abbreviated string.
+	// How much was dropped is not a separate field on this wire: it travels
+	// INSIDE the text, as the `…[n chars elided]…` marker the producer left where
+	// it cut, which is the only place it can be trusted to line up with what is
+	// on screen.
+	ask.notice.hidden = frame.truncated !== true;
+	ask.notice.textContent =
+		frame.truncated === true ? "shortened to fit — the middle was elided, the end is intact" : "";
+
+	// An ask that has already ended offers nothing: its controls were replaced by
+	// the resolution line and a replay must not put them back.
+	if (!ask.resolved) {
+		ask.options.textContent = "";
+		ask.options.hidden = false;
+		for (const option of frame.options ?? []) {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "permission-option";
+			button.dataset.optionId = option.id;
+			button.textContent = option.label;
+			button.addEventListener("click", () => answerPermission(frame.requestId, option.id));
+			ask.options.append(button);
+		}
+	}
+
+	transcriptEl.scrollTop = transcriptEl.scrollHeight;
+	return ask;
+}
+
+/**
+ * Answer an ask, then stop offering to answer it again.
+ *
+ * The buttons are DISABLED rather than removed: the ask is not over until the
+ * session says it is — a `permission_resolved` naming another surface is a
+ * perfectly ordinary reply to this tap — and taking the question off screen the
+ * instant it was tapped would leave nothing to attach that answer to.
+ */
+function answerPermission(requestId, optionId) {
+	const ask = permissionAsks.get(requestId);
+	if (!ask || ask.resolved) return;
+	if (!send({ type: "permission_response", clientId: CLIENT_ID, requestId, optionId })) return;
+	for (const button of ask.options.querySelectorAll(".permission-option")) {
+		button.disabled = true;
+		if (button.dataset.optionId === optionId) button.dataset.chosen = "true";
+	}
+	ask.outcome.hidden = false;
+	ask.outcome.textContent = "sent — waiting for the session to settle it";
+}
+
+/**
+ * The resolution echo reaching a browser (R34-PERM.2).
+ *
+ * Whoever decided, every capable client is told — so this is what takes a dead
+ * dialog down on the phone that did NOT answer, and it says which surface and
+ * which client did, rather than leaving a question mark where a decision was
+ * made. A resolution for an ask this page never drew is nothing to draw: there
+ * is no dialog here to retire.
+ */
+function renderPermissionResolved(frame) {
+	const ask = permissionAsks.get(frame.requestId);
+	if (!ask) return;
+	ask.resolved = true;
+	ask.root.dataset.decision = frame.decision;
+	ask.options.textContent = "";
+	ask.options.hidden = true;
+	ask.outcome.hidden = false;
+	const chosen = frame.chosenOptionId ? ` (${frame.chosenOptionId})` : "";
+	const by = frame.clientId ? ` by ${frame.clientId}` : "";
+	ask.outcome.textContent = `${frame.decision}${chosen} — decided on ${frame.surface}${by}`;
+	transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
 
 /* --------------------------------------------------------------- viewport -- */
@@ -558,6 +743,19 @@ function receive(frame) {
 		case "input_echo":
 			agentEntry = null;
 			addEntry("peer", frame.data);
+			break;
+
+		// A decision the agent is parked on, waiting for a human (R34-PERM.1).
+		// `agentEntry` is dropped first so whatever the agent streams AFTER the ask
+		// opens a new bubble instead of continuing the one the ask interrupted.
+		case "permission_request":
+			agentEntry = null;
+			renderPermissionRequest(frame);
+			break;
+
+		// How that ask ended, wherever it was answered (R34-PERM.2).
+		case "permission_resolved":
+			renderPermissionResolved(frame);
 			break;
 
 		case "client_joined":

@@ -513,9 +513,14 @@ export class PermissionRegistry {
  *
  * The whole rule, in one place:
  *
- *  - `input` has no option ids and never had any: EVERY string is a valid answer, carried verbatim
- *    as the answer itself. Refusing free text here would hang the agent on an ask the client
- *    rendered as fully answerable.
+ *  - `input` OFFERS NOTHING — it has no option ids and never had any — so EVERY string is a valid
+ *    answer, carried verbatim as the answer itself. Refusing free text here would hang the agent on
+ *    an ask the client rendered as fully answerable. The condition is the EMPTY OFFERED SET, not the
+ *    method name: keying it on `method === "input"` alone made "an answer must name an offered
+ *    option" depend on an invariant maintained in a different module (the decorator's
+ *    `NO_OFFERED_OPTIONS`), and an `input` ask that ever carried a vocabulary would have accepted —
+ *    and CONSUMED — an id nobody offered. Property (3) of this file holds for every method now,
+ *    whoever builds the ask.
  *  - otherwise the id must be one of the ids that were OFFERED, and what it means is that option's
  *    OWN `decision` — read off the option, never derived from its index, its id or its label.
  *  - an offered option that declares no `decision` (a plain `select`, whose entries are choices
@@ -539,7 +544,7 @@ export class PermissionRegistry {
  * `approved`, because `cancelled` grants nothing.
  */
 export function decisionFor(entry: PermissionEntry, optionId: string): TerminalDecision | undefined {
-	if (entry.method === "input") return "approved";
+	if (entry.method === "input" && entry.options.length === 0) return "approved";
 	const chosen = entry.options.find((option) => option.id === optionId);
 	if (chosen === undefined) return undefined;
 	if (chosen.decision === "deny") return "denied";

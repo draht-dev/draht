@@ -541,6 +541,14 @@ interface BuiltRequest {
  * decisive TAIL. `truncated` is the OR of every field's own verdict, so a surface can say that a
  * decision is being made on an abbreviated string.
  *
+ * THAT OR STARTS FROM THE PRODUCER'S VERDICT, NOT FROM `false`. The text arriving in `detail` was
+ * already neutralized-and-bounded at construction, at a budget EIGHT TIMES TIGHTER than the wire's
+ * (512 graphemes against `command`'s 4000) — so a 5000-character command reaches this function
+ * already ~530 characters long, every `bound` call below leaves it untouched, and an OR that began
+ * at `false` reported `truncated: false` about a string the human was shown 4,572 characters short
+ * of. Re-bounding here can only ever discover elisions THIS function performs; the producer's is
+ * unrecoverable from the value, so it is carried on the detail and read back below.
+ *
  * Returns `undefined` when the ask cannot be carried WITHOUT CHANGING WHAT IS OFFERED — an option
  * id the wire cannot hold, or more options than it can carry. Repairing that would mean offering a
  * different vocabulary than the caller authorised.
@@ -552,7 +560,10 @@ function buildRequestFrame(ask: RelayAsk, sessionCwd: string, registryExpiryMs: 
 	const detail: PermissionAskDetail | undefined =
 		ask.detail !== undefined && ask.detail.kind === "tool_permission" ? ask.detail : undefined;
 
-	let truncated = false;
+	// Seeded, not initialised to `false`: see the note above. A detail that never elided says
+	// nothing, and a detail from a producer that does not carry the flag at all leaves this `false`
+	// exactly as before — so this is additive, never a source of a fabricated `true`.
+	let truncated = detail?.truncated === true;
 	const bound = (raw: string, budget: number): string => {
 		const result = boundedSafeText(raw, budget);
 		truncated = truncated || result.truncated;
@@ -596,7 +607,7 @@ function buildRequestFrame(ask: RelayAsk, sessionCwd: string, registryExpiryMs: 
 	if (detail?.command !== undefined) frame.command = bound(detail.command, FIELD_BUDGET.command);
 	if (detail?.path !== undefined) frame.path = bound(detail.path, FIELD_BUDGET.path);
 	if (detail?.operation !== undefined) frame.operation = bound(detail.operation, FIELD_BUDGET.operation);
-	// Set last: every `bound` call above contributes to it.
+	// Set last: every `bound` call above contributes to it, on top of the producer's own verdict.
 	frame.truncated = truncated;
 
 	return { frame, options };

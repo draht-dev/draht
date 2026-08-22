@@ -626,9 +626,27 @@ const TOOL_PERMISSION_OPTIONS: readonly { id: string; label: string; decision: "
 	Object.freeze({ id: "deny", label: "No", decision: "deny" as const }),
 ]);
 
-/** Neutralize-and-bound a single wire-bound string — in clusters AND bytes — keeping only the safe value. */
-function safeField(raw: string): string {
-	return boundedSafeText(raw, PERMISSION_DETAIL_MAX_GRAPHEMES, PERMISSION_DETAIL_MAX_BYTES).value;
+/** Accumulates the elision verdicts of every field of one detail. */
+interface ElisionVerdict {
+	truncated: boolean;
+}
+
+/**
+ * Neutralize-and-bound a single wire-bound string — in clusters AND bytes — RECORDING the verdict.
+ *
+ * `verdict` is a required parameter and not an optional convenience: this function used to return
+ * `boundedSafeText(...).value` and nothing else, and every caller silently dropped `.truncated`.
+ * Making the accumulator part of the signature is what stops a new field being added tomorrow that
+ * elides in silence — there is no way to call this and not answer the question.
+ */
+function safeField(raw: string, verdict: ElisionVerdict): string {
+	const bounded = boundedSafeText(raw, PERMISSION_DETAIL_MAX_GRAPHEMES, PERMISSION_DETAIL_MAX_BYTES);
+	if (bounded.truncated) verdict.truncated = true;
+	// `bounded.originalLength` is deliberately NOT carried: `PermissionRequestFrameSchema` in
+	// packages/geist-protocol/src/wire.ts has no field for it, so putting it on the detail would
+	// produce a number that reaches no wire. The elision marker inside `value` already names the
+	// count, which is how a surface recovers the original length today.
+	return bounded.value;
 }
 
 /**
@@ -640,15 +658,17 @@ function safeField(raw: string): string {
  */
 function buildPermissionAskDetail(event: ToolCallEvent, ctx: ExtensionContext, reason: string): PermissionAskDetail {
 	const input = (event.input ?? {}) as Record<string, unknown>;
+	const verdict: ElisionVerdict = { truncated: false };
 	const detail: PermissionAskDetail = {
 		kind: "tool_permission",
-		toolCallId: safeField(event.toolCallId),
-		toolName: safeField(event.toolName),
+		toolCallId: safeField(event.toolCallId, verdict),
+		toolName: safeField(event.toolName, verdict),
 		// `ctx.cwd` is the raw, un-normalised `config.cwd`; a symlinked worktree would otherwise
 		// read as a different project on the answering surface.
-		cwd: safeField(canonicalizePath(ctx.cwd)),
-		reason: safeField(reason),
+		cwd: safeField(canonicalizePath(ctx.cwd), verdict),
+		reason: safeField(reason, verdict),
 		options: TOOL_PERMISSION_OPTIONS,
+		truncated: false,
 	};
 
 	const command = typeof input.command === "string" ? input.command : undefined;
@@ -656,15 +676,19 @@ function buildPermissionAskDetail(event: ToolCallEvent, ctx: ExtensionContext, r
 	const plainPath = typeof input.path === "string" ? input.path : undefined;
 
 	if (command !== undefined) {
-		detail.command = safeField(command);
+		detail.command = safeField(command, verdict);
 	} else if (filePath !== undefined || plainPath !== undefined) {
-		detail.path = safeField((filePath ?? plainPath) as string);
+		detail.path = safeField((filePath ?? plainPath) as string, verdict);
 	} else {
 		// Every extension tool takes `Record<string, unknown>`, so there is always SOMETHING to
 		// show. Serializing the whole argument object beats an empty ask that asks the human to
 		// approve an unknown action.
-		detail.operation = safeField(serializeToolInput(input));
+		detail.operation = safeField(serializeToolInput(input), verdict);
 	}
+
+	// Set LAST: the command/path/operation branch above is the field most likely to be elided, and
+	// it is assigned after the literal. Reading `verdict` any earlier reports on a partial detail.
+	detail.truncated = verdict.truncated;
 
 	return detail;
 }

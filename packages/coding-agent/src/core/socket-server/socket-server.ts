@@ -419,7 +419,11 @@ export class SocketServer {
 	}
 
 	/**
-	 * Set callback fired right after a client has been sent `session_metadata`.
+	 * Set callback fired right after a client has been sent `session_metadata`,
+	 * for the clients that could actually be sent a permission frame.
+	 *
+	 * See the attach case for the gate and for what does — and does not —
+	 * authenticate the peer being replayed to.
 	 */
 	onAttachReplay(callback: (clientId: string) => void): void {
 		this.#onAttachReplay = callback;
@@ -637,10 +641,31 @@ export class SocketServer {
 				};
 				this.#send(socket, metadata);
 
+				// ── replay (R34-PERM.6) ───────────────────────────────────────────────
+				//
 				// Whatever holds unanswered asks gets its chance now: the client is
 				// registered and has its metadata, so a replayed ask lands on a surface
-				// that already knows which session it is looking at.
-				this.#onAttachReplay?.(message.clientId);
+				// that already knows which session it is looking at. This fires on EVERY
+				// attach, including a reattach under a clientId this server has seen
+				// before — a reconnecting peer is a new connection with nothing on its
+				// screen, and it may be a whole new process.
+				//
+				// Gated by exactly the predicate emission is gated by, so a client that
+				// could not have been sent an ask is not offered a backlog of them
+				// either: a read-only peer may watch but never decide, and a client that
+				// never declared PERMISSION_RELAY_CAPABILITY cannot render the dialog.
+				//
+				// WHAT AUTHENTICATES THE CLIENT BEING REPLAYED TO, stated rather than
+				// invented: on this socket, nothing beyond the filesystem. The socket dir
+				// is 0700 and the socket itself 0600 (see start()), so reaching this line
+				// already means the peer runs as this user; `clientId` is SELF-ASSERTED
+				// and is an addressing label, not a credential. The device credential
+				// lives one hop up, at the gateway's `/attach`. A replay therefore hands
+				// a local peer nothing it could not have had by attaching a moment
+				// earlier and receiving the same ask in the ordinary broadcast.
+				if (this.#mayReceivePermissionFrames(client)) {
+					this.#onAttachReplay?.(message.clientId);
+				}
 
 				// Notify other clients
 				const joined: ServerMessage = {
@@ -735,6 +760,18 @@ export class SocketServer {
 
 	/**
 	 * Handle client disconnect.
+	 *
+	 * R34-PERM.6 — DO NOT MAKE THIS TOUCH A PENDING PERMISSION ASK. It removes a
+	 * CONNECTION and resets what that connection had been shown; it must never
+	 * drop, resolve, expire or cancel a registry entry. A client that was shown
+	 * an ask and then died would otherwise take the ask with it: the agent stays
+	 * parked in `beforeToolCall` forever with no surface left that can answer,
+	 * which is the wedge documented at `modes/rpc/rpc-mode.ts`. The ask stays
+	 * PENDING and is replayed to whoever attaches next, including this same
+	 * client coming back under the same id.
+	 *
+	 * Tidying this up so that "leaving cleans up after itself" is exactly the
+	 * regression this comment exists to stop.
 	 */
 	#handleClientDisconnect(clientId: string): void {
 		const client = this.#clients.get(clientId);
@@ -742,9 +779,9 @@ export class SocketServer {
 
 		this.#clients.delete(clientId);
 
-		// Before the other clients are told, because a listener that keeps
-		// per-connection state has to have dropped it by the time anything
-		// observable about this session changes.
+		// Per-connection state ONLY — see the note above. Before the other clients
+		// are told, because a listener that keeps per-connection state has to have
+		// dropped it by the time anything observable about this session changes.
 		this.#onClientDisconnect?.(clientId);
 
 		// Notify other clients

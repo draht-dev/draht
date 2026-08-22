@@ -1,4 +1,4 @@
-import { resolveSocketDir } from "@draht/geist-core";
+import { resolveSessionsDir, resolveSocketDir } from "@draht/geist-core";
 import { Hono } from "hono";
 import { websocket } from "hono/bun";
 import { except } from "hono/combine";
@@ -57,6 +57,16 @@ export interface GatewayConfig {
 	 * at one throwaway directory through `DRAHT_CODING_AGENT_DIR`.
 	 */
 	socketDir?: string;
+	/**
+	 * Directory the machine's recorded sessions live in, served by `GET /history`.
+	 *
+	 * Defaults to the same `<agent dir>/sessions` the `draht` binary writes, off
+	 * the same `DRAHT_CODING_AGENT_DIR` that relocates {@link socketDir} — so a
+	 * test that points a spawned draht and a daemon at one throwaway directory
+	 * gets the live fleet and the history from that one directory, and a
+	 * developer's real store is never read by a test daemon.
+	 */
+	sessionsDir?: string;
 	/**
 	 * The per-device credential store `/attach` authenticates against
 	 * (R33-REACH.5).
@@ -307,6 +317,7 @@ export function createServer(config: GatewayConfig): ServerHandle {
 		"/",
 		createFleetRoutes({
 			socketDir: config.socketDir ?? resolveSocketDir(),
+			sessionsDir: config.sessionsDir ?? resolveSessionsDir(),
 			authToken: config.authToken,
 			devices: deviceProvider(config.devices),
 			// Derived from the same window the handler above enforces, so the two

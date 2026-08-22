@@ -5,6 +5,8 @@ import {
 	type AuthorizationRequest,
 	type AuthorizationVerdict,
 	buildFleetFrame,
+	HistoryCursorError,
+	HistoryIndex,
 	type RendererConnection,
 } from "@draht/geist-core";
 import { DEFAULT_TRANSPORT_LIMITS, type TransportLimits } from "@draht/geist-protocol";
@@ -82,6 +84,17 @@ import { decodeWsBearerSubprotocol } from "../ws-bearer";
 export interface FleetRoutesOptions {
 	/** Directory the fleet publishes itself in (`<agent dir>/sockets`). */
 	socketDir: string;
+	/**
+	 * Directory the machine's recorded sessions live in (`<agent dir>/sessions`),
+	 * served by `GET /history` (R35-ALWAYS.6).
+	 *
+	 * A sibling of {@link socketDir} and not derived from it, because the two are
+	 * genuinely different stores: one holds ephemeral socket/lock pairs for
+	 * processes alive right now, the other holds every session this machine has
+	 * ever recorded. They share only the agent directory and the environment
+	 * variable that relocates it.
+	 */
+	sessionsDir: string;
 	/** Transport caps to advertise and enforce. Defaults to the protocol's. */
 	limits?: TransportLimits;
 	/**
@@ -435,6 +448,83 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 	// The same body the `fleet` frame carries, so a renderer parses one shape
 	// whether the list arrived over HTTP or was pushed after `hello`.
 	app.get("/fleet", (c) => c.json(buildFleetFrame(options.socketDir)));
+
+	/**
+	 * One index per surface, and therefore one per daemon process.
+	 *
+	 * Its caches are in memory and are never written to disk (R35-ALWAYS.3): a
+	 * persisted index under `~/.draht` would be a second unbounded artifact
+	 * needing its own ownership and hygiene story, to save a rebuild that costs
+	 * roughly 0.5–2 s once, at daemon start.
+	 */
+	const history = new HistoryIndex(options.sessionsDir);
+
+	/**
+	 * `GET /history` — every session this machine has recorded (R35-ALWAYS.6).
+	 *
+	 * Behind the bearer middleware for free: `createServer`'s `except([...])`
+	 * list is `/health`, `/ui`, `/ui/*` and `/attach`, and this is none of them.
+	 * Session paths and project directories are exactly as private as the fleet
+	 * listing next to it.
+	 *
+	 * Query: `project` (an ABSOLUTE path, matched against each header's `cwd` —
+	 * never against the slug directory, which is lossy enough that two different
+	 * projects can share one), `limit` (default 50, clamped to 500) and `cursor`
+	 * (opaque, from a previous page's `nextCursor`). Newest file first.
+	 *
+	 * The body carries RAW history rows and nothing else. `origin`, `attachable`,
+	 * `resumable` and `status` are deliberately absent: merging these rows
+	 * against the live socket fleet, and the wire schema that carries the merged
+	 * shape, are owned by a later task (R35-ALWAYS.7, R35-ALWAYS.8). Adding them
+	 * here would put two owners on one shape.
+	 *
+	 * `counters` is not decoration. R35-ALWAYS.6's budget is stated as a per-file
+	 * invariant — ≤1 open, ≤4,096 bytes, ≤2 stats — precisely because warm
+	 * milliseconds are a page-cache measurement that rots as the store grows, and
+	 * these counters are how the acceptance reads that invariant off a real
+	 * daemon over the wire instead of asserting a stopwatch.
+	 */
+	app.get("/history", (c) => {
+		const limitParam = c.req.query("limit");
+		let limit: number | undefined;
+		if (limitParam !== undefined && limitParam !== "") {
+			limit = Number(limitParam);
+			if (!Number.isFinite(limit) || limit < 1) {
+				return c.json({ error: `limit must be a positive integer, got ${limitParam}` }, 400);
+			}
+		}
+
+		const project = c.req.query("project");
+		if (project !== undefined && project !== "" && !project.startsWith("/")) {
+			// A relative project would be resolved against the DAEMON's cwd, which
+			// is not the cwd of anything the caller can see. Refused rather than
+			// silently answered with the wrong project's history.
+			return c.json({ error: `project must be an absolute path, got ${project}` }, 400);
+		}
+
+		try {
+			const page = history.page({
+				project: project === "" ? undefined : project,
+				limit,
+				cursor: c.req.query("cursor"),
+			});
+			return c.json({
+				type: "history",
+				total: page.total,
+				nextCursor: page.nextCursor,
+				sessions: page.sessions.map((session) => ({
+					id: session.id,
+					cwd: session.cwd,
+					startedAt: session.startedAt,
+					path: session.path,
+				})),
+				counters: page.counters,
+			});
+		} catch (error) {
+			if (error instanceof HistoryCursorError) return c.json({ error: error.message }, 400);
+			throw error;
+		}
+	});
 
 	app.get(
 		"/attach",

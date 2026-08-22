@@ -8,10 +8,66 @@ import path from "node:path";
 import { APP_NAME, getAgentDir } from "../../config.js";
 import type { AgentSession } from "../agent-session.js";
 import type { PermissionRelay } from "../permission-relay/types.js";
+import { getSoakLog, SOAK_EVENTS, type SoakLog, startupDeltaMs } from "../soak/soak-log.js";
 import { PermissionDelivery } from "./permission-delivery.js";
 import { type PermissionEntry, PermissionRegistry } from "./permission-registry.js";
 import { createSocketPermissionRelay, type SocketPermissionRelay } from "./permission-relay.js";
 import { SocketServer } from "./socket-server.js";
+
+/**
+ * SOAK RECORDING (R35-ALWAYS.11). Every seam below hands the process-wide soak log
+ * one line and returns; nothing here may do anything else.
+ *
+ * THE THREE RULES, and they are the whole contract of this helper:
+ *   • NEVER stdout, NEVER stderr. The TUI owns the terminal and a default-on
+ *     session's streams are asserted identical to a feature-off run, so one stray
+ *     byte from here surfaces as somebody else's regression.
+ *   • NEVER throw into a caller. `SoakLog` swallows its own failures; this wrapper
+ *     covers the one thing it cannot, which is failing to be constructed at all.
+ *   • NEVER build a record any other way than `log.record()` / `log.heartbeat()`.
+ *     Those stamp the mandatory fields (wall, pid, rss, sessionId…) LAST, over the
+ *     caller's, which is what keeps a seam field innocently named `pid` — the lock
+ *     files carry one — from shadowing the record's own and getting the whole line
+ *     dropped by the reader as malformed.
+ *
+ * SCOPE LIMIT, stated rather than implied: this records what the SESSION PROCESS
+ * observes. A tailnet drop, a daemon restart, a gateway-side refusal — none of
+ * those are visible from here, and Phase 35 does not cover them. The daemon half
+ * is a SEPARATE writer implementing the file-format contract documented at the top
+ * of `soak/soak-log.ts`; it must not import this module or share one with it,
+ * because Phase 38's boundary gate forbids a module spanning that line. The two
+ * halves are joined at verdict time by `sessionId` and `wall`.
+ */
+function soak(use: (log: SoakLog) => void): void {
+	try {
+		use(getSoakLog());
+	} catch {
+		// Deliberately empty, and deliberately not logged anywhere.
+	}
+}
+
+/**
+ * A prompt that arrived over the socket and did not simply run.
+ *
+ * The prompt TEXT is never recorded — only how long it was. This file writes into
+ * a log that is kept for weeks and read by a verdict tool; "what did the operator
+ * type from their phone" is not a question a resilience soak needs answered, and a
+ * log that could answer it is one more place a secret can end up.
+ */
+function recordPromptRejected(code: string, clientId: string, prompt: string, reason?: string): void {
+	soak((log) =>
+		log.record(
+			SOAK_EVENTS.PROMPT_REJECTED,
+			{
+				code,
+				clientId,
+				promptChars: prompt.length,
+				...(reason === undefined ? {} : { reason }),
+			},
+			code === "PROMPT_FAILED" ? "error" : "info",
+		),
+	);
+}
 
 export interface AttachableSessionOptions {
 	session: AgentSession;
@@ -114,12 +170,45 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 	/** Ends every pending ask fail-closed. Set alongside {@link relay}; null when nothing is bound. */
 	let cancelPending: (() => void) | null = null;
 
-	const bind = async (session: AgentSession, cwd: string): Promise<SocketServer> => {
+	/**
+	 * The last thing this handle records, from whichever exit path reached it.
+	 *
+	 * Both callers are guarded by `stopped`, so exactly one `socket_teardown` is
+	 * written per handle — which is what makes "every bind has a teardown" a claim a
+	 * verdict can check rather than a hope. The heartbeat is stopped here and the
+	 * client-count provider dropped with it: it closes over a server that is about to
+	 * be gone.
+	 */
+	const recordTeardown = (exitPath: "stop" | "stopSync"): void => {
+		soak((log) => {
+			log.record(SOAK_EVENTS.SOCKET_TEARDOWN, {
+				exitPath,
+				socketPath: server?.socketPath ?? null,
+				clients: server?.clientCount ?? 0,
+			});
+			log.stopHeartbeat();
+			log.setClientCountProvider(undefined);
+		});
+	};
+
+	/**
+	 * `previousSessionId` is null for the FIRST bind of this process and carries the
+	 * outgoing session's id for every later one, which is the only thing that tells a
+	 * `socket_bind` from a `socket_rebind` in the log: both end with a live socket,
+	 * but only one of them means a client that was attached has been dropped.
+	 */
+	const bind = async (session: AgentSession, cwd: string, previousSessionId: string | null): Promise<SocketServer> => {
 		// Get session ID from the session manager header
 		const header = session.sessionManager.getHeader();
 		if (!header) {
 			throw new Error("Cannot make session attachable: no session header found");
 		}
+
+		// Stamped BEFORE start(), so a bind that is REFUSED — the socket cap, a busy
+		// twin — still records under the session it was refused for. Everything the
+		// writer stamps from here on carries this id, which is what lets Phase 39 join
+		// this stream against the session's own durable rows.
+		soak((log) => log.setSessionId(header.id));
 
 		const next = new SocketServer({
 			sessionId: header.id,
@@ -131,6 +220,29 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 
 		await next.start();
 		unsubscribe = subscribeToSession(session, next);
+
+		soak((log) => {
+			// The live client count for the heartbeat comes from the server itself, so a
+			// gauge never disagrees with the thing it measures.
+			log.setClientCountProvider(() => next.clientCount);
+			log.record(previousSessionId === null ? SOAK_EVENTS.SOCKET_BIND : SOAK_EVENTS.SOCKET_REBIND, {
+				socketPath: next.socketPath,
+				cwd,
+				// R39-RESIL.6 wants the startup delta by name. It equals the `uptimeMs` the
+				// writer stamps on every record; carrying it explicitly means a verdict tool
+				// can ask a bind for "how long did this session take to publish itself" without
+				// knowing that the two are the same number.
+				startupDeltaMs: startupDeltaMs(),
+				...(previousSessionId === null ? {} : { previousSessionId, outcome: "bound" }),
+			});
+			// ONE heartbeat right now, before the interval's first tick. A session shorter
+			// than the heartbeat period would otherwise contribute no gauge at all, and the
+			// fd/socket gauges at bind are the baseline every later heartbeat is read
+			// against. `startHeartbeat` is idempotent and its timer is unref'd, so a rebind
+			// neither starts a second one nor keeps the process alive.
+			log.heartbeat();
+			log.startHeartbeat();
+		});
 
 		// ── the permission relay for THIS session ──────────────────────────────────────────────
 		const registry = new PermissionRegistry({ sessionId: header.id });
@@ -168,11 +280,22 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 		// Fired right after `session_metadata`, so a client that attached mid-ask is shown it on a
 		// surface that already knows which session it is looking at. Replay is a SEND, not a state
 		// transition: the ask stays pending until somebody actually answers it.
+		//
+		// NOT the `client_attach` soak seam, though it is the obvious candidate and the
+		// plan named it: this callback is gated by `#mayReceivePermissionFrames`, so a
+		// read-only peer, or any client built before geist/0.3 that declares no
+		// capabilities, attaches WITHOUT reaching it. Recording here would have paired
+		// every such client's `client_detach` — which is ungated — with no attach at all,
+		// and Phase 39 counts attaches against detaches. Both records are therefore made
+		// one layer down, at the connection bookkeeping in `socket-server.ts`, where the
+		// two seams are symmetric by construction.
 		next.onAttachReplay((clientId) => {
 			bound.replayTo(clientId);
 		});
 		// Per-connection bookkeeping only. The ask itself is untouched: a client that was shown an
 		// ask and then died must not take that ask with it.
+		// The matching half of the note above: `client_detach` is recorded in
+		// `socket-server.ts`, not here.
 		next.onClientDisconnect((clientId) => {
 			bound.forgetClient(clientId);
 		});
@@ -213,17 +336,23 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 						"The agent is mid-turn. Your prompt was queued and runs when the current turn finishes.",
 						"PROMPT_QUEUED",
 					);
+					// NO `requestId` here, and that is not an omission. A prompt over the
+					// socket is not a permission ask: it creates no `PermissionResolutionEntry`
+					// and there is nothing on the durable side to join it to. The records that
+					// DO carry one are the permission refusals in `socket-server.ts`.
+					recordPromptRejected("PROMPT_QUEUED", clientId, data);
 				})
 				.catch((error: unknown) => {
 					const message = error instanceof Error ? error.message : String(error);
 					next.sendErrorToClient(clientId, `Prompt failed: ${message}`, "PROMPT_FAILED");
+					recordPromptRejected("PROMPT_FAILED", clientId, data, message);
 				});
 		});
 
 		return next;
 	};
 
-	server = await bind(options.session, options.cwd);
+	server = await bind(options.session, options.cwd, null);
 
 	if (options.announce !== false) {
 		log(`\n🔗 Attachable session started: ${server.sessionId}`);
@@ -244,6 +373,9 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 
 		async rebind(nextSession: AgentSession, nextCwd: string): Promise<void> {
 			if (stopped) return;
+			// Read before anything is torn down: after the swap there is nothing left that
+			// remembers which session the socket used to carry.
+			const previousSessionId = server?.sessionId ?? null;
 			try {
 				unsubscribe?.();
 				unsubscribe = null;
@@ -269,7 +401,7 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 					await previous.stop();
 				}
 
-				server = await bind(nextSession, nextCwd);
+				server = await bind(nextSession, nextCwd, previousSessionId);
 			} catch (error) {
 				// A failed rebind must not break the session switch itself. The socket stays
 				// closed, so the session simply stops being attachable.
@@ -277,6 +409,20 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 				relay = null;
 				cancelPending = null;
 				const message = error instanceof Error ? error.message : String(error);
+				// A session that quietly stopped being attachable is exactly the kind of
+				// disappearance a week-long soak is run to catch, and the notice above goes
+				// to a terminal nobody will be reading in six days.
+				soak((log) => {
+					log.record(
+						SOAK_EVENTS.SOCKET_REBIND,
+						{ outcome: "failed", previousSessionId, reason: message },
+						"error",
+					);
+					// The provider closes over a server that no longer exists. The heartbeat
+					// itself keeps running: fd, rss and the directory gauges stay meaningful,
+					// and a gap in them would look like the process died.
+					log.setClientCountProvider(undefined);
+				});
 				warn(`Attachable session could not follow the session switch: ${message}`);
 			}
 		},
@@ -284,6 +430,11 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 		async stop(): Promise<void> {
 			if (stopped) return;
 			stopped = true;
+			// Recorded on ENTRY, not after the awaits below: `SocketServer.stop()` waits on
+			// peers that may take the full close grace period, and a teardown nobody
+			// recorded because the process was killed while waiting is a teardown Phase 39
+			// reads as a session that vanished.
+			recordTeardown("stop");
 			unsubscribe?.();
 			unsubscribe = null;
 			// Before the socket goes away: an unanswered ask fails closed, is announced, and is
@@ -299,6 +450,9 @@ export async function makeSessionAttachable(options: AttachableSessionOptions): 
 		stopSync(): void {
 			if (stopped) return;
 			stopped = true;
+			// Synchronous, like everything else on this path: the writer appends with
+			// `writeSync`, so this record survives `process.on("exit")` and a signal handler.
+			recordTeardown("stopSync");
 			try {
 				unsubscribe?.();
 			} catch {}

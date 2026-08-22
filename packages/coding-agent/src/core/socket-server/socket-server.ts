@@ -13,6 +13,7 @@ import { chmod, lstat, mkdir, readFile, rm, stat, writeFile } from "node:fs/prom
 import { createServer, type Server, type Socket } from "node:net";
 import path from "node:path";
 import { assertValidSessionId } from "../session-manager.js";
+import { getSoakLog, SOAK_EVENTS, type SoakFields } from "../soak/soak-log.js";
 import { currentUid, discoverSocketSessions, pidOwnership } from "./discovery.js";
 import {
 	CLIENT_MODES,
@@ -53,6 +54,42 @@ const UNWRITTEN_LOCK_STALE_MS = 10_000;
  * Overridable per server via {@link SocketServerOptions.maxLiveSockets}.
  */
 export const DEFAULT_MAX_LIVE_SOCKETS = 64;
+
+/**
+ * Longest client-supplied string this file will copy into the soak log.
+ *
+ * A `clientId` and a client `mode` arrive over the socket and are self-asserted.
+ * They are recorded because a soak verdict has to be able to name which peer
+ * churned — and bounded because the log is append-only for weeks and a peer must
+ * not be able to make one line of it megabytes long.
+ */
+const SOAK_LABEL_MAX = 128;
+
+/**
+ * One soak record, and nothing else: no stdout, no stderr, no throw. See the
+ * three rules at the head of the same helper in `session-integration.ts`; the
+ * helper is kept per-file rather than shared because the only places to share it
+ * from are `soak-log.ts` (a finished file this task may not edit) or a fourth
+ * module that would exist solely to hold six lines.
+ *
+ * `sessionId` is passed through as an ordinary field: the writer stamps its own
+ * over it whenever it has one — which it does for every session process, set at
+ * bind — and honours this one otherwise, so a `SocketServer` used outside a
+ * session still records under the id it was refused for.
+ */
+function soakRecord(event: string, fields: SoakFields, level: "info" | "warn" | "error" = "info"): void {
+	try {
+		getSoakLog().record(event, fields, level);
+	} catch {
+		// Deliberately empty, and deliberately not logged anywhere.
+	}
+}
+
+/** A client-supplied value, made safe to put in a record: a bounded string, always. */
+function soakLabel(value: unknown): string {
+	const text = typeof value === "string" ? value : JSON.stringify(value);
+	return (text ?? String(value)).slice(0, SOAK_LABEL_MAX);
+}
 
 export interface SocketServerOptions {
 	/** Session ID (used for socket filename) */
@@ -272,11 +309,37 @@ export class SocketServer {
 		// replaces one socket, it does not add one.
 		const others = live.filter((session) => session.sessionId !== this.#sessionId).length;
 		if (others >= this.#maxLiveSockets) {
+			// A refusal is the most interesting thing that can happen at a bind, and it is
+			// the one outcome that leaves NO socket behind for anything else to notice.
+			soakRecord(
+				SOAK_EVENTS.CLIENT_REJECTED,
+				{
+					reason: "socket_cap_reached",
+					sessionId: this.#sessionId,
+					cap: this.#maxLiveSockets,
+					liveSockets: others,
+				},
+				"warn",
+			);
 			throw new SocketCapReachedError(this.#sessionId, this.#maxLiveSockets, others, socketDir);
 		}
 
 		// Take ownership of the session id before touching the socket path.
-		await this.#claimLock();
+		try {
+			await this.#claimLock();
+		} catch (error) {
+			// The busy twin (`draht -c` in a second terminal) is the commonest default-on
+			// refusal there is and it is not environmental, so a soak that could not count
+			// them would mistake the phase's most likely papercut for silence.
+			if (error instanceof SocketSessionBusyError) {
+				soakRecord(
+					SOAK_EVENTS.CLIENT_REJECTED,
+					{ reason: "session_busy", sessionId: this.#sessionId, ownerPid: error.ownerPid },
+					"warn",
+				);
+			}
+			throw error;
+		}
 
 		try {
 			this.#server = createServer((socket) => this.#handleConnection(socket));
@@ -780,6 +843,17 @@ export class SocketServer {
 				// Check max clients
 				if (this.#clients.size >= this.#maxClients) {
 					this.#sendError(socket, "Maximum clients reached");
+					soakRecord(
+						SOAK_EVENTS.CLIENT_REJECTED,
+						{
+							reason: "max_clients",
+							sessionId: this.#sessionId,
+							clientId: soakLabel(message.clientId),
+							maxClients: this.#maxClients,
+							clientCount: this.#clients.size,
+						},
+						"warn",
+					);
 					socket.end();
 					return;
 				}
@@ -791,6 +865,17 @@ export class SocketServer {
 				// string that is refused.
 				if (!CLIENT_MODES.includes(message.mode)) {
 					this.#sendError(socket, `Unknown client mode ${JSON.stringify(message.mode)}`, "UNKNOWN_CLIENT_MODE");
+					soakRecord(
+						SOAK_EVENTS.CLIENT_REJECTED,
+						{
+							reason: "unknown_client_mode",
+							sessionId: this.#sessionId,
+							clientId: soakLabel(message.clientId),
+							code: "UNKNOWN_CLIENT_MODE",
+							mode: soakLabel(message.mode),
+						},
+						"warn",
+					);
 					socket.end();
 					return;
 				}
@@ -798,6 +883,16 @@ export class SocketServer {
 				// Check for duplicate client ID
 				if (this.#clients.has(message.clientId)) {
 					this.#sendError(socket, "Client ID already connected");
+					soakRecord(
+						SOAK_EVENTS.CLIENT_REJECTED,
+						{
+							reason: "duplicate_client_id",
+							sessionId: this.#sessionId,
+							clientId: soakLabel(message.clientId),
+							clientCount: this.#clients.size,
+						},
+						"warn",
+					);
 					socket.end();
 					return;
 				}
@@ -817,6 +912,19 @@ export class SocketServer {
 				};
 				this.#clients.set(message.clientId, client);
 				onAttach(message.clientId, message.mode);
+
+				// THE `client_attach` SEAM (R35-ALWAYS.11). Here, and not at the
+				// `onAttachReplay` hook one layer up, because this line is reached by EVERY
+				// client while that hook is gated on the permission capability — see the note
+				// at that callback in `session-integration.ts`. Recorded before the metadata
+				// goes out, so an attach that dies mid-write is still counted.
+				soakRecord(SOAK_EVENTS.CLIENT_ATTACH, {
+					clientId: soakLabel(message.clientId),
+					sessionId: this.#sessionId,
+					mode: soakLabel(message.mode),
+					capabilities: client.capabilities.map(soakLabel),
+					clientCount: this.#clients.size,
+				});
 
 				// Send session metadata
 				const metadata: ServerMessage = {
@@ -901,10 +1009,12 @@ export class SocketServer {
 					// "you are not that client", said the same way so neither answer is an
 					// oracle for which.
 					this.#sendError(socket, "Unknown client", "PERMISSION_NOT_ATTACHED");
+					this.#recordPermissionRefusal("permission_not_attached", "PERMISSION_NOT_ATTACHED", message);
 					return;
 				}
 				if (client.mode === "read-only") {
 					this.#sendError(socket, "Read-only clients cannot answer permissions", "PERMISSION_READ_ONLY");
+					this.#recordPermissionRefusal("permission_read_only", "PERMISSION_READ_ONLY", message);
 					return;
 				}
 				if (!client.capabilities.includes(PERMISSION_RELAY_CAPABILITY)) {
@@ -914,6 +1024,7 @@ export class SocketServer {
 						`Client did not declare the ${PERMISSION_RELAY_CAPABILITY} capability on attach`,
 						"PERMISSION_NOT_CAPABLE",
 					);
+					this.#recordPermissionRefusal("permission_not_capable", "PERMISSION_NOT_CAPABLE", message);
 					return;
 				}
 				if (!this.#onPermissionResponse) {
@@ -925,6 +1036,7 @@ export class SocketServer {
 						`No permission ask ${JSON.stringify(message.requestId)} is pending`,
 						"PERMISSION_UNKNOWN_REQUEST",
 					);
+					this.#recordPermissionRefusal("permission_unknown_request", "PERMISSION_UNKNOWN_REQUEST", message);
 					return;
 				}
 				this.#onPermissionResponse(message, message.clientId);
@@ -939,9 +1051,44 @@ export class SocketServer {
 				// never heard of it.
 				const unknown = (message as { type?: unknown }).type;
 				this.#sendError(socket, `Unknown message type ${JSON.stringify(unknown)}`, "UNKNOWN_MESSAGE_TYPE");
+				// Version skew, counted. A week of these from one peer is a renderer that
+				// needs upgrading, not a session that is misbehaving.
+				soakRecord(
+					SOAK_EVENTS.CLIENT_REJECTED,
+					{
+						reason: "unknown_message_type",
+						sessionId: this.#sessionId,
+						code: "UNKNOWN_MESSAGE_TYPE",
+						messageType: soakLabel(unknown),
+					},
+					"warn",
+				);
 				break;
 			}
 		}
+	}
+
+	/**
+	 * A permission ANSWER that was refused before anything could decide anything.
+	 *
+	 * These are the records that carry a `requestId`, which is what lets a verdict
+	 * join this stream against the durable `permission_resolution` rows the session
+	 * writes: an ask that has a refused answer here and no resolution there is a
+	 * decision that never reached the agent. Nothing about the decision itself is
+	 * duplicated into this log — the session store owns that.
+	 */
+	#recordPermissionRefusal(reason: string, code: string, message: PermissionResponseMessage): void {
+		soakRecord(
+			SOAK_EVENTS.CLIENT_REJECTED,
+			{
+				reason,
+				code,
+				sessionId: this.#sessionId,
+				clientId: soakLabel(message.clientId),
+				requestId: soakLabel(message.requestId),
+			},
+			"warn",
+		);
 	}
 
 	/**
@@ -964,6 +1111,18 @@ export class SocketServer {
 		if (!client) return;
 
 		this.#clients.delete(clientId);
+
+		// THE `client_detach` SEAM, symmetric with `client_attach` above: one record per
+		// connection that was ever registered, whatever ended it — a `detach` frame, a
+		// closed socket, or a peer that died. `#clients.get` guards re-entry, so a socket
+		// that both errors and closes is recorded once.
+		soakRecord(SOAK_EVENTS.CLIENT_DETACH, {
+			clientId: soakLabel(clientId),
+			sessionId: this.#sessionId,
+			mode: soakLabel(client.mode),
+			connectedMs: Date.now() - client.connectedAt.getTime(),
+			clientCount: this.#clients.size,
+		});
 
 		// Per-connection state ONLY — see the note above. Before the other clients
 		// are told, because a listener that keeps per-connection state has to have

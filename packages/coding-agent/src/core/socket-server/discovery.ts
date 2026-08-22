@@ -44,6 +44,7 @@ import { existsSync } from "node:fs";
 import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { uptime } from "node:os";
 import path from "node:path";
+import { getSoakLog, SOAK_EVENTS } from "../soak/soak-log.js";
 import type { SocketSessionInfo } from "./types.js";
 
 /**
@@ -65,6 +66,120 @@ export const DEBRIS_GRACE_MS = 10_000;
  * before a reboot and the reboot itself.
  */
 const PRE_BOOT_SLACK_MS = 300_000;
+
+/**
+ * What one discovery pass removed, and what it deliberately did not.
+ *
+ * This is the shape of the `sockets_reaped` soak record (R35-ALWAYS.11), and the
+ * reason it exists rather than a bare total: Phase 39 has to assert "zero orphaned
+ * .sock/.lock pairs after seven days" FROM THE LOG, not from one directory listing
+ * taken at verdict time — by then the evidence has been tidied away by the very
+ * sweep being measured.
+ *
+ * THE DISTINCTION THAT EARNS ITS KEEP is `reaped.deadPid` against
+ * `skipped.foreignPid`. {@link isProcessRunning} answers true on EPERM (O3), so a
+ * pid recycled by ANOTHER uid pins its pair as live forever — nothing here can
+ * clean that up, and nothing should: the uid checks (O1, O2) are what stop this
+ * process from deleting another user's files, and the price of that safety is a
+ * pair we can neither use nor remove. A soak that saw only a total would read that
+ * immortal pair as a leak in the reaper. Split out, it reads as exactly what it
+ * is, and a rising `skipped.foreignPid` on a machine with one user is a real
+ * finding rather than noise.
+ */
+interface ReapTally {
+	/** Files actually unlinked, by why. Counted in FILES, because that is what a directory listing counts. */
+	reaped: {
+		/** A pair whose lock names a process that no longer exists. */
+		deadPid: number;
+		/** A pair whose lock names a process that started before this machine last booted (O5). */
+		preBootLock: number;
+		/** A socket with no lock at all, past the debris grace (O4, class i). */
+		locklessSocket: number;
+		/** A regular file or symlink wearing a `.sock` name, past the debris grace (O4, class ii). */
+		notASocket: number;
+		/** A lock whose socket is gone and whose owner is gone with it. */
+		orphanLockDeadPid: number;
+		/** A lock whose socket is gone and which predates the last boot. */
+		orphanLockPreBoot: number;
+	};
+	/** Entries left strictly alone, by why. Never an error; each is a rule being obeyed. */
+	skipped: {
+		/** A `.sock` belonging to another uid (O1). */
+		foreignSocketUid: number;
+		/** A `.lock` belonging to another uid (O1). */
+		foreignLockUid: number;
+		/** Ours to read, but naming a LIVE process of another uid — EPERM (O2, O3). */
+		foreignPid: number;
+	};
+}
+
+function newReapTally(): ReapTally {
+	return {
+		reaped: {
+			deadPid: 0,
+			preBootLock: 0,
+			locklessSocket: 0,
+			notASocket: 0,
+			orphanLockDeadPid: 0,
+			orphanLockPreBoot: 0,
+		},
+		skipped: { foreignSocketUid: 0, foreignLockUid: 0, foreignPid: 0 },
+	};
+}
+
+/** Total files unlinked in this pass. */
+function reapedFileCount(tally: ReapTally): number {
+	return Object.values(tally.reaped).reduce((total, count) => total + count, 0);
+}
+
+/** Total entries left alone for an ownership reason. */
+function skippedCount(tally: ReapTally): number {
+	return Object.values(tally.skipped).reduce((total, count) => total + count, 0);
+}
+
+/**
+ * Publish one pass's tally, and only when it has something to say.
+ *
+ * A quiet sweep writes nothing: `discoverSocketSessions` runs on every session
+ * start and on every fleet read, and a record per no-op scan would be the bulk of
+ * a seven-day log. Silence here therefore means "nothing was removed and nothing
+ * was skipped", which is the common case and the one a verdict does not need
+ * evidence for.
+ *
+ * Never stdout, never stderr, never a throw — a hygiene sweep may not be what
+ * breaks a session start.
+ *
+ * NO `sessionId` IS SUPPLIED HERE, on purpose. The writer stamps its own whenever
+ * it has one, which it does for every session process — the id is set at bind,
+ * before `SocketServer.start()` runs this sweep. The one caller that reaches this
+ * function without a session of its own is `draht --list-sessions`, and a sweep
+ * performed by a process that owns no session is not attributable to one; the
+ * record is written without the field rather than with a borrowed value.
+ */
+function recordReapTally(socketDir: string, tally: ReapTally, scanned: number, live: number): void {
+	const count = reapedFileCount(tally);
+	const skipped = skippedCount(tally);
+	if (count === 0 && skipped === 0) return;
+	try {
+		getSoakLog().record(
+			SOAK_EVENTS.SOCKETS_REAPED,
+			{
+				// FILES, not pairs: a dead session contributes its `.sock` and its `.lock`
+				// separately, so this number can be compared against a `readdir` difference.
+				count,
+				reaped: tally.reaped,
+				skipped: tally.skipped,
+				skippedCount: skipped,
+				socketDir,
+				scanned,
+				live,
+			},
+			count > 0 ? "warn" : "info",
+		);
+	} catch {
+		// Deliberately empty, and deliberately not logged anywhere.
+	}
+}
 
 /** What this process may do about the process a lock names. */
 export type PidOwnership =
@@ -213,6 +328,7 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 	const uid = currentUid();
 	const now = Date.now();
 	const bootMs = bootEpochMs();
+	const tally = newReapTally();
 
 	try {
 		const entries = await readdir(socketDir);
@@ -243,6 +359,7 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 				// removing a tree is not this function's business.
 				if (!socketInfo.isDirectory() && ownedByUs(socketInfo, uid) && olderThanGrace(socketInfo, now)) {
 					await reapStaleSession(socketPath);
+					tally.reaped.notASocket++;
 				}
 				// Deliberately NOT added to sessionIdsWithSocket: this id has no socket, so
 				// its lock belongs to the orphan sweep below. Shielding it here (the old
@@ -251,7 +368,10 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 			}
 
 			// O1: another user's socket is not ours to list, dial, or delete.
-			if (!ownedByUs(socketInfo, uid)) continue;
+			if (!ownedByUs(socketInfo, uid)) {
+				tally.skipped.foreignSocketUid++;
+				continue;
+			}
 
 			sessionIdsWithSocket.add(sessionId);
 
@@ -265,12 +385,18 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 			if (lockInfo === null) {
 				// Debris class (i): a socket with no lock. Never a normal transient — the
 				// lock is claimed before the bind, and teardown removes the socket first.
-				if (olderThanGrace(socketInfo, now)) await reapStaleSession(socketPath);
+				if (olderThanGrace(socketInfo, now)) {
+					await reapStaleSession(socketPath);
+					tally.reaped.locklessSocket++;
+				}
 				continue;
 			}
 			// A lock that is not a plain file, or is not ours, is not evidence about a
 			// session of ours. Left strictly alone.
-			if (!lockInfo.isFile() || !ownedByUs(lockInfo, uid)) continue;
+			if (!lockInfo.isFile() || !ownedByUs(lockInfo, uid)) {
+				if (!ownedByUs(lockInfo, uid)) tally.skipped.foreignLockUid++;
+				continue;
+			}
 
 			const lock = await readLock(lockPath);
 			// Unreadable or half-written: ownership unknown, never guess.
@@ -279,10 +405,17 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 			const ownership = pidOwnership(lock.pid);
 			if (ownership === "dead" || lockIsPreBootDebris(lock, bootMs)) {
 				await reapStaleSession(socketPath, lockPath);
+				// Two files, and counted as two: this number is compared against a
+				// directory listing, which cannot see pairs.
+				if (ownership === "dead") tally.reaped.deadPid += 2;
+				else tally.reaped.preBootLock += 2;
 				continue;
 			}
 			// Alive, but another user's process: never listed (O1), never reaped (O2).
-			if (ownership === "foreign") continue;
+			if (ownership === "foreign") {
+				tally.skipped.foreignPid++;
+				continue;
+			}
 
 			sessions.push({
 				sessionId,
@@ -293,7 +426,8 @@ export async function discoverSocketSessions(socketDir: string): Promise<SocketS
 			});
 		}
 
-		await reapOrphanedLocks(socketDir, entries, sessionIdsWithSocket, uid, bootMs);
+		await reapOrphanedLocks(socketDir, entries, sessionIdsWithSocket, uid, bootMs, tally);
+		recordReapTally(socketDir, tally, entries.length, sessions.length);
 	} catch {
 		// Directory not readable - return empty
 		return [];
@@ -332,6 +466,7 @@ async function reapOrphanedLocks(
 	sessionIdsWithSocket: Set<string>,
 	uid: number | null,
 	bootMs: number,
+	tally: ReapTally,
 ): Promise<void> {
 	for (const entry of entries) {
 		if (!entry.endsWith(".lock")) continue;
@@ -340,13 +475,20 @@ async function reapOrphanedLocks(
 		const lockPath = path.join(socketDir, entry);
 		try {
 			const info = await lstat(lockPath);
-			if (!info.isFile() || !ownedByUs(info, uid)) continue;
+			if (!info.isFile() || !ownedByUs(info, uid)) {
+				if (!ownedByUs(info, uid)) tally.skipped.foreignLockUid++;
+				continue;
+			}
 			const lock = await readLock(lockPath);
 			// Unreadable ownership: never guess, leave it alone.
 			if (!lock) continue;
 			const ownership = pidOwnership(lock.pid);
 			if (ownership === "dead" || lockIsPreBootDebris(lock, bootMs)) {
 				await rm(lockPath, { force: true });
+				if (ownership === "dead") tally.reaped.orphanLockDeadPid++;
+				else tally.reaped.orphanLockPreBoot++;
+			} else if (ownership === "foreign") {
+				tally.skipped.foreignPid++;
 			}
 		} catch {}
 	}

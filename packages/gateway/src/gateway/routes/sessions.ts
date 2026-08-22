@@ -2,8 +2,6 @@ import { Hono } from "hono";
 import { type GatewaySettings, isPathAllowed } from "../../config/config.js";
 import type { Session } from "../../session/session.js";
 import type { SessionManager } from "../../session/session-manager.js";
-import { SessionProcess } from "../../session/session-process.js";
-import { notifyWebSocketsProcessAttached } from "./ws.js";
 
 /**
  * Serialized session shape returned by all session endpoints.
@@ -45,6 +43,44 @@ const COMMAND_REJECTED =
 	"Create the session without a command; what runs is chosen by the gateway, never by the request body.";
 
 /**
+ * Refusal for input addressed to a session record that has no process.
+ *
+ * ## The lazy spawn that used to live here, and why it is gone rather than hardened
+ *
+ * `POST /sessions/:id/input` used to notice `!session.process` and quietly run
+ * `new SessionProcess(["draht", "start"])`: a bare PATH lookup, with the
+ * daemon's whole environment, no cwd, no deadline and no teardown, reachable by
+ * any bearer-token holder. It was the front door this file's own header says was
+ * closed — `command` was removed from `POST /sessions` under R32-FLEET.8 /
+ * GSEC-12 for exactly this reason — reopened at the side.
+ *
+ * R35-ALWAYS.9 builds ONE hardened spawn primitive
+ * (`session/spawn-primitive.ts`) and R36-SPAWN.1 requires that it be the only
+ * spawn path. That left two options for this call site, and the choice is
+ * recorded here because it is a decision and not an oversight:
+ *
+ *  - **Route it through the primitive.** Rejected. The primitive's security
+ *    property is that it resolves an id against the daemon's OWN history index
+ *    and constructs the argv itself. A gateway `Session` record has no draht
+ *    session id, no recorded cwd and no history row — there is nothing for the
+ *    primitive to resolve, so routing this through it would mean adding a "just
+ *    start something" mode whose whole purpose is to bypass the resolution that
+ *    makes the primitive safe.
+ *  - **Delete it.** Taken. This route creates a session RECORD, never a process
+ *    (R32-FLEET.8); a record with no process is a record nothing can be typed
+ *    into, and saying so with a 409 is honest. A caller that wants a live draht
+ *    session starts one, or resumes a recorded one over `session_resume`, which
+ *    is the path that has an id space, a trust check, a deadline and a teardown.
+ *
+ * The consequence is deliberate: there is now NO route on this daemon that
+ * creates a process from an HTTP request. The only spawn is
+ * `session/spawn-primitive.ts`, reached only by `session_resume`.
+ */
+const NO_PROCESS =
+	"this session has no process: POST /sessions creates a session record, never a process. " +
+	"Nothing can be typed into it. Resume a recorded draht session over the attach wire instead.";
+
+/**
  * Expected JSON body for POST /sessions/:id/input.
  *
  * `text` — The input text to send to the session's stdin.
@@ -81,7 +117,12 @@ function serializeSession(session: Session): SerializedSession {
  *   GET    /:id       → Get one session; 200 or 404
  *   DELETE /:id       → Destroy a session; 204 or 404
  *   POST   /:id/input → Send input to a session; requires JSON body `{ text: string }`;
- *                       returns 204 or 404
+ *                       returns 200, 404, or 409 when the session has no process.
+ *
+ * NO HANDLER IN THIS FILE STARTS A PROCESS. `POST /` never did; `POST /:id/input`
+ * used to, lazily and through a bare PATH lookup, and no longer does — see
+ * {@link NO_PROCESS} for what was there and why it was deleted rather than
+ * hardened.
  */
 export function createSessionRoutes(manager: SessionManager, config?: GatewaySettings): Hono {
 	const app = new Hono();
@@ -205,47 +246,10 @@ export function createSessionRoutes(manager: SessionManager, config?: GatewaySet
 
 		console.log(`[INPUT] Received text for session ${sessionId}:`, text.slice(0, 50));
 
-		// Lazy spawn: if session has no process, spawn draht automatically on first input
+		// NO LAZY SPAWN. See NO_PROCESS above.
 		if (!session.process) {
-			console.log(`[INPUT] Session has no process, spawning draht...`);
-
-			// Spawn draht with default command
-			const command = ["draht", "start"];
-			const proc = new SessionProcess(command);
-			session.process = proc;
-
-			// Wire up status transitions
-			proc.ready
-				.then(() => {
-					console.log(`[INPUT] Process ready for session ${sessionId}`);
-					session.status = "running";
-				})
-				.catch((err) => {
-					console.error(`[INPUT] Process failed to start:`, err);
-				});
-
-			proc.exited
-				.then(() => {
-					console.log(`[INPUT] Process exited for session ${sessionId}`);
-					session.status = "stopped";
-				})
-				.catch(() => {
-					session.status = "stopped";
-				});
-
-			// Wait for process to be ready before writing input
-			try {
-				console.log(`[INPUT] Waiting for process to be ready...`);
-				await proc.ready;
-				console.log(`[INPUT] Process is ready!`);
-
-				// Notify any connected WebSockets about the new process
-				console.log(`[INPUT] Notifying WebSockets about new process...`);
-				notifyWebSocketsProcessAttached(sessionId, session);
-			} catch (err) {
-				console.error(`[INPUT] Failed to spawn process:`, err);
-				return c.json({ error: "Failed to spawn process" }, 500);
-			}
+			console.log(`[INPUT] Session ${sessionId} has no process; refusing rather than spawning`);
+			return c.json({ error: NO_PROCESS }, 409);
 		}
 
 		console.log(`[INPUT] Writing to process stdin...`);

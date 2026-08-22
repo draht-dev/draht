@@ -7,6 +7,8 @@ export type {
 	DeviceAuthResult,
 	PresentedCredential,
 	RendererConnection,
+	ResumeSessionPort,
+	SessionResumeOutcome,
 } from "./attach/attach-bridge.js";
 export { AttachBridge, DEFAULT_AUTH_DEADLINE_MS } from "./attach/attach-bridge.js";
 export type {

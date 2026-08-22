@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { dirname } from "node:path";
 import {
 	AttachBridge,
 	type AttachBridgeOptions,
@@ -9,12 +10,14 @@ import {
 	HistoryCursorError,
 	HistoryIndex,
 	type RendererConnection,
+	type ResumeSessionPort,
 } from "@draht/geist-core";
 import { DEFAULT_TRANSPORT_LIMITS, type TransportLimits } from "@draht/geist-protocol";
 import { Hono } from "hono";
 import { upgradeWebSocket } from "hono/bun";
 import type { WSContext } from "hono/ws";
 import pkg from "../../../package.json" with { type: "json" };
+import { SessionResumer } from "../../session/spawn-primitive.js";
 import { logger } from "../logger";
 import { decodeWsBearerSubprotocol } from "../ws-bearer";
 
@@ -133,6 +136,21 @@ export interface FleetRoutesOptions {
 	 * period has to be a fraction of the idle window rather than a free setting.
 	 */
 	keepaliveMs?: number;
+	/**
+	 * How `session_resume` is answered (R35-ALWAYS.9).
+	 *
+	 * Optional so a test can inject a port it drives by hand. When absent this
+	 * surface builds the real one over {@link SessionResumer}, which composes the
+	 * history index and the observer this file already owns with the single
+	 * hardened spawn primitive in `session/spawn-primitive.ts`.
+	 *
+	 * Note what CANNOT be configured here: what gets executed. The primitive
+	 * resolves the draht binary itself, from a canonical absolute path, and builds
+	 * the argv from a session row it looked up in its own index. There is no
+	 * option on this interface — and no field on the wire — through which a
+	 * command reaches a spawn.
+	 */
+	resumeSession?: ResumeSessionPort;
 	/**
 	 * The daemon's single fleet observer (R35-ALWAYS.10).
 	 *
@@ -514,6 +532,49 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 		});
 
 	/**
+	 * How a `session_resume` frame becomes a running session (R35-ALWAYS.9).
+	 *
+	 * Built here because this is where the two things it composes already live:
+	 * the history index, which is the ONLY id space a resume resolves in, and the
+	 * observer, which is what says whether an id is already live. Both are read
+	 * through the doors this file already uses — `history.enumerate()` and
+	 * `fleet.refreshNow()` — so a resume adds no new reader of the socket
+	 * directory and no second reaper.
+	 *
+	 * The agent directory is `dirname(socketDir)`: `resolveSocketDir` builds the
+	 * socket directory as `<agent dir>/sockets`, and the child needs the agent
+	 * directory itself, both to publish its socket where this daemon is watching
+	 * and so the spawn primitive can read the operator's `trust.json`.
+	 */
+	//
+	// ONE INSTANCE PER DAEMON, CONSTRUCTED HERE RATHER THAN PER FRAME. It used to
+	// be built inside the port closure, so every `session_resume` got a fresh
+	// resumer — which was invisible while the object was stateless and became the
+	// defect the moment it was not. `SessionResumer` now holds the DAEMON-WIDE
+	// in-flight set that stops two connections from both starting a process for
+	// one id, and a per-frame instance would give each frame its own empty set,
+	// i.e. exactly the per-connection guard that bounded nothing. Nothing else
+	// changes: `history` and `liveIds` were already thunks, so a hoisted resumer
+	// reads the same fresh state a fresh one did.
+	// Constructed unconditionally, even when a test injects its own port: the
+	// constructor stores thunks and nothing else — no directory is read, no
+	// process is started — so an unused resumer costs an object.
+	const resumer = new SessionResumer({
+		socketDir: options.socketDir,
+		agentDir: dirname(options.socketDir),
+		history: () => history.enumerate().rows,
+		// `refreshNow` rather than `snapshot`: an id that went live a moment ago
+		// must not be resumed a second time, and this is the same coalesced door
+		// `hello` and `fleet_resync` come through.
+		liveIds: () =>
+			fleet
+				.refreshNow()
+				.sessions.filter((session) => session.origin === "socket")
+				.map((session) => session.id),
+	});
+	const resumeSession: ResumeSessionPort = options.resumeSession ?? ((sessionId: string) => resumer.resume(sessionId));
+
+	/**
 	 * `GET /fleet` — the live fleet, plus the newest resumable history rows
 	 * (R35-ALWAYS.7), each row carrying the quad-state `status` the git probe
 	 * last observed (R35-ALWAYS.8), stamped with the observer's `epoch`/`seq`.
@@ -685,6 +746,9 @@ export function createFleetRoutes(options: FleetRoutesOptions): Hono {
 						// bridge subscribes for its own lifetime and unsubscribes in
 						// `close()`; the observer polls only while somebody is subscribed.
 						fleet,
+						// The daemon's one spawn path, injected as a port because
+						// `@draht/geist-core` may not import this package.
+						resumeSession,
 						limits,
 						server: { name: "draht-gateway", version: pkg.version },
 						authorize: revocationPolicy(authentication.devices),

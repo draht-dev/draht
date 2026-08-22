@@ -302,8 +302,35 @@ async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: 
 	return { type: "not_found", arg: sessionArg };
 }
 
-/** Prompt user for yes/no confirmation */
+/**
+ * Prompt user for yes/no confirmation.
+ *
+ * REFUSES OUTRIGHT WHEN STDIN IS NOT A TTY (R35-ALWAYS.9).
+ *
+ * `createInterface({ input: process.stdin })` has no TTY check, so with stdin at
+ * /dev/null this used to print the question, receive EOF, resolve to `false`,
+ * and let its one caller print "Aborted." and EXIT 0 — having started nothing.
+ * Exit 0 having done nothing is indistinguishable from success to every
+ * programmatic caller there is: a script, a supervisor, and now the geist daemon,
+ * which resumes sessions by spawning this binary. A daemon that saw a clean exit
+ * would report a resume that never happened.
+ *
+ * So a non-interactive answer to an interactive question is an ERROR, said on
+ * stderr with an exit code, not a silent "no". The caller that would have taken
+ * this branch — `--session <bare id>` naming a session in another project — is
+ * exactly the shape the daemon avoids by passing an absolute `.jsonl` path
+ * instead, which never reaches a prompt at all.
+ */
 async function promptConfirm(message: string): Promise<boolean> {
+	if (!process.stdin.isTTY) {
+		console.error(
+			chalk.red(
+				`Error: "${message}" needs an answer and stdin is not a terminal.\n` +
+					"Re-run with a terminal, or name the session by its absolute .jsonl path so no question is asked.",
+			),
+		);
+		process.exit(1);
+	}
 	return new Promise((resolve) => {
 		const rl = createInterface({
 			input: process.stdin,

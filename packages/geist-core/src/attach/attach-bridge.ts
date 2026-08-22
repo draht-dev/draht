@@ -63,6 +63,7 @@ import {
 	type ProtocolErrorCode,
 	protocolError,
 	ServerFrameSchema,
+	type SessionResumeCode,
 	type TransportLimits,
 } from "@draht/geist-protocol";
 import type { FleetSource, FleetUpdate } from "./fleet-observer.js";
@@ -94,6 +95,92 @@ const PERMISSION_RELAY_CAPABILITY = "permission-relay";
  * which is the pull half of the same mechanism.
  */
 const FLEET_DELTA_CAPABILITY = "fleet-delta";
+
+/**
+ * The capability this DAEMON declares in `server_hello` when it can act on
+ * `session_resume` (R35-ALWAYS.9).
+ *
+ * Declared only when a {@link ResumeSessionPort} was injected, for the reason
+ * stated on `server_hello.capabilities` itself: what is advertised is what this
+ * daemon WILL ANSWER. A bridge with no port refuses `session_resume` with
+ * `refused` rather than pretending, and a renderer that read the capability list
+ * knows not to ask.
+ */
+const SESSION_RESUME_CAPABILITY = "session-resume";
+
+/**
+ * The longest `session_resumed.message` this bridge will emit, in code points.
+ *
+ * The wire bounds that field in GRAPHEME clusters at 512. Code points are never
+ * fewer than graphemes, so bounding code points at 400 satisfies the wire bound
+ * with room to spare — and it is bounded HERE, before `#emit`, because
+ * `ServerFrameSchema.parse` throws on a violation and a throw inside `receive`
+ * would take the connection down over a long error string.
+ */
+const RESUME_MESSAGE_MAX = 400;
+
+/**
+ * The code points `safeText` refuses, as a predicate.
+ *
+ * A hand mirror of `NEUTRALIZED_FORBIDDEN_RANGES` in `@draht/geist-protocol`,
+ * which is itself a hand mirror of `coding-agent`'s `safe-text.ts`. It is
+ * duplicated a third time here for the same reason it was duplicated a second:
+ * the ranges are not exported, and a resume message quotes a filesystem path and
+ * an errno — both attacker-influenceable strings — so something has to
+ * neutralize them before they reach a schema that would throw.
+ */
+function neutralized(text: string): string {
+	let out = "";
+	for (const character of text) {
+		const code = character.codePointAt(0) ?? 0;
+		const forbidden =
+			code <= 0x1f ||
+			code === 0x7f ||
+			(code >= 0x80 && code <= 0x9f) ||
+			code === 0x00ad ||
+			code === 0x061c ||
+			(code >= 0x200b && code <= 0x200f) ||
+			(code >= 0x202a && code <= 0x202e) ||
+			(code >= 0x2060 && code <= 0x2064) ||
+			(code >= 0x2066 && code <= 0x2069) ||
+			code === 0xfeff ||
+			(code >= 0xfe00 && code <= 0xfe0f) ||
+			(code >= 0xfff9 && code <= 0xfffb) ||
+			(code >= 0xe0000 && code <= 0xe007f);
+		out += forbidden ? " " : character;
+		if (out.length >= RESUME_MESSAGE_MAX) break;
+	}
+	return out.slice(0, RESUME_MESSAGE_MAX);
+}
+
+/**
+ * The `session_resumed` codes that carry `ok: true`.
+ *
+ * See {@link AttachBridge.#emitResumed} for why `already_live` is here.
+ */
+const SUCCESSFUL_RESUME_CODES: ReadonlySet<SessionResumeCode> = new Set<SessionResumeCode>(["resumed", "already_live"]);
+
+/** What a host answers a `session_resume` with. */
+export interface SessionResumeOutcome {
+	/** The typed outcome. See {@link SUCCESSFUL_RESUME_CODES} for which are successes. */
+	code: SessionResumeCode;
+	/** Operator-facing detail. Neutralized and bounded before it reaches the wire. */
+	message?: string;
+}
+
+/**
+ * How a host turns a session id into a running session (R35-ALWAYS.9).
+ *
+ * A PORT, not an implementation, and it has to be: resuming means spawning, the
+ * spawn primitive lives in `@draht/gateway`, and `scripts/check-geist-boundary.mjs`
+ * forbids this package from importing it. The same shape as
+ * {@link DeviceAuthenticator} next door, for the same reason.
+ *
+ * ITS ABSENCE IS THE SWITCH. A bridge given no port does not advertise
+ * `session-resume` and answers the frame `refused`; it never spawns anything by
+ * itself, and there is no fallback path in this file that could.
+ */
+export type ResumeSessionPort = (sessionId: string) => Promise<SessionResumeOutcome>;
 
 /**
  * The relayed frames that must never be chunked. See {@link AttachBridge.#fit}.
@@ -296,6 +383,14 @@ export interface AttachBridgeOptions {
 	 * and nothing after it.
 	 */
 	fleet?: FleetSource;
+	/**
+	 * How this host resumes a recorded session (R35-ALWAYS.9).
+	 *
+	 * Its ABSENCE is the switch, exactly as `devices` and `fleet` are: given
+	 * none, this daemon does not advertise `session-resume` and answers the frame
+	 * `refused`. See {@link ResumeSessionPort} for why it is a port at all.
+	 */
+	resumeSession?: ResumeSessionPort;
 }
 
 /** WebSocket close code for a policy violation — every typed refusal uses it. */
@@ -391,6 +486,31 @@ export class AttachBridge {
 	 */
 	#fleetSeqSent = -1;
 
+	/** How this host resumes a recorded session, or null on a bridge given none. */
+	readonly #resume: ResumeSessionPort | null;
+	/**
+	 * Whether a `session_resume` from this connection is still in flight.
+	 *
+	 * ONE AT A TIME PER CONNECTION: a resume STARTS A PROCESS, and a client that
+	 * may have N in flight can turn one WebSocket into N concurrent draht
+	 * startups. A second frame while one is pending is answered `refused` — a
+	 * typed answer on the same connection, not a disconnect, because a renderer
+	 * double-tapping a button is a user, not an attacker, and dropping the socket
+	 * would cost it the session it is watching.
+	 *
+	 * WHAT THIS IS NOT. It is not the guard against two resumes of ONE ID, and
+	 * reading it as one was a measured defect: it is per connection, so it bounds
+	 * one WebSocket and nothing else. Two phones, two tabs, or one phone on two
+	 * radios sharing a token are two connections with two independent copies of
+	 * this flag, and both were answered `{ok: true, code: "resumed"}` for the same
+	 * id while `ps` showed two live processes on one session JSONL. That guard is
+	 * DAEMON-WIDE and therefore cannot live here — this object is per connection
+	 * by construction — so it lives behind {@link ResumeSessionPort}, in the one
+	 * resumer the host owns. This flag is a per-socket rate bound and is kept as
+	 * one.
+	 */
+	#resumeInFlight = false;
+
 	constructor(options: AttachBridgeOptions) {
 		this.#socketDir = options.socketDir;
 		this.#conn = options.connection;
@@ -407,6 +527,7 @@ export class AttachBridge {
 		this.#authDeadlineMs = options.authDeadlineMs ?? DEFAULT_AUTH_DEADLINE_MS;
 		this.#authorize = options.authorize ?? null;
 		this.#fleet = options.fleet ?? null;
+		this.#resume = options.resumeSession ?? null;
 		// No device store means the host authenticated the upgrade request; see
 		// `AttachBridgeOptions.devices`. Anything else and this connection starts
 		// out as nobody, on a clock.
@@ -551,6 +672,18 @@ export class AttachBridge {
 				this.#emitFleetSnapshot();
 				return;
 			}
+			case "session_resume": {
+				// Post-authentication, like everything below the gate above: the id
+				// space this resolves in IS session data, so an unauthenticated peer
+				// cannot even learn whether an id exists by asking to resume it.
+				//
+				// Accepted whether or not this connection is attached. Resuming is a
+				// fleet operation, not a session one — the renderer asking is looking
+				// at a history card, which is precisely the state in which it has no
+				// session to be attached to.
+				this.#resumeSession(frame.sessionId);
+				return;
+			}
 			case "input":
 			case "detach":
 			case "permission_response": {
@@ -664,8 +797,90 @@ export class AttachBridge {
 		// stream and no state for a resync to answer FROM — the fallback path
 		// emits one snapshot at `hello` and nothing after it. A daemon that
 		// declared `fleet-delta` anyway would be promising a stream it has no
-		// producer for.
-		return this.#fleet === null ? [] : [FLEET_DELTA_CAPABILITY];
+		// producer for. `session-resume` is conditional on its port for the same
+		// reason: a daemon with no way to spawn cannot answer the verb.
+		const capabilities: string[] = [];
+		if (this.#fleet !== null) capabilities.push(FLEET_DELTA_CAPABILITY);
+		if (this.#resume !== null) capabilities.push(SESSION_RESUME_CAPABILITY);
+		return capabilities;
+	}
+
+	/**
+	 * Answer one `session_resume` (R35-ALWAYS.9).
+	 *
+	 * ONE FRAME PER REQUEST, SENT WHEN THE ANSWER IS TRUE. The obvious
+	 * alternative — acknowledge `resumed` immediately because the id is knowable
+	 * before the spawn, then let the `fleet_delta appeared` confirm — was
+	 * rejected: it puts a `resumed` on the wire before anything has resumed, and
+	 * the failure it would then have to report (`timeout`, `spawn_failed`) has no
+	 * frame left to arrive in, because `session_resumed` is declared as "the
+	 * answer to exactly one `session_resume`". A renderer that has rendered
+	 * "resumed" and must later un-render it is worse off than one that waited.
+	 *
+	 * NO RECONNECT ANYWHERE IN HERE. The answer goes out on this connection, and
+	 * the `fleet_delta appeared` that follows it comes from the observer this
+	 * connection is already subscribed to. That is the whole of R35-ALWAYS.9's
+	 * "joins the live fleet with no client reconnect": nothing in this path
+	 * closes, re-opens, re-attaches or re-handshakes anything.
+	 *
+	 * SCOPE, per the phase's ordering constraint: "without reconnecting" is about
+	 * the FLEET LIST. This bridge still closes the WebSocket on `detach`, and a
+	 * renderer that wants to ATTACH to the session it just resumed still detaches
+	 * and reconnects to do it. Making `attach` re-callable is a second
+	 * wire-semantics change and is deliberately not in this phase.
+	 */
+	#resumeSession(sessionId: string): void {
+		const port = this.#resume;
+		if (port === null) {
+			this.#emitResumed(sessionId, "refused", "this daemon cannot resume sessions");
+			return;
+		}
+		if (this.#resumeInFlight) {
+			// This connection's own bound only. The port refuses a second resume of
+			// the SAME ID from any connection; see {@link #resumeInFlight}.
+			this.#emitResumed(sessionId, "refused", "a resume is already in flight on this connection");
+			return;
+		}
+		this.#resumeInFlight = true;
+		void port(sessionId)
+			.then((outcome) => {
+				this.#emitResumed(sessionId, outcome.code, outcome.message ?? "");
+			})
+			.catch((error: unknown) => {
+				// A port that throws is a host defect, not a client one. It is
+				// reported as `spawn_failed` on this connection and nothing else
+				// happens: the connection, and any session it is attached to, survive.
+				this.#emitResumed(sessionId, "spawn_failed", error instanceof Error ? error.message : String(error));
+			})
+			.finally(() => {
+				this.#resumeInFlight = false;
+			});
+	}
+
+	/** Emit one `session_resumed`, with `message` made safe for the wire. */
+	#emitResumed(sessionId: string, code: SessionResumeCode, message: string): void {
+		if (this.#closed) return;
+		this.#emit({
+			type: "session_resumed",
+			sessionId,
+			// Carried rather than derived by the renderer: which codes are successes
+			// is the DAEMON's judgement, and a renderer that inferred it from the
+			// code would need re-teaching every time the set grows.
+			//
+			// `already_live` IS ONE OF THEM, and that is a deliberate reading rather
+			// than an oversight. The caller asked for one thing — make this session
+			// reachable — and it is reachable; the only difference from `resumed` is
+			// that somebody got there first. Reporting `ok: false` would make a
+			// renderer show a failure for a state the user wanted, and would make the
+			// commonest double-tap on a phone look like a broken feature. (The
+			// schema's own comment in `wire.ts` says "exactly one code (`resumed`) is
+			// a success today"; that sentence describes the set as it was drafted and
+			// is what this comment supersedes. Nothing in the schema constrains `ok`
+			// to any particular code.)
+			ok: SUCCESSFUL_RESUME_CODES.has(code),
+			code,
+			message: neutralized(message),
+		});
 	}
 
 	/**

@@ -34,5 +34,11 @@ export type { AttachableSession, AttachableSessionOptions } from "./session-inte
 export { makeSessionAttachable, registerAttachableSessionCleanup } from "./session-integration.js";
 export { SocketClient } from "./socket-client.js";
 export type { SocketServerOptions } from "./socket-server.js";
-export { SocketServer, SocketSessionBusyError } from "./socket-server.js";
+export {
+	DEFAULT_MAX_LIVE_SOCKETS,
+	SocketCapReachedError,
+	SocketDirectoryUnsafeError,
+	SocketServer,
+	SocketSessionBusyError,
+} from "./socket-server.js";
 export * from "./types.js";

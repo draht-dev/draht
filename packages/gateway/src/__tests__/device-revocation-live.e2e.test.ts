@@ -149,11 +149,18 @@ class FakeSession {
 			server.once("error", reject);
 			server.listen(join(socketDir, `${id}.sock`), resolve);
 		});
-		// The lock is the liveness contract `listAttachableSessions` reads: pid,
-		// cwd, ISO creation time. This process's pid is alive by construction.
-		writeFileSync(join(socketDir, `${id}.lock`), `${process.pid}\n/work/revocation\n${new Date(0).toISOString()}`, {
-			mode: 0o600,
-		});
+		// The lock is the liveness contract `listAttachableSessions` reads: pid, cwd,
+		// ISO creation time, and — since Phase 35 — the owner's process start time in
+		// ms. That 4th line is what distinguishes a live owner from a RECYCLED pid, so
+		// it must be this process's real start time: a lock whose owner appears to
+		// predate the machine's boot is debris and gets reaped, which is exactly what
+		// this fixture's old three-line form became.
+		const processStartedAtMs = Math.round(Date.now() - process.uptime() * 1000);
+		writeFileSync(
+			join(socketDir, `${id}.lock`),
+			`${process.pid}\n/work/revocation\n${new Date(0).toISOString()}\n${processStartedAtMs}`,
+			{ mode: 0o600 },
+		);
 		return session;
 	}
 

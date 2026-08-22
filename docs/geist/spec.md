@@ -130,14 +130,16 @@ scripts/check-geist-mirrors.mjs · scripts/check-geist-boundary.mjs   # both in 
 
 ### 9.1 Config — r5 plus harness block
 
+This file is the **registry**: it is yours, it lives at `~/.geist/config.yaml`, and it is the only thing that names what the daemon may launch (§15.2). Every `cmd` is an **absolute path** — a bare name would have to be resolved through a `PATH` the daemon deliberately does not consult.
+
 ```yaml
 harness:
   default: draht
-  agents:            # ACP launch specs; exact cmds/args pinned at M3 from the registry
-    draht:  { cmd: draht-acp }
-    claude: { cmd: claude-agent-acp }
-    codex:  { cmd: codex-acp }
-    gemini: { cmd: gemini, args: [--experimental-acp] }
+  agents:            # ACP launch specs; absolute cmds/args pinned at M3 from the registry
+    draht:  { cmd: /usr/local/bin/draht-acp }
+    claude: { cmd: /usr/local/bin/claude-agent-acp }
+    codex:  { cmd: /usr/local/bin/codex-acp }
+    gemini: { cmd: /usr/local/bin/gemini, args: [--experimental-acp] }
 ```
 
 ### 9.2 WS protocol — r5 plus
@@ -170,7 +172,7 @@ Resolution order: reserved verbs (incl. allow/deny) → command match → **harn
 
 ## 12. Sessions, runs & git semantics — as r5, restated harness-free
 
-Spawn: resolve project + harness → worktree + `baseSha` → launch ACP subprocess (`cwd=wt`) → handshake → dispatch. Status: `running` while the turn streams; `awaiting_review` when the turn ends **and** git is dirty/ahead (git is the truth, not the agent's claim). approve/undo via sha ledger; variants winner semantics unchanged; permission requests pause visibly, never silently. Confinement v1 = ACP permission flow + cwd + review gate + reset-to-ref; deeper sandboxing = per-harness config (e.g. an agent's own sandbox modes), v2 topic.
+Spawn: resolve project + harness → worktree + `baseSha` → launch ACP subprocess (`cwd=wt`) → handshake → dispatch. Status: `running` while the turn streams; `awaiting_review` when the turn ends **and** git is dirty/ahead (git is the truth, not the agent's claim). approve/undo via sha ledger; variants winner semantics unchanged; permission requests pause visibly, never silently. Confinement v1 = ACP permission flow + cwd + review gate + reset-to-ref; deeper sandboxing = per-harness config (e.g. an agent's own sandbox modes), v2 topic. What environment a spawned session runs with — and what a phone is able to name at all — is §15.1–§15.2.
 
 ## 13. Board, spatial layout & design language
 
@@ -190,6 +192,22 @@ Spawn: resolve project + harness → worktree + `baseSha` → launch ACP subproc
 ## 14. Performance & latency — as r5, plus: ACP handshake + first prompt accepted ≤ 1.5 s per spawn (subprocess start dominated); permission chip round-trip (request → chip visible) ≤ 300 ms. **Glass budgets:** ≤ 6 blurred surfaces live per panel, blur radius ≤ 24 px, tier-2 refraction on ≤ 2 elements simultaneously with auto-degrade on breach — and **H5's 72 Hz gate runs with tier-1 glass ON**: the look lives inside the budget, it is not the thing you switch off to pass.
 
 ## 15. Security & privacy — as r5, plus: each agent runs under its **own** vendor auth on the dev machine (geist stores no provider credentials); permission requests are never auto-answered; allow/deny requires an utterance or tap.
+
+### 15.1 Spawned sessions get a built environment; discovered sessions keep yours
+
+Every card on the board arrived one of two ways, and the difference decides what its process environment is.
+
+**Sessions geist SPAWNS** — a `new session` from the board, or a resume of a history entry — run in an environment **built from nothing**. The daemon starts from an empty object and adds, by name: an absolute trusted `PATH` it constructs rather than copies (`DEFAULT_RESUME_PATH`, changed only by an operator declaration, never inherited from whatever shell happened to start the daemon); the runtime, locale and temp-directory names a program needs to behave like a program at all (`BASE_ENV_NAMES`); the agent directory the session must publish its socket in; and **the harness's own declared auth and nothing else** (`DECLARED_CREDENTIAL_ENV`, plus any extra names the operator lists explicitly). Names that change what code a program loads before its own first line runs — a forwarded `PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `NODE_PATH`, `BASH_ENV`, `IFS` and their kin (`NEVER_FORWARDED`) — are **refused even when an operator declares them**: the blocklist beats the declaration, because "the executable is canonical and owned by us" says nothing about a program that was told to load somebody else's library first. Implementation: `buildChildEnvironment` in `packages/gateway/src/session/spawn-primitive.ts`, which contains no `...process.env` and must never contain one — a spread would make the whole guarantee false in one character.
+
+**Sessions geist merely DISCOVERS** — a draht you started yourself in a terminal, which geist finds by its socket and attaches to — **inherit your own shell environment by construction, and are explicitly out of scope.** They were started by you, before geist ever saw them, carrying whatever your login shell exports; there is no point at which geist could filter that without killing the session and starting a different one, so it does not pretend to. This is a scope statement, not a gap left for a later phase: geist's environment guarantee covers the processes **it creates**, and discovery is offered on the honest understanding that an attached session is exactly as privileged as the shell you launched it from. **If that distinction matters for a particular project, spawn the session from the board instead of attaching to one you started by hand.**
+
+### 15.2 The registry is user-owned, and is the only thing that names what may be launched
+
+Nothing the headset or the phone sends names a program. A spawn carries **two opaque ids** — a harness id and a project id — and the daemon resolves both against a registry **you own**: `~/.geist/config.yaml`, or a registry path you hand the daemon explicitly when you start it. There is no path, no command, no argv, no cwd and no environment field anywhere on the wire, so the worst a caller can name is an id that exists or one that does not. Adding a harness means editing your own registry on the dev machine; it is not something a client can do.
+
+**The daemon reads no project-supplied config at all.** `resolveConfigPath` in `packages/geist/src/index.ts` prefers `<cwd>/geist.yaml` over `~/.geist/config.yaml` — that is the **CLI's** resolver, written for a person standing in a directory they chose, and it is deliberately **not on the daemon path**. A checked-out repository's own `geist.yaml` is **ignored** by the daemon: not merged, not consulted for a harness id, not consulted for a root. Cloning a repository therefore cannot add an entry to the set of things your dev machine will launch, which is the property the two-opaque-ids wire shape would otherwise hand straight back.
+
+**The registry file is re-checked on every load, and refuses rather than repairs.** Before a byte is read, the supplied path is walked with `lstat` — never `realpath` first, which would silently follow the very symlink the check exists to catch — and the file and its parent directory must each be owned by the **current uid** (not root, not anyone else) and must not be symbolic links; the file must not be group- or world-**accessible**, and the parent must not be group- or world-writable. A file that fails any of those is **refused, with an error naming the rule and the path**. geist never chmods it for you: a file that names executables is not one to quietly repair on somebody's behalf, and repairing it would erase the evidence that it was wrong.
 
 ## 16. Milestones
 

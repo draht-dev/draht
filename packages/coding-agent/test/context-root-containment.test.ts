@@ -13,10 +13,12 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
@@ -34,6 +36,7 @@ const IN_ROOT_CANARY = "IN-ROOT-CANARY-7b23de";
 
 /** SOURCE, not `dist/cli.js`: a dist entry asserts about whatever was last built. */
 const CLI_SOURCE_ENTRY = resolve(__dirname, "..", "src", "cli.ts");
+const TEMP_ROOT = realpathSync(tmpdir());
 
 let tmp: string;
 let agentDir: string;
@@ -43,8 +46,7 @@ function contentOf(files: Array<{ path: string; content: string }>): string {
 }
 
 beforeEach(() => {
-	// /private/tmp, not /tmp: /tmp is a symlink on macOS, and comparisons here are canonical.
-	tmp = mkdtempSync("/private/tmp/ctx-root-");
+	tmp = mkdtempSync(join(TEMP_ROOT, "ctx-root-"));
 	agentDir = join(tmp, "agent");
 	mkdirSync(agentDir, { recursive: true });
 });
@@ -330,7 +332,8 @@ writeFileSync(outPath, JSON.stringify({
 
 describe("the --context-root flag reaches the loader", () => {
 	it("accepts an absolute path and refuses a relative one instead of resolving it", () => {
-		expect(parseArgs(["--context-root", "/private/tmp/whatever"]).contextRoot).toBe("/private/tmp/whatever");
+		const absoluteContextRoot = join(tmp, "whatever");
+		expect(parseArgs(["--context-root", absoluteContextRoot]).contextRoot).toBe(absoluteContextRoot);
 
 		const relative = parseArgs(["--context-root", "packages/thing"]);
 		expect(relative.contextRoot).toBeUndefined();

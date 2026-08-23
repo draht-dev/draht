@@ -204,6 +204,29 @@ describe("the ancestor walk stops at the context root", () => {
 		]);
 	});
 
+	it("loads no project context at all when the configured root cannot be resolved", () => {
+		const root = join(tmp, "root");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "AGENTS.md"), `${IN_ROOT_CANARY}\n`);
+
+		// An unresolvable root contains nothing. Reading it as "no constraint" — which is
+		// what `undefined` means to the walk — would load the whole ancestor chain instead.
+		const files = loadProjectContextFiles({ cwd: root, agentDir, contextRoot: join(tmp, "no-such-root") });
+
+		expect(contentOf(files)).not.toContain(IN_ROOT_CANARY);
+		expect(files.map((f) => f.path)).toEqual([]);
+	});
+
+	it("still loads everything under a root that does resolve", () => {
+		const root = join(tmp, "root");
+		mkdirSync(join(root, "sub"), { recursive: true });
+		writeFileSync(join(root, "AGENTS.md"), `${IN_ROOT_CANARY}\n`);
+
+		const files = loadProjectContextFiles({ cwd: join(root, "sub"), agentDir, contextRoot: root });
+
+		expect(contentOf(files)).toContain(IN_ROOT_CANARY);
+	});
+
 	it("keeps the agent-dir global context file, which is a user resource, exempt from the root", () => {
 		const root = join(tmp, "root");
 		mkdirSync(root, { recursive: true });
@@ -216,10 +239,11 @@ describe("the ancestor walk stops at the context root", () => {
 	});
 });
 
-describe("the per-file containment gate refuses what the walk break waved through", () => {
+describe("the walk break fails closed on a directory whose real path cannot be determined", () => {
 	// Driven under BUN, which draht ships as: bun's realpath is realpath(3)-shaped and wants
-	// read permission on the directory, node's walks it with lstat and succeeds. Only where
-	// `realpath(dir)` THROWS does the fail-open walk break diverge from the fail-closed gate.
+	// read permission on the directory, node's walks it with lstat and succeeds. Where
+	// `realpath(dir)` THROWS, the walk break used to fall back to the lexical spelling and
+	// walk into the directory anyway; it now ends the walk, so both runtimes stop here.
 	const WITNESS_SCRIPT = (loaderPath: string) => `
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -247,7 +271,7 @@ writeFileSync(outPath, JSON.stringify({
 }));
 `;
 
-	it("refuses an out-of-root context file that the walk break waved through", () => {
+	it("ends the walk instead of falling back to the lexical spelling", () => {
 		const root = join(tmp, "root");
 		const outside = join(tmp, "xonly");
 		mkdirSync(root, { recursive: true });
@@ -256,8 +280,9 @@ writeFileSync(outPath, JSON.stringify({
 		writeFileSync(join(root, "AGENTS.md"), `${IN_ROOT_CANARY}\n`);
 		const link = join(root, "link");
 		symlinkSync(outside, link);
-		// Execute-only: `realpath` of the directory is refused, its contents stay reachable by
-		// name, so the walk break falls back to the lexical `root/link` — which IS inside the root.
+		// Execute-only: `realpath` of the directory is refused under bun while its contents
+		// stay reachable by name. The lexical `root/link` IS inside the root, so a fail-open
+		// walk break would have walked straight into `outside`.
 		chmodSync(outside, 0o111);
 
 		const scriptPath = join(tmp, "witness.mjs");
@@ -294,10 +319,12 @@ writeFileSync(outPath, JSON.stringify({
 		}
 		if (!result.asymmetry) return;
 
-		// Only `loadContextFileFromDir`'s own refusal emits this line.
-		expect(result.warnings.join("\n")).toContain(`${join(link, "AGENTS.md")}: outside context root`);
-		expect(result.content).toContain(IN_ROOT_CANARY);
-		expect(result.paths).toEqual([join(root, "AGENTS.md")]);
+		// node reaches the same end state by resolving `link` to `outside` and finding it
+		// out of root; bun by not resolving it at all. Neither enters the directory, and
+		// neither continues to `root` above a cwd it could not place.
+		expect(result.paths).not.toContain(join(link, "AGENTS.md"));
+		expect(result.content).not.toContain(IN_ROOT_CANARY);
+		expect(result.paths).toEqual([]);
 	}, 120_000);
 });
 

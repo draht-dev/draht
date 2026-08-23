@@ -15,7 +15,7 @@ import {
 } from "@draht/tui";
 import { KeybindingsManager } from "../../../core/keybindings.js";
 import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.js";
-import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.js";
+import { comparablePath } from "../../../utils/canonical-path.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint, keyText } from "./keybinding-hints.js";
@@ -48,9 +48,17 @@ function formatSessionDate(date: Date): string {
 	return `${Math.floor(diffDays / 365)}y`;
 }
 
+// Called per row per render, and the walk costs a syscall per segment. Session files are
+// append-only, so a path's identity does not change under us.
+const comparablePathCache = new Map<string, string>();
+
 function canonicalizePath(path: string | undefined): string | undefined {
 	if (!path) return path;
-	return _canonicalizePath(path);
+	const cached = comparablePathCache.get(path);
+	if (cached !== undefined) return cached;
+	const resolved = comparablePath(path);
+	comparablePathCache.set(path, resolved);
+	return resolved;
 }
 
 class SessionSelectorHeader implements Component {

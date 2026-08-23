@@ -285,7 +285,8 @@ test("server_hello advertises geist/0.x 0.4 — the member the fleet projection 
 
 	expect(hello.protocol).toBe("geist/0.x");
 	expect(hello.version).toBe(GEIST_PROTOCOL_VERSION);
-	expect(GEIST_PROTOCOL_VERSION).toBe("0.4");
+	// The CURRENT member, not "0.5 forever" — it moves with every 0.x bump.
+	expect(GEIST_PROTOCOL_VERSION).toBe("0.5");
 	// Since 0.4 the daemon also says what it is willing to be ASKED, so the next
 	// verb does not need another hello-refusal cliff. Required, so its absence is a
 	// wire break rather than an older daemon.

@@ -246,7 +246,9 @@ class Renderer {
 		this.send({
 			type: "hello",
 			protocol: "geist/0.x",
-			version: "0.4",
+			// Hardcoded rather than imported so this handshake is what a RENDERER
+			// sends; it moves with every 0.x bump.
+			version: "0.5",
 			client: { name: "ownership-e2e", version: "0.0.0" },
 		});
 		await this.waitFor((frame) => frame.type === "fleet", "the fleet frame");

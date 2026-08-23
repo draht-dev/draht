@@ -24,6 +24,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
+import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -225,7 +226,7 @@ function buildRequestOptions(model: Model<"mistral-conversations">, options?: Mi
 	};
 	if (options?.signal) requestOptions.signal = options.signal;
 
-	const headers: Record<string, string> = {};
+	const headers: Record<string, string> = { "User-Agent": getPiUserAgent() };
 	if (model.headers) Object.assign(headers, model.headers);
 	if (options?.headers) Object.assign(headers, options.headers);
 

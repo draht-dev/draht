@@ -96,10 +96,12 @@ describe("bootstrap exchange frames (R33-REACH.5)", () => {
 		if (smuggled.ok) expect(smuggled.frame).toEqual(pairFrame);
 	});
 
-	test("the published 0.x member is 0.4 — the fleet projection and resume moved it again", () => {
+	test("the published 0.x member is 0.5 — spawn and the registry moved it again", () => {
 		// 0.2 was the device exchange, 0.3 the permission relay, 0.4 the fleet
 		// projection (origin/attachable/resumable/status), fleet_delta + fleet_resync,
 		// session_resume, and the neutral `answered` member Phase 34 shipped without.
-		expect(GEIST_PROTOCOL_VERSION).toBe("0.4");
+		// 0.5 is session_spawn + registry_resync and their two answers. This pin
+		// tracks the CURRENT member — it is not "0.5 forever".
+		expect(GEIST_PROTOCOL_VERSION).toBe("0.5");
 	});
 });

@@ -169,7 +169,8 @@ function getDefaultAgentDir(): string {
  * ```
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
-	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());
+	const cwdSpelling = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
+	const cwd = resolvePath(cwdSpelling);
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
 	let resourceLoader = options.resourceLoader;
 
@@ -183,6 +184,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({
 			cwd,
+			cwdSpelling,
 			agentDir,
 			settingsManager,
 			extensionFactories: [...CORE_BUILTIN_EXTENSIONS],

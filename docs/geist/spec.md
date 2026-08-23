@@ -153,6 +153,8 @@ harness:
 | `variants_new` | H→B | + `harnesses?: [name]` (round-robins across members when set) |
 | everything else | ↔ | as r5 |
 
+Starting a session from a client is `session_spawn` → `session_spawned`, and the list a picker draws from is `registry_resync` → `registry`; §15.3 specifies both pairs, including why a spawn frame names two registry ids and nothing else.
+
 ### 9.3 `ElementContext` — unchanged (r2)
 
 ### 9.4 Dispatch composition — as r4/r5, capability-gated
@@ -208,6 +210,29 @@ Nothing the headset or the phone sends names a program. A spawn carries **two op
 **The daemon reads no project-supplied config at all.** `resolveConfigPath` in `packages/geist/src/index.ts` prefers `<cwd>/geist.yaml` over `~/.geist/config.yaml` — that is the **CLI's** resolver, written for a person standing in a directory they chose, and it is deliberately **not on the daemon path**. A checked-out repository's own `geist.yaml` is **ignored** by the daemon: not merged, not consulted for a harness id, not consulted for a root. Cloning a repository therefore cannot add an entry to the set of things your dev machine will launch, which is the property the two-opaque-ids wire shape would otherwise hand straight back.
 
 **The registry file is re-checked on every load, and refuses rather than repairs.** Before a byte is read, the supplied path is walked with `lstat` — never `realpath` first, which would silently follow the very symlink the check exists to catch — and the file and its parent directory must each be owned by the **current uid** (not root, not anyone else) and must not be symbolic links; the file must not be group- or world-**accessible**, and the parent must not be group- or world-writable. A file that fails any of those is **refused, with an error naming the rule and the path**. geist never chmods it for you: a file that names executables is not one to quietly repair on somebody's behalf, and repairing it would erase the evidence that it was wrong.
+
+### 15.3 Starting work from the phone: two ids, and nothing else
+
+**A client starts work with one verb, and that verb carries a harness id and a project id and nothing else** — no path, no cwd, no argv, no environment. `SessionSpawnFrameSchema` is built on exactly the rule `SessionResumeFrameSchema` is built on: the daemon looks both ids up in the registry it owns (§15.2) and constructs what actually runs itself, so the worst a caller can name is an entry that exists or one that does not. A `path` field here would not be a convenience with a validator in front of it — it would make the renderer a party to what executes, and this frame reaches a phone that is one unlocked screen away from someone who is not you. The ids are character-constrained (`RegistryIdSchema`) so that neither can be mistaken for something the daemon might open rather than look up.
+
+**Exactly one `session_spawned` answers exactly one `session_spawn`, and it is sent when the answer is true** — never optimistically on receipt. An early "starting…" spends the one answer the client is waiting on, and the failure that then has to be reported has no frame left to arrive in. `SessionSpawnCodeSchema` closes the set of things that answer may say, so a renderer switches on a code rather than matching on prose:
+
+- `spawned` — a process was started and joined the fleet; the card is on your board.
+- `unknown_harness` — you named a harness this machine's registry does not contain.
+- `unknown_project` — you named a project this machine's registry does not contain.
+- `refused` — both ids resolved and policy said no: an unapproved root, a cap, a device whose pairing was revoked.
+- `spawn_failed` — the process could not be started at all.
+- `timeout` — it started and never joined the fleet inside the deadline. Something may be running that you cannot see, which is worth saying out loud rather than reporting as a plain failure.
+
+On `SessionSpawnedFrameSchema` the `sessionId` is present **only when a process was started**, because the daemon mints it. That is the one shape difference from `session_resumed`, whose id the client supplied and which can therefore always be echoed back; a refusal here has no id to name, and inventing one to keep the shape tidy would be worse than leaving it out.
+
+**The picker's data is `registry_resync` → `registry`: the harness ids and the projects you declared, and never an executable path.** A project's `root` does cross the wire — it is where your work is, it already crosses as a fleet row's `cwd`, and a picker showing two projects both called "api" cannot tell them apart without it — but `RegistryProjectSchema` carries that root and nothing that names a program to run. An executable path crosses nothing: it tells a client what to attack and buys the picker nothing, which is the same reason a fleet row does not carry its socket path. `RegistryHarnessSchema` therefore names a harness and whether it is the default, and never its `cmd`. `RegistryFrameSchema` carries those two lists and no third thing, and `RegistryResyncFrameSchema` asks for them with no fields at all, mirroring `fleet_resync`: there is one registry, the daemon owns it, and a client-supplied filter would be a second projection to keep honest.
+
+**What the picker shows is what you wrote in the registry, and nothing found by looking around.** Scanning workspace roots for directories that look like projects, and the recents list, are deliberately not part of what a phone may spawn into in v1: discovery answers "what is on this disk", which is a different question from "what did the operator agree may be launched". The picker shows exactly the `projects` map in `~/.geist/config.yaml`. Both may feed a suggestion list later; neither selects what is spawned.
+
+**A renderer reads `server_hello.capabilities` for `session-spawn` and `registry` before it sends either verb, and does not probe.** A frame type this daemon does not declare is answered `protocol_error unknown_type` and the connection is **closed** — so a client that guesses pays for the guess with the session it was watching, and an older daemon and a newer console fail loudly instead of hanging. A capability says a frame will be understood. It never says the connection sending it has earned anything: authentication is a separate gate and it runs first, so an unauthenticated `session_spawn` is refused for being unauthenticated, not for being unknown.
+
+**There is no stop verb on the wire, and that is deliberate.** Stopping a session is the daemon's own lifecycle concern, with its own deadline and its own idea of what "stopped" means for a process tree; putting a stop on the wire one phase before the protocol freezes at `geist/1.0` is a larger and more permanent commitment than anything the product currently asks for. A session you spawned from the phone ends the way any other session ends.
 
 ## 16. Milestones
 

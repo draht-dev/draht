@@ -1,4 +1,3 @@
-import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve as nodeResolvePath, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,20 +16,6 @@ export interface PathInputOptions {
 	stripAtPrefix?: boolean;
 	/** Normalize unicode space variants to regular spaces. */
 	normalizeUnicodeSpaces?: boolean;
-}
-
-/**
- * Resolve a path to its canonical (real) form, following symlinks.
- * Falls back to the raw path if resolution fails (e.g. the target does
- * not exist yet), so that callers never crash on missing filesystem
- * entries.
- */
-export function canonicalizePath(path: string): string {
-	try {
-		return realpathSync(path);
-	} catch {
-		return path;
-	}
 }
 
 /**

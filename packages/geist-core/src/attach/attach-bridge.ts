@@ -62,8 +62,12 @@ import {
 	type GeistServerFrame,
 	type ProtocolErrorCode,
 	protocolError,
+	type RegistryHarness,
+	RegistryIdSchema,
+	type RegistryProject,
 	ServerFrameSchema,
 	type SessionResumeCode,
+	type SessionSpawnCode,
 	type TransportLimits,
 } from "@draht/geist-protocol";
 import type { FleetSource, FleetUpdate } from "./fleet-observer.js";
@@ -108,6 +112,10 @@ const FLEET_DELTA_CAPABILITY = "fleet-delta";
  */
 const SESSION_RESUME_CAPABILITY = "session-resume";
 
+/** Each declared only when its own port was injected, for {@link SESSION_RESUME_CAPABILITY}'s reason. */
+const SESSION_SPAWN_CAPABILITY = "session-spawn";
+const REGISTRY_CAPABILITY = "registry";
+
 /**
  * The longest `session_resumed.message` this bridge will emit, in code points.
  *
@@ -129,7 +137,7 @@ const RESUME_MESSAGE_MAX = 400;
  * an errno — both attacker-influenceable strings — so something has to
  * neutralize them before they reach a schema that would throw.
  */
-function neutralized(text: string): string {
+function neutralized(text: string, max: number = RESUME_MESSAGE_MAX): string {
 	let out = "";
 	for (const character of text) {
 		const code = character.codePointAt(0) ?? 0;
@@ -148,9 +156,9 @@ function neutralized(text: string): string {
 			(code >= 0xfff9 && code <= 0xfffb) ||
 			(code >= 0xe0000 && code <= 0xe007f);
 		out += forbidden ? " " : character;
-		if (out.length >= RESUME_MESSAGE_MAX) break;
+		if (out.length >= max) break;
 	}
-	return out.slice(0, RESUME_MESSAGE_MAX);
+	return out.slice(0, max);
 }
 
 /**
@@ -181,6 +189,30 @@ export interface SessionResumeOutcome {
  * itself, and there is no fallback path in this file that could.
  */
 export type ResumeSessionPort = (sessionId: string) => Promise<SessionResumeOutcome>;
+
+/** The wire's own bounds, mirrored because `#emit` THROWS on a violation and `receive` does not catch. */
+const SPAWNED_SESSION_ID_MAX = 128;
+const REGISTRY_HARNESS_MAX = 64;
+const REGISTRY_PROJECT_MAX = 256;
+
+export interface SessionSpawnOutcome {
+	code: SessionSpawnCode;
+	sessionId?: string;
+	message?: string;
+}
+
+/** How a host turns two registry ids into a running session (R36-SPAWN.1). ITS ABSENCE IS THE SWITCH. */
+export type SpawnSessionPort = (request: { harnessId: string; projectId: string }) => Promise<SessionSpawnOutcome>;
+
+export interface RegistrySnapshot {
+	harnesses: readonly RegistryHarness[];
+	projects: readonly RegistryProject[];
+}
+
+/** ASKED PER FRAME (R36-SPAWN.3), so a re-checked file is seen without a restart. */
+export type RegistryPort = () => RegistrySnapshot;
+
+const EMPTY_REGISTRY: RegistrySnapshot = { harnesses: [], projects: [] };
 
 /**
  * The relayed frames that must never be chunked. See {@link AttachBridge.#fit}.
@@ -391,6 +423,8 @@ export interface AttachBridgeOptions {
 	 * `refused`. See {@link ResumeSessionPort} for why it is a port at all.
 	 */
 	resumeSession?: ResumeSessionPort;
+	spawnSession?: SpawnSessionPort;
+	registry?: RegistryPort;
 }
 
 /** WebSocket close code for a policy violation — every typed refusal uses it. */
@@ -511,6 +545,11 @@ export class AttachBridge {
 	 */
 	#resumeInFlight = false;
 
+	readonly #spawn: SpawnSessionPort | null;
+	readonly #registry: RegistryPort | null;
+	/** Per connection, on {@link AttachBridge.#resumeInFlight}'s terms; the one-per-project guard is the port's. */
+	#spawnInFlight = false;
+
 	constructor(options: AttachBridgeOptions) {
 		this.#socketDir = options.socketDir;
 		this.#conn = options.connection;
@@ -528,6 +567,8 @@ export class AttachBridge {
 		this.#authorize = options.authorize ?? null;
 		this.#fleet = options.fleet ?? null;
 		this.#resume = options.resumeSession ?? null;
+		this.#spawn = options.spawnSession ?? null;
+		this.#registry = options.registry ?? null;
 		// No device store means the host authenticated the upgrade request; see
 		// `AttachBridgeOptions.devices`. Anything else and this connection starts
 		// out as nobody, on a clock.
@@ -684,6 +725,14 @@ export class AttachBridge {
 				this.#resumeSession(frame.sessionId);
 				return;
 			}
+			case "session_spawn": {
+				this.#spawnSession(frame.harnessId, frame.projectId);
+				return;
+			}
+			case "registry_resync": {
+				this.#emitRegistry();
+				return;
+			}
 			case "input":
 			case "detach":
 			case "permission_response": {
@@ -802,6 +851,8 @@ export class AttachBridge {
 		const capabilities: string[] = [];
 		if (this.#fleet !== null) capabilities.push(FLEET_DELTA_CAPABILITY);
 		if (this.#resume !== null) capabilities.push(SESSION_RESUME_CAPABILITY);
+		if (this.#spawn !== null) capabilities.push(SESSION_SPAWN_CAPABILITY);
+		if (this.#registry !== null) capabilities.push(REGISTRY_CAPABILITY);
 		return capabilities;
 	}
 
@@ -881,6 +932,90 @@ export class AttachBridge {
 			code,
 			message: neutralized(message),
 		});
+	}
+
+	#spawnSession(harnessId: string, projectId: string): void {
+		const port = this.#spawn;
+		if (port === null) {
+			this.#emitSpawned("refused", "this daemon cannot spawn sessions");
+			return;
+		}
+		if (this.#spawnInFlight) {
+			this.#emitSpawned("refused", "a spawn is already in flight on this connection");
+			return;
+		}
+		this.#spawnInFlight = true;
+		void port({ harnessId, projectId })
+			.then((outcome) => {
+				this.#emitSpawned(outcome.code, outcome.message ?? "", outcome.sessionId);
+			})
+			.catch((error: unknown) => {
+				this.#emitSpawned("spawn_failed", error instanceof Error ? error.message : String(error));
+			})
+			// In `finally` and nowhere else: a port that threw once would otherwise wedge this connection.
+			.finally(() => {
+				this.#spawnInFlight = false;
+			});
+	}
+
+	/**
+	 * An id crosses only when a process was started and only if it fits the wire. An
+	 * unusable one is DROPPED, never turned into a failure verdict — a started
+	 * process reported `spawn_failed` is the worse lie.
+	 */
+	#emitSpawned(code: SessionSpawnCode, message: string, sessionId?: string): void {
+		if (this.#closed) return;
+		const started = code === "spawned";
+		const minted = started ? sessionId : undefined;
+		const named = minted !== undefined && minted.length > 0 && minted.length <= SPAWNED_SESSION_ID_MAX;
+		this.#emit({
+			type: "session_spawned",
+			...(named ? { sessionId: minted } : {}),
+			ok: started,
+			code,
+			message: neutralized(message),
+		});
+	}
+
+	/** No port, or one that threw, answers EMPTY: `protocol_error` closes and `error` is the session's, relayed. */
+	#emitRegistry(): void {
+		const snapshot = this.#registrySnapshot();
+		this.#emit({
+			type: "registry",
+			harnesses: this.#admissible(snapshot.harnesses, REGISTRY_HARNESS_MAX).map((harness) => ({
+				id: harness.id,
+				isDefault: harness.isDefault === true,
+			})),
+			projects: this.#admissible(snapshot.projects, REGISTRY_PROJECT_MAX).map((project) => ({
+				id: project.id,
+				name: neutralized(project.name ?? "", 200),
+				root: neutralized(project.root ?? "", 1024),
+			})),
+		});
+	}
+
+	/**
+	 * A registry id is an UNCONSTRAINED record key in the user's `geist.yaml`, so
+	 * `bin/draht`, `draht mono` and a 257th project all reach here and each makes
+	 * `#emit` throw. Dropped, never renamed: an unresolvable name helps no renderer.
+	 */
+	#admissible<TRow extends { id: string }>(rows: readonly TRow[], max: number): TRow[] {
+		const kept: TRow[] = [];
+		for (const row of rows) {
+			if (kept.length === max) break;
+			if (RegistryIdSchema.safeParse(row.id).success) kept.push(row);
+		}
+		return kept;
+	}
+
+	#registrySnapshot(): RegistrySnapshot {
+		const port = this.#registry;
+		if (port === null) return EMPTY_REGISTRY;
+		try {
+			return port();
+		} catch {
+			return EMPTY_REGISTRY;
+		}
 	}
 
 	/**

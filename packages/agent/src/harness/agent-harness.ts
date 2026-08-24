@@ -15,7 +15,43 @@ import type { AgentMessage, AgentToolResult, QueueMode, ThinkingLevel } from "..
 import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
 import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
 import type { Context } from "./context.ts";
-import { type Result, TaggedError } from "./result.ts";
+import type {
+	Closed,
+	InvalidLane,
+	InvalidMessage,
+	InvalidNavigation,
+	LaneBusy,
+	LaneExists,
+	NoActiveOperation,
+	NoActiveRun,
+	NothingToCompact,
+	NothingToResume,
+	OperationMismatch,
+	Result,
+	UnknownSkill,
+	UnknownTarget,
+	UnknownTemplate,
+} from "./result.ts";
+
+export {
+	Closed,
+	HarnessClosed,
+	HarnessFault,
+	InvalidLane,
+	InvalidMessage,
+	InvalidNavigation,
+	LaneBusy,
+	LaneExists,
+	NoActiveOperation,
+	NoActiveRun,
+	NothingToCompact,
+	NothingToResume,
+	OperationMismatch,
+	UnknownSkill,
+	UnknownTarget,
+	UnknownTemplate,
+} from "./result.ts";
+
 import { createAgentHarness } from "./runtime2/harness.ts";
 import type {
 	BranchSummaryEntry,
@@ -39,61 +75,6 @@ import type {
 	PromptTemplate,
 	Skill,
 } from "./types.ts";
-
-export class LaneBusy extends TaggedError("LaneBusy")<{
-	lane: string;
-	operationId: string;
-	operationKind: "run" | "compaction" | "navigation";
-	message: string;
-}> {}
-export class OperationMismatch extends TaggedError("OperationMismatch")<{
-	lane: string;
-	expectedOperationId: string;
-	currentOperationId?: string;
-	lastOperationId?: string;
-	message: string;
-}> {}
-export class NoActiveRun extends TaggedError("NoActiveRun")<{ lane: string; message: string }> {}
-export class NoActiveOperation extends TaggedError("NoActiveOperation")<{ lane: string; message: string }> {}
-export class NothingToResume extends TaggedError("NothingToResume")<{ lane: string; message: string }> {}
-export class NothingToCompact extends TaggedError("NothingToCompact")<{ lane: string; message: string }> {}
-export class InvalidMessage extends TaggedError("InvalidMessage")<{
-	lane: string;
-	reason: string;
-	message: string;
-}> {}
-export class InvalidNavigation extends TaggedError("InvalidNavigation")<{
-	lane: string;
-	reason: string;
-	message: string;
-}> {}
-export class UnknownSkill extends TaggedError("UnknownSkill")<{ name: string; message: string }> {}
-export class UnknownTemplate extends TaggedError("UnknownTemplate")<{ name: string; message: string }> {}
-export class UnknownTarget extends TaggedError("UnknownTarget")<{ targetId: string; message: string }> {}
-export class LaneExists extends TaggedError("LaneExists")<{ lane: string; message: string }> {}
-export class InvalidLane extends TaggedError("InvalidLane")<{
-	lane: string;
-	reason: string;
-	message: string;
-}> {}
-export class Closed extends TaggedError("Closed")<{ message: string }> {}
-
-export class HarnessFault extends Error {
-	readonly cause: unknown;
-
-	constructor(message: string, cause: unknown) {
-		super(message);
-		this.name = "HarnessFault";
-		this.cause = cause;
-	}
-}
-
-export class HarnessClosed extends Error {
-	constructor() {
-		super("AgentHarness was closed while the operation was active");
-		this.name = "HarnessClosed";
-	}
-}
 
 export type OptionalFinalAssistant =
 	| { finalEntryId: string; finalMessage: AssistantMessage }

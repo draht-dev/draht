@@ -1,28 +1,30 @@
 import { type Api, type ImageContent, type Model, type Models, reduceAssistantMessageFrames } from "@draht/ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
-import {
-	type AgentLane,
-	Closed,
-	HarnessClosed,
-	type HarnessEvent,
-	InvalidMessage,
-	LaneBusy,
-	type LaneConfigEventPayload,
-	type LaneExecutionInfo,
-	type LaneSnapshot,
-	type ModelIdentity,
-	type OperationAdmissionResult,
-	OperationMismatch,
-	type OperationRequest,
-	type QueuedItem,
-	UnknownSkill,
-	UnknownTemplate,
-	type WatchHandle,
+import type {
+	AgentLane,
+	HarnessEvent,
+	LaneConfigEventPayload,
+	LaneExecutionInfo,
+	LaneSnapshot,
+	ModelIdentity,
+	OperationAdmissionResult,
+	OperationRequest,
+	QueuedItem,
+	WatchHandle,
 } from "../agent-harness.ts";
 import type { Context } from "../context.ts";
 import type { HookRegistry } from "../hooks.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
-import { Result } from "../result.ts";
+import {
+	Closed,
+	HarnessClosed,
+	InvalidMessage,
+	LaneBusy,
+	OperationMismatch,
+	Result,
+	UnknownSkill,
+	UnknownTemplate,
+} from "../result.ts";
 import { insertEntry } from "../session/commit.ts";
 import { SessionInvariantError, SessionPendingAssistantMessageError } from "../session/session.ts";
 import type {
@@ -52,15 +54,7 @@ import {
 	setValue,
 } from "../session/values.ts";
 import { formatSkillInvocation } from "../skills.ts";
-import {
-	type ActiveDrive,
-	type Config,
-	type DriveScope,
-	type LaneCommand,
-	type LaneDriveCapabilities,
-	type LaneState,
-	SliceNotImplemented,
-} from "./types.ts";
+import { type Config, type Drive, type LaneCommand, type LaneState, SliceNotImplemented } from "./types.ts";
 
 type EmitBatch = (events: readonly HarnessEvent[], context: Context) => Promise<void>;
 type WatchHandler = <T>(snapshot: T, filter: (event: HarnessEvent) => boolean, context: Context) => WatchHandle<T>;
@@ -102,7 +96,7 @@ function capturedModel(operation: Operation): ModelIdentity | undefined {
 }
 
 /** Runtime2 implementation of one configured lane. */
-export class Lane<TContext extends object | undefined> implements AgentLane, LaneDriveCapabilities<TContext> {
+export class Lane<TContext extends object | undefined> implements AgentLane {
 	readonly name: string;
 	readonly sessionTree: SessionTree;
 	readonly session: Session;
@@ -113,7 +107,8 @@ export class Lane<TContext extends object | undefined> implements AgentLane, Lan
 	private readonly onFault: FaultHandler;
 	private readonly installWatch: WatchHandler;
 	private readonly config: () => Config<TContext>;
-	private activeDrive: ActiveDrive | undefined;
+	/** Package-internal drive owner. Public only because deterministic procedure tests install exact owners directly. */
+	activeDrive: Drive | undefined;
 	state: LaneState;
 	closedError: Error | undefined;
 
@@ -165,8 +160,8 @@ export class Lane<TContext extends object | undefined> implements AgentLane, Lan
 		return this.config();
 	}
 
-	ownsDrive(scope: DriveScope<TContext>): boolean {
-		return this.activeDrive === scope.owner;
+	isDriveActive(drive: Drive): boolean {
+		return this.activeDrive === drive;
 	}
 
 	mismatch(expected: string, currentOperationId: string | null, last: LaneLastResult | undefined): OperationMismatch {

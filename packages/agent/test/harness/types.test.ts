@@ -475,10 +475,16 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	expectTypeOf<DriveOutcome["kind"]>().toEqualTypeOf<"settled" | "waiting">();
 	expectTypeOf<AgentLane["inspectExecution"]>().returns.toEqualTypeOf<Promise<LaneExecutionInfo>>();
 	expectTypeOf<
-		Extract<keyof AgentLane, "session" | "models" | "hooks" | "command" | "readConfig" | "ownsDrive" | "mismatch">
+		Extract<
+			keyof AgentLane,
+			"session" | "models" | "hooks" | "activeDrive" | "command" | "readConfig" | "isDriveActive" | "mismatch"
+		>
 	>().toEqualTypeOf<never>();
 	expectTypeOf<
-		Extract<keyof AgentHarness, "session" | "models" | "command" | "readConfig" | "ownsDrive" | "mismatch">
+		Extract<
+			keyof AgentHarness,
+			"session" | "models" | "activeDrive" | "command" | "readConfig" | "isDriveActive" | "mismatch"
+		>
 	>().toEqualTypeOf<never>();
 	expectTypeOf<OperationRequest["kind"]>().toEqualTypeOf<
 		"prompt" | "skill" | "prompt_template" | "compaction" | "navigation"

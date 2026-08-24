@@ -12,7 +12,8 @@ import {
 	pendingToolOutput,
 	setValue,
 } from "../session/values.ts";
-import type { DriveScope } from "./types.ts";
+import type { Lane } from "./lane.ts";
+import type { Drive } from "./types.ts";
 
 export interface ProgressChannel<T> {
 	write(item: T): void;
@@ -22,7 +23,8 @@ export interface ProgressChannel<T> {
 }
 
 function openProgress<TContext extends object | undefined, T>(
-	scope: DriveScope<TContext>,
+	lane: Lane<TContext>,
+	drive: Drive,
 	commitWrite: (item: T) => Write,
 	clear: () => Write,
 	stillOwns: (reader: SessionReader) => Promise<boolean>,
@@ -32,7 +34,7 @@ function openProgress<TContext extends object | undefined, T>(
 	return {
 		write(item) {
 			if (sealed) return;
-			const write = scope.lane.command(async (projection, reader) => {
+			const write = lane.command(async (projection, reader) => {
 				if (!(await stillOwns(reader))) return { kind: "return", result: undefined };
 				return {
 					kind: "commit",
@@ -40,7 +42,7 @@ function openProgress<TContext extends object | undefined, T>(
 					next: projection,
 					materialize: () => undefined,
 				};
-			}, scope.context);
+			}, drive.context);
 			latest = write;
 			void write.catch(() => {});
 		},
@@ -55,36 +57,39 @@ function openProgress<TContext extends object | undefined, T>(
 }
 
 async function readOwnedRun<TContext extends object | undefined>(
-	scope: DriveScope<TContext>,
+	lane: Lane<TContext>,
+	drive: Drive,
 	reader: SessionReader,
 ): Promise<RunState | undefined> {
-	const durableLane = await reader.getValue(laneStateValue(scope.lane.name), scope.context);
+	const durableLane = await reader.getValue(laneStateValue(lane.name), drive.context);
 	if (durableLane === undefined) {
-		throw new SessionInvariantError(`Lane ${JSON.stringify(scope.lane.name)} has no lane state`);
+		throw new SessionInvariantError(`Lane ${JSON.stringify(lane.name)} has no lane state`);
 	}
-	if (durableLane.value.currentOperationId !== scope.operationId) return undefined;
-	const durableState = await reader.getValue(operationStateValue(scope.operationId), scope.context);
+	if (durableLane.value.currentOperationId !== drive.operationId) return undefined;
+	const durableState = await reader.getValue(operationStateValue(drive.operationId), drive.context);
 	if (durableState === undefined) {
-		throw new SessionInvariantError(`Operation ${scope.operationId} has no operation state`);
+		throw new SessionInvariantError(`Operation ${drive.operationId} has no operation state`);
 	}
 	if (durableState.value.kind !== "run") {
-		throw new SessionInvariantError(`Operation ${scope.operationId} is ${durableState.value.kind}, expected run`);
+		throw new SessionInvariantError(`Operation ${drive.operationId} is ${durableState.value.kind}, expected run`);
 	}
-	if (!scope.lane.ownsDrive(scope)) return undefined;
+	if (!lane.isDriveActive(drive)) return undefined;
 	return durableState.value;
 }
 
 export function openFrameProgress<TContext extends object | undefined>(
-	scope: DriveScope<TContext>,
+	lane: Lane<TContext>,
+	drive: Drive,
 	responseEntryId: string,
 ): ProgressChannel<AssistantMessageFrame> {
-	const address = pendingAssistantFrames(scope.operationId, responseEntryId);
+	const address = pendingAssistantFrames(drive.operationId, responseEntryId);
 	return openProgress(
-		scope,
+		lane,
+		drive,
 		(frame) => appendList(address, frame),
 		() => deleteList(address),
 		async (reader) => {
-			const state = await readOwnedRun(scope, reader);
+			const state = await readOwnedRun(lane, drive, reader);
 			if (state === undefined) return false;
 			if (state.phase.kind === "assistant") {
 				const generation = state.phase.generation;
@@ -100,16 +105,18 @@ export function openFrameProgress<TContext extends object | undefined>(
 }
 
 export function openToolProgress<TContext extends object | undefined>(
-	scope: DriveScope<TContext>,
+	lane: Lane<TContext>,
+	drive: Drive,
 	invocationId: string,
 ): ProgressChannel<AgentToolResult<unknown>> {
-	const address = pendingToolOutput(scope.operationId, invocationId);
+	const address = pendingToolOutput(drive.operationId, invocationId);
 	return openProgress(
-		scope,
+		lane,
+		drive,
 		(snapshot) => setValue(address, snapshot),
 		() => deleteValue(address),
 		async (reader) => {
-			const state = await readOwnedRun(scope, reader);
+			const state = await readOwnedRun(lane, drive, reader);
 			if (state?.phase.kind !== "tools") return false;
 			return state.phase.batch.calls.some(
 				(call) => call.resultEntryId === invocationId && call.status === "effect_pending",

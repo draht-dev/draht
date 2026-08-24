@@ -1451,7 +1451,7 @@ type NavigationState =
 
 Structural preparation is built from an observed source leaf and settings snapshot, normalized (`Set<string>` file-operation fields become sorted arrays), and written once to the `operationPreparation(operationId, taskId)` value before the decision hook, in the same transaction as the `deciding` state (§3.9). State carries only `taskId`; the deterministic constructor locates the value, and hooks/generators hydrate arrays back to the source preparation types. Reopen never rebuilds it from current settings, so the provider sees the same summary input the hook approved.
 
-One structural attempt may make one or two sequential provider requests using the existing compaction implementation. Its request callback first commits `request:{index,usageId}`, synchronously checks `EffectGate.assertOpen()` immediately before invoking that request, then atomically writes usage and clears/advances the request field. Intermediate content remains process-local; any activated orphaned `effect_pending` attempt is treated as wholly uncertain and starts a later attempt under the captured policy rather than continuing request two. Never suspend between two requests of one live structural attempt: if its captured model identity disappears after request one, fail the attempt in-band so retry/failure follows the captured policy and no process-local intermediate text is parked waiting for registration. A durable `generating` decision prevents its decision hook from rerunning.
+One structural attempt may make one or two sequential provider requests using the existing compaction implementation. Its request callback first commits `request:{index,usageId}`, invokes that request through `drive.gate.admit(...)`, then atomically writes usage and clears/advances the request field. Intermediate content remains process-local; any activated orphaned `effect_pending` attempt is treated as wholly uncertain and starts a later attempt under the captured policy rather than continuing request two. Never suspend between two requests of one live structural attempt: if its captured model identity disappears after request one, fail the attempt in-band so retry/failure follows the captured policy and no process-local intermediate text is parked waiting for registration. A durable `generating` decision prevents its decision hook from rerunning.
 
 ## 3.3 Lane state and the restore projection
 
@@ -1550,7 +1550,7 @@ Structural preparation may be computed outside the lane line against an observed
 
 Pre-acceptance rejections write **nothing**: `LaneBusy`, `NothingToCompact`, `InvalidNavigation` (target is the current leaf, label on the root target, summarize from root, or a null target with summarize), `UnknownTarget` (non-null target missing), and `InvalidMessage` when acceptance would append zero entries. Acceptance does not consult process-local model/tool registries; unavailable captured implementations become in-band configuration failures at their actual execution boundary. An empty normalized caller request is valid only when the command captures at least one `nextRun` item; no later hook can rescue empty acceptance.
 
-**Acceptance must observe `currentOperationId === null`.** Because the check occurs on the sole lane mutation line, it is validation, not compare-and-swap. Concurrent accepts serialize naturally; the loser observes the committed operation and returns `LaneBusy`. Acceptance never installs `ActiveOperation`. Convenience calls and hosted schedulers use the same accepted state: `prompt`/`skill`/`compact`/`navigateTree` call `accept`, then `drive`; a serving layer may return the admission, schedule a durable wake, and drive later. A crash after acceptance but before drive restores the initial committed phase and starts no work automatically.
+**Acceptance must observe `currentOperationId === null`.** Because the check occurs on the sole lane mutation line, it is validation, not compare-and-swap. Concurrent accepts serialize naturally; the loser observes the committed operation and returns `LaneBusy`. Acceptance never installs a `Drive`. Convenience calls and hosted schedulers use the same accepted state: `prompt`/`skill`/`compact`/`navigateTree` call `accept`, then `drive`; a serving layer may return the admission, schedule a durable wake, and drive later. A crash after acceptance but before drive restores the initial committed phase and starts no work automatically.
 
 ## 3.7 Assistant generation
 
@@ -1893,10 +1893,16 @@ Public operation status is a small process-relative observation, not a predictio
 There is at most one process-local record per lane. It owns one `drive` pass, not the durable operation's whole lifetime: a pass may settle or reach a durable wait. Durable operation phase and control remain the recovery authority. Model/tool availability is checked only when a procedure reaches the corresponding effect-admission boundary; absence becomes an in-band durable error/result rather than a public operation status.
 
 ```ts
-interface ActiveOperation {
-  operationId: string;
-  completion: Promise<DriveOutcome>;
-  effectGate: EffectGate;
+class Drive {
+  readonly operationId: string;
+  readonly completion: Promise<DriveOutcome>; // shared by installer and joiners
+  readonly gate: Gate;
+  readonly context: Context;                  // installer cancellation removed
+  readonly installerSignal: AbortSignal | undefined;
+  readonly waitForRetry: boolean;
+  deferredPermits: number;
+  finalizedOutcome?: DriveOutcome;
+  // private GateControl and first-call-wins settle/fail closures
 }
 
 class AbortRequested extends Error {
@@ -1908,9 +1914,10 @@ class AbortRequested extends Error {
 }
 
 class OperationEnded extends Error {}
+class DriveAbandoned extends Error {}
 ```
 
-This is not another state machine. `completion` is the ordinary promise returned by the async operation procedure. `effectGate` owns only abort-versus-start arbitration and the operation's cooperative signal (§4.2). Current state, retry data, responses awaiting settlement, structural intermediate content, and parallel tool promises remain ordinary procedure-local variables. Streaming drafts and running-tool display values are ordinary lane fields used only for snapshots.
+This is not another durable state machine. `Drive` is one installed process-local pass: shared completion, exact ownership identity, effect admission, invocation Context, and pass-local wait policy. Current durable state, retry data, responses awaiting settlement, structural intermediate content, and parallel tool promises remain ordinary procedure-local variables. Streaming drafts and running-tool display values remain lane fields used only for snapshots.
 
 `pi.op.state/{operationId}` is the operation's **durable restart point**, not the live JavaScript instruction pointer. While a task is alive, its call stack is the finer program counter:
 
@@ -1969,7 +1976,7 @@ async function executeDrivePass(operationId: string,
 }
 ```
 
-The pseudo-code shows ownership and catch boundaries, not required helper names. `waitForRetry: false` returns the durable `notBefore`; `true` starts the existing abort-aware retry timer. `pollDeferred: true` grants at most the existing one-poll permit. `AbortRequested` is the one internal control-flow signal used when cancellation wins the effect gate. A scope holding live local results catches it before the outer boundary when those values affect reconciliation. In particular, the parallel-tool procedure retains its promise map, stages each finalized started call as it settles, and materializes only the source-ready prefix; an assistant procedure parked after receiving a response retains that response long enough to settle it under cancelled control.
+The pseudo-code shows ownership and catch boundaries, not required helper names. `waitForRetry: false` returns the durable `notBefore`; `true` starts the existing abort-aware retry timer. `pollDeferred: true` grants at most the existing one-poll permit. `AbortRequested` is the one internal control-flow signal used when cancellation wins the effect gate. A procedure holding live local results catches it before the outer boundary when those values affect reconciliation. In particular, the parallel-tool procedure retains its promise map, stages each finalized started call as it settles, and materializes only the source-ready prefix; an assistant procedure parked after receiving a response retains that response long enough to settle it under cancelled control.
 
 Ordinary procedures are straight-line across their own durable restart points. Assistant generation is representative:
 
@@ -1986,18 +1993,18 @@ Normal execution handles checkpoints, ready/retry states, planned or locally own
 
 ### Task installation, joining, and removal
 
-`accept` commits the first durable state and returns without installing `ActiveOperation`. A durably accepted but locally unowned operation is ordinary. `drive({ operationId }, context)` owns one pass. On the lane mutation line it reads current ownership and `pi.lane.lastResult`, then applies exactly one rule:
+`accept` commits the first durable state and returns without installing a `Drive`. A durably accepted but locally unowned operation is ordinary. `drive({ operationId }, context)` owns one pass. On the lane mutation line it reads current ownership and `pi.lane.lastResult`, then applies exactly one rule:
 
 - current operation absent and `pi.lane.lastResult.operationId === operationId`: return its already-settled outcome;
 - current operation absent with another/no last id, or current operation has another id: return `OperationMismatch` without starting work;
-- the same operation already has `ActiveOperation`: join that pass's `completion`;
-- the same operation has no task: install one deferred completion promise and fresh gate before releasing the lane line, then start the pass after `Session.mutate` returns.
+- the same operation already has a `Drive`: join that pass's completion;
+- the same operation has no Drive: construct and install one before releasing the lane line, then start the pass after `Session.mutate` returns.
 
-The first caller to install a pass supplies that pass's retry-wait and deferred-poll policy. Same-operation joiners receive the same `DriveOutcome`; a convenience caller whose policy requires more progress may call `drive` again after that pass returns. This arbitration lets `prompt` literally compose `accept` and `drive` even if an alarm reaches the accepted operation first, while preserving one process-local driver. Every drive is fenced by its expected operation id, so a stale wake for A never drives later operation B.
+The first caller to install a pass supplies that pass's retry-wait and deferred-poll policy. Same-operation joiners observe the shared completion; a convenience caller whose policy requires more progress may call `drive` again after that pass returns. Installer cancellation abandons that shared pass, so installer and current joiners reject with `DriveAbandoned` and may drive the still-open durable operation again. A joiner's own cancellation ends only that joiner's observation. This arbitration lets `prompt` literally compose `accept` and `drive` even if an alarm reaches the accepted operation first, while preserving one process-local driver. Every drive is fenced by its expected operation id, so a stale wake for A never drives later operation B.
 
 A newly installed real pass checks cancellation, then invokes `before_drive` once before recovery or ordinary work. Joiners do not rerun it. A later pass after retry wait, deferred suspension, close/reopen, or process restart invokes it again. Durable phase and local ownership alone determine dispatch: `starting` requires `before_run`; an unowned `effect_pending` phase is orphaned; every other phase follows its ordinary procedure. No fresh/continue/restore marker exists.
 
-Every task has one outer `finally` path: after its last durable commit, wait decision, or terminal observation and after publishing its final local events, it performs a no-write lane job that verifies it still owns the slot and removes its `ActiveOperation`; only then does `completion` resolve/reject. Close/fault removes records under the harness admission barrier. This keeps a lane locally busy until the old continuation and observations are actually done, even when its terminal transaction already made the durable lane idle. External finalization uses the same eventual `finally` removal after signalling the task (§4.9).
+Every task has one outer `finally` path: after its last durable commit, wait decision, or terminal observation and final local events, it synchronously removes itself only when `lane.activeDrive === drive`. Normal completion settles only after that exact cleanup. Invocation abandonment and close/fault fail completion and remove the exact Drive immediately so non-cooperative work cannot block recovery or shutdown; every late planner and progress write also checks exact Drive identity. External finalization instead settles completion immediately but deliberately retains the Drive until the task's eventual `finally`, preserving `LaneBusy` during detached cleanup (§4.9).
 
 Convenience methods add policy, not another execution path. `prompt`/`skill`/`compact`/`navigateTree` call `accept` and then drive the returned id; they wait locally through retry waits and return on terminal or deferred suspension. `resume(context)` inspects the current id and drives it with one deferred-poll permit. `abort(context)` calls `requestAbort`, then ensures cancellation reconciliation has a drive pass; it still returns once cancellation is durable. A scheduler calls the expected-id primitives directly and may persist the admission or set an alarm from `waiting.notBefore`. Normal applications do not manage operation ids when resuming.
 
@@ -2005,129 +2012,88 @@ Convenience methods add policy, not another execution path. `prompt`/`skill`/`co
 
 ## 4.2 Effect gate
 
-`Session.mutate` orders every durable race, but admission of a hook/provider/tool/timer operation does not occur inside a session transaction. `EffectGate` closes that one gap. Conceptually it has three states:
+`Session.mutate` orders durable races, but ordinary hook/provider/tool/timer admission occurs outside a transaction. Each installed `Drive` owns a split gate:
 
 ```ts
-type EffectGateState =
+interface Gate {
+  readonly signal: AbortSignal;
+  /** Synchronously checks admission and invokes the operation with no yield between them. */
+  admit<T>(invoke: () => T): T;
+}
+
+interface GateControl {
+  beginAbort(cancellation: Promise<void>): void;
+  signalAbort(): void;
+  close(error: HarnessClosed | HarnessFault | OperationEnded | DriveAbandoned): void;
+}
+```
+
+Procedures receive only `drive.gate`. `Drive` privately retains `GateControl` and exposes owner lifecycle methods `beginAbort`, `signalAbort`, and `closeGate`; there is no procedure-facing `assertOpen` method.
+
+The gate has three process-local states:
+
+```ts
+type GateState =
   | { status: "open" }
   | { status: "aborting"; cancellation: Promise<void> }
-  | { status: "closed"; error: HarnessClosed | HarnessFault | OperationEnded };
-
-interface EffectGate {
-  /** The operation-owned cooperative signal. */
-  readonly signal: AbortSignal;
-  /** Synchronously throws when ordinary work may no longer start. */
-  assertOpen(): void;
-  /** Synchronously closes ordinary starts and stores the durable-marker promise. */
-  beginAbort(cancellation: Promise<void>): void;
-  /** Pull the controller only after the cancellation commit succeeds. */
-  signalAbort(): void;
-  close(error: HarnessClosed | HarnessFault | OperationEnded): void;
-}
+  | { status: "closed"; error: Error };
 ```
 
-The gate privately owns the corresponding `AbortController`. `requestAbort(operationId, context)` is the cancellation primitive. When the expected operation has a live pass, it creates a deferred abort-mutation promise and calls `beginAbort(promise)` synchronously before performing the lane mutation. If the marker commits, it resolves the promise and calls `signalAbort()`. If the expected operation no longer owns the lane, it resolves the promise, closes the gate with `OperationEnded`, and returns `OperationMismatch`. With no live pass it commits or observes the same durable marker but installs no task; a later `drive` performs reconciliation. A commit fault rejects the promise and closes the gate with `HarnessFault`. `assertOpen()` is a synchronous check:
+`Gate.admit(invoke)` performs the only check and immediately returns `invoke()`. If abort is being committed it throws `AbortRequested(cancellation)`; if closed it throws the closing error. The gate owns the cooperative `AbortController`, exposed through `gate.signal`.
+
+`requestAbort(operationId, context)` is the durable cancellation primitive. With a matching live Drive it creates the abort-mutation promise and calls `drive.beginAbort(promise)` synchronously before the lane mutation. A committed marker resolves that promise and then calls `drive.signalAbort()`. Ownership loss resolves it, closes the gate with `OperationEnded`, and returns `OperationMismatch`. Commit fault rejects it and closes with `HarnessFault`. With no Drive, requestAbort commits or observes the same durable marker but starts no pass.
+
+**The admitted-operation boundary is load-bearing.** Preparation finishes first; then the gate check and operation invocation are one synchronous expression:
 
 ```ts
-assertOpen(): void {
-  if (state.status === "aborting")
-    throw new AbortRequested(state.cancellation);
-  if (state.status === "closed") throw state.error;
-}
+// WRONG: abort can win while preparation awaits after admission.
+const stale = drive.gate.admit(() => prepareRequest());
+await stale;
+models.streamSimple(model, aiContext, options);
+
+// Correct: all preparation finished; check and invocation are adjacent.
+await prepareRequest();
+const admittedContext = withAbortSignal(drive.gate.signal, drive.context);
+const stream = drive.gate.admit(() =>
+  models.streamSimple(model, aiContext, {
+    ...options,
+    signal: admittedContext.abortSignal,
+    telemetryContext: admittedContext.telemetryContext,
+  }),
+);
 ```
 
-`AbortRequested` is internal expected gate control flow. It carries the in-progress abort-mutation promise. That promise resolves when the lane job either commits cancellation or observes that a terminal transaction already won; it rejects on fault/close. The nearest procedure with relevant local work catches it; otherwise the operation-task boundary catches it, waits for that lane result, reloads, and either reconciles durable cancellation or resolves the already-terminal result. `HarnessClosed` and `HarnessFault` follow their ordinary rejection paths and perform no cancellation write.
+The admitted boundary is the public Models/tool/hook operation, not an eventual SDK syscall. A Models call synchronously returns a lazy stream; later auth resolution, provider loading, and delegation remain part of that admitted operation and own the same signal.
 
-For a driven operation, the gate applies to starting ordinary hooks, provider requests/fetches, real tools, and convenience-owned retry timers. It does not wrap commits: dependent commits use `Session.mutate`. Both `before_drive` and `before_run` execute only after an operation owns a real drive pass, so they use the same operation gate. Best-effort `cancelDeferred` is cancellation cleanup, not ordinary work; it runs only after durable cancellation and uses a close-only signal.
+The complete admission catalog is:
 
-**The admitted-operation boundary is load-bearing.** Preparation must finish first. Then `assertOpen()` and the operation invocation must be adjacent synchronous statements:
+**Accepted hook aggregates:** `before_drive`, `before_run`, `before_run_end`, `transform_context`, `before_request`, `before_payload`, `after_response`, `before_tool`, `after_tool`, `before_compaction`, `before_navigation`. One `admit` wraps the complete registered pipeline, not each handler.
 
-```ts
-// WRONG: abort may close the gate while this preparation awaits.
-effectGate.assertOpen();
-const staleAdmittedContext = withAbortSignal(effectGate.signal, context);
-await prepareRequest();
-models.streamSimple(model, aiContext, {
-  ...options,
-  signal: staleAdmittedContext.abortSignal,
-  telemetryContext: staleAdmittedContext.telemetryContext,
-});
+**Provider operations:** one assistant `Models.streamSimple`, each individual structural-summary request, and one explicit `Models.fetchDeferred` poll. Best-effort `cancelDeferred` is cancellation cleanup and uses its separate close-only signal.
 
-// Correct: JavaScript cannot interleave another task between these statements.
-await prepareRequest();
-effectGate.assertOpen();
-const admittedContext = withAbortSignal(effectGate.signal, context);
-admittedContext.abortSignal?.throwIfAborted();
-models.streamSimple(model, aiContext, {
-  ...options,
-  signal: admittedContext.abortSignal,
-  telemetryContext: admittedContext.telemetryContext,
-});
-```
+**Other ordinary operations:** one real `tool.execute` and creation of each assistant/structural retry timer. Unknown, invalid, blocked, and synthetic tool outcomes start no tool and use no gate.
 
-The boundary is the public invocation of the operation, not necessarily the eventual SDK/network syscall. `Models.streamSimple()` synchronously returns and starts a lazy stream; its later auth resolution and provider-module loading are part of that admitted request. If abort wins before the call, Models is never invoked. If start wins, abort later pulls the signal and the admitted setup/provider path must stop cooperatively. The same definition applies to a hook aggregate: the complete registered pipeline is one operation admitted by invoking the aggregate runner.
+No other code calls `Gate.admit`. It does not wrap commits, public queue/configuration/value/tree mutations, pure classification, transaction construction, synthetic settlement, argument/system/context preparation, an already-admitted promise, cancellation reconciliation, or passive listeners.
 
-To contain the footgun, the following catalog is complete. Only these low-level integrations own an adjacent `assertOpen()`/invocation pair.
-
-**Accepted-operation hook aggregates:**
-
-- `before_drive`;
-- `before_run`;
-- `before_run_end`;
-- `transform_context`;
-- `before_request`;
-- `before_payload`;
-- `after_response`;
-- `before_tool`;
-- `after_tool`;
-- `before_compaction`;
-- `before_navigation`.
-
-Each item means one check before invoking the complete registered pipeline, not one check per handler. Once admitted, that aggregate finishes under its hook rules. `before_drive` is fail-closed; isolated failures in the other aggregates are reported and skipped unless their contract says otherwise.
-
-**Provider operations:**
-
-- an assistant `Models.streamSimple(...)` operation;
-- each sequential provider operation inside a structural summary attempt;
-- one `Models.fetchDeferred(...)` operation for an explicit poll.
-
-Request preparation, implementation resolution, context transformation, and option composition finish before the provider check. Abort-first means `Models` is never called; admission-first means the complete Models request—including later auth resolution, lazy loading, and provider delegation—is already admitted and owns `admittedContext.abortSignal`, which composes the invocation and effect-gate signals. Those later stages are not new effect starts. Best-effort `Models.cancelDeferred(...)` is cancellation cleanup and uses the separate close-only gate/signal, not the operation gate.
-
-**Other ordinary operations:**
-
-- one real `tool.execute(...)` invocation; unknown, invalid, blocked, and other immediate tool outcomes do not check the gate because they start no tool;
-- timer creation for every assistant or structural `retry_wait` sleep.
-
-No other code calls `assertOpen()`. In particular, it is not used for:
-
-- `Session.mutate` or any public queue/configuration/value/tree mutation;
-- pure classification, transaction construction, or synthetic settlement;
-- `prepareArguments`, `systemPrompt`, `toolContext`, `toProviderMessages`, or entry projectors;
-- awaiting a provider/tool promise that was already admitted;
-- cancellation reconciliation, except its separate close-only deferred-cancellation cleanup;
-- passive event listeners;
-
-Each listed integration has abort-first/admission-first tests. The assistant block receives the invocation Context for signal-aware preparation; only the admitted request adapter synchronously composes `effectGate.signal` into a child Context immediately before Models invocation.
-
-`requestAbort` starts by synchronously changing a matching live gate to `aborting` and installing the abort-mutation promise. It then attempts to commit `cancel_requested`; only after that commit succeeds does it pull the controller. Thus the only orders are:
+The two possible orders are:
 
 ```text
-operation admission first
-→ assertOpen and operation invocation happen synchronously
-→ abort closes gate
-→ abort commit becomes durable
-→ controller signals the already-started effect
+admission first
+→ Gate.admit checks and invokes synchronously
+→ requestAbort begins durable cancellation
+→ cancellation commit lands
+→ signalAbort pulls the already-admitted operation signal
 
 abort first
-→ gate becomes aborting synchronously
-→ later assertOpen throws AbortRequested
-→ no operation invocation occurs
-→ task waits for the abort commit and reconciles
+→ beginAbort closes ordinary admission synchronously
+→ later Gate.admit throws AbortRequested
+→ invoke is never called
+→ task waits for the marker and reconciles
 ```
 
-This gate is not durable state, a mutex, a scheduler, or a second mutation line. If the process dies before the cancellation commit, its closed gate disappears and no cancellation exists. Recovery trusts only `pi.op.state.control`.
+The gate is not durable state, a mutex, scheduler, or mutation line. If the process dies before the cancellation commit, the closed gate disappears and no cancellation exists. Recovery trusts only durable control.
 
-Every procedure boundary emits its existing telemetry span around the ordinary code it executes.
+Every catalog item has abort-first/admission-first tests. Preparation must precede `admit`, and the admitted signal must reach asynchronous Models auth/loading/provider work.
 
 ## 4.3 The lane mutation line
 
@@ -2197,7 +2163,7 @@ The lane's configured model identity comes from `laneConfig`. A current operatio
 
 ## 4.5 Driving and crash recovery
 
-Recovery begins only when an open operation has no `ActiveOperation` and a matching `drive({ operationId }, context)` installs a real pass owner. `AgentHarness.create(options, context)` never drives. `resume(context)` inspects and drives the current operation without exposing its id and grants the same pass one deferred-poll permit. `requestAbort(operationId, context)` with no task commits cancellation but installs nothing; the next drive enters cancellation reconciliation directly.
+Recovery begins only when an open operation has no `Drive` and a matching `drive({ operationId }, context)` installs a real pass owner. `AgentHarness.create(options, context)` never drives. `resume(context)` inspects and drives the current operation without exposing its id and grants the same pass one deferred-poll permit. `requestAbort(operationId, context)` with no task commits cancellation but installs nothing; the next drive enters cancellation reconciliation directly.
 
 The pass first reloads durable control. If cancellation is requested, it invokes neither `before_drive` nor `before_run` and enters §4.6. Otherwise it gates and invokes `before_drive`; failure rejects this pass without faulting the harness or writing durable progress. Model/tool implementations are resolved only at the actual operation boundary that needs them. An unavailable provider/model or configured request tool becomes a non-retryable configuration failure before request intent; an unavailable requested tool becomes a synthetic error result. Neither condition suspends the operation. Durable phase then decides the work: `starting` runs and settles `before_run` as §3.6 specifies; an unowned pending effect is orphaned by construction and follows the table below; all other phases continue ordinarily.
 
@@ -2229,7 +2195,7 @@ retry_wait
 → caller schedules a wake and later drives the same operation id
 
 retry_wait
-→ drive({ waitForRetry: true }) admits and immediately starts the retry timer through EffectGate
+→ drive({ waitForRetry: true }) admits and immediately starts the retry timer through `drive.gate`
 → timer reaches notBefore: Session.mutate verifies the same wait and commits ready
 → requestAbort: timer wakes after durable cancellation and reconciliation runs
 → close: local task rejects; no durable write
@@ -2246,14 +2212,12 @@ Cancellation is durable control plus process-local prevention/signalling. It is 
 For a live operation, the first matching `requestAbort()` performs this order:
 
 ```text
-1. synchronously put the matching `ActiveOperation.effectGate` into aborting state and install
-   the abort-mutation promise;
+1. synchronously call `beginAbort` on the matching Drive and install the abort-mutation promise;
 2. `Session.mutate` rereads the latest operation and either commits
    `cancel_requested` or observes that the expected id no longer owns the lane;
 3. for runs, atomically move current steer/follow-up ids to `control.drained*`
    and empty those inbox lists; their `pendingEntry(id)` values remain;
-4. after a cancellation commit, resolve the promise and pull the `EffectGate`'s
-   `AbortController`; after an ownership mismatch, resolve it and close with `OperationEnded`;
+4. after a cancellation commit, resolve the promise and call `drive.signalAbort()`; after an ownership mismatch, resolve it and close the Drive gate with `OperationEnded`;
 5. return `AbortRequestResult` once cancellation is durable, or `OperationMismatch`
    when the fence failed; a matching live pass continues reconciliation.
 ```
@@ -2270,7 +2234,7 @@ With queued steer/follow-up, successful abort removes their ids from the inbox, 
 
 ### No live task
 
-After reopen or suspension there may be no gate to close or work to signal. `requestAbort(operationId, context)` then writes or observes `cancel_requested` and returns without installing `ActiveOperation`. A scheduler sets a wake and later calls `drive`. The `abort(context)` convenience ensures a same-id drive pass is claimed after the marker and proceeds directly to reconciliation. A crash between the marker and that claim is harmless because the next drive observes durable cancellation first.
+After reopen or suspension there may be no gate to close or work to signal. `requestAbort(operationId, context)` then writes or observes `cancel_requested` and returns without installing a `Drive`. A scheduler sets a wake and later calls `drive`. The `abort(context)` convenience ensures a same-id drive pass is claimed after the marker and proceeds directly to reconciliation. A crash between the marker and that claim is harmless because the next drive observes durable cancellation first.
 
 ### Reconciliation
 
@@ -2286,7 +2250,7 @@ Cancellation reconciliation is separate from ordinary dispatch. It never starts 
 - accepted deferred writes are still appended in order;
 - operation-owned pending and drained values are deleted by the aborted terminal transaction.
 
-A scope holding a response or parallel tool promises performs the relevant local settlement before handing off to the shared remainder. This is why those values stay procedure-local rather than moving into a generic runtime object.
+A procedure holding a response or parallel tool promises performs the relevant local settlement before handing off to the shared remainder. This is why those values stay procedure-local rather than moving into a generic runtime object.
 
 Post-effect hooks obey the same gate: abort before a not-yet-started `after_response`/`after_tool` prevents the hook; assistant/fetch uses the raw response and a live tool uses the raw result. Hook start first lets the complete aggregate finish and uses its transformed value. Already-running hooks are not forcibly interrupted.
 
@@ -2302,7 +2266,7 @@ Close is not abort and writes no cancellation or terminal state:
 
 ```text
 seal harness admission
-→ close every live EffectGate
+→ close every live Drive gate
 → pull cooperative signals
 → reject local operation promises
 → let commits admitted before the seal drain
@@ -2315,17 +2279,17 @@ Reopening reports the open operation. A later matching `drive(options, context)`
 
 ## 4.8 Faults
 
-A failed admitted storage commit faults the whole harness. Fault closes effect gates, rejects barriers and pending/future calls with `HarnessFault`, and requires process restart; it is never an expected `Err` result. `faulted:true` appears in snapshots obtained before observation closes. Reopen restores from the last successful transactions.
+A failed admitted storage commit faults the whole harness. Fault closes Drive gates, rejects barriers and pending/future calls with `HarnessFault`, and requires process restart; it is never an expected `Err` result. `faulted:true` appears in snapshots obtained before observation closes. Reopen restores from the last successful transactions.
 
 Close rejects active drive and convenience-operation promises with `HarnessClosed`; already-resolved admissions remain durable, while calls not yet accepted return `Err(Closed)`. Surfaces without a `Result` channel reject with `HarnessClosed` on and after close. Provider, tool, and isolated hook failures remain per-lane and in-band. A throw/rejection from trusted deterministic application computation (`systemPrompt`, `toolContext`, `toProviderMessages`, or an `entryProjector`) faults the harness. `AgentTool.prepareArguments` is the deliberate exception normalized to a synthetic tool error.
 
 ## 4.9 External finalization
 
-An authorized administrative operation may commit the terminal transaction while a task still exists. It uses the same lane mutation line. This specification adds no public `forceFinalize()` method: authorization, SLA policy, and initiation belong to repository or hosting administration, while the terminal-transaction helper and live-task notification remain package-internal. The next task mutation rereads current values and finds that its operation is no longer current; the mutation raises the internal `OperationEnded` signal rather than returning a normal stale boolean.
+An authorized administrative operation may commit the terminal transaction while a task still exists. It uses the same lane mutation line. This specification adds no public `forceFinalize()` method: authorization, SLA policy, and initiation belong to repository or hosting administration, while the terminal-transaction helper and live-task notification remain package-internal. Live admitted work receives `OperationEnded` when the finalizer closes `drive.gate`. Any queued or later planner rereads ownership, returns `lost_ownership`, and commits nothing.
 
-The task then stops, closes its effect gate, discards process-local results without writing, emits end observation, and resolves from the matching `pi.lane.lastResult` written by the terminal transaction. It never recreates operation values/lists or commits a competing terminal result. Scalar and list invocation writes are fenced the same way: invocation memo writes, tool checkpoint replacements, and assistant frame appends each verify durable ownership when their lane job executes, so a write enqueued before finalization is deleted by the terminal cleanup (which removes all operation-owned values/lists) and a write after it rejects without recreating state. An unowned operation needs no task to stop; a later matching `drive()` returns the settled result from `pi.lane.lastResult`, while `resume(context)` sees an idle lane and returns `NothingToResume`.
+With a live in-process Drive, the finalizer itself publishes the end observation, records `drive.finalizedOutcome`, closes the gate, and settles shared completion immediately; the detached task stops without publishing or writing. With no local Drive—for example, finalization by a replacement process—a later matching `drive()` hydrates from `pi.lane.lastResult`. Neither path recreates operation values/lists or commits a competing terminal result. Scalar and list invocation writes are fenced the same way: invocation memo writes, tool checkpoint replacements, and assistant frame appends each verify durable ownership when their lane job executes, so a write enqueued before finalization is deleted by the terminal cleanup (which removes all operation-owned values/lists) and a write after it declines without committing or recreating state. An unowned operation needs no task to stop; a later matching `drive()` returns the settled result from `pi.lane.lastResult`, while `resume(context)` sees an idle lane and returns `NothingToResume`.
 
-At most one terminal transaction commits because every candidate rereads ownership on the lane line before writing. An in-process finalizer publishes the terminal events, records the matching result on the `ActiveOperation`, closes its gate with `OperationEnded` immediately after the terminal commit, and pulls the controller so cooperative provider/tool work stops. The task then resolves without publishing a duplicate terminal event once its current awaited work returns; its outer `finally` removes the record. A new operation therefore waits/gets `LaneBusy` during that cleanup even though durable state is already idle. A replacement-process finalizer first acquires ownership after close/crash, so no live task exists to notify.
+At most one terminal transaction commits because every candidate rereads ownership on the lane line before writing. An in-process finalizer publishes terminal events, records the matching result in `drive.finalizedOutcome`, closes its gate with `OperationEnded`, and settles the shared completion immediately so non-cooperative provider/tool work cannot delay callers. It deliberately retains the Drive; acceptance returns `LaneBusy` until the detached task reaches its exact-object `finally`. The task publishes no duplicate end event and cannot write after ownership loss. A replacement-process finalizer first acquires ownership after close/crash, so no live Drive exists to notify.
 
 # Part 5 — Public surface
 
@@ -3121,7 +3085,7 @@ Uniform semantics:
 - Durability is hook-specific, as classified below. Hook completion is never itself a durable fact.
 - Events expose post-hook values. Passive listeners cannot transform them.
 
-One accepted-operation hook invocation calls `EffectGate.assertOpen()`, then immediately invokes the complete registered pipeline; individual handlers are not separate gate checks. Once admitted, the aggregate follows its isolation rule. Aggregation is deterministic:
+One accepted-operation hook invocation calls `drive.gate.admit(() => runPipeline(...))`; individual handlers are not separate gate checks. Once admitted, the aggregate follows its isolation rule. Aggregation is deterministic:
 
 - `before_run` appends messages; each later handler sees the prompt plus prior injections. The consuming `starting → checkpoint` transaction applies all injected messages once.
 - `transform_context`, request/payload/response, and `after_tool` transformations run in registration order, each seeing the prior transformed value; option/result patches merge field by field.
@@ -3172,7 +3136,7 @@ The harness owns purpose-built execution blocks under `packages/agent/src/harnes
 
 ### Assistant streaming
 
-`assistant.ts` owns one already-approved provider request. Before the request intent commits, the assistant procedure verifies that the captured durable `{ provider, modelId }` resolves in the harness's `Models` registry and runs `before_request`. After that commit, the supplied request adapter resolves the same pair, calls `EffectGate.assertOpen()`, derives the admitted Context synchronously, and immediately invokes `Models` under its composed abort signal and telemetry parent. The block itself receives only executable values:
+`assistant.ts` owns one already-approved provider request. Before the request intent commits, the assistant procedure verifies that the captured durable `{ provider, modelId }` resolves in the harness's `Models` registry and runs `before_request`. After that commit, the supplied request adapter resolves the same pair, derives the admitted Context, and invokes `Models` through `drive.gate.admit(...)` under its composed abort signal and telemetry parent. The block itself receives only executable values:
 
 ```ts
 interface AssistantResponseMetadata {
@@ -3207,8 +3171,8 @@ interface HarnessAssistantStreamConfig {
   afterResponse: (message: SettledAssistantMessage,
                   metadata: AssistantResponseMetadata,
                   context: Context) => Promise<SettledAssistantMessage>;
-  /** Models-backed adapter. It resolves the captured identity, synchronously
-      checks EffectGate, then immediately invokes Models (§4.2). */
+  /** Models-backed adapter. It resolves the captured identity and invokes
+      Models through the Drive's Gate (§4.2). */
   request(aiContext: AiContext, options: SimpleStreamOptions,
           context: Context):
     AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
@@ -3245,18 +3209,16 @@ The request function, not this block, owns registry dispatch, auth, and operatio
 ```ts
 (aiContext, options, context) => {
   const model = resolveCapturedModel();
-  effectGate.assertOpen();
-  const admittedContext = withAbortSignal(effectGate.signal, context);
-  admittedContext.abortSignal?.throwIfAborted();
-  return models.streamSimple(model, aiContext, {
+  const admittedContext = withAbortSignal(drive.gate.signal, context);
+  return drive.gate.admit(() => models.streamSimple(model, aiContext, {
     ...options,
     signal: admittedContext.abortSignal,
     telemetryContext: admittedContext.telemetryContext,
-  });
+  }));
 }
 ```
 
-There is no yield between `assertOpen()`, synchronous admitted-Context derivation, and `Models.streamSimple()`. Its asynchronous auth/lazy/provider work is part of the admitted request and owns `admittedContext.abortSignal` (§4.2). A captured identity that disappears after intent becomes an in-band provider error under the reserved response/usage ids. An identity unavailable before intent becomes a non-retryable configuration failure with no fabricated response or usage (§3.7, §4.5). Existing summary helpers keep their separate `Models`-based generation logic, but gate their `Models` operation invocation the same way.
+There is no yield between `Gate.admit` checking admission and invoking `Models.streamSimple()`. Its asynchronous auth/lazy/provider work is part of the admitted request and owns `admittedContext.abortSignal` (§4.2). A captured identity that disappears after intent becomes an in-band provider error under the reserved response/usage ids. An identity unavailable before intent becomes a non-retryable configuration failure with no fabricated response or usage (§3.7, §4.5). Existing summary helpers keep their separate `Models`-based generation logic, but gate their `Models` operation invocation the same way.
 
 ### Tool phases
 
@@ -3313,7 +3275,7 @@ function prepareToolCall(call: AgentToolCall, tools: AgentTool[]):
 function applyBeforeToolDecision(prepared: PreparedToolCall,
                                  decision: BeforeToolDecision | undefined):
   ClearedToolCall | ImmediateToolOutcome;
-function executeToolCall(call: ClearedToolCall, effectGate: EffectGate,
+function executeToolCall(call: ClearedToolCall, gate: Gate,
                          onUpdate: AgentHarnessToolUpdateCallback<unknown>,
                          context: Context): Promise<ExecutedToolCall>;
 function finalizeToolCall(call: ClearedToolCall, executed: ExecutedToolCall,
@@ -3339,7 +3301,7 @@ planned call
 → materialize source-ready outcomes as entries + usage
 ```
 
-Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution before staging a synthetic `outcome_ready` result. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. At `tool.execute` operation admission, `executeToolCall` calls `EffectGate.assertOpen()`, synchronously derives `withAbortSignal(effectGate.signal, context)`, checks that admitted signal, and immediately invokes the neutral `AgentTool` adapter with it. The bound harness adapter passes that admitted Context to `AgentHarnessTool.execute` in its trailing position. The block converts expected tool throws to an error result, stops accepting updates when the tool promise settles, and emits raw tool-effect telemetry. Every update emits live observation; `checkpoint:true` additionally enqueues one invocation-fenced `pi.pending.tool_output` replacement and replaces only the latest checkpoint-write promise reference (§3.8). The procedure retains only the latest event-delivery promise because the event bus serializes delivery, and only the latest checkpoint-write promise because the lane line is FIFO; it closes checkpoint admission at tool-promise settlement and awaits both before `after_tool`. `finalizeToolCall` applies the documented field-by-field patch semantics before `tool_end` and outcome staging.
+Unknown tools, `prepareArguments` failures, invalid initial/replacement arguments, and blocked calls produce `ImmediateToolOutcome` and skip intent/execution before staging a synthetic `outcome_ready` result. `AgentTool.prepareArguments` remains deterministic/idempotent computation and may repeat before intent; effectful policy belongs in `before_tool`. At `tool.execute` operation admission, `executeToolCall` derives `withAbortSignal(gate.signal, context)` and invokes the neutral `AgentTool` adapter through `gate.admit(...)`. The bound harness adapter passes that admitted Context to `AgentHarnessTool.execute` in its trailing position. The block converts expected tool throws to an error result, stops accepting updates when the tool promise settles, and emits raw tool-effect telemetry. Every update emits live observation; `checkpoint:true` additionally enqueues one invocation-fenced `pi.pending.tool_output` replacement and replaces only the latest checkpoint-write promise reference (§3.8). The procedure retains only the latest event-delivery promise because the event bus serializes delivery, and only the latest checkpoint-write promise because the lane line is FIFO; it closes checkpoint admission at tool-promise settlement and awaits both before `after_tool`. `finalizeToolCall` applies the documented field-by-field patch semantics before `tool_end` and outcome staging.
 
 Before starting any call in a live batch, the tool-batch procedure resolves `toolContext` once and binds the complete captured active-tool set into ordinary `AgentTool` adapters retained in a procedure-local snapshot. Each adapter also binds `AgentHarnessToolInvocation { invocationId: resultEntryId, operationId, turnId, getMemo, setMemo }`, the harness-specific update callback, and the current invocation Context. Available captured tools are bound into the snapshot. A requested call whose implementation is absent becomes an ordinary synthetic unknown-tool result with no `details`; it does not suspend the batch. Provider calls to names outside the captured active names follow the same unknown-tool path. Every call in the batch observes the same application context and its own stable invocation identity. Safe replay creates a new code/context snapshot but passes the same invocation id and memos after deleting the stale progress checkpoint. `AgentTool.replay` defaults to `"never"` when omitted.
 
@@ -3504,7 +3466,7 @@ These rows preserve requirements, not frozen package boundaries. Create their ha
 |---|---|---|---|
 | S3 | **Search** | The standalone `SessionSearchService` plus repo catch-up utilities (§2.8): core entry search as `SessionSearch<T>`, session-level ranked results, optional `searchEntries?: SessionSearch<TEntryHit>`, `remove()`, the `SessionSearchSyncTarget` cursor/index-batch contract, sync enumeration and catch-up outside the service contract, debounced notify as a utility, `(sessionId, storeGeneration)` cursor keys, and the reference SQLite FTS5 implementation working over any backend's repository through the sync utility. | Cursor catch-up from empty against existing sessions, idempotent re-index after crash mid-batch, notify-utility/sweep equivalence, sessions-vs-entries queries and ranking, removal and reconciliation, shared-index multi-process discipline. |
 | S4 | **Dev TUI and Client** | A minimal `AgentClient` over one lane — `LaneSnapshot` plus `watch()` events, `prompt`/`steer`/`followUp`/`abort`/`resume`/`cancelQueued`, `pi.lane.lastResult` read — and a throwaway alt-screen TUI on `packages/tui`: transcript from snapshot and events, input box, status/queue display, abort key. Built first against a scripted fake client on the shared types; binds to the real harness as runtime packages land. Not final. | Compiles; fake-client smoke test. No durability obligations. |
-| R2 | **Minimal no-tool drive** | Starting from WP02's durable `starting` operation, add the first real lane-owned `ActiveOperation` pass with expected-id fencing, same-id joining, latest-result lookup, an `EffectGate` and direct durable transitions; run driver-owned `before_drive`/`before_run`, make `prompt`/`skill`/`promptFromTemplate` compose `accept`+`drive`, and execute one assistant generation through captured context/options, payload/response hooks, intent/effect/settlement, synchronous per-event frame appends with latest-promise fencing, atomic frame-list deletion, usage, terminal cleanup plus `pi.lane.lastResult`, results, events, and telemetry. Unavailable captured model or configured active-tool definitions fail in-band before intent with configuration provenance; no response/usage is fabricated. | Accepted `starting` close/reopen/drive; prompt convenience and explicit accept+drive produce byte-identical writes/events; one same-id pass installed/joined and stale ids isolated; deterministic transition coverage; successful run with final assistant fields; one frame append per convertible event with no per-frame storage await and only the latest promise retained; settlement awaits the latest frame write and deletes the list atomically; frame-append failure faults before `after_response`; caller rejection and adapter-reported failures; exact ordering; supplied operation id propagates through `run_end` and `pi.lane.lastResult`; terminal cleanup; close at every boundary; invalid references rejected at consumption. |
+| R2 | **Minimal no-tool drive** | Starting from WP02's durable `starting` operation, add the first real lane-owned `Drive` pass with expected-id fencing, same-id joining, latest-result lookup, a split `Gate`/`GateControl`, and direct durable transitions; run driver-owned `before_drive`/`before_run`, make `prompt`/`skill`/`promptFromTemplate` compose `accept`+`drive`, and execute one assistant generation through captured context/options, payload/response hooks, intent/effect/settlement, synchronous per-event frame appends with latest-promise fencing, atomic frame-list deletion, usage, terminal cleanup plus `pi.lane.lastResult`, results, events, and telemetry. Unavailable captured model or configured active-tool definitions fail in-band before intent with configuration provenance; no response/usage is fabricated. | Accepted `starting` close/reopen/drive; prompt convenience and explicit accept+drive produce byte-identical writes/events; one same-id pass installed/joined and stale ids isolated; deterministic transition coverage; successful run with final assistant fields; one frame append per convertible event with no per-frame storage await and only the latest promise retained; settlement awaits the latest frame write and deletes the list atomically; frame-append failure faults before `after_response`; caller rejection and adapter-reported failures; exact ordering; supplied operation id propagates through `run_end` and `pi.lane.lastResult`; terminal cleanup; close at every boundary; invalid references rejected at consumption. |
 | R3 | **Generation recovery and retry** | Activation-only unknown-effect recovery that reduces committed frames into the synthetic zero-usage partial error under the reserved ids and then classifies ordinarily (retry or failure drain), non-retryable configuration failure when a later ready/retry attempt cannot resolve its captured model/tools, ordinary stop/error/deferred classification, provider-compliant `aborted`, failure-drain foundation, and both retry-wait policies: explicit drive returns `waiting/notBefore`, while convenience drive may own the abort-aware timer. Define deterministic timer and recovery-transition tests. Overflow classification remains explicitly unimplemented until R9. | Every generation state before/after reopen; accept/close/reopen/drive; recovery with no frames, partial frames, and authoritative end-frame content; synthetic settlement always commits under reserved ids with the interruption warning and deletes the frame list; interrupted partial tool calls never execute; `after_response` never runs for synthetic settlement; caps/backoff; no timer under `waitForRetry:false`; due and future `notBefore`; convenience/explicit-drive durable equivalence; timer abort-first/start-first; deterministic transition coverage; stop/error/aborted/deferred classification; non-retryable configuration unavailability. |
 | R4 | **Tools** | Add the harness-specific tool-update checkpoint options/callback while leaving pi-ai's `AgentToolUpdateCallback` unchanged, then compose §5.7's neutral tool phases with bound context, invocation-scoped memos, `pi.op.tool_args`, scalar `pendingToolOutput(operationId, invocationId)` checkpoints, `outcome_ready` staging in `pi.pending.entry`, completion-order outcome durability, source-ordered materialization, orphan recovery/replay, sequential/parallel promises, hook-blocked/genuine-length outcomes, hooks/events/usage, and deterministic transition coverage. Missing requested tools stage direct `ToolResultMessage` errors with no `details`; missing safe-replay implementations synthesize interruption rather than suspending. The built-in bash tool emits live updates at 100 ms and requests distinct checkpoints at most every two seconds. | Stable invocation id/memos across safe replay; every planned/effect-pending/outcome-ready/completed state; parallel out-of-order staging without replay; synchronous update callback with the latest delivery and latest checkpoint write awaited before `after_tool`; `tool_end` before staging; every requested checkpoint enqueued synchronously with only the latest promise reference retained and no write dropped or coalesced; tool-selected cadence/duplicate suppression; late-write fencing after settlement; JSONL checkpoint growth/compaction; safe replay deletes old checkpoint; unsafe recovery with/without checkpoint; missing planned tools become source-ordered error results; absent or no-longer-safe replay implementations synthesize interruption without invented typed details; source-ordered materialization; termination and abort-ready states. |
 | R5 | **Inbox, configuration, and writes** | `nextRun`/steer/follow-up via `pendingEntry(id)` values, pending-payload consumption-time dereference, `cancelQueued` triage (`not_found`), durable drain markers, checkpoint consumption with pending-value deletion, immediate total config setters, deferred tree writes, adjustments, and deterministic tests for the checkpoint boundaries introduced here. | Capture/cancel/consume races, repeated cancellation answering `not_found`, invalid queue payload kinds and missing pending values rejected at consumption, one-at-a-time crash after one drain, pending-value/entry exclusivity at every boundary, custom-write continuation, config-step race, writes surviving reopen. |
@@ -3542,16 +3504,16 @@ Operations:
 
 12. `laneState(lane)` confers lane ownership, and `operationState(operationId)` confers operation-state ownership. An open lane names operation O, `operationMeta(O)` holds that lane's compatible `OperationMeta`, and `operationState(O)` holds an `OperationState` compatible with O's intent kind; state values carry no duplicate owner metadata.
 13. Operation-owned values and lists may exist only while their operation is open: the terminal transaction deletes them atomically with clearing `currentOperationId` (§3.13). Lane-owned `pendingNextRun` values are never deleted by it.
-14. Acceptance must observe `currentOperationId === null`, commits no `ActiveOperation`, and returns before any hook/provider/tool/timer work begins. Run acceptance commits payload-free `starting`; only its consuming command may apply `before_run` output and replace it with `checkpoint`. A supplied operation id obeys §1.2 and is the exact id written to `pi.op.meta`, events, and `pi.lane.lastResult`.
+14. Acceptance must observe `currentOperationId === null`, commits no `Drive`, and returns before any hook/provider/tool/timer work begins. Run acceptance commits payload-free `starting`; only its consuming command may apply `before_run` output and replace it with `checkpoint`. A supplied operation id obeys §1.2 and is the exact id written to `pi.op.meta`, events, and `pi.lane.lastResult`.
 15. A reserved id may exist only with the content its intent named. Queued-content ids begin in `pi.pending.entry`; settlement-family ids begin as strings in `pi.op.state`. A tool-result id may then move through `string only → outcome-ready pi.pending.entry → immutable entry`; no two representations coexist at a commit boundary (§2.2). An effect-pending response id may additionally key its auxiliary frame list (§3.7); frames are observation, not a content representation, and die with settlement.
 16. Only terminal transitions construct a `LaneLastResult`. A terminal outcome is observable once through the live promise and thereafter through `pi.lane.lastResult` until the next terminal transaction on that lane; recovery never reads it.
 17. At most one operation is open per lane. Two is corruption.
 18. `overflowRecoveryUsed` is `true` only after overflow compaction. A transition that adds projecting conversational input or tool results and requires an assistant writes `false`; an unprojected custom write preserves it.
 19. **The settlement transaction that commits a response with `stopReason: "aborted"` must, in that same transaction, write an operation state with `control.status === "cancel_requested"`.** The invariant is scoped to the committing transaction — later terminal cleanup or forks may remove the state without violating it. Providers must comply with the harness-owned signal contract; violation is corruption.
 20. Attachment restores and validates only the small lane/operation projection (§3.3, §4.4). Detailed presentation references are validated by `watch(context)` under the lane line; drive references are validated by their consuming procedure. Missing or contradictory required data faults that consumer, while optional frame/checkpoint absence is legal. Live phase/effect-identity checks remain concurrency fences. `pi.lane.lastResult` never determines an open operation's next procedure.
-21. At most one terminal transaction ever commits per operation. A task mutation that finds its operation values absent raises internal `OperationEnded`; the task stops without writing and resolves from `pi.lane.lastResult` (§4.9).
-22. At most one `ActiveOperation` drive pass exists per lane. Acceptance and taskless `requestAbort` never install one. A matching `drive` installs it before releasing the lane mutation line; another matching drive joins that pass, and a stale id starts nothing. Every pass's outer `finally` removes it in a no-write lane job only after final local observation; external finalization retains and signals it until that path runs. Each newly installed pass invokes `before_drive` once after the cancellation check; joiners do not. `starting + cancel_requested` invokes neither `before_drive` nor `before_run`.
-23. The §4.2 `assertOpen()` catalog is complete. Every listed hook/provider/tool/timer integration checks immediately before invocation with no yield between them; no unlisted code checks the operation gate. Preparation stays before the check, and admitted asynchronous provider setup/delegation are continuations of the same operation owning `EffectGate.signal`.
+21. At most one terminal transaction ever commits per operation. In-process finalization closes the live Drive gate with `OperationEnded`, records `drive.finalizedOutcome`, and settles immediately; queued/later planners return `lost_ownership` and commit nothing. With no local Drive, later matching callers hydrate from `pi.lane.lastResult` (§4.9).
+22. At most one `Drive` exists per lane. Acceptance and taskless `requestAbort` never install one. A matching `drive` installs it before releasing the lane mutation line; another matching drive joins that pass, and a stale id starts nothing. Every late transition checks exact Drive identity. Normal `finally` removes only itself; abandonment and close/fault remove immediately; external finalization settles immediately but retains ownership until `finally`. Each newly installed pass invokes `before_drive` once after the cancellation check; joiners do not. `starting + cancel_requested` invokes neither `before_drive` nor `before_run`.
+23. The §4.2 `Gate.admit()` catalog is complete. Every listed hook/provider/tool/timer integration calls `admit(() => operation())` after preparation; no unlisted code calls it. Admitted asynchronous provider setup/delegation owns `drive.gate.signal`.
 24. `drive` and `requestAbort` are fenced by expected operation id. They may affect only that current operation; `drive` may also return its matching latest terminal result. A stale wake for A cannot drive or cancel B.
 25. No public drive option encodes a wall-clock budget or partial-progress return. An admitted effect settles normally or is recovered from durable state after task loss; host scheduling and process termination remain outside the harness contract.
 26. Convenience operations and their explicit primitive compositions produce the same durable writes, events, results, and recovery behavior. Their only difference is process-local waiting/scheduling policy.
@@ -3581,9 +3543,9 @@ Each durable mutation race has exactly two durable histories. Process-local owne
 | `abort` vs started tool outcome staging | abort first → real result stages under cancelled control; outcome first → finalized result is preserved and later materializes |
 | checkpoint vs tool settlement | every accepted checkpoint was enqueued before settlement closed admission; settlement awaits the latest write, then staging deletes the scalar; a late update is fenced without committing |
 | assistant frame append vs response settlement | settlement awaits the latest frame write, then its transaction deletes the list; a crash between leaves the committed frame prefix under `effect_pending` |
-| assistant frame append vs external finalization | append first → terminal cleanup deletes the list; finalization first → the fenced append rejects without recreating state |
+| assistant frame append vs external finalization | append first → terminal cleanup deletes the list; finalization first → the fenced append declines without committing |
 | live update event vs its queued frame/checkpoint commit | either finishes first; events are observation, and reconnect uses only committed frames/checkpoints |
-| external finalization vs memo/checkpoint mutation | mutation first → terminal cleanup deletes it; finalization first → durable ownership check rejects the mutation |
+| external finalization vs memo/checkpoint mutation | mutation first → terminal cleanup deletes it; finalization first → durable ownership check declines without committing |
 | later tool B settles vs earlier tool A | B stages outcome-ready immediately; tree placement waits for A |
 | `abort` vs `before_run_end` follow-up | follow-up dropped; or committed and the run continues |
 | `cancelQueued` vs checkpoint consumption | `cancelled`; or `already_consumed` |
@@ -3599,7 +3561,7 @@ Each durable mutation race has exactly two durable histories. Process-local owne
 | close vs attachment | create completes and publishes a fully open harness; or close/fault rejects attachment without a partial harness |
 | snapshot capture vs resume | capture first yields pre-resume snapshot plus events; resume publication first yields post-transition snapshot |
 | external finalization vs attachment/inspection | finalization is visible as idle/latest result; or attachment sees the still-open operation and later lane-line inspection observes publication |
-| concurrent invocation contexts | each call/event/session write retains its own telemetry parent and abort signal; canceling one does not affect the other or write durable cancellation |
+| concurrent invocation contexts | each call/event/session write retains its own telemetry parent and abort signal; joiner cancellation ends only that observer; installer cancellation abandons the shared pass for current joiners but writes no durable cancellation |
 | `close` vs settlement | settlement abandoned, state stays `effect_pending`; or it committed before the flag was set |
 
 ## 9.3 Test tiers
@@ -3620,7 +3582,7 @@ One corruption assertion constructs an `aborted` response with running control d
 - **Attachment and watch.** Construct every durable phase directly and assert minimal open inventory, configured/captured identity inspection without resolution, projection corruption faulting create, presentation corruption faulting watch, exact required/optional ad-hoc reads, no attachment effects, lane-line inspection, complete snapshots, live-over-durable partial precedence, no historical lifecycle replay, recipient binding at `emitBatch`, and both registration/publication orders without gaps or duplicates.
 - **Drive equivalence.** Convenience calls and explicit `accept`/`drive`/`requestAbort` compositions produce byte-identical durable state and equivalent events/results.
 - **Deterministic transition control.** Test-only storage gating parks commits without production annotations; controlled hooks, providers, tools, and timers expose effect windows. Each runtime slice tests every durable edge and both orders of each owned race.
-- **Effect-start gate.** Cover every item in §4.2's complete catalog and assert that no other path calls `assertOpen()`. At each listed integration, force both orders of abort versus operation admission: the check and invocation are adjacent, abort-first invokes nothing, and admission-first gives the complete operation `EffectGate.signal`. Provider tests assert that request preparation precedes the check and that the same signal reaches Models auth/lazy/provider work. Hook tests treat each aggregate pipeline as one admitted unit. A cancelled drive must enter reconciliation without invoking `before_drive` or `before_run`.
+- **Effect-start gate.** Cover every item in §4.2's complete catalog and assert that no other path calls `Gate.admit()`. At each listed integration, force both orders of abort versus operation admission: abort-first invokes nothing, and admission-first gives the complete operation `drive.gate.signal`. Provider tests assert that request preparation precedes the check and that the same signal reaches Models auth/lazy/provider work. Hook tests treat each aggregate pipeline as one admitted unit. A cancelled drive must enter reconciliation without invoking `before_drive` or `before_run`.
 - **Invocation context.** Public operations receive trailing Context; hooks/listeners/callbacks and Session reads/writes preserve it. Cross concurrent calls on one shared receiver and assert independent telemetry/cancellation lineage. Buffered delivery retains the object-identical emitting Context. Context is never written durably. An RPC cancel/disconnect aborts only its reconstructed request signal, and invocation cancellation never writes `cancel_requested`.
 - **Signal ownership.** No public surface accepts a standalone operation signal; invocation cancellation arrives through `Context.abortSignal`, while operation-owned effect signals remain harness-controlled. A `before_request` patch carrying a signal has it stripped. Assert by type and by test.
 - **Ledger completeness.** Every settled attempt commits its response and its usage. Failed structural attempts retain their cost. `getStats()` equals the ledger sum after every commit. A fork starts at zero.
@@ -3651,7 +3613,7 @@ One corruption assertion constructs an `aborted` response with running control d
 | **Effect** | Anything not pure computation: commit, provider request, tool, hook, timer. |
 | **Repeat-sensitive effect** | One whose repetition is observable outside the harness. |
 | **Operation state** | The complete durable state of one open operation — the `operationState(operationId)` value and restart point after task loss. |
-| **Active operation** | The one process-local async task for the lane's current drive pass, with its completion promise and `EffectGate`. |
+| **Drive** | The one installed process-local lane pass: exact ownership identity, shared completion, Gate, invocation Context, and wait policy. |
 | **Effect gate** | Process-local synchronous arbitration of ordinary operation admission against a cancellation request, paired with the operation's cooperative signal. |
 | **Reserved id** | An id minted before content exists. Tool-result ids progress from a string in state to staged pending content to an immutable entry. |
 | **Follower id** | An id minted with its leader's 48-bit timestamp so a call/result group shares one time prefix (§1.2). |
@@ -3665,7 +3627,7 @@ One corruption assertion constructs an `aborted` response with running control d
 | **Invocation memo** | Tool-invocation-scoped durable current value used for replay-safe memoization; valid only while the call is effect-pending. |
 | **Terminal transaction** | The commit that deletes an operation's values/lists, writes `pi.lane.lastResult`, and clears `currentOperationId`. |
 | **Segment** | A branch-index range that references an older branch instead of copying it. |
-| **External finalization** | A terminal transaction committed from outside the live task; the task detects absent operation values, stops without writing, and resolves from `pi.lane.lastResult` (§4.9). |
+| **External finalization** | A terminal transaction committed outside the live task. An in-process finalizer publishes once and settles the live Drive immediately from `finalizedOutcome`; with no local Drive, later callers hydrate from `pi.lane.lastResult` (§4.9). |
 | **Precise rewrite** | The administrative copy-retained-and-swap rebuild of a session store — the sole sanctioned path that removes entries or usage rows (§2.9). |
 
 # Appendix B — Coding-agent v3-format compatibility

@@ -10,14 +10,13 @@ import type {
 	OpenOperation,
 	Resources,
 } from "../agent-harness.ts";
-import { Closed, HarnessClosed, HarnessFault, InvalidLane, LaneExists, UnknownTarget } from "../agent-harness.ts";
 import { type CompactionSettings, DEFAULT_COMPACTION_SETTINGS } from "../compaction/compaction.ts";
 import { DEFAULT_RETRY_POLICY, validateCompactionSettings, validateRetryPolicy, validateToolNames } from "../config.ts";
 import type { Context } from "../context.ts";
 import { HarnessEventBus } from "../events.ts";
 import { HookRegistry } from "../hooks.ts";
 import { convertToLlm } from "../messages.ts";
-import { Result } from "../result.ts";
+import { Closed, HarnessClosed, HarnessFault, InvalidLane, LaneExists, Result, UnknownTarget } from "../result.ts";
 import {
 	SessionInvalidLaneError,
 	SessionInvariantError,

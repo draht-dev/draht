@@ -28,6 +28,7 @@ import {
 } from "../../src/attach/attach-bridge.js";
 
 const SESSION_ID = "session-under-test";
+const PROCESS_STARTED_AT_MS = Math.round(Date.now() - process.uptime() * 1000);
 
 let socketDir: string;
 let session: Server;
@@ -79,9 +80,11 @@ beforeEach(async () => {
 		session.once("error", reject);
 		session.listen(join(socketDir, `${SESSION_ID}.sock`), resolve);
 	});
-	writeFileSync(join(socketDir, `${SESSION_ID}.lock`), `${process.pid}\n/work/session\n2026-08-22T09:00:00.000Z`, {
-		mode: 0o600,
-	});
+	writeFileSync(
+		join(socketDir, `${SESSION_ID}.lock`),
+		`${process.pid}\n/work/session\n2026-08-22T09:00:00.000Z\n${PROCESS_STARTED_AT_MS}`,
+		{ mode: 0o600 },
+	);
 });
 
 afterEach(() => {

@@ -1463,17 +1463,17 @@ interface LaneState {
 }
 ```
 
-Attachment restores only the small durable projection needed to construct each lane and inventory open operations. It reads the lane's `laneLeaf`, `laneConfig`, `laneState`, optional `laneLastResult`, and, when `currentOperationId` names O, `operationMeta(O)` plus `operationState(O)`. These values become the lane's owned process-local projection. `laneLastResult` supports inspection but is never a recovery input (§3.13).
+Attachment restores only the small durable projection needed to construct each lane and inventory open operations. It reads the lane's `laneLeaf`, `laneConfig`, `laneState`, optional `laneLastResult`, and, when `currentOperationId` names O, `operationMeta(O)` plus `operationState(O)`. These values become the lane's owned process-local projection. While that harness remains alive and owns the session, this projection is the authoritative current lane and operation control state. Every supported control-state mutation commits through the owning `Lane` and publishes its exact next projection before the lane mutation line is released. `laneLastResult` supports inspection but is never a recovery input (§3.13).
 
-Projection restore validates the relationships required to construct that projection: required value existence, lane ownership, operation-id agreement, and intent/state kind compatibility. Missing or contradictory projection values fault attachment and no harness is returned.
+Projection restore validates the relationships required to construct that projection: required value existence, lane ownership, operation-id agreement, and intent/state kind compatibility. Missing or contradictory projection values fault attachment and no harness is returned. Process loss discards the projection; a replacement process rebuilds it from these durable values during attachment.
 
-Attachment does not dereference transcript, queue payloads, deferred sources, assistant frames, tool arguments, tool checkpoints, preparations, memos, or staged outcomes. Those references are validated by the operation that consumes them: `watch(context)` validates presentation references while capturing its snapshot, and drive procedures validate transition inputs. A missing or mismatched referenced payload is terminal storage corruption and faults that consumer. Optional frame lists and tool checkpoints may be absent. This consumption-time validation keeps attachment bounded without weakening durable transition fences (§3.4, §4.3).
+Attachment does not dereference transcript, queue payloads, deferred sources, assistant frames, tool arguments, tool checkpoints, preparations, memos, or staged outcomes. Those references are validated by the operation that consumes them: `watch(context)` validates presentation references while capturing its snapshot, and drive procedures validate transition inputs. A missing or mismatched referenced payload is terminal storage corruption and faults that consumer. Optional frame lists and tool checkpoints may be absent. This consumption-time validation keeps attachment bounded: live procedures use the owned projection for control flow and the callback reader only to dereference content named by that projection (§3.4, §4.3).
 
 ## 3.4 The atomic transition rule
 
 > Compute the next total state in memory, then atomically commit every entry insert, usage insert, and value/list write that makes that state true.
 
-A transition rereads the latest operation and lane values inside the lane mutation line, verifies the semantic state it extends, and changes only the fields it owns. In particular, settlement preserves newer inbox/control fields, and the terminal transaction clears `currentOperationId` while preserving concurrently accepted `pendingNextRun`. An unexpected non-terminal phase or effect identity is an invariant defect, not ordinary stale-state replanning; absent operation values mean a terminal transaction already won (§4.3, §4.9). Every edge below is exactly one `commit()`.
+A transition plans from the authoritative owned projection supplied by the lane mutation line, verifies the semantic state it extends, and changes only the fields it owns. In particular, settlement preserves newer inbox/control fields, and the terminal transaction clears `currentOperationId` while preserving concurrently accepted `pendingNextRun`. A procedure that awaited external work rechecks its expected phase and effect identity against that current projection before committing. Cancellation routes to reconciliation; a missing or different operation means ownership was lost; any other unexpected phase or identity is an invariant defect (§4.3, §4.9). The callback reader is used only for referenced payloads and operation-owned cleanup scans. Every edge below is exactly one `commit()`.
 
 ## 3.5 The graph
 
@@ -1592,7 +1592,7 @@ The provider loop never awaits storage per frame; existing assistant event deliv
 
 At stream settlement, the procedure stops frame admission and awaits the latest frame-write promise before `after_response`; lane FIFO means its completion implies completion of every earlier append. There is **no** timer, batcher, coalescer, active/waiting state, or flush API — public or internal. A failed frame append faults the harness before `after_response` starts; the complete final response stays process-local and never commits after a storage fault.
 
-Each append mutation verifies that the same operation, attempt, and reserved response id still own the lane when it executes; a terminal transaction that won first fences a stale append without recreating operation state (§4.9). Frames are auxiliary: a missing list is valid, frames never prove request admission or completion, never select a restart point, and a crash after the final frame append but before settlement still restores `effect_pending` — a complete-looking draft is not a settled response. Structural summary streams persist no frames (§3.9). There is no frame-persistence event, and reconnect replays no historical updates (§5.4, §5.5).
+Each append mutation verifies against the current owned projection that the same operation, attempt, and reserved response id still own the lane when it executes, and exact `Drive` identity is checked again at commit admission; a terminal transaction that won first fences a stale append without recreating operation state (§4.9). Frames are auxiliary: a missing list is valid, frames never prove request admission or completion, never select a restart point, and a crash after the final frame append but before settlement still restores `effect_pending` — a complete-looking draft is not a settled response. Structural summary streams persist no frames (§3.9). There is no frame-persistence event, and reconnect replays no historical updates (§5.4, §5.5).
 
 ### Classification order
 
@@ -1856,7 +1856,7 @@ TX[ <result-publication writes, when the terminal transition also publishes
     L({ currentOperationId: null }) ]
 ```
 
-Operation-owned pending ids are the remaining `inbox.steer ∪ inbox.followUp ∪ inbox.writes`, `control.drainedSteer ∪ control.drainedFollowUp`, and every staged `outcome_ready` result not already materialized. **Never `pi.lane.state.pendingNextRun`**: those values are lane-owned, outlive operations, and die only when consumed or cancelled. Ledger rows are never deleted (§1.6). The `L` write rereads the latest `LaneState` on the lane mutation line and clears only `currentOperationId`, preserving concurrently accepted `pendingNextRun` (§3.4).
+Operation-owned pending ids are the remaining `inbox.steer ∪ inbox.followUp ∪ inbox.writes`, `control.drainedSteer ∪ control.drainedFollowUp`, and every staged `outcome_ready` result not already materialized. **Never `pi.lane.state.pendingNextRun`**: those values are lane-owned, outlive operations, and die only when consumed or cancelled. Ledger rows are never deleted (§1.6). The `L` write is derived from the current owned `LaneState` supplied on the lane mutation line and clears only `currentOperationId`, preserving concurrently accepted `pendingNextRun` (§3.4).
 
 For the completed run of §0.4's shape — prompt `e_50`, tool call `e_51`/`e_52`, final answer `e_53`:
 
@@ -1902,7 +1902,8 @@ class Drive {
   readonly waitForRetry: boolean;
   deferredPermits: number;
   finalizedOutcome?: DriveOutcome;
-  // private GateControl and first-call-wins settle/fail closures
+  passEnded: boolean;
+  // private GateControl, first-call-wins settle/fail closures, and hasSettled()
 }
 
 class AbortRequested extends Error {
@@ -1933,27 +1934,30 @@ process lost:
 
 That asymmetry is unavoidable around an external effect. Making the task explicit prevents normal execution from mistaking a live pending request for an orphaned one.
 
-The task runs direct async procedures. There is no generic planner, action interpreter, or effect-plan graph:
+The task runs direct async procedures. There is no generic planner, action interpreter, effect-plan graph, or storage-loading transition helper:
 
 ```ts
-async function executeDrivePass(operationId: string,
-                                options: DriveOptions): Promise<DriveOutcome> {
+async function executeDrivePass(
+  lane: Lane, drive: Drive, options: DriveOptions,
+): Promise<DriveOutcome> {
   try {
-    let current = await loadCurrent(operationId);
-    if (!current) return settledFromLastResult(operationId);
+    let current = lane.state.operation;
+    if (current === null || current.meta.operationId !== drive.operationId)
+      return hydrateMatchingLastResult(lane, drive.operationId);
     if (current.state.control.status === "cancel_requested")
       return reconcileCancellation(current);
     await runBeforeDrive(current);
 
     while (true) {
-      current = await loadCurrent(operationId);
-      if (!current) return settledFromLastResult(operationId);
+      current = lane.state.operation;
+      if (current === null || current.meta.operationId !== drive.operationId)
+        return hydrateMatchingLastResult(lane, drive.operationId);
       if (current.state.control.status === "cancel_requested")
         return reconcileCancellation(current);
       if (mustWaitForRetry(current, options)) return retryWait(current);
       if (isDeferredSuspended(current) && !options.pollDeferred)
         return deferredWait(current);
-      if (current.state.phase.kind === "starting")
+      if (current.state.kind === "run" && current.state.phase.kind === "starting")
         await settleBeforeRun(current);
       else if (hasOrphanedEffect(current))
         await recoverOrphanedEffect(current, options);
@@ -1965,12 +1969,13 @@ async function executeDrivePass(operationId: string,
   } catch (error) {
     if (error instanceof AbortRequested) {
       await error.cancellation;
-      const current = await loadCurrent(operationId);
-      if (!current) return settledFromLastResult(operationId);
+      const current = lane.state.operation;
+      if (current === null || current.meta.operationId !== drive.operationId)
+        return hydrateMatchingLastResult(lane, drive.operationId);
       return reconcileCancellation(current);
     }
     if (error instanceof OperationEnded)
-      return settledFromLastResult(operationId);
+      return hydrateMatchingLastResult(lane, drive.operationId);
     throw error;
   }
 }
@@ -1993,7 +1998,7 @@ Normal execution handles checkpoints, ready/retry states, planned or locally own
 
 ### Task installation, joining, and removal
 
-`accept` commits the first durable state and returns without installing a `Drive`. A durably accepted but locally unowned operation is ordinary. `drive({ operationId }, context)` owns one pass. On the lane mutation line it reads current ownership and `pi.lane.lastResult`, then applies exactly one rule:
+`accept` commits the first durable state and returns without installing a `Drive`. A durably accepted but locally unowned operation is ordinary. `drive({ operationId }, context)` owns one pass. On the lane mutation line it inspects the current owned projection, including its latest result, then applies exactly one rule:
 
 - current operation absent and `pi.lane.lastResult.operationId === operationId`: return its already-settled outcome;
 - current operation absent with another/no last id, or current operation has another id: return `OperationMismatch` without starting work;
@@ -2004,7 +2009,7 @@ The first caller to install a pass supplies that pass's retry-wait and deferred-
 
 A newly installed real pass checks cancellation, then invokes `before_drive` once before recovery or ordinary work. Joiners do not rerun it. A later pass after retry wait, deferred suspension, close/reopen, or process restart invokes it again. Durable phase and local ownership alone determine dispatch: `starting` requires `before_run`; an unowned `effect_pending` phase is orphaned; every other phase follows its ordinary procedure. No fresh/continue/restore marker exists.
 
-Every task has one outer `finally` path: after its last durable commit, wait decision, or terminal observation and final local events, it synchronously removes itself only when `lane.activeDrive === drive`. Normal completion settles only after that exact cleanup. Invocation abandonment and close/fault fail completion and remove the exact Drive immediately so non-cooperative work cannot block recovery or shutdown; every late planner and progress write also checks exact Drive identity. External finalization instead settles completion immediately but deliberately retains the Drive until the task's eventual `finally`, preserving `LaneBusy` during detached cleanup (§4.9).
+Every task has one outer `finally` path: after its last durable commit, wait decision, or terminal observation and final local events, it synchronously removes itself only when `lane.activeDrive === drive`. Normal completion settles only after that exact cleanup. Invocation abandonment and close/fault fail completion and remove the exact Drive immediately so non-cooperative work cannot block recovery or shutdown; every late planner and progress write also checks exact Drive identity. External finalization instead closes the gate in committed materialization and settles completion immediately after terminal event delivery without waiting for detached work. The exact Drive remains installed until both that settlement and pass ending have occurred; whichever side arrives second removes it. This preserves `LaneBusy` and same-id joining throughout event delivery and detached cleanup (§4.9). Once `finalizedOutcome` is set, the pass continuation may neither settle nor fail the shared completion; only the finalizer settles it after event delivery.
 
 Convenience methods add policy, not another execution path. `prompt`/`skill`/`compact`/`navigateTree` call `accept` and then drive the returned id; they wait locally through retry waits and return on terminal or deferred suspension. `resume(context)` inspects the current id and drives it with one deferred-poll permit. `abort(context)` calls `requestAbort`, then ensures cancellation reconciliation has a drive pass; it still returns once cancellation is durable. A scheduler calls the expected-id primitives directly and may persist the admission or set an alarm from `waiting.notBefore`. Normal applications do not manage operation ids when resuming.
 
@@ -2099,13 +2104,15 @@ Every catalog item has abort-first/admission-first tests. Preparation must prece
 
 Every state-dependent mutation on a lane is linearized by `Session.mutate`: read latest state, decide, commit at most once, and complete the process-local update before the next mutation starts. Provider, tool, hook, and timer work never occupies the line. The callback-scoped `SessionMutator` enforces the one-commit limit; a high-level `SessionTree` write uses the same mechanism internally.
 
-An operation transition rereads the latest `pi.lane.state`, `pi.op.state`, leaf, and any dependent values inside that mutation. It verifies the expected semantic restart point or pending effect identity, preserves fields owned by concurrent public calls, and commits the complete next state. A mismatch is not an ordinary boolean "replan" result:
+An operation transition receives the latest owned projection inside that mutation. It verifies the expected semantic restart point or pending effect identity, preserves fields owned by concurrent public calls, and commits the complete next state. A mismatch is classified directly:
 
 - `cancel_requested` routes through the task's cancellation control flow;
-- absent operation values mean its terminal transaction already committed (§4.9);
+- a missing or different operation means the task lost ownership and commits nothing (§4.9);
 - any other unexpected phase/identity is an invariant defect.
 
-Settlement therefore cannot overwrite steer/write acceptance or cancellation with a stale snapshot. It rereads the latest state, verifies that the same request or tool call remains pending, and merges the output while preserving newer inbox/control fields.
+Settlement therefore cannot overwrite steer/write acceptance or cancellation with a stale snapshot. It verifies that the same request or tool call remains pending in the current projection and merges the output while preserving newer inbox/control fields. Referenced payloads and operation-owned cleanup prefixes are still read from storage when consumed; lane/operation control values are not reread during live execution.
+
+A drive-owned commit checks `lane.activeDrive === drive` synchronously at commit admission, immediately before invoking `mutator.commit()`, with no `await` between the check and invocation. A planner-side check alone is insufficient because abandonment can replace the exact owner after an asynchronous planner returns. If ownership was lost before admission, the command commits nothing; if commit admission won first, that transition may finish before owner removal.
 
 What serializes on the lane line: operation acceptance, drive installation/join/removal, execution inspection, detailed watch capture, queue enqueue/cancel/consumption, deferred writes, cancellation requests, assistant frame appends, tool progress checkpoints, invocation memo access, outcome staging, source-ordered outcome materialization, lane-configuration setters, finish, and lane creation. All durable races consequently have the orders listed in Part 9. The effect gate is needed only because synchronous external-call admission is not a durable mutation.
 
@@ -2165,7 +2172,7 @@ The lane's configured model identity comes from `laneConfig`. A current operatio
 
 Recovery begins only when an open operation has no `Drive` and a matching `drive({ operationId }, context)` installs a real pass owner. `AgentHarness.create(options, context)` never drives. `resume(context)` inspects and drives the current operation without exposing its id and grants the same pass one deferred-poll permit. `requestAbort(operationId, context)` with no task commits cancellation but installs nothing; the next drive enters cancellation reconciliation directly.
 
-The pass first reloads durable control. If cancellation is requested, it invokes neither `before_drive` nor `before_run` and enters §4.6. Otherwise it gates and invokes `before_drive`; failure rejects this pass without faulting the harness or writing durable progress. Model/tool implementations are resolved only at the actual operation boundary that needs them. An unavailable provider/model or configured request tool becomes a non-retryable configuration failure before request intent; an unavailable requested tool becomes a synthetic error result. Neither condition suspends the operation. Durable phase then decides the work: `starting` runs and settles `before_run` as §3.6 specifies; an unowned pending effect is orphaned by construction and follows the table below; all other phases continue ordinarily.
+The pass first inspects the authoritative owned control projection. If cancellation is requested, it invokes neither `before_drive` nor `before_run` and enters §4.6. Otherwise it gates and invokes `before_drive`; failure rejects this pass without faulting the harness or writing durable progress. Model/tool implementations are resolved only at the actual operation boundary that needs them. An unavailable provider/model or configured request tool becomes a non-retryable configuration failure before request intent; an unavailable requested tool becomes a synthetic error result. Neither condition suspends the operation. Durable phase then decides the work: `starting` runs and settles `before_run` as §3.6 specifies; an unowned pending effect is orphaned by construction and follows the table below; all other phases continue ordinarily.
 
 | Orphaned restart point | Activation recovery |
 |---|---|
@@ -2196,12 +2203,12 @@ retry_wait
 
 retry_wait
 → drive({ waitForRetry: true }) admits and immediately starts the retry timer through `drive.gate`
-→ timer reaches notBefore: Session.mutate verifies the same wait and commits ready
+→ timer reaches notBefore: Lane.command verifies the same current wait and commits ready
 → requestAbort: timer wakes after durable cancellation and reconciliation runs
 → close: local task rejects; no durable write
 ```
 
-At or after `notBefore`, either policy verifies the same durable wait and commits `ready` without an unnecessary timer.
+At or after `notBefore`, either policy verifies the same current durable wait state in the owned projection and commits `ready` without an unnecessary timer.
 
 ## 4.6 Abort and cancellation reconciliation
 
@@ -2213,7 +2220,7 @@ For a live operation, the first matching `requestAbort()` performs this order:
 
 ```text
 1. synchronously call `beginAbort` on the matching Drive and install the abort-mutation promise;
-2. `Session.mutate` rereads the latest operation and either commits
+2. `Lane.command` inspects the current owned operation and either commits
    `cancel_requested` or observes that the expected id no longer owns the lane;
 3. for runs, atomically move current steer/follow-up ids to `control.drained*`
    and empty those inbox lists; their `pendingEntry(id)` values remain;
@@ -2226,7 +2233,7 @@ The cancellation mutation leaves the current phase untouched. A later `requestAb
 
 The effect gate orders only whether external work started. The lane mutation line separately orders cancellation against settlement:
 
-- abort commit first → settlement rereads cancelled control and applies cancellation classification;
+- abort commit first → settlement observes cancelled control in the current projection and applies cancellation classification;
 - settlement first → its normal next state commits, then abort marks that state cancelled;
 - terminal first → abort returns `NoActiveOperation`.
 
@@ -2285,11 +2292,11 @@ Close rejects active drive and convenience-operation promises with `HarnessClose
 
 ## 4.9 External finalization
 
-An authorized administrative operation may commit the terminal transaction while a task still exists. It uses the same lane mutation line. This specification adds no public `forceFinalize()` method: authorization, SLA policy, and initiation belong to repository or hosting administration, while the terminal-transaction helper and live-task notification remain package-internal. Live admitted work receives `OperationEnded` when the finalizer closes `drive.gate`. Any queued or later planner rereads ownership, returns `lost_ownership`, and commits nothing.
+An authorized administrative operation may commit the terminal transaction while a task still exists. In-process finalization must use the live owning `Lane`'s command path, on the same lane mutation line, so its terminal commit publishes the idle projection before notifying the owner. Bypassing that path and mutating reserved control values behind the live `Lane` is a programming defect. This specification adds no public `forceFinalize()` method: authorization, SLA policy, and initiation belong to repository or hosting administration, while terminal cleanup and live-task notification remain package-internal. Live admitted work receives `OperationEnded` when the finalizer closes `drive.gate`. Any queued or later planner observes ownership loss in the current projection, returns `lost_ownership`, and commits nothing.
 
-With a live in-process Drive, the finalizer itself publishes the end observation, records `drive.finalizedOutcome`, closes the gate, and settles shared completion immediately; the detached task stops without publishing or writing. With no local Drive—for example, finalization by a replacement process—a later matching `drive()` hydrates from `pi.lane.lastResult`. Neither path recreates operation values/lists or commits a competing terminal result. Scalar and list invocation writes are fenced the same way: invocation memo writes, tool checkpoint replacements, and assistant frame appends each verify durable ownership when their lane job executes, so a write enqueued before finalization is deleted by the terminal cleanup (which removes all operation-owned values/lists) and a write after it declines without committing or recreating state. An unowned operation needs no task to stop; a later matching `drive()` returns the settled result from `pi.lane.lastResult`, while `resume(context)` sees an idle lane and returns `NothingToResume`.
+With a live in-process Drive, the finalizer itself records `drive.finalizedOutcome` and closes the gate in committed materialization, publishes and awaits the end observation, then settles shared completion without waiting for detached work; the detached task stops without publishing or writing. With no local Drive—for example, finalization by a replacement process—a later matching `drive()` hydrates from `pi.lane.lastResult`. Neither path recreates operation values/lists or commits a competing terminal result. Scalar and list invocation writes are fenced the same way: invocation memo writes, tool checkpoint replacements, and assistant frame appends each verify the current owned projection when their lane job executes and exact Drive identity at commit admission, so a write enqueued before finalization is deleted by the terminal cleanup (which removes all operation-owned values/lists) and a write after it declines without committing or recreating state. An unowned operation needs no task to stop; a later matching `drive()` returns the settled result from `pi.lane.lastResult`, while `resume(context)` sees an idle lane and returns `NothingToResume`.
 
-At most one terminal transaction commits because every candidate rereads ownership on the lane line before writing. An in-process finalizer publishes terminal events, records the matching result in `drive.finalizedOutcome`, closes its gate with `OperationEnded`, and settles the shared completion immediately so non-cooperative provider/tool work cannot delay callers. It deliberately retains the Drive; acceptance returns `LaneBusy` until the detached task reaches its exact-object `finally`. The task publishes no duplicate end event and cannot write after ownership loss. A replacement-process finalizer first acquires ownership after close/crash, so no live Drive exists to notify.
+At most one terminal transaction commits because every candidate verifies the current owned projection on the lane line before writing. An in-process finalizer records the matching result in `drive.finalizedOutcome` and closes its gate with `OperationEnded` in committed materialization, publishes and awaits the terminal event, then settles shared completion without waiting for non-cooperative provider/tool work. It retains the Drive until both terminal event delivery/settlement and the detached task's exact-object `finally` have occurred. Acceptance returns `LaneBusy`, and same-id drive callers join that retained completion, until the later boundary removes it. The task publishes no duplicate end event and cannot write after ownership loss. A replacement-process finalizer first acquires ownership after close/crash, so no live Drive exists to notify.
 
 # Part 5 — Public surface
 
@@ -2588,7 +2595,7 @@ interface LaneInfo {
 // QueueMode, RetryPolicy, and CompactionSettings use the source types named in §0.7.
 ```
 
-Passing an open `Session` to `create(options, context)` transfers orchestration ownership to the attachment attempt and then the returned harness until `close(context)` resolves. During that interval callers must not invoke raw `Session.mutate`, `Session.createLane`, or write reserved `pi.*` addresses through another facade; doing so can race lane inventory and violates the single-owner contract. If create rejects, ownership returns to the caller.
+Passing an open `Session` to `create(options, context)` transfers orchestration ownership to the attachment attempt and then the returned harness until `close(context)` resolves. During that interval every retained `Session` and pre-attachment `SessionTree` facade is read-only. Callers must not invoke `Session.mutate`, `Session.createLane`, `Session.appendMessage`, `Session.appendCustomEntry`, any mutating `session.view(lane)` method, or write reserved `pi.*` addresses through another facade. Application values and lists must be mutated through the harness-owned lane facade. Bypassing the owning `Lane` can stale its authoritative projection and is a programming defect, not a supported concurrency path. If create rejects, ownership returns to the caller.
 
 `create(options, context)` initializes an unconfigured main when needed, then restores the small durable projection for every lane under that Context before returning. `open` contains exactly one item per lane with a durable current operation and omits idle lanes; `aborting:true` is copied only from durable cancellation control. The array is an inventory that may become stale after return, not a reservation, identity prediction, or drive claim. Detailed snapshot payloads are read only by `watch(context)`.
 
@@ -3502,7 +3509,7 @@ Tree:
 
 Operations:
 
-12. `laneState(lane)` confers lane ownership, and `operationState(operationId)` confers operation-state ownership. An open lane names operation O, `operationMeta(O)` holds that lane's compatible `OperationMeta`, and `operationState(O)` holds an `OperationState` compatible with O's intent kind; state values carry no duplicate owner metadata.
+12. `laneState(lane)` confers lane ownership, and `operationState(operationId)` confers operation-state ownership. An open lane names operation O, `operationMeta(O)` holds that lane's compatible `OperationMeta`, and `operationState(O)` holds an `OperationState` compatible with O's intent kind; state values carry no duplicate owner metadata. While a harness owns the session, exactly one live `Lane` owns each lane's authoritative projection and every supported write to that lane's control addresses commits through it.
 13. Operation-owned values and lists may exist only while their operation is open: the terminal transaction deletes them atomically with clearing `currentOperationId` (§3.13). Lane-owned `pendingNextRun` values are never deleted by it.
 14. Acceptance must observe `currentOperationId === null`, commits no `Drive`, and returns before any hook/provider/tool/timer work begins. Run acceptance commits payload-free `starting`; only its consuming command may apply `before_run` output and replace it with `checkpoint`. A supplied operation id obeys §1.2 and is the exact id written to `pi.op.meta`, events, and `pi.lane.lastResult`.
 15. A reserved id may exist only with the content its intent named. Queued-content ids begin in `pi.pending.entry`; settlement-family ids begin as strings in `pi.op.state`. A tool-result id may then move through `string only → outcome-ready pi.pending.entry → immutable entry`; no two representations coexist at a commit boundary (§2.2). An effect-pending response id may additionally key its auxiliary frame list (§3.7); frames are observation, not a content representation, and die with settlement.
@@ -3510,9 +3517,9 @@ Operations:
 17. At most one operation is open per lane. Two is corruption.
 18. `overflowRecoveryUsed` is `true` only after overflow compaction. A transition that adds projecting conversational input or tool results and requires an assistant writes `false`; an unprojected custom write preserves it.
 19. **The settlement transaction that commits a response with `stopReason: "aborted"` must, in that same transaction, write an operation state with `control.status === "cancel_requested"`.** The invariant is scoped to the committing transaction — later terminal cleanup or forks may remove the state without violating it. Providers must comply with the harness-owned signal contract; violation is corruption.
-20. Attachment restores and validates only the small lane/operation projection (§3.3, §4.4). Detailed presentation references are validated by `watch(context)` under the lane line; drive references are validated by their consuming procedure. Missing or contradictory required data faults that consumer, while optional frame/checkpoint absence is legal. Live phase/effect-identity checks remain concurrency fences. `pi.lane.lastResult` never determines an open operation's next procedure.
-21. At most one terminal transaction ever commits per operation. In-process finalization closes the live Drive gate with `OperationEnded`, records `drive.finalizedOutcome`, and settles immediately; queued/later planners return `lost_ownership` and commit nothing. With no local Drive, later matching callers hydrate from `pi.lane.lastResult` (§4.9).
-22. At most one `Drive` exists per lane. Acceptance and taskless `requestAbort` never install one. A matching `drive` installs it before releasing the lane mutation line; another matching drive joins that pass, and a stale id starts nothing. Every late transition checks exact Drive identity. Normal `finally` removes only itself; abandonment and close/fault remove immediately; external finalization settles immediately but retains ownership until `finally`. Each newly installed pass invokes `before_drive` once after the cancellation check; joiners do not. `starting + cancel_requested` invokes neither `before_drive` nor `before_run`.
+20. Attachment restores and validates only the small lane/operation projection (§3.3, §4.4). That owned projection is authoritative until close, fault, or process loss. Detailed presentation references are validated by `watch(context)` under the lane line; drive payload references are validated by their consuming procedure. Missing or contradictory required data faults that consumer, while optional frame/checkpoint absence is legal. Live phase/effect-identity and exact-`Drive` checks remain concurrency fences. `pi.lane.lastResult` never determines an open operation's next procedure.
+21. At most one terminal transaction ever commits per operation. In-process finalization closes the live Drive gate with `OperationEnded` and records `drive.finalizedOutcome` in committed materialization, then settles after terminal event delivery without waiting for detached work; once that outcome is recorded, the pass continuation may neither settle nor fail shared completion. The exact Drive is removed only after both finalizer-owned settlement and pass ending, so no caller hydrates before terminal event delivery. Queued/later planners return `lost_ownership` and commit nothing. With no local Drive, later matching callers hydrate from `pi.lane.lastResult` (§4.9).
+22. At most one `Drive` exists per lane. Acceptance and taskless `requestAbort` never install one. A matching `drive` installs it before releasing the lane mutation line; another matching drive joins that pass, and a stale id starts nothing. Every drive-owned write rechecks exact Drive identity synchronously at commit admission. Normal `finally` removes only itself; abandonment and close/fault remove immediately; external finalization settles after terminal event delivery and retains ownership until both settlement and `finally` have occurred. Each newly installed pass invokes `before_drive` once after the cancellation check; joiners do not. `starting + cancel_requested` invokes neither `before_drive` nor `before_run`.
 23. The §4.2 `Gate.admit()` catalog is complete. Every listed hook/provider/tool/timer integration calls `admit(() => operation())` after preparation; no unlisted code calls it. Admitted asynchronous provider setup/delegation owns `drive.gate.signal`.
 24. `drive` and `requestAbort` are fenced by expected operation id. They may affect only that current operation; `drive` may also return its matching latest terminal result. A stale wake for A cannot drive or cancel B.
 25. No public drive option encodes a wall-clock budget or partial-progress return. An admitted effect settles normally or is recovered from durable state after task loss; host scheduling and process termination remain outside the harness contract.
@@ -3524,7 +3531,7 @@ Operations:
 31. Scalar assistant/deferred state is the sole restart authority for streamed partials. One effect-pending response id constructs exactly one `pendingAssistantFrames(operationId, responseEntryId)` address; every element is an exported pi-ai `AssistantMessageFrame`; frame order equals provider event order; terminal `done`/`error` events are never stored; frames never establish provider completion or suppress unknown-outcome recovery.
 32. Every final or synthetic response settlement — normal, recovery, cancellation, or external finalization — atomically deletes its exact frame list. Idle forks contain no frame lists. A restored partial may appear in `streamingMessage` but never in `transcript` before settlement.
 33. The provider loop never awaits storage per frame; frame appends are enqueued synchronously in provider-event order, and awaiting the latest frame-write promise at stream settlement implies every accepted append completed.
-34. Successful attachment publishes only complete lane projections and an open-operation inventory. It resolves no model/tool identity and starts no work. A later drive rereads and fences durable state.
+34. Successful attachment publishes only complete lane projections and an open-operation inventory. It resolves no model/tool identity and starts no work. A later drive fences the authoritative owned projection and exact `Drive` identity; storage reads only dereference payloads named by that projection.
 35. Every event-producing committing harness lane job publishes its owned projection and calls `emitBatch` with its complete event batch in the exact continuation that observes commit, as the callback's final action; this includes direct appends, lane and metadata setters, acceptance, and harness lane creation. The mutation never awaits delivery, but the public operation does. A lane watch registers buffering and clones live presentation synchronously, then performs bounded durable reads while holding the line. Snapshot plus buffered events has no gap or duplicate and replays no pre-registration lifecycle. `emitBatch` binds recipients and the emitting Context immediately; a delayed watcher receives the object-identical source Context, never its start Context.
 36. Shared harness/lane/Session/SessionTree receivers retain no invocation Context and expose no receiver-level telemetry default. Concurrent calls preserve independent telemetry and cancellation lineage. Context and its values are neither durable operation data nor serialized business arguments. RPC cancel/disconnect reaches only the matching invocation through `context.abortSignal` and never becomes durable cancellation.
 37. Process-local model/tool registry absence never becomes durable waiting state or an acceptance error. Pre-intent request-configuration absence fails in-band without fabricating a response/usage; missing requested tools stage `isError` tool-result messages with no invented details; uncertain effects settle under their existing recovery rules first.
@@ -3545,7 +3552,7 @@ Each durable mutation race has exactly two durable histories. Process-local owne
 | assistant frame append vs response settlement | settlement awaits the latest frame write, then its transaction deletes the list; a crash between leaves the committed frame prefix under `effect_pending` |
 | assistant frame append vs external finalization | append first → terminal cleanup deletes the list; finalization first → the fenced append declines without committing |
 | live update event vs its queued frame/checkpoint commit | either finishes first; events are observation, and reconnect uses only committed frames/checkpoints |
-| external finalization vs memo/checkpoint mutation | mutation first → terminal cleanup deletes it; finalization first → durable ownership check declines without committing |
+| external finalization vs memo/checkpoint mutation | mutation first → terminal cleanup deletes it; finalization first → owned-projection/exact-Drive check declines without committing |
 | later tool B settles vs earlier tool A | B stages outcome-ready immediately; tree placement waits for A |
 | `abort` vs `before_run_end` follow-up | follow-up dropped; or committed and the run continues |
 | `cancelQueued` vs checkpoint consumption | `cancelled`; or `already_consumed` |
@@ -3556,7 +3563,7 @@ Each durable mutation race has exactly two durable histories. Process-local owne
 | deferred write vs abort | write survives abort either way |
 | `requestAbort` vs `before_drive`/`before_run` admission | admission first → the complete hook pipeline runs and its consuming command observes cancellation; cancellation first → reconciliation runs and neither hook starts |
 | `requestAbort` vs ordinary operation admission | admission first → operation is invoked with the signal; cancellation first → gate refuses invocation |
-| attachment vs concurrent resume | attachment owns the session before publication; after return, resume rereads durable state and stale `open` remains harmless |
+| attachment vs concurrent resume | attachment owns the session before publication; after return, resume uses the authoritative owned projection and stale `open` remains harmless |
 | watcher registration vs state publication | watcher first → old snapshot plus the complete buffered event batch; publication/`emitBatch` first → new snapshot without that old batch |
 | close vs attachment | create completes and publishes a fully open harness; or close/fault rejects attachment without a partial harness |
 | snapshot capture vs resume | capture first yields pre-resume snapshot plus events; resume publication first yields post-transition snapshot |
@@ -3568,7 +3575,7 @@ Each durable mutation race has exactly two durable histories. Process-local owne
 
 **Tier A — state and drive.** For every state in Part 3, construct it durably, close, reopen, drive its expected operation id, and assert the next durable transition, wait, or terminal result. Coverage must include: accepted and restored `starting` with hook output applied once by its consuming transaction; minimal projection restore; ad-hoc watch capture with one compaction-bounded transcript scan and state-directed payload reads, with required presentation references faulting watch and optional frame/checkpoint absence remaining legal; drive references are detected at consumption and captured step configuration is not re-resolved; assistant intent with no settlement — with no frames, partial frames, and authoritative end-frame content — recovered into synthetic partial settlements below and at the retry cap; settlement followed by each classification branch; every settled stop reason surviving except the two deliberate normalizations; a self-contained deferred step with copied configuration, consecutive polls, repeated equal-handle pending responses, ready and terminal responses, and handle-mismatch normalization into durable failure; every tool state including planned, effect-pending safe/unsafe with and without a checkpoint, outcome-ready, and completed; parallel B/C outcomes staged before A and never replayed after reopen; source-ordered materialization; invocation memos surviving safe replay and dying at outcome staging; a batch where every call terminates; genuine-length synthetic outcomes; every overflow crash position; every navigation state; abort at every position; unavailable model/configured tools as non-retryable configuration failure; missing requested tools as detail-free error results; every terminal transaction proving deletion of tool args, memos, checkpoints, frame lists, staged outcomes, and pending payloads; `pi.lane.lastResult`; preserved `pendingNextRun`; representation exclusivity for every reserved id; and every half-completed recovery prefix.
 
-For each recovery prefix: close, reopen, drive, and compare against uninterrupted recovery. Invoking recovery twice from the initial prefix is **not** sufficient. Every operation kind also covers accept → close before first drive → reopen → drive.
+For each recovery prefix: close, reopen, drive, and compare against uninterrupted recovery. Invoking recovery twice from the initial prefix is **not** sufficient. Every operation kind also covers accept → close before first drive → reopen → drive. At every test-controlled committed lane boundary, compare the published `Lane.state` with a fresh `restoreLaneState` result; divergence is an implementation defect, never silently healed by the next transition.
 
 One corruption assertion constructs an `aborted` response with running control directly and requires the consuming transition to reject it as an invariant defect. Provider conformance separately proves implementations emit `aborted` only for the supplied signal.
 
@@ -3627,7 +3634,7 @@ One corruption assertion constructs an `aborted` response with running control d
 | **Invocation memo** | Tool-invocation-scoped durable current value used for replay-safe memoization; valid only while the call is effect-pending. |
 | **Terminal transaction** | The commit that deletes an operation's values/lists, writes `pi.lane.lastResult`, and clears `currentOperationId`. |
 | **Segment** | A branch-index range that references an older branch instead of copying it. |
-| **External finalization** | A terminal transaction committed outside the live task. An in-process finalizer publishes once and settles the live Drive immediately from `finalizedOutcome`; with no local Drive, later callers hydrate from `pi.lane.lastResult` (§4.9). |
+| **External finalization** | A terminal transaction committed outside the live task. An in-process finalizer closes the gate in committed materialization, publishes once, then settles the live Drive from `finalizedOutcome` after event delivery without waiting for detached work; the exact owner remains installed until both settlement and pass ending, preventing early hydration; with no local Drive, later callers hydrate from `pi.lane.lastResult` (§4.9). |
 | **Precise rewrite** | The administrative copy-retained-and-swap rebuild of a session store — the sole sanctioned path that removes entries or usage rows (§2.9). |
 
 # Appendix B — Coding-agent v3-format compatibility

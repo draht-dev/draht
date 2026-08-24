@@ -30,7 +30,7 @@ function doPost(e) {
 		const confirmToken = String((e && e.parameter && e.parameter.confirm_token) || "");
 		return confirmToken ? confirm_(confirmToken) : signup_(e);
 	} catch (err) {
-		return htmlMessage_("Something went wrong — mail oskar@draht.dev and I'll add you by hand.");
+		return htmlMessage_("Something went wrong. Email oskar@draht.dev and I'll add you by hand.");
 	} finally {
 		try { lock.releaseLock(); } catch (_) {}
 	}
@@ -43,7 +43,7 @@ function doGet(e) {
 	// GET must not confirm: corporate mail scanners prefetch every link.
 	// The actual confirmation is the button's POST below.
 	return page_(
-		"<p>One click left — confirm your spot on the draht uni waitlist.</p>" +
+		"<p>Confirm your place on the draht uni waitlist.</p>" +
 		'<form method="post" action="' + ScriptApp.getService().getUrl() + '">' +
 		'<input type="hidden" name="confirm_token" value="' + token + '">' +
 		'<button type="submit" style="background:#e8e2d6;color:#141311;border:0;' +
@@ -57,7 +57,7 @@ function signup_(e) {
 	const honeypot = String((e && e.parameter && e.parameter.hp_ref) || "");
 	if (honeypot) return htmlMessage_("Thanks!"); // bot filled the hidden field — pretend success
 	if (email.length > 254 || /[,;<>]/.test(email) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-		return htmlMessage_("That email address doesn't look right — go back and try again.");
+		return htmlMessage_("That email address doesn't look right. Go back and try again.");
 	}
 
 	const props = PropertiesService.getScriptProperties();
@@ -65,7 +65,7 @@ function signup_(e) {
 
 	// Already confirmed, in cooldown, or over the daily cap: same reply,
 	// no mail — the endpoint must not act as a subscription-status oracle.
-	const SENT = "Check your inbox — click the confirmation link to join.";
+	const SENT = "Check your inbox and click the confirmation link to join.";
 	if (props.getProperty("confirmed:" + email)) return htmlMessage_(SENT);
 	if (Date.now() - Number(props.getProperty("cooldown:" + email) || 0) < COOLDOWN_MS) {
 		return htmlMessage_(SENT);
@@ -76,7 +76,7 @@ function signup_(e) {
 
 	const token = Utilities.getUuid();
 	const confirmUrl = ScriptApp.getService().getUrl() + "?token=" + token;
-	GmailApp.sendEmail(email, "Confirm your spot — draht uni waitlist",
+	GmailApp.sendEmail(email, "Confirm your draht uni subscription",
 		"You asked to get every episode of the draht uni build in your inbox.\n\n" +
 		"Confirm here: " + confirmUrl + "\n\n" +
 		"The link works for 48 hours. If this wasn't you, ignore this mail and nothing happens.\n" +
@@ -94,7 +94,7 @@ function confirm_(token) {
 	const props = PropertiesService.getScriptProperties();
 	const raw = props.getProperty("pending:" + token);
 	if (!raw) {
-		return htmlMessage_("This confirmation link is expired or already used. If you just confirmed, you're on the list.");
+		return htmlMessage_("This confirmation link has expired or was already used. If you just confirmed, you're on the list.");
 	}
 	const pending = JSON.parse(raw);
 	if (Date.now() - pending.ts > CONFIRM_WINDOW_MS) {
@@ -179,6 +179,6 @@ function redirect_(url) {
 	return HtmlService.createHtmlOutput(
 		'<meta http-equiv="refresh" content="0;url=' + url + '">' +
 		'<body style="background:#141311;color:#e8e2d6;font:15px ui-monospace,monospace;padding:24px">' +
-		'Confirmed — <a href="' + url + '" style="color:#c47a4a">back to draht.dev/uni</a></body>'
+		'Confirmed. <a href="' + url + '" style="color:#c47a4a">Back to draht.dev/uni</a></body>'
 	);
 }

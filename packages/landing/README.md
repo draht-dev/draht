@@ -18,4 +18,4 @@ bun run preview  # Preview production build
 
 Deployed to AWS (S3 + CloudFront) via SST. See `sst.config.ts`.
 
-⚠️ **Do not run `sst deploy` manually** — deployments are managed via CI/CD.
+Do not run `sst deploy` manually. CI/CD manages deployments.

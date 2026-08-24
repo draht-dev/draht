@@ -189,7 +189,9 @@ export function loadProjectContextFiles(options: {
 	 */
 	contextRoot?: string;
 }): Array<{ path: string; content: string }> {
-	const resolvedCwd = resolvePath(options.cwd);
+	// The gate's own chain, from the spelling itself: `resolvePath` would collapse `..` before
+	// any link is followed and walk ancestors the gate never saw. Unresolvable contributes none.
+	const realCwd = realPathStrict(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
 	const canonicalRoot =
 		options.contextRoot === undefined ? undefined : realPathStrict(resolvePath(options.contextRoot));
@@ -207,10 +209,10 @@ export function loadProjectContextFiles(options: {
 
 	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
 
-	const shadowedContextFile = findShadowedContextFile(resolvedCwd);
-	let currentDir = resolvedCwd;
+	const shadowedContextFile = realCwd === undefined ? undefined : findShadowedContextFile(realCwd);
+	let currentDir = realCwd;
 
-	while (!contextRootUnresolvable) {
+	while (currentDir !== undefined && !contextRootUnresolvable) {
 		// Stops the walk at the context root, and refuses a cwd outside it entirely. A
 		// directory whose real path is unknown is not known to be contained either.
 		if (canonicalRoot !== undefined) {
@@ -285,6 +287,7 @@ export interface DefaultResourceLoaderOptions {
 
 export class DefaultResourceLoader implements ResourceLoader {
 	private cwd: string;
+	private cwdSpelling: string;
 	private agentDir: string;
 	private settingsManager: SettingsManager;
 	private eventBus: EventBus;
@@ -344,12 +347,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	constructor(options: DefaultResourceLoaderOptions) {
 		this.cwd = resolvePath(options.cwd);
+		this.cwdSpelling = options.cwdSpelling ?? options.cwd;
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
 		this.packageManager = new DefaultPackageManager({
 			cwd: this.cwd,
-			cwdSpelling: options.cwdSpelling ?? options.cwd,
+			cwdSpelling: this.cwdSpelling,
 			agentDir: this.agentDir,
 			settingsManager: this.settingsManager,
 		});
@@ -609,7 +613,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			agentsFiles: this.noContextFiles
 				? []
 				: loadProjectContextFiles({
-						cwd: this.cwd,
+						cwd: this.cwdSpelling,
 						agentDir: this.agentDir,
 						contextRoot: this.contextRoot,
 					}),

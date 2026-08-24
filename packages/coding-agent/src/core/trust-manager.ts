@@ -49,13 +49,23 @@ const TRUST_REQUIRING_ANCESTOR_PROJECT_RESOURCES = [
 	join(CONFIG_DIR_NAME, "agents"),
 ] as const;
 
+// The key is the spelling resolved through the filesystem; the settings/extensions/skills loaders
+// still read `<lexical cwd>/<config dir>`. A `..` that crossed a symlink makes those two different
+// directories, so a decision recorded about the key would authorize project config the user never
+// judged. A plain symlinked cwd is not this: it and its key are one directory on disk.
+function trustKeyEscapesProjectConfigDir(cwd: string): boolean {
+	const lexicalCwd = resolvePath(cwd);
+	return hasProjectConfigResources(lexicalCwd) && realPathStrict(lexicalCwd) !== realPathStrict(cwd);
+}
+
 function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreEntry | null {
 	const prefix = resolveRealPrefix(cwd);
+	// A stored refusal always binds; a stored trust binds only when the key names the directory whose project config loads. An unresolved suffix is spelled lexically, and a `..` across a symlink resolves away from it: either way the key is not that directory.
+	const trustBinds = !prefix.failed && !trustKeyEscapesProjectConfigDir(cwd);
 	let currentDir = spellRealPrefix(prefix);
 	while (true) {
-		// An unresolved suffix is spelled lexically, so this key may name a directory we are not in: a stored refusal still binds, a stored trust must not.
 		const value = data[currentDir];
-		if (value === false || (value === true && !prefix.failed)) {
+		if (value === false || (value === true && trustBinds)) {
 			return { path: currentDir, decision: value };
 		}
 

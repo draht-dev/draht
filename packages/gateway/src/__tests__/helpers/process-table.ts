@@ -1,8 +1,9 @@
 // The OS process table, read with `ps`: the oracle for process-level claims, since the daemon's own bookkeeping is not.
 
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 
-/** One row of `ps -Awwo pid=,ppid=,pgid=,stat=,command=`. */
+/** One row of `ps -A -ww -o pid=,ppid=,pgid=,stat=,command=`. */
 export interface ProcessRow {
 	pid: number;
 	ppid: number;
@@ -30,8 +31,10 @@ const ROW = /^\s*(?<pid>\d+)\s+(?<ppid>\d+)\s+(?<pgid>\d+)\s+(?<stat>\S+)\s*(?<c
  * `-A` is mandatory: without it `ps` lists only processes sharing the caller's controlling terminal, and everything
  * spawned `detached: true` has none, so such a child reads as absent. `-ww` keeps a long argv from being truncated.
  */
+export const PS_ROWS_COMMAND = ["ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,stat=,command="] as const;
+
 export function psRows(): ProcessRow[] {
-	const out = Bun.spawnSync(["ps", "-Awwo", "pid=,ppid=,pgid=,stat=,command="]);
+	const out = Bun.spawnSync([...PS_ROWS_COMMAND]);
 	if (!out.success) {
 		throw new ProcessTableError(`ps -A exited ${out.exitCode}: ${out.stderr.toString().trim()}`);
 	}
@@ -153,6 +156,8 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * starts a variable, any other token continues the previous value (values legitimately contain spaces).
  */
 export function envOf(pid: number): ProcessEnvironment {
+	if (process.platform === "linux") return linuxEnvOf(pid);
+
 	const out = Bun.spawnSync(["ps", "-Eww", "-o", "command=", "-p", String(pid)]);
 	const raw = out.stdout.toString();
 	if (!out.success || raw.trim().length === 0) {
@@ -181,6 +186,39 @@ export function envOf(pid: number): ProcessEnvironment {
 				"platform binary (/bin/sh, /bin/bash, /bin/sleep — argv only, zero environment bytes) or a process " +
 				"with a genuinely empty environment. These are indistinguishable from outside, so no absence may be " +
 				"concluded from this result",
+			raw,
+		};
+	}
+	return { visible: true, env, raw };
+}
+
+function linuxEnvOf(pid: number): ProcessEnvironment {
+	const path = `/proc/${pid}/environ`;
+	let raw: string;
+	try {
+		raw = readFileSync(path).toString();
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ESRCH") {
+			throw new ProcessTableError(`${path} names no running process`);
+		}
+		return {
+			visible: false,
+			reason: `${path} could not be read: ${(error as Error).message}`,
+			raw: "",
+		};
+	}
+
+	const env = new Map<string, string>();
+	for (const assignment of raw.split("\0")) {
+		const split = assignment.indexOf("=");
+		if (split <= 0) continue;
+		env.set(assignment.slice(0, split), assignment.slice(split + 1));
+	}
+	if (env.size === 0) {
+		return {
+			visible: false,
+			reason: `${path} was readable but held no environment assignments, so no absence may be concluded`,
 			raw,
 		};
 	}

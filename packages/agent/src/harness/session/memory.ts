@@ -23,6 +23,7 @@ import type {
 	Session,
 	SessionCreateOptions,
 	SessionMetadata,
+	SessionMutation,
 	SessionMutator,
 	SessionRepo,
 	SessionStats,
@@ -179,6 +180,32 @@ class MemorySessionFacade implements Session {
 		this.metadata = session.metadata;
 		this.idGenerator = session.idGenerator;
 		this.onClose = onClose;
+	}
+
+	async beginMutation(lane: string, context: Context): Promise<SessionMutation> {
+		const source = await this.admit(() => this.session.beginMutation(lane, context));
+		let resolveFinished!: () => void;
+		const finished = new Promise<void>((resolve) => {
+			resolveFinished = resolve;
+		});
+		this.admitted.add(finished);
+		return {
+			lane: source.lane,
+			commit: (writes, commitContext) => source.commit(writes, commitContext),
+			end: async (endContext) => {
+				try {
+					await source.end(endContext);
+				} finally {
+					this.admitted.delete(finished);
+					resolveFinished();
+				}
+			},
+			getEntries: (ids, readContext) => source.getEntries(ids, readContext),
+			getValue: (address, readContext) => source.getValue(address, readContext),
+			scanValues: (prefix, readContext) => source.scanValues(prefix, readContext),
+			readList: (address, options, readContext) => source.readList(address, options, readContext),
+			scanBranch: (query, readContext) => source.scanBranch(query, readContext),
+		};
 	}
 
 	async mutate<T>(

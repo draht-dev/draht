@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { BACKGROUND_CONTEXT, type Context } from "../../src/harness/context.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { JSONL_STORAGE_VERSION, JsonlSessionRepo } from "../../src/harness/session/jsonl/index.ts";
+import { sessionName, setValue } from "../../src/harness/session/values.ts";
 import { getOrThrow } from "../../src/harness/types.ts";
 import { createTempDir } from "./session-test-utils.ts";
 
@@ -102,6 +103,35 @@ describe("JsonlSessionRepo cwd-scoped lifecycle", () => {
 		expect(getOrThrow(await fileSystem.exists(publication.sourcePath, BACKGROUND_CONTEXT))).toBe(false);
 
 		await session.close(BACKGROUND_CONTEXT);
+		await repo.close(BACKGROUND_CONTEXT);
+	});
+
+	it("keeps an explicit mutation on the lane through commit until end", async () => {
+		const fileSystem = new NodeExecutionEnv({ cwd: createTempDir() });
+		const repo = new JsonlSessionRepo({ fileSystem, sessionsRoot: "sessions", now: () => NOW });
+		const session = await repo.create({ id: "session", cwd: "/workspace" }, BACKGROUND_CONTEXT);
+		const mutation = await session.beginMutation("main", BACKGROUND_CONTEXT);
+		let queuedStarted = false;
+		const queued = session.mutate(
+			"main",
+			() => {
+				queuedStarted = true;
+			},
+			BACKGROUND_CONTEXT,
+		);
+
+		const result = await mutation.commit([setValue(sessionName, "explicit")], BACKGROUND_CONTEXT);
+		expect(result.seqs).toHaveLength(1);
+		expect(queuedStarted).toBe(false);
+		expect(await mutation.getValue(sessionName, BACKGROUND_CONTEXT)).toMatchObject({ value: "explicit" });
+		await mutation.end(BACKGROUND_CONTEXT);
+		await queued;
+		expect(queuedStarted).toBe(true);
+
+		await session.close(BACKGROUND_CONTEXT);
+		const reopened = await repo.open(session.metadata, BACKGROUND_CONTEXT);
+		expect(await reopened.getName(BACKGROUND_CONTEXT)).toBe("explicit");
+		await reopened.close(BACKGROUND_CONTEXT);
 		await repo.close(BACKGROUND_CONTEXT);
 	});
 

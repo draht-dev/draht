@@ -38,22 +38,37 @@ describe("MemorySessionRepo metadata", () => {
 		await repo.close(BACKGROUND_CONTEXT);
 	});
 
+	it("waits for an explicit mutation before closing its facade", async () => {
+		const repo = new MemorySessionRepo({ now: () => NOW });
+		const session = await repo.create({ id: "session" }, BACKGROUND_CONTEXT);
+		const mutation = await session.beginMutation("main", BACKGROUND_CONTEXT);
+		let closed = false;
+		const closing = session.close(BACKGROUND_CONTEXT).then(() => {
+			closed = true;
+		});
+
+		await Promise.resolve();
+		expect(closed).toBe(false);
+		await mutation.end(BACKGROUND_CONTEXT);
+		await closing;
+		expect(closed).toBe(true);
+
+		const reopened = await repo.open(session.metadata, BACKGROUND_CONTEXT);
+		await Promise.all([reopened.close(BACKGROUND_CONTEXT), repo.close(BACKGROUND_CONTEXT)]);
+	});
+
 	it("captures fork options before waiting for its snapshot boundary", async () => {
 		const repo = new MemorySessionRepo({ now: () => NOW });
 		const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
 		const rootId = "00000000-0000-7000-8000-000000000001";
 		const childId = "00000000-0000-7000-8000-000000000002";
-		const commit = source.mutate(
-			"main",
-			(mutator) =>
-				mutator.commit(
-					[
-						sessionWrites.insertEntry({ id: rootId, parentId: null, type: "custom", customType: "root" }),
-						sessionWrites.insertEntry({ id: childId, parentId: rootId, type: "custom", customType: "child" }),
-						storedValues.setValue(storedValues.laneLeaf("main"), childId),
-					],
-					BACKGROUND_CONTEXT,
-				),
+		const mutation = await source.beginMutation("main", BACKGROUND_CONTEXT);
+		const commit = mutation.commit(
+			[
+				sessionWrites.insertEntry({ id: rootId, parentId: null, type: "custom", customType: "root" }),
+				sessionWrites.insertEntry({ id: childId, parentId: rootId, type: "custom", customType: "child" }),
+				storedValues.setValue(storedValues.laneLeaf("main"), childId),
+			],
 			BACKGROUND_CONTEXT,
 		);
 		const options = { id: "fork", entryId: childId, position: "before" as "before" | "at" };
@@ -62,6 +77,7 @@ describe("MemorySessionRepo metadata", () => {
 		options.position = "at";
 
 		await commit;
+		await mutation.end(BACKGROUND_CONTEXT);
 		await expect(
 			source.scanBranch({ start: childId, order: "oldestFirst" }, BACKGROUND_CONTEXT),
 		).resolves.toMatchObject([{ id: rootId }, { id: childId }]);

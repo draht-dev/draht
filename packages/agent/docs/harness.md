@@ -1050,14 +1050,21 @@ interface SessionReader {
   scanBranch(query: StorageBranchScan, context: Context): Promise<Entry[]>;
 }
 
-/** Callback-scoped write capability bound to one lane. */
-interface SessionMutator extends SessionReader {
+/** Explicitly acquired mutation capability bound to one lane. */
+interface SessionMutation extends SessionReader {
   readonly lane: string;
 
-  /** The callback's sole commit. A second call rejects, including after a
-      failed first attempt. */
+  /** The mutation's sole commit. A second call rejects, including after a
+      failed first attempt. Commit does not release the lane line. */
   commit(writes: Write[], context: Context): Promise<CommitResult>;
+
+  /** Wait for any admitted commit, invalidate this capability, and release
+      the lane line. Repeated calls are idempotent. */
+  end(context: Context): Promise<void>;
 }
+
+/** A mutate callback receives no authority to release its own lane line. */
+type SessionMutator = Omit<SessionMutation, "end">;
 
 interface Session<M extends SessionMetadata = SessionMetadata>
     extends SessionTree, SessionReader {
@@ -1066,7 +1073,10 @@ interface Session<M extends SessionMetadata = SessionMetadata>
   readonly idGenerator: { next(timestampMs?: number): string };
   view(lane: string): SessionTree;
 
-  /** Serializes one complete read/decide/commit job on the named lane. */
+  /** Acquire the named lane's mutation line until SessionMutation.end(). */
+  beginMutation(lane: string, context: Context): Promise<SessionMutation>;
+
+  /** Serializes one complete read/decide/commit/publication job on the named lane. */
   mutate<T>(lane: string,
             mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
             context: Context): Promise<T>;
@@ -1079,9 +1089,32 @@ interface Session<M extends SessionMetadata = SessionMetadata>
 }
 ```
 
-`Session.mutate` is the only raw session write surface. It queues the complete callback on the named lane's mutation line and supplies a lane-bound `SessionMutator` plus the same invocation Context. The mutator is valid only until that callback returns or throws. Reads do not consume it. Its first `commit()` attempt consumes its commit capability before awaiting storage, so a second attempt rejects even when the first failed. The callback may return without committing. Every read and the sole commit receive that invocation Context unless the callback deliberately derives a child. It must not retain the mutator or Context as a receiver default, invoke another mutating `Session`/`SessionTree` method, wait for lane idleness, or perform provider, tool, hook, or timer effects; those operations either reacquire the same line or hold it across work that must remain concurrent. Separate durable transitions use separate `mutate` calls.
+`Session.beginMutation` is the transportable raw mutation primitive. It resolves only after acquiring the named lane's mutation line and returns a `SessionMutation` that remains valid until `end()`. Reads do not consume it. Its first `commit()` attempt consumes its commit capability before awaiting storage, so a second attempt rejects even when the first failed. `commit([])` is a valid empty transaction and returns its ordinary `CommitResult`; it still does not release the line. `end()` waits for an admitted commit to settle, invalidates the reader/commit capability, and releases the line. Ending without committing performs no storage commit. A direct caller must therefore call `end()` in `finally`; retaining or abandoning an acquired mutation indefinitely blocks later work on that lane and close.
 
-The high-level mutating methods on `SessionTree` and `Session` — value setters, appends, and `createLane` — acquire the appropriate mutation line themselves and consume one private mutator commit. Callers invoke them directly rather than wrapping them in `mutate`. `createLane` alone accepts an optional synchronous committed-publication callback: it invokes the callback after commit in the same continuation, retains any returned promise without awaiting it on the line, then awaits it after the mutation returns. A callback throw or retained-promise rejection means the lane committed but process-local publication failed. Reads remain available directly on `Session`, `SessionTree`, and `SessionMutator`.
+`Session.mutate` is the callback convenience built from that lifecycle: acquire with `beginMutation`, invoke the callback with the same object narrowed to `SessionMutator`, then call `end()` in `finally`. The callback cannot release its own line. It may return without committing, and an unawaited admitted commit still settles before `end()` releases the line. Most importantly, a successful `commit()` does **not** release the line: the callback may publish the exact process-local projection and synchronously bind event recipients before it returns. This preserves the existing read → decide → commit → publish boundary and the `onCommitted` semantics below.
+
+Every read, commit, and lifecycle call receives the invocation Context unless the caller deliberately derives a child. A mutation callback must not retain its mutator or Context as a receiver default, invoke another mutating `Session`/`SessionTree` method, wait for lane idleness, or perform provider, tool, hook, or timer effects; those operations either reacquire the same line or hold it across work that must remain concurrent. Separate durable transitions use separate `mutate` calls. Callers normally await `mutate()` immediately. Code that must admit a commit before starting an independently queued repository operation, such as a fork snapshot, uses `beginMutation()`, invokes `commit()`, and only then starts that operation; it must not rely on a mutation callback's synchronous prefix.
+
+The split exists so a remote session can preserve the same lane-line scope without sending a JavaScript callback over RPC. The server owns the concrete Session, Storage, and mutation line; the worker's `RemoteSession.mutate()` performs `begin` RPC → local callback with remote reads/one remote commit → local post-commit publication → `end` RPC. The server does not release the lane after commit; it releases only after the worker ends the mutation. A disconnect or mutation timeout must terminate the server-side scope, reject/fault the in-flight harness according to the hosting policy, and leave durable recovery to resolve any uncertain commit response. Storage backends remain single-owner: no Memory maps, JSONL file, or SQLite writer are shared directly with workers.
+
+The high-level mutating methods on `SessionTree` and `Session` — value setters, appends, and `createLane` — acquire the appropriate mutation line themselves and consume one private mutator commit. Callers invoke them directly rather than wrapping them in `mutate`. `createLane` alone accepts an optional synchronous committed-publication callback: it invokes the callback after commit in the same continuation while the line remains held, retains any returned promise without awaiting it on the line, then releases the line and awaits that retained promise. A callback throw or retained-promise rejection means the lane committed but process-local publication failed. Reads remain available directly on `Session`, `SessionTree`, `SessionMutation`, and `SessionMutator`.
+
+The ordering is load-bearing and is the same for a local Session and `RemoteSession`:
+
+```ts
+const mutation = await session.beginMutation(lane, context);
+let completion: Promise<void> | undefined;
+try {
+  await mutation.commit(writes, context);
+  const result = onCommitted?.(context); // synchronous prefix runs on the line
+  completion = result === undefined ? undefined : Promise.resolve(result);
+} finally {
+  await mutation.end(context);           // release only after publication is bound
+}
+await completion;                         // asynchronous delivery runs off the line
+```
+
+Awaiting `onCommitted` before `end()` is incorrect because it holds the lane line across asynchronous event delivery. Calling it after `end()` is also incorrect because a later same-lane mutation could observe durable state before its matching process-local projection and recipients are published.
 
 Declaration-merged custom `AgentMessage` variants are trusted in-process types like other internal values; extensions that violate them are defective. A new repository session creates `main` with null leaf and an empty `LaneState`, but no configuration; first harness attachment writes its seed configuration. Every additional lane is created through `Session.createLane()` with a total configuration.
 
@@ -1090,6 +1123,8 @@ Declaration-merged custom `AgentMessage` variants are trusted in-process types l
 A repository must not open the same session twice concurrently. `create()` and `fork()` return their destination session already open; another `open()` for that session rejects until that returned `Session` finishes `close()`. Passing that open Session to `AgentHarness.create()` temporarily transfers orchestration ownership: until attachment rejects or the returned harness closes, callers do not mutate it directly or construct a second harness around it. Once close resolves, a later `open()` returns a new session instance over the same durable data. This is one open owner per session id, not a shared-handle or reference-counting contract.
 
 Repository implementations resolve `fork(source, ...)` to the source's serialized snapshot boundary: an active Memory/JSONL storage queues the snapshot with commits; an inactive JSONL file is read as one immutable prefix; SQLite uses one read snapshot of the session's file. Repositories may keep an active-storage registry by session id for this purpose. This is repository coordination, not part of the one-session `Storage` contract.
+
+All shipping backends receive explicit-mutation behavior from the same `StorageBackedSession`. JSONL returns that Session directly. Memory's open-handle facade forwards `beginMutation()` and keeps the handle admitted through `end()` so facade close waits for it. SQLite's open-session facade forwards the mutation to its storage-backed Session; closing the wrapped Session seals and drains the same lane line before releasing the writer lease. No backend implements a separate mutation protocol or becomes multi-process writable.
 
 How a repository organizes its sessions is its own choice, constrained only by the storage backend: JSONL and SQLite storage are one file per session, so their repositories are file-based; a Postgres storage could hold every session in one database.
 
@@ -2102,7 +2137,9 @@ Every catalog item has abort-first/admission-first tests. Preparation must prece
 
 ## 4.3 The lane mutation line
 
-Every state-dependent mutation on a lane is linearized by `Session.mutate`: read latest state, decide, commit at most once, and complete the process-local update before the next mutation starts. Provider, tool, hook, and timer work never occupies the line. The callback-scoped `SessionMutator` enforces the one-commit limit; a high-level `SessionTree` write uses the same mechanism internally.
+Every state-dependent mutation on a lane is linearized by one acquired `SessionMutation`: `beginMutation()` enters the line; reads observe the latest state; `commit()` writes at most once without releasing; process-local publication completes; and `end()` alone releases the line. `Session.mutate()` implements that sequence and narrows the acquired object to `SessionMutator` so its callback cannot end the scope early. Provider, tool, hook, and timer work never occupies the line. A high-level `SessionTree` write uses the same mechanism internally.
+
+This separation is a process boundary, not weaker locking. A local concrete Session and a server-owned Session use the same line lifetime. For a `RemoteSession`, the begin/read/commit/end operations cross RPC, while the mutation callback and process-local publication run in the worker. The server keeps the concrete lane line occupied between RPCs, including after commit, so another same-lane mutation cannot observe durable state before the owning worker publishes its matching local projection. Only the explicit end acknowledgment releases it.
 
 An operation transition receives the latest owned projection inside that mutation. It verifies the expected semantic restart point or pending effect identity, preserves fields owned by concurrent public calls, and commits the complete next state. A mismatch is classified directly:
 
@@ -2269,7 +2306,7 @@ For structural operations the atomic publication commit decides the race: cancel
 
 ## 4.7 Close — a controlled crash
 
-Close is not abort and writes no cancellation or terminal state:
+Close is not abort and writes no cancellation or terminal state. It seals new `beginMutation()` admission and waits for every acquired mutation to reach `end()`:
 
 ```text
 seal harness admission
@@ -3537,6 +3574,7 @@ Operations:
 35. Every event-producing committing harness lane job publishes its owned projection and calls `emitBatch` with its complete event batch in the exact continuation that observes commit, as the callback's final action; this includes direct appends, lane and metadata setters, acceptance, and harness lane creation. The mutation never awaits delivery, but the public operation does. A lane watch registers buffering and clones live presentation synchronously, then performs bounded durable reads while holding the line. Snapshot plus buffered events has no gap or duplicate and replays no pre-registration lifecycle. `emitBatch` binds recipients and the emitting Context immediately; a delayed watcher receives the object-identical source Context, never its start Context.
 36. Shared harness/lane/Session/SessionTree receivers retain no invocation Context and expose no receiver-level telemetry default. Concurrent calls preserve independent telemetry and cancellation lineage. Context and its values are neither durable operation data nor serialized business arguments. RPC cancel/disconnect reaches only the matching invocation through `context.abortSignal` and never becomes durable cancellation.
 37. Process-local model/tool registry absence never becomes durable waiting state or an acceptance error. Pre-intent request-configuration absence fails in-band without fabricating a response/usage; missing requested tools stage `isError` tool-result messages with no invented details; uncertain effects settle under their existing recovery rules first.
+38. `beginMutation()` acquires exactly one lane line, `commit()` consumes at most one commit capability without releasing that line, and `end()` alone invalidates and releases it after any admitted commit settles. `Session.mutate()` always ends in `finally`; its callback cannot end early. Local and remote implementations preserve the same read → decide → commit → process-local publication → end order.
 
 ## 9.2 Race catalog
 
@@ -3587,7 +3625,7 @@ One corruption assertion constructs an `aborted` response with running control d
 
 **Cross-cutting:**
 
-- **Backend conformance.** One suite, three backends, identical results — including checkpoint scalar set/replace/delete, list append/page/whole-key-delete with identical sequence cursors and reduced frame sequences, and torn-transaction handling exposing no list element. Memory/SQLite retain one current checkpoint; JSONL may retain superseded bytes physically but compaction produces identical logical state, including preserved list cursors. Internal values are not cloned or shape-validated. Write-order assertions use the instrumented decorator, never a durable log.
+- **Backend conformance.** One suite, three backends, identical results — including explicit begin/commit/end lane exclusion, commit-without-release, end-without-commit, close waiting for end, checkpoint scalar set/replace/delete, list append/page/whole-key-delete with identical sequence cursors and reduced frame sequences, and torn-transaction handling exposing no list element. Memory/SQLite retain one current checkpoint; JSONL may retain superseded bytes physically but compaction produces identical logical state, including preserved list cursors. Internal values are not cloned or shape-validated. Write-order assertions use the instrumented decorator, never a durable log.
 - **Attachment and watch.** Construct every durable phase directly and assert minimal open inventory, configured/captured identity inspection without resolution, projection corruption faulting create, presentation corruption faulting watch, exact required/optional ad-hoc reads, no attachment effects, lane-line inspection, complete snapshots, live-over-durable partial precedence, no historical lifecycle replay, recipient binding at `emitBatch`, and both registration/publication orders without gaps or duplicates.
 - **Drive equivalence.** Convenience calls and explicit `accept`/`drive`/`requestAbort` compositions produce byte-identical durable state and equivalent events/results.
 - **Deterministic transition control.** Test-only storage gating parks commits without production annotations; controlled hooks, providers, tools, and timers expose effect windows. Each runtime slice tests every durable edge and both orders of each owned race.
@@ -3626,7 +3664,8 @@ One corruption assertion constructs an `aborted` response with running control d
 | **Effect gate** | Process-local synchronous arbitration of ordinary operation admission against a cancellation request, paired with the operation's cooperative signal. |
 | **Reserved id** | An id minted before content exists. Tool-result ids progress from a string in state to staged pending content to an immutable entry. |
 | **Follower id** | An id minted with its leader's 48-bit timestamp so a call/result group shares one time prefix (§1.2). |
-| **Lane mutation line** | Per-lane serialization point where all state-dependent mutations queue. |
+| **Lane mutation line** | Per-lane serialization point where all state-dependent mutations queue. An explicit Session mutation holds it from `beginMutation()` until `end()`, including across its commit and process-local publication. |
+| **Session mutation** | Explicit lane-bound read/one-commit capability. `commit()` does not release it; `end()` settles and releases it. `Session.mutate()` scopes the same capability around a callback without exposing `end()`. |
 | **Control** | Orthogonal cancellation flag: `running` or `cancel_requested`. |
 | **Checkpoint** | The state between turns where queues, writes, and finishing are decided. |
 | **Continuation** | Durable answer to "does this run still owe an assistant turn?" |

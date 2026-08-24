@@ -565,18 +565,14 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 			"captures one coherent boundary between source commits",
 			async ({ repo }) => {
 				const source = await repo.create({ id: "source" }, BACKGROUND_CONTEXT);
-				const firstCommit = source.mutate(
-					"main",
-					(mutator) =>
-						mutator.commit(
-							[
-								insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "first" }),
-								setValue(laneLeaf("main"), ROOT_ID),
-								setValue(sessionName, "first name"),
-								setValue(entryLabel(ROOT_ID), "first label"),
-							],
-							BACKGROUND_CONTEXT,
-						),
+				const firstMutation = await source.beginMutation("main", BACKGROUND_CONTEXT);
+				const firstCommit = firstMutation.commit(
+					[
+						insertEntry({ id: ROOT_ID, parentId: null, type: "custom", customType: "first" }),
+						setValue(laneLeaf("main"), ROOT_ID),
+						setValue(sessionName, "first name"),
+						setValue(entryLabel(ROOT_ID), "first label"),
+					],
 					BACKGROUND_CONTEXT,
 				);
 				const fork = repo.fork(source.metadata, { id: "fork" }, BACKGROUND_CONTEXT);
@@ -601,6 +597,7 @@ export function createSessionRepoForkSourceSnapshotConformance<TMetadata extends
 				);
 
 				const [, forked] = await Promise.all([firstCommit, fork]);
+				await firstMutation.end(BACKGROUND_CONTEXT);
 				await secondCommit;
 				strictEqual(await forked.getLeafId(BACKGROUND_CONTEXT), ROOT_ID);
 				deepStrictEqual(

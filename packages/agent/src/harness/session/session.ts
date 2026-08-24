@@ -16,6 +16,7 @@ import type {
 	PendingEntry,
 	Session,
 	SessionMetadata,
+	SessionMutation,
 	SessionMutator,
 	SessionStats,
 	SessionTree,
@@ -101,15 +102,18 @@ export class SessionUnknownTargetError extends Error {
 	}
 }
 
-class StorageBackedSessionMutator implements SessionMutator {
+class StorageBackedSessionMutation implements SessionMutation {
 	readonly lane: string;
 	private readonly storage: Storage;
+	private readonly release: () => void;
 	private active = true;
 	private commitResult: Promise<CommitResult> | undefined;
+	private endPromise: Promise<void> | undefined;
 
-	constructor(lane: string, storage: Storage) {
+	constructor(lane: string, storage: Storage, release: () => void) {
 		this.lane = lane;
 		this.storage = storage;
+		this.release = release;
 	}
 
 	commit(writes: Write[], context: Context): Promise<CommitResult> {
@@ -131,6 +135,14 @@ class StorageBackedSessionMutator implements SessionMutator {
 			this.commitResult = Promise.reject(error);
 		}
 		return this.commitResult;
+	}
+
+	end(_context: Context): Promise<void> {
+		this.endPromise ??= this.settle().finally(() => {
+			this.active = false;
+			this.release();
+		});
+		return this.endPromise;
 	}
 
 	getEntries(ids: string[], context: Context): Promise<Map<string, Entry>> {
@@ -162,17 +174,13 @@ class StorageBackedSessionMutator implements SessionMutator {
 		return this.storage.scanBranch(query, context);
 	}
 
-	settle(): Promise<void> {
+	private settle(): Promise<void> {
 		return (
 			this.commitResult?.then(
 				() => undefined,
 				() => undefined,
 			) ?? Promise.resolve()
 		);
-	}
-
-	invalidate(): void {
-		this.active = false;
 	}
 
 	private assertActive(): void {
@@ -204,24 +212,37 @@ export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMet
 		this.onClose = options.onClose;
 	}
 
+	async beginMutation(lane: string, _context: Context): Promise<SessionMutation> {
+		this.assertOpen();
+		let grant!: (mutation: SessionMutation) => void;
+		let rejectGrant!: (error: unknown) => void;
+		const granted = new Promise<SessionMutation>((resolve, reject) => {
+			grant = resolve;
+			rejectGrant = reject;
+		});
+		let release!: () => void;
+		const finished = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const line = this.laneMutationLine.run(lane, async () => {
+			grant(new StorageBackedSessionMutation(lane, this.storage, release));
+			await finished;
+		});
+		void line.catch(rejectGrant);
+		return granted;
+	}
+
 	async mutate<T>(
 		lane: string,
 		mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,
 		context: Context,
 	): Promise<T> {
-		this.assertOpen();
-		return this.laneMutationLine.run(lane, async () => {
-			const mutator = new StorageBackedSessionMutator(lane, this.storage);
-			try {
-				try {
-					return await mutation(mutator, context);
-				} finally {
-					await mutator.settle();
-				}
-			} finally {
-				mutator.invalidate();
-			}
-		});
+		const mutator = await this.beginMutation(lane, context);
+		try {
+			return await mutation(mutator, context);
+		} finally {
+			await mutator.end(context);
+		}
 	}
 
 	async getEntries(ids: string[], context: Context): Promise<Map<string, Entry>> {

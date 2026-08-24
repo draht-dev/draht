@@ -48,6 +48,7 @@ import type {
 	Session,
 	SessionCreateOptions,
 	SessionMetadata,
+	SessionMutation,
 	SessionMutator,
 	SessionReader,
 	SessionRepo,
@@ -376,6 +377,11 @@ it("covers storage, session, repository, search, and identity signatures", () =>
 			context: Context,
 		) => Promise<{ firstSeq: number; seqs: number[]; timestamp: number; stats: SessionStats }>
 	>();
+	expectTypeOf<Session["beginMutation"]>().toEqualTypeOf<
+		(lane: string, context: Context) => Promise<SessionMutation>
+	>();
+	expectTypeOf<SessionMutation["commit"]>().toEqualTypeOf<SessionMutator["commit"]>();
+	expectTypeOf<SessionMutation["end"]>().toEqualTypeOf<(context: Context) => Promise<void>>();
 	expectTypeOf<Session["mutate"]>().toEqualTypeOf<
 		<T>(
 			lane: string,

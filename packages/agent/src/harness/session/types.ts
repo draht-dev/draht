@@ -495,12 +495,17 @@ export interface SessionReader {
 	scanBranch(query: StorageBranchScan, context: Context): Promise<Entry[]>;
 }
 
-/** Callback-scoped write capability bound to one lane. */
-export interface SessionMutator extends SessionReader {
+/** Exclusive mutation barrier bound to one lane. */
+export interface SessionMutation extends SessionReader {
 	readonly lane: string;
-	/** The mutation callback's sole commit. A second attempt rejects. */
+	/** The mutation's sole commit. A second attempt rejects. */
 	commit(writes: Write[], context: Context): Promise<CommitResult>;
+	/** Wait for any commit attempt, invalidate the capability, and release the barrier. */
+	end(context: Context): Promise<void>;
 }
+
+/** Callback-scoped mutation capability without authority to release its lane barrier. */
+export type SessionMutator = Omit<SessionMutation, "end">;
 
 export interface SessionTree {
 	getLeafId(context: Context): Promise<string | null>;
@@ -533,6 +538,7 @@ export interface Session<TMetadata extends SessionMetadata = SessionMetadata> ex
 	readonly metadata: TMetadata;
 	readonly idGenerator: IdGenerator;
 	view(lane: string): SessionTree;
+	beginMutation(lane: string, context: Context): Promise<SessionMutation>;
 	mutate<T>(
 		lane: string,
 		mutation: (mutator: SessionMutator, context: Context) => T | Promise<T>,

@@ -93,6 +93,54 @@ describe("StorageBackedSession", () => {
 		await session.close(BACKGROUND_CONTEXT);
 	});
 
+	it("holds an explicit lane barrier through commit until end", async () => {
+		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
+		const session = new StorageBackedSession(metadata, storage);
+		const mutation = await session.beginMutation("main", BACKGROUND_CONTEXT);
+		let queuedStarted = false;
+		const queued = session.mutate(
+			"main",
+			() => {
+				queuedStarted = true;
+			},
+			BACKGROUND_CONTEXT,
+		);
+
+		await Promise.resolve();
+		expect(queuedStarted).toBe(false);
+		expect(mutation.lane).toBe("main");
+		expect(await mutation.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toBeUndefined();
+		const result = await mutation.commit([], BACKGROUND_CONTEXT);
+		expect(result.seqs).toEqual([]);
+		expect(queuedStarted).toBe(false);
+		expect(await mutation.getValue(storedValues.sessionName, BACKGROUND_CONTEXT)).toBeUndefined();
+		await mutation.end(BACKGROUND_CONTEXT);
+		await queued;
+		expect(queuedStarted).toBe(true);
+		expect(storage.getCommitAttempts()).toEqual([[]]);
+		expect(() => mutation.getEntries([], BACKGROUND_CONTEXT)).toThrow("outside its mutation callback");
+		expect(() => mutation.commit([], BACKGROUND_CONTEXT)).toThrow("outside its mutation callback");
+		await expect(mutation.end(BACKGROUND_CONTEXT)).resolves.toBeUndefined();
+		await session.close(BACKGROUND_CONTEXT);
+	});
+
+	it("ends an explicit mutation without committing and lets close finish", async () => {
+		const storage = new InstrumentedStorage(new MemoryStorage({ now: () => NOW }));
+		const session = new StorageBackedSession(metadata, storage);
+		const mutation = await session.beginMutation("main", BACKGROUND_CONTEXT);
+		let closed = false;
+		const closing = session.close(BACKGROUND_CONTEXT).then(() => {
+			closed = true;
+		});
+
+		await Promise.resolve();
+		expect(closed).toBe(false);
+		await mutation.end(BACKGROUND_CONTEXT);
+		await closing;
+		expect(closed).toBe(true);
+		expect(storage.getCommitAttempts()).toEqual([]);
+	});
+
 	it("exposes explicit branch scans through the Session and callback-scoped mutator", async () => {
 		const storage = new MemoryStorage({ now: () => NOW });
 		const session = new StorageBackedSession(metadata, storage);

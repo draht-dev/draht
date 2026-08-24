@@ -477,13 +477,28 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 	expectTypeOf<
 		Extract<
 			keyof AgentLane,
-			"session" | "models" | "hooks" | "activeDrive" | "command" | "readConfig" | "isDriveActive" | "mismatch"
+			| "session"
+			| "models"
+			| "hooks"
+			| "activeDrive"
+			| "command"
+			| "commandDriveOwned"
+			| "readConfig"
+			| "isDriveActive"
+			| "mismatch"
 		>
 	>().toEqualTypeOf<never>();
 	expectTypeOf<
 		Extract<
 			keyof AgentHarness,
-			"session" | "models" | "activeDrive" | "command" | "readConfig" | "isDriveActive" | "mismatch"
+			| "session"
+			| "models"
+			| "activeDrive"
+			| "command"
+			| "commandDriveOwned"
+			| "readConfig"
+			| "isDriveActive"
+			| "mismatch"
 		>
 	>().toEqualTypeOf<never>();
 	expectTypeOf<OperationRequest["kind"]>().toEqualTypeOf<

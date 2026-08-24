@@ -1,6 +1,6 @@
 # WP05 — Direct durable drive
 
-**Status: implementation-ready.** M1 is complete. Independent Opus and GPT-5.6-Sol reviews approved the authoritative-`Lane.state`, straight-line procedure correction below with no blockers.
+**Status: M2 complete; M3 next.** Independent Opus and GPT-5.6-Sol reviews approved the authoritative-`Lane.state`, straight-line procedure correction and M2 implementation with no blockers.
 
 Removes breakpoints/manual drive, then implements the complete durable execution graph. Public drive stays disabled until every reachable phase and reconciliation path exists.
 
@@ -22,7 +22,7 @@ Read completely, in this order, before editing anything.
 3. `packages/agent/src/harness/session/types.ts` — durable types (`OperationState`, `RunState`, `RunPhase`, `Generation`, `Deferred`, `ToolBatch`, `ToolCall`, `StructuralDecision`, `NavigationState`, `LaneLastResult`, `SessionReader`, `Write`, `CommitResult`).
 4. `packages/agent/src/harness/session/values.ts` — every typed address and write helper.
 5. `packages/agent/src/harness/runtime2/lane.ts` — `Lane`, `Lane.command`, `LaneCommand`, `accept`.
-6. `packages/agent/src/harness/runtime2/types.ts` — `Config`, `LaneState`, `LaneCommand`, `Drive`, the current `StepResult` that M2 simplifies to `ProcedureResult`, and `SliceNotImplemented`.
+6. `packages/agent/src/harness/runtime2/types.ts` — `Config`, `LaneState`, `LaneCommand`, `Drive`, `ProcedureResult`, and `SliceNotImplemented`.
 7. `packages/agent/src/harness/runtime2/harness.ts` — `Harness`, config store, `fault`, `close`.
 8. `packages/agent/src/harness/runtime2/restore.ts` — projection restore.
 9. `packages/agent/src/harness/execution/effect-gate.ts`, `execution/assistant.ts`, `execution/tools.ts`.
@@ -131,7 +131,7 @@ private removeDrive(drive: Drive): void {
 
 Every late transition and progress write checks the current operation in the authoritative `Lane.state` supplied by the lane mutation line and exact process identity. Exact identity is checked again synchronously at commit admission, immediately before `mutator.commit()`, with no `await` between the check and invocation. A planner-side check alone is insufficient because abandonment may replace the owner after an asynchronous planner returns.
 
-This prevents ABA writes: after invocation abandonment, a replacement `Drive` may own the same durable operation id; the old object still fails exact identity and cannot write or remove the replacement. The small package-internal `Lane.commandOwned(drive, plan, context)` variant performs only this admission check; it otherwise has the same visible `LaneCommand` decision as `command` and introduces no planner or transition framework.
+This prevents ABA writes: after invocation abandonment, a replacement `Drive` may own the same durable operation id; the old object still fails exact identity and cannot write or remove the replacement. The small package-internal `Lane.commandDriveOwned(drive, plan, context)` variant performs only this admission check; it otherwise has the same visible `LaneCommand` decision as `command` and introduces no planner or transition framework.
 
 `startDrive` is ordinary Lane code:
 
@@ -376,7 +376,7 @@ private mismatch(expected: string, currentOperationId: string | null, last: Lane
 
 ### 2.4 Drive switch contract — approved
 
-**Compile ordering.** `Drive` lives in `runtime2/types.ts` from M1; M2 replaces the initial `StepResult` with `ProcedureResult`. `runtime2/drive.ts` is created in M7, once every procedure module it imports exists. M2–M6 call procedures directly from tests with a concrete `Lane` and `Drive`; public drive stays guarded until M8.
+**Compile ordering.** `Drive` lives in `runtime2/types.ts` from M1; M2 replaced the initial `StepResult` with `ProcedureResult`. `runtime2/drive.ts` is created in M7, once every procedure module it imports exists. M2–M6 call procedures directly from tests with a concrete `Lane` and `Drive`; public drive stays guarded until M8.
 
 ```ts
 // packages/agent/src/harness/runtime2/types.ts
@@ -462,7 +462,7 @@ Drive-owned commands use one small `Lane` variant so exact-object ownership is c
 
 ```ts
 // packages/agent/src/harness/runtime2/lane.ts
-async commandOwned<TResult>(
+async commandDriveOwned<TResult>(
 	drive: Drive,
 	plan: (state: LaneState, reader: SessionReader) =>
 		LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
@@ -475,12 +475,12 @@ async commandOwned<TResult>(
 }
 ```
 
-`commandOwned` is not a scheduler, planner, transaction wrapper, or capability facade. It is `Lane.command` plus the exact-Drive admission fence. If its initial operation/id check or final exact-object check fails, it returns `lost_ownership` and commits nothing. Close/fault is checked first at final admission and propagates its lifecycle error rather than being mislabeled as ownership loss. Ordinary public lane commands continue to use `command`.
+`commandDriveOwned` is not a scheduler, planner, transaction wrapper, or capability facade. It is `Lane.command` plus the exact-Drive admission fence. If its initial operation/id check or final exact-object check fails, it returns `lost_ownership` and commits nothing. Close/fault is checked first at final admission and propagates its lifecycle error rather than being mislabeled as ownership loss. This extra final open check is drive-specific: exact owner abandonment may occur outside the lane line while an asynchronous planner runs. An ordinary `command` is admitted when its mutation callback starts and may finish that active commit after close begins. Ordinary public lane commands continue to use `command`.
 
 A representative transition stays direct:
 
 ```ts
-const intent = await lane.commandOwned(drive, (state) => {
+const intent = await lane.commandDriveOwned(drive, (state) => {
 	const operation = state.operation;
 	if (operation === null || operation.state.kind !== "run") {
 		throw new SessionInvariantError("generation intent reached a non-run operation");
@@ -597,7 +597,7 @@ function openProgress<TContext extends object | undefined, T>(
 	return {
 		write(item) {
 			if (sealed) return;
-			const write = lane.commandOwned(drive, (state) => {
+			const write = lane.commandDriveOwned(drive, (state) => {
 				if (!stillOwns(state)) return { kind: "return", result: undefined };
 				return { kind: "commit", writes: [commitWrite(item)], next: state,
 					materialize: () => undefined };
@@ -612,11 +612,11 @@ function openProgress<TContext extends object | undefined, T>(
 }
 ```
 
-`openFrameProgress(lane, drive, responseEntryId)` and `openToolProgress(lane, drive, invocationId)` inspect the current projection's phase/id and use `commandOwned` for the final exact-Drive admission fence. They perform no durable control reads. The provider/tool callback enqueues synchronously, settlement seals then drains, and the settling transaction includes `clearWrite()`.
+`openFrameProgress(lane, drive, responseEntryId)` and `openToolProgress(lane, drive, invocationId)` inspect the current projection's phase/id and use `commandDriveOwned` for the final exact-Drive admission fence. They perform no durable control reads. The provider/tool callback enqueues synchronously, settlement seals then drains, and the settling transaction includes `clearWrite()`.
 
 ### 2.8 Tool batch — approved shape, illustrative bodies
 
-The tool procedure is one ordinary async routine. It keeps its process-local started-promise map, but every status patch is computed from the current `Lane.state` supplied to that specific `commandOwned` job. It never patches a batch snapshot captured before the job.
+The tool procedure is one ordinary async routine. It keeps its process-local started-promise map, but every status patch is computed from the current `Lane.state` supplied to that specific `commandDriveOwned` job. It never patches a batch snapshot captured before the job.
 
 Each child uses module-local results only:
 
@@ -777,7 +777,7 @@ Staging is completion-ordered (`outcome_ready`); `materializeReadyPrefix` places
 
 ### 2.9 Terminal transactions stay in their procedures — approved
 
-The procedure that owns a terminal boundary also owns its terminal `Lane.commandOwned`. An authorized in-process external finalizer is the one exception: it owns an ordinary `Lane.command` because it may finalize an unowned operation. Its `materialize` continuation records `finalizedOutcome` and closes any matching live Drive gate synchronously after projection publication. The finalizer settles that Drive only after `Lane.command` returns, so terminal event delivery still precedes public completion. The finalizer must still verify that the current projection names the exact operation it intends to end; a terminal winner observed first commits nothing. Each procedure already knows its exact semantic state, local result, publication writes, public outcome, and terminal event. There is no generic `commitTerminal`, `TerminalRequest`, terminal validator callback, or terminal planner.
+The procedure that owns a terminal boundary also owns its terminal `Lane.commandDriveOwned`. An authorized in-process external finalizer is the one exception: it owns an ordinary `Lane.command` because it may finalize an unowned operation. Its `materialize` continuation records `finalizedOutcome` and closes any matching live Drive gate synchronously after projection publication. The finalizer settles that Drive only after `Lane.command` returns, so terminal event delivery still precedes public completion. The finalizer must still verify that the current projection names the exact operation it intends to end; a terminal winner observed first commits nothing. Each procedure already knows its exact semantic state, local result, publication writes, public outcome, and terminal event. There is no generic `commitTerminal`, `TerminalRequest`, terminal validator callback, or terminal planner.
 
 Inside that one command, the procedure:
 
@@ -792,7 +792,7 @@ Inside that one command, the procedure:
 A normal completed-run finish is representative. Its terminal check is visibly part of the checkpoint procedure:
 
 ```ts
-return lane.commandOwned(drive, async (state, reader) => {
+return lane.commandDriveOwned(drive, async (state, reader) => {
 	const operation = state.operation;
 	if (operation === null || operation.state.kind !== "run") {
 		throw new SessionInvariantError("run finish reached a non-run operation");
@@ -1008,7 +1008,7 @@ async function runCheckpoint<TContext extends object | undefined>(
 ): Promise<ProcedureResult> { /* ... */ }
 ```
 
-`Lane` already exposes the package-internal members procedures need: `state`, `session`, `models`, `hooks`, `command`, `emitBatch`, `readConfig`, `mismatch`, and `isDriveActive`; M2 adds only `commandOwned` for exact-Drive commit admission. The package root exports only `AgentLane` / `AgentHarness`, so these members do not widen public API. Procedure imports of `Lane` are type-only and erase; `lane.ts` may value-import `drive.ts` in M8 without a runtime cycle.
+`Lane` already exposes the package-internal members procedures need: `state`, `session`, `models`, `hooks`, `command`, `emitBatch`, `readConfig`, `mismatch`, and `isDriveActive`; M2 adds only `commandDriveOwned` for exact-Drive commit admission. The package root exports only `AgentLane` / `AgentHarness`, so these members do not widen public API. Procedure imports of `Lane` are type-only and erase; `lane.ts` may value-import `drive.ts` in M8 without a runtime cycle.
 
 Rules:
 - `TContext extends object | undefined` everywhere; no other bound.
@@ -1274,9 +1274,9 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 **Modify**
 | Path | Change |
 |---|---|
-| `src/harness/runtime2/types.ts` | replace global `StepResult.advance/reload` with `ProcedureResult.continue`; retain waiting, settled, and lost ownership (§2.4) |
-| `src/harness/runtime2/lane.ts` | add `commandOwned`, with exact-Drive identity checked immediately before commit admission (§2.5); document `state` as the live control authority |
-| `src/harness/runtime2/progress.ts` | use the planner's current `LaneState` and `commandOwned`; remove durable lane/operation control reads (§2.7) |
+| `src/harness/runtime2/types.ts` | replaced global `StepResult.advance/reload` with `ProcedureResult.continue`; retained waiting, settled, and lost ownership (§2.4) |
+| `src/harness/runtime2/lane.ts` | add `commandDriveOwned`, with exact-Drive identity checked immediately before commit admission (§2.5); document `state` as the live control authority |
+| `src/harness/runtime2/progress.ts` | use the planner's current `LaneState` and `commandDriveOwned`; remove durable lane/operation control reads (§2.7) |
 | `src/harness/session/session.ts` | document retained mutators as forbidden while a harness owns the Session; no runtime compatibility layer |
 
 **Behavior/invariants landed.** A live `Lane.state` is the sole control-flow authority. Process loss restores it from durable values. Runtime reads dereference payloads only. Exact-Drive replacement between planner return and commit admission declines the commit. Cleanup enumerates every operation-owned address through typed prefix scans and concrete deletes; `pendingNextRun` is not cleanup-owned. Hydration reads only the bounded latest-result value and entries it directly names.

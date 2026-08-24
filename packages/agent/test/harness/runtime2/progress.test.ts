@@ -1,5 +1,5 @@
 import { type AssistantMessageFrame, createModels } from "@draht/ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WatchHandle } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT, type Context, withAbortSignal } from "../../../src/harness/context.ts";
@@ -11,6 +11,7 @@ import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type { RunState, Session, Write } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
+import { deferred } from "./test-utils.ts";
 
 const sessions: Session[] = [];
 const operationId = "operation";
@@ -22,12 +23,16 @@ const configuration = {
 
 class FailingStorage extends MemoryStorage {
 	failure: Error | undefined;
+	beforeNextCommit: (() => Promise<void>) | undefined;
 
-	override commit(writes: Write[], context: Context) {
+	override async commit(writes: Write[], context: Context) {
+		const beforeCommit = this.beforeNextCommit;
+		this.beforeNextCommit = undefined;
+		await beforeCommit?.();
 		if (this.failure === undefined) return super.commit(writes, context);
 		const failure = this.failure;
 		this.failure = undefined;
-		return Promise.reject(failure);
+		throw failure;
 	}
 }
 
@@ -209,6 +214,134 @@ describe("runtime2 progress channels", () => {
 		expect(progress.clearWrite()).toEqual(
 			storedValues.deleteList(storedValues.pendingAssistantFrames(operationId, responseEntryId)),
 		);
+	});
+
+	it("declines a queued frame after the authoritative projection leaves its phase without control reads", async () => {
+		const responseEntryId = "response";
+		const { lane, drive, storage } = await createFixture(
+			runState({
+				kind: "assistant",
+				generation: {
+					status: "effect_pending",
+					context: {
+						stepId: "step",
+						triggerEntryId: "trigger",
+						configuration,
+						streamOptions: {},
+						retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
+						overflowRecoveryUsed: false,
+					},
+					attempt: 1,
+					responseEntryId,
+					usageId: "usage",
+					intendedOutputLimit: 100,
+					contextWindow: 1_000,
+				},
+			}),
+		);
+		const progress = openFrameProgress(lane, drive, responseEntryId);
+		const commitStarted = deferred();
+		const releaseCommit = deferred();
+		storage.beforeNextCommit = async () => {
+			commitStarted.resolve();
+			await releaseCommit.promise;
+		};
+		const getValue = vi.spyOn(storage, "getValue");
+		const moving = lane.command((state) => {
+			const operation = state.operation;
+			if (operation?.state.kind !== "run") throw new Error("missing run");
+			const nextState: RunState = {
+				...operation.state,
+				phase: {
+					kind: "checkpoint",
+					continuation: { kind: "may_finish", includeFinalAssistant: true },
+					triggerEntryId: responseEntryId,
+				},
+			};
+			return {
+				kind: "commit",
+				writes: [storedValues.setValue(storedValues.operationState(operationId), nextState)],
+				next: { ...state, operation: { meta: operation.meta, state: nextState } },
+				materialize: () => undefined,
+			};
+		}, BACKGROUND_CONTEXT);
+		await commitStarted.promise;
+		progress.write({ type: "text_delta", contentIndex: 0, delta: "late" });
+		releaseCommit.resolve();
+		await moving;
+		await progress.drain();
+
+		expect(
+			await lane.session.readList(
+				storedValues.pendingAssistantFrames(operationId, responseEntryId),
+				undefined,
+				BACKGROUND_CONTEXT,
+			),
+		).toEqual([]);
+		expect(getValue).not.toHaveBeenCalled();
+	});
+
+	it("declines a queued frame after terminal projection publication", async () => {
+		const responseEntryId = "response";
+		const { lane, drive, storage } = await createFixture(
+			runState({
+				kind: "assistant",
+				generation: {
+					status: "effect_pending",
+					context: {
+						stepId: "step",
+						triggerEntryId: "trigger",
+						configuration,
+						streamOptions: {},
+						retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
+						overflowRecoveryUsed: false,
+					},
+					attempt: 1,
+					responseEntryId,
+					usageId: "usage",
+					intendedOutputLimit: 100,
+					contextWindow: 1_000,
+				},
+			}),
+		);
+		const progress = openFrameProgress(lane, drive, responseEntryId);
+		const commitStarted = deferred();
+		const releaseCommit = deferred();
+		storage.beforeNextCommit = async () => {
+			commitStarted.resolve();
+			await releaseCommit.promise;
+		};
+		const getValue = vi.spyOn(storage, "getValue");
+		const ending = lane.command(
+			(state) => ({
+				kind: "commit",
+				writes: [
+					storedValues.deleteValue(storedValues.operationMeta(operationId)),
+					storedValues.deleteValue(storedValues.operationState(operationId)),
+					storedValues.setValue(storedValues.laneState("main"), {
+						currentOperationId: null,
+						pendingNextRun: state.pendingNextRun,
+					}),
+				],
+				next: { ...state, operation: null },
+				materialize: () => undefined,
+			}),
+			BACKGROUND_CONTEXT,
+		);
+		await commitStarted.promise;
+		progress.write({ type: "text_delta", contentIndex: 0, delta: "late" });
+		releaseCommit.resolve();
+		await ending;
+		await progress.drain();
+
+		expect(
+			await lane.session.readList(
+				storedValues.pendingAssistantFrames(operationId, responseEntryId),
+				undefined,
+				BACKGROUND_CONTEXT,
+			),
+		).toEqual([]);
+		expect(getValue).not.toHaveBeenCalled();
 	});
 
 	it("replaces tool checkpoints and fences writes after owner identity changes", async () => {

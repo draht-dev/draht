@@ -8,6 +8,7 @@ import { HookRegistry } from "../../../src/harness/hooks.ts";
 import { convertToLlm } from "../../../src/harness/messages.ts";
 import { Lane } from "../../../src/harness/runtime2/lane.ts";
 import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
+import { Drive } from "../../../src/harness/runtime2/types.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type { LaneConfiguration, Session } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
@@ -241,6 +242,87 @@ describe("runtime2 Lane commands", () => {
 			}, BACKGROUND_CONTEXT),
 		).rejects.toMatchObject({ name: "DataCloneError" });
 
+		expect(lane.state.configuration.thinkingLevel).toBe("high");
+		expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value.thinkingLevel).toBe(
+			"high",
+		);
+	});
+
+	it("declines an owned commit when its exact drive is replaced while planning", async () => {
+		const { lane, session } = await createLane();
+		const admission = await lane.accept({ kind: "prompt", prompt: "start" }, BACKGROUND_CONTEXT);
+		if (!admission.ok) throw admission.error;
+		const drive = new Drive({ operationId: admission.value.operationId }, BACKGROUND_CONTEXT);
+		lane.activeDrive = drive;
+		const plannerStarted = deferred();
+		const releasePlanner = deferred();
+
+		const command = lane.commandDriveOwned(
+			drive,
+			async (state) => {
+				plannerStarted.resolve();
+				await releasePlanner.promise;
+				const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
+				return {
+					kind: "commit",
+					writes: [storedValues.setValue(storedValues.laneConfig("main"), configuration)],
+					next: { ...state, configuration },
+					materialize: () => "committed" as const,
+				};
+			},
+			BACKGROUND_CONTEXT,
+		);
+		await plannerStarted.promise;
+		lane.activeDrive = new Drive({ operationId: admission.value.operationId }, BACKGROUND_CONTEXT);
+		releasePlanner.resolve();
+
+		expect(await command).toEqual({ kind: "lost_ownership" });
+		expect(lane.state.configuration.thinkingLevel).toBe("off");
+		expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value.thinkingLevel).toBe(
+			"off",
+		);
+	});
+
+	it("finishes a commit admitted before exact drive replacement", async () => {
+		const { lane, session, storage } = await createLane();
+		const admission = await lane.accept({ kind: "prompt", prompt: "start" }, BACKGROUND_CONTEXT);
+		if (!admission.ok) throw admission.error;
+		const drive = new Drive({ operationId: admission.value.operationId }, BACKGROUND_CONTEXT);
+		lane.activeDrive = drive;
+		const commitStarted = deferred();
+		const releaseCommit = deferred();
+		storage.beforeNextCommit = async () => {
+			commitStarted.resolve();
+			await releaseCommit.promise;
+		};
+
+		const command = lane.commandDriveOwned(
+			drive,
+			(state) => {
+				const configuration: LaneConfiguration = { ...state.configuration, thinkingLevel: "high" };
+				return {
+					kind: "commit",
+					writes: [storedValues.setValue(storedValues.laneConfig("main"), configuration)],
+					next: { ...state, configuration },
+					materialize: () => "committed" as const,
+				};
+			},
+			BACKGROUND_CONTEXT,
+		);
+		await commitStarted.promise;
+		const replacement = new Drive({ operationId: admission.value.operationId }, BACKGROUND_CONTEXT);
+		let publishedBeforeReplacement = false;
+		const replacing = lane.command((state) => {
+			publishedBeforeReplacement = state === lane.state && state.configuration.thinkingLevel === "high";
+			lane.activeDrive = replacement;
+			return { kind: "return", result: undefined };
+		}, BACKGROUND_CONTEXT);
+		releaseCommit.resolve();
+
+		expect(await command).toBe("committed");
+		await replacing;
+		expect(publishedBeforeReplacement).toBe(true);
+		expect(lane.activeDrive).toBe(replacement);
 		expect(lane.state.configuration.thinkingLevel).toBe("high");
 		expect((await session.getValue(storedValues.laneConfig("main"), BACKGROUND_CONTEXT))?.value.thinkingLevel).toBe(
 			"high",

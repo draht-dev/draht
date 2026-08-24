@@ -121,9 +121,10 @@ export class Drive {
 	}
 }
 
-export type StepResult =
-	| { kind: "advance" }
-	| { kind: "reload" }
+export type LostOwnership = { kind: "lost_ownership" };
+
+export type ProcedureResult =
+	| { kind: "continue" }
 	| { kind: "waiting"; outcome: DriveOutcome }
 	| { kind: "settled"; outcome: TerminalOperationOutcome }
-	| { kind: "lost_ownership" };
+	| LostOwnership;

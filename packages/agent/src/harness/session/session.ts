@@ -180,7 +180,12 @@ class StorageBackedSessionMutator implements SessionMutator {
 	}
 }
 
-/** Package-internal typed boundary shared by concrete session repositories. */
+/**
+ * Package-internal typed boundary shared by concrete session repositories.
+ * After this Session is passed to AgentHarness.create(), retained Session and SessionTree
+ * facades are read-only until harness close; mutating through them would bypass the owning
+ * Lane's authoritative projection and is a trusted-programming defect.
+ */
 export class StorageBackedSession<TMetadata extends SessionMetadata = SessionMetadata> implements Session<TMetadata> {
 	readonly metadata: TMetadata;
 	readonly idGenerator: IdGenerator;

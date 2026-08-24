@@ -54,7 +54,14 @@ import {
 	setValue,
 } from "../session/values.ts";
 import { formatSkillInvocation } from "../skills.ts";
-import { type Config, type Drive, type LaneCommand, type LaneState, SliceNotImplemented } from "./types.ts";
+import {
+	type Config,
+	type Drive,
+	type LaneCommand,
+	type LaneState,
+	type LostOwnership,
+	SliceNotImplemented,
+} from "./types.ts";
 
 type EmitBatch = (events: readonly HarnessEvent[], context: Context) => Promise<void>;
 type WatchHandler = <T>(snapshot: T, filter: (event: HarnessEvent) => boolean, context: Context) => WatchHandle<T>;
@@ -109,6 +116,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 	private readonly config: () => Config<TContext>;
 	/** Package-internal drive owner. Public only because deterministic procedure tests install exact owners directly. */
 	activeDrive: Drive | undefined;
+	/** Authoritative live control projection while this harness owns the Session. */
 	state: LaneState;
 	closedError: Error | undefined;
 
@@ -187,8 +195,10 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 	 * - `reject` rejects outside the mutation/fault boundary as an expected caller error without a commit.
 	 *
 	 * Planner, commit, and materialization errors fault the harness before releasing the lane line. Close/fault gates
-	 * are checked both before queueing and when the callback starts: close-first rejects, while an admitted successful
-	 * commit always publishes memory and resolves without another open check. Never invoke providers, tools, hooks,
+	 * are checked both before queueing and when the callback starts: close-first rejects, while a callback admitted
+	 * before close may finish its commit, publish memory, and resolve without another open check. Drive-owned commands
+	 * additionally need a final fence because their exact owner may be removed outside the lane line. Never invoke
+	 * providers, tools, hooks,
 	 * timers, event handlers, or wait for task completion here; perform those after `command()` returns.
 	 */
 	async command<TResult>(
@@ -211,6 +221,70 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 								return { kind: "reject", error: decision.error };
 							case "commit": {
 								const commit = await mutator.commit(decision.writes, context);
+								this.state = decision.next;
+								const result = decision.materialize(commit);
+								if (isPromiseLike(result)) {
+									throw new TypeError("Lane command materialize() must be synchronous");
+								}
+								const events = decision.events?.(commit) ?? [];
+								const delivery = events.length === 0 ? undefined : this.emitBatch(events, context);
+								return { kind: "return", result, ...(delivery === undefined ? {} : { delivery }) };
+							}
+						}
+					} catch (error) {
+						if (this.closedError !== undefined) throw this.closedError;
+						throw this.onFault(error, context);
+					}
+				},
+				context,
+			);
+		} catch (error) {
+			if (this.closedError !== undefined) throw this.closedError;
+			throw error;
+		}
+		if (outcome.kind === "reject") throw outcome.error;
+		await outcome.delivery;
+		return outcome.result;
+	}
+
+	/**
+	 * Run one drive-owned command with an exact-object fence at commit admission.
+	 * Durable control state comes from the authoritative projection; storage reads are only for referenced payloads.
+	 * Unlike an ordinary command, owner abandonment can occur outside the lane line while the planner awaits. The final
+	 * open check preserves close/fault as lifecycle errors before the exact-owner check can report lost ownership.
+	 */
+	async commandDriveOwned<TResult>(
+		drive: Drive,
+		plan: (state: LaneState, reader: SessionReader) => LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
+		context: Context,
+	): Promise<TResult | LostOwnership> {
+		this.assertOpen();
+		let outcome: LaneCommandOutcome<TResult | LostOwnership>;
+		try {
+			outcome = await this.session.mutate(
+				this.name,
+				async (mutator) => {
+					this.assertOpen();
+					const operation = this.state.operation;
+					if (operation?.meta.operationId !== drive.operationId || this.activeDrive !== drive) {
+						return { kind: "return", result: { kind: "lost_ownership" } as const };
+					}
+					try {
+						const decision = await plan(this.state, mutator);
+						switch (decision.kind) {
+							case "return":
+								return { kind: "return", result: decision.result };
+							case "reject":
+								return { kind: "reject", error: decision.error };
+							case "commit": {
+								// Keep these checks adjacent to commit admission. Owner abandonment may occur
+								// outside the line; close/fault must still win classification over ownership loss.
+								this.assertOpen();
+								if (this.activeDrive !== drive) {
+									return { kind: "return", result: { kind: "lost_ownership" } as const };
+								}
+								const commitPromise = mutator.commit(decision.writes, context);
+								const commit = await commitPromise;
 								this.state = decision.next;
 								const result = decision.materialize(commit);
 								if (isPromiseLike(result)) {

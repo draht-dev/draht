@@ -481,6 +481,7 @@ describe("JSONL v3 migration", () => {
 			});
 			expect(adjustment).not.toHaveProperty("entryId");
 			expect(committed.seqs).not.toContain(adjustment.seq);
+			expect(committed.stats).toEqual(statsBefore);
 			expect(await storage.getStats(BACKGROUND_CONTEXT)).toEqual(statsBefore);
 
 			// Conversion replaces the legacy file and retains the adjustment and caller writes as its first transaction.

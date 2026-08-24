@@ -29,7 +29,7 @@ type RewindContext = {
 		extensionRunner: { hasHandlers: (event: string) => boolean };
 		navigateTree: (targetId: string, options: { summarize: boolean }) => Promise<{ cancelled: boolean }>;
 	};
-	sessionManager: { getLeafId: () => string | null };
+	sessionManager: { getLeafId: () => string | null; getSessionId: () => string };
 	chatContainer: { clear: () => void };
 	renderInitialMessages: () => void;
 	flushCompactionQueue: (options: { willRetry: boolean }) => Promise<void>;
@@ -65,7 +65,7 @@ function createContext(overrides: Partial<RewindContext> = {}): RewindContext {
 			extensionRunner: { hasHandlers: () => false },
 			navigateTree: async () => ({ cancelled: false }),
 		},
-		sessionManager: { getLeafId: () => "leaf-current" },
+		sessionManager: { getLeafId: () => "leaf-current", getSessionId: () => "session-current" },
 		chatContainer: { clear: vi.fn() },
 		renderInitialMessages: vi.fn(),
 		flushCompactionQueue: async () => {},

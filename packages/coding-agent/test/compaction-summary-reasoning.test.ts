@@ -173,6 +173,39 @@ describe("generateSummary reasoning options", () => {
 		);
 	});
 
+	it("rejects a length-limited history summary", async () => {
+		completeSimpleMock.mockResolvedValueOnce({
+			...mockSummaryResponse,
+			stopReason: "length",
+			content: [{ type: "text", text: "partial" }],
+		});
+
+		await expect(generateSummaryWithUsage(messages, createModel(false), 2000, "test-key")).rejects.toThrow(
+			"generation hit the token cap",
+		);
+	});
+
+	it("rejects a length-limited split-turn summary", async () => {
+		completeSimpleMock.mockResolvedValueOnce({
+			...mockSummaryResponse,
+			stopReason: "length",
+			content: [{ type: "text", text: "partial" }],
+		});
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: [],
+			turnPrefixMessages: messages,
+			isSplitTurn: true,
+			tokensBefore: 100,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
+		};
+
+		await expect(compact(preparation, createModel(false), "test-key")).rejects.toThrow(
+			"generation hit the token cap",
+		);
+	});
+
 	it("does not set reasoning when thinking is off", async () => {
 		await generateSummary(
 			messages,

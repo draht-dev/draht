@@ -86,6 +86,7 @@ describe("streamHarnessAssistant", () => {
 		let receivedContext: { systemPrompt?: string; messages: Message[]; tools?: unknown[] } | undefined;
 		let receivedOptions: SimpleStreamOptions | undefined;
 		let responseMetadata: AssistantResponseMetadata | undefined;
+		let startEventType: string | undefined;
 
 		const result = await streamHarnessAssistant(
 			input,
@@ -144,9 +145,10 @@ describe("streamHarnessAssistant", () => {
 					return stream;
 				},
 				observer: {
-					start(message) {
+					start(message, event) {
 						order.push("observer_start");
 						starts.push(message);
+						startEventType = event?.type;
 					},
 					update(message) {
 						order.push("observer_update");
@@ -184,6 +186,7 @@ describe("streamHarnessAssistant", () => {
 		});
 		expect(responseMetadata).toEqual({ status: 201, headers: { "request-id": "r1" } });
 		expect(starts).toHaveLength(1);
+		expect(startEventType).toBe("start");
 		expect(starts[0]).not.toBe(updates[0]);
 		expect(updates).toHaveLength(1);
 		expect(ends[0]).toBe(result);
@@ -244,6 +247,7 @@ describe("streamHarnessAssistant", () => {
 		const events: string[] = [];
 		const final = assistant("complete");
 		let options: SimpleStreamOptions | undefined;
+		let synthesizedStartEvent: unknown = "unset";
 		const result = await streamHarnessAssistant(
 			[user("prompt")],
 			{
@@ -259,8 +263,9 @@ describe("streamHarnessAssistant", () => {
 					return stream;
 				},
 				observer: {
-					start(message) {
+					start(message, event) {
 						events.push(`start:${message.stopReason}`);
+						synthesizedStartEvent = event;
 					},
 					update() {
 						events.push("update");
@@ -275,6 +280,7 @@ describe("streamHarnessAssistant", () => {
 
 		expect(result).toBe(final);
 		expect(events).toEqual(["start:stop", "end:stop"]);
+		expect(synthesizedStartEvent).toBeUndefined();
 		expect(options).not.toHaveProperty("reasoning");
 	});
 

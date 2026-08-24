@@ -7,8 +7,9 @@ import type {
 	Message,
 	Model,
 	SimpleStreamOptions,
+	Tool,
 } from "@draht/ai";
-import type { AgentMessage, AgentTool, ThinkingLevel } from "../../types.ts";
+import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import type { Context } from "../context.ts";
 import type { SettledAssistantMessage } from "../session/types.ts";
 import type { AgentHarnessStreamOptions } from "../types.ts";
@@ -22,7 +23,11 @@ export interface AssistantResponseMetadata {
 
 /** Process-local lifecycle observer for one assistant stream. */
 export interface AssistantStreamObserver {
-	start(message: AssistantMessage, context: Context): void | Promise<void>;
+	start(
+		message: AssistantMessage,
+		event: Extract<AssistantMessageEvent, { type: "start" }> | undefined,
+		context: Context,
+	): void | Promise<void>;
 	update(message: AssistantMessage, event: AssistantMessageEvent, context: Context): void | Promise<void>;
 	end(message: SettledAssistantMessage, context: Context): void | Promise<void>;
 }
@@ -31,7 +36,7 @@ export interface AssistantStreamObserver {
 export interface HarnessAssistantStreamConfig {
 	model: Model<Api>;
 	systemPrompt: string;
-	tools?: AgentTool[];
+	tools?: Tool[];
 	thinkingLevel: ThinkingLevel;
 	streamOptions: AgentHarnessStreamOptions;
 	transformContext?: (
@@ -126,7 +131,7 @@ export async function streamHarnessAssistant(
 	for await (const event of stream) {
 		if (event.type === "start") {
 			started = true;
-			await config.observer.start({ ...event.partial }, context);
+			await config.observer.start({ ...event.partial }, event, context);
 		} else if (isUpdateEvent(event)) {
 			await config.observer.update({ ...event.partial }, event, context);
 		}
@@ -134,7 +139,7 @@ export async function streamHarnessAssistant(
 
 	const settled = (await stream.result()) as SettledAssistantMessage;
 	if (!started) {
-		await config.observer.start({ ...settled }, context);
+		await config.observer.start({ ...settled }, undefined, context);
 	}
 	let finalMessage = settled;
 	if (config.afterResponse) {

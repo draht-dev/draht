@@ -173,7 +173,7 @@ TX[ upsert pi.op.state/O = effect_pending (reserves response n2, usage u1) ]
 … provider streams …                                  ← the uncertain window
 TX[ append pi.pending.assistant_frame/O:n2 += frame ]    ← one per streamed event,
                                                         enqueued without awaiting
-TX[ insert entry n2, upsert pi.lane.leaf = n2, insert usage u1,
+TX[ insert entry n2, insert usage u1, upsert pi.lane.leaf = n2,
     delete list pi.pending.assistant_frame/O:n2,
     upsert pi.op.state/O = tools (result id n3 reserved) ]
 TX[ upsert pi.op.tool_args/O:s1:0, upsert pi.op.state/O = call 0 effect_pending ]
@@ -245,7 +245,7 @@ Source type provenance:
 
 - `AgentMessage`, `AgentTool`, `AgentToolResult`, `QueueMode`, and `ThinkingLevel`: `packages/agent/src/types.ts`.
 - `Skill`, `PromptTemplate`, `AgentHarnessResources` (`Resources` below), `AgentHarnessTool`, `AgentHarnessToolContextSource`, `AgentHarnessToolInvocation`, `AgentHarnessToolUpdateCallback`, `AgentHarnessToolUpdateOptions`, `AgentHarnessStreamOptions`, and `AgentHarnessStreamOptionsPatch`: `packages/agent/src/harness/types.ts`.
-- `Model`, `Models`, `Usage`, `RetryPolicy`, `StopReason`, `AssistantMessage`, `ImageContent`, provider messages, stream options, and deferred handles: `packages/ai`. `AiContext` below aliases pi-ai's provider request `Context` to distinguish it from the harness invocation `Context`.
+- `Model`, `Models`, `Tool`, `Usage`, `RetryPolicy`, `StopReason`, `AssistantMessage`, `ImageContent`, provider messages, stream options, and deferred handles: `packages/ai`. `AiContext` below aliases pi-ai's provider request `Context` to distinguish it from the harness invocation `Context`.
 - `AssistantMessageFrame`, `assistantMessageEventToFrame`, and `reduceAssistantMessageFrames`: `packages/ai` (`@draht/ai`), `src/utils/assistant-message-frame.ts`. The harness defines no second frame codec or reducer.
 - `CompactionSettings`, `CompactionPreparation`, `CompactResult`, `BranchPreparation`, and `BranchSummaryResult`: `packages/agent/src/harness/compaction/`. Existing preparation and split-turn algorithms remain the implementation starting point unless this document explicitly changes them.
 - `TelemetryContext` and typed schema helpers: `packages/telemetry`; the agent-owned schemas remain in `packages/agent/src/harness/telemetry.ts`.
@@ -1397,14 +1397,14 @@ The complete transition table — every row is one `commit()`; classification or
 | assistant `effect_pending` | settlement classifies `deferred` with a valid handle | §3.7's deferred row | suspended, `poll: 0`, `sourceEntryId: R` |
 | suspended, poll *k* | captured model is unavailable when a drive supplies `pollDeferred: true` | `TX[ S(failure_drain{error:{code:"model_unavailable", ...}, provenance:{kind:"configuration"}}) ]` — the handle is abandoned without fabricating a fetch response or usage | failure_drain |
 | suspended, poll *k* | captured model resolves and a drive supplies `pollDeferred: true`: the poll's `before_request` settlement commits its intent, consuming the pass's single poll permit | mint fresh R′ and U′, then `TX[ S(deferred{effect_pending, poll k+1, responseEntryId R′, usageId U′}) ]` | effect_pending, poll *k*+1 |
-| effect_pending, poll *k*+1 | fetch returns **pending** with a completely equal handle | `TX[ insert response entry R′, upsert pi.lane.leaf = R′, insert usage U′, S(latestAssistantEntryId=R′, deferred{suspended, sourceEntryId R′, poll k+1}) ]` — the pending response becomes the next source and the operation re-suspends; no second poll this invocation | suspended, poll *k*+1 |
-| effect_pending | fetch returns **pending** with a mismatched handle | normalize to a durable `error` response explaining the mismatch: `TX[ insert normalized response R′, upsert pi.lane.leaf = R′, insert usage U′, S(latestAssistantEntryId=R′, failure_drain{error, provenance:response R′}) ]` | failure_drain |
-| effect_pending | fetch returns **ready** with tool calls | `TX[ insert response R′, upsert pi.lane.leaf = R′, insert usage U′, S(latestAssistantEntryId=R′, tools{plan with reserved result ids}) ]` — result ids minted as followers of R′ (§1.2) | tools |
-| effect_pending | fetch returns **ready** without tool calls | `TX[ insert response R′, upsert pi.lane.leaf = R′, insert usage U′, S(latestAssistantEntryId=R′, checkpoint{may_finish, includeFinalAssistant:true}) ]` | checkpoint |
-| effect_pending | fetch settles as a provider `error` | `TX[ insert response R′, upsert pi.lane.leaf = R′, insert usage U′, S(latestAssistantEntryId=R′, failure_drain{error, provenance:response R′}) ]` — polls have no retry path | failure_drain |
+| effect_pending, poll *k*+1 | fetch returns **pending** with a completely equal handle | `TX[ insert response entry R′, insert usage U′, upsert pi.lane.leaf = R′, S(latestAssistantEntryId=R′, deferred{suspended, sourceEntryId R′, poll k+1}) ]` — the pending response becomes the next source and the operation re-suspends; no second poll this invocation | suspended, poll *k*+1 |
+| effect_pending | fetch returns **pending** with a mismatched handle | normalize to a durable `error` response explaining the mismatch: `TX[ insert normalized response R′, insert usage U′, upsert pi.lane.leaf = R′, S(latestAssistantEntryId=R′, failure_drain{error, provenance:response R′}) ]` | failure_drain |
+| effect_pending | fetch returns **ready** with tool calls | `TX[ insert response R′, insert usage U′, upsert pi.lane.leaf = R′, S(latestAssistantEntryId=R′, tools{plan with reserved result ids}) ]` — result ids minted as followers of R′ (§1.2) | tools |
+| effect_pending | fetch returns **ready** without tool calls | `TX[ insert response R′, insert usage U′, upsert pi.lane.leaf = R′, S(latestAssistantEntryId=R′, checkpoint{may_finish, includeFinalAssistant:true}) ]` | checkpoint |
+| effect_pending | fetch settles as a provider `error` | `TX[ insert response R′, insert usage U′, upsert pi.lane.leaf = R′, S(latestAssistantEntryId=R′, failure_drain{error, provenance:response R′}) ]` — polls have no retry path | failure_drain |
 | effect_pending, restored, running control | crash left the poll's outcome unknown; a drive with a poll permit finds the captured model unavailable | `TX[ delete list pi.pending.assistant_frame/O:R′, S(failure_drain{error:{code:"model_unavailable", ...}, provenance:{kind:"configuration"}}) ]` — abandon the old reserved response/usage strings without fabricating settlement | failure_drain |
 | effect_pending, restored, running control | crash left the poll's outcome unknown; the next drive with a poll permit resolves the captured model and replaces it | mint fresh R″/U″ and commit a fresh intent at the **same** poll number — an unknown-outcome poll never completed, so `poll` does not increment; the old reserved id strings are abandoned, never materialized, and the intent transaction deletes the abandoned old frame list; the replacement poll starts a fresh list under its fresh response id | effect_pending, poll *k*+1 |
-| effect_pending, cancelled control | reconciliation, live or restored (§4.5, §4.6) | synthetic settlement under the **existing** reserved ids, preserving partial content reduced from committed frames: `TX[ insert synthetic aborted response R′, upsert pi.lane.leaf = R′, insert zero usage U′, delete frame list O:R′, S(latestAssistantEntryId=R′, cancelled checkpoint{may_finish}) ]` | cancelled checkpoint → aborted finish |
+| effect_pending, cancelled control | reconciliation, live or restored (§4.5, §4.6) | synthetic settlement under the **existing** reserved ids, preserving partial content reduced from committed frames: `TX[ insert synthetic aborted response R′, insert zero usage U′, upsert pi.lane.leaf = R′, delete frame list O:R′, S(latestAssistantEntryId=R′, cancelled checkpoint{may_finish}) ]` | cancelled checkpoint → aborted finish |
 | suspended, cancelled control | reconciliation | no fetch starts; best-effort `cancel_deferred` targets the newest source (§4.6), and the operation finishes through the aborted terminal transaction | terminal |
 
 ### Structural work
@@ -1559,13 +1559,13 @@ Pre-acceptance rejections write **nothing**: `LaneBusy`, `NothingToCompact`, `In
 | checkpoint `need_assistant` | ordinary procedure | snapshot current lane config, stream options, and normalized retry policy inline into the context in `TX[ S(assistant{ready, nextAttempt:1}) ]` | ready |
 | assistant `ready` | captured model or configured active-tool definition is unavailable before request admission | `TX[ S(failure_drain{error:{code:"model_unavailable" | "configured_tools_unavailable", ...}, provenance:{kind:"configuration"}}) ]` — no response/usage ids are reserved and no assistant entry or usage row is fabricated | failure_drain |
 | assistant `ready` | identities resolve and `before_request` completes | mint R and U, then `TX[ S(assistant{effect_pending, attempt=nextAttempt, responseEntryId R, usageId U, intendedOutputLimit, contextWindow}) ]` | effect_pending |
-| effect_pending | settles with tool calls | `TX[ insert response entry R, upsert pi.lane.leaf = R, insert usage U, delete frame list O:R, S(latestAssistantEntryId=R, tools{plan with reserved result ids}) ]` | tools |
-| effect_pending | retryable error, attempts remain | `TX[ insert response entry R, upsert pi.lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, assistant{retry_wait, nextAttempt k+1, notBefore}) ]` | retry_wait |
-| effect_pending | first overflow, preparation non-empty | `TX[ insert response entry R **normalized to error**, upsert pi.lane.leaf = R, insert usage U, upsert pi.op.preparation/O:{taskId} = P, S(latestAssistantEntryId=R, compaction{reason:overflow, structural:{deciding, taskId}, resumeAfter:{checkpoint, prior trigger, need_assistant(true)}}) ]` | compaction |
-| effect_pending | first overflow, preparation empty | `TX[ insert normalized response entry R, upsert pi.lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, failure_drain{error, provenance:response R}) ]` | failure_drain |
-| effect_pending | `stopReason: "deferred"` | `TX[ insert response entry R, upsert pi.lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, deferred{suspended, sourceEntryId R, poll 0, configuration/options copied}) ]` | deferred |
-| effect_pending | `stop` or genuine `length` | `TX[ insert response entry R, upsert pi.lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, checkpoint{may_finish, includeFinalAssistant:true}) ]` | checkpoint |
-| effect_pending | terminal error, retries exhausted, or 2nd overflow | `TX[ insert response entry R, upsert pi.lane.leaf = R, insert usage U, S(latestAssistantEntryId=R, failure_drain{error, provenance:response R}) ]` | failure_drain |
+| effect_pending | settles with tool calls | `TX[ insert response entry R, insert usage U, upsert pi.lane.leaf = R, delete frame list O:R, S(latestAssistantEntryId=R, tools{plan with reserved result ids}) ]` | tools |
+| effect_pending | retryable error, attempts remain | `TX[ insert response entry R, insert usage U, upsert pi.lane.leaf = R, S(latestAssistantEntryId=R, assistant{retry_wait, nextAttempt k+1, notBefore}) ]` | retry_wait |
+| effect_pending | first overflow, preparation non-empty | `TX[ insert response entry R **normalized to error**, insert usage U, upsert pi.lane.leaf = R, upsert pi.op.preparation/O:{taskId} = P, S(latestAssistantEntryId=R, compaction{reason:overflow, structural:{deciding, taskId}, resumeAfter:{checkpoint, prior trigger, need_assistant(true)}}) ]` | compaction |
+| effect_pending | first overflow, preparation empty | `TX[ insert normalized response entry R, insert usage U, upsert pi.lane.leaf = R, S(latestAssistantEntryId=R, failure_drain{error, provenance:response R}) ]` | failure_drain |
+| effect_pending | `stopReason: "deferred"` | `TX[ insert response entry R, insert usage U, upsert pi.lane.leaf = R, S(latestAssistantEntryId=R, deferred{suspended, sourceEntryId R, poll 0, configuration/options copied}) ]` | deferred |
+| effect_pending | `stop` or genuine `length` | `TX[ insert response entry R, insert usage U, upsert pi.lane.leaf = R, S(latestAssistantEntryId=R, checkpoint{may_finish, includeFinalAssistant:true}) ]` | checkpoint |
+| effect_pending | terminal error, retries exhausted, or 2nd overflow | `TX[ insert response entry R, insert usage U, upsert pi.lane.leaf = R, S(latestAssistantEntryId=R, failure_drain{error, provenance:response R}) ]` | failure_drain |
 | retry_wait | gated timer reaches `notBefore` | `TX[ S(assistant{ready, nextAttempt:k+1}) ]` | ready |
 
 Every settlement row above — tool plan, retry, overflow, deferred, checkpoint, and failure alike — additionally executes `deleteList(pendingAssistantFrames(O, R))`; the first row shows it explicitly and the rest abbreviate. Settlement and frame cleanup are one atomic commit.
@@ -1702,7 +1702,7 @@ Structural provider streams are internal: they emit **no** public assistant-mess
 ```
 TX[ insert e_41 = { …assistant response, stopReason: "error",
                     errorMessage: "context window exceeded: …" },
-    upsert pi.lane.leaf/main = "e_41", insert usage u_41,
+    insert usage u_41, upsert pi.lane.leaf/main = "e_41",
     upsert pi.op.preparation/op_9:t_1 = <structural preparation>,
     S(compaction{ reason: overflow,
                   structural: { deciding, taskId: "t_1" },
@@ -3152,7 +3152,9 @@ interface AssistantResponseMetadata {
 }
 
 interface AssistantStreamObserver {
-  start(message: AssistantMessage, context: Context): void | Promise<void>;
+  start(message: AssistantMessage,
+        event: Extract<AssistantMessageEvent, { type: "start" }> | undefined,
+        context: Context): void | Promise<void>;
   update(message: AssistantMessage, event: AssistantMessageEvent,
          context: Context): void | Promise<void>;
   end(message: SettledAssistantMessage, context: Context): void | Promise<void>;
@@ -3161,7 +3163,7 @@ interface AssistantStreamObserver {
 interface HarnessAssistantStreamConfig {
   model: Model;
   systemPrompt: string;
-  tools?: AgentTool[];
+  tools?: Tool[];
   thinkingLevel: ThinkingLevel;
   streamOptions: AgentHarnessStreamOptions;
   transformContext?: (
@@ -3201,7 +3203,7 @@ transformContext(requestContext, context)
 → map curated stream options + thinking level to SimpleStreamOptions
 → install context.abortSignal, context.telemetryContext, beforePayload, and metadata capture
 → request(aiContext, options, context)
-→ observer.start(message, context)
+→ observer.start(message, startEvent, context)
 → observer.update(message, event, context)*
 → settle the stream completely
 → afterResponse(settled message, captured metadata, context)
@@ -3209,7 +3211,7 @@ transformContext(requestContext, context)
 → return the final settled message
 ```
 
-It never mutates `messages`. Every callback receives the same explicit invocation Context unless its adapter deliberately derives a child span Context. The harness-supplied observer converts each streamed event with `assistantMessageEventToFrame` and synchronously enqueues its invocation-fenced frame append without awaiting storage (§3.7); `afterResponse` is always installed, even with no hook listeners, because it first stops frame admission and awaits the latest frame-write promise before invoking the optional `after_response` pipeline. If the stream terminates without a start event, it emits `observer.start` for the final message before `observer.end`, matching the harness lifecycle contract; this synthesized lifecycle start occurs after stream consumption and is not converted into or appended as a durable frame. If abort interrupts the parked `afterResponse` adapter, the block awaits the carried abort-mutation promise, skips that hook, emits `observer.end` with the raw settled message, and returns it so the caller can commit it under the now-current cancellation control. `beforePayload` maps to pi-ai's payload callback. Response metadata capture maps to pi-ai's `onResponse`; it is distinct from `afterResponse`, because `onResponse` runs before the response body is consumed while the harness hook transforms the settled assistant message afterward. The harness exposes neither callback through `AgentHarnessStreamOptions`.
+It never mutates `messages`. Every callback receives the same explicit invocation Context unless its adapter deliberately derives a child span Context. The harness-supplied observer converts each streamed event with `assistantMessageEventToFrame` and synchronously enqueues its invocation-fenced frame append without awaiting storage (§3.7); `afterResponse` is always installed, even with no hook listeners, because it first stops frame admission and awaits the latest frame-write promise before invoking the optional `after_response` pipeline. If the stream terminates without a start event, it emits `observer.start` with `event: undefined` for the final message before `observer.end`, matching the harness lifecycle contract; this synthesized lifecycle start occurs after stream consumption and is not converted into or appended as a durable frame. If abort interrupts the parked `afterResponse` adapter, the block awaits the carried abort-mutation promise, skips that hook, emits `observer.end` with the raw settled message, and returns it so the caller can commit it under the now-current cancellation control. `beforePayload` maps to pi-ai's payload callback. Response metadata capture maps to pi-ai's `onResponse`; it is distinct from `afterResponse`, because `onResponse` runs before the response body is consumed while the harness hook transforms the settled assistant message afterward. The harness exposes neither callback through `AgentHarnessStreamOptions`.
 
 The request function, not this block, owns registry dispatch, auth, and operation admission:
 

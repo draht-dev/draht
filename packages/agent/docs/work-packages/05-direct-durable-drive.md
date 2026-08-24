@@ -1,6 +1,6 @@
 # WP05 — Direct durable drive
 
-**Status: M2 complete; M3 next.** Independent Opus and GPT-5.6-Sol reviews approved the authoritative-`Lane.state`, straight-line procedure correction and M2 implementation with no blockers.
+**Status: M3 complete; M4 next.** Independent Opus, GPT-5.6-Sol, and Fable reviews approved the authoritative-`Lane.state` design and M3 generation implementation with no blockers.
 
 Removes breakpoints/manual drive, then implements the complete durable execution graph. Public drive stays disabled until every reachable phase and reconciliation path exists.
 
@@ -1316,7 +1316,7 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 **Modify**
 | Path | Change |
 |---|---|
-| `src/harness/execution/assistant.ts` | `request` admitted through `Gate`; observer receives Context |
+| `src/harness/execution/assistant.ts` | use provider-facing `Tool` declarations; observer callbacks receive trailing Context, and `start` also receives the raw start event (or `undefined` for a synthesized lifecycle start) so frame persistence uses pi-ai's codec; the runtime request adapter admits `Models.streamSimple` through `Gate` |
 
 **Behavior/invariants landed.** Preparation precedes intent; ids reserved at intent and honoured at settlement; frames enqueued synchronously without per-frame awaits; settlement deletes the frame list; every transition plans from the current owned projection and publishes its exact next projection; checkpoint separates tree parent/leaf from `triggerEntryId` for unprojected custom writes.
 
@@ -1672,7 +1672,7 @@ Both methods run on `Lane`; procedures do not remove ownership. The external fin
 
 `compact()` and `navigateTree()` are *accept + drive*, so they cannot be written before `accept` admits their operation kinds. Doing the composition first would force a second admission path that only the convenience method can reach.
 
-**Behavior/invariants landed.** Owner-before-idle claim order; join observes delivered events; usage row `seq` from `CommitResult`, and usage-event totals read `commit.stats.usage` inside `events(commit)` — no process accumulator (§2.12); every hook/event/observation carries the emitting Context. `AgentHarness.watchSession` is **explicitly deferred** and keeps its rejection.
+**Behavior/invariants landed.** Owner-before-idle claim order; join observes delivered events; usage row `seq` from `CommitResult`, and usage-event totals read `commit.stats.usage` inside `events(commit)` — no process accumulator (§2.12); every hook/event/observation carries the emitting Context. Before public exposure, pi-ai provider streams must guarantee that a queued start event's partial cannot be mutated before `assistantMessageEventToFrame` consumes it; pin this with a back-to-back shared-partial provider test that does not yield between start and block-start publication. `AgentHarness.watchSession` is **explicitly deferred** and keeps its rejection.
 
 **Focused tests**
 | Path | Theme |
@@ -1681,7 +1681,7 @@ Both methods run on `Lane`; procedures do not remove ownership. The external fin
 | `test/harness/runtime2/drive-ownership.test.ts` (independent completion/removal) | run each case with a **non-cooperative provider** and again with a **non-cooperative tool** that ignores its signal and never settles. **External finalization**: after the terminal event is delivered, public completion resolves with the finalizer's outcome while the effect is still stuck; `accept` returns `LaneBusy` throughout; exactly **one** `run_end` is delivered; after the effect finally returns the owner clears and `accept` succeeds. **Invocation abandonment**: the public promise rejects `DriveAbandoned`, a new `drive` claims the lane **before** the old effect returns, durable state is still `effect_pending`, and the new pass runs orphan recovery. **Close/fault**: resolves without waiting; public promises reject `HarnessClosed`/`HarnessFault`. In every case the detached pass produces no unhandled rejection, and `Drive.settle`/`Drive.fail` and exact `removeDrive` remain idempotent |
 | `test/harness/runtime2/drive-ownership.test.ts` (ABA fencing) | abandon an invocation whose effect is still running, let a **replacement owner claim the same `operationId`**, then let the old effect return: its transition planner and its progress writes both decline via `isDriveActive` even though the operation id is unchanged; zero commits attributed to the old task (asserted through `InstrumentedStorage`); the replacement owner is **not** cleared by the old task's cleanup; the replacement's own commits succeed |
 | `test/harness/runtime2/drive-surfaces.test.ts` | `accept({kind:"compaction"})` and `accept({kind:"navigation"})` admit and drive before any convenience method is used; convenience = accept + drive; `resume`; `requestAbort` through the public method reaches the M7 primitive; `Closed` returned not thrown; listeners settle before the next procedure hook; usage totals per settlement equal `getStats()`; **reopen a session with historical usage** → the first new usage event's totals include the history; **two lanes committing usage concurrently** → each event's totals match its own commit position and the final totals equal `getStats()`; Context lineage |
-| `test/harness/runtime2/drive-crash-matrix.test.ts` | release N commits → discard → reopen → drive, for every N in every phase path; every gated boundary exposes its exact committed writes; gated vs ungated byte-identical writes |
+| `test/harness/runtime2/drive-crash-matrix.test.ts` | release N commits → discard → reopen → drive, for every N in every phase path; every gated boundary exposes its exact committed writes; gated vs ungated byte-identical writes; a provider that publishes start and then mutates one shared partial for block start without yielding still persists a reducible immutable start frame |
 
 **Commands.** `npm run check` · `./test.sh`
 

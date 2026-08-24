@@ -115,7 +115,36 @@ export function withCancel(context: Context): {
 	};
 }
 
+/**
+ * Observe a promise until it settles or the invocation is cancelled.
+ * Cancellation rejects only this waiter; it does not cancel the underlying promise.
+ */
+export function awaitWithContext<T>(promise: Promise<T>, context: Context): Promise<T> {
+	const signal = context.abortSignal;
+	if (signal === undefined) return promise;
+	if (signal.aborted) return Promise.reject(abortError(signal));
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = (): void => reject(abortError(signal));
+		signal.addEventListener("abort", onAbort, { once: true });
+		void promise.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error: unknown) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
+
 /** Derive a context whose telemetry children use the supplied parent or active span. */
 export function withTelemetryContext(telemetryContext: TelemetryContext, context: Context): Context {
 	return withContextValue(TELEMETRY_CONTEXT_KEY, telemetryContext, context);
+}
+
+function abortError(signal: AbortSignal): Error {
+	const reason: unknown = signal.reason;
+	return reason instanceof Error ? reason : new DOMException("The operation was aborted", "AbortError");
 }

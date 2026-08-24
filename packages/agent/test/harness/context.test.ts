@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	awaitWithContext,
 	BACKGROUND_CONTEXT,
 	createContextKey,
 	TODO_CONTEXT,
@@ -70,6 +71,23 @@ describe("Context", () => {
 		expect(context.abortSignal?.aborted).toBe(true);
 		expect(cleanup.abortSignal).toBeUndefined();
 		expect(cleanup.value(key)).toBe("preserved");
+	});
+
+	it("stops waiting when the invocation is cancelled", async () => {
+		const controller = new AbortController();
+		const context = withAbortSignal(controller.signal, BACKGROUND_CONTEXT);
+		let resolveWork!: (value: string) => void;
+		const work = new Promise<string>((resolve) => {
+			resolveWork = resolve;
+		});
+		const waiting = awaitWithContext(work, context);
+		const cancellation = new Error("cancelled");
+
+		controller.abort(cancellation);
+		await expect(waiting).rejects.toBe(cancellation);
+		resolveWork("completed later");
+		await expect(work).resolves.toBe("completed later");
+		await expect(awaitWithContext(Promise.resolve("completed"), BACKGROUND_CONTEXT)).resolves.toBe("completed");
 	});
 
 	it("carries telemetry as an ordinary context value", async () => {

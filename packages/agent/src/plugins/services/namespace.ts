@@ -1,4 +1,4 @@
-import { BACKGROUND_CONTEXT, type Context, withCancel } from "../../harness/context.ts";
+import { awaitWithContext, BACKGROUND_CONTEXT, type Context, withCancel } from "../../harness/context.ts";
 import type { JsonValue } from "../../harness/session/types.ts";
 import { RemoteServiceError } from "./provider.ts";
 import { freshDeliveryContext } from "./state.ts";
@@ -395,6 +395,7 @@ class ServiceFacade {
 interface SingletonBinding {
 	facade: ServiceFacade;
 	subscription?: RemoteServiceSubscription;
+	starting?: Promise<void>;
 	active: boolean;
 	revision: number;
 }
@@ -450,9 +451,13 @@ class KeyedBinding<T> {
 		if (this.#hydrated) {
 			for (const instance of this.#instances.values()) this.#startTask(observer, instance);
 		}
-		if (this.#bound) {
-			this.#starting ??= this.#start(this.#revision);
-			void this.#starting.catch(this.#reportError);
+		if (this.#bound && this.#starting === undefined) {
+			const revision = this.#revision;
+			const starting = this.#start(revision);
+			this.#starting = starting;
+			void starting.catch((error: unknown) => {
+				if (!this.#closed && this.#revision === revision && this.#bound) this.#reportError(toError(error));
+			});
 		}
 		return () => {
 			if (observer.closed) return;
@@ -467,24 +472,30 @@ class KeyedBinding<T> {
 	async rebind(bound: boolean, context: Context): Promise<void> {
 		if (this.#closed) return;
 		this.#bound = bound;
-		this.#revision += 1;
-		await this.#reset(context);
+		const revision = ++this.#revision;
+		await this.#reset(context, false);
+		if (this.#closed || this.#revision !== revision || this.#bound !== bound) return;
 		if (bound && this.#observers.size > 0) {
-			this.#starting = this.#start(this.#revision);
-			void this.#starting.catch(this.#reportError);
+			const starting = this.#start(revision);
+			this.#starting = starting;
+			await starting;
 		}
+	}
+
+	ready(): Promise<void> {
+		return this.#starting ?? Promise.resolve();
 	}
 
 	async close(context: Context): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#revision += 1;
-		await this.#reset(context);
+		await this.#reset(context, true);
 		for (const observer of this.#observers) observer.closed = true;
 		this.#observers.clear();
 	}
 
-	async #reset(context: Context): Promise<void> {
+	async #reset(context: Context, waitForStarting: boolean): Promise<void> {
 		for (const observer of this.#observers) {
 			for (const task of observer.tasks.values()) task.cancel();
 			observer.tasks.clear();
@@ -495,10 +506,14 @@ class KeyedBinding<T> {
 		}
 		this.#instances.clear();
 		this.#hydrated = false;
+		const starting = this.#starting;
 		this.#starting = undefined;
 		const subscription = this.#subscription;
 		this.#subscription = undefined;
-		await subscription?.close(context);
+		await Promise.all([
+			waitForStarting ? starting?.catch(() => {}) : undefined,
+			subscription === undefined ? undefined : subscription.close(context),
+		]);
 	}
 
 	async #start(revision: number): Promise<void> {
@@ -622,6 +637,8 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 	readonly #singletons = new Map<string, SingletonBinding>();
 	readonly #keyed = new Map<string, KeyedBinding<unknown>>();
 	#bound: boolean;
+	#readinessRevision = 0;
+	#bindingTransition = Promise.resolve();
 	#disposed = false;
 
 	constructor(options: RemoteServiceNamespaceOptions) {
@@ -646,7 +663,17 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 			this.#reportError,
 		);
 		this.#singletons.set(service.id, binding);
-		if (this.#bound) void this.#startSingleton(service.id, binding, binding.revision).catch(this.#reportError);
+		this.#readinessRevision += 1;
+		if (this.#bound) {
+			const revision = binding.revision;
+			const starting = this.#startSingleton(service.id, binding, revision);
+			binding.starting = starting;
+			void starting.catch((error: unknown) => {
+				if (binding.active && binding.revision === revision && !this.#disposed && this.#bound) {
+					this.#reportError(toError(error));
+				}
+			});
+		}
 		return binding.facade.proxy as T;
 	}
 
@@ -664,18 +691,41 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 				() => {
 					if (this.#keyed.get(service.id) !== binding) return;
 					this.#keyed.delete(service.id);
+					this.#readinessRevision += 1;
 					void binding!.close(BACKGROUND_CONTEXT).catch(this.#reportError);
 				},
 				this.#bound,
 			);
 			this.#keyed.set(service.id, binding as KeyedBinding<unknown>);
+			this.#readinessRevision += 1;
 		}
 		return binding.observe(handler);
+	}
+
+	async ready(context: Context): Promise<void> {
+		if (this.#disposed) throw new Error("Remote service namespace is disposed");
+		while (true) {
+			const revision = this.#readinessRevision;
+			const starts = [
+				this.#bindingTransition,
+				...[...this.#singletons.values()].flatMap((binding) =>
+					binding.starting === undefined ? [] : [binding.starting],
+				),
+				...[...this.#keyed.values()].map((binding) => binding.ready()),
+			];
+			await awaitWithContext(
+				Promise.all(starts).then(() => undefined),
+				context,
+			);
+			if (this.#disposed) throw new Error("Remote service namespace is disposed");
+			if (revision === this.#readinessRevision) return;
+		}
 	}
 
 	async rebind(bound: boolean, context: Context): Promise<void> {
 		if (this.#disposed) throw new Error("Remote service namespace is disposed");
 		this.#bound = bound;
+		this.#readinessRevision += 1;
 		const transitions: Promise<void>[] = [];
 		for (const [serviceId, binding] of this.#singletons) {
 			binding.revision += 1;
@@ -683,21 +733,25 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 			const subscription = binding.subscription;
 			delete binding.subscription;
 			const revision = binding.revision;
-			transitions.push(
-				(async () => {
-					await subscription?.close(context);
-					if (bound) await this.#startSingleton(serviceId, binding, revision);
-				})(),
-			);
+			const starting = (async () => {
+				await subscription?.close(context);
+				if (bound) await this.#startSingleton(serviceId, binding, revision);
+			})();
+			binding.starting = starting;
+			transitions.push(starting);
 		}
 		for (const binding of this.#keyed.values()) transitions.push(binding.rebind(bound, context));
-		const results = await Promise.allSettled(transitions);
-		const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
-		if (errors.length > 0)
-			throw new AggregateError(
-				errors.map(({ reason }) => reason),
-				"Failed to rebind services",
-			);
+		const completion = (async () => {
+			const results = await Promise.allSettled(transitions);
+			const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+			if (errors.length > 0)
+				throw new AggregateError(
+					errors.map(({ reason }) => reason),
+					"Failed to rebind services",
+				);
+		})();
+		this.#bindingTransition = completion;
+		await completion;
 	}
 
 	async dispose(context: Context): Promise<void> {
@@ -707,6 +761,7 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 		for (const binding of this.#singletons.values()) {
 			binding.active = false;
 			binding.facade.clear();
+			if (binding.starting) closes.push(binding.starting.catch(() => {}));
 			if (binding.subscription) closes.push(Promise.resolve(binding.subscription.close(context)));
 		}
 		for (const binding of this.#keyed.values()) closes.push(binding.close(context));

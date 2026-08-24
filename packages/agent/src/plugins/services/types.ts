@@ -191,6 +191,8 @@ export interface RemoteServiceNamespaceApi {
 		service: Service<T>,
 		handler: (instance: RemoteServiceInstance<T>, context: Context) => void | Promise<void>,
 	): () => void;
+	/** Wait until every currently acquired service has installed its initial snapshot. */
+	ready(context: Context): Promise<void>;
 	dispose(context: Context): Promise<void>;
 }
 

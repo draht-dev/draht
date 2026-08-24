@@ -81,7 +81,8 @@ describe("plugin remote services", () => {
 		const second = namespace.use(Models);
 		expect(first).toBe(second);
 		expect(first.state.value).toBeUndefined();
-		await vi.waitFor(() => expect(first.state.value).toBe(initialState));
+		await namespace.ready(BACKGROUND_CONTEXT);
+		expect(first.state.value).toBe(initialState);
 
 		const updates: ModelsState[] = [];
 		const unsubscribe = second.state.subscribe((value) => updates.push(value));
@@ -102,11 +103,31 @@ describe("plugin remote services", () => {
 			connection: createLoopbackServiceConnection(provider),
 		});
 		const lateModels = lateNamespace.use(Models);
-		await vi.waitFor(() => expect(lateModels.state.value?.revision).toBe(1));
+		await lateNamespace.ready(BACKGROUND_CONTEXT);
+		expect(lateModels.state.value?.revision).toBe(1);
 
 		unsubscribe();
 		await Promise.all([namespace.dispose(BACKGROUND_CONTEXT), lateNamespace.dispose(BACKGROUND_CONTEXT)]);
 		provider.dispose();
+	});
+
+	test("rejects namespace readiness when initial hydration fails", async () => {
+		const failure = new Error("initial hydration failed");
+		const errors: Error[] = [];
+		const namespace = new RemoteServiceNamespace({
+			services: [Models],
+			connection: {
+				invoke: () => Promise.reject(new Error("unexpected invocation")),
+				subscribe: () => Promise.reject(failure),
+			},
+			onError: (error) => errors.push(error),
+		});
+		const models = namespace.use(Models);
+
+		await expect(namespace.ready(BACKGROUND_CONTEXT)).rejects.toBe(failure);
+		expect(models.state.value).toBeUndefined();
+		expect(errors).toEqual([failure]);
+		await namespace.dispose(BACKGROUND_CONTEXT);
 	});
 
 	test("buffers state updates that race subscription hydration", async () => {

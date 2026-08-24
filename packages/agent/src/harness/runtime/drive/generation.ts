@@ -1,7 +1,7 @@
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
-	assistantMessageEventToFrame,
+	AssistantMessageFrameEncoder,
 	isRetryableAssistantError,
 	type Tool,
 } from "@draht/ai";
@@ -547,6 +547,7 @@ export async function runGeneration<TContext extends object | undefined>(
 	if (intent.kind === "state_changed") return { kind: "continue" };
 
 	const progress = openFrameProgress(lane, drive, responseEntryId);
+	const frameEncoder = new AssistantMessageFrameEncoder();
 	let drained = false;
 	const drainProgress = async () => {
 		if (drained) return;
@@ -608,7 +609,7 @@ export async function runGeneration<TContext extends object | undefined>(
 				},
 				observer: {
 					start(message, event, context) {
-						const frame = event === undefined ? undefined : assistantMessageEventToFrame(event);
+						const frame = frameEncoder.encode(event);
 						if (frame !== undefined) progress.write(frame);
 						return lane.emitBatch(
 							[{ type: "message_start", lane: lane.name, runId: drive.operationId, message }],
@@ -616,7 +617,7 @@ export async function runGeneration<TContext extends object | undefined>(
 						);
 					},
 					update(message, event: AssistantMessageEvent, context) {
-						const frame = assistantMessageEventToFrame(event);
+						const frame = frameEncoder.encode(event);
 						if (frame !== undefined) progress.write(frame);
 						return lane.emitBatch(
 							[
@@ -626,6 +627,7 @@ export async function runGeneration<TContext extends object | undefined>(
 									runId: drive.operationId,
 									message,
 									event,
+									...(frame === undefined ? {} : { frame }),
 								},
 							],
 							context,

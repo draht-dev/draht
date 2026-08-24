@@ -5,7 +5,7 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type AssistantMessageFrame,
-	assistantMessageEventToFrame,
+	AssistantMessageFrameEncoder,
 	type Model,
 	reduceAssistantMessageFrames,
 } from "../src/index.ts";
@@ -31,8 +31,8 @@ function seed(): AssistantMessage {
 	};
 }
 
-function frame(event: AssistantMessageEvent): AssistantMessageFrame {
-	const converted = assistantMessageEventToFrame(event);
+function frame(encoder: AssistantMessageFrameEncoder, event: AssistantMessageEvent): AssistantMessageFrame {
+	const converted = encoder.encode(event);
 	if (!converted) throw new Error(`Expected ${event.type} event to produce a frame`);
 	return converted;
 }
@@ -40,13 +40,14 @@ function frame(event: AssistantMessageEvent): AssistantMessageFrame {
 describe("assistant message frames", () => {
 	it("uses authoritative text end content and signature", () => {
 		const partial = seed();
-		const frames: AssistantMessageFrame[] = [frame({ type: "start", partial })];
+		const encoder = new AssistantMessageFrameEncoder();
+		const frames: AssistantMessageFrame[] = [frame(encoder, { type: "start", partial })];
 		partial.content.push({ type: "text", text: "Hello " });
-		frames.push(frame({ type: "text_start", contentIndex: 0, partial }));
+		frames.push(frame(encoder, { type: "text_start", contentIndex: 0, partial }));
 		partial.content[0] = { type: "text", text: "Hello world", textSignature: "sig-text" };
 		frames.push(
-			frame({ type: "text_delta", contentIndex: 0, delta: "incorrect", partial }),
-			frame({ type: "text_end", contentIndex: 0, content: "Hello world", partial }),
+			frame(encoder, { type: "text_delta", contentIndex: 0, delta: "incorrect", partial }),
+			frame(encoder, { type: "text_end", contentIndex: 0, content: "Hello world", partial }),
 		);
 
 		expect(frames.at(-1)).toEqual({
@@ -62,21 +63,22 @@ describe("assistant message frames", () => {
 
 	it("preserves initial and final thinking metadata, including redaction", () => {
 		const partial = seed();
-		const frames: AssistantMessageFrame[] = [frame({ type: "start", partial })];
+		const encoder = new AssistantMessageFrameEncoder();
+		const frames: AssistantMessageFrame[] = [frame(encoder, { type: "start", partial })];
 		partial.content.push({
 			type: "thinking",
 			thinking: "[redacted]",
 			thinkingSignature: "encrypted-start",
 			redacted: true,
 		});
-		frames.push(frame({ type: "thinking_start", contentIndex: 0, partial }));
+		frames.push(frame(encoder, { type: "thinking_start", contentIndex: 0, partial }));
 		partial.content[0] = {
 			type: "thinking",
 			thinking: "[redacted]",
 			thinkingSignature: "encrypted-final",
 			redacted: true,
 		};
-		frames.push(frame({ type: "thinking_end", contentIndex: 0, content: "[redacted]", partial }));
+		frames.push(frame(encoder, { type: "thinking_end", contentIndex: 0, content: "[redacted]", partial }));
 
 		expect(frames.at(-1)).toEqual({
 			type: "thinking_end",
@@ -201,17 +203,135 @@ describe("assistant message frames", () => {
 			for (const event of events) yield event;
 		}
 
-		const frames: AssistantMessageFrame[] = [frame({ type: "start", partial: output })];
+		const encoder = new AssistantMessageFrameEncoder();
+		const frames: AssistantMessageFrame[] = [frame(encoder, { type: "start", partial: output })];
 		const stream = new AssistantMessageEventStream();
 		const push = stream.push.bind(stream);
 		stream.push = (event) => {
-			const converted = assistantMessageEventToFrame(event);
+			const converted = encoder.encode(event);
 			if (converted) frames.push(converted);
 			push(event);
 		};
 		await processResponsesStream(source(), output, stream, model);
 
 		expect(reduceAssistantMessageFrames(frames)?.content).toEqual(output.content);
+	});
+
+	it("reconciles queued text events against one advanced live partial without duplicate content", () => {
+		const partial = seed();
+		const events: AssistantMessageEvent[] = [{ type: "start", partial }];
+		const text = { type: "text" as const, text: "" };
+		partial.content.push(text);
+		events.push({ type: "text_start", contentIndex: 0, partial });
+		for (const delta of ["Hel", "lo", " ", "world"]) {
+			text.text += delta;
+			events.push({ type: "text_delta", contentIndex: 0, delta, partial });
+		}
+
+		const encoder = new AssistantMessageFrameEncoder();
+		const frames = events.flatMap((event) => {
+			const encoded = encoder.encode(event);
+			return encoded === undefined ? [] : [encoded];
+		});
+
+		expect(frames.map((item) => item.type)).toEqual(["start", "text_start"]);
+		expect(frames[0]).toMatchObject({ type: "start", partial: { content: [], stopReason: "pending" } });
+		expect(reduceAssistantMessageFrames(frames)?.content).toEqual([{ type: "text", text: "Hello world" }]);
+	});
+
+	it("trims only the covered prefix when a start snapshot lands inside a delta", () => {
+		const partial = seed();
+		const encoder = new AssistantMessageFrameEncoder();
+		const frames: AssistantMessageFrame[] = [frame(encoder, { type: "start", partial })];
+		const text = { type: "text" as const, text: "Hel" };
+		partial.content.push(text);
+		frames.push(frame(encoder, { type: "text_start", contentIndex: 0, partial }));
+		expect(encoder.encode({ type: "text_delta", contentIndex: 0, delta: "He", partial })).toBeUndefined();
+		const remainder = encoder.encode({ type: "text_delta", contentIndex: 0, delta: "llo", partial });
+		if (remainder === undefined) throw new Error("Expected uncovered text delta");
+		frames.push(remainder);
+
+		expect(remainder).toEqual({ type: "text_delta", contentIndex: 0, delta: "lo" });
+		expect(reduceAssistantMessageFrames(frames)?.content).toEqual([{ type: "text", text: "Hello" }]);
+	});
+
+	it("checkpoints queued tool JSON without replaying covered deltas", () => {
+		const partial = seed();
+		const toolCall = { type: "toolCall" as const, id: "call", name: "write", arguments: {} };
+		const events: AssistantMessageEvent[] = [{ type: "start", partial }];
+		partial.content.push(toolCall);
+		events.push({ type: "toolcall_start", contentIndex: 0, partial });
+		toolCall.arguments = { path: "README.md" };
+		events.push(
+			{ type: "toolcall_delta", contentIndex: 0, delta: '{"path":"READ', partial },
+			{ type: "toolcall_delta", contentIndex: 0, delta: 'ME.md"}', partial },
+		);
+
+		const encoder = new AssistantMessageFrameEncoder();
+		const frames = events.flatMap((event) => {
+			const encoded = encoder.encode(event);
+			return encoded === undefined ? [] : [encoded];
+		});
+		expect(frames.map((item) => item.type)).toEqual(["start", "toolcall_start", "toolcall_checkpoint"]);
+		expect(frames.at(-1)).toEqual({
+			type: "toolcall_checkpoint",
+			contentIndex: 0,
+			json: '{"path":"README.md"}',
+		});
+		expect(reduceAssistantMessageFrames(frames)?.content).toEqual([
+			{ type: "toolCall", id: "call", name: "write", arguments: { path: "README.md" } },
+		]);
+	});
+
+	it("streams grammar-tool JSON compactly from an empty argument start", () => {
+		const partial = seed();
+		const encoder = new AssistantMessageFrameEncoder();
+		const frames: AssistantMessageFrame[] = [frame(encoder, { type: "start", partial })];
+		const toolCall = { type: "toolCall" as const, id: "call", name: "bash", arguments: {} };
+		partial.content.push(toolCall);
+		frames.push(frame(encoder, { type: "toolcall_start", contentIndex: 0, partial }));
+		toolCall.arguments = { command: "ls -la /tmp" };
+		frames.push(
+			frame(encoder, {
+				type: "toolcall_delta",
+				contentIndex: 0,
+				delta: '{"command":"ls -la /tmp"}',
+				partial,
+			}),
+		);
+
+		expect(frames.at(-1)).toEqual({
+			type: "toolcall_delta",
+			contentIndex: 0,
+			delta: '{"command":"ls -la /tmp"}',
+		});
+		expect(reduceAssistantMessageFrames(frames)?.content[0]).toMatchObject({
+			type: "toolCall",
+			arguments: { command: "ls -la /tmp" },
+		});
+	});
+
+	it("accepts a pre-generation error but rejects success or updates before start", () => {
+		const failed = seed();
+		failed.stopReason = "error";
+		failed.errorMessage = "setup failed";
+		expect(
+			new AssistantMessageFrameEncoder().encode({ type: "error", reason: "error", error: failed }),
+		).toBeUndefined();
+
+		const completed = seed();
+		completed.stopReason = "stop";
+		expect(() =>
+			new AssistantMessageFrameEncoder().encode({ type: "done", reason: "stop", message: completed }),
+		).toThrow("done event appears before start");
+		expect(() =>
+			new AssistantMessageFrameEncoder().encode({
+				type: "text_delta",
+				contentIndex: 0,
+				delta: "x",
+				partial: seed(),
+			}),
+		).toThrow("text_delta event appears before start");
 	});
 
 	it("treats end signature metadata, including absence, as authoritative", () => {
@@ -268,7 +388,10 @@ describe("assistant message frames", () => {
 		};
 		partial.content.push(toolCall);
 
-		const end = frame({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+		const encoder = new AssistantMessageFrameEncoder();
+		frame(encoder, { type: "start", partial });
+		frame(encoder, { type: "toolcall_start", contentIndex: 0, partial });
+		const end = frame(encoder, { type: "toolcall_end", contentIndex: 0, toolCall, partial });
 		expect(end).toEqual({
 			type: "toolcall_end",
 			contentIndex: 0,
@@ -304,28 +427,13 @@ describe("assistant message frames", () => {
 		const partialWithScratch = partial as AssistantMessage & { outputIndex?: number };
 		partialWithScratch.outputIndex = 3;
 
-		const start = frame({ type: "start", partial });
-		const textStart = frame({ type: "text_start", contentIndex: 0, partial });
-		const thinkingStart = frame({ type: "thinking_start", contentIndex: 1, partial });
-		const toolStart = frame({ type: "toolcall_start", contentIndex: 2, partial });
+		const encoder = new AssistantMessageFrameEncoder();
+		const start = frame(encoder, { type: "start", partial });
+		const textStart = frame(encoder, { type: "text_start", contentIndex: 0, partial });
+		const thinkingStart = frame(encoder, { type: "thinking_start", contentIndex: 1, partial });
+		const toolStart = frame(encoder, { type: "toolcall_start", contentIndex: 2, partial });
 
-		expect(start.type === "start" && start.partial.content).toEqual([
-			{ type: "text", text: "visible", textSignature: "text-sig" },
-			{
-				type: "thinking",
-				thinking: "reasoning",
-				thinkingSignature: "thinking-sig",
-				redacted: false,
-			},
-			{
-				type: "toolCall",
-				id: "call",
-				name: "run",
-				arguments: { value: 1 },
-				thoughtSignature: "tool-sig",
-				namespace: "tools",
-			},
-		]);
+		expect(start.type === "start" && start.partial.content).toEqual([]);
 		expect(start).not.toHaveProperty("partial.outputIndex");
 		expect(textStart).not.toHaveProperty("content.index");
 		expect(thinkingStart).not.toHaveProperty("content.index");
@@ -361,7 +469,8 @@ describe("assistant message frames", () => {
 	it("snapshots mutable event data and keeps reduction pure", () => {
 		const partial = seed();
 		partial.diagnostics = [{ type: "test", timestamp: 2, details: { value: "original" } }];
-		const start = frame({ type: "start", partial });
+		const encoder = new AssistantMessageFrameEncoder();
+		const start = frame(encoder, { type: "start", partial });
 		partial.diagnostics[0]!.details!.value = "mutated";
 		partial.usage.cost.total = 99;
 
@@ -371,7 +480,7 @@ describe("assistant message frames", () => {
 			name: "run",
 			arguments: { nested: { value: "original" } },
 		});
-		const toolStart = frame({ type: "toolcall_start", contentIndex: 0, partial });
+		const toolStart = frame(encoder, { type: "toolcall_start", contentIndex: 0, partial });
 		const sourceTool = partial.content[0];
 		if (sourceTool?.type !== "toolCall") throw new Error("Expected source tool call");
 		(sourceTool.arguments.nested as Record<string, unknown>).value = "mutated";
@@ -390,11 +499,15 @@ describe("assistant message frames", () => {
 
 	it("omits terminal events because settlement is separate", () => {
 		const message = seed();
+		const completed = new AssistantMessageFrameEncoder();
+		completed.encode({ type: "start", partial: message });
 		message.stopReason = "stop";
-		expect(assistantMessageEventToFrame({ type: "done", reason: "stop", message })).toBeUndefined();
+		expect(completed.encode({ type: "done", reason: "stop", message })).toBeUndefined();
 		message.stopReason = "error";
 		message.errorMessage = "failed";
-		expect(assistantMessageEventToFrame({ type: "error", reason: "error", error: message })).toBeUndefined();
+		expect(
+			new AssistantMessageFrameEncoder().encode({ type: "error", reason: "error", error: message }),
+		).toBeUndefined();
 	});
 
 	it("returns undefined when there is no start frame", () => {
@@ -438,8 +551,10 @@ describe("assistant message frames", () => {
 
 	it("rejects conversion events whose contentIndex points to the wrong block kind", () => {
 		const partial = seed();
+		const encoder = new AssistantMessageFrameEncoder();
+		encoder.encode({ type: "start", partial });
 		partial.content.push({ type: "thinking", thinking: "" });
-		expect(() => assistantMessageEventToFrame({ type: "text_start", contentIndex: 0, partial })).toThrow(
+		expect(() => encoder.encode({ type: "text_start", contentIndex: 0, partial })).toThrow(
 			"text_start event points to thinking block",
 		);
 	});

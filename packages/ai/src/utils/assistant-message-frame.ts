@@ -2,8 +2,8 @@ import type { AssistantMessage, AssistantMessageEvent, TextContent, ThinkingCont
 import { parseStreamingJson } from "./json-parse.ts";
 
 /**
- * Compact, replayable representation of an assistant-message streaming event.
- * Terminal settlement is intentionally excluded and must be persisted separately.
+ * Compact, replayable assistant-message progress. Terminal settlement is
+ * intentionally excluded and must be persisted separately.
  */
 export type AssistantMessageFrame =
 	| { type: "start"; partial: AssistantMessage }
@@ -20,6 +20,7 @@ export type AssistantMessageFrame =
 			redacted?: boolean;
 	  }
 	| { type: "toolcall_start"; contentIndex: number; toolCall: ToolCall }
+	| { type: "toolcall_checkpoint"; contentIndex: number; json: string }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string }
 	| {
 			type: "toolcall_end";
@@ -31,7 +32,16 @@ export type AssistantMessageFrame =
 			namespace?: string;
 	  };
 
-type BlockState =
+type EncoderBlockState =
+	| { kind: "text" | "thinking"; coveredChars: number; deltaChars: number }
+	| {
+			kind: "toolCall";
+			caughtUp: boolean;
+			catchupJson: string;
+			snapshotArguments: string;
+	  };
+
+type ReducerBlockState =
 	| { kind: "text"; ended: boolean }
 	| { kind: "thinking"; ended: boolean }
 	| { kind: "toolCall"; ended: boolean; json: string };
@@ -64,21 +74,10 @@ function cloneToolCall(toolCall: ToolCall): ToolCall {
 	};
 }
 
-function cloneContentBlock(content: AssistantMessage["content"][number]): AssistantMessage["content"][number] {
-	switch (content.type) {
-		case "text":
-			return cloneTextContent(content);
-		case "thinking":
-			return cloneThinkingContent(content);
-		case "toolCall":
-			return cloneToolCall(content);
-	}
-}
-
-function cloneAssistantMessage(message: AssistantMessage): AssistantMessage {
+function cloneStartMessage(message: AssistantMessage): AssistantMessage {
 	return {
 		role: "assistant",
-		content: message.content.map(cloneContentBlock),
+		content: [],
 		api: message.api,
 		provider: message.provider,
 		model: message.model,
@@ -86,11 +85,7 @@ function cloneAssistantMessage(message: AssistantMessage): AssistantMessage {
 		...(message.responseId === undefined ? {} : { responseId: message.responseId }),
 		...(message.diagnostics === undefined ? {} : { diagnostics: structuredClone(message.diagnostics) }),
 		usage: structuredClone(message.usage),
-		stopReason: message.stopReason,
-		...(message.deferred === undefined ? {} : { deferred: structuredClone(message.deferred) }),
-		...(message.errorMessage === undefined ? {} : { errorMessage: message.errorMessage }),
-		...(message.rawStopReason === undefined ? {} : { rawStopReason: message.rawStopReason }),
-		...(message.endTurn === undefined ? {} : { endTurn: message.endTurn }),
+		stopReason: "pending",
 		timestamp: message.timestamp,
 	};
 }
@@ -110,99 +105,212 @@ function eventBlock(event: Exclude<AssistantMessageEvent, { type: "start" | "don
 	return block;
 }
 
-/** Convert a streaming event to a compact frame. `done` and `error` settle separately. */
-export function assistantMessageEventToFrame(event: AssistantMessageEvent): AssistantMessageFrame | undefined {
-	switch (event.type) {
-		case "start":
-			return { type: "start", partial: cloneAssistantMessage(event.partial) };
-		case "text_start": {
-			const content = eventBlock(event);
-			if (content.type !== "text") {
-				throw new Error(`text_start event points to ${content.type} block at index ${event.contentIndex}`);
-			}
-			return { type: "text_start", contentIndex: event.contentIndex, content: cloneTextContent(content) };
+function serializedArguments(argumentsValue: ToolCall["arguments"]): string {
+	const serialized = JSON.stringify(argumentsValue);
+	if (serialized === undefined) throw new Error("Tool-call arguments are not JSON-serializable");
+	return serialized;
+}
+
+const EMPTY_PARSED_TOOL_ARGUMENTS = serializedArguments(parseStreamingJson<ToolCall["arguments"]>(""));
+
+/**
+ * Encodes one assistant stream. `partial` remains a shared live accumulator;
+ * the encoder uses per-block offsets to avoid replaying deltas already visible
+ * when an older queued event is consumed.
+ */
+export class AssistantMessageFrameEncoder {
+	private started = false;
+	private terminal = false;
+	private readonly blocks = new Map<number, EncoderBlockState>();
+
+	encode(event: AssistantMessageEvent): AssistantMessageFrame | undefined {
+		if (this.terminal) throw new Error(`Assistant message event ${event.type} follows a terminal event`);
+
+		switch (event.type) {
+			case "start":
+				if (this.started) throw new Error("Assistant message stream contains more than one start event");
+				this.started = true;
+				return { type: "start", partial: cloneStartMessage(event.partial) };
+			case "done":
+				if (!this.started) throw new Error("Assistant message done event appears before start");
+				this.terminal = true;
+				return undefined;
+			case "error":
+				this.terminal = true;
+				return undefined;
 		}
-		case "text_delta":
-			return { type: "text_delta", contentIndex: event.contentIndex, delta: event.delta };
-		case "text_end": {
-			const content = eventBlock(event);
-			if (content.type !== "text") {
-				throw new Error(`text_end event points to ${content.type} block at index ${event.contentIndex}`);
+
+		if (!this.started) throw new Error(`Assistant message ${event.type} event appears before start`);
+
+		switch (event.type) {
+			case "text_start": {
+				const content = eventBlock(event);
+				if (content.type !== "text") {
+					throw new Error(`text_start event points to ${content.type} block at index ${event.contentIndex}`);
+				}
+				this.startBlock(event.contentIndex, {
+					kind: "text",
+					coveredChars: content.text.length,
+					deltaChars: 0,
+				});
+				return { type: "text_start", contentIndex: event.contentIndex, content: cloneTextContent(content) };
 			}
-			return {
-				type: "text_end",
-				contentIndex: event.contentIndex,
-				content: event.content,
-				...(content.textSignature === undefined ? {} : { textSignature: content.textSignature }),
-			};
+			case "text_delta":
+				return this.encodeTextDelta(event.contentIndex, event.delta, "text");
+			case "text_end": {
+				const content = eventBlock(event);
+				if (content.type !== "text") {
+					throw new Error(`text_end event points to ${content.type} block at index ${event.contentIndex}`);
+				}
+				this.endBlock(event.contentIndex, "text");
+				return {
+					type: "text_end",
+					contentIndex: event.contentIndex,
+					content: event.content,
+					...(content.textSignature === undefined ? {} : { textSignature: content.textSignature }),
+				};
+			}
+			case "thinking_start": {
+				const content = eventBlock(event);
+				if (content.type !== "thinking") {
+					throw new Error(`thinking_start event points to ${content.type} block at index ${event.contentIndex}`);
+				}
+				this.startBlock(event.contentIndex, {
+					kind: "thinking",
+					coveredChars: content.thinking.length,
+					deltaChars: 0,
+				});
+				return {
+					type: "thinking_start",
+					contentIndex: event.contentIndex,
+					content: cloneThinkingContent(content),
+				};
+			}
+			case "thinking_delta":
+				return this.encodeTextDelta(event.contentIndex, event.delta, "thinking");
+			case "thinking_end": {
+				const content = eventBlock(event);
+				if (content.type !== "thinking") {
+					throw new Error(`thinking_end event points to ${content.type} block at index ${event.contentIndex}`);
+				}
+				this.endBlock(event.contentIndex, "thinking");
+				return {
+					type: "thinking_end",
+					contentIndex: event.contentIndex,
+					content: event.content,
+					...(content.thinkingSignature === undefined ? {} : { thinkingSignature: content.thinkingSignature }),
+					...(content.redacted === undefined ? {} : { redacted: content.redacted }),
+				};
+			}
+			case "toolcall_start": {
+				const content = eventBlock(event);
+				if (content.type !== "toolCall") {
+					throw new Error(`toolcall_start event points to ${content.type} block at index ${event.contentIndex}`);
+				}
+				const snapshotArguments = serializedArguments(content.arguments);
+				const caughtUp = snapshotArguments === EMPTY_PARSED_TOOL_ARGUMENTS;
+				this.startBlock(event.contentIndex, {
+					kind: "toolCall",
+					caughtUp,
+					catchupJson: "",
+					snapshotArguments: caughtUp ? "" : snapshotArguments,
+				});
+				return { type: "toolcall_start", contentIndex: event.contentIndex, toolCall: cloneToolCall(content) };
+			}
+			case "toolcall_delta": {
+				const state = this.block(event.contentIndex, "toolCall");
+				if (state.kind !== "toolCall") throw new Error("Unreachable tool-call encoder state");
+				if (state.caughtUp) {
+					return event.delta.length === 0
+						? undefined
+						: { type: "toolcall_delta", contentIndex: event.contentIndex, delta: event.delta };
+				}
+				state.catchupJson += event.delta;
+				if (
+					serializedArguments(parseStreamingJson<ToolCall["arguments"]>(state.catchupJson)) !==
+					state.snapshotArguments
+				) {
+					return undefined;
+				}
+				state.caughtUp = true;
+				state.snapshotArguments = "";
+				const json = state.catchupJson;
+				state.catchupJson = "";
+				return json.length === 0
+					? undefined
+					: { type: "toolcall_checkpoint", contentIndex: event.contentIndex, json };
+			}
+			case "toolcall_end": {
+				const content = eventBlock(event);
+				if (content.type !== "toolCall") {
+					throw new Error(`toolcall_end event points to ${content.type} block at index ${event.contentIndex}`);
+				}
+				if (event.toolCall.type !== "toolCall") {
+					throw new Error(`toolcall_end event has invalid tool call at index ${event.contentIndex}`);
+				}
+				this.endBlock(event.contentIndex, "toolCall");
+				return {
+					type: "toolcall_end",
+					contentIndex: event.contentIndex,
+					id: event.toolCall.id,
+					name: event.toolCall.name,
+					arguments: structuredClone(event.toolCall.arguments),
+					...(event.toolCall.thoughtSignature === undefined
+						? {}
+						: { thoughtSignature: event.toolCall.thoughtSignature }),
+					...(event.toolCall.namespace === undefined ? {} : { namespace: event.toolCall.namespace }),
+				};
+			}
 		}
-		case "thinking_start": {
-			const content = eventBlock(event);
-			if (content.type !== "thinking") {
-				throw new Error(`thinking_start event points to ${content.type} block at index ${event.contentIndex}`);
-			}
-			return {
-				type: "thinking_start",
-				contentIndex: event.contentIndex,
-				content: cloneThinkingContent(content),
-			};
+	}
+
+	private startBlock(contentIndex: number, state: EncoderBlockState): void {
+		assertContentIndex(contentIndex);
+		if (this.blocks.has(contentIndex)) {
+			throw new Error(`Assistant message block ${contentIndex} starts more than once`);
 		}
-		case "thinking_delta":
-			return { type: "thinking_delta", contentIndex: event.contentIndex, delta: event.delta };
-		case "thinking_end": {
-			const content = eventBlock(event);
-			if (content.type !== "thinking") {
-				throw new Error(`thinking_end event points to ${content.type} block at index ${event.contentIndex}`);
-			}
-			return {
-				type: "thinking_end",
-				contentIndex: event.contentIndex,
-				content: event.content,
-				...(content.thinkingSignature === undefined ? {} : { thinkingSignature: content.thinkingSignature }),
-				...(content.redacted === undefined ? {} : { redacted: content.redacted }),
-			};
+		this.blocks.set(contentIndex, state);
+	}
+
+	private block(contentIndex: number, kind: EncoderBlockState["kind"]): EncoderBlockState {
+		assertContentIndex(contentIndex);
+		const state = this.blocks.get(contentIndex);
+		if (state === undefined) throw new Error(`Assistant message ${kind} block ${contentIndex} has not started`);
+		if (state.kind !== kind) {
+			throw new Error(`Assistant message block ${contentIndex} is ${state.kind}, not ${kind}`);
 		}
-		case "toolcall_start": {
-			const content = eventBlock(event);
-			if (content.type !== "toolCall") {
-				throw new Error(`toolcall_start event points to ${content.type} block at index ${event.contentIndex}`);
-			}
-			return { type: "toolcall_start", contentIndex: event.contentIndex, toolCall: cloneToolCall(content) };
-		}
-		case "toolcall_delta":
-			return { type: "toolcall_delta", contentIndex: event.contentIndex, delta: event.delta };
-		case "toolcall_end": {
-			const content = eventBlock(event);
-			if (content.type !== "toolCall") {
-				throw new Error(`toolcall_end event points to ${content.type} block at index ${event.contentIndex}`);
-			}
-			if (event.toolCall.type !== "toolCall") {
-				throw new Error(`toolcall_end event has invalid tool call at index ${event.contentIndex}`);
-			}
-			return {
-				type: "toolcall_end",
-				contentIndex: event.contentIndex,
-				id: event.toolCall.id,
-				name: event.toolCall.name,
-				arguments: structuredClone(event.toolCall.arguments),
-				...(event.toolCall.thoughtSignature === undefined
-					? {}
-					: { thoughtSignature: event.toolCall.thoughtSignature }),
-				...(event.toolCall.namespace === undefined ? {} : { namespace: event.toolCall.namespace }),
-			};
-		}
-		case "done":
-		case "error":
-			return undefined;
+		return state;
+	}
+
+	private endBlock(contentIndex: number, kind: EncoderBlockState["kind"]): void {
+		this.block(contentIndex, kind);
+		this.blocks.delete(contentIndex);
+	}
+
+	private encodeTextDelta(
+		contentIndex: number,
+		delta: string,
+		kind: "text" | "thinking",
+	): AssistantMessageFrame | undefined {
+		const state = this.block(contentIndex, kind);
+		if (state.kind === "toolCall") throw new Error("Unreachable text encoder state");
+		const deltaStart = state.deltaChars;
+		state.deltaChars += delta.length;
+		const covered = Math.max(0, state.coveredChars - deltaStart);
+		if (covered >= delta.length) return undefined;
+		const uncovered = covered === 0 ? delta : delta.slice(covered);
+		return kind === "text"
+			? { type: "text_delta", contentIndex, delta: uncovered }
+			: { type: "thinking_delta", contentIndex, delta: uncovered };
 	}
 }
 
 function appendBlock(
 	message: AssistantMessage,
-	states: Map<number, BlockState>,
+	states: Map<number, ReducerBlockState>,
 	contentIndex: number,
 	block: TextContent | ThinkingContent | ToolCall,
-	state: BlockState,
+	state: ReducerBlockState,
 ): void {
 	assertContentIndex(contentIndex);
 	if (contentIndex !== message.content.length) {
@@ -215,11 +323,11 @@ function appendBlock(
 
 function activeBlock(
 	message: AssistantMessage,
-	states: Map<number, BlockState>,
+	states: Map<number, ReducerBlockState>,
 	contentIndex: number,
-	expectedKind: BlockState["kind"],
+	expectedKind: ReducerBlockState["kind"],
 	frameType: AssistantMessageFrame["type"],
-): { block: TextContent | ThinkingContent | ToolCall; state: BlockState } {
+): { block: TextContent | ThinkingContent | ToolCall; state: ReducerBlockState } {
 	assertContentIndex(contentIndex);
 	const state = states.get(contentIndex);
 	const block = message.content[contentIndex];
@@ -238,27 +346,25 @@ function activeBlock(
 }
 
 /**
- * Replay compact frames into an assistant message without mutating the frames.
- * Returns undefined when the iterable has no start frame. Frames for different
- * content indexes may be interleaved, but every block must have a valid start sequence.
+ * Replay compact frames without mutating them. Returns `undefined` when the
+ * iterable contains no start frame.
  */
 export function reduceAssistantMessageFrames(frames: Iterable<AssistantMessageFrame>): AssistantMessage | undefined {
-	const replayFrames = [...frames];
-	if (!replayFrames.some((frame) => frame.type === "start")) return undefined;
-
 	let message: AssistantMessage | undefined;
-	const states = new Map<number, BlockState>();
+	let frameBeforeStart: AssistantMessageFrame["type"] | undefined;
+	const states = new Map<number, ReducerBlockState>();
 
-	for (const frame of replayFrames) {
+	for (const frame of frames) {
 		if (frame.type === "start") {
-			if (message) {
-				throw new Error("Assistant message frame sequence contains more than one start frame");
-			}
+			if (message) throw new Error("Assistant message frame sequence contains more than one start frame");
+			if (frameBeforeStart !== undefined)
+				throw new Error(`${frameBeforeStart} frame appears before the start frame`);
 			message = structuredClone(frame.partial);
 			continue;
 		}
 		if (!message) {
-			throw new Error(`${frame.type} frame appears before the start frame`);
+			frameBeforeStart ??= frame.type;
+			continue;
 		}
 
 		switch (frame.type) {
@@ -319,6 +425,15 @@ export function reduceAssistantMessageFrames(frames: Iterable<AssistantMessageFr
 					json: "",
 				});
 				break;
+			case "toolcall_checkpoint": {
+				const { block, state } = activeBlock(message, states, frame.contentIndex, "toolCall", frame.type);
+				if (block.type !== "toolCall" || state.kind !== "toolCall") {
+					throw new Error("Unreachable tool-call checkpoint state");
+				}
+				state.json = frame.json;
+				block.arguments = parseStreamingJson<ToolCall["arguments"]>(frame.json);
+				break;
+			}
 			case "toolcall_delta": {
 				const { block, state } = activeBlock(message, states, frame.contentIndex, "toolCall", frame.type);
 				if (block.type !== "toolCall" || state.kind !== "toolCall") {

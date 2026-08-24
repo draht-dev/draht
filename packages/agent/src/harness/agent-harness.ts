@@ -2,6 +2,7 @@ import type {
 	Api,
 	AssistantMessage,
 	AssistantMessageEvent,
+	AssistantMessageFrame,
 	DeferredHandle,
 	ImageContent,
 	Message,
@@ -52,7 +53,7 @@ export {
 	UnknownTemplate,
 } from "./result.ts";
 
-import { createAgentHarness } from "./runtime2/harness.ts";
+import { createAgentHarness } from "./runtime/harness.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -321,6 +322,7 @@ export type HarnessEventPayload =
 			runId: string;
 			message: AgentMessage;
 			event: AssistantMessageEvent;
+			frame?: AssistantMessageFrame;
 	  }
 	| { type: "message_end"; runId?: string; message: AgentMessage; entryId?: string }
 	| {

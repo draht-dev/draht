@@ -13,40 +13,40 @@ The review checkpoints at M1, M3, M5, M7 and the final review are mandatory proc
 Read completely, in this order, before editing anything.
 
 - Read **all** of `harness.md`, start to finish. Excerpts, searches, prior conversation, and this handoff are not substitutes.
-- Treat the current `harness.md`, this handoff, and the current runtime2/session/execution APIs as the only architectural sources of truth. Do not rely on any external prototype, archive, or prior conversation.
-- Implement runtime2 **clean-room**: do not inspect Git history for deleted runtime implementations, and do not recover, copy, adapt, or consult removed runtime1 code as a reference.
+- Treat the current `harness.md`, this handoff, and the current runtime/session/execution APIs as the only architectural sources of truth. Do not rely on any external prototype, archive, or prior conversation.
+- Implement runtime **clean-room**: do not inspect Git history for deleted runtime implementations, and do not recover, copy, adapt, or consult removed runtime1 code as a reference.
 - Reread each relevant current source file completely before changing it.
 
 1. `packages/agent/docs/harness.md` — all parts, normative.
 2. `packages/agent/src/harness/agent-harness.ts` — public types and interfaces.
 3. `packages/agent/src/harness/session/types.ts` — durable types (`OperationState`, `RunState`, `RunPhase`, `Generation`, `Deferred`, `ToolBatch`, `ToolCall`, `StructuralDecision`, `NavigationState`, `LaneLastResult`, `SessionReader`, `Write`, `CommitResult`).
 4. `packages/agent/src/harness/session/values.ts` — every typed address and write helper.
-5. `packages/agent/src/harness/runtime2/lane.ts` — `Lane`, `Lane.command`, `LaneCommand`, `accept`.
-6. `packages/agent/src/harness/runtime2/types.ts` — `Config`, `LaneState`, `LaneCommand`, `Drive`, `ProcedureResult`, and `SliceNotImplemented`.
-7. `packages/agent/src/harness/runtime2/harness.ts` — `Harness`, config store, `fault`, `close`.
-8. `packages/agent/src/harness/runtime2/restore.ts` — projection restore.
+5. `packages/agent/src/harness/runtime/lane.ts` — `Lane`, `Lane.command`, `LaneCommand`, `accept`.
+6. `packages/agent/src/harness/runtime/types.ts` — `Config`, `LaneState`, `LaneCommand`, `Drive`, `ProcedureResult`, and `SliceNotImplemented`.
+7. `packages/agent/src/harness/runtime/harness.ts` — `Harness`, config store, `fault`, `close`.
+8. `packages/agent/src/harness/runtime/restore.ts` — projection restore.
 9. `packages/agent/src/harness/execution/effect-gate.ts`, `execution/assistant.ts`, `execution/tools.ts`.
 10. `packages/agent/src/harness/hooks.ts`, `events.ts`, `context.ts`, `result.ts`, `telemetry.ts`.
 11. `packages/agent/src/harness/types.ts` — `AgentHarnessTool`, `AgentHarnessToolInvocation`.
 12. `packages/agent/src/harness/session/testing/storage-decorator.ts`, `instrumented-storage.ts`, `testing/index.ts`.
-13. Tests: `test/harness/runtime2/{accept,harness,lane,restore,watch}.test.ts`, `test/harness/runtime2/test-utils.ts`, `test/harness/execution-primitives.test.ts`, `test/harness/types.test.ts`.
+13. Tests: `test/harness/runtime/{accept,harness,lane,restore,watch}.test.ts`, `test/harness/runtime/test-utils.ts`, `test/harness/execution-primitives.test.ts`, `test/harness/types.test.ts`.
 
 ---
 
 ## 1. Module ownership and import direction
 
 ```
-agent-harness.ts        public types + constructor         -> runtime2/harness.ts
+agent-harness.ts        public types + constructor         -> runtime/harness.ts
 session/**              durable storage + session         imports no harness runtime module
 execution/effect-gate   Gate / GateControl / AbortRequested
 execution/assistant     provider streaming
 execution/tools         tool phase helpers
-runtime2/types.ts       Config / LaneState / LaneCommand / Drive / ProcedureResult
-runtime2/progress.ts    progress channels                 -> runtime2/types, type-only runtime2/lane
-runtime2/drive/*.ts     procedures                        -> runtime2/types, progress, type-only runtime2/lane
-runtime2/drive.ts       the switch                        -> runtime2/drive/*, type-only runtime2/lane   (M7 only)
-runtime2/lane.ts        Lane owner + public surfaces      -> runtime2/drive.ts (value import, M8)
-runtime2/harness.ts     Harness                           -> runtime2/lane.ts
+runtime/types.ts       Config / LaneState / LaneCommand / Drive / ProcedureResult
+runtime/progress.ts    progress channels                 -> runtime/types, type-only runtime/lane
+runtime/drive/*.ts     procedures                        -> runtime/types, progress, type-only runtime/lane
+runtime/drive.ts       the switch                        -> runtime/drive/*, type-only runtime/lane   (M7 only)
+runtime/lane.ts        Lane owner + public surfaces      -> runtime/drive.ts (value import, M8)
+runtime/harness.ts     Harness                           -> runtime/lane.ts
 ```
 
 Rules:
@@ -69,7 +69,7 @@ Rules:
 One installed process-local pass is one `Drive`. `Lane.activeDrive` is the ownership slot. The same object carries the shared completion, effect gate, invocation context, and pass-local wait policy; there is no handle, supervisor, scope, or separate capability object.
 
 ```ts
-// packages/agent/src/harness/runtime2/types.ts
+// packages/agent/src/harness/runtime/types.ts
 export class Drive {
 	readonly operationId: string;
 	readonly completion: Promise<DriveOutcome>;
@@ -116,7 +116,7 @@ async function runGeneration<TContext extends object | undefined>(
 Exact ownership and cleanup stay on `Lane`:
 
 ```ts
-// packages/agent/src/harness/runtime2/lane.ts
+// packages/agent/src/harness/runtime/lane.ts
 /** Package-internal so deterministic tests can install and replace exact owners. */
 activeDrive: Drive | undefined;
 
@@ -269,7 +269,7 @@ The retained pass context is `withoutAbortSignal(installerContext)`; admitted ef
 ### 2.3 Lane.drive claim / join / hydration — approved
 
 ```ts
-// packages/agent/src/harness/runtime2/lane.ts
+// packages/agent/src/harness/runtime/lane.ts
 type DriveClaim =
 	| { kind: "join"; drive: Drive }
 	| { kind: "install"; drive: Drive }
@@ -376,10 +376,10 @@ private mismatch(expected: string, currentOperationId: string | null, last: Lane
 
 ### 2.4 Drive switch contract — approved
 
-**Compile ordering.** `Drive` lives in `runtime2/types.ts` from M1; M2 replaced the initial `StepResult` with `ProcedureResult`. `runtime2/drive.ts` is created in M7, once every procedure module it imports exists. M2–M6 call procedures directly from tests with a concrete `Lane` and `Drive`; public drive stays guarded until M8.
+**Compile ordering.** `Drive` lives in `runtime/types.ts` from M1; M2 replaced the initial `StepResult` with `ProcedureResult`. `runtime/drive.ts` is created in M7, once every procedure module it imports exists. M2–M6 call procedures directly from tests with a concrete `Lane` and `Drive`; public drive stays guarded until M8.
 
 ```ts
-// packages/agent/src/harness/runtime2/types.ts
+// packages/agent/src/harness/runtime/types.ts
 export type LostOwnership = { kind: "lost_ownership" };
 
 export type ProcedureResult =
@@ -399,7 +399,7 @@ export type ProcedureResult =
 There is no global `advance`/`reload` distinction. A procedure must not return `continue` from an unchanged state it does not understand; that is an invariant defect, not a spin-and-hope path. Whether a particular intent commit landed matters only to the straight-line procedure that is about to start its effect. Such a helper returns a small local result such as `"committed" | "state_changed" | LostOwnership`; it does not become drive-loop vocabulary. Tool children likewise use a tool-local result when the batch must know whether a child staged or materialized anything.
 
 ```ts
-// packages/agent/src/harness/runtime2/drive.ts — M7
+// packages/agent/src/harness/runtime/drive.ts — M7
 export async function runDrive<TContext extends object | undefined>(
 	lane: Lane<TContext>, drive: Drive,
 ): Promise<DriveOutcome> {
@@ -461,7 +461,7 @@ Procedures therefore do **not** reread `laneState`, `operationMeta`, `operationS
 Drive-owned commands use one small `Lane` variant so exact-object ownership is checked at commit admission rather than only in an asynchronous planner:
 
 ```ts
-// packages/agent/src/harness/runtime2/lane.ts
+// packages/agent/src/harness/runtime/lane.ts
 async commandDriveOwned<TResult>(
 	drive: Drive,
 	plan: (state: LaneState, reader: SessionReader) =>
@@ -517,7 +517,7 @@ The single-owner contract is explicit: while a harness owns a `Session`, retaine
 ### 2.6 Generation procedure — approved shape, illustrative bodies
 
 ```ts
-// packages/agent/src/harness/runtime2/drive/generation.ts
+// packages/agent/src/harness/runtime/drive/generation.ts
 async function runReadyGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>, drive: Drive, run: RunState,
 	gen: Extract<Generation, { status: "ready" }>,
@@ -578,7 +578,7 @@ Preparation precedes the intent commit; settlement writes under the reserved ids
 ### 2.7 Progress helper — approved
 
 ```ts
-// packages/agent/src/harness/runtime2/progress.ts
+// packages/agent/src/harness/runtime/progress.ts
 export interface ProgressChannel<T> {
 	write(item: T): void;
 	seal(): void;
@@ -860,7 +860,7 @@ return lane.commandDriveOwned(drive, async (state, reader) => {
 
 Standalone structural and navigation procedures use the same visible suffix after their own result-publication writes. They do not call a generic terminal procedure.
 
-`runtime2/drive/terminal.ts` contains only mechanical helpers:
+`runtime/drive/terminal.ts` contains only mechanical helpers:
 
 - `operationCleanupWrites(reader, operationId, operationState, context)` scans typed operation prefixes and returns concrete deletes for meta/state, tool arguments, memos, preparations, tool-output checkpoints, the exact live assistant-frame list, and operation-owned pending entries;
 - `hydrateTerminalOutcome(reader, lastResult, context)` dereferences only entries directly named by the bounded value.
@@ -1132,7 +1132,7 @@ Every milestone uses the same subsections. Public drive stays disabled until M8.
 
 ### Guard that keeps public drive disabled (M1–M7)
 
-`runtime2/lane.ts` keeps throwing `SliceNotImplemented` from `drive`, `requestAbort`, `prompt`, `skill`, `promptFromTemplate`, `compact`, `navigateTree`, `resume`, `abort`, `steer`, `followUp`, `nextRun`, `cancelQueued`, `recordUsage`, `waitForIdle`, `runWhenIdle`, and from `accept({ kind: "compaction" })` / `accept({ kind: "navigation" })`. `requestAbort` stays guarded through M7 even though its primitive lands there: a durable `cancel_requested` marker on an operation that nothing can drive has no exit. Procedures are exercised with a concrete `Lane` and `Drive` constructed in each focused test against directly constructed durable state. **M8 removes those throws in one commit**, after every phase and reconciliation path exists.
+`runtime/lane.ts` keeps throwing `SliceNotImplemented` from `drive`, `requestAbort`, `prompt`, `skill`, `promptFromTemplate`, `compact`, `navigateTree`, `resume`, `abort`, `steer`, `followUp`, `nextRun`, `cancelQueued`, `recordUsage`, `waitForIdle`, `runWhenIdle`, and from `accept({ kind: "compaction" })` / `accept({ kind: "navigation" })`. `requestAbort` stays guarded through M7 even though its primitive lands there: a durable `cancel_requested` marker on an operation that nothing can drive has no exit. Procedures are exercised with a concrete `Lane` and `Drive` constructed in each focused test against directly constructed durable state. **M8 removes those throws in one commit**, after every phase and reconciliation path exists.
 
 ---
 
@@ -1143,7 +1143,7 @@ Every milestone uses the same subsections. Public drive stays disabled until M8.
 **Read completely before editing**
 - `packages/agent/src/harness/execution/breakpoint.ts`
 - `packages/agent/src/harness/agent-harness.ts`
-- `packages/agent/src/harness/runtime2/{lane,types,harness}.ts`
+- `packages/agent/src/harness/runtime/{lane,types,harness}.ts`
 - `packages/protocol/src/harness.ts`, `packages/protocol/src/codec.ts`
 - `packages/coding-agent/src/experimental/harness-wire-adapter.ts`
 - `packages/agent/test/harness/execution-primitives.test.ts`, `test/harness/types.test.ts`
@@ -1159,9 +1159,9 @@ Every milestone uses the same subsections. Public drive stays disabled until M8.
 | Path | Symbols/sections |
 |---|---|
 | `src/harness/agent-harness.ts` | `ActionInfo`, `ActionRequired`; `ActionRequired` member of `RunOutcome`/`CompactionOutcome`/`NavigationOutcome`; `action_required` member of `DriveOutcome`; `SettledResumeOutcome`; `Exclude<…, ActionRequired>` in `TerminalOperationOutcome`; `LaneSnapshot.operation.action`; `AgentLane.peekAction`/`executeAction`/`runToCompletion`; `AgentHarnessOptions.drive` |
-| `src/harness/runtime2/types.ts` | `Config.drive` |
-| `src/harness/runtime2/harness.ts` | `drive: options.drive ?? "automatic"` |
-| `src/harness/runtime2/lane.ts` | the three action-method stubs |
+| `src/harness/runtime/types.ts` | `Config.drive` |
+| `src/harness/runtime/harness.ts` | `drive: options.drive ?? "automatic"` |
+| `src/harness/runtime/lane.ts` | the three action-method stubs |
 | `packages/protocol/src/harness.ts` | `ActionInfoSchema`; `action_required` member of `RunValueSchema`; optional `action` on the operation snapshot schema |
 | `packages/coding-agent/src/experimental/harness-wire-adapter.ts` | `case "action_required":` |
 | `packages/agent/docs/harness.md` | sections listed above |
@@ -1201,19 +1201,19 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 
 **Read completely before editing**
 - `src/harness/execution/effect-gate.ts`, `src/harness/hooks.ts`
-- `src/harness/runtime2/{lane,types,harness,restore}.ts`
+- `src/harness/runtime/{lane,types,harness,restore}.ts`
 - `src/harness/session/{values,types,session,commit,in-memory-storage-state,memory}.ts`
 - `src/harness/session/jsonl/storage.ts`
 - `src/harness/session/testing/{storage-decorator,instrumented-storage,index}.ts`
 - `src/harness/session/testing/conformance/storage.ts`
-- `packages/agent/src/index.ts` (confirm it exports no `runtime2` module, §2.11)
-- `test/harness/runtime2/test-utils.ts`, `test/harness/instrumented-storage.test.ts`, `test/harness/types.test.ts`
+- `packages/agent/src/index.ts` (confirm it exports no `runtime` module, §2.11)
+- `test/harness/runtime/test-utils.ts`, `test/harness/instrumented-storage.test.ts`, `test/harness/types.test.ts`
 
 **Delete** — none.
 
 **Create**
 - `src/harness/session/testing/gating-storage.ts` — `GatingStorage` (§2.10)
-- `src/harness/runtime2/progress.ts` — `ProgressChannel`, `openFrameProgress`, `openToolProgress` (§2.7)
+- `src/harness/runtime/progress.ts` — `ProgressChannel`, `openFrameProgress`, `openToolProgress` (§2.7)
 - `test/harness/gating-storage.test.ts`
 
 **Modify**
@@ -1222,10 +1222,10 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 | `src/harness/execution/effect-gate.ts` | add `Gate`, `GateControl`, `createGate()`, `DriveAbandoned` (§2.2); keep `AbortRequested`; retire `EffectGate.assertOpen` from the procedure-facing surface |
 | `src/harness/hooks.ts` | `runWithGate`/`runToolWithGate` accept `Gate` and use `admit` |
 | `src/harness/result.ts`, `src/harness/agent-harness.ts` | keep tagged/runtime errors in the dependency-neutral result module and re-export them from `agent-harness.ts`; this lets `agent-harness.ts` directly wire `createAgentHarness` while concrete Lane imports remain order-independent |
-| `src/harness/runtime2/types.ts` | add the `Drive` class (completion, gate control, stripped pass Context, installer signal, wait policy, mutable `deferredPermits`, mutable `finalizedOutcome`) and the initial procedure-result union, simplified in M2; move `LaneCommand<TResult>` here from `lane.ts` |
-| `src/harness/runtime2/lane.ts` | make the class `Lane<TContext extends object | undefined>`; expose package-internal `session`, `models`, `hooks`, `emitBatch`, `command`, `readConfig`, and `mismatch` for direct procedure use; add package-internal `activeDrive: Drive | undefined` and `isDriveActive(drive)`; import `LaneCommand` from `types.ts`; remove the obsolete `AcceptanceConfig` type |
-| `src/harness/runtime2/harness.ts` | `Harness<TContext> extends Lane<TContext>`; `buildLane` returns `Lane<TContext>`; pass `HookRegistry` and full `Config` into `Lane` |
-| `src/harness/runtime2/restore.ts` | name `Lane<TContext>` wherever it names `Lane` |
+| `src/harness/runtime/types.ts` | add the `Drive` class (completion, gate control, stripped pass Context, installer signal, wait policy, mutable `deferredPermits`, mutable `finalizedOutcome`) and the initial procedure-result union, simplified in M2; move `LaneCommand<TResult>` here from `lane.ts` |
+| `src/harness/runtime/lane.ts` | make the class `Lane<TContext extends object | undefined>`; expose package-internal `session`, `models`, `hooks`, `emitBatch`, `command`, `readConfig`, and `mismatch` for direct procedure use; add package-internal `activeDrive: Drive | undefined` and `isDriveActive(drive)`; import `LaneCommand` from `types.ts`; remove the obsolete `AcceptanceConfig` type |
+| `src/harness/runtime/harness.ts` | `Harness<TContext> extends Lane<TContext>`; `buildLane` returns `Lane<TContext>`; pass `HookRegistry` and full `Config` into `Lane` |
+| `src/harness/runtime/restore.ts` | name `Lane<TContext>` wherever it names `Lane` |
 | `src/harness/session/types.ts` | add `stats: SessionStats` to `CommitResult` (§2.12) |
 | `src/harness/session/commit.ts` | `PreparedCommit.result` becomes `Omit<CommitResult, "stats">` |
 | `src/harness/session/in-memory-storage-state.ts` | `InMemoryStorageState.applyValidated` returns the post-apply `SessionStats` for Memory and JSONL |
@@ -1237,7 +1237,7 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 | `test/harness/instrumented-storage.test.ts` | the three fabricated literals at `:58`, `:62`, `:74` gain `stats` (§2.12) |
 | `src/harness/session/session.ts` | make `idGenerator` injectable through constructor options (**named API change**; alternative: canonical id normalization in tests) |
 | `src/harness/session/testing/index.ts` | export `GatingStorage`, `CommitDiscarded` |
-| `test/harness/runtime2/test-utils.ts` | construct concrete `Lane<TContext>` and `Drive` objects directly; name concrete contexts wherever a Lane is constructed |
+| `test/harness/runtime/test-utils.ts` | construct concrete `Lane<TContext>` and `Drive` objects directly; name concrete contexts wherever a Lane is constructed |
 
 **Behavior/invariants landed.** `admit` is the only gate check; `GateControl` is owner-held; progress `drain()` propagates write failures; `GatingStorage` parks, waits, releases, and discards deterministically, and after `discard()` no commit reaches the backend by any path; `CommitResult.stats` reports exact post-commit session totals seeded from storage state; `Lane`/`Harness` remain generic in `TContext`; `Drive` is context-type independent; no `any`.
 
@@ -1264,19 +1264,19 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 **Read completely before editing**
 - `src/harness/session/types.ts` (`OperationState`, `LaneLastResult`; `TerminalOperationOutcome` in `agent-harness.ts`)
 - `src/harness/session/values.ts` (all operation cleanup prefix constructors)
-- `src/harness/runtime2/{lane,types,restore,progress}.ts`
-- `test/harness/runtime2/{harness,watch,restore}.test.ts`
+- `src/harness/runtime/{lane,types,restore,progress}.ts`
+- `test/harness/runtime/{harness,watch,restore}.test.ts`
 
 **Create**
-- `src/harness/runtime2/drive/terminal.ts` — `operationCleanupWrites`, `hydrateTerminalOutcome` (§2.9)
-- `test/harness/runtime2/drive-terminal.test.ts`
+- `src/harness/runtime/drive/terminal.ts` — `operationCleanupWrites`, `hydrateTerminalOutcome` (§2.9)
+- `test/harness/runtime/drive-terminal.test.ts`
 
 **Modify**
 | Path | Change |
 |---|---|
-| `src/harness/runtime2/types.ts` | replaced global `StepResult.advance/reload` with `ProcedureResult.continue`; retained waiting, settled, and lost ownership (§2.4) |
-| `src/harness/runtime2/lane.ts` | add `commandDriveOwned`, with exact-Drive identity checked immediately before commit admission (§2.5); document `state` as the live control authority |
-| `src/harness/runtime2/progress.ts` | use the planner's current `LaneState` and `commandDriveOwned`; remove durable lane/operation control reads (§2.7) |
+| `src/harness/runtime/types.ts` | replaced global `StepResult.advance/reload` with `ProcedureResult.continue`; retained waiting, settled, and lost ownership (§2.4) |
+| `src/harness/runtime/lane.ts` | add `commandDriveOwned`, with exact-Drive identity checked immediately before commit admission (§2.5); document `state` as the live control authority |
+| `src/harness/runtime/progress.ts` | use the planner's current `LaneState` and `commandDriveOwned`; remove durable lane/operation control reads (§2.7) |
 | `src/harness/session/session.ts` | document retained mutators as forbidden while a harness owns the Session; no runtime compatibility layer |
 
 **Behavior/invariants landed.** A live `Lane.state` is the sole control-flow authority. Process loss restores it from durable values. Runtime reads dereference payloads only. Exact-Drive replacement between planner return and commit admission declines the commit. Cleanup enumerates every operation-owned address through typed prefix scans and concrete deletes; `pendingNextRun` is not cleanup-owned. Hydration reads only the bounded latest-result value and entries it directly names.
@@ -1284,10 +1284,10 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 **Focused tests**
 | Path | Theme |
 |---|---|
-| `test/harness/runtime2/lane.test.ts` | exact owner replaced after an async planner returns but before commit admission → no write; commit admitted first → write and projection publish complete before replacement |
-| `test/harness/runtime2/progress.test.ts` | current projection permits matching frame/tool progress; terminal or phase movement first → queued write declines; no durable control reads |
-| `test/harness/runtime2/drive-terminal.test.ts` | cleanup completeness for run, compaction, navigation, including leftovers and exact live frame list; `pendingNextRun` excluded; bounded hydration equality for directly constructed latest-result values per kind |
-| `test/harness/runtime2/restore.test.ts` | required durable projection absence/contradiction remains attachment corruption; a stored null leaf remains valid |
+| `test/harness/runtime/lane.test.ts` | exact owner replaced after an async planner returns but before commit admission → no write; commit admitted first → write and projection publish complete before replacement |
+| `test/harness/runtime/progress.test.ts` | current projection permits matching frame/tool progress; terminal or phase movement first → queued write declines; no durable control reads |
+| `test/harness/runtime/drive-terminal.test.ts` | cleanup completeness for run, compaction, navigation, including leftovers and exact live frame list; `pendingNextRun` excluded; bounded hydration equality for directly constructed latest-result values per kind |
+| `test/harness/runtime/restore.test.ts` | required durable projection absence/contradiction remains attachment corruption; a stored null leaf remains valid |
 
 **Commands.** `npm run check` · targeted vitest for every modified test file
 
@@ -1306,30 +1306,30 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 - `test/harness/execution-assistant.test.ts`
 
 **Create**
-- `src/harness/runtime2/drive/checkpoint.ts` — `startRun`, `runCheckpoint`
-- `src/harness/runtime2/drive/generation.ts` — `runGeneration`, `settleAssistant`, `enterConfigurationFailure` (§2.6)
-- `src/harness/runtime2/drive/recovery.ts` — synthetic interrupted-assistant settlement from committed frames, owned beside generation classification
-- `test/harness/runtime2/drive-generation.test.ts`
+- `src/harness/runtime/drive/checkpoint.ts` — `startRun`, `runCheckpoint`
+- `src/harness/runtime/drive/generation.ts` — `runGeneration`, `settleAssistant`, `enterConfigurationFailure` (§2.6)
+- `src/harness/runtime/drive/recovery.ts` — synthetic interrupted-assistant settlement from committed frames, owned beside generation classification
+- `test/harness/runtime/drive-generation.test.ts`
 
-**Do not create `drive.ts` here.** A switch written now would have to import `drive/deferred.ts` (M4), `drive/tools.ts` (M5), `drive/structural.ts` (M6), and `drive/reconcile.ts` (M7), none of which exist — the package would not compile, and stubbing those modules to make it compile would create exactly the half-built graph this plan forbids. `Drive` lives in `runtime2/types.ts` from M1 and `ProcedureResult` from M2, so procedures compile and are tested standalone. `drive.ts` is created once, in M7.
+**Do not create `drive.ts` here.** A switch written now would have to import `drive/deferred.ts` (M4), `drive/tools.ts` (M5), `drive/structural.ts` (M6), and `drive/reconcile.ts` (M7), none of which exist — the package would not compile, and stubbing those modules to make it compile would create exactly the half-built graph this plan forbids. `Drive` lives in `runtime/types.ts` from M1 and `ProcedureResult` from M2, so procedures compile and are tested standalone. `drive.ts` is created once, in M7.
 
 **Modify**
 | Path | Change |
 |---|---|
-| `src/harness/execution/assistant.ts` | use provider-facing `Tool` declarations; observer callbacks receive trailing Context, and `start` also receives the raw start event (or `undefined` for a synthesized lifecycle start) so frame persistence uses pi-ai's codec; the runtime request adapter admits `Models.streamSimple` through `Gate` |
+| `src/harness/execution/assistant.ts` | use provider-facing `Tool` declarations; observer callbacks receive trailing Context, and `start` receives the actual start event; pre-generation errors synthesize no start, while updates or successful completion before start are protocol defects; the runtime request adapter admits `Models.streamSimple` through `Gate` |
 
 **Behavior/invariants landed.** Preparation precedes intent; ids reserved at intent and honoured at settlement; frames enqueued synchronously without per-frame awaits; settlement deletes the frame list; every transition plans from the current owned projection and publishes its exact next projection; checkpoint separates tree parent/leaf from `triggerEntryId` for unprojected custom writes.
 
 **Focused tests**
 | Path | Theme |
 |---|---|
-| `test/harness/runtime2/drive-generation.test.ts` | each procedure invoked directly with a concrete `Lane` and `Drive`, no switch; intent before provider; reserved-id settlement; frame order without storage awaits; orphan recovery without provider call; mixed projecting/unprojected drains (leaf vs trigger); queued inbox mutation before intent → intent commits while preserving it; cancellation before intent → procedure returns `continue` and commits nothing; fence taken by another operation → returns `lost_ownership` and commits nothing; published projection equals fresh restore |
+| `test/harness/runtime/drive-generation.test.ts` | each procedure invoked directly with a concrete `Lane` and `Drive`, no switch; intent before provider; reserved-id settlement; frame order without storage awaits; orphan recovery without provider call; mixed projecting/unprojected drains (leaf vs trigger); queued inbox mutation before intent → intent commits while preserving it; cancellation before intent → procedure returns `continue` and commits nothing; fence taken by another operation → returns `lost_ownership` and commits nothing; published projection equals fresh restore |
 
 **Commands.** `npm run check` · targeted vitest
 
 **Do not implement yet.** `drive.ts`, retry, deferred, tools, structural, reconciliation, public wiring.
 
-**Exit condition / review questions.** Does any planner throw for an expected verification failure? Does any procedure start an effect on a path whose intent did not commit? Does any procedure derive state from a pre-job snapshot? Does `packages/agent/src/harness/runtime2/` contain any module importing a file that does not exist yet?
+**Exit condition / review questions.** Does any planner throw for an expected verification failure? Does any procedure start an effect on a path whose intent did not commit? Does any procedure derive state from a pre-job snapshot? Does `packages/agent/src/harness/runtime/` contain any module importing a file that does not exist yet?
 
 ---
 
@@ -1343,21 +1343,21 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 - `src/harness/agent-harness.ts` (`DriveOptions.waitForRetry`, `pollDeferred`, `DriveOutcome.waiting`)
 
 **Create**
-- `src/harness/runtime2/drive/deferred.ts`
-- `test/harness/runtime2/drive-retry-deferred.test.ts`
+- `src/harness/runtime/drive/deferred.ts`
+- `test/harness/runtime/drive-retry-deferred.test.ts`
 
 **Modify**
 | Path | Change |
 |---|---|
-| `src/harness/runtime2/drive/generation.ts` | retry classification → `retry_wait`; `waitForRetry` policy |
-| `src/harness/runtime2/drive/deferred.ts` | `drive.deferredPermits` consumption lives with the deferred procedure. **Do not touch `drive.ts`** — it does not exist until M7 |
+| `src/harness/runtime/drive/generation.ts` | retry classification → `retry_wait`; `waitForRetry` policy |
+| `src/harness/runtime/drive/deferred.ts` | `drive.deferredPermits` consumption lives with the deferred procedure. **Do not touch `drive.ts`** — it does not exist until M7 |
 
 **Behavior/invariants landed.** No durable armed poll state: `suspended` never becomes a durable pollable `ready`; the permit is consumed by the **fresh intent commit** that reserves new ids; a crash before that commit leaves `suspended` at the same poll number; an unknown-outcome poll does not consume a poll, deletes the old frame list, and mints fresh ids next poll; an unknown-outcome structural attempt *does* consume an attempt.
 
 **Focused tests**
 | Path | Theme |
 |---|---|
-| `test/harness/runtime2/drive-retry-deferred.test.ts` | waiting outcomes; permit consumption point; crash before intent stays suspended; unknown-outcome poll number and id freshness; pass-local permit never mutates caller options |
+| `test/harness/runtime/drive-retry-deferred.test.ts` | waiting outcomes; permit consumption point; crash before intent stays suspended; unknown-outcome poll number and id freshness; pass-local permit never mutates caller options |
 
 **Commands.** `npm run check` · targeted vitest
 
@@ -1378,8 +1378,8 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 - `test/harness/execution-tools.test.ts`, `test/harness/tools.test.ts`
 
 **Create**
-- `src/harness/runtime2/drive/tools.ts` (§2.8)
-- `test/harness/runtime2/drive-tools.test.ts`
+- `src/harness/runtime/drive/tools.ts` (§2.8)
+- `test/harness/runtime/drive-tools.test.ts`
 
 **Modify**
 | Path | Change |
@@ -1393,7 +1393,7 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 **Focused tests**
 | Path | Theme |
 |---|---|
-| `test/harness/runtime2/drive-tools.test.ts` | sequential and parallel two-call batches preserving sibling status; out-of-order completion → source-order placement; safe replay re-executes, unsafe does not; `outcome_ready` never re-executes; memo lifetime; checkpoint cadence; drain before `after_tool`; `addedToolNames` at placement; abort after admission |
+| `test/harness/runtime/drive-tools.test.ts` | sequential and parallel two-call batches preserving sibling status; out-of-order completion → source-order placement; safe replay re-executes, unsafe does not; `outcome_ready` never re-executes; memo lifetime; checkpoint cadence; drain before `after_tool`; `addedToolNames` at placement; abort after admission |
 
 **Commands.** `npm run check` · targeted vitest
 
@@ -1412,7 +1412,7 @@ Only `packages/coding-agent/src/core/cache-stats.ts` (comment) and vendored `hig
 - `src/harness/session/types.ts` (`StructuralDecision`, `SummaryGeneration`, `SummaryContext`, `NavigationState`)
 - `test/harness/{compaction,branch-summarization}.test.ts`
 
-**Ownership split (approved).** `runtime2/drive/structural.ts` owns **all** persistence: the preparation row, the decision, request intent rows, usage writes, the result entry, and the terminal transaction. The compaction modules stay pure generators of summary text and keep their existing behavior for their existing callers; they gain one seam so the runtime can wrap each provider call with commit intent → `gate.admit` → commit usage.
+**Ownership split (approved).** `runtime/drive/structural.ts` owns **all** persistence: the preparation row, the decision, request intent rows, usage writes, the result entry, and the terminal transaction. The compaction modules stay pure generators of summary text and keep their existing behavior for their existing callers; they gain one seam so the runtime can wrap each provider call with commit intent → `gate.admit` → commit usage.
 
 Today `compact()`, `generateSummaryWithUsage()`, and the private `generateTurnPrefixSummary()` each call `completeSimpleWithRetries(models, model, …)` directly, and `generateBranchSummary()` does the same through `GenerateBranchSummaryOptions`.
 
@@ -1460,7 +1460,7 @@ const requestOptions: SimpleStreamOptions = {
 So the drive runner composes the same four, with the signal and telemetry parent taken from the **admitted** context rather than the ambient one:
 
 ```ts
-// packages/agent/src/harness/runtime2/drive/structural.ts — sketch
+// packages/agent/src/harness/runtime/drive/structural.ts — sketch
 const request: NestedRequest = async (label, aiContext, options, context) => {
 	const index = nextRequestIndex(label);                       // 0 for history, 1 for turn_prefix
 	const usageId = lane.session.idGenerator.next();
@@ -1498,7 +1498,7 @@ The difference that matters is what it does **not** hand you. harness.md §3.9 r
 The default `retryingNestedRequest` keeps calling `completeSimpleWithRetries` unchanged, so existing callers are byte-identical and the two paths cannot diverge.
 
 ```ts
-// packages/agent/src/harness/runtime2/drive/structural.ts — module-private, never exported.
+// packages/agent/src/harness/runtime/drive/structural.ts — module-private, never exported.
 
 /** A NestedRequest cannot return without an AssistantMessage, so a declined local intent
  * unwinds to the owning structural procedure. This signal never escapes the module. */
@@ -1542,16 +1542,16 @@ A test must pin the option composition: assert the options reaching a faux `Mode
 Split-turn compaction makes two such calls — `"history"` then `"turn_prefix"` — so it produces two intents and two usage rows, which is exactly what harness.md §3.9 requires (`usageIds` accumulates). `AssistantMessage` already carries `usage`, so the runner persists what it needs without the compaction code knowing about storage.
 
 **Create**
-- `src/harness/runtime2/drive/structural.ts`
-- `test/harness/runtime2/drive-structural.test.ts`
+- `src/harness/runtime/drive/structural.ts`
+- `test/harness/runtime/drive-structural.test.ts`
 
 **Modify**
 | Path | Change |
 |---|---|
-| `src/harness/runtime2/drive/checkpoint.ts` | threshold check keyed by `thresholdCheckedTriggerEntryId` |
+| `src/harness/runtime/drive/checkpoint.ts` | threshold check keyed by `thresholdCheckedTriggerEntryId` |
 | `src/harness/compaction/compaction.ts` | add `NestedRequestLabel`, `NestedRequest`, `retryingNestedRequest`; add an **optional trailing** `request?: NestedRequest` parameter to `compact()`, `generateSummaryWithUsage()`, and the private `generateTurnPrefixSummary()`. Each replaces its `completeSimpleWithRetries(models, model, aiContext, options, retry, callbacks, context)` call with `(request ?? retryingNestedRequest(models, model, retry, callbacks))(label, aiContext, options, context)`, label `"history"` in `generateSummaryWithUsage` and `"turn_prefix"` in `generateTurnPrefixSummary`; `compact()` threads its `request` into both. `models`/`model` stay — they are still needed for `maxTokens`/`contextWindow` budgeting. **No persistence here**: `compaction.ts` never writes `operationPreparation` or any other value |
 | `src/harness/compaction/branch-summarization.ts` | add optional `request?: NestedRequest` to `GenerateBranchSummaryOptions`, defaulted in the destructuring in `generateBranchSummary` to `retryingNestedRequest(models, model, retry, callbacks)`, label `"branch"` |
-| `src/harness/runtime2/drive/structural.ts` | owns **all** persistence: writes `operationPreparation(operationId, taskId)` before the decision hook and revalidates it against its source on resume; commits each request intent and usage; commits the result entry and the terminal transaction |
+| `src/harness/runtime/drive/structural.ts` | owns **all** persistence: writes `operationPreparation(operationId, taskId)` before the decision hook and revalidates it against its source on resume; commits each request intent and usage; commits the result entry and the terminal transaction |
 
 The parameter is optional and defaulted precisely so existing callers are untouched and keep in-helper retry: `packages/coding-agent/src/core/agent-session.ts` (`compact(…)` at the compaction path and `generateBranchSummary(…)`) and `packages/agent/test/harness/compaction.test.ts` compile and behave identically. Only `drive/structural.ts` passes a `request`, and when it does, `retry` is left `undefined` so no retry can happen below the attempt level.
 
@@ -1560,7 +1560,7 @@ The parameter is optional and defaulted precisely so existing callers are untouc
 **Focused tests**
 | Path | Theme |
 |---|---|
-| `test/harness/runtime2/drive-structural.test.ts` | threshold once per boundary; decline/success/crash resume; **one intent and one usage row per provider request**, asserted through `InstrumentedStorage` for a split-turn attempt (two of each, not one); a retryable failure inside an attempt produces **zero** extra provider calls before the attempt-level `retry_wait` commit; crash after request one leaves its usage row and an uncertain attempt; model disappearance between requests fails in band; unknown attempt consumption; preparation written and revalidated by `drive/structural.ts` only; navigation with and without summary |
+| `test/harness/runtime/drive-structural.test.ts` | threshold once per boundary; decline/success/crash resume; **one intent and one usage row per provider request**, asserted through `InstrumentedStorage` for a split-turn attempt (two of each, not one); a retryable failure inside an attempt produces **zero** extra provider calls before the attempt-level `retry_wait` commit; crash after request one leaves its usage row and an uncertain attempt; model disappearance between requests fails in band; unknown attempt consumption; preparation written and revalidated by `drive/structural.ts` only; navigation with and without summary |
 
 **Commands.** `npm run check` · targeted vitest
 
@@ -1575,27 +1575,27 @@ The parameter is optional and defaulted precisely so existing callers are untouc
 **Goal.** Abort, close, fault, external finalization. Graph becomes total.
 
 **Read completely before editing**
-- `src/harness/runtime2/harness.ts` (`fault`, `close`), `src/harness/runtime2/lane.ts` (`seal`)
+- `src/harness/runtime/harness.ts` (`fault`, `close`), `src/harness/runtime/lane.ts` (`seal`)
 - `src/harness/events.ts`, `src/harness/context.ts`
 - `packages/agent/docs/harness.md` §4.6, §4.7, §4.9
 
 **Create**
-- `src/harness/runtime2/drive/reconcile.ts` — reconciliation per phase **and** the package-private cancellation primitive `requestOperationAbort(lane, operationId, context)`
-- `src/harness/runtime2/drive.ts` — the total switch: `runDrive`, `hydrateSettled`, `dispatch`, `dispatchRun` (§2.4). Created **here**, not earlier, because this is the first milestone at which every module it imports (`checkpoint`, `generation`, `deferred`, `tools`, `structural`, `reconcile`, `terminal`, `recovery`) exists
-- `test/harness/runtime2/drive-reconcile.test.ts`
-- `test/harness/runtime2/drive-lifecycle.test.ts`
-- `test/harness/runtime2/drive-switch.test.ts`
+- `src/harness/runtime/drive/reconcile.ts` — reconciliation per phase **and** the package-private cancellation primitive `requestOperationAbort(lane, operationId, context)`
+- `src/harness/runtime/drive.ts` — the total switch: `runDrive`, `hydrateSettled`, `dispatch`, `dispatchRun` (§2.4). Created **here**, not earlier, because this is the first milestone at which every module it imports (`checkpoint`, `generation`, `deferred`, `tools`, `structural`, `reconcile`, `terminal`, `recovery`) exists
+- `test/harness/runtime/drive-reconcile.test.ts`
+- `test/harness/runtime/drive-lifecycle.test.ts`
+- `test/harness/runtime/drive-switch.test.ts`
 
 **Modify**
 | Path | Change |
 |---|---|
-| `src/harness/runtime2/lane.ts` | add package-internal `startDrive`, exact `removeDrive`, `abandonDrive`, finalization notification, and seal behavior; lifecycle tests call these directly with an installed `Drive`. `Lane.requestAbort` and public `drive` keep their `SliceNotImplemented` guards until M8 |
-| `src/harness/runtime2/harness.ts` | fault seals owners; close detaches non-cooperative effects |
+| `src/harness/runtime/lane.ts` | add package-internal `startDrive`, exact `removeDrive`, `abandonDrive`, finalization notification, and seal behavior; lifecycle tests call these directly with an installed `Drive`. `Lane.requestAbort` and public `drive` keep their `SliceNotImplemented` guards until M8 |
+| `src/harness/runtime/harness.ts` | fault seals owners; close detaches non-cooperative effects |
 
 **External finalization — owner notification (approved).** harness.md §4.9 requires the in-process finalizer to notify a live owner *immediately after* the terminal commit, not to let it discover the loss later. Discovery-only would let the task keep a provider stream or tool running until its next lane job, and would risk a second end event.
 
 ```ts
-// packages/agent/src/harness/runtime2/lane.ts
+// packages/agent/src/harness/runtime/lane.ts
 /** Package-internal M7 lifecycle seam; not part of AgentLane. */
 interruptOwnerForFinalization(
 	operationId: string, outcome: TerminalOperationOutcome,
@@ -1634,11 +1634,11 @@ Both methods run on `Lane`; procedures do not remove ownership. The external fin
 **Focused tests**
 | Path | Theme |
 |---|---|
-| `test/harness/runtime2/drive-reconcile.test.ts` | `requestOperationAbort` exercised directly with a concrete `Lane` and `Drive`, not through `Lane.requestAbort`; abort before/after admission at each admit site; mid-batch abort; reconciliation per phase; `aborted` response always under `cancel_requested` |
-| `test/harness/runtime2/drive-switch.test.ts` | `before_drive` runs once, after the current owned operation is inspected; `before_drive` is **not** invoked for an already `cancel_requested` operation; `continue` requires a replaced projection and re-dispatches; unchanged `continue` faults instead of spinning; `lost_ownership` ends the pass with zero further commits; external finalization → `hydrateSettled` returns the same outcome; foreign operation on the fence → `OperationMismatch` |
-| `test/harness/runtime2/drive-lifecycle.test.ts` | close **before** admission returns `Result.err(Closed)`; close **during** admitted work rejects `HarnessClosed` (these two are asserted separately, never with a shared loose matcher); non-cooperative effect; fault sealing; invocation cancel abandons at `effect_pending` with no durable write |
-| `test/harness/runtime2/drive-lifecycle.test.ts` (finalization) | finalize while a **provider stream** is active, and again while a **tool** is active; also let an effect return successfully after committed finalization but before terminal event delivery, and attempt a same-id `drive` during that delivery: the owner's gate closes and its signal fires within committed materialization; the terminal event is delivered before shared completion settles; a cooperative effect rejects with `OperationEnded` and resolves through `drive.finalizedOutcome` **without entering a lane job**, while a successful return racing event delivery reaches `lost_ownership` but still returns `finalizedOutcome`; neither path settles/fails the Drive from the pass continuation or writes after the terminal commit (asserted through `InstrumentedStorage`: zero commit attempts after the terminal one); exactly **one** `run_end` is delivered; `accept` returns `LaneBusy` until both event-delivered settlement and the owner's `finally` have occurred, then succeeds; a non-cooperative effect that ignores the signal delays nothing and produces no unhandled rejection |
-| `test/harness/runtime2/drive-lifecycle.test.ts` (catch boundary) | each signal from admitted work reaches its own arm and no other: `OperationEnded` → settled outcome, no second end event; `AbortRequested` → marker awaited, reconciliation runs, `aborted` under `cancel_requested`; `DriveAbandoned` → pass rejects, state stays `effect_pending`, **zero** durable writes, next drive recovers it as an orphan; `HarnessClosed` and `HarnessFault` → propagate unchanged, no synthetic settlement; `OperationMismatch` from `hydrateSettled` → propagates to `Result.err`. Every arm ends with the owner removed exactly once (§2.1 ordering) |
+| `test/harness/runtime/drive-reconcile.test.ts` | `requestOperationAbort` exercised directly with a concrete `Lane` and `Drive`, not through `Lane.requestAbort`; abort before/after admission at each admit site; mid-batch abort; reconciliation per phase; `aborted` response always under `cancel_requested` |
+| `test/harness/runtime/drive-switch.test.ts` | `before_drive` runs once, after the current owned operation is inspected; `before_drive` is **not** invoked for an already `cancel_requested` operation; `continue` requires a replaced projection and re-dispatches; unchanged `continue` faults instead of spinning; `lost_ownership` ends the pass with zero further commits; external finalization → `hydrateSettled` returns the same outcome; foreign operation on the fence → `OperationMismatch` |
+| `test/harness/runtime/drive-lifecycle.test.ts` | close **before** admission returns `Result.err(Closed)`; close **during** admitted work rejects `HarnessClosed` (these two are asserted separately, never with a shared loose matcher); non-cooperative effect; fault sealing; invocation cancel abandons at `effect_pending` with no durable write |
+| `test/harness/runtime/drive-lifecycle.test.ts` (finalization) | finalize while a **provider stream** is active, and again while a **tool** is active; also let an effect return successfully after committed finalization but before terminal event delivery, and attempt a same-id `drive` during that delivery: the owner's gate closes and its signal fires within committed materialization; the terminal event is delivered before shared completion settles; a cooperative effect rejects with `OperationEnded` and resolves through `drive.finalizedOutcome` **without entering a lane job**, while a successful return racing event delivery reaches `lost_ownership` but still returns `finalizedOutcome`; neither path settles/fails the Drive from the pass continuation or writes after the terminal commit (asserted through `InstrumentedStorage`: zero commit attempts after the terminal one); exactly **one** `run_end` is delivered; `accept` returns `LaneBusy` until both event-delivered settlement and the owner's `finally` have occurred, then succeeds; a non-cooperative effect that ignores the signal delays nothing and produces no unhandled rejection |
+| `test/harness/runtime/drive-lifecycle.test.ts` (catch boundary) | each signal from admitted work reaches its own arm and no other: `OperationEnded` → settled outcome, no second end event; `AbortRequested` → marker awaited, reconciliation runs, `aborted` under `cancel_requested`; `DriveAbandoned` → pass rejects, state stays `effect_pending`, **zero** durable writes, next drive recovers it as an orphan; `HarnessClosed` and `HarnessFault` → propagate unchanged, no synthetic settlement; `OperationMismatch` from `hydrateSettled` → propagates to `Result.err`. Every arm ends with the owner removed exactly once (§2.1 ordering) |
 
 **Commands.** `npm run check` · targeted vitest
 
@@ -1654,34 +1654,34 @@ Both methods run on `Lane`; procedures do not remove ownership. The external fin
 
 **Read completely before editing**
 - `src/harness/agent-harness.ts` (`AgentLane`, `AgentHarness`)
-- `src/harness/runtime2/lane.ts` (all `SliceNotImplemented` stubs)
-- `test/harness/runtime2/{accept,lane,harness,watch}.test.ts`
+- `src/harness/runtime/lane.ts` (all `SliceNotImplemented` stubs)
+- `test/harness/runtime/{accept,lane,harness,watch}.test.ts`
 
 **Create**
-- `test/harness/runtime2/drive-ownership.test.ts`
-- `test/harness/runtime2/drive-surfaces.test.ts`
-- `test/harness/runtime2/drive-crash-matrix.test.ts`
+- `test/harness/runtime/drive-ownership.test.ts`
+- `test/harness/runtime/drive-surfaces.test.ts`
+- `test/harness/runtime/drive-crash-matrix.test.ts`
 
 **Modify**
 | Path | Change |
 |---|---|
-| `src/harness/runtime2/lane.ts` | **ordered**: (1) `accept` accepts `kind: "compaction"` and `kind: "navigation"` — today both throw `SliceNotImplemented` at the top of `accept`, so a standalone structural operation cannot be admitted at all; (2) implement the public `drive` claim/join/hydration surface (§2.3) using M7's internal lifecycle methods; `accept` returns `LaneBusy` while an owner exists; (3) expose `requestAbort` by delegating to the M7 primitive; (4) only then the convenience compositions `prompt`, `skill`, `promptFromTemplate`, `compact`, `navigateTree`, `resume`, `abort`, `steer`, `followUp`, `nextRun`, `cancelQueued`, `recordUsage`, `waitForIdle`, `runWhenIdle`; `inspectExecution` reports `running` when owned |
-| `src/harness/runtime2/restore.ts` | restore every phase projection |
+| `src/harness/runtime/lane.ts` | **ordered**: (1) `accept` accepts `kind: "compaction"` and `kind: "navigation"` — today both throw `SliceNotImplemented` at the top of `accept`, so a standalone structural operation cannot be admitted at all; (2) implement the public `drive` claim/join/hydration surface (§2.3) using M7's internal lifecycle methods; `accept` returns `LaneBusy` while an owner exists; (3) expose `requestAbort` by delegating to the M7 primitive; (4) only then the convenience compositions `prompt`, `skill`, `promptFromTemplate`, `compact`, `navigateTree`, `resume`, `abort`, `steer`, `followUp`, `nextRun`, `cancelQueued`, `recordUsage`, `waitForIdle`, `runWhenIdle`; `inspectExecution` reports `running` when owned |
+| `src/harness/runtime/restore.ts` | restore every phase projection |
 | `src/harness/telemetry.ts` | drive spans |
-| `src/harness/runtime2/types.ts` | `SliceNotImplemented` retained only for `watchSession` |
+| `src/harness/runtime/types.ts` | `SliceNotImplemented` retained only for `watchSession` |
 
 `compact()` and `navigateTree()` are *accept + drive*, so they cannot be written before `accept` admits their operation kinds. Doing the composition first would force a second admission path that only the convenience method can reach.
 
-**Behavior/invariants landed.** Owner-before-idle claim order; join observes delivered events; usage row `seq` from `CommitResult`, and usage-event totals read `commit.stats.usage` inside `events(commit)` — no process accumulator (§2.12); every hook/event/observation carries the emitting Context. Before public exposure, pi-ai provider streams must guarantee that a queued start event's partial cannot be mutated before `assistantMessageEventToFrame` consumes it; pin this with a back-to-back shared-partial provider test that does not yield between start and block-start publication. `AgentHarness.watchSession` is **explicitly deferred** and keeps its rejection.
+**Behavior/invariants landed.** Owner-before-idle claim order; join observes delivered events; usage row `seq` from `CommitResult`, and usage-event totals read `commit.stats.usage` inside `events(commit)` — no process accumulator (§2.12); every hook/event/observation carries the emitting Context. Pi-ai's per-stream frame encoder treats provider `partial` as a shared live helper and removes already-covered queued deltas without cloning the growing message per event; the crash matrix pins synchronous shared-partial bursts. `AgentHarness.watchSession` is **explicitly deferred** and keeps its rejection.
 
 **Focused tests**
 | Path | Theme |
 |---|---|
-| `test/harness/runtime2/drive-ownership.test.ts` | join before hydration; same-id join observes delivered events; mismatch ids. Both paths use the same result/error adapter: normal outcome → `Result.ok`; `OperationMismatch` and `Closed` → `Result.err`; `HarnessClosed`, `HarnessFault`, `DriveAbandoned` → rejection. Installer cancellation rejects installer and existing joiners with `DriveAbandoned`; joiner cancellation rejects only that joiner and leaves the Drive installed |
-| `test/harness/runtime2/drive-ownership.test.ts` (independent completion/removal) | run each case with a **non-cooperative provider** and again with a **non-cooperative tool** that ignores its signal and never settles. **External finalization**: after the terminal event is delivered, public completion resolves with the finalizer's outcome while the effect is still stuck; `accept` returns `LaneBusy` throughout; exactly **one** `run_end` is delivered; after the effect finally returns the owner clears and `accept` succeeds. **Invocation abandonment**: the public promise rejects `DriveAbandoned`, a new `drive` claims the lane **before** the old effect returns, durable state is still `effect_pending`, and the new pass runs orphan recovery. **Close/fault**: resolves without waiting; public promises reject `HarnessClosed`/`HarnessFault`. In every case the detached pass produces no unhandled rejection, and `Drive.settle`/`Drive.fail` and exact `removeDrive` remain idempotent |
-| `test/harness/runtime2/drive-ownership.test.ts` (ABA fencing) | abandon an invocation whose effect is still running, let a **replacement owner claim the same `operationId`**, then let the old effect return: its transition planner and its progress writes both decline via `isDriveActive` even though the operation id is unchanged; zero commits attributed to the old task (asserted through `InstrumentedStorage`); the replacement owner is **not** cleared by the old task's cleanup; the replacement's own commits succeed |
-| `test/harness/runtime2/drive-surfaces.test.ts` | `accept({kind:"compaction"})` and `accept({kind:"navigation"})` admit and drive before any convenience method is used; convenience = accept + drive; `resume`; `requestAbort` through the public method reaches the M7 primitive; `Closed` returned not thrown; listeners settle before the next procedure hook; usage totals per settlement equal `getStats()`; **reopen a session with historical usage** → the first new usage event's totals include the history; **two lanes committing usage concurrently** → each event's totals match its own commit position and the final totals equal `getStats()`; Context lineage |
-| `test/harness/runtime2/drive-crash-matrix.test.ts` | release N commits → discard → reopen → drive, for every N in every phase path; every gated boundary exposes its exact committed writes; gated vs ungated byte-identical writes; a provider that publishes start and then mutates one shared partial for block start without yielding still persists a reducible immutable start frame |
+| `test/harness/runtime/drive-ownership.test.ts` | join before hydration; same-id join observes delivered events; mismatch ids. Both paths use the same result/error adapter: normal outcome → `Result.ok`; `OperationMismatch` and `Closed` → `Result.err`; `HarnessClosed`, `HarnessFault`, `DriveAbandoned` → rejection. Installer cancellation rejects installer and existing joiners with `DriveAbandoned`; joiner cancellation rejects only that joiner and leaves the Drive installed |
+| `test/harness/runtime/drive-ownership.test.ts` (independent completion/removal) | run each case with a **non-cooperative provider** and again with a **non-cooperative tool** that ignores its signal and never settles. **External finalization**: after the terminal event is delivered, public completion resolves with the finalizer's outcome while the effect is still stuck; `accept` returns `LaneBusy` throughout; exactly **one** `run_end` is delivered; after the effect finally returns the owner clears and `accept` succeeds. **Invocation abandonment**: the public promise rejects `DriveAbandoned`, a new `drive` claims the lane **before** the old effect returns, durable state is still `effect_pending`, and the new pass runs orphan recovery. **Close/fault**: resolves without waiting; public promises reject `HarnessClosed`/`HarnessFault`. In every case the detached pass produces no unhandled rejection, and `Drive.settle`/`Drive.fail` and exact `removeDrive` remain idempotent |
+| `test/harness/runtime/drive-ownership.test.ts` (ABA fencing) | abandon an invocation whose effect is still running, let a **replacement owner claim the same `operationId`**, then let the old effect return: its transition planner and its progress writes both decline via `isDriveActive` even though the operation id is unchanged; zero commits attributed to the old task (asserted through `InstrumentedStorage`); the replacement owner is **not** cleared by the old task's cleanup; the replacement's own commits succeed |
+| `test/harness/runtime/drive-surfaces.test.ts` | `accept({kind:"compaction"})` and `accept({kind:"navigation"})` admit and drive before any convenience method is used; convenience = accept + drive; `resume`; `requestAbort` through the public method reaches the M7 primitive; `Closed` returned not thrown; listeners settle before the next procedure hook; usage totals per settlement equal `getStats()`; **reopen a session with historical usage** → the first new usage event's totals include the history; **two lanes committing usage concurrently** → each event's totals match its own commit position and the final totals equal `getStats()`; Context lineage |
+| `test/harness/runtime/drive-crash-matrix.test.ts` | release N commits → discard → reopen → drive, for every N in every phase path; every gated boundary exposes its exact committed writes; gated vs ungated byte-identical writes; a provider that publishes start, block start, and deltas synchronously against one shared live partial persists a reducible non-duplicated frame sequence |
 
 **Commands.** `npm run check` · `./test.sh`
 
@@ -1699,29 +1699,29 @@ Both methods run on `Lane`; procedures do not remove ownership. The external fin
 Milestone in parentheses where creation order matters.
 
 **Create**
-- `packages/agent/src/harness/runtime2/drive.ts` (**M7** — not before; it imports every procedure module)
-- `packages/agent/src/harness/runtime2/drive/checkpoint.ts`
-- `packages/agent/src/harness/runtime2/drive/generation.ts`
-- `packages/agent/src/harness/runtime2/drive/recovery.ts`
-- `packages/agent/src/harness/runtime2/drive/deferred.ts`
-- `packages/agent/src/harness/runtime2/drive/tools.ts`
-- `packages/agent/src/harness/runtime2/drive/structural.ts`
-- `packages/agent/src/harness/runtime2/drive/reconcile.ts`
-- `packages/agent/src/harness/runtime2/drive/terminal.ts`
-- `packages/agent/src/harness/runtime2/progress.ts`
+- `packages/agent/src/harness/runtime/drive.ts` (**M7** — not before; it imports every procedure module)
+- `packages/agent/src/harness/runtime/drive/checkpoint.ts`
+- `packages/agent/src/harness/runtime/drive/generation.ts`
+- `packages/agent/src/harness/runtime/drive/recovery.ts`
+- `packages/agent/src/harness/runtime/drive/deferred.ts`
+- `packages/agent/src/harness/runtime/drive/tools.ts`
+- `packages/agent/src/harness/runtime/drive/structural.ts`
+- `packages/agent/src/harness/runtime/drive/reconcile.ts`
+- `packages/agent/src/harness/runtime/drive/terminal.ts`
+- `packages/agent/src/harness/runtime/progress.ts`
 - `packages/agent/src/harness/session/testing/gating-storage.ts`
 - `packages/agent/test/harness/gating-storage.test.ts`
-- `packages/agent/test/harness/runtime2/drive-terminal.test.ts`
-- `packages/agent/test/harness/runtime2/drive-generation.test.ts`
-- `packages/agent/test/harness/runtime2/drive-retry-deferred.test.ts`
-- `packages/agent/test/harness/runtime2/drive-tools.test.ts`
-- `packages/agent/test/harness/runtime2/drive-structural.test.ts`
-- `packages/agent/test/harness/runtime2/drive-reconcile.test.ts`
-- `packages/agent/test/harness/runtime2/drive-switch.test.ts`
-- `packages/agent/test/harness/runtime2/drive-lifecycle.test.ts`
-- `packages/agent/test/harness/runtime2/drive-ownership.test.ts`
-- `packages/agent/test/harness/runtime2/drive-surfaces.test.ts`
-- `packages/agent/test/harness/runtime2/drive-crash-matrix.test.ts`
+- `packages/agent/test/harness/runtime/drive-terminal.test.ts`
+- `packages/agent/test/harness/runtime/drive-generation.test.ts`
+- `packages/agent/test/harness/runtime/drive-retry-deferred.test.ts`
+- `packages/agent/test/harness/runtime/drive-tools.test.ts`
+- `packages/agent/test/harness/runtime/drive-structural.test.ts`
+- `packages/agent/test/harness/runtime/drive-reconcile.test.ts`
+- `packages/agent/test/harness/runtime/drive-switch.test.ts`
+- `packages/agent/test/harness/runtime/drive-lifecycle.test.ts`
+- `packages/agent/test/harness/runtime/drive-ownership.test.ts`
+- `packages/agent/test/harness/runtime/drive-surfaces.test.ts`
+- `packages/agent/test/harness/runtime/drive-crash-matrix.test.ts`
 
 **Modify**
 - `packages/agent/src/harness/agent-harness.ts`
@@ -1735,10 +1735,10 @@ Milestone in parentheses where creation order matters.
 - `packages/agent/src/harness/compaction/compaction.ts`
 - `packages/agent/src/harness/compaction/branch-summarization.ts`
 - `packages/agent/src/harness/tools/bash.ts`
-- `packages/agent/src/harness/runtime2/lane.ts`
-- `packages/agent/src/harness/runtime2/harness.ts`
-- `packages/agent/src/harness/runtime2/types.ts`
-- `packages/agent/src/harness/runtime2/restore.ts`
+- `packages/agent/src/harness/runtime/lane.ts`
+- `packages/agent/src/harness/runtime/harness.ts`
+- `packages/agent/src/harness/runtime/types.ts`
+- `packages/agent/src/harness/runtime/restore.ts`
 - `packages/agent/src/harness/session/session.ts`
 - `packages/agent/src/harness/session/types.ts`
 - `packages/agent/src/harness/session/commit.ts`
@@ -1752,12 +1752,12 @@ Milestone in parentheses where creation order matters.
 - `packages/session-backends/sqlite-node/test/storage.test.ts`
 - `packages/agent/test/harness/execution-primitives.test.ts`
 - `packages/agent/test/harness/types.test.ts`
-- `packages/agent/test/harness/runtime2/test-utils.ts`
-- `packages/agent/test/harness/runtime2/accept.test.ts`
-- `packages/agent/test/harness/runtime2/lane.test.ts`
-- `packages/agent/test/harness/runtime2/harness.test.ts`
-- `packages/agent/test/harness/runtime2/restore.test.ts`
-- `packages/agent/test/harness/runtime2/watch.test.ts`
+- `packages/agent/test/harness/runtime/test-utils.ts`
+- `packages/agent/test/harness/runtime/accept.test.ts`
+- `packages/agent/test/harness/runtime/lane.test.ts`
+- `packages/agent/test/harness/runtime/harness.test.ts`
+- `packages/agent/test/harness/runtime/restore.test.ts`
+- `packages/agent/test/harness/runtime/watch.test.ts`
 - `packages/agent/docs/harness.md`
 - `packages/agent/docs/work-packages/02-atomic-run-acceptance.md`
 - `packages/agent/docs/work-packages/03-remove-drive-deadlines.md`
@@ -1797,10 +1797,10 @@ npm run check
 grep -rn "Breakpoint\|action_required\|ActionInfo\|ActionRequired\|peekAction\|executeAction\|runToCompletion\|SettledResumeOutcome" \
   packages/*/src packages/*/test packages/agent/docs/harness.md
 grep -rn "delete_prefix\|interface Deps\b" packages/agent/src
-grep -rn "SliceNotImplemented" packages/agent/src/harness/runtime2   # watchSession only
-grep -rn ": any\b\|<any>\|as unknown as\|@ts-expect-error" packages/agent/src/harness/runtime2
-grep -rn 'kind: "advance"\|kind: "reload"' packages/agent/src/harness/runtime2   # must stay empty
-grep -n "runtime2" packages/agent/src/index.ts                   # must stay empty (§2.11)
+grep -rn "SliceNotImplemented" packages/agent/src/harness/runtime   # watchSession only
+grep -rn ": any\b\|<any>\|as unknown as\|@ts-expect-error" packages/agent/src/harness/runtime
+grep -rn 'kind: "advance"\|kind: "reload"' packages/agent/src/harness/runtime   # must stay empty
+grep -n "runtime" packages/agent/src/index.ts                   # must stay empty (§2.11)
 # CommitResult.stats reaches all THREE backends, not just the two in packages/agent:
 grep -rn "firstSeq" packages/agent/src packages/agent/test packages/session-backends
 grep -rn "prepared.result" packages/agent/src packages/session-backends   # each composes stats

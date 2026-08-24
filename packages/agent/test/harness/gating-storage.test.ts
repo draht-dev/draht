@@ -4,7 +4,7 @@ import { MemoryStorage } from "../../src/harness/session/memory.ts";
 import { CommitDiscarded, GatingStorage, InstrumentedStorage } from "../../src/harness/session/testing/index.ts";
 import type { CommitResult, Write } from "../../src/harness/session/types.ts";
 import * as storedValues from "../../src/harness/session/values.ts";
-import { deferred } from "./runtime2/test-utils.ts";
+import { deferred } from "./runtime/test-utils.ts";
 
 class ControlledLandingStorage extends MemoryStorage {
 	readonly started = deferred();

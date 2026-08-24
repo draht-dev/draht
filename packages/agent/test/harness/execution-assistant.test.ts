@@ -148,7 +148,7 @@ describe("streamHarnessAssistant", () => {
 					start(message, event) {
 						order.push("observer_start");
 						starts.push(message);
-						startEventType = event?.type;
+						startEventType = event.type;
 					},
 					update(message) {
 						order.push("observer_update");
@@ -243,44 +243,29 @@ describe("streamHarnessAssistant", () => {
 		expect(lifecycle.filter((event) => event === "update").length).toBeGreaterThan(0);
 	});
 
-	it("synthesizes start from the settled response when the stream omits it", async () => {
-		const events: string[] = [];
+	it("rejects a successful terminal event before start", async () => {
 		const final = assistant("complete");
 		let options: SimpleStreamOptions | undefined;
-		let synthesizedStartEvent: unknown = "unset";
-		const result = await streamHarnessAssistant(
-			[user("prompt")],
-			{
-				model: model(),
-				systemPrompt: "system",
-				thinkingLevel: "off",
-				streamOptions: {},
-				toProviderMessages,
-				request: (_context, requestOptions) => {
-					options = requestOptions;
-					const stream = createAssistantMessageEventStream();
-					queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: final }));
-					return stream;
+		await expect(
+			streamHarnessAssistant(
+				[user("prompt")],
+				{
+					model: model(),
+					systemPrompt: "system",
+					thinkingLevel: "off",
+					streamOptions: {},
+					toProviderMessages,
+					request: (_context, requestOptions) => {
+						options = requestOptions;
+						const stream = createAssistantMessageEventStream();
+						queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: final }));
+						return stream;
+					},
+					observer: { start() {}, update() {}, end() {} },
 				},
-				observer: {
-					start(message, event) {
-						events.push(`start:${message.stopReason}`);
-						synthesizedStartEvent = event;
-					},
-					update() {
-						events.push("update");
-					},
-					end(message) {
-						events.push(`end:${message.stopReason}`);
-					},
-				},
-			},
-			BACKGROUND_CONTEXT,
-		);
-
-		expect(result).toBe(final);
-		expect(events).toEqual(["start:stop", "end:stop"]);
-		expect(synthesizedStartEvent).toBeUndefined();
+				BACKGROUND_CONTEXT,
+			),
+		).rejects.toThrow("done before start");
 		expect(options).not.toHaveProperty("reasoning");
 	});
 
@@ -297,7 +282,10 @@ describe("streamHarnessAssistant", () => {
 				toProviderMessages,
 				request: () => {
 					const stream = createAssistantMessageEventStream();
-					queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: final }));
+					queueMicrotask(() => {
+						stream.push({ type: "start", partial: { ...final, content: [], stopReason: "pending" } });
+						stream.push({ type: "done", reason: "stop", message: final });
+					});
 					return stream;
 				},
 				afterResponse: async () => {
@@ -335,8 +323,8 @@ describe("streamHarnessAssistant", () => {
 					return stream;
 				},
 				observer: {
-					start(message) {
-						events.push(`start:${message.stopReason}`);
+					start() {
+						throw new Error("pre-generation error must not synthesize start");
 					},
 					update() {
 						events.push("update");
@@ -350,6 +338,6 @@ describe("streamHarnessAssistant", () => {
 		);
 
 		expect(result).toBe(final);
-		expect(events).toEqual(["start:error", "end:error"]);
+		expect(events).toEqual(["end:error"]);
 	});
 });

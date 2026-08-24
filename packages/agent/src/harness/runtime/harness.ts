@@ -32,7 +32,7 @@ import { type Config, type LaneState, SliceNotImplemented } from "./types.ts";
 
 type GlobalConfigProperty = GlobalConfigEventPayload["property"];
 
-/** Runtime2 implementation of AgentHarness. The harness is the main lane. */
+/** Runtime implementation of AgentHarness. The harness is the main lane. */
 export class Harness<TContext extends object | undefined> extends Lane<TContext> implements AgentHarness<TContext> {
 	readonly events: HarnessEventBus;
 	readonly seed: LaneConfiguration;
@@ -291,7 +291,7 @@ export class Harness<TContext extends object | undefined> extends Lane<TContext>
 	}
 }
 
-/** Attach runtime2 without starting provider, tool, hook, or timer effects. */
+/** Attach runtime without starting provider, tool, hook, or timer effects. */
 export async function createAgentHarness<TContext extends object | undefined = object | undefined>(
 	options: AgentHarnessOptions<TContext>,
 	context: Context,

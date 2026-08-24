@@ -435,7 +435,7 @@ Assistant partial durability is the first built-in list consumer:
 const frames = pendingAssistantFrames(operationId, responseEntryId);
 ```
 
-`AssistantMessageFrame`, `assistantMessageEventToFrame()`, and `reduceAssistantMessageFrames()` come from `@draht/ai`. Do not define a second frame codec or reducer.
+`AssistantMessageFrame`, `AssistantMessageFrameEncoder`, and `reduceAssistantMessageFrames()` come from `@draht/ai`. Do not define a second frame codec or reducer.
 
 For every convertible non-terminal provider event, the assistant procedure:
 

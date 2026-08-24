@@ -4,9 +4,9 @@ import type { WatchHandle } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT, type Context, withAbortSignal } from "../../../src/harness/context.ts";
 import { HookRegistry } from "../../../src/harness/hooks.ts";
-import { Lane } from "../../../src/harness/runtime2/lane.ts";
-import { openFrameProgress, openToolProgress } from "../../../src/harness/runtime2/progress.ts";
-import { type Config, Drive, type LaneState as RuntimeLaneState } from "../../../src/harness/runtime2/types.ts";
+import { Lane } from "../../../src/harness/runtime/lane.ts";
+import { openFrameProgress, openToolProgress } from "../../../src/harness/runtime/progress.ts";
+import { type Config, Drive, type LaneState as RuntimeLaneState } from "../../../src/harness/runtime/types.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type { RunState, Session, Write } from "../../../src/harness/session/types.ts";
@@ -131,7 +131,7 @@ afterEach(async () => {
 	for (const session of sessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
-describe("runtime2 active drive ownership", () => {
+describe("runtime active drive ownership", () => {
 	it("settles or rejects the shared completion without exposing owner controls through the gate", async () => {
 		const settled = new Drive({ operationId }, BACKGROUND_CONTEXT);
 		const outcome = { kind: "waiting", operationId, reason: "retry", notBefore: 10 } as const;
@@ -166,7 +166,7 @@ describe("runtime2 active drive ownership", () => {
 	});
 });
 
-describe("runtime2 progress channels", () => {
+describe("runtime progress channels", () => {
 	it("enqueues assistant frames in order, seals admission, and exposes the settlement delete", async () => {
 		const responseEntryId = "response";
 		const { lane, drive } = await createFixture(

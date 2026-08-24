@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
-import { restoreLane, restoreSession } from "../../../src/harness/runtime2/restore.ts";
+import { restoreLane, restoreSession } from "../../../src/harness/runtime/restore.ts";
 import { MemorySessionRepo, MemoryStorage } from "../../../src/harness/session/memory.ts";
 import type { LaneConfiguration, OperationMeta, RunState, Session } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
@@ -50,7 +50,7 @@ afterEach(async () => {
 	for (const repo of repos.splice(0)) await repo.close(BACKGROUND_CONTEXT);
 });
 
-describe("runtime2 lane restore", () => {
+describe("runtime lane restore", () => {
 	it("restores an idle lane and its latest terminal result", async () => {
 		const session = await createSession();
 		const result = {

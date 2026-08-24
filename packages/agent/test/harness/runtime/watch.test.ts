@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type HarnessEvent, HarnessFault, type WatchHandle } from "../../../src/harness/agent-harness.ts";
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT, type Context, createContextKey, withContextValue } from "../../../src/harness/context.ts";
-import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
+import { createAgentHarness, Harness } from "../../../src/harness/runtime/harness.ts";
 import * as sessionWrites from "../../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
@@ -75,7 +75,7 @@ async function attach(session: Session): Promise<Harness<object | undefined>> {
 	const models = createModels();
 	models.setProvider(provider.provider);
 	const { harness } = await createAgentHarness({ session, models, model: provider.getModel() }, BACKGROUND_CONTEXT);
-	if (!(harness instanceof Harness)) throw new Error("Expected runtime2 Harness");
+	if (!(harness instanceof Harness)) throw new Error("Expected runtime Harness");
 	return harness;
 }
 
@@ -97,7 +97,7 @@ afterEach(async () => {
 	for (const session of sessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
-describe("runtime2 lane watch", () => {
+describe("runtime lane watch", () => {
 	it("captures a compaction-bounded transcript and isolates the returned snapshot", async () => {
 		const session = await createSession();
 		await commit(session, [

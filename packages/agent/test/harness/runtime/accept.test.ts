@@ -4,7 +4,7 @@ import { type HarnessEvent, HarnessFault, type OperationRequest } from "../../..
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT, createContextKey, withContextValue } from "../../../src/harness/context.ts";
 import type { Result } from "../../../src/harness/result.ts";
-import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
+import { createAgentHarness, Harness } from "../../../src/harness/runtime/harness.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../../src/harness/session/testing/index.ts";
@@ -61,7 +61,7 @@ async function createHarness(
 	await beforeCreate?.(created.session);
 	const harnessOptions = { ...options(created.session), resources };
 	const { harness } = await createAgentHarness(harnessOptions, BACKGROUND_CONTEXT);
-	if (!(harness instanceof Harness)) throw new Error("Expected runtime2 Harness");
+	if (!(harness instanceof Harness)) throw new Error("Expected runtime Harness");
 	created.storage.clearCommitAttempts();
 	return { harness, ...created, models: harnessOptions.models };
 }
@@ -75,7 +75,7 @@ afterEach(async () => {
 	for (const session of sessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
-describe("runtime2 atomic run acceptance", () => {
+describe("runtime atomic run acceptance", () => {
 	it.each([
 		["text", { kind: "prompt", prompt: "hello" } satisfies OperationRequest, [{ type: "text", text: "hello" }]],
 		[
@@ -313,7 +313,7 @@ describe("runtime2 atomic run acceptance", () => {
 			BACKGROUND_CONTEXT,
 		);
 		const { harness } = await createAgentHarness(options(session), BACKGROUND_CONTEXT);
-		if (!(harness instanceof Harness)) throw new Error("Expected runtime2 Harness");
+		if (!(harness instanceof Harness)) throw new Error("Expected runtime Harness");
 		storage.failure = new Error("accept failed");
 
 		await expect(harness.accept({ kind: "prompt", prompt: "hello" }, BACKGROUND_CONTEXT)).rejects.toBeInstanceOf(

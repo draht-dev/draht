@@ -5,8 +5,8 @@ import { AgentHarness, HarnessClosed, HarnessFault } from "../../../src/harness/
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
 import type { Result } from "../../../src/harness/result.ts";
-import { createAgentHarness, Harness } from "../../../src/harness/runtime2/harness.ts";
-import { Lane } from "../../../src/harness/runtime2/lane.ts";
+import { createAgentHarness, Harness } from "../../../src/harness/runtime/harness.ts";
+import { Lane } from "../../../src/harness/runtime/lane.ts";
 import { MemorySessionRepo, type MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type {
@@ -59,7 +59,7 @@ async function configureMain(session: Session, configuration: LaneConfiguration 
 
 async function createStorageSession(storage: MemoryStorage): Promise<Session> {
 	const session = new StorageBackedSession(
-		{ id: `runtime2-storage-${standaloneSessions.length}`, createdAt: 1, storageVersion: 1 },
+		{ id: `runtime-storage-${standaloneSessions.length}`, createdAt: 1, storageVersion: 1 },
 		storage,
 	);
 	standaloneSessions.push(session);
@@ -143,7 +143,7 @@ afterEach(async () => {
 	for (const session of standaloneSessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
-describe("runtime2 AgentHarness", () => {
+describe("runtime AgentHarness", () => {
 	it("is selected by the public AgentHarness constructor", async () => {
 		const session = await createSession();
 
@@ -608,7 +608,7 @@ describe("runtime2 AgentHarness", () => {
 	it("faults without publishing a lane when creation commit fails", async () => {
 		const { session, storage } = await createFailingSession();
 		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
-		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		if (!(harness instanceof Harness)) throw new Error("missing runtime harness");
 		const failure = new Error("create lane failed");
 		storage.failure = failure;
 
@@ -646,7 +646,7 @@ describe("runtime2 AgentHarness", () => {
 		const storage = new ControlledMemoryStorage();
 		const session = await createStorageSession(storage);
 		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
-		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		if (!(harness instanceof Harness)) throw new Error("missing runtime harness");
 		const commitStarted = deferred();
 		const releaseCommit = deferred();
 		storage.beforeNextCommit = async () => {
@@ -851,7 +851,7 @@ describe("runtime2 AgentHarness", () => {
 			},
 		]);
 		const pendingId = await harness.sessionTree.appendCustomEntry("note", { text: "queued" }, BACKGROUND_CONTEXT);
-		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		if (!(harness instanceof Harness)) throw new Error("missing runtime harness");
 		const updatedState = harness.state.operation?.state;
 		if (updatedState?.kind !== "run") throw new Error("missing updated run state");
 		expect(updatedState.inbox.writes).toEqual([pendingId]);
@@ -947,10 +947,10 @@ describe("runtime2 AgentHarness", () => {
 	it("faults queued lane work before releasing a failed mutation", async () => {
 		const { session, storage } = await createFailingSession();
 		const { harness } = await createAgentHarness(modelOptions(session), BACKGROUND_CONTEXT);
-		if (!(harness instanceof Harness)) throw new Error("missing runtime2 harness");
+		if (!(harness instanceof Harness)) throw new Error("missing runtime harness");
 		unwrap(await harness.createLane("worker", null, BACKGROUND_CONTEXT));
 		const worker = harness.lanesByName.get("worker");
-		if (worker === undefined) throw new Error("missing runtime2 worker lane");
+		if (worker === undefined) throw new Error("missing runtime worker lane");
 		const initialConfiguration = worker.state.configuration;
 		const faultEvent = new Promise<unknown>((resolve) => harness.events.on("fault", resolve));
 		const configUpdate = vi.fn();

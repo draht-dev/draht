@@ -12,12 +12,12 @@ import type { HarnessEvent, WatchHandle } from "../../../src/harness/agent-harne
 import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/compaction.ts";
 import { BACKGROUND_CONTEXT, type Context } from "../../../src/harness/context.ts";
 import { HookRegistry } from "../../../src/harness/hooks.ts";
-import { runCheckpoint, startRun } from "../../../src/harness/runtime2/drive/checkpoint.ts";
-import { runGeneration } from "../../../src/harness/runtime2/drive/generation.ts";
-import { recoverAssistantGeneration } from "../../../src/harness/runtime2/drive/recovery.ts";
-import { Lane } from "../../../src/harness/runtime2/lane.ts";
-import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
-import { type Config, Drive } from "../../../src/harness/runtime2/types.ts";
+import { runCheckpoint, startRun } from "../../../src/harness/runtime/drive/checkpoint.ts";
+import { runGeneration } from "../../../src/harness/runtime/drive/generation.ts";
+import { recoverAssistantGeneration } from "../../../src/harness/runtime/drive/recovery.ts";
+import { Lane } from "../../../src/harness/runtime/lane.ts";
+import { restoreLane } from "../../../src/harness/runtime/restore.ts";
+import { type Config, Drive } from "../../../src/harness/runtime/types.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../../src/harness/session/testing/instrumented-storage.ts";
@@ -197,7 +197,7 @@ afterEach(async () => {
 	for (const session of sessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
-describe("runtime2 generation checkpoint", () => {
+describe("runtime generation checkpoint", () => {
 	it("consumes before_run and snapshots a ready generation", async () => {
 		const fixture = await createFixture();
 		fixture.hooks.on("before_run", () => ({
@@ -274,7 +274,7 @@ describe("runtime2 generation checkpoint", () => {
 	});
 });
 
-describe("runtime2 assistant generation", () => {
+describe("runtime assistant generation", () => {
 	it("commits intent before provider admission, preserves queued inbox state, and settles reserved ids", async () => {
 		const fixture = await createFixture();
 		const ready = await advanceToReady(fixture);
@@ -386,19 +386,15 @@ describe("runtime2 assistant generation", () => {
 					stopReason: "pending",
 				};
 				const text = { type: "text" as const, text: "" };
-				void (async () => {
+				queueMicrotask(() => {
 					stream.push({ type: "start", partial });
-					await backend.frameStarted.promise;
 					partial.content.push(text);
 					stream.push({ type: "text_start", contentIndex: 0, partial });
-					await Promise.resolve();
 					text.text = "ab";
 					stream.push({ type: "text_delta", contentIndex: 0, delta: "ab", partial });
-					await Promise.resolve();
 					stream.push({ type: "text_end", contentIndex: 0, content: "ab", partial });
-					await Promise.resolve();
 					stream.push({ type: "done", reason: "stop", message: fauxAssistantMessage("ab", { timestamp: 5 }) });
-				})();
+				});
 				return stream;
 			},
 		};
@@ -427,9 +423,9 @@ describe("runtime2 assistant generation", () => {
 			frames.map((frame) =>
 				typeof frame === "object" && frame !== null && "type" in frame ? frame.type : undefined,
 			),
-		).toEqual(["start", "text_start", "text_delta", "text_end"]);
+		).toEqual(["start", "text_start", "text_end"]);
 		expect(frames[0]).toMatchObject({ partial: { content: [] } });
-		expect(frames[2]).toMatchObject({ delta: "ab" });
+		expect(frames[1]).toMatchObject({ content: { text: "ab" } });
 	});
 
 	it("enters configuration failure without reserving response ids or calling the provider", async () => {

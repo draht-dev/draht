@@ -3,7 +3,7 @@
 This document specifies durable partial assistant messages for ordinary assistant generation and deferred-response polling. It builds on:
 
 - bound typed value/list addresses from `values.md`;
-- `AssistantMessageFrame`, `assistantMessageEventToFrame()`, and `reduceAssistantMessageFrames()` from `@draht/ai`;
+- `AssistantMessageFrame`, `AssistantMessageFrameEncoder`, and `reduceAssistantMessageFrames()` from `@draht/ai`;
 - the assistant intent/effect/settlement state machine in `harness.md`.
 
 The design persists compact replayable stream frames without making them operation-state authority and without storing a growing full partial message on every update.
@@ -59,22 +59,26 @@ Each list element is one `AssistantMessageFrame`. The storage transaction's glob
 
 ## Frame contract
 
-For each pi-ai stream event:
+Create one pi-ai encoder per provider stream and feed it every event in order:
 
 ```ts
-const frame = assistantMessageEventToFrame(event);
+const encoder = new AssistantMessageFrameEncoder();
+const frame = encoder.encode(event);
 ```
 
-- `start` and non-terminal block events produce a frame;
-- terminal `done` and `error` return `undefined` because final response settlement is separate;
-- later frames omit repeated growing `partial` snapshots;
-- text/thinking/tool end frames may contain one authoritative completed block value because some providers, including OpenAI Responses, can supply or correct content only at the end;
-- unfinished tool-call JSON is reconstructed by pi-ai's reducer;
-- completed tool-call arguments are parsed but remain unvalidated against a tool schema.
+`partial` is the provider's shared live response-so-far helper, not an event-time snapshot. The encoder keeps per-open-block counters and trims text/thinking delta prefixes already represented by an advanced block-start snapshot. It temporarily buffers only the raw JSON prefix needed to synchronize an already-advanced tool call, then emits one checkpoint and resumes compact deltas. It never clones the growing full message on every event.
+
+- `start` produces an empty-content metadata frame;
+- a non-terminal event produces zero or one frame;
+- covered queued deltas produce no frame;
+- terminal `done` and `error` produce no frame because final response settlement is separate;
+- a setup `error` before `start` is valid and produces no frames;
+- text/thinking/tool end frames contain the authoritative completed block value;
+- completed tool-call arguments remain unvalidated against a tool schema.
 
 Do not define a second harness frame codec or reducer. Persistence stores the exported pi-ai value directly; hydration calls `reduceAssistantMessageFrames()`.
 
-Provider event blocks may interleave. Storage and reduction rely on `contentIndex`, never block contiguity.
+Provider event blocks may interleave. Encoding and reduction rely on `contentIndex`, never block contiguity. Text and ordinary thinking blocks must be empty when `*_start` is published and then append only through matching deltas until end; redacted thinking may be complete at start and emit no deltas. Streaming tool calls start with empty arguments and emit their complete raw JSON through deltas; a provider that starts with complete arguments must emit a cumulative delta prefix that parses to that snapshot at an event boundary before later argument deltas.
 
 ## Fresh stream scheduling
 
@@ -83,15 +87,15 @@ The simplest scheduling is deliberate: one list-append transaction per converted
 For every `start` or update event:
 
 ```text
-convert event to frame
-→ synchronously enqueue invocation-fenced appendList(frames, frame)
+encode the event against the per-stream frame encoder
+→ when a frame is returned, synchronously enqueue invocation-fenced appendList(frames, frame)
 → attach the ordinary harness-fault observer to the returned promise
 → replace process-local latestFrameWrite promise reference
 → emit and await the existing message_start/message_update event
 → consume the next provider event
 ```
 
-`appendList()` is called synchronously, so all frame mutations enter the lane line in provider-event order. The procedure does not await each write. Every promise is immediately observed for fault propagation before the latest reference replaces its predecessor. Model output limits bound the number and total size of queued frames; a response may queue at most its bounded output plus constant frame/transaction overhead.
+`appendList()` is called synchronously for each returned frame, so all frame mutations enter the lane line in provider-event order. The procedure does not await each write. Every promise is immediately observed for fault propagation before the latest reference replaces its predecessor. Covered queued events allocate no durable frame or write. Encoder state is proportional to open block count plus the unsynchronized prefix of an active tool-call JSON stream; it retains no second full assistant message. Model output limits bound queued frame bytes to bounded output plus frame/transaction overhead.
 
 The event side retains existing behavior: `AssistantStreamObserver.start/update` awaits `events.emit()` for every event. There is no separate latest event-delivery promise because no assistant event delivery remains outstanding when the provider loop advances.
 
@@ -214,7 +218,7 @@ Reconnect replays no historical `message_start` or `message_update` events. The 
 
 ## Events
 
-Live event ordering remains:
+A started generation retains this live event ordering:
 
 ```text
 message_start
@@ -226,6 +230,8 @@ message_start
 → entry_added
 → usage
 ```
+
+A request setup failure may produce `error` before `start`; that path emits no `message_start` or frame and proceeds through `after_response`, `message_end`, and ordinary error settlement. Successful `done` and updates before `start` are protocol defects.
 
 Frame commits emit ordinary storage telemetry only. There is no public frame event and no claim that a `message_update` was durable. `entry_added` remains the only proof that the final assistant entry committed.
 
@@ -277,7 +283,7 @@ JSONL retains deleted frame bytes until snapshot compaction. Logical deletion is
 2. One effect-pending response ID constructs exactly one assistant frame-list address.
 3. Every stored element is an exported pi-ai `AssistantMessageFrame`.
 4. Terminal `done`/`error` events are never stored as frames.
-5. Frame order equals provider event order.
+5. Frame order is a subsequence of provider event order; zero-frame covered events do not disturb order.
 6. Awaiting the latest frame-write promise at stream settlement implies all accepted appends completed.
 7. Frames never establish provider completion or suppress unknown-outcome recovery.
 8. Final or synthetic response settlement atomically deletes the exact frame list.
@@ -290,8 +296,9 @@ JSONL retains deleted frame bytes until snapshot compaction. Logical deletion is
 
 ### Frame integration
 
-- each convertible pi-ai event appends exactly one frame;
-- `done`/`error` append nothing;
+- one per-stream encoder handles shared live partials and synchronous event bursts without duplicate content;
+- each event appends zero or one frame, with covered queued deltas appending nothing;
+- `done`/`error` append nothing, including pre-generation error;
 - interleaved content indexes preserve sequence;
 - provider loop does not await individual frame writes;
 - frame appends enqueue synchronously before the next provider event;
@@ -345,4 +352,4 @@ Expected runtime areas:
 - terminal cleanup, forks, and migrations;
 - instrumented writer and backend conformance tests.
 
-Implement bound typed value/list addresses first, then frame enqueue/settlement, then recovery/snapshots. Update `harness.md` with this complete lifecycle before implementing runtime2 assistant parity.
+Implement bound typed value/list addresses first, then frame enqueue/settlement, then recovery/snapshots. Update `harness.md` with this complete lifecycle before implementing runtime assistant parity.

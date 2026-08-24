@@ -171,7 +171,7 @@ TX[ insert injected messages if any, upsert pi.lane.leaf when needed,
 TX[ upsert pi.op.state/O = assistant ready (config snapshot) ]
 TX[ upsert pi.op.state/O = effect_pending (reserves response n2, usage u1) ]
 … provider streams …                                  ← the uncertain window
-TX[ append pi.pending.assistant_frame/O:n2 += frame ]    ← one per streamed event,
+TX[ append pi.pending.assistant_frame/O:n2 += frame ]    ← zero or one per non-terminal event,
                                                         enqueued without awaiting
 TX[ insert entry n2, insert usage u1, upsert pi.lane.leaf = n2,
     delete list pi.pending.assistant_frame/O:n2,
@@ -246,7 +246,7 @@ Source type provenance:
 - `AgentMessage`, `AgentTool`, `AgentToolResult`, `QueueMode`, and `ThinkingLevel`: `packages/agent/src/types.ts`.
 - `Skill`, `PromptTemplate`, `AgentHarnessResources` (`Resources` below), `AgentHarnessTool`, `AgentHarnessToolContextSource`, `AgentHarnessToolInvocation`, `AgentHarnessToolUpdateCallback`, `AgentHarnessToolUpdateOptions`, `AgentHarnessStreamOptions`, and `AgentHarnessStreamOptionsPatch`: `packages/agent/src/harness/types.ts`.
 - `Model`, `Models`, `Tool`, `Usage`, `RetryPolicy`, `StopReason`, `AssistantMessage`, `ImageContent`, provider messages, stream options, and deferred handles: `packages/ai`. `AiContext` below aliases pi-ai's provider request `Context` to distinguish it from the harness invocation `Context`.
-- `AssistantMessageFrame`, `assistantMessageEventToFrame`, and `reduceAssistantMessageFrames`: `packages/ai` (`@draht/ai`), `src/utils/assistant-message-frame.ts`. The harness defines no second frame codec or reducer.
+- `AssistantMessageFrame`, `AssistantMessageFrameEncoder`, and `reduceAssistantMessageFrames`: `packages/ai` (`@draht/ai`), `src/utils/assistant-message-frame.ts`. The harness defines no second frame codec or reducer.
 - `CompactionSettings`, `CompactionPreparation`, `CompactResult`, `BranchPreparation`, and `BranchSummaryResult`: `packages/agent/src/harness/compaction/`. Existing preparation and split-turn algorithms remain the implementation starting point unless this document explicitly changes them.
 - `TelemetryContext` and typed schema helpers: `packages/telemetry`; the agent-owned schemas remain in `packages/agent/src/harness/telemetry.ts`.
 - `Context`, `ContextKey`, `BACKGROUND_CONTEXT`, and the immutable derivation helpers: `packages/agent/src/harness/context.ts`. Context is invocation-scoped propagation and authority, not a durable payload or receiver default.
@@ -1609,7 +1609,7 @@ Every settlement row above — tool plan, retry, overflow, deferred, checkpoint,
 
 ### Streamed frame persistence
 
-During the effect window, the assistant procedure converts every provider stream event with pi-ai's `assistantMessageEventToFrame`. Terminal `done`/`error` events convert to no frame — final settlement is separate and terminal events are never stored. The converter snapshots the initial partial once in the `start` frame, strips repeated growing `partial` snapshots from later frames, and lets end frames carry one authoritative completed block value where a provider protocol supplies or corrects content only at the end. Interleaved blocks rely on `contentIndex`, never contiguity. Hydration calls `reduceAssistantMessageFrames`; the harness defines no second frame codec or reducer.
+During the effect window, the assistant procedure owns one pi-ai `AssistantMessageFrameEncoder` and feeds it every provider stream event in order. Provider `partial` values remain shared live response-so-far helpers. The encoder emits an empty-content start frame, snapshots each block once when its queued start is consumed, trims text/thinking delta prefixes already covered by that snapshot, and uses a bounded raw-JSON checkpoint to synchronize an already-advanced tool call before compact deltas resume. Streaming tool calls begin with empty arguments and emit complete raw JSON through deltas; a provider that begins with complete arguments must emit a cumulative prefix that parses to that snapshot at an event boundary before later deltas. A non-terminal event therefore produces zero or one frame. Terminal `done`/`error` events produce no frame — final settlement is separate — and a setup `error` before `start` produces no frames. End frames carry one authoritative completed block value where a provider protocol supplies or corrects content only at the end. Interleaved blocks rely on `contentIndex`, never contiguity. Hydration calls `reduceAssistantMessageFrames`; the harness defines no second frame codec or reducer.
 
 For every convertible event, the procedure:
 
@@ -2921,7 +2921,7 @@ type HarnessEventPayload =
   // Messages
   | { type: "message_start"; runId?: string; message: AgentMessage }
   | { type: "message_update"; runId: string; message: AgentMessage;
-      event: AssistantMessageEvent }
+      event: AssistantMessageEvent; frame?: AssistantMessageFrame }
   | { type: "message_end"; runId?: string; message: AgentMessage; entryId?: string }
 
   // Tools
@@ -3004,14 +3004,14 @@ interface Events {
 Ordering for a streamed assistant response, asserted exactly by the conformance tests:
 
 ```
-message_start → message_update* (each delivery awaited; its converted frame
-append is enqueued without awaiting storage) → stop frame admission and await
+message_start → message_update* (each delivery awaited; any encoder-returned
+frame append is enqueued without awaiting storage) → stop frame admission and await
 the latest frame write → after_response hook → message_end (final value,
 optional reserved id) → atomic response + usage + frame-list delete +
 classified-state commit → entry_added → usage
 ```
 
-Frame commits emit ordinary storage telemetry only: there is no frame-persistence event, and no event claims a `message_update` was durable. A crash may follow a live update whose queued frame append never committed; reconnect then shows the older committed frame prefix. Only `entry_added` proves message durability. Classification is computed before the transaction and becomes durable with it; it is not a separate event. Abort and overflow classification may normalize the committed response after `message_end`, so `entry_added` is authoritative for those two cases. A synthetic settlement performs no provider effect, update, or response hook: `message_start → message_end → atomic commit → entry_added → usage`.
+A `message_update` carries the encoder's frame when that event advanced durable reconstruction and omits it when an older queued event was already covered by the live block-start snapshot; remote adapters forward only frame-bearing updates. Frame commits emit ordinary storage telemetry only: there is no frame-persistence event, and no event claims a `message_update` was durable. A crash may follow a live update whose queued frame append never committed; reconnect then shows the older committed frame prefix. Only `entry_added` proves message durability. Classification is computed before the transaction and becomes durable with it; it is not a separate event. Abort and overflow classification may normalize the committed response after `message_end`, so `entry_added` is authoritative for those two cases. A synthetic settlement performs no provider effect, update, or response hook: `message_start → message_end → atomic commit → entry_added → usage`.
 
 `tool_update` is always an immediate process-local event, including when its originating callback also requests `checkpoint:true`; no second public event announces checkpoint commit, and no checkpoint write is dropped or coalesced (§3.8). The synchronous callback retains the latest asynchronous delivery promise, and tool-promise settlement awaits it — together with the latest checkpoint-write promise — before `after_tool`, preserving the existing listener order without backpressuring each update. Reconnect snapshots reveal only the latest committed checkpoint. For a real effect, `tool_end` follows finalization but precedes the `outcome_ready` staging commit, in completion order; it is observation, not proof of durability. Finalized result-message lifecycle and `entry_added` occur later in source order when ready values materialize. Synthetic blocked and unsafe-recovery outcomes emit no tool-effect lifecycle. A crash after `tool_end` but before staging may recover or safely replay the still-uncertain call. Historical events are not replayed, though a safely replayed execution emits its own recovery-tagged lifecycle.
 
@@ -3190,7 +3190,7 @@ interface AssistantResponseMetadata {
 
 interface AssistantStreamObserver {
   start(message: AssistantMessage,
-        event: Extract<AssistantMessageEvent, { type: "start" }> | undefined,
+        event: Extract<AssistantMessageEvent, { type: "start" }>,
         context: Context): void | Promise<void>;
   update(message: AssistantMessage, event: AssistantMessageEvent,
          context: Context): void | Promise<void>;
@@ -3240,15 +3240,16 @@ transformContext(requestContext, context)
 → map curated stream options + thinking level to SimpleStreamOptions
 → install context.abortSignal, context.telemetryContext, beforePayload, and metadata capture
 → request(aiContext, options, context)
-→ observer.start(message, startEvent, context)
-→ observer.update(message, event, context)*
+→ either observer.start(message, startEvent, context)
+     → observer.update(message, event, context)*
+   or a pre-generation error with no start/update callback
 → settle the stream completely
 → afterResponse(settled message, captured metadata, context)
 → observer.end(message, context)
 → return the final settled message
 ```
 
-It never mutates `messages`. Every callback receives the same explicit invocation Context unless its adapter deliberately derives a child span Context. The harness-supplied observer converts each streamed event with `assistantMessageEventToFrame` and synchronously enqueues its invocation-fenced frame append without awaiting storage (§3.7); `afterResponse` is always installed, even with no hook listeners, because it first stops frame admission and awaits the latest frame-write promise before invoking the optional `after_response` pipeline. If the stream terminates without a start event, it emits `observer.start` with `event: undefined` for the final message before `observer.end`, matching the harness lifecycle contract; this synthesized lifecycle start occurs after stream consumption and is not converted into or appended as a durable frame. If abort interrupts the parked `afterResponse` adapter, the block awaits the carried abort-mutation promise, skips that hook, emits `observer.end` with the raw settled message, and returns it so the caller can commit it under the now-current cancellation control. `beforePayload` maps to pi-ai's payload callback. Response metadata capture maps to pi-ai's `onResponse`; it is distinct from `afterResponse`, because `onResponse` runs before the response body is consumed while the harness hook transforms the settled assistant message afterward. The harness exposes neither callback through `AgentHarnessStreamOptions`.
+It never mutates `messages`. Every callback receives the same explicit invocation Context unless its adapter deliberately derives a child span Context. The harness-supplied observer feeds actual start/update events to one per-stream `AssistantMessageFrameEncoder` and synchronously enqueues each returned invocation-fenced frame append without awaiting storage (§3.7); covered queued events return no frame. `afterResponse` is always installed, even with no hook listeners, because it first stops frame admission and awaits the latest frame-write promise before invoking the optional `after_response` pipeline. A pre-generation `error` emits no synthetic start: the adapter calls only `observer.end` after the response hook. An update or successful `done` before `start`, a duplicate start, or an event after terminal is a provider protocol defect. If abort interrupts the parked `afterResponse` adapter, the block awaits the carried abort-mutation promise, skips that hook, emits `observer.end` with the raw settled message, and returns it so the caller can commit it under the now-current cancellation control. `beforePayload` maps to pi-ai's payload callback. Response metadata capture maps to pi-ai's `onResponse`; it is distinct from `afterResponse`, because `onResponse` runs before the response body is consumed while the harness hook transforms the settled assistant message afterward. The harness exposes neither callback through `AgentHarnessStreamOptions`.
 
 The request function, not this block, owns registry dispatch, auth, and operation admission:
 
@@ -3522,7 +3523,7 @@ These rows preserve requirements, not frozen package boundaries. Create their ha
 | R9 | **Threshold and overflow compaction** | In-run structural decision, durable once-per-trigger threshold marker, continuation preservation, all overflow predicates, atomic response/preparation publication, specified normalization/projection, one overflow recovery flag, bounded second failure, and deterministic tests for added boundaries. | Threshold decline/empty across reopen, all overflow classifier/preparation inputs, no overflow tool plan, genuine length, crash/reopen at every transition. |
 | R10 | **Navigation** | Add navigation `OperationRequest` acceptance without task installation and compose `navigateTree()` from accept+drive. Implement navigation source/target/summary consumption-time dereference, validation, summarized decision/generation, one final transaction combining move/summary/leaf/label with terminal writes, summary-only navigation hook, and deterministic transition coverage. | Explicit accept+drive versus convenience equivalence; root/current/unknown rejection; invalid durable source/target/summary combinations; accept/close/reopen/drive; summarized/unsummarized paths; final leaf at summary; abort race; exact atomic publication including cleanup. |
 | R11 | **Schema version and migrations** | Chained migrate-on-open under the writer lease, with total mappings for open `pi.op.state` including `outcome_ready`, staged `pi.pending.entry` results, invocation memos, optional progress checkpoints, and assistant frame lists (paged in sequence order, mapped preserving `seq` or deleted whole-key); address namespace/key/kind migrations; JSONL lenient old-shape replay, mandatory post-migration compaction, refuse-newer. | Version gate; chained crash-idempotent migration; planned/effect-pending/outcome-ready tool states mapped safely; staged result/checkpoint/memo mappings; every legacy frame mapped or the whole list explicitly discarded with no completion inference; resumed operation correctness; old bytes retired. |
-| R12 | **Surface completion** | Complete full-session watch, remaining live execution snapshot updates and outcome-ready visibility, event catalog/order/filtering, telemetry, public exports, backend parity, hosted-control/convenience documentation, remove scaffold code including the S4 fake client, rename the sole implementation from `runtime2/` to `runtime/`, and update imports/tests. | Snapshot/event gap; attach during active effect with live/durable divergence for both frames and checkpoints; restored effect-pending exposing reduced `streamingMessage`; live partial precedence over durable reduction; outcome-ready, waiting/terminal states; no replay of old message or tool lifecycle; recovered turn brackets balanced by turn id across durable waits and reopened on the next pass; close before tool-effect admission creates no raw `pi.harness.tool` span; stale-wake fencing; sensitive-event/content-free telemetry; full race/crash matrix on all backends. |
+| R12 | **Surface completion** | Complete full-session watch, remaining live execution snapshot updates and outcome-ready visibility, event catalog/order/filtering, telemetry, public exports, backend parity, hosted-control/convenience documentation, remove scaffold code including the S4 fake client, and update imports/tests. | Snapshot/event gap; attach during active effect with live/durable divergence for both frames and checkpoints; restored effect-pending exposing reduced `streamingMessage`; live partial precedence over durable reduction; outcome-ready, waiting/terminal states; no replay of old message or tool lifecycle; recovered turn brackets balanced by turn id across durable waits and reopened on the next pass; close before tool-effect admission creates no raw `pi.harness.tool` span; stale-wake fencing; sensitive-event/content-free telemetry; full race/crash matrix on all backends. |
 | P1 | **Protocol schemas** | Future work after the internal harness is complete: define shared TypeBox schemas for serializable pi-ai and harness protocol data, derive the corresponding TypeScript types from those schemas, and reuse them across client/server protocol boundaries. Validation runs only on untrusted wire input and never inside Session, Storage, operation procedures, or in-process extensions. | Schema/type parity, accepted and rejected client/server payloads, protocol round trips, and no validators or schema construction on internal storage paths. |
 
 # Part 9 — Invariants and tests
@@ -3567,7 +3568,7 @@ Operations:
 28. Completed tool calls form a source-ordered prefix. A sequential suffix permits at most one effect-pending or outcome-ready call before planned calls; a parallel suffix may mix `planned`, `effect_pending`, and `outcome_ready`. Completion-order outcome staging never extends the prefix; source-ordered materialization does.
 29. Every outcome-ready call has exactly one matching finalized `pi.pending.entry`, no immutable result entry, no invocation memos, and no tool-output checkpoint. Outcome-ready and completed calls never execute again.
 30. A tool progress checkpoint is an optional bounded complete `AgentToolResult` snapshot, selected with `checkpoint:true`. It never proves completion. Every selected checkpoint synchronously enqueues one invocation-fenced scalar replacement; no write is dropped or coalesced, only the latest write promise reference is retained, and awaiting it implies completion of every earlier write. Staging or terminal cleanup deletes the value and fences late recreation.
-31. Scalar assistant/deferred state is the sole restart authority for streamed partials. One effect-pending response id constructs exactly one `pendingAssistantFrames(operationId, responseEntryId)` address; every element is an exported pi-ai `AssistantMessageFrame`; frame order equals provider event order; terminal `done`/`error` events are never stored; frames never establish provider completion or suppress unknown-outcome recovery.
+31. Scalar assistant/deferred state is the sole restart authority for streamed partials. One effect-pending response id constructs exactly one `pendingAssistantFrames(operationId, responseEntryId)` address; every element is an exported pi-ai `AssistantMessageFrame`; frame order is a subsequence of provider event order because already-covered queued events produce no frame; terminal `done`/`error` events are never stored; frames never establish provider completion or suppress unknown-outcome recovery.
 32. Every final or synthetic response settlement — normal, recovery, cancellation, or external finalization — atomically deletes its exact frame list. Idle forks contain no frame lists. A restored partial may appear in `streamingMessage` but never in `transcript` before settlement.
 33. The provider loop never awaits storage per frame; frame appends are enqueued synchronously in provider-event order, and awaiting the latest frame-write promise at stream settlement implies every accepted append completed.
 34. Successful attachment publishes only complete lane projections and an open-operation inventory. It resolves no model/tool identity and starts no work. A later drive fences the authoritative owned projection and exact `Drive` identity; storage reads only dereference payloads named by that projection.

@@ -25,7 +25,7 @@ export interface AssistantResponseMetadata {
 export interface AssistantStreamObserver {
 	start(
 		message: AssistantMessage,
-		event: Extract<AssistantMessageEvent, { type: "start" }> | undefined,
+		event: Extract<AssistantMessageEvent, { type: "start" }>,
 		context: Context,
 	): void | Promise<void>;
 	update(message: AssistantMessage, event: AssistantMessageEvent, context: Context): void | Promise<void>;
@@ -130,17 +130,18 @@ export async function streamHarnessAssistant(
 	let started = false;
 	for await (const event of stream) {
 		if (event.type === "start") {
+			if (started) throw new Error("Assistant message stream emitted more than one start event");
 			started = true;
 			await config.observer.start({ ...event.partial }, event, context);
 		} else if (isUpdateEvent(event)) {
+			if (!started) throw new Error(`Assistant message stream emitted ${event.type} before start`);
 			await config.observer.update({ ...event.partial }, event, context);
+		} else if (event.type === "done" && !started) {
+			throw new Error("Assistant message stream emitted done before start");
 		}
 	}
 
 	const settled = (await stream.result()) as SettledAssistantMessage;
-	if (!started) {
-		await config.observer.start({ ...settled }, undefined, context);
-	}
 	let finalMessage = settled;
 	if (config.afterResponse) {
 		try {

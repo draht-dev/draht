@@ -498,10 +498,7 @@ export const streamSimple: StreamFunction<"openai-codex-responses", SimpleStream
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
-	const apiKey = options?.apiKey;
-	if (!apiKey) {
-		throw new Error(`No API key for provider: ${model.provider}`);
-	}
+	const apiKey = options?.apiKey ?? "";
 
 	const base = {
 		...buildBaseOptions(model, context, options, apiKey),

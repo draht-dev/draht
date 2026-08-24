@@ -183,10 +183,7 @@ export const streamSimple: StreamFunction<"mistral-conversations", SimpleStreamO
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
-	const apiKey = options?.apiKey;
-	if (!apiKey) {
-		throw new Error(`No API key for provider: ${model.provider}`);
-	}
+	const apiKey = options?.apiKey ?? "";
 
 	const base = {
 		...buildBaseOptions(model, context, options, apiKey),

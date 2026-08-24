@@ -527,10 +527,19 @@ export interface Context {
 /**
  * Event protocol for AssistantMessageEventStream.
  *
- * Streams should emit `start` before partial updates, then terminate with either:
- * - `done` carrying the final successful AssistantMessage, or
- * - `error` carrying the final AssistantMessage with stopReason "error" or "aborted"
- *   and errorMessage.
+ * Successful streams emit `start` before partial updates and terminate with
+ * `done`. A stream may terminate directly with `error` when request setup fails
+ * before generation starts; after `start`, failures also terminate with `error`.
+ * Updates and `done` must never appear before `start`.
+ *
+ * `partial` is the shared live response-so-far helper, not an event-time
+ * snapshot. Text and thinking blocks are empty when their `*_start` event is
+ * emitted and grow only through their corresponding `*_delta` events until the
+ * authoritative `*_end`. Redacted thinking may be complete at start and emit no
+ * deltas. A streaming tool call starts with empty arguments and emits its full
+ * raw JSON through `toolcall_delta`; a provider that starts with complete
+ * arguments must emit a cumulative delta prefix that parses to those arguments
+ * before emitting any later argument delta.
  */
 export type AssistantMessageEvent =
 	| { type: "start"; partial: AssistantMessage }

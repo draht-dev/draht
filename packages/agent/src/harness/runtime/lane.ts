@@ -102,7 +102,7 @@ function capturedModel(operation: Operation): ModelIdentity | undefined {
 	}
 }
 
-/** Runtime2 implementation of one configured lane. */
+/** Runtime implementation of one configured lane. */
 export class Lane<TContext extends object | undefined> implements AgentLane {
 	readonly name: string;
 	readonly sessionTree: SessionTree;

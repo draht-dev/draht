@@ -1,7 +1,7 @@
 import { fauxAssistantMessage } from "@draht/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
-import { hydrateTerminalOutcome, operationCleanupWrites } from "../../../src/harness/runtime2/drive/terminal.ts";
+import { hydrateTerminalOutcome, operationCleanupWrites } from "../../../src/harness/runtime/drive/terminal.ts";
 import { insertEntry } from "../../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
@@ -100,7 +100,7 @@ afterEach(async () => {
 	for (const session of sessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
-describe("runtime2 terminal cleanup mechanics", () => {
+describe("runtime terminal cleanup mechanics", () => {
 	it("deletes every run-owned family and exact live frame list but preserves pendingNextRun", async () => {
 		const { session } = await createSession();
 		const operationId = "run";
@@ -255,7 +255,7 @@ describe("runtime2 terminal cleanup mechanics", () => {
 	});
 });
 
-describe("runtime2 terminal outcome hydration", () => {
+describe("runtime terminal outcome hydration", () => {
 	it("hydrates run, compaction, and navigation outcomes from only their direct entry references", async () => {
 		const { session, storage } = await createSession();
 		const assistant = fauxAssistantMessage([{ type: "text", text: "done" }]);

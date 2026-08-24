@@ -6,9 +6,9 @@ import { BACKGROUND_CONTEXT, type Context } from "../../../src/harness/context.t
 import { HarnessEventBus } from "../../../src/harness/events.ts";
 import { HookRegistry } from "../../../src/harness/hooks.ts";
 import { convertToLlm } from "../../../src/harness/messages.ts";
-import { Lane } from "../../../src/harness/runtime2/lane.ts";
-import { restoreLane } from "../../../src/harness/runtime2/restore.ts";
-import { Drive } from "../../../src/harness/runtime2/types.ts";
+import { Lane } from "../../../src/harness/runtime/lane.ts";
+import { restoreLane } from "../../../src/harness/runtime/restore.ts";
+import { Drive } from "../../../src/harness/runtime/types.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type { LaneConfiguration, Session } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
@@ -31,7 +31,7 @@ async function createLane(
 }> {
 	const storage = new ControlledMemoryStorage();
 	const session = new StorageBackedSession(
-		{ id: `runtime2-lane-${sessions.length}`, createdAt: 1, storageVersion: 1 },
+		{ id: `runtime-lane-${sessions.length}`, createdAt: 1, storageVersion: 1 },
 		storage,
 	);
 	sessions.push(session);
@@ -103,7 +103,7 @@ afterEach(async () => {
 	for (const session of sessions.splice(0)) await session.close(BACKGROUND_CONTEXT);
 });
 
-describe("runtime2 Lane commands", () => {
+describe("runtime Lane commands", () => {
 	it("reads and replaces configuration from owned state", async () => {
 		const { lane, model, session } = await createLane();
 		const activeToolNames = ["read"];

@@ -2,6 +2,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { GeistConfig } from "@draht/geist-protocol";
 import {
@@ -12,17 +13,18 @@ import {
 } from "../session/harness-resolver.js";
 
 const cleanup: string[] = [];
+const TEMP_ROOT = realpathSync(tmpdir());
 
-/** /tmp and /var are root-owned symlinks that the walk exempts by design — under /private/tmp the rule itself is tested. */
+/** Use the platform's canonical temporary root so ownership checks see the real path. */
 function tempRoot(prefix: string): string {
-	const dir = realpathSync(mkdtempSync(`/private/tmp/${prefix}`));
+	const dir = realpathSync(mkdtempSync(join(TEMP_ROOT, prefix)));
 	cleanup.push(dir);
 	return dir;
 }
 
-/** `/tmp` is a root-owned link to `/private/tmp`: the same directory, named the way an operator types it. */
+/** Name the same path through a root-owned platform link, as operators and service managers commonly do. */
 function viaRootOwnedLink(canonical: string): string {
-	const linked = canonical.replace(/^\/private\/tmp\//, "/tmp/");
+	const linked = process.platform === "darwin" ? canonical.replace(/^\/private\//, "/") : `/proc/1/root${canonical}`;
 	expect(linked).not.toBe(canonical);
 	expect(realpathSync(linked)).toBe(canonical);
 	return linked;

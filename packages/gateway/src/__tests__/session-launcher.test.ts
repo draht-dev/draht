@@ -2,6 +2,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AttachBridgeOptions } from "@draht/geist-core";
 import type { GeistConfig, SessionSpawnCode } from "@draht/geist-protocol";
@@ -15,10 +16,11 @@ import {
 } from "../session/spawn-primitive.js";
 
 const cleanup: string[] = [];
+const TEMP_ROOT = realpathSync(tmpdir());
 
-/** /tmp and /var are root-owned symlinks the resolver's walk exempts by design; under /private/tmp the rule is tested. */
+/** Use the platform's canonical temporary root so ownership checks see the real path. */
 function tempRoot(prefix: string): string {
-	const dir = realpathSync(mkdtempSync(`/private/tmp/${prefix}`));
+	const dir = realpathSync(mkdtempSync(join(TEMP_ROOT, prefix)));
 	cleanup.push(dir);
 	return dir;
 }

@@ -7,6 +7,11 @@
 > **Status 2026-08-21:** the Phase 34 seam question is **resolved from the spec** and no longer blocks —
 > rev-8 §4 already answered it. Four decisions remain open for Oskar: Phase 42 batching, GSEC-04/05
 > amendment sign-off, and the Phase 44 threat model.
+>
+> **Status 2026-08-22:** four MORE are open, from Phase 36 (spawn) — added below. They were escalated
+> before wave 2 and lived only inside `phases/36-spawn/PLAN.md`, where nobody would find them. None
+> blocks waves 1-3, which are all evidence class 2; **36.1 and 36.3 must be answered before wave 5's
+> class-3 acceptance can mean anything**, because that suite asserts the posture they decide.
 
 ## Phase 34 — which seam relays a permission ask to the phone (RESOLVED 2026-08-21, see below)
 
@@ -332,3 +337,137 @@ Consequential amendments (paste-ready):
 - Session-private $TMPDIR breaks any workflow that hands a file to an unsandboxed process via a hardcoded `/tmp/known-path`; intended (that IS the socket/plant route) but may surface as a confusing 'file not found' across a sandbox boundary.
 
 ---
+
+---
+
+## Phase 36.1 — does RESUME also get `--no-approve`, or only SPAWN?
+
+**Confidence:** medium — this is a product call, not a correctness one.
+
+**Ask:** A phone-initiated SPAWN starts untrusted (`--no-approve` defeats any standing `trust.json` grant
+and `defaultProjectTrust: "always"`). Should a phone-initiated RESUME do the same? Recommended: yes, with
+the cost stated.
+
+### Recommendation
+
+Give resume the same flag. Both verbs are driven by `session_resume`/`session_spawn` over the attach wire,
+so in both the phone is the actor. The distinction that tempts you the other way — "the user already
+trusted this project locally" — is exactly the assumption the flag exists to refuse: a standing grant is
+evidence about a past local decision, not about who is holding the phone now.
+
+### Rationale
+
+The flag is on the argv, not conditioned on origin, so this is one line either way (the resume argv in
+`spawn-primitive.ts`). Today a phone-resumed session in a project with a standing grant loads
+`.draht/extensions` — arbitrary code — plus `.draht/settings.json`, `.draht/SYSTEM.md` and ancestor
+`.agents/skills`. That is the same exposure the spawn path was hardened against, reachable by a verb that
+already ships.
+
+### Rejected alternatives
+
+- **Only spawn gets it.** Leaves the exposure above live on a shipped verb, and makes the security posture
+  depend on which frame a client happened to send for the same project.
+- **Condition the flag on whether the project was trusted before the daemon started.** Adds a stateful
+  distinction that cannot be tested from the wire and that a reader of the argv cannot see.
+
+### Risks carried
+
+Resumed sessions stop loading project extensions and project settings. If any of your workflows resume a
+session from the phone and expect its project extensions, this breaks them — visibly, not silently. That
+is the whole cost, and it is why this is your call rather than mine.
+
+---
+
+## Phase 36.2 — what is the LOCAL re-grant path for a phone-spawned session?
+
+**Confidence:** high on the recommendation, low on urgency.
+
+**Ask:** R36-SPAWN.5 requires trust to be granted only through the local machine. Nothing today turns a
+running untrusted spawned session into a trusted one without restarting it. Recommended: defer, record.
+
+### Recommendation
+
+Defer to Phase 37, where the wire opens, and record it as named debt now. Do not build a re-grant path in
+Phase 36.
+
+### Rationale
+
+Every mechanism that would carry a grant is either not built yet or is the wrong place. A wire field would
+be a trust grant delivered over the network, which R36-SPAWN.5 forbids outright. A local CLI verb needs a
+way to name a running session, which is what Phase 37 adds. And the practical workaround exists today: the
+operator trusts the project locally and the next spawn picks it up.
+
+### Risks carried
+
+Until then, a phone-spawned session in an untrusted project stays untrusted for its whole life. That is
+the correct failure direction, but it will read as a bug the first time you hit it.
+
+---
+
+## Phase 36.3 — `DRAHT_CODING_AGENT_DIR` crosses into the child, and it is the root for `auth.json`
+
+**Confidence:** high that this needs an answer; medium on which one.
+
+**Ask:** The spawned child inherits `DRAHT_CODING_AGENT_DIR`, whose directory holds `auth.json` — every
+provider credential you have. Per-harness `credentialEnv` (wave 3) narrows the ENVIRONMENT; it does
+nothing about the FILE. Recommended: scope the child's agent dir, accepting that harnesses must then be
+given credentials explicitly.
+
+### Recommendation
+
+Give a spawned session its own agent dir containing only what its harness declares, rather than the
+operator's. The environment half is already narrowable per harness; the file half should follow the same
+rule, or the narrowing is decorative — a child that cannot read `ANTHROPIC_API_KEY` from its environment
+can still read it out of `auth.json`.
+
+### Rationale
+
+This is the one place where "the phone cannot hand out a shell" stops being true in a way the wire cannot
+show you. Everything else in Phase 36 constrains what the child is *started* with; this is what the child
+can *read* once running. A harness that needs a provider credential should declare it, exactly as it
+declares its executable.
+
+### Rejected alternatives
+
+- **Leave it and rely on `credentialEnv`.** The environment narrowing is then defeated by one file read.
+- **Strip `auth.json` from the inherited dir at spawn time.** Mutates the operator's own state to protect
+  a child; a crash mid-spawn leaves the operator without credentials.
+
+### Risks carried
+
+Spawned sessions stop working until their harness declares credentials — a real setup cost, paid once per
+harness. If you would rather ship spawn working-by-default and tighten later, say so and I will record
+that as the decision rather than treat it as an oversight.
+
+---
+
+## Phase 36.4 — is a spawned session the daemon's CHILD?
+
+**Confidence:** medium.
+
+**Ask:** `detached` is a documented open decision on the spawn path and unresolved for resume.
+Recommended: detached, i.e. NOT the daemon's child.
+
+### Recommendation
+
+Detached. Deciding it for resume decides it for spawn, since wave 3 shares the whole post-spawn block
+between both origins.
+
+### Rationale
+
+Phase 39 runs a 7-day soak. If sessions are the daemon's children, a single daemon restart during that
+week takes every running session with it — which contradicts the product sentence the phase is built on
+("every draht session running on your machine is there"). Detached also gives `pgid == pid`, which is what
+makes `stop()`'s group signalling reach the whole tree; without it the child sits in the daemon's own
+process group and a group signal would hit the daemon.
+
+### Rejected alternatives
+
+- **Daemon's child.** Simpler lifecycle and guaranteed cleanup, at the cost of losing every session on any
+  daemon restart. Acceptable only if you consider a restart rare enough to not matter across a 7-day soak.
+
+### Risks carried
+
+The daemon cannot guarantee TERM→KILL for a session it did not parent and did not record — an orphan
+survives a daemon crash. The lock file's pid and `processStartedAtMs` are what let a restarted daemon
+re-adopt them, so this is bounded, but it is not free.

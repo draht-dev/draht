@@ -3,7 +3,7 @@ import { getCollection } from "astro:content";
 import AtelierPage from "../../layouts/AtelierPage.astro";
 
 const title = "Blog — Draht";
-const description = "Articles about AI coding agents, freelance development, TDD, DDD, and building with Draht.";
+const description = "Notes on coding agents, TDD, DDD, and the engineering decisions behind Draht.";
 
 const posts = (await getCollection("blog", ({ data }) => !data.draft))
 	.sort((a, b) => new Date(b.data.date).getTime() - new Date(a.data.date).getTime());
@@ -12,10 +12,10 @@ const posts = (await getCollection("blog", ({ data }) => !data.draft))
 <AtelierPage title={title} description={description}>
 	<main class="blog-index">
 		<header class="page-head">
-			<div class="page-kicker">Journal · Notes from the Werkstatt</div>
+			<div class="page-kicker">Journal · Werkstatt notes</div>
 			<h1 class="page-title">Blog<span class="ampersand">.</span></h1>
 			<p class="page-lede">
-				Longform on AI coding agents, freelance engineering, TDD, DDD, and the pieces we solder together along the way.
+				Notes on coding agents, TDD, DDD, and the decisions behind Draht.
 			</p>
 		</header>
 
@@ -49,7 +49,7 @@ const posts = (await getCollection("blog", ({ data }) => !data.draft))
 		</ol>
 
 		<p class="blog-outro">
-			More articles coming. Follow along on <a href="https://github.com/draht-dev/draht">GitHub</a>.
+			Read the code on <a href="https://github.com/draht-dev/draht">GitHub</a>.
 		</p>
 	</main>
 </AtelierPage>

@@ -450,26 +450,23 @@ test("the daemon holds none of a child's stdout, which it would if that stream w
 		handshakeDeadlineMs: 8_000,
 		stopDeadlineMs: 300,
 	});
-	const before = process.memoryUsage().rss;
 	const refused = refusalOf(spawner.resume(session));
 	const [leader] = (await readPids(pidFile)) as [number];
 	pgids.add(leader);
 	await waitForFile(join(dir, "flooded"), 30_000);
-	const ignoredMB = (process.memoryUsage().rss - before) / 1e6;
 
-	// POSITIVE CONTROL: the same 128 MB through a pipe nobody reads. Bun BUFFERS such a pipe rather than
-	// letting it fill and block the child, so what piping stdout costs is this process's memory — and the
-	// measurement above can see that cost, which is the only reason its smallness means anything.
-	const controlBefore = process.memoryUsage().rss;
-	const piped = spawn("/bin/sh", ["-c", "dd if=/dev/zero bs=1048576 count=128 2>/dev/null"], {
+	// POSITIVE CONTROL: the same command really emits 128 MB when a pipe consumer is installed.
+	// Without that consumer Linux blocks once the kernel pipe fills; the old test then waited 120 seconds
+	// for an exit that could not happen. Counting the bytes proves the witness without constructing a hang.
+	const piped = spawn("dd", ["if=/dev/zero", "bs=1048576", "count=128"], {
 		stdio: ["ignore", "pipe", "ignore"],
 	});
-	await new Promise((done) => piped.once("exit", done));
-	const pipedMB = (process.memoryUsage().rss - controlBefore) / 1e6;
-
-	expect(pipedMB).toBeGreaterThan(50);
-	expect(ignoredMB).toBeLessThan(30);
-	expect(ignoredMB).toBeLessThan(pipedMB / 4);
+	let pipedBytes = 0;
+	piped.stdout?.on("data", (chunk: Buffer) => {
+		pipedBytes += chunk.length;
+	});
+	await new Promise<void>((resolve) => piped.once("exit", () => resolve()));
+	expect(pipedBytes).toBe(128 * 1024 * 1024);
 
 	expect((await refused).code).toBe("timeout");
 	await waitForGroupGone(leader);

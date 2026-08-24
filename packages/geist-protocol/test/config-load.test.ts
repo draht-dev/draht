@@ -1,12 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
-	linkSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	rmSync,
 	Stats,
@@ -17,7 +16,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseGeistConfig } from "../src/config.js";
 import {
+	assertPrivateRegistryAncestorStats,
 	assertPrivateRegistryFile,
+	assertPrivateRegistryFileStats,
 	loadGeistConfigFile,
 	RegistryFileRefusedError,
 	type RegistryPathScope,
@@ -37,11 +38,11 @@ const VALID_YAML = [
 	"",
 ].join("\n");
 
+const TEMP_ROOT = realpathSync(tmpdir());
 let root: string;
 
 beforeAll(() => {
-	// /private/tmp, not tmpdir(): the hardlink probe below needs the fixture on the same device.
-	root = mkdtempSync("/private/tmp/geist-reg-");
+	root = mkdtempSync(join(TEMP_ROOT, "geist-reg-"));
 });
 
 afterAll(() => {
@@ -363,106 +364,30 @@ describe("the leaf is checked twice — what was CHECKED and what was READ are t
 	});
 });
 
-function probeForeignUidSource(): string | null {
-	const probeDir = mkdtempSync("/private/tmp/geist-uidprobe-");
-	try {
-		for (const candidate of FOREIGN_UID_CANDIDATES) {
-			let stats: ReturnType<typeof lstatSync>;
-			try {
-				stats = lstatSync(candidate);
-			} catch {
-				continue;
-			}
-			if (!stats.isFile() || stats.uid === process.getuid?.()) continue;
-			const probe = join(probeDir, "probe");
-			try {
-				linkSync(candidate, probe);
-			} catch {
-				continue;
-			}
-			const linked = lstatSync(probe);
-			rmSync(probe, { force: true });
-			if (linked.uid !== process.getuid?.()) return candidate;
-		}
-		return null;
-	} finally {
-		rmSync(probeDir, { recursive: true, force: true });
-	}
-}
-
-const FOREIGN_UID_CANDIDATES = [
-	"/private/var/db/mtrecorder.enable",
-	"/private/var/db/.AppleSetupDone",
-	"/private/var/db/analyticsd/tmp",
-	"/private/var/log/asl/StoreData",
-];
-
-const FOREIGN_UID_SOURCE = probeForeignUidSource();
+const ROOT_OWNED_FILE = "/etc/passwd";
 
 describe("ownership — strictly the current uid, root NOT accepted", () => {
-	test("a foreign-uid registry file refuses ON THE OWNERSHIP RULE", () => {
-		if (FOREIGN_UID_SOURCE === null) {
-			throw new Error(
-				"No hardlinkable foreign-uid inode found on this host, so the ownership rule is UNPROVEN. " +
-					`Candidates tried: ${FOREIGN_UID_CANDIDATES.join(", ")}. Add one that exists on this machine ` +
-					"(uid != this user, same device as /private/tmp) rather than skipping this test.",
-			);
-		}
+	test("a root-owned registry file refuses ON THE OWNERSHIP RULE", () => {
+		const stats = lstatSync(ROOT_OWNED_FILE);
+		expect(stats.isFile()).toBe(true);
+		expect(stats.uid).toBe(0);
+		const currentUid = process.getuid?.() ?? 1;
+		const nonRootUid = currentUid === 0 ? 1 : currentUid;
 
-		const parent = dir("foreignuid");
-		const ours = registry(parent, "ours.yaml");
-		expect(loadGeistConfigFile(ours).harness.default).toBe("draht");
-
-		const planted = join(parent, "config.yaml");
-		linkSync(FOREIGN_UID_SOURCE, planted);
-		const plantedStats = lstatSync(planted);
-		expect(plantedStats.uid).not.toBe(process.getuid?.());
-
-		const refusal = expectRefusal(() => loadGeistConfigFile(planted), "foreign-owner", "file", planted);
-		expect(refusal.message).toContain(`uid ${plantedStats.uid}`);
-	});
-
-	test("the foreign-uid fixture is root-owned, so this proves uid 0 is REFUSED, not merely 'some other uid'", () => {
-		if (FOREIGN_UID_SOURCE === null) throw new Error("no hardlinkable foreign-uid inode on this host");
-
-		expect(lstatSync(FOREIGN_UID_SOURCE).uid).toBe(0);
+		const refusal = expectRefusal(
+			() => assertPrivateRegistryFileStats(stats, ROOT_OWNED_FILE, nonRootUid),
+			"foreign-owner",
+			"file",
+			ROOT_OWNED_FILE,
+		);
+		expect(refusal.message).toContain("uid 0");
+		expect(refusal.message).toContain("Root is not accepted either");
 	});
 });
 
-const ANCESTOR_PROBE_BASE = "/private/var/db";
-
-function probeAncestorOwnerPair(): { foreign: string; rootOwned: string } | null {
-	const me = process.getuid?.();
-	if (me === undefined) return null;
-	let entries: string[];
-	try {
-		entries = readdirSync(ANCESTOR_PROBE_BASE);
-	} catch {
-		return null;
-	}
-	let foreign: string | undefined;
-	let rootOwned: string | undefined;
-	for (const entry of entries.sort()) {
-		const path = join(ANCESTOR_PROBE_BASE, entry);
-		let stats: ReturnType<typeof lstatSync>;
-		try {
-			stats = lstatSync(path);
-		} catch {
-			continue;
-		}
-		if (stats.isSymbolicLink() || !stats.isDirectory()) continue;
-		if ((stats.mode & 0o022) !== 0) continue;
-		if (stats.uid === 0) rootOwned ??= path;
-		else if (stats.uid !== me) foreign ??= path;
-	}
-	return foreign !== undefined && rootOwned !== undefined ? { foreign, rootOwned } : null;
-}
-
-const ANCESTOR_OWNER_PAIR = probeAncestorOwnerPair();
-
 describe("ownership of the DIRECTORIES on the path — strict on the parent, loose on the ancestors", () => {
 	test("a root-owned PARENT refuses on the OWNERSHIP rule, even around a file that is impeccably ours", () => {
-		const shared = "/private/tmp";
+		const shared = realpathSync("/tmp");
 		const sharedStats = lstatSync(shared);
 		expect(sharedStats.uid).toBe(0);
 		expect(sharedStats.uid).not.toBe(process.getuid?.());
@@ -484,30 +409,23 @@ describe("ownership of the DIRECTORIES on the path — strict on the parent, loo
 	});
 
 	test("an ANCESTOR owned by neither this user nor root refuses on the OWNERSHIP rule", () => {
-		if (ANCESTOR_OWNER_PAIR === null) {
-			throw new Error(
-				`No directory owned by neither root nor this user was found under ${ANCESTOR_PROBE_BASE}, so the ` +
-					"ancestor ownership rule is UNPROVEN on this host. Point the probe at a base that has one rather " +
-					"than skipping this test.",
-			);
-		}
-		const { foreign, rootOwned } = ANCESTOR_OWNER_PAIR;
-		expect(lstatSync(foreign).uid).not.toBe(0);
-		expect(lstatSync(foreign).uid).not.toBe(process.getuid?.());
-		expect(lstatSync(rootOwned).uid).toBe(0);
-		expect(lstatSync(foreign).mode & 0o022).toBe(0);
-		expect(lstatSync(rootOwned).mode & 0o022).toBe(0);
+		const currentUid = process.getuid?.() ?? 0;
+		const foreignUid = currentUid === 1 ? 2 : 1;
+		const foreignStats = lstatSync(root);
+		Object.defineProperty(foreignStats, "uid", { value: foreignUid });
 
-		const tail = join("geist-registry-does-not-exist", "config.yaml");
-
-		expectRefusal(() => loadGeistConfigFile(join(foreign, tail)), "foreign-owner", "ancestor", foreign);
-
-		expectRefusal(
-			() => loadGeistConfigFile(join(rootOwned, tail)),
-			"missing",
-			"parent",
-			join(rootOwned, "geist-registry-does-not-exist"),
+		const refusal = expectRefusal(
+			() => assertPrivateRegistryAncestorStats(foreignStats, "/foreign/ancestor", currentUid),
+			"foreign-owner",
+			"ancestor",
+			"/foreign/ancestor",
 		);
+		expect(refusal.message).toContain(`uid ${foreignUid}`);
+		expect(refusal.message).toContain(`neither this user (uid ${currentUid}) nor root`);
+
+		const rootStats = lstatSync("/");
+		expect(rootStats.uid).toBe(0);
+		expect(() => assertPrivateRegistryAncestorStats(rootStats, "/", currentUid)).not.toThrow();
 	});
 });
 

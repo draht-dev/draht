@@ -47,7 +47,7 @@ function octal(mode: number): string {
 	return `0${(mode & 0o7777).toString(8)}`;
 }
 
-function assertLeafStats(stats: Stats, path: string, uid: number): void {
+export function assertPrivateRegistryFileStats(stats: Stats, path: string, uid: number): void {
 	if (stats.uid !== uid) {
 		refuse(
 			"foreign-owner",
@@ -69,7 +69,7 @@ function assertLeafStats(stats: Stats, path: string, uid: number): void {
 	}
 }
 
-function assertParentStats(stats: Stats, path: string, uid: number): void {
+export function assertPrivateRegistryParentStats(stats: Stats, path: string, uid: number): void {
 	if (stats.uid !== uid) {
 		refuse(
 			"foreign-owner",
@@ -88,7 +88,7 @@ function assertParentStats(stats: Stats, path: string, uid: number): void {
 	}
 }
 
-function assertAncestorStats(stats: Stats, path: string, uid: number): void {
+export function assertPrivateRegistryAncestorStats(stats: Stats, path: string, uid: number): void {
 	if (stats.uid !== uid && stats.uid !== 0) {
 		refuse("foreign-owner", path, "ancestor", `owned by uid ${stats.uid}, neither this user (uid ${uid}) nor root`);
 	}
@@ -152,16 +152,16 @@ export function assertPrivateRegistryFile(path: string): string {
 		}
 
 		if (index === leafIndex) {
-			assertLeafStats(stats, current, uid);
+			assertPrivateRegistryFileStats(stats, current, uid);
 			continue;
 		}
 
 		if (index === parentIndex) {
-			assertParentStats(stats, current, uid);
+			assertPrivateRegistryParentStats(stats, current, uid);
 			continue;
 		}
 
-		assertAncestorStats(stats, current, uid);
+		assertPrivateRegistryAncestorStats(stats, current, uid);
 	}
 
 	return current;
@@ -195,7 +195,7 @@ export function loadGeistConfigFile(path: string): GeistConfig {
 			refuse("foreign-owner", checked, "file", "this platform reports no uid");
 		}
 		// Re-check and read the OPEN DESCRIPTOR, never the name: checked inode and read inode are then the same one.
-		assertLeafStats(fstatSync(fd), checked, uid);
+		assertPrivateRegistryFileStats(fstatSync(fd), checked, uid);
 		raw = readFileSync(fd, "utf-8");
 	} finally {
 		closeSync(fd);

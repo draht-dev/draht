@@ -1,4 +1,5 @@
 /** realpath collapses `..` lexically before following links, so this walks one segment at a time. */
+// POSIX only: on win32 `\` is a data byte, so a junction is one lstat'd segment and never resolved.
 
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";

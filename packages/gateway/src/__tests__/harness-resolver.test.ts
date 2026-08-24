@@ -13,7 +13,7 @@ import {
 } from "../session/harness-resolver.js";
 
 const cleanup: string[] = [];
-const TEMP_ROOT = realpathSync(tmpdir());
+const TEMP_ROOT = process.platform === "linux" ? realpathSync("/run/lock") : realpathSync(tmpdir());
 
 /** Use the platform's canonical temporary root so ownership checks see the real path. */
 function tempRoot(prefix: string): string {
@@ -24,7 +24,10 @@ function tempRoot(prefix: string): string {
 
 /** Name the same path through a root-owned platform link, as operators and service managers commonly do. */
 function viaRootOwnedLink(canonical: string): string {
-	const linked = process.platform === "darwin" ? canonical.replace(/^\/private\//, "/") : `/proc/1/root${canonical}`;
+	const linked =
+		process.platform === "darwin"
+			? canonical.replace(/^\/private\//, "/")
+			: canonical.replace(/^\/run\//, "/var/run/");
 	expect(linked).not.toBe(canonical);
 	expect(realpathSync(linked)).toBe(canonical);
 	return linked;

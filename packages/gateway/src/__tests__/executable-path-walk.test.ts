@@ -5,7 +5,6 @@ import {
 	chmodSync,
 	chownSync,
 	existsSync,
-	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	realpathSync,
@@ -29,12 +28,25 @@ const uid = process.getuid?.() ?? 0;
 const MONOREPO_CANDIDATE = resolve(import.meta.dir, "..", "..", "..", "coding-agent", "dist", "cli.js");
 
 const cleanup: string[] = [];
+const SHARED_TEMP_ROOT = realpathSync("/tmp");
+const TEST_TEMP_ROOT = process.platform === "linux" ? realpathSync("/run/lock") : SHARED_TEMP_ROOT;
 
 /** `/tmp` is a symlink to `/private/tmp` on macOS, so an unresolved temp path fails the no-follow walk immediately. */
 function fullyResolvedTempRoot(prefix: string): string {
-	const dir = realpathSync(mkdtempSync(`/tmp/${prefix}`));
+	const dir = realpathSync(mkdtempSync(join(TEST_TEMP_ROOT, prefix)));
 	cleanup.push(dir);
 	return dir;
+}
+
+/** Name a canonical path through a root-owned platform link. */
+function viaRootOwnedPlatformLink(canonical: string): string {
+	const linked =
+		process.platform === "darwin"
+			? canonical.replace(/^\/private\//, "/")
+			: canonical.replace(/^\/run\//, "/var/run/");
+	expect(linked).not.toBe(canonical);
+	expect(realpathSync(linked)).toBe(canonical);
+	return linked;
 }
 
 function program(path: string, mode = 0o755): string {
@@ -170,8 +182,8 @@ describe("a symlinked component of the DECLARED path is refused", () => {
 	test("a declared path whose parent is a link to a directory OTHER users own is refused as a link, not as ownership", () => {
 		const root = fullyResolvedTempRoot("xw-lt-");
 		const link = join(root, "tmp");
-		symlinkSync("/private/tmp", link);
-		const bin = program(join(realpathSync("/private/tmp"), `xw-${process.pid}-draht`));
+		symlinkSync(SHARED_TEMP_ROOT, link);
+		const bin = program(join(SHARED_TEMP_ROOT, `xw-${process.pid}-draht`));
 		cleanup.push(bin);
 
 		const error = refusal(() =>
@@ -180,20 +192,13 @@ describe("a symlinked component of the DECLARED path is refused", () => {
 		expect(error.message).toContain("symlink on the path to the draht binary");
 	});
 
-	test("but a ROOT-OWNED platform link is followed, or nothing under /tmp could ever be declared", () => {
-		// `/tmp`, `/var` and `/etc` are root-owned symlinks on macOS and `os.tmpdir()` is `/var/folders/…`.
-		const platform = lstatSync("/tmp");
-		expect(platform.isSymbolicLink()).toBe(true);
-		expect(platform.uid).toBe(0);
+	test("but a ROOT-OWNED platform link is followed, or platform aliases could never be declared", () => {
+		const canonicalRoot = fullyResolvedTempRoot("xw-pl-");
+		const unresolvedRoot = viaRootOwnedPlatformLink(canonicalRoot);
+		const bin = program(join(canonicalRoot, "draht"));
 
-		// Deliberately NOT realpath'd: this is the /tmp-prefixed string a caller actually holds.
-		const unresolved = mkdtempSync("/tmp/xw-pl-");
-		cleanup.push(realpathSync(unresolved));
-		const bin = program(join(unresolved, "draht"));
-
-		const resolved = resolveDrahtExecutable({ [DRAHT_BIN_ENV]: bin }, uid);
-		expect(resolved.target).toBe(realpathSync(bin));
-		expect(resolved.target.startsWith("/private/tmp/")).toBe(true);
+		const resolved = resolveDrahtExecutable({ [DRAHT_BIN_ENV]: join(unresolvedRoot, "draht") }, uid);
+		expect(resolved.target).toBe(bin);
 	});
 });
 
@@ -290,12 +295,10 @@ describe("containment: approved and forbidden roots", () => {
 	});
 
 	test("an UNRESOLVED root contains its canonical target, in both directions", () => {
-		// Roots arrive from configuration uncanonicalised, so on macOS an operator's `/tmp/…` root must still
-		// meet a binary `canonicalize` has already turned into `/private/tmp/…`.
-		const unresolved = mkdtempSync("/tmp/xw-ur-");
-		const canonical = realpathSync(unresolved);
-		cleanup.push(canonical);
-		expect(canonical).not.toBe(unresolved);
+		// Roots arrive from configuration uncanonicalised, so an operator's platform alias must still
+		// meet a binary `canonicalize` has already reduced to its real path.
+		const canonical = fullyResolvedTempRoot("xw-ur-");
+		const unresolved = viaRootOwnedPlatformLink(canonical);
 
 		const bin = program(join(canonical, "app", "draht"));
 
@@ -306,8 +309,8 @@ describe("containment: approved and forbidden roots", () => {
 			refusal(() => canonicalize(bin, uid, "the draht binary", { forbiddenRoots: [unresolved] })).message,
 		).toContain("inside a forbidden root");
 
-		const otherUnresolved = mkdtempSync("/tmp/xw-uo-");
-		cleanup.push(realpathSync(otherUnresolved));
+		const otherCanonical = fullyResolvedTempRoot("xw-uo-");
+		const otherUnresolved = viaRootOwnedPlatformLink(otherCanonical);
 		expect(
 			refusal(() => canonicalize(bin, uid, "the draht binary", { approvedRoots: [otherUnresolved] })).message,
 		).toContain("not inside an approved root");

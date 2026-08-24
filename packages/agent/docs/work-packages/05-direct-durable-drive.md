@@ -618,26 +618,146 @@ function openProgress<TContext extends object | undefined, T>(
 
 The tool procedure is one ordinary async routine. It keeps its process-local started-promise map, but every status patch is computed from the current `Lane.state` supplied to that specific `commandOwned` job. It never patches a batch snapshot captured before the job.
 
-Each child uses a module-local result only:
+Each child uses module-local results only:
 
 ```ts
 type ToolChildResult =
 	| { kind: "committed" }
 	| { kind: "state_changed" }
 	| LostOwnership;
+
+type ToolTransitionResult = ToolChildResult | { kind: "unchanged" };
+
+type ToolStartResult =
+	| { kind: "started"; work: Promise<ToolChildResult> }
+	| { kind: "finished"; result: ToolChildResult };
 ```
 
-This local result answers whether the batch may continue starting effects and whether a source-ready prefix may be materialized. It is not returned to the global drive switch. The batch procedure:
+These are local facts needed by this procedure; none becomes drive-loop vocabulary. `startCall` and `recoverCall` perform one call's source-ordered clearance through intent/admission. A real effect is already admitted before they return `{ kind: "started" }`; `work` owns only effect settlement and outcome staging. An immediate blocked, missing, invalid, or unsafe-recovery outcome is staged before `{ kind: "finished" }` returns. This keeps clearance/intent source-ordered while parallel effects settle independently.
 
-1. materializes any already-staged source-ready prefix;
-2. resolves `toolContext` once;
-3. makes one source-ordered start pass, sequentially or in parallel;
-4. retains every started promise and observes every started result;
-5. stages finalized outcomes immediately in completion order;
-6. materializes the contiguous ready prefix in source order;
-7. returns `lost_ownership` if the exact owner was replaced, otherwise `continue` so the outer loop inspects the now-current phase.
+```ts
+async function runToolBatch<TContext extends object | undefined>(
+	lane: Lane<TContext>, drive: Drive, run: RunState, batch: ToolBatch,
+): Promise<ProcedureResult> {
+	// A crash can leave source-ready outcome_ready calls with no live task. Place them
+	// before resolving tools or starting effects. If this changes state, redispatch
+	// instead of continuing with the captured batch.
+	const prefix: ToolTransitionResult = await materializeReadyPrefix(lane, drive, batch.turnId);
+	if (prefix.kind === "lost_ownership") return prefix;
+	if (prefix.kind === "committed" || prefix.kind === "state_changed") {
+		return { kind: "continue" };
+	}
 
-Under cancellation, no later call starts. Already-started calls are observed and staged, unstarted calls receive their specified synthetic cancellation outcomes, and source-order materialization finishes before reconciliation continues.
+	const sequential = run.settings.toolExecution === "sequential";
+	const toolContext = await resolveToolContext(lane, drive); // exactly once for this batch pass
+	const started = new Map<number, Promise<ToolChildResult>>();
+	let cancellation: Promise<void> | undefined;
+
+	try {
+		for (const call of batch.calls) {
+			if (call.status === "completed" || call.status === "outcome_ready") continue;
+
+			// Await only through clearance, intent commit, and synchronous effect admission.
+			// The loop therefore admits calls in source order. In parallel mode an admitted
+			// earlier effect may run while the next call is being cleared.
+			const launch: ToolStartResult = call.status === "effect_pending"
+				? await recoverCall(lane, drive, batch, call, toolContext) // orphan by construction
+				: await startCall(lane, drive, batch, call, toolContext);
+
+			let result: ToolChildResult | undefined;
+			if (launch.kind === "started") {
+				// Attach the fault observer immediately. The original promise remains in the
+				// map for ordinary result handling and cancellation reconciliation.
+				void launch.work.catch(() => {});
+				started.set(call.sourceIndex, launch.work);
+				if (sequential) result = await launch.work;
+			} else {
+				result = launch.result;
+			}
+
+			if (result?.kind === "lost_ownership") return result;
+			if (result?.kind === "state_changed") {
+				cancellation = Promise.resolve(); // the current projection already carries it
+				break;
+			}
+
+			if (sequential) {
+				// Sequential means stage and place this call before clearing the next one.
+				const placed: ToolTransitionResult = await materializeReadyPrefix(
+					lane, drive, batch.turnId,
+				);
+				if (placed.kind === "lost_ownership") return placed;
+				if (placed.kind === "state_changed") {
+					cancellation = Promise.resolve();
+					break;
+				}
+
+				const current = lane.state.operation;
+				if (current === null || current.meta.operationId !== drive.operationId ||
+					current.state.kind !== "run" || current.state.control.status === "cancel_requested" ||
+					current.state.phase.kind !== "tools" ||
+					current.state.phase.batch.turnId !== batch.turnId) {
+					return { kind: "continue" };
+				}
+			}
+		}
+
+		if (!sequential && cancellation === undefined) {
+			// Every eligible call has now passed source-ordered clearance/intent admission.
+			// Settlement and outcome staging complete independently in completion order.
+			const results = await Promise.all(started.values());
+			if (results.some((result) => result.kind === "lost_ownership")) {
+				return { kind: "lost_ownership" };
+			}
+			if (results.some((result) => result.kind === "state_changed")) {
+				cancellation = Promise.resolve();
+			}
+		}
+	} catch (error) {
+		if (!(error instanceof AbortRequested)) {
+			// Every started promise already has an observer; rethrow without detaching
+			// unobserved sibling rejections under close, fault, or finalization.
+			throw error;
+		}
+		cancellation = error.cancellation;
+	}
+
+	if (cancellation !== undefined) {
+		await cancellation;
+
+		// Some parallel children may already be running or staged. Observe every result
+		// before handling calls that never passed admission.
+		const results = await Promise.allSettled(started.values());
+		let unexpected: { error: unknown } | undefined;
+		for (const result of results) {
+			if (result.status === "fulfilled") {
+				if (result.value.kind === "lost_ownership") return result.value;
+				continue;
+			}
+			if (!(result.reason instanceof AbortRequested) && unexpected === undefined) {
+				unexpected = { error: result.reason };
+			}
+		}
+		if (unexpected !== undefined) throw unexpected.error;
+
+		// Derive this patch from the current batch. It stages only calls that never
+		// started and leaves real finalized outcomes intact.
+		const staged: ToolTransitionResult = await stageUnstartedCalls(
+			lane, drive, batch.turnId, new Set(started.keys()),
+		);
+		if (staged.kind === "lost_ownership") return staged;
+		if (staged.kind === "state_changed") return { kind: "continue" };
+	}
+
+	// Placement is separate from completion-order staging. It inserts only the current
+	// contiguous ready prefix, in source order, and may finish the batch checkpoint.
+	const placed: ToolTransitionResult = await materializeReadyPrefix(lane, drive, batch.turnId);
+	if (placed.kind === "lost_ownership") return placed;
+	return { kind: "continue" };
+}
+```
+
+Every child command rereads no control values from storage; it patches the authoritative state supplied to that lane job:
 
 ```ts
 function patchCall(state: RunState, sourceIndex: number, next: ToolCall): RunState {
@@ -653,7 +773,7 @@ function patchCall(state: RunState, sourceIndex: number, next: ToolCall): RunSta
 }
 ```
 
-Staging is completion-ordered (`outcome_ready`); `materializeReadyPrefix` places the contiguous ready prefix in source order in one commit, and `addedToolNames` takes effect only at placement.
+Staging is completion-ordered (`outcome_ready`); `materializeReadyPrefix` places the contiguous ready prefix in source order in one commit, and `addedToolNames` takes effect only at placement. Under cancellation, no later call starts, every started promise is observed, unstarted calls receive their specified synthetic outcomes, and source-order materialization finishes before reconciliation continues.
 
 ### 2.9 Terminal transactions stay in their procedures — approved
 

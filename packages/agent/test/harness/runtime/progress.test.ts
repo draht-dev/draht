@@ -9,7 +9,15 @@ import { openFrameProgress, openToolProgress } from "../../../src/harness/runtim
 import { type Config, Drive, type LaneState as RuntimeLaneState } from "../../../src/harness/runtime/types.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
-import type { RunState, Session, Write } from "../../../src/harness/session/types.ts";
+import {
+	isRunOperationState,
+	type OperationState,
+	type RunAssistantEffectPendingOperation,
+	type RunCheckpointOperation,
+	runScopeOf,
+	type Session,
+	type Write,
+} from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
 import { deferred } from "./test-utils.ts";
 
@@ -55,24 +63,42 @@ function unusedWatch<T>(): WatchHandle<T> {
 	throw new Error("watch is not used by progress tests");
 }
 
-function runState(phase: RunState["phase"]): RunState {
+function runScope() {
 	return {
-		kind: "run",
-		control: { status: "running" },
+		control: { status: "running" as const },
 		settings: {
 			compaction: DEFAULT_COMPACTION_SETTINGS,
-			steeringMode: "all",
-			followUpMode: "all",
-			toolExecution: "parallel",
+			steeringMode: "all" as const,
+			followUpMode: "all" as const,
+			toolExecution: "parallel" as const,
 		},
-		phase,
 		inbox: { steer: [], followUp: [], writes: [] },
 		latestAssistantEntryId: null,
 	};
 }
 
+function assistantEffectPending(responseEntryId: string): RunAssistantEffectPendingOperation {
+	return {
+		...runScope(),
+		at: "run.assistant.effect_pending",
+		generationContext: {
+			stepId: "step",
+			triggerEntryId: "trigger",
+			configuration,
+			streamOptions: {},
+			retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
+			overflowRecoveryUsed: false,
+		},
+		attempt: 1,
+		responseEntryId,
+		usageId: "usage",
+		intendedOutputLimit: 100,
+		contextWindow: 1_000,
+	};
+}
+
 async function createFixture(
-	state: RunState,
+	state: OperationState,
 	storage = new FailingStorage(),
 ): Promise<{ lane: Lane<undefined>; drive: Drive; storage: FailingStorage }> {
 	const session = new StorageBackedSession(
@@ -145,7 +171,7 @@ describe("runtime active drive ownership", () => {
 		expect("beginAbort" in failed.gate).toBe(false);
 	});
 
-	it("owns installer cancellation, pass context, policy, and gate control", () => {
+	it("strips invocation cancellation from pass context and owns policy and gate control", () => {
 		const controller = new AbortController();
 		const drive = new Drive(
 			{ operationId, waitForRetry: true, pollDeferred: true },
@@ -153,7 +179,6 @@ describe("runtime active drive ownership", () => {
 		);
 
 		expect(drive.operationId).toBe(operationId);
-		expect(drive.installerSignal).toBe(controller.signal);
 		expect(drive.context.abortSignal).toBeUndefined();
 		expect(drive.waitForRetry).toBe(true);
 		expect(drive.deferredPermits).toBe(1);
@@ -168,27 +193,7 @@ describe("runtime active drive ownership", () => {
 describe("runtime progress channels", () => {
 	it("enqueues assistant frames in order, seals admission, and exposes the settlement delete", async () => {
 		const responseEntryId = "response";
-		const { lane, drive } = await createFixture(
-			runState({
-				kind: "assistant",
-				generation: {
-					status: "effect_pending",
-					context: {
-						stepId: "step",
-						triggerEntryId: "trigger",
-						configuration,
-						streamOptions: {},
-						retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
-						overflowRecoveryUsed: false,
-					},
-					attempt: 1,
-					responseEntryId,
-					usageId: "usage",
-					intendedOutputLimit: 100,
-					contextWindow: 1_000,
-				},
-			}),
-		);
+		const { lane, drive } = await createFixture(assistantEffectPending(responseEntryId));
 		const progress = openFrameProgress(lane, drive, responseEntryId);
 		const frames: AssistantMessageFrame[] = [
 			{ type: "text_delta", contentIndex: 0, delta: "a" },
@@ -217,27 +222,7 @@ describe("runtime progress channels", () => {
 
 	it("declines a queued frame after the authoritative projection leaves its phase without control reads", async () => {
 		const responseEntryId = "response";
-		const { lane, drive, storage } = await createFixture(
-			runState({
-				kind: "assistant",
-				generation: {
-					status: "effect_pending",
-					context: {
-						stepId: "step",
-						triggerEntryId: "trigger",
-						configuration,
-						streamOptions: {},
-						retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
-						overflowRecoveryUsed: false,
-					},
-					attempt: 1,
-					responseEntryId,
-					usageId: "usage",
-					intendedOutputLimit: 100,
-					contextWindow: 1_000,
-				},
-			}),
-		);
+		const { lane, drive, storage } = await createFixture(assistantEffectPending(responseEntryId));
 		const progress = openFrameProgress(lane, drive, responseEntryId);
 		const commitStarted = deferred();
 		const releaseCommit = deferred();
@@ -248,14 +233,12 @@ describe("runtime progress channels", () => {
 		const getValue = vi.spyOn(storage, "getValue");
 		const moving = lane.command((state) => {
 			const operation = state.operation;
-			if (operation?.state.kind !== "run") throw new Error("missing run");
-			const nextState: RunState = {
-				...operation.state,
-				phase: {
-					kind: "checkpoint",
-					continuation: { kind: "may_finish", includeFinalAssistant: true },
-					triggerEntryId: responseEntryId,
-				},
+			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
+			const nextState: RunCheckpointOperation = {
+				...runScopeOf(operation.state),
+				at: "run.checkpoint",
+				continuation: { kind: "may_finish", includeFinalAssistant: true },
+				triggerEntryId: responseEntryId,
 			};
 			return {
 				kind: "commit",
@@ -282,27 +265,7 @@ describe("runtime progress channels", () => {
 
 	it("declines a queued frame after terminal projection publication", async () => {
 		const responseEntryId = "response";
-		const { lane, drive, storage } = await createFixture(
-			runState({
-				kind: "assistant",
-				generation: {
-					status: "effect_pending",
-					context: {
-						stepId: "step",
-						triggerEntryId: "trigger",
-						configuration,
-						streamOptions: {},
-						retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
-						overflowRecoveryUsed: false,
-					},
-					attempt: 1,
-					responseEntryId,
-					usageId: "usage",
-					intendedOutputLimit: 100,
-					contextWindow: 1_000,
-				},
-			}),
-		);
+		const { lane, drive, storage } = await createFixture(assistantEffectPending(responseEntryId));
 		const progress = openFrameProgress(lane, drive, responseEntryId);
 		const commitStarted = deferred();
 		const releaseCommit = deferred();
@@ -343,30 +306,21 @@ describe("runtime progress channels", () => {
 		expect(getValue).not.toHaveBeenCalled();
 	});
 
-	it("replaces tool checkpoints and fences writes after owner identity changes", async () => {
+	it("replaces tool checkpoints in invocation order", async () => {
 		const invocationId = "result";
-		const { lane, drive } = await createFixture(
-			runState({
-				kind: "tools",
-				batch: {
-					assistantEntryId: "assistant",
-					configuration,
-					turnId: "turn",
-					calls: [{ status: "effect_pending", sourceIndex: 0, resultEntryId: invocationId, replay: "safe" }],
-				},
-			}),
-		);
+		const { lane, drive } = await createFixture({
+			...runScope(),
+			at: "run.tools",
+			batch: {
+				assistantEntryId: "assistant",
+				configuration,
+				turnId: "turn",
+				calls: [{ status: "effect_pending", sourceIndex: 0, resultEntryId: invocationId, replay: "safe" }],
+			},
+		} satisfies OperationState);
 		const progress = openToolProgress(lane, drive, "turn", 0, invocationId);
 		progress.write({ content: [{ type: "text", text: "first" }], details: {} });
 		progress.write({ content: [{ type: "text", text: "second" }], details: {} });
-		await progress.drain();
-		expect(
-			(await lane.session.getValue(storedValues.pendingToolOutput(operationId, invocationId), BACKGROUND_CONTEXT))
-				?.value.content,
-		).toEqual([{ type: "text", text: "second" }]);
-
-		lane.activeDrive = new Drive({ operationId }, BACKGROUND_CONTEXT);
-		progress.write({ content: [{ type: "text", text: "stale" }], details: {} });
 		await progress.drain();
 		expect(
 			(await lane.session.getValue(storedValues.pendingToolOutput(operationId, invocationId), BACKGROUND_CONTEXT))
@@ -376,27 +330,7 @@ describe("runtime progress channels", () => {
 
 	it("retains the rejecting write promise so drain propagates commit failure", async () => {
 		const responseEntryId = "response";
-		const { lane, drive, storage } = await createFixture(
-			runState({
-				kind: "assistant",
-				generation: {
-					status: "effect_pending",
-					context: {
-						stepId: "step",
-						triggerEntryId: "trigger",
-						configuration,
-						streamOptions: {},
-						retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
-						overflowRecoveryUsed: false,
-					},
-					attempt: 1,
-					responseEntryId,
-					usageId: "usage",
-					intendedOutputLimit: 100,
-					contextWindow: 1_000,
-				},
-			}),
-		);
+		const { lane, drive, storage } = await createFixture(assistantEffectPending(responseEntryId));
 		const failure = new Error("frame commit failed");
 		storage.failure = failure;
 		const progress = openFrameProgress(lane, drive, responseEntryId);

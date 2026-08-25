@@ -13,21 +13,23 @@ import {
 } from "../../execution/tools.ts";
 import { insertEntry, insertUsage } from "../../session/commit.ts";
 import { SessionInvariantError } from "../../session/session.ts";
-import type {
-	JsonValue,
-	MessageEntry,
-	NewEntry,
-	RunState,
-	ToolBatch,
-	ToolCall,
-	UsageRow,
-	Write,
+import {
+	type JsonValue,
+	type MessageEntry,
+	type NewEntry,
+	type OperationState,
+	type RunCheckpointOperation,
+	type RunToolsOperation,
+	runScopeOf,
+	type ToolBatch,
+	type ToolCall,
+	type UsageRow,
+	type Write,
 } from "../../session/types.ts";
 import {
 	branchTip,
 	deleteValue,
 	laneConfig,
-	operationState as operationStateValue,
 	operationToolArgs,
 	operationToolArgsPrefix,
 	operationToolMemo,
@@ -39,10 +41,10 @@ import {
 import type { AgentHarnessTool, AgentHarnessToolInvocation } from "../../types.ts";
 import type { Lane } from "../lane.ts";
 import { openToolProgress } from "../progress.ts";
-import type { Drive, LaneState, LostOwnership, ProcedureResult } from "../types.ts";
+import type { Drive, LaneState, ProcedureResult } from "../types.ts";
 
-type LocalResult = { kind: "committed" } | { kind: "state_changed" } | LostOwnership;
-type PlacementResult = { kind: "none" } | { kind: "committed"; complete: boolean } | LostOwnership;
+type LocalResult = { kind: "committed" } | { kind: "state_changed" };
+type PlacementResult = { kind: "none" } | { kind: "committed"; complete: boolean };
 
 type BatchSource = {
 	kind: "source";
@@ -72,20 +74,16 @@ class ToolInvocationEnded extends Error {
 	}
 }
 
-function batchMatches(current: ToolBatch, expected: ToolBatch): boolean {
-	return current.assistantEntryId === expected.assistantEntryId && current.turnId === expected.turnId;
-}
-
 function currentBatch<TContext extends object | undefined>(
 	lane: Lane<TContext>,
-	drive: Drive,
-	expected: ToolBatch,
-): { run: RunState; batch: ToolBatch } | undefined {
+): { run: RunToolsOperation; batch: ToolBatch } | undefined {
 	const operation = lane.state.operation;
-	if (operation?.meta.operationId !== drive.operationId || operation.state.kind !== "run") return undefined;
-	const run = operation.state;
-	if (run.phase.kind !== "tools" || !batchMatches(run.phase.batch, expected)) return undefined;
-	return { run, batch: run.phase.batch };
+	if (operation?.state.at !== "run.tools") return undefined;
+	return { run: operation.state, batch: operation.state.batch };
+}
+
+function toolOperation<TContext extends object | undefined>(lane: Lane<TContext>): RunToolsOperation {
+	return lane.state.operation!.state as RunToolsOperation;
 }
 
 function findCall(batch: ToolBatch, sourceIndex: number, resultEntryId: string): ToolCall | undefined {
@@ -103,8 +101,8 @@ function replaceCall(batch: ToolBatch, replacement: ToolCall): ToolBatch {
 	};
 }
 
-function withBatch(run: RunState, batch: ToolBatch): RunState {
-	return { ...run, phase: { kind: "tools", batch } };
+function withBatch(run: RunToolsOperation, batch: ToolBatch): RunToolsOperation {
+	return { ...runScopeOf(run), at: "run.tools", batch };
 }
 
 function validateMemoName(name: string): void {
@@ -128,37 +126,24 @@ async function readBatchSource<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
 	batch: ToolBatch,
-): Promise<BatchSource | LostOwnership> {
-	return lane.commandDriveOwned<BatchSource>(
-		drive,
-		async (state, reader) => {
-			const operation = state.operation;
-			if (
-				operation === null ||
-				operation.state.kind !== "run" ||
-				operation.state.phase.kind !== "tools" ||
-				!batchMatches(operation.state.phase.batch, batch)
-			) {
-				throw new SessionInvariantError("Tool procedure lost its batch source");
+): Promise<BatchSource> {
+	return lane.command<BatchSource>(async (_state, reader) => {
+		const entry = (await reader.getEntries([batch.assistantEntryId], drive.context)).get(batch.assistantEntryId);
+		if (entry?.type !== "message" || entry.message.role !== "assistant") {
+			throw new SessionInvariantError("Tool batch assistant entry is invalid");
+		}
+		const calls = new Map<number, AgentToolCall>();
+		for (const call of batch.calls) {
+			const block = entry.message.content[call.sourceIndex];
+			if (block?.type !== "toolCall") {
+				throw new SessionInvariantError(
+					`Tool call source index ${call.sourceIndex} does not name a tool-call block`,
+				);
 			}
-			const entry = (await reader.getEntries([batch.assistantEntryId], drive.context)).get(batch.assistantEntryId);
-			if (entry?.type !== "message" || entry.message.role !== "assistant") {
-				throw new SessionInvariantError("Tool batch assistant entry is invalid");
-			}
-			const calls = new Map<number, AgentToolCall>();
-			for (const call of batch.calls) {
-				const block = entry.message.content[call.sourceIndex];
-				if (block?.type !== "toolCall") {
-					throw new SessionInvariantError(
-						`Tool call source index ${call.sourceIndex} does not name a tool-call block`,
-					);
-				}
-				calls.set(call.sourceIndex, block);
-			}
-			return { kind: "return", result: { kind: "source", assistant: entry.message, calls } };
-		},
-		drive.context,
-	);
+			calls.set(call.sourceIndex, block);
+		}
+		return { kind: "return", result: { kind: "source", assistant: entry.message, calls } };
+	}, drive.context);
 }
 
 function invocationCapability<TContext extends object | undefined>(
@@ -170,15 +155,8 @@ function invocationCapability<TContext extends object | undefined>(
 	let active = true;
 	const ownsEffect = (state: LaneState): boolean => {
 		const operation = state.operation;
-		if (
-			operation?.meta.operationId !== drive.operationId ||
-			operation.state.kind !== "run" ||
-			operation.state.phase.kind !== "tools" ||
-			!batchMatches(operation.state.phase.batch, batch)
-		) {
-			return false;
-		}
-		return findCall(operation.state.phase.batch, call.sourceIndex, call.resultEntryId)?.status === "effect_pending";
+		if (operation?.state.at !== "run.tools") return false;
+		return findCall(operation.state.batch, call.sourceIndex, call.resultEntryId)?.status === "effect_pending";
 	};
 	const ended = (): ToolInvocationEnded => new ToolInvocationEnded();
 	return {
@@ -190,23 +168,19 @@ function invocationCapability<TContext extends object | undefined>(
 				validateMemoName(name);
 				if (!active) return Promise.reject(ended());
 				return lane
-					.commandDriveOwned<{ kind: "value"; value: JsonValue | undefined } | { kind: "ended" }>(
-						drive,
-						async (state, reader) => {
-							if (!ownsEffect(state)) return { kind: "return", result: { kind: "ended" } as const };
-							const stored = await reader.getValue(
-								operationToolMemo(drive.operationId, call.resultEntryId, name),
-								drive.context,
-							);
-							return {
-								kind: "return",
-								result: { kind: "value", value: stored?.value } as const,
-							};
-						},
-						drive.context,
-					)
+					.command<{ kind: "value"; value: JsonValue | undefined } | { kind: "ended" }>(async (state, reader) => {
+						if (!ownsEffect(state)) return { kind: "return", result: { kind: "ended" } as const };
+						const stored = await reader.getValue(
+							operationToolMemo(drive.operationId, call.resultEntryId, name),
+							drive.context,
+						);
+						return {
+							kind: "return",
+							result: { kind: "value", value: stored?.value } as const,
+						};
+					}, drive.context)
 					.then((result) => {
-						if (result.kind === "lost_ownership" || result.kind === "ended") throw ended();
+						if (result.kind === "ended") throw ended();
 						return result.value;
 					});
 			},
@@ -214,22 +188,18 @@ function invocationCapability<TContext extends object | undefined>(
 				validateMemoName(name);
 				if (!active) return Promise.reject(ended());
 				return lane
-					.commandDriveOwned<{ kind: "written" } | { kind: "ended" }>(
-						drive,
-						(state) => {
-							if (!ownsEffect(state)) return { kind: "return", result: { kind: "ended" } as const };
-							const address = operationToolMemo(drive.operationId, call.resultEntryId, name);
-							return {
-								kind: "commit",
-								writes: [value === undefined ? deleteValue(address) : setValue(address, value)],
-								next: state,
-								materialize: () => ({ kind: "written" }) as const,
-							};
-						},
-						drive.context,
-					)
+					.command<{ kind: "written" } | { kind: "ended" }>((state) => {
+						if (!ownsEffect(state)) return { kind: "return", result: { kind: "ended" } as const };
+						const address = operationToolMemo(drive.operationId, call.resultEntryId, name);
+						return {
+							kind: "commit",
+							writes: [value === undefined ? deleteValue(address) : setValue(address, value)],
+							next: state,
+							materialize: () => ({ kind: "written" }) as const,
+						};
+					}, drive.context)
 					.then((result) => {
-						if (result.kind === "lost_ownership" || result.kind === "ended") throw ended();
+						if (result.kind === "ended") throw ended();
 					});
 			},
 		},
@@ -288,20 +258,10 @@ async function commitIntent<TContext extends object | undefined>(
 	args: Record<string, JsonValue>,
 	replay: "never" | "safe",
 ): Promise<LocalResult> {
-	return lane.commandDriveOwned<LocalResult>(
-		drive,
-		(state) => {
-			const operation = state.operation;
-			if (
-				operation === null ||
-				operation.state.kind !== "run" ||
-				operation.state.phase.kind !== "tools" ||
-				!batchMatches(operation.state.phase.batch, batch)
-			) {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
-			const run = operation.state;
-			const currentBatchState = operation.state.phase.batch;
+	return lane.mutateOperation<RunToolsOperation, LocalResult>(
+		toolOperation(lane),
+		(_state, run) => {
+			const currentBatchState = run.batch;
 			if (run.control.status === "cancel_requested") {
 				return { kind: "return", result: { kind: "state_changed" } as const };
 			}
@@ -318,11 +278,8 @@ async function commitIntent<TContext extends object | undefined>(
 			const nextRun = withBatch(run, replaceCall(currentBatchState, effectPending));
 			return {
 				kind: "commit",
-				writes: [
-					setValue(operationToolArgs(drive.operationId, batch.turnId, current.sourceIndex), args),
-					setValue(operationStateValue(drive.operationId), nextRun),
-				],
-				next: { ...state, operation: { meta: operation.meta, state: nextRun } },
+				writes: [setValue(operationToolArgs(drive.operationId, batch.turnId, current.sourceIndex), args)],
+				operationState: nextRun,
 				materialize: () => ({ kind: "committed" }) as const,
 			};
 		},
@@ -333,25 +290,14 @@ async function commitIntent<TContext extends object | undefined>(
 async function stageOutcome<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	batch: ToolBatch,
 	call: ToolCall,
 	message: ToolResultMessage<unknown>,
 	terminate: boolean,
 ): Promise<LocalResult> {
-	return lane.commandDriveOwned<LocalResult>(
-		drive,
-		async (state, reader) => {
-			const operation = state.operation;
-			if (
-				operation === null ||
-				operation.state.kind !== "run" ||
-				operation.state.phase.kind !== "tools" ||
-				!batchMatches(operation.state.phase.batch, batch)
-			) {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
-			const run = operation.state;
-			const currentBatchState = operation.state.phase.batch;
+	return lane.mutateOperation<RunToolsOperation, LocalResult>(
+		toolOperation(lane),
+		async (_state, run, _meta, reader) => {
+			const currentBatchState = run.batch;
 			const current = findCall(currentBatchState, call.sourceIndex, call.resultEntryId);
 			if (
 				current === undefined ||
@@ -377,9 +323,8 @@ async function stageOutcome<TContext extends object | undefined>(
 					setValue(pendingEntry(current.resultEntryId), { type: "message", payload: message }),
 					deleteValue(pendingToolOutput(drive.operationId, current.resultEntryId)),
 					...memos.map(({ address }) => deleteValue(address)),
-					setValue(operationStateValue(drive.operationId), nextRun),
 				],
-				next: { ...state, operation: { meta: operation.meta, state: nextRun } },
+				operationState: nextRun,
 				materialize: () => ({ kind: "committed" }) as const,
 			};
 		},
@@ -392,20 +337,11 @@ async function clearReplayCheckpoint<TContext extends object | undefined>(
 	drive: Drive,
 	batch: ToolBatch,
 	call: Extract<ToolCall, { status: "effect_pending" }>,
-): Promise<{ kind: "args"; args: Record<string, JsonValue> } | { kind: "state_changed" } | LostOwnership> {
-	return lane.commandDriveOwned<{ kind: "args"; args: Record<string, JsonValue> } | { kind: "state_changed" }>(
-		drive,
+): Promise<{ kind: "args"; args: Record<string, JsonValue> } | { kind: "state_changed" }> {
+	return lane.command<{ kind: "args"; args: Record<string, JsonValue> } | { kind: "state_changed" }>(
 		async (state, reader) => {
-			const operation = state.operation;
-			if (
-				operation === null ||
-				operation.state.kind !== "run" ||
-				operation.state.phase.kind !== "tools" ||
-				!batchMatches(operation.state.phase.batch, batch)
-			) {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
-			const current = findCall(operation.state.phase.batch, call.sourceIndex, call.resultEntryId);
+			const run = state.operation!.state as RunToolsOperation;
+			const current = findCall(run.batch, call.sourceIndex, call.resultEntryId);
 			if (current?.status !== "effect_pending") {
 				return { kind: "return", result: { kind: "state_changed" } as const };
 			}
@@ -430,26 +366,12 @@ async function clearReplayCheckpoint<TContext extends object | undefined>(
 async function readCheckpoint<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	batch: ToolBatch,
 	call: Extract<ToolCall, { status: "effect_pending" }>,
-): Promise<
-	{ kind: "checkpoint"; value: AgentToolResult<unknown> | undefined } | { kind: "state_changed" } | LostOwnership
-> {
-	return lane.commandDriveOwned<
-		{ kind: "checkpoint"; value: AgentToolResult<unknown> | undefined } | { kind: "state_changed" }
-	>(
-		drive,
+): Promise<{ kind: "checkpoint"; value: AgentToolResult<unknown> | undefined } | { kind: "state_changed" }> {
+	return lane.command<{ kind: "checkpoint"; value: AgentToolResult<unknown> | undefined } | { kind: "state_changed" }>(
 		async (state, reader) => {
-			const operation = state.operation;
-			if (
-				operation === null ||
-				operation.state.kind !== "run" ||
-				operation.state.phase.kind !== "tools" ||
-				!batchMatches(operation.state.phase.batch, batch)
-			) {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
-			const current = findCall(operation.state.phase.batch, call.sourceIndex, call.resultEntryId);
+			const run = state.operation!.state as RunToolsOperation;
+			const current = findCall(run.batch, call.sourceIndex, call.resultEntryId);
 			if (current?.status !== "effect_pending") {
 				return { kind: "return", result: { kind: "state_changed" } as const };
 			}
@@ -545,7 +467,6 @@ async function executeAndStage<TContext extends object | undefined>(
 		return stageOutcome(
 			lane,
 			drive,
-			batch,
 			call,
 			recovery ? interruptedMessage(cleared.toolCall, undefined) : abortedMessage(cleared.toolCall),
 			false,
@@ -582,7 +503,7 @@ async function executeAndStage<TContext extends object | undefined>(
 		if (!(error instanceof AbortRequested)) throw error;
 		patch = undefined;
 	}
-	const current = currentBatch(lane, drive, batch);
+	const current = currentBatch(lane);
 	const cancelled = current?.run.control.status === "cancel_requested";
 	const finalized = finalizeToolCall(cleared, executed, cancelled ? { ...patch, terminate: false } : patch);
 	await lane.emitBatch(
@@ -602,102 +523,81 @@ async function executeAndStage<TContext extends object | undefined>(
 		],
 		drive.context,
 	);
-	return stageOutcome(
-		lane,
-		drive,
-		batch,
-		call,
-		createToolResultMessage(finalized),
-		cancelled ? false : finalized.terminate,
-	);
+	return stageOutcome(lane, drive, call, createToolResultMessage(finalized), cancelled ? false : finalized.terminate);
 }
 
 async function readPlacement<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	batch: ToolBatch,
-): Promise<PlacementRead | { kind: "none" } | LostOwnership> {
-	return lane.commandDriveOwned<PlacementRead | { kind: "none" }>(
-		drive,
-		async (state, reader) => {
-			const operation = state.operation;
+): Promise<PlacementRead | { kind: "none" }> {
+	return lane.command<PlacementRead | { kind: "none" }>(async (state, reader) => {
+		const operation = state.operation;
+		if (operation?.state.at !== "run.tools") return { kind: "return", result: { kind: "none" } as const };
+		const current = operation.state.batch;
+		let first = current.calls.findIndex((call) => call.status !== "completed");
+		if (first === -1) return { kind: "return", result: { kind: "none" } as const };
+		const ready: Array<Extract<ToolCall, { status: "outcome_ready" }>> = [];
+		while (first < current.calls.length) {
+			const call = current.calls[first]!;
+			if (call.status !== "outcome_ready") break;
+			ready.push(call);
+			first += 1;
+		}
+		if (ready.length === 0) return { kind: "return", result: { kind: "none" } as const };
+
+		const assistantEntry = (await reader.getEntries([current.assistantEntryId], drive.context)).get(
+			current.assistantEntryId,
+		);
+		if (assistantEntry?.type !== "message" || assistantEntry.message.role !== "assistant") {
+			throw new SessionInvariantError("Tool placement assistant entry is invalid");
+		}
+		const items: PlacementItem[] = [];
+		for (const call of ready) {
+			const stored = await reader.getValue(pendingEntry(call.resultEntryId), drive.context);
+			if (stored?.value.type !== "message" || !isToolResultMessage(stored.value.payload)) {
+				throw new SessionInvariantError(`Tool call ${call.resultEntryId} is missing its staged result`);
+			}
+			const block = assistantEntry.message.content[call.sourceIndex];
 			if (
-				operation === null ||
-				operation.state.kind !== "run" ||
-				operation.state.phase.kind !== "tools" ||
-				!batchMatches(operation.state.phase.batch, batch)
+				block?.type !== "toolCall" ||
+				stored.value.payload.toolCallId !== block.id ||
+				stored.value.payload.toolName !== block.name
 			) {
-				return { kind: "return", result: { kind: "none" } as const };
+				throw new SessionInvariantError(`Tool call ${call.resultEntryId} has a mismatched staged result`);
 			}
-			const current = operation.state.phase.batch;
-			let first = current.calls.findIndex((call) => call.status !== "completed");
-			if (first === -1) return { kind: "return", result: { kind: "none" } as const };
-			const ready: Array<Extract<ToolCall, { status: "outcome_ready" }>> = [];
-			while (first < current.calls.length) {
-				const call = current.calls[first]!;
-				if (call.status !== "outcome_ready") break;
-				ready.push(call);
-				first += 1;
-			}
-			if (ready.length === 0) return { kind: "return", result: { kind: "none" } as const };
+			items.push({ call, message: stored.value.payload });
+		}
 
-			const assistantEntry = (await reader.getEntries([current.assistantEntryId], drive.context)).get(
-				current.assistantEntryId,
-			);
-			if (assistantEntry?.type !== "message" || assistantEntry.message.role !== "assistant") {
-				throw new SessionInvariantError("Tool placement assistant entry is invalid");
-			}
-			const items: PlacementItem[] = [];
-			for (const call of ready) {
-				const stored = await reader.getValue(pendingEntry(call.resultEntryId), drive.context);
-				if (stored?.value.type !== "message" || !isToolResultMessage(stored.value.payload)) {
-					throw new SessionInvariantError(`Tool call ${call.resultEntryId} is missing its staged result`);
+		let turnResults: ToolResultMessage<unknown>[] | undefined;
+		if (first === current.calls.length) {
+			const placedIds = current.calls
+				.filter((call) => call.status === "completed")
+				.map((call) => call.resultEntryId);
+			const placed = await reader.getEntries(placedIds, drive.context);
+			const staged = new Map(items.map((item) => [item.call.resultEntryId, item.message]));
+			turnResults = current.calls.map((call) => {
+				const message =
+					staged.get(call.resultEntryId) ??
+					(() => {
+						const entry = placed.get(call.resultEntryId);
+						return entry?.type === "message" && isToolResultMessage(entry.message) ? entry.message : undefined;
+					})();
+				if (message === undefined) {
+					throw new SessionInvariantError(`Completed tool call ${call.resultEntryId} is missing its result entry`);
 				}
-				const block = assistantEntry.message.content[call.sourceIndex];
-				if (
-					block?.type !== "toolCall" ||
-					stored.value.payload.toolCallId !== block.id ||
-					stored.value.payload.toolName !== block.name
-				) {
-					throw new SessionInvariantError(`Tool call ${call.resultEntryId} has a mismatched staged result`);
-				}
-				items.push({ call, message: stored.value.payload });
-			}
-
-			let turnResults: ToolResultMessage<unknown>[] | undefined;
-			if (first === current.calls.length) {
-				const placedIds = current.calls
-					.filter((call) => call.status === "completed")
-					.map((call) => call.resultEntryId);
-				const placed = await reader.getEntries(placedIds, drive.context);
-				const staged = new Map(items.map((item) => [item.call.resultEntryId, item.message]));
-				turnResults = current.calls.map((call) => {
-					const message =
-						staged.get(call.resultEntryId) ??
-						(() => {
-							const entry = placed.get(call.resultEntryId);
-							return entry?.type === "message" && isToolResultMessage(entry.message) ? entry.message : undefined;
-						})();
-					if (message === undefined) {
-						throw new SessionInvariantError(
-							`Completed tool call ${call.resultEntryId} is missing its result entry`,
-						);
-					}
-					return message;
-				});
-			}
-			return {
-				kind: "return",
-				result: {
-					kind: "placement",
-					items,
-					assistant: assistantEntry.message,
-					...(turnResults === undefined ? {} : { turnResults }),
-				},
-			};
-		},
-		drive.context,
-	);
+				return message;
+			});
+		}
+		return {
+			kind: "return",
+			result: {
+				kind: "placement",
+				items,
+				assistant: assistantEntry.message,
+				...(turnResults === undefined ? {} : { turnResults }),
+			},
+		};
+	}, drive.context);
 }
 
 async function commitPlacement<TContext extends object | undefined>(
@@ -709,37 +609,10 @@ async function commitPlacement<TContext extends object | undefined>(
 	const usageIds = read.items.map((item) =>
 		item.message.usage === undefined ? undefined : lane.session.idGenerator.next(),
 	);
-	return lane.commandDriveOwned<PlacementResult>(
-		drive,
-		async (state, reader) => {
-			const operation = state.operation;
-			if (
-				operation === null ||
-				operation.state.kind !== "run" ||
-				operation.state.phase.kind !== "tools" ||
-				!batchMatches(operation.state.phase.batch, batch)
-			) {
-				return { kind: "return", result: { kind: "none" } as const };
-			}
-			const run = operation.state;
-			const current = operation.state.phase.batch;
-			const first = current.calls.findIndex((call) => call.status !== "completed");
-			if (first === -1) return { kind: "return", result: { kind: "none" } as const };
-			for (const [offset, item] of read.items.entries()) {
-				const call = current.calls[first + offset];
-				if (
-					call?.status !== "outcome_ready" ||
-					call.sourceIndex !== item.call.sourceIndex ||
-					call.resultEntryId !== item.call.resultEntryId
-				) {
-					return { kind: "return", result: { kind: "none" } as const };
-				}
-				const stored = await reader.getValue(pendingEntry(call.resultEntryId), drive.context);
-				if (stored?.value.type !== "message" || !isToolResultMessage(stored.value.payload)) {
-					throw new SessionInvariantError(`Tool call ${call.resultEntryId} is missing its staged result`);
-				}
-			}
-
+	return lane.mutateOperation<RunToolsOperation, PlacementResult>(
+		toolOperation(lane),
+		async (state, run, _meta, reader) => {
+			const current = run.batch;
 			const writes: Write[] = [];
 			const eventEntries: Array<{ entry: NewEntry<MessageEntry>; seqIndex: number }> = [];
 			const eventUsage: Array<{ row: Omit<UsageRow, "seq">; seqIndex: number }> = [];
@@ -801,19 +674,18 @@ async function commitPlacement<TContext extends object | undefined>(
 			}
 			writes.push(setValue(branchTip(lane.name), parentId));
 
-			let nextRun: RunState;
+			let nextRun: OperationState;
 			if (complete) {
 				const allTerminate = completedCalls.every((call) => call.status === "completed" && call.terminate);
-				nextRun = {
-					...run,
-					phase: {
-						kind: "checkpoint",
-						continuation: allTerminate
-							? { kind: "may_finish", includeFinalAssistant: false }
-							: { kind: "need_assistant", overflowRecoveryUsed: false },
-						triggerEntryId: parentId!,
-					},
+				const checkpoint: RunCheckpointOperation = {
+					...runScopeOf(run),
+					at: "run.checkpoint",
+					continuation: allTerminate
+						? { kind: "may_finish", includeFinalAssistant: false }
+						: { kind: "need_assistant", overflowRecoveryUsed: false },
+					triggerEntryId: parentId!,
 				};
+				nextRun = checkpoint;
 				const args = await reader.scanValues(
 					operationToolArgsPrefix(drive.operationId, batch.turnId),
 					drive.context,
@@ -822,16 +694,11 @@ async function commitPlacement<TContext extends object | undefined>(
 			} else {
 				nextRun = withBatch(run, { ...current, calls: completedCalls });
 			}
-			writes.push(setValue(operationStateValue(drive.operationId), nextRun));
 			return {
 				kind: "commit",
 				writes,
-				next: {
-					...state,
-					tipId: parentId,
-					configuration: nextConfiguration,
-					operation: { meta: operation.meta, state: nextRun },
-				},
+				operationState: nextRun,
+				lane: { tipId: parentId, configuration: nextConfiguration },
 				materialize: () => ({ kind: "committed", complete }) as const,
 				events: (commit) => {
 					const events: HarnessEvent[] = [];
@@ -874,8 +741,8 @@ async function materializeReady<TContext extends object | undefined>(
 	batch: ToolBatch,
 	recovery: boolean,
 ): Promise<PlacementResult> {
-	const read = await readPlacement(lane, drive, batch);
-	if (read.kind === "lost_ownership" || read.kind === "none") return read;
+	const read = await readPlacement(lane, drive);
+	if (read.kind === "none") return read;
 	await lane.emitBatch(
 		read.items.flatMap(({ call, message }) => [
 			{
@@ -928,7 +795,7 @@ async function beginFreshCall<TContext extends object | undefined>(
 ): Promise<{ job: Promise<LocalResult> }> {
 	const toolCall = toolCallFor(sources, call);
 	if (sources.assistant.stopReason === "length") {
-		return { job: stageOutcome(lane, drive, batch, call, truncatedMessage(toolCall), false) };
+		return { job: stageOutcome(lane, drive, call, truncatedMessage(toolCall), false) };
 	}
 	const prepared = prepareToolCall(toolCall, tools);
 	if ("kind" in prepared) {
@@ -939,7 +806,7 @@ async function beginFreshCall<TContext extends object | undefined>(
 			terminate: prepared.terminate,
 		};
 		return {
-			job: stageOutcome(lane, drive, batch, call, createToolResultMessage(finalized), finalized.terminate),
+			job: stageOutcome(lane, drive, call, createToolResultMessage(finalized), finalized.terminate),
 		};
 	}
 
@@ -960,7 +827,7 @@ async function beginFreshCall<TContext extends object | undefined>(
 	} catch (error) {
 		if (!(error instanceof AbortRequested)) throw error;
 		await error.cancellation;
-		return { job: stageOutcome(lane, drive, batch, call, abortedMessage(toolCall), false) };
+		return { job: stageOutcome(lane, drive, call, abortedMessage(toolCall), false) };
 	}
 	const cleared = applyBeforeToolDecision(prepared, decision);
 	if ("kind" in cleared) {
@@ -971,17 +838,12 @@ async function beginFreshCall<TContext extends object | undefined>(
 			terminate: cleared.terminate,
 		};
 		return {
-			job: stageOutcome(lane, drive, batch, call, createToolResultMessage(finalized), finalized.terminate),
+			job: stageOutcome(lane, drive, call, createToolResultMessage(finalized), finalized.terminate),
 		};
 	}
 	const intent = await commitIntent(lane, drive, batch, call, cleared.args, cleared.tool.replay ?? "never");
 	if (intent.kind !== "committed") {
-		return {
-			job:
-				intent.kind === "lost_ownership"
-					? Promise.resolve(intent)
-					: stageOutcome(lane, drive, batch, call, abortedMessage(toolCall), false),
-		};
+		return { job: stageOutcome(lane, drive, call, abortedMessage(toolCall), false) };
 	}
 	const effectPending: Extract<ToolCall, { status: "effect_pending" }> = {
 		status: "effect_pending",
@@ -1012,43 +874,11 @@ async function beginRecoveryCall<TContext extends object | undefined>(
 		const cleared: ClearedToolCall<TContext> = { toolCall, tool, args: replay.args };
 		return { job: executeAndStage(lane, drive, batch, call, cleared, toolContext, true) };
 	}
-	const checkpoint = await readCheckpoint(lane, drive, batch, call);
+	const checkpoint = await readCheckpoint(lane, drive, call);
 	if (checkpoint.kind !== "checkpoint") return { job: Promise.resolve(checkpoint) };
 	return {
-		job: stageOutcome(lane, drive, batch, call, interruptedMessage(toolCall, checkpoint.value), false),
+		job: stageOutcome(lane, drive, call, interruptedMessage(toolCall, checkpoint.value), false),
 	};
-}
-
-async function runCancelled<TContext extends object | undefined>(
-	lane: Lane<TContext>,
-	drive: Drive,
-	batch: ToolBatch,
-	sources: BatchSource,
-	recovery: boolean,
-): Promise<ProcedureResult> {
-	for (let transition = 0; transition <= batch.calls.length * 2 + 1; transition += 1) {
-		const placement = await materializeReady(lane, drive, batch, recovery);
-		if (placement.kind === "lost_ownership") return placement;
-		const current = currentBatch(lane, drive, batch);
-		if (current === undefined) return { kind: "continue" };
-		const call = current.batch.calls.find((candidate) => candidate.status !== "completed");
-		if (call === undefined) throw new SessionInvariantError("Tool batch remained open after every call completed");
-		if (call.status === "outcome_ready") {
-			throw new SessionInvariantError("Ready tool outcome was not materialized");
-		}
-		const toolCall = toolCallFor(sources, call);
-		let staged: LocalResult;
-		if (call.status === "planned") {
-			staged = await stageOutcome(lane, drive, batch, call, abortedMessage(toolCall), false);
-		} else {
-			const checkpoint = await readCheckpoint(lane, drive, batch, call);
-			if (checkpoint.kind === "lost_ownership") return checkpoint;
-			if (checkpoint.kind === "state_changed") continue;
-			staged = await stageOutcome(lane, drive, batch, call, interruptedMessage(toolCall, checkpoint.value), false);
-		}
-		if (staged.kind === "lost_ownership") return staged;
-	}
-	throw new SessionInvariantError("Cancelled tool batch exceeded its bounded transition count");
 }
 
 async function runSequential<TContext extends object | undefined>(
@@ -1056,36 +886,50 @@ async function runSequential<TContext extends object | undefined>(
 	drive: Drive,
 	batch: ToolBatch,
 	sources: BatchSource,
-	tools: AgentHarnessTool<TContext>[],
-	toolsByName: Map<string, AgentHarnessTool<TContext>>,
-	toolContext: TContext,
+	execution:
+		| {
+				tools: AgentHarnessTool<TContext>[];
+				toolsByName: Map<string, AgentHarnessTool<TContext>>;
+				toolContext: TContext;
+		  }
+		| undefined,
 	recovery: boolean,
 ): Promise<ProcedureResult> {
 	for (let transition = 0; transition <= batch.calls.length * 2 + 1; transition += 1) {
-		const placement = await materializeReady(lane, drive, batch, recovery);
-		if (placement.kind === "lost_ownership") return placement;
-		const current = currentBatch(lane, drive, batch);
+		await materializeReady(lane, drive, batch, recovery);
+		const current = currentBatch(lane);
 		if (current === undefined) return { kind: "continue" };
 		const call = current.batch.calls.find((candidate) => candidate.status !== "completed");
 		if (call === undefined) throw new SessionInvariantError("Tool batch remained open after every call completed");
-		if (call.status === "outcome_ready") {
-			throw new SessionInvariantError("Ready tool outcome was not materialized");
+		if (call.status === "outcome_ready") throw new SessionInvariantError("Ready tool outcome was not materialized");
+
+		if (current.run.control.status === "cancel_requested") {
+			const toolCall = toolCallFor(sources, call);
+			if (call.status === "planned") {
+				await stageOutcome(lane, drive, call, abortedMessage(toolCall), false);
+			} else {
+				const checkpoint = await readCheckpoint(lane, drive, call);
+				if (checkpoint.kind === "state_changed") continue;
+				await stageOutcome(lane, drive, call, interruptedMessage(toolCall, checkpoint.value), false);
+			}
+			continue;
 		}
+
+		if (execution === undefined) throw new SessionInvariantError("Running tool batch is missing execution context");
 		const started =
 			call.status === "planned"
-				? await beginFreshCall(lane, drive, batch, sources, call, tools, toolContext, recovery)
+				? await beginFreshCall(lane, drive, batch, sources, call, execution.tools, execution.toolContext, recovery)
 				: await beginRecoveryCall(
 						lane,
 						drive,
 						batch,
 						sources,
 						call,
-						toolsByName,
-						toolContext,
-						current.run.control.status === "cancel_requested",
+						execution.toolsByName,
+						execution.toolContext,
+						false,
 					);
-		const result = await started.job;
-		if (result.kind === "lost_ownership") return result;
+		await started.job;
 	}
 	throw new SessionInvariantError("Sequential tool batch exceeded its bounded transition count");
 }
@@ -1107,11 +951,11 @@ async function runParallel<TContext extends object | undefined>(
 		return scheduled;
 	};
 	const jobs: Promise<LocalResult>[] = [];
-	const snapshot = currentBatch(lane, drive, batch);
+	const snapshot = currentBatch(lane);
 	if (snapshot === undefined) return { kind: "continue" };
 	for (const call of snapshot.batch.calls) {
 		if (call.status === "completed" || call.status === "outcome_ready") continue;
-		const current = currentBatch(lane, drive, batch);
+		const current = currentBatch(lane);
 		if (current === undefined) break;
 		const started =
 			call.status === "planned"
@@ -1133,10 +977,8 @@ async function runParallel<TContext extends object | undefined>(
 		void job.catch(() => {});
 		jobs.push(job);
 	}
-	const results = await Promise.all(jobs);
-	if (results.some((result) => result.kind === "lost_ownership")) return { kind: "lost_ownership" };
-	const placement = await scheduleMaterialization();
-	if (placement.kind === "lost_ownership") return placement;
+	await Promise.all(jobs);
+	await scheduleMaterialization();
 	return { kind: "continue" };
 }
 
@@ -1144,12 +986,9 @@ async function runParallel<TContext extends object | undefined>(
 export async function runTools<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunState,
-	batch: ToolBatch,
+	run: RunToolsOperation,
 ): Promise<ProcedureResult> {
-	if (run.phase.kind !== "tools" || !batchMatches(run.phase.batch, batch)) {
-		throw new SessionInvariantError("runTools requires its current tool batch");
-	}
+	const batch = run.batch;
 	const recovery = batch.calls.some((call) => call.status === "effect_pending" || call.status === "outcome_ready");
 	if (recovery) {
 		await lane.emitBatch(
@@ -1165,25 +1004,19 @@ export async function runTools<TContext extends object | undefined>(
 			drive.context,
 		);
 	}
-	const initialPlacement = await materializeReady(lane, drive, batch, recovery);
-	if (initialPlacement.kind === "lost_ownership") return initialPlacement;
-	if (currentBatch(lane, drive, batch) === undefined) return { kind: "continue" };
+	await materializeReady(lane, drive, batch, recovery);
+	if (currentBatch(lane) === undefined) return { kind: "continue" };
 
 	const sources = await readBatchSource(lane, drive, batch);
-	if (sources.kind === "lost_ownership") return sources;
-	const beforeResolution = currentBatch(lane, drive, batch);
-	if (beforeResolution === undefined) return { kind: "continue" };
-	if (beforeResolution.run.control.status === "cancel_requested") {
-		return runCancelled(lane, drive, batch, sources, recovery);
+	if (toolOperation(lane).control.status === "cancel_requested") {
+		return runSequential(lane, drive, batch, sources, undefined, recovery);
 	}
 	const config = lane.readConfig();
 	const active = new Set(batch.configuration.activeToolNames);
 	const tools = config.tools.filter((tool) => active.has(tool.name));
 	const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
 	const toolContext = await resolveToolContext(lane, drive);
-	const current = currentBatch(lane, drive, batch);
-	if (current === undefined) return { kind: "continue" };
-	return current.run.settings.toolExecution === "sequential"
-		? runSequential(lane, drive, batch, sources, tools, toolsByName, toolContext, recovery)
+	return toolOperation(lane).settings.toolExecution === "sequential"
+		? runSequential(lane, drive, batch, sources, { tools, toolsByName, toolContext }, recovery)
 		: runParallel(lane, drive, batch, sources, tools, toolsByName, toolContext, recovery);
 }

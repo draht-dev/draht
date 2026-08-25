@@ -23,13 +23,18 @@ import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import { GatingStorage } from "../../../src/harness/session/testing/gating-storage.ts";
 import { InstrumentedStorage } from "../../../src/harness/session/testing/instrumented-storage.ts";
-import type {
-	Deferred,
-	Generation,
-	LaneConfiguration,
-	RunState,
-	Session,
-	Write,
+import {
+	isRunOperationState,
+	type LaneConfiguration,
+	type OperationState,
+	type RunAssistantReadyOperation,
+	type RunAssistantRetryWaitOperation,
+	type RunDeferredEffectPendingOperation,
+	type RunDeferredSuspendedOperation,
+	type RunOperationState,
+	runScopeOf,
+	type Session,
+	type Write,
 } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
 
@@ -133,29 +138,30 @@ async function createFixture(
 	return { backend, gating, storage, session, lane, drive, models, faux, hooks, events, config };
 }
 
-function currentRun(fixture: Fixture): RunState {
+function currentRun(fixture: Fixture): RunOperationState {
 	const operation = fixture.lane.state.operation;
-	if (operation?.state.kind !== "run") throw new Error("fixture has no run");
+	if (operation === null || !isRunOperationState(operation.state)) throw new Error("fixture has no run");
 	return operation.state;
 }
 
-async function advanceToReady(fixture: Fixture): Promise<Extract<Generation, { status: "ready" }>> {
+async function advanceToReady(fixture: Fixture): Promise<RunAssistantReadyOperation> {
+	const starting = currentRun(fixture);
+	if (starting.at !== "run.starting") throw new Error("run did not start at its initial boundary");
+	await startRun(fixture.lane, fixture.drive, starting);
 	let run = currentRun(fixture);
-	await startRun(fixture.lane, fixture.drive, run);
+	if (run.at !== "run.checkpoint") throw new Error("run did not reach checkpoint");
+	await runCheckpoint(fixture.lane, fixture.drive, run);
 	run = currentRun(fixture);
-	if (run.phase.kind !== "checkpoint") throw new Error("run did not reach checkpoint");
-	await runCheckpoint(fixture.lane, fixture.drive, run, run.phase);
-	run = currentRun(fixture);
-	if (run.phase.kind !== "assistant" || run.phase.generation.status !== "ready") {
+	if (run.at !== "run.assistant.ready") {
 		throw new Error("run did not reach ready generation");
 	}
-	return run.phase.generation;
+	return run;
 }
 
-async function replaceRunState(fixture: Fixture, nextState: RunState, extraWrites: Write[] = []): Promise<void> {
+async function replaceRunState(fixture: Fixture, nextState: OperationState, extraWrites: Write[] = []): Promise<void> {
 	await fixture.lane.command((state) => {
 		const operation = state.operation;
-		if (operation?.state.kind !== "run") throw new Error("fixture has no run");
+		if (operation === null || !isRunOperationState(operation.state)) throw new Error("fixture has no run");
 		return {
 			kind: "commit",
 			writes: [...extraWrites, storedValues.setValue(storedValues.operationState(operationId), nextState)],
@@ -168,23 +174,24 @@ async function replaceRunState(fixture: Fixture, nextState: RunState, extraWrite
 async function submitDeferred(
 	fixture: Fixture,
 	response: AssistantMessage = fauxAssistantMessage("done", { timestamp: 20 }),
-): Promise<Extract<Deferred, { status: "suspended" }>> {
+): Promise<RunDeferredSuspendedOperation> {
 	fixture.faux.setResponses([response]);
 	const ready = await advanceToReady(fixture);
-	await runGeneration(fixture.lane, fixture.drive, currentRun(fixture), ready);
+	await runGeneration(fixture.lane, fixture.drive, ready);
 	const run = currentRun(fixture);
-	if (run.phase.kind !== "deferred" || run.phase.deferred.status !== "suspended") {
+	if (run.at !== "run.deferred.suspended") {
 		throw new Error("initial request did not suspend");
 	}
-	return run.phase.deferred;
+	return run;
 }
 
 async function installUnknownPoll(
 	fixture: Fixture,
-	suspended: Extract<Deferred, { status: "suspended" }>,
-): Promise<Extract<Deferred, { status: "effect_pending" }>> {
-	const effectPending: Extract<Deferred, { status: "effect_pending" }> = {
-		status: "effect_pending",
+	suspended: RunDeferredSuspendedOperation,
+): Promise<RunDeferredEffectPendingOperation> {
+	const effectPending: RunDeferredEffectPendingOperation = {
+		...runScopeOf(currentRun(fixture)),
+		at: "run.deferred.effect_pending",
 		stepId: suspended.stepId,
 		sourceEntryId: suspended.sourceEntryId,
 		poll: suspended.poll + 1,
@@ -193,9 +200,7 @@ async function installUnknownPoll(
 		configuration: suspended.configuration,
 		streamOptions: suspended.streamOptions,
 	};
-	const run = currentRun(fixture);
-	const nextState: RunState = { ...run, phase: { kind: "deferred", deferred: effectPending } };
-	await replaceRunState(fixture, nextState, [
+	await replaceRunState(fixture, effectPending, [
 		storedValues.appendList(storedValues.pendingAssistantFrames(operationId, effectPending.responseEntryId), {
 			type: "text_delta",
 			contentIndex: 0,
@@ -205,10 +210,12 @@ async function installUnknownPoll(
 	return effectPending;
 }
 
-function currentDeferred(fixture: Fixture): Deferred {
+function currentDeferred(fixture: Fixture): RunDeferredSuspendedOperation | RunDeferredEffectPendingOperation {
 	const run = currentRun(fixture);
-	if (run.phase.kind !== "deferred") throw new Error("fixture has no deferred phase");
-	return run.phase.deferred;
+	if (run.at !== "run.deferred.suspended" && run.at !== "run.deferred.effect_pending") {
+		throw new Error("fixture has no deferred phase");
+	}
+	return run;
 }
 
 function installDrive(fixture: Fixture, options: { waitForRetry?: boolean; pollDeferred?: boolean }): Drive {
@@ -234,16 +241,13 @@ describe("runtime assistant retry wait", () => {
 			fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 service unavailable", timestamp: 10 }),
 		]);
 
-		expect(await runGeneration(fixture.lane, fixture.drive, currentRun(fixture), ready)).toEqual({
+		expect(await runGeneration(fixture.lane, fixture.drive, ready)).toEqual({
 			kind: "continue",
 		});
-		expect(currentRun(fixture).phase).toMatchObject({
-			kind: "assistant",
-			generation: {
-				status: "retry_wait",
-				nextAttempt: 2,
-				errorMessage: "503 service unavailable",
-			},
+		expect(currentRun(fixture)).toMatchObject({
+			at: "run.assistant.retry_wait",
+			nextAttempt: 2,
+			errorMessage: "503 service unavailable",
 		});
 		expect(fixture.events.at(-1)).toMatchObject({ type: "retry_scheduled", attempt: 2 });
 		await expectProjectionRestores(fixture);
@@ -254,20 +258,19 @@ describe("runtime assistant retry wait", () => {
 		vi.setSystemTime(1_000);
 		const fixture = await createFixture({ deferredSubmission: false });
 		const ready = await advanceToReady(fixture);
-		const retryWait: Extract<Generation, { status: "retry_wait" }> = {
-			status: "retry_wait",
-			context: ready.context,
+		const retryWait: RunAssistantRetryWaitOperation = {
+			...runScopeOf(ready),
+			at: "run.assistant.retry_wait",
+			generationContext: ready.generationContext,
 			nextAttempt: 2,
 			notBefore: 1_100,
 			errorMessage: "retry",
 		};
-		const run = currentRun(fixture);
-		const nextState: RunState = { ...run, phase: { kind: "assistant", generation: retryWait } };
-		await replaceRunState(fixture, nextState);
+		await replaceRunState(fixture, retryWait);
 		fixture.storage.clearCommitAttempts();
 		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-		expect(await runGeneration(fixture.lane, fixture.drive, currentRun(fixture), retryWait)).toEqual({
+		expect(await runGeneration(fixture.lane, fixture.drive, retryWait)).toEqual({
 			kind: "waiting",
 			outcome: { kind: "waiting", operationId, reason: "retry", notBefore: 1_100 },
 		});
@@ -280,27 +283,27 @@ describe("runtime assistant retry wait", () => {
 		vi.setSystemTime(2_000);
 		const fixture = await createFixture({ deferredSubmission: false });
 		const ready = await advanceToReady(fixture);
-		const retryWait: Extract<Generation, { status: "retry_wait" }> = {
-			status: "retry_wait",
-			context: ready.context,
+		const retryWait: RunAssistantRetryWaitOperation = {
+			...runScopeOf(ready),
+			at: "run.assistant.retry_wait",
+			generationContext: ready.generationContext,
 			nextAttempt: 2,
 			notBefore: 2_000,
 			errorMessage: "retry",
 		};
-		const run = currentRun(fixture);
-		await replaceRunState(fixture, { ...run, phase: { kind: "assistant", generation: retryWait } });
+		await replaceRunState(fixture, retryWait);
 		fixture.storage.clearCommitAttempts();
 
-		expect(await runGeneration(fixture.lane, fixture.drive, currentRun(fixture), retryWait)).toEqual({
+		expect(await runGeneration(fixture.lane, fixture.drive, retryWait)).toEqual({
 			kind: "continue",
 		});
 		const next = currentRun(fixture);
-		if (next.phase.kind !== "assistant" || next.phase.generation.status !== "ready") {
+		if (next.at !== "run.assistant.ready") {
 			throw new Error("retry did not become ready");
 		}
 		expect(fixture.events.at(-1)).toMatchObject({ type: "retry_start", attempt: 2 });
 		fixture.faux.setResponses([fauxAssistantMessage("retried", { timestamp: 30 })]);
-		await runGeneration(fixture.lane, fixture.drive, next, next.phase.generation);
+		await runGeneration(fixture.lane, fixture.drive, next);
 		expect(fixture.events).toContainEqual(expect.objectContaining({ type: "retry_end", attempt: 2, success: true }));
 		await expectProjectionRestores(fixture);
 	});
@@ -310,26 +313,26 @@ describe("runtime assistant retry wait", () => {
 		vi.setSystemTime(3_000);
 		const fixture = await createFixture({ deferredSubmission: false });
 		const ready = await advanceToReady(fixture);
-		const retryWait: Extract<Generation, { status: "retry_wait" }> = {
-			status: "retry_wait",
-			context: ready.context,
+		const retryWait: RunAssistantRetryWaitOperation = {
+			...runScopeOf(ready),
+			at: "run.assistant.retry_wait",
+			generationContext: ready.generationContext,
 			nextAttempt: 2,
 			notBefore: 3_100,
 			errorMessage: "retry",
 		};
-		const run = currentRun(fixture);
-		await replaceRunState(fixture, { ...run, phase: { kind: "assistant", generation: retryWait } });
+		await replaceRunState(fixture, retryWait);
 		const drive = installDrive(fixture, { waitForRetry: true });
 		fixture.storage.clearCommitAttempts();
-		const waiting = runGeneration(fixture.lane, drive, currentRun(fixture), retryWait);
+		const waiting = runGeneration(fixture.lane, drive, retryWait);
 
 		await vi.advanceTimersByTimeAsync(99);
 		expect(fixture.storage.getCommitAttempts()).toEqual([]);
 		await vi.advanceTimersByTimeAsync(1);
 		expect(await waiting).toEqual({ kind: "continue" });
-		expect(currentRun(fixture).phase).toMatchObject({
-			kind: "assistant",
-			generation: { status: "ready", nextAttempt: 2 },
+		expect(currentRun(fixture)).toMatchObject({
+			at: "run.assistant.ready",
+			nextAttempt: 2,
 		});
 	});
 });
@@ -340,7 +343,7 @@ describe("runtime deferred polling", () => {
 		const suspended = await submitDeferred(fixture);
 		fixture.storage.clearCommitAttempts();
 
-		expect(await runDeferredSuspended(fixture.lane, fixture.drive, currentRun(fixture), suspended)).toEqual({
+		expect(await runDeferredSuspended(fixture.lane, fixture.drive, suspended)).toEqual({
 			kind: "waiting",
 			outcome: {
 				kind: "waiting",
@@ -373,7 +376,7 @@ describe("runtime deferred polling", () => {
 		const drive = new Drive(driveOptions, BACKGROUND_CONTEXT);
 		fixture.lane.activeDrive = drive;
 
-		expect(await runDeferred(fixture.lane, drive, currentRun(fixture), currentDeferred(fixture))).toEqual({
+		expect(await runDeferred(fixture.lane, drive, currentDeferred(fixture))).toEqual({
 			kind: "continue",
 		});
 		expect(drive.deferredPermits).toBe(0);
@@ -381,11 +384,11 @@ describe("runtime deferred polling", () => {
 		expect(hookOptions).toMatchObject({ deferred: false });
 		expect(fetchOptions).toMatchObject({ wait: 0 });
 		expect(fetchOptions?.signal).toBe(drive.gate.signal);
-		expect(currentDeferred(fixture)).toMatchObject({ status: "suspended", poll: 1 });
+		expect(currentDeferred(fixture)).toMatchObject({ at: "run.deferred.suspended", poll: 1 });
 		expect(fixture.faux.state.deferredFetchCount).toBe(1);
 		expect(fixture.events.slice(-2).map((event) => event.type)).toEqual(["turn_end", "run_suspend"]);
 
-		expect(await runDeferred(fixture.lane, drive, currentRun(fixture), currentDeferred(fixture))).toMatchObject({
+		expect(await runDeferred(fixture.lane, drive, currentDeferred(fixture))).toMatchObject({
 			kind: "waiting",
 			outcome: { reason: "deferred" },
 		});
@@ -404,16 +407,16 @@ describe("runtime deferred polling", () => {
 		);
 		const drive = installDrive(fixture, { pollDeferred: true });
 
-		expect(await runDeferredSuspended(fixture.lane, drive, currentRun(fixture), suspended)).toEqual({
+		expect(await runDeferredSuspended(fixture.lane, drive, suspended)).toEqual({
 			kind: "continue",
 		});
 		const run = currentRun(fixture);
-		if (run.phase.kind !== "tools") throw new Error("deferred tool response did not create a batch");
-		expect(run.phase.batch).toMatchObject({
+		if (run.at !== "run.tools") throw new Error("deferred tool response did not create a batch");
+		expect(run.batch).toMatchObject({
 			turnId: `${suspended.stepId}:poll:1`,
 			calls: [{ status: "planned", sourceIndex: 0 }],
 		});
-		expect(run.phase.batch.calls[0]?.resultEntryId.slice(0, 13)).toBe(run.latestAssistantEntryId?.slice(0, 13));
+		expect(run.batch.calls[0]?.resultEntryId.slice(0, 13)).toBe(run.latestAssistantEntryId?.slice(0, 13));
 		expect(fixture.events.at(-1)).toMatchObject({ type: "usage" });
 		await expectProjectionRestores(fixture);
 	});
@@ -428,7 +431,7 @@ describe("runtime deferred polling", () => {
 		if (gating === undefined) throw new Error("fixture is not gated");
 		const drive = installDrive(fixture, { pollDeferred: true });
 		gating.arm();
-		const polling = runDeferredSuspended(fixture.lane, drive, currentRun(fixture), suspended);
+		const polling = runDeferredSuspended(fixture.lane, drive, suspended);
 
 		await gating.waitPending();
 		expect(drive.deferredPermits).toBe(1);
@@ -438,7 +441,7 @@ describe("runtime deferred polling", () => {
 		await expect.poll(() => fixture.faux.state.deferredFetchCount).toBe(1);
 		await gating.next(2); // start frame, then response settlement
 		expect(await polling).toEqual({ kind: "continue" });
-		expect(currentRun(fixture).phase).toMatchObject({ kind: "failure_drain" });
+		expect(currentRun(fixture).at).toBe("run.failure_drain");
 	});
 
 	it("leaves suspended state unchanged when the fresh intent is discarded", async () => {
@@ -448,7 +451,7 @@ describe("runtime deferred polling", () => {
 		if (gating === undefined) throw new Error("fixture is not gated");
 		const drive = installDrive(fixture, { pollDeferred: true });
 		gating.arm();
-		const polling = runDeferredSuspended(fixture.lane, drive, currentRun(fixture), suspended);
+		const polling = runDeferredSuspended(fixture.lane, drive, suspended);
 		void polling.catch(() => {});
 
 		await gating.waitPending();
@@ -457,10 +460,7 @@ describe("runtime deferred polling", () => {
 		expect(drive.deferredPermits).toBe(1);
 		expect(fixture.faux.state.deferredFetchCount).toBe(0);
 		const durable = await fixture.backend.getValue(storedValues.operationState(operationId), BACKGROUND_CONTEXT);
-		expect(durable?.value).toMatchObject({
-			kind: "run",
-			phase: { kind: "deferred", deferred: { status: "suspended", poll: 0 } },
-		});
+		expect(durable?.value).toMatchObject({ at: "run.deferred.suspended", poll: 0 });
 	});
 
 	it("replaces an unknown poll under fresh ids at the same poll number and deletes old frames", async () => {
@@ -470,7 +470,7 @@ describe("runtime deferred polling", () => {
 		fixture.storage.clearCommitAttempts();
 
 		const noPermit = installDrive(fixture, {});
-		expect(await recoverDeferredPoll(fixture.lane, noPermit, currentRun(fixture), unknown)).toMatchObject({
+		expect(await recoverDeferredPoll(fixture.lane, noPermit, unknown)).toMatchObject({
 			kind: "waiting",
 			outcome: { reason: "deferred" },
 		});
@@ -484,7 +484,7 @@ describe("runtime deferred polling", () => {
 		expect(fixture.faux.state.deferredFetchCount).toBe(0);
 
 		const replacement = installDrive(fixture, { pollDeferred: true });
-		expect(await recoverDeferredPoll(fixture.lane, replacement, currentRun(fixture), unknown)).toEqual({
+		expect(await recoverDeferredPoll(fixture.lane, replacement, unknown)).toEqual({
 			kind: "continue",
 		});
 		const intent = fixture.storage
@@ -507,15 +507,10 @@ describe("runtime deferred polling", () => {
 		);
 		expect(intentState).toMatchObject({
 			value: {
-				phase: {
-					kind: "deferred",
-					deferred: {
-						status: "effect_pending",
-						poll: unknown.poll,
-						responseEntryId: expect.not.stringMatching(unknown.responseEntryId),
-						usageId: expect.not.stringMatching(unknown.usageId),
-					},
-				},
+				at: "run.deferred.effect_pending",
+				poll: unknown.poll,
+				responseEntryId: expect.not.stringMatching(unknown.responseEntryId),
+				usageId: expect.not.stringMatching(unknown.usageId),
 			},
 		});
 		expect(await fixture.session.getEntry(unknown.responseEntryId, BACKGROUND_CONTEXT)).toBeUndefined();
@@ -529,7 +524,7 @@ describe("runtime deferred polling", () => {
 				BACKGROUND_CONTEXT,
 			),
 		).toEqual([]);
-		expect(currentRun(fixture).phase).toMatchObject({ kind: "checkpoint" });
+		expect(currentRun(fixture).at).toBe("run.checkpoint");
 		expect(fixture.events.some((event) => "recovery" in event && event.recovery === true)).toBe(true);
 		await expectProjectionRestores(fixture);
 	});
@@ -542,13 +537,13 @@ describe("runtime deferred polling", () => {
 		fixture.storage.clearCommitAttempts();
 		const drive = installDrive(fixture, { pollDeferred: true });
 
-		expect(await recoverDeferredPoll(fixture.lane, drive, currentRun(fixture), unknown)).toEqual({
+		expect(await recoverDeferredPoll(fixture.lane, drive, unknown)).toEqual({
 			kind: "continue",
 		});
 		expect(drive.deferredPermits).toBe(1);
 		expect(fixture.faux.state.deferredFetchCount).toBe(0);
-		expect(currentRun(fixture).phase).toMatchObject({
-			kind: "failure_drain",
+		expect(currentRun(fixture)).toMatchObject({
+			at: "run.failure_drain",
 			error: { code: "model_unavailable" },
 			provenance: { kind: "configuration" },
 		});

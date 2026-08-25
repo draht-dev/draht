@@ -10,8 +10,8 @@ import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type {
 	OperationMeta,
-	RunPhase,
-	RunState,
+	OperationState,
+	RunScope,
 	Session,
 	StorageBranchScan,
 	Write,
@@ -54,9 +54,8 @@ async function commit(session: Session, writes: Write[]): Promise<void> {
 	await session.mutate((mutator) => mutator.commit(writes, BACKGROUND_CONTEXT), BACKGROUND_CONTEXT);
 }
 
-function runState(phase: RunPhase, control: RunState["control"] = { status: "running" }): RunState {
+function runScope(control: RunScope["control"] = { status: "running" }): RunScope {
 	return {
-		kind: "run",
 		control,
 		settings: {
 			compaction: DEFAULT_COMPACTION_SETTINGS,
@@ -64,7 +63,6 @@ function runState(phase: RunPhase, control: RunState["control"] = { status: "run
 			followUpMode: "all",
 			toolExecution: "parallel",
 		},
-		phase,
 		inbox: { steer: [], followUp: [], writes: [] },
 		latestAssistantEntryId: null,
 	};
@@ -161,26 +159,21 @@ describe("runtime lane watch", () => {
 			payload: { role: "user" as const, content, timestamp: 1 },
 		});
 		const operationId = session.idGenerator.next();
-		const state = runState(
-			{
-				kind: "deferred",
-				deferred: {
-					status: "suspended",
-					stepId: "step",
-					sourceEntryId: "source",
-					poll: 3,
-					configuration,
-					streamOptions: {},
-				},
-			},
-			{
+		const state: OperationState = {
+			...runScope({
 				status: "cancel_requested",
 				requestedAt: 2,
 				drainedSteer: [ids.drainedSteer],
 				drainedFollowUp: [ids.drainedFollow],
-			},
-		);
-		state.inbox = { steer: [ids.steer], followUp: [ids.follow], writes: [ids.write] };
+			}),
+			at: "run.deferred.suspended",
+			stepId: "step",
+			sourceEntryId: "source",
+			poll: 3,
+			configuration,
+			streamOptions: {},
+			inbox: { steer: [ids.steer], followUp: [ids.follow], writes: [ids.write] },
+		};
 		const meta: OperationMeta = {
 			operationId,
 			lane: "main",
@@ -238,28 +231,23 @@ describe("runtime lane watch", () => {
 				startedAt: 1,
 				intent: { kind: "run", promptEntryIds: [] },
 			}),
-			storedValues.setValue(
-				storedValues.operationState(operationId),
-				runState({
-					kind: "assistant",
-					generation: {
-						status: "effect_pending",
-						context: {
-							stepId: "step",
-							triggerEntryId: "trigger",
-							configuration,
-							streamOptions: {},
-							retryPolicy: { maxAttempts: 2, baseDelayMs: 0 },
-							overflowRecoveryUsed: false,
-						},
-						attempt: 1,
-						responseEntryId: "response-without-frames",
-						usageId: "usage",
-						intendedOutputLimit: 100,
-						contextWindow: 1000,
-					},
-				}),
-			),
+			storedValues.setValue(storedValues.operationState(operationId), {
+				...runScope(),
+				at: "run.assistant.effect_pending",
+				generationContext: {
+					stepId: "step",
+					triggerEntryId: "trigger",
+					configuration,
+					streamOptions: {},
+					retryPolicy: { maxAttempts: 2, baseDelayMs: 0 },
+					overflowRecoveryUsed: false,
+				},
+				attempt: 1,
+				responseEntryId: "response-without-frames",
+				usageId: "usage",
+				intendedOutputLimit: 100,
+				contextWindow: 1000,
+			}),
 			storedValues.setValue(storedValues.laneState("main"), {
 				currentOperationId: operationId,
 				pendingNextRun: [],
@@ -290,28 +278,23 @@ describe("runtime lane watch", () => {
 				startedAt: 1,
 				intent: { kind: "run", promptEntryIds: [] },
 			}),
-			storedValues.setValue(
-				storedValues.operationState(frameOperationId),
-				runState({
-					kind: "assistant",
-					generation: {
-						status: "effect_pending",
-						context: {
-							stepId: "step",
-							triggerEntryId: "trigger",
-							configuration,
-							streamOptions: {},
-							retryPolicy: { maxAttempts: 2, baseDelayMs: 0 },
-							overflowRecoveryUsed: false,
-						},
-						attempt: 1,
-						responseEntryId: "response",
-						usageId: "usage",
-						intendedOutputLimit: 100,
-						contextWindow: 1000,
-					},
-				}),
-			),
+			storedValues.setValue(storedValues.operationState(frameOperationId), {
+				...runScope(),
+				at: "run.assistant.effect_pending",
+				generationContext: {
+					stepId: "step",
+					triggerEntryId: "trigger",
+					configuration,
+					streamOptions: {},
+					retryPolicy: { maxAttempts: 2, baseDelayMs: 0 },
+					overflowRecoveryUsed: false,
+				},
+				attempt: 1,
+				responseEntryId: "response",
+				usageId: "usage",
+				intendedOutputLimit: 100,
+				contextWindow: 1000,
+			}),
 			...frames.map((frame) =>
 				storedValues.appendList(storedValues.pendingAssistantFrames(frameOperationId, "response"), frame),
 			),
@@ -341,28 +324,26 @@ describe("runtime lane watch", () => {
 				startedAt: 1,
 				intent: { kind: "run", promptEntryIds: [] },
 			}),
-			storedValues.setValue(
-				storedValues.operationState(toolOperationId),
-				runState({
-					kind: "tools",
-					batch: {
-						assistantEntryId: "assistant",
-						configuration,
-						turnId: "turn",
-						calls: [
-							{ status: "planned", sourceIndex: 1, resultEntryId: "planned" },
-							{ status: "effect_pending", sourceIndex: 1, resultEntryId: "result", replay: "safe" },
-							{
-								status: "effect_pending",
-								sourceIndex: 2,
-								resultEntryId: "without-checkpoint",
-								replay: "never",
-							},
-							{ status: "outcome_ready", sourceIndex: 1, resultEntryId: "ready", terminate: false },
-						],
-					},
-				}),
-			),
+			storedValues.setValue(storedValues.operationState(toolOperationId), {
+				...runScope(),
+				at: "run.tools",
+				batch: {
+					assistantEntryId: "assistant",
+					configuration,
+					turnId: "turn",
+					calls: [
+						{ status: "planned", sourceIndex: 1, resultEntryId: "planned" },
+						{ status: "effect_pending", sourceIndex: 1, resultEntryId: "result", replay: "safe" },
+						{
+							status: "effect_pending",
+							sourceIndex: 2,
+							resultEntryId: "without-checkpoint",
+							replay: "never",
+						},
+						{ status: "outcome_ready", sourceIndex: 1, resultEntryId: "ready", terminate: false },
+					],
+				},
+			}),
 			storedValues.setValue(storedValues.operationToolArgs(toolOperationId, "turn", 1), { path: "file" }),
 			storedValues.setValue(storedValues.operationToolArgs(toolOperationId, "turn", 2), { path: "output" }),
 			storedValues.setValue(storedValues.pendingToolOutput(toolOperationId, "result"), {

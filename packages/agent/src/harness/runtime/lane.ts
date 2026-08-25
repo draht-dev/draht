@@ -27,21 +27,25 @@ import {
 } from "../result.ts";
 import { insertEntry } from "../session/commit.ts";
 import { SessionInvariantError, SessionPendingAssistantMessageError } from "../session/session.ts";
-import type {
-	BranchScan,
-	Entry,
-	JsonValue,
-	LaneLastResult,
-	Operation,
-	PendingEntry,
-	Session,
-	SessionReader,
-	StructuralDecision,
+import {
+	type BranchScan,
+	type Entry,
+	isRunOperationState,
+	type JsonValue,
+	type LaneLastResult,
+	type Operation,
+	type OperationMeta,
+	type OperationState,
+	type PendingEntry,
+	type RunStartingOperation,
+	type Session,
+	type SessionReader,
 } from "../session/types.ts";
 import {
 	branchTip,
 	deleteValue,
 	laneConfig,
+	laneLastResult as laneLastResultValue,
 	laneState as laneStateValue,
 	operationMeta as operationMetaValue,
 	operationState as operationStateValue,
@@ -57,7 +61,7 @@ import {
 	type Drive,
 	type LaneCommand,
 	type LaneState,
-	type LostOwnership,
+	type OperationCommand,
 	SliceNotImplemented,
 } from "./types.ts";
 
@@ -74,28 +78,29 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 	return "then" in value && typeof value.then === "function";
 }
 
-function structuralModel(structural: StructuralDecision): ModelIdentity | undefined {
-	return structural.status === "generating" ? structural.generation.context.configuration.model : undefined;
-}
-
 function capturedModel(operation: Operation): ModelIdentity | undefined {
 	const { state } = operation;
-	if (state.kind === "compaction") return structuralModel(state.structural);
-	if (state.kind === "navigation") {
-		return state.summarize ? structuralModel(state.phase.structural) : undefined;
-	}
-	switch (state.phase.kind) {
-		case "assistant":
-			return state.phase.generation.context.configuration.model;
-		case "tools":
-			return state.phase.batch.configuration.model;
-		case "compaction":
-			return structuralModel(state.phase.structural);
-		case "deferred":
-			return state.phase.deferred.configuration.model;
-		case "starting":
-		case "checkpoint":
-		case "failure_drain":
+	switch (state.at) {
+		case "run.assistant.ready":
+		case "run.assistant.effect_pending":
+		case "run.assistant.retry_wait":
+			return state.generationContext.configuration.model;
+		case "run.tools":
+			return state.batch.configuration.model;
+		case "run.deferred.suspended":
+		case "run.deferred.effect_pending":
+			return state.configuration.model;
+		case "run.compaction.ready":
+		case "run.compaction.effect_pending":
+		case "run.compaction.retry_wait":
+		case "compaction.ready":
+		case "compaction.effect_pending":
+		case "compaction.retry_wait":
+		case "navigation.summary.ready":
+		case "navigation.summary.effect_pending":
+		case "navigation.summary.retry_wait":
+			return state.summaryContext.configuration.model;
+		default:
 			return undefined;
 	}
 }
@@ -152,10 +157,6 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		return this.config();
 	}
 
-	isDriveActive(drive: Drive): boolean {
-		return this.activeDrive === drive;
-	}
-
 	mismatch(expected: string, currentOperationId: string | null, last: LaneLastResult | undefined): OperationMismatch {
 		return new OperationMismatch({
 			lane: this.name,
@@ -180,10 +181,8 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 	 *
 	 * Planner, commit, and materialization errors fault the harness before releasing the Session line. Close/fault gates
 	 * are checked both before queueing and when the callback starts: close-first rejects, while a callback admitted
-	 * before close may finish its commit, publish memory, and resolve without another open check. Drive-owned commands
-	 * additionally need a final fence because their exact owner may be removed outside the Session line. Never invoke
-	 * providers, tools, hooks,
-	 * timers, event handlers, or wait for task completion here; perform those after `command()` returns.
+	 * before close may finish its commit, publish memory, and resolve without another open check. Never invoke providers,
+	 * tools, hooks, timers, event handlers, or wait for task completion here; perform those after `command()` returns.
 	 */
 	async command<TResult>(
 		plan: (state: LaneState, reader: SessionReader) => LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
@@ -227,64 +226,73 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		return outcome.result;
 	}
 
-	/**
-	 * Run one drive-owned command with an exact-object fence at commit admission.
-	 * Durable control state comes from the authoritative projection; storage reads are only for referenced payloads.
-	 * Unlike an ordinary command, owner abandonment can occur outside the Session line while the planner awaits. The final
-	 * open check preserves close/fault as lifecycle errors before the exact-owner check can report lost ownership.
-	 */
-	async commandDriveOwned<TResult>(
-		drive: Drive,
-		plan: (state: LaneState, reader: SessionReader) => LaneCommand<TResult> | Promise<LaneCommand<TResult>>,
+	/** Commit one transition for the operation owned by the current Drive continuation. */
+	mutateOperation<TState extends OperationState, TResult>(
+		_current: TState,
+		plan: (
+			state: LaneState,
+			current: TState,
+			meta: OperationMeta,
+			reader: SessionReader,
+		) => OperationCommand<TResult> | Promise<OperationCommand<TResult>>,
 		context: Context,
-	): Promise<TResult | LostOwnership> {
-		this.assertOpen();
-		let outcome: LaneCommandOutcome<TResult | LostOwnership>;
-		try {
-			outcome = await this.session.mutate(async (mutator) => {
-				this.assertOpen();
-				const operation = this.state.operation;
-				if (operation?.meta.operationId !== drive.operationId || this.activeDrive !== drive) {
-					return { kind: "return", result: { kind: "lost_ownership" } as const };
-				}
-				try {
-					const decision = await plan(this.state, mutator);
-					switch (decision.kind) {
-						case "return":
-							return { kind: "return", result: decision.result };
-						case "reject":
-							return { kind: "reject", error: decision.error };
-						case "commit": {
-							// Keep these checks adjacent to commit admission. Owner abandonment may occur
-							// outside the line; close/fault must still win classification over ownership loss.
-							this.assertOpen();
-							if (this.activeDrive !== drive) {
-								return { kind: "return", result: { kind: "lost_ownership" } as const };
-							}
-							const commitPromise = mutator.commit(decision.writes, context);
-							const commit = await commitPromise;
-							this.state = decision.next;
-							const result = decision.materialize(commit);
-							if (isPromiseLike(result)) {
-								throw new TypeError("Lane command materialize() must be synchronous");
-							}
-							const events = decision.events?.(commit) ?? [];
-							const delivery = events.length === 0 ? undefined : this.emitBatch(events, context);
-							return { kind: "return", result, ...(delivery === undefined ? {} : { delivery }) };
-						}
-					}
-				} catch (error) {
-					if (this.closedError !== undefined) throw this.closedError;
-					throw this.onFault(error, context);
-				}
-			}, context);
-		} catch (error) {
-			if (this.closedError !== undefined) throw this.closedError;
-			throw error;
-		}
-		if (outcome.kind === "reject") throw outcome.error;
-		await outcome.delivery;
-		return outcome.result;
+	): Promise<TResult> {
+		return this.command(async (state, reader) => {
+			const operation = state.operation!;
+			const decision = await plan(state, operation.state as TState, operation.meta, reader);
+			if (decision.kind === "commit") {
+				return {
+					kind: "commit",
+					writes: [
+						...decision.writes,
+						setValue(operationStateValue(operation.meta.operationId), decision.operationState),
+					],
+					next: {
+						...state,
+						...decision.lane,
+						operation: { meta: operation.meta, state: decision.operationState },
+					},
+					materialize: decision.materialize,
+					...(decision.events === undefined ? {} : { events: decision.events }),
+				};
+			}
+			if (decision.kind !== "finish") return decision;
+			return {
+				kind: "commit",
+				writes: [
+					...decision.writes,
+					setValue(laneLastResultValue(this.name), decision.lastResult),
+					setValue(laneStateValue(this.name), {
+						currentOperationId: null,
+						pendingNextRun: state.pendingNextRun,
+					}),
+				],
+				next: { ...state, ...decision.lane, lastResult: decision.lastResult, operation: null },
+				materialize: decision.materialize,
+				...(decision.events === undefined ? {} : { events: decision.events }),
+			};
+		}, context);
+	}
+
+	/** Ordinary progress declines when explicit durable cancellation has already won. */
+	advanceOperation<TState extends OperationState, TResult>(
+		current: TState,
+		plan: (
+			state: LaneState,
+			current: TState,
+			meta: OperationMeta,
+			reader: SessionReader,
+		) => OperationCommand<TResult> | Promise<OperationCommand<TResult>>,
+		context: Context,
+	): Promise<TResult | undefined> {
+		return this.mutateOperation<TState, TResult | undefined>(
+			current,
+			(state, latest, meta, reader) =>
+				latest.control.status === "cancel_requested"
+					? { kind: "return", result: undefined }
+					: plan(state, latest, meta, reader),
+			context,
+		);
 	}
 
 	async accept(request: OperationRequest, context: Context): Promise<OperationAdmissionResult> {
@@ -422,16 +430,15 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 				startedAt,
 				intent: { kind: "run" as const, promptEntryIds: prompt.map(({ id }) => id) },
 			};
-			const operationState = {
-				kind: "run" as const,
-				control: { status: "running" as const },
+			const operationState: RunStartingOperation = {
+				at: "run.starting",
+				control: { status: "running" },
 				settings: {
 					compaction: acceptanceConfig.compaction,
 					steeringMode: acceptanceConfig.steeringMode,
 					followUpMode: acceptanceConfig.followUpMode,
 					toolExecution: acceptanceConfig.toolExecution,
 				},
-				phase: { kind: "starting" as const },
 				inbox: { steer: [], followUp: [], writes: [] },
 				latestAssistantEntryId: null,
 			};
@@ -677,17 +684,15 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 					);
 				const nextRun = await queuedItems(captured.pendingNextRun, "Pending next-run entry");
 				const operation = captured.operation;
-				const steer =
-					operation?.state.kind === "run" ? await queuedItems(operation.state.inbox.steer, "Steer entry") : [];
+				const runState = operation !== null && isRunOperationState(operation.state) ? operation.state : undefined;
+				const steer = runState === undefined ? [] : await queuedItems(runState.inbox.steer, "Steer entry");
 				const followUp =
-					operation?.state.kind === "run"
-						? await queuedItems(operation.state.inbox.followUp, "Follow-up entry")
-						: [];
+					runState === undefined ? [] : await queuedItems(runState.inbox.followUp, "Follow-up entry");
 				// TODO does a client really need pending writes? We wouldn't visualize those, any other uses for them?
 				const pendingWrites =
-					operation?.state.kind === "run"
+					runState !== undefined
 						? await Promise.all(
-								operation.state.inbox.writes.map(async (entryId) => {
+								runState.inbox.writes.map(async (entryId) => {
 									const stored = await reader.getValue(pendingEntry(entryId), context);
 									if (stored === undefined) {
 										throw new SessionInvariantError(`Pending write ${entryId} is missing its payload`);
@@ -728,103 +733,81 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 						}
 						return reduceAssistantMessageFrames(frames);
 					};
-					const readRetry = (generation: {
-						status: string;
-						nextAttempt?: number;
-						notBefore?: number;
-						context: { retryPolicy: { maxAttempts: number } };
-					}) => {
-						if (generation.status !== "retry_wait") return undefined;
-						if (generation.nextAttempt === undefined || generation.notBefore === undefined) {
-							throw new SessionInvariantError("Retry wait is missing retry metadata");
-						}
-						return {
-							attempt: generation.nextAttempt,
-							maxAttempts: generation.context.retryPolicy.maxAttempts,
-							nextAttemptAt: generation.notBefore,
-						};
-					};
-					const readStructuralRetry = (structural: StructuralDecision) => {
-						if (structural.status !== "generating") return undefined;
-						return readRetry(structural.generation);
-					};
-
-					if (operation.state.kind === "run") {
-						switch (operation.state.phase.kind) {
-							case "assistant":
-								retry = readRetry(operation.state.phase.generation);
-								if (operation.state.phase.generation.status === "effect_pending") {
-									streamingMessage = await readStreamingMessage(
-										operation.state.phase.generation.responseEntryId,
-									);
-								}
-								break;
-							case "deferred": {
-								const durable = operation.state.phase.deferred;
-								const source = (await reader.getEntries([durable.sourceEntryId], context)).get(
-									durable.sourceEntryId,
-								);
-								if (
-									source?.type !== "message" ||
-									source.message.role !== "assistant" ||
-									source.message.deferred === undefined
-								) {
-									throw new SessionInvariantError("Deferred source is missing its assistant handle");
-								}
-								deferred = { handle: source.message.deferred, poll: durable.poll };
-								if (durable.status === "effect_pending") {
-									streamingMessage = await readStreamingMessage(durable.responseEntryId);
-								}
-								break;
+					const state = operation.state;
+					switch (state.at) {
+						case "run.assistant.retry_wait":
+							retry = {
+								attempt: state.nextAttempt,
+								maxAttempts: state.generationContext.retryPolicy.maxAttempts,
+								nextAttemptAt: state.notBefore,
+							};
+							break;
+						case "run.assistant.effect_pending":
+							streamingMessage = await readStreamingMessage(state.responseEntryId);
+							break;
+						case "run.deferred.suspended":
+						case "run.deferred.effect_pending": {
+							const source = (await reader.getEntries([state.sourceEntryId], context)).get(state.sourceEntryId);
+							if (
+								source?.type !== "message" ||
+								source.message.role !== "assistant" ||
+								source.message.deferred === undefined
+							) {
+								throw new SessionInvariantError("Deferred source is missing its assistant handle");
 							}
-							case "tools": {
-								const { batch } = operation.state.phase;
-								const assistant = (await reader.getEntries([batch.assistantEntryId], context)).get(
-									batch.assistantEntryId,
-								);
-								if (assistant?.type !== "message" || assistant.message.role !== "assistant") {
-									throw new SessionInvariantError("Tool batch assistant entry is invalid");
-								}
-								for (const call of batch.calls) {
-									if (call.status !== "effect_pending") continue;
-									const block = assistant.message.content[call.sourceIndex];
-									if (block?.type !== "toolCall") {
-										throw new SessionInvariantError(
-											`Tool call source index ${call.sourceIndex} does not name a tool-call block`,
-										);
-									}
-									const args = await reader.getValue(
-										operationToolArgs(operation.meta.operationId, batch.turnId, call.sourceIndex),
-										context,
-									);
-									if (args === undefined) {
-										throw new SessionInvariantError(`Tool call ${block.id} is missing persisted arguments`);
-									}
-									const checkpoint = await reader.getValue(
-										pendingToolOutput(operation.meta.operationId, call.resultEntryId),
-										context,
-									);
-									runningTools.push({
-										toolCallId: block.id,
-										toolName: block.name,
-										args: args.value,
-										...(checkpoint === undefined ? {} : { partialResult: checkpoint.value }),
-									});
-								}
-								break;
+							deferred = { handle: source.message.deferred, poll: state.poll };
+							if (state.at === "run.deferred.effect_pending") {
+								streamingMessage = await readStreamingMessage(state.responseEntryId);
 							}
-							case "compaction":
-								retry = readStructuralRetry(operation.state.phase.structural);
-								break;
-							case "starting":
-							case "checkpoint":
-							case "failure_drain":
-								break;
+							break;
 						}
-					} else if (operation.state.kind === "compaction") {
-						retry = readStructuralRetry(operation.state.structural);
-					} else if (operation.state.summarize) {
-						retry = readStructuralRetry(operation.state.phase.structural);
+						case "run.tools": {
+							const { batch } = state;
+							const assistant = (await reader.getEntries([batch.assistantEntryId], context)).get(
+								batch.assistantEntryId,
+							);
+							if (assistant?.type !== "message" || assistant.message.role !== "assistant") {
+								throw new SessionInvariantError("Tool batch assistant entry is invalid");
+							}
+							for (const call of batch.calls) {
+								if (call.status !== "effect_pending") continue;
+								const block = assistant.message.content[call.sourceIndex];
+								if (block?.type !== "toolCall") {
+									throw new SessionInvariantError(
+										`Tool call source index ${call.sourceIndex} does not name a tool-call block`,
+									);
+								}
+								const args = await reader.getValue(
+									operationToolArgs(operation.meta.operationId, batch.turnId, call.sourceIndex),
+									context,
+								);
+								if (args === undefined) {
+									throw new SessionInvariantError(`Tool call ${block.id} is missing persisted arguments`);
+								}
+								const checkpoint = await reader.getValue(
+									pendingToolOutput(operation.meta.operationId, call.resultEntryId),
+									context,
+								);
+								runningTools.push({
+									toolCallId: block.id,
+									toolName: block.name,
+									args: args.value,
+									...(checkpoint === undefined ? {} : { partialResult: checkpoint.value }),
+								});
+							}
+							break;
+						}
+						case "run.compaction.retry_wait":
+						case "compaction.retry_wait":
+						case "navigation.summary.retry_wait":
+							retry = {
+								attempt: state.nextAttempt,
+								maxAttempts: state.summaryContext.retryPolicy.maxAttempts,
+								nextAttemptAt: state.notBefore,
+							};
+							break;
+						default:
+							break;
 					}
 
 					const drained =
@@ -971,7 +954,7 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 			}
 
 			const operation = state.operation;
-			if (operation.state.kind !== "run") {
+			if (!isRunOperationState(operation.state)) {
 				return {
 					kind: "reject",
 					error: new Error(`Cannot append while structural operation ${operation.meta.operationId} is active`),

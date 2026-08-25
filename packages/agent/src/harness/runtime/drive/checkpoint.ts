@@ -3,47 +3,25 @@ import type { HarnessEvent, TerminalOperationOutcome } from "../../agent-harness
 import { insertEntry } from "../../session/commit.ts";
 import { buildSessionContext } from "../../session/context.ts";
 import { SessionInvariantError } from "../../session/session.ts";
-import type {
-	CheckpointPhase,
-	Entry,
-	LaneLastResult,
-	MessageEntry,
-	NewEntry,
-	RunState,
-	SettledAssistantMessage,
-} from "../../session/types.ts";
 import {
-	branchTip,
-	deleteValue,
-	laneLastResult as laneLastResultValue,
-	laneState as laneStateValue,
-	operationState as operationStateValue,
-	pendingEntry,
-	setValue,
-} from "../../session/values.ts";
+	checkpointDataOf,
+	type Entry,
+	type LaneLastResult,
+	type MessageEntry,
+	type NewEntry,
+	type RunAssistantReadyOperation,
+	type RunCheckpointOperation,
+	type RunStartingOperation,
+	runScopeOf,
+	type SettledAssistantMessage,
+} from "../../session/types.ts";
+import { branchTip, deleteValue, pendingEntry, setValue } from "../../session/values.ts";
 import type { Lane } from "../lane.ts";
-import type { Drive, LaneCommand, LostOwnership, ProcedureResult } from "../types.ts";
+import type { Drive, ProcedureResult } from "../types.ts";
 import { operationCleanupWrites } from "./terminal.ts";
-
-type ReadResult<T> = { kind: "value"; value: T } | { kind: "state_changed" } | LostOwnership;
 
 function isSettledAssistant(message: AgentMessage): message is SettledAssistantMessage {
 	return message.role === "assistant" && message.stopReason !== "pending";
-}
-
-function sameCheckpoint(current: CheckpointPhase, expected: CheckpointPhase): boolean {
-	return (
-		current.triggerEntryId === expected.triggerEntryId &&
-		current.thresholdCheckedTriggerEntryId === expected.thresholdCheckedTriggerEntryId &&
-		current.skipInboxOnce === expected.skipInboxOnce &&
-		current.continuation.kind === expected.continuation.kind &&
-		(current.continuation.kind !== "need_assistant" ||
-			(expected.continuation.kind === "need_assistant" &&
-				current.continuation.overflowRecoveryUsed === expected.continuation.overflowRecoveryUsed)) &&
-		(current.continuation.kind !== "may_finish" ||
-			(expected.continuation.kind === "may_finish" &&
-				current.continuation.includeFinalAssistant === expected.continuation.includeFinalAssistant))
-	);
 }
 
 function lifecycleEvents(entry: Entry, lane: string, runId: string): HarnessEvent[] {
@@ -59,21 +37,11 @@ function lifecycleEvents(entry: Entry, lane: string, runId: string): HarnessEven
 async function readRunContext<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	phase: CheckpointPhase,
-): Promise<ReadResult<AgentMessage[]>> {
-	const entries = await lane.commandDriveOwned<ReadResult<Entry[]>>(
-		drive,
-		async (state, reader): Promise<LaneCommand<ReadResult<Entry[]>>> => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Checkpoint context reached a non-run operation");
-			}
-			if (operation.state.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
-			if (operation.state.phase.kind !== "checkpoint" || !sameCheckpoint(operation.state.phase, phase)) {
-				throw new SessionInvariantError("Checkpoint context lost its durable boundary");
-			}
+	checkpoint: RunCheckpointOperation,
+): Promise<AgentMessage[] | undefined> {
+	const entries = await lane.advanceOperation(
+		checkpoint,
+		async (state, _current, _meta, reader) => {
 			if (state.tipId === null) throw new SessionInvariantError("Run checkpoint has no Branch tip");
 			const path = (
 				await reader.scanBranch(
@@ -81,59 +49,42 @@ async function readRunContext<TContext extends object | undefined>(
 					drive.context,
 				)
 			).reverse();
-			return { kind: "return", result: { kind: "value", value: path } as const };
+			return { kind: "return", result: path };
 		},
 		drive.context,
 	);
-	if (entries.kind !== "value") return entries;
-	return {
-		kind: "value",
-		value: await buildSessionContext(
-			entries.value,
-			{ entryProjectors: lane.readConfig().entryProjectors },
-			drive.context,
-		),
-	};
+	return entries === undefined
+		? undefined
+		: buildSessionContext(entries, { entryProjectors: lane.readConfig().entryProjectors }, drive.context);
 }
 
 /** Consume before_run and commit the initial checkpoint. */
 export async function startRun<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunState,
+	run: RunStartingOperation,
 ): Promise<ProcedureResult> {
-	if (run.phase.kind !== "starting") throw new SessionInvariantError("startRun requires the starting phase");
-	const prompt = await lane.commandDriveOwned<ReadResult<AgentMessage[]>>(
-		drive,
-		async (state, reader): Promise<LaneCommand<ReadResult<AgentMessage[]>>> => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run" || operation.meta.intent.kind !== "run") {
-				throw new SessionInvariantError("before_run reached a non-run operation");
-			}
-			if (operation.state.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
-			if (operation.state.phase.kind !== "starting") {
-				throw new SessionInvariantError("before_run lost the starting boundary");
-			}
-			const entries = await reader.getEntries(operation.meta.intent.promptEntryIds, drive.context);
-			const messages = operation.meta.intent.promptEntryIds.map((id) => {
+	const prompt = await lane.advanceOperation(
+		run,
+		async (_state, _current, meta, reader) => {
+			if (meta.intent.kind !== "run") throw new SessionInvariantError("Run operation has non-run intent");
+			const entries = await reader.getEntries(meta.intent.promptEntryIds, drive.context);
+			const messages = meta.intent.promptEntryIds.map((id) => {
 				const entry = entries.get(id);
 				if (entry?.type !== "message") {
 					throw new SessionInvariantError(`Run prompt entry ${id} is missing its message`);
 				}
 				return entry.message;
 			});
-			return { kind: "return", result: { kind: "value", value: messages } as const };
+			return { kind: "return", result: messages };
 		},
 		drive.context,
 	);
-	if (prompt.kind === "lost_ownership") return prompt;
-	if (prompt.kind === "state_changed") return { kind: "continue" };
+	if (prompt === undefined) return { kind: "continue" };
 
 	const hook = await lane.hooks.runWithGate(
 		"before_run",
-		{ lane: lane.name, runId: drive.operationId, prompt: prompt.value, resources: lane.readConfig().resources },
+		{ lane: lane.name, runId: drive.operationId, prompt, resources: lane.readConfig().resources },
 		drive.gate,
 		drive.context,
 	);
@@ -145,19 +96,9 @@ export async function startRun<TContext extends object | undefined>(
 	}
 	const reserved = injected.map((message) => ({ id: lane.session.idGenerator.next(), message }));
 
-	return lane.commandDriveOwned<ProcedureResult>(
-		drive,
-		(state) => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("before_run settlement reached a non-run operation");
-			}
-			if (operation.state.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "continue" } as const };
-			}
-			if (operation.state.phase.kind !== "starting") {
-				throw new SessionInvariantError("before_run settlement lost the starting boundary");
-			}
+	const result = await lane.advanceOperation(
+		run,
+		(state, current) => {
 			let parentId = state.tipId;
 			const entries = reserved.map(({ id, message }) => {
 				const entry: NewEntry<MessageEntry> = { id, parentId, type: "message", message };
@@ -166,26 +107,20 @@ export async function startRun<TContext extends object | undefined>(
 			});
 			const triggerEntryId = parentId;
 			if (triggerEntryId === null) throw new SessionInvariantError("Run start has no trigger entry");
-			const nextState: RunState = {
-				...operation.state,
-				phase: {
-					kind: "checkpoint",
-					continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
-					triggerEntryId,
-				},
+			const nextState: RunCheckpointOperation = {
+				...runScopeOf(current),
+				at: "run.checkpoint",
+				continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
+				triggerEntryId,
 			};
 			return {
 				kind: "commit",
 				writes: [
 					...entries.map((entry) => insertEntry(entry)),
 					...(entries.length === 0 ? [] : [setValue(branchTip(lane.name), triggerEntryId)]),
-					setValue(operationStateValue(drive.operationId), nextState),
 				],
-				next: {
-					...state,
-					tipId: triggerEntryId,
-					operation: { meta: operation.meta, state: nextState },
-				},
+				operationState: nextState,
+				lane: { tipId: triggerEntryId },
 				materialize: () => ({ kind: "continue" }) as const,
 				events: (commit) =>
 					entries.flatMap((entry, index) =>
@@ -199,27 +134,17 @@ export async function startRun<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
+	return result ?? { kind: "continue" };
 }
 
 async function applyPendingWrites<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	phase: CheckpointPhase,
+	checkpoint: RunCheckpointOperation,
 ): Promise<ProcedureResult> {
-	return lane.commandDriveOwned<ProcedureResult>(
-		drive,
-		async (state, reader) => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Pending-write drain reached a non-run operation");
-			}
-			const current = operation.state;
-			if (current.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "continue" } as const };
-			}
-			if (current.phase.kind !== "checkpoint" || !sameCheckpoint(current.phase, phase)) {
-				throw new SessionInvariantError("Pending-write drain lost its checkpoint boundary");
-			}
+	const result = await lane.advanceOperation(
+		checkpoint,
+		async (state, current, _meta, reader) => {
 			const ids = current.inbox.writes;
 			if (ids.length === 0) return { kind: "return", result: { kind: "continue" } as const };
 			const pending = await Promise.all(
@@ -248,29 +173,26 @@ async function applyPendingWrites<TContext extends object | undefined>(
 				}
 				return entry;
 			});
-			const nextPhase: CheckpointPhase =
+			const scope = { ...runScopeOf(current), inbox: { ...current.inbox, writes: [] } };
+			const nextState: RunCheckpointOperation =
 				triggerEntryId === undefined
-					? current.phase
+					? { ...scope, at: "run.checkpoint", ...checkpointDataOf(current) }
 					: {
-							kind: "checkpoint",
+							...scope,
+							at: "run.checkpoint",
 							continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
 							triggerEntryId,
 							skipInboxOnce: true,
 						};
-			const nextState: RunState = {
-				...current,
-				phase: nextPhase,
-				inbox: { ...current.inbox, writes: [] },
-			};
 			return {
 				kind: "commit",
 				writes: [
 					...entries.map((entry) => insertEntry(entry)),
 					...ids.map((id) => deleteValue(pendingEntry(id))),
 					setValue(branchTip(lane.name), parentId),
-					setValue(operationStateValue(drive.operationId), nextState),
 				],
-				next: { ...state, tipId: parentId, operation: { meta: operation.meta, state: nextState } },
+				operationState: nextState,
+				lane: { tipId: parentId },
 				materialize: () => ({ kind: "continue" }) as const,
 				events: (commit) =>
 					entries.flatMap((entry, index) =>
@@ -284,28 +206,18 @@ async function applyPendingWrites<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
+	return result ?? { kind: "continue" };
 }
 
 async function consumeQueuedMessages<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	phase: CheckpointPhase,
+	checkpoint: RunCheckpointOperation,
 	queue: "steer" | "followUp",
 ): Promise<ProcedureResult> {
-	return lane.commandDriveOwned<ProcedureResult>(
-		drive,
-		async (state, reader) => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Queue drain reached a non-run operation");
-			}
-			const current = operation.state;
-			if (current.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "continue" } as const };
-			}
-			if (current.phase.kind !== "checkpoint" || !sameCheckpoint(current.phase, phase)) {
-				throw new SessionInvariantError("Queue drain lost its checkpoint boundary");
-			}
+	const result = await lane.advanceOperation(
+		checkpoint,
+		async (state, current, _meta, reader) => {
 			const allIds = current.inbox[queue];
 			const mode = queue === "steer" ? current.settings.steeringMode : current.settings.followUpMode;
 			const ids = mode === "all" ? allIds : allIds.slice(0, 1);
@@ -339,14 +251,12 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 			});
 			const triggerEntryId = entries.at(-1)?.id;
 			if (triggerEntryId === undefined) throw new SessionInvariantError("Queue drain produced no trigger entry");
-			const nextState: RunState = {
-				...current,
-				phase: {
-					kind: "checkpoint",
-					continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
-					triggerEntryId,
-					skipInboxOnce: true,
-				},
+			const nextState: RunCheckpointOperation = {
+				...runScopeOf(current),
+				at: "run.checkpoint",
+				continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
+				triggerEntryId,
+				skipInboxOnce: true,
 				inbox: { ...current.inbox, [queue]: allIds.slice(ids.length) },
 			};
 			return {
@@ -355,13 +265,9 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 					...entries.map((entry) => insertEntry(entry)),
 					...ids.map((id) => deleteValue(pendingEntry(id))),
 					setValue(branchTip(lane.name), triggerEntryId),
-					setValue(operationStateValue(drive.operationId), nextState),
 				],
-				next: {
-					...state,
-					tipId: triggerEntryId,
-					operation: { meta: operation.meta, state: nextState },
-				},
+				operationState: nextState,
+				lane: { tipId: triggerEntryId },
 				materialize: () => ({ kind: "continue" }) as const,
 				events: (commit) => [
 					...entries.flatMap((entry, index) =>
@@ -383,19 +289,19 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
+	return result ?? { kind: "continue" };
 }
 
 async function finishRun<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	phase: CheckpointPhase,
+	checkpoint: RunCheckpointOperation,
 ): Promise<ProcedureResult> {
-	const context = await readRunContext(lane, drive, phase);
-	if (context.kind === "lost_ownership") return context;
-	if (context.kind === "state_changed") return { kind: "continue" };
+	const context = await readRunContext(lane, drive, checkpoint);
+	if (context === undefined) return { kind: "continue" };
 	const hook = await lane.hooks.runWithGate(
 		"before_run_end",
-		{ lane: lane.name, runId: drive.operationId, messages: context.value },
+		{ lane: lane.name, runId: drive.operationId, messages: context },
 		drive.gate,
 		drive.context,
 	);
@@ -404,22 +310,11 @@ async function finishRun<TContext extends object | undefined>(
 	const followUpMessage: AgentMessage | undefined =
 		followUp === undefined ? undefined : { role: "user", content: followUp, timestamp: Date.now() };
 
-	return lane.commandDriveOwned<ProcedureResult>(
-		drive,
-		async (state, reader) => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Run finish reached a non-run operation");
-			}
-			const current = operation.state;
-			if (current.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "continue" } as const };
-			}
-			if (current.phase.kind !== "checkpoint" || !sameCheckpoint(current.phase, phase)) {
-				throw new SessionInvariantError("Run finish lost its checkpoint boundary");
-			}
+	const result = await lane.advanceOperation<RunCheckpointOperation, ProcedureResult>(
+		checkpoint,
+		async (state, current, _meta, reader) => {
 			if (
-				current.phase.continuation.kind !== "may_finish" ||
+				current.continuation.kind !== "may_finish" ||
 				current.inbox.steer.length !== 0 ||
 				current.inbox.followUp.length !== 0 ||
 				current.inbox.writes.length !== 0
@@ -427,13 +322,11 @@ async function finishRun<TContext extends object | undefined>(
 				return { kind: "return", result: { kind: "continue" } as const };
 			}
 			if (followUpId !== undefined && followUpMessage !== undefined) {
-				const nextState: RunState = {
-					...current,
-					phase: {
-						kind: "checkpoint",
-						continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
-						triggerEntryId: followUpId,
-					},
+				const nextState: RunCheckpointOperation = {
+					...runScopeOf(current),
+					at: "run.checkpoint",
+					continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
+					triggerEntryId: followUpId,
 				};
 				const entry: NewEntry<MessageEntry> = {
 					id: followUpId,
@@ -443,16 +336,9 @@ async function finishRun<TContext extends object | undefined>(
 				};
 				return {
 					kind: "commit",
-					writes: [
-						insertEntry(entry),
-						setValue(branchTip(lane.name), followUpId),
-						setValue(operationStateValue(drive.operationId), nextState),
-					],
-					next: {
-						...state,
-						tipId: followUpId,
-						operation: { meta: operation.meta, state: nextState },
-					},
+					writes: [insertEntry(entry), setValue(branchTip(lane.name), followUpId)],
+					operationState: nextState,
+					lane: { tipId: followUpId },
 					materialize: () => ({ kind: "continue" }) as const,
 					events: (commit) =>
 						lifecycleEvents(
@@ -464,8 +350,8 @@ async function finishRun<TContext extends object | undefined>(
 			}
 
 			if (state.tipId === null) throw new SessionInvariantError("Completed run has no tip");
-			const finalId = current.phase.continuation.includeFinalAssistant ? current.latestAssistantEntryId : null;
-			if (current.phase.continuation.includeFinalAssistant && finalId === null) {
+			const finalId = current.continuation.includeFinalAssistant ? current.latestAssistantEntryId : null;
+			if (current.continuation.includeFinalAssistant && finalId === null) {
 				throw new SessionInvariantError("Completed run is missing its final assistant");
 			}
 			let finalEntry: { id: string; message: SettledAssistantMessage } | undefined;
@@ -499,16 +385,9 @@ async function finishRun<TContext extends object | undefined>(
 			};
 			const cleanup = await operationCleanupWrites(reader, drive.operationId, current, drive.context);
 			return {
-				kind: "commit",
-				writes: [
-					...cleanup,
-					setValue(laneLastResultValue(lane.name), lastResult),
-					setValue(laneStateValue(lane.name), {
-						currentOperationId: null,
-						pendingNextRun: state.pendingNextRun,
-					}),
-				],
-				next: { ...state, lastResult, operation: null },
+				kind: "finish",
+				writes: cleanup,
+				lastResult,
 				materialize: () => ({ kind: "settled", outcome }) as const,
 				events: () => [
 					{
@@ -524,85 +403,63 @@ async function finishRun<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
+	return result ?? { kind: "continue" };
 }
 
 /** Advance one durable run checkpoint by one visible transition. */
 export async function runCheckpoint<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunState,
-	phase: CheckpointPhase,
+	run: RunCheckpointOperation,
 ): Promise<ProcedureResult> {
-	if (run.phase.kind !== "checkpoint" || !sameCheckpoint(run.phase, phase)) {
-		throw new SessionInvariantError("runCheckpoint requires its current checkpoint phase");
+	if (run.skipInboxOnce !== true && run.inbox.writes.length !== 0) {
+		return applyPendingWrites(lane, drive, run);
 	}
-	if (run.control.status === "cancel_requested") return { kind: "continue" };
-	if (phase.skipInboxOnce !== true && run.inbox.writes.length !== 0) {
-		return applyPendingWrites(lane, drive, phase);
+	if (run.skipInboxOnce !== true && run.inbox.steer.length !== 0) {
+		return consumeQueuedMessages(lane, drive, run, "steer");
 	}
-	if (phase.skipInboxOnce !== true && run.inbox.steer.length !== 0) {
-		return consumeQueuedMessages(lane, drive, phase, "steer");
-	}
-	if (phase.continuation.kind === "need_assistant") {
+	if (run.continuation.kind === "need_assistant") {
+		const overflowRecoveryUsed = run.continuation.overflowRecoveryUsed;
 		const config = lane.readConfig();
 		const retryPolicy = config.retryPolicy.enabled
 			? { maxAttempts: config.retryPolicy.maxRetries + 1, baseDelayMs: config.retryPolicy.baseDelayMs }
 			: { maxAttempts: 1, baseDelayMs: config.retryPolicy.baseDelayMs };
 		const stepId = lane.session.idGenerator.next();
-		return lane.commandDriveOwned<ProcedureResult>(
-			drive,
-			(state) => {
-				const operation = state.operation;
-				if (operation === null || operation.state.kind !== "run") {
-					throw new SessionInvariantError("Generation start reached a non-run operation");
-				}
-				const current = operation.state;
-				if (current.control.status === "cancel_requested") {
-					return { kind: "return", result: { kind: "continue" } as const };
-				}
+		const result = await lane.advanceOperation(
+			run,
+			(state, current) => {
 				if (
-					current.phase.kind !== "checkpoint" ||
-					!sameCheckpoint(current.phase, phase) ||
-					current.phase.continuation.kind !== "need_assistant"
-				) {
-					throw new SessionInvariantError("Generation start lost its checkpoint boundary");
-				}
-				if (
-					current.phase.skipInboxOnce !== true &&
+					current.skipInboxOnce !== true &&
 					(current.inbox.writes.length !== 0 || current.inbox.steer.length !== 0)
 				) {
 					return { kind: "return", result: { kind: "continue" } as const };
 				}
-				const nextState: RunState = {
-					...current,
-					phase: {
-						kind: "assistant",
-						generation: {
-							status: "ready",
-							context: {
-								stepId,
-								triggerEntryId: current.phase.triggerEntryId,
-								configuration: state.configuration,
-								streamOptions: config.streamOptions,
-								retryPolicy,
-								overflowRecoveryUsed: current.phase.continuation.overflowRecoveryUsed,
-							},
-							nextAttempt: 1,
-						},
+				const nextState: RunAssistantReadyOperation = {
+					...runScopeOf(current),
+					at: "run.assistant.ready",
+					generationContext: {
+						stepId,
+						triggerEntryId: current.triggerEntryId,
+						configuration: state.configuration,
+						streamOptions: config.streamOptions,
+						retryPolicy,
+						overflowRecoveryUsed,
 					},
+					nextAttempt: 1,
 				};
 				return {
 					kind: "commit",
-					writes: [setValue(operationStateValue(drive.operationId), nextState)],
-					next: { ...state, operation: { meta: operation.meta, state: nextState } },
+					writes: [],
+					operationState: nextState,
 					materialize: () => ({ kind: "continue" }) as const,
 				};
 			},
 			drive.context,
 		);
+		return result ?? { kind: "continue" };
 	}
 	if (run.inbox.followUp.length !== 0) {
-		return consumeQueuedMessages(lane, drive, phase, "followUp");
+		return consumeQueuedMessages(lane, drive, run, "followUp");
 	}
-	return finishRun(lane, drive, phase);
+	return finishRun(lane, drive, run);
 }

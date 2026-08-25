@@ -8,7 +8,7 @@ import {
 	withTelemetryContext,
 } from "../../src/harness/context.ts";
 import { HarnessEventBus } from "../../src/harness/events.ts";
-import { AbortRequested, createGate, DriveAbandoned } from "../../src/harness/execution/effect-gate.ts";
+import { AbortRequested, createGate } from "../../src/harness/execution/effect-gate.ts";
 import { HookRegistry } from "../../src/harness/hooks.ts";
 import { InMemoryTelemetryContext } from "../../src/index.ts";
 
@@ -47,11 +47,6 @@ describe("createGate", () => {
 		control.close(error);
 		expect(() => gate.admit(() => undefined)).toThrow(error);
 		expect(gate.signal.aborted).toBe(true);
-	});
-
-	it("keeps invocation abandonment distinct from durable abort control flow", () => {
-		expect(new DriveAbandoned()).not.toBeInstanceOf(AbortRequested);
-		expect(new DriveAbandoned().name).toBe("DriveAbandoned");
 	});
 });
 

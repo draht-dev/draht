@@ -113,14 +113,13 @@ describe("runtime atomic run acceptance", () => {
 
 		const admission = unwrap(await lane.accept(request, BACKGROUND_CONTEXT));
 		const operation = lane.state.operation;
-		if (operation?.state.kind !== "run") throw new Error("Expected accepted run");
+		if (operation?.state.at !== "run.starting") throw new Error("Expected accepted run");
 		const entryId = operation.meta.intent.kind === "run" ? operation.meta.intent.promptEntryIds[0] : undefined;
 		if (entryId === undefined) throw new Error("Expected prompt entry");
 		const entry = await session.getEntry(entryId, BACKGROUND_CONTEXT);
 
 		expect(admission).toMatchObject({ operationId: operation.meta.operationId, kind: "run" });
 		expect(entry).toMatchObject({ type: "message", message: { role: "user", content: expectedContent } });
-		expect(operation.state.phase).toEqual({ kind: "starting" });
 		expect(operation.state.settings).toEqual({
 			compaction: DEFAULT_COMPACTION_SETTINGS,
 			steeringMode: "all",
@@ -215,7 +214,7 @@ describe("runtime atomic run acceptance", () => {
 		unwrap(await lane.accept({ kind: "prompt", prompt: "" }, BACKGROUND_CONTEXT));
 
 		const operation = lane.state.operation;
-		if (operation?.meta.intent.kind !== "run" || operation.state.kind !== "run") {
+		if (operation?.meta.intent.kind !== "run" || operation.state.at !== "run.starting") {
 			throw new Error("Expected accepted run");
 		}
 		expect(operation.meta.intent.promptEntryIds).toEqual([]);

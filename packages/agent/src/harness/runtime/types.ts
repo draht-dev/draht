@@ -11,7 +11,14 @@ import type {
 import type { CompactionSettings } from "../compaction/compaction.ts";
 import { type Context, withoutAbortSignal } from "../context.ts";
 import { createGate, type Gate, type GateControl } from "../execution/effect-gate.ts";
-import type { CommitResult, LaneConfiguration, LaneLastResult, Operation, Write } from "../session/types.ts";
+import type {
+	CommitResult,
+	LaneConfiguration,
+	LaneLastResult,
+	Operation,
+	OperationState,
+	Write,
+} from "../session/types.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessTool } from "../types.ts";
 
 export class SliceNotImplemented extends Error {
@@ -48,15 +55,34 @@ export interface LaneState {
 
 type Synchronous<TResult> = TResult extends PromiseLike<unknown> ? never : TResult;
 
+interface CommitDecision<TResult> {
+	kind: "commit";
+	writes: Write[];
+	materialize(commit: CommitResult): Synchronous<TResult>;
+	events?(commit: CommitResult): HarnessEvent[];
+}
+
 /** One effect-free decision made on a lane's serialized mutation line. */
 export type LaneCommand<TResult> =
-	| {
-			kind: "commit";
-			writes: Write[];
-			next: LaneState;
-			materialize(commit: CommitResult): Synchronous<TResult>;
-			events?(commit: CommitResult): HarnessEvent[];
-	  }
+	| (CommitDecision<TResult> & { next: LaneState })
+	| { kind: "return"; result: TResult }
+	| { kind: "reject"; error: Error };
+
+/** A durable operation transition. The Lane pairs the state write with projection publication. */
+type LanePatch = Partial<Pick<LaneState, "tipId" | "configuration" | "pendingNextRun" | "lastResult">>;
+
+interface FinishDecision<TResult> {
+	kind: "finish";
+	writes: Write[];
+	lastResult: LaneLastResult;
+	lane?: LanePatch;
+	materialize(commit: CommitResult): Synchronous<TResult>;
+	events?(commit: CommitResult): HarnessEvent[];
+}
+
+export type OperationCommand<TResult> =
+	| (CommitDecision<TResult> & { operationState: OperationState; lane?: LanePatch })
+	| FinishDecision<TResult>
 	| { kind: "return"; result: TResult }
 	| { kind: "reject"; error: Error };
 
@@ -66,10 +92,8 @@ export class Drive {
 	readonly completion: Promise<DriveOutcome>;
 	readonly gate: Gate;
 	readonly context: Context;
-	readonly installerSignal: AbortSignal | undefined;
 	readonly waitForRetry: boolean;
 	deferredPermits: number;
-	finalizedOutcome: DriveOutcome | undefined;
 
 	private readonly control: GateControl;
 	private readonly resolveCompletion: (outcome: DriveOutcome) => void;
@@ -78,7 +102,6 @@ export class Drive {
 
 	constructor(options: DriveOptions, context: Context) {
 		this.operationId = options.operationId;
-		this.installerSignal = context.abortSignal;
 		this.context = withoutAbortSignal(context);
 		this.waitForRetry = options.waitForRetry ?? false;
 		this.deferredPermits = options.pollDeferred === true ? 1 : 0;
@@ -121,10 +144,7 @@ export class Drive {
 	}
 }
 
-export type LostOwnership = { kind: "lost_ownership" };
-
 export type ProcedureResult =
 	| { kind: "continue" }
 	| { kind: "waiting"; outcome: DriveOutcome }
-	| { kind: "settled"; outcome: TerminalOperationOutcome }
-	| LostOwnership;
+	| { kind: "settled"; outcome: TerminalOperationOutcome };

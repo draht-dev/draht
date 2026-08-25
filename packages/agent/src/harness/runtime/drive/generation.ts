@@ -1,45 +1,29 @@
-import {
-	type AssistantMessage,
-	type AssistantMessageEvent,
-	AssistantMessageFrameEncoder,
-	isRetryableAssistantError,
-	type Tool,
-} from "@draht/ai";
+import { type AssistantMessage, type AssistantMessageEvent, AssistantMessageFrameEncoder, type Tool } from "@draht/ai";
 import type { AgentMessage } from "../../../types.ts";
-import type { HarnessEvent } from "../../agent-harness.ts";
 import { type Context, withAbortSignal } from "../../context.ts";
 import { streamHarnessAssistant } from "../../execution/assistant.ts";
 import { applyStreamOptionsPatch } from "../../hooks.ts";
-import { insertEntry, insertUsage } from "../../session/commit.ts";
 import { buildSessionContext } from "../../session/context.ts";
 import { SessionInvariantError } from "../../session/session.ts";
-import type {
-	Entry,
-	Generation,
-	GenerationContext,
-	JsonValue,
-	MessageEntry,
-	NewEntry,
-	OperationError,
-	RunState,
-	SettledAssistantMessage,
-	ToolCall,
-	UsageRow,
-} from "../../session/types.ts";
 import {
-	branchTip,
-	deleteList,
-	operationState as operationStateValue,
-	pendingAssistantFrames,
-	setValue,
-} from "../../session/values.ts";
+	type JsonValue,
+	type OperationError,
+	type OperationState,
+	type RunAssistantEffectPendingOperation,
+	type RunAssistantReadyOperation,
+	type RunAssistantRetryWaitOperation,
+	type RunScope,
+	runScopeOf,
+	type SettledAssistantMessage,
+} from "../../session/types.ts";
 import type { AgentHarnessStreamOptions } from "../../types.ts";
 import type { Lane } from "../lane.ts";
 import { openFrameProgress } from "../progress.ts";
-import type { Drive, LaneCommand, LostOwnership, ProcedureResult } from "../types.ts";
+import type { Drive, ProcedureResult } from "../types.ts";
+import { settleResponse } from "./response.ts";
 
-type LocalResult = { kind: "committed" } | { kind: "state_changed" } | LostOwnership;
-type ReadResult<T> = { kind: "value"; value: T } | { kind: "state_changed" } | LostOwnership;
+/** Assistant effect-pending payload without the run-wide scope fields. */
+type AssistantEffectPending = Omit<RunAssistantEffectPendingOperation, keyof RunScope>;
 
 const ZERO_USAGE = {
 	input: 0,
@@ -49,20 +33,6 @@ const ZERO_USAGE = {
 	totalTokens: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
-
-function sameReadyGeneration(current: Generation, expected: Extract<Generation, { status: "ready" }>): boolean {
-	return (
-		current.status === "ready" &&
-		current.context.stepId === expected.context.stepId &&
-		current.nextAttempt === expected.nextAttempt
-	);
-}
-
-function uuidV7Timestamp(id: string): number {
-	const timestamp = Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16);
-	if (!Number.isSafeInteger(timestamp)) throw new SessionInvariantError(`Invalid reserved UUIDv7 ${id}`);
-	return timestamp;
-}
 
 function configurationError(
 	code: "model_unavailable" | "configured_tools_unavailable",
@@ -76,35 +46,6 @@ function configurationError(
 				: "One or more configured tools are unavailable in this process",
 		details,
 	};
-}
-
-function providerError(message: SettledAssistantMessage): OperationError {
-	return {
-		code: "assistant_error",
-		message: message.errorMessage ?? `Assistant request ended with ${message.stopReason}`,
-	};
-}
-
-function normalizeError(message: SettledAssistantMessage, errorMessage: string): SettledAssistantMessage {
-	return { ...message, stopReason: "error", errorMessage };
-}
-
-function normalizeAborted(message: SettledAssistantMessage): SettledAssistantMessage {
-	return {
-		...message,
-		stopReason: "aborted",
-		errorMessage: message.errorMessage ?? "Assistant request was cancelled",
-	};
-}
-
-function retryDelay(baseDelayMs: number, attempt: number): number {
-	const delay = baseDelayMs * 2 ** Math.max(0, attempt - 1);
-	return Number.isSafeInteger(delay) ? delay : Number.MAX_SAFE_INTEGER;
-}
-
-function saturatingAdd(left: number, right: number): number {
-	const sum = left + right;
-	return Number.isSafeInteger(sum) ? sum : Number.MAX_SAFE_INTEGER;
 }
 
 function waitUntil(notBefore: number, signal: AbortSignal): Promise<void> {
@@ -133,30 +74,6 @@ function waitUntil(notBefore: number, signal: AbortSignal): Promise<void> {
 	});
 }
 
-function sameRetryWait(current: Generation, expected: Extract<Generation, { status: "retry_wait" }>): boolean {
-	return (
-		current.status === "retry_wait" &&
-		current.context.stepId === expected.context.stepId &&
-		current.nextAttempt === expected.nextAttempt &&
-		current.notBefore === expected.notBefore
-	);
-}
-
-function deferredHandleIsValid(
-	message: SettledAssistantMessage,
-	identity: GenerationContext["configuration"]["model"],
-): boolean {
-	const handle = message.deferred;
-	return (
-		message.stopReason === "deferred" &&
-		handle !== undefined &&
-		handle.id.length !== 0 &&
-		handle.provider === identity.provider &&
-		handle.modelId === identity.modelId &&
-		handle.api === message.api
-	);
-}
-
 async function resolveSystemPrompt<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	context: Context,
@@ -172,24 +89,11 @@ async function resolveSystemPrompt<TContext extends object | undefined>(
 async function readRequestMessages<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	generation: Extract<Generation, { status: "ready" }>,
-): Promise<ReadResult<AgentMessage[]>> {
-	const path = await lane.commandDriveOwned<ReadResult<Entry[]>>(
-		drive,
-		async (state, reader): Promise<LaneCommand<ReadResult<Entry[]>>> => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Generation context reached a non-run operation");
-			}
-			if (operation.state.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
-			if (
-				operation.state.phase.kind !== "assistant" ||
-				!sameReadyGeneration(operation.state.phase.generation, generation)
-			) {
-				throw new SessionInvariantError("Generation context lost its ready boundary");
-			}
+	generation: RunAssistantReadyOperation,
+): Promise<AgentMessage[] | undefined> {
+	const path = await lane.advanceOperation(
+		generation,
+		async (state, _current, _meta, reader) => {
 			if (state.tipId === null) throw new SessionInvariantError("Assistant generation has no Branch tip");
 			const entries = (
 				await reader.scanBranch(
@@ -197,55 +101,38 @@ async function readRequestMessages<TContext extends object | undefined>(
 					drive.context,
 				)
 			).reverse();
-			return { kind: "return", result: { kind: "value", value: entries } as const };
+			return { kind: "return", result: entries };
 		},
 		drive.context,
 	);
-	if (path.kind !== "value") return path;
-	return {
-		kind: "value",
-		value: await buildSessionContext(
-			path.value,
-			{ entryProjectors: lane.readConfig().entryProjectors },
-			drive.context,
-		),
-	};
+	return path === undefined
+		? undefined
+		: buildSessionContext(path, { entryProjectors: lane.readConfig().entryProjectors }, drive.context);
 }
 
 async function commitGenerationIntent<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	expected: Extract<Generation, { status: "ready" }>,
-	generation: Extract<Generation, { status: "effect_pending" }>,
-): Promise<LocalResult> {
-	return lane.commandDriveOwned<LocalResult>(
-		drive,
-		(state) => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Generation intent reached a non-run operation");
-			}
-			const run = operation.state;
-			if (run.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
-			if (run.phase.kind !== "assistant" || !sameReadyGeneration(run.phase.generation, expected)) {
-				throw new SessionInvariantError("Generation intent lost its ready boundary");
-			}
-			const nextState: RunState = { ...run, phase: { kind: "assistant", generation } };
+	ready: RunAssistantReadyOperation,
+	pending: AssistantEffectPending,
+): Promise<RunAssistantEffectPendingOperation | undefined> {
+	return lane.advanceOperation(
+		ready,
+		(_state, current) => {
+			const nextState: RunAssistantEffectPendingOperation = { ...runScopeOf(current), ...pending };
 			return {
 				kind: "commit",
-				writes: [setValue(operationStateValue(drive.operationId), nextState)],
-				next: { ...state, operation: { meta: operation.meta, state: nextState } },
-				materialize: () => ({ kind: "committed" }) as const,
+				writes: [],
+				operationState: nextState,
+				materialize: () => nextState,
 				events: () =>
-					expected.nextAttempt === 1
+					ready.nextAttempt === 1
 						? [
 								{
 									type: "turn_start",
 									lane: lane.name,
 									runId: drive.operationId,
-									turnId: expected.context.stepId,
+									turnId: ready.generationContext.stepId,
 								},
 							]
 						: [],
@@ -256,293 +143,39 @@ async function commitGenerationIntent<TContext extends object | undefined>(
 }
 
 /** Commit a non-retryable request-configuration failure before reserving response ids. */
-export function enterConfigurationFailure<TContext extends object | undefined>(
+export async function enterConfigurationFailure<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	expected: Extract<Generation, { status: "ready" }>,
+	ready: RunAssistantReadyOperation,
 	error: OperationError,
 ): Promise<ProcedureResult> {
-	return lane.commandDriveOwned<ProcedureResult>(
-		drive,
-		(state) => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Configuration failure reached a non-run operation");
-			}
-			const run = operation.state;
-			if (run.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "continue" } as const };
-			}
-			if (run.phase.kind !== "assistant" || !sameReadyGeneration(run.phase.generation, expected)) {
-				throw new SessionInvariantError("Configuration failure lost its ready boundary");
-			}
-			const nextState: RunState = {
-				...run,
-				phase: { kind: "failure_drain", error, provenance: { kind: "configuration" } },
+	const result = await lane.advanceOperation(
+		ready,
+		(_state, current) => {
+			const nextState: OperationState = {
+				...runScopeOf(current),
+				at: "run.failure_drain",
+				error,
+				provenance: { kind: "configuration" },
 			};
 			return {
 				kind: "commit",
-				writes: [setValue(operationStateValue(drive.operationId), nextState)],
-				next: { ...state, operation: { meta: operation.meta, state: nextState } },
+				writes: [],
+				operationState: nextState,
 				materialize: () => ({ kind: "continue" }) as const,
 			};
 		},
 		drive.context,
 	);
-}
-
-interface SettlementIdentity {
-	responseEntryId: string;
-	usageId: string;
-	stepId: string;
-}
-
-/** Classify and atomically settle one complete assistant response under its reserved ids. */
-export function settleAssistant<TContext extends object | undefined>(
-	lane: Lane<TContext>,
-	drive: Drive,
-	identity: SettlementIdentity,
-	response: SettledAssistantMessage,
-	options: { recovery?: true } = {},
-): Promise<ProcedureResult> {
-	return lane.commandDriveOwned<ProcedureResult>(
-		drive,
-		(state) => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Assistant settlement reached a non-run operation");
-			}
-			const run = operation.state;
-			if (run.phase.kind !== "assistant" || run.phase.generation.status !== "effect_pending") {
-				throw new SessionInvariantError("Assistant settlement lost its effect-pending boundary");
-			}
-			const generation = run.phase.generation;
-			if (
-				generation.context.stepId !== identity.stepId ||
-				generation.responseEntryId !== identity.responseEntryId ||
-				generation.usageId !== identity.usageId
-			) {
-				throw new SessionInvariantError("Assistant settlement ids contradict the durable request intent");
-			}
-
-			const modelIdentity = generation.context.configuration.model;
-			let committed = response;
-			let nextPhase: RunState["phase"];
-			if (run.control.status === "cancel_requested") {
-				committed = normalizeAborted(response);
-				nextPhase = {
-					kind: "checkpoint",
-					continuation: { kind: "may_finish", includeFinalAssistant: true },
-					triggerEntryId: identity.responseEntryId,
-				};
-			} else if (response.stopReason === "aborted") {
-				throw new SessionInvariantError("Assistant response is aborted while durable control is running");
-			} else if (response.stopReason === "deferred") {
-				if (deferredHandleIsValid(response, modelIdentity)) {
-					nextPhase = {
-						kind: "deferred",
-						deferred: {
-							status: "suspended",
-							stepId: generation.context.stepId,
-							sourceEntryId: identity.responseEntryId,
-							poll: 0,
-							configuration: generation.context.configuration,
-							streamOptions: generation.context.streamOptions,
-						},
-					};
-				} else {
-					committed = normalizeError(response, "Provider returned an invalid deferred handle");
-					nextPhase = {
-						kind: "failure_drain",
-						error: providerError(committed),
-						provenance: { kind: "response", entryId: identity.responseEntryId },
-					};
-				}
-			} else if (
-				response.stopReason === "error" &&
-				(options.recovery === true || isRetryableAssistantError(response)) &&
-				generation.attempt < generation.context.retryPolicy.maxAttempts
-			) {
-				const delayMs = retryDelay(generation.context.retryPolicy.baseDelayMs, generation.attempt);
-				nextPhase = {
-					kind: "assistant",
-					generation: {
-						status: "retry_wait",
-						context: generation.context,
-						nextAttempt: generation.attempt + 1,
-						notBefore: saturatingAdd(Date.now(), delayMs),
-						errorMessage: response.errorMessage ?? "Assistant request failed",
-					},
-				};
-			} else if (response.stopReason === "error") {
-				nextPhase = {
-					kind: "failure_drain",
-					error: providerError(response),
-					provenance: { kind: "response", entryId: identity.responseEntryId },
-				};
-			} else {
-				const calls = response.content.flatMap((content, sourceIndex) =>
-					content.type === "toolCall" ? [{ content, sourceIndex }] : [],
-				);
-				if (calls.length !== 0) {
-					const timestamp = uuidV7Timestamp(identity.responseEntryId);
-					const planned: ToolCall[] = calls.map(({ sourceIndex }) => ({
-						status: "planned",
-						sourceIndex,
-						resultEntryId: lane.session.idGenerator.next(timestamp),
-					}));
-					nextPhase = {
-						kind: "tools",
-						batch: {
-							assistantEntryId: identity.responseEntryId,
-							configuration: generation.context.configuration,
-							turnId: generation.context.stepId,
-							calls: planned,
-						},
-					};
-				} else if (response.stopReason === "toolUse") {
-					committed = normalizeError(response, "Provider reported tool use without any tool calls");
-					nextPhase = {
-						kind: "failure_drain",
-						error: providerError(committed),
-						provenance: { kind: "response", entryId: identity.responseEntryId },
-					};
-				} else {
-					nextPhase = {
-						kind: "checkpoint",
-						continuation: { kind: "may_finish", includeFinalAssistant: true },
-						triggerEntryId: identity.responseEntryId,
-					};
-				}
-			}
-
-			const nextState: RunState = {
-				...run,
-				phase: nextPhase,
-				latestAssistantEntryId: identity.responseEntryId,
-			};
-			const responseEntry: NewEntry<MessageEntry> = {
-				id: identity.responseEntryId,
-				parentId: state.tipId,
-				type: "message",
-				message: committed,
-			};
-			const usageRow: Omit<UsageRow, "seq"> = {
-				id: identity.usageId,
-				usage: committed.usage,
-				entryId: identity.responseEntryId,
-				adjustment: false,
-			};
-			return {
-				kind: "commit",
-				writes: [
-					insertEntry(responseEntry),
-					insertUsage(usageRow),
-					setValue(branchTip(lane.name), identity.responseEntryId),
-					deleteList(pendingAssistantFrames(drive.operationId, identity.responseEntryId)),
-					setValue(operationStateValue(drive.operationId), nextState),
-				],
-				next: {
-					...state,
-					tipId: identity.responseEntryId,
-					operation: { meta: operation.meta, state: nextState },
-				},
-				materialize: () => ({ kind: "continue" }) as const,
-				events: (commit) => {
-					const entry: MessageEntry = {
-						...responseEntry,
-						seq: commit.seqs[0]!,
-						timestamp: commit.timestamp,
-					};
-					const events: HarnessEvent[] = [
-						{ type: "entry_added", lane: lane.name, entry, ...options },
-						{
-							type: "usage",
-							lane: lane.name,
-							row: { ...usageRow, seq: commit.seqs[1]! },
-							totals: commit.stats.usage,
-						},
-					];
-					if (
-						options.recovery !== true &&
-						generation.attempt > 1 &&
-						!(nextPhase.kind === "assistant" && nextPhase.generation.status === "retry_wait")
-					) {
-						const success = committed.stopReason !== "error" && committed.stopReason !== "aborted";
-						events.push({
-							type: "retry_end",
-							lane: lane.name,
-							runId: drive.operationId,
-							step: identity.stepId,
-							attempt: generation.attempt,
-							success,
-							...(success
-								? {}
-								: {
-										finalError:
-											committed.errorMessage ?? `Assistant request ended with ${committed.stopReason}`,
-									}),
-						});
-					}
-					if (
-						options.recovery !== true &&
-						nextPhase.kind === "assistant" &&
-						nextPhase.generation.status === "retry_wait"
-					) {
-						events.push({
-							type: "retry_scheduled",
-							lane: lane.name,
-							runId: drive.operationId,
-							step: identity.stepId,
-							attempt: nextPhase.generation.nextAttempt,
-							maxAttempts: nextPhase.generation.context.retryPolicy.maxAttempts,
-							delayMs: retryDelay(generation.context.retryPolicy.baseDelayMs, generation.attempt),
-							errorMessage: nextPhase.generation.errorMessage,
-						});
-					}
-					if (
-						options.recovery !== true &&
-						nextPhase.kind !== "tools" &&
-						!(nextPhase.kind === "assistant" && nextPhase.generation.status === "retry_wait")
-					) {
-						events.push({
-							type: "turn_end",
-							lane: lane.name,
-							runId: drive.operationId,
-							turnId: identity.stepId,
-							message: committed,
-							toolResults: [],
-							...options,
-						});
-					}
-					if (options.recovery !== true && nextPhase.kind === "deferred" && committed.deferred !== undefined) {
-						events.push({
-							type: "run_suspend",
-							lane: lane.name,
-							runId: drive.operationId,
-							reason: "deferred",
-							deferred: committed.deferred,
-						});
-					}
-					return events;
-				},
-			};
-		},
-		drive.context,
-	);
+	return result ?? { kind: "continue" };
 }
 
 /** Advance one durable assistant retry wait according to this pass's local wait policy. */
 export async function runRetryWait<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunState,
-	generation: Extract<Generation, { status: "retry_wait" }>,
+	generation: RunAssistantRetryWaitOperation,
 ): Promise<ProcedureResult> {
-	if (run.phase.kind !== "assistant" || !sameRetryWait(run.phase.generation, generation)) {
-		throw new SessionInvariantError("runRetryWait requires its current retry wait");
-	}
-	if (run.control.status === "cancel_requested") return { kind: "continue" };
 	if (Date.now() < generation.notBefore) {
 		if (!drive.waitForRetry) {
 			return {
@@ -558,42 +191,26 @@ export async function runRetryWait<TContext extends object | undefined>(
 		await drive.gate.admit(() => waitUntil(generation.notBefore, drive.gate.signal));
 	}
 
-	return lane.commandDriveOwned<ProcedureResult>(
-		drive,
-		(state) => {
-			const operation = state.operation;
-			if (operation === null || operation.state.kind !== "run") {
-				throw new SessionInvariantError("Retry wait reached a non-run operation");
-			}
-			const current = operation.state;
-			if (current.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "continue" } as const };
-			}
-			if (current.phase.kind !== "assistant" || !sameRetryWait(current.phase.generation, generation)) {
-				throw new SessionInvariantError("Retry wait lost its durable boundary");
-			}
-			const nextState: RunState = {
-				...current,
-				phase: {
-					kind: "assistant",
-					generation: {
-						status: "ready",
-						context: generation.context,
-						nextAttempt: generation.nextAttempt,
-					},
-				},
+	const result = await lane.advanceOperation(
+		generation,
+		(_state, current) => {
+			const nextState: RunAssistantReadyOperation = {
+				...runScopeOf(current),
+				at: "run.assistant.ready",
+				generationContext: generation.generationContext,
+				nextAttempt: generation.nextAttempt,
 			};
 			return {
 				kind: "commit",
-				writes: [setValue(operationStateValue(drive.operationId), nextState)],
-				next: { ...state, operation: { meta: operation.meta, state: nextState } },
+				writes: [],
+				operationState: nextState,
 				materialize: () => ({ kind: "continue" }) as const,
 				events: () => [
 					{
 						type: "retry_start",
 						lane: lane.name,
 						runId: drive.operationId,
-						step: generation.context.stepId,
+						step: generation.generationContext.stepId,
 						attempt: generation.nextAttempt,
 					},
 				],
@@ -601,32 +218,27 @@ export async function runRetryWait<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
+	return result ?? { kind: "continue" };
 }
 
 /** Execute one ready assistant generation or advance its durable retry wait. */
 export async function runGeneration<TContext extends object | undefined>(
 	lane: Lane<TContext>,
 	drive: Drive,
-	run: RunState,
-	generation: Generation,
+	generation: RunAssistantReadyOperation | RunAssistantRetryWaitOperation,
 ): Promise<ProcedureResult> {
-	if (generation.status === "retry_wait") return runRetryWait(lane, drive, run, generation);
-	if (generation.status !== "ready") {
-		throw new SessionInvariantError("runGeneration requires a ready generation or retry wait");
-	}
-	if (run.phase.kind !== "assistant" || !sameReadyGeneration(run.phase.generation, generation)) {
-		throw new SessionInvariantError("runGeneration requires its current ready phase");
-	}
-	if (run.control.status === "cancel_requested") return { kind: "continue" };
+	if (generation.at === "run.assistant.retry_wait") return runRetryWait(lane, drive, generation);
 
-	const identity = generation.context.configuration.model;
+	const identity = generation.generationContext.configuration.model;
 	const model = lane.models.getModel(identity.provider, identity.modelId);
 	if (model === undefined) {
 		return enterConfigurationFailure(lane, drive, generation, configurationError("model_unavailable", identity));
 	}
 	const config = lane.readConfig();
 	const toolsByName = new Map(config.tools.map((tool) => [tool.name, tool]));
-	const missingTools = generation.context.configuration.activeToolNames.filter((name) => !toolsByName.has(name));
+	const missingTools = generation.generationContext.configuration.activeToolNames.filter(
+		(name) => !toolsByName.has(name),
+	);
 	if (missingTools.length !== 0) {
 		return enterConfigurationFailure(
 			lane,
@@ -635,7 +247,7 @@ export async function runGeneration<TContext extends object | undefined>(
 			configurationError("configured_tools_unavailable", { tools: missingTools }),
 		);
 	}
-	const tools: Tool[] = generation.context.configuration.activeToolNames.map((name) => {
+	const tools: Tool[] = generation.generationContext.configuration.activeToolNames.map((name) => {
 		const tool = toolsByName.get(name);
 		if (tool === undefined) throw new SessionInvariantError(`Configured tool ${name} disappeared during resolution`);
 		return {
@@ -647,8 +259,7 @@ export async function runGeneration<TContext extends object | undefined>(
 	});
 
 	const messages = await readRequestMessages(lane, drive, generation);
-	if (messages.kind === "lost_ownership") return messages;
-	if (messages.kind === "state_changed") return { kind: "continue" };
+	if (messages === undefined) return { kind: "continue" };
 	const systemPrompt = await resolveSystemPrompt(lane, drive.context);
 	const beforeRequest = await lane.hooks.runWithGate(
 		"before_request",
@@ -658,21 +269,21 @@ export async function runGeneration<TContext extends object | undefined>(
 			model,
 			step: "assistant",
 			attempt: generation.nextAttempt,
-			streamOptions: generation.context.streamOptions,
+			streamOptions: generation.generationContext.streamOptions,
 		},
 		drive.gate,
 		drive.context,
 	);
 	const streamOptions: AgentHarnessStreamOptions =
 		beforeRequest?.streamOptions === undefined
-			? generation.context.streamOptions
-			: applyStreamOptionsPatch(generation.context.streamOptions, beforeRequest.streamOptions);
+			? generation.generationContext.streamOptions
+			: applyStreamOptionsPatch(generation.generationContext.streamOptions, beforeRequest.streamOptions);
 	const at = Date.now();
 	const responseEntryId = lane.session.idGenerator.next(at);
 	const usageId = lane.session.idGenerator.next(at);
-	const effectPending: Extract<Generation, { status: "effect_pending" }> = {
-		status: "effect_pending",
-		context: generation.context,
+	const effectPending: AssistantEffectPending = {
+		at: "run.assistant.effect_pending",
+		generationContext: generation.generationContext,
 		attempt: generation.nextAttempt,
 		responseEntryId,
 		usageId,
@@ -680,10 +291,9 @@ export async function runGeneration<TContext extends object | undefined>(
 		contextWindow: model.contextWindow,
 	};
 	const intent = await commitGenerationIntent(lane, drive, generation, effectPending);
-	if (intent.kind === "lost_ownership") return intent;
-	if (intent.kind === "state_changed") return { kind: "continue" };
+	if (intent === undefined) return { kind: "continue" };
 
-	const progress = openFrameProgress(lane, drive, responseEntryId);
+	const progress = openFrameProgress(lane, drive, intent.responseEntryId);
 	const frameEncoder = new AssistantMessageFrameEncoder();
 	let drained = false;
 	const drainProgress = async () => {
@@ -695,12 +305,12 @@ export async function runGeneration<TContext extends object | undefined>(
 	let response: SettledAssistantMessage;
 	try {
 		response = await streamHarnessAssistant(
-			messages.value,
+			messages,
 			{
 				model,
 				systemPrompt,
 				tools,
-				thinkingLevel: generation.context.configuration.thinkingLevel,
+				thinkingLevel: generation.generationContext.configuration.thinkingLevel,
 				streamOptions,
 				transformContext: async (requestContext, context) => {
 					const result = await lane.hooks.runWithGate(
@@ -792,11 +402,11 @@ export async function runGeneration<TContext extends object | undefined>(
 		await drainProgress();
 	}
 
-	return settleAssistant(lane, drive, { responseEntryId, usageId, stepId: generation.context.stepId }, response);
+	return settleResponse(lane, drive, intent, response);
 }
 
 export function interruptedAssistantMessage(
-	generation: Extract<Generation, { status: "effect_pending" }>,
+	generation: RunAssistantEffectPendingOperation,
 	partial: AssistantMessage | undefined,
 ): SettledAssistantMessage {
 	const warning =
@@ -806,8 +416,8 @@ export function interruptedAssistantMessage(
 				role: "assistant",
 				content: [],
 				api: "unknown",
-				provider: generation.context.configuration.model.provider,
-				model: generation.context.configuration.model.modelId,
+				provider: generation.generationContext.configuration.model.provider,
+				model: generation.generationContext.configuration.model.modelId,
 				usage: ZERO_USAGE,
 				stopReason: "error",
 				errorMessage: warning,

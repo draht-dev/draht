@@ -6,13 +6,15 @@ import { insertEntry } from "../../../src/harness/session/commit.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import type {
-	CompactionState,
+	CompactionDecidingOperation,
 	LaneConfiguration,
 	LaneLastResult,
-	NavigationState,
+	NavigationReadyToCommitOperation,
 	OperationMeta,
 	OperationState,
-	RunState,
+	RunAssistantEffectPendingOperation,
+	RunScope,
+	RunToolsOperation,
 	Session,
 	Write,
 } from "../../../src/harness/session/types.ts";
@@ -25,9 +27,8 @@ const configuration: LaneConfiguration = {
 	activeToolNames: [],
 };
 
-function runState(phase: RunState["phase"]): RunState {
+function runScope(): RunScope {
 	return {
-		kind: "run",
 		control: { status: "running" },
 		settings: {
 			compaction: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 2_000 },
@@ -35,7 +36,6 @@ function runState(phase: RunState["phase"]): RunState {
 			followUpMode: "all",
 			toolExecution: "parallel",
 		},
-		phase,
 		inbox: { steer: [], followUp: [], writes: [] },
 		latestAssistantEntryId: null,
 	};
@@ -43,11 +43,11 @@ function runState(phase: RunState["phase"]): RunState {
 
 function meta(operationId: string, state: OperationState): OperationMeta {
 	const intent: OperationMeta["intent"] =
-		state.kind === "run"
-			? { kind: "run", promptEntryIds: [] }
-			: state.kind === "compaction"
-				? { kind: "compaction" }
-				: { kind: "navigation", targetId: state.targetId, summarize: state.summarize };
+		state.at === "compaction.deciding"
+			? { kind: "compaction" }
+			: state.at === "navigation.ready_to_commit"
+				? { kind: "navigation", targetId: state.targetId, summarize: false }
+				: { kind: "run", promptEntryIds: [] };
 	return { operationId, lane: "main", sourceTipId: null, startedAt: 1, intent };
 }
 
@@ -101,26 +101,22 @@ describe("runtime terminal cleanup mechanics", () => {
 		const { session } = await createSession();
 		const operationId = "run";
 		const responseEntryId = "response";
-		const state: RunState = {
-			...runState({
-				kind: "assistant",
-				generation: {
-					status: "effect_pending",
-					context: {
-						stepId: "step",
-						triggerEntryId: "trigger",
-						configuration,
-						streamOptions: {},
-						retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
-						overflowRecoveryUsed: false,
-					},
-					attempt: 1,
-					responseEntryId,
-					usageId: "usage",
-					intendedOutputLimit: 100,
-					contextWindow: 1_000,
-				},
-			}),
+		const state: RunAssistantEffectPendingOperation = {
+			...runScope(),
+			at: "run.assistant.effect_pending",
+			generationContext: {
+				stepId: "step",
+				triggerEntryId: "trigger",
+				configuration,
+				streamOptions: {},
+				retryPolicy: { maxAttempts: 2, baseDelayMs: 1 },
+				overflowRecoveryUsed: false,
+			},
+			attempt: 1,
+			responseEntryId,
+			usageId: "usage",
+			intendedOutputLimit: 100,
+			contextWindow: 1_000,
 			control: {
 				status: "cancel_requested",
 				requestedAt: 2,
@@ -182,8 +178,9 @@ describe("runtime terminal cleanup mechanics", () => {
 	it("deletes staged tool outcomes and leaves completed results alone", async () => {
 		const { session } = await createSession();
 		const operationId = "tools";
-		const state = runState({
-			kind: "tools",
+		const state: RunToolsOperation = {
+			...runScope(),
+			at: "run.tools",
 			batch: {
 				assistantEntryId: "assistant",
 				configuration,
@@ -193,7 +190,7 @@ describe("runtime terminal cleanup mechanics", () => {
 					{ status: "completed", sourceIndex: 1, resultEntryId: "placed", terminate: false },
 				],
 			},
-		});
+		};
 		await seedLeftovers(session, operationId, state);
 		await commit(session, [
 			storedValues.setValue(storedValues.pendingEntry("staged"), {
@@ -219,20 +216,18 @@ describe("runtime terminal cleanup mechanics", () => {
 		[
 			"compaction",
 			{
-				kind: "compaction",
+				at: "compaction.deciding",
 				control: { status: "running" },
-				structural: { status: "deciding", taskId: "task" },
-			} satisfies CompactionState,
+				taskId: "task",
+			} satisfies CompactionDecidingOperation,
 		],
 		[
 			"navigation",
 			{
-				kind: "navigation",
+				at: "navigation.ready_to_commit",
 				control: { status: "running" },
 				targetId: null,
-				summarize: false,
-				phase: { kind: "ready_to_commit" },
-			} satisfies NavigationState,
+			} satisfies NavigationReadyToCommitOperation,
 		],
 	] as const)("defensively deletes leftover %s operation families", async (operationId, state) => {
 		const { session } = await createSession();

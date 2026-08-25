@@ -3,7 +3,12 @@ import { DEFAULT_COMPACTION_SETTINGS } from "../../../src/harness/compaction/com
 import { BACKGROUND_CONTEXT } from "../../../src/harness/context.ts";
 import { restoreLane, restoreSession } from "../../../src/harness/runtime/restore.ts";
 import { MemorySessionRepo, MemoryStorage } from "../../../src/harness/session/memory.ts";
-import type { LaneConfiguration, OperationMeta, RunState, Session } from "../../../src/harness/session/types.ts";
+import type {
+	LaneConfiguration,
+	OperationMeta,
+	RunCheckpointOperation,
+	Session,
+} from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
 
 const repos: MemorySessionRepo[] = [];
@@ -35,9 +40,9 @@ async function createSession(): Promise<Session> {
 	return session;
 }
 
-function runState(triggerEntryId: string): RunState {
+function runState(triggerEntryId: string): RunCheckpointOperation {
 	return {
-		kind: "run",
+		at: "run.checkpoint",
 		control: { status: "running" },
 		settings: {
 			compaction: DEFAULT_COMPACTION_SETTINGS,
@@ -45,11 +50,8 @@ function runState(triggerEntryId: string): RunState {
 			followUpMode: "all",
 			toolExecution: "parallel",
 		},
-		phase: {
-			kind: "checkpoint",
-			continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
-			triggerEntryId,
-		},
+		continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
+		triggerEntryId,
 		inbox: { steer: [], followUp: [], writes: [] },
 		latestAssistantEntryId: null,
 	};

@@ -107,8 +107,8 @@ export type Continuation =
 	| { kind: "need_assistant"; overflowRecoveryUsed: boolean }
 	| { kind: "may_finish"; includeFinalAssistant: boolean };
 
-export interface CheckpointPhase {
-	kind: "checkpoint";
+/** Checkpoint payload; the flat leaf literal replaces the old nested phase tag. */
+export interface CheckpointData {
 	continuation: Continuation;
 	triggerEntryId: string;
 	thresholdCheckedTriggerEntryId?: string;
@@ -135,25 +135,6 @@ export interface GenerationContext {
 	overflowRecoveryUsed: boolean;
 }
 
-export type Generation =
-	| { status: "ready"; context: GenerationContext; nextAttempt: number }
-	| {
-			status: "effect_pending";
-			context: GenerationContext;
-			attempt: number;
-			responseEntryId: string;
-			usageId: string;
-			intendedOutputLimit: number;
-			contextWindow: number;
-	  }
-	| {
-			status: "retry_wait";
-			context: GenerationContext;
-			nextAttempt: number;
-			notBefore: number;
-			errorMessage: string;
-	  };
-
 interface ToolCallSource {
 	/** Zero-based index in the assistant message's complete content array, not a filtered tool-call ordinal. */
 	sourceIndex: number;
@@ -175,26 +156,6 @@ export interface ToolBatch {
 	calls: ToolCall[];
 }
 
-export type Deferred =
-	| {
-			status: "suspended";
-			stepId: string;
-			sourceEntryId: string;
-			poll: number;
-			configuration: LaneConfiguration;
-			streamOptions: AgentHarnessStreamOptions;
-	  }
-	| {
-			status: "effect_pending";
-			stepId: string;
-			sourceEntryId: string;
-			poll: number;
-			responseEntryId: string;
-			usageId: string;
-			configuration: LaneConfiguration;
-			streamOptions: AgentHarnessStreamOptions;
-	  };
-
 export interface SummaryContext {
 	taskId: string;
 	resultEntryId: string;
@@ -205,90 +166,267 @@ export interface SummaryContext {
 	reason?: "manual" | "threshold" | "overflow";
 }
 
-export type SummaryGeneration =
-	| { status: "ready"; context: SummaryContext; nextAttempt: number }
-	| {
-			status: "effect_pending";
-			context: SummaryContext;
-			attempt: number;
-			request?: { index: number; usageId: string };
-			usageIds: string[];
-	  }
-	| {
-			status: "retry_wait";
-			context: SummaryContext;
-			nextAttempt: number;
-			notBefore: number;
-			errorMessage: string;
-	  };
+/*
+ * Durable operation state is one flat union: a single `at` discriminator with one
+ * namespaced literal per dispatcher leaf. There is no nested phase/status hierarchy.
+ * ToolBatch/ToolCall remain the nested child collection state machine, and
+ * cancellation stays orthogonal via `Control`.
+ */
 
-export type StructuralDecision = { taskId: string } & (
-	| { status: "deciding" }
-	| { status: "generating"; generation: SummaryGeneration }
-);
-
-export type RunPhase =
-	| { kind: "starting" }
-	| CheckpointPhase
-	| { kind: "assistant"; generation: Generation }
-	| { kind: "tools"; batch: ToolBatch }
-	| {
-			kind: "compaction";
-			reason: "threshold" | "overflow";
-			structural: StructuralDecision;
-			resumeAfter: CheckpointPhase;
-	  }
-	| { kind: "deferred"; deferred: Deferred }
-	| {
-			kind: "failure_drain";
-			error: OperationError;
-			provenance:
-				| { kind: "response"; entryId: string }
-				| { kind: "structural"; taskId: string }
-				| { kind: "configuration" };
-	  };
-
-export interface RunState {
-	kind: "run";
+/** Every leaf carries the orthogonal cancellation shape. */
+export interface Cancellable {
 	control: Control;
-	settings: {
-		compaction: CompactionSettings;
-		steeringMode: QueueMode;
-		followUpMode: QueueMode;
-		toolExecution: "sequential" | "parallel";
-	};
-	phase: RunPhase;
+}
+
+export interface RunSettings {
+	compaction: CompactionSettings;
+	steeringMode: QueueMode;
+	followUpMode: QueueMode;
+	toolExecution: "sequential" | "parallel";
+}
+
+/** Run-wide durable data shared by every `run.*` leaf. */
+export interface RunScope extends Cancellable {
+	settings: RunSettings;
 	inbox: Inbox;
 	latestAssistantEntryId: string | null;
 }
 
-export interface CompactionState {
-	kind: "compaction";
-	control: Control;
-	customInstructions?: string;
-	structural: StructuralDecision;
+/** Failure origin. Payload datum only; never used for operation dispatch. */
+export type FailureProvenance =
+	| { kind: "response"; entryId: string }
+	| { kind: "structural"; taskId: string }
+	| { kind: "configuration" };
+
+/** Shared backoff data for any `*.retry_wait` leaf. */
+export interface RetryWait {
+	nextAttempt: number;
+	notBefore: number;
+	errorMessage: string;
 }
 
-export type NavigationState =
-	| {
-			kind: "navigation";
-			control: Control;
-			targetId: string | null;
-			label?: string;
-			summarize: false;
-			phase: { kind: "ready_to_commit" };
-	  }
-	| {
-			kind: "navigation";
-			control: Control;
-			targetId: string;
-			label?: string;
-			customInstructions?: string;
-			summarize: true;
-			phase: { kind: "summary"; structural: StructuralDecision };
-	  };
+/** Assistant generation input shared by every `run.assistant.*` leaf. */
+export interface AssistantGenerationScope {
+	generationContext: GenerationContext;
+}
 
-export type OperationState = RunState | CompactionState | NavigationState;
+/**
+ * Summary generation input shared by every structural generating leaf. The structural
+ * task id lives in `summaryContext.taskId`; only deciding leaves carry it explicitly
+ * (via StructuralTask).
+ */
+export interface SummaryGenerationScope {
+	summaryContext: SummaryContext;
+}
+
+export interface SummaryGenerationReady extends SummaryGenerationScope {
+	nextAttempt: number;
+}
+
+export interface SummaryGenerationEffectPending extends SummaryGenerationScope {
+	attempt: number;
+	request?: { index: number; usageId: string };
+	usageIds: string[];
+}
+
+export interface SummaryGenerationRetryWait extends SummaryGenerationScope, RetryWait {}
+
+/** Explicit structural task id for deciding leaves that have no SummaryContext yet. */
+export interface StructuralTask {
+	taskId: string;
+}
+
+/** Deferred-suspension durable data shared by both `run.deferred.*` leaves. */
+export interface DeferredScope extends RunScope {
+	stepId: string;
+	sourceEntryId: string;
+	poll: number;
+	configuration: LaneConfiguration;
+	streamOptions: AgentHarnessStreamOptions;
+}
+
+/** In-run compaction data: why it started and which checkpoint resumes after it. */
+export interface RunCompactionScope extends RunScope {
+	reason: "threshold" | "overflow";
+	resumeAfter: CheckpointData;
+}
+
+/** Standalone compaction shared data. */
+export interface CompactionScope extends Cancellable {
+	customInstructions?: string;
+}
+
+/** Navigation shared data. */
+export interface NavigationScope extends Cancellable {
+	label?: string;
+}
+
+/** Summarized navigation requires a concrete target entry. */
+export interface NavigationSummaryScope extends NavigationScope {
+	targetId: string;
+	customInstructions?: string;
+}
+
+export interface RunStartingOperation extends RunScope {
+	at: "run.starting";
+}
+
+export interface RunCheckpointOperation extends RunScope, CheckpointData {
+	at: "run.checkpoint";
+}
+
+export interface RunAssistantReadyOperation extends RunScope, AssistantGenerationScope {
+	at: "run.assistant.ready";
+	nextAttempt: number;
+}
+
+export interface RunAssistantEffectPendingOperation extends RunScope, AssistantGenerationScope {
+	at: "run.assistant.effect_pending";
+	attempt: number;
+	responseEntryId: string;
+	usageId: string;
+	intendedOutputLimit: number;
+	contextWindow: number;
+}
+
+export interface RunAssistantRetryWaitOperation extends RunScope, AssistantGenerationScope, RetryWait {
+	at: "run.assistant.retry_wait";
+}
+
+export interface RunToolsOperation extends RunScope {
+	at: "run.tools";
+	/** Unchanged child collection state machine. */
+	batch: ToolBatch;
+}
+
+export interface RunDeferredSuspendedOperation extends DeferredScope {
+	at: "run.deferred.suspended";
+}
+
+export interface RunDeferredEffectPendingOperation extends DeferredScope {
+	at: "run.deferred.effect_pending";
+	responseEntryId: string;
+	usageId: string;
+}
+
+export interface RunCompactionDecidingOperation extends RunCompactionScope, StructuralTask {
+	at: "run.compaction.deciding";
+}
+
+export interface RunCompactionReadyOperation extends RunCompactionScope, SummaryGenerationReady {
+	at: "run.compaction.ready";
+}
+
+export interface RunCompactionEffectPendingOperation extends RunCompactionScope, SummaryGenerationEffectPending {
+	at: "run.compaction.effect_pending";
+}
+
+export interface RunCompactionRetryWaitOperation extends RunCompactionScope, SummaryGenerationRetryWait {
+	at: "run.compaction.retry_wait";
+}
+
+export interface RunFailureDrainOperation extends RunScope {
+	at: "run.failure_drain";
+	error: OperationError;
+	provenance: FailureProvenance;
+}
+
+export interface CompactionDecidingOperation extends CompactionScope, StructuralTask {
+	at: "compaction.deciding";
+}
+
+export interface CompactionReadyOperation extends CompactionScope, SummaryGenerationReady {
+	at: "compaction.ready";
+}
+
+export interface CompactionEffectPendingOperation extends CompactionScope, SummaryGenerationEffectPending {
+	at: "compaction.effect_pending";
+}
+
+export interface CompactionRetryWaitOperation extends CompactionScope, SummaryGenerationRetryWait {
+	at: "compaction.retry_wait";
+}
+
+export interface NavigationReadyToCommitOperation extends NavigationScope {
+	at: "navigation.ready_to_commit";
+	/** Unsummarized navigation may target the branch root (null). */
+	targetId: string | null;
+}
+
+export interface NavigationSummaryDecidingOperation extends NavigationSummaryScope, StructuralTask {
+	at: "navigation.summary.deciding";
+}
+
+export interface NavigationSummaryReadyOperation extends NavigationSummaryScope, SummaryGenerationReady {
+	at: "navigation.summary.ready";
+}
+
+export interface NavigationSummaryEffectPendingOperation
+	extends NavigationSummaryScope,
+		SummaryGenerationEffectPending {
+	at: "navigation.summary.effect_pending";
+}
+
+export interface NavigationSummaryRetryWaitOperation extends NavigationSummaryScope, SummaryGenerationRetryWait {
+	at: "navigation.summary.retry_wait";
+}
+
+/** Flat durable operation state: exactly one leaf per dispatcher target. */
+export type OperationState =
+	| RunStartingOperation
+	| RunCheckpointOperation
+	| RunAssistantReadyOperation
+	| RunAssistantEffectPendingOperation
+	| RunAssistantRetryWaitOperation
+	| RunToolsOperation
+	| RunDeferredSuspendedOperation
+	| RunDeferredEffectPendingOperation
+	| RunCompactionDecidingOperation
+	| RunCompactionReadyOperation
+	| RunCompactionEffectPendingOperation
+	| RunCompactionRetryWaitOperation
+	| RunFailureDrainOperation
+	| CompactionDecidingOperation
+	| CompactionReadyOperation
+	| CompactionEffectPendingOperation
+	| CompactionRetryWaitOperation
+	| NavigationReadyToCommitOperation
+	| NavigationSummaryDecidingOperation
+	| NavigationSummaryReadyOperation
+	| NavigationSummaryEffectPendingOperation
+	| NavigationSummaryRetryWaitOperation;
+
+export type OperationAt = OperationState["at"];
+
+export type RunOperationState = Extract<OperationState, { at: `run.${string}` }>;
+export type CompactionOperationState = Extract<OperationState, { at: `compaction.${string}` }>;
+export type NavigationOperationState = Extract<OperationState, { at: `navigation.${string}` }>;
+
+export function isRunOperationState(state: OperationState): state is RunOperationState {
+	return state.at.startsWith("run.");
+}
+
+/** Copy only the run-wide scope fields when constructing a successor leaf. */
+export function runScopeOf(state: RunOperationState): RunScope {
+	return {
+		control: state.control,
+		settings: state.settings,
+		inbox: state.inbox,
+		latestAssistantEntryId: state.latestAssistantEntryId,
+	};
+}
+
+/** Copy only the checkpoint payload fields from a checkpoint-bearing state. */
+export function checkpointDataOf(state: CheckpointData): CheckpointData {
+	return {
+		continuation: state.continuation,
+		triggerEntryId: state.triggerEntryId,
+		...(state.thresholdCheckedTriggerEntryId === undefined
+			? {}
+			: { thresholdCheckedTriggerEntryId: state.thresholdCheckedTriggerEntryId }),
+		...(state.skipInboxOnce === undefined ? {} : { skipInboxOnce: state.skipInboxOnce }),
+	};
+}
 export type Operation = { meta: OperationMeta; state: OperationState };
 
 export interface LaneState {

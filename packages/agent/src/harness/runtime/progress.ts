@@ -32,19 +32,15 @@ function openProgress<TContext extends object | undefined, T>(
 		write(item) {
 			if (sealed) return;
 			const write = lane
-				.commandDriveOwned(
-					drive,
-					(projection) => {
-						if (!stillOwns(projection)) return { kind: "return", result: undefined };
-						return {
-							kind: "commit",
-							writes: [commitWrite(item)],
-							next: projection,
-							materialize: () => undefined,
-						};
-					},
-					drive.context,
-				)
+				.command((projection) => {
+					if (!stillOwns(projection)) return { kind: "return", result: undefined };
+					return {
+						kind: "commit",
+						writes: [commitWrite(item)],
+						next: projection,
+						materialize: () => undefined,
+					};
+				}, drive.context)
 				.then(() => undefined);
 			latest = write;
 			void write.catch(() => {});
@@ -71,18 +67,12 @@ export function openFrameProgress<TContext extends object | undefined>(
 		(frame) => appendList(address, frame),
 		() => deleteList(address),
 		(state) => {
-			const operation = state.operation;
-			if (operation?.meta.operationId !== drive.operationId || operation.state.kind !== "run") return false;
-			const run = operation.state;
-			if (run.phase.kind === "assistant") {
-				const generation = run.phase.generation;
-				return generation.status === "effect_pending" && generation.responseEntryId === responseEntryId;
-			}
-			if (run.phase.kind === "deferred") {
-				const deferred = run.phase.deferred;
-				return deferred.status === "effect_pending" && deferred.responseEntryId === responseEntryId;
-			}
-			return false;
+			const run = state.operation?.state;
+			if (run === undefined) return false;
+			return (
+				(run.at === "run.assistant.effect_pending" || run.at === "run.deferred.effect_pending") &&
+				run.responseEntryId === responseEntryId
+			);
 		},
 	);
 }
@@ -102,14 +92,8 @@ export function openToolProgress<TContext extends object | undefined>(
 		() => deleteValue(address),
 		(state) => {
 			const operation = state.operation;
-			if (
-				operation?.meta.operationId !== drive.operationId ||
-				operation.state.kind !== "run" ||
-				operation.state.phase.kind !== "tools"
-			) {
-				return false;
-			}
-			const batch = operation.state.phase.batch;
+			if (operation?.state.at !== "run.tools") return false;
+			const batch = operation.state.batch;
 			return (
 				batch.turnId === turnId &&
 				batch.calls.some(

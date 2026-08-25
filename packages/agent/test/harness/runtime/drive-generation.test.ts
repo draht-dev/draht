@@ -21,13 +21,16 @@ import { type Config, Drive } from "../../../src/harness/runtime/types.ts";
 import { MemoryStorage } from "../../../src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../src/harness/session/session.ts";
 import { InstrumentedStorage } from "../../../src/harness/session/testing/instrumented-storage.ts";
-import type {
-	Generation,
-	LaneConfiguration,
-	MessageEntry,
-	RunState,
-	Session,
-	Write,
+import {
+	isRunOperationState,
+	type LaneConfiguration,
+	type MessageEntry,
+	type RunAssistantEffectPendingOperation,
+	type RunAssistantReadyOperation,
+	type RunOperationState,
+	runScopeOf,
+	type Session,
+	type Write,
 } from "../../../src/harness/session/types.ts";
 import * as storedValues from "../../../src/harness/session/values.ts";
 import { deferred } from "./test-utils.ts";
@@ -144,26 +147,29 @@ async function createFixture(backend: MemoryStorage = new MemoryStorage({ now: (
 	return { lane, drive, session, storage, models, faux, hooks, events, config };
 }
 
-function currentRun(lane: Lane<undefined>): RunState {
+function currentRun(lane: Lane<undefined>): RunOperationState {
 	const operation = lane.state.operation;
-	if (operation?.state.kind !== "run") throw new Error("fixture has no run");
+	if (operation === null || !isRunOperationState(operation.state)) throw new Error("fixture has no run");
 	return operation.state;
 }
 
-function readyGeneration(lane: Lane<undefined>): Extract<Generation, { status: "ready" }> {
+function readyGeneration(lane: Lane<undefined>): RunAssistantReadyOperation {
 	const run = currentRun(lane);
-	if (run.phase.kind !== "assistant" || run.phase.generation.status !== "ready") {
-		throw new Error("fixture has no ready generation");
-	}
-	return run.phase.generation;
+	if (run.at !== "run.assistant.ready") throw new Error("fixture has no ready generation");
+	return run;
 }
 
-async function advanceToReady(fixture: Fixture): Promise<Extract<Generation, { status: "ready" }>> {
-	let run = currentRun(fixture.lane);
-	await startRun(fixture.lane, fixture.drive, run);
-	run = currentRun(fixture.lane);
-	if (run.phase.kind !== "checkpoint") throw new Error("run did not reach checkpoint");
-	await runCheckpoint(fixture.lane, fixture.drive, run, run.phase);
+async function startFixtureRun(fixture: Fixture) {
+	const run = currentRun(fixture.lane);
+	if (run.at !== "run.starting") throw new Error("run did not start at its initial boundary");
+	return startRun(fixture.lane, fixture.drive, run);
+}
+
+async function advanceToReady(fixture: Fixture): Promise<RunAssistantReadyOperation> {
+	await startFixtureRun(fixture);
+	const run = currentRun(fixture.lane);
+	if (run.at !== "run.checkpoint") throw new Error("run did not reach checkpoint");
+	await runCheckpoint(fixture.lane, fixture.drive, run);
 	return readyGeneration(fixture.lane);
 }
 
@@ -179,16 +185,8 @@ function writesOperationState(writes: readonly Write[], status: string): boolean
 			write.namespace === "pi.op.state" &&
 			typeof write.value === "object" &&
 			write.value !== null &&
-			"phase" in write.value &&
-			typeof write.value.phase === "object" &&
-			write.value.phase !== null &&
-			"kind" in write.value.phase &&
-			write.value.phase.kind === "assistant" &&
-			"generation" in write.value.phase &&
-			typeof write.value.phase.generation === "object" &&
-			write.value.phase.generation !== null &&
-			"status" in write.value.phase.generation &&
-			write.value.phase.generation.status === status,
+			"at" in write.value &&
+			write.value.at === `run.assistant.${status}`,
 	);
 }
 
@@ -202,21 +200,19 @@ describe("runtime generation checkpoint", () => {
 		fixture.hooks.on("before_run", () => ({
 			messages: [{ role: "user", content: "injected", timestamp: 2 }],
 		}));
-		const starting = currentRun(fixture.lane);
-
-		expect(await startRun(fixture.lane, fixture.drive, starting)).toEqual({ kind: "continue" });
+		expect(await startFixtureRun(fixture)).toEqual({ kind: "continue" });
 		let run = currentRun(fixture.lane);
-		if (run.phase.kind !== "checkpoint") throw new Error("missing checkpoint");
-		expect(run.phase.triggerEntryId).toBe(fixture.lane.state.tipId);
+		if (run.at !== "run.checkpoint") throw new Error("missing checkpoint");
+		expect(run.triggerEntryId).toBe(fixture.lane.state.tipId);
 		expect(fixture.events.map((event) => event.type)).toContain("entry_added");
 		await expectProjectionRestores(fixture);
 
-		expect(await runCheckpoint(fixture.lane, fixture.drive, run, run.phase)).toEqual({ kind: "continue" });
+		expect(await runCheckpoint(fixture.lane, fixture.drive, run)).toEqual({ kind: "continue" });
 		run = currentRun(fixture.lane);
-		if (run.phase.kind !== "assistant" || run.phase.generation.status !== "ready") {
+		if (run.at !== "run.assistant.ready") {
 			throw new Error("missing ready generation");
 		}
-		expect(run.phase.generation.context).toMatchObject({
+		expect(run.generationContext).toMatchObject({
 			configuration: fixture.lane.state.configuration,
 			streamOptions: {},
 			retryPolicy: { maxAttempts: 4, baseDelayMs: 1 },
@@ -227,13 +223,13 @@ describe("runtime generation checkpoint", () => {
 
 	it("drains mixed pending writes while separating leaf and generation trigger", async () => {
 		const fixture = await createFixture();
-		await startRun(fixture.lane, fixture.drive, currentRun(fixture.lane));
+		await startFixtureRun(fixture);
 		const messageId = "01950000-0000-7000-8000-000000000010";
 		const customId = "01950000-0000-7000-8000-000000000011";
 		await fixture.lane.command((state) => {
 			const operation = state.operation;
-			if (operation?.state.kind !== "run") throw new Error("missing run");
-			const nextState: RunState = {
+			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
+			const nextState: RunOperationState = {
 				...operation.state,
 				inbox: { ...operation.state.inbox, writes: [messageId, customId] },
 			};
@@ -256,15 +252,15 @@ describe("runtime generation checkpoint", () => {
 			};
 		}, BACKGROUND_CONTEXT);
 		const run = currentRun(fixture.lane);
-		if (run.phase.kind !== "checkpoint") throw new Error("missing checkpoint");
+		if (run.at !== "run.checkpoint") throw new Error("missing checkpoint");
 
-		await runCheckpoint(fixture.lane, fixture.drive, run, run.phase);
+		await runCheckpoint(fixture.lane, fixture.drive, run);
 
 		const drained = currentRun(fixture.lane);
-		if (drained.phase.kind !== "checkpoint") throw new Error("missing drained checkpoint");
+		if (drained.at !== "run.checkpoint") throw new Error("missing drained checkpoint");
 		expect(fixture.lane.state.tipId).toBe(customId);
-		expect(drained.phase.triggerEntryId).toBe(messageId);
-		expect(drained.phase).toMatchObject({
+		expect(drained.triggerEntryId).toBe(messageId);
+		expect(drained).toMatchObject({
 			continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
 			skipInboxOnce: true,
 		});
@@ -288,21 +284,18 @@ describe("runtime assistant generation", () => {
 		fixture.faux.setResponses([
 			async () => {
 				const state = await fixture.session.getValue(storedValues.operationState(operationId), BACKGROUND_CONTEXT);
-				effectPendingAtProvider =
-					state?.value.kind === "run" &&
-					state.value.phase.kind === "assistant" &&
-					state.value.phase.generation.status === "effect_pending";
+				effectPendingAtProvider = state?.value.at === "run.assistant.effect_pending";
 				return fauxAssistantMessage("answer", { timestamp: 5 });
 			},
 		]);
 		fixture.storage.clearCommitAttempts();
-		const generating = runGeneration(fixture.lane, fixture.drive, currentRun(fixture.lane), ready);
+		const generating = runGeneration(fixture.lane, fixture.drive, ready);
 		await hookStarted.promise;
 		const steerId = "01950000-0000-7000-8000-000000000020";
 		await fixture.lane.command((state) => {
 			const operation = state.operation;
-			if (operation?.state.kind !== "run") throw new Error("missing run");
-			const nextState: RunState = {
+			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
+			const nextState: RunOperationState = {
 				...operation.state,
 				inbox: { ...operation.state.inbox, steer: [steerId] },
 			};
@@ -325,7 +318,7 @@ describe("runtime assistant generation", () => {
 		expect(effectPendingAtProvider).toBe(true);
 		const settled = currentRun(fixture.lane);
 		expect(settled.inbox.steer).toEqual([steerId]);
-		if (settled.phase.kind !== "checkpoint") throw new Error("response did not reach checkpoint");
+		if (settled.at !== "run.checkpoint") throw new Error("response did not reach checkpoint");
 		const responseId = settled.latestAssistantEntryId;
 		if (responseId === null) throw new Error("missing response id");
 		const entry = await fixture.session.getEntry(responseId, BACKGROUND_CONTEXT);
@@ -401,7 +394,7 @@ describe("runtime assistant generation", () => {
 		backend.blockNextFrame = true;
 		fixture.storage.clearCommitAttempts();
 
-		const generating = runGeneration(fixture.lane, fixture.drive, currentRun(fixture.lane), ready);
+		const generating = runGeneration(fixture.lane, fixture.drive, ready);
 		await backend.frameStarted.promise;
 		await expect
 			.poll(() => fixture.events.filter((event) => event.type === "message_update").length)
@@ -433,13 +426,13 @@ describe("runtime assistant generation", () => {
 		const ready = await advanceToReady(fixture);
 		fixture.storage.clearCommitAttempts();
 
-		expect(await runGeneration(fixture.lane, fixture.drive, currentRun(fixture.lane), ready)).toEqual({
+		expect(await runGeneration(fixture.lane, fixture.drive, ready)).toEqual({
 			kind: "continue",
 		});
 
 		const run = currentRun(fixture.lane);
-		expect(run.phase).toMatchObject({
-			kind: "failure_drain",
+		expect(run).toMatchObject({
+			at: "run.failure_drain",
 			error: { code: "configured_tools_unavailable", details: { tools: ["missing"] } },
 			provenance: { kind: "configuration" },
 		});
@@ -459,12 +452,12 @@ describe("runtime assistant generation", () => {
 		fixture.models.deleteProvider(fixture.faux.provider.id);
 		fixture.storage.clearCommitAttempts();
 
-		expect(await runGeneration(fixture.lane, fixture.drive, currentRun(fixture.lane), ready)).toEqual({
+		expect(await runGeneration(fixture.lane, fixture.drive, ready)).toEqual({
 			kind: "continue",
 		});
 
-		expect(currentRun(fixture.lane).phase).toMatchObject({
-			kind: "failure_drain",
+		expect(currentRun(fixture.lane)).toMatchObject({
+			at: "run.failure_drain",
 			error: { code: "model_unavailable" },
 			provenance: { kind: "configuration" },
 		});
@@ -478,7 +471,7 @@ describe("runtime assistant generation", () => {
 		await expectProjectionRestores(fixture);
 	});
 
-	it("declines intent when cancellation or exact-owner replacement wins preparation", async () => {
+	it("declines intent when cancellation wins preparation", async () => {
 		const cancelled = await createFixture();
 		const cancelledReady = await advanceToReady(cancelled);
 		const cancelHookStarted = deferred();
@@ -489,12 +482,12 @@ describe("runtime assistant generation", () => {
 			return undefined;
 		});
 		cancelled.storage.clearCommitAttempts();
-		const cancelling = runGeneration(cancelled.lane, cancelled.drive, currentRun(cancelled.lane), cancelledReady);
+		const cancelling = runGeneration(cancelled.lane, cancelled.drive, cancelledReady);
 		await cancelHookStarted.promise;
 		await cancelled.lane.command((state) => {
 			const operation = state.operation;
-			if (operation?.state.kind !== "run") throw new Error("missing run");
-			const nextState: RunState = {
+			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
+			const nextState: RunOperationState = {
 				...operation.state,
 				control: { status: "cancel_requested", requestedAt: 10, drainedSteer: [], drainedFollowUp: [] },
 			};
@@ -511,24 +504,6 @@ describe("runtime assistant generation", () => {
 		expect(
 			cancelled.storage.getCommitAttempts().some((writes) => writesOperationState(writes, "effect_pending")),
 		).toBe(false);
-
-		const replaced = await createFixture();
-		const replacedReady = await advanceToReady(replaced);
-		const ownerHookStarted = deferred();
-		const releaseOwnerHook = deferred();
-		replaced.hooks.on("before_request", async () => {
-			ownerHookStarted.resolve();
-			await releaseOwnerHook.promise;
-			return undefined;
-		});
-		replaced.storage.clearCommitAttempts();
-		const losing = runGeneration(replaced.lane, replaced.drive, currentRun(replaced.lane), replacedReady);
-		await ownerHookStarted.promise;
-		replaced.lane.activeDrive = new Drive({ operationId }, BACKGROUND_CONTEXT);
-		releaseOwnerHook.resolve();
-		expect(await losing).toEqual({ kind: "lost_ownership" });
-		expect(replaced.faux.state.callCount).toBe(0);
-		expect(replaced.storage.getCommitAttempts()).toEqual([]);
 	});
 
 	it("recovers an orphan with no frames into a zero-usage retry wait", async () => {
@@ -536,9 +511,10 @@ describe("runtime assistant generation", () => {
 		const ready = await advanceToReady(fixture);
 		const responseEntryId = "01950000-0000-7000-8000-000000000028";
 		const usageId = "01950000-0000-7000-8000-000000000029";
-		const pending: Extract<Generation, { status: "effect_pending" }> = {
-			status: "effect_pending",
-			context: { ...ready.context, retryPolicy: { maxAttempts: 2, baseDelayMs: 1 } },
+		const pending: RunAssistantEffectPendingOperation = {
+			...runScopeOf(ready),
+			at: "run.assistant.effect_pending",
+			generationContext: { ...ready.generationContext, retryPolicy: { maxAttempts: 2, baseDelayMs: 1 } },
 			attempt: 1,
 			responseEntryId,
 			usageId,
@@ -547,33 +523,29 @@ describe("runtime assistant generation", () => {
 		};
 		await fixture.lane.command((state) => {
 			const operation = state.operation;
-			if (operation?.state.kind !== "run") throw new Error("missing run");
-			const nextState: RunState = {
-				...operation.state,
-				phase: { kind: "assistant", generation: pending },
-			};
+			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
 			return {
 				kind: "commit",
-				writes: [storedValues.setValue(storedValues.operationState(operationId), nextState)],
-				next: { ...state, operation: { meta: operation.meta, state: nextState } },
+				writes: [storedValues.setValue(storedValues.operationState(operationId), pending)],
+				next: { ...state, operation: { meta: operation.meta, state: pending } },
 				materialize: () => undefined,
 			};
 		}, BACKGROUND_CONTEXT);
 
-		await recoverAssistantGeneration(fixture.lane, fixture.drive, currentRun(fixture.lane), pending);
+		await recoverAssistantGeneration(fixture.lane, fixture.drive, pending);
 
 		const entry = (await fixture.session.getEntry(responseEntryId, BACKGROUND_CONTEXT)) as MessageEntry;
 		expect(entry.message).toMatchObject({
 			api: "unknown",
-			provider: ready.context.configuration.model.provider,
-			model: ready.context.configuration.model.modelId,
+			provider: ready.generationContext.configuration.model.provider,
+			model: ready.generationContext.configuration.model.modelId,
 			content: [],
 			stopReason: "error",
 			usage: { totalTokens: 0 },
 		});
-		expect(currentRun(fixture.lane).phase).toMatchObject({
-			kind: "assistant",
-			generation: { status: "retry_wait", nextAttempt: 2 },
+		expect(currentRun(fixture.lane)).toMatchObject({
+			at: "run.assistant.retry_wait",
+			nextAttempt: 2,
 		});
 		expect(fixture.faux.state.callCount).toBe(0);
 		await expectProjectionRestores(fixture);
@@ -588,9 +560,10 @@ describe("runtime assistant generation", () => {
 			...fauxAssistantMessage([], { timestamp: 6 }),
 			stopReason: "pending",
 		};
-		const pending: Extract<Generation, { status: "effect_pending" }> = {
-			status: "effect_pending",
-			context: { ...ready.context, retryPolicy: { maxAttempts: 1, baseDelayMs: 1 } },
+		const pending: RunAssistantEffectPendingOperation = {
+			...runScopeOf(ready),
+			at: "run.assistant.effect_pending",
+			generationContext: { ...ready.generationContext, retryPolicy: { maxAttempts: 1, baseDelayMs: 1 } },
 			attempt: 1,
 			responseEntryId,
 			usageId,
@@ -599,15 +572,11 @@ describe("runtime assistant generation", () => {
 		};
 		await fixture.lane.command((state) => {
 			const operation = state.operation;
-			if (operation?.state.kind !== "run") throw new Error("missing run");
-			const nextState: RunState = {
-				...operation.state,
-				phase: { kind: "assistant", generation: pending },
-			};
+			if (operation === null || !isRunOperationState(operation.state)) throw new Error("missing run");
 			return {
 				kind: "commit",
 				writes: [
-					storedValues.setValue(storedValues.operationState(operationId), nextState),
+					storedValues.setValue(storedValues.operationState(operationId), pending),
 					storedValues.appendList(storedValues.pendingAssistantFrames(operationId, responseEntryId), {
 						type: "start",
 						partial,
@@ -628,7 +597,7 @@ describe("runtime assistant generation", () => {
 						content: "corrected",
 					}),
 				],
-				next: { ...state, operation: { meta: operation.meta, state: nextState } },
+				next: { ...state, operation: { meta: operation.meta, state: pending } },
 				materialize: () => undefined,
 			};
 		}, BACKGROUND_CONTEXT);
@@ -638,7 +607,7 @@ describe("runtime assistant generation", () => {
 			return undefined;
 		});
 
-		expect(await recoverAssistantGeneration(fixture.lane, fixture.drive, currentRun(fixture.lane), pending)).toEqual({
+		expect(await recoverAssistantGeneration(fixture.lane, fixture.drive, pending)).toEqual({
 			kind: "continue",
 		});
 
@@ -651,7 +620,7 @@ describe("runtime assistant generation", () => {
 			stopReason: "error",
 			usage: { input: 0, output: 0 },
 		});
-		expect(currentRun(fixture.lane).phase).toMatchObject({ kind: "failure_drain" });
+		expect(currentRun(fixture.lane).at).toBe("run.failure_drain");
 		expect(
 			await fixture.session.readList(
 				storedValues.pendingAssistantFrames(operationId, responseEntryId),
@@ -669,11 +638,11 @@ describe("runtime assistant generation", () => {
 		const fixture = await createFixture();
 		const ready = await advanceToReady(fixture);
 		fixture.faux.setResponses([fauxAssistantMessage("done", { timestamp: 7 })]);
-		await runGeneration(fixture.lane, fixture.drive, currentRun(fixture.lane), ready);
+		await runGeneration(fixture.lane, fixture.drive, ready);
 		const run = currentRun(fixture.lane);
-		if (run.phase.kind !== "checkpoint") throw new Error("missing terminal checkpoint");
+		if (run.at !== "run.checkpoint") throw new Error("missing terminal checkpoint");
 
-		const result = await runCheckpoint(fixture.lane, fixture.drive, run, run.phase);
+		const result = await runCheckpoint(fixture.lane, fixture.drive, run);
 
 		expect(result).toMatchObject({
 			kind: "settled",

@@ -13,19 +13,17 @@ import type {
 	Branch,
 	BranchScan,
 	CancelQueuedResult,
-	CheckpointPhase,
-	CompactionState,
+	CheckpointData,
 	Context,
 	Control,
 	CustomEntry,
-	Deferred,
 	DriveOptions,
 	DriveOutcome,
 	DriveResult,
 	Entry,
 	EntryProjector,
 	EntryWrite,
-	Generation,
+	FailureProvenance,
 	GenerationContext,
 	HarnessEvent,
 	HookHandler,
@@ -36,15 +34,14 @@ import type {
 	LaneExecutionInfo,
 	LaneLastResult,
 	LaneSnapshot,
-	NavigationState,
 	NewEntry,
 	OperationAdmissionResult,
+	OperationAt,
 	OperationMeta,
 	OperationRequest,
 	OperationState,
-	RunPhase,
 	RunResult,
-	RunState,
+	RunScope,
 	SearchQuery,
 	Session,
 	SessionCreateOptions,
@@ -60,9 +57,7 @@ import type {
 	SettledAssistantMessage,
 	Storage,
 	StorageBranchScan,
-	StructuralDecision,
 	SummaryContext,
-	SummaryGeneration,
 	ToolCall,
 	UsageRow,
 	UsageWrite,
@@ -96,34 +91,68 @@ const summaryContext = {
 	reason: "manual",
 } satisfies SummaryContext;
 const checkpoint = {
-	kind: "checkpoint",
 	continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
 	triggerEntryId: "trigger",
-} satisfies CheckpointPhase;
+} satisfies CheckpointData;
 
 const runningControl = { status: "running" } satisfies Control;
-const generations = [
-	{ status: "ready", context: generationContext, nextAttempt: 1 },
-	{
-		status: "effect_pending",
-		context: generationContext,
-		attempt: 1,
-		responseEntryId: "response",
-		usageId: "usage",
-		intendedOutputLimit: 4096,
-		contextWindow: 128000,
-	},
-	{ status: "retry_wait", context: generationContext, nextAttempt: 2, notBefore: 10, errorMessage: "retry" },
-] satisfies Generation[];
 const toolCalls = [
 	{ status: "planned", sourceIndex: 0, resultEntryId: "result-0" },
 	{ status: "effect_pending", sourceIndex: 1, resultEntryId: "result-1", replay: "safe" },
 	{ status: "outcome_ready", sourceIndex: 2, resultEntryId: "result-2", terminate: true },
 	{ status: "completed", sourceIndex: 3, resultEntryId: "result-3", terminate: false },
 ] satisfies ToolCall[];
-const deferredStates = [
+
+const provenances = [
+	{ kind: "response", entryId: "response" },
+	{ kind: "structural", taskId: "task" },
+	{ kind: "configuration" },
+] satisfies FailureProvenance[];
+
+const runScope = {
+	control: runningControl,
+	settings: {
+		compaction: { enabled: true, reserveTokens: 1000, keepRecentTokens: 2000 },
+		steeringMode: "all",
+		followUpMode: "one-at-a-time",
+		toolExecution: "parallel",
+	},
+	inbox: { steer: [], followUp: [], writes: [] },
+	latestAssistantEntryId: null,
+} satisfies RunScope;
+
+const runState = { ...runScope, at: "run.starting" } satisfies OperationState;
+// One value fixture per flat leaf; `satisfies OperationState[]` keeps every discriminant checked.
+const operationStates = [
+	runState,
+	{ ...runScope, at: "run.checkpoint", ...checkpoint },
+	{ ...runScope, at: "run.assistant.ready", generationContext, nextAttempt: 1 },
 	{
-		status: "suspended",
+		...runScope,
+		at: "run.assistant.effect_pending",
+		generationContext,
+		attempt: 1,
+		responseEntryId: "response",
+		usageId: "usage",
+		intendedOutputLimit: 4096,
+		contextWindow: 128000,
+	},
+	{
+		...runScope,
+		at: "run.assistant.retry_wait",
+		generationContext,
+		nextAttempt: 2,
+		notBefore: 10,
+		errorMessage: "retry",
+	},
+	{
+		...runScope,
+		at: "run.tools",
+		batch: { assistantEntryId: "assistant", configuration, turnId: "turn", calls: toolCalls },
+	},
+	{
+		...runScope,
+		at: "run.deferred.suspended",
 		stepId: "step",
 		sourceEntryId: "source",
 		poll: 0,
@@ -131,7 +160,8 @@ const deferredStates = [
 		streamOptions: {},
 	},
 	{
-		status: "effect_pending",
+		...runScope,
+		at: "run.deferred.effect_pending",
 		stepId: "step",
 		sourceEntryId: "source",
 		poll: 1,
@@ -140,99 +170,73 @@ const deferredStates = [
 		configuration,
 		streamOptions: {},
 	},
-] satisfies Deferred[];
-const summaryGenerations = [
-	{ status: "ready", context: summaryContext, nextAttempt: 1 },
+	{ ...runScope, at: "run.compaction.deciding", reason: "threshold", resumeAfter: checkpoint, taskId: "task" },
 	{
-		status: "effect_pending",
-		context: summaryContext,
+		...runScope,
+		at: "run.compaction.ready",
+		reason: "threshold",
+		resumeAfter: checkpoint,
+		summaryContext,
+		nextAttempt: 1,
+	},
+	{
+		...runScope,
+		at: "run.compaction.effect_pending",
+		reason: "overflow",
+		resumeAfter: checkpoint,
+		summaryContext,
 		attempt: 1,
 		request: { index: 0, usageId: "usage" },
 		usageIds: [],
 	},
-	{ status: "retry_wait", context: summaryContext, nextAttempt: 2, notBefore: 10, errorMessage: "retry" },
-] satisfies SummaryGeneration[];
-const structuralDecisions = [
-	{ status: "deciding", taskId: "task" },
-	{ status: "generating", taskId: "task", generation: summaryGenerations[0] },
-] satisfies StructuralDecision[];
-
-const runPhases: RunPhase[] = [
-	{ kind: "starting" },
-	checkpoint,
-	{ kind: "assistant", generation: generations[0] },
 	{
-		kind: "tools",
-		batch: { assistantEntryId: "assistant", configuration, turnId: "turn", calls: toolCalls },
-	},
-	{
-		kind: "compaction",
-		reason: "threshold",
-		structural: structuralDecisions[0],
+		...runScope,
+		at: "run.compaction.retry_wait",
+		reason: "overflow",
 		resumeAfter: checkpoint,
+		summaryContext,
+		nextAttempt: 2,
+		notBefore: 10,
+		errorMessage: "retry",
 	},
-	{ kind: "deferred", deferred: deferredStates[0] },
 	{
-		kind: "failure_drain",
+		...runScope,
+		at: "run.failure_drain",
 		error: { code: "provider", message: "failed" },
-		provenance: { kind: "response", entryId: "response" },
+		provenance: provenances[0]!,
 	},
+	{ at: "compaction.deciding", control: runningControl, customInstructions: "compact", taskId: "task" },
+	{ at: "compaction.ready", control: runningControl, summaryContext, nextAttempt: 1 },
+	{ at: "compaction.effect_pending", control: runningControl, summaryContext, attempt: 1, usageIds: ["usage"] },
 	{
-		kind: "failure_drain",
-		error: {
-			code: "model_unavailable",
-			message: "Model is unavailable",
-			details: { provider: "provider", modelId: "model" },
-		},
-		provenance: { kind: "configuration" },
-	},
-	{
-		kind: "failure_drain",
-		error: {
-			code: "configured_tools_unavailable",
-			message: "Configured tools are unavailable",
-			details: { tools: ["read"] },
-		},
-		provenance: { kind: "configuration" },
-	},
-];
-
-const runState = {
-	kind: "run",
-	control: runningControl,
-	settings: {
-		compaction: { enabled: true, reserveTokens: 1000, keepRecentTokens: 2000 },
-		steeringMode: "all",
-		followUpMode: "one-at-a-time",
-		toolExecution: "parallel",
-	},
-	phase: runPhases[0]!,
-	inbox: { steer: [], followUp: [], writes: [] },
-	latestAssistantEntryId: null,
-} satisfies RunState;
-const compactionState = {
-	kind: "compaction",
-	control: runningControl,
-	customInstructions: "compact",
-	structural: structuralDecisions[0],
-} satisfies CompactionState;
-const navigationStates = [
-	{
-		kind: "navigation",
+		at: "compaction.retry_wait",
 		control: runningControl,
-		targetId: null,
-		summarize: false,
-		phase: { kind: "ready_to_commit" },
+		summaryContext,
+		nextAttempt: 2,
+		notBefore: 10,
+		errorMessage: "retry",
 	},
+	{ at: "navigation.ready_to_commit", control: runningControl, targetId: null, label: "target" },
+	{ at: "navigation.summary.deciding", control: runningControl, targetId: "target", taskId: "task" },
+	{ at: "navigation.summary.ready", control: runningControl, targetId: "target", summaryContext, nextAttempt: 1 },
 	{
-		kind: "navigation",
+		at: "navigation.summary.effect_pending",
 		control: runningControl,
 		targetId: "target",
-		summarize: true,
-		phase: { kind: "summary", structural: structuralDecisions[0] },
+		summaryContext,
+		attempt: 1,
+		usageIds: [],
 	},
-] satisfies NavigationState[];
-const operationStates = [runState, compactionState, ...navigationStates] satisfies OperationState[];
+	{
+		at: "navigation.summary.retry_wait",
+		control: runningControl,
+		targetId: "target",
+		summaryContext,
+		nextAttempt: 2,
+		notBefore: 10,
+		errorMessage: "retry",
+	},
+] satisfies OperationState[];
 const operations = [
 	{
 		operationId: "run",
@@ -338,21 +342,34 @@ it("covers the complete durable storage and Part 3 discriminants", () => {
 	>();
 	expectTypeOf<OperationMeta["intent"]["kind"]>().toEqualTypeOf<"run" | "compaction" | "navigation">();
 	expectTypeOf<Control["status"]>().toEqualTypeOf<"running" | "cancel_requested">();
-	expectTypeOf<Generation["status"]>().toEqualTypeOf<"ready" | "effect_pending" | "retry_wait">();
 	expectTypeOf<ToolCall["status"]>().toEqualTypeOf<"planned" | "effect_pending" | "outcome_ready" | "completed">();
-	expectTypeOf<Deferred["status"]>().toEqualTypeOf<"suspended" | "effect_pending">();
-	expectTypeOf<SummaryGeneration["status"]>().toEqualTypeOf<"ready" | "effect_pending" | "retry_wait">();
-	expectTypeOf<StructuralDecision["status"]>().toEqualTypeOf<"deciding" | "generating">();
-	expectTypeOf<RunPhase["kind"]>().toEqualTypeOf<
-		"starting" | "checkpoint" | "assistant" | "tools" | "compaction" | "deferred" | "failure_drain"
+	expectTypeOf<OperationAt>().toEqualTypeOf<
+		| "run.starting"
+		| "run.checkpoint"
+		| "run.assistant.ready"
+		| "run.assistant.effect_pending"
+		| "run.assistant.retry_wait"
+		| "run.tools"
+		| "run.deferred.suspended"
+		| "run.deferred.effect_pending"
+		| "run.compaction.deciding"
+		| "run.compaction.ready"
+		| "run.compaction.effect_pending"
+		| "run.compaction.retry_wait"
+		| "run.failure_drain"
+		| "compaction.deciding"
+		| "compaction.ready"
+		| "compaction.effect_pending"
+		| "compaction.retry_wait"
+		| "navigation.ready_to_commit"
+		| "navigation.summary.deciding"
+		| "navigation.summary.ready"
+		| "navigation.summary.effect_pending"
+		| "navigation.summary.retry_wait"
 	>();
-	expectTypeOf<OperationState["kind"]>().toEqualTypeOf<"run" | "compaction" | "navigation">();
-	expectTypeOf<NavigationState["summarize"]>().toEqualTypeOf<boolean>();
+	expectTypeOf<FailureProvenance["kind"]>().toEqualTypeOf<"response" | "structural" | "configuration">();
 	expectTypeOf<NewEntry["type"]>().toEqualTypeOf<"message" | "compaction" | "branch_summary" | "custom">();
 	void transaction;
-	void generations;
-	void deferredStates;
-	void summaryGenerations;
 	void operationStates;
 
 	const compileTimeFailures = () => {
@@ -479,9 +496,9 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 			| "hooks"
 			| "activeDrive"
 			| "command"
-			| "commandDriveOwned"
+			| "mutateOperation"
+			| "advanceOperation"
 			| "readConfig"
-			| "isDriveActive"
 			| "mismatch"
 		>
 	>().toEqualTypeOf<never>();
@@ -492,9 +509,9 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 			| "models"
 			| "activeDrive"
 			| "command"
-			| "commandDriveOwned"
+			| "mutateOperation"
+			| "advanceOperation"
 			| "readConfig"
-			| "isDriveActive"
 			| "mismatch"
 		>
 	>().toEqualTypeOf<never>();

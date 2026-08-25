@@ -9,14 +9,6 @@ export class AbortRequested extends Error {
 	}
 }
 
-/** Invocation cancellation or owner abandonment. Never durable cancellation. */
-export class DriveAbandoned extends Error {
-	constructor() {
-		super("Drive pass was abandoned by its installing invocation");
-		this.name = "DriveAbandoned";
-	}
-}
-
 /** Procedure-facing synchronous admission capability for one drive pass. */
 export interface Gate {
 	readonly signal: AbortSignal;

@@ -390,9 +390,9 @@ export function createSessionRepoForkBehaviorConformance<TMetadata extends Sessi
 									intent: { kind: "compaction" },
 								}),
 								setValue(operationState(OPERATION_ID), {
-									kind: "compaction",
+									at: "compaction.deciding",
 									control: { status: "running" },
-									structural: { taskId: OPERATION_ID, status: "deciding" },
+									taskId: OPERATION_ID,
 								}),
 								setValue(operationToolArgs(OPERATION_ID, ROOT_ID, 0), {
 									argument: true,

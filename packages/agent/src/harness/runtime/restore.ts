@@ -78,9 +78,9 @@ export async function restoreLaneState(reader: SessionReader, lane: string, cont
 				`Operation ${operationId} belongs to lane ${JSON.stringify(meta.value.lane)}, not ${JSON.stringify(lane)}`,
 			);
 		}
-		if (meta.value.intent.kind !== state.value.kind) {
+		if (!state.value.at.startsWith(`${meta.value.intent.kind}.`)) {
 			throw new SessionInvariantError(
-				`Operation ${operationId} intent ${meta.value.intent.kind} does not match state ${state.value.kind}`,
+				`Operation ${operationId} intent ${meta.value.intent.kind} does not match state ${state.value.at}`,
 			);
 		}
 		operation = { meta: meta.value, state: state.value };

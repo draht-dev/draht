@@ -2,15 +2,16 @@ import type { AgentMessage } from "../../../types.ts";
 import type { TerminalOperationOutcome } from "../../agent-harness.ts";
 import type { Context } from "../../context.ts";
 import { SessionInvariantError } from "../../session/session.ts";
-import type {
-	BranchSummaryEntry,
-	CompactionEntry,
-	LaneLastResult,
-	MessageEntry,
-	OperationState,
-	SessionReader,
-	SettledAssistantMessage,
-	Write,
+import {
+	type BranchSummaryEntry,
+	type CompactionEntry,
+	isRunOperationState,
+	type LaneLastResult,
+	type MessageEntry,
+	type OperationState,
+	type SessionReader,
+	type SettledAssistantMessage,
+	type Write,
 } from "../../session/types.ts";
 import {
 	deleteList,
@@ -40,12 +41,12 @@ export async function operationCleanupWrites(
 	]);
 
 	const pendingIds = new Set<string>();
-	if (state.kind === "run") {
+	if (isRunOperationState(state)) {
 		for (const id of state.inbox.steer) pendingIds.add(id);
 		for (const id of state.inbox.followUp) pendingIds.add(id);
 		for (const id of state.inbox.writes) pendingIds.add(id);
-		if (state.phase.kind === "tools") {
-			for (const call of state.phase.batch.calls) {
+		if (state.at === "run.tools") {
+			for (const call of state.batch.calls) {
 				if (call.status === "outcome_ready") pendingIds.add(call.resultEntryId);
 			}
 		}
@@ -56,16 +57,8 @@ export async function operationCleanupWrites(
 	}
 
 	let frameDelete: Write | undefined;
-	if (state.kind === "run" && state.phase.kind === "assistant") {
-		const generation = state.phase.generation;
-		if (generation.status === "effect_pending") {
-			frameDelete = deleteList(pendingAssistantFrames(operationId, generation.responseEntryId));
-		}
-	} else if (state.kind === "run" && state.phase.kind === "deferred") {
-		const deferred = state.phase.deferred;
-		if (deferred.status === "effect_pending") {
-			frameDelete = deleteList(pendingAssistantFrames(operationId, deferred.responseEntryId));
-		}
+	if (state.at === "run.assistant.effect_pending" || state.at === "run.deferred.effect_pending") {
+		frameDelete = deleteList(pendingAssistantFrames(operationId, state.responseEntryId));
 	}
 
 	return [

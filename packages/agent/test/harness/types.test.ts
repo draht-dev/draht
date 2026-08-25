@@ -496,8 +496,8 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 			| "hooks"
 			| "activeDrive"
 			| "command"
-			| "mutateOperation"
-			| "advanceOperation"
+			| "settleOperation"
+			| "continueOperation"
 			| "readConfig"
 			| "mismatch"
 		>
@@ -509,8 +509,8 @@ it("covers Part 5 results, events, hooks, snapshots, tools, and stream options",
 			| "models"
 			| "activeDrive"
 			| "command"
-			| "mutateOperation"
-			| "advanceOperation"
+			| "settleOperation"
+			| "continueOperation"
 			| "readConfig"
 			| "mismatch"
 		>

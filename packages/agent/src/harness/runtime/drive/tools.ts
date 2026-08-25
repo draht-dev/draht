@@ -258,13 +258,10 @@ async function commitIntent<TContext extends object | undefined>(
 	args: Record<string, JsonValue>,
 	replay: "never" | "safe",
 ): Promise<LocalResult> {
-	return lane.mutateOperation<RunToolsOperation, LocalResult>(
+	const result = await lane.continueOperation<RunToolsOperation, LocalResult>(
 		toolOperation(lane),
 		(_state, run) => {
 			const currentBatchState = run.batch;
-			if (run.control.status === "cancel_requested") {
-				return { kind: "return", result: { kind: "state_changed" } as const };
-			}
 			const current = findCall(currentBatchState, planned.sourceIndex, planned.resultEntryId);
 			if (current?.status !== "planned") {
 				return { kind: "return", result: { kind: "state_changed" } as const };
@@ -285,6 +282,7 @@ async function commitIntent<TContext extends object | undefined>(
 		},
 		drive.context,
 	);
+	return result ?? { kind: "state_changed" };
 }
 
 async function stageOutcome<TContext extends object | undefined>(
@@ -294,7 +292,7 @@ async function stageOutcome<TContext extends object | undefined>(
 	message: ToolResultMessage<unknown>,
 	terminate: boolean,
 ): Promise<LocalResult> {
-	return lane.mutateOperation<RunToolsOperation, LocalResult>(
+	return lane.settleOperation<RunToolsOperation, LocalResult>(
 		toolOperation(lane),
 		async (_state, run, _meta, reader) => {
 			const currentBatchState = run.batch;
@@ -609,7 +607,7 @@ async function commitPlacement<TContext extends object | undefined>(
 	const usageIds = read.items.map((item) =>
 		item.message.usage === undefined ? undefined : lane.session.idGenerator.next(),
 	);
-	return lane.mutateOperation<RunToolsOperation, PlacementResult>(
+	return lane.settleOperation<RunToolsOperation, PlacementResult>(
 		toolOperation(lane),
 		async (state, run, _meta, reader) => {
 			const current = run.batch;

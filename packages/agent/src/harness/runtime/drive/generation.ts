@@ -91,7 +91,7 @@ async function readRequestMessages<TContext extends object | undefined>(
 	drive: Drive,
 	generation: RunAssistantReadyOperation,
 ): Promise<AgentMessage[] | undefined> {
-	const path = await lane.advanceOperation(
+	const path = await lane.continueOperation(
 		generation,
 		async (state, _current, _meta, reader) => {
 			if (state.tipId === null) throw new SessionInvariantError("Assistant generation has no Branch tip");
@@ -116,7 +116,7 @@ async function commitGenerationIntent<TContext extends object | undefined>(
 	ready: RunAssistantReadyOperation,
 	pending: AssistantEffectPending,
 ): Promise<RunAssistantEffectPendingOperation | undefined> {
-	return lane.advanceOperation(
+	return lane.continueOperation(
 		ready,
 		(_state, current) => {
 			const nextState: RunAssistantEffectPendingOperation = { ...runScopeOf(current), ...pending };
@@ -149,7 +149,7 @@ export async function enterConfigurationFailure<TContext extends object | undefi
 	ready: RunAssistantReadyOperation,
 	error: OperationError,
 ): Promise<ProcedureResult> {
-	const result = await lane.advanceOperation(
+	const result = await lane.continueOperation(
 		ready,
 		(_state, current) => {
 			const nextState: OperationState = {
@@ -191,7 +191,7 @@ export async function runRetryWait<TContext extends object | undefined>(
 		await drive.gate.admit(() => waitUntil(generation.notBefore, drive.gate.signal));
 	}
 
-	const result = await lane.advanceOperation(
+	const result = await lane.continueOperation(
 		generation,
 		(_state, current) => {
 			const nextState: RunAssistantReadyOperation = {

@@ -39,7 +39,7 @@ async function readRunContext<TContext extends object | undefined>(
 	drive: Drive,
 	checkpoint: RunCheckpointOperation,
 ): Promise<AgentMessage[] | undefined> {
-	const entries = await lane.advanceOperation(
+	const entries = await lane.continueOperation(
 		checkpoint,
 		async (state, _current, _meta, reader) => {
 			if (state.tipId === null) throw new SessionInvariantError("Run checkpoint has no Branch tip");
@@ -64,7 +64,7 @@ export async function startRun<TContext extends object | undefined>(
 	drive: Drive,
 	run: RunStartingOperation,
 ): Promise<ProcedureResult> {
-	const prompt = await lane.advanceOperation(
+	const prompt = await lane.continueOperation(
 		run,
 		async (_state, _current, meta, reader) => {
 			if (meta.intent.kind !== "run") throw new SessionInvariantError("Run operation has non-run intent");
@@ -96,7 +96,7 @@ export async function startRun<TContext extends object | undefined>(
 	}
 	const reserved = injected.map((message) => ({ id: lane.session.idGenerator.next(), message }));
 
-	const result = await lane.advanceOperation(
+	const result = await lane.continueOperation(
 		run,
 		(state, current) => {
 			let parentId = state.tipId;
@@ -142,7 +142,7 @@ async function applyPendingWrites<TContext extends object | undefined>(
 	drive: Drive,
 	checkpoint: RunCheckpointOperation,
 ): Promise<ProcedureResult> {
-	const result = await lane.advanceOperation(
+	const result = await lane.continueOperation(
 		checkpoint,
 		async (state, current, _meta, reader) => {
 			const ids = current.inbox.writes;
@@ -215,7 +215,7 @@ async function consumeQueuedMessages<TContext extends object | undefined>(
 	checkpoint: RunCheckpointOperation,
 	queue: "steer" | "followUp",
 ): Promise<ProcedureResult> {
-	const result = await lane.advanceOperation(
+	const result = await lane.continueOperation(
 		checkpoint,
 		async (state, current, _meta, reader) => {
 			const allIds = current.inbox[queue];
@@ -310,7 +310,7 @@ async function finishRun<TContext extends object | undefined>(
 	const followUpMessage: AgentMessage | undefined =
 		followUp === undefined ? undefined : { role: "user", content: followUp, timestamp: Date.now() };
 
-	const result = await lane.advanceOperation<RunCheckpointOperation, ProcedureResult>(
+	const result = await lane.continueOperation<RunCheckpointOperation, ProcedureResult>(
 		checkpoint,
 		async (state, current, _meta, reader) => {
 			if (
@@ -425,7 +425,7 @@ export async function runCheckpoint<TContext extends object | undefined>(
 			? { maxAttempts: config.retryPolicy.maxRetries + 1, baseDelayMs: config.retryPolicy.baseDelayMs }
 			: { maxAttempts: 1, baseDelayMs: config.retryPolicy.baseDelayMs };
 		const stepId = lane.session.idGenerator.next();
-		const result = await lane.advanceOperation(
+		const result = await lane.continueOperation(
 			run,
 			(state, current) => {
 				if (

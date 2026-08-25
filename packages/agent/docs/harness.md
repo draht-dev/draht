@@ -1856,8 +1856,8 @@ Parallel tool children are the exception: sibling call statuses genuinely race, 
 
 The task runs direct async procedures. There is no graph interpreter or action scheduler. The Lane supplies two concrete mutation operations:
 
-- `advanceOperation` declines ordinary progress when current control is cancelled, pairs the next operation-state write with process-local projection publication, and otherwise exposes the procedure's writes/events;
-- `mutateOperation` performs effect settlement and tool-child transitions against current control, and also owns the universal terminal suffix when the procedure returns a terminal decision.
+- `continueOperation` declines ordinary progress when current control is cancelled, pairs the next operation-state write with process-local projection publication, and otherwise exposes the procedure's writes/events;
+- `settleOperation` performs effect settlement and tool-child transitions against current control, and also owns the universal terminal suffix when the procedure returns a terminal decision.
 
 A pass ends at a terminal result or durable wait. `activeDrive` is then cleared by that pass; no live pass is replaced in-process. A process crash or close destroys/detaches the continuation, and a later attachment rebuilds `Lane.state` from durable values before another pass starts.
 

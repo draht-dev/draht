@@ -12,7 +12,7 @@ export async function recoverAssistantGeneration<TContext extends object | undef
 	drive: Drive,
 	generation: RunAssistantEffectPendingOperation,
 ): Promise<ProcedureResult> {
-	const frames = await lane.advanceOperation(
+	const frames = await lane.continueOperation(
 		generation,
 		async (_state, _current, _meta, reader) => {
 			const result: AssistantMessageFrame[] = [];

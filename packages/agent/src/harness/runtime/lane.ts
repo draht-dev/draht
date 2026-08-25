@@ -226,9 +226,13 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		return outcome.result;
 	}
 
-	/** Commit one transition for the operation owned by the current Drive continuation. */
-	mutateOperation<TState extends OperationState, TResult>(
-		_current: TState,
+	/**
+	 * Run a command against the current operation even after cancellation is requested. Use this to settle admitted
+	 * effects, finish the operation, or update concurrent child state. The capability narrows the planner's state type;
+	 * the Drive continuation remains the sole top-level state writer.
+	 */
+	settleOperation<TState extends OperationState, TResult>(
+		_capability: TState,
 		plan: (
 			state: LaneState,
 			current: TState,
@@ -274,9 +278,12 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		}, context);
 	}
 
-	/** Ordinary progress declines when explicit durable cancellation has already won. */
-	advanceOperation<TState extends OperationState, TResult>(
-		current: TState,
+	/**
+	 * Run an ordinary operation command only while durable control is running. Use this before starting new hooks,
+	 * effects, or forward progress. Returns `undefined` without invoking the planner once cancellation is requested.
+	 */
+	continueOperation<TState extends OperationState, TResult>(
+		capability: TState,
 		plan: (
 			state: LaneState,
 			current: TState,
@@ -285,8 +292,8 @@ export class Lane<TContext extends object | undefined> implements AgentLane {
 		) => OperationCommand<TResult> | Promise<OperationCommand<TResult>>,
 		context: Context,
 	): Promise<TResult | undefined> {
-		return this.mutateOperation<TState, TResult | undefined>(
-			current,
+		return this.settleOperation<TState, TResult | undefined>(
+			capability,
 			(state, latest, meta, reader) =>
 				latest.control.status === "cancel_requested"
 					? { kind: "return", result: undefined }

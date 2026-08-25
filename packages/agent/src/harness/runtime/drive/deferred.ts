@@ -48,7 +48,7 @@ async function readSourceHandle<TContext extends object | undefined>(
 	drive: Drive,
 	deferred: DeferredLeaf,
 ): Promise<DeferredHandle | undefined> {
-	return lane.advanceOperation(
+	return lane.continueOperation(
 		deferred,
 		async (_state, _current, _meta, reader) => {
 			const source = (await reader.getEntries([deferred.sourceEntryId], drive.context)).get(deferred.sourceEntryId);
@@ -83,7 +83,7 @@ async function enterDeferredConfigurationFailure<TContext extends object | undef
 	drive: Drive,
 	deferred: DeferredLeaf,
 ): Promise<ProcedureResult> {
-	const result = await lane.advanceOperation(
+	const result = await lane.continueOperation(
 		deferred,
 		(_state, current) => {
 			const nextState: OperationState = {
@@ -114,7 +114,7 @@ async function commitPollIntent<TContext extends object | undefined>(
 	next: EffectPendingFields,
 	recovery: boolean,
 ): Promise<RunDeferredEffectPendingOperation | undefined> {
-	return lane.advanceOperation(
+	return lane.continueOperation(
 		deferred,
 		(_state, current) => {
 			if (drive.deferredPermits === 0) {

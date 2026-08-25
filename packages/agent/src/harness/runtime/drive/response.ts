@@ -82,7 +82,7 @@ export function settleResponse<TContext extends object | undefined>(
 	response: SettledAssistantMessage,
 	options: { recovery?: true } = {},
 ): Promise<ProcedureResult> {
-	return lane.mutateOperation(
+	return lane.settleOperation(
 		intent,
 		(state, current) => {
 			const source = current.at === "run.assistant.effect_pending" ? "assistant" : "deferred";

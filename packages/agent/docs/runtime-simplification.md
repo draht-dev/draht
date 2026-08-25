@@ -126,7 +126,7 @@ Whether close also signals process-local provider/tool work is a resource-cleanu
 
 Replace repeated `LaneCommand` ceremony in procedures with two concrete Lane operations. They are not a scheduler, graph, or action interpreter.
 
-### `advanceOperation`
+### `continueOperation`
 
 Used for ordinary non-terminal progress.
 
@@ -137,7 +137,7 @@ Used for ordinary non-terminal progress.
 - The helper appends the `operationState` write and publishes the matching process-local operation projection.
 - It does not verify an expected state or `at` value.
 
-### `mutateOperation`
+### `settleOperation`
 
 Used after an admitted provider/tool/structural effect and for genuine parallel child transitions.
 
@@ -222,7 +222,7 @@ Files:
 
 Actions:
 
-- Add `advanceOperation` and `mutateOperation`, including the terminal-decision suffix.
+- Add `continueOperation` and `settleOperation`, including the terminal-decision suffix.
 - Pair every durable operation-state write with process-local projection publication in one implementation.
 - Centralize ordinary cancellation diversion.
 - Trust the dispatcher-established current leaf; perform no expected-state check.
@@ -242,8 +242,8 @@ Files:
 Actions:
 
 - Remove repeated operation/null/kind/state checks and `same*` predicates.
-- Convert ordinary progress to `advanceOperation`.
-- Convert assistant settlement to `mutateOperation`.
+- Convert ordinary progress to `continueOperation`.
+- Convert assistant settlement to `settleOperation`.
 - Keep only checkpoint inbox/finish races and progress-channel ownership checks.
 - Fold assistant recovery into the effect-pending handler if that is smaller.
 

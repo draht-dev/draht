@@ -91,8 +91,8 @@ A procedure is the sole writer that changes its top-level `at` leaf. Inbox metho
 
 The Lane supplies two concrete operations:
 
-- `advanceOperation(state, planner, context)` — ordinary progress; if durable cancellation already won, return to the drive loop without invoking the planner;
-- `mutateOperation(state, planner, context)` — effect settlement and parallel tool-child mutations; the planner always receives current control/inbox data.
+- `continueOperation(state, planner, context)` — ordinary progress; if durable cancellation already won, return to the drive loop without invoking the planner;
+- `settleOperation(state, planner, context)` — effect settlement and parallel tool-child mutations; the planner always receives current control/inbox data.
 
 Both pair a returned next `OperationState` with its durable `operationState` write and exact process-local publication. A terminal decision additionally appends the universal suffix:
 

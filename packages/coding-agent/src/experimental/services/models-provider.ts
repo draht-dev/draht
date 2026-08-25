@@ -1,21 +1,27 @@
-import {
-	type AgentHarness,
-	BACKGROUND_CONTEXT,
-	type Context,
-	type RemoteServiceProvider,
-	remoteState,
-} from "@draht/agent-core";
+import { type AgentHarness, BACKGROUND_CONTEXT, type Context, type MutableReplicatedState } from "@draht/agent-core";
 import { getSupportedThinkingLevels } from "@draht/ai";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
-import { Models, type ModelsState } from "./models.ts";
+import { defineFacet } from "../facets.ts";
+import { Models, type Models as ModelsService, type ModelsState } from "./models.ts";
+import type { SessionFacetAttributes } from "./session-facet.ts";
 
-export async function provideModelsService(
-	provider: RemoteServiceProvider,
+export interface ModelsServiceRuntime {
+	readonly service: ModelsService;
+	activate(context: Context): Promise<void>;
+}
+
+export function createModelsService(
 	harness: AgentHarness,
 	modelRuntime: ModelRuntime | undefined,
-): Promise<void> {
+	createState: (initial: ModelsState) => MutableReplicatedState<ModelsState>,
+): ModelsServiceRuntime {
 	let catalogRevision = 0;
-	const readConfiguration = async (context: Context = BACKGROUND_CONTEXT): Promise<ModelsState["configuration"]> => {
+	const state = createState({
+		catalog: { revision: 0, availableModels: [] },
+		configuration: { model: null, thinkingLevel: "off" },
+		refresh: { status: "idle" },
+	});
+	const readConfiguration = async (context: Context): Promise<ModelsState["configuration"]> => {
 		const [selected, thinkingLevel] = await Promise.all([
 			harness.getModel(context),
 			harness.getThinkingLevel(context),
@@ -25,14 +31,11 @@ export async function provideModelsService(
 			thinkingLevel,
 		};
 	};
-	const readCatalog = async (context: Context = BACKGROUND_CONTEXT): Promise<ModelsState["catalog"]> => {
+	const readCatalog = async (context: Context): Promise<ModelsState["catalog"]> => {
 		const selected = await harness.getModel(context);
 		const available = modelRuntime?.getAvailableSnapshot() ?? [];
 		const catalog =
-			selected === undefined ||
-			available.some((model) => model.provider === selected.provider && model.id === selected.id)
-				? available
-				: [...available, selected];
+			selected === undefined || includesModel(available, selected) ? available : [...available, selected];
 		catalogRevision += 1;
 		return {
 			revision: catalogRevision,
@@ -44,12 +47,7 @@ export async function provideModelsService(
 			})),
 		};
 	};
-	const state = remoteState<ModelsState>({
-		catalog: await readCatalog(),
-		configuration: await readConfiguration(),
-		refresh: { status: "idle" },
-	});
-	provider.provide(Models, {
+	const service: ModelsService = {
 		state,
 		async cycleThinking(context) {
 			const selected = await harness.getModel(context);
@@ -93,5 +91,28 @@ export async function provideModelsService(
 			await harness.setModel(selected, context);
 			state.set({ ...state.value, configuration: await readConfiguration(context) }, context);
 		},
-	});
+	};
+	return {
+		service,
+		async activate(context) {
+			const [catalog, configuration] = await Promise.all([readCatalog(context), readConfiguration(context)]);
+			state.set({ catalog, configuration, refresh: { status: "idle" } }, context);
+		},
+	};
+}
+
+export const modelsServiceFacet = defineFacet<SessionFacetAttributes>({
+	id: "@pi/models",
+	setup(env) {
+		const runtime = createModelsService(env.harness, env.modelRuntime, env.remoteState);
+		env.provide(Models, runtime.service);
+		env.onActivate(() => runtime.activate(BACKGROUND_CONTEXT));
+	},
+});
+
+function includesModel(
+	models: readonly { readonly provider: string; readonly id: string }[],
+	selected: { readonly provider: string; readonly id: string },
+): boolean {
+	return models.some((model) => model.provider === selected.provider && model.id === selected.id);
 }

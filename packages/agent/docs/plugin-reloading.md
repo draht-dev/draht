@@ -73,39 +73,22 @@ Temporary cross-generation communication is expected. The system does not attemp
 
 ## Dependency discovery and manifest validation
 
-The service dependency graph is generated from facet setup, not reflected from erased TypeScript interfaces and not maintained as a parallel handwritten list. Every service token retains a stable runtime ID. Each host constructs facet contexts whose methods close over the host-assigned plugin ID and facet kind, so ownership remains correct even when setup functions run concurrently.
+The service dependency graph is generated from facet setup, not reflected from erased TypeScript interfaces and not maintained as a parallel handwritten list. Every service token retains a stable runtime ID. Each host combines the common facet environment with the attributes for that facet kind. Setup runs synchronously as a declaration phase; service handles remain disconnected until the complete graph validates.
 
 During setup the host records:
 
 ```text
 provide(service, implementation)  → this facet provides service/singleton
-provideKeyed(service)             → this facet provides service/keyed
+provideMany(service)              → this facet provides service/keyed
 use(service)                      → this facet requires service/singleton
 observe(service, handler)         → this facet requires service/keyed
 ```
 
-The context path supplies the target scope: local `use()`, `server.use()`, and `session.use()` are different requirements. The token supplies the service ID, and the operation supplies singleton or keyed mode. No runtime representation of the generic service interface is needed.
+The facet kind selects its host, lifetime, capabilities, and service source. A facet always uses unqualified `env.use()` and `env.observe()`; server and Session routing are not exposed as namespaces in the facet API. The token supplies the service ID, and the operation supplies singleton or keyed mode. No runtime representation of the generic service interface is needed.
 
-First acquisition and provision are setup-only operations. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup. `provideKeyed()` returns the only handle permitted to spawn that service's dynamic instances, allowing the provision to appear in the graph before any instance exists.
+First acquisition and provision are setup-only operations. Commands, hooks, event handlers, and activation callbacks use handles acquired during setup. `provideMany()` returns the only `ServiceInstances` handle permitted to add that service's dynamic instances, allowing the provision to appear in the graph before any instance exists.
 
-After setup, each host emits a JSON-safe facet plan:
-
-```ts
-interface ServiceKey {
-	scope: "local" | "server" | "session";
-	serviceId: string;
-	mode: "singleton" | "keyed";
-}
-
-interface FacetServicePlan {
-	pluginId: string;
-	facet: "server" | "session" | "tui" | "web";
-	requires: ServiceKey[];
-	provides: ServiceKey[];
-}
-```
-
-Host control combines plans by scope, service ID, and mode. It rejects missing providers, duplicate singleton providers, mode mismatches, and invalid dependency cycles; derives service allowlists; and records provider-to-consumer edges for diagnostics and lifecycle ordering. `use()` and `observe()` are hard requirements; optional dependencies need a separate explicit acquisition operation if introduced later. Directly importing another plugin's live implementation bypasses this ownership model and is unsupported.
+After setup, the host privately resolves its recorded requirements and provisions. It rejects missing providers, duplicate singleton providers, mode mismatches, and invalid dependency cycles, then records provider-to-consumer edges for lifecycle ordering. The record is kernel machinery, not a plugin-facing plan or a second declaration format. Connected service inventories and allowlists are host/manifest inputs, and their transport bindings must become ready before consuming facets activate. `use()` and `observe()` are hard requirements; optional dependencies need a separate explicit acquisition operation if introduced later. Directly importing another plugin's live implementation bypasses this ownership model and is unsupported.
 
 Removing one plugin constructs a candidate manifest without that plugin and runs the same assembly. If retained facets have unresolved hard requirements, the candidate is rejected before becoming the desired generation. If it is valid, removal still uses a complete-generation reload and simply brings back fewer facets. The removed plugin's durable namespace remains stored.
 
@@ -122,13 +105,13 @@ user invokes /reload
 → every live host stops its complete generation-N facet set
 → server/session/presentation runtimes restart on N+1
 → connections and Session attachments are re-established
-→ remote namespaces hydrate fresh snapshots
+→ remote service bindings hydrate fresh snapshots
 → normal application interaction resumes where required hosts are ready
 ```
 
 Module resolution and syntax may be checked before tearing down the old generation. Such preflight reduces avoidable failures but does not make reload transactional. Module evaluation may itself be defective, facet setup may fail only with host capabilities, and startup may fail after the old runtime has stopped.
 
-All facet-owned resources close through the ordinary lifecycle scope before graceful process exit. If graceful shutdown fails, the host may terminate the process according to its normal shutdown policy. The operating system then reclaims process resources, but it cannot undo external emissions or make an unsafe tool restartable.
+All facet-owned resources close through the ordinary facet environment before graceful process exit. If graceful shutdown fails, the host may terminate the process according to its normal shutdown policy. The operating system then reclaims process resources, but it cannot undo external emissions or make an unsafe tool restartable.
 
 ## Session-worker replacement
 
@@ -202,7 +185,7 @@ A remote service implementation belongs to its providing host generation. Servic
 This matches the basic implementation:
 
 - `RemoteServiceProvider.provide()` installs one singleton for the provider's lifetime;
-- plugin-facing `provideKeyed()` registers keyed ownership during setup, while its scoped handle delegates dynamic instances to provider `spawn()` and preserves generation fencing when a key is reused;
+- plugin-facing `provideMany()` registers keyed ownership during setup, while its `ServiceInstances.add()` handle delegates dynamic instances to the provider and preserves generation fencing when a key is reused;
 - disposing a provider removes its member listeners and subscriptions;
 - a server connection or Session attachment change makes `RemoteServiceNamespace` close old subscriptions and hydrate new ones; and
 - binding revisions and attachment IDs fence delayed frames.
@@ -272,7 +255,7 @@ The following claims are explicitly out of scope:
 
 Cordis identifies two useful concerns: resources created by a component need lifecycle ownership, and consumers must respond when a provider disappears. Pi keeps both principles:
 
-- facet scopes own registrations, listeners, subscriptions, and process-local effects; and
+- facet environments own registrations, listeners, subscriptions, and process-local effects; and
 - remote namespace bindings become unavailable and rehydrate against replacement providers.
 
 Pi does not adopt Cordis's in-process component reload as its primary mechanism. Durable Session authority, process-per-session isolation, server replacement, and snapshot-based service rebinding make host-generation replacement the simpler boundary. Inverse disposal remains cleanup, not rollback.
@@ -291,9 +274,9 @@ This also follows Cordis's system-boundary caveat: acquiring and releasing a pro
 - Deleting namespaced durable data when a plugin leaves the manifest.
 - Treating provider-local sequence or revision values as global across bindings.
 - Retaining implementation objects, callbacks, or contexts from a retired generation in host-global state.
-- Performing uncontrolled top-level module side effects before the host owns a lifecycle scope.
+- Performing uncontrolled top-level module side effects before the host owns a facet environment.
 - Acquiring a service for the first time from a later command or callback, after dependency assembly has closed.
-- Dynamically spawning a keyed service without first registering its owner through `provideKeyed()`.
+- Dynamically adding a service instance without first registering its owner through `provideMany()`.
 - Importing another plugin's live implementation instead of depending on a host-mediated service.
 - Describing preflight checks as an atomic or rollback-capable reload.
 
@@ -302,7 +285,7 @@ This also follows Cordis's system-boundary caveat: acquiring and releasing a pro
 A later implementation handoff should cover at least:
 
 - one `/reload` selects one new manifest generation for server, session, and presentation facets;
-- setup-time service acquisition produces complete cross-facet requirement and provision plans without reflecting on TypeScript types;
+- setup-time service acquisition produces the complete internal dependency graph without reflecting on TypeScript types;
 - missing providers, duplicate singleton providers, mode mismatches, and late dependency acquisition are rejected;
 - removing a plugin rejects an invalid dependent manifest or performs a complete reload with fewer facets while retaining its durable state;
 - configuration-only changes rebuild without loading a new module generation;

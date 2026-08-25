@@ -183,6 +183,7 @@ export interface RemoteServiceNamespaceOptions {
 	readonly connection: RemoteServiceConnection;
 	readonly bound?: boolean;
 	readonly onError?: (error: Error) => void;
+	readonly assertAccess?: () => void;
 }
 
 export interface RemoteServiceNamespaceApi {
@@ -193,6 +194,8 @@ export interface RemoteServiceNamespaceApi {
 	): () => void;
 	/** Wait until every currently acquired service has installed its initial snapshot. */
 	ready(context: Context): Promise<void>;
+	/** Install a host lifecycle guard for proxy member access. */
+	setAccessGuard(assertAccess: () => void): void;
 	dispose(context: Context): Promise<void>;
 }
 

@@ -111,6 +111,38 @@ describe("plugin remote services", () => {
 		provider.dispose();
 	});
 
+	test("keeps deferred service handles inaccessible until host activation", async () => {
+		const provider = new RemoteServiceProvider([Models]);
+		provider.provide(Models, {
+			state: remoteState<ModelsState>({ selected: null, revision: 0 }),
+			async select() {},
+		});
+		let active = false;
+		const namespace = new RemoteServiceNamespace({
+			services: [Models],
+			connection: createLoopbackServiceConnection(provider),
+			bound: false,
+			assertAccess() {
+				if (!active) throw new Error("Service handles are not active");
+			},
+		});
+		const models = namespace.use(Models);
+
+		expect(() => models.state.value).toThrow("Service handles are not active");
+		expect(() => models.state.subscribe(() => {})).toThrow("Service handles are not active");
+		expect(() => models.select({ provider: "test", modelId: "one" }, BACKGROUND_CONTEXT)).toThrow(
+			"Service handles are not active",
+		);
+
+		await namespace.rebind(true, BACKGROUND_CONTEXT);
+		active = true;
+		await namespace.ready(BACKGROUND_CONTEXT);
+		expect(models.state.value?.revision).toBe(0);
+
+		await namespace.dispose(BACKGROUND_CONTEXT);
+		provider.dispose();
+	});
+
 	test("rejects namespace readiness when initial hydration fails", async () => {
 		const failure = new Error("initial hydration failed");
 		const errors: Error[] = [];

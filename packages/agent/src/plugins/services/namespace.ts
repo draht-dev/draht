@@ -125,6 +125,7 @@ class MemberSlot {
 	readonly #state: RemoteStateReplica;
 	readonly #events: RemoteEventsReplica;
 	readonly #isActive: () => boolean;
+	readonly #assertAccess: () => void;
 	readonly #reportError: ErrorReporter;
 	readonly #pendingSubscriptions = new Set<PendingMemberSubscription>();
 	readonly value: unknown;
@@ -136,12 +137,14 @@ class MemberSlot {
 		member: string,
 		invoke: (args: readonly JsonValue[], context: Context) => Promise<JsonValue | undefined>,
 		isActive: () => boolean,
+		assertAccess: () => void,
 		reportError: ErrorReporter,
 	) {
 		this.#serviceId = serviceId;
 		this.#member = member;
 		this.#invoke = invoke;
 		this.#isActive = isActive;
+		this.#assertAccess = assertAccess;
 		this.#reportError = reportError;
 		this.#state = new RemoteStateReplica(reportError);
 		this.#events = new RemoteEventsReplica(reportError);
@@ -150,14 +153,12 @@ class MemberSlot {
 			apply: (_target, _thisArg, args) => this.#call(args),
 			get: (_target, property) => {
 				if (property === "value") {
+					this.#assertAccess();
 					this.#expect("state");
 					return this.#state.value;
 				}
 				if (property === "subscribe") return this.#subscribe.bind(this);
-				if (property === "on") {
-					this.#expect("events");
-					return this.#events.on.bind(this.#events);
-				}
+				if (property === "on") return this.#on.bind(this);
 				if (property === Symbol.toStringTag) return "RemoteServiceMember";
 				if (property === "then") return undefined;
 				return undefined;
@@ -200,6 +201,7 @@ class MemberSlot {
 	}
 
 	#subscribe(listener: RemoteEventListener<JsonValue>): () => void {
+		this.#assertAccess();
 		if (typeof listener !== "function")
 			throw new TypeError("Remote service subscription listener must be a function");
 		if (this.#kind === "state" || this.#expectedKind === "state") {
@@ -218,6 +220,14 @@ class MemberSlot {
 			pending.remove?.();
 			this.#pendingSubscriptions.delete(pending);
 		};
+	}
+
+	#on(type: string, listener: RemoteEventListener<JsonValue>): () => void {
+		this.#assertAccess();
+		this.#expect("events");
+		return this.#events.subscribe((event, context) => {
+			if (hasEventType(event, type)) listener(event, context);
+		});
 	}
 
 	#activateSubscription(pending: PendingMemberSubscription, kind: ServiceMemberKind): void {
@@ -252,6 +262,7 @@ class MemberSlot {
 	}
 
 	#call(args: unknown[]): Promise<JsonValue | undefined> {
+		this.#assertAccess();
 		this.#expect("method");
 		if (!this.#isActive()) {
 			return Promise.reject(
@@ -292,6 +303,7 @@ class ServiceFacade {
 	readonly #descriptions = new Map<string, ServiceMemberKind>();
 	readonly #stateSnapshots = new Map<string, ServiceStateSnapshot>();
 	readonly #isActive: () => boolean;
+	readonly #assertAccess: () => void;
 	readonly proxy: object;
 
 	constructor(
@@ -299,12 +311,14 @@ class ServiceFacade {
 		address: ServiceInstanceAddress | undefined,
 		connection: RemoteServiceConnection,
 		isActive: () => boolean,
+		assertAccess: () => void,
 		reportError: ErrorReporter,
 	) {
 		this.#serviceId = serviceId;
 		this.#address = address;
 		this.#connection = connection;
 		this.#isActive = isActive;
+		this.#assertAccess = assertAccess;
 		this.#reportError = reportError;
 		this.proxy = new Proxy(Object.create(null) as object, {
 			get: (_target, property) => {
@@ -381,6 +395,7 @@ class ServiceFacade {
 					context,
 				),
 			this.#isActive,
+			this.#assertAccess,
 			this.#reportError,
 		);
 		const kind = this.#descriptions.get(member);
@@ -420,6 +435,7 @@ class KeyedBinding<T> {
 	readonly #service: Service<T>;
 	readonly #connection: RemoteServiceConnection;
 	readonly #reportError: ErrorReporter;
+	readonly #assertAccess: () => void;
 	readonly #onEmpty: () => void;
 	readonly #instances = new Map<string, KeyedInstance>();
 	readonly #observers = new Set<ObserverRegistration<T>>();
@@ -434,12 +450,14 @@ class KeyedBinding<T> {
 		service: Service<T>,
 		connection: RemoteServiceConnection,
 		reportError: ErrorReporter,
+		assertAccess: () => void,
 		onEmpty: () => void,
 		bound: boolean,
 	) {
 		this.#service = service;
 		this.#connection = connection;
 		this.#reportError = reportError;
+		this.#assertAccess = assertAccess;
 		this.#onEmpty = onEmpty;
 		this.#bound = bound;
 	}
@@ -590,6 +608,7 @@ class KeyedBinding<T> {
 			address,
 			this.#connection,
 			() => instance.active && !this.#closed,
+			this.#assertAccess,
 			this.#reportError,
 		);
 		instance.facade.install(snapshot, context);
@@ -634,6 +653,7 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 	readonly #allowlist: ReadonlySet<string>;
 	readonly #reportError: ErrorReporter;
 	readonly #modes = new Map<string, "singleton" | "keyed">();
+	#assertAccess: () => void;
 	readonly #singletons = new Map<string, SingletonBinding>();
 	readonly #keyed = new Map<string, KeyedBinding<unknown>>();
 	#bound: boolean;
@@ -647,6 +667,7 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 		if (new Set(ids).size !== ids.length) throw new TypeError("Remote service namespace has duplicate service IDs");
 		this.#allowlist = new Set(ids);
 		this.#reportError = options.onError ?? (() => {});
+		this.#assertAccess = options.assertAccess ?? (() => {});
 		this.#bound = options.bound ?? true;
 	}
 
@@ -659,7 +680,8 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 			service.id,
 			undefined,
 			this.#connection,
-			() => binding!.active && !this.#disposed,
+			() => binding!.active && !this.#disposed && this.#bound,
+			() => this.#assertAccess(),
 			this.#reportError,
 		);
 		this.#singletons.set(service.id, binding);
@@ -688,6 +710,7 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 				service,
 				this.#connection,
 				this.#reportError,
+				() => this.#assertAccess(),
 				() => {
 					if (this.#keyed.get(service.id) !== binding) return;
 					this.#keyed.delete(service.id);
@@ -700,6 +723,10 @@ export class RemoteServiceNamespace implements RemoteServiceNamespaceApi {
 			this.#readinessRevision += 1;
 		}
 		return binding.observe(handler);
+	}
+
+	setAccessGuard(assertAccess: () => void): void {
+		this.#assertAccess = assertAccess;
 	}
 
 	async ready(context: Context): Promise<void> {
